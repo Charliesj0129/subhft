@@ -19,6 +19,23 @@ _TZ = ZoneInfo("Asia/Taipei")
 
 PLATFORM_SCALE = 10_000
 
+# ---------------------------------------------------------------------------
+# Position store reference — set by bootstrap or bot app setup
+# ---------------------------------------------------------------------------
+
+_position_store_ref = None
+
+
+def set_position_store(store: object) -> None:
+    """Set the PositionStore reference for bot commands."""
+    global _position_store_ref  # noqa: PLW0603
+    _position_store_ref = store
+
+
+def _get_position_store() -> object | None:
+    """Return the current PositionStore reference (or None)."""
+    return _position_store_ref
+
 
 def _parse_report_args(args: list[str]) -> tuple[str, str | None]:
     """Parse /report [symbol] [day|night] positional args.
@@ -360,5 +377,70 @@ async def cmd_status(update: Any, context: Any) -> None:
         lines.append(f"ClickHouse: 最後成功 {ch_mins} 分鐘前")
     else:
         lines.append("ClickHouse: 尚未連線")
+
+    await update.message.reply_text("\n".join(lines))
+
+
+@owner_only
+async def cmd_pos(update: Any, context: Any) -> None:
+    """Handle /pos [strategy_id] command — show per-strategy position breakdown."""
+    store = _get_position_store()
+    if store is None:
+        await update.message.reply_text("Position store 未連接")
+        return
+
+    args = context.args or []
+    filter_strategy = args[0] if args else None
+
+    positions = getattr(store, "positions", {})
+    if not positions:
+        await update.message.reply_text("無持倉")
+        return
+
+    # Group by strategy_id — skip flat (net_qty == 0) positions
+    by_strategy: dict[str, list[tuple[str, int]]] = {}
+    for _key, pos in positions.items():
+        if pos.net_qty == 0:
+            continue
+        strat = getattr(pos, "strategy_id", "?")
+        if filter_strategy and strat != filter_strategy:
+            continue
+        by_strategy.setdefault(strat, []).append((pos.symbol, pos.net_qty))
+
+    # Include recovery positions
+    recovery = getattr(store, "_recovery_positions", {})
+    for _rkey, rdata in recovery.items():
+        if not isinstance(rdata, dict):
+            continue
+        qty = int(rdata.get("net_qty", 0))
+        if qty == 0:
+            continue
+        strat = rdata.get("strategy_id", "?")
+        if filter_strategy and strat != filter_strategy:
+            continue
+        by_strategy.setdefault(strat, []).append((rdata.get("symbol", "?"), qty))
+
+    if not by_strategy:
+        msg = f"策略 {filter_strategy} 無持倉" if filter_strategy else "無持倉"
+        await update.message.reply_text(msg)
+        return
+
+    lines: list[str] = ["倉位明細\n"]
+    total_by_symbol: dict[str, int] = {}
+    for strat in sorted(by_strategy):
+        lines.append(f"[{strat}]")
+        for symbol, qty in sorted(by_strategy[strat]):
+            sign = "+" if qty > 0 else ""
+            lines.append(f"  {symbol}: {sign}{qty}")
+            total_by_symbol[symbol] = total_by_symbol.get(symbol, 0) + qty
+        lines.append("")
+
+    # Aggregate footer — only shown when multiple strategies are present
+    if len(by_strategy) > 1:
+        lines.append("[合計]")
+        for symbol in sorted(total_by_symbol):
+            qty = total_by_symbol[symbol]
+            sign = "+" if qty > 0 else ""
+            lines.append(f"  {symbol}: {sign}{qty}")
 
     await update.message.reply_text("\n".join(lines))

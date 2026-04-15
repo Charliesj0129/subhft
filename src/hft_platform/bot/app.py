@@ -114,6 +114,7 @@ def create_app() -> Any:
         cmd_ask,
         cmd_flow,
         cmd_levels,
+        cmd_pos,
         cmd_report,
         cmd_report_rule,
         cmd_start,
@@ -134,6 +135,7 @@ def create_app() -> Any:
     app.add_handler(CommandHandler("levels", cmd_levels))
     app.add_handler(CommandHandler("flow", cmd_flow))
     app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(CommandHandler("pos", cmd_pos))
 
     schedule_jobs(app.job_queue)
 
