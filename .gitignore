@@ -74,6 +74,7 @@ openblas_local/
 reports/
 !src/hft_platform/reports/
 !src/hft_platform/reports/**
+src/hft_platform/reports/**/__pycache__/
 artifacts/
 outputs/
 !outputs/production_rollout/
