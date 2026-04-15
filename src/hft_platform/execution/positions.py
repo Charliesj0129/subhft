@@ -224,12 +224,13 @@ class PositionStore:
         return (self._peak_equity_scaled - current) / self._peak_equity_scaled
 
     def net_qty_for_symbol(self, symbol: str, strategy_id: str | None = None) -> int:
-        """Return aggregate net_qty for *symbol*, including pending recovery positions.
+        """Return aggregate net_qty for *symbol*, optionally filtered by strategy.
 
-        When *strategy_id* is provided, only that strategy's entries in
-        ``self.positions`` are summed.  Recovery entries (which lack a
-        strategy_id) are always included because they represent a broker-
-        confirmed position that has not yet received its first fill.
+        When *strategy_id* is ``None``, all strategies AND recovery positions
+        are included (aggregate view).  When *strategy_id* is provided, only
+        positions belonging to that strategy are summed — recovery positions
+        are included only if their ``strategy_id`` matches the filter (or if
+        they have no ``strategy_id`` and no filter is applied).
         """
         total = 0
         for _key, pos in self.positions.items():
@@ -238,11 +239,19 @@ class PositionStore:
             if strategy_id is not None and getattr(pos, "strategy_id", None) != strategy_id:
                 continue
             total += int(getattr(pos, "net_qty", 0) or 0)
-        # Include pending recovery (keyed by account:symbol, no strategy_id)
         for rkey, rdata in self._recovery_positions.items():
-            rsym = rdata.get("symbol", rkey.rsplit(":", 1)[-1]) if isinstance(rdata, dict) else ""
-            if rsym == symbol:
-                total += int(rdata.get("net_qty", 0))
+            if not isinstance(rdata, dict):
+                continue
+            rsym = rdata.get("symbol", rkey.rsplit(":", 1)[-1])
+            if rsym != symbol:
+                continue
+            rstrat = rdata.get("strategy_id", "")
+            if strategy_id is not None and rstrat and rstrat != strategy_id:
+                continue
+            if strategy_id is not None and not rstrat:
+                # Legacy recovery with no strategy_id: exclude from filtered queries
+                continue
+            total += int(rdata.get("net_qty", 0))
         return total
 
     def _update_portfolio_aggregates(self, pnl_delta: int = 0) -> None:
