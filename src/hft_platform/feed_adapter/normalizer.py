@@ -300,8 +300,17 @@ class SymbolMetadata:
 
         Called by bootstrap after broker login to propagate alias mappings
         (e.g. TXFR1 → TXFE6) resolved by ContractsRuntime.
+
+        Also copies config metadata entries from alias codes to actual codes
+        so that price_scale(), exchange(), product_type() etc. resolve correctly
+        for the actual callback codes used at runtime.
         """
         self.alias_to_actual.update(alias_map)
+        for config_code, actual_code in alias_map.items():
+            if actual_code != config_code and actual_code not in self.meta:
+                config_entry = self.meta.get(config_code)
+                if config_entry is not None:
+                    self.meta[actual_code] = config_entry
 
     def resolve_symbol(self, code: str) -> str:
         """Resolve a config symbol code to the actual callback code.
