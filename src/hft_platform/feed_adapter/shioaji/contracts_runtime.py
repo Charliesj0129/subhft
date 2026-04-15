@@ -21,6 +21,63 @@ except Exception:  # pragma: no cover
 if TYPE_CHECKING:
     from hft_platform.feed_adapter.shioaji.client import ShioajiClient
 
+# Month number → TAIFEX month letter (A=Jan .. L=Dec)
+_MONTH_LETTERS = "ABCDEFGHIJKL"
+
+
+def derive_callback_code(contract: Any, config_code: str) -> str:
+    """Derive the actual callback code from a Shioaji contract object.
+
+    For R1/R2/C0/C1 continuous contracts, contract.code equals the alias
+    (e.g. "TMFR1") but quote callbacks arrive with the resolved month code
+    (e.g. "TMFE6"). This function reconstructs the month code from the
+    contract's delivery_month or delivery_date attribute.
+
+    Returns config_code unchanged if derivation fails or isn't needed.
+    """
+    # Only attempt derivation for alias-style codes
+    suffix = config_code[-2:] if len(config_code) >= 4 else ""
+    is_alias = suffix in ("R1", "R2", "C0", "C1")
+    if not is_alias:
+        # Regular month code — check contract.code directly
+        actual = getattr(contract, "code", None)
+        return actual if actual and actual != config_code else config_code
+
+    # Extract root symbol (e.g. "TMF" from "TMFR1")
+    root = config_code[:-2]
+
+    # Try delivery_month first (format: "YYYY/MM" or "YYYYMM")
+    dm = getattr(contract, "delivery_month", None)
+    if dm:
+        dm_str = str(dm).replace("/", "")
+        if len(dm_str) >= 6:
+            try:
+                month = int(dm_str[4:6])
+                year_digit = int(dm_str[3])  # last digit of year
+                if 1 <= month <= 12:
+                    letter = _MONTH_LETTERS[month - 1]
+                    return f"{root}{letter}{year_digit}"
+            except (ValueError, IndexError):
+                pass
+
+    # Fallback: try delivery_date (format: "YYYY/MM/DD" or "YYYYMMDD")
+    dd = getattr(contract, "delivery_date", None)
+    if dd:
+        dd_str = str(dd).replace("/", "").replace("-", "")
+        if len(dd_str) >= 8:
+            try:
+                month = int(dd_str[4:6])
+                year_digit = int(dd_str[3])
+                if 1 <= month <= 12:
+                    letter = _MONTH_LETTERS[month - 1]
+                    return f"{root}{letter}{year_digit}"
+            except (ValueError, IndexError):
+                pass
+
+    # Could not derive — fall back to contract.code
+    actual = getattr(contract, "code", None)
+    return actual if actual else config_code
+
 
 class ContractsRuntime:
     """Contracts cache/preflight/refresh runtime."""
@@ -610,7 +667,7 @@ class ContractsRuntime:
                 exchange, code, product_type=product_type, allow_synthetic=False,
             )
             if contract:
-                actual = getattr(contract, "code", None) or code
+                actual = derive_callback_code(contract, code)
                 if actual != code:
                     alias_map[code] = actual
                     logger.info(

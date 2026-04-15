@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict
 from structlog import get_logger
 
 from hft_platform.core import timebase
+from hft_platform.feed_adapter.shioaji.contracts_runtime import derive_callback_code
 
 try:
     import shioaji as _sj
@@ -150,7 +151,10 @@ class SubscriptionManager:
             return False
 
         # Capture alias→actual mapping (e.g. TXFR1 → TXFE6)
-        actual_code = getattr(contract, "code", None) or code
+        # For R1/R2/C0/C1 contracts, contract.code == config code (e.g. "TMFR1"),
+        # but callbacks arrive with the resolved month code (e.g. "TMFE6").
+        # Derive the actual code from delivery_month/delivery_date.
+        actual_code = derive_callback_code(contract, code)
         if actual_code != code:
             c.alias_to_actual[code] = actual_code
             logger.info(

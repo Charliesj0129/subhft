@@ -47,6 +47,82 @@ class TestSymbolMetadataAliasResolution:
         assert sm.alias_to_actual["TXFR1"] == "TXFE6"
 
 
+class TestDeriveCallbackCode:
+    """derive_callback_code: R1/R2/C0/C1 → actual month code from delivery_month."""
+
+    def test_r1_with_delivery_month(self) -> None:
+        from types import SimpleNamespace
+
+        from hft_platform.feed_adapter.shioaji.contracts_runtime import derive_callback_code
+
+        contract = SimpleNamespace(code="TMFR1", delivery_month="2026/05")
+        assert derive_callback_code(contract, "TMFR1") == "TMFE6"
+
+    def test_r1_delivery_month_yyyymm(self) -> None:
+        from types import SimpleNamespace
+
+        from hft_platform.feed_adapter.shioaji.contracts_runtime import derive_callback_code
+
+        contract = SimpleNamespace(code="TXFR1", delivery_month="202605")
+        assert derive_callback_code(contract, "TXFR1") == "TXFE6"
+
+    def test_c0_with_delivery_month(self) -> None:
+        from types import SimpleNamespace
+
+        from hft_platform.feed_adapter.shioaji.contracts_runtime import derive_callback_code
+
+        contract = SimpleNamespace(code="TMFC0", delivery_month="2026/05")
+        assert derive_callback_code(contract, "TMFC0") == "TMFE6"
+
+    def test_r2_far_month(self) -> None:
+        from types import SimpleNamespace
+
+        from hft_platform.feed_adapter.shioaji.contracts_runtime import derive_callback_code
+
+        contract = SimpleNamespace(code="TXFR2", delivery_month="2026/06")
+        assert derive_callback_code(contract, "TXFR2") == "TXFF6"
+
+    def test_delivery_date_fallback(self) -> None:
+        from types import SimpleNamespace
+
+        from hft_platform.feed_adapter.shioaji.contracts_runtime import derive_callback_code
+
+        contract = SimpleNamespace(code="TMFR1", delivery_date="2026/05/20")
+        assert derive_callback_code(contract, "TMFR1") == "TMFE6"
+
+    def test_regular_code_passthrough(self) -> None:
+        from types import SimpleNamespace
+
+        from hft_platform.feed_adapter.shioaji.contracts_runtime import derive_callback_code
+
+        contract = SimpleNamespace(code="TMFE6")
+        assert derive_callback_code(contract, "TMFE6") == "TMFE6"
+
+    def test_no_delivery_info_falls_back_to_contract_code(self) -> None:
+        from types import SimpleNamespace
+
+        from hft_platform.feed_adapter.shioaji.contracts_runtime import derive_callback_code
+
+        contract = SimpleNamespace(code="TMFR1")
+        assert derive_callback_code(contract, "TMFR1") == "TMFR1"
+
+    def test_january_month_letter(self) -> None:
+        from types import SimpleNamespace
+
+        from hft_platform.feed_adapter.shioaji.contracts_runtime import derive_callback_code
+
+        contract = SimpleNamespace(code="TXFR1", delivery_month="2027/01")
+        assert derive_callback_code(contract, "TXFR1") == "TXFA7"
+
+    def test_december_month_letter(self) -> None:
+        from types import SimpleNamespace
+
+        from hft_platform.feed_adapter.shioaji.contracts_runtime import derive_callback_code
+
+        contract = SimpleNamespace(code="MXFR1", delivery_month="2026/12")
+        assert derive_callback_code(contract, "MXFR1") == "MXFL6"
+
+
 class TestFeeCalculatorPrefixFallback:
     """Fee calculator root-prefix matching for unknown month codes."""
 
