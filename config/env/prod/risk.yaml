@@ -27,8 +27,11 @@ risk:
   daily_pnl_reset_hour: 5       # 05:00 local time (Taiwan)
   halt_requires_manual_recovery: true
 
+# Symbol limits: keyed by root product code. Risk validators resolve actual
+# month codes (e.g. TXFE6) to root (TXF) using prefix stripping.
+# TODO: Add root-prefix resolution in risk validators to avoid per-month updates.
 symbol_limits:
-  TXFD6:
+  TXFC0:
     max_position_lots: 1
     max_order_size: 1
     max_notional: 100000

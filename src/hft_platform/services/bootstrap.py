@@ -1002,6 +1002,36 @@ class SystemBootstrapper:
 
         strategy_runner.set_storm_guard(storm_guard)
 
+        # After broker login+subscription, re-resolve strategy/governor symbols with alias map
+        md_service._post_connect_hooks.append(strategy_runner.resolve_symbol_aliases)
+
+        # Preflight: validate symbol consistency after alias resolution
+        def _preflight_symbol_consistency() -> None:
+            """Warn if strategy symbols are not in the subscribed set."""
+            subscribed = getattr(md_client, "subscribed_codes", set())
+            # Also include actual codes from alias map
+            alias_map = getattr(md_client, "alias_to_actual", {})
+            all_subscribed = set(subscribed) | set(alias_map.values())
+            for strategy in strategy_runner.strategies:
+                strat_symbols = getattr(strategy, "symbols", set()) or set()
+                missing = set(strat_symbols) - all_subscribed
+                if missing:
+                    logger.error(
+                        "preflight_symbol_mismatch",
+                        strategy_id=strategy.strategy_id,
+                        strategy_symbols=sorted(strat_symbols),
+                        missing_from_feed=sorted(missing),
+                        subscribed=sorted(all_subscribed),
+                    )
+                else:
+                    logger.debug(
+                        "preflight_symbol_ok",
+                        strategy_id=strategy.strategy_id,
+                        symbols=sorted(strat_symbols),
+                    )
+
+        md_service._post_connect_hooks.append(_preflight_symbol_consistency)
+
         if _publish_queue is not None:
             strategy_runner.set_publish_sink(lambda ch, payload: _publish_queue.put_nowait((ch, payload)))
 
@@ -1034,6 +1064,13 @@ class SystemBootstrapper:
                 )
                 # Wire TrackGate into StrategyRunner for per-symbol session filtering
                 strategy_runner.track_gate = session_governor.track_gate
+                # Register alias resolution hook for session governor
+                _gov = session_governor  # capture for closure
+                md_service._post_connect_hooks.append(
+                    lambda: _gov.resolve_symbol_aliases(
+                        getattr(symbol_metadata, "alias_to_actual", None)
+                    )
+                )
                 logger.info("SessionGovernor created and TrackGate wired into StrategyRunner")
             except Exception as exc:
                 logger.warning("SessionGovernor creation failed", error=str(exc))

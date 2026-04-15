@@ -170,9 +170,9 @@ class TestPositionLimitValidator(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(reason, "OK")
 
-    def test_cbs_tmfd6_config_uses_max_position_lots(self) -> None:
+    def test_cbs_tmf_config_uses_max_position_lots(self) -> None:
         cfg = yaml.safe_load(Path("config/base/strategy_limits.yaml").read_text(encoding="utf-8"))
-        self.assertEqual(cfg["strategies"]["CBS_TMFD6"]["max_position_lots"], 1)
+        self.assertEqual(cfg["strategies"]["CBS_TMF"]["max_position_lots"], 1)
 
     def test_intraday_pnl_rollout_scope_is_global(self) -> None:
         cfg = yaml.safe_load(Path("config/base/strategy_limits.yaml").read_text(encoding="utf-8"))

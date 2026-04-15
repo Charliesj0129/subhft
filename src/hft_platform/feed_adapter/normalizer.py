@@ -143,6 +143,7 @@ class SymbolMetadata:
         self._exchange_cache: dict[str, str] = {}
         self._product_type_cache: dict[str, str] = {}
         self._mtime: float | None = None
+        self.alias_to_actual: dict[str, str] = {}  # config alias → callback code (e.g. TXFC0 → TXFE6)
         from hft_platform.core.instrument_registry import InstrumentRegistry
 
         self.registry = InstrumentRegistry()
@@ -293,6 +294,26 @@ class SymbolMetadata:
             if key in entry and entry[key] is not None:
                 params[key] = entry[key]
         return params
+
+    def set_alias_map(self, alias_map: dict[str, str]) -> None:
+        """Set alias→actual mapping from broker contract resolution.
+
+        Called by bootstrap after broker login to propagate alias mappings
+        (e.g. TXFC0 → TXFE6) resolved by ContractsRuntime.
+        """
+        self.alias_to_actual.update(alias_map)
+
+    def resolve_symbol(self, code: str) -> str:
+        """Resolve a config symbol code to the actual callback code.
+
+        Returns the actual month code if an alias mapping exists,
+        otherwise returns the input code unchanged.
+        """
+        return self.alias_to_actual.get(code, code)
+
+    def resolve_symbols(self, codes: set[str] | list[str]) -> set[str]:
+        """Resolve a set of config symbol codes to actual callback codes."""
+        return {self.alias_to_actual.get(c, c) for c in codes}
 
     def _safe_tick_size_scaled(self, entry: dict[str, Any], code: str) -> int:
         """Compute tick_size_scaled with fallback for invalid tick_size values."""

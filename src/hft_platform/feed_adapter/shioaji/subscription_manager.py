@@ -149,6 +149,16 @@ class SubscriptionManager:
                     pass
             return False
 
+        # Capture alias→actual mapping (e.g. TXFC0 → TXFE6)
+        actual_code = getattr(contract, "code", None) or code
+        if actual_code != code:
+            c.alias_to_actual[code] = actual_code
+            logger.info(
+                "symbol_alias_resolved",
+                config_code=code,
+                actual_code=actual_code,
+            )
+
         quote_api = c._quote_api()
         if quote_api is None or not hasattr(quote_api, "subscribe"):
             logger.error("Quote API unavailable during subscribe", code=code)

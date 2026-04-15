@@ -253,6 +253,7 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         self.symbol_metadata = symbol_metadata or SymbolMetadata()
         self.normalizer = MarketDataNormalizer(metadata=self.symbol_metadata)
 
+        self._post_connect_hooks: list[callable] = []  # called after subscribe_basket + alias resolution
         self.state = FeedState.INIT
         self.running = False
         self.last_event_ts = timebase.now_s()
@@ -969,6 +970,25 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                     logger.warning("Snapshot normalize failed; skipping", error=str(exc))
 
             await self._call_client(self.client.subscribe_basket, self._on_shioaji_event)
+
+            # Propagate alias→actual symbol mappings resolved during subscription
+            # (e.g. TXFC0 → TXFE6) so strategies/risk can match event symbols.
+            alias_map = getattr(self.client, "alias_to_actual", None)
+            if alias_map and self.symbol_metadata is not None:
+                self.symbol_metadata.set_alias_map(alias_map)
+                logger.info(
+                    "symbol_aliases_propagated",
+                    count=len(alias_map),
+                    aliases=dict(alias_map),
+                )
+
+            # Notify post-connect hooks (e.g. StrategyRunner alias re-resolution)
+            for hook in self._post_connect_hooks:
+                try:
+                    hook()
+                except Exception as exc:
+                    logger.warning("post_connect_hook_failed", hook=str(hook), error=str(exc))
+
             self._set_state(FeedState.CONNECTED)
 
         except Exception as e:

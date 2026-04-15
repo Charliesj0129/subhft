@@ -93,7 +93,7 @@ def resolve_trading_date(session: str, *, now: datetime | None = None) -> str:
 def build_report(
     session: str,
     date: str,
-    symbol: str = "TXFD6",
+    symbol: str = "TXFC0",
 ) -> ComposedReport | None:
     """Run pipeline stages 1-4 (collect → extract → reason → compose).
 
@@ -113,7 +113,7 @@ def build_report(
 def _build_report_components(
     session: str,
     date: str,
-    symbol: str = "TXFD6",
+    symbol: str = "TXFC0",
 ) -> tuple[object | None, object | None, ComposedReport | None]:
     from hft_platform.reports.collector import DataCollector
     from hft_platform.reports.facts import extract_all
@@ -164,7 +164,7 @@ def _compose_report(
 async def build_hybrid_report_async(
     session: str,
     date: str,
-    symbol: str = "TXFD6",
+    symbol: str = "TXFC0",
 ) -> HybridReportResult:
     fact_report, reasoning_report, composed = await asyncio.to_thread(
         _build_report_components,

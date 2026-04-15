@@ -78,13 +78,28 @@ class FeeCalculator:
         return cls(schedules, symbol_to_product=symbol_map)
 
     def _resolve_product(self, symbol: str) -> str | None:
-        """Resolve broker symbol to product code."""
+        """Resolve broker symbol to product code.
+
+        Lookup order:
+        1. Exact match in symbol_map (e.g. TXFD6 → TX)
+        2. Symbol itself is a product code (e.g. TXF → TXF schedule)
+        3. Root prefix match: strip 2-char month suffix (e.g. TMFE6 → TMF → XMT)
+        """
         product = self._symbol_to_product.get(symbol)
         if product is not None:
             return product
         # Fallback: check if symbol itself is a product code
         if symbol in self._schedules:
             return symbol
+        # Root-prefix fallback: strip trailing month code (e.g. TMFE6 → TMF)
+        # TAIFEX futures: root (3 chars) + month letter + year digit = 5+ chars
+        if len(symbol) >= 5:
+            root = symbol[:-2]  # strip month letter + year digit
+            product = self._symbol_to_product.get(root)
+            if product is not None:
+                return product
+            if root in self._schedules:
+                return root
         return None
 
     def compute(self, symbol: str, side: str, qty: int, price_scaled: int) -> FeeBreakdown:

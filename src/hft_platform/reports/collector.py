@@ -44,14 +44,29 @@ __all__ = [
     "DataCollector",
 ]
 
-# Large-trade volume thresholds per symbol family
+# Large-trade volume thresholds per symbol root (month-code agnostic).
+# Lookup: try exact match first, then strip trailing 2-char month code.
 _LARGE_TRADE_THRESHOLDS: dict[str, int] = {
-    "TXFD6": 10,
-    "TMFD6": 30,
-    "MXFD6": 30,
+    "TXF": 10,
+    "TMF": 30,
+    "MXF": 30,
     "2330": 100,
 }
 _DEFAULT_LARGE_TRADE_THRESHOLD = 10
+
+
+def _get_large_trade_threshold(symbol: str) -> int:
+    """Resolve large-trade threshold with root-prefix fallback."""
+    threshold = _LARGE_TRADE_THRESHOLDS.get(symbol)
+    if threshold is not None:
+        return threshold
+    # Root-prefix fallback: strip month code (e.g. TMFE6 → TMF)
+    if len(symbol) >= 5:
+        root = symbol[:-2]
+        threshold = _LARGE_TRADE_THRESHOLDS.get(root)
+        if threshold is not None:
+            return threshold
+    return _DEFAULT_LARGE_TRADE_THRESHOLD
 
 # Input validation patterns
 _SYMBOL_RE = re.compile(r"^[A-Za-z0-9]{1,20}$")
@@ -515,7 +530,7 @@ class DataCollector:
 
     def _query_large_trades(self, symbol: str, time_filter: str) -> list[LargeTrade]:
         """Q4: Trades at or above the large-trade volume threshold."""
-        threshold = _LARGE_TRADE_THRESHOLDS.get(symbol, _DEFAULT_LARGE_TRADE_THRESHOLD)
+        threshold = _get_large_trade_threshold(symbol)
         sql = f"""
             WITH ordered AS (
                 SELECT

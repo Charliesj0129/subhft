@@ -31,10 +31,10 @@ global_defaults:
 
 # Per-strategy limits (conservative first-launch values)
 strategies:
-  CBS_TMFD6:
+  CBS_TMF:
     max_position_lots: 1
     max_order_qty: 1
-  OPPORTUNISTIC_MM_TMFD6:
+  OPPORTUNISTIC_MM_TMF:
     max_position_lots: 1
     max_order_qty: 1
 

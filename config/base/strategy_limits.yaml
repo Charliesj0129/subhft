@@ -12,29 +12,29 @@ global_defaults:
   max_position_lots: 3               # Max 3 lots (OpMM_TX + OpMM_TMF + CBS concurrent)
   max_daily_loss: 50000000           # 5,000 NTD x10000 (triggers rejection)
   max_price_cap: 5000.0              # Stocks: max 5,000 NTD per share
-  max_price_cap_futures: 50000.0     # Futures: max 50,000 NTD (covers TMFD6/TXFD6/MXFD6)
+  max_price_cap_futures: 50000.0     # Futures: max 50,000 NTD (covers TMF/TXF/MXF)
   max_price_cap_options: 10000.0     # TXO options: max 10,000 NTD
 
 strategies:
   MM_ALPHA_V1:
     max_position_lots: 1             # Max 1 lot per symbol
     max_order_qty: 1                 # 1 lot per order (conservative)
-  OPPORTUNISTIC_MM_TXFD6:
+  OPPORTUNISTIC_MM_TXF:
     max_position_lots: 5             # Max 5 lots (Challenger recommendation)
     max_order_qty: 1                 # 1 lot per order
-  OPPORTUNISTIC_MM_TMFD6:
+  OPPORTUNISTIC_MM_TMF:
     max_position_lots: 1             # Conservative: 1 lot only (L1 depth = 1 contract)
     max_order_qty: 1                 # 1 lot per order
-  CBS_TMFD6:
+  CBS_TMF:
     max_position_lots: 1             # Conservative single lot
     max_order_qty: 1                 # 1 lot per order
-  MOMENTUM_BOUNCE_TMFD6:
+  MOMENTUM_BOUNCE_TMF:
     max_position_lots: 1             # Conservative single lot (shadow mode)
     max_order_qty: 1                 # 1 lot per order
-  R47_MAKER_TXFD6:
+  R47_MAKER_TXF:
     max_position_lots: 1             # Hard cap = strategy max_pos (RC-1 incident 2026-04-15)
     max_order_qty: 1                 # 1 lot per quote side
-  R47_MAKER_TMFD6:
+  R47_MAKER_TMF:
     max_position_lots: 1             # Hard cap = strategy max_pos (RC-1 incident 2026-04-15)
     max_order_qty: 1                 # 1 lot per quote side
 

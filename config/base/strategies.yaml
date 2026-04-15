@@ -3,46 +3,50 @@
 #
 # IMPORTANT: All spread thresholds use POINTS (not bps).
 # Points are stable across price levels; bps shifts with index value.
-# Breakeven = RT_cost_NTD / point_value_NTD (e.g. TMFD6: 40/10 = 4 pts)
+# Breakeven = RT_cost_NTD / point_value_NTD (e.g. TMF: 40/10 = 4 pts)
+#
+# SYMBOL CONVENTION: Use C0/C1 aliases (e.g. TMFC0 = front month).
+# Aliases are resolved to actual month codes at runtime after broker login.
+# This eliminates monthly manual updates.
 
 strategies:
-  # --- OpportunisticMM on TMFD6 (微台指) — SHADOW MODE ---
+  # --- OpportunisticMM on TMF (微台指) — SHADOW MODE ---
   # Point-based threshold: RT cost = 40 NTD = 4 pts, threshold = 5 pts (1 pt edge)
   # Economics: 1 pt = 10 NTD, median spread 4 pts, avg profitable spread 19.7 pts
   # Research: Round 16, docs/alpha-research/
-  - id: "OPPORTUNISTIC_MM_TMFD6"
+  - id: "OPPORTUNISTIC_MM_TMF"
     module: "hft_platform.strategies.opportunistic_mm"
     class: "OpportunisticMM"
     enabled: false
     product_type: "FUT"
-    symbols: ["TMFD6"]
+    symbols: ["TMFC0"]
     params:
       spread_threshold_pts: 5    # 5 pts > 4 pts breakeven (RT 40 NTD / 10 NTD per pt)
       tick_size_ratio_pct: 50
 
-  # --- OpportunisticMM on TXFD6 (大台) — DISABLED ---
+  # --- OpportunisticMM on TXF (大台) — DISABLED ---
   # Point-based threshold: RT cost ≈ 60 NTD ≈ 0.3 pts (1 pt = 200 NTD), threshold = 3 pts
-  # Disabled: switching shadow focus to TMFD6
-  - id: "OPPORTUNISTIC_MM_TXFD6"
+  # Disabled: switching shadow focus to TMF
+  - id: "OPPORTUNISTIC_MM_TXF"
     module: "hft_platform.strategies.opportunistic_mm"
     class: "OpportunisticMM"
     enabled: false
     product_type: "FUT"
-    symbols: ["TXFD6"]
+    symbols: ["TXFC0"]
     params:
       spread_threshold_pts: 3    # 3 pts (conservative for 大台)
       tick_size_ratio_pct: 50
 
-  # --- Cascade Bounce Strategy (TMFD6 rollout) ---
+  # --- Cascade Bounce Strategy (TMF rollout) ---
   # Vol-normalized contrarian entry with IOC-at-touch entry and passive limit exit.
-  # During rollout this is the only enabled TMFD6 live strategy because intraday_pnl
+  # During rollout this is the only enabled TMF live strategy because intraday_pnl
   # remains global in strategy_limits.yaml.
-  - id: "CBS_TMFD6"
+  - id: "CBS_TMF"
     module: "hft_platform.strategies.cascade_bounce"
     class: "CascadeBounceStrategy"
     enabled: false  # Disabled: 0/84 contrarian, 0/6 momentum configs profitable
     product_type: "FUT"
-    symbols: ["TMFD6"]
+    symbols: ["TMFC0"]
     params:
       lookback_ns: 60000000000         # 60s vol window
       trigger_sigma: 3.0
@@ -54,17 +58,17 @@ strategies:
       session_start_sec: 0            # 00:00 TWN — full-day fallback; SessionGovernor is authoritative in prod
       session_end_sec: 86400          # 24:00 TWN — keeps day/night sessions eligible when governor is enabled
 
-  # --- Momentum Bounce (CBS-Flipped) TMFD6 — SHADOW MODE ---
+  # --- Momentum Bounce (CBS-Flipped) TMF — SHADOW MODE ---
   # Trades WITH sigma-normalized large moves (momentum, not contrarian).
   # Trailing stop + hard SL + time exit. Deploy with HFT_ORDER_MODE=sim.
   # March regime: 51% win, median ~breakeven. Jan-Feb: anti-momentum.
   # Shadow mode accumulates OOS evidence; switch to live after 5+ positive days.
-  - id: "MOMENTUM_BOUNCE_TMFD6"
+  - id: "MOMENTUM_BOUNCE_TMF"
     module: "hft_platform.strategies.momentum_bounce"
     class: "MomentumBounceStrategy"
     enabled: false  # Disabled: research incomplete, not ready for live
     product_type: "FUT"
-    symbols: ["TMFD6"]
+    symbols: ["TMFC0"]
     params:
       lookback_ns: 60000000000         # 60s vol window (same as CBS)
       trigger_sigma: 3.0               # 3-sigma normalized move threshold
@@ -80,16 +84,16 @@ strategies:
   # Cross-symbol momentum: TX large-volume ticks predict TMF 10-30min moves.
   # Research: R28, E[net]=+30.6 pts/trade (SL100 + 15min horizon).
   # Enable for shadow: set enabled=true, run with HFT_ORDER_MODE=sim
-  # Subscribes to BOTH TXFD6 (signal) and TMFD6 (trade).
+  # Subscribes to BOTH TXF (signal) and TMF (trade).
   - id: "TX_TMF_LEADLAG"
     module: "hft_platform.strategies.tx_tmf_leadlag"
     class: "TxTmfLeadLagStrategy"
     enabled: false
     product_type: "FUT"
-    symbols: ["TXFD6", "TMFD6"]
+    symbols: ["TXFC0", "TMFC0"]
     params:
-      signal_symbol: "TXFD6"
-      trade_symbol: "TMFD6"
+      signal_symbol: "TXFC0"
+      trade_symbol: "TMFC0"
       dvol_threshold: 20
       sl_pts: 100
       max_hold_ns: 900000000000      # 15min
@@ -98,18 +102,18 @@ strategies:
       session_start_sec: 2700         # 00:45 UTC = 08:45 TWN
       session_end_sec: 20700          # 05:45 UTC = 13:45 TWN
 
-  # --- R47 Maker (TMFD6) — Spread-Filtered MM ---
+  # --- R47 Maker (TMF) — Spread-Filtered MM ---
   # Compromise backtest (25 days, CK-direct with queue model):
   #   spr5_back (most conservative): +10,856 pts, 36,217 fills, 69.3% WR
   #   spr5_mid: +34,051 pts, 55,639 fills, 73.6% WR, +13.6K NTD/day
-  # TMFD6 economics: 1pt=10NTD, RT cost=4.0pts. spread>=5 profitable with QI skew.
-  # 2026-04-10: Optimized for TMFD6 fee structure. QI skew reduces AS by ~20%.
-  - id: "R47_MAKER_TMFD6"
+  # TMF economics: 1pt=10NTD, RT cost=4.0pts. spread>=5 profitable with QI skew.
+  # 2026-04-10: Optimized for TMF fee structure. QI skew reduces AS by ~20%.
+  - id: "R47_MAKER_TMF"
     module: "hft_platform.strategies.r47_maker"
     class: "R47MakerStrategy"
     enabled: true
     product_type: "FUT"
-    symbols: ["TMFD6"]              # 微台: 本金門檻低, 1pt=10NTD
+    symbols: ["TMFC0"]              # 微台: 本金門檻低, 1pt=10NTD (C0=front month)
     params:
       pe_danger_threshold: 0.0     # Disabled
       pe_window: 100

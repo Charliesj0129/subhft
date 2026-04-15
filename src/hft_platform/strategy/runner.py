@@ -397,6 +397,18 @@ class StrategyRunner:
         """Set StormGuard reference for triggering HALT on persistent queue-full."""
         self._storm_guard = storm_guard
 
+    def resolve_symbol_aliases(self) -> None:
+        """Re-resolve strategy symbols using the current alias map.
+
+        Called after broker login+subscription when alias_to_actual is populated.
+        Must be called before the first event is processed.
+        """
+        if not self.symbol_metadata or not self.symbol_metadata.alias_to_actual:
+            return
+        for strategy in self.strategies:
+            self._resolve_strategy_symbols(strategy)
+            self._resolve_strategy_symbol_params(strategy)
+
     def set_publish_sink(self, sink: Any) -> None:
         """Set the publish callback for strategy-to-bus publication."""
         self._publish_sink = sink
@@ -578,7 +590,43 @@ class StrategyRunner:
             resolved.update(self.symbol_metadata.symbols_for_tags(raw_tags))
 
         if resolved or used_tag:
+            # Resolve C0/C1/R1/R2 aliases to actual month codes so
+            # strategy.symbols matches event.symbol from broker callbacks.
+            if self.symbol_metadata and self.symbol_metadata.alias_to_actual:
+                before = set(resolved)
+                resolved = self.symbol_metadata.resolve_symbols(resolved)
+                alias_keys = before & set(self.symbol_metadata.alias_to_actual)
+                if alias_keys:
+                    logger.info(
+                        "strategy_symbols_alias_resolved",
+                        strategy_id=strategy.strategy_id,
+                        aliases={a: self.symbol_metadata.resolve_symbol(a) for a in alias_keys},
+                    )
             strategy.symbols = set(resolved)
+        # Also resolve symbol aliases in strategy params (e.g. signal_symbol, trade_symbol)
+        self._resolve_strategy_symbol_params(strategy)
+
+    def _resolve_strategy_symbol_params(self, strategy: BaseStrategy) -> None:
+        """Resolve C0/C1/R1/R2 aliases in strategy's symbol-valued attributes."""
+        if not self.symbol_metadata or not self.symbol_metadata.alias_to_actual:
+            return
+        # Known symbol-valued attributes (private convention: _<name>_symbol)
+        for attr_name in dir(strategy):
+            if not attr_name.endswith("_symbol"):
+                continue
+            val = getattr(strategy, attr_name, None)
+            if not isinstance(val, str):
+                continue
+            resolved = self.symbol_metadata.resolve_symbol(val)
+            if resolved != val:
+                setattr(strategy, attr_name, resolved)
+                logger.info(
+                    "strategy_param_alias_resolved",
+                    strategy_id=strategy.strategy_id,
+                    param=attr_name,
+                    alias=val,
+                    actual=resolved,
+                )
 
     def _rebuild_executors(self):
         """Rebuild executor cache when strategies are replaced externally."""

@@ -74,7 +74,7 @@ class TestGetReportSymbols:
         monkeypatch.delenv("HFT_REPORT_SYMBOLS", raising=False)
         from hft_platform.bot.app import get_report_symbols
 
-        assert get_report_symbols() == ["TXFD6"]
+        assert get_report_symbols() == ["TXFC0"]
 
     def test_parses_comma_separated(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HFT_REPORT_SYMBOLS", "TXFD6,TMFD6,2330")
@@ -92,7 +92,7 @@ class TestGetReportSymbols:
         monkeypatch.setenv("HFT_REPORT_SYMBOLS", "")
         from hft_platform.bot.app import get_report_symbols
 
-        assert get_report_symbols() == ["TXFD6"]
+        assert get_report_symbols() == ["TXFC0"]
 
 
 class TestAccessControl:

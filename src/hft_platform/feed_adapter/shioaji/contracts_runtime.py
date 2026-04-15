@@ -307,6 +307,9 @@ class ContractsRuntime:
                 self._client.subscribed_codes.add(code)
         self._client.subscribed_count = len(self._client.subscribed_codes)
         self._client._refresh_quote_routes()
+        # Rebuild alias map after symbol reload
+        self._client.alias_to_actual.clear()
+        self.resolve_symbol_aliases()
 
     def is_contract_cache_stale(self) -> bool:
         import datetime
@@ -572,6 +575,52 @@ class ContractsRuntime:
             )
             errors.append("subscription_count_exceeded")
         logger.info("preflight_complete", passed_all=(len(errors) == 0), errors=errors)
+
+    def resolve_symbol_aliases(self, codes: list[str] | None = None) -> dict[str, str]:
+        """Resolve C0/C1/R1/R2 aliases to actual month codes via broker contracts.
+
+        Args:
+            codes: List of symbol codes to resolve. If None, resolves all
+                   symbols from client.symbols config.
+
+        Returns:
+            Mapping of config_code → actual_code for aliases that differ.
+            Identity mappings (code == actual) are omitted.
+        """
+        if codes is None:
+            codes = [
+                str(sym.get("code", ""))
+                for sym in self._client.symbols
+                if sym.get("code")
+            ]
+
+        alias_map: dict[str, str] = {}
+        for code in codes:
+            code = str(code).strip()
+            if not code:
+                continue
+            # Find matching symbol config for exchange/product_type
+            sym_cfg = next(
+                (s for s in self._client.symbols if s.get("code") == code),
+                None,
+            )
+            exchange = (sym_cfg or {}).get("exchange", "FUT")
+            product_type = (sym_cfg or {}).get("product_type") or (sym_cfg or {}).get("security_type")
+            contract = self._client._get_contract(
+                exchange, code, product_type=product_type, allow_synthetic=False,
+            )
+            if contract:
+                actual = getattr(contract, "code", None) or code
+                if actual != code:
+                    alias_map[code] = actual
+                    logger.info(
+                        "alias_resolved",
+                        config_code=code,
+                        actual_code=actual,
+                    )
+        # Merge into client-level map
+        self._client.alias_to_actual.update(alias_map)
+        return alias_map
 
     def start_contract_refresh_thread(self) -> None:
         if self._client._contract_refresh_running:

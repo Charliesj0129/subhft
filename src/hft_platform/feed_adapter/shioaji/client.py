@@ -195,6 +195,7 @@ class ShioajiClient:
         self._load_config()
         self.subscribed_count = 0
         self.subscribed_codes: set[str] = set()
+        self.alias_to_actual: dict[str, str] = {}  # config code → callback code (e.g. TXFC0 → TXFE6)
         self.tick_callback: Callable[..., Any] | None = None
         self.metrics = MetricsRegistry.get()
         _dispatch_async = os.getenv("HFT_SHIOAJI_QUOTE_DISPATCH_THREAD", "1").strip().lower() in {

@@ -2,10 +2,11 @@ broker: shioaji  # shioaji | fubon — selects BrokerFacade implementation
 
 mode: sim
 symbols:
-  - "TMFD6"
+  - "TMFC0"    # C0 = front-month alias (auto-resolved by Shioaji, no monthly update)
+  - "TXFC0"    # C0 = front-month alias
 
 strategy:
-  id: CBS_TMFD6
+  id: CBS_TMF
   module: hft_platform.strategies.cascade_bounce
   class: CascadeBounceStrategy
   params:

@@ -205,6 +205,30 @@ class SessionGovernor:
         """Expose the TrackGate for injection into StrategyRunner."""
         return self._track_gate
 
+    def resolve_symbol_aliases(self, alias_map: dict[str, str] | None = None) -> None:
+        """Re-register symbols using alias→actual mapping.
+
+        Called after broker login when alias_to_actual is populated.
+        For each track, if a symbol has an alias mapping, register the actual
+        code alongside or instead of the alias in the TrackGate.
+        """
+        if not alias_map:
+            return
+        for track_name, track_cfg in self._tracks.items():
+            new_symbols = []
+            for symbol in track_cfg.symbols:
+                actual = alias_map.get(symbol, symbol)
+                new_symbols.append(actual)
+                if actual != symbol:
+                    self._track_gate.register_symbol(actual, track_name)
+                    logger.info(
+                        "session_governor_alias_resolved",
+                        track=track_name,
+                        alias=symbol,
+                        actual=actual,
+                    )
+            track_cfg.symbols = new_symbols
+
     def register_phase_callback(self, callback: Callable[[str, SessionPhase, SessionPhase], None]) -> None:
         """Register a callback invoked on phase transitions: (track, old, new)."""
         self._phase_callbacks.append(callback)
