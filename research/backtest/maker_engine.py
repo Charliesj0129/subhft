@@ -1,0 +1,466 @@
+"""MakerEngine — CK-direct queue depletion backtest for maker strategies.
+
+Extracted and generalized from research/tools/r47_ck_direct_backtest_v2.py.
+Strategy logic is injected via MakerStrategy protocol — engine handles
+market simulation, fill determination, and PnL accounting.
+"""
+from __future__ import annotations
+
+import os
+import uuid
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Protocol
+
+import numpy as np
+import requests
+import structlog
+
+from research.backtest.cost_models import CostModel
+from research.backtest.fill_models import FillModel, QueuePosition
+from research.backtest.types import BacktestResult
+
+logger = structlog.get_logger()
+
+
+@dataclass(frozen=True)
+class TickData:
+    """Single market event (bidask update or trade)."""
+
+    exch_ts: int
+    bid_price: int
+    ask_price: int
+    bid_qty: int
+    ask_qty: int
+    trade_price: int
+    trade_volume: int
+    is_trade: bool
+    scale: int = 1_000_000
+
+    @property
+    def spread_pts(self) -> int:
+        return (self.ask_price - self.bid_price) // self.scale
+
+    @property
+    def mid_price(self) -> float:
+        return (self.bid_price + self.ask_price) / (2 * self.scale)
+
+
+@dataclass(frozen=True)
+class PostQuote:
+    side: str
+    price: int
+    qty: int = 1
+
+
+@dataclass(frozen=True)
+class CancelQuote:
+    side: str
+
+
+@dataclass(frozen=True)
+class Hold:
+    pass
+
+
+class MakerStrategy(Protocol):
+    """Strategy decides when/where to quote. Engine decides fills."""
+
+    def on_tick(self, tick: TickData) -> list[PostQuote | CancelQuote | Hold]: ...
+
+    def on_fill(self, side: str, price: int, mid_price: float) -> None: ...
+
+
+class ClickHouseSource:
+    """Fetch tick + bidask data from ClickHouse."""
+
+    __slots__ = ("_host", "_port", "_password", "_url")
+
+    def __init__(
+        self,
+        host: str | None = None,
+        port: int | None = None,
+        password: str | None = None,
+    ) -> None:
+        self._host = host or os.environ.get("CLICKHOUSE_HOST", "localhost")
+        self._port = port or int(os.environ.get("CLICKHOUSE_PORT", "8123"))
+        self._password = password or os.environ.get("CLICKHOUSE_PASSWORD", "")
+        self._url = f"http://{self._host}:{self._port}/"
+
+    def health_check(self) -> None:
+        try:
+            resp = requests.post(
+                self._url,
+                params={"password": self._password},
+                data="SELECT 1",
+                timeout=5,
+            )
+            resp.raise_for_status()
+        except Exception as exc:
+            raise ConnectionError(
+                f"ClickHouse not reachable at {self._url}. "
+                f"Please start it: docker compose up -d clickhouse\n"
+                f"Original error: {exc}"
+            ) from exc
+
+    def _query(self, sql: str) -> list[list[str]]:
+        resp = requests.post(
+            self._url,
+            params={"password": self._password},
+            data=sql + " FORMAT TSVWithNames",
+            timeout=120,
+        )
+        resp.raise_for_status()
+        lines = resp.text.strip().split("\n")
+        if len(lines) < 2:
+            return []
+        rows = [line.split("\t") for line in lines[1:] if line]
+        return [lines[0].split("\t")] + rows
+
+    def load_day(self, symbol: str, date: str) -> list[TickData]:
+        """Load interleaved bidask + tick events for one day, sorted by exch_ts."""
+        scale = 1_000_000
+
+        ba_sql = f"""
+        SELECT exch_ts,
+               bids_price[1] AS bid1_p, bids_vol[1] AS bid1_v,
+               asks_price[1] AS ask1_p, asks_vol[1] AS ask1_v
+        FROM hft.market_data
+        WHERE symbol = '{symbol}' AND type = 'BidAsk'
+          AND toDate(fromUnixTimestamp64Nano(exch_ts)) = '{date}'
+          AND length(bids_price) >= 1 AND length(asks_price) >= 1
+        ORDER BY exch_ts
+        """
+        tick_sql = f"""
+        SELECT exch_ts, price_scaled AS price, volume
+        FROM hft.market_data
+        WHERE symbol = '{symbol}' AND type = 'Tick'
+          AND toDate(fromUnixTimestamp64Nano(exch_ts)) = '{date}'
+        ORDER BY exch_ts
+        """
+        ba_rows = self._query(ba_sql)
+        tick_rows = self._query(tick_sql)
+
+        events: list[TickData] = []
+
+        if len(ba_rows) > 1:
+            for row in ba_rows[1:]:
+                events.append(
+                    TickData(
+                        exch_ts=int(row[0]),
+                        bid_price=int(row[1]),
+                        ask_price=int(row[3]),
+                        bid_qty=int(row[2]),
+                        ask_qty=int(row[4]),
+                        trade_price=0,
+                        trade_volume=0,
+                        is_trade=False,
+                        scale=scale,
+                    )
+                )
+
+        if len(tick_rows) > 1:
+            for row in tick_rows[1:]:
+                events.append(
+                    TickData(
+                        exch_ts=int(row[0]),
+                        bid_price=0,
+                        ask_price=0,
+                        bid_qty=0,
+                        ask_qty=0,
+                        trade_price=int(row[1]),
+                        trade_volume=int(row[2]),
+                        is_trade=True,
+                        scale=scale,
+                    )
+                )
+
+        events.sort(key=lambda e: e.exch_ts)
+        return events
+
+    def available_dates(self, symbol: str) -> list[str]:
+        sql = f"""
+        SELECT DISTINCT toDate(fromUnixTimestamp64Nano(exch_ts)) AS d
+        FROM hft.market_data
+        WHERE symbol = '{symbol}'
+        ORDER BY d
+        """
+        rows = self._query(sql)
+        if len(rows) <= 1:
+            return []
+        return [row[0] for row in rows[1:]]
+
+
+class MakerEngine:
+    """CK-direct maker backtest engine."""
+
+    __slots__ = ("_fill_model", "_cost_model", "_ck_source")
+
+    def __init__(
+        self,
+        fill_model: FillModel,
+        cost_model: CostModel,
+        ck_source: ClickHouseSource | None = None,
+    ) -> None:
+        self._fill_model = fill_model
+        self._cost_model = cost_model
+        self._ck_source = ck_source or ClickHouseSource()
+
+    @property
+    def engine_type(self) -> str:
+        return "maker"
+
+    @property
+    def fill_model_name(self) -> str:
+        return self._fill_model.label
+
+    def run(
+        self,
+        strategy: MakerStrategy,
+        instrument: str,
+        dates: list[str] | None = None,
+        pipeline_mode: str = "strict",
+    ) -> BacktestResult:
+        self._ck_source.health_check()
+
+        if dates is None:
+            dates = self._ck_source.available_dates(instrument)
+        if not dates:
+            raise ValueError(f"No data available for {instrument}")
+
+        daily_pnl: list[dict] = []
+        equity_points: list[float] = [0.0]
+        total_gross = 0.0
+        total_fills = 0
+        spread_breakdown: dict[int, dict] = {}
+
+        for date in dates:
+            events = self._ck_source.load_day(instrument, date)
+            if not events:
+                continue
+
+            day_fills, day_position = self._run_day(strategy, events)
+            day_gross, day_trips, day_wins = self._compute_fifo_pnl(day_fills)
+            day_net = self._cost_model.apply(day_gross, len(day_fills))
+
+            total_gross += day_gross
+            total_fills += len(day_fills)
+            equity_points.append(equity_points[-1] + day_net)
+
+            daily_pnl.append(
+                {
+                    "date": date,
+                    "pnl_pts": round(day_net, 2),
+                    "gross_pts": round(day_gross, 2),
+                    "fills": len(day_fills),
+                    "trips": day_trips,
+                    "wins": day_wins,
+                    "final_pos": day_position,
+                }
+            )
+
+            for f in day_fills:
+                spr = f.get("spread_pts", 0)
+                if spr not in spread_breakdown:
+                    spread_breakdown[spr] = {"fills": 0, "gross_pnl": 0.0}
+                spread_breakdown[spr]["fills"] += 1
+
+        equity = np.array(equity_points)
+        total_net = self._cost_model.apply(total_gross, total_fills)
+        n_days = len(daily_pnl)
+        winning_days = sum(1 for d in daily_pnl if d["pnl_pts"] > 0)
+        daily_returns = np.diff(equity)
+
+        sharpe = 0.0
+        if len(daily_returns) > 1 and np.std(daily_returns) > 0:
+            sharpe = float(
+                np.mean(daily_returns) / np.std(daily_returns) * np.sqrt(252)
+            )
+
+        max_dd = 0.0
+        peak = equity[0]
+        for val in equity:
+            peak = max(peak, val)
+            dd = (peak - val) / max(abs(peak), 1e-9)
+            max_dd = max(max_dd, dd)
+
+        pnl_per_fill = total_net / total_fills if total_fills > 0 else 0.0
+        qf = getattr(self._fill_model, "queue_fraction", None)
+
+        return BacktestResult(
+            signals=np.array([]),
+            equity_curve=equity,
+            positions=np.array([]),
+            sharpe_is=sharpe,
+            sharpe_oos=0.0,
+            ic_series=np.array([]),
+            ic_mean=0.0,
+            ic_std=0.0,
+            ic_tstat=0.0,
+            ic_pvalue=1.0,
+            ic_halflife=0,
+            sortino=0.0,
+            cvar_5pct=0.0,
+            turnover=0.0,
+            max_drawdown=max_dd,
+            regime_metrics={},
+            capacity_estimate=0.0,
+            run_id=str(uuid.uuid4())[:12],
+            config_hash="",
+            latency_profile={},
+            engine_type="maker",
+            fill_model=self._fill_model.label,
+            cost_model=self._cost_model.label,
+            instrument=instrument,
+            data_period=f"{dates[0]}..{dates[-1]}" if dates else "",
+            data_source=f"clickhouse://{self._ck_source._host}:{self._ck_source._port}/hft",
+            pipeline_mode=pipeline_mode,
+            created_at=datetime.now(timezone.utc).isoformat(),
+            queue_fraction=qf,
+            maker_scorecard={
+                "total_pnl_pts": round(total_net, 2),
+                "total_fills": total_fills,
+                "pnl_per_fill": round(pnl_per_fill, 4),
+                "winning_days": winning_days,
+                "winning_day_pct": (
+                    round(winning_days / n_days * 100, 1) if n_days > 0 else 0
+                ),
+                "n_days": n_days,
+            },
+            per_spread_breakdown={
+                str(k): v for k, v in sorted(spread_breakdown.items())
+            },
+            daily_pnl=daily_pnl,
+        )
+
+    def _run_day(
+        self,
+        strategy: MakerStrategy,
+        events: list[TickData],
+    ) -> tuple[list[dict], int]:
+        """Run strategy on one day of events."""
+        buy_order: QueuePosition | None = None
+        sell_order: QueuePosition | None = None
+        position = 0
+        fills: list[dict] = []
+        cur_bid = cur_ask = cur_bid_v = cur_ask_v = 0
+
+        for event in events:
+            if not event.is_trade:
+                cur_bid = event.bid_price
+                cur_ask = event.ask_price
+                cur_bid_v = event.bid_qty
+                cur_ask_v = event.ask_qty
+
+                if cur_ask <= cur_bid:
+                    continue
+
+                if buy_order is not None and buy_order.price != cur_bid:
+                    buy_order = None
+                if sell_order is not None and sell_order.price != cur_ask:
+                    sell_order = None
+
+                actions = strategy.on_tick(event)
+                for action in actions:
+                    if isinstance(action, PostQuote):
+                        qp = self._fill_model.post_quote(
+                            action.side,
+                            action.price,
+                            cur_bid_v if action.side == "buy" else cur_ask_v,
+                        )
+                        if action.side == "buy":
+                            buy_order = qp
+                        else:
+                            sell_order = qp
+                    elif isinstance(action, CancelQuote):
+                        if action.side == "buy":
+                            buy_order = None
+                        else:
+                            sell_order = None
+            else:
+                mid = (
+                    (cur_bid + cur_ask) / (2 * event.scale) if cur_bid > 0 else 0
+                )
+
+                if buy_order is not None:
+                    result = self._fill_model.check_fills(
+                        [buy_order],
+                        event.trade_price,
+                        event.trade_volume,
+                    )
+                    if result:
+                        fills.append(
+                            {
+                                "side": "buy",
+                                "price": buy_order.price,
+                                "mid": mid,
+                                "spread_pts": (
+                                    (cur_ask - cur_bid) // event.scale
+                                    if cur_bid > 0
+                                    else 0
+                                ),
+                            }
+                        )
+                        strategy.on_fill("buy", buy_order.price, mid)
+                        position += 1
+                        buy_order = None
+
+                if sell_order is not None:
+                    result = self._fill_model.check_fills(
+                        [sell_order],
+                        event.trade_price,
+                        event.trade_volume,
+                    )
+                    if result:
+                        fills.append(
+                            {
+                                "side": "sell",
+                                "price": sell_order.price,
+                                "mid": mid,
+                                "spread_pts": (
+                                    (cur_ask - cur_bid) // event.scale
+                                    if cur_bid > 0
+                                    else 0
+                                ),
+                            }
+                        )
+                        strategy.on_fill("sell", sell_order.price, mid)
+                        position -= 1
+                        sell_order = None
+
+        return fills, position
+
+    @staticmethod
+    def _compute_fifo_pnl(fills: list[dict]) -> tuple[float, int, int]:
+        """FIFO PnL matching. Returns (gross_pnl_pts, n_round_trips, n_wins)."""
+        buy_q: list[float] = []
+        sell_q: list[float] = []
+        realized = 0.0
+        trips = 0
+        wins = 0
+        scale = 1_000_000
+
+        for f in fills:
+            price_pts = f["price"] / scale
+            if f["side"] == "buy":
+                if sell_q:
+                    sp = sell_q.pop(0)
+                    pnl = sp - price_pts
+                    realized += pnl
+                    trips += 1
+                    if pnl > 0:
+                        wins += 1
+                else:
+                    buy_q.append(price_pts)
+            else:
+                if buy_q:
+                    bp = buy_q.pop(0)
+                    pnl = price_pts - bp
+                    realized += pnl
+                    trips += 1
+                    if pnl > 0:
+                        wins += 1
+                else:
+                    sell_q.append(price_pts)
+
+        return realized, trips, wins
