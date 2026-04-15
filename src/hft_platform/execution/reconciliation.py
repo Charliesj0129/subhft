@@ -144,6 +144,9 @@ class ReconciliationService:
         self._auto_correct_stock_max_qty: int = int(
             os.environ.get("HFT_RECON_AUTO_CORRECT_STOCK_MAX_QTY", "10")
         )
+        # Platform-managed symbols: derived dynamically from client at sync time.
+        # Non-platform symbols (e.g. manually traded via broker app) get relaxed
+        # treatment: phantom positions are auto-resolved without triggering HALT.
 
     @property
     def drift_streak(self) -> int:
@@ -341,6 +344,38 @@ class ReconciliationService:
 
             # 4. Compute discrepancies
             discrepancies = self._compute_discrepancies(local_map, broker_map)
+
+            # 4b. Auto-resolve non-platform symbol phantoms immediately.
+            # Symbols not in the client's subscribed set were placed externally
+            # (e.g. manual broker app trade).  If broker reports 0 for such a
+            # symbol, clear the phantom position without entering the HALT path.
+            platform_codes = self._get_platform_symbols()
+            if platform_codes:
+                resolved: list[PositionDiscrepancy] = []
+                kept: list[PositionDiscrepancy] = []
+                for d in discrepancies:
+                    if d.symbol not in platform_codes and d.broker_qty == 0 and d.local_qty != 0:
+                        self.store.clear_symbol_positions(d.symbol)
+                        resolved.append(d)
+                    else:
+                        kept.append(d)
+                if resolved:
+                    logger.warning(
+                        "non_platform_phantom_auto_resolved",
+                        resolved=[
+                            {"symbol": d.symbol, "local_qty": d.local_qty}
+                            for d in resolved
+                        ],
+                    )
+                    try:
+                        for d in resolved:
+                            self._metrics().reconciliation_auto_corrected_total.labels(
+                                symbol=d.symbol,
+                            ).inc()
+                    except Exception:
+                        pass
+                discrepancies = kept
+
             self._last_discrepancies = discrepancies
 
             # 5. Update reconciliation discrepancy metric (legacy)
@@ -468,6 +503,30 @@ class ReconciliationService:
         # True if ANY overlapping symbol persisted or grew; false only if ALL shrank
         return any(current_signature[s] >= previous_signature[s] for s in overlapping_symbols)
 
+    def _get_platform_symbols(self) -> set[str]:
+        """Return the set of symbols the platform is actively managing.
+
+        Combines the client's subscribed codes with alias→actual mappings.
+        Returns empty set if unavailable (disables the non-platform filter).
+        """
+        codes: set[str] = set()
+        sub = getattr(self.client, "subscribed_codes", None)
+        if sub:
+            codes |= set(sub)
+        alias_map = getattr(self.client, "alias_to_actual", None)
+        if alias_map:
+            codes |= set(alias_map.keys())
+            codes |= set(alias_map.values())
+        # Also include config-defined symbols as fallback
+        for s in self.config.get("symbols", []):
+            if isinstance(s, dict):
+                code = s.get("code", "")
+                if code:
+                    codes.add(code)
+            elif isinstance(s, str):
+                codes.add(s)
+        return codes
+
     @staticmethod
     def _is_futures(symbol: str) -> bool:
         """Heuristic: futures symbols contain common TAIFEX prefixes."""
@@ -507,22 +566,28 @@ class ReconciliationService:
     ) -> List[PositionDiscrepancy]:
         """Filter discrepancies eligible for auto-correction.
 
-        Only discrepancies where local=0 and broker has a small position are
-        auto-correctable (phantom order scenario). Large or sign-mismatch
-        discrepancies require manual intervention.
+        Two directions are supported:
+        - local=0, broker>0: orphaned phantom fill — adopt broker position.
+        - local>0, broker=0: expired/cleared position (e.g. option expiry,
+          manual broker-side close) — clear phantom local position.
+
+        Large or sign-mismatch discrepancies require manual intervention.
         """
         result: List[PositionDiscrepancy] = []
         for d in discrepancies:
-            # Only auto-correct when local is 0 (orphaned phantom fill)
-            if d.local_qty != 0:
-                continue
             max_qty = (
                 self._auto_correct_futures_max_qty
                 if d.is_futures
                 else self._auto_correct_stock_max_qty
             )
-            if abs(d.broker_qty) <= max_qty:
+            # Direction 1: local=0, broker>0 (orphaned phantom fill)
+            if d.local_qty == 0 and abs(d.broker_qty) <= max_qty:
                 result.append(d)
+                continue
+            # Direction 2: local>0, broker=0 (expired/cleared position)
+            if d.broker_qty == 0 and abs(d.local_qty) <= max_qty:
+                result.append(d)
+                continue
         return result
 
     async def _auto_correct_drift(
@@ -532,8 +597,10 @@ class ReconciliationService:
     ) -> None:
         """Adopt broker positions for auto-correctable drift.
 
-        Loads broker qty into PositionStore via load_recovery, then clears
-        the drift state so StormGuard can de-escalate.
+        Two directions:
+        - broker_qty > 0: load broker position into PositionStore via load_recovery.
+        - broker_qty == 0: clear phantom local position via clear_symbol_positions
+          (e.g. expired option, manual broker-side close).
         """
         for d in correctable:
             logger.critical(
@@ -543,17 +610,22 @@ class ReconciliationService:
                 broker_qty=d.broker_qty,
                 streak=self._critical_drift_streak,
             )
-            # Use load_recovery to inject broker position into PositionStore
-            # with strategy_id="*" (unknown ownership — matches startup_recon pattern).
-            self.store.load_recovery(
-                account_id="default",
-                symbol=d.symbol,
-                net_qty=d.broker_qty,
-                avg_price_scaled=-1,  # sentinel: unknown cost basis
-                realized_pnl_scaled=0,
-                fees_scaled=0,
-                strategy_id="*",
-            )
+            if d.broker_qty == 0:
+                # Broker cleared position (expiry, manual close, etc.)
+                # Remove all local entries for this symbol.
+                self.store.clear_symbol_positions(d.symbol)
+            else:
+                # Use load_recovery to inject broker position into PositionStore
+                # with strategy_id="*" (unknown ownership — matches startup_recon pattern).
+                self.store.load_recovery(
+                    account_id="default",
+                    symbol=d.symbol,
+                    net_qty=d.broker_qty,
+                    avg_price_scaled=-1,  # sentinel: unknown cost basis
+                    realized_pnl_scaled=0,
+                    fees_scaled=0,
+                    strategy_id="*",
+                )
             try:
                 self._metrics().reconciliation_auto_corrected_total.labels(
                     symbol=d.symbol

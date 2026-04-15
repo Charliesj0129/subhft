@@ -597,6 +597,38 @@ class PositionStore:
         logger.warning("position_store_reset", cleared_positions=count)
         return count
 
+    def clear_symbol_positions(self, symbol: str) -> int:
+        """Remove all position entries for *symbol* from store and recovery.
+
+        Used by reconciliation auto-correct when broker reports 0 for a
+        symbol that still has a phantom local position (e.g. expired option,
+        manual broker-side close).
+
+        Returns the number of position entries removed.
+        """
+        with self._fill_lock:
+            keys_to_remove = [
+                k for k, pos in self.positions.items() if pos.symbol == symbol
+            ]
+            for k in keys_to_remove:
+                self._evicted_realized_pnl_scaled += self.positions[k].realized_pnl_scaled
+                del self.positions[k]
+            rkeys_to_remove = [
+                rk
+                for rk, rd in self._recovery_positions.items()
+                if rd.get("symbol") == symbol
+            ]
+            for rk in rkeys_to_remove:
+                del self._recovery_positions[rk]
+        if keys_to_remove or rkeys_to_remove:
+            logger.info(
+                "symbol_positions_cleared",
+                symbol=symbol,
+                positions_removed=len(keys_to_remove),
+                recovery_removed=len(rkeys_to_remove),
+            )
+        return len(keys_to_remove)
+
     def _evict_flat_positions(self) -> None:
         """Evict positions with net_qty=0 to free memory."""
         flat_keys = [k for k, pos in self.positions.items() if pos.net_qty == 0]
