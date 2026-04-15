@@ -40,33 +40,100 @@ def run_gate_c(
     from research.registry.scorecard import compute_scorecard
 
     alpha_id = alpha.manifest.alpha_id
-    backtest_cfg = BacktestConfig(
-        data_paths=resolved_data_paths,
-        is_oos_split=float(config.is_oos_split),
-        signal_threshold=float(config.signal_threshold),
-        max_position=int(config.max_position),
-        maker_fee_bps=float(config.maker_fee_bps),
-        taker_fee_bps=float(config.taker_fee_bps),
-        sell_tax_bps=float(config.sell_tax_bps),
-        latency_profile_id=str(config.latency_profile_id),
-        local_decision_pipeline_latency_us=int(config.local_decision_pipeline_latency_us),
-        submit_ack_latency_ms=float(config.submit_ack_latency_ms),
-        modify_ack_latency_ms=float(config.modify_ack_latency_ms),
-        cancel_ack_latency_ms=float(config.cancel_ack_latency_ms),
-        live_uplift_factor=float(config.live_uplift_factor),
-        backtest_engine=str(config.backtest_engine),
-        queue_model=str(config.queue_model),
-        latency_model=str(config.latency_model),
-        exchange_model=str(config.exchange_model),
-        min_queue_survival_rate=float(config.min_queue_survival_rate),
-    )
-    backtest_engine_key = str(config.backtest_engine).lower()
-    if backtest_engine_key == "research":
-        raise ValueError("backtest_engine='research' 已於 v1.1 移除。請使用 'hftbacktest_v2'。")
-    for dp in resolved_data_paths:
-        ensure_hftbt_npz(dp)  # auto-convert research.npy → hftbt.npz; idempotent
-    runner: Any = HftNativeRunner(alpha, backtest_cfg)
-    base_result = runner.run()
+    strategy_type = getattr(alpha.manifest, "strategy_type", "taker")
+    instrument = getattr(alpha.manifest, "instrument", "")
+
+    if strategy_type == "maker":
+        # --- Maker path: CK-direct backtest ---
+        from research.backtest.cost_models import load_cost_profile
+        from research.backtest.fill_models import QueueDepletionFill
+        from research.backtest.maker_engine import ClickHouseSource, MakerEngine
+        from research.backtest.result_store import ResultStore
+
+        ck_source = ClickHouseSource()
+        ck_source.health_check()
+        cost = load_cost_profile(instrument)
+        qf = float(getattr(config, "queue_fraction", 0.5))
+        fill_model = QueueDepletionFill(queue_fraction=qf)
+        engine = MakerEngine(fill_model=fill_model, cost_model=cost, ck_source=ck_source)
+
+        maker_strategy = alpha.create_maker_strategy() if hasattr(alpha, "create_maker_strategy") else alpha
+        result = engine.run(
+            strategy=maker_strategy,
+            instrument=instrument,
+            pipeline_mode="strict",
+        )
+        ResultStore().save(result, alpha_id)
+        base_result = result
+        # Stub runner/cfg so downstream code that references _runner_cls/backtest_cfg still works
+        backtest_cfg = BacktestConfig(
+            data_paths=resolved_data_paths,
+            is_oos_split=float(config.is_oos_split),
+            signal_threshold=float(config.signal_threshold),
+            max_position=int(config.max_position),
+            maker_fee_bps=float(config.maker_fee_bps),
+            taker_fee_bps=float(config.taker_fee_bps),
+            sell_tax_bps=float(config.sell_tax_bps),
+            latency_profile_id=str(config.latency_profile_id),
+            local_decision_pipeline_latency_us=int(config.local_decision_pipeline_latency_us),
+            submit_ack_latency_ms=float(config.submit_ack_latency_ms),
+            modify_ack_latency_ms=float(config.modify_ack_latency_ms),
+            cancel_ack_latency_ms=float(config.cancel_ack_latency_ms),
+            live_uplift_factor=float(config.live_uplift_factor),
+            backtest_engine=str(config.backtest_engine),
+            queue_model=str(config.queue_model),
+            latency_model=str(config.latency_model),
+            exchange_model=str(config.exchange_model),
+            min_queue_survival_rate=float(config.min_queue_survival_rate),
+        )
+        runner: Any = HftNativeRunner(alpha, backtest_cfg)
+    else:
+        # --- Taker path: existing hft_native_runner (unchanged logic) ---
+        backtest_cfg = BacktestConfig(
+            data_paths=resolved_data_paths,
+            is_oos_split=float(config.is_oos_split),
+            signal_threshold=float(config.signal_threshold),
+            max_position=int(config.max_position),
+            maker_fee_bps=float(config.maker_fee_bps),
+            taker_fee_bps=float(config.taker_fee_bps),
+            sell_tax_bps=float(config.sell_tax_bps),
+            latency_profile_id=str(config.latency_profile_id),
+            local_decision_pipeline_latency_us=int(config.local_decision_pipeline_latency_us),
+            submit_ack_latency_ms=float(config.submit_ack_latency_ms),
+            modify_ack_latency_ms=float(config.modify_ack_latency_ms),
+            cancel_ack_latency_ms=float(config.cancel_ack_latency_ms),
+            live_uplift_factor=float(config.live_uplift_factor),
+            backtest_engine=str(config.backtest_engine),
+            queue_model=str(config.queue_model),
+            latency_model=str(config.latency_model),
+            exchange_model=str(config.exchange_model),
+            min_queue_survival_rate=float(config.min_queue_survival_rate),
+        )
+        backtest_engine_key = str(config.backtest_engine).lower()
+        if backtest_engine_key == "research":
+            raise ValueError("backtest_engine='research' 已於 v1.1 移除。請使用 'hftbacktest_v2'。")
+        for dp in resolved_data_paths:
+            ensure_hftbt_npz(dp)  # auto-convert research.npy → hftbt.npz; idempotent
+        runner: Any = HftNativeRunner(alpha, backtest_cfg)
+        base_result = runner.run()
+
+        # Enrich taker result with provenance (only if result is a dataclass instance)
+        import dataclasses as _dc
+
+        from research.backtest.result_store import ResultStore
+        from research.backtest.taker_engine import TakerEngine
+        if _dc.is_dataclass(base_result) and not isinstance(base_result, type):
+            data_period = ""
+            if resolved_data_paths:
+                from pathlib import Path as _Path
+                data_period = ",".join(str(_Path(p).stem) for p in resolved_data_paths)
+            base_result = TakerEngine().enrich_result(
+                base_result,
+                instrument=instrument,
+                data_period=data_period,
+                pipeline_mode="strict",
+            )
+            ResultStore().save(base_result, alpha_id)
     _runner_cls = type(runner)
     optimization_eval = _optimize_parameters(
         alpha=alpha,
