@@ -7,6 +7,8 @@ import os
 from dataclasses import fields
 from unittest.mock import MagicMock
 
+from hft_platform.contracts.constants import MANUAL_STRATEGY_ID
+
 
 def _make_store():
     store = MagicMock()
@@ -219,7 +221,7 @@ def test_recover_stale_checkpoint_broker_only(tmp_path):
     assert result.halted is False
     # Broker-only recovery uses load_recovery with broker qty
     # avg_price_scaled=-1 is sentinel for "unknown cost basis"
-    # strategy_id="*" marks wildcard ownership for broker-only positions
+    # strategy_id=MANUAL_STRATEGY_ID marks manual ownership for broker-only positions
     store.load_recovery.assert_called_once_with(
         account_id="test",
         symbol="2330",
@@ -227,7 +229,7 @@ def test_recover_stale_checkpoint_broker_only(tmp_path):
         avg_price_scaled=-1,
         realized_pnl_scaled=0,
         fees_scaled=0,
-        strategy_id="*",
+        strategy_id=MANUAL_STRATEGY_ID,
     )
 
 

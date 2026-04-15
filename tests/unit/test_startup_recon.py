@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from hft_platform.contracts.constants import MANUAL_STRATEGY_ID
 from hft_platform.execution.positions import Position, PositionStore
 from hft_platform.execution.startup_recon import StartupPositionVerifier, startup_recon_status
 
@@ -276,11 +277,11 @@ async def test_sell_direction_negates_qty() -> None:
 
 @pytest.mark.asyncio
 async def test_broker_only_recovery_uses_wildcard_strategy_id() -> None:
-    """Broker-only recovery must use '*' wildcard as strategy_id, not empty string.
+    """Broker-only recovery must use MANUAL_STRATEGY_ID as strategy_id, not empty string.
 
     Empty strategy_id silently breaks all strategy-level PnL reporting and
-    canary evaluation. The '*' wildcard is the established convention
-    (see StrategyRunner positions_by_strategy.get('*') fallback).
+    canary evaluation. MANUAL_STRATEGY_ID is the established convention
+    (see StrategyRunner positions_by_strategy.get(MANUAL_STRATEGY_ID) fallback).
     """
     client = FakeBrokerClient([FakeBrokerPosition("TXFD6", 2)])
     store = PositionStore()
@@ -291,13 +292,13 @@ async def test_broker_only_recovery_uses_wildcard_strategy_id() -> None:
     assert result.source == "broker_only"
     assert result.positions_loaded == 1
 
-    # Check that the recovered position has strategy_id="*"
+    # Check that the recovered position has strategy_id=MANUAL_STRATEGY_ID
     recovery = store._recovery_positions
     assert len(recovery) == 1
     key, data = next(iter(recovery.items()))
-    assert data["strategy_id"] == "*", f"Expected '*' wildcard, got '{data.get('strategy_id')}'"
+    assert data["strategy_id"] == MANUAL_STRATEGY_ID, f"Expected '{MANUAL_STRATEGY_ID}', got '{data.get('strategy_id')}'"
     assert "ACC1" in key
-    assert "*" in key  # key should be account:*:symbol
+    assert MANUAL_STRATEGY_ID in key  # key should be account:MANUAL:symbol
 
 
 @pytest.mark.asyncio
@@ -337,8 +338,8 @@ async def test_dual_recovery_broker_only_symbol_uses_wildcard() -> None:
 
     assert result.source == "dual"
     recovery = store._recovery_positions
-    # MXFJ6 should have strategy_id="*"
+    # MXFJ6 should have strategy_id=MANUAL_STRATEGY_ID
     mxfj_entries = {k: v for k, v in recovery.items() if "MXFJ6" in k}
     assert len(mxfj_entries) == 1
     mxfj_data = next(iter(mxfj_entries.values()))
-    assert mxfj_data["strategy_id"] == "*"
+    assert mxfj_data["strategy_id"] == MANUAL_STRATEGY_ID

@@ -9,6 +9,7 @@ from typing import Any, Callable, Dict, Optional, Union
 
 from structlog import get_logger
 
+from hft_platform.contracts.constants import MANUAL_STRATEGY_ID
 from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceCodec
 from hft_platform.engine.event_bus import RingBufferBus
@@ -618,7 +619,7 @@ class ExecutionRouter:
                 if len(parts) >= 3:
                     strategy_id = parts[1]
                     symbol = pos_data.get("symbol", parts[-1])
-                    if strategy_id and strategy_id != "*":
+                    if strategy_id and strategy_id != MANUAL_STRATEGY_ID:
                         ckpt_symbol_strategy[symbol] = strategy_id
 
         logger.info(
