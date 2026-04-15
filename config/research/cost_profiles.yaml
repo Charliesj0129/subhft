@@ -1,0 +1,16 @@
+# config/research/cost_profiles.yaml
+# Per-instrument cost model for standardized backtest engine.
+# Values in POINTS per side (not NTD).
+# Source: TAIFEX fee schedule + broker commission (retail, no rebates).
+
+TMFD6:
+  commission_pts_per_side: 1.3
+  tax_pts_per_side: 0.7
+  point_value_nwd: 10
+  scale: 1000000
+
+TXFD6:
+  commission_pts_per_side: 0.24
+  tax_pts_per_side: 0.24
+  point_value_nwd: 200
+  scale: 1000000
