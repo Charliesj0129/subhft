@@ -9,6 +9,7 @@ from typing import Any, Dict, List
 
 from structlog import get_logger
 
+from hft_platform.contracts.constants import MANUAL_STRATEGY_ID
 from hft_platform.core import timebase
 from hft_platform.execution.positions import PositionStore
 from hft_platform.observability.metrics import MetricsRegistry
@@ -616,7 +617,7 @@ class ReconciliationService:
                 self.store.clear_symbol_positions(d.symbol)
             else:
                 # Use load_recovery to inject broker position into PositionStore
-                # with strategy_id="*" (unknown ownership — matches startup_recon pattern).
+                # with MANUAL_STRATEGY_ID (explicit manual/orphan ownership).
                 self.store.load_recovery(
                     account_id="default",
                     symbol=d.symbol,
@@ -624,7 +625,7 @@ class ReconciliationService:
                     avg_price_scaled=-1,  # sentinel: unknown cost basis
                     realized_pnl_scaled=0,
                     fees_scaled=0,
-                    strategy_id="*",
+                    strategy_id=MANUAL_STRATEGY_ID,
                 )
             try:
                 self._metrics().reconciliation_auto_corrected_total.labels(

@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from hft_platform.contracts.constants import MANUAL_STRATEGY_ID
 from hft_platform.execution.positions import PositionStore
 from hft_platform.execution.reconciliation import (
     PositionDiscrepancy,
@@ -235,7 +236,7 @@ async def test_auto_correct_clears_phantom_local_position(guard):
         symbol="TX438500D6",
         net_qty=1,
         avg_price_scaled=100_0000,
-        strategy_id="*",
+        strategy_id=MANUAL_STRATEGY_ID,
     )
 
     svc = ReconciliationService(client, store, {}, storm_guard=guard)
@@ -279,7 +280,7 @@ async def test_non_platform_symbol_auto_resolved(guard):
         symbol="TX438500D6",
         net_qty=1,
         avg_price_scaled=100_0000,
-        strategy_id="*",
+        strategy_id=MANUAL_STRATEGY_ID,
     )
 
     svc = ReconciliationService(
@@ -345,7 +346,7 @@ class TestClearSymbolPositions:
             symbol="TX438500D6",
             net_qty=1,
             avg_price_scaled=100_0000,
-            strategy_id="*",
+            strategy_id=MANUAL_STRATEGY_ID,
         )
         assert any(
             rd.get("symbol") == "TX438500D6"
