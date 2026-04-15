@@ -5,7 +5,7 @@
 # Group 2: TXO Puts (178)
 
 symbols:
-- code: TXFC0
+- code: TXFR1
   exchange: TAIFEX
   group: 0
 - code: TXO26500D6

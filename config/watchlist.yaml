@@ -12,12 +12,12 @@ monitor:
   default_alpha_ids: [lob_kinetic_energy]
 
 symbols:
-  # === Futures (night + day) — C0 = front month alias (no monthly update) ===
-  - code: MXFC0
+  # === Futures (night + day) — R1 = Shioaji continuous front month (no monthly update) ===
+  - code: MXFR1
     alpha_ids: []
-  - code: TMFC0
+  - code: TMFR1
     alpha_ids: []
-  - code: TXFC0
+  - code: TXFR1
     alpha_ids: []
   # === Top Stocks (day session) ===
   - code: "2330"

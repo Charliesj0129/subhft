@@ -202,9 +202,9 @@ class TestSessionGovernorConfigLoading:
         sessions = yaml.safe_load(Path("config/base/session_governor.yaml").read_text(encoding="utf-8"))
 
         cbs = next(item for item in strategies["strategies"] if item["id"] == "CBS_TMF")
-        assert cbs["symbols"] == ["TMFC0"]
-        assert sessions["tracks"]["futures_day"]["symbols"] == ["TMFC0"]
-        assert sessions["tracks"]["futures_night"]["symbols"] == ["TMFC0"]
+        assert cbs["symbols"] == ["TMFR1"]
+        assert sessions["tracks"]["futures_day"]["symbols"] == ["TMFR1"]
+        assert sessions["tracks"]["futures_night"]["symbols"] == ["TMFR1"]
 
 
 class TestFlattenTaskDoneCallback:

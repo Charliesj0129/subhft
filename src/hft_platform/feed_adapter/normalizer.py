@@ -143,7 +143,7 @@ class SymbolMetadata:
         self._exchange_cache: dict[str, str] = {}
         self._product_type_cache: dict[str, str] = {}
         self._mtime: float | None = None
-        self.alias_to_actual: dict[str, str] = {}  # config alias → callback code (e.g. TXFC0 → TXFE6)
+        self.alias_to_actual: dict[str, str] = {}  # config alias → callback code (e.g. TXFR1 → TXFE6)
         from hft_platform.core.instrument_registry import InstrumentRegistry
 
         self.registry = InstrumentRegistry()
@@ -299,7 +299,7 @@ class SymbolMetadata:
         """Set alias→actual mapping from broker contract resolution.
 
         Called by bootstrap after broker login to propagate alias mappings
-        (e.g. TXFC0 → TXFE6) resolved by ContractsRuntime.
+        (e.g. TXFR1 → TXFE6) resolved by ContractsRuntime.
         """
         self.alias_to_actual.update(alias_map)
 

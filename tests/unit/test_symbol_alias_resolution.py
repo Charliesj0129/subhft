@@ -24,27 +24,27 @@ class TestSymbolMetadataAliasResolution:
 
     def test_resolve_symbol_with_alias_returns_actual(self) -> None:
         sm = SymbolMetadata.__new__(SymbolMetadata)
-        sm.alias_to_actual = {"TXFC0": "TXFE6"}
-        assert sm.resolve_symbol("TXFC0") == "TXFE6"
+        sm.alias_to_actual = {"TXFR1": "TXFE6"}
+        assert sm.resolve_symbol("TXFR1") == "TXFE6"
         assert sm.resolve_symbol("UNKNOWN") == "UNKNOWN"
 
     def test_resolve_symbols_set(self) -> None:
         sm = SymbolMetadata.__new__(SymbolMetadata)
-        sm.alias_to_actual = {"TXFC0": "TXFE6", "TMFC0": "TMFE6"}
-        result = sm.resolve_symbols({"TXFC0", "TMFC0", "2330"})
+        sm.alias_to_actual = {"TXFR1": "TXFE6", "TMFR1": "TMFE6"}
+        result = sm.resolve_symbols({"TXFR1", "TMFR1", "2330"})
         assert result == {"TXFE6", "TMFE6", "2330"}
 
     def test_set_alias_map_merges(self) -> None:
         sm = SymbolMetadata.__new__(SymbolMetadata)
-        sm.alias_to_actual = {"TXFC0": "TXFD6"}
-        sm.set_alias_map({"TMFC0": "TMFE6"})
-        assert sm.alias_to_actual == {"TXFC0": "TXFD6", "TMFC0": "TMFE6"}
+        sm.alias_to_actual = {"TXFR1": "TXFD6"}
+        sm.set_alias_map({"TMFR1": "TMFE6"})
+        assert sm.alias_to_actual == {"TXFR1": "TXFD6", "TMFR1": "TMFE6"}
 
     def test_set_alias_map_overwrites(self) -> None:
         sm = SymbolMetadata.__new__(SymbolMetadata)
-        sm.alias_to_actual = {"TXFC0": "TXFD6"}
-        sm.set_alias_map({"TXFC0": "TXFE6"})
-        assert sm.alias_to_actual["TXFC0"] == "TXFE6"
+        sm.alias_to_actual = {"TXFR1": "TXFD6"}
+        sm.set_alias_map({"TXFR1": "TXFE6"})
+        assert sm.alias_to_actual["TXFR1"] == "TXFE6"
 
 
 class TestFeeCalculatorPrefixFallback:
@@ -96,14 +96,14 @@ class TestSessionGovernorAliasResolution:
         from hft_platform.ops.session_governor import SessionGovernor
 
         gov = SessionGovernor()
-        # Original config uses TMFC0
-        alias_map = {"TMFC0": "TMFE6"}
+        # Original config uses TMFR1
+        alias_map = {"TMFR1": "TMFE6"}
         gov.resolve_symbol_aliases(alias_map)
 
         # Verify tracks were updated
         for track in gov._tracks.values():
             for sym in track.symbols:
-                assert sym != "TMFC0", f"Alias TMFC0 should have been resolved to TMFE6 in track {track.name}"
+                assert sym != "TMFR1", f"Alias TMFR1 should have been resolved to TMFE6 in track {track.name}"
 
     def test_resolve_registers_actual_in_gate(self) -> None:
         from hft_platform.ops.session_governor import SessionGovernor, SessionPhase
@@ -113,7 +113,7 @@ class TestSessionGovernorAliasResolution:
         for track_name in gov._tracks:
             gov._track_gate.set_track_phase(track_name, SessionPhase.OPEN)
 
-        alias_map = {"TMFC0": "TMFE6"}
+        alias_map = {"TMFR1": "TMFE6"}
         gov.resolve_symbol_aliases(alias_map)
 
         # The actual code should now be registered in the gate

@@ -2,8 +2,8 @@ broker: shioaji  # shioaji | fubon — selects BrokerFacade implementation
 
 mode: sim
 symbols:
-  - "TMFC0"    # C0 = front-month alias (auto-resolved by Shioaji, no monthly update)
-  - "TXFC0"    # C0 = front-month alias
+  - "TMFR1"    # R1 = Shioaji continuous front-month (no monthly update)
+  - "TXFR1"    # R1 = Shioaji continuous front-month
 
 strategy:
   id: CBS_TMF

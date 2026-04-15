@@ -149,7 +149,7 @@ class SubscriptionManager:
                     pass
             return False
 
-        # Capture alias→actual mapping (e.g. TXFC0 → TXFE6)
+        # Capture alias→actual mapping (e.g. TXFR1 → TXFE6)
         actual_code = getattr(contract, "code", None) or code
         if actual_code != code:
             c.alias_to_actual[code] = actual_code

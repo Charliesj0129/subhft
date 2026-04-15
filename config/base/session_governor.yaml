@@ -1,14 +1,14 @@
-# Session tracks: symbols use C0 aliases (resolved to actual month codes at runtime).
+# Session tracks: symbols use R1 continuous codes (resolved to actual month codes at runtime).
 tracks:
   futures_day:
-    symbols: ["TMFC0"]
+    symbols: ["TMFR1"]
     schedule:
       - {phase: "open", time: "08:45"}
       - {phase: "close_only", time: "13:40"}
       - {phase: "force_flat", time: "13:44"}
       - {phase: "closed", time: "13:45"}
   futures_night:
-    symbols: ["TMFC0"]
+    symbols: ["TMFR1"]
     schedule:
       - {phase: "open", time: "15:00"}
       - {phase: "close_only", time: "04:55"}

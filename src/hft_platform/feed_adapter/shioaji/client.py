@@ -195,7 +195,7 @@ class ShioajiClient:
         self._load_config()
         self.subscribed_count = 0
         self.subscribed_codes: set[str] = set()
-        self.alias_to_actual: dict[str, str] = {}  # config code → callback code (e.g. TXFC0 → TXFE6)
+        self.alias_to_actual: dict[str, str] = {}  # config code → callback code (e.g. TXFR1 → TXFE6)
         self.tick_callback: Callable[..., Any] | None = None
         self.metrics = MetricsRegistry.get()
         _dispatch_async = os.getenv("HFT_SHIOAJI_QUOTE_DISPATCH_THREAD", "1").strip().lower() in {
@@ -661,7 +661,7 @@ class ShioajiClient:
         """Delegates to TickDispatcher.refresh_quote_routes()."""
         # Include both config codes AND actual codes from alias resolution
         # so the router recognises callbacks arriving with resolved month codes
-        # (e.g. TMFE6) even when config specifies C0/R1 aliases (e.g. TMFC0).
+        # (e.g. TMFE6) even when config specifies R1/R2 aliases (e.g. TMFR1).
         sub_codes = getattr(self, "subscribed_codes", None)
         alias_map = getattr(self, "alias_to_actual", None)
         if alias_map and sub_codes is not None:

@@ -972,7 +972,7 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
             await self._call_client(self.client.subscribe_basket, self._on_shioaji_event)
 
             # Propagate alias→actual symbol mappings resolved during subscription
-            # (e.g. TXFC0 → TXFE6) so strategies/risk can match event symbols.
+            # (e.g. TXFR1 → TXFE6) so strategies/risk can match event symbols.
             alias_map = getattr(self.client, "alias_to_actual", None)
             if alias_map and self.symbol_metadata is not None:
                 self.symbol_metadata.set_alias_map(alias_map)

@@ -79,12 +79,12 @@ def get_report_symbols() -> list[str]:
     """Return the list of symbols to include in reports.
 
     Reads ``HFT_REPORT_SYMBOLS`` (comma-separated). Falls back to
-    ``["TXFC0"]`` when absent or empty.  C0 = front-month alias.
+    ``["TXFR1"]`` when absent or empty.  R1 = Shioaji continuous front-month.
     """
-    raw = os.environ.get("HFT_REPORT_SYMBOLS", "TXFC0")
+    raw = os.environ.get("HFT_REPORT_SYMBOLS", "TXFR1")
     symbols = [s.strip().upper() for s in raw.split(",") if s.strip()]
     if not symbols:
-        symbols = ["TXFC0"]
+        symbols = ["TXFR1"]
     return symbols
 
 

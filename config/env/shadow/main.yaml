@@ -13,5 +13,5 @@ shioaji:
 # OpportunisticMM on TXF + CBS on TMF
 
 symbols:
-  - "TXFC0"    # C0 = front-month alias (no monthly update needed)
-  - "TMFC0"
+  - "TXFR1"    # R1 = Shioaji continuous front-month (no monthly update)
+  - "TMFR1"

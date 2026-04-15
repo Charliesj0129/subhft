@@ -31,7 +31,7 @@ risk:
 # month codes (e.g. TXFE6) to root (TXF) using prefix stripping.
 # TODO: Add root-prefix resolution in risk validators to avoid per-month updates.
 symbol_limits:
-  TXFC0:
+  TXFR1:
     max_position_lots: 1
     max_order_size: 1
     max_notional: 100000

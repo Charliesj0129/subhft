@@ -5,7 +5,7 @@
 # Points are stable across price levels; bps shifts with index value.
 # Breakeven = RT_cost_NTD / point_value_NTD (e.g. TMF: 40/10 = 4 pts)
 #
-# SYMBOL CONVENTION: Use C0/C1 aliases (e.g. TMFC0 = front month).
+# SYMBOL CONVENTION: Use R1/R2 continuous codes (e.g. TMFR1 = front month).
 # Aliases are resolved to actual month codes at runtime after broker login.
 # This eliminates monthly manual updates.
 
@@ -19,7 +19,7 @@ strategies:
     class: "OpportunisticMM"
     enabled: false
     product_type: "FUT"
-    symbols: ["TMFC0"]
+    symbols: ["TMFR1"]
     params:
       spread_threshold_pts: 5    # 5 pts > 4 pts breakeven (RT 40 NTD / 10 NTD per pt)
       tick_size_ratio_pct: 50
@@ -32,7 +32,7 @@ strategies:
     class: "OpportunisticMM"
     enabled: false
     product_type: "FUT"
-    symbols: ["TXFC0"]
+    symbols: ["TXFR1"]
     params:
       spread_threshold_pts: 3    # 3 pts (conservative for 大台)
       tick_size_ratio_pct: 50
@@ -46,7 +46,7 @@ strategies:
     class: "CascadeBounceStrategy"
     enabled: false  # Disabled: 0/84 contrarian, 0/6 momentum configs profitable
     product_type: "FUT"
-    symbols: ["TMFC0"]
+    symbols: ["TMFR1"]
     params:
       lookback_ns: 60000000000         # 60s vol window
       trigger_sigma: 3.0
@@ -68,7 +68,7 @@ strategies:
     class: "MomentumBounceStrategy"
     enabled: false  # Disabled: research incomplete, not ready for live
     product_type: "FUT"
-    symbols: ["TMFC0"]
+    symbols: ["TMFR1"]
     params:
       lookback_ns: 60000000000         # 60s vol window (same as CBS)
       trigger_sigma: 3.0               # 3-sigma normalized move threshold
@@ -90,10 +90,10 @@ strategies:
     class: "TxTmfLeadLagStrategy"
     enabled: false
     product_type: "FUT"
-    symbols: ["TXFC0", "TMFC0"]
+    symbols: ["TXFR1", "TMFR1"]
     params:
-      signal_symbol: "TXFC0"
-      trade_symbol: "TMFC0"
+      signal_symbol: "TXFR1"
+      trade_symbol: "TMFR1"
       dvol_threshold: 20
       sl_pts: 100
       max_hold_ns: 900000000000      # 15min
@@ -113,7 +113,7 @@ strategies:
     class: "R47MakerStrategy"
     enabled: true
     product_type: "FUT"
-    symbols: ["TMFC0"]              # 微台: 本金門檻低, 1pt=10NTD (C0=front month)
+    symbols: ["TMFR1"]              # 微台: 本金門檻低, 1pt=10NTD (R1=front month)
     params:
       pe_danger_threshold: 0.0     # Disabled
       pe_window: 100
