@@ -64,29 +64,100 @@ def run_gate_c(
             pipeline_mode="strict",
         )
         ResultStore().save(result, alpha_id)
-        base_result = result
-        # Stub runner/cfg so downstream code that references _runner_cls/backtest_cfg still works
-        backtest_cfg = BacktestConfig(
-            data_paths=resolved_data_paths,
-            is_oos_split=float(config.is_oos_split),
-            signal_threshold=float(config.signal_threshold),
-            max_position=int(config.max_position),
-            maker_fee_bps=float(config.maker_fee_bps),
-            taker_fee_bps=float(config.taker_fee_bps),
-            sell_tax_bps=float(config.sell_tax_bps),
-            latency_profile_id=str(config.latency_profile_id),
-            local_decision_pipeline_latency_us=int(config.local_decision_pipeline_latency_us),
-            submit_ack_latency_ms=float(config.submit_ack_latency_ms),
-            modify_ack_latency_ms=float(config.modify_ack_latency_ms),
-            cancel_ack_latency_ms=float(config.cancel_ack_latency_ms),
-            live_uplift_factor=float(config.live_uplift_factor),
-            backtest_engine=str(config.backtest_engine),
-            queue_model=str(config.queue_model),
-            latency_model=str(config.latency_model),
-            exchange_model=str(config.exchange_model),
-            min_queue_survival_rate=float(config.min_queue_survival_rate),
+
+        # --- Maker Gate C: evaluate using maker_scorecard + gate_thresholds ---
+        import yaml as _yaml
+        thresholds_path = root / "config" / "research" / "gate_thresholds.yaml"
+        maker_thresholds = {}
+        if thresholds_path.exists():
+            all_thresholds = _yaml.safe_load(thresholds_path.read_text())
+            maker_thresholds = all_thresholds.get("maker", {})
+
+        scorecard_data = result.maker_scorecard or {}
+        n_days = scorecard_data.get("n_days", 0)
+        winning_day_pct = scorecard_data.get("winning_day_pct", 0)
+        pnl_per_fill = scorecard_data.get("pnl_per_fill", 0)
+        total_fills = scorecard_data.get("total_fills", 0)
+
+        # Gate C maker checks
+        maker_checks = {
+            "sharpe_is": result.sharpe_is >= maker_thresholds.get("sharpe_is_min", 0.5),
+            "winning_day_pct": winning_day_pct >= maker_thresholds.get("winning_day_pct_min", 55),
+            "pnl_per_fill": pnl_per_fill >= maker_thresholds.get("pnl_per_fill_min_pts", 0),
+            "max_drawdown": result.max_drawdown <= maker_thresholds.get("max_drawdown_pct", 30) / 100,
+            "has_fills": total_fills > 0,
+        }
+        maker_passed = all(maker_checks.values())
+
+        # Compute scorecard (reuse existing function with maker data)
+        from research.registry.scorecard import compute_scorecard
+
+        tracker = ExperimentTracker(base_dir=experiments_base)
+        latest_signals = getattr(tracker, "latest_signals_by_alpha", None)
+        pool_signals = latest_signals() if callable(latest_signals) else {}
+        pool_signals = {k: v for k, v in dict(pool_signals).items() if str(k) != str(alpha_id)}
+        data_meta_path = _resolve_first_data_meta_path(resolved_data_paths)
+        scorecard = compute_scorecard(
+            {
+                "signals": result.signals,
+                "sharpe_is": result.sharpe_is,
+                "sharpe_oos": result.sharpe_oos,
+                "ic_mean": result.ic_mean,
+                "ic_std": result.ic_std,
+                "turnover": result.turnover,
+                "max_drawdown": result.max_drawdown,
+                "regime_metrics": result.regime_metrics,
+                "capacity_estimate": result.capacity_estimate,
+                "latency_profile": result.latency_profile,
+            },
+            pool_signals=pool_signals,
+            data_meta_path=data_meta_path,
         )
-        runner: Any = HftNativeRunner(alpha, backtest_cfg)
+        scorecard_path = experiments_base / "runs" / result.run_id / "scorecard.json"
+
+        report = GateReport(
+            gate="Gate C",
+            passed=maker_passed,
+            details={
+                "run_id": result.run_id,
+                "config_hash": result.config_hash,
+                "engine_type": "maker",
+                "fill_model": result.fill_model,
+                "cost_model": result.cost_model,
+                "instrument": instrument,
+                "sharpe_is": result.sharpe_is,
+                "sharpe_oos": result.sharpe_oos,
+                "max_drawdown": result.max_drawdown,
+                "maker_scorecard": scorecard_data,
+                "per_spread_breakdown": result.per_spread_breakdown,
+                "daily_pnl": result.daily_pnl,
+                "maker_checks": maker_checks,
+                "maker_thresholds": maker_thresholds,
+                "scorecard_path": str(scorecard_path),
+                "note": "Maker Gate C: IC/optimize/walk-forward/stress tests skipped (not applicable to maker strategies)",
+            },
+        )
+        meta_path = tracker.log_run(
+            run_id=result.run_id,
+            alpha_id=alpha_id,
+            config_hash=result.config_hash,
+            data_paths=resolved_data_paths,
+            metrics={
+                "sharpe_is": float(result.sharpe_is),
+                "sharpe_oos": float(result.sharpe_oos),
+                "max_drawdown": float(result.max_drawdown),
+                "maker_pnl_per_fill": float(pnl_per_fill),
+                "maker_winning_day_pct": float(winning_day_pct),
+                "maker_total_fills": float(total_fills),
+            },
+            gate_status={"gate_c": bool(maker_passed)},
+            scorecard_payload=scorecard.to_dict(),
+            backtest_report_payload=asdict(report),
+            signals=result.signals,
+            equity=result.equity_curve,
+        )
+        report.details["experiment_meta_path"] = str(meta_path)
+        return report, result.run_id, result.config_hash, str(scorecard_path), str(meta_path)
     else:
         # --- Taker path: existing hft_native_runner (unchanged logic) ---
         backtest_cfg = BacktestConfig(
