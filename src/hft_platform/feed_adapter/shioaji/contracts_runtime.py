@@ -176,6 +176,17 @@ class ContractsRuntime:
                     if r_contract is not None:
                         return r_contract
 
+            # Direct product-group lookup for month codes (e.g. TMFE6 → Futures.TMF.TMFE6)
+            # Shioaji organises contracts under product groups; top-level iteration
+            # may miss them if the container isn't dict-like at the root.
+            if len(raw_code) >= 5 and raw_code[-1].isdigit() and raw_code[-2].isalpha():
+                root = raw_code[:-2]
+                root_group = getattr(self._client.api.Contracts.Futures, root, None)
+                if root_group is not None:
+                    direct = getattr(root_group, raw_code, None)
+                    if direct is not None:
+                        return direct
+
             for candidate in self._expand_future_codes(raw_code):
                 contract = self._lookup_contract(
                     self._client.api.Contracts.Futures,
