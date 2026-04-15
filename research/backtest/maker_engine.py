@@ -464,3 +464,37 @@ class MakerEngine:
                     sell_q.append(price_pts)
 
         return realized, trips, wins
+
+
+class SimpleMakerStrategy:
+    """Generic spread-gated maker strategy for backtest.
+
+    Posts symmetric quotes at best bid/ask when spread >= threshold.
+    Manages position within max_pos bounds.
+    Compatible with MakerStrategy protocol (on_tick / on_fill).
+    """
+
+    __slots__ = ("_spread_threshold", "_max_pos", "_position")
+
+    def __init__(self, spread_threshold_pts: int = 5, max_pos: int = 1) -> None:
+        self._spread_threshold = spread_threshold_pts
+        self._max_pos = max_pos
+        self._position = 0
+
+    def on_tick(self, tick: TickData) -> list[PostQuote | CancelQuote | Hold]:
+        if tick.is_trade:
+            return [Hold()]
+        if tick.spread_pts < self._spread_threshold:
+            return [Hold()]
+        actions: list[PostQuote | CancelQuote | Hold] = []
+        if self._position < self._max_pos:
+            actions.append(PostQuote(side="buy", price=tick.bid_price, qty=1))
+        if self._position > -self._max_pos:
+            actions.append(PostQuote(side="sell", price=tick.ask_price, qty=1))
+        return actions or [Hold()]
+
+    def on_fill(self, side: str, price: int, mid_price: float) -> None:
+        if side == "buy":
+            self._position += 1
+        else:
+            self._position -= 1
