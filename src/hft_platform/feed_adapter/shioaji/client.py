@@ -659,9 +659,16 @@ class ShioajiClient:
 
     def _refresh_quote_routes(self) -> None:
         """Delegates to TickDispatcher.refresh_quote_routes()."""
+        # Include both config codes AND actual codes from alias resolution
+        # so the router recognises callbacks arriving with resolved month codes
+        # (e.g. TMFE6) even when config specifies C0/R1 aliases (e.g. TMFC0).
+        sub_codes = getattr(self, "subscribed_codes", None)
+        alias_map = getattr(self, "alias_to_actual", None)
+        if alias_map and sub_codes is not None:
+            sub_codes = set(sub_codes) | set(alias_map.values())
         TickDispatcher.refresh_quote_routes(
             self.symbols,
-            getattr(self, "subscribed_codes", None),
+            sub_codes,
             self,
         )
 
