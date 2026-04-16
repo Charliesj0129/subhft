@@ -1299,7 +1299,8 @@ class TestSuperviseStormGuardUpdate:
         sys_obj.settings = {"base_capital": 10_000_000}
 
         mtm_calc = MagicMock()
-        mtm_calc.total_unrealized_pnl.return_value = -500_000
+        # 500K NTD unrealized loss, scaled int (x10000) — Bug 11 fix descales before dividing
+        mtm_calc.total_unrealized_pnl.return_value = -500_000 * 10_000
         sys_obj._mtm_calculator = mtm_calc
 
         mock_metrics = MagicMock()
@@ -1325,7 +1326,8 @@ class TestSuperviseStormGuardUpdate:
 
         sys_obj.storm_guard.update.assert_called()
         call_kwargs = sys_obj.storm_guard.update.call_args[1]
-        # drawdown_pct = 0.02 - (-500000/10000000) = 0.02 + 0.05 = 0.07
+        # Bug 11: descale unrealized (-5e9 scaled → -500K NTD) then divide by
+        # base_capital (10M NTD) → 0.05 contribution. Total = 0.02 + 0.05 = 0.07.
         assert call_kwargs["drawdown_bps"] == -700
 
 
