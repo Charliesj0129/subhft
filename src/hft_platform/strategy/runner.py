@@ -1084,14 +1084,32 @@ class StrategyRunner:
                             except Exception:  # noqa: BLE001
                                 pass
 
+            # DEBUG: trace intent generation before TrackGate
+            if intents:
+                logger.info(
+                    "runner_intents_pre_gate",
+                    strategy_id=strategy.strategy_id,
+                    count=len(intents),
+                    symbol=event_symbol,
+                    event_type=type(event).__name__,
+                )
+
             # TrackGate per-intent filtering (session phase enforcement)
             if getattr(self, "track_gate", None) is not None and intents:
+                pre_filter_count = len(intents)
                 intents = StrategyRunner.filter_intents_by_phase(
                     intents,
                     self.track_gate,
                     self.position_store,
                     strategy_id=strategy.strategy_id,
                 )
+                if pre_filter_count > 0 and not intents:
+                    logger.warning(
+                        "track_gate_filtered_all_intents",
+                        strategy_id=strategy.strategy_id,
+                        pre_count=pre_filter_count,
+                        symbol=event_symbol,
+                    )
 
             duration = time.perf_counter_ns() - start
 
