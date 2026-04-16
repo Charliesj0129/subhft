@@ -165,24 +165,24 @@ class TestPositionStore:
         assert store.get_drawdown_pct() == 0.0
 
     def test_get_drawdown_pct_negative_no_peak(self):
+        """Bug 10 fix: cold-start guard returns 0.0 when peak < min threshold."""
         store = PositionStore()
         store._peak_equity_scaled = 0
         store._total_realized_pnl_scaled = -100
-        store._base_capital_scaled = 1000
         dd = store.get_drawdown_pct()
-        assert dd == pytest.approx(0.1)
+        assert dd == 0.0  # cold-start guard: peak < 2M → 0.0
 
     def test_get_drawdown_pct_from_peak(self):
         store = PositionStore()
-        store._peak_equity_scaled = 1000
-        store._total_realized_pnl_scaled = 800
+        store._peak_equity_scaled = 10_000_000  # above min threshold (2M)
+        store._total_realized_pnl_scaled = 8_000_000
         dd = store.get_drawdown_pct()
         assert dd == pytest.approx(0.2)
 
     def test_get_drawdown_pct_at_peak(self):
         store = PositionStore()
-        store._peak_equity_scaled = 1000
-        store._total_realized_pnl_scaled = 1000
+        store._peak_equity_scaled = 10_000_000
+        store._total_realized_pnl_scaled = 10_000_000
         assert store.get_drawdown_pct() == 0.0
 
 

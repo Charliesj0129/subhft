@@ -220,19 +220,20 @@ class TestPositionDrawdown:
         assert store.get_drawdown_pct() == 0.0
 
     def test_drawdown_after_profit_then_loss(self, store):
-        # Profitable trade: buy 10 @ 500, sell 10 @ 510
+        # Profitable trade: buy 10 @ 500, sell 10 @ 530
+        # Peak must exceed cold-start threshold (2_000_000) for drawdown to be reported.
         store.on_fill(_make_fill(Side.BUY, qty=10, price=500_0000, strategy_id="s1"))
-        store.on_fill(_make_fill(Side.SELL, qty=10, price=510_0000, strategy_id="s1"))
-        # realized_pnl = (510-500)*10 = 100_0000
-        assert store.total_pnl == 100_0000
+        store.on_fill(_make_fill(Side.SELL, qty=10, price=530_0000, strategy_id="s1"))
+        # realized_pnl = (530-500)*10 = 300_0000 = 3_000_000
+        assert store.total_pnl == 300_0000
         assert store.get_drawdown_pct() == 0.0  # at peak
 
-        # Losing trade: buy 10 @ 520, sell 10 @ 510
-        store.on_fill(_make_fill(Side.BUY, qty=10, price=520_0000, strategy_id="s1"))
+        # Losing trade: buy 10 @ 540, sell 10 @ 510
+        store.on_fill(_make_fill(Side.BUY, qty=10, price=540_0000, strategy_id="s1"))
         store.on_fill(_make_fill(Side.SELL, qty=10, price=510_0000, strategy_id="s1"))
-        # realized_pnl now = 100_0000 + (510-520)*10 = 100_0000 - 100_0000 = 0
+        # realized_pnl now = 300_0000 + (510-540)*10 = 300_0000 - 300_0000 = 0
         assert store.total_pnl == 0
-        # Drawdown = (peak - current) / peak = (100_0000 - 0) / 100_0000 = 1.0
+        # Drawdown = (peak - current) / peak = (300_0000 - 0) / 300_0000 = 1.0
         assert store.get_drawdown_pct() == pytest.approx(1.0)
 
     def test_drawdown_partial(self, store):

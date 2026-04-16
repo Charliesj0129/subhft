@@ -206,18 +206,20 @@ class PositionStore:
     def get_drawdown_pct(self) -> float:
         """Portfolio drawdown from peak equity as a fraction (0.0 to 1.0).
 
-        Returns 0.0 when no drawdown (at or above peak).
-        Only meaningful after at least one profitable fill has been processed
-        (i.e., _peak_equity_scaled > 0).
+        Returns 0.0 when peak equity has not reached the minimum threshold
+        (cold-start protection: prevents false HALT from StormGuard when
+        the first trade produces a tiny fee-induced negative PnL with
+        base=1 denominator — Bug 10, 2026-04-16).
+
+        Threshold: 200 NTD = 2_000_000 scaled (matching strategy_limits.yaml
+        ``peak_drawdown_min_peak_ntd: 200``).
         """
-        if self._peak_equity_scaled <= 0:
-            # No positive peak yet — report loss-based drawdown from zero baseline
-            current = self._total_realized_pnl_scaled
-            if current >= 0:
-                return 0.0
-            # Use absolute loss as fraction of base capital (fallback to 1 to avoid div-by-zero)
-            base = getattr(self, "_base_capital_scaled", 0) or 1
-            return min(1.0, abs(current) / base)
+        # Cold-start guard: do not report drawdown until we have enough
+        # equity history. Without this, ``_base_capital_scaled`` defaults
+        # to 0 → ``0 or 1`` → base=1 → any loss = 100% drawdown → HALT.
+        _MIN_PEAK_SCALED = 2_000_000  # 200 NTD in x10000 scale
+        if self._peak_equity_scaled < _MIN_PEAK_SCALED:
+            return 0.0
         current = self._total_realized_pnl_scaled
         if current >= self._peak_equity_scaled:
             return 0.0
