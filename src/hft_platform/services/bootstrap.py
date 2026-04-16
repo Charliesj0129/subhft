@@ -867,6 +867,9 @@ class SystemBootstrapper:
             cmd_tca_map=cmd_tca_map,
             mid_price_fn=_get_mid_price,
         )
+        # Inject shared SymbolMetadata so OrderAdapter resolves exchange/price_scale
+        # for alias-resolved codes (e.g. TMFE6 → exchange=FUT, not default TSE).
+        order_adapter.metadata = symbol_metadata
 
         # Wire shadow mode from YAML config (shadow.enabled: true) into ShadowOrderSink.
         # Previously only HFT_ORDER_SHADOW_MODE env var was checked, causing a config disconnect

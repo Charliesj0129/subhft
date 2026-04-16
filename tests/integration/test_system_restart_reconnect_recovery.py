@@ -18,9 +18,13 @@ from hft_platform.services.system import HFTSystem
 class _Runner:
     def __init__(self) -> None:
         self.running = True
+        self._stale_event_skip_total = 0
 
     async def run(self) -> None:
         await asyncio.sleep(0)
+
+    def reset_stale_counter(self) -> None:
+        self._stale_event_skip_total = 0
 
 
 class _ExecutionGateway(_Runner):

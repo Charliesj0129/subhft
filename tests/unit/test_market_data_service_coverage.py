@@ -1341,3 +1341,895 @@ def test_mark_pending_reconnect_preserves_since():
 
     # since should NOT be updated if already set
     assert svc._pending_reconnect_since == original_since
+
+
+# ---------------------------------------------------------------------------
+# _get_trace_sampler (lines 59-60, 62-65)
+# ---------------------------------------------------------------------------
+
+
+def test_get_trace_sampler_success():
+    """Covers the import-success path of _get_trace_sampler (lines 59-62)."""
+    from hft_platform.services.market_data import _get_trace_sampler
+
+    # If diagnostics.trace is importable, returns a sampler object (or None).
+    # Either way the function should not raise.
+    result = _get_trace_sampler()
+    # Result is either a sampler or None — both are acceptable.
+    assert result is None or hasattr(result, "emit")
+
+
+def test_get_trace_sampler_exception_returns_none():
+    """Covers the except path of _get_trace_sampler (lines 63-65)."""
+    from hft_platform.services.market_data import _get_trace_sampler
+
+    # Patch the inner import to raise
+    with patch.dict("sys.modules", {"hft_platform.diagnostics.trace": None}):
+        result = _get_trace_sampler()
+    assert result is None
+
+
+# ---------------------------------------------------------------------------
+# _summarize_md (lines 124-134)
+# ---------------------------------------------------------------------------
+
+
+def test_summarize_md_none():
+    from hft_platform.services.market_data import _summarize_md
+
+    assert _summarize_md(None) == {}
+
+
+def test_summarize_md_dict_with_code_and_price():
+    """Covers lines 124-128: dict path with present keys and nested."""
+    from hft_platform.services.market_data import _summarize_md
+
+    obj = {"code": "2330", "close": 500.0, "ts": 123456, "tick": {"price": 100}}
+    result = _summarize_md(obj)
+    assert "keys" in result
+    assert "present" in result
+    assert "nested" in result
+    assert "code" in result["present"]
+    assert "tick" in result["nested"]
+
+
+def test_summarize_md_object_with_attrs():
+    """Covers lines 129-134: object path with hasattr checks."""
+    from hft_platform.services.market_data import _summarize_md
+
+    obj = SimpleNamespace(code="2330", close=500.0, ts=123456, tick=SimpleNamespace(price=100))
+    result = _summarize_md(obj)
+    assert "attrs" in result
+    assert "nested" in result
+    assert "code" in result["attrs"]
+    assert "tick" in result["nested"]
+
+
+def test_summarize_md_object_without_nested():
+    """Covers lines 129-134: object path without nested fields."""
+    from hft_platform.services.market_data import _summarize_md
+
+    obj = SimpleNamespace(code="2330", bid_price=100)
+    result = _summarize_md(obj)
+    assert "attrs" in result
+    assert result["nested"] == {}
+
+
+# ---------------------------------------------------------------------------
+# _try_fast_extract_callback_payload (lines 159-161)
+# ---------------------------------------------------------------------------
+
+
+def test_fast_extract_payload_alternate_order_a0_md_a1_exchange():
+    """Covers lines 157-161: argc==2 but second arg is exchange, first is MD."""
+    from hft_platform.services.market_data import _try_fast_extract_callback_payload
+
+    md_obj = {"code": "2330", "close": 500.0}
+    exchange, msg = _try_fast_extract_callback_payload(md_obj, "TSE")
+    assert msg is not None
+    assert exchange == "TSE"
+
+
+def test_fast_extract_payload_argc_1():
+    """Covers line 162-165: argc==1."""
+    from hft_platform.services.market_data import _try_fast_extract_callback_payload
+
+    md_obj = {"code": "2330", "close": 500.0}
+    exchange, msg = _try_fast_extract_callback_payload(md_obj)
+    assert msg is not None
+
+
+def test_fast_extract_payload_argc_3_last_is_md():
+    """Covers lines 166-173: argc>=3."""
+    from hft_platform.services.market_data import _try_fast_extract_callback_payload
+
+    exchange, msg = _try_fast_extract_callback_payload(
+        "TSE", "topic_str", {"code": "2330", "close": 500.0}
+    )
+    assert msg is not None
+    assert exchange == "TSE"
+
+
+# ---------------------------------------------------------------------------
+# __init__ LOB feature_engine setattr exception (lines 237-239)
+# ---------------------------------------------------------------------------
+
+
+def test_init_lob_feature_engine_setattr_exception():
+    """Covers lines 237-239: setattr(self.lob, 'feature_engine', ...) raises."""
+    from hft_platform.engine.event_bus import RingBufferBus
+    from hft_platform.services.market_data import MarketDataService
+
+    tmp, cfg = _make_symbols_config()
+    env = {
+        "HFT_FEATURE_ENGINE_ENABLED": "0",
+        "SYMBOLS_CONFIG": str(cfg),
+        "HFT_MONITOR_LIVE_ENABLED": "0",
+    }
+    bus = MagicMock(spec=RingBufferBus)
+    raw_queue = asyncio.Queue(maxsize=100)
+    client = MagicMock()
+
+    # Make LOBEngine raise on setattr for feature_engine
+    lob_mock = MagicMock()
+    type(lob_mock).feature_engine = property(
+        lambda self: None,
+        lambda self, v: (_ for _ in ()).throw(TypeError("read-only")),
+    )
+
+    with patch.dict(os.environ, env):
+        with patch("hft_platform.services.market_data.LOBEngine", return_value=lob_mock):
+            svc = MarketDataService(bus, raw_queue, client)
+
+    # Service should still be constructed despite the setattr exception
+    assert svc.lob is lob_mock
+    svc._tmp = tmp
+
+
+# ---------------------------------------------------------------------------
+# __init__ invalid timezone (lines 276-278)
+# ---------------------------------------------------------------------------
+
+
+def test_init_invalid_timezone_defaults_to_utc():
+    """Covers lines 276-278: ZoneInfo raises, falls back to UTC."""
+    import datetime as dt
+
+    svc, *_ = _make_service(extra_env={"HFT_RECONNECT_TZ": "Invalid/NoSuchTZ"})
+    assert svc._reconnect_tzinfo == dt.UTC
+
+
+# ---------------------------------------------------------------------------
+# __init__ recorder mapper import exception (lines 348-349)
+# ---------------------------------------------------------------------------
+
+
+def test_init_recorder_mapper_import_exception():
+    """Covers lines 348-349: recorder mapper import fails gracefully."""
+    from hft_platform.engine.event_bus import RingBufferBus
+    from hft_platform.services.market_data import MarketDataService
+
+    tmp, cfg = _make_symbols_config()
+    env = {
+        "HFT_FEATURE_ENGINE_ENABLED": "0",
+        "SYMBOLS_CONFIG": str(cfg),
+        "HFT_MONITOR_LIVE_ENABLED": "0",
+        "HFT_MD_RECORD_DIRECT": "1",
+    }
+    bus = MagicMock(spec=RingBufferBus)
+    raw_queue = asyncio.Queue(maxsize=100)
+    client = MagicMock()
+    recorder_queue = asyncio.Queue(maxsize=100)
+
+    with patch.dict(os.environ, env):
+        with patch.dict("sys.modules", {"hft_platform.recorder.mapper": None}):
+            svc = MarketDataService(bus, raw_queue, client, recorder_queue=recorder_queue)
+
+    # Despite import failure, service should initialize (mapper resolved lazily)
+    assert svc._map_event_to_record is None
+    svc._tmp = tmp
+
+
+# ---------------------------------------------------------------------------
+# _init_shm_publisher: symbols fallback + exception (lines 484, 491-493)
+# ---------------------------------------------------------------------------
+
+
+def test_init_shm_publisher_uses_symbols_fallback():
+    """Covers line 484: falls back to client.symbols when subscribed_symbols is None."""
+    from hft_platform.engine.event_bus import RingBufferBus
+    from hft_platform.services.market_data import MarketDataService
+
+    tmp, cfg = _make_symbols_config()
+    bus = MagicMock(spec=RingBufferBus)
+    raw_queue = asyncio.Queue()
+    client = MagicMock(spec=[])  # empty spec — no subscribed_symbols attribute
+
+    # Add 'symbols' attribute as fallback
+    client.symbols = ["2330", "TXFD6"]
+
+    env = {
+        "HFT_FEATURE_ENGINE_ENABLED": "0",
+        "SYMBOLS_CONFIG": str(cfg),
+        "HFT_MONITOR_LIVE_ENABLED": "0",
+    }
+
+    mock_shm = MagicMock()
+    mock_shm.max_symbols = 64
+
+    with patch.dict(os.environ, env):
+        with patch("hft_platform.ipc.shm_snapshot.ShmSnapshotWriter", return_value=mock_shm):
+            svc = MarketDataService(bus, raw_queue, client)
+
+    assert "2330" in svc._shm_symbol_index
+    assert "TXFD6" in svc._shm_symbol_index
+    svc._tmp = tmp
+
+
+def test_init_shm_publisher_exception_sets_none():
+    """Covers lines 491-493: ShmSnapshotWriter init raises."""
+    from hft_platform.engine.event_bus import RingBufferBus
+    from hft_platform.services.market_data import MarketDataService
+
+    tmp, cfg = _make_symbols_config()
+    bus = MagicMock(spec=RingBufferBus)
+    raw_queue = asyncio.Queue()
+    client = MagicMock()
+
+    env = {
+        "HFT_FEATURE_ENGINE_ENABLED": "0",
+        "SYMBOLS_CONFIG": str(cfg),
+        "HFT_MONITOR_LIVE_ENABLED": "0",
+    }
+
+    with patch.dict(os.environ, env):
+        with patch(
+            "hft_platform.services.market_data.ShmSnapshotWriter",
+            side_effect=OSError("shm create failed"),
+        ):
+            svc = MarketDataService(bus, raw_queue, client)
+
+    assert svc._shm_publisher is None
+    svc._tmp = tmp
+
+
+# ---------------------------------------------------------------------------
+# _publish_to_shm (lines 587-638)
+# ---------------------------------------------------------------------------
+
+
+def test_publish_to_shm_no_publisher():
+    """Covers line 588-589: early return when publisher is None."""
+    svc, *_ = _make_service()
+    svc._shm_publisher = None
+    # Should not raise
+    svc._publish_to_shm("2330", SimpleNamespace(), None)
+    assert svc._shm_publisher is None
+
+
+def test_publish_to_shm_known_symbol_with_stats():
+    """Covers lines 590, 602-624: known symbol path, LOB field population."""
+    svc, *_ = _make_service()
+    publisher = MagicMock()
+    publisher.max_symbols = 64
+    svc._shm_publisher = publisher
+    svc._shm_symbol_index = {"2330": 0}
+    svc._shm_symbol_hashes = {"2330": 12345}
+
+    stats = SimpleNamespace(
+        best_bid=5000000,
+        best_ask=5001000,
+        mid_price_x2=10001000,
+        spread_scaled=1000,
+        bid_depth=500,
+        ask_depth=600,
+        l1_bid_qty=10,
+        l1_ask_qty=12,
+        microprice_x2=10001500,
+        local_ts=1000000000,
+    )
+    svc._publish_to_shm("2330", stats, None)
+    publisher.publish.assert_called_once()
+    call_args = publisher.publish.call_args[0]
+    assert call_args[0] == 0  # idx
+    assert call_args[2] == 12345  # sym_hash
+    # LOB fields
+    lob = call_args[3]
+    assert lob[0] == 5000000  # best_bid
+    assert lob[1] == 5001000  # best_ask
+    # Features should be zeros (no feature_tuple)
+    feats = call_args[4]
+    assert all(f == 0 for f in feats)
+
+
+def test_publish_to_shm_with_feature_tuple():
+    """Covers lines 627-629: feature_tuple with >= 16 entries."""
+    svc, *_ = _make_service()
+    publisher = MagicMock()
+    publisher.max_symbols = 64
+    svc._shm_publisher = publisher
+    svc._shm_symbol_index = {"2330": 0}
+    svc._shm_symbol_hashes = {"2330": 12345}
+
+    stats = SimpleNamespace(local_ts=1000000000)
+    feature_tuple = tuple(range(100, 116))  # 16 feature values
+    svc._publish_to_shm("2330", stats, feature_tuple)
+    publisher.publish.assert_called_once()
+    feats = publisher.publish.call_args[0][4]
+    assert feats[0] == 100
+    assert feats[15] == 115
+
+
+def test_publish_to_shm_feature_tuple_too_short():
+    """Covers lines 630-632: feature_tuple with < 16 entries zeros out."""
+    svc, *_ = _make_service()
+    publisher = MagicMock()
+    publisher.max_symbols = 64
+    svc._shm_publisher = publisher
+    svc._shm_symbol_index = {"2330": 0}
+    svc._shm_symbol_hashes = {"2330": 12345}
+
+    stats = SimpleNamespace(local_ts=0)
+    feature_tuple = (1, 2, 3)  # Too short
+    svc._publish_to_shm("2330", stats, feature_tuple)
+    publisher.publish.assert_called_once()
+    feats = publisher.publish.call_args[0][4]
+    assert all(f == 0 for f in feats)
+
+
+def test_publish_to_shm_unknown_symbol_lazy_assign():
+    """Covers lines 591-600: lazy slot assignment for unknown symbol."""
+    svc, *_ = _make_service()
+    publisher = MagicMock()
+    publisher.max_symbols = 64
+    svc._shm_publisher = publisher
+    svc._shm_symbol_index = {}
+    svc._shm_symbol_hashes = {}
+
+    stats = SimpleNamespace(local_ts=0)
+    svc._publish_to_shm("TXFD6", stats, None)
+
+    assert "TXFD6" in svc._shm_symbol_index
+    assert svc._shm_symbol_index["TXFD6"] == 0
+    publisher.publish.assert_called_once()
+
+
+def test_publish_to_shm_max_symbols_exceeded():
+    """Covers line 596-597: lazy assign returns when max_symbols reached."""
+    svc, *_ = _make_service()
+    publisher = MagicMock()
+    publisher.max_symbols = 1
+    svc._shm_publisher = publisher
+    svc._shm_symbol_index = {"2330": 0}  # Already at capacity
+    svc._shm_symbol_hashes = {"2330": 12345}
+
+    stats = SimpleNamespace(local_ts=0)
+    svc._publish_to_shm("TXFD6", stats, None)  # Should return early
+    publisher.publish.assert_not_called()
+    assert "TXFD6" not in svc._shm_symbol_index
+
+
+def test_publish_to_shm_publisher_raises_silently():
+    """Covers lines 634-638: publish raises, silently caught."""
+    svc, *_ = _make_service()
+    publisher = MagicMock()
+    publisher.max_symbols = 64
+    publisher.publish.side_effect = RuntimeError("shm write failed")
+    svc._shm_publisher = publisher
+    svc._shm_symbol_index = {"2330": 0}
+    svc._shm_symbol_hashes = {"2330": 12345}
+
+    stats = SimpleNamespace(local_ts=0)
+    # Should not raise
+    svc._publish_to_shm("2330", stats, None)
+    publisher.publish.assert_called_once()
+
+
+def test_publish_to_shm_caches_buffers():
+    """Covers lines 606-613: LOB + feature buffers are cached and reused."""
+    svc, *_ = _make_service()
+    publisher = MagicMock()
+    publisher.max_symbols = 64
+    svc._shm_publisher = publisher
+    svc._shm_symbol_index = {"2330": 0}
+    svc._shm_symbol_hashes = {"2330": 12345}
+
+    stats1 = SimpleNamespace(best_bid=100, local_ts=0)
+    svc._publish_to_shm("2330", stats1, None)
+    assert "2330" in svc._shm_lob_cache
+    assert "2330" in svc._shm_feat_cache
+
+    # Second call reuses the cached buffer
+    stats2 = SimpleNamespace(best_bid=200, local_ts=0)
+    svc._publish_to_shm("2330", stats2, None)
+    # Should be the same list object
+    assert svc._shm_lob_cache["2330"][0] == 200
+
+
+# ---------------------------------------------------------------------------
+# _init_feature_shadow_engine (lines 650-652, 671, 673-675)
+# ---------------------------------------------------------------------------
+
+
+def test_init_feature_shadow_kernel_backend_exception():
+    """Covers lines 650-652: kernel_backend() raises, defaults to 'python'."""
+    svc, *_ = _make_service()
+    fe = MagicMock()
+    fe.kernel_backend = MagicMock(side_effect=RuntimeError("no backend"))
+    svc.feature_engine = fe
+
+    with patch.dict(os.environ, {"HFT_FEATURE_SHADOW_PARITY": "1"}):
+        with patch("hft_platform.services.market_data.FeatureEngine") as MockFE:
+            shadow = MagicMock()
+            shadow.kernel_backend.return_value = "rust"
+            MockFE.return_value = shadow
+            svc._init_feature_shadow_engine()
+
+    # Shadow engine should be assigned since backends differ
+    assert svc._feature_shadow_engine is shadow
+
+
+def test_init_feature_shadow_auto_mode_same_backend_returns():
+    """Covers line 671: auto mode with matching backends returns early."""
+    svc, *_ = _make_service()
+    fe = MagicMock()
+    fe.kernel_backend.return_value = "python"
+    fe.feature_set_id.return_value = "lob_shared_v3"
+    svc.feature_engine = fe
+
+    with patch.dict(
+        os.environ,
+        {"HFT_FEATURE_SHADOW_PARITY": "1", "HFT_FEATURE_SHADOW_BACKEND": ""},
+    ):
+        with patch("hft_platform.services.market_data.FeatureEngine") as MockFE:
+            shadow = MagicMock()
+            shadow.kernel_backend.return_value = "python"  # Same as primary
+            MockFE.return_value = shadow
+            svc._init_feature_shadow_engine()
+
+    assert svc._feature_shadow_engine is None
+
+
+def test_init_feature_shadow_create_raises():
+    """Covers lines 673-675: FeatureEngine() raises."""
+    svc, *_ = _make_service()
+    fe = MagicMock()
+    fe.kernel_backend.return_value = "python"
+    svc.feature_engine = fe
+
+    with patch.dict(os.environ, {"HFT_FEATURE_SHADOW_PARITY": "1"}):
+        with patch(
+            "hft_platform.services.market_data.FeatureEngine",
+            side_effect=RuntimeError("boom"),
+        ):
+            svc._init_feature_shadow_engine()
+
+    assert svc._feature_shadow_engine is None
+
+
+def test_init_feature_shadow_explicit_backend_same_ok():
+    """Covers line 665-672: explicit backend requested, even if same as primary."""
+    svc, *_ = _make_service()
+    fe = MagicMock()
+    fe.kernel_backend.return_value = "python"
+    fe.feature_set_id.return_value = "lob_shared_v3"
+    svc.feature_engine = fe
+
+    with patch.dict(
+        os.environ,
+        {"HFT_FEATURE_SHADOW_PARITY": "1", "HFT_FEATURE_SHADOW_BACKEND": "python"},
+    ):
+        with patch("hft_platform.services.market_data.FeatureEngine") as MockFE:
+            shadow = MagicMock()
+            shadow.kernel_backend.return_value = "python"
+            MockFE.return_value = shadow
+            svc._init_feature_shadow_engine()
+
+    # Explicit request: shadow should be assigned even if same backend
+    assert svc._feature_shadow_engine is shadow
+
+
+# ---------------------------------------------------------------------------
+# _process_raw: norm_recovery path (lines 770-771)
+# ---------------------------------------------------------------------------
+
+
+def test_process_raw_norm_recovery_triggers_after_failures():
+    """Covers lines 767-771: storm_guard.report_norm_recovery after failures."""
+    svc, bus, *_ = _make_service()
+
+    from hft_platform.events import TickEvent
+
+    mock_event = TickEvent(meta=None, symbol="2330", price=5000000, volume=100)
+    svc.normalizer = MagicMock()
+    svc.normalizer.normalize_tick = MagicMock(return_value=mock_event)
+    svc.lob = MagicMock()
+    svc.lob.process_event = MagicMock(return_value=None)
+    svc.feature_engine = None
+
+    sg = MagicMock()
+    svc._storm_guard = sg
+    svc._NORM_FAILURE_ESCALATE = 5
+    svc._norm_consecutive_failures = 5  # At threshold
+
+    raw = {"code": "2330", "close": 500.0, "volume": 100}
+    svc._process_raw(raw)
+
+    sg.report_norm_recovery.assert_called_once()
+
+
+def test_process_raw_norm_recovery_exception_swallowed():
+    """Covers line 770-771: report_norm_recovery raises, swallowed silently."""
+    svc, bus, *_ = _make_service()
+
+    from hft_platform.events import TickEvent
+
+    mock_event = TickEvent(meta=None, symbol="2330", price=5000000, volume=100)
+    svc.normalizer = MagicMock()
+    svc.normalizer.normalize_tick = MagicMock(return_value=mock_event)
+    svc.lob = MagicMock()
+    svc.lob.process_event = MagicMock(return_value=None)
+    svc.feature_engine = None
+
+    sg = MagicMock()
+    sg.report_norm_recovery.side_effect = RuntimeError("guard error")
+    svc._storm_guard = sg
+    svc._NORM_FAILURE_ESCALATE = 3
+    svc._norm_consecutive_failures = 3
+
+    raw = {"code": "2330", "close": 500.0, "volume": 100}
+    # Should not raise
+    svc._process_raw(raw)
+    sg.report_norm_recovery.assert_called_once()
+    # Counter should be reset to 0 after successful normalization
+    assert svc._norm_consecutive_failures == 0
+
+
+# ---------------------------------------------------------------------------
+# _md_wal_fallback_write
+# ---------------------------------------------------------------------------
+
+
+def test_md_wal_fallback_write_no_writer():
+    """WAL fallback does nothing when _wal_writer is None."""
+    svc, *_ = _make_service()
+    svc._wal_writer = None
+    svc._md_wal_fallback_write("tick", {"symbol": "2330"})
+    assert svc._wal_fallback_count == 0
+
+
+def test_md_wal_fallback_write_skips_by_sample_rate():
+    """WAL fallback writes only 1-in-N events."""
+    svc, *_ = _make_service()
+    writer = MagicMock()
+    # Return a fresh coroutine each call to avoid event loop issues
+    writer.write = MagicMock(side_effect=lambda *a, **kw: asyncio.coroutine(lambda: None)())
+    svc._wal_writer = writer
+    svc._wal_fallback_sample_rate = 10
+    svc._wal_fallback_count = 0
+
+    # First 9 calls should be skipped (count not divisible by 10)
+    for _ in range(9):
+        svc._md_wal_fallback_write("tick", {"symbol": "2330"})
+    assert svc._wal_fallback_count == 9
+
+
+def test_on_wal_fallback_done_no_exception():
+    """CF-5: done callback does nothing when no exception."""
+    from hft_platform.services.market_data import MarketDataService
+
+    # Use a mock future to avoid event-loop dependency
+    fut = MagicMock()
+    fut.exception.return_value = None
+    # Should not raise
+    MarketDataService._on_wal_fallback_done(fut)
+    fut.exception.assert_called_once()
+
+
+def test_on_wal_fallback_done_with_exception():
+    """CF-5: done callback logs warning on exception."""
+    from hft_platform.services.market_data import MarketDataService
+
+    fut = MagicMock()
+    fut.exception.return_value = IOError("disk full")
+    # Should not raise — just logs
+    MarketDataService._on_wal_fallback_done(fut)
+    fut.exception.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# _record_direct_event: non-drop path with pending puts (line 1523-1530)
+# ---------------------------------------------------------------------------
+
+
+def test_record_direct_non_drop_pending_puts_exceeded():
+    """When drop_on_full=False and pending_puts exceeds max, drops events."""
+    svc, *_ = _make_service()
+    recorder_queue = asyncio.Queue(maxsize=100)
+    svc.recorder_queue = recorder_queue
+    svc._record_direct = True
+    svc._record_drop_on_full = False
+    svc._record_pending_puts = 100
+    svc._record_pending_puts_max = 100
+
+    event = _make_tick_event()
+    with patch("hft_platform.recorder.mapper.map_event_to_record") as mock_map:
+        mock_map.return_value = ("tick", {"symbol": "2330"})
+        svc._record_direct_event(event)
+
+    assert svc._recorder_dropped_count == 1
+
+
+# ---------------------------------------------------------------------------
+# _looks_like_md edge cases
+# ---------------------------------------------------------------------------
+
+
+def test_looks_like_md_none():
+    from hft_platform.services.market_data import _looks_like_md
+
+    assert _looks_like_md(None) is False
+
+
+def test_looks_like_md_dict_with_ts():
+    from hft_platform.services.market_data import _looks_like_md
+
+    assert _looks_like_md({"ts": 123}) is True
+
+
+def test_looks_like_md_dict_with_buy_price():
+    """buy_price and sell_price are also market data indicators."""
+    from hft_platform.services.market_data import _looks_like_md
+
+    assert _looks_like_md({"buy_price": 100}) is True
+    assert _looks_like_md({"sell_price": 100}) is True
+
+
+def test_looks_like_md_object_with_code_and_time():
+    from hft_platform.services.market_data import _looks_like_md
+
+    obj = SimpleNamespace(code="2330", ts=123)
+    assert _looks_like_md(obj) is True
+
+
+def test_looks_like_md_object_with_symbol_only():
+    from hft_platform.services.market_data import _looks_like_md
+
+    # symbol alone without price or time — the condition is (has_price) or (has_code and (has_price or has_time))
+    obj = SimpleNamespace(symbol="2330")
+    assert _looks_like_md(obj) is False
+
+
+# ---------------------------------------------------------------------------
+# _unwrap_md edge cases
+# ---------------------------------------------------------------------------
+
+
+def test_unwrap_md_none():
+    from hft_platform.services.market_data import _unwrap_md
+
+    assert _unwrap_md(None) is None
+
+
+def test_unwrap_md_dict_with_tick():
+    from hft_platform.services.market_data import _unwrap_md
+
+    tick_data = {"code": "2330", "close": 500.0}
+    assert _unwrap_md({"tick": tick_data}) == tick_data
+
+
+def test_unwrap_md_dict_with_bidask():
+    from hft_platform.services.market_data import _unwrap_md
+
+    bidask_data = {"bid_price": [100], "ask_price": [200]}
+    assert _unwrap_md({"bidask": bidask_data}) == bidask_data
+
+
+def test_unwrap_md_object_with_tick():
+    from hft_platform.services.market_data import _unwrap_md
+
+    tick_data = SimpleNamespace(code="2330", close=500.0)
+    obj = SimpleNamespace(tick=tick_data, bidask=None)
+    assert _unwrap_md(obj) is tick_data
+
+
+def test_unwrap_md_object_with_bidask():
+    from hft_platform.services.market_data import _unwrap_md
+
+    bidask_data = SimpleNamespace(bid_price=[100], ask_price=[200])
+    obj = SimpleNamespace(tick=None, bidask=bidask_data)
+    assert _unwrap_md(obj) is bidask_data
+
+
+def test_unwrap_md_plain_dict_passthrough():
+    from hft_platform.services.market_data import _unwrap_md
+
+    d = {"code": "2330"}
+    assert _unwrap_md(d) is d
+
+
+# ---------------------------------------------------------------------------
+# _is_futures_symbol
+# ---------------------------------------------------------------------------
+
+
+def test_is_futures_symbol_alpha_prefix():
+    from hft_platform.services.market_data import MarketDataService
+
+    assert MarketDataService._is_futures_symbol("TXFD6") is True
+    assert MarketDataService._is_futures_symbol("TMFD6") is True
+
+
+def test_is_futures_symbol_numeric_code():
+    from hft_platform.services.market_data import MarketDataService
+
+    assert MarketDataService._is_futures_symbol("2330") is False
+    assert MarketDataService._is_futures_symbol("00878") is False
+
+
+def test_is_futures_symbol_empty():
+    from hft_platform.services.market_data import MarketDataService
+
+    assert MarketDataService._is_futures_symbol("") is False
+
+
+# ---------------------------------------------------------------------------
+# _record_shioaji_crash_signature with match
+# ---------------------------------------------------------------------------
+
+
+def test_record_crash_signature_with_match():
+    svc, *_ = _make_service()
+    metric = MagicMock()
+    svc.metrics_registry = MagicMock()
+    svc.metrics_registry.shioaji_crash_signature_total = metric
+
+    with patch(
+        "hft_platform.services.market_data.detect_crash_signature",
+        return_value="conn_reset",
+    ):
+        svc._record_shioaji_crash_signature(
+            "connection reset by peer", context="md_callback"
+        )
+
+    metric.labels.assert_called_once_with(
+        signature="conn_reset", context="md_callback"
+    )
+    metric.labels.return_value.inc.assert_called_once()
+
+
+def test_record_crash_signature_metric_inc_raises():
+    """Covers the except path in _record_shioaji_crash_signature."""
+    svc, *_ = _make_service()
+    metric = MagicMock()
+    metric.labels.side_effect = RuntimeError("metric error")
+    svc.metrics_registry = MagicMock()
+    svc.metrics_registry.shioaji_crash_signature_total = metric
+
+    with patch(
+        "hft_platform.services.market_data.detect_crash_signature",
+        return_value="conn_reset",
+    ):
+        # Should not raise
+        svc._record_shioaji_crash_signature("connection reset", context="md_callback")
+
+
+# ---------------------------------------------------------------------------
+# _process_raw: norm failure escalation to storm_guard
+# ---------------------------------------------------------------------------
+
+
+def test_process_raw_norm_failure_escalates_to_storm_guard():
+    """Covers lines 786-790: consecutive norm failures trigger storm_guard."""
+    svc, bus, *_ = _make_service()
+    svc.normalizer = MagicMock()
+    svc.normalizer.normalize_tick = MagicMock(side_effect=ValueError("bad"))
+
+    sg = MagicMock()
+    svc._storm_guard = sg
+    svc._NORM_FAILURE_ESCALATE = 2
+    svc._norm_consecutive_failures = 1  # One away from threshold
+
+    raw = {"code": "2330", "close": 500.0, "volume": 100}
+    svc._process_raw(raw)
+
+    assert svc._norm_consecutive_failures == 2
+    sg.report_norm_failure.assert_called_once_with(2)
+
+
+# ---------------------------------------------------------------------------
+# _record_direct_event: WAL fallback on QueueFull
+# ---------------------------------------------------------------------------
+
+
+def test_record_direct_queue_full_triggers_wal_fallback():
+    """When recorder queue is full, _md_wal_fallback_write is called."""
+    svc, *_ = _make_service()
+    recorder_queue = asyncio.Queue(maxsize=1)
+    svc.recorder_queue = recorder_queue
+    svc._record_direct = True
+    svc._record_drop_on_full = True
+    svc._record_degrade_threshold = 1000  # High so degraded mode is not entered
+    recorder_queue.put_nowait({"topic": "tick", "data": {}})
+
+    svc._wal_writer = MagicMock()
+    svc._md_wal_fallback_write = MagicMock()
+
+    event = _make_tick_event()
+    with patch("hft_platform.recorder.mapper.map_event_to_record") as mock_map:
+        mock_map.return_value = ("tick", {"symbol": "2330"})
+        svc._record_direct_event(event)
+
+    svc._md_wal_fallback_write.assert_called_once_with("tick", {"symbol": "2330"})
+
+
+# ---------------------------------------------------------------------------
+# _enqueue_raw: sliding window drops and storm guard escalation
+# ---------------------------------------------------------------------------
+
+
+def test_enqueue_raw_consecutive_drops_trigger_storm():
+    """Covers storm guard escalation on consecutive drops."""
+    svc, *_ = _make_service()
+    svc.raw_queue = asyncio.Queue(maxsize=1)
+    svc.raw_queue.put_nowait(("x", "y"))  # Fill
+
+    sg = MagicMock()
+    svc._storm_guard = sg
+    svc._raw_drop_degrade_threshold = 2
+    svc._raw_drop_halt_threshold = 1000
+    svc._raw_consecutive_drops = 1  # Will become 2 after next drop
+
+    svc._enqueue_raw("TSE", {"code": "2330"})
+    sg.trigger_storm.assert_called_once()
+
+
+def test_enqueue_raw_halt_threshold_triggers_halt():
+    """Covers halt escalation on sustained drops."""
+    svc, *_ = _make_service()
+    svc.raw_queue = asyncio.Queue(maxsize=1)
+    svc.raw_queue.put_nowait(("x", "y"))
+
+    sg = MagicMock()
+    svc._storm_guard = sg
+    svc._raw_drop_halt_threshold = 2
+    svc._raw_consecutive_drops = 1
+
+    svc._enqueue_raw("TSE", {"code": "2330"})
+    sg.trigger_halt.assert_called_once()
+
+
+def test_enqueue_raw_feature_engine_mark_gap():
+    """Covers FeatureEngine.mark_gap_all on drop threshold."""
+    svc, *_ = _make_service()
+    svc.raw_queue = asyncio.Queue(maxsize=1)
+    svc.raw_queue.put_nowait(("x", "y"))
+
+    fe = MagicMock()
+    svc.feature_engine = fe
+    svc._storm_guard = None
+    svc._raw_drop_degrade_threshold = 2
+    svc._raw_consecutive_drops = 1  # Will become 2 = threshold
+
+    svc._enqueue_raw("TSE", {"code": "2330"})
+    fe.mark_gap_all.assert_called_once()
+
+
+def test_enqueue_raw_sliding_window_storm():
+    """Covers sliding window drop rate triggering storm guard."""
+    svc, *_ = _make_service()
+    svc.raw_queue = asyncio.Queue(maxsize=1)
+    svc.raw_queue.put_nowait(("x", "y"))
+
+    sg = MagicMock()
+    svc._storm_guard = sg
+    svc._raw_drop_degrade_threshold = 1000  # High enough to skip
+    svc._raw_drop_halt_threshold = 1000
+    svc._raw_drop_window_threshold = 1  # Trigger on any window count
+    svc._raw_drop_window_count = 100.0  # Already high
+    svc._raw_drop_window_last_ns = 1
+    svc._raw_consecutive_drops = 0
+
+    svc._enqueue_raw("TSE", {"code": "2330"})
+    # Should have triggered storm via window check
+    sg.trigger_storm.assert_called_once()

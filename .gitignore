@@ -212,3 +212,4 @@ ${ARXIV_STORAGE_PATH}/
 
 gha-creds-*.json
 certs/
+*,cover
