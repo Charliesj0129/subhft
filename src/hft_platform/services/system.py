@@ -81,6 +81,34 @@ class HFTSystem:
         return 0.0
 
     @staticmethod
+    def _combine_drawdown_with_mtm(
+        realized_drawdown_pct: float,
+        unrealized_scaled: int,
+        base_capital: int,
+        price_scale: int = 10_000,
+    ) -> float:
+        """Combine realized drawdown with unrealized MtM loss.
+
+        Bug 11 (2026-04-17): unrealized is scaled int (x10000, from MtMCalculator),
+        base_capital is raw NTD from settings. Dividing directly inflated phantom
+        drawdown by 10,000x — a 2 pt move on 1 Mini TAIEX contract produced
+        -200bps HALT. Fix: descale unrealized to raw NTD before dividing.
+
+        Args:
+            realized_drawdown_pct: positive fraction (0.0-1.0) from PositionStore.
+            unrealized_scaled: scaled int (x price_scale); only losses matter.
+            base_capital: raw NTD portfolio capital.
+            price_scale: scaling factor for unrealized_scaled.
+
+        Returns:
+            Adjusted drawdown_pct (positive fraction).
+        """
+        if base_capital <= 0 or unrealized_scaled >= 0:
+            return realized_drawdown_pct
+        unrealized_ntd = unrealized_scaled / price_scale
+        return realized_drawdown_pct - unrealized_ntd / base_capital
+
+    @staticmethod
     def _set_service_running(service: Any, value: bool) -> None:
         """Set the ``running`` attribute on *service* if it exists."""
         if hasattr(service, "running"):
@@ -712,9 +740,11 @@ class HFTSystem:
                 if self._mtm_calculator is not None:
                     try:
                         unrealized = self._mtm_calculator.total_unrealized_pnl()
-                        base_capital = self.settings.get("base_capital", 10_000_000)
-                        if base_capital > 0 and unrealized < 0:
-                            drawdown_pct = drawdown_pct - unrealized / base_capital
+                        drawdown_pct = self._combine_drawdown_with_mtm(
+                            realized_drawdown_pct=drawdown_pct,
+                            unrealized_scaled=int(unrealized),
+                            base_capital=int(self.settings.get("base_capital", 10_000_000)),
+                        )
                         self.risk_engine.update_unrealized_pnl(int(unrealized))
                     except Exception:
                         pass
