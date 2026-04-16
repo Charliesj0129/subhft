@@ -1100,13 +1100,14 @@ class StrategyRunner:
                 if dropped:
                     now_ns = timebase.now_ns()
                     for intent in dropped:
+                        iid, sid, sym, side = _typed_intent_identity(intent)
                         fb = RiskFeedback(
-                            intent_id=intent.intent_id,
-                            strategy_id=intent.strategy_id,
-                            symbol=intent.symbol,
+                            intent_id=iid,
+                            strategy_id=sid,
+                            symbol=sym,
                             reason_code="TRACK_GATE_SESSION_FILTERED",
                             timestamp_ns=now_ns,
-                            side=intent.side,
+                            side=side,
                             was_approved=False,
                         )
                         try:
@@ -1115,7 +1116,7 @@ class StrategyRunner:
                             logger.warning(
                                 "track_gate_feedback_error",
                                 strategy_id=strategy.strategy_id,
-                                intent_id=intent.intent_id,
+                                intent_id=iid,
                             )
 
             duration = time.perf_counter_ns() - start

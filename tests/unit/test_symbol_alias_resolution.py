@@ -37,12 +37,14 @@ class TestSymbolMetadataAliasResolution:
     def test_set_alias_map_merges(self) -> None:
         sm = SymbolMetadata.__new__(SymbolMetadata)
         sm.alias_to_actual = {"TXFR1": "TXFD6"}
+        sm.meta = {}
         sm.set_alias_map({"TMFR1": "TMFE6"})
         assert sm.alias_to_actual == {"TXFR1": "TXFD6", "TMFR1": "TMFE6"}
 
     def test_set_alias_map_overwrites(self) -> None:
         sm = SymbolMetadata.__new__(SymbolMetadata)
         sm.alias_to_actual = {"TXFR1": "TXFD6"}
+        sm.meta = {}
         sm.set_alias_map({"TXFR1": "TXFE6"})
         assert sm.alias_to_actual["TXFR1"] == "TXFE6"
 

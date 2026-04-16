@@ -36,12 +36,34 @@ class _FakeCore:
         pass
 
 
+_saved_rust_core = None
+
+
 def _stub_rust_core():
     """Ensure hft_platform.rust_core is importable with a stub AlphaStrategy."""
+    global _saved_rust_core
+    _saved_rust_core = sys.modules.get("hft_platform.rust_core")
     mod = MagicMock()
     mod.AlphaStrategy = _FakeCore
     sys.modules["hft_platform.rust_core"] = mod
     return mod
+
+
+def _restore_rust_core():
+    """Restore the original rust_core module."""
+    global _saved_rust_core
+    if _saved_rust_core is not None:
+        sys.modules["hft_platform.rust_core"] = _saved_rust_core
+    else:
+        sys.modules.pop("hft_platform.rust_core", None)
+    _saved_rust_core = None
+
+
+@pytest.fixture(autouse=True)
+def _cleanup_rust_core():
+    """Restore sys.modules after each test."""
+    yield
+    _restore_rust_core()
 
 
 def _make_strategy(**overrides):
