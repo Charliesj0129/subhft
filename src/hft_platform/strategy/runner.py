@@ -1084,32 +1084,39 @@ class StrategyRunner:
                             except Exception:  # noqa: BLE001
                                 pass
 
-            # DEBUG: trace intent generation before TrackGate
-            if intents:
-                logger.info(
-                    "runner_intents_pre_gate",
-                    strategy_id=strategy.strategy_id,
-                    count=len(intents),
-                    symbol=event_symbol,
-                    event_type=type(event).__name__,
-                )
-
             # TrackGate per-intent filtering (session phase enforcement)
             if getattr(self, "track_gate", None) is not None and intents:
-                pre_filter_count = len(intents)
+                pre_filter_intents = list(intents)
                 intents = StrategyRunner.filter_intents_by_phase(
                     intents,
                     self.track_gate,
                     self.position_store,
                     strategy_id=strategy.strategy_id,
                 )
-                if pre_filter_count > 0 and not intents:
-                    logger.warning(
-                        "track_gate_filtered_all_intents",
-                        strategy_id=strategy.strategy_id,
-                        pre_count=pre_filter_count,
-                        symbol=event_symbol,
-                    )
+                # Send RiskFeedback for each filtered intent so strategy
+                # can decrement pending counters (prevents permanent freeze).
+                filtered_set = set(id(i) for i in intents)
+                dropped = [i for i in pre_filter_intents if id(i) not in filtered_set]
+                if dropped:
+                    now_ns = timebase.now_ns()
+                    for intent in dropped:
+                        fb = RiskFeedback(
+                            intent_id=intent.intent_id,
+                            strategy_id=intent.strategy_id,
+                            symbol=intent.symbol,
+                            reason_code="TRACK_GATE_SESSION_FILTERED",
+                            timestamp_ns=now_ns,
+                            side=intent.side,
+                            was_approved=False,
+                        )
+                        try:
+                            strategy.on_risk_feedback(fb)
+                        except Exception:  # noqa: BLE001
+                            logger.warning(
+                                "track_gate_feedback_error",
+                                strategy_id=strategy.strategy_id,
+                                intent_id=intent.intent_id,
+                            )
 
             duration = time.perf_counter_ns() - start
 
