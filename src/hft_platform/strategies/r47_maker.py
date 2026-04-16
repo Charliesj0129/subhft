@@ -24,6 +24,7 @@ from structlog import get_logger
 
 from hft_platform.contracts.execution import FillEvent, OrderEvent, OrderStatus
 from hft_platform.contracts.strategy import RiskFeedback, Side
+from hft_platform.core.timebase import now_ns as _now_ns
 from hft_platform.events import (
     FeatureUpdateEvent,
     GapEvent,
@@ -430,6 +431,13 @@ class R47MakerStrategy(SimpleMarketMaker):
         self._active_buy_oid: dict[str, str] = {}
         self._active_sell_oid: dict[str, str] = {}
 
+        # Bug 9 defense-in-depth: cooldown timer prevents rapid re-quoting
+        # even if pending counters are corrupted by async feedback.
+        # After placing quotes, block new quotes for 200ms (enough for
+        # broker SUBMITTED callback to arrive and set active_oid).
+        self._last_quote_ns: dict[str, int] = {}
+        self._QUOTE_COOLDOWN_NS: int = 200_000_000  # 200ms
+
         logger.info(
             "R47MakerStrategy initialized",
             pe_danger=pe_danger_threshold,
@@ -567,6 +575,9 @@ class R47MakerStrategy(SimpleMarketMaker):
         else:
             self._pending_sell[sym] = max(0, self._pending_sell.get(sym, 0) - event.qty)
             self._active_sell_oid.pop(sym, None)
+        # Bug 9 defense: clear cooldown so re-quoting resumes after fill
+        if self._pending_buy.get(sym, 0) == 0 and self._pending_sell.get(sym, 0) == 0:
+            self._last_quote_ns.pop(sym, None)
         logger.info(
             "r47_fill",
             symbol=sym,
@@ -616,8 +627,11 @@ class R47MakerStrategy(SimpleMarketMaker):
 
         Without this, a risk-rejected order leaves _pending_buy or _pending_sell
         elevated, potentially freezing one side of quoting permanently.
-        Uses feedback.side when available for precise decrement; falls back to
-        decrementing both sides (safe: R47 sends qty=1 per side).
+        Requires feedback.side for precise decrement; ignores feedback without
+        side info to prevent the "double-decrement" bug (Bug 9, 2026-04-16):
+        typed intent tuples produce side=None via getattr(tuple, "side", None),
+        causing the old else branch to decrement BOTH counters simultaneously,
+        resetting max_pos protection and allowing unlimited order stacking.
         """
         # DEC2-001: Approved feedback (e.g., DLQ expiry for dispatched orders)
         # must NOT decrement pending — the order was sent to the broker and
@@ -635,14 +649,22 @@ class R47MakerStrategy(SimpleMarketMaker):
         elif side == Side.SELL:
             self._pending_sell[sym] = max(0, self._pending_sell.get(sym, 0) - 1)
         else:
-            # Fallback: no side info — decrement both (conservative)
-            self._pending_buy[sym] = max(0, self._pending_buy.get(sym, 0) - 1)
-            self._pending_sell[sym] = max(0, self._pending_sell.get(sym, 0) - 1)
+            # Bug 9 fix: side=None feedback (from typed tuples via getattr)
+            # must NOT decrement both counters. This causes a liveness issue
+            # (pending stays elevated → quoting freezes) but that is the SAFE
+            # failure mode. Strategy restart recovers from frozen pending.
+            logger.warning(
+                "r47_risk_feedback_no_side",
+                symbol=sym,
+                reason=feedback.reason_code,
+                feedback_side=repr(side),
+            )
+            return
         logger.debug(
             "r47_risk_rejection_pending_released",
             symbol=sym,
             reason=feedback.reason_code,
-            side=side.name if side else "both",
+            side=side.name if hasattr(side, "name") else str(side),
         )
 
     def on_gap(self, event: GapEvent) -> None:
@@ -739,12 +761,20 @@ class R47MakerStrategy(SimpleMarketMaker):
 
     def _generate_quotes(self, symbol: str, event: LOBStatsEvent, pe: _PEState) -> None:
         """Compute quote prices and place orders with D3 widening + D2 suppression."""
+        exec_sym = self._exec_symbol(symbol)
+
+        # Bug 9 defense-in-depth: cooldown prevents rapid re-quoting even if
+        # pending counters are corrupted by async feedback with side=None.
+        now_ns = _now_ns()
+        last_q = self._last_quote_ns.get(exec_sym, 0)
+        if last_q > 0 and (now_ns - last_q) < self._QUOTE_COOLDOWN_NS:
+            return
+
         mfg = self._get_mfg(symbol)
         mfg_widen_bid, mfg_widen_ask = self._compute_mfg_widening(mfg, event.spread_scaled)
 
         mid_price_x2 = event.mid_price_x2
         spread_scaled = event.spread_scaled
-        exec_sym = self._exec_symbol(symbol)
         pos = self._local_position(exec_sym)
 
         # Micro price with imbalance
@@ -804,16 +834,21 @@ class R47MakerStrategy(SimpleMarketMaker):
             if old_sell_oid:
                 self.cancel(exec_sym, old_sell_oid)
 
+        quoted = False
         if can_buy and not self._suppress_bid and bid_moved:
             self.buy(exec_sym, bid_price_scaled, _qty)
             self._pending_buy[exec_sym] = pending_buy + _qty
             self._last_bid[exec_sym] = bid_price_scaled
             self._quotes_sent += 1
+            quoted = True
         if can_sell and not self._suppress_ask and ask_moved:
             self.sell(exec_sym, ask_price_scaled, _qty)
             self._pending_sell[exec_sym] = pending_sell + _qty
             self._last_ask[exec_sym] = ask_price_scaled
             self._quotes_sent += 1
+            quoted = True
+        if quoted:
+            self._last_quote_ns[exec_sym] = now_ns
 
         if self._stats_count % _LOG_INTERVAL == 1:
             self._log_stats(symbol, pe, mfg, event.spread_scaled, pos)

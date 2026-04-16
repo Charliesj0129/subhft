@@ -649,8 +649,13 @@ class TestR47OnRiskFeedback:
         strategy.on_risk_feedback(fb)
         assert strategy._pending_sell["TMFD6"] == 0
 
-    def test_on_risk_feedback_no_side_decrements_both(self, strategy):
-        """Lines 637-640: no side info decrements both."""
+    def test_on_risk_feedback_no_side_does_not_decrement(self, strategy):
+        """Bug 9 fix: side=None must NOT decrement either counter.
+
+        The old else branch decremented both counters when side=None,
+        which caused max_pos violation when typed intent tuples (which
+        have no .side attribute) produced side=None via getattr().
+        """
         strategy._pending_buy["TMFD6"] = 1
         strategy._pending_sell["TMFD6"] = 1
         fb = RiskFeedback(
@@ -658,8 +663,9 @@ class TestR47OnRiskFeedback:
             reason_code="rejected", timestamp_ns=0, side=None,
         )
         strategy.on_risk_feedback(fb)
-        assert strategy._pending_buy["TMFD6"] == 0
-        assert strategy._pending_sell["TMFD6"] == 0
+        # Must NOT decrement — this is the safe failure mode (quoting freezes)
+        assert strategy._pending_buy["TMFD6"] == 1
+        assert strategy._pending_sell["TMFD6"] == 1
 
     def test_on_risk_feedback_approved_noop(self, strategy):
         """Lines 625-626: approved feedback does not decrement."""
