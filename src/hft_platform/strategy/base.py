@@ -322,6 +322,7 @@ class BaseStrategy(ABC):
 
     def _place(self, symbol, side, price, qty, tif):
         if not self.ctx:
+            logger.warning("_place_ctx_none", symbol=symbol, side=str(side), strategy_id=self.strategy_id)
             return
         intent = self.ctx.place_order(
             symbol=symbol, side=side, price=price, qty=qty, tif=tif, intent_type=IntentType.NEW
