@@ -6,6 +6,7 @@ from hft_platform.backtest.ch_data_source import (
     ChDataSource,
     DataValidationError,
 )
+from hft_platform.backtest.result import BacktestResult
 
 __all__ = [
     "HftBacktestAdapter",
@@ -13,4 +14,5 @@ __all__ = [
     "BacktestDataSource",
     "ChDataSource",
     "DataValidationError",
+    "BacktestResult",
 ]
