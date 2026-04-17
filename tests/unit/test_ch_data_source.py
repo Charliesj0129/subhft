@@ -8,6 +8,7 @@ from hft_platform.backtest.ch_data_source import (
     BUY_EVENT,
     DEPTH_CLEAR_EVENT,
     DEPTH_EVENT,
+    EV_TYPE_MASK,
     EXCH_EVENT,
     SELL_EVENT,
     TRADE_EVENT,
@@ -31,7 +32,7 @@ def test_data_validation_error_is_exception():
 
 
 def test_ch_data_source_implements_protocol():
-    src = ChDataSource(ch_host="localhost", ch_port=9000, price_scale=1_000_000)
+    src = ChDataSource(ch_host="localhost", ch_port=8123, price_scale=1_000_000)
     assert isinstance(src, BacktestDataSource)
 
 
@@ -39,7 +40,16 @@ def test_ch_data_source_default_config():
     src = ChDataSource()
     assert src.price_scale == 1_000_000
     assert src.ch_host == "localhost"
-    assert src.ch_port == 9000
+    assert src.ch_port == 8123
+    assert src.ch_user == "default"
+    # password comes from env (empty if CLICKHOUSE_PASSWORD not set)
+    assert isinstance(src.ch_password, str)
+
+
+def test_ch_data_source_explicit_credentials():
+    src = ChDataSource(ch_user="admin", ch_password="secret")
+    assert src.ch_user == "admin"
+    assert src.ch_password == "secret"
 
 
 # ---------------------------------------------------------------------------
@@ -137,13 +147,14 @@ def test_build_tick_event_sell():
 
 
 def test_assemble_day_events_sorts_by_exch_ts():
+    """Rows out-of-order by exch_ts must be re-sorted; uses trade_direction column."""
     df = pd.DataFrame({
         "exch_ts": [300, 100, 200],
         "local_ts": [301, 101, 201],
         "event_type": ["Tick", "BidAsk", "Tick"],
         "price": [17000_500_000, 0, 17001_000_000],
         "volume": [1, 0, 2],
-        "side": ["Buy", None, "Sell"],
+        "trade_direction": [1, 0, -1],
         "bid_prices": [None, [17000_000_000, 16999_000_000], None],
         "bid_volumes": [None, [5, 10], None],
         "ask_prices": [None, [17001_000_000, 17002_000_000], None],
@@ -152,6 +163,47 @@ def test_assemble_day_events_sorts_by_exch_ts():
     events = assemble_day_events(df, price_scale=1_000_000)
     # Timestamps must be monotonically non-decreasing
     assert np.all(events["exch_ts"][1:] >= events["exch_ts"][:-1])
+
+
+def test_assemble_day_events_legacy_side_column():
+    """Legacy side='Buy'/'Sell' column still works when trade_direction absent."""
+    df = pd.DataFrame({
+        "exch_ts": [100, 200],
+        "local_ts": [101, 201],
+        "event_type": ["BidAsk", "Tick"],
+        "price": [0, 17000_500_000],
+        "volume": [0, 1],
+        "side": [None, "Buy"],
+        "bid_prices": [[17000_000_000], None],
+        "bid_volumes": [[5], None],
+        "ask_prices": [[17001_000_000], None],
+        "ask_volumes": [[3], None],
+    })
+    events = assemble_day_events(df, price_scale=1_000_000)
+    trade_events = events[(events["ev"] & EV_TYPE_MASK) == TRADE_EVENT]
+    assert len(trade_events) == 1
+    assert trade_events[0]["ev"] & BUY_EVENT
+
+
+def test_assemble_day_events_skips_trade_direction_zero():
+    """trade_direction==0 Tick rows must be dropped (no executable side)."""
+    df = pd.DataFrame({
+        "exch_ts": [100, 200, 300],
+        "local_ts": [101, 201, 301],
+        "event_type": ["BidAsk", "Tick", "Tick"],
+        "price": [0, 17000_000_000, 17001_000_000],
+        "volume": [0, 1, 2],
+        "trade_direction": [0, 0, 1],  # second Tick has direction=0 → skip
+        "bid_prices": [[17000_000_000], None, None],
+        "bid_volumes": [[5], None, None],
+        "ask_prices": [[17001_000_000], None, None],
+        "ask_volumes": [[3], None, None],
+    })
+    events = assemble_day_events(df, price_scale=1_000_000)
+    trade_events = events[(events["ev"] & EV_TYPE_MASK) == TRADE_EVENT]
+    # Only 1 trade event (trade_direction=1 Tick); direction=0 is skipped
+    assert len(trade_events) == 1
+    assert trade_events[0]["ev"] & BUY_EVENT
 
 
 # ---------------------------------------------------------------------------

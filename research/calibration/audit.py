@@ -228,7 +228,7 @@ def main() -> int:
     parser.add_argument("--l2-data-dir", type=Path,
                         default=Path("research/data/raw"))
     parser.add_argument("--ch-host", type=str, default="localhost")
-    parser.add_argument("--ch-port", type=int, default=9000)
+    parser.add_argument("--ch-port", type=int, default=8123)
     parser.add_argument("--skip-clickhouse", action="store_true")
     parser.add_argument("--output", type=Path,
                         default=Path("research/calibration/artifacts/data_audit_report.json"))
@@ -237,9 +237,15 @@ def main() -> int:
     ch_client = None
     if not args.skip_clickhouse:
         try:
-            import clickhouse_connect
+            import os  # noqa: PLC0415
+
+            import clickhouse_connect  # noqa: PLC0415
+
             ch_client = clickhouse_connect.get_client(
-                host=args.ch_host, port=args.ch_port,
+                host=args.ch_host,
+                port=args.ch_port,
+                username=os.getenv("CLICKHOUSE_USER", "default"),
+                password=os.getenv("CLICKHOUSE_PASSWORD", ""),
             )
         except Exception as e:
             print(f"WARN: ClickHouse unavailable ({e}), skipping hft.fills audit",

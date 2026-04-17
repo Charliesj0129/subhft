@@ -51,21 +51,30 @@ class ChDataSource:
     def __init__(
         self,
         ch_host: str = "localhost",
-        ch_port: int = 9000,
+        ch_port: int = 8123,
+        ch_user: str = "default",
+        ch_password: str = "",
         price_scale: int = 1_000_000,
     ) -> None:
         """Initialize ChDataSource.
 
         Args:
             ch_host: ClickHouse host
-            ch_port: ClickHouse native protocol port
+            ch_port: ClickHouse HTTP port (default: 8123). ``clickhouse_connect``
+                uses the HTTP interface — do NOT use the native TCP port 9000 here.
+            ch_user: ClickHouse username (default: "default")
+            ch_password: ClickHouse password; if empty, reads CLICKHOUSE_PASSWORD env var.
             price_scale: Scale factor for price descaling. ClickHouse / golden
                 parquet stores prices at x1,000,000 scale (not the x10,000
                 platform scale). Descaling happens at the boundary to produce
                 float prices for hftbacktest.
         """
+        import os  # noqa: PLC0415
+
         self.ch_host = ch_host
         self.ch_port = ch_port
+        self.ch_user = ch_user
+        self.ch_password = ch_password or os.getenv("CLICKHOUSE_PASSWORD", "")
         self.price_scale = price_scale
 
     def load_day(self, instrument: str, date: str, max_depth_levels: int = 5) -> np.ndarray:
@@ -73,16 +82,33 @@ class ChDataSource:
 
         Queries hft.market_data for the given instrument/date, converts rows
         into hftbacktest-compatible events, and validates the result.
+
+        Real hft.market_data schema uses:
+          - ``type`` (not event_type), ``ingest_ts`` (not local_ts),
+          - ``price_scaled`` (not price), ``bids_price``/``bids_vol`` (not bid_prices/bid_volumes),
+          - ``trade_direction`` Int8 (+1=buy, -1=sell, 0=no-direction, not side string)
         """
         # Lazy import to keep module load lightweight
         import clickhouse_connect  # noqa: PLC0415
 
-        client = clickhouse_connect.get_client(host=self.ch_host, port=self.ch_port)
+        client = clickhouse_connect.get_client(
+            host=self.ch_host,
+            port=self.ch_port,
+            username=self.ch_user,
+            password=self.ch_password,
+        )
         query = """
             SELECT
-                exch_ts, local_ts, event_type,
-                price, volume, side,
-                bid_prices, bid_volumes, ask_prices, ask_volumes
+                exch_ts,
+                ingest_ts AS local_ts,
+                type AS event_type,
+                price_scaled AS price,
+                volume,
+                trade_direction,
+                bids_price AS bid_prices,
+                bids_vol AS bid_volumes,
+                asks_price AS ask_prices,
+                asks_vol AS ask_volumes
             FROM hft.market_data
             WHERE symbol = {instrument:String}
               AND toDate(toDateTime64(exch_ts/1e9, 3)) = {date:Date}
@@ -187,9 +213,18 @@ def build_tick_event(
 def assemble_day_events(df: "pd.DataFrame", price_scale: int) -> np.ndarray:
     """Convert one day of ClickHouse market_data rows into one hftbacktest event array.
 
-    Rows must have columns: exch_ts, local_ts, event_type, and either
-      - BidAsk: bid_prices, bid_volumes, ask_prices, ask_volumes (list[int])
-      - Tick: price, volume, side
+    Accepts two column formats:
+
+    **Real ClickHouse schema** (hft.market_data after SELECT aliasing):
+      - ``event_type`` ("BidAsk" or "Tick"), ``local_ts``
+      - BidAsk: ``bid_prices``, ``bid_volumes``, ``ask_prices``, ``ask_volumes`` (list[int]);
+        ``price`` and ``volume`` are 0 for BidAsk rows and are ignored.
+      - Tick: ``price`` (int), ``volume`` (int), ``trade_direction`` (Int8: +1=buy, -1=sell,
+        0=no-direction). Rows with ``trade_direction == 0`` are skipped (no executable side).
+        If the column is absent the legacy ``side`` string column is used instead.
+
+    **Legacy / test format** (kept for backward compat with existing unit tests):
+      - Tick rows may carry ``side`` ("Buy" / "Sell") in place of ``trade_direction``.
 
     Returns numpy structured array sorted by exch_ts.
     """
@@ -197,8 +232,14 @@ def assemble_day_events(df: "pd.DataFrame", price_scale: int) -> np.ndarray:
     chunks: list[np.ndarray] = []
 
     df_sorted = df.sort_values("exch_ts", kind="stable").reset_index(drop=True)
+
+    # Determine which side column is present
+    has_trade_direction = "trade_direction" in df_sorted.columns
+    has_side = "side" in df_sorted.columns
+
     for row in df_sorted.itertuples(index=False):
         if row.event_type == "BidAsk":
+            # BidAsk rows in real schema have price_scaled=0, volume=0 — use arrays only.
             chunk = build_bidask_events(
                 exch_ts=int(row.exch_ts), local_ts=int(row.local_ts),
                 bid_prices=list(row.bid_prices), bid_volumes=list(row.bid_volumes),
@@ -207,9 +248,25 @@ def assemble_day_events(df: "pd.DataFrame", price_scale: int) -> np.ndarray:
             )
             chunks.append(chunk)
         elif row.event_type == "Tick":
+            # Resolve side string from trade_direction (real schema) or side column (legacy).
+            if has_trade_direction:
+                direction = int(row.trade_direction)
+                if direction > 0:
+                    side_str = "Buy"
+                elif direction < 0:
+                    side_str = "Sell"
+                else:
+                    # trade_direction == 0: no confirmed direction; skip row.
+                    continue
+            elif has_side:
+                side_str = str(row.side)
+            else:
+                # Cannot determine side; skip.
+                continue
+
             event = build_tick_event(
                 exch_ts=int(row.exch_ts), local_ts=int(row.local_ts),
-                price=int(row.price), volume=int(row.volume), side=str(row.side),
+                price=int(row.price), volume=int(row.volume), side=side_str,
                 price_scale=price_scale,
             )
             chunks.append(np.array([event], dtype=dtype))
