@@ -14,12 +14,21 @@ from typing import Any, Protocol, runtime_checkable
 
 @dataclass(frozen=True)
 class SubGateResult:
-    """Outcome of evaluating one sub-gate."""
+    """Outcome of evaluating one sub-gate.
+
+    ``passed`` is coerced to Python ``bool`` so the result is always
+    JSON-serializable without a custom encoder (numpy booleans are not
+    handled by stdlib json).
+    """
 
     name: str
     passed: bool
     metrics: dict[str, float] = field(default_factory=dict)
     details: str = ""
+
+    def __post_init__(self) -> None:
+        # frozen=True prevents assignment, so use object.__setattr__
+        object.__setattr__(self, "passed", bool(self.passed))
 
 
 @runtime_checkable

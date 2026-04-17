@@ -41,9 +41,15 @@ def _invoke_sub_gates_advisory(
     """
     import numpy as np
 
-    from hft_platform.alpha._sub_gates import get_registered_sub_gates
+    from hft_platform.alpha._sub_gates import (
+        ensure_builtin_sub_gates_registered,
+        get_registered_sub_gates,
+    )
     from hft_platform.alpha._sub_gates.maker import FillRateValidationGate
     from hft_platform.backtest.result import BacktestResult
+
+    # Ensure gates are registered even if a test called clear_registry().
+    ensure_builtin_sub_gates_registered()
 
     result = BacktestResult(
         run_id=result_payload.get("run_id", ""),
@@ -99,6 +105,24 @@ def _invoke_sub_gates_advisory(
     return sub_gate_results
 
 
+def _load_maker_thresholds(root: Path) -> dict:
+    """Load Gate C maker thresholds from gate_thresholds.yaml, or return {}."""
+    import yaml as _yaml
+
+    thresholds_path = root / "config" / "research" / "gate_thresholds.yaml"
+    if not thresholds_path.exists():
+        return {}
+    all_thresholds = _yaml.safe_load(thresholds_path.read_text())
+    return dict(all_thresholds.get("maker", {}))
+
+
+def _equity_to_daily_pnl(equity_curve: Any) -> list[float]:
+    """Convert cumulative equity curve to list of daily PnL differences."""
+    if equity_curve is not None and hasattr(equity_curve, "__len__") and len(equity_curve) > 1:
+        return np.diff(np.asarray(equity_curve, dtype=float)).tolist()
+    return []
+
+
 def run_gate_c(
     alpha: Any,
     config: ValidationConfig,
@@ -139,12 +163,7 @@ def run_gate_c(
         ResultStore().save(result, alpha_id)
 
         # --- Maker Gate C: evaluate using maker_scorecard + gate_thresholds ---
-        import yaml as _yaml
-        thresholds_path = root / "config" / "research" / "gate_thresholds.yaml"
-        maker_thresholds = {}
-        if thresholds_path.exists():
-            all_thresholds = _yaml.safe_load(thresholds_path.read_text())
-            maker_thresholds = all_thresholds.get("maker", {})
+        maker_thresholds = _load_maker_thresholds(root)
 
         scorecard_data = result.maker_scorecard or {}
         n_days = scorecard_data.get("n_days", 0)
@@ -234,7 +253,10 @@ def run_gate_c(
                 "maker_thresholds": maker_thresholds,
                 "scorecard_path": str(scorecard_path),
                 "sub_gates_advisory": maker_sub_gates,
-                "note": "Maker Gate C: IC/optimize/walk-forward/stress tests skipped (not applicable to maker strategies)",
+                "note": (
+                    "Maker Gate C: IC/optimize/walk-forward/stress tests"
+                    " skipped (not applicable to maker strategies)"
+                ),
             },
         )
         meta_path = tracker.log_run(
@@ -455,12 +477,8 @@ def run_gate_c(
 
     # --- Advisory sub-gates (Plan C Task C10) ---
     # Compute daily_pnl from equity_curve (cumulative PnL -> diff)
-    import numpy as _np
     _eq = getattr(result, "equity_curve", None)
-    if _eq is not None and hasattr(_eq, "__len__") and len(_eq) > 1:
-        _daily_pnl = _np.diff(_np.asarray(_eq, dtype=float)).tolist()
-    else:
-        _daily_pnl = []
+    _daily_pnl = _equity_to_daily_pnl(_eq)
 
     taker_sub_gates = _invoke_sub_gates_advisory(
         strategy_type="taker",

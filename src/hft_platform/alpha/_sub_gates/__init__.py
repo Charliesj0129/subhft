@@ -1,7 +1,8 @@
 """Sub-gate registry and implementations for unified Gate C.
 
 Importing this package auto-registers all built-in sub-gates.
-Tests can call `clear_registry()` and re-import to reset.
+Tests can call ``clear_registry()`` to isolate test state; call
+``ensure_builtin_sub_gates_registered()`` to restore defaults.
 """
 from hft_platform.alpha._sub_gates.registry import (
     SubGate,
@@ -12,8 +13,13 @@ from hft_platform.alpha._sub_gates.registry import (
 )
 
 
-def _register_builtin_sub_gates() -> None:
-    """Register all shipped sub-gates. Called once at import time."""
+def ensure_builtin_sub_gates_registered() -> None:
+    """Ensure all built-in sub-gates are registered (idempotent by name).
+
+    Safe to call multiple times — existing gates are preserved. Only
+    missing gates (by ``name`` attribute) are added. Preserves insertion
+    order of existing gates.
+    """
     from hft_platform.alpha._sub_gates.common import (
         MaxDrawdownGate,
         SharpeThresholdGate,
@@ -25,22 +31,29 @@ def _register_builtin_sub_gates() -> None:
     )
     from hft_platform.alpha._sub_gates.taker import ICEvaluationGate
 
-    # Order: common first, then strategy-specific
-    register_sub_gate(SharpeThresholdGate())
-    register_sub_gate(MaxDrawdownGate())
-    register_sub_gate(WinningDayPctGate())
-    register_sub_gate(FillQualityGate())
-    register_sub_gate(FillRateValidationGate())
-    register_sub_gate(ICEvaluationGate())
+    existing_names = {g.name for g in get_registered_sub_gates()}
+    candidates = [
+        SharpeThresholdGate(),
+        MaxDrawdownGate(),
+        WinningDayPctGate(),
+        FillQualityGate(),
+        FillRateValidationGate(),
+        ICEvaluationGate(),
+    ]
+    for gate in candidates:
+        if gate.name not in existing_names:
+            register_sub_gate(gate)
 
 
-_register_builtin_sub_gates()
+# Register built-in gates once at import time.
+ensure_builtin_sub_gates_registered()
 
 
 __all__ = [
     "SubGate",
     "SubGateResult",
     "clear_registry",
+    "ensure_builtin_sub_gates_registered",
     "get_registered_sub_gates",
     "register_sub_gate",
 ]
