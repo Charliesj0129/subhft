@@ -19,7 +19,7 @@ signal handlers, and starts the event loop.
 
 1. Load config via `config/loader.py`.
 2. Build `HFTSystem` via `services/bootstrap.py`.
-3. Run `HFTSystem.run()` under `uvloop`.
+3. Run `HFTSystem.run()` on the default asyncio event loop.
 4. On shutdown signal, drain queues and close broker sessions.
 
 ## Notes
