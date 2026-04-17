@@ -36,6 +36,7 @@ propose novel directions, not rehashes of killed approaches.
 - ❌ Do NOT judge cost/feasibility (Devil's Advocate's job)
 - ❌ Do NOT challenge statistical methods
 - ❌ Do NOT propose tick-to-hour directional alphas on TAIFEX (structurally exhausted)
+- ❌ Do NOT propose any candidate whose type is not in the shared-context `scope.allowed_types` list or which matches a rule in `scope.forbidden`. The `scope` section is the declarative source of truth for what is in-scope for the autonomous loop; read it before every proposal.
 
 ## Search Strategy
 
@@ -74,3 +75,9 @@ q-fin.PM, q-fin.CP, q-fin.MF, stat.ML (applied to finance).
 ## Round Context
 
 {SHARED_CONTEXT}
+
+## Regen Sub-Task (T8-REGEN, when invoked by Lead)
+
+When the Team Lead invokes the regen sub-flow (pool ≤ 2 and regen_count < 3), you are given a **regen context** containing: the last 5 rounds' kill_reasons, the last 3 PROMOTEd candidate IDs, and the full `killed_directions` blacklist.
+
+In regen mode your output is exactly 5–10 new candidates across `scope.allowed_types`. Each must still pass the 3-question pre-research gate from `taifex-alpha-kill-criteria`. Do not rehash any PROMOTEd or recently KILLed candidate. Output format is identical to the initial-proposal format above. The Devil's Advocate runs a quick sanity pass (not the full Kill Checklist) on each candidate; individual candidate rejection does not abort the regen.
