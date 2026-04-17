@@ -63,7 +63,7 @@ class HftBacktestAdapter:
         self,
         strategy: BaseStrategy,
         asset_symbol: str,
-        data_path: str,
+        data_path: str | np.ndarray,
         latency_us: int = 100,
         seed: int = 42,
         price_scale: int = 10_000,
@@ -98,7 +98,12 @@ class HftBacktestAdapter:
 
         self.strategy = strategy
         self.symbol = asset_symbol
-        self.data_path = data_path
+        if isinstance(data_path, np.ndarray):
+            self._data_ndarray: np.ndarray | None = data_path
+            self.data_path: str | None = None
+        else:
+            self._data_ndarray = None
+            self.data_path = data_path
         self.modify_latency_us = int(modify_latency_us)
         self.cancel_latency_us = int(cancel_latency_us)
         self.timeout = int(timeout)
@@ -161,10 +166,14 @@ class HftBacktestAdapter:
                 logger.debug("operation_fallback", error=str(exc))
                 pass
 
-        resolved_tick_size = float(tick_size) if tick_size is not None else infer_tick_size_from_data(data_path)
+        _data_for_infer: str | np.ndarray = (
+            self._data_ndarray if self._data_ndarray is not None else self.data_path  # type: ignore[assignment]
+        )
+        resolved_tick_size = float(tick_size) if tick_size is not None else infer_tick_size_from_data(_data_for_infer)
         resolved_lot_size = float(lot_size) if lot_size is not None else 1.0
 
-        asset_builder = BacktestAsset().data([data_path]).linear_asset(1.0)
+        _data_arg: list = [self._data_ndarray] if self._data_ndarray is not None else [self.data_path]
+        asset_builder = BacktestAsset().data(_data_arg).linear_asset(1.0)
         latency_model_lower = str(latency_model).strip().lower()
         if latency_model_lower == "intporderlatency" and latency_data_path:
             asset_builder = call_if_exists(asset_builder, "intp_order_latency", latency_data_path)
