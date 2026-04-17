@@ -113,7 +113,7 @@ strategies:
     class: "R47MakerStrategy"
     enabled: true
     product_type: "FUT"
-    symbols: ["TMFR1"]              # 微台: 本金門檻低, 1pt=10NTD (R1=front month)
+    symbols: ["TMFE6"]              # Bug 12 workaround 2026-04-17: use actual month; R1 alias fails to propagate on restart
     params:
       pe_danger_threshold: 0.0     # Disabled
       pe_window: 100
