@@ -100,7 +100,7 @@ def test_bench_fill_recording(monkeypatch):
     adapter = hbt_adapter.HftBacktestAdapter(
         strategy=_NoopStrategy("t"),
         asset_symbol="X",
-        data_path="d",
+        data="d",
     )
 
     t0 = time.perf_counter_ns()
@@ -119,7 +119,7 @@ def test_bench_equity_sampling(monkeypatch):
     adapter = hbt_adapter.HftBacktestAdapter(
         strategy=_NoopStrategy("t"),
         asset_symbol="X",
-        data_path="d",
+        data="d",
         equity_sample_ns=1,
     )
     adapter._reset_equity_buffers()
@@ -140,7 +140,7 @@ def test_bench_fill_stats_vectorized(monkeypatch):
     adapter = hbt_adapter.HftBacktestAdapter(
         strategy=_NoopStrategy("t"),
         asset_symbol="X",
-        data_path="d",
+        data="d",
     )
     n = 10_000
     adapter._total_buy_fills = n // 2
@@ -181,7 +181,7 @@ def test_bench_save_baseline(monkeypatch):  # noqa: no-assert
     adapter = hbt_adapter.HftBacktestAdapter(
         strategy=_NoopStrategy("t"),
         asset_symbol="X",
-        data_path="d",
+        data="d",
         equity_sample_ns=1,
     )
 

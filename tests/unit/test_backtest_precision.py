@@ -88,7 +88,7 @@ def test_mid_price_x2_is_integer(monkeypatch):
     adapter = hbt_adapter.HftBacktestAdapter(
         strategy=_NoopStrategy("t"),
         asset_symbol="X",
-        data_path="d",
+        data="d",
     )
     result = adapter.get_mid_price_x2()
     assert isinstance(result, int)
@@ -102,7 +102,7 @@ def test_fill_stores_mid_price_x2_int(monkeypatch):
     adapter = hbt_adapter.HftBacktestAdapter(
         strategy=_NoopStrategy("t"),
         asset_symbol="X",
-        data_path="d",
+        data="d",
     )
     adapter._record_fill(100, 1, 1, 20010)
     assert adapter._fill_mid_price_x2.dtype == np.int64
@@ -115,7 +115,7 @@ def test_equity_uses_mid_price_x2(monkeypatch):
     adapter = hbt_adapter.HftBacktestAdapter(
         strategy=_NoopStrategy("t"),
         asset_symbol="X",
-        data_path="d",
+        data="d",
         equity_sample_ns=1,
     )
     adapter._reset_equity_buffers()
@@ -132,7 +132,7 @@ def test_backward_compat_mid_price_float(monkeypatch):
     adapter = hbt_adapter.HftBacktestAdapter(
         strategy=_NoopStrategy("t"),
         asset_symbol="X",
-        data_path="d",
+        data="d",
     )
     adapter._record_fill(100, 1, 1, 20010)
     log = adapter._fill_log

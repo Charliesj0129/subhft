@@ -103,7 +103,7 @@ class HftBacktestRunner:
             adapter = HftBacktestAdapter(
                 strategy=self.strategy_instance,
                 asset_symbol=self.symbol,
-                data_path=data_path,
+                data=data_path,
                 latency_us=self._resolve_latency_us(),
                 seed=self.cfg.seed,
                 maker_fee=self.cfg.fee_maker,

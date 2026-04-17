@@ -102,7 +102,7 @@ def _patch(monkeypatch):
 # ---------------------------------------------------------------------------
 def test_fill_log_is_numpy_soa(monkeypatch):
     _patch(monkeypatch)
-    a = hbt_adapter.HftBacktestAdapter(strategy=_BuyStrategy("t"), asset_symbol="X", data_path="d")
+    a = hbt_adapter.HftBacktestAdapter(strategy=_BuyStrategy("t"), asset_symbol="X", data="d")
     assert isinstance(a._fill_ts_ns, np.ndarray)
     assert a._fill_ts_ns.dtype == np.int64
     assert isinstance(a._fill_delta, np.ndarray)
@@ -114,7 +114,7 @@ def test_fill_log_is_numpy_soa(monkeypatch):
 # ---------------------------------------------------------------------------
 def test_fill_log_capacity_overflow_handled(monkeypatch):
     _patch(monkeypatch)
-    a = hbt_adapter.HftBacktestAdapter(strategy=_BuyStrategy("t"), asset_symbol="X", data_path="d")
+    a = hbt_adapter.HftBacktestAdapter(strategy=_BuyStrategy("t"), asset_symbol="X", data="d")
     a._fill_ts_ns = np.zeros(2, dtype=np.int64)
     a._fill_delta = np.zeros(2, dtype=np.int32)
     a._fill_position_after = np.zeros(2, dtype=np.int32)
@@ -133,7 +133,7 @@ def test_equity_preallocated_no_append(monkeypatch):
     a = hbt_adapter.HftBacktestAdapter(
         strategy=_NoopStrategy("t"),
         asset_symbol="X",
-        data_path="d",
+        data="d",
         equity_sample_ns=1,
     )
     assert isinstance(a._equity_ts_buf, np.ndarray)
@@ -151,7 +151,7 @@ def test_equity_timestamps_monotonic(monkeypatch):
     a = hbt_adapter.HftBacktestAdapter(
         strategy=_NoopStrategy("t"),
         asset_symbol="X",
-        data_path="d",
+        data="d",
         equity_sample_ns=1,
     )
     a._reset_equity_buffers()
@@ -168,7 +168,7 @@ def test_lob_event_construction_feed(monkeypatch):
     from hft_platform.events import LOBStatsEvent
 
     _patch(monkeypatch)
-    a = hbt_adapter.HftBacktestAdapter(strategy=_NoopStrategy("t"), asset_symbol="X", data_path="d")
+    a = hbt_adapter.HftBacktestAdapter(strategy=_NoopStrategy("t"), asset_symbol="X", data="d")
     event, feat = build_lob_event(a, _Depth(), 1000, 10000, 10010)
     assert isinstance(event, LOBStatsEvent)
     assert event.best_bid == 10000
@@ -187,7 +187,7 @@ def test_lob_event_construction_elapse(monkeypatch):
     a = hbt_adapter.HftBacktestAdapter(
         strategy=_NoopStrategy("t"),
         asset_symbol="X",
-        data_path="d",
+        data="d",
         tick_mode="elapse",
     )
     event, feat = build_lob_event(a, _Depth(), 2000, 10000, 10010)
@@ -200,7 +200,7 @@ def test_lob_event_construction_elapse(monkeypatch):
 # ---------------------------------------------------------------------------
 def test_mid_price_x2_is_integer(monkeypatch):
     _patch(monkeypatch)
-    a = hbt_adapter.HftBacktestAdapter(strategy=_NoopStrategy("t"), asset_symbol="X", data_path="d")
+    a = hbt_adapter.HftBacktestAdapter(strategy=_NoopStrategy("t"), asset_symbol="X", data="d")
     x2 = a.get_mid_price_x2()
     assert isinstance(x2, int)
     assert x2 == 20010
@@ -360,13 +360,13 @@ def test_feed_elapse_event_parity(monkeypatch):
     feed_adapter = hbt_adapter.HftBacktestAdapter(
         strategy=_NoopStrategy("t"),
         asset_symbol="X",
-        data_path="d",
+        data="d",
         tick_mode="feed",
     )
     elapse_adapter = hbt_adapter.HftBacktestAdapter(
         strategy=_NoopStrategy("t"),
         asset_symbol="X",
-        data_path="d",
+        data="d",
         tick_mode="elapse",
     )
     e1, _ = build_lob_event(feed_adapter, _Depth(), 1000, 10000, 10010)
@@ -387,7 +387,7 @@ def test_tick_overhead_under_100us(monkeypatch):
     a = hbt_adapter.HftBacktestAdapter(
         strategy=_NoopStrategy("t"),
         asset_symbol="X",
-        data_path="d",
+        data="d",
         equity_sample_ns=1,
     )
     a._reset_equity_buffers()

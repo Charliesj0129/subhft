@@ -58,7 +58,7 @@ def test_adapter_accepts_ndarray_data():
     adapter = HftBacktestAdapter(
         strategy=_make_null_strategy(),
         asset_symbol="TMFD6",
-        data_path=events,  # ndarray input
+        data=events,  # ndarray input
         tick_size=1.0,
         lot_size=1.0,
     )
@@ -90,7 +90,7 @@ def test_adapter_str_path_backward_compat(tmp_path):
     adapter = HftBacktestAdapter(
         strategy=_make_null_strategy(),
         asset_symbol="TMFD6",
-        data_path=str(npz_path),
+        data=str(npz_path),
         tick_size=1.0,
         lot_size=1.0,
     )
@@ -109,7 +109,7 @@ def test_adapter_ndarray_infers_tick_size():
     adapter = HftBacktestAdapter(
         strategy=_make_null_strategy(),
         asset_symbol="TMFD6",
-        data_path=events,
+        data=events,
         # tick_size omitted to trigger inference path
         lot_size=1.0,
     )

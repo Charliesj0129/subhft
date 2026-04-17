@@ -18,6 +18,7 @@ from research.calibration.audit import (
 from research.calibration.config import (
     CalibrationNotFoundError,
     CalibrationProfile,
+    DEFAULT_PROFILES_PATH,
     load_calibration_profile,
     save_calibration_profile,
 )
@@ -41,6 +42,7 @@ from research.calibration.validate import (
 )
 
 __all__ = [
+    "DEFAULT_PROFILES_PATH",
     "DEFAULT_WEIGHTS",
     "CalibrationNotFoundError",
     "CalibrationProfile",

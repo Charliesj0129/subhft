@@ -219,6 +219,53 @@ def assemble_day_events(df: "pd.DataFrame", price_scale: int) -> np.ndarray:
     return np.concatenate(chunks)
 
 
+def _check_spread_sanity(events: np.ndarray, instrument: str) -> None:
+    """Check spread sanity per snapshot to catch DEPTH_CLEAR accumulation bugs.
+
+    Walks events; between each pair of DEPTH_CLEAR_EVENTs (or clear-to-end),
+    verifies the reconstructed best_bid/best_ask are not inverted.
+    Raises DataValidationError if best_ask <= best_bid in any snapshot.
+    """
+    current_best_bid = -1.0
+    current_best_ask = float("inf")
+    snapshot_had_bid = False
+    snapshot_had_ask = False
+
+    for i in range(len(events)):
+        ev_flags = int(events[i]["ev"])
+        ev_type = ev_flags & EV_TYPE_MASK
+
+        if ev_type == DEPTH_CLEAR_EVENT:
+            if snapshot_had_bid and snapshot_had_ask and current_best_ask <= current_best_bid:
+                raise DataValidationError(
+                    f"{instrument}: inverted book at row {i} "
+                    f"(best_bid={current_best_bid}, best_ask={current_best_ask}) — "
+                    "possible DEPTH_CLEAR accumulation bug"
+                )
+            current_best_bid = -1.0
+            current_best_ask = float("inf")
+            snapshot_had_bid = False
+            snapshot_had_ask = False
+        elif ev_type == DEPTH_EVENT:
+            px = float(events[i]["px"])
+            if px <= 0.0:
+                continue
+            if ev_flags & BUY_EVENT:
+                if px > current_best_bid:
+                    current_best_bid = px
+                snapshot_had_bid = True
+            elif ev_flags & SELL_EVENT:
+                if px < current_best_ask:
+                    current_best_ask = px
+                snapshot_had_ask = True
+
+    if snapshot_had_bid and snapshot_had_ask and current_best_ask <= current_best_bid:
+        raise DataValidationError(
+            f"{instrument}: inverted book in final snapshot "
+            f"(best_bid={current_best_bid}, best_ask={current_best_ask})"
+        )
+
+
 def validate_events(events: np.ndarray, instrument: str) -> None:
     """Post-load validation. Raises DataValidationError with diagnostic details.
 
@@ -256,3 +303,5 @@ def validate_events(events: np.ndarray, instrument: str) -> None:
         raise DataValidationError(
             f"{instrument}: negative prices detected (min={float(nonzero_prices.min())})"
         )
+
+    _check_spread_sanity(events, instrument)

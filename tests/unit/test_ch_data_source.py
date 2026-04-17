@@ -215,6 +215,32 @@ def test_validate_events_empty_raises():
         validate_events(empty, instrument="TMFD6")
 
 
+def test_validate_events_inverted_book_raises():
+    """Book with best_ask <= best_bid must raise (catches DEPTH_CLEAR accumulation bug)."""
+    events = _make_events([
+        (DEPTH_CLEAR_EVENT | EXCH_EVENT, 1, 2, 0.0, 0.0, 0, 0, 0.0),
+        # bid at 17005, ask at 17000 — inverted book
+        (DEPTH_EVENT | EXCH_EVENT | BUY_EVENT, 2, 3, 17005.0, 5, 0, 0, 0.0),
+        (DEPTH_EVENT | EXCH_EVENT | SELL_EVENT, 2, 3, 17000.0, 3, 0, 0, 0.0),
+        (TRADE_EVENT | EXCH_EVENT | BUY_EVENT, 3, 4, 17002.0, 1, 0, 0, 0.0),
+    ])
+    with pytest.raises(DataValidationError, match="inverted book"):
+        validate_events(events, instrument="TMFD6")
+
+
+def test_validate_events_valid_book_not_inverted():
+    """Correctly ordered book (ask > bid) must not raise."""
+    events = _make_events([
+        (DEPTH_CLEAR_EVENT | EXCH_EVENT, 1, 2, 0.0, 0.0, 0, 0, 0.0),
+        (DEPTH_EVENT | EXCH_EVENT | BUY_EVENT, 2, 3, 17000.0, 5, 0, 0, 0.0),
+        (DEPTH_EVENT | EXCH_EVENT | SELL_EVENT, 2, 3, 17001.0, 3, 0, 0, 0.0),
+        (TRADE_EVENT | EXCH_EVENT | BUY_EVENT, 3, 4, 17000.5, 1, 0, 0, 0.0),
+    ])
+    validate_events(events, instrument="TMFD6")
+    # No exception raised; assert postcondition
+    assert len(events) == 4
+
+
 # ---------------------------------------------------------------------------
 # B4 — load_day (mocked ClickHouse)
 # ---------------------------------------------------------------------------

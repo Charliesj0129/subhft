@@ -101,7 +101,7 @@ def test_streaming_adapter_fill_equivalence():
     adapter_stream = HftBacktestAdapter(
         strategy=NullStrategy(),
         asset_symbol=instrument,
-        data_path=streaming_events,
+        data=streaming_events,
         tick_size=1.0,
         lot_size=1.0,
         seed=42,
@@ -112,7 +112,7 @@ def test_streaming_adapter_fill_equivalence():
     adapter_npz = HftBacktestAdapter(
         strategy=NullStrategy(),
         asset_symbol=instrument,
-        data_path=str(npz_path),
+        data=str(npz_path),
         tick_size=1.0,
         lot_size=1.0,
         seed=42,

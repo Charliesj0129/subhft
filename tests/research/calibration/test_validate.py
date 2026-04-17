@@ -10,8 +10,13 @@ from research.calibration.validate import (
 
 
 def test_split_days_raises_on_empty():
-    with pytest.raises(ValueError, match="at least 1 day"):
+    with pytest.raises(ValueError, match="at least 2 days"):
         split_days([])
+
+
+def test_split_days_raises_on_single_day():
+    with pytest.raises(ValueError, match="at least 2 days"):
+        split_days(["2026-03-01"])
 
 
 def test_split_days_sufficient_uses_70_30():
@@ -25,7 +30,7 @@ def test_split_days_sufficient_uses_70_30():
 def test_split_days_low_count_uses_loo():
     days = [f"2026-03-{i:02d}" for i in range(1, 8)]  # 7 days
     train, test = split_days(days, ratio=0.7)
-    # < 10 days: leave-one-out means test has 1, train has rest
+    # < 15 days: leave-one-out means test has 1, train has rest
     assert len(test) == 1
     assert len(train) == 6
 

@@ -13,6 +13,9 @@ import yaml
 
 from research.calibration.scoring import CalibrationScore
 
+DEFAULT_PROFILES_PATH = Path("config/research/calibration_profiles.yaml")
+"""Canonical location for per-instrument calibration profiles."""
+
 
 class CalibrationNotFoundError(KeyError):
     """Raised when an instrument has no calibration profile."""
@@ -34,7 +37,7 @@ class CalibrationProfile:
     expected_fill_rate_per_day: float
 
 
-def save_calibration_profile(profile: CalibrationProfile, path: Path) -> None:
+def save_calibration_profile(profile: CalibrationProfile, path: Path = DEFAULT_PROFILES_PATH) -> None:
     # Non-atomic read-modify-write: safe for single-process research CLI invocation only.
     # Concurrent calls from multiple processes could race and discard one profile.
     path = Path(path)
@@ -57,7 +60,7 @@ def save_calibration_profile(profile: CalibrationProfile, path: Path) -> None:
     path.write_text(yaml.safe_dump(existing, sort_keys=False))
 
 
-def load_calibration_profile(instrument: str, path: Path) -> CalibrationProfile:
+def load_calibration_profile(instrument: str, path: Path = DEFAULT_PROFILES_PATH) -> CalibrationProfile:
     path = Path(path)
     if not path.exists():
         raise CalibrationNotFoundError(f"No calibration file at {path}")

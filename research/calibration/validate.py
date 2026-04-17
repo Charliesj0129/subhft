@@ -22,11 +22,15 @@ def split_days(
 ) -> tuple[list[str], list[str]]:
     """Split days into train/test.
 
-    If >= 10 days: 70/30 split. Otherwise leave-one-out (1 test day).
+    If >= 15 days: 70/30 split (spec minimum for reliable held-out validation).
+    If 2-14 days: leave-one-out (last day is test, rest is train).
+    Raises if len(days) < 2.
     """
-    if not days:
-        raise ValueError("split_days requires at least 1 day")
-    if len(days) >= 10:
+    if len(days) < 2:
+        raise ValueError(
+            f"split_days requires at least 2 days (1 train + 1 test), got {len(days)}"
+        )
+    if len(days) >= 15:
         n_train = int(len(days) * ratio)
         return days[:n_train], days[n_train:]
     else:

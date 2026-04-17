@@ -63,7 +63,7 @@ class HftBacktestAdapter:
         self,
         strategy: BaseStrategy,
         asset_symbol: str,
-        data_path: str | np.ndarray,
+        data: str | np.ndarray,
         latency_us: int = 100,
         seed: int = 42,
         price_scale: int = 10_000,
@@ -98,12 +98,12 @@ class HftBacktestAdapter:
 
         self.strategy = strategy
         self.symbol = asset_symbol
-        if isinstance(data_path, np.ndarray):
-            self._data_ndarray: np.ndarray | None = data_path
+        if isinstance(data, np.ndarray):
+            self._data_ndarray: np.ndarray | None = data
             self.data_path: str | None = None
         else:
             self._data_ndarray = None
-            self.data_path = data_path
+            self.data_path = data
         self.modify_latency_us = int(modify_latency_us)
         self.cancel_latency_us = int(cancel_latency_us)
         self.timeout = int(timeout)
@@ -498,7 +498,7 @@ class StrategyHbtAdapter:
 
     def __init__(
         self,
-        data_path: str,
+        data: str,
         strategy_module: str,
         strategy_class: str,
         strategy_id: str,
@@ -525,7 +525,7 @@ class StrategyHbtAdapter:
         self.adapter = HftBacktestAdapter(
             strategy=self.strategy,
             asset_symbol=symbol,
-            data_path=data_path,
+            data=data,
             tick_size=tick_size,
             lot_size=lot_size,
             maker_fee=maker_fee,
