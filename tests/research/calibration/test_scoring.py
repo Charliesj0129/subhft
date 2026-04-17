@@ -1,6 +1,7 @@
 import pytest
 
 from research.calibration.scoring import (
+    DEFAULT_WEIGHTS,
     CalibrationScore,
     DailyFillSummary,
     compute_adverse_fill_score,
@@ -93,3 +94,31 @@ def test_compute_score_weighted():
     )
     # default weights: (0.35, 0.25, 0.25, 0.15)
     assert score.composite() == pytest.approx(0.35)
+
+
+def test_compute_score_raises_on_no_common_dates():
+    sim_days = [DailyFillSummary(date="2026-03-01", n_fills=10, adverse_pct=0.2, pnl=100.0)]
+    live_days = [DailyFillSummary(date="2026-04-01", n_fills=10, adverse_pct=0.2, pnl=100.0)]
+    with pytest.raises(ValueError, match="No common dates"):
+        compute_score(sim_days, live_days)
+
+
+def test_compute_score_raises_on_both_empty():
+    with pytest.raises(ValueError, match="No common dates"):
+        compute_score([], [])
+
+
+def test_composite_raises_on_weights_not_summing_to_one():
+    score = CalibrationScore(1.0, 1.0, 1.0, 1.0)
+    with pytest.raises(ValueError, match="Weights must sum to 1.0"):
+        score.composite(weights=(0.5, 0.5, 0.5, 0.5))
+
+
+def test_composite_accepts_custom_weights_summing_to_one():
+    score = CalibrationScore(1.0, 0.0, 0.0, 0.0)
+    assert score.composite(weights=(1.0, 0.0, 0.0, 0.0)) == 1.0
+
+
+def test_default_weights_constant_is_exported():
+    assert DEFAULT_WEIGHTS == (0.35, 0.25, 0.25, 0.15)
+    assert sum(DEFAULT_WEIGHTS) == pytest.approx(1.0)

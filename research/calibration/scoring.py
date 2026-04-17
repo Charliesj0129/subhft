@@ -8,6 +8,10 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from statistics import mean
 
+DEFAULT_WEIGHTS: tuple[float, float, float, float] = (0.35, 0.25, 0.25, 0.15)
+"""Default composite weights: fill_rate (0.35), adverse_fill (0.25),
+pnl_direction (0.25), pnl_magnitude (0.15). Must sum to 1.0."""
+
 
 @dataclass(frozen=True)
 class DailyFillSummary:
@@ -28,11 +32,15 @@ class CalibrationScore:
     pnl_direction_score: float
     pnl_magnitude_score: float
 
-    def composite(self, weights: tuple[float, float, float, float] = (0.35, 0.25, 0.25, 0.15)) -> float:
+    def composite(self, weights: tuple[float, float, float, float] = DEFAULT_WEIGHTS) -> float:
         """Weighted composite score.
 
         Default weights: fill_rate (0.35) most important, pnl_magnitude (0.15) least.
         """
+        if abs(sum(weights) - 1.0) > 1e-9:
+            raise ValueError(
+                f"Weights must sum to 1.0, got {sum(weights):.6f}"
+            )
         components = (
             self.fill_rate_score,
             self.adverse_fill_score,
@@ -55,13 +63,18 @@ def compute_fill_rate_score(sim: float, live: float) -> float:
 
 def compute_adverse_fill_score(sim_pct: float, live_pct: float) -> float:
     """1 - |sim - live| / max(live, 1), clipped to [0, 1]."""
+    # Cap denominator at 1.0: adverse_pct is already a unit fraction,
+    # this prevents amplifying relative error when live_pct is near zero.
     denom = max(live_pct, 1.0)
     err = abs(sim_pct - live_pct) / denom
     return max(0.0, 1.0 - err)
 
 
 def compute_pnl_direction_score(sim_pnl: list[float], live_pnl: list[float]) -> float:
-    """Fraction of days where sim PnL sign matches live PnL sign."""
+    """Fraction of days where sim PnL sign matches live PnL sign.
+
+    Zero PnL is treated as non-negative (flat/positive direction).
+    """
     if not sim_pnl or not live_pnl or len(sim_pnl) != len(live_pnl):
         return 0.0
     matches = sum(1 for s, lv in zip(sim_pnl, live_pnl, strict=True)
@@ -90,7 +103,10 @@ def compute_score(
     common_dates = sorted(sim_by_date.keys() & live_by_date.keys())
 
     if not common_dates:
-        return CalibrationScore(0.0, 0.0, 0.0, 0.0)
+        raise ValueError(
+            f"No common dates between sim ({len(sim_days)} days) and "
+            f"live ({len(live_days)} days) summaries — cannot compute score."
+        )
 
     sim_aligned = [sim_by_date[d] for d in common_dates]
     live_aligned = [live_by_date[d] for d in common_dates]
