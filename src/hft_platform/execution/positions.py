@@ -608,26 +608,46 @@ class PositionStore:
         logger.warning("position_store_reset", cleared_positions=count)
         return count
 
-    def clear_symbol_positions(self, symbol: str) -> int:
-        """Remove all position entries for *symbol* from store and recovery.
+    def clear_symbol_positions(
+        self,
+        symbol: str,
+        strategy_id: str | None = None,
+    ) -> int:
+        """Remove position entries for *symbol* from store and recovery.
 
         Used by reconciliation auto-correct when broker reports 0 for a
         symbol that still has a phantom local position (e.g. expired option,
         manual broker-side close).
 
+        When *strategy_id* is provided, only entries matching that
+        ``strategy_id`` are removed. This is important for MANUAL drift
+        auto-correct (Bug 14): clearing *all* entries for a symbol would
+        also wipe active strategy positions that happen to share the
+        symbol, which would silently create a new drift.
+
         Returns the number of position entries removed.
         """
         with self._fill_lock:
-            keys_to_remove = [
-                k for k, pos in self.positions.items() if pos.symbol == symbol
-            ]
+            def _pos_matches(pos: Position) -> bool:
+                if pos.symbol != symbol:
+                    return False
+                if strategy_id is not None and pos.strategy_id != strategy_id:
+                    return False
+                return True
+
+            def _recovery_matches(rd: Dict[str, Any]) -> bool:
+                if rd.get("symbol") != symbol:
+                    return False
+                if strategy_id is not None and rd.get("strategy_id", "") != strategy_id:
+                    return False
+                return True
+
+            keys_to_remove = [k for k, pos in self.positions.items() if _pos_matches(pos)]
             for k in keys_to_remove:
                 self._evicted_realized_pnl_scaled += self.positions[k].realized_pnl_scaled
                 del self.positions[k]
             rkeys_to_remove = [
-                rk
-                for rk, rd in self._recovery_positions.items()
-                if rd.get("symbol") == symbol
+                rk for rk, rd in self._recovery_positions.items() if _recovery_matches(rd)
             ]
             for rk in rkeys_to_remove:
                 del self._recovery_positions[rk]
@@ -635,6 +655,7 @@ class PositionStore:
             logger.info(
                 "symbol_positions_cleared",
                 symbol=symbol,
+                strategy_id=strategy_id,
                 positions_removed=len(keys_to_remove),
                 recovery_removed=len(rkeys_to_remove),
             )
