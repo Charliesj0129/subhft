@@ -229,14 +229,22 @@ class StartupPositionVerifier:
         trading_date: str | None = None,
         account_id: str = "default",
     ) -> RecoveryResult:
-        """Dual-source position recovery with graduated response."""
-        from datetime import datetime
-        from zoneinfo import ZoneInfo
+        """Dual-source position recovery with graduated response.
 
-        from hft_platform.execution.checkpoint import PositionCheckpointWriter
+        Bug 15 fix: uses the TAIFEX-aware trading-date helper (not plain
+        calendar date) so checkpoints written during the 00:00-05:00
+        overnight session window align with recovery. A ±1 calendar-day
+        tolerance is also applied so that checkpoints written just before
+        the 05:00 session close are still accepted if restart occurs
+        minutes later (see ``_ckpt_date_within_tolerance``).
+        """
+        from hft_platform.execution.checkpoint import (
+            PositionCheckpointWriter,
+            _taifex_trading_date,
+        )
 
         if trading_date is None:
-            trading_date = datetime.fromtimestamp(timebase.now_s(), tz=ZoneInfo("Asia/Taipei")).strftime("%Y%m%d")
+            trading_date = _taifex_trading_date()
 
         logger.info("position_recovery: starting", trading_date=trading_date)
 
@@ -249,7 +257,7 @@ class StartupPositionVerifier:
             ckpt_data = PositionCheckpointWriter.load_checkpoint(self.checkpoint_path)
             if ckpt_data is not None:
                 ckpt_td = ckpt_data.get("trading_date")
-                if ckpt_td == trading_date:
+                if self._ckpt_date_within_tolerance(ckpt_td, trading_date):
                     ckpt_valid = True
                     ckpt_positions = ckpt_data.get("positions", {})
                     # M2: Restore portfolio-level aggregates so StormGuard drawdown
@@ -294,6 +302,35 @@ class StartupPositionVerifier:
         else:
             startup_recon_status.set(3)
             return RecoveryResult(source="empty", halted=True)
+
+    @staticmethod
+    def _ckpt_date_within_tolerance(
+        ckpt_td: str | None,
+        current_td: str,
+        tolerance_days: int = 1,
+    ) -> bool:
+        """Bug 15: accept checkpoint if ``ckpt_td`` is within ±tolerance_days
+        of ``current_td``.
+
+        This guards the 00:00-05:00 TAIFEX night-session rollover window
+        where a checkpoint written at 04:59 (trading_date=D-1) should still
+        be recognised by a recovery run at 05:01 (trading_date=D).
+
+        Returns False on missing or malformed dates; caller then logs
+        ``checkpoint stale`` at warning level.
+        """
+        from datetime import datetime as _dt, timedelta as _td
+
+        if not ckpt_td or len(ckpt_td) != 8 or not ckpt_td.isdigit():
+            return False
+        if ckpt_td == current_td:
+            return True
+        try:
+            a = _dt.strptime(ckpt_td, "%Y%m%d")
+            b = _dt.strptime(current_td, "%Y%m%d")
+        except ValueError:
+            return False
+        return abs((a - b).days) <= tolerance_days
 
     @staticmethod
     def _parse_composite_key(key: str) -> tuple[str, str, str]:
