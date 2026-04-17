@@ -672,6 +672,19 @@ class StrategyRunner:
         # Cache metrics and a reusable StrategyContext per strategy to reduce per-event allocations.
         lat_m = self.metrics.strategy_latency_ns.labels(strategy=strategy.strategy_id) if self.metrics else None
         int_m = self.metrics.strategy_intents_total.labels(strategy=strategy.strategy_id) if self.metrics else None
+        # Observability gap closure: per-strategy event dispatch counter (Bug 12).
+        # Cached in self._events_received_metrics keyed by strategy_id.
+        try:
+            if not hasattr(self, "_events_received_metrics"):
+                self._events_received_metrics = {}
+            if self.metrics is not None:
+                events_m = getattr(self.metrics, "strategy_events_received_total", None)
+                if events_m is not None:
+                    self._events_received_metrics[strategy.strategy_id] = events_m.labels(
+                        strategy_id=strategy.strategy_id
+                    )
+        except Exception:
+            pass
 
         alpha_intent_m = None
         alpha_flat_m = None
@@ -974,6 +987,16 @@ class StrategyRunner:
                         "symbol": getattr(event, "symbol", ""),
                     },
                 )
+            # Observability gap closure (Bug 12): per-strategy event dispatch counter.
+            # MUST fire before handle_event so a silent strategy is still visible.
+            try:
+                _events_cache = getattr(self, "_events_received_metrics", None)
+                if _events_cache is not None:
+                    _events_m = _events_cache.get(strategy.strategy_id)
+                    if _events_m is not None:
+                        _events_m.inc()
+            except Exception:
+                pass
             try:
                 intents = strategy.handle_event(ctx, event)
             except Exception as e:  # noqa: BLE001 — wraps user strategy code

@@ -469,9 +469,29 @@ class ReconciliationService:
                         consecutive_observations=self._noncritical_drift_streak,
                         persists_or_grows=persists_or_grows,
                     )
+                    # Observability gap closure: per-symbol drift streak gauge.
+                    try:
+                        _streak_g = getattr(self._metrics(), "reconciliation_drift_streak", None)
+                        if _streak_g is not None:
+                            _m = self._metrics()
+                            for d in discrepancies:
+                                _capped = _m.cap_symbol(d.symbol) if _m else d.symbol
+                                _streak_g.labels(symbol=_capped).set(self._noncritical_drift_streak)
+                    except Exception:
+                        pass
                     if persists_or_grows and self._noncritical_drift_streak >= 2:
                         self.platform_degrade_controller.enter_reduce_only(reason="reconciliation_drift")
             else:
+                # Drift resolved — clear streak gauges for previously-drifting symbols.
+                try:
+                    _streak_g = getattr(self._metrics(), "reconciliation_drift_streak", None)
+                    if _streak_g is not None and self._last_noncritical_drift_signature:
+                        _m = self._metrics()
+                        for _sym in self._last_noncritical_drift_signature.keys():
+                            _capped = _m.cap_symbol(_sym) if _m else _sym
+                            _streak_g.labels(symbol=_capped).set(0)
+                except Exception:
+                    pass
                 self._last_noncritical_drift_signature = {}
                 self._noncritical_drift_streak = 0
                 self._critical_drift_streak = 0
@@ -596,6 +616,54 @@ class ReconciliationService:
                 continue
         return result
 
+    def _resolve_clear_strategy_scope(self, symbol: str, expected_local_qty: int) -> str | None:
+        """Return a ``strategy_id`` to scope ``clear_symbol_positions`` to.
+
+        When the phantom local position is wholly attributable to MANUAL
+        (either live entries or pending recovery rows), the clear is
+        scoped to ``MANUAL_STRATEGY_ID`` so active strategy positions on
+        the same symbol are preserved. Otherwise returns ``None`` which
+        falls back to the original symbol-wide clear.
+        """
+        manual_qty = 0
+        other_qty = 0
+        snapshot = (
+            self.store.snapshot_positions()
+            if hasattr(self.store, "snapshot_positions")
+            else dict(getattr(self.store, "positions", {}))
+        )
+        for pos in snapshot.values():
+            if getattr(pos, "symbol", None) != symbol:
+                continue
+            qty = int(getattr(pos, "net_qty", 0) or 0)
+            if qty == 0:
+                continue
+            if getattr(pos, "strategy_id", "") == MANUAL_STRATEGY_ID:
+                manual_qty += qty
+            else:
+                other_qty += qty
+        for rdata in (getattr(self.store, "_recovery_positions", {}) or {}).values():
+            if not isinstance(rdata, dict) or rdata.get("symbol") != symbol:
+                continue
+            qty = int(rdata.get("net_qty", 0) or 0)
+            if qty == 0:
+                continue
+            if rdata.get("strategy_id", "") == MANUAL_STRATEGY_ID:
+                manual_qty += qty
+            else:
+                other_qty += qty
+
+        # If no other strategy holds this symbol, scope to MANUAL so the
+        # clear is explicit. If another strategy also holds the symbol,
+        # fall back to a symbol-wide clear only when MANUAL alone cannot
+        # explain the drift — otherwise scope to MANUAL and preserve the
+        # active strategy's position.
+        if manual_qty != 0 and other_qty == 0:
+            return MANUAL_STRATEGY_ID
+        if manual_qty != 0 and manual_qty == expected_local_qty:
+            return MANUAL_STRATEGY_ID
+        return None
+
     async def _auto_correct_drift(
         self,
         correctable: List[PositionDiscrepancy],
@@ -617,9 +685,12 @@ class ReconciliationService:
                 streak=self._critical_drift_streak,
             )
             if d.broker_qty == 0:
-                # Broker cleared position (expiry, manual close, etc.)
-                # Remove all local entries for this symbol.
-                self.store.clear_symbol_positions(d.symbol)
+                # Broker cleared position (expiry, manual close, etc.).
+                # Bug 14: scope the clear to MANUAL when the drift is fully
+                # explained by a MANUAL entry. This prevents wiping an
+                # active strategy's genuine position on the same symbol.
+                scoped_strategy = self._resolve_clear_strategy_scope(d.symbol, d.local_qty)
+                self.store.clear_symbol_positions(d.symbol, strategy_id=scoped_strategy)
             else:
                 # Use load_recovery to inject broker position into PositionStore
                 # with MANUAL_STRATEGY_ID (explicit manual/orphan ownership).

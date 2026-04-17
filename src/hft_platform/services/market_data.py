@@ -974,6 +974,24 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                     hook()
                 except Exception as exc:
                     logger.warning("post_connect_hook_failed", hook=str(hook), error=str(exc))
+        # Observability gap closure (Bug 12): alias resolution coverage ratio.
+        # configured = broker client's resolved alias map size (source of truth)
+        # resolved   = entries actually landed in SymbolMetadata after propagation
+        try:
+            from hft_platform.observability.metrics import get_metrics
+
+            _m = get_metrics()
+            if _m is not None:
+                _gauge = getattr(_m, "alias_resolution_coverage_ratio", None)
+                if _gauge is not None:
+                    configured = len(alias_map)
+                    if configured <= 0:
+                        # No aliases configured → trivially fully covered.
+                        _gauge.set(1.0)
+                    else:
+                        _gauge.set(min(1.0, new_size / configured))
+        except Exception:
+            pass
         return new_size
 
     def _resolve_aliases_eager(self) -> None:

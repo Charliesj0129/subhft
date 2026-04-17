@@ -299,6 +299,10 @@ class MetricsRegistry:
                 # Recorder degraded mode
                 _pn("recorder_degraded_mode"),
                 _pn("recorder_degraded_total"),
+                # Observability gap closures
+                _pn("strategy_events_received_total"),
+                _pn("alias_resolution_coverage_ratio"),
+                _pn("reconciliation_drift_streak"),
             ]
         )
         # Market Data
@@ -1183,6 +1187,28 @@ class MetricsRegistry:
             _pn("recorder_reinject_circuit_breaker_drops_total"),
             "Rows dropped by reinject circuit breaker after consecutive double-faults",
             ["table"],
+        )
+
+        # ── Observability gap closures ──────────────────────────────
+        # Bug 12 (13hr R47 silent): per-strategy event dispatch rate.
+        # A strategy that stops receiving events for hours should be alertable.
+        self.strategy_events_received_total = Counter(
+            _pn("strategy_events_received_total"),
+            "Events dispatched to a strategy's handle_event (pre-call)",
+            ["strategy_id"],
+        )
+        # Bug 12: alias resolution coverage — if configured aliases (e.g. TXFR1/C0)
+        # fail to land in SymbolMetadata, strategies silently see 0 events.
+        self.alias_resolution_coverage_ratio = Gauge(
+            _pn("alias_resolution_coverage_ratio"),
+            "Fraction of configured broker aliases propagated into SymbolMetadata (0.0-1.0)",
+        )
+        # MANUAL drift persistence: mirror consecutive_observations counter
+        # per-symbol so operators can alert on streaks that never clear.
+        self.reconciliation_drift_streak = Gauge(
+            _pn("reconciliation_drift_streak"),
+            "Consecutive reconciliation observations of the same drift (resets to 0 on resolve)",
+            ["symbol"],
         )
 
         # System (v2)
