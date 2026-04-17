@@ -28,6 +28,22 @@ from research.calibration.validate import (
     validate_on_heldout,
 )
 
+# Optional: ClickHouse streaming when CLICKHOUSE_PASSWORD env var is set.
+# Initialised at module load so the try/except stays outside any function.
+_ch_source = None
+_use_ch_streaming = False
+try:
+    import os as _os
+
+    _ch_password = _os.getenv("CLICKHOUSE_PASSWORD", "")
+    if _ch_password:
+        from hft_platform.backtest.ch_data_source import ChDataSource as _ChDataSource  # noqa: PLC0415
+
+        _ch_source = _ChDataSource(ch_password=_ch_password)
+        _use_ch_streaming = True
+except Exception:  # noqa: BLE001
+    pass
+
 # Literature defaults per `docs/architecture/why-custom-maker-backtest.md`:
 # "Exponent 1.5-2.0 appropriate for shallow books (5-50 queue depth) like TAIFEX,
 # vs. default 3.0 suited to deep US equity books (500-5000)."
@@ -130,6 +146,8 @@ def cmd_calibrate(args: argparse.Namespace) -> int:
         tick_size=args.tick_size,
         lot_size=args.lot_size,
         allow_stub_execution=args.allow_stub,
+        use_ch_streaming=_use_ch_streaming,
+        ch_data_source=_ch_source,
     )
 
     try:
