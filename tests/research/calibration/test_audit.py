@@ -1,6 +1,15 @@
+from unittest.mock import MagicMock
+
+import pandas as pd
 import pytest
 
-from research.calibration.audit import InstrumentAuditResult, audit_ck_export_parquet
+from research.calibration.audit import (
+    InstrumentAuditResult,
+    audit_all,
+    audit_ck_export_parquet,
+    audit_clickhouse_fills,
+    find_l2_data_days,
+)
 
 
 def test_instrument_audit_result_is_frozen():
@@ -69,10 +78,52 @@ def test_audit_ck_export_parquet_skips_invalid_date_filename(tmp_path):
 
 def test_audit_ck_export_parquet_accepts_partial_suffix(tmp_path):
     """Files like 'TXFC6_2026-03-17_partial.parquet' should be accepted."""
-    import pandas as pd
     f = tmp_path / "TXFC6_2026-03-17_partial.parquet"
     pd.DataFrame({"a": [1, 2, 3]}).to_parquet(f)
     results = audit_ck_export_parquet(tmp_path)
     assert len(results) == 1
     assert results[0].instrument == "TXFC6"
     assert results[0].date_range == ("2026-03-17", "2026-03-17")
+
+
+def test_audit_clickhouse_fills_empty_returns_empty():
+    client = MagicMock()
+    client.query_df.return_value = pd.DataFrame()
+    assert audit_clickhouse_fills(client) == []
+
+
+def test_audit_clickhouse_fills_returns_results():
+    client = MagicMock()
+    client.query_df.return_value = pd.DataFrame({
+        "symbol": ["TMFD6"] * 3 + ["TXFD6"] * 2,
+        "trading_day": ["2026-03-01", "2026-03-02", "2026-03-03",
+                         "2026-03-01", "2026-03-02"],
+        "n_fills": [10, 12, 8, 5, 7],
+    })
+    results = audit_clickhouse_fills(client)
+    assert len(results) == 2
+    assert {r.instrument for r in results} == {"TMFD6", "TXFD6"}
+    tmfd = next(r for r in results if r.instrument == "TMFD6")
+    assert tmfd.n_fills == 30
+    assert tmfd.n_trading_days == 3
+
+
+def test_find_l2_data_days(tmp_path):
+    (tmp_path / "TMFD6_2026-03-01_l2.hftbt.npz").touch()
+    (tmp_path / "TMFD6_2026-03-02_l2.hftbt.npz").touch()
+    (tmp_path / "TXFD6_2026-03-01_l2.hftbt.npz").touch()
+    days = find_l2_data_days(tmp_path, "TMFD6")
+    assert days == ["2026-03-01", "2026-03-02"]
+
+
+def test_audit_all_computes_intersection(sample_ck_export_parquet, tmp_path):
+    data_dir = tmp_path / "raw"
+    data_dir.mkdir()
+    (data_dir / "TMFD6_2026-01-27_l2.hftbt.npz").touch()
+    report = audit_all(
+        ck_export_dir=sample_ck_export_parquet.parent,
+        l2_data_dir=data_dir,
+        ch_client=None,
+    )
+    assert "TMFD6" in report["per_instrument"]
+    assert report["per_instrument"]["TMFD6"]["usable_calibration_days"] == ["2026-01-27"]
