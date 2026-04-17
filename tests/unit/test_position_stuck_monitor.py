@@ -82,6 +82,8 @@ class TestPositionStuckMonitor:
             dispatcher=dispatcher,
             alert_threshold_s=300,
         )
+        # Seed first_observed so age uses the fresh last_update_ts (10 min old).
+        mon._first_observed_ns[("R47", "TMFE6")] = now_ns - 600_000_000_000
         await mon._tick()
         await mon._tick()  # second tick must NOT re-alert (dedup)
         await mon._tick()
@@ -103,6 +105,7 @@ class TestPositionStuckMonitor:
             dispatcher=dispatcher,
             alert_threshold_s=300,
         )
+        mon._first_observed_ns[("R47", "TMFE6")] = now_ns - 600_000_000_000
         await mon._tick()
         assert dispatcher.notify_position_stuck.await_count == 1
 
@@ -113,6 +116,7 @@ class TestPositionStuckMonitor:
         # New stuck position for same key
         stuck.net_qty = -1
         stuck.last_update_ts = time.time_ns() - 600_000_000_000
+        mon._first_observed_ns[("R47", "TMFE6")] = time.time_ns() - 600_000_000_000
         await mon._tick()
 
         assert dispatcher.notify_position_stuck.await_count == 2
@@ -128,6 +132,10 @@ class TestPositionStuckMonitor:
             dispatcher=dispatcher,
             alert_threshold_s=300,
         )
+        # Seed old position with a first_observed that matches its last_update
+        # (simulates 10 min live observation), and young with first_observed=now.
+        mon._first_observed_ns[("R47", "TMFE6")] = now_ns - 600_000_000_000
+        mon._first_observed_ns[("C14", "TXFF6")] = now_ns - 5_000_000_000
         await mon._tick()
         assert dispatcher.notify_position_stuck.await_count == 1
         call = dispatcher.notify_position_stuck.await_args
@@ -144,6 +152,25 @@ class TestPositionStuckMonitor:
         )
         await mon._tick()  # must not raise
 
+    async def test_stale_last_update_ts_from_recovery_does_not_false_alert(self):
+        """Bug 27b (2026-04-18): a Position with ``last_update_ts`` 24h ago
+        (inherited from startup recovery) must NOT alert until the position
+        has persisted ``alert_threshold_s`` within the live monitor session."""
+        now_ns = time.time_ns()
+        stale_24h = now_ns - 86_400_000_000_000  # 24 hours ago in ns
+        stuck = _pos("R47", "TMFE6", 1, stale_24h)
+        store = _Store([stuck])
+        dispatcher = AsyncMock()
+        mon = PositionStuckMonitor(
+            position_store=store,
+            dispatcher=dispatcher,
+            alert_threshold_s=300,
+        )
+        await mon._tick()  # first observation → anchors first_observed_ns to now
+        dispatcher.notify_position_stuck.assert_not_awaited()
+        await mon._tick()  # second tick 0s later → still not alert-worthy
+        dispatcher.notify_position_stuck.assert_not_awaited()
+
     async def test_unrealized_pnl_computed_when_mid_provided(self):
         """Verify that mid_price_fn yields an unrealized_ntd field in the alert."""
         now_ns = time.time_ns()
@@ -159,6 +186,7 @@ class TestPositionStuckMonitor:
             mid_price_fn=lambda _sym: 379_000_000,
             alert_threshold_s=300,
         )
+        mon._first_observed_ns[("R47", "TMFE6")] = now_ns - 600_000_000_000
         await mon._tick()
         call = dispatcher.notify_position_stuck.await_args
         assert call.kwargs["unrealized_ntd"] == -1000

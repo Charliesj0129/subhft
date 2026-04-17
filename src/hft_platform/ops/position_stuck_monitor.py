@@ -50,6 +50,7 @@ class PositionStuckMonitor:
         "_task",
         "_alerted_keys",
         "_seen_keys",
+        "_first_observed_ns",
         "_get_contract_multiplier",
     )
 
@@ -83,6 +84,12 @@ class PositionStuckMonitor:
         self._alerted_keys: set[tuple[str, str]] = set()
         # (strategy_id, symbol) keys we have observed non-flat so we can clean gauges
         self._seen_keys: set[tuple[str, str]] = set()
+        # Bug 27b (2026-04-18): track first-observed non-zero time per key so that
+        # positions restored via startup-recovery (with stale ``last_update_ts``
+        # from a prior engine run) don't generate false 24h age alerts. We use
+        # the MAX of ``last_update_ts`` and ``first_observed_ns`` as the age
+        # reference — new fills (which update last_update_ts) still take effect.
+        self._first_observed_ns: dict[tuple[str, str], int] = {}
         self._get_contract_multiplier = contract_multiplier_fn
 
     # ------------------------------------------------------------------
@@ -153,14 +160,24 @@ class PositionStuckMonitor:
                 continue
 
             last_update_ts = int(getattr(pos, "last_update_ts", 0) or 0)
-            if last_update_ts <= 0:
-                # Position exists but no fill recorded yet — ignore (recovery state).
-                continue
-
-            age_s = max(0, (now_ns - last_update_ts) // 1_000_000_000)
             key = (strategy_id, symbol)
             current_keys.add(key)
             self._seen_keys.add(key)
+            # Record the first tick we saw this non-zero position; used to
+            # defeat stale ``last_update_ts`` inherited from startup recovery.
+            if key not in self._first_observed_ns:
+                self._first_observed_ns[key] = now_ns
+
+            # Age reference: the LATER of fresh fill time vs first-observed time.
+            # If last_update_ts is stale (recovery) but within this monitor's
+            # lifetime we use first_observed_ns → position must actually persist
+            # for ``alert_threshold_s`` within the live session before alerting.
+            reference_ns = max(last_update_ts, self._first_observed_ns[key])
+            age_s = max(0, (now_ns - reference_ns) // 1_000_000_000)
+
+            if last_update_ts <= 0 and age_s < self._alert_threshold_s:
+                # Recovery-state position with no fill yet and not long enough to alert — skip gauge too.
+                continue
 
             try:
                 self._metrics.position_age_seconds.labels(
@@ -188,6 +205,8 @@ class PositionStuckMonitor:
                 pass
             self._alerted_keys.discard(key)
             self._seen_keys.discard(key)
+            # Clear first-observed so the next non-flat episode re-anchors.
+            self._first_observed_ns.pop(key, None)
 
     async def _emit_alert(
         self,
