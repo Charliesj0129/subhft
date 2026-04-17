@@ -213,3 +213,14 @@ ${ARXIV_STORAGE_PATH}/
 gha-creds-*.json
 certs/
 *,cover
+
+# Research data (moved out of git tracking 2026-04-17)
+research/data/
+research/arxiv_paper/
+research/arxiv_papers/
+research/experiments/runs/
+research/logs/
+research/results/
+research/results_batch6/
+research/results_batch7/
+research/__pycache__/
