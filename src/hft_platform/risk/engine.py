@@ -16,6 +16,7 @@ from hft_platform.contracts.strategy import (
     RiskDecision,
     RiskFeedback,
     StormGuardState,
+    typed_intent_side,
 )
 from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceScaleProvider
@@ -428,7 +429,7 @@ class RiskEngine:
                                         symbol=intent.symbol,
                                         reason_code="TTL_EXPIRED",
                                         timestamp_ns=timebase.now_ns(),
-                                        side=getattr(intent, "side", None),
+                                        side=typed_intent_side(intent),
                                     )
                                 )
                             except asyncio.QueueFull:
@@ -476,7 +477,7 @@ class RiskEngine:
                                         symbol=getattr(intent, "symbol", ""),
                                         reason_code="HALT_BLOCKED_POST_APPROVE",
                                         timestamp_ns=timebase.now_ns(),
-                                        side=getattr(intent, "side", None),
+                                        side=typed_intent_side(intent),
                                     )
                                 )
                             except asyncio.QueueFull:
@@ -518,7 +519,7 @@ class RiskEngine:
                                     symbol=getattr(intent, "symbol", ""),
                                     reason_code=decision.reason_code,
                                     timestamp_ns=timebase.now_ns(),
-                                    side=getattr(intent, "side", None),
+                                    side=typed_intent_side(intent),
                                 )
                             )
                         except asyncio.QueueFull:
@@ -552,7 +553,7 @@ class RiskEngine:
                                 symbol=getattr(intent, "symbol", ""),
                                 reason_code="risk_engine_error",
                                 timestamp_ns=timebase.now_ns(),
-                                side=getattr(intent, "side", None),
+                                side=typed_intent_side(intent),
                             )
                         )
                     except asyncio.QueueFull:
@@ -613,7 +614,7 @@ class RiskEngine:
                     symbol=getattr(intent, "symbol", ""),
                     reason_code=reason,
                     timestamp_ns=timebase.now_ns(),
-                    side=getattr(intent, "side", None),
+                    side=typed_intent_side(intent),
                     was_approved=True,
                 )
             )

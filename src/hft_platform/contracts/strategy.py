@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from enum import IntEnum
-from typing import Optional
+from typing import Any, Optional
 
 
 class Side(IntEnum):
@@ -104,3 +104,56 @@ class OrderCommand:
     created_ns: int = 0
     decision_price: int = 0  # Passthrough from OrderIntent
     arrival_price: int = 0  # Stamped by OrderAdapter at submit time
+
+
+# ---------------------------------------------------------------------------
+# Typed intent tuple helpers
+#
+# The fast path across the strategy→risk→order boundary carries intents as
+# tuples ("typed_intent_v1", intent_id, strategy_id, symbol, intent_type,
+# side, price, qty, tif, ...). Attribute access (`intent.side`, etc.) does
+# not work on tuples, so consumers that need these fields MUST use these
+# helpers rather than bare ``getattr`` — Bug 9/13 showed silent ``side=None``
+# propagation freezing R47's pending counters permanently.
+# ---------------------------------------------------------------------------
+
+
+def typed_intent_side(intent: Any) -> int | None:
+    """Extract side (as int) from typed-intent tuple index 5 or OrderIntent.side."""
+    if isinstance(intent, tuple) and len(intent) >= 6 and intent[0] == "typed_intent_v1":
+        try:
+            return int(intent[5])
+        except (TypeError, ValueError):
+            return None
+    value = getattr(intent, "side", None)
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def typed_intent_symbol(intent: Any) -> str:
+    """Extract symbol from typed-intent tuple index 3 or OrderIntent.symbol."""
+    if isinstance(intent, tuple) and len(intent) >= 4 and intent[0] == "typed_intent_v1":
+        return str(intent[3])
+    return str(getattr(intent, "symbol", ""))
+
+
+def typed_intent_strategy_id(intent: Any) -> str:
+    """Extract strategy_id from typed-intent tuple index 2 or OrderIntent.strategy_id."""
+    if isinstance(intent, tuple) and len(intent) >= 3 and intent[0] == "typed_intent_v1":
+        return str(intent[2])
+    return str(getattr(intent, "strategy_id", ""))
+
+
+def typed_intent_id(intent: Any) -> int:
+    """Extract intent_id from typed-intent tuple index 1 or OrderIntent.intent_id."""
+    if isinstance(intent, tuple) and len(intent) >= 2 and intent[0] == "typed_intent_v1":
+        try:
+            return int(intent[1])
+        except (TypeError, ValueError):
+            return 0
+    try:
+        return int(getattr(intent, "intent_id", 0))
+    except (TypeError, ValueError):
+        return 0
