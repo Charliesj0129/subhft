@@ -95,6 +95,17 @@ These modules run outside the tick-processing loop and are not latency-critical.
 
 Module documentation: `docs/modules/<module>.md` for each service.
 
+### Package Naming Convention
+
+Two splits in the codebase can look confusing but are intentional:
+
+| Split | Framework side | Implementation side | Rule |
+|-------|----------------|---------------------|------|
+| Strategies | `strategy/` — BaseStrategy, StrategyRunner, StrategyContext, registry | `strategies/` — concrete strategy classes (r47_maker, cascade_bounce, etc.) | Concrete strategy code lives in `strategies/`. Framework code lives in `strategy/`. |
+| Runtime | `engine/` — low-level event bus (RingBufferBus) | `services/` — high-level service orchestration (bootstrap, HFTSystem, market_data) | Generic infrastructure lives in `engine/`. Service graph wiring lives in `services/`. |
+
+Do not rename these packages — they are load-bearing across hundreds of imports. Add a new package if you need a new layer.
+
 ## 📦 Key Data Contracts (Scaled Int Convention)
 
 All price fields are `int` scaled by **x10000** (configurable per symbol in `symbols.yaml`).
