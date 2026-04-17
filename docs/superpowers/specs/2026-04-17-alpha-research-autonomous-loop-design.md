@@ -325,7 +325,7 @@ Manual smoke test plan (no automated test for prompt/skill changes):
 | Researcher regenerates candidates that duplicate killed directions | Challenger's regen sanity-pass checks `killed_directions` blacklist explicitly; plus full Kill Checklist still runs at T2 |
 | Lead abuses tie-break authority to short-circuit legitimate disagreement | User can override by editing `summary.md` post-hoc and appending `tie_break_override` event; Tie-break rationale is written verbatim so abuse is visible |
 | Session crashes mid-regen | `candidate_pool.json` only updates after T8-REGEN-4; partial regen leaves pool untouched |
-| Budget-guard hook false-positive halts (e.g., date parse failure) | Hook fails-safe by exiting 1; false halt means you lose at most the current round's pending completion; just manually fix `budget.json` and resume |
+| Budget-guard hook false-positive halts (e.g., date parse failure) | Hook fails-safe by exiting 2; false halt means you lose at most the current round's pending completion; just manually fix `budget.json` and resume |
 | Scope creep — "maker/taker" scope broadens over rounds | `scope.allowed_types` is declarative; Challenger item 0 enforces; any scope expansion requires editing shared-context YAML (visible in git) |
 
 ## Open questions

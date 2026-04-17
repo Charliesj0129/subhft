@@ -6,14 +6,16 @@ Reusable team structure for alpha research rounds (R32+).
 
 | Role | Model | Job | Key Skills |
 |------|-------|-----|------------|
-| Lead (your session) | Opus | Orchestrate, inject context, KILL/PROMOTE | `hft-strategy-lifecycle`, `hft-release-gate` |
+| Lead (your session) | Sonnet | Orchestrate, inject context, KILL/PROMOTE | `hft-strategy-lifecycle`, `hft-release-gate` |
 | Researcher | Opus | Literature search, hypothesis, `explore.py` | `taifex-alpha-kill-criteria`, `taifex-market-structure` |
 | Devil's Advocate | Opus | Kill Checklist (H1-H6, S1-S6), adversarial review | `taifex-alpha-kill-criteria`, `hft-backtest-calibration` |
-| Executor | Sonnet | `impl.py`, backtest, scorecard | `hft-strategy-sdk`, `hft-backtest-calibration`, `hft-test-hft` |
+| Executor | Opus | `impl.py`, backtest, scorecard | `hft-strategy-sdk`, `hft-backtest-calibration`, `hft-test-hft` |
 
 ## Skill Pipeline (per stage)
 
 ```
+T0 Lead:          (init) hft-mm-design, taifex-market-structure
+                       (resume) none — re-reads artifacts
 T1 Researcher:    taifex-alpha-kill-criteria → avoid dead ends
                   taifex-market-structure    → correct cost/spread assumptions
 T2 Devil's Adv:   taifex-alpha-kill-criteria → 50+ killed directions reference
@@ -26,6 +28,9 @@ T5 Executor:      hft-backtest-calibration   → scorecard interpretation + trap
 T6 Devil's Adv:   hft-backtest-calibration   → statistical validation checklist
 T7 Lead:          hft-strategy-lifecycle     → promotion path (shadow → live)
                   hft-release-gate           → deployment readiness
+T8 Lead:          hft-strategy-lifecycle    → post-PROMOTE scaffold
+                  hft-backtest-calibration  → validate regen candidates
+T9 Lead:          (halt path) hft-release-gate / hft-production-audit if final PROMOTE
 ```
 
 ## Quick Start
@@ -111,6 +116,7 @@ User may override any tie-break post-hoc by editing `round-<N>/summary.md` and a
 - Completed rounds ≥ `budget.json.max_rounds` (default 20)
 - Cumulative PROMOTEs ≥ `budget.json.max_promotes` (default 3)
 - Last N rows of `progress.jsonl` are all KILLs where N = `max_consecutive_kills` (default 8)
+- `budget.json` missing while `progress.jsonl` exists (invariant violation — rounds recorded without a baseline budget)
 
 To stop the loop on demand: `echo STOP > outputs/team_artifacts/alpha-research/STOP`.
 
@@ -128,6 +134,7 @@ If T7 = PROMOTE, the Lead follows `hft-strategy-lifecycle`:
 
 ## Hooks
 
-Two hooks auto-enforce quality (configured in `.claude/settings.local.json`):
-- **TaskCompleted**: Validates required fields before task can close
-- **TeammateIdle**: Directs idle teammates to claim pending tasks
+Three hooks auto-enforce discipline (configured in `.claude/settings.local.json`):
+- **TaskCompleted** → `task-completed-gate.sh`: validates required fields (Expected Edge, H1-H6 markers, Sharpe/Drawdown, etc.) before a task can close.
+- **TaskCompleted** → `budget-guard.sh`: halts the autonomous loop on STOP file or any of the 5 budget triggers (runtime, rounds, PROMOTEs, consecutive KILLs, missing budget with existing progress). See `## Budget-guard Hook` section above.
+- **TeammateIdle** → `teammate-idle-check.sh`: directs idle teammates to claim pending tasks.

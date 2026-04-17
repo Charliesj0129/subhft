@@ -1,5 +1,5 @@
 #!/bin/bash
-# Test harness for budget-guard.sh — 9 cases.
+# Test harness for budget-guard.sh — 10 cases.
 # Each case prepares a temp artifacts dir, pipes a synthetic TaskCompleted
 # JSON into the hook with cwd set to the temp dir's grandparent, and asserts
 # the exit code + stderr content.
