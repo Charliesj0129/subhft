@@ -1,3 +1,4 @@
+<!-- REVIEW-2026-04-17: unreferenced by rules/workflows/teams/agents. Confirm or delete. -->
 ---
 name: research-factory
 description: Use when running the alpha research pipeline end-to-end, from paper intake through live promotion. Covers the 8-stage factory workflow, gate validation, artifact policy, and factory commands.

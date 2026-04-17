@@ -1,3 +1,4 @@
+<!-- REVIEW-2026-04-17: unreferenced by rules/workflows/teams/agents. Confirm or delete. -->
 ---
 name: hft-architect
 description: Use when designing or reviewing platform architecture, changing runtime boundaries, introducing new hot-path stages, or evaluating Python-Rust, broker, recorder, or feature-plane design decisions.

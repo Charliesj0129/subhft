@@ -1,3 +1,4 @@
+<!-- REVIEW-2026-04-17: unreferenced by rules/workflows/teams/agents. Confirm or delete. -->
 ---
 name: hft-market-data
 description: Use when working on market data ingestion, normalization, LOB engine, broker quote callbacks, tick dispatch, reconnect, or any code in feed_adapter/, normalizer, lob_engine.

@@ -1,3 +1,4 @@
+<!-- REVIEW-2026-04-17: unreferenced by rules/workflows/teams/agents. Confirm or delete. -->
 ---
 name: hft-recorder
 description: Use when working on the persistence pipeline — recorder service, batcher, ClickHouse writer, WAL, WAL-first mode, WAL loader, disk monitor, shard claim, or any code in recorder/.

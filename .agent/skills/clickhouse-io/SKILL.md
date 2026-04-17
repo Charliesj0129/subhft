@@ -1,3 +1,4 @@
+<!-- REVIEW-2026-04-17: unreferenced by rules/workflows/teams/agents. Confirm or delete. -->
 ---
 name: clickhouse-io
 description: Use when working with the project's ClickHouse schema, recorder-facing analytics tables, operational TTL or disk issues, migrations, WAL replay, or writing ClickHouse queries tied to HFT runtime and research artifacts.
