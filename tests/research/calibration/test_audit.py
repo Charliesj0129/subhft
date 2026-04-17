@@ -9,6 +9,7 @@ from research.calibration.audit import (
     audit_ck_export_parquet,
     audit_clickhouse_fills,
     find_l2_data_days,
+    find_l2_data_days_from_ch,
 )
 
 
@@ -138,3 +139,22 @@ def test_audit_all_computes_intersection(sample_ck_export_parquet, tmp_path):
     )
     assert "TMFD6" in report["per_instrument"]
     assert report["per_instrument"]["TMFD6"]["usable_calibration_days"] == ["2026-01-27"]
+
+
+def test_find_l2_data_days_from_ch_with_client():
+    client = MagicMock()
+    client.query_df.return_value = pd.DataFrame({
+        "trading_day": ["2026-04-10", "2026-04-09", "2026-04-08"],
+    })
+    days = find_l2_data_days_from_ch("TMFD6", client)
+    assert days == ["2026-04-08", "2026-04-09", "2026-04-10"]
+
+
+def test_find_l2_data_days_from_ch_empty_client_returns_empty():
+    assert find_l2_data_days_from_ch("TMFD6", None) == []
+
+
+def test_find_l2_data_days_from_ch_handles_exception():
+    client = MagicMock()
+    client.query_df.side_effect = RuntimeError("connection lost")
+    assert find_l2_data_days_from_ch("TMFD6", client) == []

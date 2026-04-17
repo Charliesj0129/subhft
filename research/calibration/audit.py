@@ -184,6 +184,32 @@ def find_l2_data_days(data_dir: Path, instrument: str) -> list[str]:
     return sorted(days)
 
 
+def find_l2_data_days_from_ch(
+    instrument: str, ch_client: Any = None,
+) -> list[str]:
+    """Find trading days with L2-equivalent data in ClickHouse hft.market_data.
+
+    Returns days where CH has BidAsk snapshots for the instrument.
+    Returns [] if client is None or CH unreachable.
+    """
+    if ch_client is None:
+        return []
+    try:
+        query = """
+            SELECT DISTINCT toDate(toDateTime64(exch_ts/1e9, 3)) AS trading_day
+            FROM hft.market_data
+            WHERE symbol = {instrument:String}
+              AND type = 'BidAsk'
+            ORDER BY trading_day
+        """
+        df = ch_client.query_df(query, parameters={"instrument": instrument})
+        if df.empty:
+            return []
+        return sorted(df["trading_day"].astype(str).tolist())
+    except Exception:
+        return []
+
+
 def audit_all(
     ck_export_dir: Path,
     l2_data_dir: Path,
@@ -207,11 +233,17 @@ def audit_all(
         bucket["fill_dates"].update(r.trading_dates)
 
     for instrument, bucket in per_instrument.items():
-        l2_days = set(find_l2_data_days(l2_data_dir, instrument))
-        usable = sorted(bucket["fill_dates"] & l2_days)
+        npz_l2_days = set(find_l2_data_days(l2_data_dir, instrument))
+        ch_l2_days = set(find_l2_data_days_from_ch(instrument, ch_client))
+        all_l2_days = npz_l2_days | ch_l2_days
+        usable = sorted(bucket["fill_dates"] & all_l2_days)
         bucket["usable_calibration_days"] = usable
         bucket["n_usable_days"] = len(usable)
         bucket["fill_dates"] = sorted(bucket["fill_dates"])
+        bucket["l2_sources"] = {
+            "npz": sorted(npz_l2_days),
+            "ch_market_data": sorted(ch_l2_days),
+        }
 
     return {
         "per_instrument": per_instrument,
