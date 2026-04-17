@@ -232,6 +232,18 @@ class SymbolMetadata:
         self._price_scale_cache[symbol] = self.DEFAULT_SCALE
         return self.DEFAULT_SCALE
 
+    def tick_size_scaled(self, symbol: str) -> int:
+        """Return tick_size * price_scale for *symbol*, or 0 if unknown.
+
+        Used by strategy intent validation to reject under-scaled prices (e.g.
+        a strategy passing raw 505 instead of 5_050_000 for a x10000-scaled
+        symbol). A zero return disables the guard for symbols without metadata.
+        """
+        entry = self.meta.get(symbol)
+        if not entry:
+            return 0
+        return self._safe_tick_size_scaled(entry, symbol)
+
     def contract_multiplier(self, symbol: str) -> int:
         """Return contract point-value multiplier for PnL calculation.
 

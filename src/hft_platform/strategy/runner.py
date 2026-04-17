@@ -4,11 +4,34 @@ import os
 import re
 import time
 from decimal import Decimal
-from typing import Any, List
+from types import MappingProxyType
+from typing import Any, List, Mapping
 
 from structlog import get_logger
 
-from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, RiskFeedback, Side
+from hft_platform.contracts.execution import PositionDelta
+from hft_platform.contracts.strategy import (
+    TIF,
+    IntentType,
+    OrderIntent,
+    RiskFeedback,
+    Side,
+)
+from hft_platform.contracts.strategy import (
+    typed_intent_identity as _typed_intent_identity,
+)
+from hft_platform.contracts.strategy import (
+    typed_intent_side as _typed_intent_side,
+)
+from hft_platform.contracts.strategy import (
+    typed_intent_symbol as _typed_intent_symbol,
+)
+from hft_platform.contracts.strategy import (
+    typed_intent_tif as _typed_intent_tif,
+)
+from hft_platform.contracts.strategy import (
+    typed_intent_type as _typed_intent_type,
+)
 from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceCodec, SymbolMetadataPriceScaleProvider
 from hft_platform.events import GapEvent
@@ -32,6 +55,10 @@ _RUST_CIRCUIT_ENABLED = os.getenv("HFT_STRATEGY_CIRCUIT_RUST", "1").lower() not 
 }
 
 _MAX_INTENTS_PER_EVENT: int = int(os.getenv("HFT_MAX_INTENTS_PER_EVENT", "20"))
+
+# Shared read-only empty view for strategies without positions. Hand the same
+# singleton to every strategy — MappingProxyType is immutable so this is safe.
+_EMPTY_POSITION_VIEW: Mapping[str, int] = MappingProxyType({})
 
 try:
     try:
@@ -57,69 +84,6 @@ def _obs_policy() -> str:
     if value in {"minimal", "balanced", "debug"}:
         return value
     return ""
-
-
-def _typed_intent_symbol(intent: Any) -> str:
-    if isinstance(intent, tuple) and len(intent) >= 4 and intent[0] == "typed_intent_v1":
-        return str(intent[3])
-    return str(getattr(intent, "symbol", ""))
-
-
-def _typed_intent_type(intent: Any) -> int | None:
-    if isinstance(intent, tuple) and len(intent) >= 5 and intent[0] == "typed_intent_v1":
-        try:
-            return int(intent[4])
-        except (TypeError, ValueError):
-            return None
-    value = getattr(intent, "intent_type", None)
-    try:
-        return int(value) if value is not None else None
-    except (TypeError, ValueError):
-        return None
-
-
-def _typed_intent_tif(intent: Any) -> int | None:
-    """Extract TIF from typed intent tuple (index 8) or OrderIntent attribute."""
-    if isinstance(intent, tuple) and len(intent) >= 9 and intent[0] == "typed_intent_v1":
-        try:
-            return int(intent[8])
-        except (TypeError, ValueError):
-            return None
-    value = getattr(intent, "tif", None)
-    try:
-        return int(value) if value is not None else None
-    except (TypeError, ValueError):
-        return None
-
-
-def _typed_intent_side(intent: Any) -> int | None:
-    """Extract Side from typed intent tuple (index 5) or OrderIntent attribute."""
-    if isinstance(intent, tuple) and len(intent) >= 6 and intent[0] == "typed_intent_v1":
-        try:
-            return int(intent[5])
-        except (TypeError, ValueError):
-            return None
-    value = getattr(intent, "side", None)
-    try:
-        return int(value) if value is not None else None
-    except (TypeError, ValueError):
-        return None
-
-
-def _typed_intent_identity(intent: Any) -> tuple[int, str, str, int | None]:
-    """Extract (intent_id, strategy_id, symbol, side) from typed tuple or OrderIntent."""
-    if isinstance(intent, tuple) and len(intent) >= 4 and intent[0] == "typed_intent_v1":
-        _iid = int(intent[1]) if len(intent) > 1 else 0
-        _sid = str(intent[2]) if len(intent) > 2 else ""
-        _sym = str(intent[3]) if len(intent) > 3 else ""
-        _side = int(intent[5]) if len(intent) > 5 else None
-        return (_iid, _sid, _sym, _side)
-    return (
-        getattr(intent, "intent_id", 0),
-        getattr(intent, "strategy_id", ""),
-        getattr(intent, "symbol", ""),
-        getattr(intent, "side", None),
-    )
 
 
 def _get_symbol_net_qty(position_store: Any, symbol: str, strategy_id: str | None = None) -> int:
@@ -181,6 +145,7 @@ class StrategyRunner:
         "price_codec",
         "_intent_seq",
         "_positions_cache",
+        "_positions_views",
         "_positions_dirty",
         "_current_source_ts_ns",
         "_current_trace_id",
@@ -268,6 +233,7 @@ class StrategyRunner:
         self.price_codec = PriceCodec(SymbolMetadataPriceScaleProvider(self.symbol_metadata))
         self._intent_seq = 0
         self._positions_cache: dict = {}
+        self._positions_views: dict[str, Mapping[str, int]] = {}
         self._positions_dirty = True
         self._current_source_ts_ns = 0
         self._current_trace_id = ""
@@ -748,6 +714,24 @@ class StrategyRunner:
             source_ts_ns = self._current_source_ts_ns
         if trace_id is None:
             trace_id = self._current_trace_id
+        # Scale guard: reject under-scaled prices on NEW/AMEND orders. Catches
+        # operator errors like `place_order(price=505)` when the symbol uses
+        # price_scale=10000 and expects 5_050_000. CANCEL/FORCE_FLAT carry
+        # price=0 legitimately and skip the guard.
+        if int(intent_type) in (int(IntentType.NEW), int(IntentType.AMEND)):
+            tick_scaled = 0
+            tick_source = getattr(self.symbol_metadata, "tick_size_scaled", None)
+            if callable(tick_source):
+                try:
+                    tick_scaled = int(tick_source(symbol))
+                except (TypeError, ValueError):
+                    tick_scaled = 0
+            if tick_scaled > 0 and int(price) < tick_scaled:
+                raise ValueError(
+                    f"under-scaled price rejected: symbol={symbol!r} price={price} < "
+                    f"tick_size_scaled={tick_scaled}. Platform uses scaled int "
+                    f"(price * price_scale); pass Decimal for auto-scaling."
+                )
         if self._typed_intent_fastpath:
             return (
                 "typed_intent_v1",
@@ -767,6 +751,7 @@ class StrategyRunner:
                 "",
                 self._default_intent_ttl_ns,  # ttl_ns
                 0,  # decision_price — populated by StrategyRunner from LOB mid
+                str(price_type or "LMT"),  # price_type (LMT/MKT) — index 17
             )
         return OrderIntent(
             intent_id=self._intent_seq,
@@ -861,8 +846,10 @@ class StrategyRunner:
         self._positions_dirty = True
 
     async def process_event(self, event: Any):
+        # Dispatch by exact type (avoid isinstance MRO walk on hot path).
+        et = type(event)
         # Defensive guard: skip unexpected tuple events (allow known typed ring tags)
-        if isinstance(event, tuple) and (not event or event[0] not in _KNOWN_TUPLE_TAGS):
+        if et is tuple and (not event or event[0] not in _KNOWN_TUPLE_TAGS):
             logger.warning("Unexpected tuple event skipped", length=len(event), head=repr(event[0] if event else None))
             return
         source_ts_ns, trace_id = self._extract_event_trace(event)
@@ -884,14 +871,17 @@ class StrategyRunner:
                         total_skipped=self._stale_event_skip_total,
                     )
                 return
-        # Invalidate on position delta events
-        if hasattr(event, "delta_source"):
+        # Invalidate on position delta events (exact-type check avoids hasattr
+        # descriptor lookup on every tick).
+        if et is PositionDelta:
             self._positions_dirty = True
 
         if self._positions_dirty:
             self._positions_cache = self._build_positions_by_strategy()
+            self._positions_views = {
+                sid: MappingProxyType(inner) for sid, inner in self._positions_cache.items()
+            }
             self._positions_dirty = False
-        positions_by_strategy = self._positions_cache
 
         target_strat_id = getattr(event, "strategy_id", None)
         event_symbol = getattr(event, "symbol", "")
@@ -973,8 +963,14 @@ class StrategyRunner:
                 else:
                     continue
 
-            positions = positions_by_strategy.get(strategy.strategy_id) or positions_by_strategy.get("*", {})
-            ctx.positions = dict(positions)  # Shallow copy to prevent strategy mutation corrupting cache
+            # Hand strategy a read-only view over the cached per-strategy dict.
+            # MappingProxyType is zero-copy and raises TypeError on mutation attempts,
+            # protecting `_positions_cache` without per-event dict() allocation.
+            ctx.positions = (
+                self._positions_views.get(strategy.strategy_id)
+                or self._positions_views.get("*")
+                or _EMPTY_POSITION_VIEW
+            )
 
             start = time.perf_counter_ns()
             if getattr(self, "_trace_sampler", None) is not None:

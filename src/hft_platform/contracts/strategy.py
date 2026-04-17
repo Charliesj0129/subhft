@@ -157,3 +157,63 @@ def typed_intent_id(intent: Any) -> int:
         return int(getattr(intent, "intent_id", 0))
     except (TypeError, ValueError):
         return 0
+
+
+def typed_intent_type(intent: Any) -> int | None:
+    """Extract intent_type from typed-intent tuple index 4 or OrderIntent.intent_type."""
+    if isinstance(intent, tuple) and len(intent) >= 5 and intent[0] == "typed_intent_v1":
+        try:
+            return int(intent[4])
+        except (TypeError, ValueError):
+            return None
+    value = getattr(intent, "intent_type", None)
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def typed_intent_tif(intent: Any) -> int | None:
+    """Extract TIF from typed-intent tuple index 8 or OrderIntent.tif."""
+    if isinstance(intent, tuple) and len(intent) >= 9 and intent[0] == "typed_intent_v1":
+        try:
+            return int(intent[8])
+        except (TypeError, ValueError):
+            return None
+    value = getattr(intent, "tif", None)
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def typed_intent_price_type(intent: Any) -> str:
+    """Extract price_type (LMT/MKT) from typed-intent tuple index 17 or OrderIntent.price_type.
+
+    Returns "LMT" when the field is missing (legacy 17-tuple frames) or invalid.
+    """
+    if isinstance(intent, tuple) and len(intent) >= 18 and intent[0] == "typed_intent_v1":
+        value = intent[17]
+        return str(value) if value else "LMT"
+    value = getattr(intent, "price_type", None)
+    return str(value) if value else "LMT"
+
+
+def typed_intent_identity(intent: Any) -> tuple[int, str, str, int | None]:
+    """Extract (intent_id, strategy_id, symbol, side) from typed tuple or OrderIntent."""
+    if isinstance(intent, tuple) and len(intent) >= 4 and intent[0] == "typed_intent_v1":
+        iid = int(intent[1]) if len(intent) > 1 else 0
+        sid = str(intent[2]) if len(intent) > 2 else ""
+        sym = str(intent[3]) if len(intent) > 3 else ""
+        side_val: int | None
+        try:
+            side_val = int(intent[5]) if len(intent) > 5 else None
+        except (TypeError, ValueError):
+            side_val = None
+        return (iid, sid, sym, side_val)
+    return (
+        getattr(intent, "intent_id", 0),
+        getattr(intent, "strategy_id", ""),
+        getattr(intent, "symbol", ""),
+        getattr(intent, "side", None),
+    )

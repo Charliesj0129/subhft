@@ -624,8 +624,11 @@ class LOBEngine:
 
     def process_event(self, event: Union[BidAskEvent, TickEvent, tuple]) -> Optional[LOBStatsEvent | tuple]:
         metrics_enabled = self._is_metrics_enabled()
+        # Dispatch by exact type (avoid isinstance MRO walk). Event dataclasses
+        # are frozen+slots with no subclasses — `type(x) is C` is correct.
+        et = type(event)
         # Tuple fast-path (avoid event object creation)
-        if isinstance(event, tuple) and event:
+        if et is tuple and event:
             if event[0] == "bidask":
                 if len(event) >= 13:
                     (
@@ -675,8 +678,8 @@ class LOBEngine:
                 book.update_tick(price, volume, exch_ts)
                 return None
 
-        # Typed dispatch
-        if isinstance(event, BidAskEvent):
+        # Typed dispatch (exact-type; subclasses never created for these)
+        if et is BidAskEvent:
             book = self.get_book(event.symbol)
             if book is None:
                 return None
@@ -716,7 +719,7 @@ class LOBEngine:
                 self._record_lob_metrics(event.symbol, event.is_snapshot)
             return self._emit_stats(book)
 
-        elif isinstance(event, TickEvent):
+        elif et is TickEvent:
             book = self.get_book(event.symbol)
             if book is None:
                 return None

@@ -387,7 +387,7 @@ class TestTypedFrameViewDecisionPrice:
         assert intent.decision_price == 750_0000
 
     def test_intent_factory_emits_17_elements(self, runner_factory, monkeypatch):
-        """_intent_factory produces 17-element tuples when typed fast path is enabled."""
+        """_intent_factory produces 18-element tuples when typed fast path is enabled."""
         monkeypatch.setenv("HFT_TYPED_INTENT_CHANNEL", "1")
         rq = _make_risk_queue_typed()
         runner, _, _ = runner_factory(rq=rq, typed=True)
@@ -406,9 +406,10 @@ class TestTypedFrameViewDecisionPrice:
         )
 
         assert isinstance(result, tuple)
-        assert len(result) == 17
+        assert len(result) == 18
         assert result[0] == "typed_intent_v1"
         assert result[16] == 0  # decision_price default
+        assert result[17] == "LMT"  # price_type default
 
 
 # ---------------------------------------------------------------------------

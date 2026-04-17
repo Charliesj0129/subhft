@@ -1,21 +1,23 @@
-"""Tests that StrategyRunner passes a shallow copy of positions to each strategy context.
+"""Tests that StrategyRunner passes a read-only view of positions to each strategy context.
 
 Verifies that:
-1. Mutating ctx.positions in one strategy does NOT affect ctx.positions seen by a
-   subsequent strategy in the same event cycle.
-2. The underlying _positions_cache is not corrupted by a strategy mutation.
+1. `ctx.positions` is a `types.MappingProxyType` — attempting mutation raises TypeError.
+2. Each strategy sees the same per-strategy positions (no accidental cross-strategy leak
+   because each strategy_id owns a distinct underlying dict in `positions_by_strategy`).
+3. The underlying `_positions_cache` is never corrupted (read-only enforces this).
+
+Prior contract allowed `ctx.positions = dict(positions)` defensive copy. That allocated a
+fresh dict per strategy per event. The runner now hands out a MappingProxyType view over
+the already-cached per-strategy dict — zero allocation, mutation fails loud.
 """
 
 from __future__ import annotations
 
 import asyncio
+from types import MappingProxyType
 from unittest.mock import MagicMock, patch
 
 import pytest
-
-# ---------------------------------------------------------------------------
-# Helpers / stubs
-# ---------------------------------------------------------------------------
 
 
 def _make_runner(position_store=None):
@@ -33,20 +35,12 @@ def _make_runner(position_store=None):
     return runner
 
 
-class _FakePosition:
-    def __init__(self, strategy_id: str, symbol: str, net_qty: int) -> None:
-        self.strategy_id = strategy_id
-        self.symbol = symbol
-        self.net_qty = net_qty
-
-
 class _PositionStore:
     def __init__(self, initial: dict) -> None:
         self.positions = initial
 
 
 def _make_tick_event(symbol: str = "2330") -> object:
-    """Minimal tick-like event that process_event accepts."""
     from hft_platform.events import MetaData, TickEvent
 
     return TickEvent(
@@ -62,14 +56,7 @@ def _make_tick_event(symbol: str = "2330") -> object:
     )
 
 
-# ---------------------------------------------------------------------------
-# Strategy stubs that capture and optionally mutate ctx.positions
-# ---------------------------------------------------------------------------
-
-
 class _CapturingStrategy:
-    """Records the positions dict seen at handle_event call time."""
-
     def __init__(self, sid: str, symbol: str = "2330") -> None:
         self.strategy_id = sid
         self.symbols = {symbol}
@@ -77,15 +64,16 @@ class _CapturingStrategy:
         self.required_features = []
         self.required_feature_profile = None
         self.seen_positions: list[dict] = []
+        self.seen_type: list[type] = []
 
     def handle_event(self, ctx, event):  # noqa: ANN001
-        # Snapshot value at call time (dict copy so we can compare later)
         self.seen_positions.append(dict(ctx.positions))
+        self.seen_type.append(type(ctx.positions))
         return []
 
 
 class _MutatingStrategy:
-    """Mutates ctx.positions by adding a fake entry, then records what was there."""
+    """Attempts to mutate ctx.positions — must raise TypeError under read-only contract."""
 
     def __init__(self, sid: str, symbol: str = "2330") -> None:
         self.strategy_id = sid
@@ -93,90 +81,64 @@ class _MutatingStrategy:
         self.enabled = True
         self.required_features = []
         self.required_feature_profile = None
+        self.mutation_error: Exception | None = None
         self.seen_positions: list[dict] = []
 
     def handle_event(self, ctx, event):  # noqa: ANN001
         self.seen_positions.append(dict(ctx.positions))
-        # Mutate: add a fake key that should NOT propagate to other strategies
-        ctx.positions["__injected__"] = 9999
+        try:
+            ctx.positions["__injected__"] = 9999
+        except TypeError as exc:
+            self.mutation_error = exc
         return []
 
 
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
-async def test_mutation_in_first_strategy_does_not_affect_second():
-    """Mutating ctx.positions in strategy A must not alter ctx.positions for strategy B."""
-    store = _PositionStore(
-        {
-            "pos:*:2330": 5,
-        }
-    )
+async def test_ctx_positions_is_readonly_view():
+    """ctx.positions must be MappingProxyType; direct mutation must raise TypeError."""
+    store = _PositionStore({"pos:*:2330": 5})
     runner = _make_runner(store)
 
     mutator = _MutatingStrategy("strat_a")
-    observer = _CapturingStrategy("strat_b")
-
     runner.register(mutator)
-    runner.register(observer)
 
-    event = _make_tick_event("2330")
-    await runner.process_event(event)
+    await runner.process_event(_make_tick_event("2330"))
 
-    assert len(mutator.seen_positions) == 1, "mutator must have been called"
-    assert len(observer.seen_positions) == 1, "observer must have been called"
-
-    # The observer should NOT see the key injected by the mutator
-    assert "__injected__" not in observer.seen_positions[0], (
-        "observer saw mutator-injected key — positions dict was shared, not copied"
-    )
+    assert mutator.mutation_error is not None, "mutation must have raised"
+    assert isinstance(mutator.mutation_error, TypeError)
 
 
 @pytest.mark.asyncio
-async def test_mutation_does_not_corrupt_positions_cache():
-    """After a strategy mutates ctx.positions, the internal cache must remain clean."""
-    store = _PositionStore(
-        {
-            "pos:*:2330": 10,
-        }
-    )
+async def test_mutation_attempt_does_not_corrupt_positions_cache():
+    """Failed mutation must leave _positions_cache pristine."""
+    store = _PositionStore({"pos:*:2330": 10})
     runner = _make_runner(store)
 
     mutator = _MutatingStrategy("strat_mut")
     runner.register(mutator)
 
-    event = _make_tick_event("2330")
-    await runner.process_event(event)
+    await runner.process_event(_make_tick_event("2330"))
 
-    # The strategy mutated ctx.positions — the cache should still be pristine
     cached = runner._positions_cache
     wildcard_positions = cached.get("*", {})
-    assert "__injected__" not in wildcard_positions, "_positions_cache was corrupted by strategy mutation"
-    assert wildcard_positions.get("2330") == 10, "cache lost original position value after strategy mutation"
+    assert "__injected__" not in wildcard_positions
+    assert wildcard_positions.get("2330") == 10
 
 
 @pytest.mark.asyncio
-async def test_each_strategy_receives_independent_copy():
-    """Three strategies, each mutating ctx.positions, must all start from same clean state."""
-    store = _PositionStore(
-        {
-            "pos:*:2330": 7,
-        }
-    )
+async def test_each_strategy_receives_readonly_view():
+    """All strategies see MappingProxyType. Observer sees clean state despite mutator attempt."""
+    store = _PositionStore({"pos:*:2330": 7})
     runner = _make_runner(store)
 
-    strategies = [_MutatingStrategy(f"strat_{i}") for i in range(3)]
-    for s in strategies:
-        runner.register(s)
+    mutator = _MutatingStrategy("strat_a")
+    observer = _CapturingStrategy("strat_b")
+    runner.register(mutator)
+    runner.register(observer)
 
-    event = _make_tick_event("2330")
-    await runner.process_event(event)
+    await runner.process_event(_make_tick_event("2330"))
 
-    for i, strat in enumerate(strategies):
-        assert len(strat.seen_positions) == 1, f"strat_{i} not called"
-        positions_at_entry = strat.seen_positions[0]
-        assert "__injected__" not in positions_at_entry, f"strat_{i} saw a key injected by a previous strategy"
-        assert positions_at_entry.get("2330") == 7, f"strat_{i} did not see the original position value"
+    assert mutator.mutation_error is not None
+    assert observer.seen_type == [MappingProxyType]
+    assert "__injected__" not in observer.seen_positions[0]
+    assert observer.seen_positions[0].get("2330") == 7
