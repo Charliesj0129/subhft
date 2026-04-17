@@ -1,8 +1,7 @@
 """Sub-gate registry and implementations for unified Gate C.
 
-This package defines the SubGate protocol (an evaluator for one sub-gate
-check) and the in-process registry. Concrete sub-gate implementations
-live in sibling modules (common.py, maker.py, taker.py).
+Importing this package auto-registers all built-in sub-gates.
+Tests can call `clear_registry()` and re-import to reset.
 """
 from hft_platform.alpha._sub_gates.registry import (
     SubGate,
@@ -11,6 +10,32 @@ from hft_platform.alpha._sub_gates.registry import (
     get_registered_sub_gates,
     register_sub_gate,
 )
+
+
+def _register_builtin_sub_gates() -> None:
+    """Register all shipped sub-gates. Called once at import time."""
+    from hft_platform.alpha._sub_gates.common import (
+        MaxDrawdownGate,
+        SharpeThresholdGate,
+        WinningDayPctGate,
+    )
+    from hft_platform.alpha._sub_gates.maker import (
+        FillQualityGate,
+        FillRateValidationGate,
+    )
+    from hft_platform.alpha._sub_gates.taker import ICEvaluationGate
+
+    # Order: common first, then strategy-specific
+    register_sub_gate(SharpeThresholdGate())
+    register_sub_gate(MaxDrawdownGate())
+    register_sub_gate(WinningDayPctGate())
+    register_sub_gate(FillQualityGate())
+    register_sub_gate(FillRateValidationGate())
+    register_sub_gate(ICEvaluationGate())
+
+
+_register_builtin_sub_gates()
+
 
 __all__ = [
     "SubGate",
