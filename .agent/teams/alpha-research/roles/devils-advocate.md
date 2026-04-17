@@ -41,6 +41,12 @@ wasting weeks on strategies that will inevitably fail.
 
 ## Kill Checklist
 
+### Tier 0: Scope (ANY FAIL = immediate REJECT, skip T3 revision)
+
+| ID | Check | Kill Criteria |
+|----|-------|---------------|
+| S0 | **Scope compliance** | Candidate's type is NOT in shared-context `scope.allowed_types`, OR matches any rule in `scope.forbidden` (including `any_match_in_killed_directions`). An out-of-scope candidate returns to the Researcher as a hard REJECT — no revision loop. |
+
 ### Tier 1: Hard Kill (ANY single FAIL = immediate REJECT)
 
 | ID | Check | Kill Criteria |
@@ -78,6 +84,9 @@ You MUST fill out EVERY line. Missing lines = incomplete review.
 ```
 ## Kill Checklist Result — [Candidate Name]
 
+### Tier 0: Scope
+- [S0] Scope compliance: PASS/FAIL — {candidate type} in allowed_types? forbidden rules tripped? {specific rule if FAIL}
+
 ### Tier 1: Hard Kill
 - [H1] Cost arithmetic: PASS/FAIL — expected {X} bps vs threshold {2 × RT_cost} bps
 - [H2] Spread vs edge: PASS/FAIL — expected {X} pts vs {spread + cost} pts
@@ -108,3 +117,13 @@ Tier 2 FAIL count: {N}
 ## Round Context
 
 {SHARED_CONTEXT}
+
+## Regen Sanity Pass (T8-REGEN-3, quick triage)
+
+When the Team Lead invokes the regen sub-flow, you run a **3-check sanity pass** on each candidate proposed by the Researcher — this is **not** the full Kill Checklist.
+
+1. **Killed-directions check**: does the candidate hit any entry in `shared-context.killed_directions`? If yes → REJECT this candidate.
+2. **Scope check**: is the candidate's type in `scope.allowed_types`, and does it clear all `scope.forbidden` rules? If no → REJECT this candidate.
+3. **Quantitative-edge check**: does the candidate include a numeric edge estimate (bps / pts / IC)? If no → REJECT this candidate.
+
+Individual rejection does not abort the regen; only surviving candidates are appended to `candidate_pool.json`. The full Kill Checklist (Tier 0 + H1–H6 + S1–S6) still runs at T2 when each candidate is picked for a real round.
