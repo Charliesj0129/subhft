@@ -162,17 +162,23 @@ class RiskEngine:
         )
         self._position_provider = position_provider
 
-        # Validators
+        # Validators — Bug 21: share position_provider so each validator can bypass
+        # its gate when the order strictly reduces |net_position| (cover / exit).
+        _pos_provider = self._current_strategy_symbol_net_position
         self.validators: list[RiskValidator] = [
             PriceBandValidator(self.config, price_scale_provider),
-            MaxNotionalValidator(self.config, price_scale_provider),
-            PerSymbolNotionalValidator(self.config, price_scale_provider),
+            MaxNotionalValidator(self.config, price_scale_provider, position_provider=_pos_provider),
+            PerSymbolNotionalValidator(
+                self.config, price_scale_provider, position_provider=_pos_provider
+            ),
             PositionLimitValidator(
                 self.config,
                 price_scale_provider,
-                position_provider=self._current_strategy_symbol_net_position,
+                position_provider=_pos_provider,
             ),
-            DailyLossLimitValidator(self.config, price_scale_provider),
+            DailyLossLimitValidator(
+                self.config, price_scale_provider, position_provider=_pos_provider
+            ),
         ]
         # Pre-compute validators that Rust doesn't cover (avoid per-call isinstance)
         self._rust_uncovered_validators: list[RiskValidator] = [
@@ -185,6 +191,12 @@ class RiskEngine:
         # Cache validator[0] reference to avoid list index on hot path
         self._validator0 = self.validators[0] if self.validators else None
         self.storm_guard = storm_guard if storm_guard is not None else StormGuard()
+        # Bug 21: share position_provider with StormGuard so reducing orders
+        # can bypass HALT/STORM rejection (prevents R47 deadlock).
+        try:
+            self.storm_guard.set_position_provider(self._current_strategy_symbol_net_position)
+        except Exception:  # noqa: BLE001 — defensive: never break engine init
+            logger.warning("stormguard_position_provider_wire_failed", exc_info=True)
         self._notification_dispatcher = notification_dispatcher
         self._rust_validator = self._init_rust_validator(price_scale_provider)
         self._rust_validator_reason_map = {

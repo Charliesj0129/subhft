@@ -19,6 +19,7 @@ class RiskValidator:
         config: Dict[str, Any],
         price_scale_provider: PriceScaleProvider | None = None,
         lob: Optional["LOBEngine"] = None,
+        position_provider: Any | None = None,
     ):
         self.config = config
         self.defaults = config.get("global_defaults", {})
@@ -26,6 +27,7 @@ class RiskValidator:
         provider = price_scale_provider or SymbolMetadataPriceScaleProvider()
         self.price_codec = PriceCodec(provider)
         self.lob = lob
+        self._position_provider = position_provider
         self._shared_scale_cache: Dict[str, int] = {}
 
     def _scale_factor(self, symbol: str) -> int:
@@ -35,6 +37,68 @@ class RiskValidator:
             value = int(self.price_codec.scale_factor(symbol))
             cache[symbol] = value
         return value or 1
+
+    def _current_position(self, symbol: str, strategy_id: str) -> int:
+        """Resolve net position via ``position_provider`` if present.
+
+        Accepts either a callable ``(symbol, strategy_id) -> int`` or a provider
+        object exposing ``net_qty_for_symbol`` / ``positions``. Missing provider
+        returns 0 (no position — treated as "cannot verify reduction").
+        """
+        provider = self._position_provider
+        if provider is None:
+            return 0
+        if callable(provider):
+            try:
+                return int(provider(symbol, strategy_id) or 0)
+            except Exception:  # noqa: BLE001 — provider errors are non-fatal
+                return 0
+
+        nq_fn = getattr(provider, "net_qty_for_symbol", None)
+        if nq_fn is not None:
+            try:
+                return int(nq_fn(symbol, strategy_id))
+            except Exception:  # noqa: BLE001
+                return 0
+
+        positions = getattr(provider, "positions", {})
+        net_qty = 0
+        for pos in positions.values():
+            if getattr(pos, "symbol", None) != symbol:
+                continue
+            if getattr(pos, "strategy_id", strategy_id) != strategy_id:
+                continue
+            net_qty += int(getattr(pos, "net_qty", 0) or 0)
+        return net_qty
+
+    def reduces_position(self, intent: OrderIntent) -> bool:
+        """Return True iff ``intent`` strictly reduces |net_position|.
+
+        Bug 21 (2026-04-17): Safety gates like PEAK_DRAWDOWN, SOFT_LIMIT,
+        DAILY_LOSS_LIMIT, MAX_NOTIONAL were blocking cover orders, preventing
+        strategies from exiting adverse positions. The predicate here allows
+        validators to distinguish cover orders from openers and bypass safety
+        gates that would otherwise deadlock the strategy.
+
+        Semantics:
+          * CANCEL / FORCE_FLAT → always True (escape hatches)
+          * NEW where ``abs(current + signed_qty) < abs(current)`` → True
+          * Over-cover that flips sign and matches/grows magnitude → False
+            (treated as new opener — strictly safer)
+          * Flat position or no position_provider wired → False
+        """
+        if intent.intent_type in (IntentType.CANCEL, IntentType.FORCE_FLAT):
+            return True
+        if self._position_provider is None:
+            return False
+        try:
+            current = self._current_position(intent.symbol, intent.strategy_id)
+        except Exception:  # noqa: BLE001 — never raise from a predicate
+            return False
+        if current == 0:
+            return False
+        signed = int(intent.qty if intent.side == Side.BUY else -intent.qty)
+        return abs(current + signed) < abs(current)
 
     def check(self, intent: OrderIntent) -> Tuple[bool, str]:
         """Return (Approved, Reason)."""
@@ -165,6 +229,11 @@ class MaxNotionalValidator(RiskValidator):
         if intent.intent_type == IntentType.CANCEL:
             return True, "OK"
 
+        # Bug 21: allow orders that strictly reduce |net_position| to bypass
+        # notional cap so a stuck position can always be closed.
+        if self.reduces_position(intent):
+            return True, "REDUCE_ONLY_BYPASS"
+
         cache_key = (intent.strategy_id, intent.symbol)
         max_notional_scaled = self._max_notional_scaled_cache.get(cache_key)
         if max_notional_scaled is None:
@@ -184,36 +253,14 @@ class MaxNotionalValidator(RiskValidator):
 class PositionLimitValidator(RiskValidator):
     """Stateless validator: rejects orders where abs(qty) exceeds max_position_lots."""
 
-    __slots__ = ("_default_max_position_lots", "_max_position_cache", "_position_provider")
+    __slots__ = ("_default_max_position_lots", "_max_position_cache")
 
     def __init__(self, *args: Any, position_provider: Any | None = None, **kwargs: Any) -> None:
+        # position_provider is now on the base class; forward it.
+        kwargs.setdefault("position_provider", position_provider)
         super().__init__(*args, **kwargs)
         self._default_max_position_lots: int = int(self.defaults.get("max_position_lots", 1_000))
         self._max_position_cache: Dict[str, int] = {}
-        self._position_provider = position_provider
-
-    def _current_position(self, symbol: str, strategy_id: str) -> int:
-        provider = self._position_provider
-        if provider is None:
-            return 0
-        if callable(provider):
-            return int(provider(symbol, strategy_id) or 0)
-
-        # Prefer net_qty_for_symbol which includes pending recovery positions
-        # (loaded at startup but not yet merged via first fill).
-        nq_fn = getattr(provider, "net_qty_for_symbol", None)
-        if nq_fn is not None:
-            return int(nq_fn(symbol, strategy_id))
-
-        positions = getattr(provider, "positions", {})
-        net_qty = 0
-        for pos in positions.values():
-            if getattr(pos, "symbol", None) != symbol:
-                continue
-            if getattr(pos, "strategy_id", strategy_id) != strategy_id:
-                continue
-            net_qty += int(getattr(pos, "net_qty", 0) or 0)
-        return net_qty
 
     def check(self, intent: OrderIntent) -> Tuple[bool, str]:
         if intent.intent_type in (IntentType.CANCEL, IntentType.FORCE_FLAT):
@@ -434,6 +481,13 @@ class DailyLossLimitValidator(RiskValidator):
         if intent.intent_type in (IntentType.CANCEL, IntentType.FORCE_FLAT):
             return True, "OK"
 
+        # Bug 21 (2026-04-17): cover orders must bypass SOFT_LIMIT / PEAK_DRAWDOWN
+        # / DAILY_LOSS_LIMIT so a strategy stuck in adverse PnL can always reduce
+        # risk. Without this R47 deadlocked short -1 TMFE6 while drawdown grew
+        # from -120 NTD to -2680 NTD (realized on manual cover).
+        if self.reduces_position(intent):
+            return True, "REDUCE_ONLY_BYPASS"
+
         # b. Daily reset check
         self._maybe_reset()
 
@@ -558,6 +612,10 @@ class PerSymbolNotionalValidator(RiskValidator):
     def check(self, intent: OrderIntent) -> Tuple[bool, str]:
         if intent.intent_type == IntentType.CANCEL:
             return True, "OK"
+
+        # Bug 21: cover orders bypass per-symbol notional cap.
+        if self.reduces_position(intent):
+            return True, "REDUCE_ONLY_BYPASS"
 
         cache_key = (intent.strategy_id, intent.symbol)
         max_notional_scaled = self._per_symbol_notional_cache.get(cache_key)

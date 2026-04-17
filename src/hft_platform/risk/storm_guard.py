@@ -8,7 +8,7 @@ from typing import Any, Callable
 
 from structlog import get_logger
 
-from hft_platform.contracts.strategy import IntentType, OrderIntent, StormGuardState
+from hft_platform.contracts.strategy import IntentType, OrderIntent, Side, StormGuardState
 from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.risk.drift_burst_detector import DriftBurstDetector
 
@@ -51,6 +51,7 @@ class StormGuard:
         "_state_lock",
         "_session_active",
         "_halt_exempt_strategies",
+        "_position_provider",
         "_feature_failure_active",
         "_feature_failure_storm_ts",
         "_norm_failure_active",
@@ -68,6 +69,7 @@ class StormGuard:
         on_halt_callback: Callable[[], Any] | None = None,
         drift_burst_detector: DriftBurstDetector | None = None,
         halt_exempt_strategies: frozenset[str] | None = None,
+        position_provider: Callable[[str, str], int] | None = None,
     ):
         self.state = StormGuardState.NORMAL
         self.thresholds = thresholds or RiskThresholds()
@@ -89,6 +91,10 @@ class StormGuard:
         env_exempt = os.getenv("HFT_STORMGUARD_HALT_EXEMPT_STRATEGIES", "")
         env_set = frozenset(s.strip() for s in env_exempt.split(",") if s.strip()) if env_exempt else frozenset()
         self._halt_exempt_strategies: frozenset[str] = halt_exempt_strategies or env_set
+        # Bug 21 (2026-04-17): allow reducing orders through HALT/STORM even when
+        # strategy is not on exempt list. Prevents deadlock where strategy stuck
+        # with open position can't cover because StormGuard is blocking.
+        self._position_provider: Callable[[str, str], int] | None = position_provider
         self._feature_failure_active: bool = False
         self._feature_failure_storm_ts: float = 0.0
         self._norm_failure_active: bool = False
@@ -491,6 +497,8 @@ class StormGuard:
             if self.state == StormGuardState.HALT:
                 if intent.intent_type in (IntentType.CANCEL, IntentType.FORCE_FLAT):
                     return True, "OK"
+                if self._intent_reduces_position(intent):
+                    return True, "HALT_REDUCE_ONLY"
                 if intent.strategy_id in self._halt_exempt_strategies:
                     logger.warning(
                         "stormguard_halt_exempt_bypass",
@@ -506,6 +514,8 @@ class StormGuard:
                 return False, "STORMGUARD_HALT"
             if self.state == StormGuardState.STORM:
                 if intent.intent_type in (IntentType.NEW, IntentType.AMEND):
+                    if self._intent_reduces_position(intent):
+                        return True, "STORM_REDUCE_ONLY"
                     if intent.strategy_id in self._halt_exempt_strategies:
                         logger.warning(
                             "stormguard_storm_exempt_bypass",
@@ -515,6 +525,33 @@ class StormGuard:
                         return True, "STORM_EXEMPT"
                     return False, "STORMGUARD_STORM_BLOCKED"
             return True, "OK"
+
+    def set_position_provider(self, provider: Callable[[str, str], int] | None) -> None:
+        """Bug 21: wire position provider post-construction.
+
+        Bootstrap creates StormGuard before the position store is available.
+        RiskEngine injects its own ``_current_strategy_symbol_net_position``
+        here so reducing orders can bypass HALT/STORM safely.
+        """
+        self._position_provider = provider
+
+    def _intent_reduces_position(self, intent: OrderIntent) -> bool:
+        """Bug 21 helper: True iff intent strictly reduces |net_position|.
+
+        When ``position_provider`` is not wired (e.g. unit tests), returns False
+        — conservative default that preserves the original HALT blocking.
+        """
+        provider = self._position_provider
+        if provider is None:
+            return False
+        try:
+            current = int(provider(intent.symbol, intent.strategy_id) or 0)
+        except Exception:  # noqa: BLE001
+            return False
+        if current == 0:
+            return False
+        signed = int(intent.qty if intent.side == Side.BUY else -intent.qty)
+        return abs(current + signed) < abs(current)
 
     def set_session_active(self, active: bool) -> None:
         """Inform StormGuard whether any trading session is currently open.
