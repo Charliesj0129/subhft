@@ -39,7 +39,7 @@ class CalibrationScore:
             self.pnl_direction_score,
             self.pnl_magnitude_score,
         )
-        return sum(s * w for s, w in zip(components, weights))
+        return sum(s * w for s, w in zip(components, weights, strict=True))
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -64,8 +64,8 @@ def compute_pnl_direction_score(sim_pnl: list[float], live_pnl: list[float]) -> 
     """Fraction of days where sim PnL sign matches live PnL sign."""
     if not sim_pnl or not live_pnl or len(sim_pnl) != len(live_pnl):
         return 0.0
-    matches = sum(1 for s, l in zip(sim_pnl, live_pnl)
-                   if (s >= 0 and l >= 0) or (s < 0 and l < 0))
+    matches = sum(1 for s, lv in zip(sim_pnl, live_pnl, strict=True)
+                   if (s >= 0 and lv >= 0) or (s < 0 and lv < 0))
     return matches / len(sim_pnl)
 
 
