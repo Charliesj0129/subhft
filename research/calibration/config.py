@@ -35,6 +35,8 @@ class CalibrationProfile:
 
 
 def save_calibration_profile(profile: CalibrationProfile, path: Path) -> None:
+    # Non-atomic read-modify-write: safe for single-process research CLI invocation only.
+    # Concurrent calls from multiple processes could race and discard one profile.
     path = Path(path)
     existing: dict = {}
     if path.exists():
@@ -66,21 +68,27 @@ def load_calibration_profile(instrument: str, path: Path) -> CalibrationProfile:
             f"Run: uv run python -m research.calibration.cli calibrate --instrument {instrument}"
         )
     entry = data[instrument]
-    vs = entry["validation_scores"]
-    return CalibrationProfile(
-        instrument=instrument,
-        queue_model=entry["queue_model"],
-        exponent=entry.get("exponent"),
-        calibration_date=entry["calibration_date"],
-        data_days_used=entry["data_days_used"],
-        held_out_days=entry["held_out_days"],
-        composite_score=entry["composite_score"],
-        validation_scores=CalibrationScore(
-            fill_rate_score=vs["fill_rate_score"],
-            adverse_fill_score=vs["adverse_fill_score"],
-            pnl_direction_score=vs["pnl_direction_score"],
-            pnl_magnitude_score=vs["pnl_magnitude_score"],
-        ),
-        confidence=entry["confidence"],
-        expected_fill_rate_per_day=entry["expected_fill_rate_per_day"],
-    )
+    try:
+        vs = entry["validation_scores"]
+        return CalibrationProfile(
+            instrument=instrument,
+            queue_model=entry["queue_model"],
+            exponent=entry.get("exponent"),
+            calibration_date=entry["calibration_date"],
+            data_days_used=entry["data_days_used"],
+            held_out_days=entry["held_out_days"],
+            composite_score=entry["composite_score"],
+            validation_scores=CalibrationScore(
+                fill_rate_score=vs["fill_rate_score"],
+                adverse_fill_score=vs["adverse_fill_score"],
+                pnl_direction_score=vs["pnl_direction_score"],
+                pnl_magnitude_score=vs["pnl_magnitude_score"],
+            ),
+            confidence=entry["confidence"],
+            expected_fill_rate_per_day=entry["expected_fill_rate_per_day"],
+        )
+    except KeyError as exc:
+        raise CalibrationNotFoundError(
+            f"Calibration profile for {instrument} in {path} is missing required field: {exc}. "
+            "Profile may be corrupt or from an incompatible schema version."
+        ) from exc

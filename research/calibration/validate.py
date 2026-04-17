@@ -24,6 +24,8 @@ def split_days(
 
     If >= 10 days: 70/30 split. Otherwise leave-one-out (1 test day).
     """
+    if not days:
+        raise ValueError("split_days requires at least 1 day")
     if len(days) >= 10:
         n_train = int(len(days) * ratio)
         return days[:n_train], days[n_train:]

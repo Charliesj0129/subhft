@@ -9,6 +9,11 @@ from research.calibration.validate import (
 )
 
 
+def test_split_days_raises_on_empty():
+    with pytest.raises(ValueError, match="at least 1 day"):
+        split_days([])
+
+
 def test_split_days_sufficient_uses_70_30():
     days = [f"2026-03-{i:02d}" for i in range(1, 16)]  # 15 days
     train, test = split_days(days, ratio=0.7)
