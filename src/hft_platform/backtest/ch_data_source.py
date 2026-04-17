@@ -26,6 +26,11 @@ LOCAL_EVENT = 1 << 30
 BUY_EVENT = 1 << 29
 SELL_EVENT = 1 << 28
 
+# Mask to extract the raw event-type integer from the composite ev field.
+# Lower byte holds the event type (1=DEPTH, 2=TRADE, 3=DEPTH_CLEAR, 4=SNAPSHOT).
+# Upper bits hold flags (EXCH_EVENT, LOCAL_EVENT, BUY_EVENT, SELL_EVENT).
+EV_TYPE_MASK = 0xFF
+
 
 class DataValidationError(RuntimeError):
     """Raised when loaded market data fails post-load sanity checks."""
@@ -64,7 +69,36 @@ class ChDataSource:
         self.price_scale = price_scale
 
     def load_day(self, instrument: str, date: str, max_depth_levels: int = 5) -> np.ndarray:
-        raise NotImplementedError
+        """Load one trading day as hftbacktest event_dtype array.
+
+        Queries hft.market_data for the given instrument/date, converts rows
+        into hftbacktest-compatible events, and validates the result.
+        """
+        # Lazy import to keep module load lightweight
+        import clickhouse_connect  # noqa: PLC0415
+
+        client = clickhouse_connect.get_client(host=self.ch_host, port=self.ch_port)
+        query = """
+            SELECT
+                exch_ts, local_ts, event_type,
+                price, volume, side,
+                bid_prices, bid_volumes, ask_prices, ask_volumes
+            FROM hft.market_data
+            WHERE symbol = {instrument:String}
+              AND toDate(toDateTime64(exch_ts/1e9, 3)) = {date:Date}
+            ORDER BY exch_ts
+        """
+        df = client.query_df(
+            query, parameters={"instrument": instrument, "date": date},
+        )
+        if df.empty:
+            raise DataValidationError(
+                f"{instrument} {date}: no rows in hft.market_data"
+            )
+
+        events = assemble_day_events(df, price_scale=self.price_scale)
+        validate_events(events, instrument=instrument)
+        return events
 
     def load_days(self, instrument: str, dates: list[str]) -> list[np.ndarray]:
         return [self.load_day(instrument, d) for d in dates]
@@ -183,3 +217,42 @@ def assemble_day_events(df: "pd.DataFrame", price_scale: int) -> np.ndarray:
     if not chunks:
         return np.array([], dtype=dtype)
     return np.concatenate(chunks)
+
+
+def validate_events(events: np.ndarray, instrument: str) -> None:
+    """Post-load validation. Raises DataValidationError with diagnostic details.
+
+    Checks:
+    1. Event array is non-empty
+    2. At least one DEPTH_EVENT is present
+    3. At least one TRADE_EVENT is present
+    4. Timestamps (exch_ts) are monotonically non-decreasing
+    5. No negative prices on non-clear events
+    """
+    if len(events) == 0:
+        raise DataValidationError(f"{instrument}: empty event array")
+
+    ev_types = events["ev"] & EV_TYPE_MASK
+    has_depth = bool(np.any(ev_types == DEPTH_EVENT))
+    has_trade = bool(np.any(ev_types == TRADE_EVENT))
+    if not has_depth:
+        raise DataValidationError(f"{instrument}: no depth events in array")
+    if not has_trade:
+        raise DataValidationError(f"{instrument}: no trade events in array")
+
+    ts = events["exch_ts"]
+    if len(ts) > 1 and np.any(ts[1:] < ts[:-1]):
+        first_bad = int(np.argmax(ts[1:] < ts[:-1]))
+        raise DataValidationError(
+            f"{instrument}: timestamps not monotonic at row {first_bad}"
+        )
+
+    # Identify DEPTH_CLEAR rows to exclude from price check (clear events have px=0)
+    is_clear = ev_types == DEPTH_CLEAR_EVENT
+    non_clear = ~is_clear
+    prices = events["px"][non_clear]
+    nonzero_prices = prices[prices != 0.0]
+    if len(nonzero_prices) and np.any(nonzero_prices < 0):
+        raise DataValidationError(
+            f"{instrument}: negative prices detected (min={float(nonzero_prices.min())})"
+        )
