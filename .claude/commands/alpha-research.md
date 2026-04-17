@@ -9,6 +9,32 @@ description: Launch Alpha Research agent team — autonomous 24h maker/taker res
 
 支援 `--resume` 旗標（寫在 `$ARGUMENTS` 最前面）：Lead 在 T0 讀 `outputs/team_artifacts/alpha-research/resume_checkpoint.json`，若新鮮（updated_at < 24h 且 budget.json 匹配）則從 `current_round` / `current_stage` 繼續；否則在 chat 警告並開 fresh run。
 
+## Bootstrap (T-1 — 必先執行)
+
+**執行本指令的 session = Team Lead 本人**。你必須在 T0 之前依序完成以下 bootstrap，否則不會有真正的 agent team（只會變成你一個人跑）：
+
+1. **建立 team 容器**（使用 `TeamCreate` 工具）：
+   ```
+   TeamCreate({
+     team_name: "alpha-research-<YYYYMMDD-HHMM>",   // 以當前日期時間命名避免與舊 team config 衝突
+     description: "Autonomous maker/taker research loop (24h)",
+     agent_type: "team-lead"
+   })
+   ```
+
+2. **準備 shared context**：把 `.agent/teams/alpha-research/shared-context.template.yaml` 複製到 `outputs/team_artifacts/alpha-research/shared-context.yaml`，填入當前 round 的 `round_id`（R<N>，由 candidate_pool 或 user 指定）、`target_instrument`、`research_goal`（來自 `$ARGUMENTS` 或候選池第一項）。
+
+3. **並行 spawn 3 teammates**（單一訊息、三個 `Agent` tool call，都傳 `team_name`）：
+   - `Agent({team_name: <上面建立的>, name: "researcher", subagent_type: "general-purpose", model: "opus", prompt: <讀 .agent/teams/alpha-research/roles/researcher.md 完整內容，並附上 shared-context.yaml 內容>})`
+   - `Agent({team_name, name: "devils-advocate", subagent_type: "general-purpose", model: "opus", prompt: <讀 .agent/teams/alpha-research/roles/devils-advocate.md 完整內容 + shared-context>})`
+   - `Agent({team_name, name: "executor", subagent_type: "general-purpose", model: "opus", prompt: <讀 .agent/teams/alpha-research/roles/executor.md 完整內容 + shared-context>})`
+
+4. **初始化 artifacts**：在 `outputs/team_artifacts/alpha-research/` 寫 `budget.json`（`started_at`, `max_runtime_hours: 24`, `max_rounds: 20`, `max_promotes: 3`, `max_consecutive_kills: 8`）+ 初始 `candidate_pool.json`（若無 `--resume`）。
+
+5. Bootstrap 完成 → 進 T0（Init 或 Resume，見 README.md 的 Task Chain 章節）。後續每個 task 用 `TaskCreate` 建立、`TaskUpdate({owner: "researcher"|"devils-advocate"|"executor"|"team-lead"})` 指派，teammate 收到會自動開始工作；完成後 `TaskUpdate({status:"completed"})`，Lead 依 T0-T9 推進。
+
+若 `--resume`：略過步驟 1 與 4（使用既有的 `budget.json` 與 `candidate_pool.json`），仍需執行步驟 2-3（重新 spawn teammates；teammate 實例無法跨 session 保留）。
+
 ## 運行模式
 
 **Autonomous Continuous Mode（預設）** — Team Lead 持續推進研究，不需要每個 stage 等使用者確認。設計運行時間：最長 **24 小時** 或 budget 用盡（見 README.md 的 Budget-guard Hook 章節）。
