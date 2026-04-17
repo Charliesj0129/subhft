@@ -11,6 +11,7 @@ from structlog import get_logger
 
 from hft_platform.contracts.constants import MANUAL_STRATEGY_ID
 from hft_platform.core import timebase
+from hft_platform.core.symbol_classifier import is_futures_symbol
 from hft_platform.execution.positions import PositionStore
 from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.ops.platform_degrade import get_shared_platform_degrade_controller
@@ -530,8 +531,12 @@ class ReconciliationService:
 
     @staticmethod
     def _is_futures(symbol: str) -> bool:
-        """Heuristic: futures symbols contain common TAIFEX prefixes."""
-        return any(c in symbol.upper() for c in ("FD", "FX", "TX", "MX", "TE", "TF"))
+        """Heuristic: futures symbols contain common TAIFEX prefixes.
+
+        Delegates to :func:`hft_platform.core.symbol_classifier.is_futures_symbol`
+        to keep a single source of truth shared with ``startup_recon``.
+        """
+        return is_futures_symbol(symbol)
 
     def _compute_discrepancies(
         self, local_map: Dict[str, int], broker_map: Dict[str, int]

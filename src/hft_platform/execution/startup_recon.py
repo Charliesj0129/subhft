@@ -16,6 +16,7 @@ from structlog import get_logger
 
 from hft_platform.contracts.constants import MANUAL_STRATEGY_ID
 from hft_platform.core import timebase
+from hft_platform.core.symbol_classifier import is_futures_symbol
 from hft_platform.execution.positions import PositionStore
 from hft_platform.execution.reconciliation import (
     PositionDiscrepancy,
@@ -535,8 +536,12 @@ class StartupPositionVerifier:
 
     @staticmethod
     def _is_futures(symbol: str) -> bool:
-        """Heuristic: futures symbols contain common TAIFEX prefixes."""
-        return any(c in symbol.upper() for c in ("FD", "FX", "TX", "MX", "TE", "TF"))
+        """Heuristic: futures symbols contain common TAIFEX prefixes.
+
+        Delegates to :func:`hft_platform.core.symbol_classifier.is_futures_symbol`
+        to keep a single source of truth shared with ``ReconciliationService``.
+        """
+        return is_futures_symbol(symbol)
 
     def _write_to_store(self, positions: Dict[str, Dict[str, Any]], account_id: str) -> int:
         """Write recovered positions into PositionStore via load_recovery.
