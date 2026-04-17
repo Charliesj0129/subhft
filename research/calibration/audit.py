@@ -41,39 +41,42 @@ _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def audit_ck_export_parquet(directory: Path) -> list[InstrumentAuditResult]:
-    """Audit CK export parquet files in a directory.
+    """Audit CK export parquet files organized by instrument subdirectory.
 
-    Expected filename pattern: <INSTRUMENT>_<YYYY-MM-DD>.parquet
-    Returns one InstrumentAuditResult per instrument found.
+    Expected layout: ``<directory>/<INSTRUMENT>/<DATE>[_partial].parquet``
+    For example: ``research/data/ck_export/TXFD6/2026-01-27.parquet``.
+
+    Returns one InstrumentAuditResult per instrument subdirectory found.
     """
     directory = Path(directory)
     if not directory.exists():
         return []
 
-    files = sorted(directory.glob("*.parquet"))
-    if not files:
-        return []
-
-    per_instrument: dict[str, list[tuple[pd.DataFrame, str, str]]] = {}
-    for f in files:
-        parts = f.stem.split("_")
-        if len(parts) < 2 or not _DATE_RE.match(parts[1]):
-            continue
-        instrument = parts[0]
-        date = parts[1]
-        try:
-            df = pd.read_parquet(f)
-        except Exception:
-            continue
-        per_instrument.setdefault(instrument, []).append((df, date, f.name))
-
     results: list[InstrumentAuditResult] = []
-    for instrument, entries in per_instrument.items():
-        dates = sorted(e[1] for e in entries)
-        total_rows = sum(len(e[0]) for e in entries)
+    for inst_dir in sorted(p for p in directory.iterdir() if p.is_dir()):
+        instrument = inst_dir.name
+        files = sorted(inst_dir.glob("*.parquet"))
+
+        entries: list[tuple[int, list[str], str, str]] = []
+        for f in files:
+            stem = f.stem  # e.g., "2026-01-27" or "2026-02-03_partial"
+            date_part = stem.split("_", 1)[0]
+            if not _DATE_RE.match(date_part):
+                continue
+            try:
+                df = pd.read_parquet(f)
+            except Exception:
+                continue
+            entries.append((len(df), list(df.columns), date_part, f.name))
+
+        if not entries:
+            continue
+
+        dates = sorted(e[2] for e in entries)
+        total_rows = sum(e[0] for e in entries)
         fill_cols: set[str] = set()
-        for df, _, _ in entries:
-            fill_cols.update(df.columns)
+        for _, cols, _, _ in entries:
+            fill_cols.update(cols)
 
         has_queue_pos = "queue_position" in fill_cols
         has_decision_price = "decision_price" in fill_cols or "arrival_price" in fill_cols
@@ -158,15 +161,19 @@ def audit_clickhouse_fills(client: Any) -> list[InstrumentAuditResult]:
 def find_l2_data_days(data_dir: Path, instrument: str) -> list[str]:
     """Find trading days with L2 data for an instrument.
 
-    Expected filename pattern: <INSTRUMENT>_<YYYY-MM-DD>_l2.hftbt.npz
+    Expected layout: ``<data_dir>/<instrument_lowercase>/<INSTRUMENT>_<DATE>_l2.hftbt.npz``
+    For example: ``research/data/raw/tmfd6/TMFD6_2026-01-26_l2.hftbt.npz``.
     """
     data_dir = Path(data_dir)
     if not data_dir.exists():
         return []
+    inst_dir = data_dir / instrument.lower()
+    if not inst_dir.exists() or not inst_dir.is_dir():
+        return []
     prefix = f"{instrument}_"
     suffix = "_l2.hftbt.npz"
     days: list[str] = []
-    for f in data_dir.iterdir():
+    for f in inst_dir.iterdir():
         name = f.name
         if name.startswith(prefix) and name.endswith(suffix):
             date = name[len(prefix):-len(suffix)]

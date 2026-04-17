@@ -47,7 +47,7 @@ def test_instrument_audit_result_to_dict():
 
 
 def test_audit_ck_export_parquet_returns_results(sample_ck_export_parquet):
-    results = audit_ck_export_parquet(sample_ck_export_parquet.parent)
+    results = audit_ck_export_parquet(sample_ck_export_parquet)
     assert len(results) == 1
     r = results[0]
     assert r.instrument == "TMFD6"
@@ -63,11 +63,12 @@ def test_audit_ck_export_parquet_empty_dir_returns_empty(tmp_path):
 
 
 def test_audit_ck_export_parquet_skips_invalid_date_filename(tmp_path):
-    """Files like 'TMFD6_bad_extra.parquet' (non-ISO date) should be skipped."""
-    import pandas as pd
-    bad = tmp_path / "TMFD6_bad_extra.parquet"
+    """Files like 'bad_extra.parquet' (non-ISO date stem) should be skipped."""
+    inst_dir = tmp_path / "TMFD6"
+    inst_dir.mkdir()
+    bad = inst_dir / "bad_extra.parquet"
     pd.DataFrame({"a": [1]}).to_parquet(bad)
-    good = tmp_path / "TMFD6_2026-03-19.parquet"
+    good = inst_dir / "2026-03-19.parquet"
     pd.DataFrame({"a": [1]}).to_parquet(good)
     results = audit_ck_export_parquet(tmp_path)
     # Only the good file should be counted
@@ -76,9 +77,11 @@ def test_audit_ck_export_parquet_skips_invalid_date_filename(tmp_path):
     assert results[0].date_range == ("2026-03-19", "2026-03-19")
 
 
-def test_audit_ck_export_parquet_accepts_partial_suffix(tmp_path):
-    """Files like 'TXFC6_2026-03-17_partial.parquet' should be accepted."""
-    f = tmp_path / "TXFC6_2026-03-17_partial.parquet"
+def test_audit_ck_export_parquet_accepts_partial_day_file(tmp_path):
+    """Files like '2026-03-17_partial.parquet' should be accepted as the date-only day."""
+    inst_dir = tmp_path / "TXFC6"
+    inst_dir.mkdir()
+    f = inst_dir / "2026-03-17_partial.parquet"
     pd.DataFrame({"a": [1, 2, 3]}).to_parquet(f)
     results = audit_ck_export_parquet(tmp_path)
     assert len(results) == 1
@@ -109,9 +112,13 @@ def test_audit_clickhouse_fills_returns_results():
 
 
 def test_find_l2_data_days(tmp_path):
-    (tmp_path / "TMFD6_2026-03-01_l2.hftbt.npz").touch()
-    (tmp_path / "TMFD6_2026-03-02_l2.hftbt.npz").touch()
-    (tmp_path / "TXFD6_2026-03-01_l2.hftbt.npz").touch()
+    tmfd6_dir = tmp_path / "tmfd6"
+    tmfd6_dir.mkdir()
+    (tmfd6_dir / "TMFD6_2026-03-01_l2.hftbt.npz").touch()
+    (tmfd6_dir / "TMFD6_2026-03-02_l2.hftbt.npz").touch()
+    txfd6_dir = tmp_path / "txfd6"
+    txfd6_dir.mkdir()
+    (txfd6_dir / "TXFD6_2026-03-01_l2.hftbt.npz").touch()
     days = find_l2_data_days(tmp_path, "TMFD6")
     assert days == ["2026-03-01", "2026-03-02"]
 
@@ -119,9 +126,11 @@ def test_find_l2_data_days(tmp_path):
 def test_audit_all_computes_intersection(sample_ck_export_parquet, tmp_path):
     data_dir = tmp_path / "raw"
     data_dir.mkdir()
-    (data_dir / "TMFD6_2026-01-27_l2.hftbt.npz").touch()
+    tmfd6_dir = data_dir / "tmfd6"
+    tmfd6_dir.mkdir()
+    (tmfd6_dir / "TMFD6_2026-01-27_l2.hftbt.npz").touch()
     report = audit_all(
-        ck_export_dir=sample_ck_export_parquet.parent,
+        ck_export_dir=sample_ck_export_parquet,
         l2_data_dir=data_dir,
         ch_client=None,
     )
