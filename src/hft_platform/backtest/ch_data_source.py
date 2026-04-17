@@ -8,7 +8,10 @@ Eliminates the .npz intermediate file and its associated export bugs
 """
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 import numpy as np
 
@@ -126,3 +129,57 @@ def build_bidask_events(
         ))
 
     return np.array(rows, dtype=dtype)
+
+
+def build_tick_event(
+    exch_ts: int, local_ts: int,
+    price: int, volume: int, side: str,
+    price_scale: int,
+) -> np.ndarray:
+    """Build one hftbacktest event for a trade tick."""
+    dtype = _event_dtype()
+    side_flag = BUY_EVENT if side == "Buy" else SELL_EVENT
+    return np.array(
+        [(
+            TRADE_EVENT | EXCH_EVENT | LOCAL_EVENT | side_flag,
+            exch_ts, local_ts,
+            price / price_scale, float(volume),
+            0, 0, 0.0,
+        )],
+        dtype=dtype,
+    )[0]
+
+
+def assemble_day_events(df: "pd.DataFrame", price_scale: int) -> np.ndarray:
+    """Convert one day of ClickHouse market_data rows into one hftbacktest event array.
+
+    Rows must have columns: exch_ts, local_ts, event_type, and either
+      - BidAsk: bid_prices, bid_volumes, ask_prices, ask_volumes (list[int])
+      - Tick: price, volume, side
+
+    Returns numpy structured array sorted by exch_ts.
+    """
+    dtype = _event_dtype()
+    chunks: list[np.ndarray] = []
+
+    df_sorted = df.sort_values("exch_ts", kind="stable").reset_index(drop=True)
+    for row in df_sorted.itertuples(index=False):
+        if row.event_type == "BidAsk":
+            chunk = build_bidask_events(
+                exch_ts=int(row.exch_ts), local_ts=int(row.local_ts),
+                bid_prices=list(row.bid_prices), bid_volumes=list(row.bid_volumes),
+                ask_prices=list(row.ask_prices), ask_volumes=list(row.ask_volumes),
+                price_scale=price_scale,
+            )
+            chunks.append(chunk)
+        elif row.event_type == "Tick":
+            event = build_tick_event(
+                exch_ts=int(row.exch_ts), local_ts=int(row.local_ts),
+                price=int(row.price), volume=int(row.volume), side=str(row.side),
+                price_scale=price_scale,
+            )
+            chunks.append(np.array([event], dtype=dtype))
+
+    if not chunks:
+        return np.array([], dtype=dtype)
+    return np.concatenate(chunks)

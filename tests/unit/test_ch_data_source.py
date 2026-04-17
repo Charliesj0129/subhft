@@ -1,3 +1,5 @@
+import numpy as np
+import pandas as pd
 import pytest
 
 from hft_platform.backtest.ch_data_source import (
@@ -5,10 +7,13 @@ from hft_platform.backtest.ch_data_source import (
     DEPTH_CLEAR_EVENT,
     DEPTH_EVENT,
     SELL_EVENT,
+    TRADE_EVENT,
     BacktestDataSource,
     ChDataSource,
     DataValidationError,
+    assemble_day_events,
     build_bidask_events,
+    build_tick_event,
 )
 
 
@@ -87,3 +92,44 @@ def test_build_bidask_events_skips_zero_volume():
     )
     # 1 clear + 1 bid + 1 ask = 3 (not 4)
     assert len(events) == 3
+
+
+def test_build_tick_event_buy():
+    event = build_tick_event(
+        exch_ts=1_700_000_000_000_000_000,
+        local_ts=1_700_000_000_001_000_000,
+        price=17000_500_000, volume=2, side="Buy",
+        price_scale=1_000_000,
+    )
+    assert event["ev"] & TRADE_EVENT
+    assert event["ev"] & BUY_EVENT
+    assert event["px"] == pytest.approx(17000.5)
+    assert event["qty"] == 2.0
+
+
+def test_build_tick_event_sell():
+    event = build_tick_event(
+        exch_ts=1, local_ts=2,
+        price=17000_000_000, volume=1, side="Sell",
+        price_scale=1_000_000,
+    )
+    assert event["ev"] & TRADE_EVENT
+    assert event["ev"] & SELL_EVENT
+
+
+def test_assemble_day_events_sorts_by_exch_ts():
+    df = pd.DataFrame({
+        "exch_ts": [300, 100, 200],
+        "local_ts": [301, 101, 201],
+        "event_type": ["Tick", "BidAsk", "Tick"],
+        "price": [17000_500_000, 0, 17001_000_000],
+        "volume": [1, 0, 2],
+        "side": ["Buy", None, "Sell"],
+        "bid_prices": [None, [17000_000_000, 16999_000_000], None],
+        "bid_volumes": [None, [5, 10], None],
+        "ask_prices": [None, [17001_000_000, 17002_000_000], None],
+        "ask_volumes": [None, [3, 7], None],
+    })
+    events = assemble_day_events(df, price_scale=1_000_000)
+    # Timestamps must be monotonically non-decreasing
+    assert np.all(events["exch_ts"][1:] >= events["exch_ts"][:-1])
