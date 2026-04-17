@@ -32,8 +32,16 @@ class PassiveQuoteProbe:
         self.max_pos = max_pos
 
     def on_tick(
-        self, bid: int, ask: int, mid: float, position: int,
+        self,
+        bid: int,
+        ask: int,
+        mid: float,  # noqa: ARG002 - reserved for skewed-quoting variants
+        position: int,
     ) -> ProbeAction:
+        """Generate quote action based on best bid/ask and current position.
+
+        `mid` is currently unused but reserved for future skewed-quoting variants.
+        """
         if ask <= bid:
             return ProbeAction(None, None, self.qty)
         post_bid = bid if position < self.max_pos else None

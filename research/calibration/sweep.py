@@ -7,7 +7,7 @@ and selects the highest-scoring candidate.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from research.calibration.scoring import (
     CalibrationScore,
@@ -36,7 +36,7 @@ class SweepResult:
     instrument: str
     best_candidate: QueueModelCandidate
     best_score: CalibrationScore
-    all_results: list[tuple[QueueModelCandidate, CalibrationScore]] = field(default_factory=list)
+    all_results: tuple[tuple[QueueModelCandidate, CalibrationScore], ...] = ()
 
 
 def generate_candidates(
@@ -46,15 +46,18 @@ def generate_candidates(
     exponent_step: float,
 ) -> list[QueueModelCandidate]:
     """Build the grid of candidates to evaluate."""
+    if exponent_step <= 0:
+        raise ValueError(f"exponent_step must be positive, got {exponent_step}")
+
     candidates: list[QueueModelCandidate] = []
-    for qm in queue_models:
-        if qm.startswith("power_prob"):
-            exponent = exponent_min
-            while exponent <= exponent_max + 1e-9:
-                candidates.append(QueueModelCandidate(qm, round(exponent, 2)))
-                exponent += exponent_step
+    for queue_model in queue_models:
+        if queue_model.startswith("power_prob"):
+            n_steps = round((exponent_max - exponent_min) / exponent_step) + 1
+            for i in range(n_steps):
+                exponent = round(exponent_min + i * exponent_step, 4)
+                candidates.append(QueueModelCandidate(queue_model, exponent))
         else:
-            candidates.append(QueueModelCandidate(qm, None))
+            candidates.append(QueueModelCandidate(queue_model, None))
     return candidates
 
 
@@ -82,10 +85,15 @@ def sweep_exponent(
         score = compute_score(sim_days, live_days)
         all_results.append((cand, score))
 
+    if not all_results:
+        raise ValueError(
+            f"No calibration results for instrument '{instrument}': "
+            "candidates list is empty or all calibration_days are absent from live_fills."
+        )
     best_cand, best_score = max(all_results, key=lambda x: x[1].composite())
     return SweepResult(
         instrument=instrument,
         best_candidate=best_cand,
         best_score=best_score,
-        all_results=all_results,
+        all_results=tuple(all_results),
     )
