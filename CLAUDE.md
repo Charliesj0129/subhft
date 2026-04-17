@@ -50,7 +50,7 @@ Exchange → BrokerFacade(Shioaji|Fubon) → Normalizer → LOBEngine → Featur
 
 > **Multi-broker**: The `BrokerFacade` is a polymorphic adapter selected at startup by `config.broker` / `HFT_BROKER`. Each implementation exposes identical `login()`, `subscribe()`, `place_order()`, `cancel_order()` interfaces. See `docs/architecture/multi-broker-support.md` for the ADR.
 
-**Feature Engine** (Phase 18→v3): `FeatureEngine` sits between `LOBEngine` and `RingBufferBus`, computing 27 shared features across 3 schema versions (`lob_shared_v1`:16, `lob_shared_v2`:22, `lob_shared_v3`:27 — default). v1: 8 stateless + 8 rolling (OFI L1, EMA spread/imbalance). v2 adds: depth-normalized OFI, return autocovariance, TOB survival, impact surprise, deep depth momentum, trade-signed toxicity. v3 adds: multi-window EMA aggregation (5s/30s/300s OFI, imbalance, spread). Enabled by default (`HFT_FEATURE_ENGINE_ENABLED=1`); disable with `HFT_FEATURE_ENGINE_ENABLED=0`. Companion modules: `BurstDetector` (tick intensity surge detection). See `feature/engine.py`, `feature/registry.py`. Production hardening (Rust kernel promotion, parity testing) tracked in `docs/TODO.md`.
+**Feature Engine** (Phase 18→v3): `FeatureEngine` sits between `LOBEngine` and `RingBufferBus`, computing 27 shared features across 3 schema versions (`lob_shared_v1`:16, `lob_shared_v2`:22, `lob_shared_v3`:27 — default). v1: 8 stateless + 8 rolling (OFI L1, EMA spread/imbalance). v2 adds: depth-normalized OFI, return autocovariance, TOB survival, impact surprise, deep depth momentum, trade-signed toxicity. v3 adds: multi-window EMA aggregation (5s/30s/300s OFI, imbalance, spread). Enabled by default (`HFT_FEATURE_ENGINE_ENABLED=1`); disable with `HFT_FEATURE_ENGINE_ENABLED=0`. See `feature/engine.py`, `feature/registry.py`. Production hardening (Rust kernel promotion, parity testing) tracked in `docs/TODO.md`.
 
 ### Latency Realism Guard (Research / Backtest / Promotion)
 
@@ -72,9 +72,9 @@ Mandatory policy:
 | ------------- | ------------------------------------------------------------------------------------ | ------------------------------------------- |
 | Control       | `services/bootstrap.py`, `services/system.py`                                        | Bounded queues, service graph, supervision  |
 | Market Data   | `feed_adapter/shioaji_client.py`, `normalizer.py`, `lob_engine.py`; fused path: `RustNormalizerLobFused` / `RustNormalizerFeatureFusedV1` | Ingest → normalize → LOB state (fused Rust path optional via `HFT_FUSED_NORMALIZER=1`) |
-| Feature       | `feature/engine.py`, `feature/registry.py`, `feature/burst_detector.py`              | 27 LOB-derived features (v3), burst detection, research/live parity |
+| Feature       | `feature/engine.py`, `feature/registry.py`                                            | 27 LOB-derived features (v3), research/live parity                  |
 | Decision      | `strategy/runner.py`, `risk/engine.py`                                               | Strategy dispatch → risk validation         |
-| Execution     | `order/adapter.py`, `execution/router.py`, `execution/positions.py`, `execution/execution_optimizer.py`, `execution/checkpoint.py`, `execution/startup_recon.py` | Broker API, fill routing, position tracking, limit/market decision, checkpoint, startup recon |
+| Execution     | `order/adapter.py`, `execution/router.py`, `execution/positions.py`, `execution/checkpoint.py`, `execution/startup_recon.py` | Broker API, fill routing, position tracking, checkpoint, startup recon |
 | Persistence   | `recorder/worker.py`, `recorder/batcher.py`, `recorder/writer.py`, `recorder/wal.py` | ClickHouse + WAL fallback                   |
 | Observability | `observability/metrics.py`, `risk/storm_guard.py`                                    | Prometheus metrics, StormGuard FSM          |
 
@@ -92,7 +92,6 @@ These modules run outside the tick-processing loop and are not latency-critical.
 | Ops            | `ops/`                       | SessionGovernor, AutonomyMonitor, BackupManager, PositionFlattener      |
 | Analytics      | `analytics/`                 | ClickHouse query templates for offline analysis                         |
 | Diagnostics    | `diagnostics/`               | Event replay, decision trace sampling for post-mortem                   |
-| Data Quality   | `data_quality/`              | Completeness checks, outlier detection, feed gap profiling              |
 
 Module documentation: `docs/modules/<module>.md` for each service.
 

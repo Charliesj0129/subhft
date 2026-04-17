@@ -6,7 +6,6 @@ import numpy as np
 import pytest
 
 from hft_platform.backtest import adapter as hbt_adapter
-from hft_platform.backtest._equity_core import compute_equity_from_positions
 from hft_platform.strategy.base import BaseStrategy
 
 
@@ -307,29 +306,6 @@ def test_apply_latency_deterministic():
     np.testing.assert_array_equal(r1, r2)
     # Latency-applied positions must be same length as input
     assert len(r1) == len(desired)
-
-
-# ---------------------------------------------------------------------------
-# 12. Equity curve fee deduction
-# ---------------------------------------------------------------------------
-def test_equity_curve_fee_deduction():
-    prices = np.array([100.0, 100.0, 100.0])
-    positions = np.array([0.0, 1.0, 0.0])
-    eq = compute_equity_from_positions(prices, positions, fee_rate=0.01, initial_equity=1000.0)
-    assert eq[-1] < 1000.0  # fees reduced equity
-
-
-# ---------------------------------------------------------------------------
-# 13. Adapter/runner equity parity (same function)
-# ---------------------------------------------------------------------------
-def test_adapter_runner_equity_parity():
-    """Both adapter and runner use same compute_equity_from_positions."""
-    prices = np.array([100.0, 101.0, 102.0, 101.0, 100.0])
-    positions = np.array([1.0, 1.0, -1.0, -1.0, 0.0])
-    eq1 = compute_equity_from_positions(prices, positions, fee_rate=0.001)
-    eq2 = compute_equity_from_positions(prices, positions, fee_rate=0.001)
-    np.testing.assert_array_equal(eq1, eq2)
-    assert len(eq1) == len(prices)
 
 
 # ---------------------------------------------------------------------------

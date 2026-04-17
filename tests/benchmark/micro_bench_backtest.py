@@ -14,10 +14,7 @@ import json
 import time
 from pathlib import Path
 
-import numpy as np
-
 from hft_platform.backtest import adapter as hbt_adapter
-from hft_platform.backtest._equity_core import compute_equity_from_positions
 from hft_platform.strategy.base import BaseStrategy
 
 
@@ -157,22 +154,6 @@ def test_bench_fill_stats_vectorized(monkeypatch):
     print(f"\nFill stats ({n} fills): {elapsed_ms:.3f} ms")
     assert stats["n_fill_events"] == n
     assert elapsed_ms < 50, f"fill_stats too slow: {elapsed_ms:.3f} ms"
-
-
-def test_bench_equity_core_100k():
-    """Measure compute_equity_from_positions for 100K ticks."""
-    np.random.seed(42)
-    prices = np.cumsum(np.random.randn(N_TICKS)) + 1000.0
-    positions = np.clip(np.cumsum(np.sign(np.random.randn(N_TICKS))), -5, 5).astype(np.float64)
-
-    t0 = time.perf_counter_ns()
-    eq = compute_equity_from_positions(prices, positions, fee_rate=0.001)
-    elapsed_ns = time.perf_counter_ns() - t0
-
-    elapsed_ms = elapsed_ns / 1_000_000.0
-    print(f"\nEquity core ({N_TICKS} ticks): {elapsed_ms:.3f} ms")
-    assert len(eq) == N_TICKS
-    assert elapsed_ms < 50, f"Equity computation too slow: {elapsed_ms:.3f} ms"
 
 
 def test_bench_save_baseline(monkeypatch):  # noqa: no-assert
