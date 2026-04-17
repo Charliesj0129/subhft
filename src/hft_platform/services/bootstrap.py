@@ -965,7 +965,12 @@ class SystemBootstrapper:
             exposure_store = ExposureStore()
             dedup_store = IdempotencyStore()
             dedup_store.load()
-            gateway_policy = GatewayPolicy(storm_guard=storm_guard)
+            # Bug 22: wire position_provider so GatewayPolicy can allow
+            # reducing orders through HALT/DEGRADE (prevents R47 cover deadlock).
+            gateway_policy = GatewayPolicy(
+                storm_guard=storm_guard,
+                position_provider=risk_engine._current_strategy_symbol_net_position,
+            )
             gateway_service = GatewayService(
                 channel=intent_channel,
                 risk_engine=risk_engine,

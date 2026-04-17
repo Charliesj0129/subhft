@@ -335,10 +335,15 @@ class GatewayService:
         sg_state = self._storm_guard.state
         _strategy_id = str(getattr(intent, "strategy_id", ""))
         if is_typed_view and hasattr(self._policy, "gate_typed"):
+            # Bug 22: pass symbol/side/qty so typed fast-path also enables
+            # reduce-only bypass in HALT/DEGRADE (same as slow path via gate()).
             allowed, reason = self._policy.gate_typed(
                 intent_type_value,
                 sg_state,
                 strategy_id=_strategy_id,
+                symbol=str(getattr(intent, "symbol", "")),
+                side=int(getattr(intent, "side", 0) or 0),
+                qty=int(getattr(intent, "qty", 0) or 0),
             )
         else:
             allowed, reason = self._policy.gate(intent, sg_state)

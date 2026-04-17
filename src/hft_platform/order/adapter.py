@@ -257,8 +257,24 @@ class OrderAdapter:
         """
         self._actual_to_config = {actual: config for config, actual in alias_map.items()}
 
-    def _send_dispatch_rejection(self, intent: OrderIntent, reason_code: str) -> None:
-        """Non-blocking rejection feedback for dispatch failures."""
+    def _send_dispatch_rejection(
+        self,
+        intent: OrderIntent,
+        reason_code: str,
+        phantom_pending: bool = False,
+    ) -> None:
+        """Non-blocking rejection feedback for dispatch failures.
+
+        Bug 23 (2026-04-17): when ``phantom_pending=True``, the intent was
+        registered as a phantom candidate (likely reached the broker despite
+        the dispatch-path exception). To prevent the strategy from releasing
+        its pending counter and emitting a duplicate order (which then causes
+        max_pos breach when both phantoms fill), flag ``was_approved=True``
+        so strategy-side ``on_risk_feedback`` skips the pending decrement.
+        The phantom fill (if any) will arrive later and update state via
+        ``on_fill``. If no fill arrives, pending remains elevated — a safe
+        liveness loss preferred over an unsafe max_pos breach.
+        """
         if self._rejection_sink is None:
             return
         try:
@@ -272,6 +288,7 @@ class OrderAdapter:
                     reason_code=reason_code,
                     timestamp_ns=timebase.now_ns(),
                     side=getattr(intent, "side", None),
+                    was_approved=phantom_pending,
                 )
             )
         except asyncio.QueueFull:
@@ -2004,13 +2021,25 @@ class OrderAdapter:
                         self.metrics.order_reject_total.inc()
                         self.circuit_breaker.record_failure()
                         self._update_cb_metric()
-                        self._send_dispatch_rejection(item.intent, "dispatch_failed")
-                        self.strategy_cb_mgr.record_failure(item.intent.strategy_id)
+                        # Bug 23: for NEW/FORCE_FLAT the order may still have
+                        # reached the broker (phantom). Flag feedback with
+                        # was_approved=True so strategy keeps pending elevated
+                        # and doesn't emit a duplicate on the next tick.
+                        _intent = item.intent
+                        _is_phantom_candidate = _intent.intent_type in (
+                            IntentType.NEW,
+                            IntentType.FORCE_FLAT,
+                        )
+                        self._send_dispatch_rejection(
+                            _intent,
+                            "dispatch_failed",
+                            phantom_pending=_is_phantom_candidate,
+                        )
+                        self.strategy_cb_mgr.record_failure(_intent.strategy_id)
                         # D-03: Exception may occur AFTER broker received the order
                         # (e.g., during ID registration post-place_order). Mark as
                         # phantom so fills arriving later can be reconciled.
-                        _intent = item.intent
-                        if _intent.intent_type in (IntentType.NEW, IntentType.FORCE_FLAT):
+                        if _is_phantom_candidate:
                             _phantom_key = f"{_intent.strategy_id}:{_intent.intent_id}"
                             self._phantom_order_keys[_phantom_key] = (time.monotonic(), _intent.symbol)
                             if len(self._phantom_order_keys) > self._phantom_order_max:
