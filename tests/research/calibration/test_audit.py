@@ -55,6 +55,7 @@ def test_audit_ck_export_parquet_returns_results(sample_ck_export_parquet):
     assert r.n_fills == 10
     assert r.n_trading_days == 1
     assert "missing_queue_pos" in r.quality_flags
+    assert r.trading_dates == ["2026-01-27"]
 
 
 def test_audit_ck_export_parquet_empty_dir_returns_empty(tmp_path):
@@ -109,6 +110,7 @@ def test_audit_clickhouse_fills_returns_results():
     tmfd = next(r for r in results if r.instrument == "TMFD6")
     assert tmfd.n_fills == 30
     assert tmfd.n_trading_days == 3
+    assert tmfd.trading_dates == ["2026-03-01", "2026-03-02", "2026-03-03"]
 
 
 def test_find_l2_data_days(tmp_path):

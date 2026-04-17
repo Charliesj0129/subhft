@@ -32,6 +32,7 @@ class InstrumentAuditResult:
     fill_rate_per_day: float
     instruments_found: list[str] = field(default_factory=list)
     quality_flags: list[str] = field(default_factory=list)
+    trading_dates: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -72,7 +73,7 @@ def audit_ck_export_parquet(directory: Path) -> list[InstrumentAuditResult]:
         if not entries:
             continue
 
-        dates = sorted(e[2] for e in entries)
+        unique_dates = sorted(set(e[2] for e in entries))
         total_rows = sum(e[0] for e in entries)
         fill_cols: set[str] = set()
         for _, cols, _, _ in entries:
@@ -91,21 +92,22 @@ def audit_ck_export_parquet(directory: Path) -> list[InstrumentAuditResult]:
             flags.append("missing_queue_pos")
         if not has_decision_price:
             flags.append("missing_decision_price")
-        if total_rows < 5 * len(entries):
+        if total_rows < 5 * len(unique_dates):
             flags.append("sparse_data")
 
         results.append(InstrumentAuditResult(
             instrument=instrument,
             source="ck_export",
-            date_range=(dates[0], dates[-1]),
-            n_trading_days=len(entries),
+            date_range=(unique_dates[0], unique_dates[-1]),
+            n_trading_days=len(unique_dates),
             n_fills=total_rows,
             n_fills_with_queue_position=n_with_qp,
             n_fills_with_decision_price=n_with_dp,
             n_fills_with_latency=n_with_lat,
-            fill_rate_per_day=total_rows / max(len(entries), 1),
+            fill_rate_per_day=total_rows / max(len(unique_dates), 1),
             instruments_found=[instrument],
             quality_flags=flags,
+            trading_dates=unique_dates,
         ))
     return results
 
@@ -154,6 +156,7 @@ def audit_clickhouse_fills(client: Any) -> list[InstrumentAuditResult]:
             fill_rate_per_day=total_fills / max(n_days, 1),
             instruments_found=[instrument],
             quality_flags=flags,
+            trading_dates=dates,
         ))
     return results
 
@@ -201,8 +204,7 @@ def audit_all(
         })
         bucket["sources"].append(r.to_dict())
         bucket["total_fills"] += r.n_fills
-        bucket["fill_dates"].add(r.date_range[0])
-        bucket["fill_dates"].add(r.date_range[1])
+        bucket["fill_dates"].update(r.trading_dates)
 
     for instrument, bucket in per_instrument.items():
         l2_days = set(find_l2_data_days(l2_data_dir, instrument))
