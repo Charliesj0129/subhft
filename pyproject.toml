@@ -74,6 +74,7 @@ packages = ["src/hft_platform"]
 
 [tool.pytest.ini_options]
 addopts = "--cov=src/hft_platform --cov-branch --cov-report=term-missing --timeout=30"
+pythonpath = ["."]
 norecursedirs = [
     "research",
     ".venv",

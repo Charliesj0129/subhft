@@ -118,6 +118,8 @@ research/knowledge/summaries/**/*.pdf
 !research/knowledge/reports/**/*.md
 !research/registry/
 !research/registry/**/*.py
+!research/calibration/
+!research/calibration/**/*.py
 !research/data/
 research/data/*
 !research/data/raw/
