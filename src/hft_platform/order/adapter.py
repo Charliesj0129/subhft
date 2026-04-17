@@ -453,8 +453,18 @@ class OrderAdapter:
         side = getattr(fill_event, "side", None)
         if not symbol:
             return None
+        # Bug 16: None side on a fill event is a data integrity error. Previously
+        # defaulted to BUY which could misattribute phantom fills. Skip resolution
+        # and log; upstream reconciliation will surface the orphan via metrics.
+        if side is None:
+            logger.warning(
+                "phantom_fill_resolution_skipped_none_side",
+                symbol=symbol,
+                fill_event=repr(fill_event),
+            )
+            return None
         # Check pending_fill_index first — it has symbol+side specificity
-        side_name = "SELL" if side is not None and int(side) == 1 else "BUY"
+        side_name = "SELL" if int(side) == 1 else "BUY"
         pf_key = f"{symbol}:{side_name}"
         with self._pending_fill_lock:
             pending = self._pending_fill_index.get(pf_key)
