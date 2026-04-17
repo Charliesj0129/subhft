@@ -1,5 +1,6 @@
 import pytest
-from research.calibration.audit import InstrumentAuditResult
+
+from research.calibration.audit import InstrumentAuditResult, audit_ck_export_parquet
 
 
 def test_instrument_audit_result_is_frozen():
@@ -36,11 +37,6 @@ def test_instrument_audit_result_to_dict():
     assert isinstance(d["quality_flags"], list)
 
 
-from pathlib import Path
-
-from research.calibration.audit import audit_ck_export_parquet
-
-
 def test_audit_ck_export_parquet_returns_results(sample_ck_export_parquet):
     results = audit_ck_export_parquet(sample_ck_export_parquet.parent)
     assert len(results) == 1
@@ -55,3 +51,28 @@ def test_audit_ck_export_parquet_returns_results(sample_ck_export_parquet):
 def test_audit_ck_export_parquet_empty_dir_returns_empty(tmp_path):
     results = audit_ck_export_parquet(tmp_path)
     assert results == []
+
+
+def test_audit_ck_export_parquet_skips_invalid_date_filename(tmp_path):
+    """Files like 'TMFD6_bad_extra.parquet' (non-ISO date) should be skipped."""
+    import pandas as pd
+    bad = tmp_path / "TMFD6_bad_extra.parquet"
+    pd.DataFrame({"a": [1]}).to_parquet(bad)
+    good = tmp_path / "TMFD6_2026-03-19.parquet"
+    pd.DataFrame({"a": [1]}).to_parquet(good)
+    results = audit_ck_export_parquet(tmp_path)
+    # Only the good file should be counted
+    assert len(results) == 1
+    assert results[0].n_trading_days == 1
+    assert results[0].date_range == ("2026-03-19", "2026-03-19")
+
+
+def test_audit_ck_export_parquet_accepts_partial_suffix(tmp_path):
+    """Files like 'TXFC6_2026-03-17_partial.parquet' should be accepted."""
+    import pandas as pd
+    f = tmp_path / "TXFC6_2026-03-17_partial.parquet"
+    pd.DataFrame({"a": [1, 2, 3]}).to_parquet(f)
+    results = audit_ck_export_parquet(tmp_path)
+    assert len(results) == 1
+    assert results[0].instrument == "TXFC6"
+    assert results[0].date_range == ("2026-03-17", "2026-03-17")

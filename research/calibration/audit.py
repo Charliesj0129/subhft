@@ -6,6 +6,7 @@ or sparse coverage.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -32,6 +33,9 @@ class InstrumentAuditResult:
         return asdict(self)
 
 
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
 def audit_ck_export_parquet(directory: Path) -> list[InstrumentAuditResult]:
     """Audit CK export parquet files in a directory.
 
@@ -49,7 +53,7 @@ def audit_ck_export_parquet(directory: Path) -> list[InstrumentAuditResult]:
     per_instrument: dict[str, list[tuple[pd.DataFrame, str, str]]] = {}
     for f in files:
         parts = f.stem.split("_")
-        if len(parts) < 2:
+        if len(parts) < 2 or not _DATE_RE.match(parts[1]):
             continue
         instrument = parts[0]
         date = parts[1]
