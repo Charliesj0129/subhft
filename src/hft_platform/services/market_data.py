@@ -941,6 +941,68 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
 
     # -- connect sequence ----------------------------------------------------
 
+    def _propagate_alias_map(self, *, trigger: str = "connect") -> int:
+        """Propagate alias_to_actual from broker client to SymbolMetadata and
+        fire post-connect hooks (strategy/risk re-resolution).
+
+        Idempotent: safe to call repeatedly. Each call picks up any new entries
+        added to ``client.alias_to_actual`` since the last propagation so that
+        late subscriptions (Bug 12: background retry thread) refresh strategy
+        symbols instead of being orphaned.
+
+        Returns the size of the alias map after propagation.
+        """
+        alias_map = getattr(self.client, "alias_to_actual", None) or {}
+        prev_size = 0
+        if self.symbol_metadata is not None:
+            prev_size = len(getattr(self.symbol_metadata, "alias_to_actual", {}) or {})
+            if alias_map:
+                self.symbol_metadata.set_alias_map(alias_map)
+        new_size = len(getattr(self.symbol_metadata, "alias_to_actual", {}) or {}) if self.symbol_metadata else 0
+        if alias_map and new_size != prev_size:
+            logger.info(
+                "symbol_aliases_propagated",
+                count=len(alias_map),
+                aliases=dict(alias_map),
+                trigger=trigger,
+            )
+        if new_size != prev_size:
+            # Hooks (e.g. StrategyRunner.resolve_symbol_aliases) must re-run
+            # whenever new aliases appear so strategy.symbols is re-resolved.
+            for hook in self._post_connect_hooks:
+                try:
+                    hook()
+                except Exception as exc:
+                    logger.warning("post_connect_hook_failed", hook=str(hook), error=str(exc))
+        return new_size
+
+    def _resolve_aliases_eager(self) -> None:
+        """Eagerly populate client.alias_to_actual via ContractsRuntime, before
+        subscribe_basket races.
+
+        Bug 12: on `docker compose restart` the subscribe loop can be
+        short-circuited by callback-not-ready guards, pushing work to the
+        background retry thread. Without pre-resolution the alias map stays
+        empty until that retry, and no downstream propagation fires. Calling
+        ContractsRuntime.resolve_symbol_aliases() here derives the mapping
+        directly from contract.delivery_month, independent of subscribe timing.
+        """
+        runtime = getattr(self.client, "contracts_runtime", None) or getattr(
+            self.client, "_contracts_runtime", None
+        )
+        if runtime is None:
+            return
+        try:
+            resolved = runtime.resolve_symbol_aliases()
+            if resolved:
+                logger.info(
+                    "alias_eager_resolve",
+                    count=len(resolved),
+                    aliases=dict(resolved),
+                )
+        except Exception as exc:
+            logger.warning("alias_eager_resolve_failed", error=str(exc))
+
     async def _connect_sequence(self) -> None:
         try:
             self._set_state(FeedState.CONNECTING)
@@ -969,25 +1031,24 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                 except Exception as exc:
                     logger.warning("Snapshot normalize failed; skipping", error=str(exc))
 
+            # Bug 12 root-cause fix: eagerly resolve aliases BEFORE subscribe so
+            # ``alias_to_actual`` is populated even when subscribe defers work
+            # to the background retry thread.
+            self._resolve_aliases_eager()
+            self._propagate_alias_map(trigger="pre_subscribe")
+
+            # Register a callback so late subscriptions (retry thread) re-fire
+            # propagation and strategy re-resolution.
+            try:
+                self.client.on_alias_map_updated = lambda: self._propagate_alias_map(trigger="retry")
+            except Exception:
+                pass
+
             await self._call_client(self.client.subscribe_basket, self._on_shioaji_event)
 
-            # Propagate alias→actual symbol mappings resolved during subscription
-            # (e.g. TXFR1 → TXFE6) so strategies/risk can match event symbols.
-            alias_map = getattr(self.client, "alias_to_actual", None)
-            if alias_map and self.symbol_metadata is not None:
-                self.symbol_metadata.set_alias_map(alias_map)
-                logger.info(
-                    "symbol_aliases_propagated",
-                    count=len(alias_map),
-                    aliases=dict(alias_map),
-                )
-
-            # Notify post-connect hooks (e.g. StrategyRunner alias re-resolution)
-            for hook in self._post_connect_hooks:
-                try:
-                    hook()
-                except Exception as exc:
-                    logger.warning("post_connect_hook_failed", hook=str(hook), error=str(exc))
+            # Post-subscribe propagation picks up any aliases learned during the
+            # inline subscribe loop; also idempotent if eager path already fired.
+            self._propagate_alias_map(trigger="post_subscribe")
 
             self._set_state(FeedState.CONNECTED)
 

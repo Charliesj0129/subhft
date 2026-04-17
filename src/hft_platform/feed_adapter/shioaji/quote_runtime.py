@@ -800,6 +800,15 @@ class QuoteRuntime:
                             c.subscribed_codes.add(code)
                         c.subscribed_count = len(c.subscribed_codes)
                         logger.info("Subscription retry succeeded", code=sym.get("code"))
+                        # Bug 12: trigger alias propagation so strategies re-resolve
+                        # symbols when subscribe succeeds after the initial
+                        # connect sequence finished.
+                        _cb_alias = getattr(c, "on_alias_map_updated", None)
+                        if _cb_alias is not None:
+                            try:
+                                _cb_alias()
+                            except Exception as exc:
+                                logger.warning("on_alias_map_updated_failed", error=str(exc))
                     else:
                         remaining.append(sym)
                 c._failed_sub_symbols = remaining
