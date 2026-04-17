@@ -63,7 +63,7 @@ class HftBacktestAdapter:
         self,
         strategy: BaseStrategy,
         asset_symbol: str,
-        data_path: str,
+        data: str | np.ndarray,
         latency_us: int = 100,
         seed: int = 42,
         price_scale: int = 10_000,
@@ -87,6 +87,8 @@ class HftBacktestAdapter:
         elapse_ns: int = 100_000_000,
         feature_array_source: tuple[np.ndarray, np.ndarray] | None = None,
         risk_config: BacktestRiskConfig | None = None,
+        instrument: str | None = None,
+        calibration_profile_path: str | None = None,
     ):
         if not HFTBACKTEST_AVAILABLE:
             raise ImportError("hftbacktest not installed")
@@ -98,7 +100,12 @@ class HftBacktestAdapter:
 
         self.strategy = strategy
         self.symbol = asset_symbol
-        self.data_path = data_path
+        if isinstance(data, np.ndarray):
+            self._data_ndarray: np.ndarray | None = data
+            self.data_path: str | None = None
+        else:
+            self._data_ndarray = None
+            self.data_path = data
         self.modify_latency_us = int(modify_latency_us)
         self.cancel_latency_us = int(cancel_latency_us)
         self.timeout = int(timeout)
@@ -161,10 +168,14 @@ class HftBacktestAdapter:
                 logger.debug("operation_fallback", error=str(exc))
                 pass
 
-        resolved_tick_size = float(tick_size) if tick_size is not None else infer_tick_size_from_data(data_path)
+        _data_for_infer: str | np.ndarray = (
+            self._data_ndarray if self._data_ndarray is not None else self.data_path  # type: ignore[assignment]
+        )
+        resolved_tick_size = float(tick_size) if tick_size is not None else infer_tick_size_from_data(_data_for_infer)
         resolved_lot_size = float(lot_size) if lot_size is not None else 1.0
 
-        asset_builder = BacktestAsset().data([data_path]).linear_asset(1.0)
+        _data_arg: list = [self._data_ndarray] if self._data_ndarray is not None else [self.data_path]
+        asset_builder = BacktestAsset().data(_data_arg).linear_asset(1.0)
         latency_model_lower = str(latency_model).strip().lower()
         if latency_model_lower == "intporderlatency" and latency_data_path:
             asset_builder = call_if_exists(asset_builder, "intp_order_latency", latency_data_path)
@@ -197,7 +208,42 @@ class HftBacktestAdapter:
             lat_ns = effective_latency_us * 1000
             asset_builder = call_if_exists(asset_builder, "constant_order_latency", lat_ns, lat_ns)
 
-        queue_model_lower = str(queue_model).strip().lower()
+        # Resolve queue_model if auto
+        if queue_model == "auto":
+            if instrument is None:
+                raise ValueError(
+                    "instrument required when queue_model='auto'. "
+                    "Pass instrument=<name> or set queue_model to an explicit "
+                    "spec like 'PowerProbQueueModel(n)' / 'LogProbQueueModel'."
+                )
+            from pathlib import Path as _Path
+
+            from research.calibration.config import (
+                DEFAULT_PROFILES_PATH,
+                load_calibration_profile,
+            )
+
+            _prof_path = _Path(calibration_profile_path) if calibration_profile_path else DEFAULT_PROFILES_PATH
+            profile = load_calibration_profile(instrument, _prof_path)
+            _qm_name_map = {
+                "power_prob": "PowerProbQueueModel",
+                "power_prob2": "PowerProbQueueModel2",
+                "power_prob3": "PowerProbQueueModel3",
+                "log_prob": "LogProbQueueModel",
+            }
+            _qm_name = _qm_name_map.get(profile.queue_model, profile.queue_model)
+            if profile.exponent is not None:
+                resolved_queue_model = f"{_qm_name}({profile.exponent})"
+            else:
+                resolved_queue_model = _qm_name
+            self.calibration_profile_id: str = f"{instrument}_{profile.calibration_date}"
+        else:
+            resolved_queue_model = queue_model
+            self.calibration_profile_id = "uncalibrated"
+
+        self.queue_model: str = resolved_queue_model
+
+        queue_model_lower = str(resolved_queue_model).strip().lower()
         if "riskadverse" in queue_model_lower or "risk_adverse" in queue_model_lower:
             asset_builder = call_if_exists(asset_builder, "risk_adverse_queue_model")
         elif "logprob" in queue_model_lower:
@@ -207,7 +253,7 @@ class HftBacktestAdapter:
         else:
             import re
 
-            m = re.search(r"[\d.]+", str(queue_model))
+            m = re.search(r"[\d.]+", str(resolved_queue_model))
             exponent = float(m.group()) if m else 3.0
             asset_builder = call_if_exists(asset_builder, "power_prob_queue_model", exponent)
 
@@ -489,7 +535,7 @@ class StrategyHbtAdapter:
 
     def __init__(
         self,
-        data_path: str,
+        data: str,
         strategy_module: str,
         strategy_class: str,
         strategy_id: str,
@@ -516,7 +562,7 @@ class StrategyHbtAdapter:
         self.adapter = HftBacktestAdapter(
             strategy=self.strategy,
             asset_symbol=symbol,
-            data_path=data_path,
+            data=data,
             tick_size=tick_size,
             lot_size=lot_size,
             maker_fee=maker_fee,

@@ -26,6 +26,103 @@ from hft_platform.alpha._validation_helpers import (
 from hft_platform.alpha._validation_types import GateReport, ValidationConfig
 
 
+def _invoke_sub_gates_advisory(
+    *,
+    strategy_type: str,
+    result_payload: dict,
+    thresholds: dict,
+    calibration_profile: Any | None = None,
+) -> list[dict]:
+    """Invoke all applicable sub-gates and return advisory results.
+
+    This does NOT affect Gate C pass/fail decision — sub-gates are evaluated
+    in parallel with the existing inline checks for visibility and future
+    migration. Each sub-gate failure/error is captured defensively.
+    """
+    import numpy as np
+
+    from hft_platform.alpha._sub_gates import (
+        ensure_builtin_sub_gates_registered,
+        get_registered_sub_gates,
+    )
+    from hft_platform.alpha._sub_gates.maker import FillRateValidationGate
+    from hft_platform.backtest.result import BacktestResult
+
+    # Ensure gates are registered even if a test called clear_registry().
+    ensure_builtin_sub_gates_registered()
+
+    result = BacktestResult(
+        run_id=result_payload.get("run_id", ""),
+        config_hash=result_payload.get("config_hash", ""),
+        instrument=result_payload.get("instrument", ""),
+        strategy_name=result_payload.get("strategy_name", ""),
+        strategy_type=strategy_type,  # type: ignore[arg-type]
+        engine=result_payload.get("engine", "unknown"),
+        queue_model=result_payload.get("queue_model", "unknown"),
+        calibration_profile_id=result_payload.get("calibration_profile_id", "uncalibrated"),
+        data_source=result_payload.get("data_source", "unknown"),
+        latency_profile=str(result_payload.get("latency_profile", "")),
+        pnl_pts=float(result_payload.get("pnl_pts", 0.0)),
+        n_fills=int(result_payload.get("n_fills", 0)),
+        n_trading_days=int(result_payload.get("n_trading_days", 0)),
+        equity_curve=result_payload.get("equity_curve", np.zeros(1)),
+        pnl_per_fill=result_payload.get("pnl_per_fill"),
+        adverse_fill_pct=result_payload.get("adverse_fill_pct"),
+        fill_rate_per_day=result_payload.get("fill_rate_per_day"),
+        ic_is=result_payload.get("ic_is"),
+        ic_oos=result_payload.get("ic_oos"),
+        daily_pnl=list(result_payload.get("daily_pnl") or []),
+    )
+
+    sub_gate_results: list[dict] = []
+    for gate in get_registered_sub_gates():
+        if strategy_type not in gate.applies_to:
+            continue
+        try:
+            if isinstance(gate, FillRateValidationGate):
+                sub = gate.evaluate(
+                    result,
+                    config=None,
+                    thresholds=thresholds,
+                    profile=calibration_profile,
+                )
+            else:
+                sub = gate.evaluate(result, config=None, thresholds=thresholds)
+            sub_gate_results.append({
+                "name": sub.name,
+                "passed": sub.passed,
+                "metrics": sub.metrics,
+                "details": sub.details,
+            })
+        except Exception as exc:  # noqa: BLE001 - advisory: never break Gate C
+            sub_gate_results.append({
+                "name": getattr(gate, "name", "unknown"),
+                "passed": None,
+                "metrics": {},
+                "details": f"sub-gate error: {exc!r}",
+                "error": True,
+            })
+    return sub_gate_results
+
+
+def _load_maker_thresholds(root: Path) -> dict:
+    """Load Gate C maker thresholds from gate_thresholds.yaml, or return {}."""
+    import yaml as _yaml
+
+    thresholds_path = root / "config" / "research" / "gate_thresholds.yaml"
+    if not thresholds_path.exists():
+        return {}
+    all_thresholds = _yaml.safe_load(thresholds_path.read_text())
+    return dict(all_thresholds.get("maker", {}))
+
+
+def _equity_to_daily_pnl(equity_curve: Any) -> list[float]:
+    """Convert cumulative equity curve to list of daily PnL differences."""
+    if equity_curve is not None and hasattr(equity_curve, "__len__") and len(equity_curve) > 1:
+        return np.diff(np.asarray(equity_curve, dtype=float)).tolist()
+    return []
+
+
 def run_gate_c(
     alpha: Any,
     config: ValidationConfig,
@@ -66,12 +163,7 @@ def run_gate_c(
         ResultStore().save(result, alpha_id)
 
         # --- Maker Gate C: evaluate using maker_scorecard + gate_thresholds ---
-        import yaml as _yaml
-        thresholds_path = root / "config" / "research" / "gate_thresholds.yaml"
-        maker_thresholds = {}
-        if thresholds_path.exists():
-            all_thresholds = _yaml.safe_load(thresholds_path.read_text())
-            maker_thresholds = all_thresholds.get("maker", {})
+        maker_thresholds = _load_maker_thresholds(root)
 
         scorecard_data = result.maker_scorecard or {}
         n_days = scorecard_data.get("n_days", 0)
@@ -115,6 +207,32 @@ def run_gate_c(
         )
         scorecard_path = experiments_base / "runs" / result.run_id / "scorecard.json"
 
+        # --- Advisory sub-gates (Plan C Task C10) ---
+        maker_sub_gates = _invoke_sub_gates_advisory(
+            strategy_type="maker",
+            result_payload={
+                "run_id": result.run_id,
+                "config_hash": result.config_hash,
+                "instrument": instrument,
+                "strategy_name": alpha_id,
+                "engine": "maker_engine",
+                "queue_model": f"QueueDepletionFill(qf={qf})",
+                "calibration_profile_id": "uncalibrated",
+                "data_source": "clickhouse_direct",
+                "latency_profile": getattr(result, "latency_profile", ""),
+                "pnl_pts": float(sum(result.daily_pnl or []) if hasattr(result, "daily_pnl") else 0.0),
+                "n_fills": int(total_fills),
+                "n_trading_days": int(n_days),
+                "equity_curve": getattr(result, "equity_curve", None),
+                "pnl_per_fill": float(pnl_per_fill) if pnl_per_fill is not None else None,
+                "adverse_fill_pct": float(scorecard_data.get("adverse_fill_pct", 0)),
+                "fill_rate_per_day": (float(total_fills) / max(float(n_days), 1.0)),
+                "daily_pnl": list(result.daily_pnl) if hasattr(result, "daily_pnl") else [],
+            },
+            thresholds=maker_thresholds,
+            calibration_profile=None,  # Future: load from calibration_profiles.yaml
+        )
+
         report = GateReport(
             gate="Gate C",
             passed=maker_passed,
@@ -134,7 +252,11 @@ def run_gate_c(
                 "maker_checks": maker_checks,
                 "maker_thresholds": maker_thresholds,
                 "scorecard_path": str(scorecard_path),
-                "note": "Maker Gate C: IC/optimize/walk-forward/stress tests skipped (not applicable to maker strategies)",
+                "sub_gates_advisory": maker_sub_gates,
+                "note": (
+                    "Maker Gate C: IC/optimize/walk-forward/stress tests"
+                    " skipped (not applicable to maker strategies)"
+                ),
             },
         )
         meta_path = tracker.log_run(
@@ -352,6 +474,50 @@ def run_gate_c(
         and bool(robustness_eval.get("passed"))
         and bool(trend_gate_passed)
     )
+
+    # --- Advisory sub-gates (Plan C Task C10) ---
+    # Compute daily_pnl from equity_curve (cumulative PnL -> diff)
+    _eq = getattr(result, "equity_curve", None)
+    _daily_pnl = _equity_to_daily_pnl(_eq)
+
+    taker_sub_gates = _invoke_sub_gates_advisory(
+        strategy_type="taker",
+        result_payload={
+            "run_id": result.run_id,
+            "config_hash": result.config_hash,
+            "instrument": instrument,
+            "strategy_name": alpha_id,
+            "engine": "hftbacktest_v2",
+            "queue_model": str(selected_cfg.queue_model),
+            "calibration_profile_id": "uncalibrated",
+            "data_source": "hftbt_npz",
+            "latency_profile": getattr(result, "latency_profile", ""),
+            "pnl_pts": (
+                float(result.equity_curve[-1] - result.equity_curve[0])
+                if _eq is not None and len(_eq) > 1
+                else 0.0
+            ),
+            "n_fills": (
+                int(len(result.signals))
+                if hasattr(result, "signals") and result.signals is not None
+                else 0
+            ),
+            "n_trading_days": int(len(_daily_pnl)),
+            "equity_curve": _eq,
+            "ic_is": float(result.ic_mean) if result.ic_mean is not None else None,
+            "ic_oos": None,  # Computed from OOS split in future enhancement
+            "daily_pnl": _daily_pnl,
+        },
+        thresholds={
+            "sharpe_is_min": float(config.min_sharpe_oos),
+            "max_drawdown_pct": float(abs(config.max_abs_drawdown)) * 100,
+            "winning_day_pct_min": 55.0,
+            "ic_is_min": 0.03,
+            "ic_oos_min": 0.02,
+        },
+        calibration_profile=None,
+    )
+
     report = GateReport(
         gate="Gate C",
         passed=passed,
@@ -418,6 +584,7 @@ def run_gate_c(
             "stress_backtest": stress_eval,
             "parameter_robustness": robustness_eval,
             "trend_contamination": trend_check,
+            "sub_gates_advisory": taker_sub_gates,
             "latency_profile": result.latency_profile,
             "scorecard_path": str(scorecard_path),
             "scorecard_data_meta_path": data_meta_path,

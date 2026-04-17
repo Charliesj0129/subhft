@@ -104,7 +104,7 @@ def test_backtest_adapter_submits_scaled_order(monkeypatch):
     _patch_hftbacktest(monkeypatch)
 
     strategy = _SimpleStrategy("demo")
-    adapter = hbt_adapter.HftBacktestAdapter(strategy=strategy, asset_symbol="AAA", data_path="dummy", price_scale=100)
+    adapter = hbt_adapter.HftBacktestAdapter(strategy=strategy, asset_symbol="AAA", data="dummy", price_scale=100)
 
     result = adapter.run()
     assert result is True
@@ -123,7 +123,7 @@ def test_backtest_adapter_lob_feature_mode_populates_ctx_features(monkeypatch):
     adapter = hbt_adapter.HftBacktestAdapter(
         strategy=strategy,
         asset_symbol="AAA",
-        data_path="dummy",
+        data="dummy",
         price_scale=100,
         feature_mode="lob_feature",
     )
@@ -146,7 +146,7 @@ def test_strategy_hbt_adapter_uses_strategy_class(monkeypatch):
     monkeypatch.setattr(hbt_adapter, "HftBacktestAdapter", lambda *args, **kwargs: stub_adapter, raising=False)
 
     adapter = hbt_adapter.StrategyHbtAdapter(
-        data_path="dummy",
+        data="dummy",
         strategy_module="dummy_mod",
         strategy_class="DummyStrategy",
         strategy_id="demo",
@@ -165,7 +165,7 @@ def test_backtest_adapter_accepts_modify_cancel_latency(monkeypatch):
     adapter = hbt_adapter.HftBacktestAdapter(
         strategy=strategy,
         asset_symbol="AAA",
-        data_path="dummy",
+        data="dummy",
         latency_us=100,
         modify_latency_us=43000,
         cancel_latency_us=47000,

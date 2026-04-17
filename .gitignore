@@ -76,6 +76,8 @@ reports/
 !src/hft_platform/reports/**
 src/hft_platform/reports/**/__pycache__/
 artifacts/
+!research/calibration/artifacts/
+!research/calibration/artifacts/*.json
 outputs/
 !outputs/production_rollout/
 !outputs/production_rollout/phase2/
@@ -118,6 +120,8 @@ research/knowledge/summaries/**/*.pdf
 !research/knowledge/reports/**/*.md
 !research/registry/
 !research/registry/**/*.py
+!research/calibration/
+!research/calibration/**/*.py
 !research/data/
 research/data/*
 !research/data/raw/

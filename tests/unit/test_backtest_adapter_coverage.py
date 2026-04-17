@@ -33,7 +33,7 @@ def test_hftbacktest_not_available_raises():
             HftBacktestAdapter(
                 strategy=MagicMock(),
                 asset_symbol="TEST",
-                data_path="fake.npz",
+                data="fake.npz",
             )
 
 

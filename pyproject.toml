@@ -68,7 +68,8 @@ build-backend = "hatchling.build"
 packages = ["src/hft_platform"]
 
 [tool.pytest.ini_options]
-addopts = "--cov=src/hft_platform --cov-branch --cov-report=term-missing --timeout=30"
+addopts = "--cov=src/hft_platform --cov-branch --cov-report=term-missing --cov-fail-under=70 --timeout=30 --ignore=tests/research"
+pythonpath = ["."]
 norecursedirs = [
     "research",
     ".venv",
@@ -105,8 +106,9 @@ omit = [
 ]
 
 [tool.coverage.report]
+# fail_under is enforced via --cov-fail-under=70 in addopts so that --no-cov
+# and -p no:cov invocations (e.g. tests/research explicit runs) skip the gate.
 # Roadmap: 70 (Phase 2, current) → 80 (Phase 3). See .agent/rules/50-testing.md
-fail_under = 70
 exclude_lines = [
     "pragma: no cover",
     "if TYPE_CHECKING:",

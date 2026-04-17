@@ -103,7 +103,7 @@ def test_build_l1_bidask_event_rescales_to_x10000(monkeypatch):
     adapter = hbt_adapter.HftBacktestAdapter(
         strategy=_NoopStrategy("t"),
         asset_symbol="X",
-        data_path="d",
+        data="d",
         price_scale=10_000,
     )
     event = adapter._build_l1_bidask_event(depth, ts_ns=1_000_000)
@@ -120,7 +120,7 @@ def test_build_l1_bidask_event_zero_price(monkeypatch):
     adapter = hbt_adapter.HftBacktestAdapter(
         strategy=_NoopStrategy("t"),
         asset_symbol="X",
-        data_path="d",
+        data="d",
     )
     event = adapter._build_l1_bidask_event(depth, ts_ns=0)
 
@@ -137,7 +137,7 @@ def test_build_l1_bidask_event_tick_level_prices(monkeypatch):
     adapter = hbt_adapter.HftBacktestAdapter(
         strategy=_NoopStrategy("t"),
         asset_symbol="X",
-        data_path="d",
+        data="d",
         price_scale=10_000,
     )
     event = adapter._build_l1_bidask_event(depth, ts_ns=0)
@@ -157,7 +157,7 @@ def test_build_l1_bidask_event_qty_unaffected(monkeypatch):
     adapter = hbt_adapter.HftBacktestAdapter(
         strategy=_NoopStrategy("t"),
         asset_symbol="X",
-        data_path="d",
+        data="d",
     )
     event = adapter._build_l1_bidask_event(depth, ts_ns=0)
 
@@ -178,7 +178,7 @@ def test_get_mid_price_x2_rescales(monkeypatch):
     adapter = hbt_adapter.HftBacktestAdapter(
         strategy=_NoopStrategy("t"),
         asset_symbol="X",
-        data_path="d",
+        data="d",
         price_scale=10_000,
     )
     # 1.0 * 10000 = 10000; 1.001 * 10000 = 10010 → sum = 20010
@@ -193,7 +193,7 @@ def test_get_mid_price_x2_is_int(monkeypatch):
     adapter = hbt_adapter.HftBacktestAdapter(
         strategy=_NoopStrategy("t"),
         asset_symbol="X",
-        data_path="d",
+        data="d",
     )
     result = adapter.get_mid_price_x2()
     assert isinstance(result, int)
@@ -216,7 +216,7 @@ def test_no_truncation_on_fractional_price(monkeypatch):
     adapter = hbt_adapter.HftBacktestAdapter(
         strategy=_NoopStrategy("t"),
         asset_symbol="X",
-        data_path="d",
+        data="d",
         price_scale=10_000,
     )
     event = adapter._build_l1_bidask_event(depth, ts_ns=0)
@@ -240,7 +240,7 @@ def test_build_l1_bidask_event_arrays_are_int64(monkeypatch):
     adapter = hbt_adapter.HftBacktestAdapter(
         strategy=_NoopStrategy("t"),
         asset_symbol="X",
-        data_path="d",
+        data="d",
     )
     event = adapter._build_l1_bidask_event(depth, ts_ns=0)
 
