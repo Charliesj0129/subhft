@@ -144,6 +144,52 @@ class NotificationDispatcher:
     # Non-critical events
     # ------------------------------------------------------------------
 
+    async def notify_position_stuck(
+        self,
+        *,
+        strategy_id: str,
+        symbol: str,
+        net_qty: int,
+        age_s: int,
+        unrealized_ntd: int | None = None,
+    ) -> None:
+        """Bug 27: alert operator that a non-zero position has had no fills for age_s.
+
+        Dedup key includes strategy+symbol so repeat alerts while the condition
+        persists collapse into a single active alert (re-arm after clearing).
+        """
+        msg = templates.render_position_stuck(
+            strategy_id=strategy_id,
+            symbol=symbol,
+            net_qty=net_qty,
+            age_s=age_s,
+            unrealized_ntd=unrealized_ntd,
+        )
+        logger.warning(
+            "dispatcher.notify_position_stuck",
+            strategy_id=strategy_id,
+            symbol=symbol,
+            net_qty=net_qty,
+            age_s=age_s,
+        )
+        alert = Alert(
+            alert_id=_make_alert_id(),
+            severity=AlertSeverity.CRITICAL,
+            category="risk",
+            source="position_stuck_monitor",
+            title=f"Position stuck: {strategy_id}/{symbol} {age_s}s",
+            detail=msg,
+            ts_ns=timebase.now_ns(),
+            dedup_key=f"position_stuck:{strategy_id}:{symbol}",
+            metadata={
+                "strategy_id": strategy_id,
+                "symbol": symbol,
+                "net_qty": net_qty,
+                "age_s": age_s,
+            },
+        )
+        await self._emit_or_legacy(alert, msg, critical=True)
+
     async def notify_stormguard_change(self, old: str, new: str, reason: str) -> None:
         """Notify operator of a StormGuard FSM state transition.
 

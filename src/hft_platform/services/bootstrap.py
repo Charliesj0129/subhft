@@ -1186,6 +1186,23 @@ class SystemBootstrapper:
                 logger.warning("DailyReportService creation failed", error=str(exc))
                 daily_report_service = None
 
+        # Bug 27 (2026-04-17): PositionStuckMonitor for deadlock observability.
+        # Enabled by default; disable with HFT_POSITION_STUCK_ENABLED=0. Alert-only;
+        # does not place orders. Threshold: HFT_POSITION_STUCK_ALERT_S (default 300s).
+        position_stuck_monitor = None
+        if os.environ.get("HFT_POSITION_STUCK_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}:
+            try:
+                from hft_platform.ops.position_stuck_monitor import PositionStuckMonitor
+
+                position_stuck_monitor = PositionStuckMonitor(
+                    position_store=position_store,
+                    dispatcher=notification_dispatcher if "notification_dispatcher" in dir() else None,
+                )
+                logger.info("PositionStuckMonitor created")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("PositionStuckMonitor creation failed", error=str(exc))
+                position_stuck_monitor = None
+
         # Startup config snapshot (non-blocking)
         from hft_platform.ops.config_snapshot import build_snapshot, write_snapshot_to_clickhouse
 
@@ -1262,6 +1279,7 @@ class SystemBootstrapper:
             session_governor=session_governor,
             autonomy_monitor=autonomy_monitor,
             daily_report_service=daily_report_service,
+            position_stuck_monitor=position_stuck_monitor,
             checkpoint_writer=checkpoint_writer,
             startup_verifier=startup_verifier,
         )

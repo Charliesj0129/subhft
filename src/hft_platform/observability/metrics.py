@@ -882,6 +882,21 @@ class MetricsRegistry:
             "Unix timestamp of last non-flat alpha signal",
             ["strategy"],
         )
+
+        # Bug 27 (2026-04-17): position stuck observability.
+        # Gauge: per (strategy, symbol) age in seconds since last_update_ts while
+        # net_qty != 0. Resets (or is deleted) when position goes flat. Alerts at
+        # > HFT_POSITION_STUCK_ALERT_S (default 300s) via PositionStuckMonitor.
+        self.position_age_seconds = Gauge(
+            _pn("position_age_seconds"),
+            "Seconds since last fill for a non-zero position (per strategy,symbol)",
+            ["strategy", "symbol"],
+        )
+        self.position_stuck_alerts_total = Counter(
+            _pn("position_stuck_alerts_total"),
+            "Position-stuck telegram alerts emitted",
+            ["strategy", "symbol"],
+        )
         # Alpha governance pipeline metrics
         self.alpha_gate_results_total = Counter(
             _pn("alpha_gate_results_total"),

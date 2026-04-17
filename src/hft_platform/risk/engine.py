@@ -15,6 +15,7 @@ from hft_platform.contracts.strategy import (
     OrderIntent,
     RiskDecision,
     RiskFeedback,
+    Side,
     StormGuardState,
     typed_intent_side,
 )
@@ -582,6 +583,8 @@ class RiskEngine:
         Returns True if the command is still safe to replay, False if it should
         be dropped.  Runs ALL validators so that price moves, accumulated daily
         loss, notional limits, etc. are all re-checked against current state.
+        StormGuard HALT/STORM handling is done in ``_drain_order_dlq`` at the
+        batch level (Bug 25 fix there) so this method does not re-consult it.
         """
         intent = cmd.intent
         # Cancel / force-flat orders are always safe to replay.
@@ -640,37 +643,94 @@ class RiskEngine:
                 cmd_id=cmd.cmd_id,
             )
 
+    def _cmd_reduces_position(self, cmd: OrderCommand) -> bool:
+        """Bug 25 helper: True iff replaying this DLQ command strictly reduces
+        ``|net_position|``. Used to preserve cover orders through HALT/STORM
+        clears so a stuck short/long can still unwind.
+
+        Mirrors StormGuard._intent_reduces_position; returns False conservatively
+        when no position_provider is available.
+        """
+        intent = cmd.intent
+        provider = self._position_provider
+        if provider is None:
+            return False
+        try:
+            current = int(provider(intent.symbol, intent.strategy_id) or 0)
+        except Exception:  # noqa: BLE001
+            return False
+        if current == 0:
+            return False
+        signed = int(intent.qty if intent.side == Side.BUY else -intent.qty)
+        return abs(current + signed) < abs(current)
+
     def _drain_order_dlq(self) -> None:
-        """Drain stale-filtered DLQ entries back into order_queue."""
+        """Drain stale-filtered DLQ entries back into order_queue.
+
+        Bug 25 (2026-04-17): during HALT/STORM, preserve reducing (cover) orders
+        so a stuck position can still unwind. Opening orders are still cleared.
+        Downstream OrderAdapter (Bug 24) allows reducing orders through HALT.
+        """
         if not self._order_dlq:
             return
-        # During HALT or STORM, clear all pending DLQ entries — they were approved
-        # under pre-escalation conditions and must not be replayed to the broker.
+        # During HALT or STORM, clear OPENING orders but keep REDUCING covers —
+        # reducing intents are allowed through HALT by StormGuard/adapter (Bug 21/24).
         if self.storm_guard.state >= StormGuardState.STORM:
-            cleared = len(self._order_dlq)
             sg_label = "halt" if self.storm_guard.state == StormGuardState.HALT else "storm"
-            for cmd, _ in self._order_dlq:
-                self._send_dlq_rejection(cmd, f"dlq_{sg_label}_cleared")
+            kept: list[tuple[OrderCommand, int]] = []
+            cleared = 0
+            for cmd, ts in self._order_dlq:
+                if self._cmd_reduces_position(cmd):
+                    kept.append((cmd, ts))
+                else:
+                    self._send_dlq_rejection(cmd, f"dlq_{sg_label}_cleared")
+                    cleared += 1
             self._order_dlq.clear()
+            for item in kept:
+                self._order_dlq.append(item)
             if cleared > 0:
-                logger.warning("risk_dlq_cleared_during_escalation", cleared=cleared, sg_state=sg_label)
+                logger.warning(
+                    "risk_dlq_cleared_during_escalation",
+                    cleared=cleared,
+                    preserved_covers=len(kept),
+                    sg_state=sg_label,
+                )
                 self.metrics.risk_dlq_expired_total.inc(cleared)
-            return
+            if not kept:
+                return
+            # Fall through and drain the preserved covers normally.
         now_ns = time.monotonic_ns()
         ttl_ns = self._dlq_ttl_ns
         drained = 0
         expired = 0
         while self._order_dlq:
             cmd, enqueued_ns = self._order_dlq[0]
-            # Re-check escalated state during drain (TOCTOU defense-in-depth)
-            if self.storm_guard.state >= StormGuardState.STORM:
-                cleared = len(self._order_dlq)
-                for c, _ in self._order_dlq:
-                    self._send_dlq_rejection(c, "dlq_storm_cleared")
+            # Re-check escalated state during drain (TOCTOU defense-in-depth).
+            # Bug 25: preserve reducing covers; only clear opening orders.
+            # Covers that survive the check fall through to normal drain below.
+            if self.storm_guard.state >= StormGuardState.STORM and not self._cmd_reduces_position(cmd):
+                kept_mid: list[tuple[OrderCommand, int]] = []
+                cleared_mid = 0
+                for c, ts in self._order_dlq:
+                    if self._cmd_reduces_position(c):
+                        kept_mid.append((c, ts))
+                    else:
+                        self._send_dlq_rejection(c, "dlq_storm_cleared")
+                        cleared_mid += 1
                 self._order_dlq.clear()
-                logger.warning("risk_dlq_cleared_during_escalation_mid_drain", cleared=cleared)
-                self.metrics.risk_dlq_expired_total.inc(cleared)
-                break
+                for item in kept_mid:
+                    self._order_dlq.append(item)
+                if cleared_mid > 0:
+                    logger.warning(
+                        "risk_dlq_cleared_during_escalation_mid_drain",
+                        cleared=cleared_mid,
+                        preserved_covers=len(kept_mid),
+                    )
+                    self.metrics.risk_dlq_expired_total.inc(cleared_mid)
+                if not kept_mid:
+                    break
+                # Reducing covers remain in queue; fall through to normal drain.
+                continue
             # Expire stale entries (DLQ TTL)
             if now_ns - enqueued_ns > ttl_ns:
                 self._order_dlq.popleft()

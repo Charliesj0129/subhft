@@ -248,6 +248,25 @@ class OrderAdapter:
         """Inject StormGuard reference for live HALT checks (M1 gap closure)."""
         self._storm_guard = storm_guard
 
+    def _intent_reduces_position(self, intent: OrderIntent) -> bool:
+        """Bug 24: True iff intent strictly reduces |net_position|.
+
+        Delegates to StormGuard's wired predicate so we reuse the single source
+        of truth (position_provider injected by RiskEngine at bootstrap).
+        Conservative fallback (False) when StormGuard is unwired or raises,
+        preserving the legacy HALT blocking behaviour.
+        """
+        sg = self._storm_guard
+        if sg is None:
+            return False
+        check = getattr(sg, "_intent_reduces_position", None)
+        if check is None:
+            return False
+        try:
+            return bool(check(intent))
+        except Exception:  # noqa: BLE001 — predicate must never raise
+            return False
+
     def set_alias_map(self, alias_map: dict[str, str]) -> None:
         """Set config→actual alias map and build reverse (actual→config).
 
@@ -1052,10 +1071,14 @@ class OrderAdapter:
             _is_halt = getattr(self._storm_guard, "state", None) == StormGuardState.HALT
         # Constitution: HALT blocks new orders but allows CANCEL/FORCE_FLAT through.
         # halt_flatten requires conjunction with FORCE_FLAT to prevent spoofing.
+        # Bug 24 (2026-04-17): reducing cover orders also bypass (mirrors Bug 21/22
+        # reduce-only bypass at validator / Gateway layers — adapter is the last gate
+        # and must remain consistent under HALT, else cover orders stranded in DLQ).
         _halt_exempt = (
             intent.intent_type == IntentType.CANCEL
             or intent.intent_type == IntentType.FORCE_FLAT
             or self._is_strategy_halt_exempt(intent.strategy_id)
+            or self._intent_reduces_position(intent)
         )
         if _is_halt and not _halt_exempt:
             await self._add_to_dlq(

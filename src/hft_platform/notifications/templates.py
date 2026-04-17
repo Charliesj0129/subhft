@@ -442,6 +442,40 @@ def render_margin_critical(ratio: float, used: int, available: int) -> str:
     return f"🚨 保證金危急 — 已進入 reduce-only\n使用率: {ratio:.1%}\n已用: {used:,} NTD\n可用: {available:,} NTD"
 
 
+def render_position_stuck(
+    *,
+    strategy_id: str,
+    symbol: str,
+    net_qty: int,
+    age_s: int,
+    unrealized_ntd: int | None = None,
+) -> str:
+    """Bug 27: position held too long without any new fills — possible deadlock.
+
+    Args:
+        strategy_id: Strategy that owns the stuck position.
+        symbol: Instrument symbol.
+        net_qty: Signed quantity (positive=long, negative=short).
+        age_s: Seconds since last fill on this position.
+        unrealized_ntd: Current unrealized PnL in NTD (optional).
+
+    Returns:
+        Formatted Telegram alert string.
+    """
+    side = "LONG" if net_qty > 0 else "SHORT"
+    upnl_line = (
+        f"\n未實現損益: {unrealized_ntd:+d} NTD" if unrealized_ntd is not None else ""
+    )
+    return (
+        f"⚠️ 部位卡住\n"
+        f"策略: {escape(strategy_id)}\n"
+        f"合約: {escape(symbol)}  方向: {side}  口數: {abs(net_qty)}\n"
+        f"持有時間: {age_s // 60} 分 {age_s % 60} 秒 (無新成交)"
+        f"{upnl_line}\n"
+        f"請檢查策略是否 deadlock。"
+    )
+
+
 def render_backup_failed(
     *,
     date_str: str,

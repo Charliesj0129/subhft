@@ -196,6 +196,7 @@ class HFTSystem:
         self.session_governor = getattr(self.registry, "session_governor", None)
         self.autonomy_monitor = getattr(self.registry, "autonomy_monitor", None)
         self.daily_report_service = getattr(self.registry, "daily_report_service", None)
+        self.position_stuck_monitor = getattr(self.registry, "position_stuck_monitor", None)
         self.evidence_writer = getattr(self.registry, "evidence_writer", None) or get_shared_autonomy_evidence_writer()
         self.platform_degrade_controller = (
             getattr(self.registry, "platform_degrade_controller", None) or get_shared_platform_degrade_controller()
@@ -327,6 +328,10 @@ class HFTSystem:
             # Opt-in: start AutonomyMonitor via supervisor (so crashes are detected/restarted)
             if self.autonomy_monitor is not None:
                 self._start_service("autonomy_monitor", self.autonomy_monitor.run())
+
+            # Bug 27 (2026-04-17): start PositionStuckMonitor (alert-only observability).
+            if self.position_stuck_monitor is not None:
+                self._start_service("position_stuck_monitor", self.position_stuck_monitor.run())
 
             # Start Services
             # Recorder MUST start before exec_router to prevent fill recording gaps
@@ -571,6 +576,10 @@ class HFTSystem:
             services.append(("risk", "RiskEngine", self.risk_engine.run))
         if self.autonomy_monitor is not None:
             services.append(("autonomy_monitor", "AutonomyMonitor", self.autonomy_monitor.run))
+        if self.position_stuck_monitor is not None:
+            services.append(
+                ("position_stuck_monitor", "PositionStuckMonitor", self.position_stuck_monitor.run)
+            )
         return services
 
     def _reset_restart_backoff_if_healthy(self, name: str, task: asyncio.Task[Any] | None) -> None:
