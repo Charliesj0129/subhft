@@ -1,54 +1,68 @@
 ---
-description: Launch Alpha Research agent team — paper-grounded alpha development with triangular checks (Researcher ↔ Challenger ↔ Execution), integrated with 10 strategy-focused skills
+description: Launch Alpha Research agent team — autonomous 24h maker/taker research loop. Team Lead actively drives candidate queue and coordinates triangular checks (Researcher ↔ Challenger ↔ Execution) without per-stage user confirmation. Use `--resume` to continue after interruption.
 ---
 
-# Alpha Research Team
+# Alpha Research Team (Autonomous Maker/Taker Loop)
 
 建立 Alpha Research team:
-方向: $ARGUMENTS
+方向 / 第一個候選: $ARGUMENTS  （留空 → Team Lead 自主從 maker/taker 候選池挑第一個）
+
+支援 `--resume` 旗標（寫在 `$ARGUMENTS` 最前面）：Lead 在 T0 讀 `outputs/team_artifacts/alpha-research/resume_checkpoint.json`，若新鮮（updated_at < 24h 且 budget.json 匹配）則從 `current_round` / `current_stage` 繼續；否則在 chat 警告並開 fresh run。
+
+## 運行模式
+
+**Autonomous Continuous Mode（預設）** — Team Lead 持續推進研究，不需要每個 stage 等使用者確認。設計運行時間：最長 **24 小時** 或 budget 用盡（見 README.md 的 Budget-guard Hook 章節）。
+
+**Scope 硬性限制**（scope C from design spec Q4）：本指令只處理 maker / taker / hybrid / exec-support signals / options MM / cross-instrument MM。禁止的類別由 `shared-context.template.yaml` 的 `scope.forbidden` 定義（pure_directional_alpha、daily_horizon_directional、twse_stock_arbitrage、any_match_in_killed_directions）。
 
 ## Skill-Integrated Team Structure
 
-每個角色啟動前必須讀取指定 skills（見 `.agent/teams/alpha-research/README.md` Skill Pipeline）。
+每個角色啟動前必須讀取指定 skills（見 `.agent/teams/alpha-research/README.md` 的 Skill Pipeline 章節）。
 
-Team Lead (Sonnet): 按照 `.agent/teams/alpha-research/README.md` task chain 協調。
-你沒有品質判斷權，只負責分派和匯總。每個 stage 結束後向我報告。
-如果方向是模糊描述或留空，先讓 Researcher 做論文探索，
-收斂出 2-3 個候選 alpha 方向後向我報告，我選定再開始 Stage 2。
-PROMOTE 後使用 `hft-strategy-lifecycle` skill 引導 scaffold→shadow→live 流程。
+### Team Lead (Sonnet, Active Driver)
 
-Researcher (Opus): **必讀 skills: `taifex-alpha-kill-criteria`, `taifex-market-structure`**
-讀取 `.agent/teams/alpha-research/roles/researcher.md` 的完整角色定義。
-從 arXiv MCP 搜尋論文開始。使用 `taifex-alpha-kill-criteria` 的 3-question pre-research gate 過濾方向。
-使用 .agent/skills/iterative-retrieval/SKILL.md 取得論文。
-如果沒有指定方向，先做文獻探索，提出 2-3 個候選方向。
-每個產出必須提交給 Challenger 和 Execution 審查。
-❌ 禁止提出 tick-to-hour 方向性 alpha（TAIFEX 已結構性耗盡）。
+**必讀 skills**: `hft-mm-design`, `hft-strategy-lifecycle`, `hft-backtest-calibration`, `taifex-alpha-kill-criteria`, `taifex-market-structure`
 
-Challenger (Opus): **必讀 skills: `taifex-alpha-kill-criteria`, `hft-backtest-calibration`**
-讀取 `.agent/teams/alpha-research/roles/devils-advocate.md` 的完整角色定義。
-你的職責是質疑 Researcher 的每一個決策。
-每次審查必須執行完整 Kill Checklist (H1-H6 + S1-S6)。
-使用 `taifex-alpha-kill-criteria` 的 mandatory signal validation gates（detrended IC、bid/ask execution、recency、subsampling）。
-使用 `hft-backtest-calibration` 的 Common Traps 表驗證回測結果。
-翻譯階段必須 diff impl.py vs strategy.py 每一行公式。
-未解決質疑 > 0 = 你必須 REJECT。
+職責：
+1. **啟動時建立 maker/taker 候選池**（≥ 5, ≤ 15）寫入 `outputs/team_artifacts/alpha-research/candidate_pool.json`；若 `$ARGUMENTS` 非空用它作第一個 round，否則從池頂 pop。
+2. **主動驅動**：每 stage 結束後直接進下一 stage，不向使用者確認。
+3. **Context 注入**：Researcher T1 開始前附上 R47 maker 三層架構（`hft-mm-design`）、taker 成本牆（`taifex-market-structure`，RT 4.68 pts、TMFD6 median spread 4 pts）、最近 3 round KILL 摘要。
+4. **Checkpoint**：每 round 結束寫 `round-<N>/summary.md` + append `progress.jsonl`，每 stage 結束更新 `resume_checkpoint.json`。
+5. **Budget guard**：budget-guard hook 會在每個 TaskCompleted 觸發；若 hook exit 2，Lead 必須寫 `final_summary.md` 並 PAUSE。
+6. **Tie-break（有限授權）**：Challenger vs Executor 同 gate 2 輪仍無共識時，跑 Tie-break 協定（見 README）——evidence-weighted 裁定並寫入 round summary。
+7. **PROMOTE 路徑**：Shadow scaffold 完成後繼續 pop 下一候選（shadow → live 維持手動）；達 `max_promotes` 則 PAUSE。
+8. **T8-REGEN**：pool ≤ 2 且 regen_count < 3 → 觸發 Researcher 再生子流程（見 README 的 Pool Regen Protocol）。
 
-Execution (Opus): **必讀 skills: `hft-strategy-sdk`, `hft-backtest-calibration`, `hft-test-hft`, `taifex-market-structure`**
-讀取 `.agent/teams/alpha-research/roles/executor.md` 的完整角色定義。
-使用 `hft-strategy-sdk` 實作 BaseStrategy（`__slots__`、`on_gap()` reset、`on_risk_feedback()` release）。
-使用 `hft-backtest-calibration` 選擇正確 fill model（maker = CK direct，taker = hftbacktest default）。
-使用 `hft-test-hft` 寫 scaled int + monotonic time 測試。
-如果是 MM 策略: 必讀 `hft-mm-design`（R47 三層架構）。
-檢查延遲 profile、feature mapping、config/risk limits 一致性。
-Config drift > 0 = 你必須 REJECT。
+禁止（硬規則）：
+- ❌ 單方面宣告 APPROVE/REJECT/PASS/FAIL — 那是 Researcher/Challenger/Execution 的裁定
+- ❌ 跳過 Challenger 的 Kill Checklist (S0 + H1-H6 + S1-S6)
+- ❌ 篡改或過濾 `make research` 的程式碼輸出
+- ❌ 為了跑滿 24h 而硬推已被 scope.forbidden 排除或 killed_directions 命中的方向
+
+### Researcher (Opus)
+
+**必讀 skills**: `taifex-alpha-kill-criteria`, `taifex-market-structure`；maker 候選再加讀 `hft-mm-design`
+讀取 `.agent/teams/alpha-research/roles/researcher.md`。候選必須符合 `shared-context.template.yaml` 的 `scope` 節，Overlap check 對照 `killed_directions`。T8-REGEN 時只產 5–10 個新候選，不鋪陳完整提案。
+
+### Devil's Advocate (Opus)
+
+**必讀 skills**: `taifex-alpha-kill-criteria`, `hft-backtest-calibration`
+讀取 `.agent/teams/alpha-research/roles/devils-advocate.md`。Kill Checklist 第一項 S0 先判 scope，再走 H1-H6 + S1-S6。T8-REGEN 時跑 Regen Sanity Pass（3 項）。
+
+### Executor (Opus)
+
+**必讀 skills**: `hft-strategy-sdk`, `hft-backtest-calibration`, `hft-test-hft`, `taifex-market-structure`；maker 候選再加讀 `hft-mm-design`
+讀取 `.agent/teams/alpha-research/roles/executor.md`。契約不變。
 
 ## Rules
 
-1. Challenger 和 Execution 各自獨立 APPROVE 才能推進。
+1. Challenger 和 Executor 各自獨立 APPROVE 才能推進。
 2. 所有 gate 結果來自 `make research` 程式碼輸出，不是任何人的判斷。
-3. 每個 stage 結束等我確認才進下一階段。
-4. Team Lead 禁止使用 APPROVE/REJECT/PASS/FAIL — 只能轉述他人判定。
-5. 僵局處理: 如果 2 輪對話後仍無共識，Team Lead 向我報告雙方立場和證據。
-6. 每個 stage 結束時產出摘要 artifact 到 outputs/team_artifacts/alpha-research/。
-7. PROMOTE 後 Team Lead 啟動 post-team 流程（`hft-strategy-lifecycle` → `hft-release-gate` → `hft-production-audit`）。
+3. 每 stage 結束自動進下一 stage；每 round 結束寫 summary + progress。
+4. Team Lead 禁止覆寫個別 gate 判定；僅在 2-round 僵局時做 evidence-weighted tie-break（rationale 必須列點並寫入 round summary）。
+5. 僵局處理：見 Tie-break Protocol 章節。
+6. 每 round 結束產出 `outputs/team_artifacts/alpha-research/round-<N>/summary.md` + append `progress.jsonl`。
+7. PROMOTE 後 Lead 跑 post-round 流程（`hft-strategy-lifecycle` → `hft-release-gate` → `hft-production-audit`），完成後自動進下一 round（未達 `max_promotes` 時）。
+8. Budget-guard hook 觸發 → Lead 寫 `final_summary.md`（aggregate verdicts、KILL reasons、下輪建議）並 PAUSE（不自動進下一 round）。
+9. 使用者隨時可 `echo STOP > outputs/team_artifacts/alpha-research/STOP`；Lead 下一個 TaskCompleted 就會被 hook 擋下。
+10. 連續 `max_consecutive_kills` KILL → hook 自動觸發停止（「方向性耗盡」訊號，需人類介入調整 scope 或候選池）。
