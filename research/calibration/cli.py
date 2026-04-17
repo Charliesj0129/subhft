@@ -1,12 +1,12 @@
 """CLI entry points for calibration workflow.
 
 Commands:
-  audit        — run data audit (shared with research.calibration.audit module)
   calibrate    — run exponent sweep + held-out validation for one instrument
 
+Note: data audit is a separate CLI available via `python -m research.calibration.audit`.
 When data is insufficient or replay is stub-only, writes a fallback profile
-with literature-default exponent and confidence="uncalibrated" so downstream
-consumers (Plan C) have something to read.
+with literature-default exponent and confidence="low" so downstream consumers
+(Plan C) have something to read.
 """
 from __future__ import annotations
 
@@ -17,7 +17,6 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 
-from research.calibration.audit import audit_all
 from research.calibration.config import CalibrationProfile, save_calibration_profile
 from research.calibration.probe_strategy import PassiveQuoteProbe
 from research.calibration.replay import ReplayNotReadyError, build_probe_replay_fn
@@ -59,10 +58,12 @@ def _write_fallback_profile(
     output: Path,
     reason: str,
 ) -> None:
-    """Write an uncalibrated profile using literature defaults.
+    """Write a low-confidence profile using literature defaults.
 
-    Lets downstream consumers run with a sensible-but-unvalidated exponent
-    while clearly marking the profile as not-calibrated.
+    Writes confidence="low" with exponent=LITERATURE_DEFAULT_EXPONENT so
+    downstream consumers can still run with a sensible default while treating
+    the profile as uncalibrated. Callers SHOULD branch on
+    `confidence == "low"` AND `composite_score == 0.0` to detect fallback.
     """
     profile = CalibrationProfile(
         instrument=instrument,
@@ -85,6 +86,13 @@ def _write_fallback_profile(
 
 
 def cmd_calibrate(args: argparse.Namespace) -> int:
+    if args.allow_stub:
+        print(
+            f"[{args.instrument}] WARNING: --allow-stub enabled. Replay will run "
+            f"in stub mode with n_fills=0 for all candidates. Calibration result "
+            f"will be meaningless. Use only for pipeline testing.",
+            file=sys.stderr,
+        )
     days, live_fills = _load_live_fills_from_audit(args.audit_report, args.instrument)
     if len(days) < 5:
         reason = f"only {len(days)} usable calibration days (< 5 minimum)"
@@ -162,7 +170,9 @@ def cmd_calibrate(args: argparse.Namespace) -> int:
         f"[{args.instrument}] validation composite={composite:.3f} confidence={confidence}"
     )
 
-    artifacts_dir = Path("research/calibration/artifacts") / args.instrument
+    # Co-locate artifacts with output profile: <output_parent>/../calibration/artifacts/<instrument>/
+    # Default: config/research/calibration_profiles.yaml → research/calibration/artifacts/<instrument>/
+    artifacts_dir = Path(args.artifacts_dir) / args.instrument
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     (artifacts_dir / "sweep_results.json").write_text(
         json.dumps(
@@ -236,6 +246,11 @@ def main() -> int:
     cal.add_argument(
         "--output", type=Path,
         default=Path("config/research/calibration_profiles.yaml"),
+    )
+    cal.add_argument(
+        "--artifacts-dir", type=Path,
+        default=Path("research/calibration/artifacts"),
+        help="Directory for sweep_results.json and validation_report.json artifacts",
     )
     cal.set_defaults(func=cmd_calibrate)
 
