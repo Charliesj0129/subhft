@@ -1,6 +1,7 @@
 import asyncio
 import collections
 import gc
+import math
 import os
 import time
 from typing import Any, Dict, Optional
@@ -103,10 +104,37 @@ class HFTSystem:
         Returns:
             Adjusted drawdown_pct (positive fraction).
         """
-        if base_capital <= 0 or unrealized_scaled >= 0:
+        if base_capital <= 0 or price_scale <= 0:
+            return realized_drawdown_pct
+        # Bug 11/17: guard against NaN/inf unrealized (e.g. from unexpected float
+        # arithmetic upstream). Division of NaN/inf inflates drawdown_pct to NaN/inf,
+        # and the downstream ``-int(drawdown_pct * 10_000)`` raises ValueError which
+        # the broad ``supervise()`` exception handler silently swallows, skipping
+        # the StormGuard update for that cycle.
+        try:
+            if math.isnan(unrealized_scaled) or math.isinf(unrealized_scaled):
+                logger.warning(
+                    "combine_drawdown_nonfinite_unrealized",
+                    unrealized_scaled=unrealized_scaled,
+                )
+                return realized_drawdown_pct
+        except TypeError:
+            # unrealized_scaled is not a number (shouldn't happen); fall through.
+            return realized_drawdown_pct
+        if unrealized_scaled >= 0:
             return realized_drawdown_pct
         unrealized_ntd = unrealized_scaled / price_scale
-        return realized_drawdown_pct - unrealized_ntd / base_capital
+        result = realized_drawdown_pct - unrealized_ntd / base_capital
+        if math.isnan(result) or math.isinf(result):
+            logger.warning(
+                "combine_drawdown_nonfinite_result",
+                realized_drawdown_pct=realized_drawdown_pct,
+                unrealized_scaled=unrealized_scaled,
+                base_capital=base_capital,
+                price_scale=price_scale,
+            )
+            return realized_drawdown_pct
+        return result
 
     @staticmethod
     def _set_service_running(service: Any, value: bool) -> None:

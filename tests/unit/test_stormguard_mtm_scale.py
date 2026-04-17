@@ -78,3 +78,40 @@ class TestMtmDrawdownScale:
     def test_zero_base_capital_no_divide_by_zero(self):
         drawdown = _combine(realized=0.01, unrealized_scaled=-1_000_000, base_capital=0)
         assert drawdown == 0.01  # unchanged, no crash
+
+    def test_price_scale_zero_no_divide_error(self):
+        """Bug 11/17: price_scale=0 must not raise ZeroDivisionError.
+
+        Returns realized_drawdown_pct unchanged instead.
+        """
+        from hft_platform.services.system import HFTSystem
+
+        result = HFTSystem._combine_drawdown_with_mtm(
+            realized_drawdown_pct=0.05,
+            unrealized_scaled=-1_000_000,
+            base_capital=10_000_000,
+            price_scale=0,
+        )
+        assert result == 0.05
+
+    def test_nan_unrealized_returns_realized(self):
+        """Bug 11/17: NaN unrealized_scaled must return realized (no NaN propagation)."""
+        from hft_platform.services.system import HFTSystem
+
+        result = HFTSystem._combine_drawdown_with_mtm(
+            realized_drawdown_pct=0.03,
+            unrealized_scaled=float("nan"),  # type: ignore[arg-type]
+            base_capital=10_000_000,
+        )
+        assert result == 0.03
+
+    def test_inf_unrealized_returns_realized(self):
+        """Bug 11/17: inf unrealized_scaled must return realized (no inf propagation)."""
+        from hft_platform.services.system import HFTSystem
+
+        result = HFTSystem._combine_drawdown_with_mtm(
+            realized_drawdown_pct=0.03,
+            unrealized_scaled=float("-inf"),  # type: ignore[arg-type]
+            base_capital=10_000_000,
+        )
+        assert result == 0.03
