@@ -1,9 +1,4 @@
-"""Ensure repo root is on sys.path for research package imports."""
-from __future__ import annotations
-
-import sys
-from pathlib import Path
-
-_ROOT = Path(__file__).resolve().parents[2]
-if str(_ROOT) not in sys.path:
-    sys.path.insert(0, str(_ROOT))
+# Path setup handled by pythonpath = ["."] in pyproject.toml [tool.pytest.ini_options]
+# Coverage gate is bypassed for this test tree: use --no-cov when invoking
+# tests/research paths explicitly, e.g.:
+#   uv run pytest tests/research/calibration/test_audit.py --no-cov -v
