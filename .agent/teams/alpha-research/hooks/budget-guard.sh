@@ -13,7 +13,7 @@
 
 set -euo pipefail
 
-# jq resolution (matches the pattern used by teammate-idle-check.sh)
+# jq resolution — prefer system jq if in PATH, fall back to local install
 JQ="${HOME}/.local/bin/jq"
 if command -v jq &>/dev/null; then
     JQ="$(command -v jq)"
@@ -52,8 +52,13 @@ max_promotes=$("$JQ" -r '.max_promotes // 3' "$BUDGET")
 max_consec_kills=$("$JQ" -r '.max_consecutive_kills // 8' "$BUDGET")
 
 # Runtime check
+# GNU date required (Linux target). Fail-safe: unparseable started_at halts the hook.
 if [[ -n "$started_at" ]]; then
-    elapsed_h=$(( ( $(date +%s) - $(date -d "$started_at" +%s) ) / 3600 ))
+    if ! started_ts=$(date -d "$started_at" +%s 2>/dev/null); then
+        echo "HALT: budget.json started_at is unparseable ('$started_at'). Fix or delete budget.json." >&2
+        exit 2
+    fi
+    elapsed_h=$(( ( $(date +%s) - started_ts ) / 3600 ))
     if (( elapsed_h >= max_hours )); then
         echo "HALT: runtime $elapsed_h h >= max $max_hours h. Write final_summary.md and pause." >&2
         exit 2

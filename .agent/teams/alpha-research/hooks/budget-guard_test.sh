@@ -56,6 +56,10 @@ prep_promotes_over(){ prep_budget_only "$1"; for i in 1 2 3; do echo "{\"round\"
 prep_consec_kills() { prep_budget_only "$1"; echo '{"round":1,"verdict":"PROMOTE"}' >> "$1/progress.jsonl"; for i in $(seq 2 9); do echo "{\"round\":$i,\"verdict\":\"KILL\"}" >> "$1/progress.jsonl"; done; }
 prep_healthy()      { prep_budget_only "$1"; echo '{"round":1,"verdict":"KILL"}' >> "$1/progress.jsonl"; }
 prep_progress_only(){ echo '{"round":1,"verdict":"KILL"}' > "$1/progress.jsonl"; }
+prep_bad_budget()   { cat > "$1/budget.json" <<EOF
+{"started_at":"not-a-date","max_runtime_hours":24,"max_rounds":20,"max_promotes":3,"max_consecutive_kills":8}
+EOF
+}
 
 # ---- Cases ----
 PREP_FN=prep_empty
@@ -102,6 +106,11 @@ PREP_FN=prep_consec_kills
 run_case "consecutive-kills" \
     '{"team_name":"alpha-research-R99","teammate_name":"lead"}' \
     2 "consecutive KILLs"
+
+PREP_FN=prep_bad_budget
+run_case "unparseable-started-at" \
+    '{"team_name":"alpha-research-R99","teammate_name":"lead"}' \
+    2 "unparseable"
 
 # ---- Summary ----
 echo
