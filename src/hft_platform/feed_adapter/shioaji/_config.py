@@ -189,12 +189,9 @@ def load_shioaji_config(
     # --- Config path ---
     resolved_config_path = config_path
     if resolved_config_path is None:
-        resolved_config_path = os.getenv("SYMBOLS_CONFIG")
-        if not resolved_config_path:
-            if os.path.exists("config/symbols.yaml"):
-                resolved_config_path = "config/symbols.yaml"
-            else:
-                resolved_config_path = "config/base/symbols.yaml"
+        from hft_platform.config.symbols_path import resolve_symbols_config_path
+
+        resolved_config_path = resolve_symbols_config_path()
 
     # --- Quote version ---
     quote_version_mode = os.getenv("HFT_QUOTE_VERSION", "auto").strip().lower()

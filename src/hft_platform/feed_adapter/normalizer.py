@@ -118,22 +118,9 @@ class SymbolMetadata:
     def __init__(self, config_path: str | None = None):
         # simplified for this context, assuming existing logic was ok, just need it here
         if config_path is None:
-            config_path = os.getenv("SYMBOLS_CONFIG")
-            if not config_path:
-                # Resolve config path relative to the project root (not cwd)
-                # so tests that change cwd don't break metadata loading.
-                _pkg_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-                _project_root = os.path.dirname(os.path.dirname(_pkg_dir))
-                _abs_symbols = os.path.join(_project_root, "config", "symbols.yaml")
-                _abs_base = os.path.join(_project_root, "config", "base", "symbols.yaml")
-                if os.path.exists(_abs_symbols):
-                    config_path = _abs_symbols
-                elif os.path.exists(_abs_base):
-                    config_path = _abs_base
-                elif os.path.exists("config/symbols.yaml"):
-                    config_path = "config/symbols.yaml"
-                else:
-                    config_path = "config/base/symbols.yaml"
+            from hft_platform.config.symbols_path import resolve_symbols_config_path
+
+            config_path = resolve_symbols_config_path()
 
         self.config_path = config_path
         self.meta: dict[str, dict[str, Any]] = {}

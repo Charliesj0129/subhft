@@ -173,12 +173,9 @@ class ShioajiClient:
         self.ca_password = ca_password
 
         if config_path is None:
-            config_path = os.getenv("SYMBOLS_CONFIG")
-            if not config_path:
-                if os.path.exists("config/symbols.yaml"):
-                    config_path = "config/symbols.yaml"
-                else:
-                    config_path = "config/base/symbols.yaml"
+            from hft_platform.config.symbols_path import resolve_symbols_config_path
+
+            config_path = resolve_symbols_config_path()
 
         sim_override = self.shioaji_config.get("simulation") if "simulation" in self.shioaji_config else None
         if sim_override is None:

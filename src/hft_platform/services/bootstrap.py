@@ -708,8 +708,15 @@ class SystemBootstrapper:
 
         # 3. Config Paths
         paths = self.settings.get("paths", {})
-        symbols_path = os.getenv("SYMBOLS_CONFIG", paths.get("symbols", "config/symbols.yaml"))
-        os.environ.setdefault("SYMBOLS_CONFIG", symbols_path)
+        from hft_platform.config.symbols_path import (
+            propagate_env as _propagate_symbols_env,
+        )
+        from hft_platform.config.symbols_path import (
+            resolve_symbols_config_path,
+        )
+
+        symbols_path = resolve_symbols_config_path(paths_setting=paths.get("symbols"))
+        _propagate_symbols_env(symbols_path)
         risk_path = paths.get("strategy_limits", "config/base/strategy_limits.yaml")
         adapter_path = paths.get("order_adapter", "config/base/order_adapter.yaml")
 

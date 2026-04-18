@@ -870,14 +870,16 @@ class TestConfigPathResolution:
         assert isinstance(m.meta, dict)
 
     def test_fallback_last_resort_path(self, tmp_path, monkeypatch):
-        """When all os.path.exists checks fail, config_path defaults to 'config/base/symbols.yaml' (line 136)."""
+        """Resolver's final fallback is ``config/base/symbols.yaml`` anchored
+        to the project root (now an absolute path via
+        hft_platform.config.symbols_path)."""
         monkeypatch.delenv("SYMBOLS_CONFIG", raising=False)
 
-        import os
+        from hft_platform.config import symbols_path as sp
 
-        monkeypatch.setattr(os.path, "exists", lambda path: False)
+        monkeypatch.setattr(sp, "_PROJECT_ROOT", tmp_path)
         m = SymbolMetadata(None)
-        assert m.config_path == "config/base/symbols.yaml"
+        assert m.config_path.endswith("config/base/symbols.yaml")
         assert isinstance(m.meta, dict)
 
 
