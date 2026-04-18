@@ -305,3 +305,199 @@ def build_probe_replay_fn(  # noqa: C901
         )
 
     return replay
+
+
+def build_maker_strategy_replay_fn(  # noqa: C901
+    instrument: str,
+    strategy_factory: Callable[[], object],
+    latency_us: int,
+    tick_size: float,
+    lot_size: float,
+    ch_data_source: "ChDataSource",
+    price_scale: int = 1_000_000,
+) -> Callable[[QueueModelCandidate, str], DailyFillSummary]:
+    """Build a replay function driven by a MakerEngine-protocol strategy.
+
+    The strategy must expose ``on_tick(TickData) -> list[PostQuote|CancelQuote|Hold]``
+    where fields use the ClickHouse-scale integer prices (``x1_000_000`` by
+    default). The replay loop reconstructs TickData from hftbacktest's live
+    depth, dispatches strategy actions, and returns a DailyFillSummary.
+
+    Unlike ``build_probe_replay_fn``, there is no stub / legacy .npz path —
+    this function is calibration-oriented and always streams via ChDataSource.
+    """
+    from hftbacktest import (  # noqa: PLC0415
+        FILLED as _HBT_FILLED,  # type: ignore[attr-defined]
+    )
+    from hftbacktest import (
+        GTC,
+        LIMIT,
+        BacktestAsset,
+        HashMapMarketDepthBacktest,
+    )
+    from research.backtest.maker_engine import (  # noqa: PLC0415
+        CancelQuote,
+        Hold,
+        PostQuote,
+        TickData,
+    )
+
+    assert int(_HBT_FILLED) == _STATUS_FILLED
+
+    def _build_asset(
+        candidate: QueueModelCandidate,
+        data: np.ndarray,
+    ) -> "BacktestAsset":
+        asset = BacktestAsset()
+        asset.linear_asset(1.0)
+        asset.tick_size(tick_size)
+        asset.lot_size(lot_size)
+        asset.data([data])
+        asset.constant_order_latency(latency_us * 1000, latency_us * 1000)
+        asset.no_partial_fill_exchange()
+        if candidate.queue_model == "power_prob":
+            asset.power_prob_queue_model(candidate.exponent)
+        elif candidate.queue_model == "power_prob2":
+            asset.power_prob_queue_model2(candidate.exponent)
+        elif candidate.queue_model == "power_prob3":
+            asset.power_prob_queue_model3(candidate.exponent)
+        elif candidate.queue_model == "log_prob":
+            asset.log_prob_queue_model()
+        else:
+            raise ValueError(f"Unknown queue model: {candidate.queue_model}")
+        return asset
+
+    def replay(candidate: QueueModelCandidate, date: str) -> DailyFillSummary:  # noqa: C901
+        data = ch_data_source.load_day(instrument, date)
+        asset = _build_asset(candidate, data)
+        hbt = HashMapMarketDepthBacktest([asset])
+        strategy = strategy_factory()
+
+        active_ids: dict[str, int] = {}
+        active_prices: dict[str, float] = {}
+        next_order_id: int = 1
+
+        n_fills: int = 0
+        total_buy_cost: float = 0.0
+        total_sell_revenue: float = 0.0
+        total_buy_qty: float = 0.0
+        total_sell_qty: float = 0.0
+
+        def _submit(side: str, price: float, qty: float) -> int:
+            nonlocal next_order_id
+            oid = next_order_id
+            next_order_id += 1
+            if side == "buy":
+                hbt.submit_buy_order(0, oid, price, qty, GTC, LIMIT, False)
+            else:
+                hbt.submit_sell_order(0, oid, price, qty, GTC, LIMIT, False)
+            return oid
+
+        def _cancel(oid: int) -> None:
+            try:
+                hbt.cancel(0, oid, False)
+            except Exception:  # noqa: BLE001
+                pass
+
+        def _collect_fill(side: str) -> None:
+            nonlocal n_fills, total_buy_cost, total_buy_qty
+            nonlocal total_sell_revenue, total_sell_qty
+            oid = active_ids.get(side)
+            if oid is None:
+                return
+            o = hbt.orders(0).get(oid)
+            if o is None:
+                return
+            if o.status == _STATUS_FILLED and o.exec_qty > 0.0:
+                qty_int = int(round(o.exec_qty))
+                n_fills += qty_int
+                if side == "buy":
+                    total_buy_cost += float(o.exec_price) * qty_int
+                    total_buy_qty += qty_int
+                else:
+                    total_sell_revenue += float(o.exec_price) * qty_int
+                    total_sell_qty += qty_int
+                active_ids.pop(side, None)
+                active_prices.pop(side, None)
+
+        while hbt.elapse(_ELAPSE_NS) == 0:
+            depth = hbt.depth(0)
+            best_bid = depth.best_bid
+            best_ask = depth.best_ask
+
+            _collect_fill("buy")
+            _collect_fill("sell")
+
+            if (
+                math.isnan(best_bid) or math.isnan(best_ask)
+                or best_bid <= 0.0 or best_ask <= 0.0 or best_ask < best_bid
+            ):
+                continue
+
+            bid_px_scaled = int(round(best_bid * price_scale))
+            ask_px_scaled = int(round(best_ask * price_scale))
+            bid_qty_at_best = int(round(float(depth.bid_qty_at_tick(
+                int(round(best_bid / tick_size))
+            ))))
+            ask_qty_at_best = int(round(float(depth.ask_qty_at_tick(
+                int(round(best_ask / tick_size))
+            ))))
+            tick = TickData(
+                exch_ts=int(hbt.current_timestamp),
+                bid_price=bid_px_scaled,
+                ask_price=ask_px_scaled,
+                bid_qty=bid_qty_at_best,
+                ask_qty=ask_qty_at_best,
+                trade_price=0,
+                trade_volume=0,
+                is_trade=False,
+                scale=price_scale,
+            )
+
+            actions = strategy.on_tick(tick)
+            if not isinstance(actions, list):
+                actions = [actions]
+
+            for action in actions:
+                if isinstance(action, Hold):
+                    continue
+                if isinstance(action, CancelQuote):
+                    oid = active_ids.pop(action.side, None)
+                    active_prices.pop(action.side, None)
+                    if oid is not None:
+                        _cancel(oid)
+                    continue
+                if isinstance(action, PostQuote):
+                    target_px = action.price / price_scale
+                    prev_oid = active_ids.get(action.side)
+                    prev_px = active_prices.get(action.side)
+                    need_repost = (
+                        prev_oid is None
+                        or prev_px is None
+                        or abs(prev_px - target_px) > tick_size * 0.1
+                    )
+                    if need_repost:
+                        if prev_oid is not None:
+                            _cancel(prev_oid)
+                        new_oid = _submit(action.side, target_px, float(action.qty))
+                        active_ids[action.side] = new_oid
+                        active_prices[action.side] = target_px
+
+        hbt.close()
+
+        matched_qty = min(total_buy_qty, total_sell_qty)
+        if matched_qty > 0.0 and total_buy_qty > 0.0 and total_sell_qty > 0.0:
+            avg_buy = total_buy_cost / total_buy_qty
+            avg_sell = total_sell_revenue / total_sell_qty
+            pnl_pts = (avg_sell - avg_buy) * matched_qty
+        else:
+            pnl_pts = 0.0
+
+        return DailyFillSummary(
+            date=date,
+            n_fills=n_fills,
+            adverse_pct=0.0,
+            pnl=pnl_pts,
+        )
+
+    return replay
