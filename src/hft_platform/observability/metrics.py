@@ -327,6 +327,11 @@ class MetricsRegistry:
         )
         self.lob_updates_total = Counter(_pn("lob_updates_total"), "LOB updates applied", ["symbol", "type"])
         self.lob_snapshots_total = Counter(_pn("lob_snapshots_total"), "LOB snapshots applied", ["symbol"])
+        self.unknown_symbol_ingress_total = Counter(
+            _pn("unknown_symbol_ingress_total"),
+            "Events with symbols not declared in SymbolMetadata that reached an ingress boundary",
+            ["plane"],
+        )
         self.feed_reconnect_total = Counter(_pn("feed_reconnect_total"), "Feed reconnect attempts", ["result"])
         self.feed_reconnect_timeout_total = Counter(
             _pn("feed_reconnect_timeout_total"),

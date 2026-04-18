@@ -166,7 +166,7 @@ Base YAML (config/base/main.yaml)
 | `HFT_QUOTE_VERSION_STRICT` | `0` | 禁止 watchdog 自動降版（同 Section 2） | — |
 | `HFT_API_MAX_INFLIGHT` | `16` | 下單 API 同時 in-flight 上限 | API 延遲升高時下調 |
 | `HFT_API_QUEUE_MAX` | `1024` | 下單 API 佇列上限 | 佇列爆滿時排查風控/下單耗時 |
-| `HFT_CONTRACT_REFRESH_RESUBSCRIBE_POLICY` | `none` | contract refresh 後重訂閱策略：`none`/`diff`/`all` | 生產穩定期建議 `none` |
+| `HFT_CONTRACT_REFRESH_RESUBSCRIBE_POLICY` | `diff` | contract refresh 後重訂閱策略：`none`/`diff`/`all` | 預設 `diff` 確保 rollover 日自動轉訂新月合約；遇 broker 回傳異常合約清單（runbook Mode 2）時臨時改 `none` |
 
 **Runbook 參考**: [Section 1 — Feed Gap](../runbooks.md#1-feed-gap--無行情), [Section 2 — Shioaji API latency](../runbooks.md#2-shioaji-api-latency-激增), [Section 14 — Quote Schema 不符](../runbooks.md#14-quote-schema-不符version-mismatch), [shioaji-contract-refresh-operations](../runbooks/shioaji-contract-refresh-operations.md)
 

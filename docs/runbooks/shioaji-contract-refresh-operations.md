@@ -37,8 +37,8 @@ docker compose restart hft-engine
 
 | 值 | 行為 |
 |---|---|
-| `none`（預設） | 僅重載 symbols/routes，不重新訂閱行情 |
-| `diff` | 若 contract diff 有變動（新增/移除），重新訂閱受影響標的 |
+| `none` | 僅重載 symbols/routes，不重新訂閱行情（Mode 2 應變使用） |
+| `diff`（預設，2026-04-18 起） | 若 contract diff 有變動（新增/移除），重新訂閱受影響標的——讓月度 rollover（例如 TMFE6→TMFF6）自動生效 |
 | `all` | 每次 refresh 後強制重新訂閱全部標的 |
 
 ---
@@ -89,7 +89,7 @@ docker compose restart hft-engine
 1. **立即確認**: 比對 `config/contracts.json` 與前次備份。
 2. 若確認為誤報（非真實下市），**不要重啟**，等待下一個 refresh 週期自動恢復。
 3. 若策略正在交易受影響標的 → 手動確認倉位是否完整。
-4. 長期防護：將 `HFT_CONTRACT_REFRESH_RESUBSCRIBE_POLICY` 設為 `none`（保守模式）。
+4. **臨時緩解**（Mode 2 期間）：將 `HFT_CONTRACT_REFRESH_RESUBSCRIBE_POLICY` 從預設 `diff` 改為 `none`，待 broker 回傳恢復正常後再改回。
 
 ### 模式 3：Thread 鎖死（skipped_locked 持續累積）
 **徵兆**: `contract_refresh_total[result=skipped_locked]` 持續遞增，無 `ok` 記錄。

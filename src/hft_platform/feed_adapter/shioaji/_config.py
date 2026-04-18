@@ -135,7 +135,7 @@ class ShioajiClientConfig:
     contract_retry_s: float = 60.0
     contract_refresh_s: float = 86400.0
     contract_cache_path: str = "config/contracts.json"
-    contract_refresh_resubscribe_policy: str = "none"
+    contract_refresh_resubscribe_policy: str = "diff"
     contract_refresh_status_path: str = "outputs/contract_refresh_status.json"
 
     # --- Session lock ---
@@ -210,7 +210,7 @@ def load_shioaji_config(
     # --- Contract refresh status ---
     contract_refresh_status_path = os.getenv("HFT_CONTRACT_REFRESH_STATUS_PATH", "outputs/contract_refresh_status.json")
     contract_refresh_resubscribe_policy = (
-        os.getenv("HFT_CONTRACT_REFRESH_RESUBSCRIBE_POLICY", "none").strip().lower() or "none"
+        os.getenv("HFT_CONTRACT_REFRESH_RESUBSCRIBE_POLICY", "diff").strip().lower() or "diff"
     )
 
     cfg = ShioajiClientConfig(

@@ -384,7 +384,7 @@ class ShioajiClient:
             "HFT_CONTRACT_REFRESH_STATUS_PATH", "outputs/contract_refresh_status.json"
         )
         self._contract_refresh_resubscribe_policy = (
-            os.getenv("HFT_CONTRACT_REFRESH_RESUBSCRIBE_POLICY", "none").strip().lower() or "none"
+            os.getenv("HFT_CONTRACT_REFRESH_RESUBSCRIBE_POLICY", "diff").strip().lower() or "diff"
         )
         self._session_lock_enabled = _as_bool(os.getenv("HFT_SHIOAJI_SESSION_LOCK_ENABLED", "1"))
         lock_id_raw = (

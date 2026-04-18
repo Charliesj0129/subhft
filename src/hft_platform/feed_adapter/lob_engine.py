@@ -449,6 +449,9 @@ class LOBEngine:
         "_metrics_known_symbols",
         "_eviction_ttl_ns",
         "_eviction_last_run_ns",
+        "_symbol_metadata",
+        "_strict_ingress",
+        "_unknown_symbol_warned",
     )
 
     def __init__(self):
@@ -472,6 +475,19 @@ class LOBEngine:
         _evict_ttl_s = int(os.getenv("HFT_LOB_SYMBOL_TTL_S", "3600"))
         self._eviction_ttl_ns: int = _evict_ttl_s * 1_000_000_000
         self._eviction_last_run_ns: int = 0
+        # Ingress invariant (Hemorrhage #5, 2026-04-18). When a symbol enters
+        # the LOB that is not known in SymbolMetadata, we log once and bump
+        # unknown_symbol_ingress_total. Strict mode (env=1) additionally
+        # refuses to allocate a book — default is permissive.
+        self._symbol_metadata: Any = None
+        self._strict_ingress: bool = os.getenv("HFT_LOB_STRICT_INGRESS", "0") == "1"
+        self._unknown_symbol_warned: set[str] = set()
+
+    def set_symbol_metadata(self, symbol_metadata: Any) -> None:
+        """Inject SymbolMetadata so get_book can verify the incoming symbol
+        is known. No-op when called with ``None``; no-op on ingress when
+        SymbolMetadata has no entries (startup / test scenarios)."""
+        self._symbol_metadata = symbol_metadata
 
     def _is_metrics_enabled(self) -> bool:
         if self._metrics_enabled:
@@ -608,6 +624,21 @@ class LOBEngine:
         if symbol == self._last_symbol and self._last_book is not None:
             return self._last_book
         if symbol not in self.books:
+            # Ingress invariant: detect symbols not declared in SymbolMetadata.
+            # Permissive by default so strange symbols still flow; strict mode
+            # (HFT_LOB_STRICT_INGRESS=1) refuses to allocate a book so downstream
+            # planes fail fast instead of silently using the default price scale.
+            if not self._is_symbol_known(symbol):
+                if symbol not in self._unknown_symbol_warned:
+                    self._unknown_symbol_warned.add(symbol)
+                    logger.warning(
+                        "lob_unknown_symbol_ingress",
+                        symbol=symbol,
+                        strict=self._strict_ingress,
+                    )
+                    self._bump_unknown_symbol_metric()
+                if self._strict_ingress:
+                    return None
             if len(self.books) >= self._max_symbols:
                 logger.warning(
                     "lob_symbol_cardinality_exceeded",
@@ -621,6 +652,31 @@ class LOBEngine:
         self._last_symbol = symbol
         self._last_book = book
         return book
+
+    def _is_symbol_known(self, symbol: str) -> bool:
+        """True when SymbolMetadata reports an entry for ``symbol``.
+
+        Returns True when no metadata is wired (backward-compat) or when
+        metadata is empty (startup).
+        """
+        sm = self._symbol_metadata
+        if sm is None:
+            return True
+        meta = getattr(sm, "meta", None)
+        if not meta:
+            return True
+        return symbol in meta
+
+    def _bump_unknown_symbol_metric(self) -> None:
+        if self.metrics is None:
+            return
+        counter = getattr(self.metrics, "unknown_symbol_ingress_total", None)
+        if counter is None:
+            return
+        try:
+            counter.labels(plane="lob").inc()
+        except Exception:  # noqa: BLE001 — metrics must never crash hot path
+            pass
 
     def process_event(self, event: Union[BidAskEvent, TickEvent, tuple]) -> Optional[LOBStatsEvent | tuple]:
         metrics_enabled = self._is_metrics_enabled()

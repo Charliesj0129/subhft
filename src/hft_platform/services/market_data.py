@@ -252,6 +252,11 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         self._shm_feat_cache: dict[str, list[int]] = {}
         self.symbol_metadata = symbol_metadata or SymbolMetadata()
         self.normalizer = MarketDataNormalizer(metadata=self.symbol_metadata)
+        # Wire metadata into LOBEngine for the ingress invariant (Hemorrhage #5)
+        try:
+            self.lob.set_symbol_metadata(self.symbol_metadata)
+        except AttributeError:
+            pass
 
         self._post_connect_hooks: list[callable] = []  # called after subscribe_basket + alias resolution
         self.state = FeedState.INIT
