@@ -160,3 +160,76 @@ strategies:
       publish:
         channel: "monitor:portfolio:greeks"
         interval_ms: 1000
+
+  # --- C14 TXF Front-Month Maker — SHADOW ONLY ---
+  # R47 maker strategy on TXF rolling front-month (TXFB6 → TXFC6 → TXFD6).
+  # Promoted 2026-04-17 (R6 round). Research: research/alphas/c14_txf_frontmonth_native_maker/
+  # Scorecard: OOS Sharpe 18.89, +313K NTD/day (p_front=0.3). Shadow default p_front=0.2 (pessimistic).
+  # Symbols list is literal for now; production front-month rotator is a post-shadow
+  # engineering item (see RELEASE_GATE.md). Live runtime quotes on whichever subscribed
+  # symbol produces events.
+  # Economics: 1 pt = 200 NTD, RT cost 0.48 pt, front-month median spread 2-5 pt.
+  - id: "C14_TXF_FRONTMONTH_MAKER"
+    module: "hft_platform.strategies.c14_txf_frontmonth_maker"
+    class: "C14TxfFrontMonthMakerStrategy"
+    enabled: false                   # SHADOW ONLY — do not enable without user approval
+    product_type: "FUT"
+    symbols: ["TXFB6", "TXFC6", "TXFD6"]
+    params:
+      max_pos: 3                     # R47 structural minimum (max_pos=1 turns +4,504 → -1,407)
+      spread_threshold_pts: 3        # TXF breakeven ~0.5 pts; 3 pts = comfortable margin
+      inventory_skew_tenths: 2       # 0.2 ticks/contract fixed skew (R47 structural best)
+      shadow_mode: true              # Paired with HFT_ORDER_SHADOW_MODE=1 at launch
+      p_front_shadow_flag: 0.2       # pessimistic sensitivity — informational echo in metrics
+      rollover_rule: "volume_crossover"  # see research/alphas/c14_txf_frontmonth_native_maker/frontmonth.py
+
+  # --- C17 TMF Front-Month Maker — SHADOW ONLY ---
+  # R47 maker strategy on TMF rolling front-month (TMFB6 → TMFC6 → TMFD6).
+  # Approved T2 2026-04-17 (R10 round). Research: research/alphas/c17_tmf_frontmonth_native_maker/
+  # TMF analog of C14 (1 pt = 10 NTD, RT cost 4.0 pt vs TXF 0.48 pt).
+  # SWITCH semantics: REPLACES the deployed R47_MAKER_TMF max_pos=1.
+  # MUST NOT run simultaneously — doing so replicates R51-C1b kill (net -109K NTD).
+  # Economics: 1 pt = 10 NTD, RT cost 4.0 pt, front-month median spread 2-3 pt.
+  # The live-runtime wrapper class is added at T8 post-PROMOTE; leaving the
+  # module/class strings here keeps the entry registry-valid when wired.
+  - id: "C17_TMF_FRONTMONTH_MAKER"
+    module: "hft_platform.strategies.c17_tmf_frontmonth_maker"
+    class: "C17TmfFrontMonthMakerStrategy"
+    enabled: false                   # SHADOW ONLY — do not enable without user approval
+    product_type: "FUT"
+    symbols: ["TMFB6", "TMFC6", "TMFD6"]
+    params:
+      max_pos: 3                     # R47 structural minimum
+      spread_threshold_pts: 5        # TMF RT 4.0 pt requires >=5 pt spread for positive edge
+      inventory_skew_tenths: 2       # 0.2 ticks/contract fixed skew
+      shadow_mode: true
+      p_front_shadow_flag: 0.2       # pessimistic queue-position shadow flag
+      rollover_rule: "volume_crossover"
+      switch_from_strategy: "R47_MAKER_TMF"  # disable before enabling C17
+
+  # --- C27 Vol-Percentile Amplification on C14 — SHADOW ONLY ---
+  # Modulator on C14: baseline max_pos=3, amplified to 4 during high-vol minutes
+  # (within-day 1-min realized-vol percentile > P90, hysteresis release at P70).
+  # R14 candidate; T2 CONDITIONAL-APPROVE (FIFO inflation caught in Researcher's
+  # explore.py — T5 used authoritative position-boundary accounting).
+  # Mechanism inversion of R7 C13 DISABLE gate (KILLED). Same signal, opposite action.
+  # Live wrapper class is added at T8 post-PROMOTE (not authored until T6/T7 decide).
+  - id: "C27_VOL_AMPLIFIED_C14"
+    module: "hft_platform.strategies.c27_vol_amplified_c14"
+    class: "C27VolAmplifiedStrategy"
+    enabled: false                   # SHADOW ONLY
+    product_type: "FUT"
+    symbols: ["TXFB6", "TXFC6", "TXFD6"]
+    params:
+      spread_threshold_pts: 3        # inherits C14
+      max_pos_baseline: 3            # baseline state (R47 structural optimum)
+      max_pos_amplified: 4           # amplified state during high-vol minutes
+      inventory_skew_tenths: 2       # inherits C14
+      vol_percentile_threshold: 0.90 # trigger amplified above P90
+      vol_percentile_release: 0.70   # release below P70 (hysteresis)
+      vol_window_seconds: 60         # informational; gate uses minute buckets
+      warmup_minutes: 10             # minutes of history before gate can fire
+      shadow_mode: true
+      p_front_shadow_flag: 0.2       # inherits C14 shadow-default
+      rollover_rule: "volume_crossover"
+      switch_from_strategy: "C14_TXF_FRONTMONTH_MAKER"  # C27 REPLACES C14 (not co-deploy)

@@ -1,0 +1,84 @@
+alpha_id: c14_txf_frontmonth_native_maker
+name: "R47 Maker on TXF Rolling Front-Month"
+version: "0.1.0"
+status: prototype
+owner: alpha-research-20260417-0815
+strategy_type: maker
+instrument: TXF_frontmonth
+instruments:
+  - TXFB6
+  - TXFC6
+  - TXFD6
+
+hypothesis: >
+  R47's structural edge (V-shape recovery via max_pos=3, minimal
+  inventory skew, fresh-quote replacement) is venue-invariant within
+  the same cost-structure class. Running R47 on the TXF rolling
+  front-month contract captures the same structural edge at a
+  dramatically more favourable cost-to-spread ratio (TXF RT 0.48 pt
+  on 3-5 pt median spread = 10-16% drag, vs TMFD6 RT 4 pt on 3-5 pt
+  spread = 80-133% drag).
+
+paper_refs:
+  - r47_maker_strategy
+  - r47_structural_properties
+  - r47_backtest_data_regression
+  - "2008 Avellaneda-Stoikov HFT in LOB"
+  - "2011 Huang-Polak LOBSTER reconstruction"
+
+signals:
+  reuse: "R47 three-layer (PE regime / queue survival / MFG skew). Minimal-layer defaults."
+
+parameters:
+  spread_threshold_pts: 3
+  pe_danger_threshold: 0.0       # disabled (R47 structural)
+  pe_window: 100
+  queue_cancel_threshold: 1.0    # disabled (R47 structural)
+  queue_ema_alpha: 0.05
+  mfg_skew_z_threshold: 100.0    # disabled (R47 structural)
+  mfg_ema_alpha: 0.01
+  max_pos: 3                     # R47 non-linear optimum
+  inventory_skew_tenths: 2       # 0.2 ticks/contract fixed skew
+
+rollover:
+  rule: "volume_crossover_with_calendar_fallback"
+  calendar_windows:
+    TXFB6: "2026-01-26..2026-02-25"
+    TXFC6: "2026-02-26..2026-03-18"
+    TXFD6: "2026-03-19..2026-04-14"
+  boundary_behaviour: "flatten_outgoing_before_quoting_incoming"
+  cost_accounting: "rollover-day slippage included in backtest (T2 P2 WARN requirement)"
+
+latency_profile: "sim_p95_v2026-02-26"
+
+cost_model:
+  TXFB6:
+    commission_pts_per_side: 0.24
+    tax_pts_per_side: 0.24
+    point_value_nwd: 200
+  TXFC6:
+    commission_pts_per_side: 0.24
+    tax_pts_per_side: 0.24
+    point_value_nwd: 200
+  TXFD6:
+    commission_pts_per_side: 0.24
+    tax_pts_per_side: 0.24
+    point_value_nwd: 200
+
+expected_edge:
+  historical_ck_direct_pts_per_day: 375      # r47_backtest_data_regression.md (TXFD6 front-month only)
+  pessimistic_fullqueue_pts_per_day: 99      # r47_backtest_data_regression.md
+  post_retail_discount_ntd_per_day: "12k..45k"
+  point_value_ntd: 200
+  rt_cost_pts: 0.48
+
+governance:
+  t1_proposal: outputs/team_artifacts/alpha-research/round-6/artifacts/t1_researcher_proposal.md
+  t2_review: outputs/team_artifacts/alpha-research/round-6/artifacts/t2_challenger_review.md
+  t2_verdict: APPROVE
+  t2_warn: "P2 — rollover engineering cost (addressed in frontmonth.py)"
+
+notes:
+  - "Reuses R47 quoting sub-states via composition from research.alphas.r47_maker_pivot.impl. No R47 code is modified."
+  - "Research-module float/scale exception applies (rule 11 of 25-architecture-governance). The strategy operates on integer prices from the CK source at scale=1_000_000; no float arithmetic in the fill path."
+  - "Rollover rule: volume-crossover with calendar fallback (see frontmonth.py). On rollover day, outgoing contract position is flattened before new quotes open — no cross-contract carry."

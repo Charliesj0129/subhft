@@ -37,6 +37,31 @@ strategies:
   R47_MAKER_TMF:
     max_position_lots: 1             # Hard cap = strategy max_pos (RC-1 incident 2026-04-15)
     max_order_qty: 1                 # 1 lot per quote side
+  C14_TXF_FRONTMONTH_MAKER:
+    # Shadow-only defaults. Post-PROMOTE R6 2026-04-17.
+    # Live-transition requires user approval + 10+ shadow days (see SHADOW_DEPLOY.md).
+    max_position_lots: 3                   # Strategy max_pos parity
+    max_order_qty: 1                       # 1 lot per quote side
+    daily_loss_hard_stop_ntd: 200000       # 2/3 of pessimistic OOS NTD/day — flat + disable on hit
+    max_inventory_holding_seconds: 3600    # 1-hour inventory cap (no overnight carry from quoting)
+    storm_guard_tier: B                    # Cancel allowed during STORM, quoting suppressed
+  C17_TMF_FRONTMONTH_MAKER:
+    # Shadow-only defaults. T4 scaffold R10 2026-04-17 (TMF analog of C14).
+    # SWITCH semantics: REPLACES deployed R47_MAKER_TMF; must NOT run simultaneously.
+    max_position_lots: 3                   # Strategy max_pos parity
+    max_order_qty: 1                       # 1 lot per quote side
+    daily_loss_hard_stop_ntd: 10000        # 1/20 of C14 (TMF 10 NTD/pt vs TXF 200 NTD/pt leverage)
+    max_inventory_holding_seconds: 3600    # 1-hour inventory cap
+    storm_guard_tier: B                    # Cancel allowed during STORM, quoting suppressed
+  C27_VOL_AMPLIFIED_C14:
+    # Shadow-only defaults. R14 scaffold 2026-04-18.
+    # Vol-amplification modulator on C14. max_pos={3,4} state-switched.
+    # daily_loss hard stop scaled 4/3 vs C14 to accommodate amplified state exposure.
+    max_position_lots: 4                   # matches max_pos_amplified
+    max_order_qty: 1                       # 1 lot per quote side
+    daily_loss_hard_stop_ntd: 267000       # 4/3 × C14's 200K (matches amplified-vs-baseline capacity)
+    max_inventory_holding_seconds: 3600    # 1-hour inventory cap
+    storm_guard_tier: B                    # Cancel allowed during STORM, quoting suppressed
 
 intraday_pnl:
   scope: global

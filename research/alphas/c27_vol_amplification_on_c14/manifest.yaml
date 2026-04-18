@@ -1,0 +1,65 @@
+alpha_id: c27_vol_amplification_on_c14
+name: "Vol-Percentile Amplification Modulator on C14 TXF Front-Month Maker"
+version: "0.1.0"
+status: prototype
+owner: alpha-research-20260417-0815
+strategy_type: maker
+instrument: TXF_frontmonth
+instruments:
+  - TXFB6
+  - TXFC6
+  - TXFD6
+
+depends_on:
+  - c14_txf_frontmonth_native_maker
+
+hypothesis: >
+  C14's round-trip PnL is concentrated in high within-day vol minutes
+  (R14-T1 §2 bucket analysis). Amplify exposure during P90+ minutes by
+  raising max_pos from 3 to 4; hysteresis release at P70. Mechanism is
+  the inverse of R7 C13's DISABLE gate (same signal, opposite action).
+
+paper_refs:
+  - r47_maker_strategy
+  - r47_structural_properties
+  - c14_txf_frontmonth_native_maker
+  - c13_vol_gate_disable_R7_kill
+
+signals:
+  reuse: "C14's R47 three-layer (PE/queue/MFG, all disabled by default). Adds 1-min realized-vol within-day percentile gate with hysteresis."
+
+parameters:
+  spread_threshold_pts: 3
+  max_pos_baseline: 3
+  max_pos_amplified: 4
+  inventory_skew_tenths: 2
+  vol_percentile_threshold: 0.90
+  vol_percentile_release: 0.70
+  vol_window_seconds: 60
+  warmup_minutes: 10
+
+latency_profile: "sim_p95_v2026-02-26"
+
+governance:
+  t1_proposal: outputs/team_artifacts/alpha-research/round-14/artifacts/t1_researcher_proposal.md
+  t2_review: outputs/team_artifacts/alpha-research/round-14/artifacts/t2_challenger_review.md
+  t2_verdict: CONDITIONAL-APPROVE
+  t2_warn: "S2: Researcher's explore.py cited +290K NTD/day but uses FIFO reconstruction that inflates per-trip gross ~8x vs R6 scorecard's position-boundary accounting. Corrected projection is +36K NTD/day. T5 must use authoritative position-boundary methodology matching round-6/artifacts/backtest-revised/run_c14_backtest_revised.py."
+  authoritative_methodology: round-6/artifacts/backtest-revised/run_c14_backtest_revised.py
+  c14_baseline_reference: round-6/artifacts/backtest-revised/scorecard.json
+
+methodology_notes:
+  - "T5 backtest MUST use position-boundary per-trip accounting (matches R6 scorecard.json). FIFO reconstruction inflates 8x."
+  - "T5 MUST re-measure C14 strict max_pos=3 baseline (prior C14 backtest leaks beyond 3 on 31/40 days). C27 uplift is vs strict baseline, not leaky +262K reference."
+  - "Vol gate: within-day 1-min realized-vol std; percentile ranks against COMPLETED minutes only; warmup 10 minutes."
+
+switch_semantics: >
+  C27 is a MODULATOR of C14 (not a separate strategy). In live deploy,
+  C27 replaces C14's static max_pos=3 with state-switched {3, 4}. Must
+  NOT run concurrently with deployed TMFD6 R47 (R51-C1b). Same SWITCH
+  discipline as C14.
+
+notes:
+  - "No modifications to C14, R47, or R6 backtest code. C27 composes C14's TxfFrontMonthMaker via import."
+  - "Scaled int convention: live x10000, CK x1_000_000 (inherited from C14)."
+  - "Research-module float exception applies — VolPercentileGate uses float for running vol std."
