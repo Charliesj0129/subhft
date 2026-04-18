@@ -210,8 +210,83 @@ def build_tick_event(
     )[0]
 
 
+def build_bidask_events_diff(
+    exch_ts: int,
+    local_ts: int,
+    prev_bid_map: dict[int, int],
+    prev_ask_map: dict[int, int],
+    bid_prices: list[int],
+    bid_volumes: list[int],
+    ask_prices: list[int],
+    ask_volumes: list[int],
+    price_scale: int,
+) -> np.ndarray:
+    """Emit incremental depth diff between previous and current snapshot.
+
+    hftbacktest's queue model tracks resting-order queue position by accumulating
+    consumed volume at each price level. A ``DEPTH_CLEAR_EVENT`` resets all queue
+    state, which makes every exponent produce identical fills. This function
+    emits only the delta: ``qty=0`` for removed levels, new qty for changed
+    levels. Unchanged levels emit nothing.
+
+    Mutates prev_bid_map and prev_ask_map in place to reflect the new snapshot.
+    """
+    dtype = _event_dtype()
+    rows: list[tuple] = []
+
+    curr_bid_map = {
+        p: v for p, v in zip(bid_prices, bid_volumes, strict=True)
+        if p > 0 and v > 0
+    }
+    curr_ask_map = {
+        p: v for p, v in zip(ask_prices, ask_volumes, strict=True)
+        if p > 0 and v > 0
+    }
+
+    for price, prev_vol in list(prev_bid_map.items()):
+        if price not in curr_bid_map:
+            rows.append((
+                DEPTH_EVENT | EXCH_EVENT | LOCAL_EVENT | BUY_EVENT,
+                exch_ts, local_ts, price / price_scale, 0.0, 0, 0, 0.0,
+            ))
+    for price, curr_vol in curr_bid_map.items():
+        if prev_bid_map.get(price) != curr_vol:
+            rows.append((
+                DEPTH_EVENT | EXCH_EVENT | LOCAL_EVENT | BUY_EVENT,
+                exch_ts, local_ts, price / price_scale, float(curr_vol),
+                0, 0, 0.0,
+            ))
+
+    for price, prev_vol in list(prev_ask_map.items()):
+        if price not in curr_ask_map:
+            rows.append((
+                DEPTH_EVENT | EXCH_EVENT | LOCAL_EVENT | SELL_EVENT,
+                exch_ts, local_ts, price / price_scale, 0.0, 0, 0, 0.0,
+            ))
+    for price, curr_vol in curr_ask_map.items():
+        if prev_ask_map.get(price) != curr_vol:
+            rows.append((
+                DEPTH_EVENT | EXCH_EVENT | LOCAL_EVENT | SELL_EVENT,
+                exch_ts, local_ts, price / price_scale, float(curr_vol),
+                0, 0, 0.0,
+            ))
+
+    prev_bid_map.clear()
+    prev_bid_map.update(curr_bid_map)
+    prev_ask_map.clear()
+    prev_ask_map.update(curr_ask_map)
+
+    return np.array(rows, dtype=dtype) if rows else np.array([], dtype=dtype)
+
+
 def assemble_day_events(df: "pd.DataFrame", price_scale: int) -> np.ndarray:
     """Convert one day of ClickHouse market_data rows into one hftbacktest event array.
+
+    The first BidAsk snapshot is emitted as ``DEPTH_CLEAR + full levels``.
+    Subsequent BidAsk snapshots are emitted as incremental diffs (qty=0 for
+    removed levels, new qty for changed levels). This preserves hftbacktest's
+    queue position tracking across snapshots, so queue model exponents produce
+    meaningfully different fill probabilities.
 
     Accepts two column formats:
 
@@ -233,20 +308,45 @@ def assemble_day_events(df: "pd.DataFrame", price_scale: int) -> np.ndarray:
 
     df_sorted = df.sort_values("exch_ts", kind="stable").reset_index(drop=True)
 
-    # Determine which side column is present
     has_trade_direction = "trade_direction" in df_sorted.columns
     has_side = "side" in df_sorted.columns
 
+    prev_bid_map: dict[int, int] = {}
+    prev_ask_map: dict[int, int] = {}
+    first_bidask_emitted = False
+
     for row in df_sorted.itertuples(index=False):
         if row.event_type == "BidAsk":
-            # BidAsk rows in real schema have price_scaled=0, volume=0 — use arrays only.
-            chunk = build_bidask_events(
-                exch_ts=int(row.exch_ts), local_ts=int(row.local_ts),
-                bid_prices=list(row.bid_prices), bid_volumes=list(row.bid_volumes),
-                ask_prices=list(row.ask_prices), ask_volumes=list(row.ask_volumes),
-                price_scale=price_scale,
-            )
-            chunks.append(chunk)
+            bid_prices = list(row.bid_prices)
+            bid_volumes = list(row.bid_volumes)
+            ask_prices = list(row.ask_prices)
+            ask_volumes = list(row.ask_volumes)
+            if not first_bidask_emitted:
+                chunk = build_bidask_events(
+                    exch_ts=int(row.exch_ts), local_ts=int(row.local_ts),
+                    bid_prices=bid_prices, bid_volumes=bid_volumes,
+                    ask_prices=ask_prices, ask_volumes=ask_volumes,
+                    price_scale=price_scale,
+                )
+                prev_bid_map = {
+                    p: v for p, v in zip(bid_prices, bid_volumes, strict=True)
+                    if p > 0 and v > 0
+                }
+                prev_ask_map = {
+                    p: v for p, v in zip(ask_prices, ask_volumes, strict=True)
+                    if p > 0 and v > 0
+                }
+                first_bidask_emitted = True
+            else:
+                chunk = build_bidask_events_diff(
+                    exch_ts=int(row.exch_ts), local_ts=int(row.local_ts),
+                    prev_bid_map=prev_bid_map, prev_ask_map=prev_ask_map,
+                    bid_prices=bid_prices, bid_volumes=bid_volumes,
+                    ask_prices=ask_prices, ask_volumes=ask_volumes,
+                    price_scale=price_scale,
+                )
+            if len(chunk) > 0:
+                chunks.append(chunk)
         elif row.event_type == "Tick":
             # Resolve side string from trade_direction (real schema) or side column (legacy).
             if has_trade_direction:
@@ -277,50 +377,57 @@ def assemble_day_events(df: "pd.DataFrame", price_scale: int) -> np.ndarray:
 
 
 def _check_spread_sanity(events: np.ndarray, instrument: str) -> None:
-    """Check spread sanity per snapshot to catch DEPTH_CLEAR accumulation bugs.
+    """Check spread sanity by running an incremental book, validated at
+    snapshot boundaries (transitions between distinct exch_ts values).
 
-    Walks events; between each pair of DEPTH_CLEAR_EVENTs (or clear-to-end),
-    verifies the reconstructed best_bid/best_ask are not inverted.
-    Raises DataValidationError if best_ask <= best_bid in any snapshot.
+    Within a single exch_ts the book can pass through a transient inverted
+    state as bid/ask updates are applied independently; only the committed
+    end-of-snapshot state must be consistent.
     """
-    current_best_bid = -1.0
-    current_best_ask = float("inf")
-    snapshot_had_bid = False
-    snapshot_had_ask = False
+    bid_book: dict[float, float] = {}
+    ask_book: dict[float, float] = {}
 
-    for i in range(len(events)):
+    n = len(events)
+    last_ts: int | None = None
+    last_boundary_i = 0
+
+    def _validate(row_i: int) -> None:
+        if bid_book and ask_book:
+            best_bid = max(bid_book)
+            best_ask = min(ask_book)
+            if best_ask < best_bid:
+                raise DataValidationError(
+                    f"{instrument}: inverted book at row {row_i} "
+                    f"(best_bid={best_bid}, best_ask={best_ask})"
+                )
+
+    for i in range(n):
         ev_flags = int(events[i]["ev"])
         ev_type = ev_flags & EV_TYPE_MASK
+        ts = int(events[i]["exch_ts"])
+
+        if last_ts is not None and ts != last_ts:
+            _validate(last_boundary_i)
+            last_boundary_i = i
 
         if ev_type == DEPTH_CLEAR_EVENT:
-            if snapshot_had_bid and snapshot_had_ask and current_best_ask <= current_best_bid:
-                raise DataValidationError(
-                    f"{instrument}: inverted book at row {i} "
-                    f"(best_bid={current_best_bid}, best_ask={current_best_ask}) — "
-                    "possible DEPTH_CLEAR accumulation bug"
-                )
-            current_best_bid = -1.0
-            current_best_ask = float("inf")
-            snapshot_had_bid = False
-            snapshot_had_ask = False
+            bid_book.clear()
+            ask_book.clear()
         elif ev_type == DEPTH_EVENT:
             px = float(events[i]["px"])
-            if px <= 0.0:
-                continue
-            if ev_flags & BUY_EVENT:
-                if px > current_best_bid:
-                    current_best_bid = px
-                snapshot_had_bid = True
-            elif ev_flags & SELL_EVENT:
-                if px < current_best_ask:
-                    current_best_ask = px
-                snapshot_had_ask = True
+            qty = float(events[i]["qty"])
+            if px > 0.0:
+                book = bid_book if (ev_flags & BUY_EVENT) else (
+                    ask_book if (ev_flags & SELL_EVENT) else None
+                )
+                if book is not None:
+                    if qty <= 0.0:
+                        book.pop(px, None)
+                    else:
+                        book[px] = qty
+        last_ts = ts
 
-    if snapshot_had_bid and snapshot_had_ask and current_best_ask <= current_best_bid:
-        raise DataValidationError(
-            f"{instrument}: inverted book in final snapshot "
-            f"(best_bid={current_best_bid}, best_ask={current_best_ask})"
-        )
+    _validate(n - 1 if n > 0 else 0)
 
 
 def validate_events(events: np.ndarray, instrument: str) -> None:

@@ -18,6 +18,7 @@ from hft_platform.backtest.ch_data_source import (
     _event_dtype,
     assemble_day_events,
     build_bidask_events,
+    build_bidask_events_diff,
     build_tick_event,
     validate_events,
 )
@@ -268,16 +269,28 @@ def test_validate_events_empty_raises():
 
 
 def test_validate_events_inverted_book_raises():
-    """Book with best_ask <= best_bid must raise (catches DEPTH_CLEAR accumulation bug)."""
+    """Book with best_ask < best_bid must raise; locked book (==) is allowed."""
     events = _make_events([
         (DEPTH_CLEAR_EVENT | EXCH_EVENT, 1, 2, 0.0, 0.0, 0, 0, 0.0),
-        # bid at 17005, ask at 17000 — inverted book
+        # bid at 17005, ask at 17000 — strictly inverted book
         (DEPTH_EVENT | EXCH_EVENT | BUY_EVENT, 2, 3, 17005.0, 5, 0, 0, 0.0),
         (DEPTH_EVENT | EXCH_EVENT | SELL_EVENT, 2, 3, 17000.0, 3, 0, 0, 0.0),
         (TRADE_EVENT | EXCH_EVENT | BUY_EVENT, 3, 4, 17002.0, 1, 0, 0, 0.0),
     ])
     with pytest.raises(DataValidationError, match="inverted book"):
         validate_events(events, instrument="TMFD6")
+
+
+def test_validate_events_locked_book_allowed():
+    """Locked book (bid == ask) is a transient matching state, not inverted."""
+    events = _make_events([
+        (DEPTH_CLEAR_EVENT | EXCH_EVENT, 1, 2, 0.0, 0.0, 0, 0, 0.0),
+        (DEPTH_EVENT | EXCH_EVENT | BUY_EVENT, 2, 3, 17000.0, 5, 0, 0, 0.0),
+        (DEPTH_EVENT | EXCH_EVENT | SELL_EVENT, 2, 3, 17000.0, 3, 0, 0, 0.0),
+        (TRADE_EVENT | EXCH_EVENT | BUY_EVENT, 3, 4, 17000.0, 1, 0, 0, 0.0),
+    ])
+    validate_events(events, instrument="TMFD6")
+    assert len(events) == 4
 
 
 def test_validate_events_valid_book_not_inverted():
@@ -296,6 +309,121 @@ def test_validate_events_valid_book_not_inverted():
 # ---------------------------------------------------------------------------
 # B4 — load_day (mocked ClickHouse)
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# B5 — Incremental depth diff (queue-model-preserving)
+# ---------------------------------------------------------------------------
+
+
+def test_build_bidask_events_diff_unchanged_emits_nothing():
+    """When snapshot matches previous state, diff must emit zero events."""
+    prev_bids = {17000_000_000: 5, 16999_000_000: 10}
+    prev_asks = {17001_000_000: 3, 17002_000_000: 7}
+    events = build_bidask_events_diff(
+        exch_ts=100, local_ts=101,
+        prev_bid_map=prev_bids, prev_ask_map=prev_asks,
+        bid_prices=[17000_000_000, 16999_000_000],
+        bid_volumes=[5, 10],
+        ask_prices=[17001_000_000, 17002_000_000],
+        ask_volumes=[3, 7],
+        price_scale=1_000_000,
+    )
+    assert len(events) == 0
+
+
+def test_build_bidask_events_diff_removes_stale_level():
+    """When previous level disappears, diff must emit qty=0 for that level."""
+    prev_bids = {17000_000_000: 5, 16999_000_000: 10}
+    prev_asks = {17001_000_000: 3}
+    events = build_bidask_events_diff(
+        exch_ts=100, local_ts=101,
+        prev_bid_map=prev_bids, prev_ask_map=prev_asks,
+        bid_prices=[17000_000_000], bid_volumes=[5],
+        ask_prices=[17001_000_000], ask_volumes=[3],
+        price_scale=1_000_000,
+    )
+    removals = [e for e in events if e["qty"] == 0.0]
+    assert len(removals) == 1
+    assert removals[0]["ev"] & BUY_EVENT
+    assert removals[0]["px"] == pytest.approx(16999.0)
+
+
+def test_build_bidask_events_diff_changed_volume():
+    """When volume at existing level changes, diff emits DEPTH_EVENT with new qty."""
+    prev_bids = {17000_000_000: 5}
+    prev_asks = {17001_000_000: 3}
+    events = build_bidask_events_diff(
+        exch_ts=100, local_ts=101,
+        prev_bid_map=prev_bids, prev_ask_map=prev_asks,
+        bid_prices=[17000_000_000], bid_volumes=[8],
+        ask_prices=[17001_000_000], ask_volumes=[3],
+        price_scale=1_000_000,
+    )
+    assert len(events) == 1
+    assert events[0]["ev"] & BUY_EVENT
+    assert events[0]["qty"] == 8.0
+
+
+def test_build_bidask_events_diff_mutates_prev_maps():
+    """Diff must update prev maps in place to reflect new snapshot."""
+    prev_bids = {17000_000_000: 5}
+    prev_asks = {17001_000_000: 3}
+    build_bidask_events_diff(
+        exch_ts=100, local_ts=101,
+        prev_bid_map=prev_bids, prev_ask_map=prev_asks,
+        bid_prices=[17000_500_000], bid_volumes=[4],
+        ask_prices=[17002_000_000], ask_volumes=[6],
+        price_scale=1_000_000,
+    )
+    assert prev_bids == {17000_500_000: 4}
+    assert prev_asks == {17002_000_000: 6}
+
+
+def test_assemble_day_events_only_first_snapshot_clears():
+    """Multi-snapshot day emits exactly one DEPTH_CLEAR (at the start)."""
+    df = pd.DataFrame({
+        "exch_ts": [100, 200, 300],
+        "local_ts": [101, 201, 301],
+        "event_type": ["BidAsk", "BidAsk", "BidAsk"],
+        "price": [0, 0, 0],
+        "volume": [0, 0, 0],
+        "trade_direction": [0, 0, 0],
+        "bid_prices": [
+            [17000_000_000], [17000_000_000], [17000_500_000]
+        ],
+        "bid_volumes": [[5], [6], [4]],
+        "ask_prices": [
+            [17001_000_000], [17001_000_000], [17001_500_000]
+        ],
+        "ask_volumes": [[3], [3], [5]],
+    })
+    events = assemble_day_events(df, price_scale=1_000_000)
+    ev_types = events["ev"] & EV_TYPE_MASK
+    n_clear = int(np.sum(ev_types == DEPTH_CLEAR_EVENT))
+    assert n_clear == 1
+
+
+def test_assemble_day_events_diff_chain_preserves_queue_signal():
+    """Second identical snapshot emits no events; third emits only the delta."""
+    df = pd.DataFrame({
+        "exch_ts": [100, 200, 300],
+        "local_ts": [101, 201, 301],
+        "event_type": ["BidAsk", "BidAsk", "BidAsk"],
+        "price": [0, 0, 0],
+        "volume": [0, 0, 0],
+        "trade_direction": [0, 0, 0],
+        "bid_prices": [[17000_000_000], [17000_000_000], [17000_000_000]],
+        "bid_volumes": [[5], [5], [7]],  # volume changed only at t=300
+        "ask_prices": [[17001_000_000], [17001_000_000], [17001_000_000]],
+        "ask_volumes": [[3], [3], [3]],
+    })
+    events = assemble_day_events(df, price_scale=1_000_000)
+    # t=100: 1 clear + 1 bid + 1 ask = 3; t=200: 0; t=300: 1 bid diff = 1. Total 4.
+    assert len(events) == 4
+    events_at_300 = events[events["exch_ts"] == 300]
+    assert len(events_at_300) == 1
+    assert events_at_300[0]["qty"] == 7.0
 
 
 def test_load_day_empty_result_raises():
