@@ -295,15 +295,15 @@ class OrderAdapter:
     def _resolve_broker_contract_code(self, intent: OrderIntent) -> str:
         """Pick the correct broker-side code for ``intent``.
 
-        Preference order:
-        1. ``intent.contract.display()`` when a ContractFamilyResolver is
-           wired and recognises the ref via its ``native_hints`` snapshot.
-           This is the Gate-3 happy path and does not depend on
+        Preference order (tracked via ``order_contract_code_resolution_total``):
+        1. ``resolver_hit``: ``intent.contract.display()`` when a
+           ContractFamilyResolver is wired and recognises the ref via its
+           ``native_hints`` snapshot. Gate-3 happy path — independent of
            ``_actual_to_config`` being populated by a post-connect hook.
-        2. ``_actual_to_config[intent.symbol]`` — the legacy reverse-alias
-           path, retained for intents built before Gate 3 and for brokers
-           that have not yet been populated into the resolver.
-        3. ``intent.symbol`` as a last resort.
+        2. ``alias_fallback``: ``_actual_to_config[intent.symbol]`` — the
+           legacy reverse-alias path, retained for legacy intents and
+           brokers that have not yet been populated into the resolver.
+        3. ``symbol_raw``: ``intent.symbol`` verbatim (last resort).
         """
         contract = getattr(intent, "contract", None)
         resolver = self._contract_resolver
@@ -311,10 +311,30 @@ class OrderAdapter:
             try:
                 snapshot = resolver.snapshot
                 if snapshot.native_hint(contract) is not None:
+                    try:
+                        self.metrics.order_contract_code_resolution_total.labels(
+                            source="resolver_hit"
+                        ).inc()
+                    except Exception:  # noqa: BLE001 — metric must never break order path
+                        pass
                     return contract.display()
             except Exception:  # noqa: BLE001 — fall back silently
                 pass
-        return self._actual_to_config.get(intent.symbol, intent.symbol)
+        if intent.symbol in self._actual_to_config:
+            try:
+                self.metrics.order_contract_code_resolution_total.labels(
+                    source="alias_fallback"
+                ).inc()
+            except Exception:  # noqa: BLE001
+                pass
+            return self._actual_to_config[intent.symbol]
+        try:
+            self.metrics.order_contract_code_resolution_total.labels(
+                source="symbol_raw"
+            ).inc()
+        except Exception:  # noqa: BLE001
+            pass
+        return intent.symbol
 
     def _send_dispatch_rejection(
         self,

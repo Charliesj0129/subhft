@@ -96,6 +96,7 @@ class MetricsRegistry:
                 _pn("halt_drain_safety_intent_lost_total"),
                 _pn("order_actions_total"),
                 _pn("order_reject_total"),
+                _pn("order_contract_code_resolution_total"),
                 _pn("order_halt_skip_total"),
                 _pn("order_deadline_expired_total"),
                 _pn("phantom_order_candidates_total"),
@@ -441,6 +442,19 @@ class MetricsRegistry:
         # Order
         self.order_actions_total = Counter(_pn("order_actions_total"), "Order actions sent", ["type"])
         self.order_reject_total = Counter(_pn("order_reject_total"), "Broker rejects")
+        # Gate 3: track which source OrderAdapter used to derive the
+        # broker-side contract_code. Label values:
+        #   - "resolver_hit": ``intent.contract`` resolved via
+        #     ``ContractFamilyResolver.snapshot.native_hint`` (new structured path)
+        #   - "alias_fallback": ``_actual_to_config`` reverse-alias dict hit
+        #     (legacy path — depends on post-connect alias propagation)
+        #   - "symbol_raw": neither was available; ``intent.symbol`` used verbatim
+        # When resolver_hit dominates we can safely retire ``_actual_to_config``.
+        self.order_contract_code_resolution_total = Counter(
+            _pn("order_contract_code_resolution_total"),
+            "OrderAdapter contract_code resolution path (Gate 3 migration telemetry)",
+            ["source"],
+        )
         self.order_halt_skip_total = Counter(
             _pn("order_halt_skip_total"),
             "Orders skipped in _api_worker because StormGuard transitioned to HALT",

@@ -25,12 +25,26 @@ def _adapter():
     Avoids ``__init__`` side effects (metrics registry, queues, background
     tasks) that are irrelevant to contract-code resolution.
     """
+    from hft_platform.observability.metrics import MetricsRegistry
     from hft_platform.order.adapter import OrderAdapter
 
     a = OrderAdapter.__new__(OrderAdapter)
     a._actual_to_config = {}
     a._contract_resolver = None
+    a.metrics = MetricsRegistry.get()
     return a
+
+
+def _counter_sum(metric, source: str) -> float:
+    """Sum the current value of ``hft_order_contract_code_resolution_total``
+    for a given ``source`` label across processes. prometheus_client stores
+    counters as a family; iterate samples to find the matching labelset."""
+    total = 0.0
+    for family in metric.collect():
+        for sample in family.samples:
+            if sample.name.endswith("_total") and sample.labels.get("source") == source:
+                total += sample.value
+    return total
 
 
 def _intent(symbol: str, contract=None) -> OrderIntent:
@@ -126,6 +140,33 @@ class TestResolverPath:
         a.set_contract_resolver(resolver)
         a._actual_to_config = {"TMFE6": "TMFR1"}
         assert a._resolve_broker_contract_code(_intent("TMFE6", contract=ref)) == "TMFR1"
+
+
+class TestObservability:
+    def test_resolver_hit_increments_resolver_hit_label(self) -> None:
+        a = _adapter()
+        a.set_contract_resolver(_populated_resolver())
+        ref = FutureRef(root="TMF", expiry=date(2026, 5, 21))
+        before = _counter_sum(a.metrics.order_contract_code_resolution_total, "resolver_hit")
+        a._resolve_broker_contract_code(_intent("TMFE6", contract=ref))
+        after = _counter_sum(a.metrics.order_contract_code_resolution_total, "resolver_hit")
+        assert after == before + 1
+
+    def test_alias_fallback_increments_alias_fallback_label(self) -> None:
+        a = _adapter()
+        a._actual_to_config = {"TMFE6": "TMFR1"}
+        before = _counter_sum(a.metrics.order_contract_code_resolution_total, "alias_fallback")
+        a._resolve_broker_contract_code(_intent("TMFE6"))
+        after = _counter_sum(a.metrics.order_contract_code_resolution_total, "alias_fallback")
+        assert after == before + 1
+
+    def test_symbol_raw_increments_symbol_raw_label(self) -> None:
+        a = _adapter()
+        # Neither resolver nor alias dict has anything.
+        before = _counter_sum(a.metrics.order_contract_code_resolution_total, "symbol_raw")
+        a._resolve_broker_contract_code(_intent("TMFE6"))
+        after = _counter_sum(a.metrics.order_contract_code_resolution_total, "symbol_raw")
+        assert after == before + 1
 
 
 class TestSetters:

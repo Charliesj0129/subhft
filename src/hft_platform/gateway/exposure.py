@@ -15,12 +15,15 @@ from __future__ import annotations
 import os
 import threading
 import time
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, Optional
 
 from structlog import get_logger
 
 from hft_platform.contracts.strategy import IntentType, OrderIntent
+
+if TYPE_CHECKING:
+    from hft_platform.contracts.ref import ContractRef
 
 logger = get_logger("gateway.exposure")
 
@@ -54,9 +57,51 @@ class ExposureLimitError(RuntimeError):
 
 @dataclass(slots=True)
 class ExposureKey:
+    """Identifies a single exposure bucket.
+
+    ``symbol`` remains the canonical string key for the internal dict
+    (keeping Rust-path parity and avoiding per-tick ContractRef hashing).
+    ``contract`` is optional structured metadata (Gate 3) carried for
+    observability and so future Rust migrations have a clean handoff.
+    When both are set we trust ``symbol`` (callers build it via
+    :meth:`from_intent` which derives it from ``contract.display()`` when
+    ``contract`` is set).
+    """
+
     account: str
     strategy_id: str
     symbol: str
+    contract: Optional["ContractRef"] = field(default=None, compare=False)
+
+    @classmethod
+    def from_intent(
+        cls,
+        intent: OrderIntent,
+        *,
+        account: str = "default",
+    ) -> "ExposureKey":
+        """Build an :class:`ExposureKey` from an :class:`OrderIntent`.
+
+        When ``intent.contract`` is set, its ``display()`` is used as the
+        canonical ``symbol`` — this guarantees identical bucketing between
+        intents that carry a structured ref and intents that only carry
+        ``symbol``. The raw ``contract`` is stored for downstream
+        observability and migration consumers.
+        """
+        contract: Any = getattr(intent, "contract", None)
+        if contract is not None:
+            try:
+                canonical = contract.display()
+            except Exception:  # noqa: BLE001 — defensive; fall back to symbol
+                canonical = intent.symbol
+        else:
+            canonical = intent.symbol
+        return cls(
+            account=account,
+            strategy_id=intent.strategy_id,
+            symbol=canonical,
+            contract=contract,
+        )
 
 
 @dataclass(slots=True)

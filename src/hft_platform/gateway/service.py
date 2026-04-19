@@ -364,12 +364,10 @@ class GatewayService:
             self._record_latency(t0)
             return
 
-        # Step 3: Exposure check
-        exp_key = ExposureKey(
-            account="default",
-            strategy_id=intent.strategy_id,
-            symbol=intent.symbol,
-        )
+        # Step 3: Exposure check. ``ExposureKey.from_intent`` derives the
+        # canonical symbol from ``intent.contract.display()`` when set
+        # (Gate 3) so bucketing is stable across structured/legacy intents.
+        exp_key = ExposureKey.from_intent(intent, account="default")
         _order_key = key  # idempotency_key — used for per-order exposure tracking
         _target_order_key = getattr(intent, "target_order_id", "") or ""
         if intent_type_value not in (int(IntentType.CANCEL), int(IntentType.FORCE_FLAT)):
