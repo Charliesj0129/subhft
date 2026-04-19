@@ -9,7 +9,7 @@ global_limits:
 global_defaults:
   max_notional: 500000000            # 50K NTD x10000
   per_symbol_max_notional: 5000000000 # Single symbol = full capital for futures
-  max_position_lots: 3               # Max 3 lots (OpMM_TX + OpMM_TMF + CBS concurrent)
+  max_position_lots: 2               # Exception live rollout cap: R47=1 + C33=1 only
   max_daily_loss: 50000000           # 5,000 NTD x10000 (triggers rejection)
   max_price_cap: 5000.0              # Stocks: max 5,000 NTD per share
   max_price_cap_futures: 50000.0     # Futures: max 50,000 NTD (covers TMF/TXF/MXF)
@@ -35,7 +35,7 @@ strategies:
     max_position_lots: 1             # Hard cap = strategy max_pos (RC-1 incident 2026-04-15)
     max_order_qty: 1                 # 1 lot per quote side
   R47_MAKER_TMF:
-    max_position_lots: 1             # Hard cap = strategy max_pos (RC-1 incident 2026-04-15)
+    max_position_lots: 2             # User-approved live cap increase; keep parity with strategy max_pos
     max_order_qty: 1                 # 1 lot per quote side
   C14_TXF_FRONTMONTH_MAKER:
     # Shadow-only defaults. Post-PROMOTE R6 2026-04-17.
@@ -62,6 +62,108 @@ strategies:
     daily_loss_hard_stop_ntd: 267000       # 4/3 × C14's 200K (matches amplified-vs-baseline capacity)
     max_inventory_holding_seconds: 3600    # 1-hour inventory cap
     storm_guard_tier: B                    # Cancel allowed during STORM, quoting suppressed
+  C33_TXFD6_SOLO_MAKER:
+    # Exception live rollout 2026-04-18 on explicit user instruction.
+    # Recommended research operating point remains mp=3/q=5, but live is hard-capped to 1 lot.
+    max_position_lots: 1                   # Conservative live cap, matches strategy max_pos
+    max_order_qty: 1                       # 1 lot per quote side
+    daily_loss_hard_stop_ntd: 150000       # ~2× worst observed OOS daily loss (-43,600 × ~3.4 safety)
+    max_inventory_holding_seconds: 3600    # 1-hour inventory cap (no overnight carry)
+    storm_guard_tier: B                    # Cancel allowed during STORM, quoting suppressed
+    cycle_timeout_s: 5                     # max life duration before forced reset
+    auto_disable:
+      regime_persistence_sp_med_min: 3           # min TXFD6 session median spread (pts)
+      regime_persistence_consec_days: 3          # consecutive days below sp_med_min triggers disable
+      shadow_close_maker_rate_min: 0.80          # DA decisive threshold; must clear in shadow
+      shadow_close_maker_trailing_cycles: 200    # rolling window for the above
+      shadow_daily_pnl_min_ntd: 7000             # 30% of projected +23K/day haircut floor
+      shadow_min_sessions: 5                     # min consecutive sessions required before live
+      shadow_min_sp_med_regime_pts: 4            # shadow must run in sp_med >= 4 regime
+  C60_TMFD6_SOLO_MAKER:
+    # Shadow-scaffold 2026-04-19 (R1 T8). enabled=false in strategies.yaml
+    # pending user confirmation. Live is hard-capped to 2 lots TMFD6.
+    # TMF point value 10 NTD/pt -> 2 lots × 10 = 20 NTD/pt exposure (trivial
+    # vs TXFD6 200 NTD/pt for reference scale).
+    max_position_lots: 2                   # Canonical mp=2 per DA T6
+    max_order_qty: 1                       # 1 lot per quote side
+    daily_loss_hard_stop_ntd: 15000        # ~3× worst observed fresh-sim day loss
+    max_inventory_holding_seconds: 3600    # 1-hour inventory cap (no overnight carry)
+    storm_guard_tier: B                    # Cancel allowed during STORM, quoting suppressed
+    cycle_timeout_s: 5                     # max life duration before forced reset
+    auto_disable:
+      # ----- 6 canonical rules (SHADOW_DEPLOY.md) -----
+      # Rule 1 — Rolling PnL floor (DA T6 cond #2)
+      rolling_pnl_window_days: 5
+      rolling_pnl_min_ntd_per_day: -3000
+      rolling_pnl_trigger_count: 2
+      # Rule 2 — Spread regime shift (>20% from 2 pt baseline)
+      spread_regime_baseline_pt: 2
+      spread_regime_shift_pct_max: 20
+      spread_regime_consec_days: 3
+      # Rule 3 — Close-maker rate drift (DA T6 cond #1)
+      shadow_close_maker_rate_min: 0.80
+      shadow_close_maker_trailing_cycles: 200
+      # Rule 4 — Loss-tail asymmetry (> 2x mean for 2 consec days)
+      loss_tail_ratio_max: 2
+      loss_tail_consec_days: 2
+      # Rule 5 — PnL-vs-projection shortfall (< 10% of +1367 after 30 days)
+      shadow_pnl_vs_projection_floor_pct: 10
+      shadow_projection_ntd_per_day: 1367
+      shadow_projection_min_days: 30
+      # Rule 6 — Walk-forward k=5 replication floor (DA T6 cond #4)
+      walk_forward_k: 5
+      walk_forward_min_positive: 3
+      # ----- Additional structural guardrails (NOT one of the 6) -----
+      # Deep-compression hard floor (subset of Rule 2 compression direction)
+      regime_persistence_sp_med_min: 1
+      regime_persistence_consec_days: 3
+      # Shadow session entry gates
+      shadow_daily_pnl_min_ntd: 1367             # 30% haircut of +4,557 projection
+      shadow_min_sessions: 5
+      shadow_min_sp_med_regime_pts: 2
+  C63_TXFD6_TIGHT_SPREAD_MAKER:
+    # Shadow-scaffold 2026-04-19 (R2-SUPP T8). enabled=false; MUTUALLY EXCLUSIVE
+    # with C33_TXFD6_SOLO_MAKER. HARD COST GATE at retail RT = 2.5 pt.
+    # TXF point value 200 NTD/pt -> 3 lots * 200 = 600 NTD/pt exposure.
+    max_position_lots: 3                   # Canonical mp=3 per DA T6 R2-SUPP
+    max_order_qty: 1                       # 1 lot per quote side
+    daily_loss_hard_stop_ntd: 20000        # ~tight guard; cost-fragile strategy
+    max_inventory_holding_seconds: 3600    # 1-hour inventory cap (no overnight carry)
+    storm_guard_tier: B                    # Cancel allowed during STORM, quoting suppressed
+    cycle_timeout_s: 5                     # max life duration before forced reset
+    auto_disable:
+      # ----- 7 canonical rules (SHADOW_DEPLOY.md) -----
+      # Rule 1 (HARD) — Broker-confirmed cost gate
+      hard_cost_gate_retail_rt_max_pt: 2.5
+      hard_cost_gate_action: "ABORT_BEFORE_DEPLOY"
+      # Rule 2 — Rolling PnL floor (5-day < +20,000 NTD/day x 2 consec windows)
+      rolling_pnl_window_days: 5
+      rolling_pnl_min_ntd_per_day: 20000
+      rolling_pnl_trigger_count: 2
+      # Rule 3 — Spread regime drift (compression <3 pt OR expansion >6 pt, >20% drift)
+      spread_regime_baseline_pt: 4
+      spread_regime_floor_pt: 3
+      spread_regime_ceiling_pt: 6
+      spread_regime_drift_pct_max: 20
+      spread_regime_consec_days: 3
+      # Rule 4 — Close-maker rate drift
+      shadow_close_maker_rate_min: 0.80
+      shadow_close_maker_trailing_cycles: 200
+      # Rule 5 — Loss-tail asymmetry (>2x mean for 2 consec days)
+      loss_tail_ratio_max: 2
+      loss_tail_consec_days: 2
+      # Rule 6 — PnL vs projection shortfall (<20% of +34,404 after 30 days)
+      shadow_pnl_vs_projection_floor_pct: 20
+      shadow_projection_ntd_per_day: 34404
+      shadow_projection_min_days: 30
+      # Rule 7 — Walk-forward k=5 replication floor
+      walk_forward_k: 5
+      walk_forward_min_positive: 3
+      # ----- Structural / lifecycle gates (not one of the 7) -----
+      shadow_daily_pnl_min_ntd: 34404            # 30% haircut of +114,680 projection
+      shadow_min_sessions: 5
+      shadow_min_sp_med_regime_pts: 3
+      mutually_exclusive_with: "C33_TXFD6_SOLO_MAKER"
 
 intraday_pnl:
   scope: global
