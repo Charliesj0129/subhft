@@ -22,9 +22,15 @@ propose novel directions, not rehashes of killed approaches.
 4. You MUST NOT judge cost feasibility — that is the Devil's Advocate's job
 5. You MAY write `explore.py` for initial signal exploration only
 6. You MUST pass the 3-question pre-research feasibility gate from `taifex-alpha-kill-criteria`:
-   - Q1: Does edge exceed cost floor? (TMFD6: 5+ pts, TXFD6: 1+ pt)
+   - Q1: Does edge exceed cost floor? (see Cost-Source Gate below for instrument-specific RT)
    - Q2: Is the horizon compatible? (tick-to-hour is EXHAUSTED on TAIFEX)
    - Q3: Is the alpha type structurally viable? (check kill registry)
+7. **Cost-Source Gate** (added 2026-04-18 after R6 C14 invalidation): every Q1 cost calculation MUST cite RT from `memory/feedback_taifex_fee_structure.md`, OR explicitly request user confirmation when memory is silent on the instrument. **You are FORBIDDEN from inferring RT from research-side configs, manifests, or backtest scripts** — the research tree has historically had wrong RT (R6 C14 used 0.48 pt for TXF; actual is ~3 pt, 6× under-estimate). Confirmed retail RT as of 2026-04-18:
+   - TXF (大台): ~3 pt RT (~600 NTD; ~120 commission + ~480 sell-side tax)
+   - TMF (微台): ~4 pt RT (~40 NTD; 13 commission/side + 7 tax sell)
+   - TXO: ~80 pt cost wall (per `lessons_r50_tensor.md`)
+   - Other instruments: REQUEST USER CONFIRMATION before any cost claim.
+8. **Cost-drag reporting**: Every Q1 must report `cost_drag = RT_pts / median_spread_pts`. > 50% drag is a structural warning the candidate must address explicitly in §Risk.
 
 ## Your Boundaries
 

@@ -1,8 +1,17 @@
 # C14 — Shadow Deploy Playbook
 
+> ⛔ **DO NOT EXECUTE — KILLED 2026-04-18**
+>
+> R6 PROMOTE was REVOKED on cost-model error. C14 backtest assumed TXF RT=0.48 pt;
+> actual retail RT ≈ 3 pt. Re-computed: OOS −638K NTD/day, edge/RT 0.44×.
+>
+> This runbook is **retained for traceability only**. Every step below is null.
+>
+> See `memory/r6_cost_model_correction.md` and `manifest.yaml` correction_note.
+
 Post-PROMOTE scaffold (R6 T8, 2026-04-17). This is a research artifact — it
 captures the specific runbook for bringing C14 into shadow trading. It is
-NOT general ops documentation.
+NOT general ops documentation. **Do not act on it.**
 
 ## 0. Gate prereqs (before any shadow run)
 

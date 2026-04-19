@@ -1,7 +1,25 @@
 # C14 — Release Gate Checklist
 
+> ⛔ **KILLED 2026-04-18** — R6 PROMOTE REVOKED on cost-model error.
+>
+> The release-gate analysis below was performed under the assumption TXF retail
+> RT = 0.48 pt. **Actual retail RT ≈ 3 pt** (user-confirmed). Re-computed under
+> corrected cost: OOS net −1.69 pt/fill, **−638K NTD/day**, edge/RT 0.44× —
+> deep under 1× floor.
+>
+> **DO NOT proceed with shadow. DO NOT proceed with live.**
+>
+> Gate #6 (Risk Validation) and Gate #7 (Performance) are both retroactive FAIL.
+> All other gates are moot.
+>
+> See:
+> - `memory/r6_cost_model_correction.md`
+> - `outputs/team_artifacts/alpha-research/round-6/summary.md` Correction section
+> - `manifest.yaml` correction_note
+
 Per `.agent/skills/hft-release-gate/SKILL.md`. This records the C14-specific
 release-readiness state as of post-PROMOTE scaffold (2026-04-17).
+**Status as snapshot of an INVALID PROMOTE — retained for traceability only.**
 
 Rows reference the skill's 7-gate base + strategy-specific gates 8-13.
 

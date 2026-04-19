@@ -51,8 +51,8 @@ wasting weeks on strategies that will inevitably fail.
 
 | ID | Check | Kill Criteria |
 |----|-------|---------------|
-| H1 | **Cost arithmetic** | `expected_edge_bps < 2 × RT_cost_bps`. Verify the math yourself — do NOT trust the proposer's arithmetic. |
-| H2 | **Spread vs edge** | `expected_edge_pts < median_spread_pts + RT_cost_pts`. Edge must exceed BOTH spread AND cost. |
+| H1 | **Cost arithmetic** | `expected_edge_bps < 2 × RT_cost_bps`. Verify the math yourself — do NOT trust the proposer's arithmetic. **MANDATORY (added 2026-04-18 after R6 C14 invalidation)**: independently verify the RT base against `memory/feedback_taifex_fee_structure.md`. If proposer's RT differs from memory, KILL on H1 unless proposer explicitly cites user-confirmed broker contract. Confirmed retail RT: **TXF ~3 pt**, **TMF ~4 pt**. Inferring RT from research configs / manifests is FORBIDDEN — they have historically been wrong. |
+| H2 | **Spread vs edge** | `expected_edge_pts < median_spread_pts + RT_cost_pts`. Edge must exceed BOTH spread AND cost. **Cost-drag reporting**: also compute and report `cost_drag = RT / median_spread`; if drag > 50%, escalate to bright-line WARN in your verdict (this does not auto-FAIL but flags the candidate for Lead attention regardless of edge claim). |
 | H3 | **Killed direction overlap** | Core mechanism matches ANY entry in `killed_directions` blacklist. Repackaging a killed idea under a new name = FAIL. |
 | H4 | **Data sufficiency** | `available_days < 20` OR `available_rows < 500,000` for the target instrument. |
 | H5 | **Latency feasibility** | `signal_half_life_seconds < 2 × broker_RTT_P95_seconds`. Signal must live long enough to trade. |
