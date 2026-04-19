@@ -3,6 +3,8 @@ from typing import NamedTuple, Union
 
 import numpy as np
 
+from hft_platform.contracts.ref import ContractRef
+
 
 class BookStats(NamedTuple):
     """Named stats tuple for BidAskEvent.stats (backward-compat: floats for mid_price/spread)."""
@@ -66,6 +68,12 @@ class TickEvent:
     # Classification confidence (scaled x1000): 1000=at-quote, 800=inside, 500=tick-rule, 0=unknown
     trade_confidence: int = 0
 
+    # Option-3 migration (Gate 2a): optional structured contract identity.
+    # ``None`` while normalizer / broker adapters haven't filled it (dual-write
+    # phase). Consumers that understand ContractRef read this; legacy code
+    # keeps reading ``symbol``.
+    contract: ContractRef | None = None
+
 
 @dataclass(slots=True, frozen=True)
 class BidAskEvent:
@@ -83,6 +91,8 @@ class BidAskEvent:
     stats: BookStats | None = None
     fused_stats: FusedBookStats | None = None
     is_snapshot: bool = False
+    # Option-3 migration (Gate 2a): optional structured contract identity.
+    contract: ContractRef | None = None
 
 
 @dataclass(slots=True, frozen=True)

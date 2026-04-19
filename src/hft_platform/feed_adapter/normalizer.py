@@ -196,6 +196,50 @@ class SymbolMetadata:
             resolved.update(self.symbols_by_tag.get(key, set()))
         return resolved
 
+    def contract_ref(self, symbol: str) -> Any:
+        """Return a cached ``ContractRef`` for *symbol*, or ``None`` if the
+        symbol cannot be parsed.
+
+        Gate 2b of the Option-3 migration. Lazy-populated: events passing
+        through the hot path incur a single dict lookup after the first parse
+        per symbol. Failures are cached as ``None`` so we do not re-parse a
+        malformed symbol on every tick.
+        """
+        cache = getattr(self, "_contract_ref_cache", None)
+        if cache is None:
+            cache = {}
+            self._contract_ref_cache = cache
+        if symbol in cache:
+            return cache[symbol]
+
+        from datetime import UTC, datetime
+
+        from hft_platform.contracts.ref import (
+            ContractFamily,
+            FutureRef,
+            parse_display,
+        )
+
+        base_year = datetime.now(UTC).year
+        parsed: Any
+        try:
+            parsed = parse_display(symbol, base_year=base_year)
+        except ValueError:
+            parsed = None
+        # A family string (e.g. "TMFR1") is not a concrete contract; events
+        # carry a concrete expiry. We keep the ``contract`` field as None for
+        # family-form symbols and rely on the resolver to fill it at dispatch.
+        if isinstance(parsed, ContractFamily):
+            parsed = None
+        # Defensive: future single-digit year parser may not uniquely
+        # identify the exact expiry day. Downstream (ContractResolver) is the
+        # authority for concrete expiry dates; parse_display is a best-effort
+        # fallback for dual-write convenience.
+        if isinstance(parsed, FutureRef):
+            parsed = parsed  # type intentionally narrowed; keep as parsed.
+        cache[symbol] = parsed
+        return parsed
+
     def price_scale(self, symbol: str) -> int:
         cached = self._price_scale_cache.get(symbol)
         if cached is not None:
@@ -707,6 +751,11 @@ class MarketDataNormalizer:
                                 is_odd_lot=bool(is_odd_lot),
                                 trade_direction=_td,
                                 trade_confidence=_tc,
+                                contract=(
+                                    self.metadata.contract_ref(_sym)
+                                    if self.metadata is not None
+                                    else None
+                                ),
                             )
                     except Exception as exc:
                         logger.debug("rust_tick_fallback", error=str(exc))
@@ -760,6 +809,11 @@ class MarketDataNormalizer:
                 is_odd_lot=is_odd_lot,
                 trade_direction=_td,
                 trade_confidence=_tc,
+                contract=(
+                    self.metadata.contract_ref(symbol)
+                    if self.metadata is not None
+                    else None
+                ),
             )
         except Exception as e:
             logger.error("Normalize Tick Error", error=str(e), payload_type=str(type(payload)))
@@ -864,6 +918,11 @@ class MarketDataNormalizer:
                             asks=asks_np,
                             stats=compat_stats,
                             fused_stats=fused_stats,
+                            contract=(
+                                self.metadata.contract_ref(symbol)
+                                if self.metadata is not None
+                                else None
+                            ),
                         )
                 except Exception as exc:
                     # Fall through to standard path
@@ -1186,7 +1245,18 @@ class MarketDataNormalizer:
             self._record_latency_metrics(exch_ts, local_ts, "_last_local_ts_bidask")
             meta = MetaData(seq=self._next_seq(), topic="bidask", source_ts=exch_ts, local_ts=local_ts)
             event_stats = stats if stats is not None and not synthesized else None
-            return BidAskEvent(meta=meta, symbol=symbol, bids=bids_final, asks=asks_final, stats=event_stats)
+            return BidAskEvent(
+                meta=meta,
+                symbol=symbol,
+                bids=bids_final,
+                asks=asks_final,
+                stats=event_stats,
+                contract=(
+                    self.metadata.contract_ref(symbol)
+                    if self.metadata is not None
+                    else None
+                ),
+            )
         except Exception as e:
             logger.error("Normalize BidAsk Error", error=str(e), payload_type=str(type(payload)))
             if self.metrics:
@@ -1244,7 +1314,18 @@ class MarketDataNormalizer:
             exch_ts, local_ts = self._validate_and_sync_timestamp(exch_ts, local_ts, "snapshot", symbol)
             self._record_latency_metrics(exch_ts, local_ts, "_last_local_ts_snapshot")
             meta = MetaData(seq=self._next_seq(), topic="snapshot", source_ts=exch_ts, local_ts=local_ts)
-            return BidAskEvent(meta=meta, symbol=symbol, bids=bids, asks=asks, is_snapshot=True)
+            return BidAskEvent(
+                meta=meta,
+                symbol=symbol,
+                bids=bids,
+                asks=asks,
+                is_snapshot=True,
+                contract=(
+                    self.metadata.contract_ref(symbol)
+                    if self.metadata is not None
+                    else None
+                ),
+            )
 
         event = self.normalize_bidask(payload)
         if isinstance(event, tuple):
