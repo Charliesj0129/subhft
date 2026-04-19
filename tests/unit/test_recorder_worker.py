@@ -65,7 +65,7 @@ class TestRecorderService(unittest.IsolatedAsyncioTestCase):
     async def test_recover_wal_skips_when_disabled(self):
         queue = asyncio.Queue()
 
-        with patch.dict(os.environ, {"HFT_DISABLE_CLICKHOUSE": "1"}, clear=False):
+        with patch.dict(os.environ, {"HFT_CLICKHOUSE_ENABLED": "0"}, clear=False):
             with patch("hft_platform.recorder.worker.DataWriter"):
                 worker = RecorderService(queue)
                 with patch("hft_platform.recorder.worker.logger.info") as log_info:

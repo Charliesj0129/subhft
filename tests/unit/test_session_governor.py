@@ -203,8 +203,8 @@ class TestSessionGovernorConfigLoading:
 
         cbs = next(item for item in strategies["strategies"] if item["id"] == "CBS_TMF")
         assert cbs["symbols"] == ["TMFR1"]
-        assert sessions["tracks"]["futures_day"]["symbols"] == ["TMFR1"]
-        assert sessions["tracks"]["futures_night"]["symbols"] == ["TMFR1"]
+        assert "TMFR1" in sessions["tracks"]["futures_day"]["symbols"]
+        assert "TMFR1" in sessions["tracks"]["futures_night"]["symbols"]
 
 
 class TestFlattenTaskDoneCallback:

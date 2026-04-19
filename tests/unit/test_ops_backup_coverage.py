@@ -389,13 +389,9 @@ def test_report_success_with_notifier(tmp_path: Path, monkeypatch: pytest.Monkey
     mock_notifier.notify_backup_success = AsyncMock(return_value=None)
     mgr._notifier = mock_notifier
 
-    # Patch asyncio.run to avoid nested event loop issues
-    asyncio_run_calls: list = []
-    monkeypatch.setattr("asyncio.run", lambda coro: asyncio_run_calls.append(coro))
-
     mgr._report_success("daily_20260329", duration_s=1.0)
 
-    assert len(asyncio_run_calls) == 1
+    mock_notifier.notify_backup_success.assert_awaited_once()
 
 
 def test_report_failure_no_notifier_no_crash(tmp_path: Path) -> None:
@@ -435,12 +431,9 @@ def test_report_failure_with_notifier(tmp_path: Path, monkeypatch: pytest.Monkey
     mock_notifier.notify_backup_failed = AsyncMock(return_value=None)
     mgr._notifier = mock_notifier
 
-    asyncio_run_calls: list = []
-    monkeypatch.setattr("asyncio.run", lambda coro: asyncio_run_calls.append(coro))
-
     mgr._report_failure("daily_20260329", BackupError("err"), duration_s=0.5)
 
-    assert len(asyncio_run_calls) == 1
+    mock_notifier.notify_backup_failed.assert_awaited_once()
 
 
 def test_report_failure_with_metrics(tmp_path: Path) -> None:
