@@ -175,7 +175,7 @@ Essential runtime/safety vars (full reference in `.claude/skills/hft-env-vars/`)
 | `HFT_STRICT_PRICE_MODE` | `0`         | `1` = reject float prices with TypeError  |
 | `HFT_BROKER`            | `shioaji`   | Broker backend: `shioaji` / `fubon`       |
 | `HFT_GATEWAY_ENABLED`   | `0`         | `1` = enable CE-M2 order/risk gateway     |
-| `HFT_FEATURE_ENGINE_ENABLED` | `1`    | `0` = disable FeatureEngine in runtime pipeline |
+| `HFT_FEATURE_ENGINE_ENABLED` | `1`    | `0` = disable FeatureEngine in runtime pipeline (default: v3 with 27 features) |
 
 ## 🎨 Coding Style (Strict)
 
