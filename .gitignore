@@ -4,6 +4,9 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# Codex plugin marker
+.codex
+
 # Environments
 .env
 .env.*
