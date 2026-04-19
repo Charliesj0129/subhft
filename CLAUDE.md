@@ -7,30 +7,17 @@
 - **Stack**: Python 3.12 + Rust (PyO3 via `rust_core`) + ClickHouse + Prometheus
 - **Entry CLI**: `hft run sim|live` → `src/hft_platform/cli.py`
 
-## 🛡️ Critical HFT Laws (THE CONSTITUTION)
+## 🛡️ Critical HFT Laws
 
-**Violation of these laws causes critical latency penalties or financial loss.**
+Five non-negotiable laws. Full detail in `.agent/rules/01-core-laws.md`:
 
-1.  **Allocator Law**:
-    - ❌ **BAD**: `data = [x for x in range(1000)]` (in tick loop)
-    - ✅ **GOOD**: `self.buffer[i] = x` (Pre-allocated)
-    - **Rule**: No `malloc` or heap allocations on the Hot Path. Use Object Pooling.
-2.  **Cache Law**:
-    - ❌ **BAD**: Array of Objects (Pointer Chasing)
-    - ✅ **GOOD**: Structure of Arrays (Contiguous Memory)
-    - **Rule**: Data must be packed for locality. Use `numpy` or Rust `Vec`.
-3.  **Async Law**:
-    - ❌ **BAD**: `requests.get()`, `time.sleep()`, `json.loads(big_file)`
-    - ✅ **GOOD**: `await client.get()`, `await asyncio.sleep()`, `orjson` in thread pool
-    - **Rule**: No blocking IO or compute > 1ms on the main loop.
-4.  **Precision Law**:
-    - ❌ **BAD**: `price = 100.1 + 0.2` (Float)
-    - ✅ **GOOD**: `price = Decimal('100.1')` or `price_micros = 100100000`
-    - **Rule**: Never use `float` for prices/balances. All prices are **scaled int (x10000)**.
-5.  **Boundary Law**:
-    - ❌ **BAD**: Copying large lists between Python and Rust.
-    - ✅ **GOOD**: `PyBuffer` protocol, Arrow, Shared Memory.
-    - **Rule**: Zero-Copy Interfaces only.
+1. **Allocator** — no heap allocations on the hot path (tick loop). Use pre-allocated buffers / object pools / Rust.
+2. **Cache** — Structure of Arrays, not Array of Structures. Pack data for locality (`numpy`, Rust `Vec`).
+3. **Async** — no blocking IO or compute > 1ms on the main event loop. Offload to threads or use async primitives.
+4. **Precision** — never `float` for prices/balances. Use `Decimal` or scaled int (x10000).
+5. **Boundary** — zero-copy Python↔Rust. Use `PyBuffer` protocol, Arrow, or shared memory.
+
+Violation causes critical latency penalties or financial loss.
 
 ## 🏛️ Architecture Quick Reference
 
