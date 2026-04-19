@@ -1,0 +1,128 @@
+"""Populate a :class:`ContractFamilyResolver` from a Shioaji contract table.
+
+Reads ``api.Contracts.Futures.<root>`` and extracts every concrete expiry's
+``delivery_month`` / ``delivery_date``, building a per-root list of
+:class:`FutureRef`. The resolver's snapshot is then swapped atomically so
+every consumer sees a consistent binding.
+
+Design
+------
+* Runs **after** broker login fills the contract table (post-connect hook).
+* Ignores R1/R2/C0/C1 alias entries — they carry no expiry of their own;
+  the family binding itself is what this module builds.
+* Failures in per-contract parsing are logged once and do not abort the
+  whole refresh — one bad contract must not poison the binding table.
+"""
+
+from __future__ import annotations
+
+from calendar import monthrange
+from datetime import UTC, date, datetime
+from typing import Any
+
+from structlog import get_logger
+
+from hft_platform.contracts.family_resolver import (
+    ContractFamilyResolver,
+    build_snapshot_from_calendar,
+)
+from hft_platform.contracts.ref import FutureRef
+from hft_platform.core import timebase
+
+logger = get_logger("feed_adapter.shioaji.family_populator")
+
+_ALIAS_SUFFIXES: frozenset[str] = frozenset({"R1", "R2", "C0", "C1"})
+
+
+def _parse_delivery_to_date(value: Any) -> date | None:
+    """Parse Shioaji's ``delivery_month`` / ``delivery_date`` to a :class:`date`.
+
+    Accepts ``"YYYY/MM"``, ``"YYYYMM"``, ``"YYYY/MM/DD"``, ``"YYYYMMDD"``.
+    When only year+month are available the last day of that month is used
+    as a conservative expiry placeholder (real expiry day is exchange
+    business-calendar specific; close enough for "is this expired" checks).
+    """
+    if value is None:
+        return None
+    raw = str(value).replace("/", "").replace("-", "")
+    try:
+        if len(raw) >= 8:
+            return date(int(raw[:4]), int(raw[4:6]), int(raw[6:8]))
+        if len(raw) >= 6:
+            year, month = int(raw[:4]), int(raw[4:6])
+            last_day = monthrange(year, month)[1]
+            return date(year, month, last_day)
+    except (ValueError, TypeError):
+        return None
+    return None
+
+
+def _extract_futures(api: Any) -> dict[str, list[FutureRef]]:
+    """Walk ``api.Contracts.Futures`` and build per-root :class:`FutureRef` lists."""
+    if api is None:
+        return {}
+    contracts = getattr(api, "Contracts", None)
+    futures = getattr(contracts, "Futures", None) if contracts is not None else None
+    if futures is None:
+        return {}
+    try:
+        roots = list(futures.keys())
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("shioaji_family_populator_roots_failed", error=str(exc))
+        return {}
+
+    out: dict[str, list[FutureRef]] = {}
+    for root in roots:
+        try:
+            contract_list = list(futures[root])
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                "shioaji_family_populator_root_iter_failed",
+                root=str(root),
+                error=str(exc),
+            )
+            continue
+        refs: list[FutureRef] = []
+        for contract in contract_list:
+            code = str(getattr(contract, "code", "") or "")
+            suffix = code[-2:] if len(code) >= 4 else ""
+            if suffix in _ALIAS_SUFFIXES:
+                continue
+            expiry = _parse_delivery_to_date(
+                getattr(contract, "delivery_date", None)
+                or getattr(contract, "delivery_month", None)
+            )
+            if expiry is None:
+                continue
+            refs.append(FutureRef(root=str(root), expiry=expiry))
+        if refs:
+            out[str(root)] = refs
+    return out
+
+
+def populate_resolver_from_shioaji(
+    resolver: ContractFamilyResolver,
+    api: Any,
+    *,
+    today: date | None = None,
+) -> int:
+    """Swap ``resolver``'s snapshot to one derived from the Shioaji contract
+    table. Returns the number of family bindings installed. Idempotent —
+    repeat calls with an unchanged contract table produce no rebinds (and
+    therefore no hook fires).
+    """
+    if today is None:
+        today = datetime.now(UTC).date()
+    calendars = _extract_futures(api)
+    snapshot = build_snapshot_from_calendar(
+        calendars,
+        today=today,
+        snapshot_ns=timebase.now_ns(),
+    )
+    resolver.swap_snapshot(snapshot)
+    logger.info(
+        "shioaji_family_populator_snapshot_installed",
+        roots=sorted(calendars.keys()),
+        bindings=len(snapshot.family_map),
+    )
+    return len(snapshot.family_map)

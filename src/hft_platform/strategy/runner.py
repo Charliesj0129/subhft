@@ -334,6 +334,12 @@ class StrategyRunner:
         self._queue_full_consecutive: int = 0
         self._queue_full_halt_threshold: int = int(os.getenv("HFT_QUEUE_FULL_HALT_THRESHOLD", "3"))
 
+        # Option-3 Gate 1 prod: ContractFamily-based subscriptions. Set via
+        # :meth:`set_family_resolver` after construction. A strategy that
+        # declares ``contract_families`` gets ``strategy.symbols`` populated
+        # from the resolver at register + auto-updated on snapshot swap.
+        self._family_resolver: Any = None
+
         # Load initial
         for strat in self.registry.instantiate():
             self.register(strat)
@@ -374,6 +380,74 @@ class StrategyRunner:
         for strategy in self.strategies:
             self._resolve_strategy_symbols(strategy)
             self._resolve_strategy_symbol_params(strategy)
+
+    # ------------------------------------------------------------------ #
+    # Option-3 Gate 1 prod: ContractFamily-based subscriptions
+    # ------------------------------------------------------------------ #
+
+    def set_family_resolver(self, resolver: Any | None) -> None:
+        """Attach a :class:`ContractFamilyResolver`.
+
+        Strategies declaring ``contract_families`` get their ``symbols`` set
+        populated from the resolver's current snapshot, and the runner
+        registers a hook so subsequent snapshot swaps rebind
+        ``strategy.symbols`` atomically (no alias-propagation race).
+
+        Calling this after construction re-applies bindings to every
+        already-registered strategy.
+        """
+        self._family_resolver = resolver
+        if resolver is None:
+            return
+        try:
+            resolver.add_hook(self._on_family_rebind)
+        except AttributeError:
+            logger.warning("strategy_runner_family_resolver_missing_add_hook")
+            return
+        for strat in self.strategies:
+            self._apply_family_bindings(strat)
+
+    def _apply_family_bindings(self, strategy: Any) -> None:
+        """Add the current concrete display for each declared family into
+        ``strategy.symbols``. No-op when the strategy has no
+        ``contract_families`` or the resolver is not attached.
+        """
+        resolver = getattr(self, "_family_resolver", None)
+        if resolver is None:
+            return
+        families = getattr(strategy, "contract_families", None) or ()
+        if not families:
+            return
+        syms = set(getattr(strategy, "symbols", None) or set())
+        for family in families:
+            ref = resolver.resolve_family(family)
+            if ref is not None:
+                syms.add(ref.display())
+        strategy.symbols = syms
+
+    def _on_family_rebind(self, change: Any) -> None:
+        """Hook fired by the family resolver on binding change. Updates
+        ``strategy.symbols`` for every registered strategy that subscribes
+        to the changed family.
+        """
+        for strat in self.strategies:
+            families = getattr(strat, "contract_families", None) or ()
+            if change.family not in families:
+                continue
+            syms = set(getattr(strat, "symbols", None) or set())
+            if change.old_ref is not None:
+                syms.discard(change.old_ref.display())
+            if change.new_ref is not None:
+                syms.add(change.new_ref.display())
+            strat.symbols = syms
+            logger.info(
+                "strategy_family_rebind",
+                strategy_id=getattr(strat, "strategy_id", "?"),
+                family=str(change.family),
+                new_ref=(
+                    change.new_ref.display() if change.new_ref is not None else None
+                ),
+            )
 
     def set_publish_sink(self, sink: Any) -> None:
         """Set the publish callback for strategy-to-bus publication."""
@@ -519,6 +593,10 @@ class StrategyRunner:
         self.strategies.append(strategy)
         self._strategies_version += 1
         self._resolve_strategy_symbols(strategy)
+        # Option-3 Gate 1 prod: seed ContractFamily-declared strategies from
+        # the current resolver snapshot. No-op when the strategy is purely
+        # str-based (legacy) or the resolver is not yet attached.
+        self._apply_family_bindings(strategy)
         self._strat_executors.append(self._build_executor_entry(strategy))
         self._executors_version = self._strategies_version
         idx = len(self._strat_executors) - 1

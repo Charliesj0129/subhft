@@ -1017,6 +1017,15 @@ class SystemBootstrapper:
 
         strategy_runner.set_storm_guard(storm_guard)
 
+        # Option-3 Gate 1 prod: instantiate ContractFamilyResolver and wire it
+        # into the runner. Strategies that declare ``contract_families`` get
+        # ``strategy.symbols`` populated from the resolver on snapshot swap
+        # — no dependence on the ``alias_to_actual`` propagation path.
+        from hft_platform.contracts.family_resolver import ContractFamilyResolver
+
+        family_resolver = ContractFamilyResolver()
+        strategy_runner.set_family_resolver(family_resolver)
+
         # After broker login+subscription, re-resolve strategy/governor symbols with alias map
         md_service._post_connect_hooks.append(strategy_runner.resolve_symbol_aliases)
 
@@ -1053,6 +1062,28 @@ class SystemBootstrapper:
             if alias_map:
                 order_adapter.set_alias_map(alias_map)
         md_service._post_connect_hooks.append(_propagate_alias_to_order_adapter)
+
+        # Option-3 Gate 1 prod: post-connect populator for the ContractFamily
+        # resolver. Reads the Shioaji contract table (available after login)
+        # and swaps the resolver snapshot. Registered *after* the legacy
+        # hooks so the family rebind does not interfere with their ordering;
+        # Fubon's populator is deferred pending a TAIFEX calendar source.
+        if broker_id == "shioaji":
+            from hft_platform.feed_adapter.shioaji.family_populator import (
+                populate_resolver_from_shioaji,
+            )
+
+            def _populate_families_from_shioaji() -> None:
+                try:
+                    populate_resolver_from_shioaji(
+                        family_resolver, getattr(md_client, "api", None)
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "family_populator_failed", broker="shioaji", error=str(exc)
+                    )
+
+            md_service._post_connect_hooks.append(_populate_families_from_shioaji)
 
         if _publish_queue is not None:
             strategy_runner.set_publish_sink(lambda ch, payload: _publish_queue.put_nowait((ch, payload)))
