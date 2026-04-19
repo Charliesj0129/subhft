@@ -1,6 +1,9 @@
 from dataclasses import dataclass
 from enum import IntEnum
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
+
+if TYPE_CHECKING:
+    from hft_platform.contracts.ref import ContractRef
 
 
 class Side(IntEnum):
@@ -64,6 +67,13 @@ class OrderIntent:
 
     # Order type: "LMT" (default limit order) or "MKT" (market order)
     price_type: str = "LMT"
+
+    # Option-3 Gate 3 slice: optional structured contract identity that
+    # propagates from ``event.contract`` (Gate 2b) through the
+    # strategy → risk → order path. Legacy consumers that key on
+    # ``symbol`` are unaffected; consumers that understand ContractRef
+    # can prefer this over parsing ``symbol`` strings.
+    contract: Optional["ContractRef"] = None
 
 
 @dataclass(slots=True)

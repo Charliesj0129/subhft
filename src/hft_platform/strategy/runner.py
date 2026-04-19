@@ -237,6 +237,10 @@ class StrategyRunner:
         self._positions_dirty = True
         self._current_source_ts_ns = 0
         self._current_trace_id = ""
+        # Option-3 Gate 3 slice: propagated from the currently-processed
+        # event (see ``process_event``). Read by ``_intent_factory`` for the
+        # object-form intent path.
+        self._current_contract: Any = None
         _stale_ms = int(os.getenv("HFT_STALE_EVENT_THRESHOLD_MS", "500"))
         self._stale_event_threshold_ns: int = _stale_ms * 1_000_000
         self._stale_event_skip_total: int = 0
@@ -846,6 +850,7 @@ class StrategyRunner:
             trace_id=str(trace_id or ""),
             price_type=price_type,
             ttl_ns=self._default_intent_ttl_ns,
+            contract=getattr(self, "_current_contract", None),
         )
 
     def _scale_price(self, symbol: str, price: int | Decimal) -> int:
@@ -933,6 +938,11 @@ class StrategyRunner:
         source_ts_ns, trace_id = self._extract_event_trace(event)
         self._current_source_ts_ns = source_ts_ns
         self._current_trace_id = trace_id
+        # Option-3 Gate 3 slice: track the event's ContractRef (Gate 2b fills
+        # it in the normalizer). Intents produced by this event copy the ref
+        # so downstream Risk/Order consumers can prefer it over parsing
+        # ``symbol`` strings. None for events that predate the dual-write.
+        self._current_contract = getattr(event, "contract", None)
         # Staleness guard: skip events older than threshold to prevent
         # strategies from acting on stale market data during event loop lag.
         if source_ts_ns > 0:
