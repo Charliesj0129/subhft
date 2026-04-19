@@ -14,7 +14,7 @@ Rules are auto-loaded by agents from `.agent/rules/`.
 | `30-git.md`                     | Commits, branches, pre-commit, hygiene              | ~63   |
 | `40-ops.md`                     | Docker Compose, service health, common ops          | ~55   |
 | `50-testing.md`                 | Coverage goals, test pyramid, what to test          | ~25   |
-| `55-enforcement.md`            | Pre-commit hooks, discipline rules, CI gates        | ~75   |
+| `55-enforcement.md`            | Pre-commit hooks, discipline rules, CI gates        | ~43   |
 | `60-agent-workflow-governance.md` | Agent mutual exclusion, blast radius, conflict protocol | ~180 |
 
 ## Related Context
