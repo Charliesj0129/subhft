@@ -67,35 +67,6 @@ Mandatory policy:
 3. Record latency assumptions in research artifacts; missing latency profile = non-promotion-ready.
 4. Treat sub-broker-RTT alpha half-lives as optimistic until validated via shadow/live evidence.
 
-### Runtime Planes (7)
-
-| Plane         | Key Module                                                                           | Responsibility                              |
-| ------------- | ------------------------------------------------------------------------------------ | ------------------------------------------- |
-| Control       | `services/bootstrap.py`, `services/system.py`                                        | Bounded queues, service graph, supervision  |
-| Market Data   | `feed_adapter/shioaji_client.py`, `normalizer.py`, `lob_engine.py`; fused path: `RustNormalizerLobFused` / `RustNormalizerFeatureFusedV1` | Ingest → normalize → LOB state (fused Rust path optional via `HFT_FUSED_NORMALIZER=1`) |
-| Feature       | `feature/engine.py`, `feature/registry.py`                                            | 27 LOB-derived features (v3), research/live parity                  |
-| Decision      | `strategy/runner.py`, `risk/engine.py`                                               | Strategy dispatch → risk validation         |
-| Execution     | `order/adapter.py`, `execution/router.py`, `execution/positions.py`, `execution/checkpoint.py`, `execution/startup_recon.py` | Broker API, fill routing, position tracking, checkpoint, startup recon |
-| Persistence   | `recorder/worker.py`, `recorder/batcher.py`, `recorder/writer.py`, `recorder/wal.py` | ClickHouse + WAL fallback                   |
-| Observability | `observability/metrics.py`, `risk/storm_guard.py`                                    | Prometheus metrics, StormGuard FSM          |
-
-### Non-Hot-Path Services (Cold Plane)
-
-These modules run outside the tick-processing loop and are not latency-critical. Float arithmetic is permitted.
-
-| Service        | Module                       | Purpose                                                                 |
-| -------------- | ---------------------------- | ----------------------------------------------------------------------- |
-| Notifications  | `notifications/`             | Telegram + webhook alert routing (23+ templates, critical retry)        |
-| Telegram Bot   | `bot/`                       | Interactive commands (`/report`, `/levels`, `/flow`, `/status`, `/stop`) |
-| TCA            | `tca/`                       | Transaction cost analysis (fee calc + 4-component slippage decomposition) |
-| Reports        | `reports/`                   | Daily market analysis pipeline (collect → facts → reason → compose → distribute) |
-| Monitor TUI    | `monitor/`                   | Live signal monitoring (ClickHouse + Redis + SHM hybrid data)           |
-| Ops            | `ops/`                       | SessionGovernor, AutonomyMonitor, BackupManager, PositionFlattener      |
-| Analytics      | `analytics/`                 | ClickHouse query templates for offline analysis                         |
-| Diagnostics    | `diagnostics/`               | Event replay, decision trace sampling for post-mortem                   |
-
-Module documentation: `docs/modules/<module>.md` for each service.
-
 ### Package Naming Convention
 
 Two splits in the codebase can look confusing but are intentional:
@@ -111,32 +82,9 @@ Do not rename these packages — they are load-bearing across hundreds of import
 
 All prices are scaled int (x10000). Contract flow: `OrderIntent → RiskDecision → OrderCommand → FillEvent → PositionDelta`. Field reference (per-contract files and columns): `.claude/skills/hft-data-contracts/` (on-demand skill).
 
-## ⚙️ Config Priority Chain
-
-Settings are resolved via layered merge in `config/loader.py`:
-
-```
-Base YAML (config/base/main.yaml)
-  → Env YAML (config/env/{mode}/main.yaml)
-    → settings.py (config/settings.py)
-      → Environment Variables (HFT_MODE, HFT_SYMBOLS, ...)
-        → CLI Overrides (--mode, --symbols, ...)
-```
-
 ## 🧬 Alpha Governance Pipeline
 
-Full lifecycle from research to production, implemented in `src/hft_platform/alpha/`:
-
-| Gate       | Check                              | Module                                 |
-| ---------- | ---------------------------------- | -------------------------------------- |
-| **A**      | Manifest + data-field + complexity | `alpha/validation.py::run_gate_a`      |
-| **B**      | Per-alpha pytest execution         | `alpha/validation.py::run_gate_b`      |
-| **C**      | Standardized backtest + scorecard  | `alpha/validation.py::run_gate_c`      |
-| **D**      | Sharpe/drawdown thresholds         | `alpha/promotion.py::_evaluate_gate_d` |
-| **E**      | Shadow session + execution quality | `alpha/promotion.py::_evaluate_gate_e` |
-| **Canary** | Hold/escalate/rollback/graduate    | `alpha/canary.py`                      |
-
-Research artifacts: `research/alphas/<alpha_id>/` (48+ implementations), experiment runs: `research/experiments/runs/`. Feature kernels unified via `FeatureEngine` (Phase 18); remaining parity work tracked in `docs/TODO.md`.
+Research → Gates A/B/C/D/E → Canary. Implementation in `src/hft_platform/alpha/`. Research artifacts: `research/alphas/<alpha_id>/`.
 
 ## 🤖 Commands
 
