@@ -210,8 +210,8 @@ notebooks/.ipynb_checkpoints
 # Claude Code local state
 .claude/worktrees/
 .claude/agents/
-.claude/skills/
 .claude/*.lock
+# Note: .claude/skills/ IS tracked — project-specific on-demand reference skills
 
 # ArXiv paper storage (local only)
 arxiv_papers/
