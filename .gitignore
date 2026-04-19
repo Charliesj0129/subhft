@@ -203,8 +203,9 @@ notebooks/.ipynb_checkpoints
 .gemini/
 .antigravity/
 
-# Agent prompts (local only)
-/.agent/
+# Agent prompts (local only) — but rules/ is tracked so auto-loaded rules work across machines
+/.agent/*
+!/.agent/rules/
 /agent_prompts/
 
 # Claude Code local state
