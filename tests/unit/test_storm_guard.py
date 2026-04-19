@@ -315,7 +315,7 @@ def test_halt_callback_exception_does_not_propagate(guard):
     assert guard.state == StormGuardState.HALT
 
 
-def test_halt_callback_coroutine_no_running_loop(guard):
+def test_halt_callback_coroutine_no_running_loop(guard, recwarn):
     """Coroutine callback when no event loop is running logs warning, does not crash."""
 
     async def async_cb():
@@ -323,6 +323,8 @@ def test_halt_callback_coroutine_no_running_loop(guard):
 
     guard._on_halt_callback = async_cb
     guard.trigger_halt("async no loop")
+    runtime_warnings = [w for w in recwarn if issubclass(w.category, RuntimeWarning)]
+    assert runtime_warnings == []
     assert guard.state == StormGuardState.HALT
 
 

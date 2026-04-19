@@ -446,7 +446,9 @@ class StormGuard:
                     future = asyncio.run_coroutine_threadsafe(result, loop)
                     future.add_done_callback(self._halt_callback_done)
                 except RuntimeError:
-                    # No running event loop; log and discard
+                    # No running event loop; close the coroutine explicitly so
+                    # the interpreter does not emit an unawaited-coroutine warning.
+                    result.close()
                     logger.warning("halt_callback_coroutine_no_loop")
         except Exception as exc:
             logger.error(

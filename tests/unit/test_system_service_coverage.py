@@ -843,6 +843,7 @@ class TestStopSyncFallback:
         sys_obj.loop = mock_loop
 
         with patch("asyncio.create_task") as mock_ct:
+            mock_ct.side_effect = lambda coro: (coro.close(), MagicMock(name="stop_async_task"))[1]
             sys_obj.stop()
 
         assert sys_obj.running is False

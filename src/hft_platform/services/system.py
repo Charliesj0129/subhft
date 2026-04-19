@@ -555,6 +555,7 @@ class HFTSystem:
                 logger.warning("PnL snapshot export failed", exc_info=True)
 
     def _iter_supervised_services(self) -> list[tuple[str, str, Any]]:
+        position_stuck_monitor = getattr(self, "position_stuck_monitor", None)
         services: list[tuple[str, str, Any]] = [
             ("md", "MarketDataService", self.md_service.run),
             ("exec_router", "ExecutionRouter", self.exec_service.run),
@@ -576,9 +577,9 @@ class HFTSystem:
             services.append(("risk", "RiskEngine", self.risk_engine.run))
         if self.autonomy_monitor is not None:
             services.append(("autonomy_monitor", "AutonomyMonitor", self.autonomy_monitor.run))
-        if self.position_stuck_monitor is not None:
+        if position_stuck_monitor is not None:
             services.append(
-                ("position_stuck_monitor", "PositionStuckMonitor", self.position_stuck_monitor.run)
+                ("position_stuck_monitor", "PositionStuckMonitor", position_stuck_monitor.run)
             )
         return services
 

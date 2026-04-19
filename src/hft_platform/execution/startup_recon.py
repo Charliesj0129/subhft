@@ -319,7 +319,8 @@ class StartupPositionVerifier:
         Returns False on missing or malformed dates; caller then logs
         ``checkpoint stale`` at warning level.
         """
-        from datetime import datetime as _dt, timedelta as _td
+        from datetime import datetime as _dt
+        from zoneinfo import ZoneInfo
 
         if not ckpt_td or len(ckpt_td) != 8 or not ckpt_td.isdigit():
             return False
@@ -330,7 +331,17 @@ class StartupPositionVerifier:
             b = _dt.strptime(current_td, "%Y%m%d")
         except ValueError:
             return False
-        return abs((a - b).days) <= tolerance_days
+        delta_days = abs((a - b).days)
+        if delta_days == 0:
+            return True
+        if delta_days > tolerance_days:
+            return False
+
+        # Only treat adjacent trading dates as equivalent during the brief
+        # 05:00 handover window where a just-written night-session checkpoint
+        # can legitimately straddle the TAIFEX trading-date rollover.
+        now_tpe = _dt.fromtimestamp(timebase.now_s(), tz=ZoneInfo("Asia/Taipei"))
+        return now_tpe.hour == 5 and now_tpe.minute <= 5
 
     @staticmethod
     def _parse_composite_key(key: str) -> tuple[str, str, str]:

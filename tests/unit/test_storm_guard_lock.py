@@ -214,9 +214,13 @@ def test_async_halt_callback_uses_threadsafe():
     mock_loop = MagicMock()
     mock_future = MagicMock()
 
+    def _close_and_return(coro, loop):
+        coro.close()
+        return mock_future
+
     with (
         patch("asyncio.get_running_loop", return_value=mock_loop),
-        patch("asyncio.run_coroutine_threadsafe", return_value=mock_future) as mock_rcts,
+        patch("asyncio.run_coroutine_threadsafe", side_effect=_close_and_return) as mock_rcts,
     ):
         guard.trigger_halt("async-test")
 

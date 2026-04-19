@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -127,7 +127,7 @@ def write_contract_cache(contracts: list[dict[str, Any]], path: str = DEFAULT_CO
 
     payload = {
         "cache_version": cache_version,
-        "updated_at": datetime.utcnow().isoformat() + "Z",
+        "updated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "contracts": contracts,
     }
     tmp = dest.with_suffix(".json.tmp")

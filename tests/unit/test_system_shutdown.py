@@ -138,7 +138,11 @@ async def test_stop_async_drain_timeout_does_not_block_shutdown():
     system = _build_system(reg)
 
     # Patch the timeout to be very short so test doesn't hang
-    with patch("hft_platform.services.system.asyncio.wait_for", side_effect=asyncio.TimeoutError):
+    async def _timeout_and_close(awaitable, timeout):
+        awaitable.close()
+        raise asyncio.TimeoutError
+
+    with patch("hft_platform.services.system.asyncio.wait_for", side_effect=_timeout_and_close):
         await system.stop_async()
 
     # Shutdown completed despite drain timeout — verify by checking tasks cleared
