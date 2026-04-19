@@ -1,4 +1,5 @@
 """Tests for extended BacktestResult with provenance metadata."""
+
 import numpy as np
 import pytest
 

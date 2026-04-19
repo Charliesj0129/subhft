@@ -13,7 +13,6 @@ import pytest
 
 from hft_platform.recorder.writer import DataWriter
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -786,6 +785,7 @@ async def test_write_columnar_uses_batch_writer_add_columnar(connected_writer):
     connected_writer._wal_batch_enabled = True
 
     import hft_platform.core.timebase as tb
+
     now_ns = tb.now_ns()
 
     loop = asyncio.get_event_loop()
@@ -804,6 +804,7 @@ async def test_write_columnar_batch_writer_without_add_columnar(connected_writer
     connected_writer._wal_batch_enabled = True
 
     import hft_platform.core.timebase as tb
+
     now_ns = tb.now_ns()
 
     loop = asyncio.get_event_loop()
@@ -823,6 +824,7 @@ async def test_write_columnar_double_fault_raises(connected_writer):
     connected_writer._wal_batch_enabled = False
 
     import hft_platform.core.timebase as tb
+
     now_ns = tb.now_ns()
 
     loop = asyncio.get_event_loop()
@@ -923,7 +925,9 @@ def test_connect_retries_with_backoff(mock_sleep, mock_ch, tmp_path):
     mock_client = MagicMock()
     mock_ch.get_client.side_effect = [ConnectionError("fail"), mock_client]
 
-    with patch.dict("os.environ", {"HFT_CLICKHOUSE_ENABLED": "1", "HFT_CH_MAX_RETRIES": "2", "HFT_CH_BASE_DELAY_S": "0.01"}):
+    with patch.dict(
+        "os.environ", {"HFT_CLICKHOUSE_ENABLED": "1", "HFT_CH_MAX_RETRIES": "2", "HFT_CH_BASE_DELAY_S": "0.01"}
+    ):
         writer = DataWriter(wal_dir=str(tmp_path))
         with (
             patch.object(writer, "_init_schema"),
@@ -940,7 +944,11 @@ def test_connect_with_native_fallback(mock_sleep, mock_ch, tmp_path):
     mock_client = MagicMock()
     mock_ch.get_client.side_effect = [Exception("unrecognized client type native"), mock_client]
 
-    with patch.dict("os.environ", {"HFT_CLICKHOUSE_ENABLED": "1", "HFT_CH_MAX_RETRIES": "1"}):
+    with patch.dict(
+        "os.environ",
+        {"HFT_CLICKHOUSE_ENABLED": "1", "HFT_CH_MAX_RETRIES": "1", "HFT_CLICKHOUSE_PORT": "9000"},
+        clear=False,
+    ):
         writer = DataWriter(wal_dir=str(tmp_path))
         with (
             patch.object(writer, "_init_schema"),
@@ -1165,6 +1173,7 @@ def test_start_heartbeat_runs_and_stops_on_heartbeat_failure(tmp_path):
         w._start_heartbeat_thread()
         # Wait briefly for heartbeat to detect failure
         import time
+
         time.sleep(0.1)
 
     # Heartbeat should have marked connection as stale
@@ -1253,10 +1262,13 @@ async def test_shutdown_drains_semaphore_before_pool_shutdown(writer):
 @pytest.mark.asyncio
 async def test_shutdown_timeout_on_in_flight_inserts(tmp_path):
     """shutdown times out when semaphore is partially acquired."""
-    with patch.dict("os.environ", {
-        "HFT_CLICKHOUSE_ENABLED": "0",
-        "HFT_CH_SHUTDOWN_TIMEOUT_S": "0",
-    }):
+    with patch.dict(
+        "os.environ",
+        {
+            "HFT_CLICKHOUSE_ENABLED": "0",
+            "HFT_CH_SHUTDOWN_TIMEOUT_S": "0",
+        },
+    ):
         w = DataWriter(wal_dir=str(tmp_path))
     w._wal_batch_writer = None
 
@@ -1265,6 +1277,7 @@ async def test_shutdown_timeout_on_in_flight_inserts(tmp_path):
 
     # Patch time.monotonic to make deadline already passed
     import time as _time
+
     original_monotonic = _time.monotonic
     call_count = [0]
 

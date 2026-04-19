@@ -232,7 +232,9 @@ class TestRunAlphaValidation:
             mock_registry_instance = MagicMock()
             mock_registry_instance.discover.return_value = {}
             mock_registry_cls.return_value = mock_registry_instance
-            with patch.dict("sys.modules", {"research.registry.alpha_registry": MagicMock(AlphaRegistry=mock_registry_cls)}):
+            with patch.dict(
+                "sys.modules", {"research.registry.alpha_registry": MagicMock(AlphaRegistry=mock_registry_cls)}
+            ):
                 with pytest.raises(ValueError, match="Unknown alpha_id"):
                     run_alpha_validation(config)
 
@@ -304,7 +306,10 @@ class TestRunAlphaValidation:
             patch("hft_platform.alpha.validation._write_json"),
             patch("hft_platform.alpha.validation.run_gate_a", return_value=passed_a),
             patch("hft_platform.alpha.validation.run_gate_b", return_value=passed_b),
-            patch("hft_platform.alpha.validation.run_gate_c", return_value=(passed_c, "run-1", "hash-1", str(tmp_path / "sc.json"), str(tmp_path / "meta.json"))),
+            patch(
+                "hft_platform.alpha.validation.run_gate_c",
+                return_value=(passed_c, "run-1", "hash-1", str(tmp_path / "sc.json"), str(tmp_path / "meta.json")),
+            ),
             patch("hft_platform.alpha.validation._resolve_data_path", side_effect=lambda root, p: p),
             patch("hft_platform.alpha.validation._update_manifest_status"),
             patch.dict("sys.modules", {"research.registry.alpha_registry": MagicMock(AlphaRegistry=mock_registry_cls)}),
@@ -352,13 +357,19 @@ class TestRunAlphaValidation:
             patch("hft_platform.alpha.validation._write_json"),
             patch("hft_platform.alpha.validation.run_gate_a", return_value=passed_a),
             patch("hft_platform.alpha.validation.run_gate_b", return_value=passed_b),
-            patch("hft_platform.alpha.validation.run_gate_c", return_value=(passed_c, "run-1", "hash-1", str(tmp_path / "sc.json"), str(tmp_path / "meta.json"))),
+            patch(
+                "hft_platform.alpha.validation.run_gate_c",
+                return_value=(passed_c, "run-1", "hash-1", str(tmp_path / "sc.json"), str(tmp_path / "meta.json")),
+            ),
             patch("hft_platform.alpha.validation._resolve_data_path", side_effect=lambda root, p: p),
             patch("hft_platform.alpha.validation._update_manifest_status"),
-            patch.dict("sys.modules", {
-                "research.registry.alpha_registry": MagicMock(AlphaRegistry=mock_registry_cls),
-                "hft_platform.alpha.audit": audit_mod,
-            }),
+            patch.dict(
+                "sys.modules",
+                {
+                    "research.registry.alpha_registry": MagicMock(AlphaRegistry=mock_registry_cls),
+                    "hft_platform.alpha.audit": audit_mod,
+                },
+            ),
         ):
             result = run_alpha_validation(config)
 

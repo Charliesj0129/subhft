@@ -32,7 +32,6 @@ from hft_platform.execution.checkpoint import (
 )
 from hft_platform.execution.startup_recon import StartupPositionVerifier
 
-
 _TZ_TPE = ZoneInfo("Asia/Taipei")
 
 
@@ -116,8 +115,10 @@ async def test_recover_accepts_night_session_checkpoint_written_before_rollover(
     verifier._fetch_broker_positions = AsyncMock(side_effect=RuntimeError("broker offline"))  # type: ignore[method-assign]
 
     fake_now = datetime(2026, 4, 17, 4, 59, 30, tzinfo=_TZ_TPE)
-    with patch("hft_platform.execution.startup_recon.timebase.now_s", return_value=fake_now.timestamp()), \
-         patch("hft_platform.execution.checkpoint.timebase.now_s", return_value=fake_now.timestamp()):
+    with (
+        patch("hft_platform.execution.startup_recon.timebase.now_s", return_value=fake_now.timestamp()),
+        patch("hft_platform.execution.checkpoint.timebase.now_s", return_value=fake_now.timestamp()),
+    ):
         result = await verifier.recover()
 
     assert result.source == "checkpoint_only", (
@@ -148,8 +149,10 @@ async def test_recover_accepts_checkpoint_across_0500_boundary_with_broker_toler
     verifier._fetch_broker_positions = AsyncMock(return_value={"TMFD6": -1})  # type: ignore[method-assign]
 
     fake_now = datetime(2026, 4, 17, 5, 1, 0, tzinfo=_TZ_TPE)
-    with patch("hft_platform.execution.startup_recon.timebase.now_s", return_value=fake_now.timestamp()), \
-         patch("hft_platform.execution.checkpoint.timebase.now_s", return_value=fake_now.timestamp()):
+    with (
+        patch("hft_platform.execution.startup_recon.timebase.now_s", return_value=fake_now.timestamp()),
+        patch("hft_platform.execution.checkpoint.timebase.now_s", return_value=fake_now.timestamp()),
+    ):
         result = await verifier.recover()
 
     # The legitimate checkpoint must NOT be discarded; dual-source recovery
@@ -176,8 +179,10 @@ async def test_recover_rejects_checkpoint_more_than_one_day_stale(tmp_path):
     verifier._fetch_broker_positions = AsyncMock(return_value={"TMFD6": -1})  # type: ignore[method-assign]
 
     fake_now = datetime(2026, 4, 17, 10, 0, 0, tzinfo=_TZ_TPE)
-    with patch("hft_platform.execution.startup_recon.timebase.now_s", return_value=fake_now.timestamp()), \
-         patch("hft_platform.execution.checkpoint.timebase.now_s", return_value=fake_now.timestamp()):
+    with (
+        patch("hft_platform.execution.startup_recon.timebase.now_s", return_value=fake_now.timestamp()),
+        patch("hft_platform.execution.checkpoint.timebase.now_s", return_value=fake_now.timestamp()),
+    ):
         result = await verifier.recover()
 
     assert result.source == "broker_only"

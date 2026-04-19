@@ -41,7 +41,6 @@ from hft_platform.gateway.exposure import ExposureLimitError, ExposureStore
 from hft_platform.gateway.policy import GatewayPolicy
 from hft_platform.gateway.service import GatewayService, _bool_env, _int_env, _obs_policy
 
-
 # ── Helpers ────────────────────────────────────────────────────────────────
 
 

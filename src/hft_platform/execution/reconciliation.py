@@ -132,20 +132,12 @@ class ReconciliationService:
         # Auto-correct: after N consecutive observations of the SAME persistent
         # critical drift, adopt broker state to break the drift loop.
         # Default 5 = ~25s at 5s interval (conservative: gives time for fills).
-        self._auto_correct_after: int = int(
-            os.environ.get("HFT_RECON_AUTO_CORRECT_AFTER", "5")
-        )
-        self._auto_correct_enabled: bool = (
-            os.environ.get("HFT_RECON_AUTO_CORRECT_ENABLED", "1") == "1"
-        )
+        self._auto_correct_after: int = int(os.environ.get("HFT_RECON_AUTO_CORRECT_AFTER", "5"))
+        self._auto_correct_enabled: bool = os.environ.get("HFT_RECON_AUTO_CORRECT_ENABLED", "1") == "1"
         # Futures auto-correct threshold: only auto-correct if abs(diff) <= this
-        self._auto_correct_futures_max_qty: int = int(
-            os.environ.get("HFT_RECON_AUTO_CORRECT_FUTURES_MAX_QTY", "2")
-        )
+        self._auto_correct_futures_max_qty: int = int(os.environ.get("HFT_RECON_AUTO_CORRECT_FUTURES_MAX_QTY", "2"))
         # Stock auto-correct threshold
-        self._auto_correct_stock_max_qty: int = int(
-            os.environ.get("HFT_RECON_AUTO_CORRECT_STOCK_MAX_QTY", "10")
-        )
+        self._auto_correct_stock_max_qty: int = int(os.environ.get("HFT_RECON_AUTO_CORRECT_STOCK_MAX_QTY", "10"))
         # Platform-managed symbols: derived dynamically from client at sync time.
         # Non-platform symbols (e.g. manually traded via broker app) get relaxed
         # treatment: phantom positions are auto-resolved without triggering HALT.
@@ -364,10 +356,7 @@ class ReconciliationService:
                 if resolved:
                     logger.warning(
                         "non_platform_phantom_auto_resolved",
-                        resolved=[
-                            {"symbol": d.symbol, "local_qty": d.local_qty}
-                            for d in resolved
-                        ],
+                        resolved=[{"symbol": d.symbol, "local_qty": d.local_qty} for d in resolved],
                     )
                     try:
                         for d in resolved:
@@ -441,10 +430,7 @@ class ReconciliationService:
                         )
                         # Auto-correct: after sufficient consecutive observations
                         # of the same persistent drift, adopt broker state.
-                        if (
-                            self._auto_correct_enabled
-                            and self._critical_drift_streak >= self._auto_correct_after
-                        ):
+                        if self._auto_correct_enabled and self._critical_drift_streak >= self._auto_correct_after:
                             correctable = self._filter_auto_correctable(critical)
                             if correctable:
                                 await self._auto_correct_drift(correctable, broker_map)
@@ -587,9 +573,7 @@ class ReconciliationService:
 
         return discrepancies
 
-    def _filter_auto_correctable(
-        self, discrepancies: List[PositionDiscrepancy]
-    ) -> List[PositionDiscrepancy]:
+    def _filter_auto_correctable(self, discrepancies: List[PositionDiscrepancy]) -> List[PositionDiscrepancy]:
         """Filter discrepancies eligible for auto-correction.
 
         Two directions are supported:
@@ -601,11 +585,7 @@ class ReconciliationService:
         """
         result: List[PositionDiscrepancy] = []
         for d in discrepancies:
-            max_qty = (
-                self._auto_correct_futures_max_qty
-                if d.is_futures
-                else self._auto_correct_stock_max_qty
-            )
+            max_qty = self._auto_correct_futures_max_qty if d.is_futures else self._auto_correct_stock_max_qty
             # Direction 1: local=0, broker>0 (orphaned phantom fill)
             if d.local_qty == 0 and abs(d.broker_qty) <= max_qty:
                 result.append(d)
@@ -704,9 +684,7 @@ class ReconciliationService:
                     strategy_id=MANUAL_STRATEGY_ID,
                 )
             try:
-                self._metrics().reconciliation_auto_corrected_total.labels(
-                    symbol=d.symbol
-                ).inc()
+                self._metrics().reconciliation_auto_corrected_total.labels(symbol=d.symbol).inc()
             except Exception:
                 pass
 

@@ -33,9 +33,7 @@ class TestContractFamilyParser:
     def test_parse_single_entry(self) -> None:
         raw = [{"product": "FUTURE", "root": "TMF", "family": "R1"}]
         out = _parse_contract_families(raw)
-        assert out == (
-            ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1),
-        )
+        assert out == (ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1),)
 
     def test_parse_multiple_entries(self) -> None:
         raw = [
@@ -98,9 +96,7 @@ class TestR47Config:
                             "enabled": False,  # avoid instantiation side effects
                             "product_type": "FUT",
                             "symbols": ["TMFE6"],
-                            "contract_families": [
-                                {"product": "FUTURE", "root": "TMF", "family": "R1"}
-                            ],
+                            "contract_families": [{"product": "FUTURE", "root": "TMF", "family": "R1"}],
                             "params": {},
                         }
                     ]
@@ -111,9 +107,7 @@ class TestR47Config:
         reg = StrategyRegistry(str(cfg))
         assert len(reg.configs) == 1
         cfg0 = reg.configs[0]
-        assert cfg0.contract_families == [
-            {"product": "FUTURE", "root": "TMF", "family": "R1"}
-        ]
+        assert cfg0.contract_families == [{"product": "FUTURE", "root": "TMF", "family": "R1"}]
 
 
 class TestEndToEndBinding:
@@ -136,9 +130,7 @@ class TestEndToEndBinding:
             {
                 "strategy_id": "r47_test",
                 "symbols": {"TMFE6"},  # pre-existing hardcode
-                "contract_families": (
-                    ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1),
-                ),
+                "contract_families": (ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1),),
                 "enabled": True,
             },
         )()
@@ -167,9 +159,7 @@ class TestEndToEndBinding:
             )
         )
         assert "TMFF6" in strat.symbols
-        assert "TMFE6" not in strat.symbols, (
-            "R47 symbols should drop the expired ref on rollover"
-        )
+        assert "TMFE6" not in strat.symbols, "R47 symbols should drop the expired ref on rollover"
 
     def test_r47_without_family_binding_is_unaffected(self) -> None:
         """A legacy str-only R47-like strategy (no contract_families) is

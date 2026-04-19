@@ -354,8 +354,11 @@ class NotificationDispatcher:
             detail=msg,
             ts_ns=timebase.now_ns(),
             dedup_key="heartbeat",
-            metadata={"autonomy_state": autonomy_state, "strategies_active": strategies_active,
-                      "feed_status": feed_status},
+            metadata={
+                "autonomy_state": autonomy_state,
+                "strategies_active": strategies_active,
+                "feed_status": feed_status,
+            },
         )
         await self._emit_or_legacy(alert, msg, critical=False)
 
@@ -752,8 +755,12 @@ class NotificationDispatcher:
             detail=msg,
             ts_ns=timebase.now_ns(),
             dedup_key=None,
-            metadata={"date_str": date_str, "size_mb": size_mb,
-                      "duration_s": duration_s, "retained_count": retained_count},
+            metadata={
+                "date_str": date_str,
+                "size_mb": size_mb,
+                "duration_s": duration_s,
+                "retained_count": retained_count,
+            },
         )
         await self._emit_or_legacy(alert, msg, critical=False)
 

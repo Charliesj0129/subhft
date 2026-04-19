@@ -26,6 +26,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from hft_platform.recorder.worker import (
+    MARKET_DATA_COLUMNS,
     RecorderService,
     _extract_fill,
     _extract_fill_values,
@@ -37,9 +38,7 @@ from hft_platform.recorder.worker import (
     _getattr_scaled,
     _to_date,
     _values_to_dict,
-    MARKET_DATA_COLUMNS,
 )
-
 
 # -- Shared helpers -----------------------------------------------------------
 

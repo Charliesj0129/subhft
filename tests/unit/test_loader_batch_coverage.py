@@ -12,7 +12,6 @@ from __future__ import annotations
 from datetime import date
 from unittest.mock import MagicMock
 
-
 from hft_platform.recorder._loader_batch import (
     _to_date,
     format_backtest_runs,
@@ -25,7 +24,6 @@ from hft_platform.recorder._loader_batch import (
     format_trades,
     insert_batch_for_table,
 )
-
 
 # ---------------------------------------------------------------------------
 # _to_date (lines 26, 28-31)

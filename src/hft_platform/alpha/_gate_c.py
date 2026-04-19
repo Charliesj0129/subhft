@@ -26,6 +26,22 @@ from hft_platform.alpha._validation_helpers import (
 from hft_platform.alpha._validation_types import GateReport, ValidationConfig
 
 
+def _daily_pnl_points(daily_pnl: list[Any] | None) -> float:
+    if not daily_pnl:
+        return 0.0
+    total = 0.0
+    for entry in daily_pnl:
+        if isinstance(entry, dict):
+            total += float(entry.get("pnl_pts", 0.0))
+        else:
+            total += float(entry)
+    return total
+
+
+def _daily_pnl_sequence(daily_pnl: list[Any] | None) -> list[Any]:
+    return list(daily_pnl or [])
+
+
 def _invoke_sub_gates_advisory(
     *,
     strategy_type: str,
@@ -88,20 +104,24 @@ def _invoke_sub_gates_advisory(
                 )
             else:
                 sub = gate.evaluate(result, config=None, thresholds=thresholds)
-            sub_gate_results.append({
-                "name": sub.name,
-                "passed": sub.passed,
-                "metrics": sub.metrics,
-                "details": sub.details,
-            })
+            sub_gate_results.append(
+                {
+                    "name": sub.name,
+                    "passed": sub.passed,
+                    "metrics": sub.metrics,
+                    "details": sub.details,
+                }
+            )
         except Exception as exc:  # noqa: BLE001 - advisory: never break Gate C
-            sub_gate_results.append({
-                "name": getattr(gate, "name", "unknown"),
-                "passed": None,
-                "metrics": {},
-                "details": f"sub-gate error: {exc!r}",
-                "error": True,
-            })
+            sub_gate_results.append(
+                {
+                    "name": getattr(gate, "name", "unknown"),
+                    "passed": None,
+                    "metrics": {},
+                    "details": f"sub-gate error: {exc!r}",
+                    "error": True,
+                }
+            )
     return sub_gate_results
 
 
@@ -208,6 +228,7 @@ def run_gate_c(
         scorecard_path = experiments_base / "runs" / result.run_id / "scorecard.json"
 
         # --- Advisory sub-gates (Plan C Task C10) ---
+        daily_pnl = getattr(result, "daily_pnl", None)
         maker_sub_gates = _invoke_sub_gates_advisory(
             strategy_type="maker",
             result_payload={
@@ -220,14 +241,14 @@ def run_gate_c(
                 "calibration_profile_id": "uncalibrated",
                 "data_source": "clickhouse_direct",
                 "latency_profile": getattr(result, "latency_profile", ""),
-                "pnl_pts": float(sum(result.daily_pnl or []) if hasattr(result, "daily_pnl") else 0.0),
+                "pnl_pts": _daily_pnl_points(daily_pnl),
                 "n_fills": int(total_fills),
                 "n_trading_days": int(n_days),
                 "equity_curve": getattr(result, "equity_curve", None),
                 "pnl_per_fill": float(pnl_per_fill) if pnl_per_fill is not None else None,
                 "adverse_fill_pct": float(scorecard_data.get("adverse_fill_pct", 0)),
                 "fill_rate_per_day": (float(total_fills) / max(float(n_days), 1.0)),
-                "daily_pnl": list(result.daily_pnl) if hasattr(result, "daily_pnl") else [],
+                "daily_pnl": _daily_pnl_sequence(daily_pnl),
             },
             thresholds=maker_thresholds,
             calibration_profile=None,  # Future: load from calibration_profiles.yaml
@@ -254,8 +275,7 @@ def run_gate_c(
                 "scorecard_path": str(scorecard_path),
                 "sub_gates_advisory": maker_sub_gates,
                 "note": (
-                    "Maker Gate C: IC/optimize/walk-forward/stress tests"
-                    " skipped (not applicable to maker strategies)"
+                    "Maker Gate C: IC/optimize/walk-forward/stress tests skipped (not applicable to maker strategies)"
                 ),
             },
         )
@@ -315,10 +335,12 @@ def run_gate_c(
 
         from research.backtest.result_store import ResultStore
         from research.backtest.taker_engine import TakerEngine
+
         if _dc.is_dataclass(base_result) and not isinstance(base_result, type):
             data_period = ""
             if resolved_data_paths:
                 from pathlib import Path as _Path
+
                 data_period = ",".join(str(_Path(p).stem) for p in resolved_data_paths)
             base_result = TakerEngine().enrich_result(
                 base_result,
@@ -493,15 +515,9 @@ def run_gate_c(
             "data_source": "hftbt_npz",
             "latency_profile": getattr(result, "latency_profile", ""),
             "pnl_pts": (
-                float(result.equity_curve[-1] - result.equity_curve[0])
-                if _eq is not None and len(_eq) > 1
-                else 0.0
+                float(result.equity_curve[-1] - result.equity_curve[0]) if _eq is not None and len(_eq) > 1 else 0.0
             ),
-            "n_fills": (
-                int(len(result.signals))
-                if hasattr(result, "signals") and result.signals is not None
-                else 0
-            ),
+            "n_fills": (int(len(result.signals)) if hasattr(result, "signals") and result.signals is not None else 0),
             "n_trading_days": int(len(_daily_pnl)),
             "equity_curve": _eq,
             "ic_is": float(result.ic_mean) if result.ic_mean is not None else None,

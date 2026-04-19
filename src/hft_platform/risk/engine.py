@@ -53,6 +53,16 @@ _KNOWN_ERROR_TYPES = frozenset(
 )
 
 
+def _feedback_side(intent: Any) -> Side | None:
+    side = typed_intent_side(intent)
+    if side is None:
+        return None
+    try:
+        return Side(side)
+    except ValueError:
+        return None
+
+
 def _cap_error_type(e: Exception) -> str:
     """Map exception type name to a known label value to cap Prometheus cardinality."""
     name = type(e).__name__
@@ -169,17 +179,13 @@ class RiskEngine:
         self.validators: list[RiskValidator] = [
             PriceBandValidator(self.config, price_scale_provider),
             MaxNotionalValidator(self.config, price_scale_provider, position_provider=_pos_provider),
-            PerSymbolNotionalValidator(
-                self.config, price_scale_provider, position_provider=_pos_provider
-            ),
+            PerSymbolNotionalValidator(self.config, price_scale_provider, position_provider=_pos_provider),
             PositionLimitValidator(
                 self.config,
                 price_scale_provider,
                 position_provider=_pos_provider,
             ),
-            DailyLossLimitValidator(
-                self.config, price_scale_provider, position_provider=_pos_provider
-            ),
+            DailyLossLimitValidator(self.config, price_scale_provider, position_provider=_pos_provider),
         ]
         # Pre-compute validators that Rust doesn't cover (avoid per-call isinstance)
         self._rust_uncovered_validators: list[RiskValidator] = [
@@ -442,7 +448,7 @@ class RiskEngine:
                                         symbol=intent.symbol,
                                         reason_code="TTL_EXPIRED",
                                         timestamp_ns=timebase.now_ns(),
-                                        side=typed_intent_side(intent),
+                                        side=_feedback_side(intent),
                                     )
                                 )
                             except asyncio.QueueFull:
@@ -490,7 +496,7 @@ class RiskEngine:
                                         symbol=getattr(intent, "symbol", ""),
                                         reason_code="HALT_BLOCKED_POST_APPROVE",
                                         timestamp_ns=timebase.now_ns(),
-                                        side=typed_intent_side(intent),
+                                        side=_feedback_side(intent),
                                     )
                                 )
                             except asyncio.QueueFull:
@@ -532,7 +538,7 @@ class RiskEngine:
                                     symbol=getattr(intent, "symbol", ""),
                                     reason_code=decision.reason_code,
                                     timestamp_ns=timebase.now_ns(),
-                                    side=typed_intent_side(intent),
+                                    side=_feedback_side(intent),
                                 )
                             )
                         except asyncio.QueueFull:
@@ -566,7 +572,7 @@ class RiskEngine:
                                 symbol=getattr(intent, "symbol", ""),
                                 reason_code="risk_engine_error",
                                 timestamp_ns=timebase.now_ns(),
-                                side=typed_intent_side(intent),
+                                side=_feedback_side(intent),
                             )
                         )
                     except asyncio.QueueFull:
@@ -629,7 +635,7 @@ class RiskEngine:
                     symbol=getattr(intent, "symbol", ""),
                     reason_code=reason,
                     timestamp_ns=timebase.now_ns(),
-                    side=typed_intent_side(intent),
+                    side=_feedback_side(intent),
                     was_approved=True,
                 )
             )

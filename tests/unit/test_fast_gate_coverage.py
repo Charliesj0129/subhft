@@ -175,7 +175,7 @@ def test_fast_gate_double_close(_cleanup_shm):
     assert gate.ks_shm is None
 
 
-def test_fast_gate_unlink_missing(_cleanup_shm):
+def test_fast_gate_unlink_missing(_cleanup_shm):  # noqa: no-assert
     gate = FastGate(create_shm=True)
     gate.unlink()
     gate.unlink()  # should not raise even if already unlinked

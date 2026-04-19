@@ -13,6 +13,7 @@ import datetime as dt
 import math
 import os
 import time
+from collections.abc import Callable
 from typing import Any, cast
 from zoneinfo import ZoneInfo
 
@@ -258,7 +259,7 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         except AttributeError:
             pass
 
-        self._post_connect_hooks: list[callable] = []  # called after subscribe_basket + alias resolution
+        self._post_connect_hooks: list[Callable[[], None]] = []  # called after subscribe_basket + alias resolution
         self.state = FeedState.INIT
         self.running = False
         self.last_event_ts = timebase.now_s()
@@ -1010,9 +1011,7 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         ContractsRuntime.resolve_symbol_aliases() here derives the mapping
         directly from contract.delivery_month, independent of subscribe timing.
         """
-        runtime = getattr(self.client, "contracts_runtime", None) or getattr(
-            self.client, "_contracts_runtime", None
-        )
+        runtime = getattr(self.client, "contracts_runtime", None) or getattr(self.client, "_contracts_runtime", None)
         if runtime is None:
             return
         try:

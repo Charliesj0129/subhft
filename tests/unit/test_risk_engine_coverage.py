@@ -17,15 +17,14 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from hft_platform.contracts.strategy import (
+    TIF,
     IntentType,
     OrderIntent,
     RiskDecision,
     Side,
     StormGuardState,
-    TIF,
 )
 from hft_platform.risk.engine import RiskEngine, _cap_error_type, _obs_policy
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -271,19 +270,25 @@ def test_on_config_reload_clears_caches(engine):
 
 
 def test_emit_reject_metric_no_metrics(engine):
+    engine._reject_metric_counter = 7
     engine.metrics = None
     engine._emit_reject_metric("s1", "REASON")  # Should not raise
+    assert engine._reject_metric_counter == 7
 
 
 def test_emit_reject_metric_sampling(engine):
     """Test that sampling skips metric emission when counter is not aligned."""
     engine._reject_metric_sample_every = 2
     engine._reject_metric_counter = 0
+    engine._reject_metric_cache.clear()
     # First call increments counter to 1, mod 2 != 0, so skips
     engine._emit_reject_metric("s1", "TEST")
+    assert engine._reject_metric_counter == 1
+    assert engine._reject_metric_cache == {}
     # Second call would emit
     engine._emit_reject_metric("s1", "TEST")
-    # No assertion needed beyond no crash
+    assert engine._reject_metric_counter == 0
+    assert ("s1", "TEST") in engine._reject_metric_cache
 
 
 def test_emit_reject_metric_cache_owner_change(engine):
@@ -365,7 +370,8 @@ def test_notify_fill_pnl(engine):
 def test_update_unrealized_pnl(engine):
     """update_unrealized_pnl updates unrealized and checks halt."""
     engine.update_unrealized_pnl(-100000)
-    # Should not raise
+    daily_loss = next(v for v in engine.validators if hasattr(v, "_unrealized_pnl"))
+    assert daily_loss._unrealized_pnl == -100000
 
 
 # ---------------------------------------------------------------------------
@@ -375,8 +381,9 @@ def test_update_unrealized_pnl(engine):
 
 def test_check_daily_loss_halt_already_halted(engine):
     engine.storm_guard.state = StormGuardState.HALT
-    engine._check_daily_loss_halt()
-    # Should return early without errors
+    with patch.object(type(engine.storm_guard), "trigger_halt") as trigger_halt:
+        engine._check_daily_loss_halt()
+    trigger_halt.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -387,6 +394,7 @@ def test_check_daily_loss_halt_already_halted(engine):
 def test_drain_order_dlq_empty(engine):
     """_drain_order_dlq is a no-op when DLQ is empty."""
     engine._drain_order_dlq()
+    assert len(engine._order_dlq) == 0
 
 
 def test_drain_order_dlq_storm_clears_entries(engine):
@@ -487,18 +495,21 @@ def test_send_dlq_rejection_no_sink(engine):
     engine._rejection_sink = None
     intent = _make_intent()
     cmd = engine.create_command(intent)
-    engine._send_dlq_rejection(cmd, "test_reason")
-    # Should not raise
+    with patch("hft_platform.risk.engine.logger.error") as error_log:
+        engine._send_dlq_rejection(cmd, "test_reason")
+    error_log.assert_called_once()
 
 
 def test_send_dlq_rejection_sink_full(engine):
     """When rejection_sink is full, increments overflow metric."""
     engine._rejection_sink = asyncio.Queue(maxsize=1)
     engine._rejection_sink.put_nowait("filler")
+    engine.metrics.rejection_sink_overflow_total.inc = MagicMock()
     intent = _make_intent()
     cmd = engine.create_command(intent)
     engine._send_dlq_rejection(cmd, "test_reason")
-    # Should not raise
+    assert engine._rejection_sink.qsize() == 1
+    engine.metrics.rejection_sink_overflow_total.inc.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -588,6 +599,7 @@ def test_dlq_overflow_eviction(engine):
 def test_emit_trace_no_sampler(engine):
     engine._trace_sampler = None
     engine._emit_trace("test", _make_intent(), {"key": "val"})
+    assert engine._trace_sampler is None
 
 
 def test_emit_trace_with_sampler(engine):
@@ -602,7 +614,7 @@ def test_emit_trace_sampler_exception(engine):
     sampler.emit.side_effect = RuntimeError("boom")
     engine._trace_sampler = sampler
     engine._emit_trace("test_stage", _make_intent(), {"key": "val"})
-    # Should not raise
+    sampler.emit.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -638,10 +650,8 @@ def test_evaluate_greeks_validator_pass(engine):
 
 def test_audit_risk_decision_import_error(engine):
     """_audit_risk_decision handles ImportError gracefully."""
-    with patch("hft_platform.risk.engine.importlib") as mock_il:
-        # Make the import inside _audit fail
-        pass
-    # The method uses a local import; just ensure it doesn't crash
     intent = _make_intent()
     decision = RiskDecision(True, intent)
-    engine._audit_risk_decision(intent, decision)
+    with patch("hft_platform.recorder.audit.get_audit_writer", side_effect=ImportError("boom")) as getter:
+        engine._audit_risk_decision(intent, decision)
+    getter.assert_called_once()

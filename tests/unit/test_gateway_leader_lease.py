@@ -1,5 +1,3 @@
-import fcntl
-import os
 import tempfile
 from unittest.mock import patch
 
@@ -28,9 +26,7 @@ def test_file_leader_lease_single_leader_and_failover():
 
 
 def test_tick_returns_true_when_disabled(tmp_path):
-    lease = FileLeaderLease(
-        lease_path=str(tmp_path / "lease.lock"), enabled=False, owner_id="x"
-    )
+    lease = FileLeaderLease(lease_path=str(tmp_path / "lease.lock"), enabled=False, owner_id="x")
     result = lease.tick()
     assert result is True
     assert lease._is_leader is True
@@ -40,9 +36,7 @@ def test_tick_returns_true_when_disabled(tmp_path):
 
 
 def test_tick_returns_false_when_open_raises_oserror(tmp_path):
-    lease = FileLeaderLease(
-        lease_path=str(tmp_path / "lease.lock"), enabled=True, owner_id="x"
-    )
+    lease = FileLeaderLease(lease_path=str(tmp_path / "lease.lock"), enabled=True, owner_id="x")
     # fd is None initially, so tick() will try os.open
     with patch("hft_platform.gateway.leader_lease.os.open", side_effect=OSError("permission denied")):
         result = lease.tick()
@@ -69,9 +63,7 @@ def test_tick_returns_false_when_flock_raises_oserror(tmp_path):
 
 
 def test_release_sets_not_leader_when_disabled(tmp_path):
-    lease = FileLeaderLease(
-        lease_path=str(tmp_path / "lease.lock"), enabled=False, owner_id="x"
-    )
+    lease = FileLeaderLease(lease_path=str(tmp_path / "lease.lock"), enabled=False, owner_id="x")
     # Simulate having been "leader" via tick()
     lease.tick()
     assert lease._is_leader is True
@@ -83,9 +75,7 @@ def test_release_sets_not_leader_when_disabled(tmp_path):
 
 
 def test_release_returns_early_when_fd_is_none(tmp_path):
-    lease = FileLeaderLease(
-        lease_path=str(tmp_path / "lease.lock"), enabled=True, owner_id="x"
-    )
+    lease = FileLeaderLease(lease_path=str(tmp_path / "lease.lock"), enabled=True, owner_id="x")
     # fd is None by default; release should not raise
     lease._is_leader = True
     lease.release()
@@ -148,9 +138,7 @@ def test_status_reflects_leader_state_after_tick(tmp_path):
 
 
 def test_write_heartbeat_returns_early_when_fd_none(tmp_path):
-    lease = FileLeaderLease(
-        lease_path=str(tmp_path / "lease.lock"), enabled=True, owner_id="x"
-    )
+    lease = FileLeaderLease(lease_path=str(tmp_path / "lease.lock"), enabled=True, owner_id="x")
     assert lease._fd is None
     # Calling _write_heartbeat directly should not raise
     lease._write_heartbeat()

@@ -1,4 +1,5 @@
 """OperationsStateMachine — daily lifecycle orchestrator above SessionGovernor."""
+
 from __future__ import annotations
 
 import enum
@@ -15,6 +16,7 @@ logger = structlog.get_logger("ops.ops_state_machine")
 
 def _make_id() -> str:
     import uuid
+
     return str(uuid.uuid4())[:8]
 
 
@@ -31,8 +33,12 @@ class OperationsStateMachine:
     """Orchestrates daily lifecycle above SessionGovernor."""
 
     __slots__ = (
-        "_state", "_session_governor", "_preflight_checker",
-        "_alert_callback", "_state_history", "_callbacks",
+        "_state",
+        "_session_governor",
+        "_preflight_checker",
+        "_alert_callback",
+        "_state_history",
+        "_callbacks",
     )
 
     def __init__(

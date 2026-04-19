@@ -13,6 +13,7 @@ Key translations:
 - Hold -> []
 - TIF.LIMIT used (TIF enum has no GTC)
 """
+
 from __future__ import annotations
 
 from typing import Any, Protocol
@@ -115,6 +116,4 @@ class MakerStrategyBridge(BaseStrategy):
         if isinstance(action, Hold):
             return []
 
-        raise TypeError(
-            f"MakerStrategyBridge: unknown action type {type(action).__name__}"
-        )
+        raise TypeError(f"MakerStrategyBridge: unknown action type {type(action).__name__}")

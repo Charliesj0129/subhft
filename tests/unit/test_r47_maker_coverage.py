@@ -458,14 +458,14 @@ class TestR47OnFeatures:
     def test_on_features_updates_queue(self, strategy):
         """Lines 503-507: Queue state updated with L1 quantities."""
         values = list([0] * 22)
-        values[8] = 50   # L1_BID_QTY
+        values[8] = 50  # L1_BID_QTY
         values[9] = 100  # L1_ASK_QTY
         event = _make_feature_event(values=tuple(values))
         strategy.on_features(event)
         qs = strategy._get_queue("TMFD6")
         assert qs._update_count >= 1
 
-    def test_on_features_d2_suppression_flags(self, strategy):
+    def test_on_features_d2_suppression_flags(self, strategy):  # noqa: no-assert
         """Lines 515-523: D2 sets suppression flags when queue depleted."""
         qs = strategy._get_queue("TMFD6")
         # Warm up the queue state
@@ -474,8 +474,8 @@ class TestR47OnFeatures:
         qs._p_depl_ask = 0.9
 
         values = list([0] * 22)
-        values[8] = 10   # bid_qty
-        values[9] = 10   # ask_qty
+        values[8] = 10  # bid_qty
+        values[9] = 10  # ask_qty
         event = _make_feature_event(values=tuple(values))
         strategy.on_features(event)
         # After update, suppression flags should be set based on new depletion probs
@@ -483,8 +483,8 @@ class TestR47OnFeatures:
     def test_on_features_d4_qi_widen_ask(self, strategy):
         """Lines 528-539: QI > threshold widens ask."""
         values = list([0] * 22)
-        values[8] = 100   # bid_qty high (buying pressure)
-        values[9] = 10    # ask_qty low
+        values[8] = 100  # bid_qty high (buying pressure)
+        values[9] = 10  # ask_qty low
         event = _make_feature_event(values=tuple(values))
         strategy.on_features(event)
         # qi = (100-10)/110 ≈ 0.82 > 0.1 threshold → widen ask
@@ -493,8 +493,8 @@ class TestR47OnFeatures:
     def test_on_features_d4_qi_widen_bid(self, strategy):
         """Lines 537-538: QI < -threshold widens bid."""
         values = list([0] * 22)
-        values[8] = 10    # bid_qty low (selling pressure)
-        values[9] = 100   # ask_qty high
+        values[8] = 10  # bid_qty low (selling pressure)
+        values[9] = 100  # ask_qty high
         event = _make_feature_event(values=tuple(values))
         strategy.on_features(event)
         # qi = (10-100)/110 ≈ -0.82 < -0.1 threshold → widen bid
@@ -633,8 +633,12 @@ class TestR47OnRiskFeedback:
         """Lines 633-634: BUY side decrements pending_buy."""
         strategy._pending_buy["TMFD6"] = 2
         fb = RiskFeedback(
-            intent_id=1, strategy_id="r47_maker", symbol="TMFD6",
-            reason_code="rejected", timestamp_ns=0, side=Side.BUY,
+            intent_id=1,
+            strategy_id="r47_maker",
+            symbol="TMFD6",
+            reason_code="rejected",
+            timestamp_ns=0,
+            side=Side.BUY,
         )
         strategy.on_risk_feedback(fb)
         assert strategy._pending_buy["TMFD6"] == 1
@@ -643,8 +647,12 @@ class TestR47OnRiskFeedback:
         """Lines 635-636: SELL side decrements pending_sell."""
         strategy._pending_sell["TMFD6"] = 1
         fb = RiskFeedback(
-            intent_id=1, strategy_id="r47_maker", symbol="TMFD6",
-            reason_code="rejected", timestamp_ns=0, side=Side.SELL,
+            intent_id=1,
+            strategy_id="r47_maker",
+            symbol="TMFD6",
+            reason_code="rejected",
+            timestamp_ns=0,
+            side=Side.SELL,
         )
         strategy.on_risk_feedback(fb)
         assert strategy._pending_sell["TMFD6"] == 0
@@ -659,8 +667,12 @@ class TestR47OnRiskFeedback:
         strategy._pending_buy["TMFD6"] = 1
         strategy._pending_sell["TMFD6"] = 1
         fb = RiskFeedback(
-            intent_id=1, strategy_id="r47_maker", symbol="TMFD6",
-            reason_code="rejected", timestamp_ns=0, side=None,
+            intent_id=1,
+            strategy_id="r47_maker",
+            symbol="TMFD6",
+            reason_code="rejected",
+            timestamp_ns=0,
+            side=None,
         )
         strategy.on_risk_feedback(fb)
         # Must NOT decrement — this is the safe failure mode (quoting freezes)
@@ -671,8 +683,13 @@ class TestR47OnRiskFeedback:
         """Lines 625-626: approved feedback does not decrement."""
         strategy._pending_buy["TMFD6"] = 2
         fb = RiskFeedback(
-            intent_id=1, strategy_id="r47_maker", symbol="TMFD6",
-            reason_code="ok", timestamp_ns=0, side=Side.BUY, was_approved=True,
+            intent_id=1,
+            strategy_id="r47_maker",
+            symbol="TMFD6",
+            reason_code="ok",
+            timestamp_ns=0,
+            side=Side.BUY,
+            was_approved=True,
         )
         strategy.on_risk_feedback(fb)
         assert strategy._pending_buy["TMFD6"] == 2

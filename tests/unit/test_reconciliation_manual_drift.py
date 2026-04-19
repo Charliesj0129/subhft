@@ -13,9 +13,9 @@ These tests verify:
 2. The reconciliation auto-correct path removes MANUAL-only drift
    without requiring the operator to restart the engine.
 """
+
 from __future__ import annotations
 
-from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -139,9 +139,7 @@ async def test_auto_correct_removes_manual_phantom_without_restart(guard):
     await svc.sync_portfolio()
 
     manual_key = f"default:{MANUAL_STRATEGY_ID}:TMFE6"
-    assert manual_key not in store.positions, (
-        "MANUAL phantom position must be cleared by auto-correct without restart"
-    )
+    assert manual_key not in store.positions, "MANUAL phantom position must be cleared by auto-correct without restart"
     # Reconciliation state should also reset.
     assert svc._halt_triggered is False
     assert svc._critical_drift_streak == 0

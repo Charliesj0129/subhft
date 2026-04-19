@@ -1,4 +1,5 @@
 """Alert data models for the tiered notification routing system."""
+
 from __future__ import annotations
 
 import enum

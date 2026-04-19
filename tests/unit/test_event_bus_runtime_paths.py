@@ -18,6 +18,7 @@ from hft_platform.engine.event_bus import RingBufferBus
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_py_bus(monkeypatch, *, use_typed_tick=False, use_typed_book=False, size=8):
     """Create a pure-Python RingBufferBus with optional typed ring flags."""
     monkeypatch.setattr(event_bus_mod, "_RUST_ENABLED", False)
@@ -138,11 +139,19 @@ def test_bidask_ring_without_packed_writer_with_stats(monkeypatch):
     bus._bidask_ring = ring
 
     bidask = (
-        "bidask", "2330",
+        "bidask",
+        "2330",
         [[10000, 5], [9990, 2]],
         [[10010, 4], [10020, 1]],
-        789, False,
-        10000, 10010, 7, 5, 10005.0, 10.0, 0.25,
+        789,
+        False,
+        10000,
+        10010,
+        7,
+        5,
+        10005.0,
+        10.0,
+        0.25,
     )
 
     async def _run():
@@ -219,10 +228,10 @@ def test_lobstats_typed_ring_set_stats_called(monkeypatch):
     call_args = set_stats_mock.call_args[0]
     # set_stats signature: (idx, symbol, ts, mid_x2, spread_scaled, imbalance, ...)
     # idx = next_seq (0), symbol = event[1] = "2330", ts = event[2] = 300
-    assert call_args[0] == 0       # idx = next_seq
+    assert call_args[0] == 0  # idx = next_seq
     assert call_args[1] == "2330"  # symbol
-    assert call_args[2] == 300     # ts
-    assert call_args[3] == 20030   # mid_x2
+    assert call_args[2] == 300  # ts
+    assert call_args[3] == 20030  # mid_x2
 
 
 # ---------------------------------------------------------------------------

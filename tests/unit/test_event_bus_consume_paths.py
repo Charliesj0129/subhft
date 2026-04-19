@@ -19,6 +19,7 @@ from hft_platform.engine.event_bus import RingBufferBus
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _py_bus(monkeypatch, *, size: int = 16, wait_mode: str = "event") -> RingBufferBus:
     """Pure-Python RingBufferBus with no typed rings (use_rust=False)."""
     monkeypatch.setattr(event_bus_mod, "_RUST_ENABLED", False)
@@ -45,7 +46,7 @@ def test_notify_early_return_when_counter_not_multiple_of_notify_every(monkeypat
     1 % 2 != 0, so _notify returns without setting the signal.
     """
     bus = _py_bus(monkeypatch, wait_mode="event")
-    bus._notify_every = 2   # override default of 1
+    bus._notify_every = 2  # override default of 1
 
     assert bus.signal is not None
 
@@ -63,6 +64,7 @@ def test_notify_early_return_when_counter_not_multiple_of_notify_every(monkeypat
 # ---------------------------------------------------------------------------
 # Helper coroutines for spin-wait tests
 # ---------------------------------------------------------------------------
+
 
 async def _consume_one(bus: RingBufferBus, out: list, start_cursor, name: str) -> None:
     """Append first event from bus.consume() to out then return."""
@@ -98,16 +100,14 @@ async def test_consume_spin_wait_yields_published_event(monkeypatch):
 
     # Pre-seed one event so cursor=0; consumer will start_cursor=None → local_seq=0
     # Then after consumer task starts, we publish one more event to move cursor to 1.
-    bus.publish_nowait("seed-event")   # cursor → 0
+    bus.publish_nowait("seed-event")  # cursor → 0
 
     events: list = []
 
-    consumer_task = asyncio.ensure_future(
-        _consume_one(bus, events, start_cursor=None, name="spin-consumer")
-    )
+    consumer_task = asyncio.ensure_future(_consume_one(bus, events, start_cursor=None, name="spin-consumer"))
     # Yield to let the consumer task run and enter the spin-wait (cursor=0, local_seq=0)
     await asyncio.sleep(0)
-    bus.publish_nowait("spin-event")   # cursor → 1 → satisfies cursor > local_seq=0
+    bus.publish_nowait("spin-event")  # cursor → 1 → satisfies cursor > local_seq=0
     for _ in range(20):
         await asyncio.sleep(0)
         if events:
@@ -129,17 +129,15 @@ async def test_consume_spin_wait_with_sleep_yields_event(monkeypatch):
     With _spin_sleep > 0 the inner loop uses asyncio.sleep instead of the spin-budget.
     """
     bus = _py_bus(monkeypatch, wait_mode="spin")
-    bus._spin_sleep = 0.005   # > 0 → exercises the else branch (line 644)
+    bus._spin_sleep = 0.005  # > 0 → exercises the else branch (line 644)
 
-    bus.publish_nowait("seed")    # cursor → 0
+    bus.publish_nowait("seed")  # cursor → 0
 
     events: list = []
-    consumer_task = asyncio.ensure_future(
-        _consume_one(bus, events, start_cursor=None, name="sleep-spin")
-    )
+    consumer_task = asyncio.ensure_future(_consume_one(bus, events, start_cursor=None, name="sleep-spin"))
     await asyncio.sleep(0)
-    bus.publish_nowait("sleep-spin-event")   # cursor → 1
-    await asyncio.sleep(0.030)              # wait for the sleep inside consume to wake
+    bus.publish_nowait("sleep-spin-event")  # cursor → 1
+    await asyncio.sleep(0.030)  # wait for the sleep inside consume to wake
 
     consumer_task.cancel()
     try:
@@ -175,7 +173,7 @@ async def test_consume_buffer_none_init_path(monkeypatch):
     # but then we null it again to test the consume-side lazy init.
     bus._publish_unlocked("lazy-init-event")
     bus._notify()
-    bus.buffer = None   # force consume to hit the buffer-is-None branch
+    bus.buffer = None  # force consume to hit the buffer-is-None branch
 
     # publish_nowait increments cursor; we nulled buffer so consume must init it.
     # But since buffer is None after re-nulling, the event won't be there — we
@@ -195,7 +193,7 @@ async def test_consume_buffer_none_init_path(monkeypatch):
         break
 
     assert events == ["lazy-buf-event"]
-    assert bus2.buffer is not None   # confirmed initialised by consume()
+    assert bus2.buffer is not None  # confirmed initialised by consume()
 
 
 # ---------------------------------------------------------------------------
@@ -212,12 +210,10 @@ async def test_consume_batch_spin_wait_yields_batch(monkeypatch):
     bus = _py_bus(monkeypatch, wait_mode="spin")
     assert bus.signal is None
 
-    bus.publish_nowait("seed-batch")   # cursor → 0; consumer will have local_seq=0
+    bus.publish_nowait("seed-batch")  # cursor → 0; consumer will have local_seq=0
 
     batches: list = []
-    consumer_task = asyncio.ensure_future(
-        _consume_batch_one(bus, batches, start_cursor=None, name="batch-spin")
-    )
+    consumer_task = asyncio.ensure_future(_consume_batch_one(bus, batches, start_cursor=None, name="batch-spin"))
     await asyncio.sleep(0)
     bus.publish_nowait("batch-spin-1")
     bus.publish_nowait("batch-spin-2")
@@ -244,12 +240,10 @@ async def test_consume_batch_spin_sleep_branch_yields_batch(monkeypatch):
     bus = _py_bus(monkeypatch, wait_mode="spin")
     bus._spin_sleep = 0.005
 
-    bus.publish_nowait("seed-bs")     # cursor → 0
+    bus.publish_nowait("seed-bs")  # cursor → 0
 
     batches: list = []
-    consumer_task = asyncio.ensure_future(
-        _consume_batch_one(bus, batches, start_cursor=None, name="bs-sleep")
-    )
+    consumer_task = asyncio.ensure_future(_consume_batch_one(bus, batches, start_cursor=None, name="bs-sleep"))
     await asyncio.sleep(0)
     bus.publish_nowait("bs-event")
     await asyncio.sleep(0.030)

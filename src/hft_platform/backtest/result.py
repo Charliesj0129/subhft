@@ -3,6 +3,7 @@
 Fields common to both strategy types are required; strategy-specific metrics
 default to None on the irrelevant side.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

@@ -143,25 +143,17 @@ class TestPopulator:
         )
         resolver = ContractFamilyResolver()
         populate_resolver_from_fubon(resolver, runtime, today=date(2026, 4, 19))
-        assert resolver.resolve_family(
-            ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1)
-        ) is not None
-        assert resolver.resolve_family(
-            ContractFamily(Product.FUTURE, "TXF", FamilyCode.R1)
-        ) is not None
+        assert resolver.resolve_family(ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1)) is not None
+        assert resolver.resolve_family(ContractFamily(Product.FUTURE, "TXF", FamilyCode.R1)) is not None
 
     def test_none_source_is_noop(self) -> None:
         resolver = ContractFamilyResolver()
-        assert populate_resolver_from_fubon(
-            resolver, None, today=date(2026, 4, 19)
-        ) == 0
+        assert populate_resolver_from_fubon(resolver, None, today=date(2026, 4, 19)) == 0
 
     def test_empty_symbols_is_noop(self) -> None:
         resolver = ContractFamilyResolver()
         runtime = _FakeRuntime([])
-        assert populate_resolver_from_fubon(
-            resolver, runtime, today=date(2026, 4, 19)
-        ) == 0
+        assert populate_resolver_from_fubon(resolver, runtime, today=date(2026, 4, 19)) == 0
 
     def test_facade_symbols_chain(self) -> None:
         facade = _FakeFacade([{"code": "TMFE6"}])
@@ -171,9 +163,7 @@ class TestPopulator:
 
     def test_raw_list_source(self) -> None:
         resolver = ContractFamilyResolver()
-        count = populate_resolver_from_fubon(
-            resolver, [{"code": "TMFE6"}], today=date(2026, 4, 19)
-        )
+        count = populate_resolver_from_fubon(resolver, [{"code": "TMFE6"}], today=date(2026, 4, 19))
         assert count == 1
 
     def test_symbol_field_key_also_accepted(self) -> None:

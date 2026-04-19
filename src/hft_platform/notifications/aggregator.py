@@ -1,4 +1,5 @@
 """Alert deduplication and time-window aggregation."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

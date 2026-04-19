@@ -3,6 +3,7 @@
 Verifies that HALT triggered by RECONCILIATION_MISMATCH does not auto-recover
 until ReconciliationService confirms drift is resolved.
 """
+
 from unittest.mock import MagicMock, patch
 
 import pytest

@@ -9,8 +9,6 @@ Verifies that:
 
 from __future__ import annotations
 
-import pytest
-
 from hft_platform.feed_adapter.normalizer import SymbolMetadata
 
 
@@ -202,9 +200,7 @@ class TestSessionGovernorAliasResolution:
         from hft_platform.ops.session_governor import SessionGovernor
 
         gov = SessionGovernor()
-        original_symbols = {
-            name: list(track.symbols) for name, track in gov._tracks.items()
-        }
+        original_symbols = {name: list(track.symbols) for name, track in gov._tracks.items()}
         gov.resolve_symbol_aliases({})
         for name, track in gov._tracks.items():
             assert track.symbols == original_symbols[name]

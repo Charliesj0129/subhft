@@ -6,6 +6,7 @@ holds the list of registered sub-gates in insertion order; Gate C's
 dispatcher iterates the registry and filters by `applies_to` tags
 (strategy_type values: "maker" | "taker").
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

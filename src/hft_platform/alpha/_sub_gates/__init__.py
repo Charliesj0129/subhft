@@ -4,6 +4,7 @@ Importing this package auto-registers all built-in sub-gates.
 Tests can call ``clear_registry()`` to isolate test state; call
 ``ensure_builtin_sub_gates_registered()`` to restore defaults.
 """
+
 from hft_platform.alpha._sub_gates.registry import (
     SubGate,
     SubGateResult,
@@ -32,7 +33,7 @@ def ensure_builtin_sub_gates_registered() -> None:
     from hft_platform.alpha._sub_gates.taker import ICEvaluationGate
 
     existing_names = {g.name for g in get_registered_sub_gates()}
-    candidates = [
+    candidates: list[SubGate] = [
         SharpeThresholdGate(),
         MaxDrawdownGate(),
         WinningDayPctGate(),

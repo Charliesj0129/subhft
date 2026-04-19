@@ -123,12 +123,7 @@ def test_load_order_id_map_skips_malformed_entries(tmp_path, tmp_config):
     import orjson
 
     map_path = tmp_path / "oid_map.jsonl"
-    content = (
-        b"not-valid-json\n"
-        + orjson.dumps({"k": "GOOD", "v": "strat:1"})
-        + b"\n"
-        + b'{"missing_v": true}\n'
-    )
+    content = b"not-valid-json\n" + orjson.dumps({"k": "GOOD", "v": "strat:1"}) + b"\n" + b'{"missing_v": true}\n'
     map_path.write_bytes(content)
 
     with patch.dict(os.environ, {"HFT_ORDER_ID_MAP_PERSIST_PATH": str(map_path)}):

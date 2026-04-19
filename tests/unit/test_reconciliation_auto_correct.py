@@ -3,6 +3,7 @@
 Verifies that persistent phantom order drift (local=0, broker=N) is
 automatically corrected after sufficient consecutive observations.
 """
+
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -348,16 +349,10 @@ class TestClearSymbolPositions:
             avg_price_scaled=100_0000,
             strategy_id=MANUAL_STRATEGY_ID,
         )
-        assert any(
-            rd.get("symbol") == "TX438500D6"
-            for rd in store._recovery_positions.values()
-        )
+        assert any(rd.get("symbol") == "TX438500D6" for rd in store._recovery_positions.values())
 
         store.clear_symbol_positions("TX438500D6")
-        assert not any(
-            rd.get("symbol") == "TX438500D6"
-            for rd in store._recovery_positions.values()
-        )
+        assert not any(rd.get("symbol") == "TX438500D6" for rd in store._recovery_positions.values())
 
     def test_noop_for_absent_symbol(self):
         store = PositionStore()

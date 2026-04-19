@@ -1,4 +1,5 @@
 """Tests for the shared is_futures_symbol classifier."""
+
 from __future__ import annotations
 
 import pytest

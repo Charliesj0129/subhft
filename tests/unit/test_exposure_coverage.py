@@ -11,9 +11,8 @@ import time
 
 import pytest
 
-from hft_platform.contracts.strategy import IntentType, OrderIntent, Side, TIF
+from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, Side
 from hft_platform.gateway.exposure import ExposureKey, ExposureLimitError, ExposureLimits, ExposureStore
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -169,12 +168,12 @@ class TestAmend:
 
 
 class TestReleaseExposure:
-    def test_release_cancel_noop(self):
+    def test_release_cancel_noop(self):  # noqa: no-assert
         store = ExposureStore()
         store.release_exposure(_key(), _intent(intent_type=IntentType.CANCEL))
         # No crash
 
-    def test_release_amend_rollback(self):
+    def test_release_amend_rollback(self):  # noqa: no-assert
         store = ExposureStore()
         store.check_and_update(_key(), _intent(price=100, qty=10), order_key="ord1")
         amend = _intent(intent_type=IntentType.AMEND, price=100, qty=15, target_order_id="ord1")
@@ -266,7 +265,11 @@ class TestCheckAndUpdateTyped:
     def test_typed_amend(self):
         store = ExposureStore()
         store.check_and_update_typed(
-            _key(), intent_type=int(IntentType.NEW), price=100, qty=10, order_key="ord1",
+            _key(),
+            intent_type=int(IntentType.NEW),
+            price=100,
+            qty=10,
+            order_key="ord1",
         )
         ok, reason = store.check_and_update_typed(
             _key(),
@@ -280,7 +283,10 @@ class TestCheckAndUpdateTyped:
     def test_typed_global_limit(self):
         store = ExposureStore(global_max_notional=500)
         ok, reason = store.check_and_update_typed(
-            _key(), intent_type=int(IntentType.NEW), price=100, qty=10,
+            _key(),
+            intent_type=int(IntentType.NEW),
+            price=100,
+            qty=10,
         )
         assert ok is False
         assert reason == "GLOBAL_EXPOSURE_LIMIT"
@@ -289,7 +295,10 @@ class TestCheckAndUpdateTyped:
         limits = {"s1": ExposureLimits(max_notional_scaled=500)}
         store = ExposureStore(limits=limits)
         ok, reason = store.check_and_update_typed(
-            _key(), intent_type=int(IntentType.NEW), price=100, qty=10,
+            _key(),
+            intent_type=int(IntentType.NEW),
+            price=100,
+            qty=10,
         )
         assert ok is False
         assert reason == "STRATEGY_EXPOSURE_LIMIT"
@@ -297,17 +306,27 @@ class TestCheckAndUpdateTyped:
     def test_typed_cardinality_limit(self):
         store = ExposureStore(max_symbols=1)
         store.check_and_update_typed(
-            _key(sym="A"), intent_type=int(IntentType.NEW), price=100, qty=1,
+            _key(sym="A"),
+            intent_type=int(IntentType.NEW),
+            price=100,
+            qty=1,
         )
         with pytest.raises(ExposureLimitError):
             store.check_and_update_typed(
-                _key(sym="B"), intent_type=int(IntentType.NEW), price=100, qty=1,
+                _key(sym="B"),
+                intent_type=int(IntentType.NEW),
+                price=100,
+                qty=1,
             )
 
     def test_typed_per_order_tracking(self):
         store = ExposureStore()
         store.check_and_update_typed(
-            _key(), intent_type=int(IntentType.NEW), price=100, qty=10, order_key="ord1",
+            _key(),
+            intent_type=int(IntentType.NEW),
+            price=100,
+            qty=10,
+            order_key="ord1",
         )
         assert "ord1" in store._order_notionals
 
@@ -318,43 +337,70 @@ class TestCheckAndUpdateTyped:
 
 
 class TestReleaseExposureTyped:
-    def test_typed_cancel_noop(self):
+    def test_typed_cancel_noop(self):  # noqa: no-assert
         store = ExposureStore()
         store.release_exposure_typed(
-            _key(), intent_type=int(IntentType.CANCEL), price=0, qty=0,
+            _key(),
+            intent_type=int(IntentType.CANCEL),
+            price=0,
+            qty=0,
         )
 
-    def test_typed_amend_rollback(self):
+    def test_typed_amend_rollback(self):  # noqa: no-assert
         store = ExposureStore()
         store.check_and_update_typed(
-            _key(), intent_type=int(IntentType.NEW), price=100, qty=10, order_key="ord1",
+            _key(),
+            intent_type=int(IntentType.NEW),
+            price=100,
+            qty=10,
+            order_key="ord1",
         )
         store.check_and_update_typed(
-            _key(), intent_type=int(IntentType.AMEND), price=100, qty=15,
+            _key(),
+            intent_type=int(IntentType.AMEND),
+            price=100,
+            qty=15,
             target_order_key="ord1",
         )
         store.release_exposure_typed(
-            _key(), intent_type=int(IntentType.AMEND), price=100, qty=15,
+            _key(),
+            intent_type=int(IntentType.AMEND),
+            price=100,
+            qty=15,
             target_order_key="ord1",
         )
 
     def test_typed_new_release_by_order(self):
         store = ExposureStore()
         store.check_and_update_typed(
-            _key(), intent_type=int(IntentType.NEW), price=100, qty=10, order_key="ord1",
+            _key(),
+            intent_type=int(IntentType.NEW),
+            price=100,
+            qty=10,
+            order_key="ord1",
         )
         store.release_exposure_typed(
-            _key(), intent_type=int(IntentType.NEW), price=100, qty=10, order_key="ord1",
+            _key(),
+            intent_type=int(IntentType.NEW),
+            price=100,
+            qty=10,
+            order_key="ord1",
         )
         assert store.get_global_notional() == 0
 
     def test_typed_new_legacy_fallback(self):
         store = ExposureStore()
         store.check_and_update_typed(
-            _key(), intent_type=int(IntentType.NEW), price=100, qty=10,
+            _key(),
+            intent_type=int(IntentType.NEW),
+            price=100,
+            qty=10,
         )
         store.release_exposure_typed(
-            _key(), intent_type=int(IntentType.NEW), price=100, qty=10,
+            _key(),
+            intent_type=int(IntentType.NEW),
+            price=100,
+            qty=10,
         )
         assert store.get_global_notional() == 0
 

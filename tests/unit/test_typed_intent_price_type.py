@@ -16,11 +16,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from hft_platform.contracts.strategy import IntentType, Side, TIF
+from hft_platform.contracts.strategy import TIF, IntentType, Side
 from hft_platform.gateway.channel import (
     LocalIntentChannel,
     typed_frame_to_intent,
-    typed_frame_to_view,
 )
 
 

@@ -85,9 +85,7 @@ class TestTaifexTradingDate:
 class TestWriteCheckpoint:
     def test_writes_json_with_sha256(self, tmp_path):
         ckpt_path = str(tmp_path / "ckpt.json")
-        store = _make_store(
-            positions={"acc:strat:SYM": {"symbol": "SYM", "net_qty": 5}}
-        )
+        store = _make_store(positions={"acc:strat:SYM": {"symbol": "SYM", "net_qty": 5}})
         writer = PositionCheckpointWriter(store, path=ckpt_path, interval_s=60)
         result_path = writer.write_checkpoint()
         assert result_path == ckpt_path
@@ -123,9 +121,7 @@ class TestWriteCheckpoint:
 
     def test_unknown_basis_flag(self, tmp_path):
         ckpt_path = str(tmp_path / "ckpt.json")
-        store = _make_store(
-            positions={"acc:strat:UNK": {"symbol": "UNK", "net_qty": 2, "avg_price_scaled": -1}}
-        )
+        store = _make_store(positions={"acc:strat:UNK": {"symbol": "UNK", "net_qty": 2, "avg_price_scaled": -1}})
         writer = PositionCheckpointWriter(store, path=ckpt_path, interval_s=60)
         writer.write_checkpoint()
 
@@ -168,9 +164,7 @@ class TestWriteCheckpoint:
 class TestLoadCheckpoint:
     def test_load_valid_checkpoint(self, tmp_path):
         ckpt_path = str(tmp_path / "ckpt.json")
-        store = _make_store(
-            positions={"acc:strat:SYM": {"symbol": "SYM", "net_qty": 5}}
-        )
+        store = _make_store(positions={"acc:strat:SYM": {"symbol": "SYM", "net_qty": 5}})
         writer = PositionCheckpointWriter(store, path=ckpt_path, interval_s=60)
         writer.write_checkpoint()
 

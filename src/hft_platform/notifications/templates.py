@@ -463,9 +463,7 @@ def render_position_stuck(
         Formatted Telegram alert string.
     """
     side = "LONG" if net_qty > 0 else "SHORT"
-    upnl_line = (
-        f"\n未實現損益: {unrealized_ntd:+d} NTD" if unrealized_ntd is not None else ""
-    )
+    upnl_line = f"\n未實現損益: {unrealized_ntd:+d} NTD" if unrealized_ntd is not None else ""
     return (
         f"⚠️ 部位卡住\n"
         f"策略: {escape(strategy_id)}\n"

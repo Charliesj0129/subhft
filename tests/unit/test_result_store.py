@@ -1,4 +1,5 @@
 """Tests for ResultStore JSON persistence."""
+
 import json
 from pathlib import Path
 
@@ -19,13 +20,22 @@ def _make_result(**overrides) -> BacktestResult:
         signals=np.array([0.1, 0.2, 0.3]),
         equity_curve=np.array([1.0, 1.01, 1.02]),
         positions=np.array([0, 1, 0]),
-        sharpe_is=1.5, sharpe_oos=0.8,
+        sharpe_is=1.5,
+        sharpe_oos=0.8,
         ic_series=np.array([0.05, 0.06]),
-        ic_mean=0.055, ic_std=0.01, ic_tstat=5.5, ic_pvalue=0.001, ic_halflife=10,
-        sortino=1.2, cvar_5pct=-0.03, turnover=0.5, max_drawdown=0.1,
+        ic_mean=0.055,
+        ic_std=0.01,
+        ic_tstat=5.5,
+        ic_pvalue=0.001,
+        ic_halflife=10,
+        sortino=1.2,
+        cvar_5pct=-0.03,
+        turnover=0.5,
+        max_drawdown=0.1,
         regime_metrics={"high_vol_sharpe": 1.0},
         capacity_estimate=1e6,
-        run_id="run-test-001", config_hash="abc123",
+        run_id="run-test-001",
+        config_hash="abc123",
         latency_profile={"submit_ms": 36.0},
         engine_type="maker",
         fill_model="QueueDepletion(qf=0.5)",

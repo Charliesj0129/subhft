@@ -578,9 +578,7 @@ class HFTSystem:
         if self.autonomy_monitor is not None:
             services.append(("autonomy_monitor", "AutonomyMonitor", self.autonomy_monitor.run))
         if position_stuck_monitor is not None:
-            services.append(
-                ("position_stuck_monitor", "PositionStuckMonitor", position_stuck_monitor.run)
-            )
+            services.append(("position_stuck_monitor", "PositionStuckMonitor", position_stuck_monitor.run))
         return services
 
     def _reset_restart_backoff_if_healthy(self, name: str, task: asyncio.Task[Any] | None) -> None:

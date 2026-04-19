@@ -65,12 +65,7 @@ def _isolate_state(tmp_path, monkeypatch):
 
 def _symbols_cfg(tmp_path):
     cfg = tmp_path / "symbols.yaml"
-    cfg.write_text(
-        "symbols:\n"
-        "  - code: 'TXFD6'\n"
-        "    exchange: 'TAIFEX'\n"
-        "    price_scale: 10000\n"
-    )
+    cfg.write_text("symbols:\n  - code: 'TXFD6'\n    exchange: 'TAIFEX'\n    price_scale: 10000\n")
     return cfg
 
 

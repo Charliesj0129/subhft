@@ -145,10 +145,7 @@ def test_strategies_yaml_c60_enabled_false() -> None:
     cfg = _load_strategies_yaml()
     c60 = _find_c60_entry(cfg)
     assert c60 is not None
-    assert c60["enabled"] is False, (
-        "C60 must ship enabled=false; user-gated per "
-        "memory/feedback_no_auto_deploy.md"
-    )
+    assert c60["enabled"] is False, "C60 must ship enabled=false; user-gated per memory/feedback_no_auto_deploy.md"
 
 
 def test_strategies_yaml_c60_module_class_correct() -> None:
@@ -253,10 +250,8 @@ def test_price_scale_constant_is_10k() -> None:
     assert _PRICE_SCALE == 10_000
 
 
-def test_on_stats_runs_without_error_on_valid_input() -> None:
-    strat = C60TmfD6SoloMakerMinimal(
-        "c60_test", max_pos=2, subscribe_symbols=["TMFD6"]
-    )
+def test_on_stats_runs_without_error_on_valid_input() -> None:  # noqa: no-assert
+    strat = C60TmfD6SoloMakerMinimal("c60_test", max_pos=2, subscribe_symbols=["TMFD6"])
     stats = _make_stats()
     strat.on_stats(stats)  # should not raise
 
@@ -272,7 +267,7 @@ def test_on_stats_skips_invalid_spread() -> None:
     assert strat._spread_blocked == 1
 
 
-def test_on_stats_skips_zero_prices() -> None:
+def test_on_stats_skips_zero_prices() -> None:  # noqa: no-assert
     strat = C60TmfD6SoloMakerMinimal("c60_test", subscribe_symbols=["TMFD6"])
     stats = _make_stats(best_bid=0, best_ask=0, mid_price_x2=0, spread_scaled=0)
     strat.on_stats(stats)  # early return, no raise
@@ -331,23 +326,20 @@ def test_wrapper_has_no_d1_d2_d3_signal_layer_attributes() -> None:
         "_queue_state",
         "_mfg_state",
     ):
-        assert not hasattr(strat, attr_name), (
-            f"R47-minimal violation: {attr_name} found on wrapper"
-        )
+        assert not hasattr(strat, attr_name), f"R47-minimal violation: {attr_name} found on wrapper"
 
 
 def test_wrapper_does_not_import_r47_d1_d2_d3_state_classes() -> None:
     """Static check: wrapper module does not import R47 D1/D2/D3 classes."""
     import hft_platform.strategies.c60_tmfd6_solo_maker as mod
+
     src_path = mod.__file__
     assert src_path is not None
     with open(src_path) as f:
         source = f.read()
     forbidden = ("_PEState", "_QueueState", "_MFGState")
     for sym in forbidden:
-        assert sym not in source, (
-            f"R47-minimal violation: wrapper references {sym}"
-        )
+        assert sym not in source, f"R47-minimal violation: wrapper references {sym}"
 
 
 def test_wrapper_exposes_qi_compute_method() -> None:
@@ -363,9 +355,7 @@ def test_wrapper_exposes_qi_compute_method() -> None:
 
 
 def test_qi_skew_widens_ask_when_bid_heavy() -> None:
-    strat = C60TmfD6SoloMakerMinimal(
-        "c60_test", enable_qi_layer=True, subscribe_symbols=["TMFD6"]
-    )
+    strat = C60TmfD6SoloMakerMinimal("c60_test", enable_qi_layer=True, subscribe_symbols=["TMFD6"])
     # imbalance = +0.8 > +0.10 threshold -> widen ASK up 1 tick
     stats = _make_stats(imbalance=0.8)
     strat.on_stats(stats)
@@ -374,9 +364,7 @@ def test_qi_skew_widens_ask_when_bid_heavy() -> None:
 
 
 def test_qi_skew_widens_bid_when_ask_heavy() -> None:
-    strat = C60TmfD6SoloMakerMinimal(
-        "c60_test", enable_qi_layer=True, subscribe_symbols=["TMFD6"]
-    )
+    strat = C60TmfD6SoloMakerMinimal("c60_test", enable_qi_layer=True, subscribe_symbols=["TMFD6"])
     stats = _make_stats(imbalance=-0.8)
     strat.on_stats(stats)
     assert strat._qi_widen_events == 1
@@ -384,9 +372,7 @@ def test_qi_skew_widens_bid_when_ask_heavy() -> None:
 
 
 def test_qi_skew_neutral_within_threshold() -> None:
-    strat = C60TmfD6SoloMakerMinimal(
-        "c60_test", enable_qi_layer=True, subscribe_symbols=["TMFD6"]
-    )
+    strat = C60TmfD6SoloMakerMinimal("c60_test", enable_qi_layer=True, subscribe_symbols=["TMFD6"])
     stats = _make_stats(imbalance=0.04)  # within +/-0.10 threshold
     strat.on_stats(stats)
     assert strat._qi_widen_events == 0
@@ -417,9 +403,7 @@ def test_qi_skew_is_not_pos_gated() -> None:
 
 
 def test_qi_skew_disabled_by_param() -> None:
-    strat = C60TmfD6SoloMakerMinimal(
-        "c60_test", enable_qi_layer=False, subscribe_symbols=["TMFD6"]
-    )
+    strat = C60TmfD6SoloMakerMinimal("c60_test", enable_qi_layer=False, subscribe_symbols=["TMFD6"])
     strat.on_stats(_make_stats(imbalance=0.8))
     assert strat._qi_widen_events == 0
 
@@ -429,9 +413,7 @@ def test_qi_skew_disabled_by_param() -> None:
 # ----------------------------------------------------------------------------
 
 
-def _make_fill(
-    side_enum: object, qty: int = 1, price: int = 22500 * 10_000
-) -> object:
+def _make_fill(side_enum: object, qty: int = 1, price: int = 22500 * 10_000) -> object:
     from hft_platform.contracts.execution import FillEvent
 
     return FillEvent(
@@ -453,9 +435,7 @@ def _make_fill(
 def test_on_fill_updates_local_position() -> None:
     from hft_platform.contracts.strategy import Side
 
-    strat = C60TmfD6SoloMakerMinimal(
-        "c60_test", max_pos=2, subscribe_symbols=["TMFD6"]
-    )
+    strat = C60TmfD6SoloMakerMinimal("c60_test", max_pos=2, subscribe_symbols=["TMFD6"])
     strat.on_fill(_make_fill(Side.BUY))  # type: ignore[arg-type]
     assert strat._local_pos.get("TMFD6") == 1
 
@@ -463,9 +443,7 @@ def test_on_fill_updates_local_position() -> None:
 def test_on_fill_sell_decrements() -> None:
     from hft_platform.contracts.strategy import Side
 
-    strat = C60TmfD6SoloMakerMinimal(
-        "c60_test", max_pos=2, subscribe_symbols=["TMFD6"]
-    )
+    strat = C60TmfD6SoloMakerMinimal("c60_test", max_pos=2, subscribe_symbols=["TMFD6"])
     strat.on_fill(_make_fill(Side.SELL, price=22505 * 10_000))  # type: ignore[arg-type]
     assert strat._local_pos.get("TMFD6") == -1
 
@@ -473,16 +451,12 @@ def test_on_fill_sell_decrements() -> None:
 def test_on_gap_clears_transient_state() -> None:
     from hft_platform.events import GapEvent
 
-    strat = C60TmfD6SoloMakerMinimal(
-        "c60_test", max_pos=2, subscribe_symbols=["TMFD6"]
-    )
+    strat = C60TmfD6SoloMakerMinimal("c60_test", max_pos=2, subscribe_symbols=["TMFD6"])
     strat._pending_buy["TMFD6"] = 2
     strat._pending_sell["TMFD6"] = 1
     strat._last_bid["TMFD6"] = 22500 * 10_000
     strat._last_ask["TMFD6"] = 22505 * 10_000
-    gap = GapEvent(
-        missed_count=5, first_missed_seq=100, last_missed_seq=104, ts=1000
-    )
+    gap = GapEvent(missed_count=5, first_missed_seq=100, last_missed_seq=104, ts=1000)
     strat.on_gap(gap)
     assert strat._pending_buy == {}
     assert strat._pending_sell == {}

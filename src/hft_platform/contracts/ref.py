@@ -117,10 +117,7 @@ class OptionRef:
         Example: ``OptionRef("TXO", date(2026, 5, 21), 23000, Right.CALL)``
         → ``"TXO202605C23000"``.
         """
-        return (
-            f"{self.root}{self.expiry.year:04d}{self.expiry.month:02d}"
-            f"{self.right.value}{self.strike}"
-        )
+        return f"{self.root}{self.expiry.year:04d}{self.expiry.month:02d}{self.right.value}{self.strike}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,9 +150,7 @@ class ContractFamily:
         if self.product is Product.STOCK:
             raise ValueError("ContractFamily is not applicable to stocks")
         if self.family is FamilyCode.SPECIFIC:
-            raise ValueError(
-                "ContractFamily requires R1/R2 (not SPECIFIC); use a concrete ref instead"
-            )
+            raise ValueError("ContractFamily requires R1/R2 (not SPECIFIC); use a concrete ref instead")
 
 
 @runtime_checkable
@@ -234,9 +229,7 @@ def parse_display(s: str, base_year: int) -> ContractRef | ContractFamily:
     """
     if match := _FUTURE_FAMILY_RE.match(s):
         root, fam_str = match.groups()
-        return ContractFamily(
-            product=Product.FUTURE, root=root, family=FamilyCode(fam_str)
-        )
+        return ContractFamily(product=Product.FUTURE, root=root, family=FamilyCode(fam_str))
 
     if match := _FUTURE_MONTH_RE.match(s):
         root, letter, year_digit = match.groups()

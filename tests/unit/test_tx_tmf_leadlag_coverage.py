@@ -292,8 +292,13 @@ class TestCheckExitsOnTmfEvent:
         strat = _make_strategy(sl_pts=100)
         # L1 data showing bid well below entry (entry=5001, bid=4900 → loss=101 pts > 100 SL)
         sl_l1 = (
-            _TS_BASE_NS, _scaled(4_900), _scaled(4_902),
-            _scaled(4_900) + _scaled(4_902), _scaled(2), 10, 10,
+            _TS_BASE_NS,
+            _scaled(4_900),
+            _scaled(4_902),
+            _scaled(4_900) + _scaled(4_902),
+            _scaled(2),
+            10,
+            10,
         )
         ctx = _make_ctx(l1_data=sl_l1)
         _enter_long(strat, ctx)
@@ -323,7 +328,7 @@ class TestCheckExitsOnTmfEvent:
         intents = strat.handle_event(ctx, tmf_tick)
         assert intents == []
 
-    def test_tmf_tick_no_ctx_skips(self):
+    def test_tmf_tick_no_ctx_skips(self):  # noqa: no-assert
         """Lines 235-236: no ctx → early return."""
         strat = _make_strategy()
         pos = _OpenPosition(entry_ts_ns=0, entry_price=_scaled(5_001), direction=1)
@@ -354,6 +359,7 @@ class TestCheckExitsOnTmfEvent:
         # Now switch L1 to None so fallback path is exercised
         def _no_l1(symbol):
             return None
+
         ctx._lob_l1_source = _no_l1
 
         # TMF tick — L1 returns None, so tick price used as bid/ask. Time-kill triggers.
@@ -389,9 +395,7 @@ class TestCheckExitsOnTmfEvent:
         """Lines 255-257: pending_force_close retries on tick."""
         strat = _make_strategy()
         ctx = _make_ctx()
-        pos = _OpenPosition(
-            entry_ts_ns=_TS_BASE_NS, entry_price=_scaled(5_001), direction=1
-        )
+        pos = _OpenPosition(entry_ts_ns=_TS_BASE_NS, entry_price=_scaled(5_001), direction=1)
         pos.pending_force_close = True
         pos.exit_order_id = ""
         strat._positions_open.append(pos)
@@ -406,9 +410,7 @@ class TestCheckExitsOnTmfEvent:
         """Lines 259-260: awaiting_exit position skipped."""
         strat = _make_strategy(max_hold_ns=1)
         ctx = _make_ctx()
-        pos = _OpenPosition(
-            entry_ts_ns=0, entry_price=_scaled(5_001), direction=1
-        )
+        pos = _OpenPosition(entry_ts_ns=0, entry_price=_scaled(5_001), direction=1)
         pos.awaiting_exit = True
         strat._positions_open.append(pos)
         strat.ctx = ctx
@@ -436,9 +438,7 @@ class TestCheckExitsOnTmfEvent:
         """Lines 287-290: cancel resting exit and set pending_force_close."""
         strat = _make_strategy(max_hold_ns=1)
         ctx = _make_ctx()
-        pos = _OpenPosition(
-            entry_ts_ns=0, entry_price=_scaled(5_001), direction=1
-        )
+        pos = _OpenPosition(entry_ts_ns=0, entry_price=_scaled(5_001), direction=1)
         pos.exit_order_id = "EXIT-100"
         pos.awaiting_exit = False
         strat._positions_open.append(pos)
@@ -500,8 +500,13 @@ class TestShortPositionExits:
         strat = _make_strategy(sl_pts=100)
         # L1 data showing ask well above entry (entry=4999, ask=5102 → loss=103 pts > 100 SL)
         sl_l1 = (
-            _TS_BASE_NS, _scaled(5_100), _scaled(5_102),
-            _scaled(5_100) + _scaled(5_102), _scaled(2), 10, 10,
+            _TS_BASE_NS,
+            _scaled(5_100),
+            _scaled(5_102),
+            _scaled(5_100) + _scaled(5_102),
+            _scaled(2),
+            10,
+            10,
         )
         ctx = _make_ctx(l1_data=sl_l1)
         _enter_short(strat, ctx)
@@ -540,9 +545,7 @@ class TestOnTickRouting:
         # Simulate volume going backwards (day boundary in cumulative volume)
         intents = strat.handle_event(
             ctx,
-            _make_tx_tick(
-                ts=_TS_BASE_NS + _ONE_SEC_NS, price_pts=20_010, total_volume=50
-            ),
+            _make_tx_tick(ts=_TS_BASE_NS + _ONE_SEC_NS, price_pts=20_010, total_volume=50),
         )
         # dvol = 50 - 100 = -50 → dvol = 50, which > 20 threshold, dp > 0 → signal
         assert len(intents) == 1
@@ -629,9 +632,7 @@ class TestEmitAggressiveExit:
         """Line 376-377: aggressive_exit_inflight blocks duplicate."""
         strat = _make_strategy()
         ctx = _make_ctx()
-        pos = _OpenPosition(
-            entry_ts_ns=0, entry_price=_scaled(5_001), direction=1
-        )
+        pos = _OpenPosition(entry_ts_ns=0, entry_price=_scaled(5_001), direction=1)
         pos.aggressive_exit_inflight = True
         strat.ctx = ctx
         strat._generated_intents = []
@@ -642,9 +643,7 @@ class TestEmitAggressiveExit:
         """Lines 383: price <= 0 skips."""
         strat = _make_strategy()
         ctx = _make_ctx()
-        pos = _OpenPosition(
-            entry_ts_ns=0, entry_price=_scaled(5_001), direction=1
-        )
+        pos = _OpenPosition(entry_ts_ns=0, entry_price=_scaled(5_001), direction=1)
         strat.ctx = ctx
         strat._generated_intents = []
         strat._emit_aggressive_exit(pos, 0, 0)
@@ -654,9 +653,7 @@ class TestEmitAggressiveExit:
         """Lines 378-379: long direction → sell at best_bid."""
         strat = _make_strategy()
         ctx = _make_ctx()
-        pos = _OpenPosition(
-            entry_ts_ns=0, entry_price=_scaled(5_001), direction=1
-        )
+        pos = _OpenPosition(entry_ts_ns=0, entry_price=_scaled(5_001), direction=1)
         strat.ctx = ctx
         strat._generated_intents = []
         strat._emit_aggressive_exit(pos, _scaled(4_900), _scaled(4_905))
@@ -669,9 +666,7 @@ class TestEmitAggressiveExit:
         """Lines 380-381: short direction → buy at best_ask."""
         strat = _make_strategy()
         ctx = _make_ctx()
-        pos = _OpenPosition(
-            entry_ts_ns=0, entry_price=_scaled(4_999), direction=-1
-        )
+        pos = _OpenPosition(entry_ts_ns=0, entry_price=_scaled(4_999), direction=-1)
         strat.ctx = ctx
         strat._generated_intents = []
         strat._emit_aggressive_exit(pos, _scaled(5_050), _scaled(5_055))
@@ -681,9 +676,7 @@ class TestEmitAggressiveExit:
     def test_no_ctx_skips(self):
         """Line 384: ctx is None → skip."""
         strat = _make_strategy()
-        pos = _OpenPosition(
-            entry_ts_ns=0, entry_price=_scaled(5_001), direction=1
-        )
+        pos = _OpenPosition(entry_ts_ns=0, entry_price=_scaled(5_001), direction=1)
         strat.ctx = None
         strat._generated_intents = []
         strat._emit_aggressive_exit(pos, _scaled(4_900), _scaled(4_905))
@@ -740,10 +733,18 @@ class TestOnFillExitMatching:
         ctx = _make_ctx()
         _enter_long(strat, ctx)
         fill = FillEvent(
-            fill_id="f1", account_id="acct", order_id="o1",
-            strategy_id="tx_tmf_leadlag", symbol="WRONG",
-            side=Side.SELL, qty=1, price=_scaled(5_000),
-            fee=0, tax=0, ingest_ts_ns=0, match_ts_ns=0,
+            fill_id="f1",
+            account_id="acct",
+            order_id="o1",
+            strategy_id="tx_tmf_leadlag",
+            symbol="WRONG",
+            side=Side.SELL,
+            qty=1,
+            price=_scaled(5_000),
+            fee=0,
+            tax=0,
+            ingest_ts_ns=0,
+            match_ts_ns=0,
         )
         strat.handle_event(ctx, fill)
         assert len(strat._positions_open) == 1  # unchanged
@@ -835,10 +836,17 @@ class TestOnOrderExitTracking:
         ctx = _make_ctx()
         _enter_long(strat, ctx)
         order = OrderEvent(
-            order_id="o1", strategy_id="tx_tmf_leadlag", symbol="WRONG",
-            status=OrderStatus.SUBMITTED, submitted_qty=1, filled_qty=0,
-            remaining_qty=1, price=_scaled(5_000),
-            side=ExecSide.SELL, ingest_ts_ns=0, broker_ts_ns=0,
+            order_id="o1",
+            strategy_id="tx_tmf_leadlag",
+            symbol="WRONG",
+            status=OrderStatus.SUBMITTED,
+            submitted_qty=1,
+            filled_qty=0,
+            remaining_qty=1,
+            price=_scaled(5_000),
+            side=ExecSide.SELL,
+            ingest_ts_ns=0,
+            broker_ts_ns=0,
         )
         strat.handle_event(ctx, order)
         pos = strat._positions_open[0]
@@ -889,9 +897,12 @@ class TestOnStatsExitPaths:
         _enter_long(strat, ctx)
         stats = LOBStatsEvent(
             symbol="TXFD6",  # signal symbol, not trade
-            ts=_TS_BASE_NS, imbalance=0.0,
-            best_bid=_scaled(20_000), best_ask=_scaled(20_010),
-            bid_depth=10, ask_depth=10,
+            ts=_TS_BASE_NS,
+            imbalance=0.0,
+            best_bid=_scaled(20_000),
+            best_ask=_scaled(20_010),
+            bid_depth=10,
+            ask_depth=10,
             mid_price_x2=_scaled(20_000) + _scaled(20_010),
             spread_scaled=_scaled(10),
         )
@@ -902,9 +913,7 @@ class TestOnStatsExitPaths:
         """Lines 314-315: no positions → early return."""
         strat = _make_strategy()
         ctx = _make_ctx()
-        intents = strat.handle_event(
-            ctx, _make_tmf_stats(ts=_TS_BASE_NS + 60 * _ONE_SEC_NS)
-        )
+        intents = strat.handle_event(ctx, _make_tmf_stats(ts=_TS_BASE_NS + 60 * _ONE_SEC_NS))
         assert intents == []
 
     def test_stats_mark_price_fallback_midpoint(self):
@@ -941,9 +950,7 @@ class TestOnStatsExitPaths:
         pos.exit_order_id = "EX-REST"
         pos.awaiting_exit = False
 
-        intents = strat.handle_event(
-            ctx, _make_tmf_stats(ts=_TS_BASE_NS + 60 * _ONE_SEC_NS)
-        )
+        intents = strat.handle_event(ctx, _make_tmf_stats(ts=_TS_BASE_NS + 60 * _ONE_SEC_NS))
         assert pos.pending_force_close is True
         assert pos.exit_order_id == ""
         # A cancel intent should be generated
@@ -958,9 +965,7 @@ class TestOnStatsExitPaths:
 class TestCurrentLots:
     def test_includes_open_positions(self):
         strat = _make_strategy()
-        strat._positions_open.append(
-            _OpenPosition(0, _scaled(5_001), 1)
-        )
+        strat._positions_open.append(_OpenPosition(0, _scaled(5_001), 1))
         assert strat._current_lots() == 1
 
     def test_includes_awaiting_entry(self):
@@ -970,9 +975,7 @@ class TestCurrentLots:
 
     def test_combined_count(self):
         strat = _make_strategy()
-        strat._positions_open.append(
-            _OpenPosition(0, _scaled(5_001), 1)
-        )
+        strat._positions_open.append(_OpenPosition(0, _scaled(5_001), 1))
         strat._awaiting_entry = -1
         assert strat._current_lots() == 2
 
@@ -1035,9 +1038,7 @@ class TestOnOrderNonMatchingSide:
         _enter_long(strat, ctx)
         pos = strat._positions_open[0]
         pos.awaiting_exit = True
-        order = _make_tmf_order(
-            OrderStatus.PARTIALLY_FILLED, Side.SELL, order_id="EX-006"
-        )
+        order = _make_tmf_order(OrderStatus.PARTIALLY_FILLED, Side.SELL, order_id="EX-006")
         strat.handle_event(ctx, order)
         assert pos.exit_order_id == "EX-006"
 

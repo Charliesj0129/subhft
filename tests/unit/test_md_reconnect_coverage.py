@@ -14,7 +14,6 @@ import pytest
 from hft_platform.services._md_ingestion import FeedState
 from hft_platform.services._md_reconnect import MarketDataReconnectMixin
 
-
 # ---------------------------------------------------------------------------
 # Minimal concrete class mixing in MarketDataReconnectMixin
 # ---------------------------------------------------------------------------
@@ -213,6 +212,7 @@ class TestTriggerReconnectMetrics:
 
         def slow_reconnect(*args, **kwargs):
             import time as _time
+
             _time.sleep(5.0)
             return True
 
@@ -679,6 +679,7 @@ class TestWatchdogLoop:
 
         class ExplodingDict(dict):
             """Dict that raises RuntimeError on iteration."""
+
             _explode_count = 0
 
             def __iter__(self):

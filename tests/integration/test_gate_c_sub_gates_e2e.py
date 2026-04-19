@@ -8,6 +8,7 @@ helper function directly rather than invoking the full `run_gate_c`.
 Full end-to-end validation with real CK data is covered by the research
 SOP in a separate session.
 """
+
 from __future__ import annotations
 
 import numpy as np

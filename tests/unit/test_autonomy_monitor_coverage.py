@@ -509,9 +509,7 @@ class TestHandleFlattenRequest:
         )
         await _handle_flatten_request(gate, flattener)
         flattener.flatten_all.assert_awaited_once()
-        gate.complete.assert_called_once_with(
-            fully_closed=3, partially_closed=0, failed=0, failed_symbols=[]
-        )
+        gate.complete.assert_called_once_with(fully_closed=3, partially_closed=0, failed=0, failed_symbols=[])
 
     @pytest.mark.asyncio
     async def test_flatten_track_scope(self) -> None:

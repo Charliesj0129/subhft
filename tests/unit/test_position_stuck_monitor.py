@@ -34,9 +34,7 @@ def _pos(strategy_id, symbol, net_qty, last_update_ts, avg_price_scaled=377_000_
 class _Store:
     def __init__(self, positions):
         # Mimic PositionStore.positions: Dict[key, Position]
-        self.positions = {
-            f"{p.strategy_id}:{p.symbol}": p for p in positions
-        }
+        self.positions = {f"{p.strategy_id}:{p.symbol}": p for p in positions}
 
 
 @pytest.mark.asyncio
@@ -66,9 +64,7 @@ class TestPositionStuckMonitor:
         dispatcher.notify_position_stuck.assert_not_awaited()
 
         # Gauge populated
-        metric = MetricsRegistry.get().position_age_seconds.labels(
-            strategy="R47", symbol="TMFE6"
-        )
+        metric = MetricsRegistry.get().position_age_seconds.labels(strategy="R47", symbol="TMFE6")
         assert metric._value.get() >= 0
 
     async def test_stuck_position_fires_once_then_dedups(self):
@@ -176,8 +172,7 @@ class TestPositionStuckMonitor:
         now_ns = time.time_ns()
         # net_qty=-1 short @ 37800*10000, mid=37900*10000 → diff +100*10000 scaled
         # unrealized = (37900-37800)*10000 * -1 * 10 / 10000 = -1000 NTD
-        stuck = _pos("R47", "TMFE6", -1, now_ns - 600_000_000_000,
-                     avg_price_scaled=378_000_000)
+        stuck = _pos("R47", "TMFE6", -1, now_ns - 600_000_000_000, avg_price_scaled=378_000_000)
         store = _Store([stuck])
         dispatcher = AsyncMock()
         mon = PositionStuckMonitor(

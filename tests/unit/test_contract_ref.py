@@ -61,15 +61,11 @@ class TestFutureRef:
 
 class TestOptionRef:
     def test_display_call(self) -> None:
-        ref = OptionRef(
-            root="TXO", expiry=date(2026, 5, 21), strike=23000, right=Right.CALL
-        )
+        ref = OptionRef(root="TXO", expiry=date(2026, 5, 21), strike=23000, right=Right.CALL)
         assert ref.display() == "TXO202605C23000"
 
     def test_display_put(self) -> None:
-        ref = OptionRef(
-            root="TXO", expiry=date(2026, 5, 21), strike=22500, right=Right.PUT
-        )
+        ref = OptionRef(root="TXO", expiry=date(2026, 5, 21), strike=22500, right=Right.PUT)
         assert ref.display() == "TXO202605P22500"
 
     def test_hashable(self) -> None:
@@ -105,9 +101,7 @@ class TestContractFamily:
 
     def test_reject_specific_family(self) -> None:
         with pytest.raises(ValueError, match="requires R1/R2"):
-            ContractFamily(
-                product=Product.FUTURE, root="TMF", family=FamilyCode.SPECIFIC
-            )
+            ContractFamily(product=Product.FUTURE, root="TMF", family=FamilyCode.SPECIFIC)
 
     def test_hashable(self) -> None:
         a = ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1)
@@ -218,9 +212,7 @@ class TestImmutableContractSnapshot:
         assert snap.native_hint(ref) == "broker-native-obj"
 
     def test_miss_returns_none(self) -> None:
-        snap = ImmutableContractSnapshot.build(
-            family_map={}, native_hints={}, snapshot_ns=0
-        )
+        snap = ImmutableContractSnapshot.build(family_map={}, native_hints={}, snapshot_ns=0)
         assert snap.resolve_family(self._fam()) is None
         assert snap.native_hint(FutureRef("TMF", date(2026, 5, 21))) is None
 
@@ -236,17 +228,13 @@ class TestImmutableContractSnapshot:
             snap.family_map[fam] = FutureRef("TXF", date(2027, 1, 15))  # type: ignore[index]
 
     def test_native_hints_is_read_only(self) -> None:
-        snap = ImmutableContractSnapshot.build(
-            family_map={}, native_hints={"X": object()}, snapshot_ns=0
-        )
+        snap = ImmutableContractSnapshot.build(family_map={}, native_hints={"X": object()}, snapshot_ns=0)
         assert isinstance(snap.native_hints, MappingProxyType)
         with pytest.raises(TypeError):
             snap.native_hints["Y"] = object()  # type: ignore[index]
 
     def test_snapshot_is_frozen(self) -> None:
-        snap = ImmutableContractSnapshot.build(
-            family_map={}, native_hints={}, snapshot_ns=1234
-        )
+        snap = ImmutableContractSnapshot.build(family_map={}, native_hints={}, snapshot_ns=1234)
         with pytest.raises((AttributeError, TypeError)):
             snap.snapshot_ns = 5678  # type: ignore[misc]
 
@@ -267,10 +255,7 @@ class TestMatchDispatch:
         assert self._classify(FutureRef("TMF", date(2026, 5, 21))) == "future"
 
     def test_option_classified(self) -> None:
-        assert (
-            self._classify(OptionRef("TXO", date(2026, 5, 21), 23000, Right.CALL))
-            == "option"
-        )
+        assert self._classify(OptionRef("TXO", date(2026, 5, 21), 23000, Right.CALL)) == "option"
 
     def test_stock_classified(self) -> None:
         assert self._classify(StockRef("2330")) == "stock"

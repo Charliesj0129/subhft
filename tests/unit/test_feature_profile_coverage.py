@@ -321,10 +321,7 @@ class TestFeatureProfileRegistryFromFile:
     def test_from_file_skips_entries_missing_profile_id(self, tmp_path: Path) -> None:
         path = tmp_path / "profiles.yaml"
         path.write_text(
-            "profiles:\n"
-            "  - feature_set_id: lob_shared_v3\n"
-            "  - profile_id: good\n"
-            "    feature_set_id: lob_shared_v3\n",
+            "profiles:\n  - feature_set_id: lob_shared_v3\n  - profile_id: good\n    feature_set_id: lob_shared_v3\n",
             encoding="utf-8",
         )
         reg = FeatureProfileRegistry.from_file(path)
@@ -333,10 +330,7 @@ class TestFeatureProfileRegistryFromFile:
     def test_from_file_skips_entries_missing_feature_set_id(self, tmp_path: Path) -> None:
         path = tmp_path / "profiles.yaml"
         path.write_text(
-            "profiles:\n"
-            "  - profile_id: bad\n"
-            "  - profile_id: good\n"
-            "    feature_set_id: lob_shared_v3\n",
+            "profiles:\n  - profile_id: bad\n  - profile_id: good\n    feature_set_id: lob_shared_v3\n",
             encoding="utf-8",
         )
         reg = FeatureProfileRegistry.from_file(path)
@@ -373,10 +367,7 @@ class TestFeatureProfileRegistryFromFile:
     def test_from_file_skips_non_dict_entries(self, tmp_path: Path) -> None:
         path = tmp_path / "profiles.yaml"
         path.write_text(
-            "profiles:\n"
-            "  - not_a_dict_value\n"
-            "  - profile_id: p1\n"
-            "    feature_set_id: lob_shared_v3\n",
+            "profiles:\n  - not_a_dict_value\n  - profile_id: p1\n    feature_set_id: lob_shared_v3\n",
             encoding="utf-8",
         )
         reg = FeatureProfileRegistry.from_file(path)

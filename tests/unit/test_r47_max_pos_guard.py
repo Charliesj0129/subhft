@@ -11,7 +11,6 @@ Defense-in-depth: even if pending is somehow reset, the guard must hold.
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -147,16 +146,32 @@ class TestBug9MaxPosViolation:
 
         # Simulate fills
         buy_fill = FillEvent(
-            fill_id="F001", account_id="acct", order_id="O001",
-            strategy_id="r47_test", symbol="TMFE6", side=Side.BUY,
-            qty=1, price=3727_0000, fee=0, tax=0,
-            ingest_ts_ns=0, match_ts_ns=0,
+            fill_id="F001",
+            account_id="acct",
+            order_id="O001",
+            strategy_id="r47_test",
+            symbol="TMFE6",
+            side=Side.BUY,
+            qty=1,
+            price=3727_0000,
+            fee=0,
+            tax=0,
+            ingest_ts_ns=0,
+            match_ts_ns=0,
         )
         sell_fill = FillEvent(
-            fill_id="F002", account_id="acct", order_id="O002",
-            strategy_id="r47_test", symbol="TMFE6", side=Side.SELL,
-            qty=1, price=3733_0000, fee=0, tax=0,
-            ingest_ts_ns=0, match_ts_ns=0,
+            fill_id="F002",
+            account_id="acct",
+            order_id="O002",
+            strategy_id="r47_test",
+            symbol="TMFE6",
+            side=Side.SELL,
+            qty=1,
+            price=3733_0000,
+            fee=0,
+            tax=0,
+            ingest_ts_ns=0,
+            match_ts_ns=0,
         )
         r47_max1.handle_event(ctx, buy_fill)
         r47_max1.handle_event(ctx, sell_fill)
@@ -181,9 +196,13 @@ class TestBug9MaxPosViolation:
 
         # Send risk feedback with Side.BUY enum
         fb = RiskFeedback(
-            intent_id=1, strategy_id="r47_test", symbol="TMFE6",
-            reason_code="REJECTED", timestamp_ns=0,
-            side=Side.BUY, was_approved=False,
+            intent_id=1,
+            strategy_id="r47_test",
+            symbol="TMFE6",
+            reason_code="REJECTED",
+            timestamp_ns=0,
+            side=Side.BUY,
+            was_approved=False,
         )
         r47_max1.on_risk_feedback(fb)
         assert r47_max1._pending_buy.get("TMFE6", 0) == 0
@@ -201,8 +220,11 @@ class TestBug9MaxPosViolation:
 
         # Send risk feedback with int side (as typed_intent_identity returns)
         fb = RiskFeedback(
-            intent_id=1, strategy_id="r47_test", symbol="TMFE6",
-            reason_code="TRACK_GATE_SESSION_FILTERED", timestamp_ns=0,
+            intent_id=1,
+            strategy_id="r47_test",
+            symbol="TMFE6",
+            reason_code="TRACK_GATE_SESSION_FILTERED",
+            timestamp_ns=0,
             side=int(Side.BUY),  # int, not Side enum!
             was_approved=False,
         )

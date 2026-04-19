@@ -33,6 +33,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from hft_platform.contracts.strategy import (
+    TIF,
     IntentType,
     OrderCommand,
     OrderIntent,
@@ -40,10 +41,8 @@ from hft_platform.contracts.strategy import (
     RiskFeedback,
     Side,
     StormGuardState,
-    TIF,
 )
 from hft_platform.risk.engine import RiskEngine, _load_rust_risk_validator
-
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
 

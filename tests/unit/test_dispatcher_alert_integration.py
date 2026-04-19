@@ -1,4 +1,5 @@
 """Tests that NotificationDispatcher still works after AlertRouter rewire."""
+
 from __future__ import annotations
 
 from unittest.mock import AsyncMock
@@ -193,9 +194,7 @@ async def test_notify_pre_market_fail_emits_critical(dispatcher_with_router, moc
 
 @pytest.mark.asyncio
 async def test_notify_position_recovery_failed_emits_fatal(dispatcher_with_router, mock_router):
-    await dispatcher_with_router.notify_position_recovery_failed(
-        source="dual", reason="timeout", mismatches=[]
-    )
+    await dispatcher_with_router.notify_position_recovery_failed(source="dual", reason="timeout", mismatches=[])
     alert = mock_router.emit.call_args.args[0]
     from hft_platform.notifications.alert import AlertSeverity
 
@@ -205,9 +204,7 @@ async def test_notify_position_recovery_failed_emits_fatal(dispatcher_with_route
 
 @pytest.mark.asyncio
 async def test_notify_canary_action_rollback_emits_critical(dispatcher_with_router, mock_router):
-    await dispatcher_with_router.notify_canary_action(
-        alpha_id="r47", action="rolled_back", reason="sharpe drop"
-    )
+    await dispatcher_with_router.notify_canary_action(alpha_id="r47", action="rolled_back", reason="sharpe drop")
     alert = mock_router.emit.call_args.args[0]
     from hft_platform.notifications.alert import AlertSeverity
 
@@ -217,9 +214,7 @@ async def test_notify_canary_action_rollback_emits_critical(dispatcher_with_rout
 
 @pytest.mark.asyncio
 async def test_notify_canary_action_graduated_emits_info(dispatcher_with_router, mock_router):
-    await dispatcher_with_router.notify_canary_action(
-        alpha_id="r47", action="graduated", reason="all gates passed"
-    )
+    await dispatcher_with_router.notify_canary_action(alpha_id="r47", action="graduated", reason="all gates passed")
     alert = mock_router.emit.call_args.args[0]
     from hft_platform.notifications.alert import AlertSeverity
 
@@ -275,9 +270,7 @@ async def test_notify_daily_report_emits_info(dispatcher_with_router, mock_route
 
 @pytest.mark.asyncio
 async def test_notify_reconciliation_mismatch_emits_warn(dispatcher_with_router, mock_router):
-    await dispatcher_with_router.notify_reconciliation_mismatch(
-        platform_pnl=12000, broker_pnl=11500, ch_pnl=12100
-    )
+    await dispatcher_with_router.notify_reconciliation_mismatch(platform_pnl=12000, broker_pnl=11500, ch_pnl=12100)
     alert = mock_router.emit.call_args.args[0]
     from hft_platform.notifications.alert import AlertSeverity
 

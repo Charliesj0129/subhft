@@ -346,9 +346,7 @@ class TestFilterIntentsByPhase:
         intent = self._order_intent("TSMC", IntentType.NEW, side=Side.SELL, tif=TIF.IOC)
         pos = SimpleNamespace(net_qty=5)
         store = SimpleNamespace(positions={"acct:strat_a:TSMC": pos})
-        result = StrategyRunner.filter_intents_by_phase(
-            [intent], gate, position_store=store, strategy_id="strat_a"
-        )
+        result = StrategyRunner.filter_intents_by_phase([intent], gate, position_store=store, strategy_id="strat_a")
         assert len(result) == 1
 
     def test_close_only_allows_ioc_buy_when_short(self):
@@ -359,9 +357,7 @@ class TestFilterIntentsByPhase:
         intent = self._order_intent("TSMC", IntentType.NEW, side=Side.BUY, tif=TIF.IOC)
         pos = SimpleNamespace(net_qty=-3)
         store = SimpleNamespace(positions={"acct:strat_a:TSMC": pos})
-        result = StrategyRunner.filter_intents_by_phase(
-            [intent], gate, position_store=store, strategy_id="strat_a"
-        )
+        result = StrategyRunner.filter_intents_by_phase([intent], gate, position_store=store, strategy_id="strat_a")
         assert len(result) == 1
 
     def test_close_only_blocks_ioc_buy_when_flat(self):
@@ -371,9 +367,7 @@ class TestFilterIntentsByPhase:
         gate = self._make_track_gate("TSMC", SessionPhase.CLOSE_ONLY)
         intent = self._order_intent("TSMC", IntentType.NEW, side=Side.BUY, tif=TIF.IOC)
         store = SimpleNamespace(positions={})
-        result = StrategyRunner.filter_intents_by_phase(
-            [intent], gate, position_store=store, strategy_id="strat_a"
-        )
+        result = StrategyRunner.filter_intents_by_phase([intent], gate, position_store=store, strategy_id="strat_a")
         assert len(result) == 0
 
     def test_close_only_blocks_ioc_when_no_position_store(self):
@@ -502,9 +496,7 @@ class TestResolveSymbolAliases:
         runner, _, _ = runner_factory()
         runner.symbol_metadata.alias_to_actual = {"C0": "TXFD6"}
         runner.symbol_metadata.resolve_symbol = lambda s: runner.symbol_metadata.alias_to_actual.get(s, s)
-        runner.symbol_metadata.resolve_symbols = lambda syms: {
-            runner.symbol_metadata.resolve_symbol(s) for s in syms
-        }
+        runner.symbol_metadata.resolve_symbols = lambda syms: {runner.symbol_metadata.resolve_symbol(s) for s in syms}
         strat = _FakeStrategy("s1", symbols=["C0"])
         runner.register(strat)
         runner.resolve_symbol_aliases()
@@ -515,9 +507,7 @@ class TestResolveSymbolAliases:
         runner, _, _ = runner_factory()
         runner.symbol_metadata.alias_to_actual = {"R1": "TMFD6"}
         runner.symbol_metadata.resolve_symbol = lambda s: runner.symbol_metadata.alias_to_actual.get(s, s)
-        runner.symbol_metadata.resolve_symbols = lambda syms: {
-            runner.symbol_metadata.resolve_symbol(s) for s in syms
-        }
+        runner.symbol_metadata.resolve_symbols = lambda syms: {runner.symbol_metadata.resolve_symbol(s) for s in syms}
         strat = _FakeStrategy("s1", symbols=["TSMC"])
         strat._trade_symbol = "R1"
         runner.register(strat)
@@ -862,8 +852,13 @@ class TestStormGuardEscalation:
 
         strat = _FakeStrategy("s_sg", symbols=["TSMC"])
         intent = OrderIntent(
-            intent_id=1, strategy_id="s_sg", symbol="TSMC",
-            intent_type=IntentType.NEW, side=Side.BUY, price=100_0000, qty=1,
+            intent_id=1,
+            strategy_id="s_sg",
+            symbol="TSMC",
+            intent_type=IntentType.NEW,
+            side=Side.BUY,
+            price=100_0000,
+            qty=1,
         )
         strat._return_value = [intent]
         runner.register(strat)

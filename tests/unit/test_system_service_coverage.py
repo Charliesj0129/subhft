@@ -13,7 +13,6 @@ import pytest
 
 from hft_platform.services.system import HFTSystem
 
-
 # ---------------------------------------------------------------------------
 # Helper: lightweight HFTSystem stub (bypass __init__ / SystemBootstrapper)
 # ---------------------------------------------------------------------------
@@ -253,9 +252,7 @@ class TestTryRestartService:
         from hft_platform.core import timebase
 
         expected_delay = 8.0
-        assert sys_obj._task_restart_until_s["md"] == pytest.approx(
-            timebase.now_s() + expected_delay, abs=2.0
-        )
+        assert sys_obj._task_restart_until_s["md"] == pytest.approx(timebase.now_s() + expected_delay, abs=2.0)
 
         # Cleanup
         sys_obj.tasks["md"].cancel()
@@ -280,14 +277,14 @@ class TestUpdatePlatformDegradeState:
         assert sys_obj.platform_degrade_controller.enter_reduce_only.call_count == 2
         sys_obj.platform_degrade_controller.check_auto_recovery.assert_called_once()
 
-    def test_skips_when_controller_is_none(self):
+    def test_skips_when_controller_is_none(self):  # noqa: no-assert
         sys_obj = _make_stub()
         sys_obj.platform_degrade_controller = None
 
         # Should not raise
         sys_obj._update_platform_degrade_state()
 
-    def test_skips_when_inputs_is_none(self):
+    def test_skips_when_inputs_is_none(self):  # noqa: no-assert
         sys_obj = _make_stub()
         sys_obj.platform_degrade_inputs = None
 
@@ -316,7 +313,7 @@ class TestPersistLostExecEvent:
         assert parsed["topic"] == "deal"
         assert parsed["data"]["price"] == 100
 
-    def test_handles_write_failure_gracefully(self, monkeypatch):
+    def test_handles_write_failure_gracefully(self, monkeypatch):  # noqa: no-assert
         sys_obj = _make_stub()
         # Point to an invalid directory that cannot be created
         monkeypatch.setenv("HFT_STATE_DIR", "/dev/null/impossible")
@@ -793,7 +790,7 @@ class TestGetDrawdownPctEdge:
 
 
 class TestSyncDrainRecorderNone:
-    def test_returns_early_when_no_recorder(self):
+    def test_returns_early_when_no_recorder(self):  # noqa: no-assert
         sys_obj = _make_stub()
         sys_obj.recorder = None
 

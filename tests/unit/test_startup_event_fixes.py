@@ -253,7 +253,7 @@ class TestOrderDispatchAudit:
         # Should not raise
         adapter._audit_log_order({"event": "dispatched"})
 
-    def test_audit_log_order_swallows_exception(self):
+    def test_audit_log_order_swallows_exception(self):  # noqa: no-assert
         """If audit writer raises, _audit_log_order swallows the exception."""
 
         adapter = self._make_adapter()

@@ -242,7 +242,9 @@ class TestTick:
         """tick() sends suppression summaries from aggregator."""
         # Simulate dedup: same dedup_key, different alert_ids
         a1 = _make_alert(dedup_key="dup", ts_ns=1_000_000_000_000_000_000, severity=AlertSeverity.WARN)
-        a2 = _make_alert(dedup_key="dup", ts_ns=1_000_000_000_000_000_001, alert_id="a-002", severity=AlertSeverity.WARN)
+        a2 = _make_alert(
+            dedup_key="dup", ts_ns=1_000_000_000_000_000_001, alert_id="a-002", severity=AlertSeverity.WARN
+        )
         await router.emit(a1)
         await router.emit(a2)
 

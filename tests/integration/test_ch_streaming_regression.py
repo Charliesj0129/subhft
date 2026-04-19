@@ -8,6 +8,7 @@ Requires:
 All prerequisites are checked at test entry; if any are missing the test is
 skipped with an explicit reason.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -123,8 +124,7 @@ def test_streaming_adapter_fill_equivalence():
     npz_fills = adapter_npz._fill_count
 
     assert stream_fills == npz_fills, (
-        f"Fill count mismatch on {instrument} {date}: "
-        f"streaming={stream_fills} vs .npz={npz_fills}"
+        f"Fill count mismatch on {instrument} {date}: streaming={stream_fills} vs .npz={npz_fills}"
     )
 
 

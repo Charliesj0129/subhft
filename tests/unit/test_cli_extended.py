@@ -336,7 +336,12 @@ def test_cmd_run_downgrades_live(monkeypatch, capsys):
 
     monkeypatch.setattr("hft_platform.cli._run.asyncio", types.SimpleNamespace(run=_run))
     # Build a stub that satisfies all prometheus_client imports the CLI may trigger
-    _fake_metric = lambda *a, **k: _types.SimpleNamespace(labels=lambda **_: _types.SimpleNamespace(inc=lambda *_: None, set=lambda *_: None, observe=lambda *_: None), inc=lambda *_: None, set=lambda *_: None, observe=lambda *_: None)
+    _fake_metric = lambda *a, **k: _types.SimpleNamespace(
+        labels=lambda **_: _types.SimpleNamespace(inc=lambda *_: None, set=lambda *_: None, observe=lambda *_: None),
+        inc=lambda *_: None,
+        set=lambda *_: None,
+        observe=lambda *_: None,
+    )
     _prom_stub = _types.SimpleNamespace(
         start_http_server=lambda *_a, **_k: None,
         REGISTRY=_types.SimpleNamespace(unregister=lambda *_: None),

@@ -15,7 +15,6 @@ import numpy as np
 from hft_platform.events import BidAskEvent, BookStats, LOBStatsEvent, MetaData, TickEvent
 from hft_platform.feed_adapter.lob_engine import BookState, LOBEngine, _NoopLock
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -222,10 +221,15 @@ class TestBookStateApplyUpdateWithStatsFields:
         book = BookState("TST")
         book._rust_state = None
         book.apply_update_with_stats_fields(
-            _list_bids(), _list_asks(), 1000,
-            best_bid=1010000, best_ask=1000000,  # Crossed
-            bid_depth=15, ask_depth=11,
-            _mid_price=0.0, _spread=0.0,
+            _list_bids(),
+            _list_asks(),
+            1000,
+            best_bid=1010000,
+            best_ask=1000000,  # Crossed
+            bid_depth=15,
+            ask_depth=11,
+            _mid_price=0.0,
+            _spread=0.0,
             imbalance=0.1,
         )
         assert book.mid_price_x2 == 0
@@ -235,13 +239,29 @@ class TestBookStateApplyUpdateWithStatsFields:
         book = BookState("TST")
         book._rust_state = None
         book.apply_update_with_stats_fields(
-            _list_bids(), _list_asks(), 2000,
-            1000000, 1001000, 15, 11, 0.0, 0.0, 0.1,
+            _list_bids(),
+            _list_asks(),
+            2000,
+            1000000,
+            1001000,
+            15,
+            11,
+            0.0,
+            0.0,
+            0.1,
         )
         v = book.version
         book.apply_update_with_stats_fields(
-            _list_bids(), _list_asks(), 1000,  # Stale
-            1000000, 1001000, 15, 11, 0.0, 0.0, 0.1,
+            _list_bids(),
+            _list_asks(),
+            1000,  # Stale
+            1000000,
+            1001000,
+            15,
+            11,
+            0.0,
+            0.0,
+            0.1,
         )
         assert book.version == v
 
@@ -249,8 +269,16 @@ class TestBookStateApplyUpdateWithStatsFields:
         book = BookState("TST")
         book._rust_state = None
         book.apply_update_with_stats_fields(
-            [], [], 1000,
-            1000000, 1001000, 0, 0, 0.0, 0.0, 0.0,
+            [],
+            [],
+            1000,
+            1000000,
+            1001000,
+            0,
+            0,
+            0.0,
+            0.0,
+            0.0,
         )
         assert book.bids == []
         assert book.asks == []
@@ -298,8 +326,19 @@ class TestLOBEngineProcessEvent:
         bids = _np_bids()
         asks = _np_asks()
         event = (
-            "bidask", "TST", bids, asks, 1000, False,
-            1000000, 1001000, 15, 11, 1000500.0, 1000.0, 0.1,
+            "bidask",
+            "TST",
+            bids,
+            asks,
+            1000,
+            False,
+            1000000,
+            1001000,
+            15,
+            11,
+            1000500.0,
+            1000.0,
+            0.1,
         )
         result = engine.process_event(event)
         assert result is not None
@@ -333,14 +372,19 @@ class TestLOBEngineProcessEvent:
         engine = LOBEngine()
         meta = _make_meta()
         stats = BookStats(
-            best_bid=1000000, best_ask=1001000,
-            bid_depth=15, ask_depth=11,
-            mid_price=1000500.0, spread=1000.0,
+            best_bid=1000000,
+            best_ask=1001000,
+            bid_depth=15,
+            ask_depth=11,
+            mid_price=1000500.0,
+            spread=1000.0,
             imbalance=0.1,
         )
         event = BidAskEvent(
-            meta=meta, symbol="TST",
-            bids=_np_bids(), asks=_np_asks(),
+            meta=meta,
+            symbol="TST",
+            bids=_np_bids(),
+            asks=_np_asks(),
             stats=stats,
         )
         result = engine.process_event(event)
@@ -350,8 +394,10 @@ class TestLOBEngineProcessEvent:
         engine = LOBEngine()
         meta = _make_meta()
         event = BidAskEvent(
-            meta=meta, symbol="TST",
-            bids=_np_bids(), asks=_np_asks(),
+            meta=meta,
+            symbol="TST",
+            bids=_np_bids(),
+            asks=_np_asks(),
             stats=None,
         )
         result = engine.process_event(event)
@@ -581,7 +627,7 @@ class TestLOBEngineMetrics:
         # "C" should be mapped to "_other"
         assert ("_other", "BidAsk") in engine._metrics_pending_updates
 
-    def test_flush_metrics_disabled(self):
+    def test_flush_metrics_disabled(self):  # noqa: no-assert
         engine = LOBEngine()
         engine._metrics_enabled = False
         engine.metrics = None

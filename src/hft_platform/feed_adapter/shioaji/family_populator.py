@@ -99,8 +99,7 @@ def _extract_futures(
             if suffix in _ALIAS_SUFFIXES:
                 continue
             expiry = _parse_delivery_to_date(
-                getattr(contract, "delivery_date", None)
-                or getattr(contract, "delivery_month", None)
+                getattr(contract, "delivery_date", None) or getattr(contract, "delivery_month", None)
             )
             if expiry is None:
                 continue

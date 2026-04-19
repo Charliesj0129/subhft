@@ -106,18 +106,12 @@ class C33TxfD6SoloMaker(BaseStrategy):
             return default
 
         self._max_pos: int = _as_int(kwargs.get("max_pos", 1), 1)
-        self._spread_threshold_pts: int = _as_int(
-            kwargs.get("spread_threshold_pts", 5), 5
-        )
-        self._inventory_skew_tenths: int = _as_int(
-            kwargs.get("inventory_skew_tenths", 2), 2
-        )
+        self._spread_threshold_pts: int = _as_int(kwargs.get("spread_threshold_pts", 5), 5)
+        self._inventory_skew_tenths: int = _as_int(kwargs.get("inventory_skew_tenths", 2), 2)
         self._shadow_mode: bool = bool(kwargs.get("shadow_mode", False))
         # queue_share is informational (live broker decides fills); kept for
         # research-live parity of the strategies.yaml block.
-        self._queue_share_info: float = _as_float(
-            kwargs.get("queue_share", 0.05), 0.05
-        )
+        self._queue_share_info: float = _as_float(kwargs.get("queue_share", 0.05), 0.05)
         variant = kwargs.get("variant", "R47-minimal")
         self._variant_label: str = str(variant) if variant is not None else "R47-minimal"
 
@@ -234,29 +228,21 @@ class C33TxfD6SoloMaker(BaseStrategy):
         symbol = event.symbol
         if event.side == Side.BUY:
             self._local_pos[symbol] = self._local_pos.get(symbol, 0) + event.qty
-            self._pending_buy[symbol] = max(
-                0, self._pending_buy.get(symbol, 0) - event.qty
-            )
+            self._pending_buy[symbol] = max(0, self._pending_buy.get(symbol, 0) - event.qty)
             self._last_bid.pop(symbol, None)
         elif event.side == Side.SELL:
             self._local_pos[symbol] = self._local_pos.get(symbol, 0) - event.qty
-            self._pending_sell[symbol] = max(
-                0, self._pending_sell.get(symbol, 0) - event.qty
-            )
+            self._pending_sell[symbol] = max(0, self._pending_sell.get(symbol, 0) - event.qty)
             self._last_ask.pop(symbol, None)
 
     def on_risk_feedback(self, feedback: RiskFeedback) -> None:
         """Release pending counters on risk rejection (prevents deadlock)."""
         symbol = feedback.symbol
         if feedback.side == Side.BUY:
-            self._pending_buy[symbol] = max(
-                0, self._pending_buy.get(symbol, 0) - 1
-            )
+            self._pending_buy[symbol] = max(0, self._pending_buy.get(symbol, 0) - 1)
             self._last_bid.pop(symbol, None)
         elif feedback.side == Side.SELL:
-            self._pending_sell[symbol] = max(
-                0, self._pending_sell.get(symbol, 0) - 1
-            )
+            self._pending_sell[symbol] = max(0, self._pending_sell.get(symbol, 0) - 1)
             self._last_ask.pop(symbol, None)
 
     def on_gap(self, event: GapEvent) -> None:

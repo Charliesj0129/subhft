@@ -1,13 +1,15 @@
 """Tests for TAIFEX cost model."""
+
 import pytest
 
-from research.backtest.cost_models import load_cost_profile, TAIFEXCost
+from research.backtest.cost_models import TAIFEXCost, load_cost_profile
 
 
 @pytest.fixture(autouse=True)
 def _reset_cost_cache():
     """Reset the module-level cache between tests to ensure isolation."""
     import research.backtest.cost_models as _mod
+
     _mod._cache = None
     yield
     _mod._cache = None

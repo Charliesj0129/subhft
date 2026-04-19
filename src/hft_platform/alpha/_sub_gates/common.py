@@ -1,4 +1,5 @@
 """Common sub-gates applicable to both maker and taker strategies."""
+
 from __future__ import annotations
 
 from statistics import mean, stdev

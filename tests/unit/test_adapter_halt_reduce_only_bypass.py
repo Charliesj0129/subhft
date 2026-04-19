@@ -130,9 +130,7 @@ class TestAdapterHaltReduceOnlyBypass:
         # We stub downstream paths so execute() returns cleanly.
         adapter._dedup_store = None
         adapter.per_symbol_rate_limiter = MagicMock()
-        adapter.per_symbol_rate_limiter.check = MagicMock(
-            return_value=MagicMock(name="OK")
-        )
+        adapter.per_symbol_rate_limiter.check = MagicMock(return_value=MagicMock(name="OK"))
         # Force a subsequent bail-out after HALT check, so we don't drag the full pipeline in.
         # We patch _platform_degrade_allows to return False to stop execution cleanly.
         adapter._platform_degrade_allows = MagicMock(return_value=False)
@@ -148,12 +146,10 @@ class TestAdapterHaltReduceOnlyBypass:
 
         # Assert: none of the _add_to_dlq calls used the "StormGuard HALT" reason.
         halt_rejects = [
-            c for c in adapter._add_to_dlq.await_args_list
-            if len(c.args) >= 3 and c.args[2] == "StormGuard HALT"
+            c for c in adapter._add_to_dlq.await_args_list if len(c.args) >= 3 and c.args[2] == "StormGuard HALT"
         ]
         assert not halt_rejects, (
-            f"Adapter still blocks cover order under HALT (Bug 24 not fixed): "
-            f"{adapter._add_to_dlq.await_args_list}"
+            f"Adapter still blocks cover order under HALT (Bug 24 not fixed): {adapter._add_to_dlq.await_args_list}"
         )
 
     @pytest.mark.asyncio
@@ -169,9 +165,6 @@ class TestAdapterHaltReduceOnlyBypass:
 
         # Opening orders should still hit DLQ with "StormGuard HALT"
         halt_rejects = [
-            c for c in adapter._add_to_dlq.await_args_list
-            if len(c.args) >= 3 and c.args[2] == "StormGuard HALT"
+            c for c in adapter._add_to_dlq.await_args_list if len(c.args) >= 3 and c.args[2] == "StormGuard HALT"
         ]
-        assert halt_rejects, (
-            "Opening order must still be blocked under HALT — fix over-reached"
-        )
+        assert halt_rejects, "Opening order must still be blocked under HALT — fix over-reached"

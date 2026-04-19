@@ -18,7 +18,6 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # HFTBACKTEST_AVAILABLE=False (lines 27-28)
 # ---------------------------------------------------------------------------
@@ -45,7 +44,7 @@ def test_hftbacktest_not_available_raises():
 @pytest.fixture
 def mock_adapter():
     """Create an adapter-like object with key attributes for method testing."""
-    from hft_platform.backtest.adapter import _FILL_CAPACITY, _EQUITY_CAPACITY
+    from hft_platform.backtest.adapter import _EQUITY_CAPACITY, _FILL_CAPACITY
 
     adapter = types.SimpleNamespace()
     adapter.symbol = "TXFD6"
@@ -155,9 +154,7 @@ def test_maybe_record_equity_point_records(mock_adapter):
     mock_adapter._read_balance = lambda asset_id: 1_000_000.0
 
     # Use bound method via class
-    HftBacktestAdapter._maybe_record_equity_point(
-        mock_adapter, ts_ns=2_000_000, best_bid=100000, best_ask=100200
-    )
+    HftBacktestAdapter._maybe_record_equity_point(mock_adapter, ts_ns=2_000_000, best_bid=100000, best_ask=100200)
     assert mock_adapter._equity_count == 1
     assert mock_adapter._equity_ts_buf[0] == 2_000_000
 
@@ -168,9 +165,7 @@ def test_maybe_record_equity_point_skips_before_next(mock_adapter):
     mock_adapter._next_equity_sample_ns = 10_000_000
     mock_adapter._read_balance = lambda asset_id: 1_000_000.0
 
-    HftBacktestAdapter._maybe_record_equity_point(
-        mock_adapter, ts_ns=5_000_000, best_bid=100000, best_ask=100200
-    )
+    HftBacktestAdapter._maybe_record_equity_point(mock_adapter, ts_ns=5_000_000, best_bid=100000, best_ask=100200)
     assert mock_adapter._equity_count == 0
 
 
@@ -178,9 +173,7 @@ def test_maybe_record_equity_point_disabled(mock_adapter):
     from hft_platform.backtest.adapter import HftBacktestAdapter
 
     mock_adapter.equity_sample_ns = 0
-    HftBacktestAdapter._maybe_record_equity_point(
-        mock_adapter, ts_ns=2_000_000, best_bid=100000, best_ask=100200
-    )
+    HftBacktestAdapter._maybe_record_equity_point(mock_adapter, ts_ns=2_000_000, best_bid=100000, best_ask=100200)
     assert mock_adapter._equity_count == 0
 
 
@@ -191,9 +184,7 @@ def test_maybe_record_equity_point_buffer_growth(mock_adapter):
     mock_adapter._equity_count = cap
     mock_adapter._read_balance = lambda asset_id: 1_000_000.0
 
-    HftBacktestAdapter._maybe_record_equity_point(
-        mock_adapter, ts_ns=2_000_000, best_bid=100000, best_ask=100200
-    )
+    HftBacktestAdapter._maybe_record_equity_point(mock_adapter, ts_ns=2_000_000, best_bid=100000, best_ask=100200)
     assert mock_adapter._equity_ts_buf.size == cap * 2
 
 

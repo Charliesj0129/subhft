@@ -212,7 +212,7 @@ class OrderAdapter:
 
         # Phantom order tracking: timed-out mutating calls that may have succeeded at broker
         # R2-03: Bounded dict with TTL eviction (Architecture Governance Rule 12)
-        self._phantom_order_keys: dict[str, float] = {}  # key -> monotonic timestamp
+        self._phantom_order_keys: dict[str, tuple[float, str]] = {}  # key -> (monotonic timestamp, symbol)
         self._phantom_order_max: int = 1000
 
         # Pending fill index: maps "{symbol}:{side}" -> [order_key, ...] for strategy_id
@@ -312,9 +312,7 @@ class OrderAdapter:
                 snapshot = resolver.snapshot
                 if snapshot.native_hint(contract) is not None:
                     try:
-                        self.metrics.order_contract_code_resolution_total.labels(
-                            source="resolver_hit"
-                        ).inc()
+                        self.metrics.order_contract_code_resolution_total.labels(source="resolver_hit").inc()
                     except Exception:  # noqa: BLE001 — metric must never break order path
                         pass
                     return contract.display()
@@ -322,16 +320,12 @@ class OrderAdapter:
                 pass
         if intent.symbol in self._actual_to_config:
             try:
-                self.metrics.order_contract_code_resolution_total.labels(
-                    source="alias_fallback"
-                ).inc()
+                self.metrics.order_contract_code_resolution_total.labels(source="alias_fallback").inc()
             except Exception:  # noqa: BLE001
                 pass
             return self._actual_to_config[intent.symbol]
         try:
-            self.metrics.order_contract_code_resolution_total.labels(
-                source="symbol_raw"
-            ).inc()
+            self.metrics.order_contract_code_resolution_total.labels(source="symbol_raw").inc()
         except Exception:  # noqa: BLE001
             pass
         return intent.symbol

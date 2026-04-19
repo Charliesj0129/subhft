@@ -185,11 +185,7 @@ class ExecutionNormalizer:
             strategy_id = self._resolve_strategy_id(raw)
 
             contract = d.get("contract", {}) if isinstance(d.get("contract"), dict) else {}
-            symbol = (
-                self._first_str(contract, fm.symbol_keys())
-                or self._first_str(d, fm.symbol_keys())
-                or "UNKNOWN"
-            )
+            symbol = self._first_str(contract, fm.symbol_keys()) or self._first_str(d, fm.symbol_keys()) or "UNKNOWN"
             price_val = self._payload_get(order, "price") or 0
             price = self.price_codec.scale(symbol, price_val)
 

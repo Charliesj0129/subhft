@@ -376,9 +376,7 @@ def test_adapter_agnostic_interop() -> None:
             today=date(2026, 4, 19),
             snapshot_ns=0,
         )
-        assert snap.resolve_family(
-            ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1)
-        ).display() == "TMFE6"
+        assert snap.resolve_family(ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1)).display() == "TMFE6"
 
 
 # ---------------------------------------------------------------------------
@@ -389,12 +387,7 @@ def test_adapter_agnostic_interop() -> None:
 
 def test_unknown_family_returns_none_not_raises() -> None:
     resolver = ContractFamilyResolver()
-    assert (
-        resolver.resolve_family(
-            ContractFamily(Product.FUTURE, "NONEXISTENT", FamilyCode.R1)
-        )
-        is None
-    )
+    assert resolver.resolve_family(ContractFamily(Product.FUTURE, "NONEXISTENT", FamilyCode.R1)) is None
 
 
 # ---------------------------------------------------------------------------

@@ -125,7 +125,7 @@ class TestOrderAdapterRejectionSink:
         assert fb.reason_code == "dispatch_failed"
         assert fb.side == 1
 
-    def test_send_dispatch_rejection_noop_when_no_sink(self):
+    def test_send_dispatch_rejection_noop_when_no_sink(self):  # noqa: no-assert
         from hft_platform.order.adapter import OrderAdapter
 
         adapter = OrderAdapter(
@@ -232,7 +232,7 @@ class TestRiskDLQRejectionOverflowLogging:
         assert fb.reason_code == "dlq_storm_cleared"
         assert fb.side == 0
 
-    def test_none_sink_is_noop(self):
+    def test_none_sink_is_noop(self):  # noqa: no-assert
         from hft_platform.risk.engine import RiskEngine
 
         engine = RiskEngine.__new__(RiskEngine)

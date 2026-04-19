@@ -1,4 +1,5 @@
 """Test HftBacktestAdapter accepts ndarray input (from ChDataSource)."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -22,12 +23,9 @@ def _minimal_events() -> np.ndarray:
     dtype = _event_dtype()
     return np.array(
         [
-            (DEPTH_EVENT | EXCH_EVENT | BUY_EVENT,
-             1_000_000_000, 1_001_000_000, 17000.0, 5, 0, 0, 0.0),
-            (DEPTH_EVENT | EXCH_EVENT | SELL_EVENT,
-             1_000_000_000, 1_001_000_000, 17001.0, 3, 0, 0, 0.0),
-            (TRADE_EVENT | EXCH_EVENT | BUY_EVENT,
-             2_000_000_000, 2_001_000_000, 17000.5, 1, 0, 0, 0.0),
+            (DEPTH_EVENT | EXCH_EVENT | BUY_EVENT, 1_000_000_000, 1_001_000_000, 17000.0, 5, 0, 0, 0.0),
+            (DEPTH_EVENT | EXCH_EVENT | SELL_EVENT, 1_000_000_000, 1_001_000_000, 17001.0, 3, 0, 0, 0.0),
+            (TRADE_EVENT | EXCH_EVENT | BUY_EVENT, 2_000_000_000, 2_001_000_000, 17000.5, 1, 0, 0, 0.0),
         ],
         dtype=dtype,
     )
@@ -75,12 +73,9 @@ def test_adapter_str_path_backward_compat(tmp_path):
     dtype = _event_dtype()
     events = np.array(
         [
-            (DEPTH_EVENT | EXCH_EVENT | BUY_EVENT,
-             1_000_000_000, 1_001_000_000, 17000.0, 5, 0, 0, 0.0),
-            (DEPTH_EVENT | EXCH_EVENT | SELL_EVENT,
-             1_000_000_000, 1_001_000_000, 17001.0, 3, 0, 0, 0.0),
-            (TRADE_EVENT | EXCH_EVENT | BUY_EVENT,
-             2_000_000_000, 2_001_000_000, 17000.5, 1, 0, 0, 0.0),
+            (DEPTH_EVENT | EXCH_EVENT | BUY_EVENT, 1_000_000_000, 1_001_000_000, 17000.0, 5, 0, 0, 0.0),
+            (DEPTH_EVENT | EXCH_EVENT | SELL_EVENT, 1_000_000_000, 1_001_000_000, 17001.0, 3, 0, 0, 0.0),
+            (TRADE_EVENT | EXCH_EVENT | BUY_EVENT, 2_000_000_000, 2_001_000_000, 17000.5, 1, 0, 0, 0.0),
         ],
         dtype=dtype,
     )

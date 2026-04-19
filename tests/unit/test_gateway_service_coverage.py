@@ -46,7 +46,6 @@ from hft_platform.gateway.exposure import ExposureStore
 from hft_platform.gateway.policy import GatewayPolicy
 from hft_platform.gateway.service import GatewayService, _get_trace_sampler
 
-
 # ── Helpers ────────────────────────────────────────────────────────────────
 
 
@@ -155,8 +154,7 @@ def test_get_trace_sampler_returns_none_on_import_error():
     """_get_trace_sampler returns None when diagnostics.trace import fails."""
     with patch.dict("sys.modules", {"hft_platform.diagnostics.trace": None}):
         result = _get_trace_sampler()
-        # When the import fails, it catches the exception and returns None
-        assert result is None or result is not None  # function must not raise
+    assert result is None
 
 
 def test_get_trace_sampler_returns_none_on_exception():

@@ -212,7 +212,7 @@ class SymbolMetadata:
         if symbol in cache:
             return cache[symbol]
 
-        from datetime import UTC, datetime
+        import datetime as dt
 
         from hft_platform.contracts.ref import (
             ContractFamily,
@@ -220,7 +220,7 @@ class SymbolMetadata:
             parse_display,
         )
 
-        base_year = datetime.now(UTC).year
+        base_year = dt.datetime.fromtimestamp(timebase.now_s(), dt.UTC).year
         parsed: Any
         try:
             parsed = parse_display(symbol, base_year=base_year)
@@ -751,11 +751,7 @@ class MarketDataNormalizer:
                                 is_odd_lot=bool(is_odd_lot),
                                 trade_direction=_td,
                                 trade_confidence=_tc,
-                                contract=(
-                                    self.metadata.contract_ref(_sym)
-                                    if self.metadata is not None
-                                    else None
-                                ),
+                                contract=(self.metadata.contract_ref(_sym) if self.metadata is not None else None),
                             )
                     except Exception as exc:
                         logger.debug("rust_tick_fallback", error=str(exc))
@@ -809,11 +805,7 @@ class MarketDataNormalizer:
                 is_odd_lot=is_odd_lot,
                 trade_direction=_td,
                 trade_confidence=_tc,
-                contract=(
-                    self.metadata.contract_ref(symbol)
-                    if self.metadata is not None
-                    else None
-                ),
+                contract=(self.metadata.contract_ref(symbol) if self.metadata is not None else None),
             )
         except Exception as e:
             logger.error("Normalize Tick Error", error=str(e), payload_type=str(type(payload)))
@@ -918,11 +910,7 @@ class MarketDataNormalizer:
                             asks=asks_np,
                             stats=compat_stats,
                             fused_stats=fused_stats,
-                            contract=(
-                                self.metadata.contract_ref(symbol)
-                                if self.metadata is not None
-                                else None
-                            ),
+                            contract=(self.metadata.contract_ref(symbol) if self.metadata is not None else None),
                         )
                 except Exception as exc:
                     # Fall through to standard path
@@ -1251,11 +1239,7 @@ class MarketDataNormalizer:
                 bids=bids_final,
                 asks=asks_final,
                 stats=event_stats,
-                contract=(
-                    self.metadata.contract_ref(symbol)
-                    if self.metadata is not None
-                    else None
-                ),
+                contract=(self.metadata.contract_ref(symbol) if self.metadata is not None else None),
             )
         except Exception as e:
             logger.error("Normalize BidAsk Error", error=str(e), payload_type=str(type(payload)))
@@ -1320,11 +1304,7 @@ class MarketDataNormalizer:
                 bids=bids,
                 asks=asks,
                 is_snapshot=True,
-                contract=(
-                    self.metadata.contract_ref(symbol)
-                    if self.metadata is not None
-                    else None
-                ),
+                contract=(self.metadata.contract_ref(symbol) if self.metadata is not None else None),
             )
 
         event = self.normalize_bidask(payload)

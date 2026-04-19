@@ -35,7 +35,6 @@ from hft_platform.recorder._loader_wal import (
     save_manifest,
 )
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -299,24 +298,33 @@ class TestReplayDlq:
     def test_replay_dry_run(self, svc):
         # Create a DLQ file
         import json
+
         fpath = os.path.join(svc.dlq_dir, "market_data_100.jsonl")
         with open(fpath, "w") as f:
-            f.write(json.dumps({"_dlq_meta": True, "table": "market_data", "error": "e", "timestamp": 100, "row_count": 1}) + "\n")
+            f.write(
+                json.dumps({"_dlq_meta": True, "table": "market_data", "error": "e", "timestamp": 100, "row_count": 1})
+                + "\n"
+            )
             f.write(json.dumps({"val": 1}) + "\n")
         result = replay_dlq(svc, dry_run=True)
         assert result["replayed"] == 1
 
     def test_replay_success(self, svc):
         import json
+
         fpath = os.path.join(svc.dlq_dir, "market_data_100.jsonl")
         with open(fpath, "w") as f:
-            f.write(json.dumps({"_dlq_meta": True, "table": "market_data", "error": "e", "timestamp": 100, "row_count": 1}) + "\n")
+            f.write(
+                json.dumps({"_dlq_meta": True, "table": "market_data", "error": "e", "timestamp": 100, "row_count": 1})
+                + "\n"
+            )
             f.write(json.dumps({"val": 1}) + "\n")
         result = replay_dlq(svc)
         assert result["replayed"] == 1
 
     def test_replay_insert_failure(self, svc):
         import json
+
         fpath = os.path.join(svc.dlq_dir, "market_data_100.jsonl")
         with open(fpath, "w") as f:
             f.write(json.dumps({"val": 1}) + "\n")
@@ -333,6 +341,7 @@ class TestReplayDlq:
 
     def test_replay_unknown_table(self, svc):
         import json
+
         fpath = os.path.join(svc.dlq_dir, "emergency_100.jsonl")
         with open(fpath, "w") as f:
             f.write(json.dumps({"val": 1}) + "\n")
@@ -341,6 +350,7 @@ class TestReplayDlq:
 
     def test_replay_max_files(self, svc):
         import json
+
         for i in range(5):
             fpath = os.path.join(svc.dlq_dir, f"market_data_{i}.jsonl")
             with open(fpath, "w") as f:
@@ -375,11 +385,11 @@ class TestCleanupOldDlqFiles:
         cleanup_old_dlq_files(svc)
         assert os.path.exists(os.path.join(svc._dlq_archive_path, "old_file.jsonl"))
 
-    def test_cleanup_no_dir(self, svc):
+    def test_cleanup_no_dir(self, svc):  # noqa: no-assert
         svc.dlq_dir = "/nonexistent_dir"
         cleanup_old_dlq_files(svc)  # Should not raise
 
-    def test_cleanup_rate_limited(self, svc):
+    def test_cleanup_rate_limited(self, svc):  # noqa: no-assert
         svc._last_dlq_cleanup_ts = time.time() + 9999
         svc._dlq_cleanup_interval_s = 99999
         cleanup_old_dlq_files(svc)  # Should be rate-limited
@@ -401,7 +411,7 @@ class TestCleanupCorruptFiles:
         cleanup_old_corrupt_files(svc)
         assert not os.path.exists(fpath)
 
-    def test_cleanup_no_dir(self, svc):
+    def test_cleanup_no_dir(self, svc):  # noqa: no-assert
         svc.corrupt_dir = "/nonexistent_corrupt"
         cleanup_old_corrupt_files(svc)  # Should not raise
 
@@ -421,7 +431,7 @@ class TestCleanupArchiveFiles:
         cleanup_old_archive_files(svc)
         assert not os.path.exists(fpath)
 
-    def test_cleanup_no_dir(self, svc):
+    def test_cleanup_no_dir(self, svc):  # noqa: no-assert
         svc.archive_dir = "/nonexistent_archive"
         cleanup_old_archive_files(svc)  # Should not raise
 
@@ -449,16 +459,16 @@ class TestCheckWalAccumulation:
         check_wal_accumulation(svc)
         svc.metrics.wal_directory_size_bytes.set.assert_called()
 
-    def test_no_dir(self, svc):
+    def test_no_dir(self, svc):  # noqa: no-assert
         svc.wal_dir = "/nonexistent_wal"
         check_wal_accumulation(svc)
 
-    def test_rate_limited(self, svc):
+    def test_rate_limited(self, svc):  # noqa: no-assert
         svc._last_wal_check_ts = time.time() + 9999
         svc._wal_check_interval_s = 99999
         check_wal_accumulation(svc)
 
-    def test_warning_threshold(self, svc):
+    def test_warning_threshold(self, svc):  # noqa: no-assert
         svc.metrics = MagicMock()
         svc._wal_size_warning_mb = 0  # Trigger warning
         fpath = os.path.join(svc.wal_dir, "data_100.jsonl")
@@ -485,7 +495,7 @@ class TestQuarantineCorruptFile:
         quarantine_corrupt_file(svc, fpath, "bad.jsonl", "test_reason")
         assert os.path.exists(os.path.join(svc.corrupt_dir, "bad.jsonl"))
 
-    def test_quarantine_failure(self, svc):
+    def test_quarantine_failure(self, svc):  # noqa: no-assert
         """Quarantine handles missing source gracefully."""
         quarantine_corrupt_file(svc, "/nonexistent/bad.jsonl", "bad.jsonl", "missing")
         # Should not raise

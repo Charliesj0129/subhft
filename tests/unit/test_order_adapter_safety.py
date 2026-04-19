@@ -75,6 +75,7 @@ def _make_adapter(tmp_path, client=None) -> OrderAdapter:
         client.get_exchange = MagicMock(return_value="TSE")
     queue = asyncio.Queue()
     adapter = OrderAdapter(str(config_file), queue, client)
+    adapter.shadow_sink.enabled = False
     return adapter
 
 

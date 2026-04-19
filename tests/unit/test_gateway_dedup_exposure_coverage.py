@@ -126,7 +126,7 @@ class TestIdempotencyStorePersist:
         assert rec is not None
         assert rec.approved is True
 
-    def test_persist_disabled_noop(self, tmp_path):
+    def test_persist_disabled_noop(self, tmp_path):  # noqa: no-assert
         store = IdempotencyStore(window_size=100, persist_enabled=False)
         store.check_or_reserve("k1")
         store.persist()
@@ -305,7 +305,7 @@ class TestExposureStoreAmend:
 
 
 class TestExposureStoreRelease:
-    def test_release_cancel_noop(self):
+    def test_release_cancel_noop(self):  # noqa: no-assert
         store = ExposureStore()
         key = _make_key()
         intent = _make_intent(intent_type=IntentType.CANCEL)
@@ -360,17 +360,13 @@ class TestExposureStoreTyped:
     def test_check_and_update_typed_new(self):
         store = ExposureStore()
         key = _make_key()
-        ok, reason = store.check_and_update_typed(
-            key, intent_type=int(IntentType.NEW), price=100, qty=1
-        )
+        ok, reason = store.check_and_update_typed(key, intent_type=int(IntentType.NEW), price=100, qty=1)
         assert ok is True
 
     def test_check_and_update_typed_cancel(self):
         store = ExposureStore()
         key = _make_key()
-        ok, reason = store.check_and_update_typed(
-            key, intent_type=int(IntentType.CANCEL), price=0, qty=0
-        )
+        ok, reason = store.check_and_update_typed(key, intent_type=int(IntentType.CANCEL), price=0, qty=0)
         assert ok is True
 
     def test_check_and_update_typed_amend(self):
@@ -385,9 +381,7 @@ class TestExposureStoreTyped:
     def test_check_and_update_typed_global_limit(self):
         store = ExposureStore(global_max_notional=50)
         key = _make_key()
-        ok, reason = store.check_and_update_typed(
-            key, intent_type=int(IntentType.NEW), price=100, qty=1
-        )
+        ok, reason = store.check_and_update_typed(key, intent_type=int(IntentType.NEW), price=100, qty=1)
         assert ok is False
         assert reason == "GLOBAL_EXPOSURE_LIMIT"
 
@@ -395,9 +389,7 @@ class TestExposureStoreTyped:
         limits = {"strat1": ExposureLimits(max_notional_scaled=50)}
         store = ExposureStore(limits=limits)
         key = _make_key()
-        ok, reason = store.check_and_update_typed(
-            key, intent_type=int(IntentType.NEW), price=100, qty=1
-        )
+        ok, reason = store.check_and_update_typed(key, intent_type=int(IntentType.NEW), price=100, qty=1)
         assert ok is False
         assert reason == "STRATEGY_EXPOSURE_LIMIT"
 
@@ -411,21 +403,17 @@ class TestExposureStoreTyped:
 
 
 class TestExposureStoreReleaseTyped:
-    def test_release_typed_cancel_noop(self):
+    def test_release_typed_cancel_noop(self):  # noqa: no-assert
         store = ExposureStore()
         key = _make_key()
         store.release_exposure_typed(key, intent_type=int(IntentType.CANCEL), price=0, qty=0)
 
-    def test_release_typed_amend(self):
+    def test_release_typed_amend(self):  # noqa: no-assert
         store = ExposureStore()
         key = _make_key()
         store.check_and_update_typed(key, intent_type=int(IntentType.NEW), price=100, qty=1, order_key="o1")
-        store.check_and_update_typed(
-            key, intent_type=int(IntentType.AMEND), price=200, qty=1, target_order_key="o1"
-        )
-        store.release_exposure_typed(
-            key, intent_type=int(IntentType.AMEND), price=200, qty=1, target_order_key="o1"
-        )
+        store.check_and_update_typed(key, intent_type=int(IntentType.AMEND), price=200, qty=1, target_order_key="o1")
+        store.release_exposure_typed(key, intent_type=int(IntentType.AMEND), price=200, qty=1, target_order_key="o1")
 
     def test_release_typed_new_with_order_key(self):
         store = ExposureStore()
@@ -515,9 +503,7 @@ class TestLoadRustExposure:
             fake_rust_core = types.ModuleType("hft_platform.rust_core")
             fake_rust_core.RustExposureStore = sentinel
 
-            monkeypatch.setitem(
-                __import__("sys").modules, "hft_platform.rust_core", fake_rust_core
-            )
+            monkeypatch.setitem(__import__("sys").modules, "hft_platform.rust_core", fake_rust_core)
 
             result = mod._load_rust_exposure()
             assert result is sentinel

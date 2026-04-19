@@ -1,4 +1,5 @@
 """Tests for maker-specific sub-gates."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -33,6 +34,7 @@ def _maker_result(pnl_per_fill=1.0, adverse_fill_pct=0.3, fill_rate_per_day=5.0)
 
 
 # --- FillQualityGate ---
+
 
 def test_fill_quality_gate_passes():
     gate = FillQualityGate()
@@ -71,6 +73,7 @@ def test_fill_quality_gate_name_and_applies_to():
 
 
 # --- FillRateValidationGate ---
+
 
 def test_fill_rate_validation_passes_within_deviation():
     gate = FillRateValidationGate()
@@ -122,18 +125,23 @@ def test_fill_rate_validation_skips_when_no_fill_rate():
 
     # fill_rate_per_day = None
     result = BacktestResult(
-        run_id="r1", config_hash="h1", instrument="TMFD6",
-        strategy_name="r47", strategy_type="maker",
-        engine="hftbacktest", queue_model="power_prob(1.5)",
+        run_id="r1",
+        config_hash="h1",
+        instrument="TMFD6",
+        strategy_name="r47",
+        strategy_type="maker",
+        engine="hftbacktest",
+        queue_model="power_prob(1.5)",
         calibration_profile_id="TMFD6_2026-04-20",
-        data_source="clickhouse_streaming", latency_profile="p95",
-        pnl_pts=0.0, n_fills=0, n_trading_days=10,
+        data_source="clickhouse_streaming",
+        latency_profile="p95",
+        pnl_pts=0.0,
+        n_fills=0,
+        n_trading_days=10,
         equity_curve=np.zeros((1, 10)),
         fill_rate_per_day=None,
     )
-    sub = gate.evaluate(result, config=None,
-                         thresholds={"fill_rate_deviation_max": 0.5},
-                         profile=FakeProfile())
+    sub = gate.evaluate(result, config=None, thresholds={"fill_rate_deviation_max": 0.5}, profile=FakeProfile())
     assert sub.passed
     assert "skipped" in sub.details.lower()
 

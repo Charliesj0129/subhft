@@ -1,4 +1,5 @@
 """PreflightChecker — pre-market health check system."""
+
 from __future__ import annotations
 
 import asyncio

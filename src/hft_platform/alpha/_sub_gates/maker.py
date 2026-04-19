@@ -1,4 +1,5 @@
 """Maker-specific sub-gates."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -28,10 +29,7 @@ class FillQualityGate:
                 "min_pnl_per_fill": float(min_ppf),
                 "max_adverse_fill_pct": float(max_adverse),
             },
-            details=(
-                f"pnl/fill={pnl_per_fill:.2f} (min {min_ppf}), "
-                f"adverse={adverse_pct:.1f}% (max {max_adverse})"
-            ),
+            details=(f"pnl/fill={pnl_per_fill:.2f} (min {min_ppf}), adverse={adverse_pct:.1f}% (max {max_adverse})"),
         )
 
 
@@ -83,6 +81,6 @@ class FillRateValidationGate:
             },
             details=(
                 f"fill_rate={actual:.2f}/day vs expected {expected:.2f} "
-                f"(dev={deviation*100:.1f}% vs max {max_dev*100:.0f}%)"
+                f"(dev={deviation * 100:.1f}% vs max {max_dev * 100:.0f}%)"
             ),
         )

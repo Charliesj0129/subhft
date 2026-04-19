@@ -56,27 +56,21 @@ class TestConfigDataclassDefault:
 
 
 class TestEnvOverride:
-    def test_env_none_disables_resubscribe(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_env_none_disables_resubscribe(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HFT_CONTRACT_REFRESH_RESUBSCRIBE_POLICY", "none")
         from hft_platform.feed_adapter.shioaji._config import load_shioaji_config
 
         cfg = load_shioaji_config()
         assert cfg.contract_refresh_resubscribe_policy == "none"
 
-    def test_env_all_resubscribes_every_refresh(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_env_all_resubscribes_every_refresh(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HFT_CONTRACT_REFRESH_RESUBSCRIBE_POLICY", "all")
         from hft_platform.feed_adapter.shioaji._config import load_shioaji_config
 
         cfg = load_shioaji_config()
         assert cfg.contract_refresh_resubscribe_policy == "all"
 
-    def test_empty_env_falls_back_to_default_diff(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_empty_env_falls_back_to_default_diff(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HFT_CONTRACT_REFRESH_RESUBSCRIBE_POLICY", "")
         from hft_platform.feed_adapter.shioaji._config import load_shioaji_config
 
@@ -115,8 +109,7 @@ class TestResubscribeTriggered:
 
         diff = client._contract_refresh_last_diff
         should_resub = policy == "all" or (
-            policy == "diff"
-            and bool(diff.get("added_codes") or diff.get("removed_codes"))
+            policy == "diff" and bool(diff.get("added_codes") or diff.get("removed_codes"))
         )
         assert should_resub, "rollover-day added_codes must trigger resubscribe"
 
@@ -130,7 +123,6 @@ class TestResubscribeTriggered:
         policy = client._contract_refresh_resubscribe_policy
         diff = client._contract_refresh_last_diff
         should_resub = policy == "all" or (
-            policy == "diff"
-            and bool(diff.get("added_codes") or diff.get("removed_codes"))
+            policy == "diff" and bool(diff.get("added_codes") or diff.get("removed_codes"))
         )
         assert not should_resub, "empty diff must not trigger resubscribe"

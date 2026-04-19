@@ -133,9 +133,7 @@ def test_strategies_yaml_c63_enabled_false() -> None:
     cfg = _load_strategies_yaml()
     c63 = _find(cfg, "C63_TXFD6_TIGHT_SPREAD_MAKER")
     assert c63 is not None
-    assert c63["enabled"] is False, (
-        "C63 must ship enabled=false; user-gated + mutually exclusive with C33"
-    )
+    assert c63["enabled"] is False, "C63 must ship enabled=false; user-gated + mutually exclusive with C33"
 
 
 def test_strategies_yaml_c63_module_class_correct() -> None:
@@ -184,9 +182,7 @@ def test_strategies_yaml_c33_c63_never_both_enabled() -> None:
     c63 = _find(cfg, "C63_TXFD6_TIGHT_SPREAD_MAKER")
     assert c33 is not None and c63 is not None
     # Both cannot be True at same time on TXFD6.
-    assert not (c33["enabled"] and c63["enabled"]), (
-        "C33 and C63 are mutually exclusive on TXFD6 — double-book risk"
-    )
+    assert not (c33["enabled"] and c63["enabled"]), "C33 and C63 are mutually exclusive on TXFD6 — double-book risk"
 
 
 # ----------------------------------------------------------------------------
@@ -261,7 +257,7 @@ def test_price_scale_constant_is_10k() -> None:
     assert _PRICE_SCALE == 10_000
 
 
-def test_on_stats_runs_without_error() -> None:
+def test_on_stats_runs_without_error() -> None:  # noqa: no-assert
     s = C63TxfD6TightSpreadMaker("c63_test", subscribe_symbols=["TXFD6"])
     s.on_stats(_make_stats())  # should not raise
 
@@ -274,11 +270,9 @@ def test_on_stats_skips_invalid_spread() -> None:
     assert s._quotes_posted == 0
 
 
-def test_on_stats_skips_zero_prices() -> None:
+def test_on_stats_skips_zero_prices() -> None:  # noqa: no-assert
     s = C63TxfD6TightSpreadMaker("c63_test", subscribe_symbols=["TXFD6"])
-    s.on_stats(
-        _make_stats(best_bid=0, best_ask=0, mid_price_x2=0, spread_scaled=0)
-    )
+    s.on_stats(_make_stats(best_bid=0, best_ask=0, mid_price_x2=0, spread_scaled=0))
     # early return; no raise
 
 
@@ -317,27 +311,30 @@ def test_spread_gate_admits_at_sp5() -> None:
 def test_wrapper_has_no_signal_layer_attributes() -> None:
     s = C63TxfD6TightSpreadMaker("c63_test", subscribe_symbols=["TXFD6"])
     for attr in (
-        "_pe_states", "_queue_states", "_mfg_states", "_qi_states",
-        "_pe_state", "_queue_state", "_mfg_state", "_qi_state",
-        "_qi_skew_threshold",   # no D4 QI for TXFD6 (C33 precedent)
+        "_pe_states",
+        "_queue_states",
+        "_mfg_states",
+        "_qi_states",
+        "_pe_state",
+        "_queue_state",
+        "_mfg_state",
+        "_qi_state",
+        "_qi_skew_threshold",  # no D4 QI for TXFD6 (C33 precedent)
         "_qi_skew_widen_ticks",
         "_enable_qi_layer",
     ):
-        assert not hasattr(s, attr), (
-            f"R47-minimal violation: {attr} on C63 wrapper"
-        )
+        assert not hasattr(s, attr), f"R47-minimal violation: {attr} on C63 wrapper"
 
 
 def test_wrapper_does_not_import_r47_signal_state_classes() -> None:
     import hft_platform.strategies.c63_txfd6_tight_spread_maker as mod
+
     src = mod.__file__
     assert src is not None
     with open(src) as f:
         source = f.read()
     for sym in ("_PEState", "_QueueState", "_MFGState", "_QIState"):
-        assert sym not in source, (
-            f"R47-minimal violation: wrapper references {sym}"
-        )
+        assert sym not in source, f"R47-minimal violation: wrapper references {sym}"
 
 
 # ----------------------------------------------------------------------------
@@ -388,9 +385,7 @@ def test_on_gap_clears_transient_state() -> None:
     s._pending_sell["TXFD6"] = 1
     s._last_bid["TXFD6"] = 17500 * 10_000
     s._last_ask["TXFD6"] = 17503 * 10_000
-    g = GapEvent(
-        missed_count=5, first_missed_seq=100, last_missed_seq=104, ts=1000
-    )
+    g = GapEvent(missed_count=5, first_missed_seq=100, last_missed_seq=104, ts=1000)
     s.on_gap(g)
     assert s._pending_buy == {}
     assert s._pending_sell == {}
@@ -409,9 +404,7 @@ def test_shadow_mode_defaults_to_false() -> None:
 
 
 def test_queue_share_informational_only() -> None:
-    s = C63TxfD6TightSpreadMaker(
-        "c63_test", queue_share=0.05, subscribe_symbols=["TXFD6"]
-    )
+    s = C63TxfD6TightSpreadMaker("c63_test", queue_share=0.05, subscribe_symbols=["TXFD6"])
     s.on_stats(_make_stats())
     # Still quotes (queue_share does not gate).
     assert s._quotes_posted == 2

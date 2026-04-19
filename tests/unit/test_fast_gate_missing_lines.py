@@ -374,9 +374,7 @@ def test_init_partial_shm_state_cleaned_on_failure():
         nonlocal call_count
         call_count += 1
         # Create real SHM first so ks_shm is set
-        self.ks_shm = shm.SharedMemory(
-            name=KILL_SWITCH_SHM_NAME, create=True, size=1
-        )
+        self.ks_shm = shm.SharedMemory(name=KILL_SWITCH_SHM_NAME, create=True, size=1)
         # Then fail before completing
         raise ValueError("partial init failure")
 

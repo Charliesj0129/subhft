@@ -70,9 +70,7 @@ class TestRegistrationSeedsSymbols:
 
         strat = _FakeStrategy(
             "s1",
-            contract_families=(
-                ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1),
-            ),
+            contract_families=(ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1),),
         )
         runner.strategies.append(strat)
         runner._apply_family_bindings(strat)
@@ -102,9 +100,7 @@ class TestRegistrationSeedsSymbols:
         # No set_family_resolver() call.
         strat = _FakeStrategy(
             "s1",
-            contract_families=(
-                ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1),
-            ),
+            contract_families=(ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1),),
         )
         runner.strategies.append(strat)
         runner._apply_family_bindings(strat)
@@ -127,9 +123,7 @@ class TestRebindHookUpdatesSymbols:
 
         strat = _FakeStrategy(
             "s1",
-            contract_families=(
-                ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1),
-            ),
+            contract_families=(ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1),),
         )
         runner.strategies.append(strat)
         runner._apply_family_bindings(strat)
@@ -154,15 +148,11 @@ class TestRebindHookUpdatesSymbols:
 
         tmf_strat = _FakeStrategy(
             "tmf",
-            contract_families=(
-                ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1),
-            ),
+            contract_families=(ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1),),
         )
         txf_strat = _FakeStrategy(
             "txf",
-            contract_families=(
-                ContractFamily(Product.FUTURE, "TXF", FamilyCode.R1),
-            ),
+            contract_families=(ContractFamily(Product.FUTURE, "TXF", FamilyCode.R1),),
         )
         runner.strategies.extend([tmf_strat, txf_strat])
 
@@ -186,9 +176,7 @@ class TestColdStart:
 
         strat = _FakeStrategy(
             "s1",
-            contract_families=(
-                ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1),
-            ),
+            contract_families=(ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1),),
         )
         runner.strategies.append(strat)
         runner._apply_family_bindings(strat)
@@ -212,9 +200,7 @@ class TestSetResolverReBindsExistingStrategies:
         # Register strategies FIRST, then attach resolver (reverse of normal).
         strat = _FakeStrategy(
             "s1",
-            contract_families=(
-                ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1),
-            ),
+            contract_families=(ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1),),
         )
         runner.strategies.append(strat)
 
@@ -288,9 +274,7 @@ class TestCoexistWithLegacyAliasPath:
         strat = _FakeStrategy(
             "hedge",
             symbols={"2330"},
-            contract_families=(
-                ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1),
-            ),
+            contract_families=(ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1),),
         )
         runner.strategies.append(strat)
         runner._apply_family_bindings(strat)

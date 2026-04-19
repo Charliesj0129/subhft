@@ -1,4 +1,5 @@
 """Tests for the AlertRouter core routing pipeline."""
+
 from __future__ import annotations
 
 from unittest.mock import AsyncMock
@@ -17,9 +18,15 @@ def _make_alert(
     ts_ns: int = 1_000_000_000_000_000_000,
 ) -> Alert:
     return Alert(
-        alert_id=alert_id, severity=severity, category=category, source="test",
-        title="Test alert", detail="Test detail", ts_ns=ts_ns,
-        dedup_key=dedup_key, metadata=None,
+        alert_id=alert_id,
+        severity=severity,
+        category=category,
+        source="test",
+        title="Test alert",
+        detail="Test detail",
+        ts_ns=ts_ns,
+        dedup_key=dedup_key,
+        metadata=None,
     )
 
 
@@ -40,6 +47,7 @@ def mock_webhook() -> AsyncMock:
 @pytest.fixture
 def router(mock_telegram, mock_webhook):
     from hft_platform.notifications.alert_router import AlertRouter
+
     return AlertRouter(telegram_sender=mock_telegram, webhook_sender=mock_webhook)
 
 
@@ -70,8 +78,13 @@ async def test_fatal_sends_telegram_and_webhook(router, mock_telegram, mock_webh
 @pytest.mark.asyncio
 async def test_silenced_alert_not_sent(router, mock_telegram):
     rule = SilenceRule(
-        rule_id="s-001", category="feed", source=None,
-        severity_max=AlertSeverity.WARN, start_ns=0, end_ns=0, reason="test silence",
+        rule_id="s-001",
+        category="feed",
+        source=None,
+        severity_max=AlertSeverity.WARN,
+        start_ns=0,
+        end_ns=0,
+        reason="test silence",
     )
     router.add_silence(rule)
     alert = _make_alert(severity=AlertSeverity.WARN, category="feed")
@@ -82,8 +95,13 @@ async def test_silenced_alert_not_sent(router, mock_telegram):
 @pytest.mark.asyncio
 async def test_remove_silence_allows_sending(router, mock_telegram):
     rule = SilenceRule(
-        rule_id="s-001", category="feed", source=None,
-        severity_max=AlertSeverity.WARN, start_ns=0, end_ns=0, reason="test silence",
+        rule_id="s-001",
+        category="feed",
+        source=None,
+        severity_max=AlertSeverity.WARN,
+        start_ns=0,
+        end_ns=0,
+        reason="test silence",
     )
     router.add_silence(rule)
     router.remove_silence("s-001")

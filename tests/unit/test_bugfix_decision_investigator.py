@@ -279,13 +279,13 @@ class TestDedupReleaseOnDispatchFailure:
         result = store.check_or_reserve("key1")
         assert result is None  # None means new/reserved
 
-    def test_release_noop_for_empty_key(self) -> None:
+    def test_release_noop_for_empty_key(self) -> None:  # noqa: no-assert
         from hft_platform.gateway.dedup import IdempotencyStore
 
         store = IdempotencyStore(persist_enabled=False)
         store.release("")  # should not raise
 
-    def test_release_noop_for_missing_key(self) -> None:
+    def test_release_noop_for_missing_key(self) -> None:  # noqa: no-assert
         from hft_platform.gateway.dedup import IdempotencyStore
 
         store = IdempotencyStore(persist_enabled=False)

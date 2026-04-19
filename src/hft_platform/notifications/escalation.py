@@ -1,4 +1,5 @@
 """Escalation chain for unacknowledged CRITICAL/FATAL alerts."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -64,9 +65,7 @@ class EscalationTracker:
                 continue
             interval_idx = min(entry.escalation_count, len(self._intervals_ns) - 1)
             interval = self._intervals_ns[interval_idx]
-            reference_ns = (
-                entry.last_escalated_ns if entry.last_escalated_ns else entry.tracked_ns
-            )
+            reference_ns = entry.last_escalated_ns if entry.last_escalated_ns else entry.tracked_ns
             if now_ns - reference_ns >= interval:
                 due.append(entry.alert)
         return due

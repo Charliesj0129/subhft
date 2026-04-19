@@ -218,6 +218,7 @@ class StormGuard:
 
         # Transition Logic (with hysteresis protection for de-escalation)
         fire_callback = False
+        current_state: StormGuardState = self.state
         with self._state_lock:
             now = time.monotonic()
             if new_state > self.state:

@@ -1,4 +1,5 @@
 """AlertRouter — core routing pipeline for tiered alert delivery."""
+
 from __future__ import annotations
 
 import asyncio
@@ -18,9 +19,7 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger(__name__)
 
-_DEFAULT_SILENCE_PATH = (
-    Path(__file__).resolve().parents[3] / "config" / "base" / "alert_silence.yaml"
-)
+_DEFAULT_SILENCE_PATH = Path(__file__).resolve().parents[3] / "config" / "base" / "alert_silence.yaml"
 
 
 class AlertRouter:
@@ -189,10 +188,7 @@ class AlertRouter:
         # Flush expired aggregation windows and send suppression summaries
         summaries = self._aggregator.flush_expired(now_ns)
         for s in summaries:
-            msg = (
-                f"⚠️ {s.first_alert.title} — repeated {s.suppressed_count} times "
-                f"in past 5 minutes"
-            )
+            msg = f"⚠️ {s.first_alert.title} — repeated {s.suppressed_count} times in past 5 minutes"
             await self._telegram.send(msg, critical=False)
 
         # Re-send due escalations

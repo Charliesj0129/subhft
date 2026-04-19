@@ -20,7 +20,6 @@ import numpy as np
 
 from hft_platform.alpha._validation_types import GateReport, ValidationConfig
 
-
 # ---------------------------------------------------------------------------
 # GateReport basic tests (lines 48-51, 53-58)
 # ---------------------------------------------------------------------------

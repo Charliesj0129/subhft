@@ -77,9 +77,7 @@ class TestBucketParity:
         structured = _intent("TMFE6", contract=ref, intent_id=2)
 
         store.check_and_update(ExposureKey.from_intent(legacy), legacy, order_key="o1")
-        store.check_and_update(
-            ExposureKey.from_intent(structured), structured, order_key="o2"
-        )
+        store.check_and_update(ExposureKey.from_intent(structured), structured, order_key="o2")
 
         # Both reservations share the same (account, strategy, symbol) bucket.
         exposure = store.get_exposure("default", "r47", "TMFE6")

@@ -9,13 +9,12 @@ falls below the symbol's tick size.
 from __future__ import annotations
 
 import asyncio
-import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from hft_platform.contracts.strategy import IntentType, Side, TIF
+from hft_platform.contracts.strategy import TIF, IntentType, Side
 from hft_platform.feed_adapter.normalizer import SymbolMetadata
 
 

@@ -27,8 +27,6 @@ pending stays elevated (safe liveness loss > unsafe max_pos breach).
 
 from __future__ import annotations
 
-from dataclasses import asdict
-
 from hft_platform.contracts.strategy import IntentType, OrderIntent, RiskFeedback, Side
 
 
@@ -74,9 +72,7 @@ class TestDispatchFailedPreservesPending:
         fb = _make_risk_feedback(Side.SELL, "dispatch_failed", was_approved=True)
         strat.on_risk_feedback(fb)
 
-        assert strat._pending_sell["TMFE6"] == 1, (
-            "was_approved=True should keep pending elevated"
-        )
+        assert strat._pending_sell["TMFE6"] == 1, "was_approved=True should keep pending elevated"
 
     def test_dispatch_failed_without_approved_flag_decrements_todo(self):
         """Current state: without was_approved flag, pending DOES decrement.
@@ -128,9 +124,7 @@ class TestAdapterDispatchFailedFlagsApproved:
         feedback = mock_sink.put_nowait.call_args[0][0]
         assert isinstance(feedback, RiskFeedback)
         assert feedback.reason_code == "dispatch_failed"
-        assert feedback.was_approved is True, (
-            "phantom_pending=True must flip was_approved=True to keep pending safe"
-        )
+        assert feedback.was_approved is True, "phantom_pending=True must flip was_approved=True to keep pending safe"
 
     def test_send_dispatch_rejection_default_is_not_approved(self):
         """Backward compat: default path keeps was_approved=False (existing behavior)."""
@@ -173,12 +167,8 @@ class TestMaxPosNotBreachedOnPhantomRace:
         strat._pending_sell["TMFE6"] = 1  # after first SELL emit
 
         # First dispatch_failed, with fix adapter flags was_approved=True
-        strat.on_risk_feedback(
-            _make_risk_feedback(Side.SELL, "dispatch_failed", was_approved=True)
-        )
-        assert strat._pending_sell["TMFE6"] == 1, (
-            "After fix: first dispatch_failed keeps pending elevated"
-        )
+        strat.on_risk_feedback(_make_risk_feedback(Side.SELL, "dispatch_failed", was_approved=True))
+        assert strat._pending_sell["TMFE6"] == 1, "After fix: first dispatch_failed keeps pending elevated"
 
         # R47 emits second SELL — can_sell uses pending_sell=1, pos=0
         # → can_sell = 0 - 1 > -1 (which is False when max_pos=1)
@@ -187,11 +177,7 @@ class TestMaxPosNotBreachedOnPhantomRace:
         strat._pending_sell["TMFE6"] = 2
 
         # Second dispatch_failed feedback also flagged
-        strat.on_risk_feedback(
-            _make_risk_feedback(Side.SELL, "dispatch_failed", was_approved=True)
-        )
-        assert strat._pending_sell["TMFE6"] == 2, (
-            "Second dispatch_failed also preserves pending"
-        )
+        strat.on_risk_feedback(_make_risk_feedback(Side.SELL, "dispatch_failed", was_approved=True))
+        assert strat._pending_sell["TMFE6"] == 2, "Second dispatch_failed also preserves pending"
 
         # When fills arrive for both phantoms, on_fill decrements naturally

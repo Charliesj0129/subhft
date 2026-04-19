@@ -64,15 +64,11 @@ class ContractFamilyResolver:
 
     __slots__ = ("_snapshot", "_hooks")
 
-    def __init__(
-        self, *, initial: ImmutableContractSnapshot | None = None
-    ) -> None:
+    def __init__(self, *, initial: ImmutableContractSnapshot | None = None) -> None:
         self._snapshot: ImmutableContractSnapshot = (
             initial
             if initial is not None
-            else ImmutableContractSnapshot.build(
-                family_map={}, native_hints={}, snapshot_ns=0
-            )
+            else ImmutableContractSnapshot.build(family_map={}, native_hints={}, snapshot_ns=0)
         )
         self._hooks: list[FamilyBindingHook] = []
 
@@ -88,9 +84,7 @@ class ContractFamilyResolver:
     def resolve_family(self, family: ContractFamily) -> ContractRef | None:
         return self._snapshot.resolve_family(family)
 
-    def swap_snapshot(
-        self, new_snapshot: ImmutableContractSnapshot
-    ) -> list[FamilyBindingChanged]:
+    def swap_snapshot(self, new_snapshot: ImmutableContractSnapshot) -> list[FamilyBindingChanged]:
         """Replace the binding table atomically and fire hooks for diffs."""
         old = self._snapshot
         self._snapshot = new_snapshot
@@ -136,17 +130,11 @@ def build_snapshot_from_calendar(
     """
     family_map: dict[ContractFamily, ContractRef] = {}
     for root, refs in calendars.items():
-        active = sorted(
-            (r for r in refs if r.expiry >= today), key=lambda r: r.expiry
-        )
+        active = sorted((r for r in refs if r.expiry >= today), key=lambda r: r.expiry)
         for position, ref in enumerate(active[: len(_FAMILY_ORDER)]):
             family_code = _FAMILY_ORDER[position]
-            family = ContractFamily(
-                product=Product.FUTURE, root=root, family=family_code
-            )
-            bound = FutureRef(
-                root=ref.root, expiry=ref.expiry, family=family_code
-            )
+            family = ContractFamily(product=Product.FUTURE, root=root, family=family_code)
+            bound = FutureRef(root=ref.root, expiry=ref.expiry, family=family_code)
             family_map[family] = bound
     return ImmutableContractSnapshot.build(
         family_map=family_map,

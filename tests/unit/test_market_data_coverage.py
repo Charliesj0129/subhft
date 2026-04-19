@@ -24,6 +24,7 @@ from hft_platform.services.market_data import FeedState
 class TestLooksLikeMd:
     def _fn(self, obj):
         from hft_platform.services.market_data import _looks_like_md
+
         return _looks_like_md(obj)
 
     def test_none_returns_false(self):
@@ -87,6 +88,7 @@ class TestLooksLikeMd:
 class TestUnwrapMd:
     def _fn(self, obj):
         from hft_platform.services.market_data import _unwrap_md
+
         return _unwrap_md(obj)
 
     def test_none_returns_none(self):
@@ -125,6 +127,7 @@ class TestUnwrapMd:
 class TestSummarizeMd:
     def _fn(self, obj):
         from hft_platform.services.market_data import _summarize_md
+
         return _summarize_md(obj)
 
     def test_none_returns_empty(self):
@@ -156,6 +159,7 @@ class TestSummarizeMd:
 class TestTryFastExtract:
     def _fn(self, *args, **kwargs):
         from hft_platform.services.market_data import _try_fast_extract_callback_payload
+
         return _try_fast_extract_callback_payload(*args, **kwargs)
 
     def test_kwargs_quote(self):
@@ -229,6 +233,7 @@ class TestTryFastExtract:
 class TestEnvInt:
     def _fn(self, name, default):
         from hft_platform.services.market_data import _env_int
+
         return _env_int(name, default)
 
     def test_returns_default_when_not_set(self):
@@ -255,6 +260,7 @@ class TestEnvInt:
 class TestObsPolicy:
     def _fn(self):
         from hft_platform.services.market_data import _obs_policy
+
         return _obs_policy()
 
     def test_default_balanced(self):

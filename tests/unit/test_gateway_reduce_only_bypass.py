@@ -53,9 +53,7 @@ class TestGatewayHaltReduceOnly:
         # bypass startup holdoff
         policy._startup_holdoff_until = 0.0
         policy.set_halt()
-        policy.set_position_provider(
-            _position_provider({("TMFE6", "R47"): position})
-        )
+        policy.set_position_provider(_position_provider({("TMFE6", "R47"): position}))
         return policy
 
     def test_halt_blocks_opener_without_position(self):
@@ -117,9 +115,7 @@ class TestGatewayDegradeReduceOnly:
         from hft_platform.gateway.policy import GatewayPolicyMode
 
         policy._set_mode(GatewayPolicyMode.DEGRADE)
-        policy.set_position_provider(
-            _position_provider({("TMFE6", "R47"): position})
-        )
+        policy.set_position_provider(_position_provider({("TMFE6", "R47"): position}))
         return policy
 
     def test_degrade_blocks_opener(self):
@@ -143,9 +139,7 @@ class TestGatewayTypedFastPath:
         policy = GatewayPolicy()
         policy._startup_holdoff_until = 0.0
         policy.set_halt()
-        policy.set_position_provider(
-            _position_provider({("TMFE6", "R47"): position})
-        )
+        policy.set_position_provider(_position_provider({("TMFE6", "R47"): position}))
         return policy
 
     def test_typed_halt_allows_cover(self):

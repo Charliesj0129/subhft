@@ -15,7 +15,6 @@ import pytest
 from hft_platform.contracts.execution import FillEvent, PositionDelta, Side
 from hft_platform.execution.positions import Position, PositionStore
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

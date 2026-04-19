@@ -98,7 +98,9 @@ def test_r47_max_pos_not_bypassed_after_gap() -> None:
     tick, sending 76 orders to the broker.
     """
     strat = R47MakerStrategy(
-        strategy_id="test-r47", symbols=["TMFD6"], max_pos=1,
+        strategy_id="test-r47",
+        symbols=["TMFD6"],
+        max_pos=1,
     )
     # Simulate: 1 pending buy already sent to broker
     strat._pending_buy["TMFD6"] = 1
@@ -167,7 +169,9 @@ def test_r47_local_pos_hard_cap_blocks_order_after_gap() -> None:
     _local_pos at max_pos must block further orders.
     """
     strat = R47MakerStrategy(
-        strategy_id="test-r47", symbols=["TMFD6"], max_pos=1,
+        strategy_id="test-r47",
+        symbols=["TMFD6"],
+        max_pos=1,
     )
     # Simulate: position is already at max
     strat._local_pos["TMFD6"] = 1
@@ -185,7 +189,9 @@ def test_r47_risk_feedback_preserves_last_price() -> None:
     loop (76-order burst incident 2026-04-15 RC-2).
     """
     strat = R47MakerStrategy(
-        strategy_id="test-r47", symbols=["TMFD6"], max_pos=1,
+        strategy_id="test-r47",
+        symbols=["TMFD6"],
+        max_pos=1,
     )
     strat._pending_buy["TMFD6"] = 1
     strat._last_bid["TMFD6"] = 367250000
@@ -202,9 +208,7 @@ def test_r47_risk_feedback_preserves_last_price() -> None:
     # Pending should be decremented
     assert strat._pending_buy["TMFD6"] == 0
     # But last_bid must NOT be cleared — price gate must stay armed
-    assert strat._last_bid.get("TMFD6") == 367250000, (
-        "_last_bid must not be cleared by risk rejection"
-    )
+    assert strat._last_bid.get("TMFD6") == 367250000, "_last_bid must not be cleared by risk rejection"
     # last_ask untouched (rejection was BUY side)
     assert strat._last_ask.get("TMFD6") == 367280000
 
@@ -216,7 +220,9 @@ def test_r47_cancel_before_requote_on_order_tracking() -> None:
     so that stale ROD orders can be canceled when the quote price moves.
     """
     strat = R47MakerStrategy(
-        strategy_id="test-r47", symbols=["TMFD6"], max_pos=1,
+        strategy_id="test-r47",
+        symbols=["TMFD6"],
+        max_pos=1,
     )
     # Simulate SUBMITTED event with broker order_id
     submitted = OrderEvent(

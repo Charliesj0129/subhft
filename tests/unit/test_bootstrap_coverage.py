@@ -182,8 +182,8 @@ class TestStaleCleanupFailed:
         # After stale_cleanup failed, continues to conflict path:
         #   conflict tries MetricsRegistry -> raise ImportError (line 436-437)
         stream = (
-            b"$5\r\nother\r\n"   # GET owner -> "other"
-            b":-1\r\n"            # TTL -> -1 (stale)
+            b"$5\r\nother\r\n"  # GET owner -> "other"
+            b":-1\r\n"  # TTL -> -1 (stale)
             b"$9\r\ndifferent\r\n"  # GET verify -> "different" (owner changed)
         )
         sock = _FakeSock(stream)
@@ -582,11 +582,19 @@ class TestBuildLeaseRefreshStarted:
         with (
             patch.object(bs, "_check_session_ownership", return_value=True),
             patch.object(bs, "_start_lease_refresh_thread") as mock_start,
-            patch.object(bs, "_get_redis_lease_params", return_value={
-                "host": "redis", "port": 6379, "password": "",
-                "key": "feed:session:owner", "owner_id": "me:1",
-                "ttl_s": 60, "timeout_s": 0.1,
-            }),
+            patch.object(
+                bs,
+                "_get_redis_lease_params",
+                return_value={
+                    "host": "redis",
+                    "port": 6379,
+                    "password": "",
+                    "key": "feed:session:owner",
+                    "owner_id": "me:1",
+                    "ttl_s": 60,
+                    "timeout_s": 0.1,
+                },
+            ),
         ):
             registry = bs.build()
 
@@ -1631,9 +1639,7 @@ class TestAliasMapPropagation:
         alias_hook()
 
         # Verify OrderAdapter.set_alias_map was called
-        registry.order_adapter.set_alias_map.assert_called_once_with(
-            {"TMFR1": "TMFE6", "TXFR1": "TXFD6"}
-        )
+        registry.order_adapter.set_alias_map.assert_called_once_with({"TMFR1": "TMFE6", "TXFR1": "TXFD6"})
 
 
 # ===================================================================

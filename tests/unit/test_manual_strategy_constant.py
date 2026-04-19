@@ -1,4 +1,5 @@
 """Tests for MANUAL_STRATEGY_ID constant and its usage contract."""
+
 from unittest.mock import MagicMock, patch
 
 

@@ -68,6 +68,7 @@ def _get_large_trade_threshold(symbol: str) -> int:
             return threshold
     return _DEFAULT_LARGE_TRADE_THRESHOLD
 
+
 # Input validation patterns
 _SYMBOL_RE = re.compile(r"^[A-Za-z0-9]{1,20}$")
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")

@@ -1,4 +1,5 @@
 """Tests for TakerEngine wrapper."""
+
 from research.backtest.taker_engine import TakerEngine
 
 

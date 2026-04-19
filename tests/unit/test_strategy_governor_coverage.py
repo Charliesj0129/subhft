@@ -9,14 +9,12 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-
 from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, Side
 from hft_platform.ops.autonomy import AutonomyMode, AutonomyTransition
 from hft_platform.ops.strategy_governor import (
     StrategyHealthGovernor,
     StrategyQuarantine,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -172,13 +170,13 @@ def test_build_cancel_intents_with_trace_info():
 # ---------------------------------------------------------------------------
 
 
-def test_set_strategy_quarantine_active_no_metrics():
+def test_set_strategy_quarantine_active_no_metrics():  # noqa: no-assert
     governor = StrategyHealthGovernor(metrics=None, evidence_writer=None)
     # Should not raise even with None metrics
     governor._set_strategy_quarantine_active("strat1", active=True)
 
 
-def test_set_strategy_quarantine_active_no_metric_attr():
+def test_set_strategy_quarantine_active_no_metric_attr():  # noqa: no-assert
     metrics = MagicMock(spec=[])  # empty spec, no attributes
     governor = StrategyHealthGovernor(metrics=metrics, evidence_writer=None)
     governor._set_strategy_quarantine_active("strat1", active=True)
@@ -189,7 +187,7 @@ def test_set_strategy_quarantine_active_no_metric_attr():
 # ---------------------------------------------------------------------------
 
 
-def test_set_strategy_scope_state_no_metrics():
+def test_set_strategy_scope_state_no_metrics():  # noqa: no-assert
     governor = StrategyHealthGovernor(metrics=None, evidence_writer=None)
     governor._set_strategy_scope_state()  # should not raise
 

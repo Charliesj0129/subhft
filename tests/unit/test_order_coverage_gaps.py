@@ -124,11 +124,7 @@ def test_get_trace_sampler_returns_none_on_import_error():
     sys.modules["hft_platform.diagnostics.trace"] = None  # type: ignore[assignment]
     try:
         result = adapter_mod._get_trace_sampler()
-        # Should either succeed (if diagnostics.trace present) or return None
-        # The important thing is it does NOT raise
-        assert result is None or result is not None  # executes without raising
-    except Exception:  # noqa: BLE001
-        pytest.fail("_get_trace_sampler must never raise")
+        assert result is None
     finally:
         if original is not None:
             sys.modules["hft_platform.diagnostics.trace"] = original
@@ -620,13 +616,12 @@ async def test_deadletter_write_entries_exception_returns_zero(tmp_path):
             reason=RejectionReason.API_TIMEOUT,
             error_message="timeout",
         )
-    except Exception:  # noqa: BLE001
-        pass  # write failure is swallowed; stats may differ
     finally:
         tmp_path.chmod(0o755)
 
-    # The key invariant: no exception propagated out of add()
-    assert True
+    assert dlq.total_entries == 2
+    assert dlq.total_flushed == 0
+    assert len(dlq._buffer) == 0
 
 
 @pytest.mark.asyncio

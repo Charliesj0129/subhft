@@ -63,10 +63,7 @@ class TestRiskEngineFeedbackSide:
 
     @pytest.mark.asyncio
     async def test_rejection_feedback_preserves_typed_tuple_side(self):
-        import asyncio
-
         from hft_platform.contracts.strategy import RiskFeedback
-        from hft_platform.risk.engine import RiskEngine
 
         # Use monkey-patched minimal engine shim: we only test the getattr→helper
         # replacement effect on a constructed typed tuple.

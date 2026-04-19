@@ -5,6 +5,7 @@ Currently provides ICEvaluationGate. Additional taker-specific gates
 task, since they already exist as `_evaluate_*` helpers in _gate_c.py
 and will be migrated in-place during the Gate C rewrite.
 """
+
 from __future__ import annotations
 
 from typing import Any

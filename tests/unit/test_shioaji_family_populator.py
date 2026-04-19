@@ -35,9 +35,7 @@ class _FakeContainer:
 
 
 def _fake_api(roots: dict[str, list]) -> SimpleNamespace:
-    return SimpleNamespace(
-        Contracts=SimpleNamespace(Futures=_FakeContainer(roots))
-    )
+    return SimpleNamespace(Contracts=SimpleNamespace(Futures=_FakeContainer(roots)))
 
 
 class TestDeliveryDateParser:
@@ -75,9 +73,7 @@ class TestPopulator:
             }
         )
         resolver = ContractFamilyResolver()
-        count = populate_resolver_from_shioaji(
-            resolver, api, today=date(2026, 4, 19)
-        )
+        count = populate_resolver_from_shioaji(resolver, api, today=date(2026, 4, 19))
 
         # Both R1 and R2 installed.
         assert count == 2
@@ -97,9 +93,7 @@ class TestPopulator:
             }
         )
         resolver = ContractFamilyResolver()
-        populate_resolver_from_shioaji(
-            resolver, api, today=date(2026, 4, 19)
-        )
+        populate_resolver_from_shioaji(resolver, api, today=date(2026, 4, 19))
         # Only the real expiry shows up as R1 binding.
         fam_r1 = ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1)
         ref = resolver.resolve_family(fam_r1)
@@ -114,15 +108,9 @@ class TestPopulator:
             }
         )
         resolver = ContractFamilyResolver()
-        populate_resolver_from_shioaji(
-            resolver, api, today=date(2026, 4, 19)
-        )
-        assert resolver.resolve_family(
-            ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1)
-        ) is not None
-        assert resolver.resolve_family(
-            ContractFamily(Product.FUTURE, "TXF", FamilyCode.R1)
-        ) is not None
+        populate_resolver_from_shioaji(resolver, api, today=date(2026, 4, 19))
+        assert resolver.resolve_family(ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1)) is not None
+        assert resolver.resolve_family(ContractFamily(Product.FUTURE, "TXF", FamilyCode.R1)) is not None
 
     def test_expired_contracts_dropped(self) -> None:
         api = _fake_api(
@@ -135,13 +123,9 @@ class TestPopulator:
             }
         )
         resolver = ContractFamilyResolver()
-        populate_resolver_from_shioaji(
-            resolver, api, today=date(2026, 4, 17)
-        )
+        populate_resolver_from_shioaji(resolver, api, today=date(2026, 4, 17))
         # April 17 is past March/April → May becomes R1.
-        ref = resolver.resolve_family(
-            ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1)
-        )
+        ref = resolver.resolve_family(ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1))
         assert ref is not None
         assert ref.display() == "TMFE6"
 
@@ -155,15 +139,11 @@ class TestPopulator:
             }
         )
         resolver = ContractFamilyResolver()
-        count = populate_resolver_from_shioaji(
-            resolver, api, today=date(2026, 4, 19)
-        )
+        count = populate_resolver_from_shioaji(resolver, api, today=date(2026, 4, 19))
         assert count == 1
 
     def test_idempotent_repeat_call_produces_no_rebinds(self) -> None:
-        api = _fake_api(
-            {"TMF": [_mock_contract("TMFE6", delivery_date="2026/05/21")]}
-        )
+        api = _fake_api({"TMF": [_mock_contract("TMFE6", delivery_date="2026/05/21")]})
         resolver = ContractFamilyResolver()
         hook_events: list = []
         resolver.add_hook(hook_events.append)
@@ -177,17 +157,13 @@ class TestPopulator:
 
     def test_none_api_is_noop(self) -> None:
         resolver = ContractFamilyResolver()
-        count = populate_resolver_from_shioaji(
-            resolver, None, today=date(2026, 4, 19)
-        )
+        count = populate_resolver_from_shioaji(resolver, None, today=date(2026, 4, 19))
         assert count == 0
 
     def test_api_without_contracts_is_noop(self) -> None:
         resolver = ContractFamilyResolver()
         api = SimpleNamespace()  # no Contracts attribute
-        count = populate_resolver_from_shioaji(
-            resolver, api, today=date(2026, 4, 19)
-        )
+        count = populate_resolver_from_shioaji(resolver, api, today=date(2026, 4, 19))
         assert count == 0
 
     def test_native_hints_carry_broker_contract(self) -> None:

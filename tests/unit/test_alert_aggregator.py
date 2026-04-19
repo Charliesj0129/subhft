@@ -1,7 +1,6 @@
 """Tests for alert dedup and time-window aggregation."""
-from __future__ import annotations
 
-import pytest
+from __future__ import annotations
 
 from hft_platform.notifications.alert import Alert, AlertSeverity
 
@@ -14,15 +13,22 @@ def _make_alert(
     alert_id: str = "a-001",
 ) -> Alert:
     return Alert(
-        alert_id=alert_id, severity=severity, category="feed", source="test",
-        title="Test alert", detail="Details here", ts_ns=ts_ns,
-        dedup_key=dedup_key, metadata=None,
+        alert_id=alert_id,
+        severity=severity,
+        category="feed",
+        source="test",
+        title="Test alert",
+        detail="Details here",
+        ts_ns=ts_ns,
+        dedup_key=dedup_key,
+        metadata=None,
     )
 
 
 class TestAlertAggregator:
     def test_first_alert_passes_through(self):
         from hft_platform.notifications.aggregator import AlertAggregator
+
         agg = AlertAggregator(window_ns=300_000_000_000)
         alert = _make_alert()
         result = agg.process(alert)
@@ -31,6 +37,7 @@ class TestAlertAggregator:
 
     def test_duplicate_within_window_is_suppressed(self):
         from hft_platform.notifications.aggregator import AlertAggregator
+
         agg = AlertAggregator(window_ns=300_000_000_000)
         a1 = _make_alert(ts_ns=1_000_000_000_000_000_000)
         # a2 arrives 1 second later — well within the 300-second window
@@ -40,6 +47,7 @@ class TestAlertAggregator:
 
     def test_alert_after_window_passes_through(self):
         from hft_platform.notifications.aggregator import AlertAggregator
+
         agg = AlertAggregator(window_ns=300_000_000_000)
         a1 = _make_alert(ts_ns=1_000_000_000_000_000_000)
         # a2 arrives 301 seconds later — just past the 300-second window
@@ -49,6 +57,7 @@ class TestAlertAggregator:
 
     def test_none_dedup_key_always_passes(self):
         from hft_platform.notifications.aggregator import AlertAggregator
+
         agg = AlertAggregator(window_ns=300_000_000_000)
         a1 = _make_alert(dedup_key=None, ts_ns=1_000_000_000_000_000_000)
         a2 = _make_alert(dedup_key=None, ts_ns=1_000_000_000_000_000_001, alert_id="a-002")
@@ -57,6 +66,7 @@ class TestAlertAggregator:
 
     def test_fatal_never_aggregated(self):
         from hft_platform.notifications.aggregator import AlertAggregator
+
         agg = AlertAggregator(window_ns=300_000_000_000)
         a1 = _make_alert(severity=AlertSeverity.FATAL, ts_ns=1_000_000_000_000_000_000)
         a2 = _make_alert(severity=AlertSeverity.FATAL, ts_ns=1_000_000_000_000_000_001, alert_id="a-002")
@@ -65,6 +75,7 @@ class TestAlertAggregator:
 
     def test_flush_pending_returns_summary(self):
         from hft_platform.notifications.aggregator import AlertAggregator
+
         agg = AlertAggregator(window_ns=300_000_000_000)
         a1 = _make_alert(ts_ns=1_000_000_000_000_000_000)
         # a2 and a3 arrive within the 300-second window (1s and 2s after a1)
@@ -80,6 +91,7 @@ class TestAlertAggregator:
 
     def test_different_dedup_keys_independent(self):
         from hft_platform.notifications.aggregator import AlertAggregator
+
         agg = AlertAggregator(window_ns=300_000_000_000)
         a1 = _make_alert(dedup_key="key_a", ts_ns=1_000_000_000_000_000_000)
         a2 = _make_alert(dedup_key="key_b", ts_ns=1_000_000_000_000_000_001, alert_id="a-002")

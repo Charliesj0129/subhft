@@ -628,6 +628,7 @@ class PositionStore:
         Returns the number of position entries removed.
         """
         with self._fill_lock:
+
             def _pos_matches(pos: Position) -> bool:
                 if pos.symbol != symbol:
                     return False
@@ -646,9 +647,7 @@ class PositionStore:
             for k in keys_to_remove:
                 self._evicted_realized_pnl_scaled += self.positions[k].realized_pnl_scaled
                 del self.positions[k]
-            rkeys_to_remove = [
-                rk for rk, rd in self._recovery_positions.items() if _recovery_matches(rd)
-            ]
+            rkeys_to_remove = [rk for rk, rd in self._recovery_positions.items() if _recovery_matches(rd)]
             for rk in rkeys_to_remove:
                 del self._recovery_positions[rk]
         if keys_to_remove or rkeys_to_remove:

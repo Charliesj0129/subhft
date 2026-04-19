@@ -1038,7 +1038,7 @@ class SystemBootstrapper:
         # Preflight: validate symbol consistency after alias resolution
         def _preflight_symbol_consistency() -> None:
             """Warn if strategy symbols are not in the subscribed set."""
-            subscribed = getattr(md_client, "subscribed_codes", set())
+            subscribed: set[str] = set(getattr(md_client, "subscribed_codes", set()))
             # Also include actual codes from alias map
             alias_map = getattr(md_client, "alias_to_actual", {})
             all_subscribed = set(subscribed) | set(alias_map.values())
@@ -1067,6 +1067,7 @@ class SystemBootstrapper:
             alias_map = getattr(md_client, "alias_to_actual", None)
             if alias_map:
                 order_adapter.set_alias_map(alias_map)
+
         md_service._post_connect_hooks.append(_propagate_alias_to_order_adapter)
 
         # Option-3 Gate 1 prod: post-connect populator for the ContractFamily
@@ -1080,13 +1081,9 @@ class SystemBootstrapper:
 
             def _populate_families_from_shioaji() -> None:
                 try:
-                    populate_resolver_from_shioaji(
-                        family_resolver, getattr(md_client, "api", None)
-                    )
+                    populate_resolver_from_shioaji(family_resolver, getattr(md_client, "api", None))
                 except Exception as exc:  # noqa: BLE001
-                    logger.warning(
-                        "family_populator_failed", broker="shioaji", error=str(exc)
-                    )
+                    logger.warning("family_populator_failed", broker="shioaji", error=str(exc))
 
             md_service._post_connect_hooks.append(_populate_families_from_shioaji)
         elif broker_id == "fubon":
@@ -1098,9 +1095,7 @@ class SystemBootstrapper:
                 try:
                     populate_resolver_from_fubon(family_resolver, md_client)
                 except Exception as exc:  # noqa: BLE001
-                    logger.warning(
-                        "family_populator_failed", broker="fubon", error=str(exc)
-                    )
+                    logger.warning("family_populator_failed", broker="fubon", error=str(exc))
 
             md_service._post_connect_hooks.append(_populate_families_from_fubon)
 
@@ -1139,9 +1134,7 @@ class SystemBootstrapper:
                 # Register alias resolution hook for session governor
                 _gov = session_governor  # capture for closure
                 md_service._post_connect_hooks.append(
-                    lambda: _gov.resolve_symbol_aliases(
-                        getattr(symbol_metadata, "alias_to_actual", None)
-                    )
+                    lambda: _gov.resolve_symbol_aliases(getattr(symbol_metadata, "alias_to_actual", None))
                 )
                 logger.info("SessionGovernor created and TrackGate wired into StrategyRunner")
             except Exception as exc:

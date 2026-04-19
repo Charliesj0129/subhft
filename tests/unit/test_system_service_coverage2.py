@@ -213,9 +213,7 @@ class TestStopAsyncBusDrain:
         sys_obj = _make_stub()
         sys_obj.running = True
         sys_obj.bus.cursor = 10
-        sys_obj.strategy_runner.drain_to_cursor = AsyncMock(
-            side_effect=RuntimeError("drain fail")
-        )
+        sys_obj.strategy_runner.drain_to_cursor = AsyncMock(side_effect=RuntimeError("drain fail"))
         sys_obj.exec_service.stop = AsyncMock(return_value=0)
         sys_obj.exec_service.persist_fill_dedup = MagicMock()
         sys_obj.tasks = {}
@@ -348,9 +346,7 @@ class TestStopAsyncExecServiceDrain:
         sys_obj = _make_stub()
         sys_obj.running = True
         sys_obj.exec_service.stop = AsyncMock(return_value=0)
-        sys_obj.exec_service.persist_fill_dedup = MagicMock(
-            side_effect=RuntimeError("dedup fail")
-        )
+        sys_obj.exec_service.persist_fill_dedup = MagicMock(side_effect=RuntimeError("dedup fail"))
         sys_obj.tasks = {}
 
         await sys_obj.stop_async()
@@ -376,9 +372,7 @@ class TestStopAsyncExecServiceDrain:
     async def test_order_adapter_drain_exception(self):
         sys_obj = _make_stub()
         sys_obj.running = True
-        sys_obj.order_adapter.drain_and_cancel = AsyncMock(
-            side_effect=RuntimeError("drain fail")
-        )
+        sys_obj.order_adapter.drain_and_cancel = AsyncMock(side_effect=RuntimeError("drain fail"))
         sys_obj.exec_service.stop = AsyncMock(return_value=0)
         sys_obj.exec_service.persist_fill_dedup = MagicMock()
         sys_obj.tasks = {}
@@ -390,9 +384,7 @@ class TestStopAsyncExecServiceDrain:
     async def test_order_id_map_persist_exception_swallowed(self):
         sys_obj = _make_stub()
         sys_obj.running = True
-        sys_obj.order_adapter.persist_order_id_map = MagicMock(
-            side_effect=RuntimeError("persist fail")
-        )
+        sys_obj.order_adapter.persist_order_id_map = MagicMock(side_effect=RuntimeError("persist fail"))
         sys_obj.exec_service.stop = AsyncMock(return_value=0)
         sys_obj.exec_service.persist_fill_dedup = MagicMock()
         sys_obj.tasks = {}
@@ -1180,10 +1172,7 @@ class TestSuperviseServiceHealth:
 
         # No new halt triggered for this expected stop
         # (trigger_halt is NOT called for order task done in HALT)
-        halt_calls = [
-            c for c in sys_obj.storm_guard.trigger_halt.call_args_list
-            if "OrderAdapter" in str(c)
-        ]
+        halt_calls = [c for c in sys_obj.storm_guard.trigger_halt.call_args_list if "OrderAdapter" in str(c)]
         assert len(halt_calls) == 0
 
 
@@ -1206,6 +1195,7 @@ class TestSuperviseImmediateFailDetection:
 
         # Started at < 2s ago
         from hft_platform.core import timebase
+
         sys_obj._task_started_at["md"] = timebase.now_s()
 
         mock_factory = MagicMock()
@@ -1852,9 +1842,7 @@ class TestGracefulResetStormGuard:
         results = await sys_obj.graceful_reset(reason="test_reset")
 
         assert "reset from STORM" in results["storm_guard"]
-        sys_obj.storm_guard.update.assert_called_once_with(
-            drawdown_bps=0, latency_us=0, feed_gap_s=0.0
-        )
+        sys_obj.storm_guard.update.assert_called_once_with(drawdown_bps=0, latency_us=0, feed_gap_s=0.0)
 
     @pytest.mark.asyncio
     async def test_dlq_drain_exception_handled(self):
@@ -2009,7 +1997,9 @@ class TestRecorderBridgeEventRouting:
         sys_obj.bus.consume_batch = _consumer
 
         with patch.dict(os.environ, {"HFT_BUS_BATCH_SIZE": "4"}):
-            with patch("hft_platform.recorder.mapper.map_event_to_record", side_effect=[("t", {"a": 1}), ("t", {"a": 2})]):
+            with patch(
+                "hft_platform.recorder.mapper.map_event_to_record", side_effect=[("t", {"a": 1}), ("t", {"a": 2})]
+            ):
                 with patch("hft_platform.observability.metrics.MetricsRegistry") as MockMR:
                     MockMR.get.return_value = MagicMock()
                     await sys_obj._recorder_bridge()
@@ -2188,9 +2178,7 @@ class TestSuperviseHaltDrainAndCancel:
         sys_obj = _make_stub()
         sys_obj.running = True
         sys_obj.storm_guard.state = StormGuardState.HALT
-        sys_obj.order_adapter.drain_and_cancel = AsyncMock(
-            side_effect=RuntimeError("cancel fail")
-        )
+        sys_obj.order_adapter.drain_and_cancel = AsyncMock(side_effect=RuntimeError("cancel fail"))
         sys_obj.order_adapter._background_tasks = None  # no bg tasks set
 
         mock_metrics = MagicMock()
@@ -2315,6 +2303,7 @@ class TestResetRestartBackoff:
 
     def test_no_reset_when_uptime_below_threshold(self):
         from hft_platform.core import timebase
+
         sys_obj = _make_stub()
         mock_task = MagicMock()
         mock_task.done.return_value = False
@@ -2341,6 +2330,7 @@ class TestPersistLostExecEventJsonFallback:
 
         # Temporarily make orjson import fail in the method
         import builtins
+
         original_import = builtins.__import__
 
         def _no_orjson(name, *args, **kwargs):

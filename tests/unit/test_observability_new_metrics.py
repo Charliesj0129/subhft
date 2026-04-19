@@ -77,9 +77,7 @@ def test_strategy_events_received_increments_on_dispatch():
     runner.register(strat)
 
     # Grab initial counter value via exposed labels().
-    counter = MetricsRegistry.get().strategy_events_received_total.labels(
-        strategy_id="obs_test_strat"
-    )
+    counter = MetricsRegistry.get().strategy_events_received_total.labels(strategy_id="obs_test_strat")
     initial = counter._value.get()
 
     # Build a minimal tick-like event. StrategyRunner's process_event is async; run it.
@@ -143,15 +141,9 @@ def test_reconciliation_drift_streak_gauge_labels():
     registry.reconciliation_drift_streak.labels(symbol="TXFD6").set(3)
     registry.reconciliation_drift_streak.labels(symbol="TMFD6").set(1)
 
-    assert (
-        registry.reconciliation_drift_streak.labels(symbol="TXFD6")._value.get() == 3
-    )
-    assert (
-        registry.reconciliation_drift_streak.labels(symbol="TMFD6")._value.get() == 1
-    )
+    assert registry.reconciliation_drift_streak.labels(symbol="TXFD6")._value.get() == 3
+    assert registry.reconciliation_drift_streak.labels(symbol="TMFD6")._value.get() == 1
 
     # Reset on drift resolution.
     registry.reconciliation_drift_streak.labels(symbol="TXFD6").set(0)
-    assert (
-        registry.reconciliation_drift_streak.labels(symbol="TXFD6")._value.get() == 0
-    )
+    assert registry.reconciliation_drift_streak.labels(symbol="TXFD6")._value.get() == 0

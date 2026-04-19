@@ -1,4 +1,5 @@
 """Tests for HftBacktestAdapter queue_model='auto' + calibration profile loading."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -28,12 +29,9 @@ def _minimal_events() -> np.ndarray:
     dtype = _event_dtype()
     return np.array(
         [
-            (DEPTH_EVENT | EXCH_EVENT | BUY_EVENT,
-             1_000_000_000, 1_001_000_000, 17000.0, 5, 0, 0, 0.0),
-            (DEPTH_EVENT | EXCH_EVENT | SELL_EVENT,
-             1_000_000_000, 1_001_000_000, 17001.0, 3, 0, 0, 0.0),
-            (TRADE_EVENT | EXCH_EVENT | BUY_EVENT,
-             2_000_000_000, 2_001_000_000, 17000.5, 1, 0, 0, 0.0),
+            (DEPTH_EVENT | EXCH_EVENT | BUY_EVENT, 1_000_000_000, 1_001_000_000, 17000.0, 5, 0, 0, 0.0),
+            (DEPTH_EVENT | EXCH_EVENT | SELL_EVENT, 1_000_000_000, 1_001_000_000, 17001.0, 3, 0, 0, 0.0),
+            (TRADE_EVENT | EXCH_EVENT | BUY_EVENT, 2_000_000_000, 2_001_000_000, 17000.5, 1, 0, 0, 0.0),
         ],
         dtype=dtype,
     )
@@ -75,7 +73,8 @@ def test_adapter_queue_model_auto_requires_instrument(tmp_path):
             strategy=Strategy(strategy_id="test"),
             asset_symbol="TMFD6",
             data=_minimal_events(),
-            tick_size=1.0, lot_size=1.0,
+            tick_size=1.0,
+            lot_size=1.0,
             queue_model="auto",
         )
 
@@ -90,7 +89,8 @@ def test_adapter_queue_model_auto_loads_profile(tmp_path):
         strategy=Strategy(strategy_id="test"),
         asset_symbol="TMFD6",
         data=_minimal_events(),
-        tick_size=1.0, lot_size=1.0,
+        tick_size=1.0,
+        lot_size=1.0,
         queue_model="auto",
         instrument="TMFD6",
         calibration_profile_path=profile_path,
@@ -111,7 +111,8 @@ def test_adapter_queue_model_auto_supports_log_prob(tmp_path):
         strategy=Strategy(strategy_id="test"),
         asset_symbol="TMFD6",
         data=_minimal_events(),
-        tick_size=1.0, lot_size=1.0,
+        tick_size=1.0,
+        lot_size=1.0,
         queue_model="auto",
         instrument="TMFD6",
         calibration_profile_path=profile_path,
@@ -126,7 +127,8 @@ def test_adapter_queue_model_explicit_still_works(tmp_path):
         strategy=Strategy(strategy_id="test"),
         asset_symbol="TMFD6",
         data=_minimal_events(),
-        tick_size=1.0, lot_size=1.0,
+        tick_size=1.0,
+        lot_size=1.0,
         queue_model="PowerProbQueueModel(2.0)",
     )
     assert adapter.queue_model == "PowerProbQueueModel(2.0)"

@@ -16,7 +16,6 @@ import pytest
 
 from hft_platform.recorder.writer import DataWriter, WriterDoubleFaultError
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -37,10 +36,14 @@ def writer(tmp_path):
 
 def test_deprecated_disable_clickhouse_env(tmp_path):
     """HFT_DISABLE_CLICKHOUSE triggers deprecation warning."""
-    with patch.dict(os.environ, {
-        "HFT_DISABLE_CLICKHOUSE": "1",
-        "HFT_CLICKHOUSE_ENABLED": "",
-    }, clear=False):
+    with patch.dict(
+        os.environ,
+        {
+            "HFT_DISABLE_CLICKHOUSE": "1",
+            "HFT_CLICKHOUSE_ENABLED": "",
+        },
+        clear=False,
+    ):
         with pytest.warns(DeprecationWarning, match="deprecated"):
             w = DataWriter(ch_host="localhost", ch_port=8123, wal_dir=str(tmp_path / "wal"))
         assert w.ch_enabled is False
@@ -48,20 +51,28 @@ def test_deprecated_disable_clickhouse_env(tmp_path):
 
 def test_env_port_override_native(tmp_path):
     """HFT_CLICKHOUSE_PORT=9000 sets native interface."""
-    with patch.dict(os.environ, {
-        "HFT_CLICKHOUSE_ENABLED": "0",
-        "HFT_CLICKHOUSE_PORT": "9000",
-    }, clear=False):
+    with patch.dict(
+        os.environ,
+        {
+            "HFT_CLICKHOUSE_ENABLED": "0",
+            "HFT_CLICKHOUSE_PORT": "9000",
+        },
+        clear=False,
+    ):
         w = DataWriter(ch_host="localhost", ch_port=8123, wal_dir=str(tmp_path / "wal"))
     assert w.ch_params.get("interface") == "native"
 
 
 def test_env_port_override_http(tmp_path):
     """HFT_CLICKHOUSE_PORT=8123 removes native interface."""
-    with patch.dict(os.environ, {
-        "HFT_CLICKHOUSE_ENABLED": "0",
-        "HFT_CLICKHOUSE_PORT": "8123",
-    }, clear=False):
+    with patch.dict(
+        os.environ,
+        {
+            "HFT_CLICKHOUSE_ENABLED": "0",
+            "HFT_CLICKHOUSE_PORT": "8123",
+        },
+        clear=False,
+    ):
         w = DataWriter(ch_host="localhost", ch_port=9000, wal_dir=str(tmp_path / "wal"))
     assert "interface" not in w.ch_params
 
@@ -72,12 +83,8 @@ def test_env_port_override_http(tmp_path):
 
 
 def test_native_interface_error_detection():
-    assert DataWriter._is_native_interface_unsupported_error(
-        RuntimeError("unrecognized client type native something")
-    )
-    assert not DataWriter._is_native_interface_unsupported_error(
-        RuntimeError("connection refused")
-    )
+    assert DataWriter._is_native_interface_unsupported_error(RuntimeError("unrecognized client type native something"))
+    assert not DataWriter._is_native_interface_unsupported_error(RuntimeError("connection refused"))
 
 
 # ---------------------------------------------------------------------------
@@ -356,13 +363,13 @@ def test_heartbeat_check_exception(writer):
 # ---------------------------------------------------------------------------
 
 
-def test_schedule_reconnect_disabled(writer):
+def test_schedule_reconnect_disabled(writer):  # noqa: no-assert
     writer.ch_enabled = False
     writer._schedule_reconnect("test")
     # Should be a no-op
 
 
-def test_schedule_reconnect_rate_limited(writer):
+def test_schedule_reconnect_rate_limited(writer):  # noqa: no-assert
     writer.ch_enabled = True
     writer._last_reconnect_ts = time.time() + 9999  # Far future
     writer._schedule_reconnect("test")

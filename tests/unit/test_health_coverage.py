@@ -11,13 +11,11 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-
 from hft_platform.observability.health import (
     DegradationTracker,
     HealthServer,
     _json_dumps,
 )
-
 
 # ---------------------------------------------------------------------------
 # _json_dumps
@@ -252,9 +250,7 @@ class TestCheckReadiness:
     def test_optional_tasks(self):
         mock_task = MagicMock()
         mock_task.done.return_value = False
-        tasks = {
-            name: mock_task for name in ["md", "strat", "order", "recorder", "risk", "exec_router"]
-        }
+        tasks = {name: mock_task for name in ["md", "strat", "order", "recorder", "risk", "exec_router"]}
         system = SimpleNamespace(
             running=True,
             md_client=SimpleNamespace(logged_in=True),
@@ -331,7 +327,7 @@ class TestBuildStatus:
 # ---------------------------------------------------------------------------
 
 
-def test_health_server_stop_no_server():
+def test_health_server_stop_no_server():  # noqa: no-assert
     server = HealthServer()
     server.stop()  # No-op
 

@@ -68,15 +68,9 @@ class PositionStuckMonitor:
         self._dispatcher = dispatcher
         self._mid_price_fn = mid_price_fn
         self._metrics = MetricsRegistry.get()
-        self._interval_s = float(
-            interval_s
-            if interval_s is not None
-            else os.getenv("HFT_POSITION_STUCK_POLL_S", "5")
-        )
+        self._interval_s = float(interval_s if interval_s is not None else os.getenv("HFT_POSITION_STUCK_POLL_S", "5"))
         self._alert_threshold_s = float(
-            alert_threshold_s
-            if alert_threshold_s is not None
-            else os.getenv("HFT_POSITION_STUCK_ALERT_S", "300")
+            alert_threshold_s if alert_threshold_s is not None else os.getenv("HFT_POSITION_STUCK_ALERT_S", "300")
         )
         self._running = False
         self._task: asyncio.Task[None] | None = None
@@ -180,9 +174,7 @@ class PositionStuckMonitor:
                 continue
 
             try:
-                self._metrics.position_age_seconds.labels(
-                    strategy=strategy_id, symbol=symbol
-                ).set(float(age_s))
+                self._metrics.position_age_seconds.labels(strategy=strategy_id, symbol=symbol).set(float(age_s))
             except Exception:  # noqa: BLE001 — metric failure must not block
                 pass
 
@@ -227,9 +219,7 @@ class PositionStuckMonitor:
             unrealized_ntd=unrealized_ntd,
         )
         try:
-            self._metrics.position_stuck_alerts_total.labels(
-                strategy=strategy_id, symbol=symbol
-            ).inc()
+            self._metrics.position_stuck_alerts_total.labels(strategy=strategy_id, symbol=symbol).inc()
         except Exception:  # noqa: BLE001
             pass
 
@@ -246,9 +236,7 @@ class PositionStuckMonitor:
         except Exception as exc:  # noqa: BLE001
             logger.error("position_stuck_notify_failed", error=str(exc))
 
-    def _estimate_unrealized_ntd(
-        self, symbol: str, net_qty: int, avg_price_scaled: int
-    ) -> int | None:
+    def _estimate_unrealized_ntd(self, symbol: str, net_qty: int, avg_price_scaled: int) -> int | None:
         """Best-effort unrealized PnL for the alert message. None if unavailable."""
         if self._mid_price_fn is None or avg_price_scaled == 0 or net_qty == 0:
             return None

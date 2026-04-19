@@ -320,7 +320,7 @@ class TestOnBookUpdate:
         strat.handle_event(ctx, event)
         assert strat.core.on_depth.called
 
-    def test_on_book_update_exception_logged(self):
+    def test_on_book_update_exception_logged(self):  # noqa: no-assert
         """Lines 178-189: exception in on_depth caught and logged."""
         strat = _make_strategy()
         ctx = _make_ctx()
@@ -454,7 +454,7 @@ class TestOnTick:
         call_args = strat.core.on_trade.call_args
         assert call_args[0][3] is False  # is_buyer_maker (default aggressor buy)
 
-    def test_on_tick_exception_logged(self):
+    def test_on_tick_exception_logged(self):  # noqa: no-assert
         """Lines 227-238: exception in on_trade caught."""
         strat = _make_strategy()
         strat.best_bid = 100 * _PRICE_SCALE
@@ -497,6 +497,7 @@ class TestExecuteOnSignal:
         strat._execute_on_signal("BTCUSD", signal=0.5)
         assert ctx.place_order.called
         from hft_platform.contracts.strategy import Side
+
         call_kw = ctx.place_order.call_args.kwargs
         assert call_kw["side"] == Side.BUY
         assert call_kw["price"] == 100 * _PRICE_SCALE
@@ -511,6 +512,7 @@ class TestExecuteOnSignal:
         strat._execute_on_signal("BTCUSD", signal=-0.5)
         assert ctx.place_order.called
         from hft_platform.contracts.strategy import Side
+
         call_kw = ctx.place_order.call_args.kwargs
         assert call_kw["side"] == Side.SELL
         assert call_kw["price"] == 101 * _PRICE_SCALE
@@ -599,6 +601,7 @@ class TestExecuteOnSignal:
         strat._execute_on_signal("BTCUSD", signal=0.0)
         assert ctx.place_order.called
         from hft_platform.contracts.strategy import Side
+
         call_kw = ctx.place_order.call_args.kwargs
         assert call_kw["side"] == Side.SELL
         assert call_kw["qty"] == 3  # abs(pos)
@@ -618,6 +621,7 @@ class TestExecuteOnSignal:
         strat._execute_on_signal("BTCUSD", signal=0.0)
         assert ctx.place_order.called
         from hft_platform.contracts.strategy import Side
+
         call_kw = ctx.place_order.call_args.kwargs
         assert call_kw["side"] == Side.BUY
         assert call_kw["qty"] == 2
@@ -684,6 +688,7 @@ class TestExecuteOnSignal:
         strat._execute_on_signal("BTCUSD", signal=0.8)  # strong buy signal
         # Stop-loss sell happens, not a buy
         from hft_platform.contracts.strategy import Side
+
         call_kw = ctx.place_order.call_args.kwargs
         assert call_kw["side"] == Side.SELL
 
@@ -756,7 +761,7 @@ class TestMetricsExceptionPaths:
         strat.handle_event(ctx, tick)
         assert counter.labels.called
 
-    def test_no_exc_metrics_on_exception(self):
+    def test_no_exc_metrics_on_exception(self):  # noqa: no-assert
         """Lines 180/229: _exc_metrics is None, exception still handled."""
         strat = _make_strategy()
         ctx = _make_ctx()

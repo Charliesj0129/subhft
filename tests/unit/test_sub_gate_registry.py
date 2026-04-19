@@ -1,4 +1,5 @@
 """Tests for sub-gate registry."""
+
 from __future__ import annotations
 
 import pytest
@@ -83,6 +84,7 @@ def test_clear_registry_removes_all():
 
 def test_get_registered_returns_copy():
     """Modifying returned list should not affect registry."""
+
     class G:
         name = "g"
         applies_to = {"maker"}
@@ -99,6 +101,7 @@ def test_get_registered_returns_copy():
 
 def test_protocol_runtime_check():
     """SubGate Protocol works with isinstance at runtime."""
+
     class ProperGate:
         name = "p"
         applies_to = {"maker"}

@@ -1,5 +1,6 @@
 """Tests for QueueDepletionFill model."""
-from research.backtest.fill_models import QueueDepletionFill, QueuePosition
+
+from research.backtest.fill_models import QueueDepletionFill
 
 
 def test_post_quote_calculates_queue_position():

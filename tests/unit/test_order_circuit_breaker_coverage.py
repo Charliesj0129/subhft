@@ -5,6 +5,7 @@ Missing lines:
   139-140: record_failure — metrics exception swallowed (tripped=True path)
   147:     _evict_idle — del self._breakers[sid]
 """
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock
@@ -14,6 +15,7 @@ from hft_platform.order.circuit_breaker import StrategyCircuitBreakerManager
 
 def _make_mgr(metrics=None) -> StrategyCircuitBreakerManager:
     from unittest.mock import patch as _patch
+
     with _patch("hft_platform.order.circuit_breaker.MetricsRegistry") as mm:
         if metrics is not None:
             mm.get.return_value = metrics

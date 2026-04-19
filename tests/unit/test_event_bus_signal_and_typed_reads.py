@@ -21,6 +21,7 @@ from hft_platform.engine.event_bus import RingBufferBus
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _py_bus_event(monkeypatch, *, size: int = 16) -> RingBufferBus:
     """Pure-Python bus in event (signal) wait mode."""
     monkeypatch.setattr(event_bus_mod, "_RUST_ENABLED", False)
@@ -110,9 +111,9 @@ async def test_consume_signal_wait_multiple_events(monkeypatch):
     task = asyncio.create_task(_consumer())
     await asyncio.sleep(0)  # let consumer enter signal-wait
 
-    bus.publish_nowait("alpha")   # cursor → 0; wakes consumer
-    await asyncio.sleep(0)        # let consumer process "alpha"
-    bus.publish_nowait("beta")    # cursor → 1; second wake
+    bus.publish_nowait("alpha")  # cursor → 0; wakes consumer
+    await asyncio.sleep(0)  # let consumer process "alpha"
+    bus.publish_nowait("beta")  # cursor → 1; second wake
 
     await asyncio.wait_for(task, timeout=2.0)
     assert "alpha" in received
@@ -143,7 +144,7 @@ async def test_consume_spin_budget_early_break(monkeypatch):
     monkeypatch.setattr(event_bus_mod, "_WAIT_MODE", "spin")
 
     bus = RingBufferBus(size=16)
-    bus._spin_sleep = 0     # force spin-budget path
+    bus._spin_sleep = 0  # force spin-budget path
     bus._spin_budget = 100  # large budget so early-break is exercised
 
     # Publish one seed so cursor=0; consumer will start at local_seq=0
@@ -209,11 +210,12 @@ async def test_consume_buffer_lazily_inited_at_read_time(monkeypatch):
     # Reconstruct buffer manually at the correct slot so the event is readable
     # after consume() initialises it.
     import ctypes  # noqa: F401  (unused, just verifying import path)
+
     # Actually: restore the real data by re-publishing into correct slot
     # without nulling — easier approach: don't null after 2nd publish.
     bus3 = _py_bus_event(monkeypatch)
-    bus3.buffer = None                      # null before first publish
-    bus3.publish_nowait("lazyread-event")   # _store_fallback fills buffer[0]
+    bus3.buffer = None  # null before first publish
+    bus3.publish_nowait("lazyread-event")  # _store_fallback fills buffer[0]
     # At this point bus3.buffer is non-None (set by _store_fallback).
     # To hit consume lines 703-704 we null it — but then the data is gone.
     # The test verifies that consume() creates the buffer and doesn't crash;
@@ -255,7 +257,7 @@ async def test_consume_buffer_lazily_inited_at_read_time(monkeypatch):
 async def test_consume_buffer_none_then_publish_reads_correctly(monkeypatch):
     """Buffer=None before publish: _store_fallback + consume() both init lazily."""
     bus = _py_bus_event(monkeypatch)
-    bus.buffer = None           # null before publish
+    bus.buffer = None  # null before publish
 
     bus.publish_nowait("fresh-event")  # _store_fallback allocates buffer
 
@@ -353,8 +355,8 @@ async def test_consume_batch_spin_budget_exhausted_sleeps(monkeypatch):
     monkeypatch.setattr(event_bus_mod, "_WAIT_MODE", "spin")
 
     bus = RingBufferBus(size=16)
-    bus._spin_sleep = 0    # spin-budget path
-    bus._spin_budget = 1   # minimal budget → exhausted immediately
+    bus._spin_sleep = 0  # spin-budget path
+    bus._spin_budget = 1  # minimal budget → exhausted immediately
 
     # Pre-seed so cursor=0; consumer starts at local_seq=0 → cursor <= local_seq
     bus.publish_nowait("seed-exhaust")
@@ -454,8 +456,8 @@ async def test_consume_batch_mixed_typed_events(monkeypatch):
     bus.publish_nowait(tick)
     bus.publish_nowait(lobstats)
 
-    assert bus._kind_ring[0] == 1   # tick
-    assert bus._kind_ring[1] == 3   # lobstats
+    assert bus._kind_ring[0] == 1  # tick
+    assert bus._kind_ring[1] == 3  # lobstats
 
     batches: list = []
     async for batch in bus.consume_batch(batch_size=4, start_cursor=-1, consumer_name="batch-mixed"):
@@ -477,7 +479,7 @@ async def test_consume_batch_mixed_typed_events(monkeypatch):
 async def test_consume_batch_buffer_none_lazily_inited(monkeypatch):
     """Lines 812-813: consume_batch() allocates buffer lazily when self.buffer is None."""
     bus = _py_bus_event(monkeypatch)
-    bus.buffer = None            # null before publish
+    bus.buffer = None  # null before publish
     bus.publish_nowait("batch-lazy")  # _store_fallback initialises buffer
 
     batches: list = []
@@ -495,7 +497,7 @@ async def test_consume_batch_buffer_none_then_read_no_crash(monkeypatch):
     bus = _py_bus_event(monkeypatch)
     bus.buffer = None
     # Publish to advance cursor so consumer has work to do
-    bus.publish_nowait("item-lost")   # _store_fallback inits buffer
+    bus.publish_nowait("item-lost")  # _store_fallback inits buffer
     # Now null buffer so consume_batch hits lines 812-813
     bus.buffer = None
 

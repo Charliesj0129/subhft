@@ -1,4 +1,5 @@
 """Tests for common sub-gates applicable to both maker and taker."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -34,12 +35,12 @@ def _make_result(daily_pnl: list[float], strategy_type: str = "maker") -> Backte
 
 # --- SharpeThresholdGate ---
 
+
 def test_sharpe_gate_passes_when_above_threshold():
     gate = SharpeThresholdGate()
     # Consistent positive returns -> high Sharpe
     result = _make_result([10, 12, 11, 13, 10, 14, 11, 12, 13, 10] * 3)
-    sub = gate.evaluate(result, config=None,
-                         thresholds={"sharpe_is_min": 0.5})
+    sub = gate.evaluate(result, config=None, thresholds={"sharpe_is_min": 0.5})
     assert sub.passed
     assert sub.metrics["sharpe"] > 0
 
@@ -48,8 +49,7 @@ def test_sharpe_gate_fails_when_below_threshold():
     gate = SharpeThresholdGate()
     # Near-zero mean, high vol -> low Sharpe
     result = _make_result([1, -1, 2, -2, 1, -1, 2, -2, 1, -1] * 3)
-    sub = gate.evaluate(result, config=None,
-                         thresholds={"sharpe_is_min": 1.0})
+    sub = gate.evaluate(result, config=None, thresholds={"sharpe_is_min": 1.0})
     assert not sub.passed
 
 
@@ -70,6 +70,7 @@ def test_sharpe_gate_applies_to_both():
 
 
 # --- MaxDrawdownGate ---
+
 
 def test_max_drawdown_gate_passes_small_dd():
     gate = MaxDrawdownGate()
@@ -101,6 +102,7 @@ def test_max_drawdown_gate_name():
 
 
 # --- WinningDayPctGate ---
+
 
 def test_winning_day_gate_passes_at_60_pct():
     gate = WinningDayPctGate()
@@ -134,6 +136,7 @@ def test_winning_day_gate_name():
 
 def test_all_common_gates_are_sub_gate_protocol():
     from hft_platform.alpha._sub_gates.registry import SubGate
+
     assert isinstance(SharpeThresholdGate(), SubGate)
     assert isinstance(MaxDrawdownGate(), SubGate)
     assert isinstance(WinningDayPctGate(), SubGate)

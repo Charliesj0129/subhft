@@ -18,8 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from types import SimpleNamespace
-from unittest.mock import MagicMock, PropertyMock, patch
+from unittest.mock import MagicMock
 
 from hft_platform.contracts.strategy import (
     IntentType,
@@ -100,9 +99,7 @@ class TestDlqDrainPreservesCoversOnHalt:
             drained_cmds.append(engine.order_queue.get_nowait().cmd_id)
 
         assert 2 not in remaining_cmds + drained_cmds, "Opener must be cleared"
-        assert 1 in remaining_cmds + drained_cmds, (
-            "Cover must survive (preserved or drained)"
-        )
+        assert 1 in remaining_cmds + drained_cmds, "Cover must survive (preserved or drained)"
 
     def test_all_openers_still_blanket_cleared_when_flat(self):
         """Backward compat: with position=0, all DLQ entries are opening → cleared."""
@@ -116,9 +113,7 @@ class TestDlqDrainPreservesCoversOnHalt:
 
         engine._drain_order_dlq()
 
-        assert len(engine._order_dlq) == 0, (
-            "Opening orders must still be cleared (flat position)"
-        )
+        assert len(engine._order_dlq) == 0, "Opening orders must still be cleared (flat position)"
 
     def test_helper_identifies_reducing_cover(self):
         """_cmd_reduces_position returns True for NEW BUY covering a short."""

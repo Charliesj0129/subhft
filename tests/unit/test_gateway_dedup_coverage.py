@@ -50,10 +50,13 @@ class TestLoadRustDedup:
             mock_hft_mod = MagicMock(spec=[])  # No RustDedupStore attr
             del mock_hft_mod.RustDedupStore  # Force AttributeError -> ImportError path
 
-            with patch.dict("sys.modules", {
-                "hft_platform.rust_core": mock_hft_mod,
-                "rust_core": mock_hft_mod,
-            }):
+            with patch.dict(
+                "sys.modules",
+                {
+                    "hft_platform.rust_core": mock_hft_mod,
+                    "rust_core": mock_hft_mod,
+                },
+            ):
                 dedup_mod._rust_dedup_loaded = False
                 # The import will succeed but getattr for RustDedupStore will fail
                 # which triggers the ImportError fallback. Let's just force ImportError.

@@ -91,7 +91,7 @@ def test_eager_resolve_calls_contracts_runtime():
     runtime.resolve_symbol_aliases.assert_called_once()
 
 
-def test_eager_resolve_swallows_runtime_errors():
+def test_eager_resolve_swallows_runtime_errors():  # noqa: no-assert
     sm = _FakeSymbolMetadata()
     runtime = MagicMock()
     runtime.resolve_symbol_aliases.side_effect = RuntimeError("contract cache cold")
@@ -100,7 +100,7 @@ def test_eager_resolve_swallows_runtime_errors():
     inst._resolve_aliases_eager()  # must not raise
 
 
-def test_eager_resolve_without_runtime_is_noop():
+def test_eager_resolve_without_runtime_is_noop():  # noqa: no-assert
     sm = _FakeSymbolMetadata()
     client = SimpleNamespace(alias_to_actual={})
     inst = _make_md_service_shim(sm, client)
@@ -255,9 +255,7 @@ def test_cold_restart_alias_propagation_end_to_end(tmp_path):
     runner.resolve_symbol_aliases()
 
     # Invariant: strategy.symbols now keys on the broker callback code.
-    assert strat.symbols == {"TMFE6"}, (
-        f"alias propagation failed: strategy.symbols={strat.symbols}"
-    )
+    assert strat.symbols == {"TMFE6"}, f"alias propagation failed: strategy.symbols={strat.symbols}"
 
     # An event with the broker callback code reaches handle_event — not dropped.
     event = _make_bidask_event("TMFE6")

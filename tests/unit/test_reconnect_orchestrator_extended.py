@@ -354,9 +354,7 @@ def test_is_trading_hours_uses_futures_product_type(mock_tb, orch):
     assert result is True
     # Verify product_type="future" was passed
     call_kwargs = mock_calendar.is_trading_hours.call_args
-    assert call_kwargs[1].get("product_type") == "future" or (
-        len(call_kwargs[0]) > 1 and call_kwargs[0][1] == "future"
-    )
+    assert call_kwargs[1].get("product_type") == "future" or (len(call_kwargs[0]) > 1 and call_kwargs[0][1] == "future")
 
 
 # ------------------------------------------------------------------ #

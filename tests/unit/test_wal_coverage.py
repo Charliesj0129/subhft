@@ -24,7 +24,6 @@ import pytest
 
 from hft_platform.recorder.wal import WALBatchWriter, WALWriter, _loads
 
-
 # ── Shared fixtures ──────────────────────────────────────────────────────
 
 
@@ -81,26 +80,20 @@ class TestWALWriterLegacySync:
 
 
 class TestWALWriterMetricsFallbacks:
-    def test_set_disk_pressure_metrics_catches_exception(
-        self, wal_writer: WALWriter, mock_metrics: MagicMock
-    ) -> None:
+    def test_set_disk_pressure_metrics_catches_exception(self, wal_writer: WALWriter, mock_metrics: MagicMock) -> None:
         """_set_disk_pressure_metrics swallows metric recording exceptions."""
         mock_metrics.wal_disk_available_mb.set.side_effect = RuntimeError("metric boom")
         # Should not raise
         wal_writer._set_disk_pressure_metrics(500.0, False, "wal")
         assert mock_metrics.wal_disk_available_mb.set.called
 
-    def test_record_wal_write_latency_catches_exception(
-        self, wal_writer: WALWriter, mock_metrics: MagicMock
-    ) -> None:
+    def test_record_wal_write_latency_catches_exception(self, wal_writer: WALWriter, mock_metrics: MagicMock) -> None:
         """_record_wal_write_latency swallows metric recording exceptions."""
         mock_metrics.recorder_wal_write_latency_ms.labels.side_effect = RuntimeError("metric boom")
         wal_writer._record_wal_write_latency("wal", "atomic", 1.5)
         assert mock_metrics.recorder_wal_write_latency_ms.labels.called
 
-    def test_record_fsync_latency_catches_exception(
-        self, wal_writer: WALWriter, mock_metrics: MagicMock
-    ) -> None:
+    def test_record_fsync_latency_catches_exception(self, wal_writer: WALWriter, mock_metrics: MagicMock) -> None:
         """_record_fsync_latency swallows metric recording exceptions."""
         mock_metrics.recorder_wal_fsync_latency_ms.labels.side_effect = RuntimeError("metric boom")
         wal_writer._record_fsync_latency("wal", "file", 0.5)
@@ -115,9 +108,7 @@ class TestWALWriterMetricsFallbacks:
         assert result is False
         assert wal_writer._disk_full_count == 5
 
-    def test_handle_disk_pressure_skip_raises_on_raise_policy(
-        self, tmp_path: Path, mock_metrics: MagicMock
-    ) -> None:
+    def test_handle_disk_pressure_skip_raises_on_raise_policy(self, tmp_path: Path, mock_metrics: MagicMock) -> None:
         """When policy is 'raise', _handle_disk_pressure_skip raises RuntimeError."""
         with patch.dict(os.environ, {"HFT_WAL_DISK_PRESSURE_POLICY": "raise"}):
             writer = WALWriter(str(tmp_path))
@@ -144,9 +135,7 @@ class TestBatchWriterMetricsInit:
 
 
 class TestBatchWriterMetricsFallbacks:
-    def test_set_disk_pressure_metrics_no_metrics_returns(
-        self, batch_writer: WALBatchWriter
-    ) -> None:
+    def test_set_disk_pressure_metrics_no_metrics_returns(self, batch_writer: WALBatchWriter) -> None:
         """_set_disk_pressure_metrics returns early when _metrics is None."""
         batch_writer._metrics = None
         # Should not raise or do anything
@@ -161,9 +150,7 @@ class TestBatchWriterMetricsFallbacks:
         batch_writer._set_disk_pressure_metrics(500.0, True)
         assert mock_metrics.wal_disk_available_mb.set.called
 
-    def test_record_wal_write_latency_no_metrics_returns(
-        self, batch_writer: WALBatchWriter
-    ) -> None:
+    def test_record_wal_write_latency_no_metrics_returns(self, batch_writer: WALBatchWriter) -> None:
         """_record_wal_write_latency returns early when _metrics is None."""
         batch_writer._metrics = None
         batch_writer._record_wal_write_latency("batch_flush", 1.0)
@@ -177,9 +164,7 @@ class TestBatchWriterMetricsFallbacks:
         batch_writer._record_wal_write_latency("batch_flush", 1.0)
         assert mock_metrics.recorder_wal_write_latency_ms.labels.called
 
-    def test_record_fsync_latency_no_metrics_returns(
-        self, batch_writer: WALBatchWriter
-    ) -> None:
+    def test_record_fsync_latency_no_metrics_returns(self, batch_writer: WALBatchWriter) -> None:
         """_record_fsync_latency returns early when _metrics is None."""
         batch_writer._metrics = None
         batch_writer._record_fsync_latency("file", 0.5)
@@ -202,9 +187,7 @@ class TestBatchWriterMetricsFallbacks:
         assert result is False
         assert batch_writer._disk_full_count == 3
 
-    def test_handle_disk_pressure_skip_raises_on_raise_policy(
-        self, tmp_path: Path, mock_metrics: MagicMock
-    ) -> None:
+    def test_handle_disk_pressure_skip_raises_on_raise_policy(self, tmp_path: Path, mock_metrics: MagicMock) -> None:
         """Raise policy propagates RuntimeError from _handle_disk_pressure_skip."""
         with patch.dict(os.environ, {"HFT_WAL_DISK_PRESSURE_POLICY": "raise"}):
             writer = WALBatchWriter(str(tmp_path))
@@ -219,9 +202,7 @@ class TestBatchWriterMetricsFallbacks:
 
 
 class TestBatchWriterDiskSpace:
-    def test_disk_space_transition_to_full(
-        self, batch_writer: WALBatchWriter
-    ) -> None:
+    def test_disk_space_transition_to_full(self, batch_writer: WALBatchWriter) -> None:
         """_check_disk_space transitions from healthy to disk_full when below threshold."""
         batch_writer._last_disk_check_ts = 0.0  # force re-check
         batch_writer._disk_full = False
@@ -236,9 +217,7 @@ class TestBatchWriterDiskSpace:
         assert result is False
         assert batch_writer._disk_full is True
 
-    def test_disk_space_recovery_from_full(
-        self, batch_writer: WALBatchWriter
-    ) -> None:
+    def test_disk_space_recovery_from_full(self, batch_writer: WALBatchWriter) -> None:
         """_check_disk_space transitions from disk_full back to healthy."""
         batch_writer._last_disk_check_ts = 0.0
         batch_writer._disk_full = True
@@ -253,9 +232,7 @@ class TestBatchWriterDiskSpace:
         assert result is True
         assert batch_writer._disk_full is False
 
-    def test_disk_space_oserror_fails_open(
-        self, batch_writer: WALBatchWriter
-    ) -> None:
+    def test_disk_space_oserror_fails_open(self, batch_writer: WALBatchWriter) -> None:
         """On OSError from statvfs, _check_disk_space returns True (fail-open)."""
         batch_writer._last_disk_check_ts = 0.0
         batch_writer._disk_full = False
@@ -265,9 +242,7 @@ class TestBatchWriterDiskSpace:
 
         assert result is True
 
-    def test_disk_space_interval_caching(
-        self, batch_writer: WALBatchWriter
-    ) -> None:
+    def test_disk_space_interval_caching(self, batch_writer: WALBatchWriter) -> None:
         """Within the check interval, cached result is returned without statvfs call."""
         batch_writer._last_disk_check_ts = time.monotonic()  # recent check
         batch_writer._disk_full = False
@@ -278,9 +253,7 @@ class TestBatchWriterDiskSpace:
         assert result is True
         assert not mock_statvfs.called
 
-    def test_disk_space_dir_fsync_throttled(
-        self, batch_writer: WALBatchWriter
-    ) -> None:
+    def test_disk_space_dir_fsync_throttled(self, batch_writer: WALBatchWriter) -> None:
         """_maybe_fsync_dir respects _dir_fsync_min_ms throttle."""
         batch_writer._dir_fsync_min_ms = 100_000.0  # 100 seconds
         batch_writer._last_dir_fsync_ts = time.monotonic()  # just synced
@@ -296,9 +269,7 @@ class TestBatchWriterDiskSpace:
 
 class TestBatchWriterAddAutoFlush:
     @pytest.mark.asyncio
-    async def test_add_triggers_flush_on_row_threshold(
-        self, tmp_path: Path, mock_metrics: MagicMock
-    ) -> None:
+    async def test_add_triggers_flush_on_row_threshold(self, tmp_path: Path, mock_metrics: MagicMock) -> None:
         """When _batch_max_rows is reached, add() triggers immediate flush."""
         with patch.dict(os.environ, {"HFT_WAL_BATCH_MAX_ROWS": "3"}):
             writer = WALBatchWriter(str(tmp_path))
@@ -315,9 +286,7 @@ class TestBatchWriterAddAutoFlush:
             writer.stop()
 
     @pytest.mark.asyncio
-    async def test_add_disk_full_returns_false(
-        self, batch_writer: WALBatchWriter
-    ) -> None:
+    async def test_add_disk_full_returns_false(self, batch_writer: WALBatchWriter) -> None:
         """add() returns False when disk is full."""
         batch_writer._disk_full = True
         batch_writer._last_disk_check_ts = time.monotonic()  # skip recheck
@@ -331,9 +300,7 @@ class TestBatchWriterAddAutoFlush:
 
 class TestBatchWriterAddColumnar:
     @pytest.mark.asyncio
-    async def test_add_columnar_buffers_data(
-        self, batch_writer: WALBatchWriter
-    ) -> None:
+    async def test_add_columnar_buffers_data(self, batch_writer: WALBatchWriter) -> None:
         """add_columnar stores columnar data in the buffer."""
         cols = ["sym", "px"]
         data = [["2330", "TXFD6"], [100, 200]]
@@ -344,27 +311,21 @@ class TestBatchWriterAddColumnar:
         assert "market_data" in batch_writer._columnar_buffer
 
     @pytest.mark.asyncio
-    async def test_add_columnar_empty_rows_returns_true(
-        self, batch_writer: WALBatchWriter
-    ) -> None:
+    async def test_add_columnar_empty_rows_returns_true(self, batch_writer: WALBatchWriter) -> None:
         """add_columnar with zero row_count returns True immediately."""
         result = await batch_writer.add_columnar("market_data", ["sym"], [["2330"]], 0)
         assert result is True
         assert batch_writer._buffer_rows == 0
 
     @pytest.mark.asyncio
-    async def test_add_columnar_empty_columns_returns_true(
-        self, batch_writer: WALBatchWriter
-    ) -> None:
+    async def test_add_columnar_empty_columns_returns_true(self, batch_writer: WALBatchWriter) -> None:
         """add_columnar with empty column_names returns True immediately."""
         result = await batch_writer.add_columnar("market_data", [], [], 2)
         assert result is True
         assert batch_writer._buffer_rows == 0
 
     @pytest.mark.asyncio
-    async def test_add_columnar_disk_full_returns_false(
-        self, batch_writer: WALBatchWriter
-    ) -> None:
+    async def test_add_columnar_disk_full_returns_false(self, batch_writer: WALBatchWriter) -> None:
         """add_columnar returns False when disk is full."""
         batch_writer._disk_full = True
         batch_writer._last_disk_check_ts = time.monotonic()
@@ -373,9 +334,7 @@ class TestBatchWriterAddColumnar:
         assert result is False
 
     @pytest.mark.asyncio
-    async def test_add_columnar_triggers_flush_on_threshold(
-        self, tmp_path: Path, mock_metrics: MagicMock
-    ) -> None:
+    async def test_add_columnar_triggers_flush_on_threshold(self, tmp_path: Path, mock_metrics: MagicMock) -> None:
         """add_columnar triggers flush when threshold rows reached."""
         with patch.dict(os.environ, {"HFT_WAL_BATCH_MAX_ROWS": "2"}):
             writer = WALBatchWriter(str(tmp_path))
@@ -451,9 +410,7 @@ class TestBatchWriterFlushMetrics:
 
 class TestBatchWriterFlushEmpty:
     @pytest.mark.asyncio
-    async def test_flush_empty_buffer_returns_true(
-        self, batch_writer: WALBatchWriter
-    ) -> None:
+    async def test_flush_empty_buffer_returns_true(self, batch_writer: WALBatchWriter) -> None:
         """flush() on empty buffer returns True without writing."""
         result = await batch_writer.flush()
         assert result is True
@@ -464,9 +421,7 @@ class TestBatchWriterFlushEmpty:
 
 class TestBatchWriterStop:
     @pytest.mark.asyncio
-    async def test_stop_flushes_remaining_data(
-        self, tmp_path: Path, mock_metrics: MagicMock
-    ) -> None:
+    async def test_stop_flushes_remaining_data(self, tmp_path: Path, mock_metrics: MagicMock) -> None:
         """stop() flushes buffered data before stopping the timer thread."""
         writer = WALBatchWriter(str(tmp_path))
         await writer.add("orders", [{"order_id": "O1"}])
@@ -479,18 +434,14 @@ class TestBatchWriterStop:
         assert len(jsonl_files) >= 1
 
     @pytest.mark.asyncio
-    async def test_stop_with_empty_buffer_no_write(
-        self, batch_writer: WALBatchWriter, tmp_path: Path
-    ) -> None:
+    async def test_stop_with_empty_buffer_no_write(self, batch_writer: WALBatchWriter, tmp_path: Path) -> None:
         """stop() with empty buffer does not create any files."""
         batch_writer.stop()
         jsonl_files = list(tmp_path.glob("*.jsonl"))
         assert len(jsonl_files) == 0
 
     @pytest.mark.asyncio
-    async def test_stop_merges_back_on_write_failure(
-        self, tmp_path: Path, mock_metrics: MagicMock
-    ) -> None:
+    async def test_stop_merges_back_on_write_failure(self, tmp_path: Path, mock_metrics: MagicMock) -> None:
         """stop() merges data back when final flush write fails."""
         writer = WALBatchWriter(str(tmp_path))
         await writer.add("orders", [{"order_id": "O1"}, {"order_id": "O2"}])
@@ -507,9 +458,7 @@ class TestBatchWriterStop:
 
 
 class TestBatchWriterColumnarSync:
-    def test_write_batch_sync_columnar_creates_valid_jsonl(
-        self, batch_writer: WALBatchWriter, tmp_path: Path
-    ) -> None:
+    def test_write_batch_sync_columnar_creates_valid_jsonl(self, batch_writer: WALBatchWriter, tmp_path: Path) -> None:
         """_write_batch_sync writes columnar data as individual row dicts."""
         columnar_data = {
             "market_data": [
@@ -532,9 +481,7 @@ class TestBatchWriterColumnarSync:
         assert row1["sym"] == "2330"
         assert row1["px"] == 100
 
-    def test_write_batch_sync_mixed_dict_and_columnar(
-        self, batch_writer: WALBatchWriter, tmp_path: Path
-    ) -> None:
+    def test_write_batch_sync_mixed_dict_and_columnar(self, batch_writer: WALBatchWriter, tmp_path: Path) -> None:
         """_write_batch_sync handles both dict rows and columnar data."""
         dict_data = {"orders": [{"order_id": "O1"}]}
         columnar_data = {
@@ -556,9 +503,7 @@ class TestBatchWriterColumnarSync:
 
 
 class TestBatchWriterFileSplitting:
-    def test_write_batch_sync_splits_on_size_limit(
-        self, tmp_path: Path, mock_metrics: MagicMock
-    ) -> None:
+    def test_write_batch_sync_splits_on_size_limit(self, tmp_path: Path, mock_metrics: MagicMock) -> None:
         """EC-3: When file exceeds max size, a new file is started."""
         # Set very small max size to force split
         with patch.dict(os.environ, {"HFT_WAL_FILE_MAX_MB": "0.0001"}):
@@ -573,9 +518,7 @@ class TestBatchWriterFileSplitting:
         finally:
             writer.stop()
 
-    def test_write_batch_sync_columnar_splits_on_size_limit(
-        self, tmp_path: Path, mock_metrics: MagicMock
-    ) -> None:
+    def test_write_batch_sync_columnar_splits_on_size_limit(self, tmp_path: Path, mock_metrics: MagicMock) -> None:
         """EC-3: Columnar data also triggers file splits when size exceeded."""
         with patch.dict(os.environ, {"HFT_WAL_FILE_MAX_MB": "0.0001"}):
             writer = WALBatchWriter(str(tmp_path))

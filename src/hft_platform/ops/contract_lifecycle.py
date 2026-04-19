@@ -1,4 +1,5 @@
 """ContractLifecycleManager — automatic futures rollover and option chain updates."""
+
 from __future__ import annotations
 
 from datetime import date
@@ -13,6 +14,7 @@ logger = structlog.get_logger("ops.contract_lifecycle")
 
 def _make_id() -> str:
     import uuid
+
     return str(uuid.uuid4())[:8]
 
 
@@ -20,8 +22,12 @@ class ContractLifecycleManager:
     """Manages contract expiry detection, futures alias refresh, and option chain updates."""
 
     __slots__ = (
-        "_contracts_runtime", "_alert_callback", "_expiry_warn_days",
-        "_option_strike_range", "_known_expiries", "_warned_expiries",
+        "_contracts_runtime",
+        "_alert_callback",
+        "_expiry_warn_days",
+        "_option_strike_range",
+        "_known_expiries",
+        "_warned_expiries",
     )
 
     def __init__(
@@ -41,6 +47,7 @@ class ContractLifecycleManager:
     async def check_expiries(self, today: date) -> None:
         """Check all registered contracts for upcoming expiry and fire alerts."""
         from hft_platform.core import timebase
+
         for symbol, expiry in self._known_expiries.items():
             days_until = (expiry - today).days
             for warn_days in self._expiry_warn_days:

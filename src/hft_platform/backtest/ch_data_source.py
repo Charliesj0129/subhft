@@ -6,6 +6,7 @@ conforming to hftbacktest's event_dtype specification.
 Eliminates the .npz intermediate file and its associated export bugs
 (notably the DEPTH_EVENT accumulation bug that caused 577x PnL overestimate).
 """
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
@@ -115,12 +116,11 @@ class ChDataSource:
             ORDER BY exch_ts
         """
         df = client.query_df(
-            query, parameters={"instrument": instrument, "date": date},
+            query,
+            parameters={"instrument": instrument, "date": date},
         )
         if df.empty:
-            raise DataValidationError(
-                f"{instrument} {date}: no rows in hft.market_data"
-            )
+            raise DataValidationError(f"{instrument} {date}: no rows in hft.market_data")
 
         events = assemble_day_events(df, price_scale=self.price_scale)
         validate_events(events, instrument=instrument)
@@ -132,16 +132,18 @@ class ChDataSource:
 
 def _event_dtype() -> np.dtype:
     """hftbacktest event_dtype layout (8 fields, 64 bytes)."""
-    return np.dtype([
-        ("ev", "u8"),
-        ("exch_ts", "i8"),
-        ("local_ts", "i8"),
-        ("px", "f8"),
-        ("qty", "f8"),
-        ("order_id", "u8"),
-        ("ival", "i8"),
-        ("fval", "f8"),
-    ])
+    return np.dtype(
+        [
+            ("ev", "u8"),
+            ("exch_ts", "i8"),
+            ("local_ts", "i8"),
+            ("px", "f8"),
+            ("qty", "f8"),
+            ("order_id", "u8"),
+            ("ival", "i8"),
+            ("fval", "f8"),
+        ]
+    )
 
 
 def build_bidask_events(
@@ -163,49 +165,78 @@ def build_bidask_events(
     rows: list[tuple] = []
 
     # Clear event (wipes the depth state in hftbacktest)
-    rows.append((
-        DEPTH_CLEAR_EVENT | EXCH_EVENT | LOCAL_EVENT,
-        exch_ts, local_ts, 0.0, 0.0, 0, 0, 0.0,
-    ))
+    rows.append(
+        (
+            DEPTH_CLEAR_EVENT | EXCH_EVENT | LOCAL_EVENT,
+            exch_ts,
+            local_ts,
+            0.0,
+            0.0,
+            0,
+            0,
+            0.0,
+        )
+    )
 
     for price, vol in zip(bid_prices, bid_volumes, strict=True):
         if vol <= 0 or price <= 0:
             continue
-        rows.append((
-            DEPTH_EVENT | EXCH_EVENT | LOCAL_EVENT | BUY_EVENT,
-            exch_ts, local_ts,
-            price / price_scale, float(vol),
-            0, 0, 0.0,
-        ))
+        rows.append(
+            (
+                DEPTH_EVENT | EXCH_EVENT | LOCAL_EVENT | BUY_EVENT,
+                exch_ts,
+                local_ts,
+                price / price_scale,
+                float(vol),
+                0,
+                0,
+                0.0,
+            )
+        )
 
     for price, vol in zip(ask_prices, ask_volumes, strict=True):
         if vol <= 0 or price <= 0:
             continue
-        rows.append((
-            DEPTH_EVENT | EXCH_EVENT | LOCAL_EVENT | SELL_EVENT,
-            exch_ts, local_ts,
-            price / price_scale, float(vol),
-            0, 0, 0.0,
-        ))
+        rows.append(
+            (
+                DEPTH_EVENT | EXCH_EVENT | LOCAL_EVENT | SELL_EVENT,
+                exch_ts,
+                local_ts,
+                price / price_scale,
+                float(vol),
+                0,
+                0,
+                0.0,
+            )
+        )
 
     return np.array(rows, dtype=dtype)
 
 
 def build_tick_event(
-    exch_ts: int, local_ts: int,
-    price: int, volume: int, side: str,
+    exch_ts: int,
+    local_ts: int,
+    price: int,
+    volume: int,
+    side: str,
     price_scale: int,
 ) -> np.ndarray:
     """Build one hftbacktest event for a trade tick."""
     dtype = _event_dtype()
     side_flag = BUY_EVENT if side == "Buy" else SELL_EVENT
     return np.array(
-        [(
-            TRADE_EVENT | EXCH_EVENT | LOCAL_EVENT | side_flag,
-            exch_ts, local_ts,
-            price / price_scale, float(volume),
-            0, 0, 0.0,
-        )],
+        [
+            (
+                TRADE_EVENT | EXCH_EVENT | LOCAL_EVENT | side_flag,
+                exch_ts,
+                local_ts,
+                price / price_scale,
+                float(volume),
+                0,
+                0,
+                0.0,
+            )
+        ],
         dtype=dtype,
     )[0]
 
@@ -234,42 +265,66 @@ def build_bidask_events_diff(
     dtype = _event_dtype()
     rows: list[tuple] = []
 
-    curr_bid_map = {
-        p: v for p, v in zip(bid_prices, bid_volumes, strict=True)
-        if p > 0 and v > 0
-    }
-    curr_ask_map = {
-        p: v for p, v in zip(ask_prices, ask_volumes, strict=True)
-        if p > 0 and v > 0
-    }
+    curr_bid_map = {p: v for p, v in zip(bid_prices, bid_volumes, strict=True) if p > 0 and v > 0}
+    curr_ask_map = {p: v for p, v in zip(ask_prices, ask_volumes, strict=True) if p > 0 and v > 0}
 
-    for price, prev_vol in list(prev_bid_map.items()):
+    for price, _prev_vol in list(prev_bid_map.items()):
         if price not in curr_bid_map:
-            rows.append((
-                DEPTH_EVENT | EXCH_EVENT | LOCAL_EVENT | BUY_EVENT,
-                exch_ts, local_ts, price / price_scale, 0.0, 0, 0, 0.0,
-            ))
+            rows.append(
+                (
+                    DEPTH_EVENT | EXCH_EVENT | LOCAL_EVENT | BUY_EVENT,
+                    exch_ts,
+                    local_ts,
+                    price / price_scale,
+                    0.0,
+                    0,
+                    0,
+                    0.0,
+                )
+            )
     for price, curr_vol in curr_bid_map.items():
         if prev_bid_map.get(price) != curr_vol:
-            rows.append((
-                DEPTH_EVENT | EXCH_EVENT | LOCAL_EVENT | BUY_EVENT,
-                exch_ts, local_ts, price / price_scale, float(curr_vol),
-                0, 0, 0.0,
-            ))
+            rows.append(
+                (
+                    DEPTH_EVENT | EXCH_EVENT | LOCAL_EVENT | BUY_EVENT,
+                    exch_ts,
+                    local_ts,
+                    price / price_scale,
+                    float(curr_vol),
+                    0,
+                    0,
+                    0.0,
+                )
+            )
 
-    for price, prev_vol in list(prev_ask_map.items()):
+    for price, _prev_vol in list(prev_ask_map.items()):
         if price not in curr_ask_map:
-            rows.append((
-                DEPTH_EVENT | EXCH_EVENT | LOCAL_EVENT | SELL_EVENT,
-                exch_ts, local_ts, price / price_scale, 0.0, 0, 0, 0.0,
-            ))
+            rows.append(
+                (
+                    DEPTH_EVENT | EXCH_EVENT | LOCAL_EVENT | SELL_EVENT,
+                    exch_ts,
+                    local_ts,
+                    price / price_scale,
+                    0.0,
+                    0,
+                    0,
+                    0.0,
+                )
+            )
     for price, curr_vol in curr_ask_map.items():
         if prev_ask_map.get(price) != curr_vol:
-            rows.append((
-                DEPTH_EVENT | EXCH_EVENT | LOCAL_EVENT | SELL_EVENT,
-                exch_ts, local_ts, price / price_scale, float(curr_vol),
-                0, 0, 0.0,
-            ))
+            rows.append(
+                (
+                    DEPTH_EVENT | EXCH_EVENT | LOCAL_EVENT | SELL_EVENT,
+                    exch_ts,
+                    local_ts,
+                    price / price_scale,
+                    float(curr_vol),
+                    0,
+                    0,
+                    0.0,
+                )
+            )
 
     prev_bid_map.clear()
     prev_bid_map.update(curr_bid_map)
@@ -323,26 +378,27 @@ def assemble_day_events(df: "pd.DataFrame", price_scale: int) -> np.ndarray:
             ask_volumes = list(row.ask_volumes)
             if not first_bidask_emitted:
                 chunk = build_bidask_events(
-                    exch_ts=int(row.exch_ts), local_ts=int(row.local_ts),
-                    bid_prices=bid_prices, bid_volumes=bid_volumes,
-                    ask_prices=ask_prices, ask_volumes=ask_volumes,
+                    exch_ts=int(row.exch_ts),
+                    local_ts=int(row.local_ts),
+                    bid_prices=bid_prices,
+                    bid_volumes=bid_volumes,
+                    ask_prices=ask_prices,
+                    ask_volumes=ask_volumes,
                     price_scale=price_scale,
                 )
-                prev_bid_map = {
-                    p: v for p, v in zip(bid_prices, bid_volumes, strict=True)
-                    if p > 0 and v > 0
-                }
-                prev_ask_map = {
-                    p: v for p, v in zip(ask_prices, ask_volumes, strict=True)
-                    if p > 0 and v > 0
-                }
+                prev_bid_map = {p: v for p, v in zip(bid_prices, bid_volumes, strict=True) if p > 0 and v > 0}
+                prev_ask_map = {p: v for p, v in zip(ask_prices, ask_volumes, strict=True) if p > 0 and v > 0}
                 first_bidask_emitted = True
             else:
                 chunk = build_bidask_events_diff(
-                    exch_ts=int(row.exch_ts), local_ts=int(row.local_ts),
-                    prev_bid_map=prev_bid_map, prev_ask_map=prev_ask_map,
-                    bid_prices=bid_prices, bid_volumes=bid_volumes,
-                    ask_prices=ask_prices, ask_volumes=ask_volumes,
+                    exch_ts=int(row.exch_ts),
+                    local_ts=int(row.local_ts),
+                    prev_bid_map=prev_bid_map,
+                    prev_ask_map=prev_ask_map,
+                    bid_prices=bid_prices,
+                    bid_volumes=bid_volumes,
+                    ask_prices=ask_prices,
+                    ask_volumes=ask_volumes,
                     price_scale=price_scale,
                 )
             if len(chunk) > 0:
@@ -365,8 +421,11 @@ def assemble_day_events(df: "pd.DataFrame", price_scale: int) -> np.ndarray:
                 continue
 
             event = build_tick_event(
-                exch_ts=int(row.exch_ts), local_ts=int(row.local_ts),
-                price=int(row.price), volume=int(row.volume), side=side_str,
+                exch_ts=int(row.exch_ts),
+                local_ts=int(row.local_ts),
+                price=int(row.price),
+                volume=int(row.volume),
+                side=side_str,
                 price_scale=price_scale,
             )
             chunks.append(np.array([event], dtype=dtype))
@@ -397,8 +456,7 @@ def _check_spread_sanity(events: np.ndarray, instrument: str) -> None:
             best_ask = min(ask_book)
             if best_ask < best_bid:
                 raise DataValidationError(
-                    f"{instrument}: inverted book at row {row_i} "
-                    f"(best_bid={best_bid}, best_ask={best_ask})"
+                    f"{instrument}: inverted book at row {row_i} (best_bid={best_bid}, best_ask={best_ask})"
                 )
 
     for i in range(n):
@@ -417,9 +475,7 @@ def _check_spread_sanity(events: np.ndarray, instrument: str) -> None:
             px = float(events[i]["px"])
             qty = float(events[i]["qty"])
             if px > 0.0:
-                book = bid_book if (ev_flags & BUY_EVENT) else (
-                    ask_book if (ev_flags & SELL_EVENT) else None
-                )
+                book = bid_book if (ev_flags & BUY_EVENT) else (ask_book if (ev_flags & SELL_EVENT) else None)
                 if book is not None:
                     if qty <= 0.0:
                         book.pop(px, None)
@@ -454,9 +510,7 @@ def validate_events(events: np.ndarray, instrument: str) -> None:
     ts = events["exch_ts"]
     if len(ts) > 1 and np.any(ts[1:] < ts[:-1]):
         first_bad = int(np.argmax(ts[1:] < ts[:-1]))
-        raise DataValidationError(
-            f"{instrument}: timestamps not monotonic at row {first_bad}"
-        )
+        raise DataValidationError(f"{instrument}: timestamps not monotonic at row {first_bad}")
 
     # Identify DEPTH_CLEAR rows to exclude from price check (clear events have px=0)
     is_clear = ev_types == DEPTH_CLEAR_EVENT
@@ -464,8 +518,6 @@ def validate_events(events: np.ndarray, instrument: str) -> None:
     prices = events["px"][non_clear]
     nonzero_prices = prices[prices != 0.0]
     if len(nonzero_prices) and np.any(nonzero_prices < 0):
-        raise DataValidationError(
-            f"{instrument}: negative prices detected (min={float(nonzero_prices.min())})"
-        )
+        raise DataValidationError(f"{instrument}: negative prices detected (min={float(nonzero_prices.min())})")
 
     _check_spread_sanity(events, instrument)

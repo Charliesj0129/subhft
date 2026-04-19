@@ -60,7 +60,6 @@ from hft_platform.recorder.schema import (
     ensure_price_scaled_views,
 )
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -316,8 +315,16 @@ class TestInsertBatchForTable:
     def test_all_table_keys_supported(self) -> None:
         svc = MagicMock()
         svc._insert_with_retry.return_value = True
-        for table in ["market_data", "orders", "trades", "fills", "risk_log",
-                       "backtest_runs", "pnl_snapshots", "latency_spans"]:
+        for table in [
+            "market_data",
+            "orders",
+            "trades",
+            "fills",
+            "risk_log",
+            "backtest_runs",
+            "pnl_snapshots",
+            "latency_spans",
+        ]:
             result = insert_batch_for_table(svc, table, [{}])
             assert result is True
 
@@ -350,9 +357,11 @@ class TestConnect:
 
     def test_connect_file_not_found_error(self, tmp_path) -> None:
         svc = _make_svc(tmp_path)
+        original_client = svc.ch_client
         with patch("hft_platform.recorder._loader_ch.get_ch_client", side_effect=FileNotFoundError("no schema")):
             connect(svc)
-        # FileNotFoundError doesn't set ch_client to None (only logs)
+        # FileNotFoundError only logs and preserves the existing client handle.
+        assert svc.ch_client is original_client
 
     def test_connect_generic_exception(self, tmp_path) -> None:
         svc = _make_svc(tmp_path)
@@ -478,7 +487,7 @@ class TestDedupHelpers:
         svc = _make_svc(tmp_path)
         svc.ch_client.insert = MagicMock(side_effect=RuntimeError("fail"))
         record_dedup(svc, "orders", "hash123", 5)
-        # Should not raise
+        svc.ch_client.insert.assert_called_once()
 
     def test_insert_with_dedup_empty_rows(self, tmp_path) -> None:
         svc = _make_svc(tmp_path)
@@ -790,5 +799,6 @@ class TestSaveManifestErrorHandling:
         svc._manifest = {"file.jsonl"}
         # Make the manifest path a directory to cause write failure
         os.makedirs(svc._manifest_path, exist_ok=True)
-        # Should not raise
         save_manifest(svc)
+        assert os.path.isdir(svc._manifest_path)
+        assert not list(tmp_path.glob("*.tmp"))

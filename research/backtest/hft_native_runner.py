@@ -355,7 +355,7 @@ def _compute_equity_curve(
     # maker_fee_bps is preserved in BacktestConfig for future maker/taker split
     # modelling but is NOT applied here (conservative taker-only assumption).
     pos_change = np.diff(pos, prepend=0.0)
-    buys = np.maximum(pos_change, 0.0)    # shares added (long entry / short cover)
+    buys = np.maximum(pos_change, 0.0)  # shares added (long entry / short cover)
     sells = np.maximum(-pos_change, 0.0)  # shares removed (long exit / short entry)
 
     buy_fee_rate = max(config.taker_fee_bps, 0.0) / 10_000.0
@@ -424,7 +424,7 @@ def _run_adapter_slice(
     adapter = HftBacktestAdapter(
         strategy=bridge,
         asset_symbol=symbol,
-        data_path=npz_path,
+        data=npz_path,
         latency_us=latency_us,
         maker_fee=float(config.maker_fee_bps) / 10_000.0,
         taker_fee=float(config.taker_fee_bps) / 10_000.0,

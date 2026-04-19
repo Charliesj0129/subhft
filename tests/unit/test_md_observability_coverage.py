@@ -9,10 +9,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-
 from hft_platform.events import FeatureUpdateEvent, LOBStatsEvent, MetaData, TickEvent
 from hft_platform.services._md_observability import MarketDataObservabilityMixin
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -78,7 +76,7 @@ def _make_feature_update(**kwargs):
 
 
 class TestEmitTrace:
-    def test_no_sampler(self):
+    def test_no_sampler(self):  # noqa: no-assert
         obj = _make_mixin()
         obj._emit_trace("test", "trace1", {"a": 1})
         # No crash
@@ -89,7 +87,7 @@ class TestEmitTrace:
         obj._emit_trace("test_stage", "trace1", {"key": "val"})
         sampler.emit.assert_called_once()
 
-    def test_sampler_exception(self):
+    def test_sampler_exception(self):  # noqa: no-assert
         sampler = MagicMock()
         sampler.emit.side_effect = RuntimeError("boom")
         obj = _make_mixin(_trace_sampler=sampler)
@@ -103,7 +101,7 @@ class TestEmitTrace:
 
 
 class TestRecordCrashSignature:
-    def test_no_metrics(self):
+    def test_no_metrics(self):  # noqa: no-assert
         obj = _make_mixin()
         obj._record_shioaji_crash_signature("error text", context="test")
 
@@ -144,13 +142,13 @@ class TestRecordFeatureMetrics:
         assert obj._feature_latency_counter == 1
         assert obj._feature_metrics_counter == 1
 
-    def test_without_feature_update(self):
+    def test_without_feature_update(self):  # noqa: no-assert
         metrics = MagicMock()
         metrics.feature_plane_updates_total = MagicMock()
         obj = _make_mixin(metrics_registry=metrics)
         obj._record_feature_metrics(_make_tick(), None, 100)
 
-    def test_quality_flags_recorded(self):
+    def test_quality_flags_recorded(self):  # noqa: no-assert
         metrics = MagicMock()
         metrics.feature_plane_updates_total = MagicMock()
         metrics.feature_quality_flags_total = MagicMock()
@@ -158,7 +156,7 @@ class TestRecordFeatureMetrics:
         fu = _make_feature_update(quality_flags=0xFF)
         obj._record_feature_metrics(_make_tick(), fu, 100)
 
-    def test_with_feature_engine_view(self):
+    def test_with_feature_engine_view(self):  # noqa: no-assert
         metrics = MagicMock()
         metrics.feature_plane_updates_total = MagicMock()
         fe = MagicMock()
@@ -173,17 +171,21 @@ class TestRecordFeatureMetrics:
 
 
 class TestFeatureShadowParity:
-    def test_no_shadow_engine(self):
+    def test_no_shadow_engine(self):  # noqa: no-assert
         obj = _make_mixin()
-        lob = LOBStatsEvent(symbol="TST", ts=1000, imbalance=0.0, best_bid=1000, best_ask=1001, bid_depth=10, ask_depth=10)
+        lob = LOBStatsEvent(
+            symbol="TST", ts=1000, imbalance=0.0, best_bid=1000, best_ask=1001, bid_depth=10, ask_depth=10
+        )
         obj._maybe_run_feature_shadow_parity(_make_tick(), lob, 1000, None)
         # No crash
 
-    def test_shadow_update_fails(self):
+    def test_shadow_update_fails(self):  # noqa: no-assert
         shadow = MagicMock()
         shadow.process_lob_update = MagicMock(side_effect=RuntimeError("fail"))
         obj = _make_mixin(_feature_shadow_engine=shadow, metrics_registry=MagicMock())
-        lob = LOBStatsEvent(symbol="TST", ts=1000, imbalance=0.0, best_bid=1000, best_ask=1001, bid_depth=10, ask_depth=10)
+        lob = LOBStatsEvent(
+            symbol="TST", ts=1000, imbalance=0.0, best_bid=1000, best_ask=1001, bid_depth=10, ask_depth=10
+        )
         obj._maybe_run_feature_shadow_parity(_make_tick(), lob, 1000, None)
 
     def test_shadow_parity_match(self):
@@ -193,7 +195,9 @@ class TestFeatureShadowParity:
         shadow.process_lob_update = MagicMock(return_value=shadow_fu)
         obj = _make_mixin(_feature_shadow_engine=shadow, _feature_shadow_sample_every=1)
         primary = _make_feature_update()
-        lob = LOBStatsEvent(symbol="TST", ts=1000, imbalance=0.0, best_bid=1000, best_ask=1001, bid_depth=10, ask_depth=10)
+        lob = LOBStatsEvent(
+            symbol="TST", ts=1000, imbalance=0.0, best_bid=1000, best_ask=1001, bid_depth=10, ask_depth=10
+        )
         obj._maybe_run_feature_shadow_parity(_make_tick(), lob, 1000, primary)
         assert obj._feature_shadow_mismatch_counter == 0
 
@@ -212,11 +216,13 @@ class TestFeatureShadowParity:
             metrics_registry=metrics,
         )
         primary = _make_feature_update(values=(1.0, 2.0))
-        lob = LOBStatsEvent(symbol="TST", ts=1000, imbalance=0.0, best_bid=1000, best_ask=1001, bid_depth=10, ask_depth=10)
+        lob = LOBStatsEvent(
+            symbol="TST", ts=1000, imbalance=0.0, best_bid=1000, best_ask=1001, bid_depth=10, ask_depth=10
+        )
         obj._maybe_run_feature_shadow_parity(_make_tick(), lob, 1000, primary)
         assert obj._feature_shadow_mismatch_counter == 1
 
-    def test_shadow_parity_id_mismatch(self):
+    def test_shadow_parity_id_mismatch(self):  # noqa: no-assert
         """When feature IDs differ, all primary IDs are reported as mismatches."""
         shadow = MagicMock()
         shadow_fu = _make_feature_update(feature_ids=("x1", "x2"))
@@ -230,24 +236,30 @@ class TestFeatureShadowParity:
             metrics_registry=metrics,
         )
         primary = _make_feature_update(feature_ids=("f1", "f2"))
-        lob = LOBStatsEvent(symbol="TST", ts=1000, imbalance=0.0, best_bid=1000, best_ask=1001, bid_depth=10, ask_depth=10)
+        lob = LOBStatsEvent(
+            symbol="TST", ts=1000, imbalance=0.0, best_bid=1000, best_ask=1001, bid_depth=10, ask_depth=10
+        )
         obj._maybe_run_feature_shadow_parity(_make_tick(), lob, 1000, primary)
 
-    def test_shadow_compare_skipped_when_not_aligned(self):
+    def test_shadow_compare_skipped_when_not_aligned(self):  # noqa: no-assert
         """Shadow is updated but comparison is skipped when counter not aligned."""
         shadow = MagicMock()
         shadow.process_lob_update = MagicMock(return_value=_make_feature_update())
         obj = _make_mixin(_feature_shadow_engine=shadow, _feature_shadow_sample_every=100)
-        lob = LOBStatsEvent(symbol="TST", ts=1000, imbalance=0.0, best_bid=1000, best_ask=1001, bid_depth=10, ask_depth=10)
+        lob = LOBStatsEvent(
+            symbol="TST", ts=1000, imbalance=0.0, best_bid=1000, best_ask=1001, bid_depth=10, ask_depth=10
+        )
         obj._maybe_run_feature_shadow_parity(_make_tick(), lob, 1000, _make_feature_update())
         # Counter incremented but comparison skipped
 
-    def test_shadow_with_process_lob_stats_fallback(self):
+    def test_shadow_with_process_lob_stats_fallback(self):  # noqa: no-assert
         """When shadow has no process_lob_update, uses process_lob_stats."""
         shadow = MagicMock(spec=[])  # No process_lob_update attribute
         shadow.process_lob_stats = MagicMock(return_value=_make_feature_update())
         obj = _make_mixin(_feature_shadow_engine=shadow, _feature_shadow_sample_every=1)
-        lob = LOBStatsEvent(symbol="TST", ts=1000, imbalance=0.0, best_bid=1000, best_ask=1001, bid_depth=10, ask_depth=10)
+        lob = LOBStatsEvent(
+            symbol="TST", ts=1000, imbalance=0.0, best_bid=1000, best_ask=1001, bid_depth=10, ask_depth=10
+        )
         obj._maybe_run_feature_shadow_parity(_make_tick(), lob, 1000, _make_feature_update())
 
 
@@ -257,7 +269,7 @@ class TestFeatureShadowParity:
 
 
 class TestShadowCheckMetric:
-    def test_no_metrics(self):
+    def test_no_metrics(self):  # noqa: no-assert
         obj = _make_mixin()
         obj._emit_feature_shadow_check_metric("checked")
 
@@ -284,7 +296,7 @@ class TestShadowCheckMetric:
 
 
 class TestShadowMismatchMetric:
-    def test_no_metrics(self):
+    def test_no_metrics(self):  # noqa: no-assert
         obj = _make_mixin()
         obj._emit_feature_shadow_mismatch_metric("v3", "f1")
 

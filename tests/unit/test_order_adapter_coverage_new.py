@@ -12,6 +12,7 @@ Covers the following clusters of missing lines:
   Misc: _on_terminal_callback deferred terminal, _register_broker_ids eviction,
         drain_deferred_terminals (lines 832-833, 895)
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -112,6 +113,7 @@ def _make_adapter(tmp_config: str, client=None):
         client = _make_client()
     q: asyncio.Queue = asyncio.Queue()
     adapter = OrderAdapter(config_path=tmp_config, order_queue=q, broker_client=client, broker_codec=_StubCodec())
+    adapter.shadow_sink.enabled = False
     return adapter
 
 
@@ -1088,6 +1090,7 @@ async def test_dispatch_amend_api_returns_none_returns_false(tmp_config):
 async def test_drain_deferred_terminals_removes_resolved_entry(tmp_config):
     """_drain_deferred_terminals removes deferred entries where order_key now exists in live_orders."""
     import time as _time
+
     adapter = _make_adapter(tmp_config)
 
     # Add a deferred terminal — not expired (recent timestamp)
@@ -1111,6 +1114,7 @@ async def test_drain_deferred_terminals_removes_resolved_entry(tmp_config):
 async def test_drain_deferred_terminals_expired_entries_are_logged_not_processed(tmp_config):
     """_drain_deferred_terminals skips expired entries (age >= 30s) (lines 996-1004)."""
     import time as _time
+
     adapter = _make_adapter(tmp_config)
 
     # Add an expired deferred terminal (> 30s old)
@@ -1132,6 +1136,7 @@ async def test_drain_deferred_terminals_expired_entries_are_logged_not_processed
 async def test_drain_deferred_terminals_unresolved_entry_stays_in_remaining(tmp_config):
     """_drain_deferred_terminals keeps entries that aren't yet in live_orders (line 1016)."""
     import time as _time
+
     adapter = _make_adapter(tmp_config)
 
     recent_ts = _time.monotonic()

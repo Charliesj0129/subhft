@@ -11,8 +11,6 @@ must NOT produce a drawdown_bps value that would trigger HALT.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
-
 
 def _combine(realized: float, unrealized_scaled: int, base_capital: int) -> float:
     """Shim that calls the production combiner."""
@@ -39,7 +37,7 @@ class TestMtmDrawdownScale:
         base_capital = 10_000_000  # raw NTD
         drawdown = _combine(realized=0.0, unrealized_scaled=unrealized_scaled, base_capital=base_capital)
         # Real drawdown: 10 NTD loss / 10M NTD = 1e-6
-        assert drawdown < 0.0001, f"1 pt MtM loss produced phantom drawdown {drawdown*10000:.1f}bps"
+        assert drawdown < 0.0001, f"1 pt MtM loss produced phantom drawdown {drawdown * 10000:.1f}bps"
         drawdown_bps = -int(drawdown * 10_000)
         # Must be ≥ -200bps (HALT threshold). A fractional bps is fine.
         assert drawdown_bps > -200, f"1 pt loss triggered HALT: {drawdown_bps}bps"

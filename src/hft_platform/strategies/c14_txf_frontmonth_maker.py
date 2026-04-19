@@ -189,16 +189,12 @@ class C14TxfFrontMonthMakerStrategy(BaseStrategy):
         symbol = event.symbol
         if event.side == Side.BUY:
             self._local_pos[symbol] = self._local_pos.get(symbol, 0) + event.qty
-            self._pending_buy[symbol] = max(
-                0, self._pending_buy.get(symbol, 0) - event.qty
-            )
+            self._pending_buy[symbol] = max(0, self._pending_buy.get(symbol, 0) - event.qty)
             # Allow requote at the next bid level after a fill
             self._last_bid.pop(symbol, None)
         elif event.side == Side.SELL:
             self._local_pos[symbol] = self._local_pos.get(symbol, 0) - event.qty
-            self._pending_sell[symbol] = max(
-                0, self._pending_sell.get(symbol, 0) - event.qty
-            )
+            self._pending_sell[symbol] = max(0, self._pending_sell.get(symbol, 0) - event.qty)
             self._last_ask.pop(symbol, None)
 
     def on_risk_feedback(self, feedback: RiskFeedback) -> None:

@@ -27,25 +27,17 @@ def _tmf(month: int, year: int = 2026) -> FutureRef:
 class TestBuildSnapshotFromCalendar:
     def test_r1_r2_ordered_by_expiry(self) -> None:
         cal = {"TMF": [_tmf(5), _tmf(6), _tmf(7)]}
-        snap = build_snapshot_from_calendar(
-            cal, today=date(2026, 4, 19), snapshot_ns=1000
-        )
+        snap = build_snapshot_from_calendar(cal, today=date(2026, 4, 19), snapshot_ns=1000)
 
         fam_r1 = ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1)
         fam_r2 = ContractFamily(Product.FUTURE, "TMF", FamilyCode.R2)
 
-        assert snap.resolve_family(fam_r1) == FutureRef(
-            "TMF", date(2026, 5, 21), FamilyCode.R1
-        )
-        assert snap.resolve_family(fam_r2) == FutureRef(
-            "TMF", date(2026, 6, 21), FamilyCode.R2
-        )
+        assert snap.resolve_family(fam_r1) == FutureRef("TMF", date(2026, 5, 21), FamilyCode.R1)
+        assert snap.resolve_family(fam_r2) == FutureRef("TMF", date(2026, 6, 21), FamilyCode.R2)
 
     def test_expired_refs_excluded(self) -> None:
         cal = {"TMF": [_tmf(3), _tmf(5), _tmf(6)]}
-        snap = build_snapshot_from_calendar(
-            cal, today=date(2026, 4, 19), snapshot_ns=0
-        )
+        snap = build_snapshot_from_calendar(cal, today=date(2026, 4, 19), snapshot_ns=0)
         fam_r1 = ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1)
         assert snap.resolve_family(fam_r1).expiry.month == 5
 
@@ -57,15 +49,9 @@ class TestBuildSnapshotFromCalendar:
                 FutureRef("TXF", date(2026, 6, 17)),
             ],
         }
-        snap = build_snapshot_from_calendar(
-            cal, today=date(2026, 4, 19), snapshot_ns=0
-        )
-        assert snap.resolve_family(
-            ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1)
-        ).display() == "TMFE6"
-        assert snap.resolve_family(
-            ContractFamily(Product.FUTURE, "TXF", FamilyCode.R1)
-        ).display() == "TXFE6"
+        snap = build_snapshot_from_calendar(cal, today=date(2026, 4, 19), snapshot_ns=0)
+        assert snap.resolve_family(ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1)).display() == "TMFE6"
+        assert snap.resolve_family(ContractFamily(Product.FUTURE, "TXF", FamilyCode.R1)).display() == "TXFE6"
 
 
 class TestResolver:
@@ -217,15 +203,11 @@ class TestInvariants:
         at ``ContractFamily.__post_init__``.
         """
         with pytest.raises(ValueError):
-            ContractFamily(
-                product=Product.FUTURE, root="TMF", family=FamilyCode.SPECIFIC
-            )
+            ContractFamily(product=Product.FUTURE, root="TMF", family=FamilyCode.SPECIFIC)
 
     def test_stock_family_rejected(self) -> None:
         with pytest.raises(ValueError):
-            ContractFamily(
-                product=Product.STOCK, root="2330", family=FamilyCode.R1
-            )
+            ContractFamily(product=Product.STOCK, root="2330", family=FamilyCode.R1)
 
     def test_snapshot_builder_produces_refs_with_matching_family_code(
         self,
@@ -235,21 +217,15 @@ class TestInvariants:
             today=date(2026, 4, 19),
             snapshot_ns=0,
         )
-        r1 = snap.resolve_family(
-            ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1)
-        )
-        r2 = snap.resolve_family(
-            ContractFamily(Product.FUTURE, "TMF", FamilyCode.R2)
-        )
+        r1 = snap.resolve_family(ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1))
+        r2 = snap.resolve_family(ContractFamily(Product.FUTURE, "TMF", FamilyCode.R2))
         assert isinstance(r1, FutureRef) and r1.family is FamilyCode.R1
         assert isinstance(r2, FutureRef) and r2.family is FamilyCode.R2
 
 
 class TestEmptyCalendar:
     def test_empty_calendar_produces_empty_snapshot(self) -> None:
-        snap = build_snapshot_from_calendar(
-            {}, today=date(2026, 4, 19), snapshot_ns=0
-        )
+        snap = build_snapshot_from_calendar({}, today=date(2026, 4, 19), snapshot_ns=0)
         assert snap.family_map == {}
 
     def test_only_expired_refs_produces_empty_snapshot(self) -> None:
@@ -262,8 +238,6 @@ class TestEmptyCalendar:
 
 
 def test_immutable_contract_snapshot_stored_in_resolver_is_same_instance() -> None:
-    snap = ImmutableContractSnapshot.build(
-        family_map={}, native_hints={}, snapshot_ns=42
-    )
+    snap = ImmutableContractSnapshot.build(family_map={}, native_hints={}, snapshot_ns=42)
     r = ContractFamilyResolver(initial=snap)
     assert r.snapshot is snap

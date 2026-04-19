@@ -75,9 +75,7 @@ class TestPermissiveDefault:
 
 
 class TestStrictMode:
-    def test_strict_mode_refuses_unknown_symbol(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_strict_mode_refuses_unknown_symbol(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HFT_LOB_STRICT_INGRESS", "1")
         engine = LOBEngine()
         engine.set_symbol_metadata(_metadata_with({"TMFE6"}))
@@ -85,9 +83,7 @@ class TestStrictMode:
         assert "UNKNOWN" in engine._unknown_symbol_warned
         assert "UNKNOWN" not in engine.books
 
-    def test_strict_mode_still_allocates_for_known_symbols(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_strict_mode_still_allocates_for_known_symbols(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HFT_LOB_STRICT_INGRESS", "1")
         engine = LOBEngine()
         engine.set_symbol_metadata(_metadata_with({"TMFE6"}))
@@ -113,8 +109,6 @@ def _lob_plane_sample(counter) -> float:
     """Return the current value of the ``plane="lob"`` sample for the counter."""
     for metric_family in counter.collect():
         for sample in metric_family.samples:
-            if sample.labels.get("plane") == "lob" and sample.name.endswith(
-                "_total"
-            ):
+            if sample.labels.get("plane") == "lob" and sample.name.endswith("_total"):
                 return sample.value
     return 0.0

@@ -1443,9 +1443,7 @@ def test_fast_extract_payload_argc_3_last_is_md():
     """Covers lines 166-173: argc>=3."""
     from hft_platform.services.market_data import _try_fast_extract_callback_payload
 
-    exchange, msg = _try_fast_extract_callback_payload(
-        "TSE", "topic_str", {"code": "2330", "close": 500.0}
-    )
+    exchange, msg = _try_fast_extract_callback_payload("TSE", "topic_str", {"code": "2330", "close": 500.0})
     assert msg is not None
     assert exchange == "TSE"
 
@@ -2088,17 +2086,13 @@ def test_record_crash_signature_with_match():
         "hft_platform.services.market_data.detect_crash_signature",
         return_value="conn_reset",
     ):
-        svc._record_shioaji_crash_signature(
-            "connection reset by peer", context="md_callback"
-        )
+        svc._record_shioaji_crash_signature("connection reset by peer", context="md_callback")
 
-    metric.labels.assert_called_once_with(
-        signature="conn_reset", context="md_callback"
-    )
+    metric.labels.assert_called_once_with(signature="conn_reset", context="md_callback")
     metric.labels.return_value.inc.assert_called_once()
 
 
-def test_record_crash_signature_metric_inc_raises():
+def test_record_crash_signature_metric_inc_raises():  # noqa: no-assert
     """Covers the except path in _record_shioaji_crash_signature."""
     svc, *_ = _make_service()
     metric = MagicMock()

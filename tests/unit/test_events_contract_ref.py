@@ -91,7 +91,7 @@ class TestContractAlignsWithSymbol:
         )
         assert t.symbol == ref.display() == "TMFE6"
 
-    def test_frozen_event_still_frozen(self) -> None:
+    def test_frozen_event_still_frozen(self) -> None:  # noqa: no-assert
         """Adding ``contract`` must not break frozen semantics."""
         t = TickEvent(meta=_meta(), symbol="TMFE6", price=100_000, volume=1)
         import dataclasses

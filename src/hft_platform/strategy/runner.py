@@ -56,6 +56,16 @@ _RUST_CIRCUIT_ENABLED = os.getenv("HFT_STRATEGY_CIRCUIT_RUST", "1").lower() not 
 
 _MAX_INTENTS_PER_EVENT: int = int(os.getenv("HFT_MAX_INTENTS_PER_EVENT", "20"))
 
+
+def _feedback_side(value: int | None) -> Side | None:
+    if value is None:
+        return None
+    try:
+        return Side(value)
+    except ValueError:
+        return None
+
+
 # Shared read-only empty view for strategies without positions. Hand the same
 # singleton to every strategy — MappingProxyType is immutable so this is safe.
 _EMPTY_POSITION_VIEW: Mapping[str, int] = MappingProxyType({})
@@ -448,9 +458,7 @@ class StrategyRunner:
                 "strategy_family_rebind",
                 strategy_id=getattr(strat, "strategy_id", "?"),
                 family=str(change.family),
-                new_ref=(
-                    change.new_ref.display() if change.new_ref is not None else None
-                ),
+                new_ref=(change.new_ref.display() if change.new_ref is not None else None),
             )
 
     def set_publish_sink(self, sink: Any) -> None:
@@ -966,9 +974,7 @@ class StrategyRunner:
 
         if self._positions_dirty:
             self._positions_cache = self._build_positions_by_strategy()
-            self._positions_views = {
-                sid: MappingProxyType(inner) for sid, inner in self._positions_cache.items()
-            }
+            self._positions_views = {sid: MappingProxyType(inner) for sid, inner in self._positions_cache.items()}
             self._positions_dirty = False
 
         target_strat_id = getattr(event, "strategy_id", None)
@@ -1214,7 +1220,7 @@ class StrategyRunner:
                             symbol=sym,
                             reason_code="TRACK_GATE_SESSION_FILTERED",
                             timestamp_ns=now_ns,
-                            side=side,
+                            side=_feedback_side(side),
                             was_approved=False,
                         )
                         try:

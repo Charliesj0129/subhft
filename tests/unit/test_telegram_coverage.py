@@ -268,17 +268,13 @@ class TestPollerPollOnce:
 class TestPollerClose:
     @pytest.mark.asyncio
     async def test_close_no_session(self):
-        poller = TelegramCommandPoller(
-            bot_token="t", chat_id="c", redis_client=MagicMock()
-        )
+        poller = TelegramCommandPoller(bot_token="t", chat_id="c", redis_client=MagicMock())
         await poller.close()
         assert poller._session is None
 
     @pytest.mark.asyncio
     async def test_close_open_session(self):
-        poller = TelegramCommandPoller(
-            bot_token="t", chat_id="c", redis_client=MagicMock()
-        )
+        poller = TelegramCommandPoller(bot_token="t", chat_id="c", redis_client=MagicMock())
         mock_session = AsyncMock()
         mock_session.closed = False
         poller._session = mock_session
@@ -287,9 +283,7 @@ class TestPollerClose:
 
     @pytest.mark.asyncio
     async def test_close_already_closed_session(self):
-        poller = TelegramCommandPoller(
-            bot_token="t", chat_id="c", redis_client=MagicMock()
-        )
+        poller = TelegramCommandPoller(bot_token="t", chat_id="c", redis_client=MagicMock())
         mock_session = AsyncMock()
         mock_session.closed = True
         poller._session = mock_session

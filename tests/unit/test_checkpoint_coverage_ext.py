@@ -51,11 +51,7 @@ class TestJsonFallbackPaths:
         # if orjson is unavailable. Since we can't easily unimport orjson,
         # we test that the checkpoint works correctly regardless.
         ckpt_path = str(tmp_path / "ckpt.json")
-        store = _make_store(
-            positions={
-                "acc:strat:SYM": {"symbol": "SYM", "net_qty": 10, "avg_price_scaled": 50000}
-            }
-        )
+        store = _make_store(positions={"acc:strat:SYM": {"symbol": "SYM", "net_qty": 10, "avg_price_scaled": 50000}})
         writer = PositionCheckpointWriter(store, path=ckpt_path, interval_s=60)
         writer.write_checkpoint()
 
@@ -74,9 +70,7 @@ class TestWriteCheckpointAtomicFailure:
     def test_cleanup_on_rename_failure(self, tmp_path):
         """When os.rename fails, the temp file should be cleaned up."""
         ckpt_path = str(tmp_path / "ckpt.json")
-        store = _make_store(
-            positions={"acc:strat:S": {"symbol": "S", "net_qty": 1}}
-        )
+        store = _make_store(positions={"acc:strat:S": {"symbol": "S", "net_qty": 1}})
         writer = PositionCheckpointWriter(store, path=ckpt_path, interval_s=60)
 
         original_rename = os.rename
@@ -95,9 +89,7 @@ class TestWriteCheckpointAtomicFailure:
     def test_cleanup_on_write_failure(self, tmp_path):
         """When os.write fails, the temp file should be cleaned up."""
         ckpt_path = str(tmp_path / "ckpt.json")
-        store = _make_store(
-            positions={"acc:strat:S": {"symbol": "S", "net_qty": 1}}
-        )
+        store = _make_store(positions={"acc:strat:S": {"symbol": "S", "net_qty": 1}})
         writer = PositionCheckpointWriter(store, path=ckpt_path, interval_s=60)
 
         original_write = os.write
@@ -184,9 +176,7 @@ class TestRecoveryPositionSymbolFallback:
         """Recovery position should not overwrite a live position with same key."""
         ckpt_path = str(tmp_path / "ckpt.json")
         store = _make_store(
-            positions={
-                "acc:strat:SYM": {"symbol": "SYM", "net_qty": 5, "avg_price_scaled": 100000}
-            },
+            positions={"acc:strat:SYM": {"symbol": "SYM", "net_qty": 5, "avg_price_scaled": 100000}},
             recovery={
                 "acc:strat:SYM": {
                     "symbol": "SYM",
@@ -224,9 +214,7 @@ class TestCheckpointInitDefaults:
         monkeypatch.setenv("HFT_POSITION_CHECKPOINT_PATH", "/should/not/use")
         monkeypatch.setenv("HFT_CHECKPOINT_INTERVAL_S", "999")
         store = _make_store()
-        writer = PositionCheckpointWriter(
-            store, path=str(tmp_path / "explicit.json"), interval_s=30
-        )
+        writer = PositionCheckpointWriter(store, path=str(tmp_path / "explicit.json"), interval_s=30)
         assert writer._path == str(tmp_path / "explicit.json")
         assert writer._interval_s == 30.0
 

@@ -159,9 +159,7 @@ class GatewayPolicy:
 
         return True, "OK"
 
-    def _reduces_position(
-        self, symbol: str, strategy_id: str, side: int, qty: int
-    ) -> bool:
+    def _reduces_position(self, symbol: str, strategy_id: str, side: int, qty: int) -> bool:
         """Bug 22 helper: True iff the order strictly reduces ``abs(net_position)``.
 
         Conservative: missing ``position_provider``, missing symbol, or any
@@ -179,9 +177,7 @@ class GatewayPolicy:
         signed = int(qty) if side == int(Side.BUY) else -int(qty)
         return abs(current + signed) < abs(current)
 
-    def set_position_provider(
-        self, provider: Callable[[str, str], int] | None
-    ) -> None:
+    def set_position_provider(self, provider: Callable[[str, str], int] | None) -> None:
         """Bug 22: wire position provider post-construction.
 
         Bootstrap may build GatewayPolicy before RiskEngine; this setter closes

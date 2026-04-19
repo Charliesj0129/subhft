@@ -2,7 +2,7 @@ import asyncio
 import importlib
 import os
 from threading import Lock
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Optional, Union, cast
 
 import numpy as np
 from structlog import get_logger
@@ -685,8 +685,9 @@ class LOBEngine:
         et = type(event)
         # Tuple fast-path (avoid event object creation)
         if et is tuple and event:
-            if event[0] == "bidask":
-                if len(event) >= 13:
+            tuple_event = cast(tuple[Any, ...], event)
+            if tuple_event[0] == "bidask":
+                if len(tuple_event) >= 13:
                     (
                         _,
                         symbol,
@@ -701,7 +702,7 @@ class LOBEngine:
                         mid_price,
                         spread,
                         imbalance,
-                    ) = event[:13]
+                    ) = tuple_event[:13]
                     book = self.get_book(symbol)
                     if book is None:
                         return None
@@ -718,7 +719,7 @@ class LOBEngine:
                         float(imbalance),
                     )
                 else:
-                    _, symbol, bids, asks, exch_ts, is_snapshot = event
+                    _, symbol, bids, asks, exch_ts, is_snapshot = tuple_event
                     book = self.get_book(symbol)
                     if book is None:
                         return None
@@ -726,8 +727,8 @@ class LOBEngine:
                 if metrics_enabled:
                     self._record_lob_metrics(symbol, bool(is_snapshot))
                 return self._emit_stats(book)
-            if event[0] == "tick":
-                _, symbol, price, volume, _total_volume, _is_simtrade, _is_odd_lot, exch_ts, *_rest = event
+            if tuple_event[0] == "tick":
+                _, symbol, price, volume, _total_volume, _is_simtrade, _is_odd_lot, exch_ts, *_rest = tuple_event
                 book = self.get_book(symbol)
                 if book is None:
                     return None
@@ -736,21 +737,22 @@ class LOBEngine:
 
         # Typed dispatch (exact-type; subclasses never created for these)
         if et is BidAskEvent:
-            book = self.get_book(event.symbol)
+            bidask_event = cast(BidAskEvent, event)
+            book = self.get_book(bidask_event.symbol)
             if book is None:
                 return None
             # Propagate normalizer seq for downstream ordering (Bug #10 fix)
-            book.normalizer_seq = event.meta.seq
+            book.normalizer_seq = bidask_event.meta.seq
             # Fused bypass: normalizer already computed stats in a single Rust call;
             # skip redundant apply_update + _recompute and directly set book fields.
-            if _FUSED_BYPASS and event.fused_stats is not None:
-                fs = event.fused_stats
-                exch_ts = event.meta.source_ts
+            if _FUSED_BYPASS and bidask_event.fused_stats is not None:
+                fs = bidask_event.fused_stats
+                exch_ts = bidask_event.meta.source_ts
                 with book.lock:
                     if exch_ts >= book.exch_ts:
                         book.exch_ts = exch_ts
-                        book.bids = event.bids
-                        book.asks = event.asks
+                        book.bids = bidask_event.bids
+                        book.asks = bidask_event.asks
                         book.bid_depth_total = int(fs.bid_depth)
                         book.ask_depth_total = int(fs.ask_depth)
                         _fs_mid = int(fs.mid_price_x2)
@@ -765,21 +767,27 @@ class LOBEngine:
                             book.imbalance = 0.0
                         book.version += 1
                 if metrics_enabled:
-                    self._record_lob_metrics(event.symbol, event.is_snapshot)
+                    self._record_lob_metrics(bidask_event.symbol, bidask_event.is_snapshot)
                 return self._emit_stats(book)
-            if event.stats is not None:
-                book.apply_update_with_stats(event.bids, event.asks, event.meta.source_ts, event.stats)
+            if bidask_event.stats is not None:
+                book.apply_update_with_stats(
+                    bidask_event.bids,
+                    bidask_event.asks,
+                    bidask_event.meta.source_ts,
+                    bidask_event.stats,
+                )
             else:
-                book.apply_update(event.bids, event.asks, event.meta.source_ts)
+                book.apply_update(bidask_event.bids, bidask_event.asks, bidask_event.meta.source_ts)
             if metrics_enabled:
-                self._record_lob_metrics(event.symbol, event.is_snapshot)
+                self._record_lob_metrics(bidask_event.symbol, bidask_event.is_snapshot)
             return self._emit_stats(book)
 
         elif et is TickEvent:
-            book = self.get_book(event.symbol)
+            tick_event = cast(TickEvent, event)
+            book = self.get_book(tick_event.symbol)
             if book is None:
                 return None
-            book.update_tick(event.price, event.volume, event.meta.source_ts)
+            book.update_tick(tick_event.price, tick_event.volume, tick_event.meta.source_ts)
             # return book.get_stats() # Optional: emit stats on tick?
             return None
 

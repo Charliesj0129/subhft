@@ -26,7 +26,6 @@ from hft_platform.alpha.experiments import (
     gc_experiment_runs,
 )
 
-
 # ---------------------------------------------------------------------------
 # list_runs: corrupt meta files are skipped (lines 137-139, 141)
 # ---------------------------------------------------------------------------
@@ -517,9 +516,7 @@ def test_is_legacy_zero_duration_has_session_minutes():
 
 def test_is_legacy_zero_duration_unparseable_timestamps():
     payload = {}
-    result = _is_legacy_zero_duration_session(
-        payload, started_at="INVALID", ended_at="INVALID"
-    )
+    result = _is_legacy_zero_duration_session(payload, started_at="INVALID", ended_at="INVALID")
     assert result is False
 
 

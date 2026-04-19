@@ -4,6 +4,7 @@ Centralizes the heuristics that were previously duplicated in
 ``execution/reconciliation.py`` and ``execution/startup_recon.py`` so that
 the definition of "futures symbol" cannot drift between modules.
 """
+
 from __future__ import annotations
 
 # TAIFEX futures/options symbol prefixes.

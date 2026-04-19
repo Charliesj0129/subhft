@@ -284,8 +284,11 @@ class TestAskHandler:
         from hft_platform.bot.handlers import cmd_ask
 
         bot_app.latest_manual_report_context = bot_app.LatestReportContext(
-            symbol="TXFD6", session="day", date="2026-04-07",
-            dossier=MagicMock(), decision=MagicMock(),
+            symbol="TXFD6",
+            session="day",
+            date="2026-04-07",
+            dossier=MagicMock(),
+            decision=MagicMock(),
         )
         update = _make_update(chat_id=12345, text="/ask")
         ctx = _make_context(args=[])
@@ -302,8 +305,11 @@ class TestAskHandler:
         from hft_platform.bot.handlers import cmd_ask
 
         bot_app.latest_manual_report_context = bot_app.LatestReportContext(
-            symbol="TXFD6", session="day", date="2026-04-07",
-            dossier=MagicMock(), decision=MagicMock(),
+            symbol="TXFD6",
+            session="day",
+            date="2026-04-07",
+            dossier=MagicMock(),
+            decision=MagicMock(),
         )
         update = _make_update(chat_id=12345, text="/ask why")
         ctx = _make_context(args=["why"])
@@ -334,8 +340,11 @@ class TestAskHandler:
         from hft_platform.bot.handlers import cmd_ask
 
         bot_app.latest_manual_report_context = bot_app.LatestReportContext(
-            symbol="TXFD6", session="day", date="2026-04-07",
-            dossier=MagicMock(), decision=MagicMock(),
+            symbol="TXFD6",
+            session="day",
+            date="2026-04-07",
+            dossier=MagicMock(),
+            decision=MagicMock(),
         )
         update = _make_update(chat_id=12345, text="/ask 還能追嗎")
         ctx = _make_context(args=["還能追嗎"])

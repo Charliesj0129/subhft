@@ -656,11 +656,7 @@ class ContractsRuntime:
             Identity mappings (code == actual) are omitted.
         """
         if codes is None:
-            codes = [
-                str(sym.get("code", ""))
-                for sym in self._client.symbols
-                if sym.get("code")
-            ]
+            codes = [str(sym.get("code", "")) for sym in self._client.symbols if sym.get("code")]
 
         alias_map: dict[str, str] = {}
         for code in codes:
@@ -675,7 +671,10 @@ class ContractsRuntime:
             exchange = (sym_cfg or {}).get("exchange", "FUT")
             product_type = (sym_cfg or {}).get("product_type") or (sym_cfg or {}).get("security_type")
             contract = self._client._get_contract(
-                exchange, code, product_type=product_type, allow_synthetic=False,
+                exchange,
+                code,
+                product_type=product_type,
+                allow_synthetic=False,
             )
             if contract:
                 actual = derive_callback_code(contract, code)

@@ -225,7 +225,7 @@ def test_price_scale_constant_is_10k() -> None:
     assert _PRICE_SCALE == 10_000
 
 
-def test_on_stats_runs_without_error_on_valid_input() -> None:
+def test_on_stats_runs_without_error_on_valid_input() -> None:  # noqa: no-assert
     """No exception on well-formed LOBStatsEvent."""
     strat = C33TxfD6SoloMaker("c33_test", max_pos=3, subscribe_symbols=["TXFD6"])
     stats = _make_stats()
@@ -243,7 +243,7 @@ def test_on_stats_skips_invalid_spread() -> None:
     assert strat._spread_blocked == 1
 
 
-def test_on_stats_skips_zero_prices() -> None:
+def test_on_stats_skips_zero_prices() -> None:  # noqa: no-assert
     strat = C33TxfD6SoloMaker("c33_test", subscribe_symbols=["TXFD6"])
     stats = _make_stats(best_bid=0, best_ask=0, mid_price_x2=0, spread_scaled=0)
     strat.on_stats(stats)  # early return, no raise
@@ -289,23 +289,20 @@ def test_wrapper_has_no_signal_layer_attributes() -> None:
         "_mfg_state",
         "_qi_state",
     ):
-        assert not hasattr(strat, attr_name), (
-            f"R47-minimal violation: {attr_name} found on wrapper"
-        )
+        assert not hasattr(strat, attr_name), f"R47-minimal violation: {attr_name} found on wrapper"
 
 
 def test_wrapper_does_not_import_r47_signal_state_classes() -> None:
     """Static check: the wrapper module does not import R47 signal classes."""
     import hft_platform.strategies.c33_txfd6_solo_maker as mod
+
     src_path = mod.__file__
     assert src_path is not None
     with open(src_path) as f:
         source = f.read()
     forbidden = ("_PEState", "_QueueState", "_MFGState")
     for sym in forbidden:
-        assert sym not in source, (
-            f"R47-minimal violation: wrapper references {sym}"
-        )
+        assert sym not in source, f"R47-minimal violation: wrapper references {sym}"
 
 
 # ----------------------------------------------------------------------------
@@ -356,9 +353,7 @@ def test_on_gap_clears_transient_state() -> None:
     strat._pending_sell["TXFD6"] = 1
     strat._last_bid["TXFD6"] = 17500 * 10_000
     strat._last_ask["TXFD6"] = 17505 * 10_000
-    gap = GapEvent(
-        missed_count=5, first_missed_seq=100, last_missed_seq=104, ts=1000
-    )
+    gap = GapEvent(missed_count=5, first_missed_seq=100, last_missed_seq=104, ts=1000)
     strat.on_gap(gap)
     assert strat._pending_buy == {}
     assert strat._pending_sell == {}

@@ -27,7 +27,6 @@ import pytest
 
 from hft_platform.recorder.wal import WALBatchWriter, WALWriter, _dumps, _loads
 
-
 # -- Shared fixtures ----------------------------------------------------------
 
 
@@ -149,9 +148,7 @@ class TestBatchWriterFlushFailureMergeBack:
     ) -> None:
         """When flush write fails, columnar data is merged back into buffer."""
         # Add columnar data
-        await batch_writer.add_columnar(
-            "hft.ticks", ["sym", "px"], [["ABC"], [100]], 1
-        )
+        await batch_writer.add_columnar("hft.ticks", ["sym", "px"], [["ABC"], [100]], 1)
         assert batch_writer._buffer_rows == 1
 
         with patch.object(batch_writer, "_write_batch_sync", side_effect=OSError("disk err")):
@@ -168,9 +165,7 @@ class TestBatchWriterFlushFailureMergeBack:
     ) -> None:
         """Flush failure merges back both dict and columnar data."""
         await batch_writer.add("hft.orders", [{"id": "O1"}])
-        await batch_writer.add_columnar(
-            "hft.market_data", ["sym"], [["2330"]], 1
-        )
+        await batch_writer.add_columnar("hft.market_data", ["sym"], [["2330"]], 1)
         assert batch_writer._buffer_rows == 2
 
         with patch.object(batch_writer, "_write_batch_sync", side_effect=IOError("fail")):
@@ -236,9 +231,7 @@ class TestBatchWriterTimerLoopCircuitBreaker:
 
 
 class TestWriteBatchSyncEdgeCases:
-    def test_empty_rows_dict_produces_no_data_lines(
-        self, batch_writer: WALBatchWriter, tmp_path: Path
-    ) -> None:
+    def test_empty_rows_dict_produces_no_data_lines(self, batch_writer: WALBatchWriter, tmp_path: Path) -> None:
         """_write_batch_sync with empty rows list in a table skips that table."""
         data = {"hft.market_data": []}
         batch_writer._write_batch_sync(data, 0)
@@ -246,9 +239,7 @@ class TestWriteBatchSyncEdgeCases:
         jsonl_files = list(tmp_path.glob("batch_*.jsonl"))
         assert len(jsonl_files) == 0
 
-    def test_columnar_segment_zero_row_count_skipped(
-        self, batch_writer: WALBatchWriter, tmp_path: Path
-    ) -> None:
+    def test_columnar_segment_zero_row_count_skipped(self, batch_writer: WALBatchWriter, tmp_path: Path) -> None:
         """Columnar segment with row_count=0 is skipped."""
         columnar = {
             "hft.ticks": [
@@ -259,9 +250,7 @@ class TestWriteBatchSyncEdgeCases:
         jsonl_files = list(tmp_path.glob("batch_*.jsonl"))
         assert len(jsonl_files) == 0
 
-    def test_multiple_tables_in_single_file(
-        self, batch_writer: WALBatchWriter, tmp_path: Path
-    ) -> None:
+    def test_multiple_tables_in_single_file(self, batch_writer: WALBatchWriter, tmp_path: Path) -> None:
         """Multiple tables are written into a single batch file with headers."""
         data = {
             "hft.orders": [{"order_id": "O1"}],
@@ -307,18 +296,14 @@ class TestBatchWriterStopNullTimer:
 
 class TestBatchWriterAddColumnarEdge:
     @pytest.mark.asyncio
-    async def test_add_columnar_negative_row_count_returns_true(
-        self, batch_writer: WALBatchWriter
-    ) -> None:
+    async def test_add_columnar_negative_row_count_returns_true(self, batch_writer: WALBatchWriter) -> None:
         """add_columnar with negative row_count returns True immediately."""
         result = await batch_writer.add_columnar("t", ["a"], [["x"]], -1)
         assert result is True
         assert batch_writer._buffer_rows == 0
 
     @pytest.mark.asyncio
-    async def test_add_columnar_empty_column_data_returns_true(
-        self, batch_writer: WALBatchWriter
-    ) -> None:
+    async def test_add_columnar_empty_column_data_returns_true(self, batch_writer: WALBatchWriter) -> None:
         """add_columnar with empty column_data returns True immediately."""
         result = await batch_writer.add_columnar("t", ["a"], [], 5)
         assert result is True
@@ -364,9 +349,7 @@ class TestBatchWriterFsyncFileDisabled:
 
 
 class TestBatchWriterFsyncDirThrottled:
-    def test_maybe_fsync_dir_throttled_does_not_call_os_open(
-        self, batch_writer: WALBatchWriter
-    ) -> None:
+    def test_maybe_fsync_dir_throttled_does_not_call_os_open(self, batch_writer: WALBatchWriter) -> None:
         """_maybe_fsync_dir skips when within throttle interval."""
         batch_writer._dir_fsync_min_ms = 100_000.0
         batch_writer._last_dir_fsync_ts = time.monotonic()

@@ -225,14 +225,14 @@ class AutonomyMonitor:
             elapsed_ns = now_ns - self._broker_disconnect_since_ns
             if elapsed_ns > 300_000_000_000 and not self._is_on_cooldown("broker_disconnect", now_ns):
                 decisions.append(
-                        MonitorDecision(
-                            rule_name="broker_disconnect",
-                            action="enter_reduce_only",
-                            reason="broker_unavailable",
-                            scope="platform",
-                            rearm="auto",
-                        )
+                    MonitorDecision(
+                        rule_name="broker_disconnect",
+                        action="enter_reduce_only",
+                        reason="broker_unavailable",
+                        scope="platform",
+                        rearm="auto",
                     )
+                )
         else:
             self._broker_was_connected = True
             self._broker_disconnect_since_ns = 0

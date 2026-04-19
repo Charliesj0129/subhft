@@ -1,4 +1,5 @@
 """Tests for Gate C engine selection based on manifest strategy_type."""
+
 import pytest
 
 from research.backtest.maker_engine import MakerEngine

@@ -1,4 +1,5 @@
 """Tests for /pos Telegram bot command."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

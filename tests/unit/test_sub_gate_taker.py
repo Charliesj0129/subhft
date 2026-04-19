@@ -1,4 +1,5 @@
 """Tests for taker-specific sub-gates."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -30,33 +31,33 @@ def _taker_result(ic_is=0.08, ic_oos=0.05):
 
 def test_ic_gate_passes_with_good_ic():
     gate = ICEvaluationGate()
-    sub = gate.evaluate(_taker_result(ic_is=0.1, ic_oos=0.06),
-                         config=None,
-                         thresholds={"ic_is_min": 0.03, "ic_oos_min": 0.02})
+    sub = gate.evaluate(
+        _taker_result(ic_is=0.1, ic_oos=0.06), config=None, thresholds={"ic_is_min": 0.03, "ic_oos_min": 0.02}
+    )
     assert sub.passed
 
 
 def test_ic_gate_fails_on_oos_below_threshold():
     gate = ICEvaluationGate()
-    sub = gate.evaluate(_taker_result(ic_is=0.1, ic_oos=0.01),
-                         config=None,
-                         thresholds={"ic_is_min": 0.03, "ic_oos_min": 0.02})
+    sub = gate.evaluate(
+        _taker_result(ic_is=0.1, ic_oos=0.01), config=None, thresholds={"ic_is_min": 0.03, "ic_oos_min": 0.02}
+    )
     assert not sub.passed
 
 
 def test_ic_gate_fails_on_is_below_threshold():
     gate = ICEvaluationGate()
-    sub = gate.evaluate(_taker_result(ic_is=0.01, ic_oos=0.1),
-                         config=None,
-                         thresholds={"ic_is_min": 0.03, "ic_oos_min": 0.02})
+    sub = gate.evaluate(
+        _taker_result(ic_is=0.01, ic_oos=0.1), config=None, thresholds={"ic_is_min": 0.03, "ic_oos_min": 0.02}
+    )
     assert not sub.passed
 
 
 def test_ic_gate_fails_on_missing_ic():
     gate = ICEvaluationGate()
-    sub = gate.evaluate(_taker_result(ic_is=None, ic_oos=None),
-                         config=None,
-                         thresholds={"ic_is_min": 0.03, "ic_oos_min": 0.02})
+    sub = gate.evaluate(
+        _taker_result(ic_is=None, ic_oos=None), config=None, thresholds={"ic_is_min": 0.03, "ic_oos_min": 0.02}
+    )
     assert not sub.passed
 
 

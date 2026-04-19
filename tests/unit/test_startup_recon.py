@@ -296,7 +296,9 @@ async def test_broker_only_recovery_uses_wildcard_strategy_id() -> None:
     recovery = store._recovery_positions
     assert len(recovery) == 1
     key, data = next(iter(recovery.items()))
-    assert data["strategy_id"] == MANUAL_STRATEGY_ID, f"Expected '{MANUAL_STRATEGY_ID}', got '{data.get('strategy_id')}'"
+    assert data["strategy_id"] == MANUAL_STRATEGY_ID, (
+        f"Expected '{MANUAL_STRATEGY_ID}', got '{data.get('strategy_id')}'"
+    )
     assert "ACC1" in key
     assert MANUAL_STRATEGY_ID in key  # key should be account:MANUAL:symbol
 

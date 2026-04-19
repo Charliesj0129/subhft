@@ -979,9 +979,7 @@ class TestRustTickReturnTuple:
         monkeypatch.setattr(norm_mod, "_RUST_ENABLED", True)
 
         rust_result = ("tick", "2330", 1000000, 5, 100, False, False, 1_620_000_000_000_000)
-        monkeypatch.setattr(
-            norm_mod, "_RUST_NORMALIZE_TICK", lambda payload, sym, scale: rust_result
-        )
+        monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_TICK", lambda payload, sym, scale: rust_result)
 
         payload = {
             "code": "2330",
@@ -1024,9 +1022,7 @@ class TestPythonFallbackNegativePrice:
 
         # Rust returns price=0 for a valid close => raises ValueError => Python fallback
         rust_result = ("tick", "2330", 0, 5, 100, False, False, 1_620_000_000_000_000)
-        monkeypatch.setattr(
-            norm_mod, "_RUST_NORMALIZE_TICK", lambda payload, sym, scale: rust_result
-        )
+        monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_TICK", lambda payload, sym, scale: rust_result)
 
         payload = {
             "code": "2330",
@@ -1055,12 +1051,17 @@ class TestFusedPathReturnTuple:
         asks_np = np.array([[1005000, 20]], dtype=np.int64)
         mock_fused = MagicMock()
         mock_fused.process_bidask.return_value = (
-            bids_np, asks_np,
-            1000000, 1005000,  # best_bid, best_ask
-            10, 20,            # bid_depth, ask_depth
-            2005000, 5000,     # mid_x2, spread_scaled
-            -333333, 1,        # imbalance_ppm, version
-            -0.333333,         # top_imbalance
+            bids_np,
+            asks_np,
+            1000000,
+            1005000,  # best_bid, best_ask
+            10,
+            20,  # bid_depth, ask_depth
+            2005000,
+            5000,  # mid_x2, spread_scaled
+            -333333,
+            1,  # imbalance_ppm, version
+            -0.333333,  # top_imbalance
         )
         normalizer._fused = mock_fused
 
@@ -1223,14 +1224,20 @@ class TestRustSynthBidaskTickSize:
         asks_np = np.array([[10010, 20]], dtype=np.int64)
 
         synth_result = (
-            "bidask", "TMFD6",
-            bids_np, asks_np,
+            "bidask",
+            "TMFD6",
+            bids_np,
+            asks_np,
             1_620_000_000_000_000,
-            False,              # is_snapshot
-            10000, 10010,       # best_bid, best_ask
-            10, 20,             # bid_depth, ask_depth
-            10005.0, 10.0,      # mid_price, spread
-            -0.333, False,      # imbalance, synthesized
+            False,  # is_snapshot
+            10000,
+            10010,  # best_bid, best_ask
+            10,
+            20,  # bid_depth, ask_depth
+            10005.0,
+            10.0,  # mid_price, spread
+            -0.333,
+            False,  # imbalance, synthesized
         )
         mock_synth_fn = MagicMock(return_value=synth_result)
         monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_BIDASK_SYNTH", mock_synth_fn)
@@ -1264,14 +1271,20 @@ class TestRustSynthBidaskTickSize:
         asks_np = np.array([[1001000, 20]], dtype=np.int64)
 
         synth_result = (
-            "bidask", "BADTICK",
-            bids_np, asks_np,
+            "bidask",
+            "BADTICK",
+            bids_np,
+            asks_np,
             1_620_000_000_000_000,
             False,
-            1000000, 1001000,
-            10, 20,
-            1000500.0, 1000.0,
-            -0.333, False,
+            1000000,
+            1001000,
+            10,
+            20,
+            1000500.0,
+            1000.0,
+            -0.333,
+            False,
         )
         mock_synth_fn = MagicMock(return_value=synth_result)
         monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_BIDASK_SYNTH", mock_synth_fn)
@@ -1309,12 +1322,20 @@ class TestRustSynthBidaskTickSize:
         bids_np = np.array([[100, 10]], dtype=np.int64)
         asks_np = np.array([[101, 20]], dtype=np.int64)
         synth_result = (
-            "bidask", "ZEROSCALE",
-            bids_np, asks_np,
+            "bidask",
+            "ZEROSCALE",
+            bids_np,
+            asks_np,
             1_620_000_000_000_000,
             False,
-            100, 101, 10, 20,
-            100.5, 1.0, -0.333, False,
+            100,
+            101,
+            10,
+            20,
+            100.5,
+            1.0,
+            -0.333,
+            False,
         )
         mock_synth_fn = MagicMock(return_value=synth_result)
         monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_BIDASK_SYNTH", mock_synth_fn)
@@ -1451,9 +1472,19 @@ class TestRustBidaskFallbackChain:
         bids_list = [[1000000, 10]]
         asks_list = [[1005000, 8]]
         tuple_result = (
-            "bidask", "2330", bids_list, asks_list,
-            1_620_000_000_000_000, False,
-            1000000, 1005000, 10, 8, 1002500.0, 5000.0, 0.111,
+            "bidask",
+            "2330",
+            bids_list,
+            asks_list,
+            1_620_000_000_000_000,
+            False,
+            1000000,
+            1005000,
+            10,
+            8,
+            1002500.0,
+            5000.0,
+            0.111,
         )
         mock_tuple = MagicMock(return_value=tuple_result)
         monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_BIDASK", mock_tuple)
@@ -1474,6 +1505,7 @@ class TestRustBidaskFallbackChain:
         pair_stats_result = (bids_list, asks_list, (1000000, 1005000, 10, 8, 1002500.0, 5000.0, 0.111))
 
         call_count = {"n": 0}
+
         def pair_stats_fn(*args):
             call_count["n"] += 1
             if call_count["n"] == 1:
@@ -1513,10 +1545,12 @@ class TestRustBidaskFallbackChain:
         monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_BIDASK", failing)
         monkeypatch.setattr(norm_mod, "_RUST_SCALE_BOOK_PAIR", failing)
 
-        mock_seq = MagicMock(side_effect=[
-            [[1000000, 10], [995000, 5]],   # bids result
-            [[1005000, 8], [1010000, 3]],   # asks result
-        ])
+        mock_seq = MagicMock(
+            side_effect=[
+                [[1000000, 10], [995000, 5]],  # bids result
+                [[1005000, 8], [1010000, 3]],  # asks result
+            ]
+        )
         monkeypatch.setattr(norm_mod, "_RUST_SCALE_BOOK_SEQ", mock_seq)
 
         result = normalizer.normalize_bidask(_BIDASK_PAYLOAD)
@@ -1553,9 +1587,19 @@ class TestRustBidaskFallbackChain:
         bids_list = [[1000000, 10], [995000, 5], [990000, 3], [985000, 2], [980000, 1]]
         asks_list = [[1005000, 8], [1010000, 3], [1015000, 2], [1020000, 1], [1025000, 1]]
         np_result = (
-            "bidask", "2330", bids_list, asks_list,
-            1_620_000_000_000_000, False,
-            1000000, 1005000, 21, 15, 1002500.0, 5000.0, 0.167,
+            "bidask",
+            "2330",
+            bids_list,
+            asks_list,
+            1_620_000_000_000_000,
+            False,
+            1000000,
+            1005000,
+            21,
+            15,
+            1002500.0,
+            5000.0,
+            0.167,
         )
         mock_np = MagicMock(return_value=np_result)
         monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_BIDASK_NP", mock_np)
