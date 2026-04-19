@@ -1,61 +1,38 @@
 # HFT Performance Guidelines
 
-> **Context**: This file provides optimization checklists and anti-patterns for High-Frequency Trading.
+Optimization checklists and project-specific anti-patterns. For the 5 Core Laws (Allocator / Cache / Async / Precision / Boundary), see `01-core-laws.md`.
 
-## ⚡ Performance Checklist
+## Performance Checklist (Hot Path)
 
-### 1. Memory Management (The Hot Path)
+### Memory
 
-- [ ] **Allocations**: Are we creating objects in the loop? (Dicts, Lists, Classes)
-  - _Fix_: Pre-allocate buffers or reuse objects.
-- [ ] **GC Pressure**: Is the garbage collector running during trading?
-  - _Fix_: Disable GC during active trading hours (`gc.disable()`).
-- [ ] **Copying**: Are we copying data unnecessarily?
-  - _Fix_: Use views, slices, or references.
+- [ ] Objects created in tick loop? → pre-allocate buffers or reuse.
+- [ ] GC running during trading? → `gc.disable()` during active hours.
+- [ ] Unnecessary copies? → use views / slices / references.
 
-### 2. Data Structures
+### Data Structures
 
-- [ ] **Locality**: Is data accessed sequentially?
-  - _Check_: L1/L2 cache miss rates.
-- [ ] **Layout**: Are we using `__slots__` for Python classes?
-  - _Benefit_: 30% less memory, faster access.
-- [ ] **Lookup**: Are lookups O(1)?
-  - _Avoid_: O(n) linear scans.
+- [ ] `__slots__` on Python classes (30% less mem, faster access)?
+- [ ] All lookups O(1)? No O(n) linear scans?
 
-### 3. Concurrency
+### Concurrency
 
-- [ ] **Event Loop**: Is the lag > 1ms?
-  - _Check_: `asyncio` loop lag metrics.
-- [ ] **GIL**: Is Rust code holding the GIL unnecessarily?
-  - _Fix_: `Python::allow_threads` for CPU-bound tasks.
+- [ ] Event loop lag > 1ms? → check `asyncio` loop lag metrics.
+- [ ] Rust code holding GIL unnecessarily? → `Python::allow_threads` for CPU-bound tasks.
 
-## 🛑 Anti-Patterns (Red Flags)
+## Anti-Patterns
 
-| Pattern                      | Why it's bad                                                 | Replacement                          |
-| ---------------------------- | ------------------------------------------------------------ | ------------------------------------ |
-| `datetime.now()`             | System call overhead                                         | `loop.time()` (monotonic)            |
-| `decimal.Decimal`            | Slow allocation. Forbidden in Hot Path, Allowed in Cold Path | Integer math (micros) / `scaled int` |
-| `pandas.DataFrame` (in loop) | Heavy overhead                                               | `numpy` arrays / Dict of arrays      |
-| `print()`                    | Blocking I/O                                                 | `structlog` (async/buffered)         |
-| `try-except` (in loop)       | Stack unwinding cost                                         | Branching / Return codes             |
-| `dataclass` (default)        | Mutable overhead                                             | `msgspec.Struct` or `NamedTuple`     |
+| Pattern                      | Why bad              | Replacement                          |
+| ---------------------------- | -------------------- | ------------------------------------ |
+| `datetime.now()`             | syscall overhead     | `timebase.now_ns()` (monotonic)      |
+| `decimal.Decimal` (hot path) | slow allocation      | scaled int (x10000)                  |
+| `pandas.DataFrame` (in loop) | heavy overhead       | `numpy` arrays / dict of arrays      |
+| `print()`                    | blocking I/O         | `structlog`                          |
+| `try-except` (in loop)       | stack-unwind cost    | branching / return codes             |
+| `dataclass` (default)        | mutable overhead     | `msgspec.Struct` or `NamedTuple`     |
 
-## 🛠 Optimization Techniques
+## Optimization Techniques (project-specific)
 
-### 1. The "Warm-up" Strategy
-
-JIT compilers (PyPy, Numba) and OS page caches need warm-up.
-
-- **Action**: Run a dummy trading session for 10s before market open.
-
-### 2. CPU Isolation
-
-OS interrupts kill tail latency.
-
-- **Action**: Use `./ops.sh isolate` to pin strategy threads to isolated cores.
-
-### 3. Kernel Bypass (Advanced)
-
-If standard networking is too slow:
-
-- **Action**: Evaluate Solarflare / AF_XDP (Check `rust_core` capabilities).
+1. **Warm-up**: run a dummy trading session for 10s before market open (JIT/page-cache prewarm).
+2. **CPU isolation**: `./ops.sh isolate` to pin strategy threads to isolated cores.
+3. **Kernel bypass (advanced)**: evaluate Solarflare / AF_XDP; check `rust_core` capabilities.
