@@ -1,0 +1,146 @@
+alpha_id: c68_txf_rollover_back_front_maker
+name: "TXF rollover-week back-to-front passive maker"
+version: "0.1.0"
+status: prototype
+owner: alpha-research-20260419-inst-options
+strategy_type: maker
+instrument: "TXFE6"
+instruments:
+  - TXFE6
+
+run_label: "alpha-research-20260419-inst-options"
+round_id: R4
+gate_position: "T4 implementation (post T1 CONDITIONAL PROCEED, pre T2 APPROVE)"
+
+hypothesis: >
+  Back-month TXF contract entering rollover (becoming new-front in 3 days)
+  exhibits a narrow-spread window (median 12-16 pt, TXFD6 Feb 2026-02-23..25
+  analog) with non-trivial trade activity (747-1323 trades/day). C68 quotes
+  passively on the transitioning back-month during this window only, via
+  calendar gate + spread gate. Per-trip gross 14 pt vs combined inst RT 3 pt
+  = +7.8 pt/RT margin (linear estimate; R1 lesson: 5-8x optimistic vs fresh
+  sim). Task-brief "hedge pair" framing REJECTED per Researcher T1: TAKE
+  hedge leg inverts edge to negative (-0.9 pt/RT). C68 is SOLO PASSIVE MAKER
+  with rollover-window calendar gate.
+
+mechanism_class: pure_maker    # NOT cross_instrument_mm (T1 rejected hedge leg)
+
+distinction_from_killed_classes:
+  - name: "R8-prior C36 txf_intra_family_hedge_pair_retired_contract"
+    distinction: >
+      C36 was killed because the targeted contract was RETIRED (expired, no
+      trading). C68 targets the ACTIVE transition window when the back-month
+      becomes new-front. CK pre-screen (Researcher T1) confirms 747-1323
+      trades/day during the transition window (not zero). Distinct temporal
+      context.
+  - name: "R5-prior C30 hedge-qty notional-matching error"
+    distinction: >
+      C68 is SOLO on TXFE6 per Researcher T1 rejection of the hedge framing.
+      No cross-instrument leg -> R5 hedge-qty rule N/A.
+  - name: "C33 TXFD6 PROMOTE / C33-variants cluster"
+    distinction: >
+      Different instrument scope (back-month TXFE6 vs front-month TXFD6) and
+      different temporal window (3-day rollover vs continuous day session).
+      Novel axis under B (inst RT enables back-month trading at all).
+  - name: "Deep-back-month trading attempts"
+    distinction: >
+      C68 explicitly targets the NARROW-spread transition window (median
+      12-16 pt) NOT the wide-spread deep-back phase (median 200-1300 pt).
+      Calendar gate prevents drift into deep-back regime.
+
+paper_refs:
+  - r47_maker_strategy
+  - r47_structural_properties
+  - c33_txfd6_solo_passive_maker
+  - shared-context_2026-04-19_cost_model
+  - memory/backtest_method_reliability
+  - "2008 Avellaneda-Stoikov HFT in LOB"
+  - "2015 Cartea-Jaimungal-Penalva MM economics"
+  - "2010 Cont-Stoikov-Talreja queue fill probability"
+
+signals:
+  reuse: >
+    R47-minimal framework (spread gate + linear inventory skew + max_pos cap)
+    inherited from C33. All four signal layers (D1 PE, D2 Queue, D3 MFG, D4
+    QI) DISABLED per TXFD6 R47-minimal precedent. Calendar gate is a NEW
+    layer above R47 (novel axis, not an overlay of a kill-listed pattern).
+
+parameters:
+  spread_threshold_pts: 12              # TXFD6 Feb analog median 12-16 pt
+  max_pos: 1                             # Data-constrained (3-day analog)
+  inventory_skew_tenths: 2               # 0.2 ticks/contract fixed, linear
+  rollover_window_days: 3                # canonical 3-day window
+  # rollover_window_start_date / rollover_window_end_date set per deploy
+  enable_pe_layer: false                 # R47-minimal
+  enable_queue_layer: false              # R47-minimal
+  enable_mfg_layer: false                # R47-minimal
+  enable_qi_layer: false                 # R47-minimal (C33 precedent)
+
+latency_profile: "shioaji_sim_p95_v2026-03-04"
+
+cost_model:
+  source: "outputs/team_artifacts/alpha-research/shared-context.yaml#cost_model"
+  tier: "institutional_estimate"
+  confirmed: false
+  confirmation_source: "user-authorized rough estimate, 2026-04-19"
+  TXF:
+    rt_cost_ntd: 300
+    rt_cost_pts: 1.5
+    point_value_ntd: 200
+  retail_reference:
+    source: "memory/feedback_taifex_fee_structure.md"
+    TXF_retail_rt_cost_pts: 3.0
+  maker_rebate_ntd_per_side: 10          # ESTIMATED (MM-designation); 0.1 pt/RT on TXF — negligible
+  tax_mm_discount_pct: 50
+
+h2_framework:
+  adjudication: "MAKER FULL-CYCLE, rollover-window regime"
+  analog_median_spread_pts: 14           # TXFD6 Feb 2026-02-23..25
+  per_cycle_gross_pts: 14                # 2 x half-spread
+  per_cycle_cost_pts_inst: 3.0           # RT inst (1.5 pt per cycle, both legs passive)
+  margin_pts_inst: 11.0                  # linear estimate, likely 5-8x optimistic
+  adverse_selection_pt_assumed: 1.6      # hft-mm-design SKILL empirical
+  per_trip_net_linear_estimate: 7.8      # 14 - 2*1.6 - 3 = 7.8 pt
+  conditional_on: >
+    T5 must demonstrate close-side fills are MAKER for >=80% of cycles
+    (C33 precedent 97.7%). If <80% OR fresh-sim NTD/day is net-negative OR
+    analog-only sample < 3 days, framework collapses and T6 REJECTs. R1
+    lesson: T5 fresh CK-direct typically 5-8x less than linear re-price.
+
+expected_edge:
+  # Linear estimates (R1 lesson: OPTIMISTIC)
+  linear_ntd_per_rollover_day: 156000    # 100 trips/day x 7.8 pt x 200 NTD/pt
+  linear_ntd_per_year: 5600000           # 12 rollovers x 3 days
+  # Fresh-sim corrected (R1 5-8x correction)
+  fresh_sim_ntd_per_year_estimate_floor: 700000
+  fresh_sim_ntd_per_year_estimate_ceiling: 1120000
+  source_artifact: "outputs/team_artifacts/alpha-research/round-4/artifacts/researcher_t1_counterfactual_result.md"
+
+t1_carry_forward_flags:
+  hedge_pair_framing_rejected: true      # Researcher T1 math: TAKE hedge -0.9 pt/RT
+  data_analog_only: true                 # N=3 days (TXFD6 Feb 2026-02-23..25)
+  actual_target_window_not_in_ck: true   # TXFE6 becoming new-front 2026-04-15+ not yet
+  sample_size_warning: "3-day window; walk-forward k=5 requires ~3 months shadow"
+  competitive_crowding_risk: true        # spread-narrowing suggests existing makers already active
+
+promote_prerequisites:
+  requires_broker_confirmation_before_live: true
+  requires_fresh_txfe6_transition_data: true  # post-2026-04-18 CK update
+  reason: >
+    cost_model.confirmed=false AND 3-day analog sample AND target-window
+    data not yet in CK. Three compounding uncertainties. PROMOTE is
+    strictly CONDITIONAL on post-2026-04-18 fresh data retest + broker RT
+    confirmation.
+
+shadow_kill_criterion: >
+  TXFE6 session median spread > 30 pt during 3rd day of rollover window ->
+  regime mismatch vs TXFD6 Feb analog (12-16 pt). Auto-disable.
+  Also: any session outside rollover_window dates must return Hold (gate
+  blocked) — violation indicates calendar logic bug.
+
+notes:
+  - "Research-module float exception (Rule 11 of 25-architecture-governance)."
+  - "TXFE6 price scale: x10_000 (live platform), x1_000_000 (CK storage)."
+  - "Calendar gate is a NEW layer vs C33/C63 — novel axis under B (inst tier enables back-month trading); NOT a C41-prior-style session-variant dynamic threshold."
+  - "'Emergency unwind' discipline: if rollover window ends with |pos|>0, caller must flatten via taker cross (spread reverts to 100+ pt beyond window)."
+  - "Do NOT re-enable hedge-pair framing without a fresh DA review of hedge-leg execution costs (T1 concluded -0.9 pt/RT inversion)."

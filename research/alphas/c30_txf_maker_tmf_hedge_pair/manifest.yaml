@@ -1,0 +1,128 @@
+alpha_id: c30_txf_maker_tmf_hedge_pair
+name: "TXFD6 passive maker with TMFD6 delta hedge (cross-instrument MM pair)"
+version: "0.1.0"
+status: prototype
+owner: alpha-research-20260418-reboot
+strategy_type: maker
+instrument: "TXFD6+TMFD6"
+instruments:
+  - TXFD6
+  - TMFD6
+
+hypothesis: >
+  TXFD6 passive R47-minimal maker (spread_threshold_pts=5, max_pos=3 TXF
+  contracts) earns half-spread on the current ~4pt median-spread regime
+  at RT 3 pt; accumulated TXF delta is neutralized via a TMFD6 taker
+  hedge at the 20-pt inventory trigger (1 TXF = 20 TMF contracts by
+  notional, 200 NTD/pt vs 10 NTD/pt). Mechanism is operationally distinct
+  from the killed TX-TMF leadlag class (R26/R28) because no TXF->TMF
+  directional prediction is used; edge source is TXF half-spread capture
+  minus drift minus TMF hedge cost.
+
+mechanism_class: cross_instrument_mm
+
+distinction_from_killed_classes:
+  - name: "TX-TMF leadlag (R26/R28)"
+    distinction: >
+      R26/R28 used TXF price to predict TMFD6 direction (directional
+      scalar IC). C30 uses TXF for passive maker quotes only; the TMF
+      leg is a delta-hedge taker triggered on TXF inventory, not on a
+      TXF->TMF predictive signal. A random-timing hedge would still
+      produce a positive MTM per cycle (Researcher empirical check).
+  - name: "C14 TXF front-month retail (revoked PROMOTE)"
+    distinction: >
+      C14 was sole maker on TXFD6; C30 adds a TMFD6 hedge leg that pays
+      extra 4 pt RT to neutralize delta risk. Same primary, different
+      execution structure.
+  - name: "TMFD6-multi-instrument (proven -109K NTD)"
+    distinction: >
+      That was TMF-as-primary quoted across venues; C30 is TXF-as-primary
+      with TMF used exclusively as hedge execution.
+
+paper_refs:
+  - r47_maker_strategy
+  - r47_structural_properties
+  - feedback_taifex_fee_structure
+  - memory/backtest_method_reliability
+  - c14_txf_frontmonth_native_maker
+  - "2015 Cartea-Jaimungal Optimal execution with limit and market orders"
+  - "2008 Avellaneda-Stoikov HFT in LOB"
+
+signals:
+  reuse: "R47 spread-gate + max_pos + fixed inventory skew. R47 signal layers (PE / queue / MFG) intentionally disabled (R47 structural minimal); edge source is spread capture not layered signals."
+
+parameters:
+  spread_threshold_pts: 5            # R47 convention; TXFD6 current 4-pt median
+  txf_max_pos_contracts: 3
+  hedge_inv_trigger_pts: 20          # T5 brackets [10, 20, 40] per DA WARN #5
+  tmf_hedge_ratio: 20                # 200/10 TXF-to-TMF notional
+  assumed_queue_share_pct: 2.0       # T5 bracket {1, 2, 5, 10} per DA WARN #3
+  inventory_skew_tenths: 2           # 0.2 ticks/contract R47 best practice
+  tmf_taker_slippage_pts: 0          # Default 0; T5 may model 0..1 pt per WARN #4
+
+latency_profile: "shioaji_sim_p95_v2026-03-04"
+
+# Cost model — ALL values cited from memory/feedback_taifex_fee_structure.md
+# (user-confirmed 2026-04-18). DO NOT infer RT from research-side configs
+# (the R6 C14 cascade revoke was caused by exactly that anti-pattern).
+cost_model:
+  source_memo: "memory/feedback_taifex_fee_structure.md"
+  confirmed_by_user: "2026-04-18"
+  TXFD6:
+    commission_pts_per_side: 0.3
+    tax_pts_per_side: 1.2
+    rt_cost_pts: 3.0
+    point_value_ntd: 200
+    median_spread_pts: 4.3
+    cost_drag_pct: 75
+  TMFD6:
+    commission_pts_per_side: 1.3
+    tax_pts_per_side: 0.7
+    rt_cost_pts: 4.0
+    point_value_ntd: 10
+    median_spread_pts: 2
+    cost_drag_pct_if_spread_capture: 200
+    note: "TMFD6 leg is taker delta-hedge (no spread capture); 200% drag is the worst-case maker-on-TMF metric and does NOT apply to C30's hedge leg."
+
+coexistence_with_deployed_r47:
+  deployed_baseline: "R47 deployed on TMFD6 spr>=5 max_pos=1 (maker)"
+  conflict_risk: >
+    Both strategies touch TMFD6. R47 is a passive maker at TMFD6 max_pos=1;
+    C30's TMFD6 leg is a taker hedge, qty = |TXF_contracts| * 20 (e.g.
+    20 TMF at TXF=1, 40 at TXF=2, 60 at TXF=3). Combined TMFD6 exposure
+    ranges from 1 + 0 (no TXF inventory) to 1 + 60 (|TXF|=3 right before
+    hedge) to 1 + 0 (flat after hedge).
+  mitigation: >
+    Position accounting MUST distinguish C30's TMF hedge fills from R47's
+    TMF maker fills via strategy_id. T5 scorecard reports combined
+    exposure on days where both strategies would have been live.
+
+expected_edge:
+  note: "T5 backtest (CK direct, bid/ask execution, queue-share bracket) will produce binding numbers. T1 counterfactual showed +109.2 pt/cycle OOS (4 days, 123 cycles) on upper-bound fill assumption; realistic at queue_share=2% ~67 pt/day, at queue_share=5% ~170 pt/day."
+  counterfactual_method: "CK direct, TXFD6 BidAsk + Tick, MTM-to-hedge per covered cycle"
+  source_artifact: "outputs/team_artifacts/alpha-research/round-5/artifacts/researcher_t1_counterfactual_result.md"
+
+governance:
+  t1_proposal: outputs/team_artifacts/alpha-research/round-5/artifacts/researcher_t1_proposal.md
+  t1_counterfactual: outputs/team_artifacts/alpha-research/round-5/artifacts/researcher_t1_counterfactual_result.md
+  t2_review: outputs/team_artifacts/alpha-research/round-5/artifacts/da_t2_kill_checklist.md
+  t2_verdict: APPROVE
+  t2_tier1_fails: 0
+  t2_tier2_fails: 0
+  t2_warns:
+    - "WARN #1: TXF 75% + TMF 200% cost-drag — structural; do not widen gate below 5pt without fresh TXFD6 regime evidence."
+    - "WARN #2: ALL partition (14d mixed fidelity) +7.4pt/cycle is marginal; verdict relies on OOS partition."
+    - "WARN #3: Queue-share q=1% crosses into NEG-EV; T5 must bracket {1,2,5,10}%."
+    - "WARN #4: 4 OOS days is thin calendar coverage; expand at T5 as CK accrues."
+    - "WARN #5: Inventory trigger (20) not sensitivity-tested; T5 bracket [10, 20, 40]."
+    - "WARN #6: C30 TMF hedge and deployed R47 TMFD6 maker share instrument; position accounting must distinguish."
+
+shadow_kill_criterion: >
+  TXFD6 sp_med < 3 pt for 3 consecutive sessions -> auto-disable
+  (matches the TMFD6 Mar->Apr regime-shift trajectory that killed
+  TMFD6-centric variants).
+
+notes:
+  - "Research-module float exception (Rule 11 of 25-architecture-governance). Strategy operates on integer prices from CK source at scale=1_000_000; live pipeline uses x10_000."
+  - "TXFD6 live-platform price scale is x10_000; CK storage is x1_000_000. See memory/feedback_golden_data_scale."
+  - "No concurrent R47 signal layers (PE/queue/MFG) — intentional minimum per R47 structural-minimal best practice; T5 can enable them via C30Params if needed."

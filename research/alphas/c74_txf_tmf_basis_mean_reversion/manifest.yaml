@@ -1,0 +1,162 @@
+alpha_id: c74_txf_tmf_basis_mean_reversion
+name: "TXF-TMF basis mean-reversion (cross-instrument pair)"
+version: "0.1.0"
+status: prototype
+owner: alpha-research-20260419-inst-options
+strategy_type: maker               # cross_instrument_mm — not in enum, maker is closest
+instrument: "TXFD6+TMFD6"
+instruments:
+  - TXFD6
+  - TMFD6
+
+run_label: "alpha-research-20260419-inst-options"
+round_id: R10
+gate_position: "T4 implementation (post T2 APPROVE, pre T5 backtest)"
+t2_verdict: APPROVE
+
+hypothesis: >
+  Dollar-neutral TXF-TMF basis (basis = mid_txf - 20*mid_tmf) mean-reverts
+  on minutes-to-hours scale. Entry when |basis - rolling_mean| > 2 *
+  rolling_stdev (60-min adaptive window); exit on reversion to mean OR
+  30-min timeout (both MAKER); stop-loss at 4-sigma (TAKER cross). Hedge
+  ratio 20 TMF per 1 TXF per dollar-neutral physics (R5 C30 / R7 C66
+  lesson). R7 C66 passive-pair was rejected because passive-maker edge
+  was dominated by hedge-take cost; C74 avoids that by MAKER-MAKER both
+  legs with TAKER only at 4-sigma stop.
+
+mechanism_class: cross_instrument_mm_directional_basis
+
+distinction_from_killed_classes:
+  - name: "R7 C66 TXF-TMF passive pair MM"
+    distinction: >
+      C66 was a continuous-quoting passive pair maker (both sides always
+      posted); killed because per-trip edge was dominated by take-hedge
+      cost (-940 NTD/trip). C74 is OPPORTUNISTIC directional
+      mean-reversion: no continuous quoting; entries gated on |basis -
+      mu| > 2-sigma; both legs MAKER; TAKER only at 4-sigma stop. DA T2
+      confirmed R7 C66 physics DOES NOT apply (mechanism and cost profile
+      distinct).
+  - name: "R5-prior C30 hedge-qty 20x undercount"
+    distinction: >
+      R5 C30 failed because hedge-ratio was 1 (not 20). C74 uses the
+      CORRECT 1:20 dollar-neutral ratio from manifest construction.
+      Fixed by physics: 200 NTD/pt / 10 NTD/pt = 20.
+  - name: "TX-TMF-leadlag (R26/R28, stay_killed)"
+    distinction: >
+      Lead-lag was directional prediction of TXF direction using TMF
+      movement. C74 is the symmetric basis residual — treats TXF and TMF
+      as COINTEGRATED and trades the residual on mean-reversion, not
+      lead-lag. Different mechanism. DA T2 Fanelli-2023 citation covers
+      non-trivial idiosyncratic structure.
+  - name: "CBS-mean-reversion (R14-R17, stay_killed)"
+    distinction: >
+      CBS was intra-instrument mid-price mean reversion, which was a
+      mid-price artifact. C74 is inter-instrument residual with bid/ask
+      execution. Different observable (basis vs mid) and different
+      execution model (bid/ask + TAKER stop).
+
+paper_refs:
+  - r47_maker_strategy
+  - c60_tmfd6_r47_minimal_inst_rt
+  - c63_txfd6_r47_tight_spread
+  - shared-context_2026-04-19_cost_model
+  - memory/backtest_method_reliability
+  - "Fanelli 2023 futures-basis microstructure (cited in DA T2)"
+  - "2008 Avellaneda-Stoikov"
+  - "2015 Cartea-Jaimungal-Penalva"
+  - "r7_summary C66 hedge-cost-dominance lesson"
+
+signals:
+  reuse: >
+    NONE of the R47 signal layers. C74 is a NEW mechanism:
+    rolling mu/sigma over configurable window (default 60 min) on the
+    dollar-neutral basis. Entry/exit logic is distinct from R47 family.
+
+parameters:
+  window_seconds: 3600                # 60-min rolling (T5 sweeps {300, 1800, 3600})
+  entry_sigma: 2.0                    # T5 sweeps {1.5, 2.0, 2.5}
+  stop_sigma: 4.0                     # Stop-loss (TAKER cross)
+  timeout_seconds: 1800               # 30-min forced exit
+  stale_basis_filter_pt: 50           # DA T2 flag #3
+  min_samples_for_entry: 120          # warm-up before trusting mu/sigma
+  max_pos_trips: 1                    # 1 concurrent trip
+  txf_symbol: "TXFD6"
+  tmf_symbol: "TMFD6"
+  hedge_ratio_tmf_per_txf: 20         # FIXED by physics (200/10)
+
+latency_profile: "shioaji_sim_p95_v2026-03-04"
+
+cost_model:
+  source: "outputs/team_artifacts/alpha-research/shared-context.yaml#cost_model"
+  tier: "institutional_estimate"
+  confirmed: false
+  confirmation_source: "user-authorized rough estimate, 2026-04-19"
+  TXF:
+    rt_cost_pts: 1.5
+    point_value_ntd: 200
+  TMF:
+    rt_cost_pts: 1.5
+    point_value_ntd: 10
+  combined_rt_pts_equivalent: 3.0     # sum (both legs, inst)
+  hedge_ratio_tmf_per_txf: 20
+  dollar_cost_per_trip_ntd: 600       # 1.5*200 + 1.5*20*10 = 300 + 300 = 600
+                                       # (at full trip; rebate brings to ~560)
+  retail_reference:
+    source: "memory/feedback_taifex_fee_structure.md"
+    TXF_retail_rt_cost_pts: 3.0
+    TMF_retail_rt_cost_pts: 4.0
+
+# DA T2 APPROVED bounded costs (117-line checklist; 0 Tier-1/2 FAIL)
+h2_framework:
+  adjudication: "DIRECTIONAL BASIS MEAN-REVERSION — opportunistic pair"
+  cost_drag_pct: 20                   # per DA T2 (not 100% like C66)
+  conditional_on: >
+    T5 must demonstrate (a) per-trip PnL distribution (not just aggregate)
+    to validate Sharpe, (b) 2x2 session-sigma quartile x direction grid
+    is not asymmetrically negative, (c) |basis|>50 filter hit-rate is
+    logged, (d) 4-sigma stop-loss activates correctly.
+
+# DA T2 MANDATORY T5 FLAGS (10 items, all must appear in scorecard)
+da_t5_mandatory_flags:
+  - id: "1_broker_confirmation"
+    desc: "requires_broker_confirmation_before_live: true"
+  - id: "2_adaptive_rolling_sigma"
+    desc: "Fresh CK-direct with ADAPTIVE rolling-sigma (not fixed 2-sigma)"
+  - id: "3_stale_quote_filter"
+    desc: "Stale-quote filter (|basis|>50) with hit-logging"
+  - id: "4_maker_both_legs"
+    desc: "Maker-maker on both legs; 4-sigma TAKER stop-loss only"
+  - id: "5_exch_ts_alignment"
+    desc: "Cross-instrument timestamp alignment via exch_ts (not local ingest)"
+  - id: "6_per_trip_pnl_distribution"
+    desc: "Per-trip PnL distribution (not just daily aggregate) — critical for Sharpe"
+  - id: "7_no_double_count"
+    desc: "Hedge-leg PnL not double-counted (strict trip-matching per leg OR spread-basis)"
+  - id: "8_session_sigma_quartile_grid"
+    desc: "Split PnL by (direction x session-sigma quartile) 2x2 grid (asymmetry -5.84 neg vs -1.62 pos flagged)"
+  - id: "9_mutual_exclusion_c63"
+    desc: "Mutually exclusive with C63 on TXFD6 (inventory conflict)"
+  - id: "10_fanelli_precedent"
+    desc: "Verify basis has non-trivial idiosyncratic structure (not just pure correlation)"
+
+promote_prerequisites:
+  requires_broker_confirmation_before_live: true
+  mutually_exclusive_with_c63_on_txfd6: true
+  mutually_exclusive_with_c60_on_tmfd6_during_active_trip: true
+
+t1_carry_forward_flags:
+  s6_session_sigma_regime_warn: true
+
+shadow_kill_criterion: >
+  (a) 5-day rolling mean per-trip PnL < 0 for 2 consecutive windows OR
+  (b) stale-quote filter hit-rate > 10% (indicates bad snapshots or
+  regime change) OR (c) 4-sigma stop-loss fires > 5% of trips (indicates
+  regime has moved beyond mean-reversion assumption).
+
+notes:
+  - "Research-module float exception (Rule 11)."
+  - "Prices in research module use scale = 1_000_000 (CK golden parquet); live platform uses x10_000."
+  - "Cross-instrument: strategy consumes events from BOTH TXFD6 and TMFD6. Backtest runner must route events by symbol via `update_mid(symbol, tick)`."
+  - "Hedge-ratio 20 is FIXED by dollar-neutral physics. Do NOT make configurable except for test coverage."
+  - "C74 is mutually exclusive with C63 on TXFD6 during an open trip — inventory conflict. Live deployment must not co-enable."
+  - "Basis mean mu and stdev sigma are adaptive over window_seconds. Fixed-sigma variants would hit R14-prior structural-break class."
