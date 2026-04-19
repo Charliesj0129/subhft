@@ -20,7 +20,6 @@ These are the immutable laws of the HFT Platform. Violation of these laws result
 ## 3. The Async Law (Event Loop)
 **Principle**: The Python Event Loop is a single thread. Blocking it stops the world.
 - **Rule**: No synchronous IO (File/Network) or compute > 1ms on the main loop.
-- **Forbidden**: `requests`, `time.sleep`, large JSON parsing in main thread.
 - **BAD**: `requests.get()`, `time.sleep()`, `json.loads(big_file)`.
 - **GOOD**: `await client.get()`, `await asyncio.sleep()`, `orjson` in thread pool.
 - **Remediation**: Offload to thread pool or use `aiohttp`/`asyncio`.
@@ -28,7 +27,6 @@ These are the immutable laws of the HFT Platform. Violation of these laws result
 ## 4. The Precision Law (Correctness)
 **Principle**: Floating point errors accumulate and cause money loss.
 - **Rule**: Price and Balance are Discrete. All prices are scaled int (x10000).
-- **Forbidden**: `float` for `price`, `balance`, or `pnl`.
 - **BAD**: `price = 100.1 + 0.2` (float).
 - **GOOD**: `price = Decimal('100.1')` or `price_micros = 100100000`.
 - **Remediation**: Use `Decimal` (slow but safe) or `scaled int` (fast and safe).
