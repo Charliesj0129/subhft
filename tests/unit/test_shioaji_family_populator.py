@@ -190,6 +190,30 @@ class TestPopulator:
         )
         assert count == 0
 
+    def test_native_hints_carry_broker_contract(self) -> None:
+        """After populate, ``snapshot.native_hint(ref)`` returns the
+        original broker Contract object, keyed by canonical display."""
+        c = _mock_contract("TMFE6", delivery_date="2026/05/21")
+        api = _fake_api({"TMF": [c]})
+        resolver = ContractFamilyResolver()
+        populate_resolver_from_shioaji(resolver, api, today=date(2026, 4, 19))
+
+        from hft_platform.contracts.ref import FutureRef
+
+        ref = FutureRef(root="TMF", expiry=date(2026, 5, 21))
+        # native_hint() keys on display() which is "TMFE6".
+        assert resolver.snapshot.native_hint(ref) is c
+
+    def test_native_hints_cover_broker_code_alias(self) -> None:
+        """Broker ``code`` is also registered as a native_hint key, not only
+        the canonical display form (useful if the two diverge)."""
+        c = _mock_contract("TMFE6", delivery_date="2026/05/21")
+        api = _fake_api({"TMF": [c]})
+        resolver = ContractFamilyResolver()
+        populate_resolver_from_shioaji(resolver, api, today=date(2026, 4, 19))
+
+        assert resolver.snapshot.native_hints["TMFE6"] is c
+
     def test_rollover_scenario(self) -> None:
         """Before rollover: TMFE6 is R1. Simulate the May expiry passing
         and refresh: TMFF6 becomes R1 and hooks fire.

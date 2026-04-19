@@ -57,21 +57,31 @@ def _parse_delivery_to_date(value: Any) -> date | None:
     return None
 
 
-def _extract_futures(api: Any) -> dict[str, list[FutureRef]]:
-    """Walk ``api.Contracts.Futures`` and build per-root :class:`FutureRef` lists."""
+def _extract_futures(
+    api: Any,
+) -> tuple[dict[str, list[FutureRef]], dict[str, object]]:
+    """Walk ``api.Contracts.Futures`` and build:
+
+    1. per-root :class:`FutureRef` calendars for the resolver, and
+    2. a ``native_hints`` map keyed by canonical display string
+       (``FutureRef.display()``) and valued by the live broker
+       ``Contract`` object so :class:`OrderAdapter` can bypass its own
+       lookup path.
+    """
     if api is None:
-        return {}
+        return {}, {}
     contracts = getattr(api, "Contracts", None)
     futures = getattr(contracts, "Futures", None) if contracts is not None else None
     if futures is None:
-        return {}
+        return {}, {}
     try:
         roots = list(futures.keys())
     except Exception as exc:  # noqa: BLE001
         logger.debug("shioaji_family_populator_roots_failed", error=str(exc))
-        return {}
+        return {}, {}
 
     out: dict[str, list[FutureRef]] = {}
+    native_hints: dict[str, object] = {}
     for root in roots:
         try:
             contract_list = list(futures[root])
@@ -94,10 +104,21 @@ def _extract_futures(api: Any) -> dict[str, list[FutureRef]]:
             )
             if expiry is None:
                 continue
-            refs.append(FutureRef(root=str(root), expiry=expiry))
+            ref = FutureRef(root=str(root), expiry=expiry)
+            refs.append(ref)
+            # native_hint key is the canonical display form. A later
+            # ``FutureRef`` rebound to R1 keeps the same display string,
+            # so OrderAdapter can look the Contract up via ``ref.display()``
+            # without caring about family code.
+            native_hints[ref.display()] = contract
+            # Also map the broker-side code directly (may equal display
+            # for Shioaji, but keeps the door open for codes that diverge
+            # from our canonical form).
+            if code:
+                native_hints.setdefault(code, contract)
         if refs:
             out[str(root)] = refs
-    return out
+    return out, native_hints
 
 
 def populate_resolver_from_shioaji(
@@ -113,16 +134,18 @@ def populate_resolver_from_shioaji(
     """
     if today is None:
         today = datetime.now(UTC).date()
-    calendars = _extract_futures(api)
+    calendars, native_hints = _extract_futures(api)
     snapshot = build_snapshot_from_calendar(
         calendars,
         today=today,
         snapshot_ns=timebase.now_ns(),
+        native_hints=native_hints,
     )
     resolver.swap_snapshot(snapshot)
     logger.info(
         "shioaji_family_populator_snapshot_installed",
         roots=sorted(calendars.keys()),
         bindings=len(snapshot.family_map),
+        native_hints=len(native_hints),
     )
     return len(snapshot.family_map)

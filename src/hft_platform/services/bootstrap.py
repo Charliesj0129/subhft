@@ -1025,6 +1025,12 @@ class SystemBootstrapper:
 
         family_resolver = ContractFamilyResolver()
         strategy_runner.set_family_resolver(family_resolver)
+        # Option-3 Gate 3: OrderAdapter consults the resolver to prefer
+        # ``intent.contract.display()`` over ``_actual_to_config`` when the
+        # resolver knows the ref — decouples the order-out path from the
+        # fragile alias-dict propagation that was the Bug 12 root cause.
+        if hasattr(order_adapter, "set_contract_resolver"):
+            order_adapter.set_contract_resolver(family_resolver)
 
         # After broker login+subscription, re-resolve strategy/governor symbols with alias map
         md_service._post_connect_hooks.append(strategy_runner.resolve_symbol_aliases)
@@ -1064,10 +1070,9 @@ class SystemBootstrapper:
         md_service._post_connect_hooks.append(_propagate_alias_to_order_adapter)
 
         # Option-3 Gate 1 prod: post-connect populator for the ContractFamily
-        # resolver. Reads the Shioaji contract table (available after login)
+        # resolver. Reads the broker contract table (available after login)
         # and swaps the resolver snapshot. Registered *after* the legacy
-        # hooks so the family rebind does not interfere with their ordering;
-        # Fubon's populator is deferred pending a TAIFEX calendar source.
+        # hooks so the family rebind does not interfere with their ordering.
         if broker_id == "shioaji":
             from hft_platform.feed_adapter.shioaji.family_populator import (
                 populate_resolver_from_shioaji,
@@ -1084,6 +1089,20 @@ class SystemBootstrapper:
                     )
 
             md_service._post_connect_hooks.append(_populate_families_from_shioaji)
+        elif broker_id == "fubon":
+            from hft_platform.feed_adapter.fubon.family_populator import (
+                populate_resolver_from_fubon,
+            )
+
+            def _populate_families_from_fubon() -> None:
+                try:
+                    populate_resolver_from_fubon(family_resolver, md_client)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "family_populator_failed", broker="fubon", error=str(exc)
+                    )
+
+            md_service._post_connect_hooks.append(_populate_families_from_fubon)
 
         if _publish_queue is not None:
             strategy_runner.set_publish_sink(lambda ch, payload: _publish_queue.put_nowait((ch, payload)))

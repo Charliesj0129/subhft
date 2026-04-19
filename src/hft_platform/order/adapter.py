@@ -159,6 +159,12 @@ class OrderAdapter:
         self._metadata: SymbolMetadata = SymbolMetadata()
         self.price_codec: PriceCodec = PriceCodec(SymbolMetadataPriceScaleProvider(self._metadata))
         self._actual_to_config: dict[str, str] = {}  # reverse alias: TMFE6 → TMFR1
+        # Option-3 Gate 3: optional ContractFamilyResolver. When ``intent.contract``
+        # is set AND the resolver's snapshot has a native_hint for it, the
+        # adapter trusts ``intent.contract.display()`` directly as the broker
+        # code, bypassing the ``_actual_to_config`` reverse-alias lookup which
+        # was the Bug 12 (alias dict empty on restart) root cause.
+        self._contract_resolver: Any = None
 
         # State - Protected by _live_orders_lock for concurrent access
         self.live_orders: Dict[str, Any] = {}  # Map "strategy_id:intent_id" -> Trade Object or Status dict
@@ -275,6 +281,40 @@ class OrderAdapter:
         (e.g. TMFR1) that the broker SDK recognises for contract lookup.
         """
         self._actual_to_config = {actual: config for config, actual in alias_map.items()}
+
+    def set_contract_resolver(self, resolver: Any) -> None:
+        """Inject the ContractFamilyResolver so the adapter can trust
+        ``intent.contract`` when choosing the broker-side code (Gate 3).
+
+        Bootstrap wires this alongside ``set_alias_map`` so new-style intents
+        prefer the structured ref while legacy intents fall back to the
+        reverse-alias dict unchanged.
+        """
+        self._contract_resolver = resolver
+
+    def _resolve_broker_contract_code(self, intent: OrderIntent) -> str:
+        """Pick the correct broker-side code for ``intent``.
+
+        Preference order:
+        1. ``intent.contract.display()`` when a ContractFamilyResolver is
+           wired and recognises the ref via its ``native_hints`` snapshot.
+           This is the Gate-3 happy path and does not depend on
+           ``_actual_to_config`` being populated by a post-connect hook.
+        2. ``_actual_to_config[intent.symbol]`` — the legacy reverse-alias
+           path, retained for intents built before Gate 3 and for brokers
+           that have not yet been populated into the resolver.
+        3. ``intent.symbol`` as a last resort.
+        """
+        contract = getattr(intent, "contract", None)
+        resolver = self._contract_resolver
+        if contract is not None and resolver is not None:
+            try:
+                snapshot = resolver.snapshot
+                if snapshot.native_hint(contract) is not None:
+                    return contract.display()
+            except Exception:  # noqa: BLE001 — fall back silently
+                pass
+        return self._actual_to_config.get(intent.symbol, intent.symbol)
 
     def _send_dispatch_rejection(
         self,
@@ -1536,10 +1576,12 @@ class OrderAdapter:
                         self._remove_pending_fill(order_key)
                         return False
 
-                # Resolve actual month code back to config code for broker
-                # contract lookup (e.g. TMFE6 → TMFR1). Shioaji SDK indexes
-                # continuous contracts by R1/R2 code, not the resolved month.
-                order_contract_code = self._actual_to_config.get(intent.symbol, intent.symbol)
+                # Resolve the broker-side contract code. Gate 3 prefers
+                # ``intent.contract.display()`` when the resolver has a native
+                # hint for it (structured path); falls back to the reverse
+                # alias dict for legacy intents. See
+                # :meth:`_resolve_broker_contract_code` for ordering rationale.
+                order_contract_code = self._resolve_broker_contract_code(intent)
                 trade = await self._call_api(
                     "place_order",
                     self.client.place_order,
