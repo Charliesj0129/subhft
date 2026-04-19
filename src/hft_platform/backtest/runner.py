@@ -32,7 +32,7 @@ class HftBacktestConfig:
     risk_config: Any = None  # BacktestRiskConfig or None
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class HftBacktestRunResult:
     run_id: str
     config_hash: str
@@ -45,6 +45,42 @@ class HftBacktestRunResult:
     report_path: str | None
     risk_rejection_count: int = 0
     risk_rejection_breakdown: dict[str, int] = field(default_factory=dict)
+
+    def __init__(
+        self,
+        *,
+        run_id: str,
+        config_hash: str,
+        symbol: str,
+        strategy_name: str,
+        data: str | None = None,
+        data_path: str | None = None,
+        pnl: float,
+        equity_points: int,
+        used_synthetic_equity: bool,
+        report_path: str | None,
+        risk_rejection_count: int = 0,
+        risk_rejection_breakdown: dict[str, int] | None = None,
+    ) -> None:
+        resolved_data_path = data_path if data_path is not None else data
+        if resolved_data_path is None:
+            raise TypeError("HftBacktestRunResult requires 'data' or 'data_path'")
+
+        object.__setattr__(self, "run_id", run_id)
+        object.__setattr__(self, "config_hash", config_hash)
+        object.__setattr__(self, "symbol", symbol)
+        object.__setattr__(self, "strategy_name", strategy_name)
+        object.__setattr__(self, "data_path", resolved_data_path)
+        object.__setattr__(self, "pnl", pnl)
+        object.__setattr__(self, "equity_points", equity_points)
+        object.__setattr__(self, "used_synthetic_equity", used_synthetic_equity)
+        object.__setattr__(self, "report_path", report_path)
+        object.__setattr__(self, "risk_rejection_count", risk_rejection_count)
+        object.__setattr__(self, "risk_rejection_breakdown", dict(risk_rejection_breakdown or {}))
+
+    @property
+    def data(self) -> str:
+        return self.data_path
 
 
 class HftBacktestRunner:

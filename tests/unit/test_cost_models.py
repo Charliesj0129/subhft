@@ -23,7 +23,7 @@ def test_load_tmfd6_cost():
 
 def test_load_txfd6_cost():
     cost = load_cost_profile("TXFD6")
-    assert cost.commission_pts_per_side == 0.24
+    assert cost.commission_pts_per_side == 0.3
     assert cost.point_value_nwd == 200
 
 

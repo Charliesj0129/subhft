@@ -104,7 +104,7 @@ def _forward_returns(prices: np.ndarray, horizon: int = _FORWARD_HORIZON) -> np.
     fwd = np.full(len(prices), np.nan)
     base = prices[:-horizon].astype(np.float64)
     safe = prices[horizon:].astype(np.float64)
-    mask = base != 0.0
+    mask = (base > 0.0) & (safe > 0.0)
     fwd[:-horizon][mask] = np.log(safe[mask] / base[mask])
     return fwd
 

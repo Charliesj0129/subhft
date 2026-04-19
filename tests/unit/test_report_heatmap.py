@@ -54,12 +54,13 @@ def _make_session_data() -> SessionData:
     )
 
 
-def test_generate_heatmap_returns_png_bytes():
+def test_generate_heatmap_returns_png_bytes(recwarn):
     sd = _make_session_data()
     result = generate_heatmap(sd)
     assert isinstance(result, bytes)
     assert result[:4] == b"\x89PNG"
     assert len(result) > 1000
+    assert not [w for w in recwarn if issubclass(w.category, UserWarning)]
 
 
 def test_generate_heatmap_empty_data():
