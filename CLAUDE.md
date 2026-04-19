@@ -107,23 +107,9 @@ Two splits in the codebase can look confusing but are intentional:
 
 Do not rename these packages — they are load-bearing across hundreds of imports. Add a new package if you need a new layer.
 
-## 📦 Key Data Contracts (Scaled Int Convention)
+## 📦 Key Data Contracts
 
-All price fields are `int` scaled by **x10000** (configurable per symbol in `symbols.yaml`).
-
-```
-OrderIntent → (Risk) → RiskDecision → OrderCommand → (Broker) → FillEvent → PositionDelta
-```
-
-| Contract        | File                     | Key Fields                                                          |
-| --------------- | ------------------------ | ------------------------------------------------------------------- |
-| `OrderIntent`   | `contracts/strategy.py`  | `price: int`, `qty: int`, `side: Side`, `idempotency_key`, `ttl_ns` |
-| `OrderCommand`  | `contracts/strategy.py`  | `cmd_id`, `deadline_ns`, `storm_guard_state`                        |
-| `FillEvent`     | `contracts/execution.py` | `price: int`, `fee: int`, `tax: int` (all x10000)                   |
-| `PositionDelta` | `contracts/execution.py` | `net_qty`, `avg_price: int`, `realized_pnl: int`                    |
-| `TickEvent`     | `events.py`              | `price: int` (x10000), `volume`, `meta: MetaData`                   |
-| `BidAskEvent`   | `events.py`              | `bids/asks: np.ndarray` shape (N,2), `stats: tuple`                 |
-| `LOBStatsEvent` | `events.py`              | `mid_price_x2: int`, `spread_scaled: int`, `imbalance: float`       |
+All prices are scaled int (x10000). Contract flow: `OrderIntent → RiskDecision → OrderCommand → FillEvent → PositionDelta`. Field reference (per-contract files and columns): `.claude/skills/hft-data-contracts/` (on-demand skill).
 
 ## ⚙️ Config Priority Chain
 
