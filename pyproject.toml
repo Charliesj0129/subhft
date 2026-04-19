@@ -73,11 +73,13 @@ pythonpath = ["."]
 norecursedirs = [
     "research",
     ".venv",
+    ".hypothesis",
     "data",
     "examples",
     "scripts",
 ]
 markers = [
+    "unit: unit-level tests",
     "blackbox: black-box CLI/system interface tests",
     "regression: regression tests for fixed defects",
     "stress: stress and load tests",
