@@ -344,11 +344,12 @@ def test_ic_weighted_all_zero_ic():
 # ---------------------------------------------------------------------------
 
 
-def test_mean_variance_with_short_returns():
+def test_mean_variance_with_short_returns(recwarn):
     data = np.array([[1.0], [2.0]])
     returns = np.array([0.5])
     result = _mean_variance(data, returns)
     assert result.shape[0] == 2
+    assert not [w for w in recwarn if issubclass(w.category, RuntimeWarning)]
 
 
 def test_mean_variance_all_zero_mu():

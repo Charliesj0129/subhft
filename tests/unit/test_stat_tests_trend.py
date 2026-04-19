@@ -146,13 +146,14 @@ class TestEdgeCases:
         assert result["passed"] is True
         assert "insufficient_data" in result["detail"]
 
-    def test_constant_signal(self) -> None:
+    def test_constant_signal(self, recwarn) -> None:
         n = 2000
         mid = np.linspace(100, 110, n)
         signal = np.ones(n) * 0.5
         result = _evaluate_trend_contamination(signal, mid)
         # Constant signal has zero IC, should not be monotonic
         assert result["monotonic_ic"]["is_monotonic"] is False
+        assert not [w for w in recwarn if issubclass(w.category, RuntimeWarning)]
 
     def test_constant_mid_prices(self) -> None:
         n = 2000

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import multiprocessing as mp
 import os
 import pickle
 from dataclasses import replace
@@ -62,13 +63,22 @@ def _submit_grid_points(
     Falls back to sequential execution when alpha/runner_cls are not picklable
     (e.g. locally-defined classes in tests or lambdas).
     """
+    if max_workers <= 1:
+        return [_run_single_grid_point(alpha, runner_cls, base_cfg, t, objective_mode) for t in thresholds]
+
     # Pre-check picklability to avoid spawning processes that will fail
     try:
         pickle.dumps((alpha, runner_cls, base_cfg))
     except (pickle.PicklingError, AttributeError, TypeError):
         return [_run_single_grid_point(alpha, runner_cls, base_cfg, t, objective_mode) for t in thresholds]
 
-    with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+    executor_kwargs: dict[str, Any] = {"max_workers": max_workers}
+    if max_workers > 1:
+        # Python 3.12 warns on forking multi-threaded processes. Use an
+        # explicit spawn context so parallel optimization stays warning-free.
+        executor_kwargs["mp_context"] = mp.get_context("spawn")
+
+    with concurrent.futures.ProcessPoolExecutor(**executor_kwargs) as executor:
         futures = [
             executor.submit(
                 _run_single_grid_point,

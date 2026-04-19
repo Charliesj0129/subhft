@@ -43,9 +43,15 @@ def _evaluate_oos_statistical_tests(
             "tests": {},
         }
 
-    t_res = stats.ttest_1samp(arr, popmean=0.0, alternative="greater", nan_policy="omit")
-    t_pvalue = float(t_res.pvalue) if np.isfinite(getattr(t_res, "pvalue", np.nan)) else 1.0
-    t_pass = bool(t_pvalue <= pvalue_threshold)
+    mean_return = float(np.mean(arr))
+    std_return = float(np.std(arr))
+    if std_return <= 1e-12:
+        t_pvalue = 0.0 if mean_return > 0.0 else 1.0
+        t_pass = bool(t_pvalue <= pvalue_threshold)
+    else:
+        t_res = stats.ttest_1samp(arr, popmean=0.0, alternative="greater", nan_policy="omit")
+        t_pvalue = float(t_res.pvalue) if np.isfinite(getattr(t_res, "pvalue", np.nan)) else 1.0
+        t_pass = bool(t_pvalue <= pvalue_threshold)
 
     wilcoxon_pvalue = 1.0
     wilcoxon_pass = False
@@ -105,8 +111,8 @@ def _evaluate_oos_statistical_tests(
         "tests_required": int(min_tests_pass),
         "diagnostic_gate_passed": bool(diagnostic_gate_passed),
         "pvalue_threshold": float(pvalue_threshold),
-        "mean_return": float(np.mean(arr)),
-        "std_return": float(np.std(arr)),
+        "mean_return": mean_return,
+        "std_return": std_return,
         "tests": tests,
     }
 
@@ -248,6 +254,8 @@ def _bds_correlation_delta(arr: np.ndarray, epsilon: float) -> float:
 
 def _safe_spearmanr(a: np.ndarray, b: np.ndarray) -> float:
     """Spearman rank correlation, returning NaN on degenerate input."""
+    if np.std(a) <= 1e-12 or np.std(b) <= 1e-12:
+        return float("nan")
     corr, _ = stats.spearmanr(a, b)
     return float(corr) if np.isfinite(corr) else float("nan")
 

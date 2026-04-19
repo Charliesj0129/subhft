@@ -173,7 +173,7 @@ def test_evaluate_oos_statistical_tests_bootstrap_ci_keys():
     assert "pass" in boot
 
 
-def test_evaluate_oos_statistical_tests_filters_nonfinite():
+def test_evaluate_oos_statistical_tests_filters_nonfinite(recwarn):
     # Include some NaN/inf in the array — they should be stripped.
     arr = np.array([0.02] * 25 + [np.nan, np.inf, -np.inf, float("nan")])
     result = _evaluate_oos_statistical_tests(
@@ -184,6 +184,7 @@ def test_evaluate_oos_statistical_tests_filters_nonfinite():
     )
     # Finite sample count should be 25
     assert result["sample_count"] == 25
+    assert not [w for w in recwarn if issubclass(w.category, RuntimeWarning)]
 
 
 # ---------------------------------------------------------------------------
