@@ -9,7 +9,7 @@ global_limits:
 global_defaults:
   max_notional: 500000000            # 50K NTD x10000
   per_symbol_max_notional: 5000000000 # Single symbol = full capital for futures
-  max_position_lots: 2               # Exception live rollout cap: R47=1 + C33=1 only
+  max_position_lots: 1               # Emergency rollback: single-lot live cap across the engine
   max_daily_loss: 50000000           # 5,000 NTD x10000 (triggers rejection)
   max_price_cap: 5000.0              # Stocks: max 5,000 NTD per share
   max_price_cap_futures: 50000.0     # Futures: max 50,000 NTD (covers TMF/TXF/MXF)
@@ -35,7 +35,7 @@ strategies:
     max_position_lots: 1             # Hard cap = strategy max_pos (RC-1 incident 2026-04-15)
     max_order_qty: 1                 # 1 lot per quote side
   R47_MAKER_TMF:
-    max_position_lots: 2             # User-approved live cap increase; keep parity with strategy max_pos
+    max_position_lots: 1             # Emergency rollback to strategy max_pos parity
     max_order_qty: 1                 # 1 lot per quote side
   C14_TXF_FRONTMONTH_MAKER:
     # Shadow-only defaults. Post-PROMOTE R6 2026-04-17.

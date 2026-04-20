@@ -134,7 +134,7 @@ strategies:
       toxicity_max: 9999           # Disabled (negligible on TMFD6)
       qi_skew_threshold: 0.10     # D4: QI |imbalance| > 0.10 → widen adverse side
       qi_widen_ticks: 1           # Widen by 1 tick (w=1 optimal for total PnL + Sharpe)
-      max_pos: 2                   # User-approved live cap increase to 2 lots (2026-04-19)
+      max_pos: 1                   # Emergency rollback to 1 lot after 2026-04-20 HALT episode
 
   # --- Electronic Eye (TXO Options MM + Delta Hedge) — DISABLED ---
   # Phase 3: Automated options market-making with delta-neutral hedging.
