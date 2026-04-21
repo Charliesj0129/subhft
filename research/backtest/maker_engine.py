@@ -63,6 +63,31 @@ class Hold:
     pass
 
 
+@dataclass(frozen=True)
+class LatencyProfile:
+    """D5 (2026-04-21 incident): broker latency model for live-faithful backtest.
+
+    ``place_ns``: nanoseconds between ``PostQuote`` returned by the strategy
+    and the order becoming visible (fillable) on the book. Zero = instant RTT.
+
+    ``cancel_ns``: nanoseconds between ``CancelQuote`` and the order being
+    removed from the book. During this window trades can still adversely
+    fill the order that is "in flight to cancel".
+
+    Real-world example — Shioaji sim API today shows P95 RTT ~800 ms
+    (``docs/architecture/latency-baseline-shioaji-sim-vs-system.md``). Use
+    :meth:`shioaji_p95` for a canned profile.
+    """
+
+    place_ns: int = 0
+    cancel_ns: int = 0
+
+    @classmethod
+    def shioaji_p95(cls) -> "LatencyProfile":
+        """Shioaji sim API P95 RTT (800 ms) applied symmetrically."""
+        return cls(place_ns=800_000_000, cancel_ns=800_000_000)
+
+
 class MakerStrategy(Protocol):
     """Strategy decides when/where to quote. Engine decides fills."""
 
@@ -194,17 +219,20 @@ class ClickHouseSource:
 class MakerEngine:
     """CK-direct maker backtest engine."""
 
-    __slots__ = ("_fill_model", "_cost_model", "_ck_source")
+    __slots__ = ("_fill_model", "_cost_model", "_ck_source", "_latency")
 
     def __init__(
         self,
         fill_model: FillModel,
         cost_model: CostModel,
         ck_source: ClickHouseSource | None = None,
+        latency_profile: LatencyProfile | None = None,
     ) -> None:
         self._fill_model = fill_model
         self._cost_model = cost_model
         self._ck_source = ck_source or ClickHouseSource()
+        # D5: None = instant-RTT (backward compat). Set for live-faithful sim.
+        self._latency = latency_profile
 
     @property
     def engine_type(self) -> str:
@@ -338,14 +366,47 @@ class MakerEngine:
         strategy: MakerStrategy,
         events: list[TickData],
     ) -> tuple[list[dict], int]:
-        """Run strategy on one day of events."""
+        """Run strategy on one day of events.
+
+        When ``self._latency`` is set, PostQuote/CancelQuote actions do not
+        take effect immediately — they are queued with an activation timestamp
+        and applied once the market clock reaches it. This models broker RTT
+        (Shioaji P95 ~800 ms today) and reproduces the adverse-selection
+        window where a cancel is in flight but a trade still fills the order.
+        """
         buy_order: QueuePosition | None = None
         sell_order: QueuePosition | None = None
         position = 0
         fills: list[dict] = []
         cur_bid = cur_ask = cur_bid_v = cur_ask_v = 0
 
+        # D5 pending-action queues. Each entry is (activation_ts, op, payload).
+        # op ∈ {"place_buy", "place_sell", "cancel_buy", "cancel_sell"}.
+        pending: list[tuple[int, str, QueuePosition | None]] = []
+        place_ns = self._latency.place_ns if self._latency else 0
+        cancel_ns = self._latency.cancel_ns if self._latency else 0
+
+        def _apply_pending(now_ts: int) -> None:
+            """Drain pending actions with activation_ts <= now_ts."""
+            nonlocal buy_order, sell_order, pending
+            remaining: list[tuple[int, str, QueuePosition | None]] = []
+            for ts, op, payload in pending:
+                if ts <= now_ts:
+                    if op == "place_buy":
+                        buy_order = payload
+                    elif op == "place_sell":
+                        sell_order = payload
+                    elif op == "cancel_buy":
+                        buy_order = None
+                    elif op == "cancel_sell":
+                        sell_order = None
+                else:
+                    remaining.append((ts, op, payload))
+            pending = remaining
+
         for event in events:
+            _apply_pending(event.exch_ts)  # D5: drain latency queue first
+
             if not event.is_trade:
                 cur_bid = event.bid_price
                 cur_ask = event.ask_price
@@ -368,15 +429,25 @@ class MakerEngine:
                             action.price,
                             cur_bid_v if action.side == "buy" else cur_ask_v,
                         )
-                        if action.side == "buy":
-                            buy_order = qp
+                        # D5: schedule placement at event.exch_ts + place_ns.
+                        # With place_ns=0 (default), this is applied this tick.
+                        op = "place_buy" if action.side == "buy" else "place_sell"
+                        if place_ns == 0:
+                            if action.side == "buy":
+                                buy_order = qp
+                            else:
+                                sell_order = qp
                         else:
-                            sell_order = qp
+                            pending.append((event.exch_ts + place_ns, op, qp))
                     elif isinstance(action, CancelQuote):
-                        if action.side == "buy":
-                            buy_order = None
+                        op = "cancel_buy" if action.side == "buy" else "cancel_sell"
+                        if cancel_ns == 0:
+                            if action.side == "buy":
+                                buy_order = None
+                            else:
+                                sell_order = None
                         else:
-                            sell_order = None
+                            pending.append((event.exch_ts + cancel_ns, op, None))
             else:
                 mid = (
                     (cur_bid + cur_ask) / (2 * event.scale) if cur_bid > 0 else 0
