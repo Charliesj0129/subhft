@@ -251,6 +251,76 @@ class TestReconciliationService:
         assert "RECONCILIATION_UNAVAILABLE" in storm_guard.trigger_halt.call_args[0][0]
 
     @pytest.mark.asyncio
+    async def test_run_loop_off_session_does_not_escalate_to_halt(self):
+        """Bug #38: outside TAIFEX trading hours, repeated sync failures must
+        NOT increment the failure counter and must NOT trigger HALT — broker
+        often returns None/errors when the market is closed (overnight gap),
+        and the previous behaviour produced false-positive HALT cycles."""
+        svc, storm_guard = make_recon_service(
+            config={"reconciliation": {"check_interval_s": 0.01, "grace_failures": 2}},
+        )
+
+        call_count = 0
+
+        async def sync_side_effect():
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return  # startup sync succeeds
+            if call_count >= 8:
+                svc.running = False
+                return
+            raise RuntimeError("get_positions returned None")
+
+        with (
+            patch.object(svc, "sync_portfolio", side_effect=sync_side_effect),
+            patch.object(svc, "_update_failure_gauge"),
+            patch.object(svc, "_in_trading_hours", return_value=False),
+            patch(
+                "hft_platform.execution.reconciliation._compute_backoff_delay",
+                return_value=0.001,
+            ),
+        ):
+            await svc.run()
+
+        storm_guard.trigger_halt.assert_not_called()
+        assert svc._consecutive_failures == 0
+        assert svc._halt_triggered is False
+
+    @pytest.mark.asyncio
+    async def test_run_loop_in_session_still_escalates(self):
+        """Sanity check: with the off-session gate explicitly inactive, the
+        legacy HALT-on-grace-exceeded path still fires."""
+        svc, storm_guard = make_recon_service(
+            config={"reconciliation": {"check_interval_s": 0.01, "grace_failures": 2}},
+        )
+
+        call_count = 0
+
+        async def sync_side_effect():
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return
+            if call_count >= 5:
+                svc.running = False
+                return
+            raise RuntimeError("broker down")
+
+        with (
+            patch.object(svc, "sync_portfolio", side_effect=sync_side_effect),
+            patch.object(svc, "_update_failure_gauge"),
+            patch.object(svc, "_in_trading_hours", return_value=True),
+            patch(
+                "hft_platform.execution.reconciliation._compute_backoff_delay",
+                return_value=0.001,
+            ),
+        ):
+            await svc.run()
+
+        storm_guard.trigger_halt.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_run_loop_success_resets_consecutive_failures(self):
         """A successful sync resets _consecutive_failures to 0."""
         svc, _ = make_recon_service(

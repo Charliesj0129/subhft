@@ -110,6 +110,8 @@ class OrderAdapter:
         "_dedup_store",
         "_phantom_order_keys",
         "_phantom_order_max",
+        "_phantom_intents",
+        "_phantom_recovery_ttl_s",
         "_audit_writer",
         "_rejection_sink",
         "_pending_fill_index",
@@ -178,6 +180,14 @@ class OrderAdapter:
         # Bounded deque: auto-evicts oldest entries when full (OOM protection)
         self._deferred_terminals: collections.deque[tuple[str, str, float]] = collections.deque(maxlen=256)
 
+        # Bug #29: bounded LRU of recently-terminal order_keys, populated by
+        # on_terminal_state. Used by CANCEL path to distinguish race-loser
+        # (order filled/cancelled just before CANCEL arrived → success) from
+        # genuine unknown order_id (typo / strategy bug → preserve WARNING+DLQ).
+        self._recently_terminal_orders: collections.OrderedDict[str, tuple[float, str]] = collections.OrderedDict()
+        self._recently_terminal_max: int = int(os.getenv("HFT_RECENT_TERMINAL_MAX", "2048"))
+        self._recently_terminal_ttl_s: float = float(os.getenv("HFT_RECENT_TERMINAL_TTL_S", "60"))
+
         # Helpers
         self.rate_limiter = RateLimiter(soft_cap=180, hard_cap=250, window_s=10)
         self.circuit_breaker = CircuitBreaker(threshold=5, timeout_s=60)
@@ -214,6 +224,15 @@ class OrderAdapter:
         # R2-03: Bounded dict with TTL eviction (Architecture Governance Rule 12)
         self._phantom_order_keys: dict[str, tuple[float, str]] = {}  # key -> (monotonic timestamp, symbol)
         self._phantom_order_max: int = 1000
+        # Bug D (2026-04-20): preserve the originating intent so the recovery
+        # janitor can emit a was_approved=False feedback (releasing strategy
+        # pending counters) when the broker never sends a fill or cancel
+        # callback for a phantom (Shioaji client-side exceptions don't always
+        # reach the exchange, leaving R47 frozen on poisoned _pending_buy/sell).
+        self._phantom_intents: dict[str, OrderIntent] = {}
+        self._phantom_recovery_ttl_s: float = float(
+            os.getenv("HFT_PHANTOM_RECOVERY_TTL_S", "30")
+        )
 
         # Pending fill index: maps "{symbol}:{side}" -> [order_key, ...] for strategy_id
         # resolution in deal callbacks where order_id_map has no seed data (Shioaji futures).
@@ -483,6 +502,132 @@ class OrderAdapter:
                     pass
         return evicted
 
+    async def _handle_dispatch_exception(self, *, intent: OrderIntent, cmd_id: int) -> None:
+        """Bug D' (2026-04-20): single-source exception handler for _api_worker.
+
+        Phantom-candidate intents (NEW, FORCE_FLAT) take a hygienic path:
+        log at WARNING (not ERROR), and do NOT inflate ``order_reject_total``
+        or trip the global circuit breaker — the order may have reached the
+        broker and counting it as a real reject corrupts dashboards, fires
+        false Telegram CRITICAL alerts, and can stop a healthy strategy.
+
+        Genuine non-phantom dispatch failures keep the original full-reject
+        accounting (CB armed, reject metric inc'd, ERROR-level log).
+        """
+        is_phantom_candidate = intent.intent_type in (IntentType.NEW, IntentType.FORCE_FLAT)
+        # Always release dedup so strategy can retry with the same idempotency key
+        self._dedup_release(intent.idempotency_key)
+
+        if is_phantom_candidate:
+            logger.warning(
+                "_api_worker: dispatch failed for phantom candidate",
+                cmd_id=cmd_id,
+                symbol=intent.symbol,
+                exc_info=True,
+            )
+        else:
+            logger.error(
+                "_api_worker: dispatch failed for single order",
+                cmd_id=cmd_id,
+                symbol=intent.symbol,
+                exc_info=True,
+            )
+            self.metrics.order_reject_total.inc()
+            self.circuit_breaker.record_failure()
+            self._update_cb_metric()
+            self.strategy_cb_mgr.record_failure(intent.strategy_id)
+
+        # Bug 23: phantom_pending=True keeps strategy pending elevated so the
+        # strategy doesn't emit a duplicate while the broker may still fill.
+        # The Bug D recovery janitor will release pending after TTL if no
+        # callback arrives.
+        self._send_dispatch_rejection(
+            intent,
+            "dispatch_failed",
+            phantom_pending=is_phantom_candidate,
+        )
+
+        if is_phantom_candidate:
+            phantom_key = f"{intent.strategy_id}:{intent.intent_id}"
+            self._phantom_order_keys[phantom_key] = (time.monotonic(), intent.symbol)
+            self._phantom_intents[phantom_key] = intent
+            if len(self._phantom_order_keys) > self._phantom_order_max:
+                cutoff = time.monotonic() - 3600.0
+                stale = [k for k, v in self._phantom_order_keys.items() if v[0] <= cutoff]
+                for sk in stale:
+                    del self._phantom_order_keys[sk]
+                    self._phantom_intents.pop(sk, None)
+            logger.warning(
+                "phantom_order_candidate_dispatch_failed",
+                strategy_id=intent.strategy_id,
+                symbol=intent.symbol,
+                order_key=phantom_key,
+                cmd_id=cmd_id,
+            )
+            self.metrics.phantom_order_candidates_total.inc()
+
+        # Clean up live_orders sentinel to prevent permanent slot occupation
+        order_key = f"{intent.strategy_id}:{intent.intent_id}"
+        async with self._live_orders_lock:
+            if self.live_orders.get(order_key) is _PENDING_SENTINEL:
+                del self.live_orders[order_key]
+                self._pending_order_keys.discard(order_key)
+        # NOTE: do NOT remove pending_fill for phantom candidates — the order
+        # may have reached the broker and fills arriving later need the
+        # pending_fill_index for strategy_id resolution.
+
+    async def release_stale_phantom_pendings(self, ttl_s: float | None = None) -> int:
+        """Bug D (2026-04-20): release strategy pending counters for phantoms past TTL.
+
+        Phantom-pending feedbacks (was_approved=True) keep strategy
+        ``_pending_buy/_pending_sell`` counters elevated indefinitely while
+        waiting for a fill or cancel callback. When the broker never sends one
+        (Shioaji client-side exception that didn't reach the exchange — confirmed
+        via Shioaji enumeration during 2026-04-20 incident), the strategy stays
+        frozen. After ``ttl_s`` seconds we assume the phantom is orphaned and
+        emit a fresh feedback with ``was_approved=False`` so the strategy
+        releases the slot.
+
+        Trade-off: if a phantom does later fill, on_fill will create an
+        unexpected position update on the strategy. With 30s default TTL this
+        is rare (broker callbacks normally arrive sub-second).
+
+        Returns the number of phantoms released. Called from supervisor loop.
+        """
+        if not self._phantom_order_keys:
+            return 0
+        ttl = ttl_s if ttl_s is not None else self._phantom_recovery_ttl_s
+        now_mono = time.monotonic()
+        released = 0
+        for pkey, entry in list(self._phantom_order_keys.items()):
+            ts, _symbol = entry if isinstance(entry, tuple) else (entry, "")
+            if (now_mono - ts) < ttl:
+                continue
+            intent = self._phantom_intents.pop(pkey, None)
+            self._phantom_order_keys.pop(pkey, None)
+            if intent is None:
+                # Phantom registered before this fix shipped, or already drained
+                # via resolve_phantom_fill — nothing to send.
+                continue
+            self._send_dispatch_rejection(
+                intent,
+                "phantom_recovery_ttl_expired",
+                phantom_pending=False,
+            )
+            released += 1
+            try:
+                self.metrics.phantom_recovery_releases_total.inc()
+            except Exception:
+                pass
+        if released:
+            logger.warning(
+                "phantom_recovery_swept",
+                released=released,
+                ttl_s=ttl,
+                remaining=len(self._phantom_order_keys),
+            )
+        return released
+
     async def _run_blocking_call(self, fn: Any, *args: Any, **kwargs: Any) -> Any:
         """Run a synchronous broker call off-loop without using the loop's default executor.
 
@@ -524,6 +669,7 @@ class OrderAdapter:
     def clear_phantom_candidate(self, key: str) -> None:
         """Remove a phantom order key after reconciliation confirms resolution."""
         self._phantom_order_keys.pop(key, None)
+        self._phantom_intents.pop(key, None)
 
     def resolve_phantom_fill(self, fill_event: Any) -> str | None:
         """Attempt to resolve an orphaned fill against phantom order candidates.
@@ -567,6 +713,7 @@ class OrderAdapter:
                 strategy_id = order_key.split(":", 1)[0] if ":" in order_key else order_key
                 # Clear phantom candidate if it matches
                 self._phantom_order_keys.pop(order_key, None)
+                self._phantom_intents.pop(order_key, None)
                 logger.warning(
                     "phantom_fill_resolved_via_pending_index",
                     symbol=symbol,
@@ -588,6 +735,7 @@ class OrderAdapter:
                 continue
             strategy_id = pkey.split(":", 1)[0] if ":" in pkey else pkey
             self._phantom_order_keys.pop(pkey, None)
+            self._phantom_intents.pop(pkey, None)
             logger.warning(
                 "phantom_fill_resolved_via_phantom_keys",
                 symbol=symbol,
@@ -889,6 +1037,31 @@ class OrderAdapter:
         logger.info("Order drain complete", cancelled=cancelled, total=len(live_keys))
         return cancelled
 
+    def _record_recent_terminal(self, order_key: str, reason: str) -> None:
+        """Bug #29: remember recently-terminal order_keys for idempotent cancel.
+        Bounded LRU + TTL eviction; called next to live_orders deletion."""
+        now = time.monotonic()
+        self._recently_terminal_orders[order_key] = (now, reason)
+        self._recently_terminal_orders.move_to_end(order_key)
+        cutoff = now - self._recently_terminal_ttl_s
+        while self._recently_terminal_orders:
+            oldest_key = next(iter(self._recently_terminal_orders))
+            ts, _ = self._recently_terminal_orders[oldest_key]
+            if ts < cutoff or len(self._recently_terminal_orders) > self._recently_terminal_max:
+                self._recently_terminal_orders.popitem(last=False)
+            else:
+                break
+
+    def _is_recently_terminal(self, order_key: str) -> bool:
+        entry = self._recently_terminal_orders.get(order_key)
+        if entry is None:
+            return False
+        ts, _ = entry
+        if time.monotonic() - ts > self._recently_terminal_ttl_s:
+            self._recently_terminal_orders.pop(order_key, None)
+            return False
+        return True
+
     async def on_terminal_state(self, strategy_id: str, order_id: str) -> None:
         """Called when an order reaches a terminal state (Filled, Cancelled, Rejected)."""
         resolved_order_key = f"{strategy_id}:{order_id}" if order_id is not None else f"{strategy_id}:"
@@ -901,6 +1074,7 @@ class OrderAdapter:
                 # Normal path — order is registered, clean up
                 logger.info("Removing terminal order", key=order_key)
                 del self.live_orders[order_key]
+                self._record_recent_terminal(order_key, reason="terminal")
                 # Clean up e2e latency tracking entry (SLO-2)
                 self._cmd_created_ns_map.pop(order_key, None)
                 # Clean up TCA price tracking entry
@@ -941,6 +1115,7 @@ class OrderAdapter:
             if order_key in self.live_orders:
                 logger.info("Removing terminal order", key=order_key)
                 del self.live_orders[order_key]
+                self._record_recent_terminal(order_key, reason="terminal")
         self._remove_pending_fill(resolved_order_key)
 
         # Also clean up rate limit window if needed? No, rate limit is distinct.
@@ -1137,7 +1312,7 @@ class OrderAdapter:
         if _is_halt and not _halt_exempt:
             await self._add_to_dlq(
                 intent,
-                RejectionReason.VALIDATION_ERROR,
+                RejectionReason.STORMGUARD_HALT,
                 "StormGuard HALT",
                 halt_exempt_blocked=self._is_strategy_halt_exempt(intent.strategy_id),
             )
@@ -1159,7 +1334,7 @@ class OrderAdapter:
                     prior_approved=existing.approved,
                 )
                 self.metrics.order_reject_total.inc()
-                await self._add_to_dlq(intent, RejectionReason.VALIDATION_ERROR, "Duplicate idempotency_key")
+                await self._add_to_dlq(intent, RejectionReason.IDEMPOTENCY_DUPLICATE, "Duplicate idempotency_key")
                 return
 
         # R2-01: Track whether we reserved a dedup slot so we can release it on
@@ -1196,7 +1371,7 @@ class OrderAdapter:
             if not self._platform_degrade_allows(intent):
                 self.metrics.order_reject_total.inc()
                 self._emit_trace("order_reject", intent, {"reason": "platform_reduce_only", "cmd_id": int(cmd.cmd_id)})
-                await self._add_to_dlq(intent, RejectionReason.VALIDATION_ERROR, "Platform is in reduce-only mode")
+                await self._add_to_dlq(intent, RejectionReason.PLATFORM_REDUCE_ONLY, "Platform is in reduce-only mode")
                 return
             self._reserve_platform_reduce_only_close(intent)
 
@@ -1486,7 +1661,7 @@ class OrderAdapter:
                     logger.error("No broker codec configured — cannot dispatch order", symbol=intent.symbol)
                     self.metrics.order_reject_total.inc()
                     self._dedup_commit(intent.idempotency_key, False, "no_broker_codec", cmd.cmd_id)
-                    await self._add_to_dlq(intent, RejectionReason.VALIDATION_ERROR, "no_broker_codec")
+                    await self._add_to_dlq(intent, RejectionReason.BROKER_CODEC_MISSING, "no_broker_codec")
                     return False
                 logger.info("Placing Order", symbol=intent.symbol, price=intent.price, qty=intent.qty, side=intent.side)
 
@@ -1627,23 +1802,11 @@ class OrderAdapter:
                     return False
 
                 self.metrics.order_actions_total.labels(type="new").inc()
-                # Inject timestamp for TTL tracking
-                trade_ts = timebase.now_s()
-                try:
-                    if isinstance(trade, dict):
-                        trade["timestamp"] = trade_ts
-                    else:
-                        trade.timestamp = trade_ts
-                except (AttributeError, TypeError) as ts_err:
-                    logger.warning(
-                        "Failed to set trade timestamp - TTL tracking may be affected",
-                        order_key=order_key,
-                        error=str(ts_err),
-                    )
-                    # Store timestamp externally if object is rigid
-                    if isinstance(trade, dict):
-                        trade["_external_timestamp"] = trade_ts
-                    # For objects, we'll rely on live_orders insertion time
+                # Bug #35 (2026-04-21): Removed `trade.timestamp = ...` setattr
+                # block. Shioaji Trade is a strict Pydantic model that rejects
+                # unknown fields with ValueError, generating one warning per
+                # order with no benefit — TTL tracking already uses the
+                # `_live_orders_inserted_at` sidecar populated at line 1730.
 
                 # Register broker IDs BEFORE removing from pending keys so that
                 # fast fill callbacks arriving during this window are still
@@ -1758,15 +1921,8 @@ class OrderAdapter:
                         self._remove_pending_fill(order_key)
                     return False
 
-                trade_ts = timebase.now_s()
-                try:
-                    if isinstance(trade, dict):
-                        trade["timestamp"] = trade_ts
-                    else:
-                        trade.timestamp = trade_ts
-                except (AttributeError, TypeError):
-                    if isinstance(trade, dict):
-                        trade["_external_timestamp"] = trade_ts
+                # Bug #35: TTL tracked via `_live_orders_inserted_at` sidecar
+                # (line 1910). No need to mutate the Pydantic Trade object.
 
                 async with self._live_orders_lock:
                     self.live_orders[order_key] = trade
@@ -1828,17 +1984,44 @@ class OrderAdapter:
                 elif target_trade is _PENDING_SENTINEL:
                     logger.warning("Cancel target still pending", target=target_key)
                     self.metrics.order_reject_total.inc()
-                    await self._add_to_dlq(intent, RejectionReason.VALIDATION_ERROR, "Cancel target still pending")
+                    await self._add_to_dlq(intent, RejectionReason.CANCEL_TARGET_PENDING, "Cancel target still pending")
                 elif target_trade is _TERMINAL_BEFORE_REGISTERED:
                     logger.warning("Cancel target terminated before registered", target=target_key)
                     self.metrics.order_reject_total.inc()
                     await self._add_to_dlq(
-                        intent, RejectionReason.VALIDATION_ERROR, "Cancel target terminated before registered"
+                        intent, RejectionReason.CANCEL_TARGET_TERMINAL, "Cancel target terminated before registered"
                     )
                 else:
+                    # Bug #29: distinguish race-loser cancels (target was just
+                    # filled/cancelled, removed from live_orders before CANCEL
+                    # arrived) from true unknown order_ids (typo, strategy bug).
+                    if self._is_recently_terminal(target_key):
+                        logger.info(
+                            "cancel_already_terminal",
+                            target=target_key,
+                            cancel_outcome="not_found_local",
+                            strategy_id=intent.strategy_id,
+                            cmd_id=int(cmd.cmd_id),
+                        )
+                        self.metrics.order_cancel_already_terminal_total.labels(
+                            reason="not_found_local"
+                        ).inc()
+                        self._audit_log_order(
+                            {
+                                "event": "cancel_no_op_already_terminal",
+                                "intent_type": "CANCEL",
+                                "order_key": f"{intent.strategy_id}:{intent.intent_id}",
+                                "target_key": target_key,
+                                "symbol": intent.symbol,
+                                "strategy_id": intent.strategy_id,
+                                "cmd_id": int(cmd.cmd_id),
+                            }
+                        )
+                        return True
                     logger.warning("Cancel target not found", target=target_key)
                     self.metrics.order_reject_total.inc()
-                    await self._add_to_dlq(intent, RejectionReason.VALIDATION_ERROR, "Cancel target not found")
+                    await self._add_to_dlq(intent, RejectionReason.CANCEL_TARGET_NOT_FOUND, "Cancel target not found")
+                    return False
 
             elif intent.intent_type == IntentType.AMEND:
                 async with self._live_orders_lock:
@@ -1883,17 +2066,17 @@ class OrderAdapter:
                 elif target_trade is _PENDING_SENTINEL:
                     logger.warning("Amend target still pending", target=target_key)
                     self.metrics.order_reject_total.inc()
-                    await self._add_to_dlq(intent, RejectionReason.VALIDATION_ERROR, "Amend target still pending")
+                    await self._add_to_dlq(intent, RejectionReason.AMEND_TARGET_PENDING, "Amend target still pending")
                 elif target_trade is _TERMINAL_BEFORE_REGISTERED:
                     logger.warning("Amend target terminated before registered", target=target_key)
                     self.metrics.order_reject_total.inc()
                     await self._add_to_dlq(
-                        intent, RejectionReason.VALIDATION_ERROR, "Amend target terminated before registered"
+                        intent, RejectionReason.AMEND_TARGET_TERMINAL, "Amend target terminated before registered"
                     )
                 else:
                     logger.warning("Amend target not found", target=target_key)
                     self.metrics.order_reject_total.inc()
-                    await self._add_to_dlq(intent, RejectionReason.VALIDATION_ERROR, "Amend target not found")
+                    await self._add_to_dlq(intent, RejectionReason.AMEND_TARGET_NOT_FOUND, "Amend target not found")
 
         except (OSError, TimeoutError, ConnectionError, RuntimeError) as e:
             logger.error("Broker Error", error=str(e))
@@ -2079,7 +2262,7 @@ class OrderAdapter:
                         self.metrics.order_reject_total.inc()
                         await self._add_to_dlq(
                             item.intent,
-                            RejectionReason.VALIDATION_ERROR,
+                            RejectionReason.DEADLINE_EXCEEDED,
                             "DEADLINE_EXPIRED",
                         )
                         self._send_dispatch_rejection(item.intent, "dispatch_deadline_expired")
@@ -2089,60 +2272,7 @@ class OrderAdapter:
                         if ok:
                             self._dedup_commit(item.intent.idempotency_key, True, "dispatched", item.cmd_id)
                     except Exception:
-                        logger.error(
-                            "_api_worker: dispatch failed for single order",
-                            cmd_id=item.cmd_id,
-                            symbol=item.intent.symbol,
-                            exc_info=True,
-                        )
-                        # Release dedup slot so strategy can retry with same key
-                        self._dedup_release(item.intent.idempotency_key)
-                        self.metrics.order_reject_total.inc()
-                        self.circuit_breaker.record_failure()
-                        self._update_cb_metric()
-                        # Bug 23: for NEW/FORCE_FLAT the order may still have
-                        # reached the broker (phantom). Flag feedback with
-                        # was_approved=True so strategy keeps pending elevated
-                        # and doesn't emit a duplicate on the next tick.
-                        _intent = item.intent
-                        _is_phantom_candidate = _intent.intent_type in (
-                            IntentType.NEW,
-                            IntentType.FORCE_FLAT,
-                        )
-                        self._send_dispatch_rejection(
-                            _intent,
-                            "dispatch_failed",
-                            phantom_pending=_is_phantom_candidate,
-                        )
-                        self.strategy_cb_mgr.record_failure(_intent.strategy_id)
-                        # D-03: Exception may occur AFTER broker received the order
-                        # (e.g., during ID registration post-place_order). Mark as
-                        # phantom so fills arriving later can be reconciled.
-                        if _is_phantom_candidate:
-                            _phantom_key = f"{_intent.strategy_id}:{_intent.intent_id}"
-                            self._phantom_order_keys[_phantom_key] = (time.monotonic(), _intent.symbol)
-                            if len(self._phantom_order_keys) > self._phantom_order_max:
-                                _cutoff = time.monotonic() - 3600.0
-                                _stale = [k for k, v in self._phantom_order_keys.items() if v[0] <= _cutoff]
-                                for _sk in _stale:
-                                    del self._phantom_order_keys[_sk]
-                            logger.warning(
-                                "phantom_order_candidate_dispatch_failed",
-                                strategy_id=_intent.strategy_id,
-                                symbol=_intent.symbol,
-                                order_key=_phantom_key,
-                                cmd_id=item.cmd_id,
-                            )
-                            self.metrics.phantom_order_candidates_total.inc()
-                        # Clean up live_orders sentinel to prevent permanent slot occupation
-                        _order_key = f"{_intent.strategy_id}:{_intent.intent_id}"
-                        async with self._live_orders_lock:
-                            if self.live_orders.get(_order_key) is _PENDING_SENTINEL:
-                                del self.live_orders[_order_key]
-                                self._pending_order_keys.discard(_order_key)
-                        # NOTE: Do NOT remove pending_fill for phantom candidates —
-                        # the order may have reached the broker, and fills arriving
-                        # later need the pending_fill_index for strategy_id resolution.
+                        await self._handle_dispatch_exception(intent=item.intent, cmd_id=item.cmd_id)
             except Exception:
                 logger.error("_api_worker: unexpected exception in dispatch loop", exc_info=True)
                 self.metrics.order_reject_total.inc()
@@ -2286,15 +2416,20 @@ class OrderAdapter:
                             self.strategy_cb_mgr.record_failure(intent.strategy_id)
                         # D-03: Track phantom order candidates for reconciliation
                         # R2-02: Use 2-part order_key format for reconciliation parity
-                        if intent is not None:
+                        # Bug #29: only NEW intents can produce phantom orders.
+                        # CANCEL/AMEND failures are not "phantom orders" — gating
+                        # prevents spurious phantom_recovery_releases on cancels.
+                        if intent is not None and intent.intent_type == IntentType.NEW:
                             phantom_key = f"{intent.strategy_id}:{intent.intent_id}"
                             self._phantom_order_keys[phantom_key] = (time.monotonic(), intent.symbol)
+                            self._phantom_intents[phantom_key] = intent
                             # R2-03: Evict entries older than 1 hour when over capacity
                             if len(self._phantom_order_keys) > self._phantom_order_max:
                                 cutoff = time.monotonic() - 3600.0
                                 _stale = [k for k, v in self._phantom_order_keys.items() if v[0] <= cutoff]
                                 for _sk in _stale:
                                     del self._phantom_order_keys[_sk]
+                                    self._phantom_intents.pop(_sk, None)
                             logger.warning(
                                 "phantom_order_candidate",
                                 strategy_id=intent.strategy_id,

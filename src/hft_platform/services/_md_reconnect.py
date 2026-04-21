@@ -270,14 +270,23 @@ class MarketDataReconnectMixin:
     # -- watchdog helpers ------------------------------------------------------
 
     def _find_stale_symbols(self: Any, active_snapshot: dict[str, float], now: float) -> list[tuple[str, float]]:
-        """Return (symbol, gap) pairs exceeding the gap threshold."""
-        threshold = getattr(self, "_symbol_gap_threshold_s", 6.0)
+        """Return (symbol, gap) pairs exceeding the per-symbol gap threshold.
+
+        Bug #36: previously a single global threshold flagged illiquid stocks
+        (2207, 2201) and far-month futures (TXFG6) as stale even though
+        sparse trading is normal for them. The per-symbol override map
+        (``_symbol_gap_threshold_overrides``) lets ops set higher floors
+        for known-low-liquidity symbols without weakening front-month gates.
+        """
+        global_threshold = getattr(self, "_symbol_gap_threshold_s", 6.0)
         if self._is_market_open_grace_period():
-            threshold = max(threshold, getattr(self, "_market_open_grace_gap_threshold_s", 30.0))
+            global_threshold = max(global_threshold, getattr(self, "_market_open_grace_gap_threshold_s", 30.0))
+        overrides: dict[str, float] = getattr(self, "_symbol_gap_threshold_overrides", {}) or {}
         stale: list[tuple[str, float]] = []
         for symbol, last_ts in active_snapshot.items():
             if any(symbol.startswith(p) for p in _WATCHDOG_EXCLUDE_PREFIXES):
                 continue
+            threshold = overrides.get(symbol, global_threshold)
             gap = now - last_ts
             if gap > threshold:
                 stale.append((symbol, gap))

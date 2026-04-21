@@ -121,6 +121,26 @@ class StrategyRegistry:
                 strategy.optional_feature_ids = list(cfg.optional_feature_ids or [])
                 strategy.contract_families = _parse_contract_families(cfg.contract_families)
                 strategies.append(strategy)
+            except (ModuleNotFoundError, AttributeError) as exc:
+                # Bug #34: config entries often pre-declare strategies whose
+                # live wrapper class isn't merged yet (e.g. C17/C27 post-PROMOTE
+                # scaffolds). Per-startup ERROR noise drowns real failures —
+                # scaffold gaps are expected, so downgrade them to INFO.
+                if cfg.enabled:
+                    logger.warning(
+                        "strategy_scaffold_missing_but_enabled",
+                        id=cfg.strategy_id,
+                        module=cfg.module,
+                        class_name=cfg.class_name,
+                        error=str(exc),
+                    )
+                else:
+                    logger.info(
+                        "strategy_scaffold_placeholder_skipped",
+                        id=cfg.strategy_id,
+                        module=cfg.module,
+                        class_name=cfg.class_name,
+                    )
             except Exception as exc:
                 logger.error("Failed to instantiate strategy", id=cfg.strategy_id, error=str(exc))
         return strategies

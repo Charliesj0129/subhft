@@ -27,7 +27,15 @@ logger = get_logger("order.deadletter")
 
 
 class RejectionReason(str, Enum):
-    """Categorized reasons for order rejection."""
+    """Categorized reasons for order rejection.
+
+    Bug #37: previously 10+ distinct rejection paths in adapter.py shared the
+    generic VALIDATION_ERROR label, making metrics & DLQ entries impossible to
+    triage by category. The specific *_TARGET_* / PLATFORM_REDUCE_ONLY /
+    IDEMPOTENCY_DUPLICATE / BROKER_CODEC_MISSING values were added so each
+    rejection path has a distinct, queryable reason. VALIDATION_ERROR now
+    means "upstream RiskEngine validator rejected the intent" only.
+    """
 
     CIRCUIT_BREAKER = "circuit_breaker"
     RATE_LIMIT = "rate_limit"
@@ -37,6 +45,15 @@ class RejectionReason(str, Enum):
     BROKER_REJECT = "broker_reject"
     DEADLINE_EXCEEDED = "deadline_exceeded"
     STORMGUARD_HALT = "stormguard_halt"
+    IDEMPOTENCY_DUPLICATE = "idempotency_duplicate"
+    PLATFORM_REDUCE_ONLY = "platform_reduce_only"
+    BROKER_CODEC_MISSING = "broker_codec_missing"
+    CANCEL_TARGET_NOT_FOUND = "cancel_target_not_found"
+    CANCEL_TARGET_PENDING = "cancel_target_pending"
+    CANCEL_TARGET_TERMINAL = "cancel_target_terminal"
+    AMEND_TARGET_NOT_FOUND = "amend_target_not_found"
+    AMEND_TARGET_PENDING = "amend_target_pending"
+    AMEND_TARGET_TERMINAL = "amend_target_terminal"
     UNKNOWN = "unknown"
 
 

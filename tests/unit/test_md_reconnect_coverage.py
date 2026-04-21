@@ -505,6 +505,35 @@ class TestFindStaleSymbols:
             stale = md._find_stale_symbols(snapshot, now)
         assert len(stale) == 1
 
+    def test_per_symbol_override_suppresses_false_positive(self, md: _FakeMD) -> None:
+        """Bug #36: a symbol with a higher per-symbol threshold must NOT be
+        flagged stale at the global threshold. Used for illiquid stocks /
+        far-month futures where slow trading is normal."""
+        md._symbol_gap_threshold_s = 6.0
+        md._symbol_gap_threshold_overrides = {"TXFG6": 60.0, "2207": 120.0}
+        now = 1000.0
+        # gap=20 — would trigger global 6s threshold but well below override
+        snapshot = {"TXFG6": 980.0, "2207": 940.0, "TXFD6": 980.0}
+
+        with patch.object(md, "_is_market_open_grace_period", return_value=False):
+            stale = md._find_stale_symbols(snapshot, now)
+        symbols = [s for s, _ in stale]
+        assert "TXFG6" not in symbols  # 20s < 60s override
+        assert "2207" not in symbols   # 60s < 120s override
+        assert "TXFD6" in symbols      # 20s > 6s global threshold
+
+    def test_override_does_not_lower_below_global(self, md: _FakeMD) -> None:
+        """Per-symbol override is only consulted as a per-symbol threshold;
+        a symbol without an override still uses the global value."""
+        md._symbol_gap_threshold_s = 6.0
+        md._symbol_gap_threshold_overrides = {"TXFG6": 60.0}
+        now = 1000.0
+        snapshot = {"UNRELATED": 985.0}  # gap=15 — no override → use global 6s
+
+        with patch.object(md, "_is_market_open_grace_period", return_value=False):
+            stale = md._find_stale_symbols(snapshot, now)
+        assert ("UNRELATED", 15.0) in [(s, round(g, 1)) for s, g in stale]
+
 
 # ---------------------------------------------------------------------------
 # _watchdog_loop (lines 294-361)

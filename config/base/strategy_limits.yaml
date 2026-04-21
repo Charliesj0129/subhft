@@ -167,10 +167,15 @@ strategies:
 
 intraday_pnl:
   scope: global
+  # 2026-04-20: User-requested daily loss cap 5,000 NTD; PEAK_DRAWDOWN only
+  # protects days with peak ≥ 3,500 NTD (40% retracement triggers force-flat).
+  # Values intentionally mirror config/env/prod/strategy_limits.yaml as a
+  # belt-and-suspenders default in case HFT_ENV is unset/typoed (loader.py
+  # logs a warning in that case — Bug #33 investigated 2026-04-21).
   soft_limit_ntd: 500
-  hard_limit_ntd: 8000
+  hard_limit_ntd: 5000
   peak_drawdown_pct: 0.40
   soft_recovery_ntd: 300
   drawdown_recovery_pct: 0.20
   soft_limit_cooldown_s: 60
-  peak_drawdown_min_peak_ntd: 200
+  peak_drawdown_min_peak_ntd: 3500

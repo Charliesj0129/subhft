@@ -56,6 +56,34 @@ logger = get_logger("service.market_data")
 __all__ = ["FeedState", "MarketDataService"]
 
 
+def _parse_symbol_gap_overrides(raw: str) -> dict[str, float]:
+    """Bug #36: parse 'SYM=secs,SYM=secs' into a per-symbol threshold map.
+
+    Silently skips malformed entries with a debug log so a typo in one
+    pair never disables overrides for the other (well-formed) pairs.
+    """
+    overrides: dict[str, float] = {}
+    if not raw:
+        return overrides
+    for token in raw.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        if "=" not in token:
+            logger.debug("symbol_gap_override_skipped_malformed", token=token)
+            continue
+        sym, _, val = token.partition("=")
+        sym = sym.strip()
+        try:
+            secs = float(val.strip())
+            if secs <= 0:
+                raise ValueError("must be positive")
+            overrides[sym] = secs
+        except (TypeError, ValueError) as exc:
+            logger.debug("symbol_gap_override_skipped_invalid_seconds", token=token, error=str(exc))
+    return overrides
+
+
 def _get_trace_sampler():
     try:
         from hft_platform.diagnostics.trace import get_trace_sampler
@@ -376,6 +404,14 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         # Per-symbol feed gap monitoring (bounded by subscribed symbol count)
         self._symbol_last_tick: dict[str, float] = {}
         self._symbol_gap_threshold_s = float(os.getenv("HFT_SYMBOL_GAP_THRESHOLD_S", "6.0"))
+        # Bug #36: per-symbol overrides for the watchdog gap threshold.
+        # Format: HFT_SYMBOL_GAP_THRESHOLD_OVERRIDES="TXFG6=60,2207=120,..."
+        # Far-month futures and illiquid stocks naturally trade slowly; using
+        # the global 6s threshold for them produces noisy false-positive
+        # warnings that mask real STORM-eligible gaps on front-month contracts.
+        self._symbol_gap_threshold_overrides: dict[str, float] = _parse_symbol_gap_overrides(
+            os.getenv("HFT_SYMBOL_GAP_THRESHOLD_OVERRIDES", "")
+        )
         self._watchdog_interval_s = float(os.getenv("HFT_WATCHDOG_INTERVAL_S", "1.0"))
         self._symbol_gap_min_stale_count = max(1, int(os.getenv("HFT_SYMBOL_GAP_MIN_STALE_COUNT", "5")))
         self._symbol_gap_min_active_symbols = max(1, int(os.getenv("HFT_SYMBOL_GAP_MIN_ACTIVE_SYMBOLS", "24")))

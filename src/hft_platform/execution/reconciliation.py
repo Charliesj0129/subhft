@@ -171,6 +171,28 @@ class ReconciliationService:
         self._metrics().reconciliation_last_success_ts.set(timebase.now_ns() / 1e9)
 
     # ------------------------------------------------------------------
+    # Session-awareness (Bug #38)
+    # ------------------------------------------------------------------
+
+    def _in_trading_hours(self) -> bool:
+        """Bug #38: TAIFEX-aware check used to suppress HALT escalation when
+        the market is closed. Outside trading hours ``get_positions()`` will
+        often return None / fail; before this gate that drove the failure
+        counter past ``grace_failures`` and tripped HALT every overnight
+        cycle. Defaults to True if the calendar can't be loaded so we keep
+        the legacy behaviour rather than silently disabling escalation.
+        """
+        if os.environ.get("HFT_RECON_OFF_SESSION_GUARD", "1") not in {"1", "true", "yes", "on"}:
+            return True
+        try:
+            from hft_platform.core.market_calendar import get_calendar
+
+            return get_calendar().is_trading_hours(product_type="future")
+        except Exception as exc:  # pragma: no cover — fail-safe path
+            logger.debug("reconciliation_calendar_lookup_failed", error=str(exc))
+            return True
+
+    # ------------------------------------------------------------------
     # Main loop
     # ------------------------------------------------------------------
 
@@ -204,6 +226,20 @@ class ReconciliationService:
                 self._consecutive_failures = 0
                 self._update_failure_gauge()
             except Exception as e:
+                # Bug #38: outside TAIFEX trading hours the broker often
+                # returns None / errors on get_positions(). Counting those
+                # toward grace_failures triggered nightly HALT cycles even
+                # though no live trading was at risk. During off-session we
+                # log a warning, keep retrying, but neither increment the
+                # failure counter nor escalate to HALT.
+                if not self._in_trading_hours():
+                    logger.warning(
+                        "reconciliation_skipped_off_session",
+                        error=str(e),
+                        consecutive_failures=self._consecutive_failures,
+                    )
+                    continue
+
                 self._consecutive_failures += 1
                 self._update_failure_gauge()
                 remaining = self.grace_failures - self._consecutive_failures

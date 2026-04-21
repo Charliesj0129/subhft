@@ -193,6 +193,7 @@ class HFTSystem:
         self.intent_channel = getattr(self.registry, "intent_channel", None)
         self.checkpoint_writer = getattr(self.registry, "checkpoint_writer", None)
         self.startup_verifier = getattr(self.registry, "startup_verifier", None)
+        self.startup_fill_reconciler = getattr(self.registry, "startup_fill_reconciler", None)
         self.session_governor = getattr(self.registry, "session_governor", None)
         self.autonomy_monitor = getattr(self.registry, "autonomy_monitor", None)
         self.daily_report_service = getattr(self.registry, "daily_report_service", None)
@@ -372,6 +373,20 @@ class HFTSystem:
                     logger.critical("Position recovery failed", error=str(exc))
                     return
 
+            if os.getenv("HFT_STARTUP_RECON_ENABLED", "1") == "1" and self.startup_fill_reconciler is not None:
+                try:
+                    fill_backfill = await self.startup_fill_reconciler.run()
+                    logger.info(
+                        "Startup fill reconciliation complete",
+                        broker_fills=fill_backfill.broker_fills,
+                        platform_fills=fill_backfill.platform_fills,
+                        inserted=fill_backfill.inserted,
+                        broker_query_error=fill_backfill.broker_query_error,
+                        errors=len(fill_backfill.errors),
+                    )
+                except Exception as exc:
+                    logger.warning("Startup fill reconciliation failed", error=str(exc))
+
             # ── Checkpoint Writer (after recovery, before trading) ──
             if os.getenv("HFT_CHECKPOINT_ENABLED", "1") == "1" and self.checkpoint_writer:
                 self._start_service("checkpoint_writer", self.checkpoint_writer.run())
@@ -389,7 +404,28 @@ class HFTSystem:
 
                 self._audit_writer = get_audit_writer()
                 await self._audit_writer.start()
-                logger.info("AuditWriter started")
+                # Bug #19: get_audit_writer() is invoked here without a CH
+                # writer adapter, so every batch falls through to the
+                # structlog `audit_fallback` path. That's the *current*
+                # design — log aggregation captures it — but it means
+                # `audit.orders_log`, `audit.risk_log`, `audit.guardrail_log`
+                # are NOT populated in ClickHouse. Surface that fact loudly
+                # at startup so operators know the audit-trail story before
+                # they try to query the tables. Proper CH wiring needs a
+                # per-table schema mapper (see audit producer dicts vs
+                # 20260301_001_initial_schema.sql column lists) — out of
+                # scope for this fix.
+                if getattr(self._audit_writer, "_writer", None) is None:
+                    logger.warning(
+                        "audit_writer_persistence_mode_structlog",
+                        message=(
+                            "AuditWriter has no ClickHouse writer attached; "
+                            "audit rows will be emitted as structlog "
+                            "audit_fallback events only (audit.* tables stay empty)."
+                        ),
+                    )
+                else:
+                    logger.info("AuditWriter started", persistence="clickhouse")
                 # Inject audit writer into OrderAdapter for order lifecycle logging
                 if hasattr(self.order_adapter, "set_audit_writer"):
                     self.order_adapter.set_audit_writer(self._audit_writer)
@@ -988,6 +1024,13 @@ class HFTSystem:
             if _oa is not None:
                 try:
                     await _oa.sweep_stale_live_orders()
+                except Exception:  # noqa: BLE001
+                    pass
+                # Bug D (2026-04-20): release strategy pending counters for
+                # phantoms past TTL — prevents R47 indefinite freeze when broker
+                # never sends fill/cancel callback for a phantom.
+                try:
+                    await _oa.release_stale_phantom_pendings()
                 except Exception:  # noqa: BLE001
                     pass
 

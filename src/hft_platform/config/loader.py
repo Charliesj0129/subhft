@@ -130,6 +130,15 @@ def load_settings(cli_overrides: Dict[str, Any] | None = None) -> Tuple[Dict[str
         if os.path.exists(env_overlay_path):
             env_settings = _load_yaml(env_overlay_path)
             settings = _merge(settings, env_settings)
+        else:
+            # Bug #33 root cause: silently skipping a missing overlay meant
+            # typos (e.g. HFT_ENV=prrod) fell back to base without warning,
+            # so operators never discovered their prod risk limits weren't loaded.
+            logger.warning(
+                "env_overlay_not_found",
+                env=env_name,
+                expected_path=env_overlay_path,
+            )
         settings["env"] = env_name
 
     # 3. Local Developer Overrides (settings.py - Python power)

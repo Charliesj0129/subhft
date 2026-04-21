@@ -375,8 +375,11 @@ async def test_dispatch_new_trade_is_none_returns_false_and_dlqs(tmp_config):
 
 
 @pytest.mark.asyncio
-async def test_dispatch_new_trade_timestamp_injected_for_dict_trade(tmp_config):
-    """_dispatch_to_api injects 'timestamp' key into dict trade (lines 1524-1530)."""
+async def test_dispatch_new_records_insertion_time_in_sidecar(tmp_config):
+    """Bug #35 follow-up: TTL tracking relies on `_live_orders_inserted_at`
+    sidecar (populated at the D2 pre-register site), not on mutating the
+    broker Trade object. Replaces the former 'trade["timestamp"] injected'
+    test since that mutation path has been removed."""
     client = _make_client()
     trade_dict = {"seq_no": "S1", "ord_no": "O1"}
     client.place_order.return_value = trade_dict
@@ -387,7 +390,9 @@ async def test_dispatch_new_trade_timestamp_injected_for_dict_trade(tmp_config):
 
     await adapter._dispatch_to_api(cmd)
 
-    assert "timestamp" in trade_dict
+    order_key = "s1:13"
+    assert order_key in adapter._live_orders_inserted_at
+    assert adapter._live_orders_inserted_at[order_key] > 0.0
 
 
 @pytest.mark.asyncio
@@ -836,10 +841,11 @@ async def test_dispatch_new_no_broker_codec_rejects(tmp_config):
 
 
 @pytest.mark.asyncio
-async def test_dispatch_new_trade_timestamp_injected_for_object_trade(tmp_config):
-    """_dispatch_to_api injects .timestamp attribute on object trade (line 1530)."""
+async def test_dispatch_new_does_not_mutate_object_trade(tmp_config):
+    """Bug #35: dispatch must NOT inject .timestamp into the broker Trade
+    object. Strict-Pydantic Trade rejects unknown fields with ValueError;
+    TTL is tracked via the `_live_orders_inserted_at` sidecar instead."""
     client = _make_client()
-    # Make a simple namespace object with seq_no (will be converted via setattr)
     trade_obj = SimpleNamespace(seq_no="S1", ord_no="O1", order_id="ID1", id="X1", order=None, status=None)
     client.place_order.return_value = trade_obj
     adapter = _make_adapter(tmp_config, client)
@@ -849,7 +855,8 @@ async def test_dispatch_new_trade_timestamp_injected_for_object_trade(tmp_config
 
     await adapter._dispatch_to_api(cmd)
 
-    assert hasattr(trade_obj, "timestamp")
+    assert not hasattr(trade_obj, "timestamp")
+    assert "s1:70" in adapter._live_orders_inserted_at
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -918,34 +925,10 @@ async def test_dispatch_new_metadata_exchange_failure_uses_client_exchange(tmp_c
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# _dispatch_to_api NEW — timestamp exception path (lines 1531-1539)
-# ═════════════════════════════════════════════════════════════════════════════
-
-
-@pytest.mark.asyncio
-async def test_dispatch_new_timestamp_exception_stores_external_timestamp_in_dict(tmp_config):
-    """When trade.timestamp raises, external timestamp is stored in dict trade (lines 1531-1539)."""
-    client = _make_client()
-
-    # Return a dict trade without a "timestamp" key but that raises on direct set
-    # We simulate this by using a custom subclass that raises on key set
-    class _FrozenDict(dict):
-        def __setitem__(self, key, value):
-            if key == "timestamp":
-                raise TypeError("frozen dict")
-            super().__setitem__(key, value)
-
-    trade_dict = _FrozenDict({"seq_no": "S1", "ord_no": "O1"})
-    client.place_order.return_value = trade_dict
-    adapter = _make_adapter(tmp_config, client)
-
-    intent = _make_intent(IntentType.NEW, strategy_id="s1", intent_id=100)
-    cmd = _make_cmd(intent)
-
-    await adapter._dispatch_to_api(cmd)
-
-    # _external_timestamp fallback should be set (line 1538-1539)
-    assert "_external_timestamp" in trade_dict
+# Bug #35 (2026-04-21): the NEW-path `trade.timestamp = ts` block was removed
+# (Pydantic Trade rejected it, generating one warning per order; TTL tracking
+# already uses the `_live_orders_inserted_at` sidecar). The legacy
+# external-timestamp fallback test that lived here was deleted with the code.
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1004,30 +987,9 @@ async def test_dispatch_force_flat_order_params_failure_uses_empty(tmp_config):
     assert result is True
 
 
-@pytest.mark.asyncio
-async def test_dispatch_force_flat_timestamp_exception_stores_external(tmp_config):
-    """FORCE_FLAT handles trade timestamp exception (lines 1661-1663)."""
-    client = _make_client()
-
-    class _FrozenDict(dict):
-        def __setitem__(self, key, value):
-            if key == "timestamp":
-                raise AttributeError("frozen")
-            super().__setitem__(key, value)
-
-    trade_dict = _FrozenDict({"seq_no": "S1", "ord_no": "O1"})
-    client.place_order.return_value = trade_dict
-    adapter = _make_adapter(tmp_config, client)
-
-    pos = SimpleNamespace(symbol="2330", net_qty=1, avg_price_scaled=500_0000)
-    adapter.position_store = SimpleNamespace(positions={"p1": pos})
-
-    intent = _make_intent(IntentType.FORCE_FLAT, strategy_id="s1", intent_id=113, symbol="2330")
-    cmd = _make_cmd(intent)
-
-    result = await adapter._dispatch_to_api(cmd)
-    assert result is True
-    assert "_external_timestamp" in trade_dict
+# Bug #35 (2026-04-21): the FORCE_FLAT trade-timestamp setattr block was
+# removed alongside the NEW-path equivalent; the matching coverage test
+# was deleted with the code.
 
 
 # ═════════════════════════════════════════════════════════════════════════════
