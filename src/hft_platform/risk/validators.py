@@ -535,6 +535,12 @@ class DailyLossLimitValidator(RiskValidator):
             drawdown = self._peak_pnl_scaled - total_pnl
             drawdown_limit = int(self._peak_drawdown_pct * self._peak_pnl_scaled)
             if drawdown > drawdown_limit:
+                # Why: PEAK_DRAWDOWN must escalate to StormGuard HALT so
+                # autonomy_monitor.flatten_all() closes positions at market
+                # (per user 2026-04-20 — lock in profits on retracement).
+                # FORCE_FLAT and reduce-position intents bypass this gate
+                # earlier, so flatten orders still go through.
+                self.halt_triggered = True
                 logger.warning(
                     "DailyLossLimitValidator: peak drawdown exceeded",
                     peak_pnl_scaled=self._peak_pnl_scaled,

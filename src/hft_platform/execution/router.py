@@ -379,6 +379,24 @@ class ExecutionRouter:
                                     symbol=fill_event.symbol,
                                     order_id=fill_event.order_id,
                                 )
+                                # Bug #32-B: even orphaned fills must be persisted to
+                                # ClickHouse so forensic queries on hft.fills can see
+                                # the complete trade record. strategy_id stays "UNKNOWN"
+                                # — downstream tools filter on it. Without this write,
+                                # the platform's hft.fills row count diverges from the
+                                # broker's actual fill count (today: 70 vs 106).
+                                if self._recorder_queue is not None and self._symbol_metadata is not None:
+                                    from hft_platform.recorder.mapper import map_event_to_record  # noqa: PLC0415
+                                    _orphan_mapped = map_event_to_record(
+                                        fill_event, self._symbol_metadata, self._price_codec
+                                    )
+                                    if _orphan_mapped:
+                                        _o_topic, _o_payload = _orphan_mapped
+                                        try:
+                                            self._recorder_queue.put_nowait({"topic": _o_topic, "data": _o_payload})
+                                        except asyncio.QueueFull:
+                                            self.metrics.recorder_exec_drops_total.labels(topic="fills").inc()
+                                            self._wal_fallback_write(_o_topic, _o_payload)
                                 continue
 
                         # Observe e2e order-to-fill latency (SLO-2)
@@ -528,6 +546,18 @@ class ExecutionRouter:
                                     symbol=fill_event.symbol,
                                     order_id=fill_event.order_id,
                                 )
+                                # Bug #32-B: persist to CH before continuing (same as main loop).
+                                if self._recorder_queue is not None and self._symbol_metadata is not None:
+                                    from hft_platform.recorder.mapper import map_event_to_record  # noqa: PLC0415
+                                    _sd_mapped = map_event_to_record(
+                                        fill_event, self._symbol_metadata, self._price_codec
+                                    )
+                                    if _sd_mapped:
+                                        _sd_topic, _sd_payload = _sd_mapped
+                                        try:
+                                            self._recorder_queue.put_nowait({"topic": _sd_topic, "data": _sd_payload})
+                                        except asyncio.QueueFull:
+                                            self._wal_fallback_write(_sd_topic, _sd_payload)
                                 continue
                         _dedup_key = fill_event.fill_id or _synthesize_dedup_key(fill_event)
                         if _dedup_key not in self._seen_fill_ids:

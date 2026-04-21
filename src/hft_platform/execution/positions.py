@@ -37,6 +37,9 @@ if _RUST_POSITIONS:
         _RustPositionTracker = getattr(_rust_mod, "RustPositionTracker", None)
 
 
+_MIN_PEAK_SCALED: int = int(os.getenv("HFT_DRAWDOWN_MIN_PEAK_SCALED", "100000000"))
+
+
 @dataclass(slots=True)
 class Position:
     """Position state using integer fixed-point arithmetic (no float for financial calc).
@@ -207,17 +210,17 @@ class PositionStore:
         """Portfolio drawdown from peak equity as a fraction (0.0 to 1.0).
 
         Returns 0.0 when peak equity has not reached the minimum threshold
-        (cold-start protection: prevents false HALT from StormGuard when
-        the first trade produces a tiny fee-induced negative PnL with
-        base=1 denominator — Bug 10, 2026-04-16).
+        (cold-start guard) — without this, even tiny fee-induced losses
+        produce 100% drawdown vs the just-crossed-zero peak.
 
-        Threshold: 200 NTD = 2_000_000 scaled (matching strategy_limits.yaml
-        ``peak_drawdown_min_peak_ntd: 200``).
+        Threshold is read once at module import from
+        ``HFT_DRAWDOWN_MIN_PEAK_SCALED`` (default 100_000_000 = 10,000 NTD =
+        1000 pts on TMFD6). Bug 10 (2026-04-16) used 2_000_000 (200 NTD)
+        which was too tight for HFT-scale low-volume strategies; Bug B
+        incident 2026-04-20T01:42 UTC: R47 morning +24 pts → afternoon
+        -22 pts pullback computed 92.9% drawdown vs intraday peak,
+        triggering false HALT. Operators tune via the env var.
         """
-        # Cold-start guard: do not report drawdown until we have enough
-        # equity history. Without this, ``_base_capital_scaled`` defaults
-        # to 0 → ``0 or 1`` → base=1 → any loss = 100% drawdown → HALT.
-        _MIN_PEAK_SCALED = 2_000_000  # 200 NTD in x10000 scale
         if self._peak_equity_scaled < _MIN_PEAK_SCALED:
             return 0.0
         current = self._total_realized_pnl_scaled

@@ -20,6 +20,7 @@ def _make_adapter_stub():
 
     stub = OrderAdapter.__new__(OrderAdapter)
     stub._phantom_order_keys = {}
+    stub._phantom_intents = {}  # Bug D (2026-04-20)
     stub._pending_fill_index = {}
     stub._pending_fill_registered_at = {}
     import threading

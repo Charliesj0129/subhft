@@ -167,6 +167,20 @@ class TestBuildServiceGraph:
         assert verifier_cls.call_args.kwargs["checkpoint_path"] == ".state/position_checkpoint.json"
 
     @pytest.mark.usefixtures("_sim_env", "_mock_services")
+    def test_build_wires_startup_fill_reconciler(self) -> None:
+        with (
+            patch("hft_platform.execution.checkpoint.PositionCheckpointWriter"),
+            patch("hft_platform.execution.startup_recon.StartupPositionVerifier"),
+            patch("hft_platform.services.startup_reconciler.ClickHouseFillsQueryClient") as ch_query_cls,
+            patch("hft_platform.services.startup_reconciler.StartupReconciler") as reconciler_cls,
+        ):
+            registry = _build_with_mocks()
+
+        ch_query_cls.assert_called_once()
+        reconciler_cls.assert_called_once()
+        assert registry.startup_fill_reconciler is reconciler_cls.return_value
+
+    @pytest.mark.usefixtures("_sim_env", "_mock_services")
     def test_build_sets_runtime_role_in_settings(self) -> None:
         settings: dict = {}
         registry = _build_with_mocks(settings=settings)

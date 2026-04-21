@@ -134,6 +134,58 @@ class TestAuditWriter:
         # Structlog fallback drained all queues — all should be empty
         assert all(q.qsize() == 0 for q in audit._queues.values())
 
+    # ------------------------------------------------------------------
+    # Bug #30 — reserved-kwarg collision regression
+    # ------------------------------------------------------------------
+    # orders_log rows include `"event": "dispatched"` (set by adapter.py).
+    # Splatting `**row` into logger.info("audit_fallback", **row) collides with
+    # structlog's positional `event` kwarg → TypeError → batch dropped silently
+    # by outer _flush_loop except. Fix renames reserved kwargs to row_* prefix.
+
+    @pytest.mark.asyncio
+    async def test_flush_fallback_handles_event_key_collision(self) -> None:
+        """Row with `event` key (from order audit rows) must not raise TypeError
+        in the structlog fallback path. Prior to fix, this dropped the entire batch."""
+        audit = AuditWriter(queue_size=100, writer=None)
+        row = {
+            "event": "dispatched",
+            "intent_type": "NEW",
+            "order_key": "strat1:42",
+            "symbol": "TMFE6",
+            "side": "BUY",
+            "price": 5000000,
+            "qty": 1,
+            "strategy_id": "R47_MAKER_TMF",
+            "cmd_id": 7,
+        }
+        # Direct call to _flush_batch — the bug is in this method, isolate from queue plumbing
+        await audit._flush_batch("audit.orders_log", [row])
+        # If we got here without raising TypeError, the collision is handled.
+
+    @pytest.mark.asyncio
+    async def test_flush_fallback_handles_all_reserved_structlog_keys(self) -> None:
+        """Defense-in-depth: future audit rows may include other reserved structlog
+        kwargs (timestamp, level, logger, exc_info, stack_info). All must be safely
+        renamed."""
+        audit = AuditWriter(queue_size=100, writer=None)
+        row = {
+            "event": "x",
+            "timestamp": "2026-04-20T07:00:00Z",
+            "level": "info",
+            "logger": "test",
+            "exc_info": None,
+            "stack_info": None,
+            "ordinary_field": "preserved",
+        }
+        await audit._flush_batch("audit.orders_log", [row])
+
+    @pytest.mark.asyncio
+    async def test_flush_fallback_preserves_ordinary_keys_unchanged(self) -> None:
+        """Renaming must apply only to reserved kwargs, not to every key."""
+        audit = AuditWriter(queue_size=100, writer=None)
+        row = {"order_key": "k1", "symbol": "TXFD6", "qty": 1, "side": "SELL"}
+        await audit._flush_batch("audit.risk_log", [row])
+
     @pytest.mark.asyncio
     async def test_stop_drains_remaining(self) -> None:
         mock_writer = AsyncMock()

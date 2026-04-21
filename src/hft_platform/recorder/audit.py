@@ -23,6 +23,14 @@ _DEFAULT_FLUSH_INTERVAL_MS = 1_000
 _DEFAULT_FLUSH_LIMIT = 500
 _DEFAULT_OVERFLOW_SIZE = 50_000
 
+# Bug #30: structlog method signature is `meth(event, *args, **kw)` plus a few
+# other reserved kwargs it injects. Splatting a row dict containing any of these
+# keys raises TypeError. Rename to `row_*` prefix in fallback path.
+_RESERVED_STRUCTLOG_KEYS: frozenset[str] = frozenset(
+    {"event", "exc_info", "stack_info", "level", "logger", "timestamp",
+     "_record", "_from_structlog"}
+)
+
 # Singleton instance
 _audit_writer: AuditWriter | None = None
 
@@ -249,9 +257,16 @@ class AuditWriter:
                     batch_size=len(batch),
                 )
 
-        # Fallback: log each row via structlog (never lose audit data silently)
+        # Fallback: log each row via structlog (never lose audit data silently).
+        # Bug #30: row dicts may contain keys reserved by structlog (`event`,
+        # `timestamp`, `level`, etc). Splatting them collides with structlog's
+        # positional kwargs → TypeError → batch dropped. Rename to row_* prefix.
         for row in batch:
-            logger.info("audit_fallback", table=table_name, **row)
+            safe_row = {
+                (f"row_{k}" if k in _RESERVED_STRUCTLOG_KEYS else k): v
+                for k, v in row.items()
+            }
+            logger.info("audit_fallback", table=table_name, **safe_row)
 
     @property
     def dropped_counts(self) -> dict[str, int]:

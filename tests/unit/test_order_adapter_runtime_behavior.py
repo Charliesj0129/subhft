@@ -775,9 +775,13 @@ async def test_api_worker_continues_after_unexpected_exception(tmp_config):
 
     # Worker processed both items (continued after first exception)
     assert call_count == 2
-    # Metrics and circuit breaker were updated on the failure
-    adapter.metrics.order_reject_total.inc.assert_called()
-    adapter.circuit_breaker.record_failure.assert_called()
+    # Bug D' hygiene: NEW intents are phantom candidates → _handle_dispatch_exception
+    # does NOT inflate order_reject_total or trip circuit_breaker (the order may
+    # have reached the broker; counting it as a real reject corrupts dashboards).
+    # Phantom-candidate counter IS incremented instead.
+    adapter.metrics.order_reject_total.inc.assert_not_called()
+    adapter.circuit_breaker.record_failure.assert_not_called()
+    adapter.metrics.phantom_order_candidates_total.inc.assert_called()
 
 
 @pytest.mark.asyncio

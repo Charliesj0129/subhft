@@ -68,3 +68,4 @@ class ServiceRegistry:
     position_stuck_monitor: Optional[Any] = field(default=None)
     checkpoint_writer: Optional[Any] = field(default=None)
     startup_verifier: Optional[Any] = field(default=None)
+    startup_fill_reconciler: Optional[Any] = field(default=None)

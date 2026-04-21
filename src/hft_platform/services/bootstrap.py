@@ -5,6 +5,7 @@ import os
 import socket
 import threading
 import time
+from datetime import date
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 if TYPE_CHECKING:
@@ -743,6 +744,23 @@ class SystemBootstrapper:
             position_store=position_store,
             checkpoint_path=os.getenv("HFT_POSITION_CHECKPOINT_PATH", DEFAULT_POSITION_CHECKPOINT_PATH),
         )
+        startup_fill_reconciler = None
+        try:
+            from hft_platform.observability.metrics import MetricsRegistry
+            from hft_platform.services.startup_reconciler import (
+                ClickHouseFillsQueryClient,
+                StartupReconciler,
+            )
+
+            startup_fill_reconciler = StartupReconciler(
+                broker_account_query=order_client,
+                ch_fills_query=ClickHouseFillsQueryClient(),
+                metrics=MetricsRegistry.get(),
+                today=date.today(),
+                broker_account=getattr(order_client, "account", None),
+            )
+        except Exception as exc:
+            logger.warning("startup_fill_reconciler_init_failed", error=str(exc))
 
         # 4. Services
         feature_engine = None
@@ -1087,17 +1105,31 @@ class SystemBootstrapper:
 
             md_service._post_connect_hooks.append(_populate_families_from_shioaji)
         elif broker_id == "fubon":
-            from hft_platform.feed_adapter.fubon.family_populator import (
-                populate_resolver_from_fubon,
-            )
+            # The Fubon family_populator module isn't shipped yet (see
+            # docs/architecture/multi-broker-support.md ADR — Fubon adapter
+            # in scaffold state). Import defensively so a Fubon-broker
+            # bootstrap doesn't ModuleNotFoundError at startup; instead it
+            # falls back to the legacy non-family rebind path with a clear
+            # warning.
+            try:
+                from hft_platform.feed_adapter.fubon.family_populator import (
+                    populate_resolver_from_fubon,
+                )
+            except ImportError as exc:
+                logger.warning(
+                    "family_populator_unavailable",
+                    broker="fubon",
+                    error=str(exc),
+                    note="Fubon contract-family populator not yet implemented; legacy rebind path active.",
+                )
+            else:
+                def _populate_families_from_fubon() -> None:
+                    try:
+                        populate_resolver_from_fubon(family_resolver, md_client)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("family_populator_failed", broker="fubon", error=str(exc))
 
-            def _populate_families_from_fubon() -> None:
-                try:
-                    populate_resolver_from_fubon(family_resolver, md_client)
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("family_populator_failed", broker="fubon", error=str(exc))
-
-            md_service._post_connect_hooks.append(_populate_families_from_fubon)
+                md_service._post_connect_hooks.append(_populate_families_from_fubon)
 
         if _publish_queue is not None:
             strategy_runner.set_publish_sink(lambda ch, payload: _publish_queue.put_nowait((ch, payload)))
@@ -1332,6 +1364,7 @@ class SystemBootstrapper:
             position_stuck_monitor=position_stuck_monitor,
             checkpoint_writer=checkpoint_writer,
             startup_verifier=startup_verifier,
+            startup_fill_reconciler=startup_fill_reconciler,
         )
 
 

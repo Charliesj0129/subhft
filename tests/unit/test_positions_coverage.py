@@ -173,16 +173,62 @@ class TestPositionStore:
 
     def test_get_drawdown_pct_from_peak(self):
         store = PositionStore()
-        store._peak_equity_scaled = 10_000_000  # above min threshold (2M)
-        store._total_realized_pnl_scaled = 8_000_000
+        # Bug B: default threshold raised to 100M scaled (10000 NTD).
+        # Use peak well above threshold so drawdown calc activates.
+        store._peak_equity_scaled = 1_000_000_000  # 100,000 NTD, above threshold
+        store._total_realized_pnl_scaled = 800_000_000  # 80,000 NTD
         dd = store.get_drawdown_pct()
         assert dd == pytest.approx(0.2)
 
     def test_get_drawdown_pct_at_peak(self):
         store = PositionStore()
-        store._peak_equity_scaled = 10_000_000
-        store._total_realized_pnl_scaled = 10_000_000
+        store._peak_equity_scaled = 1_000_000_000
+        store._total_realized_pnl_scaled = 1_000_000_000
         assert store.get_drawdown_pct() == 0.0
+
+    def test_get_drawdown_pct_low_volume_does_not_explode(self):
+        """Bug B: realized-PnL-only drawdown produced 92.9% for low-PnL HFT
+        scenario (R47 morning peak +24 pts → afternoon -22 pts pullback).
+        Triggered false HALT in incident 2026-04-20T01:42 UTC.
+
+        For HFT-scale strategies (1-lot R47 maker on TMFD6), absolute losses
+        of ~22 NTD are normal variance and must not trigger HALT-grade
+        drawdown (>= 200 bps = 2%).
+        """
+        import os
+
+        # Ensure default threshold (no env override) for this test
+        os.environ.pop("HFT_DRAWDOWN_MIN_PEAK_SCALED", None)
+        store = PositionStore()
+        store._peak_equity_scaled = 2_395_000   # 240 NTD intraday peak
+        store._total_realized_pnl_scaled = 170_000  # 17 NTD after pullback (loss = 22.3 NTD)
+        drawdown = store.get_drawdown_pct()
+        assert drawdown < 0.02, (
+            f"Drawdown {drawdown:.4f} would trigger HALT (>= 2%). "
+            f"22 NTD loss on HFT-scale strategy must stay safe."
+        )
+
+    def test_get_drawdown_pct_min_peak_scaled_env_override(self):
+        """Bug B: HFT_DRAWDOWN_MIN_PEAK_SCALED must let operators tune the
+        cold-start threshold for their notional. Default raised to 1e8 scaled
+        (10,000 NTD) for HFT-scale; operators can lower for higher notional.
+        """
+        import os
+        from importlib import reload
+
+        from hft_platform.execution import positions as positions_mod
+
+        # Lower threshold via env → drawdown calc activates earlier
+        os.environ["HFT_DRAWDOWN_MIN_PEAK_SCALED"] = "5000000"  # 500 NTD
+        try:
+            reload(positions_mod)
+            store = positions_mod.PositionStore()
+            store._peak_equity_scaled = 10_000_000  # 1000 NTD, above 500 NTD floor
+            store._total_realized_pnl_scaled = 8_000_000
+            assert store.get_drawdown_pct() == pytest.approx(0.2)
+        finally:
+            os.environ.pop("HFT_DRAWDOWN_MIN_PEAK_SCALED", None)
+            reload(positions_mod)
 
 
 # ---------------------------------------------------------------------------

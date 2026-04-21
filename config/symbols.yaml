@@ -1,11 +1,879 @@
-# Minimal subscription list for contract-refresh verification session
-# (original 357-entry version backed up as symbols.yaml.bak.*)
-# Uses R1 continuous aliases so the contract refresh thread keeps the
-# concrete month code current across rollovers without YAML edits.
 symbols:
-- code: TXFR1
-  exchange: TAIFEX
-  group: 0
-- code: TMFR1
-  exchange: TAIFEX
-  group: 0
+- code: '1101'
+  name: "\u53F0\u6CE5"
+  exchange: TSE
+  product_type: stock
+- code: '1102'
+  name: "\u4E9E\u6CE5"
+  exchange: TSE
+  product_type: stock
+- code: '1216'
+  name: "\u7D71\u4E00"
+  exchange: TSE
+  product_type: stock
+- code: '1301'
+  name: "\u53F0\u5851"
+  exchange: TSE
+  product_type: stock
+- code: '1303'
+  name: "\u5357\u4E9E"
+  exchange: TSE
+  product_type: stock
+- code: '1326'
+  name: "\u53F0\u5316"
+  exchange: TSE
+  product_type: stock
+- code: '1402'
+  name: "\u9060\u6771\u65B0"
+  exchange: TSE
+  product_type: stock
+- code: '2002'
+  name: "\u4E2D\u92FC"
+  exchange: TSE
+  product_type: stock
+- code: '2201'
+  name: "\u88D5\u9686"
+  exchange: TSE
+  product_type: stock
+- code: '2207'
+  name: "\u548C\u6CF0\u8ECA"
+  exchange: TSE
+  product_type: stock
+- code: '2301'
+  name: "\u5149\u5BF6\u79D1"
+  exchange: TSE
+  product_type: stock
+- code: '2303'
+  name: "\u806F\u96FB"
+  exchange: TSE
+  product_type: stock
+- code: '2308'
+  name: "\u53F0\u9054\u96FB"
+  exchange: TSE
+  product_type: stock
+- code: '2317'
+  name: "\u9D3B\u6D77"
+  exchange: TSE
+  product_type: stock
+- code: '2327'
+  name: "\u570B\u5DE8*"
+  exchange: TSE
+  product_type: stock
+- code: '2330'
+  name: "\u53F0\u7A4D\u96FB"
+  exchange: TSE
+  product_type: stock
+- code: '2345'
+  name: "\u667A\u90A6"
+  exchange: TSE
+  product_type: stock
+- code: '2354'
+  name: "\u9D3B\u6E96"
+  exchange: TSE
+  product_type: stock
+- code: '2357'
+  name: "\u83EF\u78A9"
+  exchange: TSE
+  product_type: stock
+- code: '2379'
+  name: "\u745E\u6631"
+  exchange: TSE
+  product_type: stock
+- code: '2382'
+  name: "\u5EE3\u9054"
+  exchange: TSE
+  product_type: stock
+- code: '2395'
+  name: "\u7814\u83EF"
+  exchange: TSE
+  product_type: stock
+- code: '2408'
+  name: "\u5357\u4E9E\u79D1"
+  exchange: TSE
+  product_type: stock
+- code: '2409'
+  name: "\u53CB\u9054"
+  exchange: TSE
+  product_type: stock
+- code: '2412'
+  name: "\u4E2D\u83EF\u96FB"
+  exchange: TSE
+  product_type: stock
+- code: '2454'
+  name: "\u806F\u767C\u79D1"
+  exchange: TSE
+  product_type: stock
+- code: '2474'
+  name: "\u53EF\u6210"
+  exchange: TSE
+  product_type: stock
+- code: '2603'
+  name: "\u9577\u69AE"
+  exchange: TSE
+  product_type: stock
+- code: '2609'
+  name: "\u967D\u660E"
+  exchange: TSE
+  product_type: stock
+- code: '2615'
+  name: "\u842C\u6D77"
+  exchange: TSE
+  product_type: stock
+- code: '2801'
+  name: "\u5F70\u9280"
+  exchange: TSE
+  product_type: stock
+- code: '2881'
+  name: "\u5BCC\u90A6\u91D1"
+  exchange: TSE
+  product_type: stock
+- code: '2882'
+  name: "\u570B\u6CF0\u91D1"
+  exchange: TSE
+  product_type: stock
+- code: '2883'
+  name: "\u51F1\u57FA\u91D1"
+  exchange: TSE
+  product_type: stock
+- code: '2884'
+  name: "\u7389\u5C71\u91D1"
+  exchange: TSE
+  product_type: stock
+- code: '2885'
+  name: "\u5143\u5927\u91D1"
+  exchange: TSE
+  product_type: stock
+- code: '2886'
+  name: "\u5146\u8C50\u91D1"
+  exchange: TSE
+  product_type: stock
+- code: '2887'
+  name: "\u53F0\u65B0\u65B0\u5149\u91D1"
+  exchange: TSE
+  product_type: stock
+- code: '2890'
+  name: "\u6C38\u8C50\u91D1"
+  exchange: TSE
+  product_type: stock
+- code: '2891'
+  name: "\u4E2D\u4FE1\u91D1"
+  exchange: TSE
+  product_type: stock
+- code: '2892'
+  name: "\u7B2C\u4E00\u91D1"
+  exchange: TSE
+  product_type: stock
+- code: '2912'
+  name: "\u7D71\u4E00\u8D85"
+  exchange: TSE
+  product_type: stock
+- code: '3008'
+  name: "\u5927\u7ACB\u5149"
+  exchange: TSE
+  product_type: stock
+- code: '3034'
+  name: "\u806F\u8A60"
+  exchange: TSE
+  product_type: stock
+- code: '3045'
+  name: "\u53F0\u7063\u5927"
+  exchange: TSE
+  product_type: stock
+- code: '3711'
+  name: "\u65E5\u6708\u5149\u6295\u63A7"
+  exchange: TSE
+  product_type: stock
+- code: '4904'
+  name: "\u9060\u50B3"
+  exchange: TSE
+  product_type: stock
+- code: '4938'
+  name: "\u548C\u78A9"
+  exchange: TSE
+  product_type: stock
+- code: '5871'
+  name: "\u4E2D\u79DF-KY"
+  exchange: TSE
+  product_type: stock
+- code: '5880'
+  name: "\u5408\u5EAB\u91D1"
+  exchange: TSE
+  product_type: stock
+- code: TXFE6
+  name: "\u81FA\u80A1\u671F\u8CA805"
+  exchange: FUT
+  product_type: future
+  tags:
+  - futures
+  - front_month
+  - txf
+- code: TXFG6
+  name: "\u81FA\u80A1\u671F\u8CA807"
+  exchange: FUT
+  product_type: future
+  tags:
+  - futures
+  - far_month
+  - txf
+- code: MXFE6
+  name: "\u5C0F\u578B\u81FA\u630705"
+  exchange: FUT
+  product_type: future
+  tags:
+  - futures
+  - front_month
+  - mxf
+- code: MXFG6
+  name: "\u5C0F\u578B\u81FA\u630707"
+  exchange: FUT
+  product_type: future
+  tags:
+  - futures
+  - far_month
+  - mxf
+- code: TMFE6
+  name: "\u5FAE\u578B\u81FA\u6307\u671F\u8CA805"
+  exchange: FUT
+  product_type: future
+  tags:
+  - futures
+  - front_month
+  - tmf
+- code: TMFG6
+  name: "\u5FAE\u578B\u81FA\u6307\u671F\u8CA807"
+  exchange: FUT
+  product_type: future
+  tags:
+  - futures
+  - far_month
+  - tmf
+- code: TXO35400E6
+  name: "\u81FA\u6307\u9078\u64C7\u6B0AF505\u6708 35400C"
+  exchange: OPT
+  product_type: option
+  tags:
+  - options
+  - near_month
+  - atm
+  - txo
+  right: C
+  strike: 35400.0
+  expiry: 2026/05/20
+  underlying: TX
+  point_value: 50
+  price_scale: 10000
+- code: TXO35900Q6
+  name: "\u81FA\u6307\u9078\u64C7\u6B0AF505\u6708 35900P"
+  exchange: OPT
+  product_type: option
+  tags:
+  - options
+  - near_month
+  - atm
+  - txo
+  right: P
+  strike: 35900.0
+  expiry: 2026/05/20
+  underlying: TX
+  point_value: 50
+  price_scale: 10000
+- code: TXO34000E6
+  name: "\u81FA\u6307\u9078\u64C7\u6B0AF505\u6708 34000C"
+  exchange: OPT
+  product_type: option
+  tags:
+  - options
+  - near_month
+  - atm
+  - txo
+  right: C
+  strike: 34000.0
+  expiry: 2026/05/20
+  underlying: TX
+  point_value: 50
+  price_scale: 10000
+- code: TXO34700Q6
+  name: "\u81FA\u6307\u9078\u64C7\u6B0AF505\u6708 34700P"
+  exchange: OPT
+  product_type: option
+  tags:
+  - options
+  - near_month
+  - atm
+  - txo
+  right: P
+  strike: 34700.0
+  expiry: 2026/05/20
+  underlying: TX
+  point_value: 50
+  price_scale: 10000
+- code: TXO35100Q6
+  name: "\u81FA\u6307\u9078\u64C7\u6B0AF505\u6708 35100P"
+  exchange: OPT
+  product_type: option
+  tags:
+  - options
+  - near_month
+  - atm
+  - txo
+  right: P
+  strike: 35100.0
+  expiry: 2026/05/20
+  underlying: TX
+  point_value: 50
+  price_scale: 10000
+- code: TXO34900Q6
+  name: "\u81FA\u6307\u9078\u64C7\u6B0AF505\u6708 34900P"
+  exchange: OPT
+  product_type: option
+  tags:
+  - options
+  - near_month
+  - atm
+  - txo
+  right: P
+  strike: 34900.0
+  expiry: 2026/05/20
+  underlying: TX
+  point_value: 50
+  price_scale: 10000
+- code: TXO34100E6
+  name: "\u81FA\u6307\u9078\u64C7\u6B0AF505\u6708 34100C"
+  exchange: OPT
+  product_type: option
+  tags:
+  - options
+  - near_month
+  - atm
+  - txo
+  right: C
+  strike: 34100.0
+  expiry: 2026/05/20
+  underlying: TX
+  point_value: 50
+  price_scale: 10000
+- code: TXO35200Q6
+  name: "\u81FA\u6307\u9078\u64C7\u6B0AF505\u6708 35200P"
+  exchange: OPT
+  product_type: option
+  tags:
+  - options
+  - near_month
+  - atm
+  - txo
+  right: P
+  strike: 35200.0
+  expiry: 2026/05/20
+  underlying: TX
+  point_value: 50
+  price_scale: 10000
+- code: TXO35700E6
+  name: "\u81FA\u6307\u9078\u64C7\u6B0AF505\u6708 35700C"
+  exchange: OPT
+  product_type: option
+  tags:
+  - options
+  - near_month
+  - atm
+  - txo
+  right: C
+  strike: 35700.0
+  expiry: 2026/05/20
+  underlying: TX
+  point_value: 50
+  price_scale: 10000
+- code: TXO35800E6
+  name: "\u81FA\u6307\u9078\u64C7\u6B0AF505\u6708 35800C"
+  exchange: OPT
+  product_type: option
+  tags:
+  - options
+  - near_month
+  - atm
+  - txo
+  right: C
+  strike: 35800.0
+  expiry: 2026/05/20
+  underlying: TX
+  point_value: 50
+  price_scale: 10000
+- code: TXO34300Q6
+  name: "\u81FA\u6307\u9078\u64C7\u6B0AF505\u6708 34300P"
+  exchange: OPT
+  product_type: option
+  tags:
+  - options
+  - near_month
+  - atm
+  - txo
+  right: P
+  strike: 34300.0
+  expiry: 2026/05/20
+  underlying: TX
+  point_value: 50
+  price_scale: 10000
+- code: TXO34500Q6
+  name: "\u81FA\u6307\u9078\u64C7\u6B0AF505\u6708 34500P"
+  exchange: OPT
+  product_type: option
+  tags:
+  - options
+  - near_month
+  - atm
+  - txo
+  right: P
+  strike: 34500.0
+  expiry: 2026/05/20
+  underlying: TX
+  point_value: 50
+  price_scale: 10000
+- code: TXO35500E6
+  name: "\u81FA\u6307\u9078\u64C7\u6B0AF505\u6708 35500C"
+  exchange: OPT
+  product_type: option
+  tags:
+  - options
+  - near_month
+  - atm
+  - txo
+  right: C
+  strike: 35500.0
+  expiry: 2026/05/20
+  underlying: TX
+  point_value: 50
+  price_scale: 10000
+- code: TXO34500E6
+  name: "\u81FA\u6307\u9078\u64C7\u6B0AF505\u6708 34500C"
+  exchange: OPT
+  product_type: option
+  tags:
+  - options
+  - near_month
+  - atm
+  - txo
+  right: C
+  strike: 34500.0
+  expiry: 2026/05/20
+  underlying: TX
+  point_value: 50
+  price_scale: 10000
+- code: TXO35600E6
+  name: "\u81FA\u6307\u9078\u64C7\u6B0AF505\u6708 35600C"
+  exchange: OPT
+  product_type: option
+  tags:
+  - options
+  - near_month
+  - atm
+  - txo
+  right: C
+  strike: 35600.0
+  expiry: 2026/05/20
+  underlying: TX
+  point_value: 50
+  price_scale: 10000
+- code: TXO35600Q6
+  name: "\u81FA\u6307\u9078\u64C7\u6B0AF505\u6708 35600P"
+  exchange: OPT
+  product_type: option
+  tags:
+  - options
+  - near_month
+  - atm
+  - txo
+  right: P
+  strike: 35600.0
+  expiry: 2026/05/20
+  underlying: TX
+  point_value: 50
+  price_scale: 10000
+- code: TXO35800Q6
+  name: "\u81FA\u6307\u9078\u64C7\u6B0AF505\u6708 35800P"
+  exchange: OPT
+  product_type: option
+  tags:
+  - options
+  - near_month
+  - atm
+  - txo
+  right: P
+  strike: 35800.0
+  expiry: 2026/05/20
+  underlying: TX
+  point_value: 50
+  price_scale: 10000
+- code: TXO34100Q6
+  name: "\u81FA\u6307\u9078\u64C7\u6B0AF505\u6708 34100P"
+  exchange: OPT
+  product_type: option
+  tags:
+  - options
+  - near_month
+  - atm
+  - txo
+  right: P
+  strike: 34100.0
+  expiry: 2026/05/20
+  underlying: TX
+  point_value: 50
+  price_scale: 10000
+- code: TXO35700Q6
+  name: "\u81FA\u6307\u9078\u64C7\u6B0AF505\u6708 35700P"
+  exchange: OPT
+  product_type: option
+  tags:
+  - options
+  - near_month
+  - atm
+  - txo
+  right: P
+  strike: 35700.0
+  expiry: 2026/05/20
+  underlying: TX
+  point_value: 50
+  price_scale: 10000
+- code: TXO34200E6
+  name: "\u81FA\u6307\u9078\u64C7\u6B0AF505\u6708 34200C"
+  exchange: OPT
+  product_type: option
+  tags:
+  - options
+  - near_month
+  - atm
+  - txo
+  right: C
+  strike: 34200.0
+  expiry: 2026/05/20
+  underlying: TX
+  point_value: 50
+  price_scale: 10000
+- code: TXO34600Q6
+  name: "\u81FA\u6307\u9078\u64C7\u6B0AF505\u6708 34600P"
+  exchange: OPT
+  product_type: option
+  tags:
+  - options
+  - near_month
+  - atm
+  - txo
+  right: P
+  strike: 34600.0
+  expiry: 2026/05/20
+  underlying: TX
+  point_value: 50
+  price_scale: 10000
+- code: TXO35900E6
+  name: "\u81FA\u6307\u9078\u64C7\u6B0AF505\u6708 35900C"
+  exchange: OPT
+  product_type: option
+  tags:
+  - options
+  - near_month
+  - atm
+  - txo
+  right: C
+  strike: 35900.0
+  expiry: 2026/05/20
+  underlying: TX
+  point_value: 50
+  price_scale: 10000
+- code: TXO34600E6
+  name: "\u81FA\u6307\u9078\u64C7\u6B0AF505\u6708 34600C"
+  exchange: OPT
+  product_type: option
+  tags:
+  - options
+  - near_month
+  - atm
+  - txo
+  right: C
+  strike: 34600.0
+  expiry: 2026/05/20
+  underlying: TX
+  point_value: 50
+  price_scale: 10000
+- code: TXO34400E6
+  name: "\u81FA\u6307\u9078\u64C7\u6B0AF505\u6708 34400C"
+  exchange: OPT
+  product_type: option
+  tags:
+  - options
+  - near_month
+  - atm
+  - txo
+  right: C
+  strike: 34400.0
+  expiry: 2026/05/20
+  underlying: TX
+  point_value: 50
+  price_scale: 10000
+- code: TXO33900Q6
+  name: "\u81FA\u6307\u9078\u64C7\u6B0AF505\u6708 33900P"
+  exchange: OPT
+  product_type: option
+  tags:
+  - options
+  - near_month
+  - atm
+  - txo
+  right: P
+  strike: 33900.0
+  expiry: 2026/05/20
+  underlying: TX
+  point_value: 50
+  price_scale: 10000
+- code: TXO34900E6
+  name: "\u81FA\u6307\u9078\u64C7\u6B0AF505\u6708 34900C"
+  exchange: OPT
+  product_type: option
+  tags:
+  - options
+  - near_month
+  - atm
+  - txo
+  right: C
+  strike: 34900.0
+  expiry: 2026/05/20
+  underlying: TX
+  point_value: 50
+  price_scale: 10000
+- code: TXO34300E6
+  name: "\u81FA\u6307\u9078\u64C7\u6B0AF505\u6708 34300C"
+  exchange: OPT
+  product_type: option
+  tags:
+  - options
+  - near_month
+  - atm
+  - txo
+  right: C
+  strike: 34300.0
+  expiry: 2026/05/20
+  underlying: TX
+  point_value: 50
+  price_scale: 10000
+- code: TXO35200E6
+  name: "\u81FA\u6307\u9078\u64C7\u6B0AF505\u6708 35200C"
+  exchange: OPT
+  product_type: option
+  tags:
+  - options
+  - near_month
+  - atm
+  - txo
+  right: C
+  strike: 35200.0
+  expiry: 2026/05/20
+  underlying: TX
+  point_value: 50
+  price_scale: 10000
+- code: TXO35000Q6
+  name: "\u81FA\u6307\u9078\u64C7\u6B0AF505\u6708 35000P"
+  exchange: OPT
+  product_type: option
+  tags:
+  - options
+  - near_month
+  - atm
+  - txo
+  right: P
+  strike: 35000.0
+  expiry: 2026/05/20
+  underlying: TX
+  point_value: 50
+  price_scale: 10000
+- code: TXO34000Q6
+  name: "\u81FA\u6307\u9078\u64C7\u6B0AF505\u6708 34000P"
+  exchange: OPT
+  product_type: option
+  tags:
+  - options
+  - near_month
+  - atm
+  - txo
+  right: P
+  strike: 34000.0
+  expiry: 2026/05/20
+  underlying: TX
+  point_value: 50
+  price_scale: 10000
+- code: TXO34800E6
+  name: "\u81FA\u6307\u9078\u64C7\u6B0AF505\u6708 34800C"
+  exchange: OPT
+  product_type: option
+  tags:
+  - options
+  - near_month
+  - atm
+  - txo
+  right: C
+  strike: 34800.0
+  expiry: 2026/05/20
+  underlying: TX
+  point_value: 50
+  price_scale: 10000
+- code: TXO35400Q6
+  name: "\u81FA\u6307\u9078\u64C7\u6B0AF505\u6708 35400P"
+  exchange: OPT
+  product_type: option
+  tags:
+  - options
+  - near_month
+  - atm
+  - txo
+  right: P
+  strike: 35400.0
+  expiry: 2026/05/20
+  underlying: TX
+  point_value: 50
+  price_scale: 10000
+- code: TXO34400Q6
+  name: "\u81FA\u6307\u9078\u64C7\u6B0AF505\u6708 34400P"
+  exchange: OPT
+  product_type: option
+  tags:
+  - options
+  - near_month
+  - atm
+  - txo
+  right: P
+  strike: 34400.0
+  expiry: 2026/05/20
+  underlying: TX
+  point_value: 50
+  price_scale: 10000
+- code: TXO34800Q6
+  name: "\u81FA\u6307\u9078\u64C7\u6B0AF505\u6708 34800P"
+  exchange: OPT
+  product_type: option
+  tags:
+  - options
+  - near_month
+  - atm
+  - txo
+  right: P
+  strike: 34800.0
+  expiry: 2026/05/20
+  underlying: TX
+  point_value: 50
+  price_scale: 10000
+- code: TXO35300E6
+  name: "\u81FA\u6307\u9078\u64C7\u6B0AF505\u6708 35300C"
+  exchange: OPT
+  product_type: option
+  tags:
+  - options
+  - near_month
+  - atm
+  - txo
+  right: C
+  strike: 35300.0
+  expiry: 2026/05/20
+  underlying: TX
+  point_value: 50
+  price_scale: 10000
+- code: TXO33900E6
+  name: "\u81FA\u6307\u9078\u64C7\u6B0AF505\u6708 33900C"
+  exchange: OPT
+  product_type: option
+  tags:
+  - options
+  - near_month
+  - atm
+  - txo
+  right: C
+  strike: 33900.0
+  expiry: 2026/05/20
+  underlying: TX
+  point_value: 50
+  price_scale: 10000
+- code: TXO34700E6
+  name: "\u81FA\u6307\u9078\u64C7\u6B0AF505\u6708 34700C"
+  exchange: OPT
+  product_type: option
+  tags:
+  - options
+  - near_month
+  - atm
+  - txo
+  right: C
+  strike: 34700.0
+  expiry: 2026/05/20
+  underlying: TX
+  point_value: 50
+  price_scale: 10000
+- code: TXO35000E6
+  name: "\u81FA\u6307\u9078\u64C7\u6B0AF505\u6708 35000C"
+  exchange: OPT
+  product_type: option
+  tags:
+  - options
+  - near_month
+  - atm
+  - txo
+  right: C
+  strike: 35000.0
+  expiry: 2026/05/20
+  underlying: TX
+  point_value: 50
+  price_scale: 10000
+- code: TXO35300Q6
+  name: "\u81FA\u6307\u9078\u64C7\u6B0AF505\u6708 35300P"
+  exchange: OPT
+  product_type: option
+  tags:
+  - options
+  - near_month
+  - atm
+  - txo
+  right: P
+  strike: 35300.0
+  expiry: 2026/05/20
+  underlying: TX
+  point_value: 50
+  price_scale: 10000
+- code: TXO34200Q6
+  name: "\u81FA\u6307\u9078\u64C7\u6B0AF505\u6708 34200P"
+  exchange: OPT
+  product_type: option
+  tags:
+  - options
+  - near_month
+  - atm
+  - txo
+  right: P
+  strike: 34200.0
+  expiry: 2026/05/20
+  underlying: TX
+  point_value: 50
+  price_scale: 10000
+- code: TXO35500Q6
+  name: "\u81FA\u6307\u9078\u64C7\u6B0AF505\u6708 35500P"
+  exchange: OPT
+  product_type: option
+  tags:
+  - options
+  - near_month
+  - atm
+  - txo
+  right: P
+  strike: 35500.0
+  expiry: 2026/05/20
+  underlying: TX
+  point_value: 50
+  price_scale: 10000
+- code: TXO35100E6
+  name: "\u81FA\u6307\u9078\u64C7\u6B0AF505\u6708 35100C"
+  exchange: OPT
+  product_type: option
+  tags:
+  - options
+  - near_month
+  - atm
+  - txo
+  right: C
+  strike: 35100.0
+  expiry: 2026/05/20
+  underlying: TX
+  point_value: 50
+  price_scale: 10000

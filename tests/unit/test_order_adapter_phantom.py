@@ -7,6 +7,7 @@ set and increment the phantom metric, while non-mutating timeouts do not.
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -85,6 +86,105 @@ def _make_intent(intent_id: int = 1) -> OrderIntent:
 
 
 # ── Tests ──────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_phantom_dispatch_does_not_inflate_reject_or_cb_metrics(tmp_config):
+    """Bug D' (2026-04-20): phantom_order_candidate_dispatch_failed should NOT
+    increment order_reject_total or call circuit_breaker.record_failure(). The
+    order may have reached the broker (Bug 23 phantom design) — counting it as
+    a rejection inflates dashboards, fires false Telegram CRITICAL alerts, and
+    can eventually trip the circuit breaker on a healthy broker (observed
+    14 phantoms / 5 min on 2026-04-20 incident).
+    """
+    adapter = _make_adapter(tmp_config)
+    sink: asyncio.Queue = asyncio.Queue(maxsize=64)
+    adapter.set_rejection_sink(sink)
+    intent = _make_intent(intent_id=99)
+
+    # Reset CB state and metric mock counts for clean assertions
+    adapter.metrics.order_reject_total.reset_mock()
+    cb_failures_before = adapter.circuit_breaker.failure_count
+
+    # Inline reproduction of the _api_worker except branch (so we can drive
+    # it directly rather than spinning up the full worker with a fake-raising
+    # _dispatch_to_api). After Bug D' fix, the metric/CB calls below must
+    # NOT happen on the phantom-candidate code path.
+    try:
+        raise RuntimeError("simulated Shioaji place_order client-side exception")
+    except Exception:
+        await adapter._handle_dispatch_exception(intent=intent, cmd_id=99)
+
+    adapter.metrics.order_reject_total.inc.assert_not_called()
+    assert adapter.circuit_breaker.failure_count == cb_failures_before, (
+        "phantom dispatch must not call circuit_breaker.record_failure()"
+    )
+
+    # The phantom candidate must still be tracked (so on_fill can reconcile)
+    assert f"{intent.strategy_id}:{intent.intent_id}" in adapter._phantom_order_keys
+    adapter.metrics.phantom_order_candidates_total.inc.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_release_stale_phantom_pendings_emits_recovery_feedback(tmp_config):
+    """Bug D (2026-04-20): phantom_pending=True feedbacks freeze strategies
+    because R47.on_risk_feedback returns early on was_approved=True. When the
+    broker never sends a fill or cancel callback (Shioaji client-side
+    exception that didn't reach the broker), the strategy stays frozen.
+
+    The recovery janitor must, after TTL, emit a SECOND RiskFeedback with
+    ``was_approved=False`` so the strategy releases the pending counter and
+    resumes quoting.
+    """
+    adapter = _make_adapter(tmp_config)
+    sink: asyncio.Queue = asyncio.Queue(maxsize=64)
+    adapter.set_rejection_sink(sink)
+
+    intent = _make_intent(intent_id=42)
+    phantom_key = f"{intent.strategy_id}:{intent.intent_id}"
+
+    # Simulate phantom registration (mirrors adapter.py:2118-2123 path)
+    adapter._send_dispatch_rejection(intent, "dispatch_failed", phantom_pending=True)
+    adapter._phantom_order_keys[phantom_key] = (time.monotonic() - 999.0, intent.symbol)
+    adapter._phantom_intents[phantom_key] = intent
+
+    # Drain the initial phantom_pending feedback (was_approved=True)
+    fb1 = sink.get_nowait()
+    assert fb1.was_approved is True
+
+    # Run recovery sweep with TTL=30s — our entry is 999s old, eligible
+    released = await adapter.release_stale_phantom_pendings(ttl_s=30.0)
+
+    assert released == 1
+    assert phantom_key not in adapter._phantom_order_keys
+    assert phantom_key not in adapter._phantom_intents
+
+    fb2 = sink.get_nowait()
+    assert fb2.was_approved is False, "recovery feedback must release pending"
+    assert fb2.symbol == intent.symbol
+    assert fb2.side == intent.side
+    assert fb2.strategy_id == intent.strategy_id
+    assert "phantom_recovery" in fb2.reason_code
+
+
+@pytest.mark.asyncio
+async def test_release_stale_phantom_pendings_skips_fresh_entries(tmp_config):
+    """Fresh phantoms (within TTL) must NOT be released — broker may still
+    send a fill/cancel callback. Only after TTL we assume orphaned."""
+    adapter = _make_adapter(tmp_config)
+    sink: asyncio.Queue = asyncio.Queue(maxsize=64)
+    adapter.set_rejection_sink(sink)
+
+    intent = _make_intent(intent_id=43)
+    phantom_key = f"{intent.strategy_id}:{intent.intent_id}"
+
+    adapter._phantom_order_keys[phantom_key] = (time.monotonic(), intent.symbol)
+    adapter._phantom_intents[phantom_key] = intent
+
+    released = await adapter.release_stale_phantom_pendings(ttl_s=30.0)
+    assert released == 0
+    assert phantom_key in adapter._phantom_order_keys
+    assert sink.empty()
 
 
 @pytest.mark.asyncio

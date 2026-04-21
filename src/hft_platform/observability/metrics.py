@@ -100,6 +100,7 @@ class MetricsRegistry:
                 _pn("order_halt_skip_total"),
                 _pn("order_deadline_expired_total"),
                 _pn("phantom_order_candidates_total"),
+                _pn("phantom_recovery_releases_total"),
                 _pn("api_guard_timeout_total"),
                 _pn("shadow_orders_total"),
                 _pn("shadow_mode_active"),
@@ -442,6 +443,14 @@ class MetricsRegistry:
         # Order
         self.order_actions_total = Counter(_pn("order_actions_total"), "Order actions sent", ["type"])
         self.order_reject_total = Counter(_pn("order_reject_total"), "Broker rejects")
+        # Bug #29: cancel intents that targeted an order already in terminal
+        # state (race-loser, semantic success). Distinct from order_reject_total
+        # (which counts true failures) and from phantom counters.
+        self.order_cancel_already_terminal_total = Counter(
+            _pn("order_cancel_already_terminal_total"),
+            "CANCEL intents whose target was already terminal (success, not failure)",
+            ["reason"],
+        )
         # Gate 3: track which source OrderAdapter used to derive the
         # broker-side contract_code. Label values:
         #   - "resolver_hit": ``intent.contract`` resolved via
@@ -466,6 +475,11 @@ class MetricsRegistry:
         self.phantom_order_candidates_total = Counter(
             _pn("phantom_order_candidates_total"),
             "Timed-out mutating API calls that may have succeeded at broker",
+        )
+        self.phantom_recovery_releases_total = Counter(
+            _pn("phantom_recovery_releases_total"),
+            "Phantom orders released after TTL expiry to unfreeze strategy "
+            "pending counters (Bug D, 2026-04-20)",
         )
         self.api_guard_timeout_total = Counter(
             _pn("api_guard_timeout_total"),
@@ -500,6 +514,16 @@ class MetricsRegistry:
         self.synthetic_fill_id_total = Counter(
             _pn("synthetic_fill_id_total"),
             "Fills with synthesized fill_id (broker omitted seqno)",
+        )
+        self.startup_reconciler_missing_fills_total = Counter(
+            _pn("startup_reconciler_missing_fills_total"),
+            "Bug #32 backfill: fills found at broker but missing from CH at startup",
+            ["result"],
+        )
+        self.startup_reconciler_run_seconds = Histogram(
+            _pn("startup_reconciler_run_seconds"),
+            "Bug #32 backfill: end-to-end runtime of one startup reconcile pass",
+            buckets=(0.05, 0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0),
         )
         self.execution_router_lag_ns = Histogram(
             _pn("execution_router_lag_ns"),
