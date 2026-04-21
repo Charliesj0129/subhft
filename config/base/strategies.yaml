@@ -134,6 +134,8 @@ strategies:
       toxicity_max: 9999           # Disabled (negligible on TMFD6)
       qi_skew_threshold: 0.10     # D4: QI |imbalance| > 0.10 → widen adverse side
       qi_widen_ticks: 1           # Widen by 1 tick (w=1 optimal for total PnL + Sharpe)
+      stale_quote_max_ticks: 3    # D1 (2026-04-21 fix): cancel active quote when |mid - last_quote| > 3 pts regardless of placement-gate state. Today's incident: spread gate blocked 96.3% of ticks, abandoned orders sat up to 41 s.
+      quote_cooldown_ms: 1000     # D2 (2026-04-21 fix): re-quote cooldown must exceed Shioaji P95 RTT (~800 ms) so _active_*_oid is populated before the next placement; else earlier in-flight orders get orphaned.
       max_pos: 1                   # Emergency rollback to 1 lot after 2026-04-20 HALT episode
 
   # --- Electronic Eye (TXO Options MM + Delta Hedge) — DISABLED ---

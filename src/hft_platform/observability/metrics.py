@@ -398,6 +398,19 @@ class MetricsRegistry:
             buckets=[5000, 20000, 50000, 100000, 200000],
         )  # 5us to 200us
         self.strategy_intents_total = Counter(_pn("strategy_intents_total"), "Intents generated", ["strategy"])
+        # D6 (2026-04-21 incident fix): divergence metrics for MM strategies.
+        # Catch future backtest-live drift via: stale-quote cancel rate,
+        # in-flight oid multiplicity (RTT-spike indicator).
+        self.strategy_stale_cancels_total = Counter(
+            _pn("strategy_stale_cancels_total"),
+            "Cancels fired by distance-from-mid reconciler (D1)",
+            ["strategy", "side"],
+        )
+        self.strategy_inflight_oids = Gauge(
+            _pn("strategy_inflight_oids"),
+            "In-flight order count per strategy/side (D3 tracking)",
+            ["strategy", "side"],
+        )
         self.risk_reject_total = Counter(_pn("risk_reject_total"), "Risk rejections", ["reason", "strategy"])
         self.stormguard_mode = Gauge(
             _pn("stormguard_mode"), "StormGuard State (0=NORMAL, 1=WARM, 2=STORM, 3=HALT)", ["strategy"]
