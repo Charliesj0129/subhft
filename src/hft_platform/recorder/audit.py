@@ -3,6 +3,19 @@
 Non-blocking audit logging via bounded asyncio.Queue with drop-on-full semantics.
 Background flush tasks batch rows and write to ClickHouse audit tables.
 Falls back to structlog if ClickHouse is unavailable.
+
+P0-I3 (2026-04-24): asyncio.Queue instances are created lazily inside ``start()``
+so that the queues bind to the engine loop. Previously they were created in
+``__init__`` — the first caller to hit ``log_*`` could be a daemon thread (e.g.
+bootstrap lease-refresh → storm_guard → audit), which bound queue futures to an
+orphan loop and silently dropped audit rows. Pre-start log calls buffer into the
+thread-safe ``_pre_start_buffer`` (a ``collections.deque`` under a lock); the
+buffer is drained into the real queues once ``start()`` runs on the engine loop.
+
+P1 guardrail retention: ``audit.guardrail_log`` uses a "sticky-first" overflow
+policy — when the queue + overflow are full, NEW entries are dropped instead of
+evicting the oldest. The first transition (root cause of a cascade) is the most
+valuable row to retain for post-incident forensics.
 """
 
 from __future__ import annotations
@@ -10,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import collections
 import os
+import threading
 from typing import Any
 
 from structlog import get_logger
@@ -22,6 +36,11 @@ _DEFAULT_QUEUE_SIZE = 10_000
 _DEFAULT_FLUSH_INTERVAL_MS = 1_000
 _DEFAULT_FLUSH_LIMIT = 500
 _DEFAULT_OVERFLOW_SIZE = 50_000
+# P1 fix: guardrail_log rows (StormGuard state transitions) are operationally
+# critical — root-cause transitions must survive a bursty cascade. Larger default
+# overflow, and "sticky-first" policy applied in ``_put``.
+_DEFAULT_GUARDRAIL_OVERFLOW_SIZE = 100_000
+_GUARDRAIL_TABLE = "audit.guardrail_log"
 
 # Bug #30: structlog method signature is `meth(event, *args, **kw)` plus a few
 # other reserved kwargs it injects. Splatting a row dict containing any of these
@@ -56,6 +75,13 @@ class AuditWriter:
         "_tasks",
         "_running",
         "_dropped",
+        # P0-I3: Pre-start thread-safe buffer used until ``start()`` creates the
+        # real asyncio.Queue instances on the engine loop.
+        "_pre_start_buffer",
+        "_pre_start_lock",
+        "_queues_ready",
+        "_queue_size",
+        "_overflow_size",
     )
 
     _TABLE_NAMES: tuple[str, ...] = (
@@ -73,11 +99,38 @@ class AuditWriter:
     ) -> None:
         resolved_size = queue_size or int(os.getenv("HFT_AUDIT_QUEUE_SIZE", str(_DEFAULT_QUEUE_SIZE)))
         overflow_size = int(os.getenv("HFT_AUDIT_OVERFLOW_SIZE", str(_DEFAULT_OVERFLOW_SIZE)))
-        self._queues: dict[str, asyncio.Queue[dict[str, Any]]] = {
-            name: asyncio.Queue(maxsize=resolved_size) for name in self._TABLE_NAMES
+        guardrail_overflow_size = int(
+            os.getenv("HFT_AUDIT_GUARDRAIL_OVERFLOW_SIZE", str(_DEFAULT_GUARDRAIL_OVERFLOW_SIZE))
+        )
+        self._queue_size = resolved_size
+        # Per-table overflow sizes — guardrail gets a larger allocation so
+        # root-cause transitions survive bursty cascades.
+        self._overflow_size: dict[str, int] = {
+            name: (guardrail_overflow_size if name == _GUARDRAIL_TABLE else overflow_size)
+            for name in self._TABLE_NAMES
         }
+
+        # P0-I3: DO NOT create asyncio.Queue instances here. The engine loop is
+        # not yet running when AuditWriter is first constructed (see
+        # bootstrap.py / HFTSystem.__init__ ordering). Queues are created lazily
+        # in ``start()`` on the engine loop.
+        self._queues: dict[str, asyncio.Queue[dict[str, Any]] | None] = dict.fromkeys(self._TABLE_NAMES, None)
+        self._queues_ready = False
+
+        # Pre-start buffer: thread-safe (collections.deque + threading.Lock)
+        # so any thread (including the daemon lease-refresh thread that may
+        # invoke StormGuard._transition before the engine loop is running) can
+        # safely enqueue audit rows without corrupting an asyncio.Queue. Size is
+        # queue_size + overflow_size so pre-start cannot exhaust earlier than
+        # the post-start queue + overflow combination would have.
+        self._pre_start_lock = threading.Lock()
+        self._pre_start_buffer: dict[str, collections.deque[dict[str, Any]]] = {
+            name: collections.deque(maxlen=self._queue_size + self._overflow_size[name])
+            for name in self._TABLE_NAMES
+        }
+        # Post-start overflow deque (per-table sized).
         self._overflow: dict[str, collections.deque[dict[str, Any]]] = {
-            name: collections.deque(maxlen=overflow_size) for name in self._TABLE_NAMES
+            name: collections.deque(maxlen=self._overflow_size[name]) for name in self._TABLE_NAMES
         }
         self._flush_limit = flush_limit
         self._flush_interval_ms = flush_interval_ms
@@ -110,9 +163,41 @@ class AuditWriter:
     # ------------------------------------------------------------------
 
     async def start(self) -> None:
-        """Start background flush tasks for each audit table."""
+        """Start background flush tasks for each audit table.
+
+        P0-I3: Creates the asyncio.Queue instances on the current running loop
+        (engine loop) and drains any rows accumulated in ``_pre_start_buffer``
+        by threads that logged before the loop was up. MUST be called from the
+        engine loop.
+        """
         if self._running:
             return
+
+        # Create queues on the engine loop (getter semantics in Python 3.12 —
+        # asyncio.Queue binds to the running loop on first put/get).
+        for table_name in self._TABLE_NAMES:
+            self._queues[table_name] = asyncio.Queue(maxsize=self._queue_size)
+        self._queues_ready = True
+
+        # Drain pre-start buffer into the fresh queues under lock.
+        with self._pre_start_lock:
+            for table_name, buf in self._pre_start_buffer.items():
+                q = self._queues[table_name]
+                if q is None:
+                    continue
+                while buf:
+                    item = buf.popleft()
+                    try:
+                        q.put_nowait(item)
+                    except asyncio.QueueFull:
+                        # Queue already full from pre-start overflow — route
+                        # into the normal overflow deque for retry on flush.
+                        overflow = self._overflow[table_name]
+                        if overflow.maxlen is None or len(overflow) < overflow.maxlen:
+                            overflow.append(item)
+                        else:
+                            self._dropped[table_name] = self._dropped.get(table_name, 0) + 1
+
         self._running = True
         for table_name in self._TABLE_NAMES:
             task = asyncio.create_task(self._flush_loop(table_name))
@@ -145,39 +230,103 @@ class AuditWriter:
     # ------------------------------------------------------------------
 
     def _put(self, table: str, data: dict[str, Any]) -> None:
-        """Non-blocking enqueue with overflow buffer before drop."""
+        """Non-blocking enqueue with overflow buffer before drop.
+
+        P0-I3: Before ``start()`` binds asyncio.Queue instances, all writes land
+        in ``_pre_start_buffer`` (thread-safe deque under a lock). This lets a
+        daemon thread safely enqueue StormGuard transition rows during startup.
+
+        P1 sticky-first (guardrail only): when queue + overflow are both full,
+        the ``audit.guardrail_log`` table drops the NEW entry instead of evicting
+        the oldest — the root-cause transition at the top of a cascade is the
+        most valuable row to retain for forensics.
+        """
+        # Pre-start path: queues not yet created on any loop.
+        if not self._queues_ready:
+            with self._pre_start_lock:
+                buf = self._pre_start_buffer[table]
+                if buf.maxlen is None or len(buf) < buf.maxlen:
+                    buf.append(data)
+                else:
+                    # Guardrail: reject newest to preserve oldest (root cause).
+                    if table == _GUARDRAIL_TABLE:
+                        self._dropped[table] = self._dropped.get(table, 0) + 1
+                    else:
+                        # Non-guardrail: retain newest, evict oldest. Counted
+                        # as a drop for observability (an entry IS being lost,
+                        # even if deque auto-manages the maxlen).
+                        buf.append(data)  # deque drops leftmost automatically
+                        self._dropped[table] = self._dropped.get(table, 0) + 1
+            return
+
+        q = self._queues[table]
+        if q is None:
+            # Should not happen after _queues_ready — defensive fallback.
+            self._dropped[table] = self._dropped.get(table, 0) + 1
+            return
+
         try:
-            self._queues[table].put_nowait(data)
+            q.put_nowait(data)
+            return
         except asyncio.QueueFull:
-            overflow = self._overflow[table]
-            if overflow.maxlen is not None and len(overflow) < overflow.maxlen:
-                overflow.append(data)
-                try:
-                    from hft_platform.observability.metrics import MetricsRegistry
+            pass
 
-                    MetricsRegistry.get().audit_overflow_total.labels(table=table).inc()
-                except Exception:
-                    pass
-            else:
-                # Overflow also full — hard drop (last resort)
-                self._dropped[table] = self._dropped.get(table, 0) + 1
-                try:
-                    from hft_platform.observability.metrics import MetricsRegistry
+        overflow = self._overflow[table]
+        if overflow.maxlen is not None and len(overflow) < overflow.maxlen:
+            overflow.append(data)
+            try:
+                from hft_platform.observability.metrics import MetricsRegistry
 
-                    MetricsRegistry.get().audit_dropped_total.labels(table=table).inc()
-                except Exception:
-                    pass
-                if self._dropped[table] <= 3 or self._dropped[table] % 100 == 0:
-                    logger.error(
-                        "Audit overflow exhausted, dropping event",
-                        table=table,
-                        total_dropped=self._dropped[table],
-                        overflow_size=len(overflow),
-                    )
+                MetricsRegistry.get().audit_overflow_total.labels(table=table).inc()
+            except Exception:
+                pass
+            return
+
+        # Queue + overflow both full.
+        if table == _GUARDRAIL_TABLE:
+            # P1 sticky-first: do NOT evict oldest; drop this new event so
+            # the first (root-cause) transition is preserved.
+            self._dropped[table] = self._dropped.get(table, 0) + 1
+            try:
+                from hft_platform.observability.metrics import MetricsRegistry
+
+                MetricsRegistry.get().audit_dropped_total.labels(table=table).inc()
+            except Exception:
+                pass
+            if self._dropped[table] <= 3 or self._dropped[table] % 100 == 0:
+                logger.error(
+                    "Audit guardrail overflow exhausted (sticky-first), dropping NEWEST",
+                    table=table,
+                    total_dropped=self._dropped[table],
+                    overflow_size=len(overflow),
+                )
+            return
+
+        # Non-guardrail tables: hard drop (last resort) — behaviour preserved
+        # from prior revision for backward compat.
+        self._dropped[table] = self._dropped.get(table, 0) + 1
+        try:
+            from hft_platform.observability.metrics import MetricsRegistry
+
+            MetricsRegistry.get().audit_dropped_total.labels(table=table).inc()
+        except Exception:
+            pass
+        if self._dropped[table] <= 3 or self._dropped[table] % 100 == 0:
+            logger.error(
+                "Audit overflow exhausted, dropping event",
+                table=table,
+                total_dropped=self._dropped[table],
+                overflow_size=len(overflow),
+            )
 
     async def _flush_loop(self, table_name: str) -> None:
         """Background loop: drain queue and flush in batches."""
         queue = self._queues[table_name]
+        if queue is None:
+            # Defensive — should never happen because start() populates queues
+            # before scheduling flush loops.
+            logger.error("audit_flush_loop_no_queue", table=table_name)
+            return
         batch: list[dict[str, Any]] = []
         interval_s = self._flush_interval_ms / 1000.0
 
@@ -228,15 +377,22 @@ class AuditWriter:
         """Drain remaining items from queue and overflow, then flush."""
         queue = self._queues[table_name]
         batch: list[dict[str, Any]] = []
-        while not queue.empty():
-            try:
-                batch.append(queue.get_nowait())
-            except asyncio.QueueEmpty:
-                break
+        if queue is not None:
+            while not queue.empty():
+                try:
+                    batch.append(queue.get_nowait())
+                except asyncio.QueueEmpty:
+                    break
         # Also drain overflow deque
         overflow = self._overflow[table_name]
         while overflow:
             batch.append(overflow.popleft())
+        # P0-I3: also drain pre-start buffer if anything is still there
+        # (e.g. shutdown before start() completed).
+        with self._pre_start_lock:
+            buf = self._pre_start_buffer[table_name]
+            while buf:
+                batch.append(buf.popleft())
         if batch:
             await self._flush_batch(table_name, batch)
 

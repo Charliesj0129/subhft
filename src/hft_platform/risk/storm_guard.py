@@ -63,6 +63,14 @@ class StormGuard:
         "_warm_deescalation_ts",
         "_warm_reescalation_cooldown_s",
         "_reconciliation_hold",
+        # P0-I4: engine loop reference bound via ``bind_loop()`` by HFTSystem.run().
+        # Used by ``_fire_halt_callback`` to dispatch coroutine halt callbacks from
+        # non-asyncio threads (e.g. bootstrap lease-refresh daemon).
+        "_loop",
+        # P1 fix: list of transition side-effect records produced inside the
+        # state lock and flushed via ``_emit_pending_transition`` afterwards
+        # so Prometheus metric / audit locks never nest with ``_state_lock``.
+        "_pending_transition_emit",
     )
 
     def __init__(
@@ -119,6 +127,25 @@ class StormGuard:
         # Reconciliation hold: when True, HALT de-escalation is blocked until
         # ReconciliationService confirms drift is resolved.
         self._reconciliation_hold: bool = False
+        # P0-I4: engine loop reference; bound by HFTSystem.run() via ``bind_loop``.
+        # When ``None``, ``_fire_halt_callback`` falls back to a best-effort
+        # ``asyncio.get_running_loop()`` lookup (safe on the loop thread itself).
+        self._loop: asyncio.AbstractEventLoop | None = None
+        # P1 fix: transition side-effect queue flushed outside _state_lock.
+        self._pending_transition_emit: list[dict[str, Any]] = []
+
+    def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Bind the engine event loop for cross-thread halt-callback dispatch.
+
+        MUST be called once from the engine loop (HFTSystem.run()) before any
+        non-asyncio thread can trigger HALT via ``trigger_halt`` or similar.
+        Without this, a coroutine halt-callback fired from a daemon thread
+        cannot be scheduled and is silently closed — Telegram / audit alerts
+        for session-lease loss (bootstrap lease-refresh thread) are dropped.
+
+        Idempotent and safe to call multiple times; the last binding wins.
+        """
+        self._loop = loop
 
     def reload_thresholds(self, config: dict) -> None:
         """Update thresholds from new config."""
@@ -310,6 +337,10 @@ class StormGuard:
 
             current_state = self.state
 
+        # P1 fix: flush metrics + audit outside _state_lock to avoid nested
+        # lock ordering with the Prometheus scraper thread.
+        self._emit_pending_transition()
+
         if fire_callback:
             self._fire_halt_callback()
 
@@ -348,6 +379,8 @@ class StormGuard:
                         StormGuardState.STORM,
                         f"Crossed book: spread_scaled={spread_scaled}",
                     )
+            # P1 fix: flush metrics + audit outside _state_lock (crossed-book path).
+            self._emit_pending_transition()
             return self.state
         if mid_price_x2 <= 0:
             # Empty/invalid book — skip DriftBurst to avoid feeding invalid data
@@ -404,6 +437,9 @@ class StormGuard:
 
             current_state = self.state
 
+        # P1 fix: flush metrics + audit outside _state_lock (drift-burst path).
+        self._emit_pending_transition()
+
         if fire_callback:
             self._fire_halt_callback()
 
@@ -412,8 +448,19 @@ class StormGuard:
     def _transition(self, new_state: StormGuardState, reason: str) -> tuple[StormGuardState, bool]:
         """Transition state machine. Returns (old_state, should_fire_halt_callback).
 
-        IMPORTANT: Caller must invoke _fire_halt_callback() AFTER releasing
-        _state_lock when the second element is True.
+        IMPORTANT (lock ordering):
+        * Called by methods that hold ``_state_lock``.
+        * This function MUST NOT call into Prometheus metric internals or the
+          audit singleton while the lock is held — those acquire their own
+          locks (prometheus_client MutexValue, audit asyncio.Queue) and the
+          reverse ordering (scraper thread reads the same metric collector)
+          creates a cross-thread deadlock risk.
+        * Side-effects (metric emission + audit row) are recorded on the
+          instance in ``_pending_transition_emit`` and flushed by
+          ``_emit_pending_transition`` AFTER the caller releases
+          ``_state_lock``. Callers MUST invoke
+          ``_emit_pending_transition()`` immediately after exiting the
+          ``with self._state_lock:`` block (P1 fix).
         """
         old_state = self.state
         self.state = new_state
@@ -421,34 +468,16 @@ class StormGuard:
 
         logger.warning("StormGuard Transition", old=old_state.name, new=new_state.name, reason=reason)
 
-        # Update Metric — log at WARNING if metrics fail during a state
-        # transition so operators know observability is degraded (INFRA-011).
-        try:
-            self.metrics.stormguard_mode.labels(strategy="system").set(int(new_state))
-        except Exception as exc:
-            logger.warning("stormguard_metric_update_failed", metric="mode", error=str(exc))
-
-        # Count transition direction
-        direction = "escalation" if int(new_state) > int(old_state) else "de_escalation"
-        try:
-            self.metrics.stormguard_transitions_total.labels(direction=direction).inc()
-        except Exception as exc:
-            logger.warning("stormguard_metric_update_failed", metric="transitions", error=str(exc))
-
-        # Audit guardrail transition
-        try:
-            from hft_platform.recorder.audit import get_audit_writer
-
-            audit = get_audit_writer()
-            audit.log_guardrail_transition(
-                {
-                    "old_state": old_state.name,
-                    "new_state": new_state.name,
-                    "reason": reason,
-                }
-            )
-        except Exception as exc:
-            logger.warning("audit_guardrail_transition_failed", error=str(exc))
+        # P1 fix: record intent to emit metrics/audit OUTSIDE the lock.
+        self._pending_transition_emit.append(
+            {
+                "old_state_int": int(old_state),
+                "new_state_int": int(new_state),
+                "old_name": old_state.name,
+                "new_name": new_state.name,
+                "reason": reason,
+            }
+        )
 
         # Signal caller to fire callback OUTSIDE the lock
         # Only fire on *entry* to HALT, not re-entry (prevents infinite recursion)
@@ -459,29 +488,101 @@ class StormGuard:
         )
         return old_state, should_fire
 
+    def _emit_pending_transition(self) -> None:
+        """Flush queued transition side-effects (metrics + audit) outside _state_lock.
+
+        P1 fix: avoids nested-lock ordering (_state_lock → prometheus metric lock)
+        that could deadlock against the Prometheus scraper thread.
+
+        Called by every path that invokes ``_transition`` after releasing the
+        state lock. Safe to call when no pending entries exist (no-op).
+        """
+        # Pop under a tiny local swap to avoid losing entries if we are racing
+        # with another emitter (which should not happen — this function is
+        # single-threaded-caller by convention).
+        if not self._pending_transition_emit:
+            return
+        pending = self._pending_transition_emit
+        self._pending_transition_emit = []
+
+        for entry in pending:
+            new_state_int = entry["new_state_int"]
+            old_state_int = entry["old_state_int"]
+            direction = "escalation" if new_state_int > old_state_int else "de_escalation"
+
+            # Update Metric — log at WARNING if metrics fail during a state
+            # transition so operators know observability is degraded (INFRA-011).
+            try:
+                self.metrics.stormguard_mode.labels(strategy="system").set(new_state_int)
+            except Exception as exc:
+                logger.warning("stormguard_metric_update_failed", metric="mode", error=str(exc))
+
+            try:
+                self.metrics.stormguard_transitions_total.labels(direction=direction).inc()
+            except Exception as exc:
+                logger.warning("stormguard_metric_update_failed", metric="transitions", error=str(exc))
+
+            # Audit guardrail transition (may block on asyncio.Queue.put_nowait;
+            # still safer outside the state lock).
+            try:
+                from hft_platform.recorder.audit import get_audit_writer
+
+                audit = get_audit_writer()
+                audit.log_guardrail_transition(
+                    {
+                        "old_state": entry["old_name"],
+                        "new_state": entry["new_name"],
+                        "reason": entry["reason"],
+                    }
+                )
+            except Exception as exc:
+                logger.warning("audit_guardrail_transition_failed", error=str(exc))
+
     def _fire_halt_callback(self) -> None:
-        """Invoke the on_halt_callback. Must be called OUTSIDE _state_lock."""
+        """Invoke the on_halt_callback. Must be called OUTSIDE _state_lock.
+
+        P0-I4: when a coroutine halt-callback is triggered from a non-asyncio
+        thread (e.g. bootstrap lease-refresh daemon), ``asyncio.get_running_loop()``
+        raises RuntimeError. Use the engine loop reference bound via ``bind_loop()``
+        so coroutines can be scheduled thread-safely via
+        ``asyncio.run_coroutine_threadsafe``.
+        """
         if self._on_halt_callback is None:
             return
         try:
             result = self._on_halt_callback()
-            # If callback is a coroutine, schedule it thread-safely
-            if asyncio.iscoroutine(result):
-                try:
-                    loop = asyncio.get_running_loop()
-                    future = asyncio.run_coroutine_threadsafe(result, loop)
-                    future.add_done_callback(self._halt_callback_done)
-                except RuntimeError:
-                    # No running event loop; close the coroutine explicitly so
-                    # the interpreter does not emit an unawaited-coroutine warning.
-                    result.close()
-                    logger.warning("halt_callback_coroutine_no_loop")
         except Exception as exc:
             logger.error(
                 "on_halt_callback_error",
                 error=str(exc),
                 error_type=type(exc).__name__,
             )
+            return
+
+        if not asyncio.iscoroutine(result):
+            return
+
+        # Prefer the explicitly bound loop (safe from any thread); fall back to
+        # get_running_loop() when we are ourselves on the engine loop thread.
+        loop = self._loop
+        if loop is None:
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                # No bound loop and not running inside one — close the coroutine
+                # explicitly so the interpreter does not emit an unawaited-coroutine
+                # warning, and surface that observability is degraded.
+                result.close()
+                logger.warning("halt_callback_coroutine_no_loop")
+                return
+
+        try:
+            future = asyncio.run_coroutine_threadsafe(result, loop)
+            future.add_done_callback(self._halt_callback_done)
+        except RuntimeError as exc:
+            # Loop is closed or otherwise unusable; close the coroutine cleanly.
+            result.close()
+            logger.warning("halt_callback_schedule_failed", error=str(exc))
 
     @staticmethod
     def _halt_callback_done(future: Future[Any]) -> None:
@@ -506,8 +607,17 @@ class StormGuard:
                 self._de_escalate_count = 0
                 self._transition(StormGuardState.STORM, reason)
 
+        # P1 fix: flush metrics + audit outside _state_lock.
+        self._emit_pending_transition()
+
     def trigger_halt(self, reason: str) -> None:
-        """Manual or Supervisor override to force HALT."""
+        """Manual or Supervisor override to force HALT.
+
+        Thread-safe: callable from any thread (engine loop, supervisor, daemon
+        lease-refresh thread, broker callback thread). The coroutine halt-callback
+        is scheduled via ``_fire_halt_callback`` which uses ``bind_loop()``'s
+        engine-loop reference for cross-thread dispatch (P0-I4).
+        """
         fire_callback = False
         with self._state_lock:
             now = time.monotonic()
@@ -516,6 +626,9 @@ class StormGuard:
             self._halt_entry_ts = now
             self._de_escalate_count = 0
             _, fire_callback = self._transition(StormGuardState.HALT, reason)
+
+        # P1 fix: flush metrics + audit outside _state_lock.
+        self._emit_pending_transition()
 
         if fire_callback:
             self._fire_halt_callback()
@@ -638,6 +751,8 @@ class StormGuard:
                     StormGuardState.STORM,
                     f"FeatureEngine consecutive failures: {count}",
                 )
+        # P1 fix: flush transition metrics + audit outside _state_lock.
+        self._emit_pending_transition()
         try:
             self.metrics.feature_engine_escalation_total.inc()
         except Exception:
@@ -695,6 +810,8 @@ class StormGuard:
                     StormGuardState.STORM,
                     f"Normalizer consecutive failures: {count}",
                 )
+        # P1 fix: flush transition metrics + audit outside _state_lock.
+        self._emit_pending_transition()
         try:
             self.metrics.norm_engine_escalation_total.inc()
         except Exception:

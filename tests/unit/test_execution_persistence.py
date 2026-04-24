@@ -376,23 +376,36 @@ class TestAuditDropMetric:
     """Verify audit drops are exposed as Prometheus metric."""
 
     def test_drop_on_full_increments_metric(self):
+        """P0-I3 refactor: start() the writer so queue-full path (not pre-start
+        buffer) exercises the drop-metric code path.
+        """
+        import asyncio as _asyncio
+
         from hft_platform.recorder.audit import AuditWriter, reset_audit_writer
 
         reset_audit_writer()
-        writer = AuditWriter(queue_size=1)  # Tiny queue
-        # Set overflow buffer size to 0 so drops happen immediately after queue full
-        for name in writer._overflow:
-            writer._overflow[name] = collections.deque(maxlen=0)
 
-        metrics_mock = MagicMock()
-        with patch("hft_platform.observability.metrics.MetricsRegistry") as mock_reg:
-            mock_reg.get.return_value = metrics_mock
+        async def _inner() -> None:
+            writer = AuditWriter(queue_size=1)
+            await writer.start()
+            try:
+                # Force overflow to zero-capacity so drops happen immediately after queue full.
+                for name in writer._overflow:
+                    writer._overflow[name] = collections.deque(maxlen=0)
 
-            writer.log_order({"cmd_id": 1})  # fills queue
-            writer.log_order({"cmd_id": 2})  # should trigger drop + metric
+                metrics_mock = MagicMock()
+                with patch("hft_platform.observability.metrics.MetricsRegistry") as mock_reg:
+                    mock_reg.get.return_value = metrics_mock
 
-        assert writer._dropped["audit.orders_log"] >= 1
-        metrics_mock.audit_dropped_total.labels.assert_called_with(table="audit.orders_log")
+                    writer.log_order({"cmd_id": 1})  # fills queue
+                    writer.log_order({"cmd_id": 2})  # should trigger drop + metric
+
+                assert writer._dropped["audit.orders_log"] >= 1
+                metrics_mock.audit_dropped_total.labels.assert_called_with(table="audit.orders_log")
+            finally:
+                await writer.stop()
+
+        _asyncio.run(_inner())
         reset_audit_writer()
 
 

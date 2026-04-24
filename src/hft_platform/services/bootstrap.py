@@ -1286,7 +1286,13 @@ class SystemBootstrapper:
                 position_stuck_monitor = None
 
         # Startup config snapshot (non-blocking)
+        # NOTE: build() runs inside HFTSystem.__init__ BEFORE the engine loop starts.
+        # Python 3.12 deprecates asyncio.get_event_loop() without a running loop, and
+        # scheduling tasks on an orphan loop silently fails. Collect coroutines into
+        # ``deferred_tasks`` and let HFTSystem.run() create the tasks on the engine loop.
         from hft_platform.ops.config_snapshot import build_snapshot, write_snapshot_to_clickhouse
+
+        deferred_tasks: list[Any] = []
 
         # ch_client is only set when HFT_DAILY_REPORT_ENABLED=1; fall back to recorder writer
         if "ch_client" not in dir():
@@ -1301,7 +1307,7 @@ class SystemBootstrapper:
             ]
             _snapshot = build_snapshot(yaml_paths=_yaml_paths)
             if ch_client is not None:
-                asyncio.get_event_loop().create_task(write_snapshot_to_clickhouse(ch_client, _snapshot))
+                deferred_tasks.append(write_snapshot_to_clickhouse(ch_client, _snapshot))
             else:
                 logger.info("config_snapshot_fallback", **_snapshot)
         except Exception:  # noqa: BLE001
@@ -1312,8 +1318,8 @@ class SystemBootstrapper:
             from hft_platform.notifications.alertmanager_bridge import AlertmanagerBridge
 
             _alert_bridge = AlertmanagerBridge()
-            asyncio.get_event_loop().create_task(_alert_bridge.run())
-            logger.info("alertmanager_bridge_scheduled")
+            deferred_tasks.append(_alert_bridge.run())
+            logger.info("alertmanager_bridge_scheduled_deferred")
         except Exception:  # noqa: BLE001
             logger.warning("alertmanager_bridge_start_failed", exc_info=True)
 
@@ -1365,6 +1371,7 @@ class SystemBootstrapper:
             checkpoint_writer=checkpoint_writer,
             startup_verifier=startup_verifier,
             startup_fill_reconciler=startup_fill_reconciler,
+            deferred_tasks=deferred_tasks,
         )
 
 

@@ -249,6 +249,13 @@ class WALBatchWriter:
         self._buffer_rows = 0
         self._buffer_bytes = 0  # Approximate
         self._lock = threading.Lock()
+        # P0-I2 (2026-04-24): serialises the physical write phase
+        # (``_write_batch_sync``) so the background timer thread and async
+        # ``flush()`` (which offloads via run_in_executor) never enter the
+        # critical section simultaneously. Without this, two threads can race
+        # on the shared ``_file_seq`` counter and the parent directory fsync,
+        # producing duplicate/racing WAL files.
+        self._write_lock = threading.Lock()
         self._last_flush_ts = time.monotonic()
 
         # Disk space check (reuse WALWriter's approach)
@@ -494,7 +501,23 @@ class WALBatchWriter:
         _approx_bytes: int,
         columnar_data: dict[str, list[tuple[list[str], list[list[Any]], int]]] | None = None,
     ) -> None:
-        """Write multi-table WAL file(s) atomically. EC-3: splits on size limit."""
+        """Write multi-table WAL file(s) atomically. EC-3: splits on size limit.
+
+        P0-I2: ``_write_lock`` serialises all physical writes so the background
+        timer thread and the async ``flush()`` path (executor-scheduled) cannot
+        enter this section concurrently. Lock is held for the entire write
+        phase including tempfile create → fsync → rename.
+        """
+        with self._write_lock:
+            self._write_batch_sync_locked(data, _approx_bytes, columnar_data)
+
+    def _write_batch_sync_locked(
+        self,
+        data: dict[str, list[dict[str, Any]]],
+        _approx_bytes: int,
+        columnar_data: dict[str, list[tuple[list[str], list[list[Any]], int]]] | None = None,
+    ) -> None:
+        """Actual write implementation. MUST be called with ``_write_lock`` held."""
         dir_path = self._wal_dir
         current_bytes = 0
         current_lines: list[bytes] = []

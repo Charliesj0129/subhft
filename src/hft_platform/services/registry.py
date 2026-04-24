@@ -69,3 +69,7 @@ class ServiceRegistry:
     checkpoint_writer: Optional[Any] = field(default=None)
     startup_verifier: Optional[Any] = field(default=None)
     startup_fill_reconciler: Optional[Any] = field(default=None)
+    # Coroutines scheduled by HFTSystem.run() once the engine loop is running.
+    # build() must NOT call asyncio.get_event_loop() (deprecated in Python 3.12+);
+    # collect coroutines here and let the system create tasks post-loop-bind.
+    deferred_tasks: list[Any] = field(default_factory=list)

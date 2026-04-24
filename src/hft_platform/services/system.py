@@ -288,15 +288,17 @@ class HFTSystem:
         # from non-asyncio threads (e.g. bootstrap lease-refresh daemon) can be
         # dispatched via run_coroutine_threadsafe instead of get_running_loop()
         # (which raises RuntimeError in a non-loop thread). P0-I4.
-        if hasattr(self.storm_guard, "bind_loop"):
-            self.storm_guard.bind_loop(self.loop)
+        sg = getattr(self, "storm_guard", None)
+        if sg is not None and hasattr(sg, "bind_loop"):
+            sg.bind_loop(self.loop)
 
         # Schedule coroutines that build() collected while outside the engine loop.
         # P0-I1: build() runs in __init__ without a running loop, so it cannot call
         # asyncio.get_event_loop() safely on Python 3.12+. Coroutines returned from
         # build() (e.g. config-snapshot writer, alertmanager bridge) are started here.
         self._deferred_tasks: list[asyncio.Task[Any]] = []
-        for coro in list(getattr(self.registry, "deferred_tasks", []) or []):
+        registry = getattr(self, "registry", None)
+        for coro in list(getattr(registry, "deferred_tasks", None) or []):
             try:
                 self._deferred_tasks.append(self.loop.create_task(coro))
             except Exception as exc:  # noqa: BLE001
