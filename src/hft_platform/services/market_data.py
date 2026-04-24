@@ -270,6 +270,16 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         self._fe_process_lob_update = (
             getattr(self.feature_engine, "process_lob_update", None) if self.feature_engine else None
         )
+        # H12: propagate tick-dispatcher drops to FeatureEngine so downstream
+        # quality_flags carry QUALITY_FLAG_GAP; strategies can distinguish
+        # 'no new info' from 'lost N ticks'.
+        if self.feature_engine is not None:
+            dispatcher = getattr(self.client, "_tick_dispatcher", None)
+            if dispatcher is not None and hasattr(dispatcher, "set_on_drop_callback"):
+                try:
+                    dispatcher.set_on_drop_callback(self.feature_engine.mark_gap_all)
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("tick_drop_gap_wiring_failed", error=str(exc))
         self._feature_shadow_engine: FeatureEngine | None = None
         self._shm_publisher: ShmSnapshotWriter | None = None
         self._shm_symbol_index: dict[str, int] = {}

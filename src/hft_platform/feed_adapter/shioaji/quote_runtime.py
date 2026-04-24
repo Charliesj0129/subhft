@@ -278,18 +278,21 @@ class QuoteRuntime:
             )
             if allow_fallback and supports_v0:
                 logger.warning("Falling back to quote v0 callbacks")
-                c._quote_version = "v0"
+                with c._quote_version_lock:
+                    c._quote_version = "v0"
                 ok = _set_v0()
                 if ok and c.metrics:
                     c.metrics.quote_version_switch_total.labels(direction="downgrade").inc()
                 if not ok:
-                    c._quote_version = "v1"
+                    with c._quote_version_lock:
+                        c._quote_version = "v1"
             else:
                 if not supports_v1:
                     logger.warning("Quote v1 callbacks not available on this Shioaji version")
                 if allow_fallback and not supports_v0:
                     logger.warning("Quote v0 callbacks not available; staying on v1")
-                c._quote_version = "v1"
+                with c._quote_version_lock:
+                    c._quote_version = "v1"
                 ok = False
         else:
             if supports_v0:
@@ -297,7 +300,8 @@ class QuoteRuntime:
             else:
                 logger.warning("Quote v0 callbacks not available on this Shioaji version")
                 if supports_v1:
-                    c._quote_version = "v1"
+                    with c._quote_version_lock:
+                        c._quote_version = "v1"
                 ok = False
 
         return ok
@@ -349,7 +353,8 @@ class QuoteRuntime:
                             gap_s=round(gap, 3),
                             to_version="v0",
                         )
-                        c._quote_version = "v0"
+                        with c._quote_version_lock:
+                            c._quote_version = "v0"
                         if c.metrics:
                             c.metrics.quote_version_switch_total.labels(direction="downgrade").inc()
                             try:

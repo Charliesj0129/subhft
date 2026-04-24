@@ -14,7 +14,7 @@ from hft_platform.observability.metrics import MetricsRegistry
 logger = get_logger("feed_adapter.lob")
 
 _RUST_ENABLED = os.getenv("HFT_RUST_ACCEL", "1").lower() not in {"0", "false", "no", "off"}
-_LOCKS_ENABLED = os.getenv("HFT_LOB_LOCKS", "0").lower() not in {"0", "false", "no", "off"}
+_LOCKS_ENABLED = os.getenv("HFT_LOB_LOCKS", "1").lower() not in {"0", "false", "no", "off"}
 _READ_LOCKS_ENABLED = os.getenv("HFT_LOB_READ_LOCKS", "1").lower() not in {
     "0",
     "false",

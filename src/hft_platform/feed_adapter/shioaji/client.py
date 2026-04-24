@@ -242,6 +242,10 @@ class ShioajiClient:
         self.ca_active = False
         self._reconnect_lock = threading.Lock()
         self._callback_register_lock = threading.Lock()
+        # H13: guards writes to _quote_version so watchdog thread cannot
+        # flip the value mid-decision in readers (e.g., subscribe path,
+        # get_quote_version snapshot).
+        self._quote_version_lock = threading.Lock()
         self._last_reconnect_ts = 0.0
         self._reconnect_backoff_s = float(os.getenv("HFT_RECONNECT_BACKOFF_S", "30"))
         self._reconnect_backoff_max_s = float(os.getenv("HFT_RECONNECT_BACKOFF_MAX_S", "120"))

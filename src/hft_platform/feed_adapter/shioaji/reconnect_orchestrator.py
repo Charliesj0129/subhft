@@ -282,11 +282,19 @@ class ReconnectOrchestrator:
         if not sj or not hasattr(sj.constant, "QuoteVersion"):
             return None
         c = self._client
-        if c._quote_version == "v0" and not c._supports_quote_v0():
+        # H13: snapshot under the dedicated lock so the watchdog thread
+        # cannot flip _quote_version between the two comparisons below.
+        lock = getattr(c, "_quote_version_lock", None)
+        if lock is not None:
+            with lock:
+                current = c._quote_version
+        else:
+            current = c._quote_version
+        if current == "v0" and not c._supports_quote_v0():
             if c._supports_quote_v1():
                 return sj.constant.QuoteVersion.v1
             return None
-        return sj.constant.QuoteVersion.v0 if c._quote_version == "v0" else sj.constant.QuoteVersion.v1
+        return sj.constant.QuoteVersion.v0 if current == "v0" else sj.constant.QuoteVersion.v1
 
     def handle_quote_schema_mismatch(self, reason: str, *args: Any, **kwargs: Any) -> None:
         """Record and log quote schema mismatches."""

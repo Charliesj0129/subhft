@@ -33,6 +33,24 @@ class TestBookStateInit:
         assert bs.asks == []
         assert bs.mid_price_x2 == 0
 
+    def test_lock_is_real_lock_by_default(self):
+        """H11: HFT_LOB_LOCKS default must be enabled so apply_update
+        is not racy against concurrent readers under HFT_LOB_READ_LOCKS=1.
+        Torn reads occurred silently because the NoopLock context was
+        still acquired on the read side but protected nothing."""
+        from threading import Lock as _RealLock
+
+        import hft_platform.feed_adapter.lob_engine as mod
+
+        assert mod._LOCKS_ENABLED is True
+        bs = BookState("2330")
+        # The real threading.Lock is not a class, so check it quacks like one:
+        assert hasattr(bs.lock, "acquire")
+        assert hasattr(bs.lock, "release")
+        assert not isinstance(bs.lock, mod._NoopLock)
+        # Sanity check: the type matches the module-level Lock factory.
+        assert type(bs.lock).__module__ == _RealLock.__module__
+
     def test_rust_state_disabled(self):
         import hft_platform.feed_adapter.lob_engine as mod
 
