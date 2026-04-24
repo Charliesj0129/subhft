@@ -51,6 +51,7 @@ class FubonQuoteRuntime:
         "_watchdog_thread",
         "_subscribed",
         "_running",
+        "_stopped",
         "_tick_buffer",
         "_bidask_buffer",
         "_last_data_ts",
@@ -68,6 +69,12 @@ class FubonQuoteRuntime:
         self._watchdog_thread: threading.Thread | None = None
         self._subscribed: set[str] = set()
         self._running: bool = False
+        # Set True once ``stop()`` has been invoked. The Fubon SDK retains
+        # bound references to _on_fubon_trade / _on_fubon_book after stop,
+        # so late-arriving callbacks could still double-publish into the
+        # canonical pipeline during a resubscribe (P1, 2026-04-24). The
+        # callbacks check this flag first and silently drop once stopped.
+        self._stopped: bool = False
         self._last_data_ts: float = 0.0
         self.log = logger
 
@@ -165,7 +172,9 @@ class FubonQuoteRuntime:
 
     def _on_fubon_trade(self, data: Any) -> None:
         """Translate a Fubon trade event to canonical tick dict and forward."""
-        if self._on_tick is None:
+        # P1 (2026-04-24): the SDK keeps a bound reference to this method
+        # after stop(); late deliveries must not leak into the pipeline.
+        if self._stopped or self._on_tick is None:
             return
         try:
             buf = self._tick_buffer
@@ -204,7 +213,9 @@ class FubonQuoteRuntime:
 
     def _on_fubon_book(self, data: Any) -> None:
         """Translate a Fubon book event to canonical bidask dict and forward."""
-        if self._on_bidask is None:
+        # P1 (2026-04-24): the SDK keeps a bound reference to this method
+        # after stop(); late deliveries must not leak into the pipeline.
+        if self._stopped or self._on_bidask is None:
             return
         try:
             buf = self._bidask_buffer
@@ -298,7 +309,13 @@ class FubonQuoteRuntime:
     # ------------------------------------------------------------------ #
 
     def stop(self) -> None:
-        """Stop the watchdog and unsubscribe all symbols."""
+        """Stop the watchdog and unsubscribe all symbols.
+
+        Sets ``_stopped`` before unsubscribing so that any callbacks still
+        queued by the Fubon SDK drop their payloads instead of emitting
+        them into the canonical pipeline (P1, 2026-04-24).
+        """
+        self._stopped = True
         self._running = False
         if self._subscribed:
             self.unsubscribe(list(self._subscribed))

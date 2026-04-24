@@ -411,6 +411,51 @@ class TestStop:
         rt.stop()  # second call must not crash
         assert len(rt._subscribed) == 0
 
+    def test_late_callbacks_dropped_after_stop(self) -> None:
+        """P1 (2026-04-24): Fubon SDK retains callback references after stop();
+        late-delivered trade/book events must be discarded to prevent double
+        publishing during resubscribe (FubonClient.resubscribe replaces the
+        runtime without unregistering)."""
+        rt = _make_runtime()
+        tick_received: list[dict[str, Any]] = []
+        book_received: list[dict[str, Any]] = []
+        rt.register_quote_callbacks(
+            on_tick=lambda d: tick_received.append(dict(d)),
+            on_bidask=lambda d: book_received.append(dict(d)),
+        )
+        # Before stop — deliveries succeed.
+        rt._on_fubon_trade({"symbol": "2330", "close": 100.0, "volume": 1, "datetime": 0})
+        rt._on_fubon_book(
+            {
+                "symbol": "2330",
+                "bid_prices": [99.0],
+                "bid_sizes": [10],
+                "ask_prices": [101.0],
+                "ask_sizes": [10],
+                "datetime": 0,
+            }
+        )
+        assert len(tick_received) == 1
+        assert len(book_received) == 1
+
+        rt.stop()
+
+        # Simulate the Fubon SDK delivering a buffered callback post-stop.
+        rt._on_fubon_trade({"symbol": "2330", "close": 200.0, "volume": 5, "datetime": 0})
+        rt._on_fubon_book(
+            {
+                "symbol": "2330",
+                "bid_prices": [199.0],
+                "bid_sizes": [50],
+                "ask_prices": [201.0],
+                "ask_sizes": [50],
+                "datetime": 0,
+            }
+        )
+        # No additional deliveries — the old runtime refuses to forward.
+        assert len(tick_received) == 1, "late trade callback leaked through stopped runtime"
+        assert len(book_received) == 1, "late book callback leaked through stopped runtime"
+
 
 # ---------------------------------------------------------------------------
 # Price scaling edge cases
