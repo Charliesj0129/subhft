@@ -121,6 +121,7 @@ class OrderAdapter:
         "_pending_fill_index",
         "_pending_fill_registered_at",
         "_pending_fill_ttl_s",
+        "_pending_fifo_strict",
         "_pending_fill_lock",
         "_custom_field_counter",
         "_background_tasks",
@@ -250,6 +251,16 @@ class OrderAdapter:
         self._pending_fill_index: dict[str, list[str]] = {}
         self._pending_fill_registered_at: dict[str, float] = {}
         self._pending_fill_ttl_s: float = float(os.getenv("HFT_PENDING_FILL_TTL_S", "7200"))  # noqa: duration
+        # H6: opt-in strict mode. When enabled, resolve_strategy_from_deal
+        # returns None on ambiguity (multiple pending entries for the same
+        # symbol+side) so the caller routes to UNKNOWN / DLQ rather than
+        # silently misattributing a fill via FIFO pop.
+        self._pending_fifo_strict: bool = os.getenv("HFT_PENDING_FIFO_STRICT", "0").lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
         self._pending_fill_lock = threading.Lock()  # protects _pending_fill_index across threads
         self._custom_field_counter: int = 0
 
@@ -1276,10 +1287,25 @@ class OrderAdapter:
                 logger.warning("pending_fill_index_expired", symbol=symbol, action=action, order_key=head)
             if not pending:
                 return None
-            # FIFO pop: takes the oldest pending order for this symbol+side.
-            # When multiple orders are pending, this is ambiguous — log a warning
-            # since the fill may be attributed to the wrong order.
             remaining_before_pop = len(pending)
+            # H6: under strict mode, refuse ambiguous FIFO pops so the
+            # caller can DLQ / UNKNOWN-route the fill rather than silently
+            # misattribute. Permissive mode (default) preserves the legacy
+            # behaviour — FIFO head wins, warning emitted.
+            if remaining_before_pop > 1 and self._pending_fifo_strict:
+                logger.warning(
+                    "pending_fill_fifo_ambiguous_blocked",
+                    symbol=symbol,
+                    action=action,
+                    candidates=list(pending),
+                    msg="strict mode — fill refused to avoid cross-strategy misattribution",
+                )
+                try:
+                    self.metrics.pending_fill_ambiguous_blocked_total.inc()
+                except Exception:  # noqa: BLE001
+                    pass
+                return None
+            # FIFO pop: takes the oldest pending order for this symbol+side.
             order_key = pending.pop(0)
             self._pending_fill_registered_at.pop(order_key, None)
             if remaining_before_pop > 1:
@@ -2191,16 +2217,78 @@ class OrderAdapter:
             self._emit_trace("order_enqueue_api", cmd.intent, {"cmd_id": int(cmd.cmd_id)})
             return True
         except asyncio.QueueFull:
+            # H7: CANCEL is safety-critical — a lost CANCEL leaves a resting
+            # order at the broker with no local way to cancel. On queue-full,
+            # preempt the oldest NEW (DLQ it) so the CANCEL can proceed. If
+            # no NEW is present to evict, fall through to normal DLQ.
+            if cmd.intent.intent_type == IntentType.CANCEL:
+                evicted = self._evict_new_for_cancel()
+                if evicted is not None:
+                    try:
+                        self._api_queue.put_nowait(cmd)
+                    except asyncio.QueueFull:
+                        # Race: queue filled again before we could put; put
+                        # the evicted NEW back and fall through to DLQ.
+                        try:
+                            self._api_queue.put_nowait(evicted)
+                        except asyncio.QueueFull:
+                            await self._add_to_dlq(
+                                evicted.intent,
+                                RejectionReason.RATE_LIMIT,
+                                "Lost during safety CANCEL eviction",
+                            )
+                    else:
+                        self._emit_trace(
+                            "order_enqueue_api_preempt",
+                            cmd.intent,
+                            {"cmd_id": int(cmd.cmd_id), "evicted_cmd_id": int(evicted.cmd_id)},
+                        )
+                        try:
+                            self.metrics.api_queue_cancel_priority_eviction_total.inc()
+                        except Exception:  # noqa: BLE001 — metric may not exist in tests
+                            pass
+                        await self._add_to_dlq(
+                            evicted.intent,
+                            RejectionReason.RATE_LIMIT,
+                            "Preempted by safety CANCEL",
+                        )
+                        return True
             logger.warning(
                 "API queue full - routing to DLQ",
                 cmd_id=cmd.cmd_id,
                 strategy_id=cmd.intent.strategy_id,
                 symbol=cmd.intent.symbol,
+                intent_type=str(cmd.intent.intent_type),
             )
             self.metrics.order_reject_total.inc()
             self._emit_trace("order_reject", cmd.intent, {"reason": "API_QUEUE_FULL", "cmd_id": int(cmd.cmd_id)})
             await self._add_to_dlq(cmd.intent, RejectionReason.RATE_LIMIT, "API queue full")
             return False
+
+    def _evict_new_for_cancel(self) -> OrderCommand | None:
+        """Remove and return the oldest NEW-intent command from ``_api_queue``.
+
+        Returns None if none found or the queue internals are unavailable.
+        Accesses ``asyncio.Queue._queue`` (collections.deque) directly —
+        this is stable CPython behaviour but guarded with a try/except.
+        """
+        try:
+            internal = self._api_queue._queue  # type: ignore[attr-defined]
+        except AttributeError:
+            return None
+        if not internal:
+            return None
+        for item in list(internal):
+            intent = getattr(item, "intent", None)
+            if intent is None:
+                continue
+            if intent.intent_type == IntentType.NEW:
+                try:
+                    internal.remove(item)
+                except ValueError:
+                    return None
+                return item
+        return None
 
     def submit_typed_command_nowait(self, frame: TypedOrderCommandFrame) -> None:
         """Prototype typed command ingress from GatewayService (avoids early materialization)."""

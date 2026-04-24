@@ -65,9 +65,14 @@ class OrderIdResolver:
         if order_key:
             return order_key
         if order_id_str:
+            # H5: snapshot the iteration so broker-thread reads cannot
+            # collide with asyncio-task writes (which would raise
+            # ``RuntimeError: dictionary changed size during iteration``).
+            # ``tuple(dict.items())`` is atomic under GIL.
+            #
             # Prefix-match fallback: Shioaji ordno grows from "vA0G6" (order)
             # to "vA0G671S" (fill) — the fill ordno starts with the order ordno.
-            for registered_id, mapped_key in self.order_id_map.items():
+            for registered_id, mapped_key in tuple(self.order_id_map.items()):
                 if registered_id and order_id_str.startswith(str(registered_id)):
                     order_key = self.normalize_order_key(mapped_key)
                     if order_key:
