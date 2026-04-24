@@ -134,6 +134,34 @@ class TestAuditWriter:
         # Structlog fallback drained all queues — all should be empty
         assert all(q.qsize() == 0 for q in audit._queues.values())
 
+    @pytest.mark.asyncio
+    async def test_flush_no_writer_emits_debug_level(self) -> None:
+        """When writer is None (documented Bug #19 fallback mode), per-row
+        emissions should be DEBUG (not INFO) to avoid 8k/day log spam."""
+        from unittest.mock import patch
+
+        audit = AuditWriter(queue_size=100, writer=None)
+        row = {"strategy_id": "R47", "intent_id": "1", "approved": True}
+        with patch("hft_platform.recorder.audit.logger") as mock_logger:
+            await audit._flush_batch("audit.risk_log", [row])
+        mock_logger.debug.assert_called_once()
+        mock_logger.info.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_flush_write_failure_still_uses_info_level(self) -> None:
+        """When writer exists but raises, per-row fallback stays at INFO so
+        operators can reconstruct the lost batch."""
+        from unittest.mock import AsyncMock, patch
+
+        writer = AsyncMock()
+        writer.write.side_effect = RuntimeError("CH down")
+        audit = AuditWriter(queue_size=100, writer=writer)
+        row = {"strategy_id": "R47", "intent_id": "1", "approved": True}
+        with patch("hft_platform.recorder.audit.logger") as mock_logger:
+            await audit._flush_batch("audit.risk_log", [row])
+        mock_logger.error.assert_called_once()
+        mock_logger.info.assert_called_once()
+
     # ------------------------------------------------------------------
     # Bug #30 — reserved-kwarg collision regression
     # ------------------------------------------------------------------

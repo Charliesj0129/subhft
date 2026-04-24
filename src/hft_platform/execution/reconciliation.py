@@ -280,7 +280,10 @@ class ReconciliationService:
                     await asyncio.sleep(delay)
 
     async def sync_portfolio(self) -> None:  # noqa: C901
-        logger.info("Starting Portfolio Sync...")
+        # Downgraded to DEBUG: with 5 s default interval this fires 17k
+        # times/day. The final "Portfolio Sync Complete" / warning lines
+        # are the authoritative liveness signals.
+        logger.debug("Starting Portfolio Sync...")
         t0 = time.monotonic()
         try:
             # 1. Fetch positions from broker
@@ -292,21 +295,9 @@ class ReconciliationService:
                 raise RuntimeError("get_positions() returned None — broker query unhealthy")
 
             # 2. Build broker position map {symbol: qty}
-            broker_map: Dict[str, int] = {}
-            for pos in raw_positions:
-                code = getattr(pos, "code", None) or (pos.get("code") if isinstance(pos, dict) else None)
-                qty = getattr(pos, "quantity", None) or (pos.get("quantity", 0) if isinstance(pos, dict) else 0)
-                direction = getattr(pos, "direction", "")
-                # Shioaji futures positions use "Short"/"Long"; stock positions use
-                # "Action.Sell"/"Action.Buy". Accept both forms.
-                if str(direction) in ("Action.Sell", "Short"):
-                    qty = -qty
-                if code:
-                    # Accumulate (not overwrite) to handle multiple account types
-                    # (stock + futopt) returning the same symbol code.
-                    broker_map[code] = broker_map.get(code, 0) + int(qty)
+            broker_map = self._build_broker_map(raw_positions)
 
-            logger.info("Portfolio Sync: Broker State", positions=broker_map)
+            logger.debug("Portfolio Sync: Broker State", positions=broker_map)
 
             # 3. Build local position map {symbol: qty}
             # Also build per-strategy breakdown for drift attribution (M9)
@@ -325,6 +316,15 @@ class ReconciliationService:
                 strat = pos.strategy_id
                 strat_positions = per_strategy_map.setdefault(strat, {})
                 strat_positions[symbol] = strat_positions.get(symbol, 0) + pos.net_qty
+            live_keys = {
+                (
+                    str(getattr(pos, "account_id", "") or ""),
+                    str(getattr(pos, "strategy_id", "") or ""),
+                    str(getattr(pos, "symbol", "") or ""),
+                )
+                for pos in snapshot.values()
+            }
+            live_account_symbols = {(acct, symbol) for acct, _strat, symbol in live_keys if acct and symbol}
 
             recovery = getattr(self.store, "_recovery_positions", None)
             if recovery:
@@ -334,20 +334,40 @@ class ReconciliationService:
                     qty = int(rdata.get("net_qty", 0) or 0)
                     if qty == 0:
                         continue
+                    account_id = str(rdata.get("account_id") or rkey.split(":", 1)[0])
                     symbol = str(rdata.get("symbol") or rkey.rsplit(":", 1)[-1])
+                    strategy_id = str(rdata.get("strategy_id") or "")
+                    if strategy_id:
+                        if (account_id, strategy_id, symbol) in live_keys:
+                            logger.debug(
+                                "reconciliation_skip_stale_recovery_exact_duplicate",
+                                account_id=account_id,
+                                strategy_id=strategy_id,
+                                symbol=symbol,
+                            )
+                            continue
+                    elif (account_id, symbol) in live_account_symbols:
+                        logger.debug(
+                            "reconciliation_skip_stale_recovery_legacy_duplicate",
+                            account_id=account_id,
+                            symbol=symbol,
+                        )
+                        continue
                     local_map[symbol] = local_map.get(symbol, 0) + qty
-                    strat = str(rdata.get("strategy_id") or "*")
+                    strat = strategy_id or "*"
                     strat_positions = per_strategy_map.setdefault(strat, {})
                     strat_positions[symbol] = strat_positions.get(symbol, 0) + qty
 
-            # Log per-strategy breakdown at INFO level (M9)
-            logger.info(
+            # Per-strategy breakdown + local state at DEBUG to cut 34k INFO
+            # lines/day. Discrepancy path below still emits at WARNING with
+            # full attribution, which is the operator-relevant signal.
+            logger.debug(
                 "Portfolio Sync: Per-strategy position breakdown",
                 strategies=list(per_strategy_map.keys()),
                 per_strategy=per_strategy_map,
             )
 
-            logger.info("Portfolio Sync: Local State", positions=local_map)
+            logger.debug("Portfolio Sync: Local State", positions=local_map)
             self.platform_degrade_controller.update_reference_positions(local_map=local_map, broker_map=broker_map)
 
             broker_has_positions = any(int(qty) != 0 for qty in broker_map.values())
@@ -570,6 +590,51 @@ class ReconciliationService:
             elif isinstance(s, str):
                 codes.add(s)
         return codes
+
+    @staticmethod
+    def _broker_position_kind(pos: Any) -> str:
+        """Return a coarse broker position kind for collision handling.
+
+        Runtime reconciliation is symbol-scoped. If Shioaji returns the same
+        literal ``code`` from heterogeneous position types (for example stock
+        and futopt snapshots), summing them inflates ``broker_qty``. We treat
+        heterogeneous duplicates as ambiguous and keep the first-seen row.
+        """
+        if isinstance(pos, dict):
+            for key in ("position_type", "product_type", "security_type", "kind"):
+                value = pos.get(key)
+                if value:
+                    return str(value)
+            return "dict"
+        return type(pos).__name__
+
+    @classmethod
+    def _build_broker_map(cls, raw_positions: List[Any]) -> Dict[str, int]:
+        broker_map: Dict[str, int] = {}
+        code_kind: Dict[str, str] = {}
+        for pos in raw_positions:
+            code = getattr(pos, "code", None) or (pos.get("code") if isinstance(pos, dict) else None)
+            qty = getattr(pos, "quantity", None) or (pos.get("quantity", 0) if isinstance(pos, dict) else 0)
+            direction = getattr(pos, "direction", "") or (pos.get("direction", "") if isinstance(pos, dict) else "")
+            # Shioaji futures positions use "Short"/"Long"; stock positions use
+            # "Action.Sell"/"Action.Buy". Accept both forms.
+            if str(direction) in ("Action.Sell", "Short"):
+                qty = -qty
+            if not code:
+                continue
+            kind = cls._broker_position_kind(pos)
+            previous_kind = code_kind.get(str(code))
+            if previous_kind is not None and previous_kind != kind:
+                logger.warning(
+                    "broker_position_code_collision_across_types",
+                    symbol=code,
+                    first_kind=previous_kind,
+                    ignored_kind=kind,
+                )
+                continue
+            code_kind[str(code)] = kind
+            broker_map[str(code)] = broker_map.get(str(code), 0) + int(qty)
+        return broker_map
 
     @staticmethod
     def _is_futures(symbol: str) -> bool:

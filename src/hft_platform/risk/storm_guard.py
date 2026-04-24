@@ -60,6 +60,8 @@ class StormGuard:
         "_feed_gap_reescalation_cooldown_s",
         "_latency_deescalation_ts",
         "_latency_reescalation_cooldown_s",
+        "_warm_deescalation_ts",
+        "_warm_reescalation_cooldown_s",
         "_reconciliation_hold",
     )
 
@@ -106,6 +108,13 @@ class StormGuard:
         self._latency_deescalation_ts: float = 0.0
         self._latency_reescalation_cooldown_s: float = float(
             os.getenv("HFT_STORMGUARD_LATENCY_REESCALATION_COOLDOWN_S", "120")
+        )
+        # WARM re-escalation cooldown: suppresses repeated DriftBurst WARM
+        # escalations immediately after WARM→NORMAL de-escalation. Prevents
+        # 58/58 flip-flop observed when drift-burst toxicity oscillates near 0.5.
+        self._warm_deescalation_ts: float = 0.0
+        self._warm_reescalation_cooldown_s: float = float(
+            os.getenv("HFT_STORMGUARD_WARM_REESCALATION_COOLDOWN_S", "300")
         )
         # Reconciliation hold: when True, HALT de-escalation is blocked until
         # ReconciliationService confirms drift is resolved.
@@ -278,6 +287,9 @@ class StormGuard:
                         if old_for_log >= StormGuardState.STORM:
                             self._feed_gap_deescalation_ts = now
                             self._latency_deescalation_ts = now
+                        # Record WARM→lower de-escalation for drift-burst re-escalation cooldown
+                        if old_for_log == StormGuardState.WARM and new_state < StormGuardState.WARM:
+                            self._warm_deescalation_ts = now
                         # Reset storm entry timestamp so next STORM gets fresh cooldown
                         self._storm_entry_ts = 0.0
                         _, fire_callback = self._transition(new_state, "Recovery")
@@ -309,6 +321,7 @@ class StormGuard:
         spread_scaled: int = 0,
         imbalance: float = 0.0,
         ts: int = 0,
+        symbol: str = "",
     ) -> StormGuardState:
         """Evaluate LOB-derived drift-burst toxicity and escalate state if needed.
 
@@ -321,6 +334,7 @@ class StormGuard:
             spread_scaled: best_ask - best_bid (scaled int x10000).
             imbalance: LOB imbalance ratio [-1, 1].
             ts: Timestamp in nanoseconds.
+            symbol: Symbol driving this LOB update (for observability only).
 
         Returns:
             Current StormGuardState after potential escalation.
@@ -362,8 +376,18 @@ class StormGuard:
         # Only escalate — never de-escalate from drift burst
         fire_callback = False
         with self._state_lock:
+            # WARM re-escalation cooldown: suppress if we recently de-escalated
+            # from WARM. Prevents 58/58 flip-flop when toxicity oscillates near
+            # the 0.5 boundary. Higher states (STORM/HALT) bypass this guard.
+            now = time.monotonic()
+            if (
+                target == StormGuardState.WARM
+                and self.state < StormGuardState.WARM
+                and self._warm_deescalation_ts > 0
+                and (now - self._warm_deescalation_ts) < self._warm_reescalation_cooldown_s
+            ):
+                return self.state
             if target > self.state:
-                now = time.monotonic()
                 self._de_escalate_count = 0
                 if target >= StormGuardState.STORM and self.state < StormGuardState.STORM:
                     self._storm_entry_ts = now
@@ -372,6 +396,7 @@ class StormGuard:
                 _, fire_callback = self._transition(target, reason)
                 logger.info(
                     "StormGuard drift_burst escalation",
+                    symbol=symbol,
                     new_state=target.name,
                     toxicity_score=f"{result.toxicity_score:.3f}",
                     burst_detected=result.burst_detected,

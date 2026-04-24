@@ -261,12 +261,18 @@ class AuditWriter:
         # Bug #30: row dicts may contain keys reserved by structlog (`event`,
         # `timestamp`, `level`, etc). Splatting them collides with structlog's
         # positional kwargs → TypeError → batch dropped. Rename to row_* prefix.
+        # Log level rationale: when `self._writer is None` this is the documented
+        # operating mode (Bug #19) with a single startup warning — downgrade
+        # per-row emission to DEBUG to avoid 8 k/day INFO spam. When a writer
+        # *was* configured but the write actually failed, the `logger.error`
+        # above already fired; per-row rows here still help forensic recovery.
+        row_level = logger.debug if self._writer is None else logger.info
         for row in batch:
             safe_row = {
                 (f"row_{k}" if k in _RESERVED_STRUCTLOG_KEYS else k): v
                 for k, v in row.items()
             }
-            logger.info("audit_fallback", table=table_name, **safe_row)
+            row_level("audit_fallback", table=table_name, **safe_row)
 
     @property
     def dropped_counts(self) -> dict[str, int]:

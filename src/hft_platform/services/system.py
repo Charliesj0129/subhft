@@ -870,6 +870,7 @@ class HFTSystem:
                                     spread_scaled=book.spread,
                                     imbalance=book.imbalance,
                                     ts=timebase.now_ns(),
+                                    symbol=_sym,
                                 )
                                 break
             except Exception as e:

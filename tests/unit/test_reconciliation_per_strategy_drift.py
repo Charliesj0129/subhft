@@ -47,7 +47,11 @@ def _make_service(client, store) -> ReconciliationService:
 
 @pytest.mark.asyncio
 async def test_per_strategy_breakdown_logged_no_discrepancy():
-    """Per-strategy breakdown is logged at INFO even when broker matches."""
+    """Per-strategy breakdown is logged at DEBUG when broker matches.
+
+    Downgraded from INFO (was 5 s cadence → 17 k lines/day). When discrepancies
+    exist the drift attribution still fires at WARNING (see below).
+    """
     client = MagicMock()
     # Broker reports 10 of 2330
     client.get_positions.return_value = [SimpleNamespace(code="2330", quantity=10, direction="Action.Buy")]
@@ -58,12 +62,12 @@ async def test_per_strategy_breakdown_logged_no_discrepancy():
     with patch("hft_platform.execution.reconciliation.logger") as mock_logger:
         await service.sync_portfolio()
 
-    info_messages = [c[0][0] for c in mock_logger.info.call_args_list]
-    assert "Portfolio Sync: Per-strategy position breakdown" in info_messages
+    debug_messages = [c[0][0] for c in mock_logger.debug.call_args_list]
+    assert "Portfolio Sync: Per-strategy position breakdown" in debug_messages
 
     # Verify the breakdown content has the right strategy
-    info_kwargs = {c[0][0]: c[1] for c in mock_logger.info.call_args_list if c[0]}
-    breakdown_kwargs = info_kwargs.get("Portfolio Sync: Per-strategy position breakdown", {})
+    debug_kwargs = {c[0][0]: c[1] for c in mock_logger.debug.call_args_list if c[0]}
+    breakdown_kwargs = debug_kwargs.get("Portfolio Sync: Per-strategy position breakdown", {})
     assert "strat_a" in breakdown_kwargs.get("strategies", [])
 
 
@@ -84,11 +88,11 @@ async def test_per_strategy_breakdown_contains_all_strategies():
     with patch("hft_platform.execution.reconciliation.logger") as mock_logger:
         await service.sync_portfolio()
 
-    info_calls = [
-        c for c in mock_logger.info.call_args_list if c[0][0] == "Portfolio Sync: Per-strategy position breakdown"
+    debug_calls = [
+        c for c in mock_logger.debug.call_args_list if c[0][0] == "Portfolio Sync: Per-strategy position breakdown"
     ]
-    assert info_calls, "Expected per-strategy breakdown INFO log"
-    strategies = info_calls[0][1].get("strategies", [])
+    assert debug_calls, "Expected per-strategy breakdown DEBUG log"
+    strategies = debug_calls[0][1].get("strategies", [])
     assert "strat_a" in strategies
     assert "strat_b" in strategies
 

@@ -393,7 +393,19 @@ class MarketDataReconnectMixin:
         if state == FeedState.CONNECTED:
             heartbeat_threshold_s = getattr(self, "heartbeat_threshold_s", 5.0)
             if gap > heartbeat_threshold_s:
-                logger.warning("Heartbeat missing", gap=gap)
+                now_s = timebase.now_s()
+                skip_off_hours = getattr(self, "_heartbeat_skip_off_hours", True)
+                in_trading_hours = self._is_trading_hours() if skip_off_hours else True
+                log_cooldown_s = getattr(self, "_heartbeat_log_cooldown_s", 60.0)
+                last_log_ts = getattr(self, "_last_heartbeat_missing_log_ts", 0.0)
+                if not in_trading_hours:
+                    off_hours_interval = getattr(self, "_heartbeat_off_hours_log_interval_s", 300.0)
+                    if now_s - getattr(self, "_last_heartbeat_off_hours_log_ts", 0.0) >= off_hours_interval:
+                        logger.info("Skipping heartbeat warning outside trading hours", gap=gap)
+                        self._last_heartbeat_off_hours_log_ts = now_s
+                elif now_s - last_log_ts >= log_cooldown_s:
+                    logger.warning("Heartbeat missing", gap=gap)
+                    self._last_heartbeat_missing_log_ts = now_s
             resubscribe_gap_s = getattr(self, "resubscribe_gap_s", 15.0)
             if gap > resubscribe_gap_s:
                 await self._attempt_resubscribe(gap, reason="heartbeat_gap")

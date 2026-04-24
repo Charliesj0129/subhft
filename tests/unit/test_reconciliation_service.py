@@ -4,8 +4,23 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from hft_platform.execution.positions import PositionStore
+from hft_platform.execution.positions import Position
 from hft_platform.execution.reconciliation import ReconciliationService
 from hft_platform.risk.storm_guard import StormGuard
+
+
+class _StockPosition:
+    def __init__(self, code: str, quantity: int, direction: str = "Long") -> None:
+        self.code = code
+        self.quantity = quantity
+        self.direction = direction
+
+
+class _FuturePosition:
+    def __init__(self, code: str, quantity: int, direction: str = "Long") -> None:
+        self.code = code
+        self.quantity = quantity
+        self.direction = direction
 
 
 @pytest.mark.asyncio
@@ -22,8 +37,8 @@ async def test_reconciliation_sync_portfolio_logs_remote_positions(tmp_path):
     with patch("hft_platform.execution.reconciliation.logger") as mock_logger:
         await service.sync_portfolio()
 
-    # Check that broker state was logged
-    mock_logger.info.assert_any_call("Portfolio Sync: Broker State", positions={"AAA": 2, "BBB": -3})
+    # Broker state is logged at DEBUG (downgraded from INFO to reduce 5 s-cadence spam)
+    mock_logger.debug.assert_any_call("Portfolio Sync: Broker State", positions={"AAA": 2, "BBB": -3})
 
     # Verify discrepancies were computed (local store is empty, so both symbols differ)
     discreps = service._last_discrepancies
@@ -61,6 +76,78 @@ async def test_reconciliation_includes_pending_recovery_positions():
 
     service = ReconciliationService(
         client, store, {"reconciliation": {"heartbeat_threshold_ms": 1}}, storm_guard=StormGuard()
+    )
+
+    await service.sync_portfolio()
+
+    assert service._last_discrepancies == []
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_dedupes_duplicate_code_across_broker_position_types():
+    """Duplicate Shioaji code across stock/futopt snapshots must not be summed.
+
+    AccountGateway concatenates stock_account and futopt_account positions. When
+    both account facets return the same literal code, reconciliation runs at
+    symbol scope and cannot safely add them together without inflating
+    broker_qty.
+    """
+    client = MagicMock()
+    client.get_positions.return_value = [
+        _StockPosition("2330", 5, "Long"),
+        _FuturePosition("2330", 5, "Long"),
+    ]
+
+    store = PositionStore()
+    store.positions["acct:R47:2330"] = Position(
+        account_id="acct",
+        strategy_id="R47",
+        symbol="2330",
+        net_qty=5,
+        avg_price_scaled=1_000_000,
+    )
+
+    service = ReconciliationService(
+        client,
+        store,
+        {"reconciliation": {"heartbeat_threshold_ms": 1}, "symbols": [{"code": "2330"}]},
+        storm_guard=StormGuard(),
+    )
+
+    await service.sync_portfolio()
+
+    assert service._last_discrepancies == []
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_ignores_legacy_recovery_when_live_position_already_exists():
+    """Legacy account:symbol recovery must not double-count over a live position."""
+    client = MagicMock()
+    client.get_positions.return_value = [_StockPosition("2330", 5, "Long")]
+
+    store = PositionStore()
+    store.positions["acct:R47:2330"] = Position(
+        account_id="acct",
+        strategy_id="R47",
+        symbol="2330",
+        net_qty=5,
+        avg_price_scaled=1_000_000,
+    )
+    store._recovery_positions["acct:2330"] = {
+        "account_id": "acct",
+        "strategy_id": "",
+        "symbol": "2330",
+        "net_qty": 5,
+        "avg_price_scaled": -1,
+        "realized_pnl_scaled": 0,
+        "fees_scaled": 0,
+    }
+
+    service = ReconciliationService(
+        client,
+        store,
+        {"reconciliation": {"heartbeat_threshold_ms": 1}, "symbols": [{"code": "2330"}]},
+        storm_guard=StormGuard(),
     )
 
     await service.sync_portfolio()
