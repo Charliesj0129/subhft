@@ -522,37 +522,68 @@ class StormGuard:
 
     def validate(self, intent: OrderIntent) -> tuple[bool, str]:
         with self._state_lock:
-            if self.state == StormGuardState.HALT:
-                if intent.intent_type in (IntentType.CANCEL, IntentType.FORCE_FLAT):
-                    return True, "OK"
+            return self._validate_locked(intent)
+
+    def _validate_locked(self, intent: OrderIntent) -> tuple[bool, str]:
+        """H4: policy body for validate / check_and_submit. Caller MUST
+        hold ``self._state_lock``. Split out so ``check_and_submit`` can
+        run the validation and the downstream queue-put under one lock
+        acquisition, closing the race between the state read and the put.
+        """
+        if self.state == StormGuardState.HALT:
+            if intent.intent_type in (IntentType.CANCEL, IntentType.FORCE_FLAT):
+                return True, "OK"
+            if self._intent_reduces_position(intent):
+                return True, "HALT_REDUCE_ONLY"
+            if intent.strategy_id in self._halt_exempt_strategies:
+                logger.warning(
+                    "stormguard_halt_exempt_bypass",
+                    strategy_id=intent.strategy_id,
+                    intent_type=intent.intent_type.name,
+                    symbol=intent.symbol,
+                )
+                try:
+                    self.metrics.stormguard_halt_exempt_bypass_total.inc()
+                except Exception:
+                    pass
+                return True, "HALT_EXEMPT"
+            return False, "STORMGUARD_HALT"
+        if self.state == StormGuardState.STORM:
+            if intent.intent_type in (IntentType.NEW, IntentType.AMEND):
                 if self._intent_reduces_position(intent):
-                    return True, "HALT_REDUCE_ONLY"
+                    return True, "STORM_REDUCE_ONLY"
                 if intent.strategy_id in self._halt_exempt_strategies:
                     logger.warning(
-                        "stormguard_halt_exempt_bypass",
+                        "stormguard_storm_exempt_bypass",
                         strategy_id=intent.strategy_id,
-                        intent_type=intent.intent_type.name,
                         symbol=intent.symbol,
                     )
-                    try:
-                        self.metrics.stormguard_halt_exempt_bypass_total.inc()
-                    except Exception:
-                        pass
-                    return True, "HALT_EXEMPT"
-                return False, "STORMGUARD_HALT"
-            if self.state == StormGuardState.STORM:
-                if intent.intent_type in (IntentType.NEW, IntentType.AMEND):
-                    if self._intent_reduces_position(intent):
-                        return True, "STORM_REDUCE_ONLY"
-                    if intent.strategy_id in self._halt_exempt_strategies:
-                        logger.warning(
-                            "stormguard_storm_exempt_bypass",
-                            strategy_id=intent.strategy_id,
-                            symbol=intent.symbol,
-                        )
-                        return True, "STORM_EXEMPT"
-                    return False, "STORMGUARD_STORM_BLOCKED"
-            return True, "OK"
+                    return True, "STORM_EXEMPT"
+                return False, "STORMGUARD_STORM_BLOCKED"
+        return True, "OK"
+
+    def check_and_submit(
+        self,
+        intent: OrderIntent,
+        submit_fn: Callable[[], Any],
+    ) -> tuple[bool, str]:
+        """H4: atomic HALT check + submit. Acquires ``_state_lock`` once,
+        runs validation, and — if approved — calls ``submit_fn`` while
+        the lock is still held. A concurrent ``trigger_halt`` blocks on
+        the lock; either it preempts (intent sees HALT) or it runs after
+        submit_fn returned (submission completes before HALT). Either
+        ordering is consistent, eliminating the post-approve race that
+        the 3-layer gate patched at the cost of inconsistent telemetry.
+
+        ``submit_fn`` must be non-blocking (e.g. ``queue.put_nowait``);
+        blocking inside the lock would stall all other StormGuard
+        transitions.
+        """
+        with self._state_lock:
+            ok, reason = self._validate_locked(intent)
+            if ok:
+                submit_fn()
+            return ok, reason
 
     def set_position_provider(self, provider: Callable[[str, str], int] | None) -> None:
         """Bug 21: wire position provider post-construction.
