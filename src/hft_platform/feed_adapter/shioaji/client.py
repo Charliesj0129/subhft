@@ -201,6 +201,26 @@ class ShioajiClient:
             "yes",
             "on",
         }
+        if not _dispatch_async:
+            # P1 (2026-04-24): when the async dispatch worker is disabled
+            # Shioaji delivers quote callbacks inline from (potentially
+            # multiple) SDK threads directly into _process_tick. This exposes
+            # concurrent read-modify-write on _first_quote_seen,
+            # _last_quote_data_ts, and the (_pending_quote_resubscribe,
+            # _pending_quote_reason, _pending_quote_ts) triple. The
+            # QuoteEventHandler._pending_lock (P0-D2) covers the triple, but
+            # the simple-flag RMW on _first_quote_seen remains unguarded.
+            # Shout loudly so operators know they have opted out of the safe
+            # default single-consumer dispatch path.
+            logger.warning(
+                "shioaji_quote_dispatch_async_disabled",
+                note=(
+                    "HFT_SHIOAJI_QUOTE_DISPATCH_THREAD=0 — inline callback "
+                    "dispatch exposes _process_tick to concurrent SDK threads. "
+                    "Only use in single-threaded testing; production should "
+                    "keep the default (async worker)."
+                ),
+            )
         try:
             _dispatch_queue_size = max(1, int(os.getenv("HFT_SHIOAJI_QUOTE_CB_QUEUE_SIZE", "8192")))
         except ValueError:
