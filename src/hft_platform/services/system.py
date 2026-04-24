@@ -146,6 +146,10 @@ class HFTSystem:
         configure_logging()
         self.settings = settings or {}
         self.running = False
+        # H9: pre-initialize loop so early broker-thread callbacks (which can
+        # fire between __init__ and run()'s first tick) can do an is-None
+        # check without tripping AttributeError. Assigned for real at run().
+        self.loop: Optional[asyncio.AbstractEventLoop] = None
         self._recorder_seen_tick = False
         self._recorder_seen_bidask = False
         self._md_record_direct = os.getenv("HFT_MD_RECORD_DIRECT", "1").lower() not in {"0", "false", "no", "off"}
@@ -342,15 +346,12 @@ class HFTSystem:
             # StrategyRunner will replay from this cursor to avoid missing startup-window events.
             pre_md_cursor = self.bus.cursor
             self._start_service("md", self.md_service.run())
-            self._start_service("exec_router", self.exec_service.run())
-            # CE-M2: start GatewayService when enabled; otherwise start RiskEngine standalone
-            if self.gateway_service is not None:
-                self._start_service("gateway", self.gateway_service.run())
-            else:
-                self._start_service("risk", self.risk_engine.run())
-            self._start_service("order", self.order_adapter.run())
-            self._start_service("exec_gateway", self.execution_gateway.run())
-            # ── Position Recovery (must complete before recon + strategy) ──
+            # C3: Position recovery MUST complete before exec_router so that
+            # exec_router does not apply startup-window fills on top of a
+            # stale position_store only to be overwritten by the broker
+            # snapshot. Fills arriving during recover() pile up in
+            # raw_exec_queue (bounded, with overflow buffer) and are consumed
+            # only after the canonical baseline is loaded.
             if os.getenv("HFT_STARTUP_RECON_ENABLED", "1") == "1" and self.startup_verifier:
                 try:
                     recovery = await self.startup_verifier.recover(
@@ -386,6 +387,15 @@ class HFTSystem:
                     )
                 except Exception as exc:
                     logger.warning("Startup fill reconciliation failed", error=str(exc))
+
+            self._start_service("exec_router", self.exec_service.run())
+            # CE-M2: start GatewayService when enabled; otherwise start RiskEngine standalone
+            if self.gateway_service is not None:
+                self._start_service("gateway", self.gateway_service.run())
+            else:
+                self._start_service("risk", self.risk_engine.run())
+            self._start_service("order", self.order_adapter.run())
+            self._start_service("exec_gateway", self.execution_gateway.run())
 
             # ── Checkpoint Writer (after recovery, before trading) ──
             if os.getenv("HFT_CHECKPOINT_ENABLED", "1") == "1" and self.checkpoint_writer:
@@ -522,6 +532,12 @@ class HFTSystem:
         recorder = getattr(self, "recorder", None)
         if recorder is None:
             return
+        # H10: single-path shutdown — if recorder.run()'s finally has
+        # already drained+flushed, skip the sync fallback. Double-drive
+        # would race on writer/batchers/WALFirstWriter state.
+        if getattr(recorder, "_shutdown_drained", False):
+            logger.info("sync_drain_recorder_skipped_already_drained")
+            return
         recorder.running = False
         try:
             tmp_loop = asyncio.new_event_loop()
@@ -533,6 +549,7 @@ class HFTSystem:
                     await recorder._shutdown_flush()
 
                 tmp_loop.run_until_complete(asyncio.wait_for(_drain_and_flush(), timeout=_timeout))
+                recorder._shutdown_drained = True
                 logger.info("Synchronous recorder drain complete")
             except Exception as exc:
                 logger.warning("Synchronous recorder drain failed", error=str(exc))

@@ -319,6 +319,10 @@ class RecorderService:
     def __init__(self, queue: asyncio.Queue, _clickhouse_client=None):
         self.queue = queue
         self.running = False
+        # H10: single-path shutdown guard. Set once run()'s finally has
+        # drained+flushed so the synchronous fallback (_sync_drain_recorder)
+        # does not race on the same writer/batchers.
+        self._shutdown_drained = False
         # Health attributes for health endpoint probes
         self.healthy: bool = True
         self.last_write_ok: int = 0  # nanosecond timestamp of last successful write
@@ -576,6 +580,9 @@ class RecorderService:
                 )
             except asyncio.CancelledError:
                 logger.warning("recorder_shutdown_flush_cancelled")
+            # H10: mark single-path shutdown complete so the sync fallback
+            # (_sync_drain_recorder) skips re-entry on the same writer.
+            self._shutdown_drained = True
             logger.info("Recorder stopped")
 
     async def _drain_queue_into_batchers(self) -> int:
