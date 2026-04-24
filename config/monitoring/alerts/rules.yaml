@@ -300,14 +300,19 @@ groups:
         summary: "Feature shadow parity mismatch detected"
         description: "Feature shadow parity mismatches occurred in the last 10m."
 
+  # Threshold calibrated 2026-04-25 against measured baseline on the WSL+Docker
+  # deploy target: P50=77us, P95=154us, P99=191us. The original 50us threshold
+  # was below P50 and fired continuously. 500us is ~2.5x current P99 — tight
+  # enough to catch a real regression, loose enough to ride normal variance.
+  # Revisit if the deploy hardware changes (bare metal would cut these by ~3x).
   - alert: FeaturePlaneLatencyP99High
-    expr: histogram_quantile(0.99, sum(rate(feature_plane_latency_ns_bucket[5m])) by (le)) > 5e4
+    expr: histogram_quantile(0.99, sum(rate(feature_plane_latency_ns_bucket[5m])) by (le)) > 5e5
     for: 5m
     labels:
         severity: warning
     annotations:
         summary: "Feature plane latency p99 high"
-        description: "feature_plane_latency_ns p99 exceeded 50us for 5m."
+        description: "feature_plane_latency_ns p99 exceeded 500us for 5m."
 
   - alert: FeatureQualityFlagsSpike
     expr: sum(increase(feature_quality_flags_total{flag=~"gap|out_of_order|partial"}[10m])) > 0
@@ -581,8 +586,18 @@ groups:
         description: "Loki has been unreachable for >2 minutes. Log search unavailable."
 
   # ── Backup Health ─────────────────────────────────────────────
+  # `hft_backup_last_success_ts > 0` gate (2026-04-25): the cron-driven backup
+  # runs as a one-shot `docker compose exec hft-engine python -c ...` subprocess.
+  # Its MetricsRegistry.get() returns a fresh registry in that subprocess and
+  # is not the engine's scrape target, so the gauge never leaves 0 even though
+  # backups have succeeded daily (see /tmp/hft_backup.log on prod). Without the
+  # gate, `0 < time() - 172800` is always true and BackupStale fires forever.
+  # TODO(ops): structural fix — either Pushgateway, node_exporter textfile
+  # collector, or have the engine stat $BACKUP_DIR mtime periodically and
+  # update the gauge. Until then this gate disables the alert; monitor backup
+  # health via /tmp/hft_backup.log tailing.
   - alert: BackupStale
-    expr: hft_backup_last_success_ts < (time() - 172800)
+    expr: hft_backup_last_success_ts < (time() - 172800) and hft_backup_last_success_ts > 0
     for: 1h
     labels:
         severity: critical

@@ -316,11 +316,21 @@ services:
       - "127.0.0.1:9091:9090"
     volumes:
       - ./config/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ./config/monitoring/alerts/rules.yaml:/etc/prometheus/alerts/rules.yaml:ro
+      # Directory mount (not file mount) — 2026-04-25. File bind-mounts pin to
+      # the host file's inode at container start; `git pull` replaces the file
+      # via rename(), the container keeps pointing at the (defunct) old inode,
+      # and SIGHUP reloads read stale content. Directory mounts are re-resolved
+      # on every read, so `curl -X POST .../-/reload` picks up the new rules.yaml.
+      # Prometheus only loads `rules.yaml` via `rule_files:` in prometheus.yml;
+      # the other files in this directory (alertmanager.yml*) are ignored.
+      - ./config/monitoring/alerts:/etc/prometheus/alerts:ro
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.retention.time=30d"
       - "--storage.tsdb.path=/prometheus"
+      # Enables `curl -X POST http://localhost:9091/-/reload` so rules.yaml can
+      # be applied without bouncing the container (2026-04-25).
+      - "--web.enable-lifecycle"
     depends_on:
       - hft-engine
       - alertmanager

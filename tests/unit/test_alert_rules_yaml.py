@@ -48,6 +48,47 @@ def test_alpha_signal_silent_gates_on_nonzero_timestamp():
     )
 
 
+def test_feature_plane_latency_threshold_above_measured_p99():
+    """FeaturePlaneLatencyP99High threshold must be realistic for the deploy target.
+
+    Measured baseline on WSL+Docker (2026-04-25): P50=77us, P95=154us, P99=191us.
+    The original 50us (5e4 ns) threshold was below P50 and fired continuously.
+    The threshold should be high enough to ride normal variance but still catch
+    genuine regressions. This test guards against accidentally reverting to the
+    pathologically-tight 50us value.
+    """
+    alerts = _load_alerts_by_name()
+    assert "FeaturePlaneLatencyP99High" in alerts
+    expr = alerts["FeaturePlaneLatencyP99High"]["expr"]
+    assert "> 5e4" not in expr, (
+        "50us threshold is below the measured P50 (77us) on the current deploy "
+        "target. Use 5e5 (500us) or tune against a fresh measurement."
+    )
+    assert "> 5e5" in expr or "> 500000" in expr, (
+        f"Expected threshold >= 500us. Current expression: {expr!r}"
+    )
+
+
+def test_backup_stale_gates_on_nonzero_timestamp():
+    """BackupStale must gate on `hft_backup_last_success_ts > 0`.
+
+    Same bug class as AlphaSignalSilent: the backup cron runs as a one-shot
+    `docker compose exec hft-engine python -c ...` subprocess whose MetricsRegistry
+    is separate from the engine's scrape target. The gauge therefore never leaves
+    0, and `0 < time() - 172800` is always true — the alert fires forever despite
+    backups succeeding daily. Until the metric pipeline is fixed (Pushgateway,
+    textfile collector, or engine-side file mtime polling), the gate prevents
+    the false positive.
+    """
+    alerts = _load_alerts_by_name()
+    assert "BackupStale" in alerts
+    expr = alerts["BackupStale"]["expr"]
+    assert "hft_backup_last_success_ts > 0" in expr, (
+        "BackupStale must gate on a non-zero gauge. Current expression: "
+        f"{expr!r}"
+    )
+
+
 def test_redis_connection_down_alert_removed():
     """RedisConnectionDown must not exist — engine does not probe Redis.
 
