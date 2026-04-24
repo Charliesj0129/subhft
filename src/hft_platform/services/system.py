@@ -283,6 +283,25 @@ class HFTSystem:
     async def run(self):
         self.running = True
         self.loop = asyncio.get_running_loop()
+
+        # Bind the engine loop into StormGuard so halt-callback coroutines scheduled
+        # from non-asyncio threads (e.g. bootstrap lease-refresh daemon) can be
+        # dispatched via run_coroutine_threadsafe instead of get_running_loop()
+        # (which raises RuntimeError in a non-loop thread). P0-I4.
+        if hasattr(self.storm_guard, "bind_loop"):
+            self.storm_guard.bind_loop(self.loop)
+
+        # Schedule coroutines that build() collected while outside the engine loop.
+        # P0-I1: build() runs in __init__ without a running loop, so it cannot call
+        # asyncio.get_event_loop() safely on Python 3.12+. Coroutines returned from
+        # build() (e.g. config-snapshot writer, alertmanager bridge) are started here.
+        self._deferred_tasks: list[asyncio.Task[Any]] = []
+        for coro in list(getattr(self.registry, "deferred_tasks", []) or []):
+            try:
+                self._deferred_tasks.append(self.loop.create_task(coro))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("deferred_task_schedule_failed", error=str(exc))
+
         # Check for fills lost during startup race (before loop was assigned)
         if self._exec_startup_overflow_lost:
             logger.critical(
@@ -528,16 +547,32 @@ class HFTSystem:
         2. Flush batchers and shut down writer.
         This prevents silent data loss of fills/orders during synchronous stop()
         when the main event loop is not running (INFRA-015).
+
+        P0-I5 (2026-04-24): BEFORE creating the temp loop, stop any background
+        ``WALBatchWriter._timer_thread`` that may still be calling
+        ``_write_batch_sync`` concurrently. The temp-loop drain path writes to
+        the same WAL directory and file-sequence counter — a concurrent timer
+        thread would create duplicate/racing files (corrupted renames, shared
+        ``itertools.count`` access, cross-thread fsync).
         """
         recorder = getattr(self, "recorder", None)
         if recorder is None:
             return
         # H10: single-path shutdown — if recorder.run()'s finally has
         # already drained+flushed, skip the sync fallback. Double-drive
-        # would race on writer/batchers/WALFirstWriter state.
-        if getattr(recorder, "_shutdown_drained", False):
+        # would race on writer/batchers/WALFirstWriter state. Strict
+        # ``is True`` so test doubles (MagicMock auto-creates truthy
+        # attributes) do not accidentally short-circuit.
+        if getattr(recorder, "_shutdown_drained", False) is True:
             logger.info("sync_drain_recorder_skipped_already_drained")
             return
+
+        # P0-I5: stop the WAL batch timer thread BEFORE the temp loop runs so
+        # that the temp loop becomes the sole writer to the WAL directory.
+        # Walk both possible WAL writer holders (DataWriter-embedded batch
+        # writer AND WAL-first writer's embedded batch writer).
+        self._stop_wal_batch_timers(recorder)
+
         recorder.running = False
         try:
             tmp_loop = asyncio.new_event_loop()
@@ -557,6 +592,31 @@ class HFTSystem:
                 tmp_loop.close()
         except Exception as exc:
             logger.warning("Synchronous recorder drain setup failed", error=str(exc))
+
+    @staticmethod
+    def _stop_wal_batch_timers(recorder: Any) -> None:
+        """Stop all WALBatchWriter timer threads embedded in the recorder.
+
+        Covers both DataWriter-embedded and WAL-first writer variants. Safe to
+        call when writers are absent or already stopped — individual failures
+        are logged but do not propagate.
+        """
+        writer = getattr(recorder, "writer", None)
+        wal_batch_writer = getattr(writer, "_wal_batch_writer", None) if writer is not None else None
+        if wal_batch_writer is not None and hasattr(wal_batch_writer, "stop"):
+            try:
+                wal_batch_writer.stop()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("wal_batch_writer_stop_failed", error=str(exc))
+
+        wal_first = getattr(recorder, "_wal_first_writer", None)
+        if wal_first is not None:
+            inner = getattr(wal_first, "_wal", None)
+            if inner is not None and hasattr(inner, "stop"):
+                try:
+                    inner.stop()
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("wal_first_batch_writer_stop_failed", error=str(exc))
 
     def _teardown_bootstrap(self) -> None:
         if self._bootstrap_torn_down:
