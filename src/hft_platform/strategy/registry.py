@@ -104,6 +104,24 @@ class StrategyRegistry:
     def instantiate(self):
         strategies = []
         for cfg in self.configs:
+            if not cfg.enabled:
+                # R3 structural fix (2026-04-24): config-disabled strategies must
+                # not be instantiated. A disabled strategy reaching
+                # ``StrategyRunner.register()`` called ``_build_executor_entry``,
+                # which called ``alpha_last_signal_ts.labels(...)`` and created
+                # a child gauge stuck at 0. ``AlphaSignalSilent`` then fired
+                # forever (``time() - 0 > 300``). Skipping here is consistent
+                # with the ``strategy_scaffold_placeholder_skipped`` path below
+                # which already elides disabled strategies whose module is
+                # missing. Runtime enable/disable (circuit breaker, manual
+                # operator toggle) is unaffected — only the initial config.
+                logger.info(
+                    "strategy_disabled_in_config_skipped",
+                    id=cfg.strategy_id,
+                    module=cfg.module,
+                    class_name=cfg.class_name,
+                )
+                continue
             try:
                 module = importlib.import_module(cfg.module)
                 cls = getattr(module, cfg.class_name)
