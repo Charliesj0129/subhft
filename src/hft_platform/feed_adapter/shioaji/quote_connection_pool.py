@@ -382,6 +382,12 @@ class QuoteConnectionPool:
         Spawns a daemon thread that performs the actual reconnect for this
         single facade. On success, marks the slot for pending warmup reset
         (applied on the event loop by ``_apply_pending_resets``).
+
+        Thread safety (P1, 2026-04-24): the slot's ``begin_reconnect`` /
+        ``record_reconnect_success`` / ``record_reconnect_failure`` helpers
+        guard compound state transitions under the slot's per-instance lock
+        so the daemon thread and the event-loop supervisor never race on
+        ``state`` + ``reconnect_failures``.
         """
         slot: FacadeSlot | None = None
         for s in self._slots:
@@ -391,10 +397,9 @@ class QuoteConnectionPool:
         if slot is None:
             logger.warning("schedule_reconnect_unknown_conn_id", conn_id=conn_id)
             return
-        if slot.state == FacadeState.RECOVERING:
+        if not slot.begin_reconnect():
+            # Another thread already owns the reconnect slot.
             return
-        slot.state = FacadeState.RECOVERING
-        slot.last_reconnect_mono = time.monotonic()
         logger.warning("facade_reconnect_scheduled", conn_id=conn_id)
 
         def _do_reconnect() -> None:
@@ -402,18 +407,13 @@ class QuoteConnectionPool:
             try:
                 ok = slot.facade.reconnect(reason="health_check", force=False)
                 if ok:
-                    slot.state = FacadeState.CONNECTED
-                    slot.reconnect_failures = 0
-                    slot.last_data_mono = time.monotonic()
-                    slot._pending_warmup_reset = True
+                    slot.record_reconnect_success()
                     log.info("facade_reconnected_via_health_check")
                 else:
-                    slot.reconnect_failures += 1
-                    slot.state = FacadeState.DISCONNECTED
+                    slot.record_reconnect_failure()
                     log.warning("facade_health_reconnect_failed")
             except Exception as exc:
-                slot.reconnect_failures += 1
-                slot.state = FacadeState.DISCONNECTED
+                slot.record_reconnect_failure()
                 log.error("facade_health_reconnect_exception", error=str(exc))
 
         t = threading.Thread(
