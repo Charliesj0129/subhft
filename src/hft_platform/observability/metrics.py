@@ -156,7 +156,6 @@ class MetricsRegistry:
                 _pn("shioaji_contract_lookup_errors_total"),
                 _pn("latency_spans_dropped_total"),
                 _pn("clickhouse_connection_health"),
-                _pn("redis_connection_health"),
                 _pn("wal_corrupt_files_total"),
                 # Phase 12 P2 metrics
                 _pn("wal_batch_flush_total"),
@@ -765,11 +764,6 @@ class MetricsRegistry:
         self.clickhouse_connection_health = Gauge(
             _pn("clickhouse_connection_health"),
             "ClickHouse connection health (1=healthy, 0=unhealthy)",
-        )
-        # Redis connection health gauge
-        self.redis_connection_health = Gauge(
-            _pn("redis_connection_health"),
-            "Redis connection health (1=healthy, 0=unhealthy)",
         )
         # Corrupt WAL files counter (B5)
         self.wal_corrupt_files_total = Counter(

@@ -447,7 +447,18 @@ class RecorderService:
         try:
             from hft_platform.observability.metrics import MetricsRegistry
 
-            MetricsRegistry.get().wal_mode.set(1 if self._mode == RecorderMode.WAL_FIRST else 0)
+            _reg = MetricsRegistry.get()
+            _reg.wal_mode.set(1 if self._mode == RecorderMode.WAL_FIRST else 0)
+            # R2 (2026-04-24): in wal_first mode the engine does NOT open a
+            # direct ClickHouse connection — DataWriter.connect_async() is
+            # gated below by `self._mode != RecorderMode.WAL_FIRST`, so the
+            # gauge that DataWriter normally owns stays at its default 0 and
+            # permanently triggers ClickHouseConnectionDown. Mark healthy here
+            # since WAL-loader is the component responsible for CH ingestion
+            # in this mode. In direct-CH mode we leave the gauge alone and
+            # let DataWriter.connect_async() report actual connect health.
+            if self._mode == RecorderMode.WAL_FIRST:
+                _reg.clickhouse_connection_health.set(1)
         except Exception as exc:
             logger.debug("operation_failed", error=str(exc))
 

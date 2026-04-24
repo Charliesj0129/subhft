@@ -541,15 +541,11 @@ groups:
         summary: "Portfolio drawdown > 10%"
         description: "Portfolio drawdown exceeded 10%. StormGuard should be in HALT."
 
-  # Redis health
-  - alert: RedisConnectionDown
-    expr: redis_connection_health == 0
-    for: 2m
-    labels:
-        severity: warning
-    annotations:
-        summary: "Redis connection down"
-        description: "Redis connectivity lost. Monitor live cache and session lease unavailable."
+  # Redis health monitoring removed 2026-04-24 — engine does not probe Redis
+  # (no `redis` Python module in engine container; only the separate monitor
+  # container uses Redis). The `redis_connection_health` gauge had no setter,
+  # so this alert fired continuously on a default-0 gauge. Re-introduce at the
+  # component that actually probes Redis (monitor) when needed.
 
   - alert: OrphanedFillDetected
     expr: increase(orphaned_fill_total[5m]) > 0
@@ -605,8 +601,12 @@ groups:
       description: "exec_overflow_evicted_total is increasing. Fill events are being silently dropped."
 
   # ── Alpha Signal Silence (M-09) ──────────────────────────────
+  # `alpha_last_signal_ts > 0` gate prevents false positives for strategies that
+  # are registered (executor entry built by StrategyRunner) but have never
+  # emitted an intent — e.g. config-disabled strategies. Without the gate,
+  # `time() - 0` always exceeds 300 and the alert fires forever at startup.
   - alert: AlphaSignalSilent
-    expr: (time() - alpha_last_signal_ts) > 300
+    expr: (time() - alpha_last_signal_ts) > 300 and alpha_last_signal_ts > 0
     for: 1m
     labels:
       severity: warning
