@@ -26,6 +26,7 @@ def _make_adapter_stub():
     import threading
 
     stub._pending_fill_lock = threading.Lock()
+    stub._phantom_lock = threading.Lock()  # P0-E2
     return stub
 
 

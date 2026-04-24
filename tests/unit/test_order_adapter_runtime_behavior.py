@@ -349,7 +349,7 @@ async def test_register_broker_ids_from_dict(tmp_config):
     trade = {"seq_no": "S1", "ord_no": "O1"}
     await adapter._register_broker_ids("s1:1", trade)
 
-    async with adapter._order_id_map_lock:
+    with adapter._order_id_map_lock:
         assert adapter.order_id_map.get("S1") == "s1:1"
         assert adapter.order_id_map.get("O1") == "s1:1"
 
@@ -365,7 +365,7 @@ async def test_register_broker_ids_from_object(tmp_config):
     trade.order = None
     await adapter._register_broker_ids("s1:2", trade)
 
-    async with adapter._order_id_map_lock:
+    with adapter._order_id_map_lock:
         assert adapter.order_id_map.get("SQ1") == "s1:2"
 
 
@@ -381,7 +381,7 @@ async def test_register_broker_ids_eviction(tmp_config):
     trade = {"seq_no": "NEW_ID"}
     await adapter._register_broker_ids("s1:99", trade)
 
-    async with adapter._order_id_map_lock:
+    with adapter._order_id_map_lock:
         assert adapter.order_id_map.get("NEW_ID") == "s1:99"
         assert len(adapter.order_id_map) <= 5
 
@@ -393,7 +393,7 @@ async def test_register_broker_ids_nested_order(tmp_config):
     trade = {"order": {"seq_no": "NESTED_SEQ"}}
     await adapter._register_broker_ids("s1:3", trade)
 
-    async with adapter._order_id_map_lock:
+    with adapter._order_id_map_lock:
         assert adapter.order_id_map.get("NESTED_SEQ") == "s1:3"
 
 

@@ -116,6 +116,7 @@ class OrderAdapter:
         "_phantom_order_max",
         "_phantom_intents",
         "_phantom_recovery_ttl_s",
+        "_phantom_lock",
         "_audit_writer",
         "_rejection_sink",
         "_pending_fill_index",
@@ -249,6 +250,20 @@ class OrderAdapter:
         self._phantom_recovery_ttl_s: float = float(
             os.getenv("HFT_PHANTOM_RECOVERY_TTL_S", "30")
         )
+        # P0-E2: serialises access to ``_phantom_order_keys`` and
+        # ``_phantom_intents``. Multiple coroutine tasks (``_call_api``,
+        # ``_handle_dispatch_exception``, ``release_stale_phantom_pendings``,
+        # ``resolve_phantom_fill``, ``clear_phantom_candidate``, and the
+        # over-capacity eviction branch inside ``_call_api``) can observe
+        # interleaved reads/writes; the previous unguarded
+        # ``[k for k, v in self._phantom_order_keys.items() if ...]``
+        # inside the capacity eviction path could raise
+        # ``RuntimeError: dictionary changed size during iteration`` when a
+        # peer task popped keys. ``threading.Lock`` (not asyncio) because
+        # ``resolve_phantom_fill`` is documented as callable from other
+        # threads in future (it currently runs on the loop, but the lock
+        # discipline needs to remain correct if that changes).
+        self._phantom_lock = threading.Lock()
 
         # Pending fill index: maps "{symbol}:{side}" -> [order_key, ...] for strategy_id
         # resolution in deal callbacks where order_id_map has no seed data (Shioaji futures).
@@ -575,14 +590,16 @@ class OrderAdapter:
 
         if is_phantom_candidate:
             phantom_key = f"{intent.strategy_id}:{intent.intent_id}"
-            self._phantom_order_keys[phantom_key] = (time.monotonic(), intent.symbol)
-            self._phantom_intents[phantom_key] = intent
-            if len(self._phantom_order_keys) > self._phantom_order_max:
-                cutoff = time.monotonic() - 3600.0
-                stale = [k for k, v in self._phantom_order_keys.items() if v[0] <= cutoff]
-                for sk in stale:
-                    del self._phantom_order_keys[sk]
-                    self._phantom_intents.pop(sk, None)
+            # P0-E2: insert + over-capacity eviction under _phantom_lock.
+            with self._phantom_lock:
+                self._phantom_order_keys[phantom_key] = (time.monotonic(), intent.symbol)
+                self._phantom_intents[phantom_key] = intent
+                if len(self._phantom_order_keys) > self._phantom_order_max:
+                    cutoff = time.monotonic() - 3600.0
+                    stale = [k for k, v in self._phantom_order_keys.items() if v[0] <= cutoff]
+                    for sk in stale:
+                        self._phantom_order_keys.pop(sk, None)
+                        self._phantom_intents.pop(sk, None)
             logger.warning(
                 "phantom_order_candidate_dispatch_failed",
                 strategy_id=intent.strategy_id,
@@ -625,16 +642,24 @@ class OrderAdapter:
         ttl = ttl_s if ttl_s is not None else self._phantom_recovery_ttl_s
         now_mono = time.monotonic()
         released = 0
-        for pkey, entry in list(self._phantom_order_keys.items()):
-            ts, _symbol = entry if isinstance(entry, tuple) else (entry, "")
-            if (now_mono - ts) < ttl:
-                continue
-            intent = self._phantom_intents.pop(pkey, None)
-            self._phantom_order_keys.pop(pkey, None)
-            if intent is None:
-                # Phantom registered before this fix shipped, or already drained
-                # via resolve_phantom_fill — nothing to send.
-                continue
+        # P0-E2: snapshot + evict under _phantom_lock, emit feedback after.
+        # Feedback emission (``_send_dispatch_rejection``) calls into
+        # _rejection_sink.put_nowait; we intentionally release the lock
+        # before that to avoid holding the phantom lock across queue I/O.
+        expired: list[tuple[str, OrderIntent]] = []
+        with self._phantom_lock:
+            for pkey, entry in list(self._phantom_order_keys.items()):
+                ts, _symbol = entry if isinstance(entry, tuple) else (entry, "")
+                if (now_mono - ts) < ttl:
+                    continue
+                intent = self._phantom_intents.pop(pkey, None)
+                self._phantom_order_keys.pop(pkey, None)
+                if intent is None:
+                    # Phantom registered before this fix shipped, or already
+                    # drained via resolve_phantom_fill — nothing to send.
+                    continue
+                expired.append((pkey, intent))
+        for _pkey, intent in expired:
             self._send_dispatch_rejection(
                 intent,
                 "phantom_recovery_ttl_expired",
@@ -689,13 +714,23 @@ class OrderAdapter:
         return await result_future
 
     def get_phantom_candidates(self) -> frozenset[str]:
-        """Return a frozen copy of phantom order keys for reconciliation."""
-        return frozenset(self._phantom_order_keys.keys())
+        """Return a frozen copy of phantom order keys for reconciliation.
+
+        P0-E2: snapshots under _phantom_lock so the frozenset construction is
+        not racing with a concurrent insert/pop.
+        """
+        with self._phantom_lock:
+            return frozenset(self._phantom_order_keys.keys())
 
     def clear_phantom_candidate(self, key: str) -> None:
-        """Remove a phantom order key after reconciliation confirms resolution."""
-        self._phantom_order_keys.pop(key, None)
-        self._phantom_intents.pop(key, None)
+        """Remove a phantom order key after reconciliation confirms resolution.
+
+        P0-E2: both dicts popped atomically under _phantom_lock so
+        reconciliation never sees a half-cleared entry.
+        """
+        with self._phantom_lock:
+            self._phantom_order_keys.pop(key, None)
+            self._phantom_intents.pop(key, None)
 
     def resolve_phantom_fill(self, fill_event: Any) -> str | None:
         """Attempt to resolve an orphaned fill against phantom order candidates.
@@ -704,8 +739,9 @@ class OrderAdapter:
         the broker. This method checks if any phantom candidate matches the fill
         by symbol and side, returning the strategy_id if found.
 
-        Thread-safe: reads from _phantom_order_keys (dict, GIL-atomic reads).
-        Called from ExecutionRouter on the event loop.
+        P0-E2: phantom dict mutations are now serialised under ``_phantom_lock``.
+        Called from ExecutionRouter on the event loop today; the lock
+        discipline keeps it safe if future reconciliation threads call in.
 
         Returns strategy_id or None.
         """
@@ -725,7 +761,8 @@ class OrderAdapter:
                 fill_event=repr(fill_event),
             )
             return None
-        # Check pending_fill_index first — it has symbol+side specificity
+        # Check pending_fill_index first — it has symbol+side specificity.
+        # Lock order: _pending_fill_lock → _phantom_lock (no reverse path).
         side_name = "SELL" if int(side) == 1 else "BUY"
         pf_key = f"{symbol}:{side_name}"
         with self._pending_fill_lock:
@@ -737,9 +774,10 @@ class OrderAdapter:
                 if not pending:
                     del self._pending_fill_index[pf_key]
                 strategy_id = order_key.split(":", 1)[0] if ":" in order_key else order_key
-                # Clear phantom candidate if it matches
-                self._phantom_order_keys.pop(order_key, None)
-                self._phantom_intents.pop(order_key, None)
+                # Clear phantom candidate if it matches (P0-E2: under phantom lock).
+                with self._phantom_lock:
+                    self._phantom_order_keys.pop(order_key, None)
+                    self._phantom_intents.pop(order_key, None)
                 logger.warning(
                     "phantom_fill_resolved_via_pending_index",
                     symbol=symbol,
@@ -750,26 +788,30 @@ class OrderAdapter:
                 return strategy_id
         # Fallback: match phantom key with verified symbol match.
         now_mono = time.monotonic()
-        for pkey, entry in list(self._phantom_order_keys.items()):
-            # entry is (monotonic_ts, symbol_str)
-            p_ts, p_symbol = entry if isinstance(entry, tuple) else (entry, "")
-            # Skip entries older than 2 hours (stale phantoms)
-            if (now_mono - p_ts) > 7200.0:
-                continue
-            # C-2 fix: MUST verify symbol match to prevent cross-strategy misattribution
-            if p_symbol and p_symbol != symbol:
-                continue
-            strategy_id = pkey.split(":", 1)[0] if ":" in pkey else pkey
-            self._phantom_order_keys.pop(pkey, None)
-            self._phantom_intents.pop(pkey, None)
-            logger.warning(
-                "phantom_fill_resolved_via_phantom_keys",
-                symbol=symbol,
-                side=side_name,
-                phantom_key=pkey,
-                strategy_id=strategy_id,
-            )
-            return strategy_id
+        with self._phantom_lock:
+            # Snapshot inside the lock; process candidates below (still holding
+            # the lock for the matching pop to avoid a concurrent task stealing
+            # the same key between our match decision and the pop).
+            for pkey, entry in list(self._phantom_order_keys.items()):
+                # entry is (monotonic_ts, symbol_str)
+                p_ts, p_symbol = entry if isinstance(entry, tuple) else (entry, "")
+                # Skip entries older than 2 hours (stale phantoms)
+                if (now_mono - p_ts) > 7200.0:
+                    continue
+                # C-2 fix: MUST verify symbol match to prevent cross-strategy misattribution
+                if p_symbol and p_symbol != symbol:
+                    continue
+                strategy_id = pkey.split(":", 1)[0] if ":" in pkey else pkey
+                self._phantom_order_keys.pop(pkey, None)
+                self._phantom_intents.pop(pkey, None)
+                logger.warning(
+                    "phantom_fill_resolved_via_phantom_keys",
+                    symbol=symbol,
+                    side=side_name,
+                    phantom_key=pkey,
+                    strategy_id=strategy_id,
+                )
+                return strategy_id
         return None
 
     def load_config(self) -> None:
@@ -2622,15 +2664,20 @@ class OrderAdapter:
                         # prevents spurious phantom_recovery_releases on cancels.
                         if intent is not None and intent.intent_type == IntentType.NEW:
                             phantom_key = f"{intent.strategy_id}:{intent.intent_id}"
-                            self._phantom_order_keys[phantom_key] = (time.monotonic(), intent.symbol)
-                            self._phantom_intents[phantom_key] = intent
-                            # R2-03: Evict entries older than 1 hour when over capacity
-                            if len(self._phantom_order_keys) > self._phantom_order_max:
-                                cutoff = time.monotonic() - 3600.0
-                                _stale = [k for k, v in self._phantom_order_keys.items() if v[0] <= cutoff]
-                                for _sk in _stale:
-                                    del self._phantom_order_keys[_sk]
-                                    self._phantom_intents.pop(_sk, None)
+                            # P0-E2: insert + over-capacity eviction under _phantom_lock.
+                            # Previously the list-comprehension at the ``_stale =`` line
+                            # could raise ``RuntimeError: dictionary changed size during
+                            # iteration`` when a peer task popped keys in parallel.
+                            with self._phantom_lock:
+                                self._phantom_order_keys[phantom_key] = (time.monotonic(), intent.symbol)
+                                self._phantom_intents[phantom_key] = intent
+                                # R2-03: Evict entries older than 1 hour when over capacity
+                                if len(self._phantom_order_keys) > self._phantom_order_max:
+                                    cutoff = time.monotonic() - 3600.0
+                                    _stale = [k for k, v in self._phantom_order_keys.items() if v[0] <= cutoff]
+                                    for _sk in _stale:
+                                        self._phantom_order_keys.pop(_sk, None)
+                                        self._phantom_intents.pop(_sk, None)
                             logger.warning(
                                 "phantom_order_candidate",
                                 strategy_id=intent.strategy_id,
