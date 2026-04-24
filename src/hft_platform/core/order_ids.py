@@ -1,12 +1,35 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Dict, Mapping, Optional
+from dataclasses import dataclass, field
+from typing import Any, ContextManager, Dict, Mapping, Optional
+
+
+class _NullLock:
+    """No-op lock used when the resolver has not been wired with a threading.Lock.
+
+    Keeps the `with` / `__enter__` protocol working so iteration paths stay
+    single-codepath whether or not a real lock is injected.
+    """
+
+    __slots__ = ()
+
+    def __enter__(self) -> "_NullLock":
+        return self
+
+    def __exit__(self, *exc: Any) -> None:  # pragma: no cover — trivial
+        return None
+
+
+_NULL_LOCK: _NullLock = _NullLock()
 
 
 @dataclass(slots=True)
 class OrderIdResolver:
     order_id_map: Dict[str, Any]
+    # P0-E1: optional threading.Lock injected by OrderAdapter bootstrap so
+    # broker-thread reads can briefly lock against main-loop writes. Defaults
+    # to a no-op lock for tests and callers that do not cross threads.
+    lock: ContextManager[Any] = field(default_factory=lambda: _NULL_LOCK)
 
     def normalize_order_key(self, raw: Any) -> Optional[str]:
         if raw is None:
@@ -61,22 +84,26 @@ class OrderIdResolver:
         if order_id is None:
             return None
         order_id_str = str(order_id)
-        order_key = self.normalize_order_key(self.order_id_map.get(order_id_str))
-        if order_key:
-            return order_key
-        if order_id_str:
-            # H5: snapshot the iteration so broker-thread reads cannot
-            # collide with asyncio-task writes (which would raise
-            # ``RuntimeError: dictionary changed size during iteration``).
-            # ``tuple(dict.items())`` is atomic under GIL.
-            #
+        # P0-E1: hold the lock across BOTH the direct get and the prefix-match
+        # snapshot so a writer that appears between the two reads cannot leave
+        # the resolver wedged on a stale dict view. Tuple materialisation is
+        # what actually prevents `RuntimeError: dictionary changed size during
+        # iteration`; the lock additionally prevents the CPython-internal
+        # half-resized dict state that is officially undefined behaviour.
+        with self.lock:
+            order_key = self.normalize_order_key(self.order_id_map.get(order_id_str))
+            if order_key:
+                return order_key
+            if not order_id_str:
+                return None
             # Prefix-match fallback: Shioaji ordno grows from "vA0G6" (order)
             # to "vA0G671S" (fill) — the fill ordno starts with the order ordno.
-            for registered_id, mapped_key in tuple(self.order_id_map.items()):
-                if registered_id and order_id_str.startswith(str(registered_id)):
-                    order_key = self.normalize_order_key(mapped_key)
-                    if order_key:
-                        return order_key
+            snapshot = tuple(self.order_id_map.items())
+        for registered_id, mapped_key in snapshot:
+            if registered_id and order_id_str.startswith(str(registered_id)):
+                order_key = self.normalize_order_key(mapped_key)
+                if order_key:
+                    return order_key
         return None
 
     def resolve_order_key_from_candidates(self, candidates: list[str]) -> Optional[str]:

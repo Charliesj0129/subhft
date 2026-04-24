@@ -4,7 +4,7 @@ import os
 import tempfile
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Any, Dict, TypeAlias, TypeGuard, cast
 
 import yaml
@@ -144,9 +144,13 @@ class OrderAdapter:
         self.client = broker_client
         self._broker_codec = broker_codec
         # Map broker order IDs -> order_key ("strategy_id:intent_id")
-        # Protected by _order_id_map_lock for concurrent access
+        # P0-E1: protected by a threading.Lock (not asyncio.Lock) because
+        # ``_on_exec`` runs on the broker callback thread and calls the
+        # resolver pre-hand-off (see ``services/system.py::_on_exec``).
+        # Critical sections are small (single dict get / bounded-N eviction),
+        # so event-loop latency impact is negligible.
         self.order_id_map = order_id_map if order_id_map is not None else {}
-        self._order_id_map_lock = asyncio.Lock()
+        self._order_id_map_lock = threading.Lock()
         # Map order_key -> cmd.created_ns for e2e latency tracking (SLO-2)
         # Shared with ExecutionRouter for fill-side lookup
         self._cmd_created_ns_map: Dict[str, int] = cmd_created_ns_map if cmd_created_ns_map is not None else {}
@@ -199,7 +203,7 @@ class OrderAdapter:
         # Helpers
         self.rate_limiter = RateLimiter(soft_cap=180, hard_cap=250, window_s=10)
         self.circuit_breaker = CircuitBreaker(threshold=5, timeout_s=60)
-        self.order_id_resolver = OrderIdResolver(self.order_id_map)
+        self.order_id_resolver = OrderIdResolver(self.order_id_map, lock=self._order_id_map_lock)
         self._api_timeout_s = float(os.getenv("HFT_API_TIMEOUT_S", "3.0"))  # precision-time
         self._api_guard_timeout_s = float(os.getenv("HFT_API_GUARD_TIMEOUT_S", "0.005"))  # precision-time
         self._api_max_inflight = int(os.getenv("HFT_API_MAX_INFLIGHT", "16"))
@@ -981,6 +985,12 @@ class OrderAdapter:
         (dict/list ops only). Both pending_fill_index AND order_id_map are updated
         atomically under the same lock to eliminate the window where a fill could
         arrive between the two registrations.
+
+        P0-E1: acquires ``_order_id_map_lock`` in addition to the pending-fill
+        lock so the single write at ``self.order_id_map[custom_field_token]``
+        is visible to broker-thread readers under the same lock discipline as
+        ``_register_broker_ids``. Lock order is strictly
+        ``_pending_fill_lock`` → ``_order_id_map_lock``; no reverse path.
         """
         key = self._pending_fill_key(symbol, side)
         with self._pending_fill_lock:
@@ -988,7 +998,8 @@ class OrderAdapter:
             if order_key not in pending:
                 pending.append(order_key)
             self._pending_fill_registered_at[order_key] = time.monotonic()
-            self.order_id_map[custom_field_token] = order_key
+            with self._order_id_map_lock:
+                self.order_id_map[custom_field_token] = order_key
         self._maybe_persist_order_id_map()
 
     def _remove_pending_fill(self, order_key: str) -> None:
@@ -1180,6 +1191,29 @@ class OrderAdapter:
                 self._record_recent_terminal(order_key, reason="terminal")
         self._remove_pending_fill(resolved_order_key)
 
+    def register_broker_ids_bulk(self, ids: Iterable[str], order_key: str) -> bool:
+        """P0-E1: external-writer helper that acquires ``_order_id_map_lock``.
+
+        Callable from any thread (CPython ``threading.Lock`` is re-entrant
+        safe, not nestable, but our critical section is non-nested).
+        ExecutionRouter's ``_backfill_order_id_map`` calls this instead of
+        mutating ``order_id_map`` directly so there is a single writer-side
+        lock discipline across Decision and Execution planes.
+
+        Returns True if any new mapping was added.
+        """
+        changed = False
+        with self._order_id_map_lock:
+            for broker_id in ids:
+                key = str(broker_id or "")
+                if not key:
+                    continue
+                if self.order_id_map.get(key) == order_key:
+                    continue
+                self.order_id_map[key] = order_key
+                changed = True
+        return changed
+
         # Also clean up rate limit window if needed? No, rate limit is distinct.
 
     async def _register_broker_ids(self, order_key: str, trade: Any) -> bool:
@@ -1225,7 +1259,9 @@ class OrderAdapter:
                         ids.add(val)
 
         changed = False
-        async with self._order_id_map_lock:
+        # P0-E1: synchronous lock, because broker-thread readers (_on_exec)
+        # also take this lock. All critical sections here are dict ops only.
+        with self._order_id_map_lock:
             # Evict oldest entries if at limit — skip entries whose order_key
             # is still in live_orders to prevent orphaning active fills (M6).
             if len(self.order_id_map) >= self._order_id_map_max_size:

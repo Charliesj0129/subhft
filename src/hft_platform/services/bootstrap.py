@@ -959,6 +959,12 @@ class SystemBootstrapper:
         )
         if _fee_calculator is not None:
             exec_service.normalizer._fee_calculator = _fee_calculator
+        # P0-E1: share OrderAdapter's threading.Lock with the normalizer's
+        # resolver so ExecutionRouter._backfill_order_id_map and the broker
+        # thread (_on_exec) use the same mutex when reading/writing the
+        # shared order_id_map dict. Without this, router backfill and
+        # adapter writes would be serialised by different locks.
+        exec_service.normalizer.order_id_resolver.lock = order_adapter._order_id_map_lock
         risk_engine = RiskEngine(
             risk_path,
             risk_queue,

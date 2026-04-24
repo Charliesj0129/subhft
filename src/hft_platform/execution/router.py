@@ -242,12 +242,16 @@ class ExecutionRouter:
                 break
         if not order_key:
             return
-        # Register all extracted IDs under the same order_key
+        # Register all extracted IDs under the same order_key.
+        # P0-E1: acquire the resolver's lock (injected by bootstrap, shared
+        # with OrderAdapter._order_id_map_lock) so this backfill writer is
+        # mutually exclusive with broker-thread readers in ``_on_exec``.
         changed = False
-        for broker_id in ids:
-            if broker_id not in resolver.order_id_map:
-                resolver.order_id_map[broker_id] = order_key
-                changed = True
+        with resolver.lock:
+            for broker_id in ids:
+                if broker_id not in resolver.order_id_map:
+                    resolver.order_id_map[broker_id] = order_key
+                    changed = True
         if changed:
             logger.debug(
                 "order_id_map_backfilled",
