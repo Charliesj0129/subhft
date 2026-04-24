@@ -52,13 +52,39 @@ class QuoteEventHandler:
 
     ShioajiClient delegates to this class and applies the returned
     QuotePendingState atomically.
+
+    Thread safety (P0-D2, 2026-04-24)
+    ---------------------------------
+    ``mark_pending``/``clear_pending`` are invoked from at least three
+    threads: the Shioaji SDK event-callback thread (``on_quote_event``),
+    the quote watchdog thread, and the TickDispatcher worker thread (via
+    ``_process_tick`` -> ``_clear_quote_pending``). The (_reason, _ts)
+    pair is a compound state — a reader observing ``reason is None and
+    ts > 0`` is a torn read that the watchdog then misinterprets as a
+    stuck pending (operators saw this as "stuck CH/Redis gauges").
+    The internal ``_pending_lock`` ensures the two fields are written and
+    sampled atomically. The returned ``QuotePendingState`` is an immutable
+    frozen dataclass so callers can mirror it to ``ShioajiClient`` fields
+    under the same lock without re-reading handler state.
     """
 
-    __slots__ = ("_pending_reason", "_pending_ts")
+    __slots__ = ("_pending_reason", "_pending_ts", "_pending_lock")
 
     def __init__(self) -> None:
         self._pending_reason: str | None = None
         self._pending_ts: float = 0.0
+        # Guards the (_pending_reason, _pending_ts) pair so readers never
+        # observe a half-updated handler. Also used by QuoteRuntime to mirror
+        # handler state onto ShioajiClient fields atomically — hence RLock:
+        # QuoteRuntime.mark_pending acquires the lock and then calls
+        # handler.mark_pending which would re-acquire it on a plain Lock.
+        self._pending_lock: threading.RLock = threading.RLock()
+
+    @property
+    def pending_lock(self) -> threading.RLock:
+        """Expose the internal lock so QuoteRuntime can extend the critical
+        section across the handler update and the client-side mirror."""
+        return self._pending_lock
 
     def mark_pending(self, reason: str, current_ts: float | None = None) -> QuotePendingState:
         """Transition to pending state.
@@ -67,24 +93,27 @@ class QuoteEventHandler:
         Idempotent: repeated marks with the same reason return an unchanged state.
         """
         ts = current_ts if current_ts is not None else timebase.now_s()
-        if self._pending_reason == reason:
-            # Already pending for the same reason — no-op
-            return QuotePendingState(pending=True, reason=reason, ts=self._pending_ts)
-        self._pending_reason = reason
-        self._pending_ts = ts
-        return QuotePendingState(pending=True, reason=reason, ts=ts)
+        with self._pending_lock:
+            if self._pending_reason == reason:
+                # Already pending for the same reason — no-op
+                return QuotePendingState(pending=True, reason=reason, ts=self._pending_ts)
+            self._pending_reason = reason
+            self._pending_ts = ts
+            return QuotePendingState(pending=True, reason=reason, ts=ts)
 
     def clear_pending(self) -> QuotePendingState:
         """Transition out of pending state.
 
         Returns a QuotePendingState with pending=False for the caller to apply.
         """
-        self._pending_reason = None
-        self._pending_ts = 0.0
+        with self._pending_lock:
+            self._pending_reason = None
+            self._pending_ts = 0.0
         return QuotePendingState(pending=False, reason=None, ts=0.0)
 
     @property
     def is_pending(self) -> bool:
+        # Single attribute read — GIL-atomic, no lock needed.
         return self._pending_reason is not None
 
     @property
@@ -96,9 +125,11 @@ class QuoteEventHandler:
         return self._pending_ts
 
     def snapshot(self) -> QuotePendingState:
-        if self._pending_reason is None:
-            return QuotePendingState(pending=False, reason=None, ts=0.0)
-        return QuotePendingState(pending=True, reason=self._pending_reason, ts=self._pending_ts)
+        """Return a consistent snapshot of the (_reason, _ts) pair."""
+        with self._pending_lock:
+            if self._pending_reason is None:
+                return QuotePendingState(pending=False, reason=None, ts=0.0)
+            return QuotePendingState(pending=True, reason=self._pending_reason, ts=self._pending_ts)
 
 
 class QuoteRuntime:
@@ -121,22 +152,33 @@ class QuoteRuntime:
     # ------------------------------------------------------------------ #
 
     def mark_pending(self, reason: str) -> QuotePendingState:
-        """Mark the quote feed as pending and return the new state delta."""
-        delta = self._event_handler.mark_pending(reason)
-        c = self._client
-        c._pending_quote_resubscribe = delta.pending
-        if delta.pending and c._pending_quote_ts == 0.0:
-            c._pending_quote_ts = delta.ts
-        c._pending_quote_reason = delta.reason
+        """Mark the quote feed as pending and return the new state delta.
+
+        The handler mutation and the mirror to ShioajiClient fields run under
+        a single critical section so concurrent readers of
+        ``_pending_quote_resubscribe`` / ``_pending_quote_reason`` /
+        ``_pending_quote_ts`` never see a torn triple (P0-D2).
+        """
+        # Compute ts outside the lock to minimise its duration; handler
+        # takes the lock again internally but that's a cheap reentrant-free
+        # sequence of ordinary attribute writes.
+        with self._event_handler.pending_lock:
+            delta = self._event_handler.mark_pending(reason)
+            c = self._client
+            c._pending_quote_resubscribe = delta.pending
+            if delta.pending and c._pending_quote_ts == 0.0:
+                c._pending_quote_ts = delta.ts
+            c._pending_quote_reason = delta.reason
         return delta
 
     def clear_pending(self) -> QuotePendingState:
         """Clear the pending state and return the cleared state delta."""
-        delta = self._event_handler.clear_pending()
-        c = self._client
-        c._pending_quote_resubscribe = False
-        c._pending_quote_reason = None
-        c._pending_quote_ts = 0.0
+        with self._event_handler.pending_lock:
+            delta = self._event_handler.clear_pending()
+            c = self._client
+            c._pending_quote_resubscribe = False
+            c._pending_quote_reason = None
+            c._pending_quote_ts = 0.0
         return delta
 
     @property
@@ -633,42 +675,55 @@ class QuoteRuntime:
         return hasattr(quote_api, "set_on_tick_stk_v1_callback")
 
     def mark_quote_pending(self, reason: str) -> None:
+        """Public entry for marking pending state.
+
+        Unlike ``mark_pending`` above, this variant is invoked from the
+        ShioajiClient stub (_mark_quote_pending) and covers the fallback
+        path when ``c._quote_event_handler`` is not yet wired. The
+        handler's ``pending_lock`` guards the (_reason, _ts, _resubscribe)
+        triple on both the handler and the client mirror (P0-D2).
+        """
         c = self._client
         now = timebase.now_s()
-        if not c._pending_quote_resubscribe or c._pending_quote_reason != reason:
-            logger.warning("Quote pending", reason=reason)
-        if c._quote_event_handler is not None:
-            try:
-                delta = c._quote_event_handler.mark_pending(reason, current_ts=now)
-                c._pending_quote_resubscribe = delta.pending
-                c._pending_quote_reason = delta.reason
-                if delta.pending and c._pending_quote_ts == 0.0:
-                    c._pending_quote_ts = delta.ts
-            except Exception as exc:
-                logger.debug("operation_fallback", error=str(exc))
+        # Use our local handler's lock — always available via QuoteRuntime.
+        lock = self._event_handler.pending_lock
+        with lock:
+            if not c._pending_quote_resubscribe or c._pending_quote_reason != reason:
+                logger.warning("Quote pending", reason=reason)
+            if c._quote_event_handler is not None:
+                try:
+                    delta = c._quote_event_handler.mark_pending(reason, current_ts=now)
+                    c._pending_quote_resubscribe = delta.pending
+                    c._pending_quote_reason = delta.reason
+                    if delta.pending and c._pending_quote_ts == 0.0:
+                        c._pending_quote_ts = delta.ts
+                except Exception as exc:
+                    logger.debug("operation_fallback", error=str(exc))
+                    c._pending_quote_resubscribe = True
+                    c._pending_quote_reason = reason
+                    c._pending_quote_ts = now
+            else:
                 c._pending_quote_resubscribe = True
                 c._pending_quote_reason = reason
                 c._pending_quote_ts = now
-        else:
-            c._pending_quote_resubscribe = True
-            c._pending_quote_reason = reason
-            c._pending_quote_ts = now
-        c._quote_pending_stall_reported = False
+            c._quote_pending_stall_reported = False
         c._update_quote_pending_metrics()
         c._schedule_force_relogin()
 
     def clear_quote_pending(self) -> None:
         c = self._client
-        if c._quote_event_handler is not None:
-            try:
-                c._quote_event_handler.clear_pending()
-            except Exception as exc:
-                logger.debug("operation_fallback", error=str(exc))
-                pass
-        c._pending_quote_resubscribe = False
-        c._pending_quote_reason = None
-        c._pending_quote_ts = 0.0
-        c._quote_pending_stall_reported = False
+        lock = self._event_handler.pending_lock
+        with lock:
+            if c._quote_event_handler is not None:
+                try:
+                    c._quote_event_handler.clear_pending()
+                except Exception as exc:
+                    logger.debug("operation_fallback", error=str(exc))
+                    pass
+            c._pending_quote_resubscribe = False
+            c._pending_quote_reason = None
+            c._pending_quote_ts = 0.0
+            c._quote_pending_stall_reported = False
         c._update_quote_pending_metrics()
         logger.info("Quote data resumed; clearing pending")
 
@@ -855,9 +910,18 @@ class QuoteRuntime:
         return bool(self._client._allow_quote_recovery(reason))
 
     def snapshot(self) -> QuoteRuntimeSnapshot:
+        # Read the (_resubscribe, _reason, _ts) triple under the pending_lock
+        # so the returned snapshot is internally consistent (P0-D2). The
+        # callbacks_registered flag is a single bool (GIL-atomic) and not
+        # part of the triple, so reading it outside the lock is acceptable.
+        c = self._client
+        with self._event_handler.pending_lock:
+            resubscribe = bool(getattr(c, "_pending_quote_resubscribe", False))
+            reason = getattr(c, "_pending_quote_reason", None)
+            since = float(getattr(c, "_pending_quote_ts", 0.0) or 0.0)
         return QuoteRuntimeSnapshot(
-            pending_resubscribe=bool(getattr(self._client, "_pending_quote_resubscribe", False)),
-            pending_reason=getattr(self._client, "_pending_quote_reason", None),
-            pending_since=float(getattr(self._client, "_pending_quote_ts", 0.0) or 0.0),
-            callbacks_registered=bool(getattr(self._client, "_callbacks_registered", False)),
+            pending_resubscribe=resubscribe,
+            pending_reason=reason,
+            pending_since=since,
+            callbacks_registered=bool(getattr(c, "_callbacks_registered", False)),
         )
