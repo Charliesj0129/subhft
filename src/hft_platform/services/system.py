@@ -280,6 +280,11 @@ class HFTSystem:
         # WU-17: Structured health endpoint
         self.health_server = HealthServer(system=self)
 
+        # P1 fix: handle for stop_async() task created by synchronous stop().
+        # The launcher (main.py) awaits this to prevent loop teardown from
+        # cutting recorder drain / final checkpoint / order drain short.
+        self._stop_async_task: asyncio.Task[None] | None = None
+
     async def run(self):
         self.running = True
         self.loop = asyncio.get_running_loop()
@@ -1507,9 +1512,13 @@ class HFTSystem:
         # Schedule async cleanup if event loop is available.
         # H13: When the loop is running, defer broker close and bootstrap
         # teardown to stop_async() so recorder can drain first.
+        # P1 fix: track the detached task on ``self._stop_async_task`` so the
+        # launcher (main.py) can await it before the loop is torn down — fixes
+        # fire-and-forget pattern where recorder drain / final checkpoint /
+        # order drain were cut short by ``asyncio.run`` loop teardown.
         loop = getattr(self, "loop", None)
         if loop is not None and loop.is_running():
-            asyncio.create_task(self.stop_async())
+            self._stop_async_task = asyncio.create_task(self.stop_async())
         else:
             # Synchronous fallback: event loop not running.
             # Flush recorder data before teardown to prevent silent data loss

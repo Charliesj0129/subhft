@@ -68,7 +68,24 @@ async def main():
         system.stop()
         if not system_task.done():
             system_task.cancel()
-        await asyncio.gather(system_task, return_exceptions=True)
+
+        # P1 fix: wait for the detached stop_async() task so recorder drain,
+        # final position checkpoint, and in-flight order cancellation actually
+        # complete before the event loop is torn down. Without this, the
+        # signal-handler path (SIGTERM/SIGINT) was fire-and-forget and could
+        # leave the position checkpoint in a partial state, or drop buffered
+        # audit rows that still needed to be flushed.
+        stop_task = getattr(system, "_stop_async_task", None)
+        tasks_to_await: list[asyncio.Task] = [system_task]
+        if stop_task is not None and not stop_task.done():
+            tasks_to_await.append(stop_task)
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*tasks_to_await, return_exceptions=True),
+                timeout=float(os.getenv("HFT_SHUTDOWN_GRACE_TIMEOUT_S", "90")),
+            )
+        except asyncio.TimeoutError:
+            main_logger.warning("stop_async_timeout_on_shutdown")
         main_logger.info("Shutdown complete")
 
 

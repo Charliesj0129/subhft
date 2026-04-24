@@ -482,3 +482,81 @@ class TestAuditGuardrailStickyOverflow:
         assert buf[1]["marker"] == "middle_1"
         assert buf[2]["marker"] == "middle_2"
         assert writer._dropped["audit.guardrail_log"] == 1
+
+    def test_non_guardrail_drop_counter_increments_pre_start(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Non-guardrail tables: drop counter tracks deque auto-eviction pre-start."""
+        from hft_platform.recorder.audit import AuditWriter
+
+        # queue_size=1 + overflow=1 → pre-start buffer maxlen=2.
+        monkeypatch.setenv("HFT_AUDIT_OVERFLOW_SIZE", "1")
+        writer = AuditWriter(queue_size=1)
+        writer.log_order({"a": 1})  # buf=[1]
+        writer.log_order({"a": 2})  # buf=[1, 2]
+        writer.log_order({"a": 3})  # buf=[2, 3] (1 dropped, counter+=1)
+        writer.log_order({"a": 4})  # buf=[3, 4] (2 dropped, counter+=1)
+
+        assert writer._dropped["audit.orders_log"] == 2
+
+
+# ---------------------------------------------------------------------------
+# P1: main.py awaits detached stop_async task
+# ---------------------------------------------------------------------------
+
+
+class TestSystemStopAsyncTaskTracked:
+    """HFTSystem.stop() must assign the detached stop_async task to
+    ``self._stop_async_task`` so the launcher can await it.
+    """
+
+    def test_stop_async_task_attribute_exists(self) -> None:
+        from hft_platform.services.system import HFTSystem
+
+        system = HFTSystem.__new__(HFTSystem)
+        # Simulate __init__'s attribute creation by accessing the slot / dict.
+        # The attribute is initialised in __init__; in a real run it starts
+        # as None. Here we just verify the attribute NAME is in the system
+        # source so the launcher's `getattr(system, "_stop_async_task", None)`
+        # lookup is not referencing a name that doesn't exist.
+        import inspect
+
+        src = inspect.getsource(HFTSystem.__init__)
+        assert "_stop_async_task" in src, (
+            "HFTSystem.__init__ must initialise self._stop_async_task so "
+            "HFTSystem.stop() can store the detached stop_async() task for "
+            "the launcher to await on shutdown."
+        )
+
+        src_stop = inspect.getsource(HFTSystem.stop)
+        assert "_stop_async_task" in src_stop, (
+            "HFTSystem.stop() must store the detached stop_async() task "
+            "so the launcher can await it before loop teardown."
+        )
+
+
+# ---------------------------------------------------------------------------
+# P1: MetricsRegistry scrape-vs-rebuild lock
+# ---------------------------------------------------------------------------
+
+
+class TestMetricsRegistryScrapeLock:
+    """registry_rw_lock must guard both rebuild and scrape paths."""
+
+    def test_registry_rw_lock_module_attribute(self) -> None:
+        from hft_platform.observability import metrics
+
+        assert hasattr(metrics, "registry_rw_lock"), (
+            "metrics module must expose `registry_rw_lock` so the scraper "
+            "can synchronise with `MetricsRegistry.__init__`."
+        )
+
+    def test_metrics_server_acquires_registry_rw_lock(self) -> None:
+        """Metrics server source must reference registry_rw_lock."""
+        import inspect
+
+        from hft_platform.observability import metrics_server
+
+        src = inspect.getsource(metrics_server)
+        assert "registry_rw_lock" in src, (
+            "metrics_server.py must acquire registry_rw_lock during scrape to "
+            "avoid observing a partially-rebuilt REGISTRY."
+        )

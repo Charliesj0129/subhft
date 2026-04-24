@@ -622,29 +622,56 @@ class RecorderService:
         return drained
 
     async def _shutdown_flush(self) -> None:
-        """Flush all batchers and shut down writer. Called during graceful shutdown."""
+        """Flush all batchers and shut down writer. Called during graceful shutdown.
+
+        P1 fix: each batcher gets its own bounded timeout
+        (``HFT_RECORDER_BATCHER_FLUSH_TIMEOUT_S``, default 10s) instead of
+        relying solely on the caller's 60s outer wait_for. A stuck batcher
+        lock / slow CH insert now only delays ITS topic, not the whole
+        shutdown. Timed-out batchers are logged as ``skipped`` and the loop
+        continues so remaining batchers (esp. ``fills`` / ``orders``, the
+        financial-integrity tables) still flush.
+        """
         flushed: list[str] = []
         skipped: list[str] = []
+        timed_out: list[str] = []
         all_topics = list(self.batchers.keys())
+        per_batcher_timeout_s = float(os.getenv("HFT_RECORDER_BATCHER_FLUSH_TIMEOUT_S", "10"))
 
         try:
             for topic, batcher in self.batchers.items():
                 try:
-                    await batcher.force_flush()
+                    await asyncio.wait_for(batcher.force_flush(), timeout=per_batcher_timeout_s)
                     flushed.append(topic)
+                except asyncio.TimeoutError:
+                    timed_out.append(topic)
+                    logger.error(
+                        "recorder_batcher_flush_timeout",
+                        topic=topic,
+                        timeout_s=per_batcher_timeout_s,
+                        msg="Individual batcher flush timed out; continuing with remaining batchers",
+                    )
                 except asyncio.CancelledError:
-                    skipped.extend(t for t in all_topics if t not in flushed and t != topic)
+                    skipped.extend(t for t in all_topics if t not in flushed and t not in timed_out and t != topic)
                     skipped.append(topic)
                     raise  # Re-raise to exit the loop
                 except Exception as exc:
                     logger.warning("recorder_batcher_flush_error", topic=topic, error=str(exc))
                     flushed.append(topic)  # Attempted, move on
+            if timed_out:
+                logger.error(
+                    "recorder_shutdown_batchers_timed_out",
+                    flushed=flushed,
+                    timed_out=timed_out,
+                    per_batcher_timeout_s=per_batcher_timeout_s,
+                )
         except asyncio.CancelledError:
             if skipped:
                 logger.error(
                     "recorder_shutdown_batchers_skipped",
                     flushed=flushed,
                     skipped=skipped,
+                    timed_out=timed_out,
                     msg="Shutdown timeout — some batchers were not flushed",
                 )
             raise  # Must re-raise for wait_for to handle

@@ -653,16 +653,28 @@ class WALBatchWriter:
                 except Exception as e:
                     self._merge_back_consecutive_failures += 1
                     if self._merge_back_consecutive_failures >= self._merge_back_max_failures:
+                        # P1 fix: compute the ACTUAL dropped-row count including
+                        # anything that may have re-accumulated in flush_data /
+                        # flush_columnar (the snapshot taken under lock is the
+                        # authoritative drop size).
+                        _dropped_rows = sum(len(v) for v in flush_data.values()) + sum(
+                            seg[2] for segs in flush_columnar.values() for seg in segs
+                        )
                         logger.warning(
                             "WAL merge-back circuit breaker tripped — dropping data",
-                            rows=flush_rows,
+                            rows=_dropped_rows,
+                            flush_rows=flush_rows,
                             consecutive_failures=self._merge_back_consecutive_failures,
                             error=str(e),
                         )
                         self._merge_back_consecutive_failures = 0
                         if self._metrics:
                             try:
-                                self._metrics.wal_batch_flush_total.labels(result="dropped").inc()
+                                # Count per-row so disk-pressure alerts fire on the
+                                # true data-loss volume, not once per circuit-breaker trip.
+                                self._metrics.wal_batch_flush_total.labels(result="dropped").inc(
+                                    max(1, _dropped_rows)
+                                )
                             except Exception as exc:
                                 logger.debug("operation_fallback", error=str(exc))
                     else:

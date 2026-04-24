@@ -5,6 +5,14 @@ from prometheus_client import REGISTRY, Counter, Gauge, Histogram
 
 _METRICS_PREFIX = os.getenv("HFT_METRICS_PREFIX", "")
 
+# P1 fix: guards the unregister+reregister cycle in ``MetricsRegistry.__init__``
+# against the Prometheus scraper thread iterating ``REGISTRY._names_to_collectors``
+# concurrently. The resilient metrics server acquires this lock while baking the
+# scrape response so a partial-registry snapshot is never returned to a scrape.
+# Uses RLock so `__init__` can nest helper functions that would otherwise
+# deadlock on self-acquisition.
+registry_rw_lock: threading.RLock = threading.RLock()
+
 _KNOWN_EXCEPTION_TYPES: frozenset[str] = frozenset(
     {
         "ConnectionError",
@@ -73,6 +81,18 @@ class MetricsRegistry:
 
     def __init__(self):
         self._seen_symbols: set[str] = set()
+        # P1 fix: serialise full unregister+reregister cycle against the
+        # Prometheus scraper thread so scrapes never observe a partially
+        # rebuilt REGISTRY. The scraper side is wrapped in
+        # metrics_server.py's resilient bake path.
+        self._registry_rw_lock = registry_rw_lock
+        self._registry_rw_lock.__enter__()
+        try:
+            self._init_collectors()
+        finally:
+            self._registry_rw_lock.__exit__(None, None, None)
+
+    def _init_collectors(self) -> None:
         _unregister_all_custom_metrics()
         _unregister_metric_prefixes(
             [

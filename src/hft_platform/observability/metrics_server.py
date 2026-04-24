@@ -20,6 +20,8 @@ from prometheus_client import REGISTRY
 from prometheus_client.exposition import _bake_output
 from structlog import get_logger
 
+from hft_platform.observability.metrics import registry_rw_lock
+
 logger = get_logger("metrics_server")
 
 _corruption_logged: bool = False
@@ -29,7 +31,12 @@ def _resilient_metrics_app(
     environ: dict[str, Any],
     start_response: Any,
 ) -> list[bytes]:
-    """WSGI app that tolerates corrupted prometheus collectors."""
+    """WSGI app that tolerates corrupted prometheus collectors.
+
+    P1 fix: holds ``registry_rw_lock`` during _bake_output so a concurrent
+    ``MetricsRegistry.__init__`` unregister+rebuild cycle cannot mutate
+    ``REGISTRY._names_to_collectors`` mid-iteration.
+    """
     global _corruption_logged  # noqa: PLW0603
 
     accept_header = environ.get("HTTP_ACCEPT", "")
@@ -37,13 +44,14 @@ def _resilient_metrics_app(
     params = environ.get("QUERY_STRING", "")
 
     try:
-        status, headers, output = _bake_output(
-            REGISTRY,
-            accept_header,
-            accept_encoding,
-            params,
-            False,
-        )
+        with registry_rw_lock:
+            status, headers, output = _bake_output(
+                REGISTRY,
+                accept_header,
+                accept_encoding,
+                params,
+                False,
+            )
         start_response(status, headers)
         return [output]
     except TypeError as exc:
@@ -60,12 +68,17 @@ def _resilient_metrics_app(
 
 
 def _collect_partial(start_response: Any) -> list[bytes]:
-    """Collect metrics one-by-one, skipping corrupted collectors."""
+    """Collect metrics one-by-one, skipping corrupted collectors.
+
+    P1 fix: holds ``registry_rw_lock`` while iterating so a concurrent registry
+    rebuild does not pull the rug out from under us.
+    """
     lines: list[str] = []
     skipped = 0
 
-    # Direct access to the registry's internal collector list
-    collectors = list(REGISTRY._names_to_collectors.values())
+    with registry_rw_lock:
+        # Direct access to the registry's internal collector list
+        collectors = list(REGISTRY._names_to_collectors.values())
     seen = set()
 
     for collector in collectors:

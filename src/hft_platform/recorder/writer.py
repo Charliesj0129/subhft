@@ -112,9 +112,19 @@ class DataWriter:
         # Apply send_receive_timeout to CH params
         self.ch_params["send_receive_timeout"] = int(self._insert_timeout_s)
 
-        # CC-3: Bounded thread pool for CH inserts
-        self._pool_size = int(os.getenv("HFT_CH_INSERT_POOL_SIZE", "8"))
+        # CC-3: Bounded thread pool for CH inserts.
+        # P2 fix: align pool size with semaphore ceiling so we don't pay for
+        # idle worker threads. The semaphore is the authoritative concurrency
+        # gate; any extra executor slots above it are never used.
         self._max_concurrent_inserts = int(os.getenv("HFT_CH_MAX_CONCURRENT_INSERTS", "6"))
+        self._pool_size = max(1, int(os.getenv("HFT_CH_INSERT_POOL_SIZE", str(self._max_concurrent_inserts))))
+        if self._pool_size > self._max_concurrent_inserts:
+            logger.debug(
+                "ch_pool_size_exceeds_semaphore_ceiling_reducing",
+                pool_size=self._pool_size,
+                semaphore_ceiling=self._max_concurrent_inserts,
+            )
+            self._pool_size = self._max_concurrent_inserts
         self._executor = ThreadPoolExecutor(
             max_workers=self._pool_size,
             thread_name_prefix="ch-insert",
