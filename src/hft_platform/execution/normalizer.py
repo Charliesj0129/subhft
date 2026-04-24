@@ -181,8 +181,12 @@ class ExecutionNormalizer:
             ord_no = self._first_str(order, fm.order_id_keys()) or self._first_str(d, fm.order_id_keys())
             seq_no = self._first_str(order, fm.sequence_id_keys()) or self._first_str(d, fm.sequence_id_keys())
             other_id = self._first_str(order, fm.other_id_keys()) or self._first_str(d, fm.other_id_keys())
+            custom_field = self._first_str(order, fm.custom_field_keys()) or self._first_str(d, fm.custom_field_keys())
             oid = ord_no or seq_no or other_id
             strategy_id = self._resolve_strategy_id(raw)
+            client_order_id = self.order_id_resolver.resolve_order_key_from_candidates(
+                [ord_no, seq_no, other_id, custom_field]
+            )
 
             contract = d.get("contract", {}) if isinstance(d.get("contract"), dict) else {}
             symbol = self._first_str(contract, fm.symbol_keys()) or self._first_str(d, fm.symbol_keys()) or "UNKNOWN"
@@ -203,6 +207,7 @@ class ExecutionNormalizer:
                 side=Side.BUY if "buy" in str(order.get("action", "")).lower() else Side.SELL,
                 ingest_ts_ns=raw.ingest_ts_ns,
                 broker_ts_ns=self._normalize_ts_ns(exchange_ts),
+                client_order_id=client_order_id or "",
             )
         except (KeyError, TypeError, ValueError) as e:
             logger.error("Order normalization failed", error=str(e), data=d)
@@ -243,6 +248,12 @@ class ExecutionNormalizer:
                     sym = self._first_str(c, fm.symbol_keys())
 
             strategy_id = self._resolve_strategy_id(raw)
+            order_id = self._first_str(d, fm.order_id_keys())
+            other_id = self._first_str(d, fm.other_id_keys())
+            custom_field = self._first_str(d, fm.custom_field_keys())
+            client_order_id = self.order_id_resolver.resolve_order_key_from_candidates(
+                [order_id, other_id, custom_field]
+            )
             # scale() handles float/int/Decimal inputs with precision
             scale_price = self.price_codec.scale(sym, price_value)
 
@@ -297,7 +308,7 @@ class ExecutionNormalizer:
             return FillEvent(
                 fill_id=fill_id,
                 account_id=account_id,
-                order_id=self._first_str(d, fm.order_id_keys()),
+                order_id=order_id,
                 strategy_id=strategy_id,
                 symbol=sym,
                 side=side,
@@ -307,6 +318,7 @@ class ExecutionNormalizer:
                 tax=tax,
                 ingest_ts_ns=raw.ingest_ts_ns,
                 match_ts_ns=self._normalize_ts_ns(get("ts")),
+                client_order_id=client_order_id or "",
             )
         except (KeyError, TypeError, ValueError, AttributeError) as _exc:
             logger.error("Fill normalization failed", error=str(_exc), data=d)

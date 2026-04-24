@@ -78,9 +78,11 @@ def test_map_order_and_fill(tmp_path):
         side=Side.BUY,
         ingest_ts_ns=100,
         broker_ts_ns=200,
+        client_order_id="S1:42",
     )
     topic, row = map_event_to_record(order, metadata)
     assert topic == "orders"
+    assert row["client_order_id"] == "S1:42"
     assert row["price_scaled"] == 1_000_000
     assert row["status"] == "SUBMITTED"
     # RC-1: instrument_type and oc_type added to orders
@@ -101,6 +103,7 @@ def test_map_order_and_fill(tmp_path):
         tax=0,
         ingest_ts_ns=100,
         match_ts_ns=110,
+        client_order_id="S1:42",
     )
     topic, row = map_event_to_record(fill, metadata)
     assert topic == "fills"
@@ -111,7 +114,7 @@ def test_map_order_and_fill(tmp_path):
     assert row["ts_exchange"] == 110  # from match_ts_ns
     assert row["ts_local"] == 100  # from ingest_ts_ns
     assert row["broker_order_id"] == "O1"  # from order_id
-    assert row["client_order_id"] == ""
+    assert row["client_order_id"] == "S1:42"
     assert row["source"] == "shioaji"
     assert "order_id" not in row  # old field removed
     assert "match_ts" not in row  # old field removed

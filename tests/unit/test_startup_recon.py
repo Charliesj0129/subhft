@@ -27,6 +27,10 @@ class FakeBrokerPosition:
         self.direction = direction
 
 
+class FakeFutureBrokerPosition(FakeBrokerPosition):
+    """Distinct type to mimic Shioaji futopt position objects."""
+
+
 class FakeBrokerClient:
     """Minimal broker client stub exposing get_positions."""
 
@@ -92,6 +96,24 @@ async def test_mismatch_detected() -> None:
     assert result[0].diff == -50
     assert verifier.status == 2
     assert startup_recon_status._value.get() == 2
+
+
+@pytest.mark.asyncio
+async def test_verify_dedupes_duplicate_code_across_broker_position_types() -> None:
+    """Startup verification must not inflate broker_qty on mixed account snapshots."""
+    client = FakeBrokerClient(
+        [
+            FakeBrokerPosition("2330", 100, "Long"),
+            FakeFutureBrokerPosition("2330", 100, "Long"),
+        ]
+    )
+    store = _make_store_with_positions({"2330": 100})
+    verifier = StartupPositionVerifier(client, store)
+
+    result = await verifier.verify()
+
+    assert result == []
+    assert verifier.status == 1
 
 
 @pytest.mark.asyncio

@@ -16,8 +16,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from hft_platform.contracts.execution import OrderEvent, OrderStatus
-from hft_platform.contracts.strategy import IntentType, Side
+from hft_platform.contracts.strategy import IntentType
 from hft_platform.events import LOBStatsEvent
 
 
@@ -83,4 +82,32 @@ class TestDuplicateCancelGuard:
             f"D4: duplicate-cancel guard violated — expected 1 cancel across "
             f"5 repeated stale events, got {total_cancels}. This reproduces "
             f"the 210 cancel_already_terminal events seen on 2026-04-21."
+        )
+
+    def test_price_moved_cancelled_exactly_once_across_repeated_events(self, strategy):
+        """The legacy cancel-before-requote path must also clear oid state.
+
+        This covers the non-D1 path: spread gate passes, the quote is still
+        close enough to mid to avoid stale reconciliation, but the computed
+        quote price moved by one tick. Before the fix this path re-cancelled
+        the same oid on every tick until the broker terminal callback arrived.
+        """
+        ctx = _ctx()
+        strategy._last_bid["TMFE6"] = 3_7758_0000
+        strategy._active_buy_oid["TMFE6"] = "v004N"
+        strategy._inflight_buy_oids["TMFE6"] = {"v004N"}
+        strategy._pending_buy["TMFE6"] = 1
+
+        total_cancels = 0
+        for _ in range(5):
+            ev = _lob_stats(mid_pts=37761, spread_pts=8)
+            intents = strategy.handle_event(ctx, ev)
+            total_cancels += sum(
+                1 for i in intents
+                if getattr(i, "intent_type", None) == IntentType.CANCEL
+            )
+
+        assert total_cancels == 1, (
+            f"D4: price-moved cancel path must also clear oid state; "
+            f"expected 1 cancel across repeated ticks, got {total_cancels}"
         )

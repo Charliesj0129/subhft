@@ -288,7 +288,7 @@ def test_format_orders_float_price():
         }
     ]
     cols, data = format_orders(rows)
-    assert data[0][4] > 0  # price scaled from float
+    assert data[0][5] > 0  # price scaled from float
 
 
 def test_format_orders_action_fallback():
@@ -300,8 +300,8 @@ def test_format_orders_action_fallback():
         }
     ]
     cols, data = format_orders(rows)
-    assert data[0][3] == "SELL"
-    assert data[0][5] == 5
+    assert data[0][4] == "SELL"
+    assert data[0][6] == 5
 
 
 # ---------------------------------------------------------------------------

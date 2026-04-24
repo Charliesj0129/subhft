@@ -5,6 +5,9 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import structlog
+
+logger = structlog.get_logger("alpha.gate_c")
 
 from hft_platform.alpha._param_opt import (
     _evaluate_parameter_robustness,
@@ -164,15 +167,43 @@ def run_gate_c(
         # --- Maker path: CK-direct backtest ---
         from research.backtest.cost_models import load_cost_profile
         from research.backtest.fill_models import QueueDepletionFill
-        from research.backtest.maker_engine import ClickHouseSource, MakerEngine
+        from research.backtest.maker_engine import ClickHouseSource, LatencyProfile, MakerEngine
         from research.backtest.result_store import ResultStore
+
+        from hft_platform.alpha.latency_profiles import resolve_profile
 
         ck_source = ClickHouseSource()
         ck_source.health_check()
         cost = load_cost_profile(instrument)
         qf = float(getattr(config, "queue_fraction", 0.5))
         fill_model = QueueDepletionFill(queue_fraction=qf)
-        engine = MakerEngine(fill_model=fill_model, cost_model=cost, ck_source=ck_source)
+
+        # Resolve latency_profile metadata string -> LatencyProfile injected into
+        # MakerEngine. Missing / unresolvable names fall back to instant-RTT
+        # (logged). This closes the wiring gap identified in
+        # docs/incidents/2026-04-24-r47-backtest-credibility-audit.md.
+        latency_profile_name = getattr(alpha.manifest, "latency_profile", "") or ""
+        latency_profile: LatencyProfile | None = None
+        if latency_profile_name:
+            try:
+                resolved = resolve_profile(latency_profile_name)
+                latency_profile = LatencyProfile(
+                    place_ns=int(float(resolved["submit_ack_latency_ms"]) * 1_000_000),
+                    cancel_ns=int(float(resolved["cancel_ack_latency_ms"]) * 1_000_000),
+                )
+            except (KeyError, ValueError) as exc:
+                logger.warning(
+                    "maker_gate_c: latency_profile unresolved; defaulting to instant-RTT",
+                    profile=latency_profile_name,
+                    error=str(exc),
+                )
+
+        engine = MakerEngine(
+            fill_model=fill_model,
+            cost_model=cost,
+            ck_source=ck_source,
+            latency_profile=latency_profile,
+        )
 
         maker_strategy = alpha.create_maker_strategy() if hasattr(alpha, "create_maker_strategy") else alpha
         result = engine.run(

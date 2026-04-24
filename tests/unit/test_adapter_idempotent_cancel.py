@@ -161,6 +161,26 @@ async def test_cancel_after_recent_terminal_logs_info_no_dlq(tmp_config, mock_de
 
 
 @pytest.mark.asyncio
+async def test_duplicate_cancel_for_live_target_is_noop_while_first_cancel_in_flight(tmp_config):
+    """Adapter-level invariant: duplicate CANCEL target must not hit broker twice.
+
+    This catches strategy bugs outside R47 and direct safety-intent submissions
+    that bypass BaseStrategy.cancel().
+    """
+    adapter = _make_adapter(tmp_config)
+    target_oid = "OID-live"
+    trade = MagicMock(name="trade")
+    adapter.live_orders[f"strat1:{target_oid}"] = trade
+
+    first = _make_cmd(_make_cancel_intent(intent_id=99, target_order_id=target_oid))
+    second = _make_cmd(_make_cancel_intent(intent_id=100, target_order_id=target_oid))
+
+    assert await adapter._dispatch_to_api(first) is True
+    assert await adapter._dispatch_to_api(second) is True
+    adapter.client.cancel_order.assert_called_once_with(trade)
+
+
+@pytest.mark.asyncio
 async def test_cancel_for_never_seen_order_id_still_warns_and_dlqs(tmp_config, mock_deps):
     """Negative: a CANCEL for an order_id that NEVER existed (typo, strategy bug)
     must preserve the existing WARNING + order_reject_total + DLQ behavior, and

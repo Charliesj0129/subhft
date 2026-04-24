@@ -54,6 +54,7 @@ MARKET_DATA_COLUMNS = [
 
 ORDER_COLUMNS = [
     "order_id",
+    "client_order_id",
     "strategy_id",
     "symbol",
     "side",
@@ -160,6 +161,7 @@ def _extract_order_values(row) -> list | None:
             get = row.get
             return [
                 get("order_id"),
+                get("client_order_id", ""),
                 get("strategy_id"),
                 get("symbol"),
                 get("side", get("action", "")),
@@ -173,6 +175,7 @@ def _extract_order_values(row) -> list | None:
             ]
         return [
             getattr(row, "order_id", None),
+            getattr(row, "client_order_id", ""),
             getattr(row, "strategy_id", None),
             getattr(row, "symbol", None),
             getattr(row, "side", None) or getattr(row, "action", None) or "",

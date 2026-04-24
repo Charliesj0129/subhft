@@ -1544,6 +1544,11 @@ class StrategyRunner:
                     source_ts_ns = int(event[ts_idx] or 0)
                 except (TypeError, ValueError):
                     source_ts_ns = 0
+        elif hasattr(event, "local_ts"):
+            try:
+                source_ts_ns = int(getattr(event, "local_ts") or 0)
+            except (TypeError, ValueError):
+                source_ts_ns = 0
         elif hasattr(event, "ts"):
             try:
                 source_ts_ns = int(getattr(event, "ts") or 0)

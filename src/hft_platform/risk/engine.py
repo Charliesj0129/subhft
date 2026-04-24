@@ -931,8 +931,21 @@ class RiskEngine:
 
     def create_command(self, intent: OrderIntent) -> OrderCommand:
         cmd_id = self._next_cmd_id()
-        # Set 500ms deadline from now (relaxed for Python/Docker latency)
-        deadline = time.monotonic_ns() + 500_000_000
+        mono_now_ns = time.monotonic_ns()
+        default_ttl_ns = 5_000_000_000
+        raw_ttl_ns = getattr(intent, "ttl_ns", 0)
+        ttl_ns = int(raw_ttl_ns) if isinstance(raw_ttl_ns, int | float) else 0
+
+        if ttl_ns > 0:
+            remaining_ttl_ns = ttl_ns
+            raw_timestamp_ns = getattr(intent, "timestamp_ns", 0)
+            timestamp_ns = int(raw_timestamp_ns) if isinstance(raw_timestamp_ns, int | float) else 0
+            if timestamp_ns > 0:
+                age_ns = max(0, timebase.now_ns() - timestamp_ns)
+                remaining_ttl_ns = max(1, ttl_ns - age_ns)
+            deadline = mono_now_ns + remaining_ttl_ns
+        else:
+            deadline = mono_now_ns + default_ttl_ns
 
         cmd = OrderCommand(
             cmd_id=cmd_id,

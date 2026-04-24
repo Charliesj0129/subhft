@@ -1,3 +1,4 @@
+import datetime as dt
 import importlib
 import os
 import re
@@ -19,6 +20,9 @@ from hft_platform.trade_classifier import TradeClassifier
 # Use existing implementation of SymbolMetadata.
 
 logger = get_logger("feed_adapter.normalizer")
+
+_TICK_EVENT_SUPPORTS_CONTRACT = "contract" in getattr(TickEvent, "__dataclass_fields__", {})
+_BIDASK_EVENT_SUPPORTS_CONTRACT = "contract" in getattr(BidAskEvent, "__dataclass_fields__", {})
 
 _RUST_ENABLED = os.getenv("HFT_RUST_ACCEL", "1").lower() not in {"0", "false", "no", "off"}
 _RUST_MIN_LEVELS = int(os.getenv("HFT_RUST_MIN_LEVELS", "0"))
@@ -214,11 +218,15 @@ class SymbolMetadata:
 
         import datetime as dt
 
-        from hft_platform.contracts.ref import (
-            ContractFamily,
-            FutureRef,
-            parse_display,
-        )
+        try:
+            from hft_platform.contracts.ref import (
+                ContractFamily,
+                FutureRef,
+                parse_display,
+            )
+        except ModuleNotFoundError:
+            cache[symbol] = None
+            return None
 
         base_year = dt.datetime.fromtimestamp(timebase.now_s(), dt.UTC).year
         parsed: Any
@@ -458,11 +466,56 @@ def _extract_ts_ns(ts_val: Any) -> int:
     return timebase.coerce_ns(ts_val)
 
 
+def _event_contract_kw(event_cls: type, metadata: "SymbolMetadata | None", symbol: str) -> dict[str, Any]:
+    if event_cls is TickEvent:
+        supports_contract = _TICK_EVENT_SUPPORTS_CONTRACT
+    elif event_cls is BidAskEvent:
+        supports_contract = _BIDASK_EVENT_SUPPORTS_CONTRACT
+    else:
+        supports_contract = False
+    if not supports_contract:
+        return {}
+    return {"contract": metadata.contract_ref(symbol) if metadata is not None else None}
+
+
+def _local_tz_offset_ns(now_ns: int) -> int:
+    try:
+        now_dt = dt.datetime.fromtimestamp(now_ns / 1e9, tz=timebase.TZINFO)
+        offset = timebase.TZINFO.utcoffset(now_dt)
+    except Exception:
+        return 0
+    if offset is None:
+        return 0
+    return int(offset.total_seconds() * 1e9)
+
+
+def _correct_local_tz_future_ts(exch_ts: int, now_ns: int) -> int | None:
+    offset_ns = _local_tz_offset_ns(now_ns)
+    if not offset_ns:
+        return None
+    corrected = exch_ts - offset_ns
+    if abs(corrected - now_ns) >= abs(exch_ts - now_ns):
+        return None
+    if corrected - now_ns > _TS_MAX_FUTURE_NS:
+        return None
+    return corrected
+
+
 def _clamp_future_ts(exch_ts: int, now_ns: int, topic: str, symbol: str) -> int:
     if not exch_ts or not _TS_MAX_FUTURE_NS:
         return exch_ts
     delta_ns = exch_ts - now_ns
     if delta_ns > _TS_MAX_FUTURE_NS:
+        corrected = _correct_local_tz_future_ts(exch_ts, now_ns)
+        if corrected is not None:
+            logger.debug(
+                "Exchange timestamp timezone shift corrected",
+                topic=topic,
+                symbol=symbol,
+                delta_ns=delta_ns,
+                corrected_delta_ns=corrected - now_ns,
+            )
+            return corrected
         logger.warning(
             "Exchange timestamp in future",
             topic=topic,
@@ -751,7 +804,7 @@ class MarketDataNormalizer:
                                 is_odd_lot=bool(is_odd_lot),
                                 trade_direction=_td,
                                 trade_confidence=_tc,
-                                contract=(self.metadata.contract_ref(_sym) if self.metadata is not None else None),
+                                **_event_contract_kw(TickEvent, self.metadata, _sym),
                             )
                     except Exception as exc:
                         logger.debug("rust_tick_fallback", error=str(exc))
@@ -805,7 +858,7 @@ class MarketDataNormalizer:
                 is_odd_lot=is_odd_lot,
                 trade_direction=_td,
                 trade_confidence=_tc,
-                contract=(self.metadata.contract_ref(symbol) if self.metadata is not None else None),
+                **_event_contract_kw(TickEvent, self.metadata, symbol),
             )
         except Exception as e:
             logger.error("Normalize Tick Error", error=str(e), payload_type=str(type(payload)))
@@ -910,7 +963,7 @@ class MarketDataNormalizer:
                             asks=asks_np,
                             stats=compat_stats,
                             fused_stats=fused_stats,
-                            contract=(self.metadata.contract_ref(symbol) if self.metadata is not None else None),
+                            **_event_contract_kw(BidAskEvent, self.metadata, symbol),
                         )
                 except Exception as exc:
                     # Fall through to standard path
@@ -1239,7 +1292,7 @@ class MarketDataNormalizer:
                 bids=bids_final,
                 asks=asks_final,
                 stats=event_stats,
-                contract=(self.metadata.contract_ref(symbol) if self.metadata is not None else None),
+                **_event_contract_kw(BidAskEvent, self.metadata, symbol),
             )
         except Exception as e:
             logger.error("Normalize BidAsk Error", error=str(e), payload_type=str(type(payload)))
@@ -1304,7 +1357,7 @@ class MarketDataNormalizer:
                 bids=bids,
                 asks=asks,
                 is_snapshot=True,
-                contract=(self.metadata.contract_ref(symbol) if self.metadata is not None else None),
+                **_event_contract_kw(BidAskEvent, self.metadata, symbol),
             )
 
         event = self.normalize_bidask(payload)

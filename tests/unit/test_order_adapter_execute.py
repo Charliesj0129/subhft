@@ -1,6 +1,7 @@
 """Tests for OrderAdapter.execute() rejection cascade and dispatch logic."""
 
 import asyncio
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -108,6 +109,68 @@ def adapter(tmp_config):
     return oa
 
 
+def test_order_adapter_wires_shadow_writer(tmp_config):
+    """OrderAdapter should persist shadow orders, not only log/metric them."""
+    from hft_platform.order.adapter import OrderAdapter
+    from hft_platform.order.shadow_writer import ShadowOrderWriter
+
+    q = asyncio.Queue()
+    client = MagicMock()
+    oa = OrderAdapter(
+        config_path=tmp_config,
+        order_queue=q,
+        broker_client=client,
+    )
+
+    assert isinstance(oa.shadow_sink._writer, ShadowOrderWriter)
+
+
+@pytest.mark.asyncio
+async def test_order_adapter_flushes_shadow_sink_on_stop(adapter):
+    """Pending shadow order rows should be flushed during adapter shutdown."""
+    task = asyncio.create_task(adapter.run())
+    await asyncio.sleep(0)
+
+    adapter.running = False
+    await task
+
+    adapter.shadow_sink.flush.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_pre_dispatch_deadline_expired_sends_feedback_and_dlq(adapter):
+    """Expired commands in run() must release strategy pending via deadline feedback."""
+    from hft_platform.contracts.strategy import RiskFeedback
+
+    rejection_sink = asyncio.Queue()
+    adapter.set_rejection_sink(rejection_sink)
+    cmd = make_cmd()
+    cmd.deadline_ns = time.monotonic_ns() - 1_000_000
+    adapter.order_queue.put_nowait(cmd)
+
+    task = asyncio.create_task(adapter.run())
+    await asyncio.sleep(0.05)
+    adapter.running = False
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    adapter.metrics.order_deadline_expired_total.inc.assert_called_once()
+    adapter._dlq.add.assert_awaited_once()
+    call_kwargs = adapter._dlq.add.call_args[1]
+    assert call_kwargs["reason"].value == "deadline_exceeded"
+    assert call_kwargs["error_message"] == "DEADLINE_EXPIRED"
+    assert rejection_sink.qsize() == 1
+    feedback = rejection_sink.get_nowait()
+    assert isinstance(feedback, RiskFeedback)
+    assert feedback.intent_id == cmd.intent.intent_id
+    assert feedback.side == cmd.intent.side
+    assert feedback.reason_code == "dispatch_deadline_expired"
+    assert feedback.was_approved is False
+
+
 # --- 1. Per-symbol rate limit HARD -> DLQ ---
 
 
@@ -188,6 +251,31 @@ async def test_shadow_mode_intercepts_without_dlq(adapter):
 
     adapter.shadow_sink.intercept.assert_called_once_with(cmd.intent)
     adapter._dlq.add.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_shadow_mode_sends_terminal_feedback_to_release_strategy_pending(adapter):
+    """Shadow orders are terminal at the adapter and must release strategy pending state."""
+    from hft_platform.contracts.strategy import RiskFeedback
+
+    adapter.shadow_sink.enabled = True
+    rejection_sink = asyncio.Queue()
+    adapter.set_rejection_sink(rejection_sink)
+    cmd = make_cmd()
+
+    await adapter.execute(cmd)
+
+    adapter.shadow_sink.intercept.assert_called_once_with(cmd.intent)
+    adapter.client.place_order.assert_not_called()
+    assert rejection_sink.qsize() == 1
+    feedback = rejection_sink.get_nowait()
+    assert isinstance(feedback, RiskFeedback)
+    assert feedback.intent_id == cmd.intent.intent_id
+    assert feedback.strategy_id == cmd.intent.strategy_id
+    assert feedback.symbol == cmd.intent.symbol
+    assert feedback.side == cmd.intent.side
+    assert feedback.reason_code == "shadow_intercepted"
+    assert feedback.was_approved is False
 
 
 # --- 6. Client validation failure -> DLQ ---
@@ -403,7 +491,7 @@ async def test_storm_guard_halt_rejects_to_dlq(adapter):
 
     adapter._dlq.add.assert_awaited_once()
     call_kwargs = adapter._dlq.add.call_args[1]
-    assert call_kwargs["reason"].value == "validation_error"
+    assert call_kwargs["reason"].value == "stormguard_halt"
     assert "StormGuard HALT" in call_kwargs["error_message"]
     # Confirm no other checks ran (per-symbol rate limiter never called)
     adapter.per_symbol_rate_limiter.check.assert_not_called()

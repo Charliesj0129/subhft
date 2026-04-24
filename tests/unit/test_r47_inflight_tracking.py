@@ -104,6 +104,19 @@ class TestInflightOidSet:
             "D3: fill(oA) must leave oB tracked"
         )
 
+    def test_fill_prefix_order_id_removes_registered_oid(self, strategy):
+        """Shioaji fill ordno can extend the submitted order ordno.
+
+        Live audit observed order_id ``v007o`` with fill broker_order_id
+        ``v007oW1D``. The fill must still remove the tracked submitted oid;
+        otherwise the strategy later sends stale cancels for an already-filled
+        order.
+        """
+        ctx = _ctx()
+        strategy.handle_event(ctx, _order("v007o", Side.BUY))
+        strategy.handle_event(ctx, _fill("v007oW1D", Side.BUY))
+        assert strategy._inflight_buy_oids.get("TMFE6", set()) == set()
+
     def test_gap_clears_all_inflight(self, strategy):
         ctx = _ctx()
         strategy.handle_event(ctx, _order("oA", Side.BUY))

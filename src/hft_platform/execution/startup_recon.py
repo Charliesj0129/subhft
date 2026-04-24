@@ -196,20 +196,7 @@ class StartupPositionVerifier:
     async def _fetch_broker_positions(self) -> Dict[str, int]:
         """Fetch positions from broker and return {symbol: qty} map."""
         raw_positions = await asyncio.to_thread(self.client.get_positions)
-        broker_map: Dict[str, int] = {}
-        for pos in raw_positions:
-            code = getattr(pos, "code", None) or (pos.get("code") if isinstance(pos, dict) else None)
-            qty = getattr(pos, "quantity", None) or (pos.get("quantity", 0) if isinstance(pos, dict) else 0)
-            direction = getattr(pos, "direction", "")
-            # Align with runtime reconciliation: both Action.Sell (stocks)
-            # and Short (futures) map to negative qty.
-            if str(direction) in ("Action.Sell", "Short"):
-                qty = -qty
-            if code:
-                # Accumulate (not overwrite) to handle multiple account types
-                # (stock + futopt) returning the same symbol code.
-                broker_map[code] = broker_map.get(code, 0) + int(qty)
-        return broker_map
+        return ReconciliationService._build_broker_map(raw_positions)
 
     def _build_local_map(self) -> Dict[str, int]:
         """Build {symbol: qty} map from PositionStore."""

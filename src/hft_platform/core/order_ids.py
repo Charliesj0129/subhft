@@ -50,19 +50,38 @@ class OrderIdResolver:
         return order_key
 
     def resolve_strategy_id(self, order_id: str) -> str:
-        order_key = self.normalize_order_key(self.order_id_map.get(order_id))
-        if not order_key and order_id:
-            # Prefix-match fallback: Shioaji ordno grows from "vA0G6" (order)
-            # to "vA0G671S" (fill) — the fill ordno starts with the order ordno.
-            for registered_id, mapped_key in self.order_id_map.items():
-                if registered_id and order_id.startswith(registered_id):
-                    order_key = self.normalize_order_key(mapped_key)
-                    break
+        order_key = self.resolve_order_key_candidate(order_id)
         if not order_key:
             return "UNKNOWN"
         if ":" in order_key:
             return order_key.split(":", 1)[0]
         return order_key
+
+    def resolve_order_key_candidate(self, order_id: Any) -> Optional[str]:
+        if order_id is None:
+            return None
+        order_id_str = str(order_id)
+        order_key = self.normalize_order_key(self.order_id_map.get(order_id_str))
+        if order_key:
+            return order_key
+        if order_id_str:
+            # Prefix-match fallback: Shioaji ordno grows from "vA0G6" (order)
+            # to "vA0G671S" (fill) — the fill ordno starts with the order ordno.
+            for registered_id, mapped_key in self.order_id_map.items():
+                if registered_id and order_id_str.startswith(str(registered_id)):
+                    order_key = self.normalize_order_key(mapped_key)
+                    if order_key:
+                        return order_key
+        return None
+
+    def resolve_order_key_from_candidates(self, candidates: list[str]) -> Optional[str]:
+        for candidate in candidates:
+            if not candidate:
+                continue
+            order_key = self.resolve_order_key_candidate(candidate)
+            if order_key:
+                return order_key
+        return None
 
     def resolve_strategy_id_from_candidates(self, candidates: list[str]) -> str:
         for candidate in candidates:

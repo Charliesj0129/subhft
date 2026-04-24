@@ -24,6 +24,7 @@ from hft_platform.ops.platform_degrade import get_shared_platform_degrade_contro
 from hft_platform.order.circuit_breaker import CircuitBreaker, StrategyCircuitBreakerManager
 from hft_platform.order.deadletter import DeadLetterQueue, RejectionReason, get_dlq
 from hft_platform.order.shadow import ShadowOrderSink
+from hft_platform.order.shadow_writer import ShadowOrderWriter
 
 logger = get_logger("order_adapter")
 
@@ -108,6 +109,9 @@ class OrderAdapter:
         "_mid_price_fn",
         "_storm_guard",
         "_dedup_store",
+        "_cancel_inflight_targets",
+        "_cancel_inflight_max",
+        "_cancel_inflight_ttl_s",
         "_phantom_order_keys",
         "_phantom_order_max",
         "_phantom_intents",
@@ -187,6 +191,9 @@ class OrderAdapter:
         self._recently_terminal_orders: collections.OrderedDict[str, tuple[float, str]] = collections.OrderedDict()
         self._recently_terminal_max: int = int(os.getenv("HFT_RECENT_TERMINAL_MAX", "2048"))
         self._recently_terminal_ttl_s: float = float(os.getenv("HFT_RECENT_TERMINAL_TTL_S", "60"))
+        self._cancel_inflight_targets: collections.OrderedDict[str, float] = collections.OrderedDict()
+        self._cancel_inflight_max: int = int(os.getenv("HFT_CANCEL_INFLIGHT_MAX", "2048"))
+        self._cancel_inflight_ttl_s: float = float(os.getenv("HFT_CANCEL_INFLIGHT_TTL_S", "30"))
 
         # Helpers
         self.rate_limiter = RateLimiter(soft_cap=180, hard_cap=250, window_s=10)
@@ -212,7 +219,11 @@ class OrderAdapter:
         # Per-symbol rate limiter, per-strategy circuit breaker, shadow mode
         self.per_symbol_rate_limiter = PerSymbolRateLimiter()
         self.strategy_cb_mgr = StrategyCircuitBreakerManager()
-        self.shadow_sink = ShadowOrderSink()
+        try:
+            shadow_batch_size = max(1, int(os.getenv("HFT_SHADOW_ORDER_BATCH_SIZE", "1")))
+        except ValueError:
+            shadow_batch_size = 1
+        self.shadow_sink = ShadowOrderSink(writer=ShadowOrderWriter(batch_size=shadow_batch_size))
         self.platform_degrade_controller = get_shared_platform_degrade_controller(metrics=self.metrics)
         self.position_store: Any = None
 
@@ -825,6 +836,17 @@ class OrderAdapter:
                         self.metrics.order_deadline_expired_total.inc()
                     except Exception:  # noqa: BLE001
                         pass
+                    try:
+                        self.metrics.order_reject_total.inc()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    self._dedup_release(cmd.intent.idempotency_key)
+                    await self._add_to_dlq(
+                        cmd.intent,
+                        RejectionReason.DEADLINE_EXCEEDED,
+                        "DEADLINE_EXPIRED",
+                    )
+                    self._send_dispatch_rejection(cmd.intent, "dispatch_deadline_expired")
                     self.order_queue.task_done()
                     continue
 
@@ -839,6 +861,10 @@ class OrderAdapter:
                 except (asyncio.TimeoutError, asyncio.CancelledError):
                     pass
                 self._api_worker_task = None
+            try:
+                self.shadow_sink.flush()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("shadow_sink_flush_failed", error=str(exc))
             logger.info("OrderAdapter stopped")
 
     def check_rate_limit(self) -> bool:
@@ -1040,6 +1066,7 @@ class OrderAdapter:
     def _record_recent_terminal(self, order_key: str, reason: str) -> None:
         """Bug #29: remember recently-terminal order_keys for idempotent cancel.
         Bounded LRU + TTL eviction; called next to live_orders deletion."""
+        self._clear_cancel_inflight(order_key)
         now = time.monotonic()
         self._recently_terminal_orders[order_key] = (now, reason)
         self._recently_terminal_orders.move_to_end(order_key)
@@ -1061,6 +1088,30 @@ class OrderAdapter:
             self._recently_terminal_orders.pop(order_key, None)
             return False
         return True
+
+    def _prune_cancel_inflight(self) -> None:
+        if not self._cancel_inflight_targets:
+            return
+        cutoff = time.monotonic() - self._cancel_inflight_ttl_s
+        while self._cancel_inflight_targets:
+            oldest_key = next(iter(self._cancel_inflight_targets))
+            ts = self._cancel_inflight_targets[oldest_key]
+            if ts < cutoff or len(self._cancel_inflight_targets) > self._cancel_inflight_max:
+                self._cancel_inflight_targets.popitem(last=False)
+            else:
+                break
+
+    def _is_cancel_inflight(self, target_key: str) -> bool:
+        self._prune_cancel_inflight()
+        return target_key in self._cancel_inflight_targets
+
+    def _mark_cancel_inflight(self, target_key: str) -> None:
+        self._prune_cancel_inflight()
+        self._cancel_inflight_targets[target_key] = time.monotonic()
+        self._cancel_inflight_targets.move_to_end(target_key)
+
+    def _clear_cancel_inflight(self, target_key: str) -> None:
+        self._cancel_inflight_targets.pop(target_key, None)
 
     async def on_terminal_state(self, strategy_id: str, order_id: str) -> None:
         """Called when an order reaches a terminal state (Filled, Cancelled, Rejected)."""
@@ -1379,6 +1430,7 @@ class OrderAdapter:
             if self.shadow_sink.enabled:
                 self.shadow_sink.intercept(intent)
                 self.per_symbol_rate_limiter.record(intent.symbol)
+                self._send_dispatch_rejection(intent, "shadow_intercepted", phantom_pending=False)
                 return
 
             if not self._validate_client(intent):
@@ -1612,6 +1664,7 @@ class OrderAdapter:
 
     async def _dispatch_to_api(self, cmd: OrderCommand) -> bool:
         intent = cmd.intent
+        cancel_target_key = ""
         self._emit_trace(
             "order_dispatch_start", intent, {"cmd_id": int(cmd.cmd_id), "intent_type": int(intent.intent_type)}
         )
@@ -1963,9 +2016,31 @@ class OrderAdapter:
                     and target_trade is not _PENDING_SENTINEL
                     and target_trade is not _TERMINAL_BEFORE_REGISTERED
                 ):
+                    cancel_target_key = target_key
+                    if self._is_cancel_inflight(target_key):
+                        logger.info(
+                            "cancel_already_inflight",
+                            target=target_key,
+                            strategy_id=intent.strategy_id,
+                            cmd_id=int(cmd.cmd_id),
+                        )
+                        self._audit_log_order(
+                            {
+                                "event": "cancel_no_op_already_inflight",
+                                "intent_type": "CANCEL",
+                                "order_key": f"{intent.strategy_id}:{intent.intent_id}",
+                                "target_key": target_key,
+                                "symbol": intent.symbol,
+                                "strategy_id": intent.strategy_id,
+                                "cmd_id": int(cmd.cmd_id),
+                            }
+                        )
+                        return True
+                    self._mark_cancel_inflight(target_key)
                     logger.info("Canceling Order", target=target_key)
                     result = await self._call_api("cancel_order", self.client.cancel_order, target_trade, intent=intent)
                     if result is None or result is _GUARD_TIMEOUT:
+                        self._clear_cancel_inflight(target_key)
                         return False
                     self.metrics.order_actions_total.labels(type="cancel").inc()
                     self.rate_limiter.record()
@@ -2097,6 +2172,8 @@ class OrderAdapter:
                 }
             )
             # Clean up sentinel to prevent permanent slot occupation (D2 rollback)
+            if cancel_target_key:
+                self._clear_cancel_inflight(cancel_target_key)
             async with self._live_orders_lock:
                 if order_key in self.live_orders and self.live_orders.get(order_key) is _PENDING_SENTINEL:
                     del self.live_orders[order_key]

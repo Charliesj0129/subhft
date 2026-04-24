@@ -673,6 +673,37 @@ class ShioajiClient:
         with open(self.config_path, "r") as f:
             data = yaml.safe_load(f) or {}
             self.symbols = data.get("symbols", [])
+            symbols_filter = {code.strip() for code in os.getenv("HFT_SYMBOLS", "").split(",") if code.strip()}
+            if symbols_filter:
+                before_count = len(self.symbols)
+                configured_codes = {str(s.get("code")) for s in self.symbols if s.get("code")}
+                expanded_filter = set(symbols_filter)
+                for code in symbols_filter:
+                    if len(code) >= 4 and code.endswith(("R1", "R2")):
+                        root = code[:-2].lower()
+                        month_tag = "front_month" if code.endswith("R1") else "far_month"
+                        for sym in self.symbols:
+                            tags = {str(tag).lower() for tag in sym.get("tags", [])}
+                            product_type = str(sym.get("product_type") or sym.get("type") or "").lower()
+                            if (
+                                product_type == "future"
+                                and root in tags
+                                and month_tag in tags
+                                and sym.get("code")
+                            ):
+                                expanded_filter.add(str(sym["code"]))
+                filtered = [s for s in self.symbols if str(s.get("code", "")) in expanded_filter]
+                if filtered:
+                    self.symbols = filtered
+                missing = sorted(symbols_filter - configured_codes)
+                logger.info(
+                    "HFT_SYMBOLS filter applied",
+                    requested=sorted(symbols_filter),
+                    expanded=sorted(expanded_filter),
+                    before=before_count,
+                    after=len(self.symbols),
+                    missing=missing,
+                )
             if len(self.symbols) > self.MAX_SUBSCRIPTIONS:
                 if os.getenv("HFT_ALLOW_TRUNCATE_SUBSCRIPTIONS") == "1":
                     logger.warning(

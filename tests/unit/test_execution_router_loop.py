@@ -757,3 +757,41 @@ async def test_dlq_retry_enriches_fill_with_tca_prices(
     # TCA prices should be enriched on the fill
     assert fake_fill.decision_price == 5_000_000
     assert fake_fill.arrival_price == 5_010_000
+
+
+@pytest.mark.asyncio
+async def test_fill_enrichment_uses_prefix_matched_order_key(bus: MagicMock, position_store: MagicMock) -> None:
+    """Broker fills can extend order IDs; enrichment must still resolve the original order_key."""
+    q: asyncio.Queue = asyncio.Queue()
+    order_id_map: dict[str, str] = {"ORD001": "strat1:42"}
+    cmd_created_ns_map: dict[str, int] = {"strat1:42": 1_000_000_000}
+    cmd_tca_map: dict[str, tuple[int, int]] = {"strat1:42": (5_000_000, 5_010_000)}
+    handler = MagicMock()
+    router = ExecutionRouter(
+        bus,
+        q,
+        order_id_map,
+        position_store,
+        handler,
+        cmd_created_ns_map=cmd_created_ns_map,
+        cmd_tca_map=cmd_tca_map,
+    )
+
+    raw = _make_deal_raw(order_id="ORD001-A", strategy_id="strat1", ingest_ts_ns=1_005_000_000)
+    await router.raw_queue.put(raw)
+
+    task = asyncio.create_task(router.run())
+    await router.raw_queue.join()
+    router.running = False
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    published = bus.publish_many_nowait.call_args[0][0]
+    fill = published[1]
+    assert fill.client_order_id == "strat1:42"
+    assert fill.decision_price == 5_000_000
+    assert fill.arrival_price == 5_010_000
+    router.metrics.e2e_order_latency_ns.observe.assert_called_once_with(5_000_000)

@@ -528,6 +528,24 @@ class DailyLossLimitValidator(RiskValidator):
                 self.soft_limit_active = False
                 self._soft_limit_cooldown_until_ns = 0
             else:
+                current_pos: int | None = None
+                if self._position_provider is not None:
+                    try:
+                        current_pos = self._current_position(intent.symbol, intent.strategy_id)
+                    except Exception:  # noqa: BLE001 — fail closed if position lookup breaks
+                        current_pos = None
+                # Bug #39: maker-style strategies can deadlock in SOFT_LIMIT when
+                # flat because no intent qualifies as reduce-only, so PnL never
+                # moves and recovery_loss never improves. After the cooldown
+                # expires, allow new orders again only while flat. Once exposed,
+                # the existing SOFT_LIMIT reduce-only behavior still applies.
+                if current_pos == 0 and now_ns >= self._soft_limit_cooldown_until_ns:
+                    logger.info(
+                        "DailyLossLimitValidator: soft limit flat cooldown bypass",
+                        strategy_id=intent.strategy_id,
+                        total_pnl=total_pnl,
+                    )
+                    return True, "SOFT_LIMIT_FLAT_COOLDOWN_BYPASS"
                 return False, f"SOFT_LIMIT: loss={-total_pnl} >= threshold={self._soft_limit_threshold_scaled}"
 
         # g. Peak drawdown check (before total_pnl >= 0 guard to handle positive-peak scenarios)

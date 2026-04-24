@@ -165,6 +165,22 @@ class TestApplyUpdate:
         finally:
             mod._LOCAL_TS_ENABLED = old
 
+    def test_get_stats_propagates_local_ts(self):
+        import hft_platform.feed_adapter.lob_engine as mod
+
+        old = mod._LOCAL_TS_ENABLED
+        mod._LOCAL_TS_ENABLED = True
+        try:
+            bs = BookState("2330")
+            bs._rust_state = None
+            bids = np.array([[1000000, 10]], dtype=np.int64)
+            asks = np.array([[1010000, 5]], dtype=np.int64)
+            bs.apply_update(bids, asks, 100)
+            stats = bs.get_stats()
+            assert stats.local_ts == bs.local_ts
+        finally:
+            mod._LOCAL_TS_ENABLED = old
+
     def test_numpy_float64_coerced(self):
         """Float64 arrays should be coerced to int64."""
         bs = BookState("2330")

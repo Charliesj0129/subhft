@@ -173,6 +173,7 @@ def map_event_to_record(
             latency_us = max(0, int((event.ingest_ts_ns - event.broker_ts_ns) / 1000))
         order_record: Dict[str, Any] = {
             "order_id": event.order_id,
+            "client_order_id": event.client_order_id,
             "strategy_id": event.strategy_id,
             "symbol": symbol,
             "side": str(event.side.name if hasattr(event.side, "name") else event.side),
@@ -191,7 +192,7 @@ def map_event_to_record(
         fill_record: Dict[str, Any] = {
             "ts_exchange": int(event.match_ts_ns),
             "ts_local": int(event.ingest_ts_ns),
-            "client_order_id": "",
+            "client_order_id": event.client_order_id,
             "broker_order_id": event.order_id,
             "fill_id": event.fill_id,
             "strategy_id": event.strategy_id,

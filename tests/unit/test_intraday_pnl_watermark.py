@@ -1,5 +1,7 @@
 """Tests for DailyLossLimitValidator intraday watermark extensions."""
 
+from types import SimpleNamespace
+
 from hft_platform.contracts.strategy import IntentType, OrderIntent, Side
 from hft_platform.risk.validators import DailyLossLimitValidator
 
@@ -107,6 +109,48 @@ class TestSoftLimit:
         v.check(_make_intent())  # re-triggers
         assert v.soft_limit_active is True
         assert v._soft_limit_cooldown_until_ns > 0
+
+    def test_soft_limit_allows_flat_strategy_after_cooldown_without_pnl_recovery(self):
+        """Bug #39: flat strategies must not deadlock forever under SOFT_LIMIT."""
+        position_state = SimpleNamespace(net=0)
+
+        def _provider(symbol, strategy_id):
+            return position_state.net
+
+        v = DailyLossLimitValidator(_make_validator().config, None, position_provider=_provider)
+        v.record_pnl("TEST", -550_000)
+
+        ok, reason = v.check(_make_intent())
+        assert ok is False
+        assert "SOFT_LIMIT" in reason
+        assert v.soft_limit_active is True
+
+        v._soft_limit_cooldown_until_ns = 0
+        ok, reason = v.check(_make_intent())
+        assert ok is True
+        assert reason == "SOFT_LIMIT_FLAT_COOLDOWN_BYPASS"
+        assert v.soft_limit_active is True
+
+    def test_soft_limit_flat_cooldown_bypass_does_not_allow_readding_after_fill(self):
+        """Cooldown escape is only for flat state; once exposed, SOFT_LIMIT still binds."""
+        position_state = SimpleNamespace(net=0)
+
+        def _provider(symbol, strategy_id):
+            return position_state.net
+
+        v = DailyLossLimitValidator(_make_validator().config, None, position_provider=_provider)
+        v.record_pnl("TEST", -550_000)
+        v.check(_make_intent())  # trigger soft limit
+
+        v._soft_limit_cooldown_until_ns = 0
+        ok, reason = v.check(_make_intent())
+        assert ok is True
+        assert reason == "SOFT_LIMIT_FLAT_COOLDOWN_BYPASS"
+
+        position_state.net = 1
+        ok, reason = v.check(_make_intent(side=Side.BUY))
+        assert ok is False
+        assert "SOFT_LIMIT" in reason
 
 
 class TestPeakDrawdown:

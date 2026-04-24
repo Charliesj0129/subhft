@@ -119,6 +119,8 @@ class LOBStatsEvent:
     normalizer_seq: int = 0
     # Backtest-only: trades that occurred during elapse interval (None in live)
     last_trades: object = None
+    # Ingestion timestamp at the local process boundary.
+    local_ts: int = 0
 
     def __post_init__(self) -> None:
         # Compute integer fields if not provided (object.__setattr__ for frozen dataclass)

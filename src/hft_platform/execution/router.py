@@ -255,6 +255,15 @@ class ExecutionRouter:
                 new_ids=[i for i in ids if i not in resolver.order_id_map or resolver.order_id_map.get(i) == order_key],
             )
 
+    def _resolve_order_key_for_fill(self, fill: Any) -> str | None:
+        client_order_id = str(getattr(fill, "client_order_id", "") or "")
+        if client_order_id:
+            return client_order_id
+        order_id = str(getattr(fill, "order_id", "") or "")
+        if not order_id:
+            return None
+        return self.normalizer.order_id_resolver.resolve_order_key_candidate(order_id)
+
     async def run(self) -> None:
         self.running = True
         logger.info("ExecutionRouter started")
@@ -400,7 +409,7 @@ class ExecutionRouter:
                                 continue
 
                         # Observe e2e order-to-fill latency (SLO-2)
-                        _order_key = self._order_id_map.get(fill_event.order_id)
+                        _order_key = self._resolve_order_key_for_fill(fill_event)
                         if _order_key is not None:
                             _cmd_created_ns = self._cmd_created_ns_map.get(_order_key, 0)
                             if _cmd_created_ns > 0:
@@ -410,6 +419,7 @@ class ExecutionRouter:
 
                         # TCA: enrich FillEvent with decision/arrival prices
                         if _order_key is not None:
+                            fill_event.client_order_id = _order_key
                             _tca = self._cmd_tca_map.get(_order_key)
                             if _tca is not None:
                                 fill_event.decision_price = _tca[0]
@@ -750,8 +760,9 @@ class ExecutionRouter:
                     continue
                 self._register_fill_dedup_key(_dedup_key)
                 # TCA enrichment for DLQ-resolved fills (M4)
-                _order_key = self._order_id_map.get(fill.order_id)
+                _order_key = self._resolve_order_key_for_fill(fill)
                 if _order_key is not None:
+                    fill.client_order_id = _order_key
                     _tca = self._cmd_tca_map.get(_order_key)
                     if _tca is not None:
                         fill.decision_price = _tca[0]

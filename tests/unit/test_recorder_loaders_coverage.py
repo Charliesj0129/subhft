@@ -214,7 +214,7 @@ class TestFormatOrdersEdgeCases:
     def test_missing_price_defaults_to_zero(self) -> None:
         rows = [{"order_id": "O1"}]
         cols, data = format_orders(rows)
-        assert data[0][4] == 0
+        assert data[0][5] == 0
 
     def test_instrument_fields(self) -> None:
         rows = [
@@ -225,8 +225,8 @@ class TestFormatOrdersEdgeCases:
             }
         ]
         cols, data = format_orders(rows)
-        assert data[0][9] == "future"
-        assert data[0][10] == "open"
+        assert data[0][10] == "future"
+        assert data[0][11] == "open"
 
 
 class TestFormatTradesEdgeCases:

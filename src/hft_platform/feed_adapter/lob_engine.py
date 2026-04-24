@@ -325,6 +325,7 @@ class BookState:
                 bid_depth=int(self.bid_depth_total),
                 ask_depth=int(self.ask_depth_total),
                 normalizer_seq=self.normalizer_seq,
+                local_ts=self.local_ts,
             )
 
     def get_stats_tuple(self) -> tuple:

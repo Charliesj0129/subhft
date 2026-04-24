@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import builtins
 from pathlib import Path
 
 import pytest
@@ -57,6 +58,21 @@ class TestSymbolMetadataContractRef:
         assert metadata.contract_ref("GARBAGE-SYMBOL-??") is None
         assert metadata.contract_ref("!!!") is None
 
+    def test_missing_contract_module_returns_none(self, metadata: SymbolMetadata, monkeypatch: pytest.MonkeyPatch) -> None:
+        real_import = builtins.__import__
+
+        def fake_import(name: str, *args, **kwargs):
+            if name == "hft_platform.contracts.ref":
+                raise ModuleNotFoundError("No module named 'hft_platform.contracts.ref'")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", fake_import)
+        cache = getattr(metadata, "_contract_ref_cache", None)
+        if cache is not None:
+            cache.clear()
+
+        assert metadata.contract_ref("TMFE6") is None
+
     def test_cache_hit_returns_same_object(self, metadata: SymbolMetadata) -> None:
         first = metadata.contract_ref("TMFE6")
         second = metadata.contract_ref("TMFE6")
@@ -84,6 +100,19 @@ class TestNormalizerFillsContract:
             "volume": 1,
         }
         event = norm.normalize_tick(payload)
+        assert event is not None
+        assert event.contract is None
+
+    def test_tick_event_skips_contract_for_legacy_event_class(
+        self, metadata: SymbolMetadata, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import hft_platform.feed_adapter.normalizer as mod
+
+        monkeypatch.setattr(mod, "_TICK_EVENT_SUPPORTS_CONTRACT", False)
+        norm = MarketDataNormalizer(metadata=metadata)
+
+        event = norm.normalize_tick({"code": "TMFE6", "close": 100.0, "volume": 1})
+
         assert event is not None
         assert event.contract is None
 

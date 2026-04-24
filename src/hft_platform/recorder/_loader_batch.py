@@ -183,6 +183,7 @@ def format_market_data(
 
 _ORDERS_COLS: list[str] = [
     "order_id",
+    "client_order_id",
     "strategy_id",
     "symbol",
     "side",
@@ -211,6 +212,7 @@ def format_orders(
 
         row_data = [
             str(r.get("order_id", "")),
+            str(r.get("client_order_id", "")),
             str(r.get("strategy_id", "")),
             str(r.get("symbol", "")),
             str(r.get("side", r.get("action", ""))),

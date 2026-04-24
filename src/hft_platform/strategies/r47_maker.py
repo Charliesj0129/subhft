@@ -611,11 +611,11 @@ class R47MakerStrategy(SimpleMarketMaker):
             # F2: fill consumed the resting order — clear active tracking
             self._active_buy_oid.pop(sym, None)
             # D3: remove this oid from in-flight set (other oids still tracked)
-            self._inflight_buy_oids.get(sym, set()).discard(event.order_id)
+            self._discard_inflight_oid(sym, Side.BUY, event.order_id)
         else:
             self._pending_sell[sym] = max(0, self._pending_sell.get(sym, 0) - event.qty)
             self._active_sell_oid.pop(sym, None)
-            self._inflight_sell_oids.get(sym, set()).discard(event.order_id)
+            self._discard_inflight_oid(sym, Side.SELL, event.order_id)
         # Bug 9 defense: clear cooldown so re-quoting resumes after fill
         if self._pending_buy.get(sym, 0) == 0 and self._pending_sell.get(sym, 0) == 0:
             self._last_quote_ns.pop(sym, None)
@@ -637,17 +637,11 @@ class R47MakerStrategy(SimpleMarketMaker):
             if event.side == Side.BUY:
                 self._active_buy_oid[sym] = event.order_id
                 self._inflight_buy_oids.setdefault(sym, set()).add(event.order_id)  # D3
-                if self._metric_inflight_oids is not None:
-                    self._metric_inflight_oids.labels(strategy=self.strategy_id, side="BUY").set(
-                        len(self._inflight_buy_oids[sym])
-                    )
+                self._set_inflight_metric(sym, Side.BUY)
             else:
                 self._active_sell_oid[sym] = event.order_id
                 self._inflight_sell_oids.setdefault(sym, set()).add(event.order_id)  # D3
-                if self._metric_inflight_oids is not None:
-                    self._metric_inflight_oids.labels(strategy=self.strategy_id, side="SELL").set(
-                        len(self._inflight_sell_oids[sym])
-                    )
+                self._set_inflight_metric(sym, Side.SELL)
             return
         if event.status not in (OrderStatus.CANCELLED, OrderStatus.FAILED):
             return
@@ -655,11 +649,11 @@ class R47MakerStrategy(SimpleMarketMaker):
         if event.side == Side.BUY:
             if self._active_buy_oid.get(sym) == event.order_id:
                 del self._active_buy_oid[sym]
-            self._inflight_buy_oids.get(sym, set()).discard(event.order_id)  # D3
+            self._discard_inflight_oid(sym, Side.BUY, event.order_id)  # D3
         else:
             if self._active_sell_oid.get(sym) == event.order_id:
                 del self._active_sell_oid[sym]
-            self._inflight_sell_oids.get(sym, set()).discard(event.order_id)  # D3
+            self._discard_inflight_oid(sym, Side.SELL, event.order_id)  # D3
         # DEC2-002: remaining_qty=0 means fully filled before cancel arrived.
         # Decrement by 0 (no-op) — the fill already decremented pending.
         remaining = max(0, event.remaining_qty)
@@ -775,6 +769,74 @@ class R47MakerStrategy(SimpleMarketMaker):
                 logger.info("r47_local_pos_seeded", symbol=symbol, pos=ctx_pos, source="ctx")
         return self._local_pos.get(symbol, 0)
 
+    def _inflight_oids_for_side(self, symbol: str, side: Side) -> set[str]:
+        return (
+            self._inflight_buy_oids.setdefault(symbol, set())
+            if side == Side.BUY
+            else self._inflight_sell_oids.setdefault(symbol, set())
+        )
+
+    def _set_inflight_metric(self, symbol: str, side: Side) -> None:
+        if self._metric_inflight_oids is None:
+            return
+        inflight = self._inflight_oids_for_side(symbol, side)
+        self._metric_inflight_oids.labels(strategy=self.strategy_id, side=side.name).set(len(inflight))
+
+    def _discard_inflight_oid(self, symbol: str, side: Side, order_id: str) -> None:
+        """Remove exact or Shioaji prefix-expanded oid from D3 inflight state."""
+        if not order_id:
+            return
+        inflight = self._inflight_oids_for_side(symbol, side)
+        if order_id in inflight:
+            inflight.discard(order_id)
+        else:
+            for oid in tuple(inflight):
+                if order_id.startswith(oid) or oid.startswith(order_id):
+                    inflight.discard(oid)
+        self._set_inflight_metric(symbol, side)
+
+    def _cancel_tracked_side(
+        self,
+        symbol: str,
+        side: Side,
+        *,
+        count_stale_metric: bool = False,
+        clear_last_quote: bool = False,
+    ) -> int:
+        """Cancel all known oids for one side and clear local oid state.
+
+        This keeps the D1 stale reconciler and the legacy price-moved
+        cancel-before-requote path behaviorally identical: after dispatching a
+        cancel, the same oid is no longer eligible for duplicate cancel intents
+        while the broker terminal callback is still in flight.
+        """
+        inflight = self._inflight_oids_for_side(symbol, side)
+        targets = set(inflight)
+        if side == Side.BUY:
+            primary = self._active_buy_oid.pop(symbol, None)
+        else:
+            primary = self._active_sell_oid.pop(symbol, None)
+        if primary:
+            targets.add(primary)
+        if not targets:
+            return 0
+
+        for oid in sorted(targets):
+            self.cancel(symbol, oid)
+            if count_stale_metric:
+                self._stale_cancels += 1
+                if self._metric_stale_cancels is not None:
+                    self._metric_stale_cancels.labels(strategy=self.strategy_id, side=side.name).inc()
+
+        inflight.clear()
+        self._set_inflight_metric(symbol, side)
+        if clear_last_quote:
+            if side == Side.BUY:
+                self._last_bid.pop(symbol, None)
+            else:
+                self._last_ask.pop(symbol, None)
+        return len(targets)
+
     def _reconcile_stale_quotes(self, event: LOBStatsEvent) -> None:
         """D1 (2026-04-21 incident fix): cancel active orders whose last quoted
         price is too far from current mid in EITHER direction.
@@ -804,35 +866,11 @@ class R47MakerStrategy(SimpleMarketMaker):
 
         last_bid = self._last_bid.get(exec_sym)
         if last_bid is not None and last_bid > 0 and abs(mid_scaled - last_bid) > max_dist:
-            # D3: cancel union of {single-slot oid, in-flight set}. Production
-            # code populates both via on_order; tests sometimes seed only one.
-            targets = set(self._inflight_buy_oids.get(exec_sym, set()))
-            primary = self._active_buy_oid.pop(exec_sym, None)
-            if primary:
-                targets.add(primary)
-            if targets:
-                for oid in list(targets):
-                    self.cancel(exec_sym, oid)
-                    self._stale_cancels += 1
-                    if self._metric_stale_cancels is not None:
-                        self._metric_stale_cancels.labels(strategy=self.strategy_id, side="BUY").inc()
-                self._inflight_buy_oids.get(exec_sym, set()).clear()
-                self._last_bid.pop(exec_sym, None)
+            self._cancel_tracked_side(exec_sym, Side.BUY, count_stale_metric=True, clear_last_quote=True)
 
         last_ask = self._last_ask.get(exec_sym)
         if last_ask is not None and last_ask > 0 and abs(last_ask - mid_scaled) > max_dist:
-            targets = set(self._inflight_sell_oids.get(exec_sym, set()))
-            primary = self._active_sell_oid.pop(exec_sym, None)
-            if primary:
-                targets.add(primary)
-            if targets:
-                for oid in list(targets):
-                    self.cancel(exec_sym, oid)
-                    self._stale_cancels += 1
-                    if self._metric_stale_cancels is not None:
-                        self._metric_stale_cancels.labels(strategy=self.strategy_id, side="SELL").inc()
-                self._inflight_sell_oids.get(exec_sym, set()).clear()
-                self._last_ask.pop(exec_sym, None)
+            self._cancel_tracked_side(exec_sym, Side.SELL, count_stale_metric=True, clear_last_quote=True)
 
     def on_stats(self, event: LOBStatsEvent) -> None:
         """Main quoting logic with 3-layer gating."""
@@ -947,13 +985,9 @@ class R47MakerStrategy(SimpleMarketMaker):
 
         # F2: Cancel stale ROD before requoting at new price to prevent stacking.
         if bid_moved:
-            old_buy_oid = self._active_buy_oid.get(exec_sym)
-            if old_buy_oid:
-                self.cancel(exec_sym, old_buy_oid)
+            self._cancel_tracked_side(exec_sym, Side.BUY)
         if ask_moved:
-            old_sell_oid = self._active_sell_oid.get(exec_sym)
-            if old_sell_oid:
-                self.cancel(exec_sym, old_sell_oid)
+            self._cancel_tracked_side(exec_sym, Side.SELL)
 
         quoted = False
         if can_buy and not self._suppress_bid and bid_moved:
