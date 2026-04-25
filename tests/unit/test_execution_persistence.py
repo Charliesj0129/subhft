@@ -240,6 +240,7 @@ class TestOrderIdMapPersistence:
     """Verify order_id_map survives process restart."""
 
     def _make_adapter(self, tmp_path, pre_seed=None):
+        from hft_platform.core import timebase
         from hft_platform.order.adapter import OrderAdapter
 
         persist_path = str(tmp_path / "oid_map.jsonl")
@@ -248,9 +249,15 @@ class TestOrderIdMapPersistence:
             import orjson
 
             os.makedirs(os.path.dirname(persist_path), exist_ok=True)
+            now_ns = timebase.now_ns()
             with open(persist_path, "wb") as f:
+                # H3: pre-seed with the new schema (k, v, t_ns, s) so the
+                # loader does not drop entries as legacy/stale.
                 for k, v in pre_seed.items():
-                    f.write(orjson.dumps({"k": k, "v": v}) + b"\n")
+                    f.write(
+                        orjson.dumps({"k": k, "v": v, "t_ns": now_ns, "s": "live"})
+                        + b"\n"
+                    )
 
         with patch.dict(os.environ, {"HFT_ORDER_ID_MAP_PERSIST_PATH": persist_path}):
             adapter = OrderAdapter(
@@ -273,7 +280,14 @@ class TestOrderIdMapPersistence:
         with open(path, "rb") as f:
             rows = [orjson.loads(line.strip()) for line in f if line.strip()]
         assert len(rows) == 2
-        assert rows[0] == {"k": "broker_123", "v": "strat_a:intent_1"}
+        # H3: every persisted row carries t_ns + state. The defensive branch
+        # in persist_order_id_map() stamps an unmetered entry as live with
+        # the current timestamp so downstream load can apply TTL filtering.
+        first = rows[0]
+        assert first["k"] == "broker_123"
+        assert first["v"] == "strat_a:intent_1"
+        assert first["s"] == "live"
+        assert isinstance(first["t_ns"], int) and first["t_ns"] > 0
 
     def test_load_restores_mappings(self, tmp_path):
         pre_seed = {"bid_1": "s1:i1", "bid_2": "s2:i2"}

@@ -87,13 +87,17 @@ def _make_adapter(tmp_config: str):
 
 
 def test_load_order_id_map_reads_jsonl_file(tmp_path, tmp_config):
-    """_load_order_id_map parses valid JSONL and populates order_id_map."""
+    """_load_order_id_map parses valid JSONL (H3 schema: k, v, t_ns, s)
+    and populates order_id_map."""
     import orjson
 
+    from hft_platform.core import timebase
+
     map_path = tmp_path / "oid_map.jsonl"
+    now_ns = timebase.now_ns()
     lines = [
-        orjson.dumps({"k": "TOKEN1", "v": "strat1:100"}) + b"\n",
-        orjson.dumps({"k": "TOKEN2", "v": "strat2:200"}) + b"\n",
+        orjson.dumps({"k": "TOKEN1", "v": "strat1:100", "t_ns": now_ns, "s": "live"}) + b"\n",
+        orjson.dumps({"k": "TOKEN2", "v": "strat2:200", "t_ns": now_ns, "s": "live"}) + b"\n",
     ]
     map_path.write_bytes(b"".join(lines))
 
@@ -105,11 +109,19 @@ def test_load_order_id_map_reads_jsonl_file(tmp_path, tmp_config):
 
 
 def test_load_order_id_map_skips_blank_lines(tmp_path, tmp_config):
-    """_load_order_id_map silently skips empty lines in the JSONL file."""
+    """_load_order_id_map silently skips empty lines in the JSONL file
+    (H3 schema)."""
     import orjson
 
+    from hft_platform.core import timebase
+
     map_path = tmp_path / "oid_map.jsonl"
-    content = b"\n" + orjson.dumps({"k": "K1", "v": "V1"}) + b"\n\n"
+    now_ns = timebase.now_ns()
+    content = (
+        b"\n"
+        + orjson.dumps({"k": "K1", "v": "V1", "t_ns": now_ns, "s": "live"})
+        + b"\n\n"
+    )
     map_path.write_bytes(content)
 
     with patch.dict(os.environ, {"HFT_ORDER_ID_MAP_PERSIST_PATH": str(map_path)}):
@@ -119,11 +131,20 @@ def test_load_order_id_map_skips_blank_lines(tmp_path, tmp_config):
 
 
 def test_load_order_id_map_skips_malformed_entries(tmp_path, tmp_config):
-    """_load_order_id_map silently skips lines that are not valid JSON."""
+    """_load_order_id_map silently skips malformed lines and pre-H3 entries
+    that lack t_ns/s metadata (legacy schema dropped to prevent ABA)."""
     import orjson
 
+    from hft_platform.core import timebase
+
     map_path = tmp_path / "oid_map.jsonl"
-    content = b"not-valid-json\n" + orjson.dumps({"k": "GOOD", "v": "strat:1"}) + b"\n" + b'{"missing_v": true}\n'
+    now_ns = timebase.now_ns()
+    content = (
+        b"not-valid-json\n"
+        + orjson.dumps({"k": "GOOD", "v": "strat:1", "t_ns": now_ns, "s": "live"})
+        + b"\n"
+        + b'{"missing_v": true}\n'
+    )
     map_path.write_bytes(content)
 
     with patch.dict(os.environ, {"HFT_ORDER_ID_MAP_PERSIST_PATH": str(map_path)}):
@@ -135,12 +156,19 @@ def test_load_order_id_map_skips_malformed_entries(tmp_path, tmp_config):
 
 
 def test_load_order_id_map_enforces_max_size(tmp_path, tmp_config):
-    """_load_order_id_map evicts oldest entries when max size is exceeded."""
+    """_load_order_id_map evicts oldest entries when max size is exceeded
+    (H3 schema)."""
     import orjson
 
+    from hft_platform.core import timebase
+
     map_path = tmp_path / "oid_map.jsonl"
+    now_ns = timebase.now_ns()
     # Write 5 entries but cap max size at 3
-    lines = [orjson.dumps({"k": f"K{i}", "v": f"V{i}"}) + b"\n" for i in range(5)]
+    lines = [
+        orjson.dumps({"k": f"K{i}", "v": f"V{i}", "t_ns": now_ns, "s": "live"}) + b"\n"
+        for i in range(5)
+    ]
     map_path.write_bytes(b"".join(lines))
 
     with patch.dict(

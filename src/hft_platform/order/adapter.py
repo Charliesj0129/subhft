@@ -1070,6 +1070,22 @@ class OrderAdapter:
     # the helpers without deadlocking. Each call emits a ``debug`` log with
     # the ``source=`` argument for forensic tracing of the mutation site.
 
+    def _get_order_id_meta(self) -> dict[str, tuple[int, str]]:
+        """H3: lazy accessor for the metadata sidecar.
+
+        Tests construct OrderAdapter via ``__new__`` and seed only the
+        slots they exercise. ``_order_id_meta`` may not be present on
+        those skeleton instances, so every helper that touches the
+        sidecar goes through this accessor which auto-initialises on
+        first use. ``getattr`` guard keeps the production path
+        zero-overhead.
+        """
+        meta = getattr(self, "_order_id_meta", None)
+        if meta is None:
+            meta = {}
+            self._order_id_meta = meta
+        return meta
+
     def _set_order_id_mapping(
         self,
         token: str,
@@ -1090,9 +1106,10 @@ class OrderAdapter:
         registration with downstream order_key resolution failures.
         """
         ts_ns = int(created_ns) if created_ns is not None else timebase.now_ns()
+        meta = self._get_order_id_meta()
         with self._order_id_map_lock:
             self.order_id_map[token] = order_key
-            self._order_id_meta[token] = (ts_ns, state)
+            meta[token] = (ts_ns, state)
         logger.debug(
             "order_id_map_set",
             token=token,
@@ -1109,9 +1126,10 @@ class OrderAdapter:
         delete with ``source=`` for the same forensic reasons as the setter.
         H3: also drops the metadata sidecar entry.
         """
+        meta = self._get_order_id_meta()
         with self._order_id_map_lock:
             prior = self.order_id_map.pop(token, None)
-            self._order_id_meta.pop(token, None)
+            meta.pop(token, None)
         logger.debug("order_id_map_del", token=token, prior=prior, source=source)
         return prior
 
@@ -1124,16 +1142,17 @@ class OrderAdapter:
         is the ABA window the broker exploits when it re-uses a numeric id.
         Returns the number of entries marked. Idempotent.
         """
+        meta = self._get_order_id_meta()
         marked = 0
         with self._order_id_map_lock:
             for token, mapped in list(self.order_id_map.items()):
                 if mapped != order_key:
                     continue
-                meta = self._order_id_meta.get(token)
-                if meta is None:
-                    self._order_id_meta[token] = (timebase.now_ns(), "terminal")
+                prior = meta.get(token)
+                if prior is None:
+                    meta[token] = (timebase.now_ns(), "terminal")
                 else:
-                    self._order_id_meta[token] = (meta[0], "terminal")
+                    meta[token] = (prior[0], "terminal")
                 marked += 1
         if marked:
             logger.debug(
@@ -1144,7 +1163,21 @@ class OrderAdapter:
         return marked
 
     def _load_order_id_map(self) -> None:
-        """Load order_id_map from disk on startup (restart-safe strategy resolution)."""
+        """Load order_id_map from disk on startup (restart-safe strategy resolution).
+
+        H3: supports two schemas:
+
+        * Old ``{k, v}`` — pre-H3 format. Treated as terminal-stale and
+          dropped on first load. Old persisted state is inherently stale
+          (no creation timestamp, no terminal-state tracking); resurrecting
+          it can revive a (broker_id -> order_key) binding whose underlying
+          order is long gone, which is the ABA attack vector the new
+          schema closes.
+        * New ``{k, v, t_ns, s}`` — H3 format. Filters entries where
+          ``s == "terminal"`` or ``now_ns - t_ns > _order_id_map_ttl_ns``.
+          Surviving entries are inserted with their persisted ``t_ns`` so
+          their age clock continues across the restart.
+        """
         path = self._order_id_map_persist_path
         if not os.path.exists(path):
             return
@@ -1152,6 +1185,11 @@ class OrderAdapter:
             import orjson
 
             loaded = 0
+            skipped_terminal = 0
+            skipped_ttl = 0
+            skipped_legacy = 0
+            now_ns = timebase.now_ns()
+            ttl_ns = getattr(self, "_order_id_map_ttl_ns", 86400 * 1_000_000_000)
             with open(path, "rb") as f:
                 for raw in f:
                     raw = raw.strip()
@@ -1159,18 +1197,54 @@ class OrderAdapter:
                         continue
                     try:
                         obj = orjson.loads(raw)
-                        if isinstance(obj, dict) and "k" in obj and "v" in obj:
-                            self._set_order_id_mapping(
-                                str(obj["k"]), str(obj["v"]), source="persisted_load"
-                            )
-                            loaded += 1
                     except Exception:
                         continue
+                    if not (isinstance(obj, dict) and "k" in obj and "v" in obj):
+                        continue
+                    token = str(obj["k"])
+                    order_key = str(obj["v"])
+                    t_ns_raw = obj.get("t_ns")
+                    state_raw = obj.get("s")
+                    if t_ns_raw is None or state_raw is None:
+                        # Legacy schema — drop. Pre-H3 entries have no age
+                        # info, so we cannot honour TTL for them; skipping
+                        # is the conservative choice (a missing mapping
+                        # falls back to UNKNOWN attribution downstream,
+                        # which is far safer than an ABA misattribution).
+                        skipped_legacy += 1
+                        continue
+                    try:
+                        t_ns = int(t_ns_raw)
+                    except (TypeError, ValueError):
+                        skipped_legacy += 1
+                        continue
+                    state = str(state_raw)
+                    if state != "live":
+                        skipped_terminal += 1
+                        continue
+                    if ttl_ns > 0 and (now_ns - t_ns) > ttl_ns:
+                        skipped_ttl += 1
+                        continue
+                    self._set_order_id_mapping(
+                        token,
+                        order_key,
+                        source="persisted_load",
+                        created_ns=t_ns,
+                        state=state,
+                    )
+                    loaded += 1
             # Enforce max size
             while len(self.order_id_map) > self._order_id_map_max_size:
                 first_key = next(iter(self.order_id_map))
                 self._del_order_id_mapping(first_key, source="persisted_evict")
-            logger.info("order_id_map_loaded", count=loaded, path=path)
+            logger.info(
+                "order_id_map_loaded",
+                count=loaded,
+                path=path,
+                skipped_terminal=skipped_terminal,
+                skipped_ttl=skipped_ttl,
+                skipped_legacy=skipped_legacy,
+            )
         except Exception as exc:
             logger.warning("order_id_map_load_failed", error=str(exc), path=path)
 
@@ -1178,10 +1252,33 @@ class OrderAdapter:
         """Persist order_id_map to disk atomically (temp+fsync+rename).
 
         Called during graceful shutdown. Safe to call from thread pool.
+
+        H3: writes the new schema ``{k, v, t_ns, s}`` and filters out any
+        entry whose state has been flipped to ``"terminal"`` (via
+        ``_mark_order_id_terminal``). Terminal entries are dropped from
+        disk so a subsequent restart cannot resurrect a stale binding —
+        even though the broker may still echo the old broker_id when it
+        re-uses the numeric id (the ABA attack vector). Snapshotting under
+        the lock guarantees the state and order_id_map views agree.
         """
         path = self._order_id_map_persist_path
-        # Snapshot under CPython GIL atomicity
-        snapshot = list(self.order_id_map.items())
+        # Snapshot under the lock so the order_id_map and metadata views agree.
+        meta_dict = self._get_order_id_meta()
+        with self._order_id_map_lock:
+            snapshot: list[tuple[str, str, int, str]] = []
+            now_ns = timebase.now_ns()
+            for k, v in self.order_id_map.items():
+                meta = meta_dict.get(k)
+                if meta is None:
+                    # Defensive: unmetered entry (direct mutation, legacy
+                    # callsite, or test path) — stamp as live with the
+                    # current timestamp so a future load applies TTL only.
+                    snapshot.append((k, v, now_ns, "live"))
+                    continue
+                t_ns, state = meta
+                if state == "terminal":
+                    continue  # H3: drop terminals from the persisted snapshot
+                snapshot.append((k, v, t_ns, state))
         try:
             import orjson
 
@@ -1190,8 +1287,11 @@ class OrderAdapter:
             fd, tmp_path = tempfile.mkstemp(suffix=".tmp", dir=persist_dir)
             try:
                 with os.fdopen(fd, "wb") as f:
-                    for k, v in snapshot:
-                        f.write(orjson.dumps({"k": k, "v": v}) + b"\n")
+                    for k, v, t_ns, state in snapshot:
+                        f.write(
+                            orjson.dumps({"k": k, "v": v, "t_ns": t_ns, "s": state})
+                            + b"\n"
+                        )
                     f.flush()
                     os.fsync(f.fileno())
                 os.rename(tmp_path, path)
