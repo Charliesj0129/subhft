@@ -685,7 +685,12 @@ class RiskEngine:
             sg_label = "halt" if self.storm_guard.state == StormGuardState.HALT else "storm"
             kept: list[tuple[OrderCommand, int]] = []
             cleared = 0
-            for cmd, ts in self._order_dlq:
+            # P1-7: snapshot before iteration so any re-entrant mutation of
+            # ``self._order_dlq`` triggered by ``_send_dlq_rejection``
+            # (rejection sink callbacks may, in principle, re-enqueue) cannot
+            # raise "deque mutated during iteration" or skip entries.
+            snapshot = list(self._order_dlq)
+            for cmd, ts in snapshot:
                 if self._cmd_reduces_position(cmd):
                     kept.append((cmd, ts))
                 else:
@@ -717,7 +722,13 @@ class RiskEngine:
             if self.storm_guard.state >= StormGuardState.STORM and not self._cmd_reduces_position(cmd):
                 kept_mid: list[tuple[OrderCommand, int]] = []
                 cleared_mid = 0
-                for c, ts in self._order_dlq:
+                # P1-7: snapshot the DLQ before the rebuild loop so any
+                # re-entrant append from ``_send_dlq_rejection`` (or a callback
+                # it triggers) cannot perturb iteration. Mid-loop appends
+                # remain invisible to this pass — they will be processed on
+                # the next ``_drain_order_dlq`` invocation.
+                snapshot_mid = list(self._order_dlq)
+                for c, ts in snapshot_mid:
                     if self._cmd_reduces_position(c):
                         kept_mid.append((c, ts))
                     else:
