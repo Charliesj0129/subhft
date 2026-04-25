@@ -112,6 +112,7 @@ class OrderAdapter:
         "_cancel_inflight_targets",
         "_cancel_inflight_max",
         "_cancel_inflight_ttl_s",
+        "_engine_thread_id",
         "_phantom_order_keys",
         "_phantom_order_max",
         "_phantom_intents",
@@ -200,6 +201,12 @@ class OrderAdapter:
         self._cancel_inflight_targets: collections.OrderedDict[str, float] = collections.OrderedDict()
         self._cancel_inflight_max: int = int(os.getenv("HFT_CANCEL_INFLIGHT_MAX", "2048"))
         self._cancel_inflight_ttl_s: float = float(os.getenv("HFT_CANCEL_INFLIGHT_TTL_S", "30"))
+        # P1-3: ``_recently_terminal_orders`` and ``_cancel_inflight_targets`` are
+        # OrderedDicts mutated by the helpers below. They are designed for
+        # engine-loop-only use (no lock). Capture the engine thread id lazily on
+        # the first call so a misuse from a broker/recorder thread surfaces as
+        # ``RuntimeError`` instead of silently corrupting the LRU state.
+        self._engine_thread_id: int | None = None
 
         # Helpers
         self.rate_limiter = RateLimiter(soft_cap=180, hard_cap=250, window_s=10)
@@ -1127,9 +1134,33 @@ class OrderAdapter:
         logger.info("Order drain complete", cancelled=cancelled, total=len(live_keys))
         return cancelled
 
+    def _assert_engine_thread(self) -> None:
+        """P1-3: enforce engine-loop-only access to terminal LRU trackers.
+
+        ``_recently_terminal_orders`` and ``_cancel_inflight_targets`` are plain
+        ``OrderedDict`` instances without locks because every legitimate caller
+        (``_record_recent_terminal``, ``_prune_cancel_inflight``,
+        ``_mark_cancel_inflight``, ``_clear_cancel_inflight``,
+        ``_is_recently_terminal``) runs on the asyncio loop thread. If a future
+        edit calls one from the broker callback thread or a worker pool, the
+        ``move_to_end`` / ``popitem`` mutations would race silently. This guard
+        lazily pins the engine thread id on first use and raises afterwards on
+        mismatch so the regression is loud.
+        """
+        tid = threading.get_ident()
+        if self._engine_thread_id is None:
+            self._engine_thread_id = tid
+            return
+        if tid != self._engine_thread_id:
+            raise RuntimeError(
+                "OrderAdapter terminal-tracking accessed from non-engine thread "
+                f"(expected={self._engine_thread_id} got={tid})"
+            )
+
     def _record_recent_terminal(self, order_key: str, reason: str) -> None:
         """Bug #29: remember recently-terminal order_keys for idempotent cancel.
         Bounded LRU + TTL eviction; called next to live_orders deletion."""
+        self._assert_engine_thread()
         self._clear_cancel_inflight(order_key)
         now = time.monotonic()
         self._recently_terminal_orders[order_key] = (now, reason)
@@ -1144,6 +1175,7 @@ class OrderAdapter:
                 break
 
     def _is_recently_terminal(self, order_key: str) -> bool:
+        self._assert_engine_thread()
         entry = self._recently_terminal_orders.get(order_key)
         if entry is None:
             return False
@@ -1154,6 +1186,7 @@ class OrderAdapter:
         return True
 
     def _prune_cancel_inflight(self) -> None:
+        self._assert_engine_thread()
         if not self._cancel_inflight_targets:
             return
         cutoff = time.monotonic() - self._cancel_inflight_ttl_s
@@ -1175,6 +1208,7 @@ class OrderAdapter:
         self._cancel_inflight_targets.move_to_end(target_key)
 
     def _clear_cancel_inflight(self, target_key: str) -> None:
+        self._assert_engine_thread()
         self._cancel_inflight_targets.pop(target_key, None)
 
     async def on_terminal_state(self, strategy_id: str, order_id: str) -> None:
