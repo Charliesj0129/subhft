@@ -81,10 +81,18 @@ class MarkToMarketCalculator:
         Positions with ``net_qty == 0`` yield ``0``.
         Positions whose mid-price is unavailable are **skipped** (logged
         at warning level).
+
+        Wave 3 (2026-04-25): iterate a snapshot from
+        ``PositionStore.snapshot_positions()`` (acquires
+        ``_fill_lock`` and ``dataclasses.replace()``-copies every
+        Position) instead of ``self._position_store.positions`` directly.
+        This removes the cross-thread torn-read race documented in the
+        class docstring.
         """
         result: dict[str, int] = {}
+        snapshot = self._position_store.snapshot_positions()
         with self._lock:
-            for key, pos in self._position_store.positions.items():
+            for key, pos in snapshot.items():
                 if pos.net_qty == 0:
                     result[key] = 0
                     continue

@@ -15,8 +15,13 @@ from hft_platform.execution.positions import Position, PositionStore
 
 def _make_store_with_positions(positions: dict[str, Position]) -> PositionStore:
     """Build a PositionStore pre-loaded with given positions (no fills needed)."""
+    import threading
+
     store = PositionStore.__new__(PositionStore)
     store.positions = dict(positions)
+    # Wave 3 (2026-04-25): MtM.calculate now calls snapshot_positions()
+    # which acquires _fill_lock; provide it for __new__-built stores.
+    store._fill_lock = threading.Lock()
     return store
 
 
