@@ -221,14 +221,16 @@ class PositionStore:
         -22 pts pullback computed 92.9% drawdown vs intraday peak,
         triggering false HALT. Operators tune via the env var.
         """
-        # Wave 3 (2026-04-25): snapshot the (peak, current) pair under
-        # _fill_lock so a concurrent writer cannot update one field
-        # between our two reads, producing an internally inconsistent
-        # drawdown that doesn't correspond to any pair the writer ever
-        # set atomically.
         with self._fill_lock:
-            peak = self._peak_equity_scaled
-            current = self._total_realized_pnl_scaled
+            return self._get_drawdown_pct_locked()
+
+    def _get_drawdown_pct_locked(self) -> float:
+        # Caller MUST hold self._fill_lock. Splitting the locked snapshot
+        # from the public entry-point avoids re-acquiring a non-reentrant
+        # Lock when writers (e.g. _on_fill_python:525) emit drawdown
+        # metrics from inside their own critical section.
+        peak = self._peak_equity_scaled
+        current = self._total_realized_pnl_scaled
         if peak < _MIN_PEAK_SCALED:
             return 0.0
         if current >= peak:
@@ -482,7 +484,7 @@ class PositionStore:
             if hasattr(self.metrics, "portfolio_total_pnl"):
                 self.metrics.portfolio_total_pnl.set(self._total_realized_pnl_scaled)
             if hasattr(self.metrics, "portfolio_drawdown_pct"):
-                self.metrics.portfolio_drawdown_pct.set(self.get_drawdown_pct())
+                self.metrics.portfolio_drawdown_pct.set(self._get_drawdown_pct_locked())
 
         return PositionDelta(
             account_id=fill.account_id,
@@ -522,7 +524,7 @@ class PositionStore:
             if hasattr(self.metrics, "portfolio_total_pnl"):
                 self.metrics.portfolio_total_pnl.set(self._total_realized_pnl_scaled)
             if hasattr(self.metrics, "portfolio_drawdown_pct"):
-                self.metrics.portfolio_drawdown_pct.set(self.get_drawdown_pct())
+                self.metrics.portfolio_drawdown_pct.set(self._get_drawdown_pct_locked())
 
         # Emit delta (all values are already in scaled fixed-point form)
         return PositionDelta(
