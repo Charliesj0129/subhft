@@ -221,12 +221,19 @@ class PositionStore:
         -22 pts pullback computed 92.9% drawdown vs intraday peak,
         triggering false HALT. Operators tune via the env var.
         """
-        if self._peak_equity_scaled < _MIN_PEAK_SCALED:
+        # Wave 3 (2026-04-25): snapshot the (peak, current) pair under
+        # _fill_lock so a concurrent writer cannot update one field
+        # between our two reads, producing an internally inconsistent
+        # drawdown that doesn't correspond to any pair the writer ever
+        # set atomically.
+        with self._fill_lock:
+            peak = self._peak_equity_scaled
+            current = self._total_realized_pnl_scaled
+        if peak < _MIN_PEAK_SCALED:
             return 0.0
-        current = self._total_realized_pnl_scaled
-        if current >= self._peak_equity_scaled:
+        if current >= peak:
             return 0.0
-        return (self._peak_equity_scaled - current) / self._peak_equity_scaled
+        return (peak - current) / peak
 
     def net_qty_for_symbol(self, symbol: str, strategy_id: str | None = None) -> int:
         """Return aggregate net_qty for *symbol*, optionally filtered by strategy.
