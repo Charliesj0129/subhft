@@ -377,6 +377,22 @@ class MetricsRegistry:
             _pn("feed_resubscribe_skipped_concurrent_total"),
             "D2: Feed resubscribe attempts skipped because another caller held _resubscribe_lock",
         )
+        # D1 (2026-04-25): per-symbol subscribe retry telemetry.
+        self.feed_subscription_retry_total = Counter(
+            _pn("feed_subscription_retry_total"),
+            "D1: subscribe retry decisions per symbol (ok|skip_backoff|skip_permanent)",
+            ["symbol", "result"],
+        )
+        self.feed_subscription_permanent_failures_total = Counter(
+            _pn("feed_subscription_permanent_failures_total"),
+            "D1: symbols that crossed HFT_SUB_RETRY_MAX_ATTEMPTS and stopped retrying",
+            ["symbol"],
+        )
+        self.feed_subscription_retry_attempts = Gauge(
+            _pn("feed_subscription_retry_attempts"),
+            "D1: current attempt counter per symbol (resets to 0 on success)",
+            ["symbol"],
+        )
         self.feed_last_event_ts = Gauge(
             _pn("feed_last_event_ts"), "Last feed event timestamp (unix seconds)", ["source"]
         )

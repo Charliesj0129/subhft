@@ -141,11 +141,144 @@ class QuoteRuntime:
     returning QuotePendingState deltas that ShioajiClient applies atomically.
     """
 
-    __slots__ = ("_client", "_event_handler")
+    __slots__ = (
+        "_client",
+        "_event_handler",
+        # D1 (2026-04-25): per-symbol retry state with exponential backoff +
+        # max-attempts cap. Replaces the pre-fix unbounded 60 s retry loop
+        # that burned 22 TXO codes for 24 h+ in production.
+        "_retry_attempts",
+        "_retry_next_ts",
+        "_permanently_failed",
+        "_retry_state_lock",
+    )
+
+    # D1: backoff schedule in seconds. Beyond the schedule, the cap (3600 s)
+    # repeats indefinitely until max-attempts trips.
+    _RETRY_BACKOFF_SCHEDULE_S: tuple[float, ...] = (60.0, 120.0, 300.0, 600.0, 1800.0, 3600.0)
 
     def __init__(self, client: "ShioajiClient") -> None:
         self._client = client
         self._event_handler = QuoteEventHandler()
+        # D1: per-symbol retry state.
+        self._retry_attempts: dict[str, int] = {}
+        self._retry_next_ts: dict[str, float] = {}
+        self._permanently_failed: set[str] = set()
+        self._retry_state_lock = threading.Lock()
+
+    # ------------------------------------------------------------------ #
+    # D1: subscription retry state helpers
+    # ------------------------------------------------------------------ #
+
+    def _retry_max_attempts(self) -> int:
+        return int(os.getenv("HFT_SUB_RETRY_MAX_ATTEMPTS", "10"))
+
+    def _backoff_for_attempt(self, attempt_count: int) -> float:
+        """Return the backoff (seconds) for the Nth failure (1-indexed)."""
+        idx = max(0, attempt_count - 1)
+        if idx >= len(self._RETRY_BACKOFF_SCHEDULE_S):
+            return self._RETRY_BACKOFF_SCHEDULE_S[-1]
+        return self._RETRY_BACKOFF_SCHEDULE_S[idx]
+
+    def _should_attempt_subscription(self, code: str, now: float) -> tuple[bool, str]:
+        """Return (allowed, reason) for whether ``code`` may be retried now.
+
+        Reasons:
+        - ``ok``: never seen, or backoff window elapsed → allow.
+        - ``skip_backoff``: still inside backoff window.
+        - ``skip_permanent``: code is in ``_permanently_failed`` and will
+          never be retried again until restart.
+        """
+        with self._retry_state_lock:
+            if code in self._permanently_failed:
+                reason = "skip_permanent"
+            else:
+                next_ts = self._retry_next_ts.get(code, 0.0)
+                if next_ts == 0.0 or now >= next_ts:
+                    reason = "ok"
+                else:
+                    reason = "skip_backoff"
+        # Metric outside lock to keep critical section minimal.
+        self._bump_retry_metric(code, reason)
+        return reason == "ok", reason
+
+    def _record_subscription_failure(self, code: str, now: float) -> bool:
+        """Record a failed subscribe; return True iff symbol just became permanent.
+
+        Updates ``_retry_attempts`` and ``_retry_next_ts``. After
+        ``HFT_SUB_RETRY_MAX_ATTEMPTS`` failures, moves to
+        ``_permanently_failed`` and emits the permanent-failures metric.
+        """
+        max_attempts = self._retry_max_attempts()
+        became_permanent = False
+        attempts: int = 0
+        with self._retry_state_lock:
+            if code in self._permanently_failed:
+                # Defensive — should not be retried after permanent.
+                attempts = self._retry_attempts.get(code, max_attempts)
+            else:
+                attempts = self._retry_attempts.get(code, 0) + 1
+                self._retry_attempts[code] = attempts
+                self._retry_next_ts[code] = now + self._backoff_for_attempt(attempts)
+                if attempts >= max_attempts:
+                    self._permanently_failed.add(code)
+                    became_permanent = True
+        # Metric updates outside lock.
+        self._set_attempts_gauge(code, attempts)
+        if became_permanent:
+            self._bump_permanent_metric(code)
+            logger.warning(
+                "subscription_permanently_failed",
+                code=code,
+                attempts=attempts,
+                max_attempts=max_attempts,
+            )
+        return became_permanent
+
+    def _record_subscription_success(self, code: str) -> None:
+        """Reset all retry state for ``code`` after a successful subscribe."""
+        with self._retry_state_lock:
+            self._retry_attempts.pop(code, None)
+            self._retry_next_ts.pop(code, None)
+            self._permanently_failed.discard(code)
+        self._set_attempts_gauge(code, 0)
+
+    # ------------------------------------------------------------------ #
+    # D1: metric helpers (defensive — metrics may be absent on test stubs)
+    # ------------------------------------------------------------------ #
+
+    def _bump_retry_metric(self, code: str, result: str) -> None:
+        metrics = getattr(self._client, "metrics", None)
+        counter = getattr(metrics, "feed_subscription_retry_total", None) if metrics else None
+        if counter is None:
+            return
+        try:
+            sym = metrics.cap_symbol(code) if hasattr(metrics, "cap_symbol") else code
+            counter.labels(symbol=sym, result=result).inc()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _bump_permanent_metric(self, code: str) -> None:
+        metrics = getattr(self._client, "metrics", None)
+        counter = getattr(metrics, "feed_subscription_permanent_failures_total", None) if metrics else None
+        if counter is None:
+            return
+        try:
+            sym = metrics.cap_symbol(code) if hasattr(metrics, "cap_symbol") else code
+            counter.labels(symbol=sym).inc()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _set_attempts_gauge(self, code: str, attempts: int) -> None:
+        metrics = getattr(self._client, "metrics", None)
+        gauge = getattr(metrics, "feed_subscription_retry_attempts", None) if metrics else None
+        if gauge is None:
+            return
+        try:
+            sym = metrics.cap_symbol(code) if hasattr(metrics, "cap_symbol") else code
+            gauge.labels(symbol=sym).set(attempts)
+        except Exception:  # noqa: BLE001
+            pass
 
     # ------------------------------------------------------------------ #
     # Pending state management via QuoteEventHandler
@@ -860,6 +993,7 @@ class QuoteRuntime:
                 # the loop here — those new entries are picked up on the
                 # next interval tick.
                 pending = len(c._failed_sub_symbols)
+                now = timebase.now_s()
                 for _ in range(pending):
                     if not c._sub_retry_running:
                         break
@@ -873,12 +1007,23 @@ class QuoteRuntime:
                     if c.subscribed_count >= c.MAX_SUBSCRIPTIONS:
                         c._failed_sub_symbols.append(sym)
                         continue
+                    # D1: per-symbol backoff + max-attempts gate.
+                    code = sym.get("code") or ""
+                    allowed, reason = self._should_attempt_subscription(code, now)
+                    if not allowed:
+                        if reason == "skip_permanent":
+                            # Drop permanently — never re-append.
+                            continue
+                        # skip_backoff: retain in queue for next interval.
+                        c._failed_sub_symbols.append(sym)
+                        continue
                     if c._subscribe_symbol(sym, cb):
-                        code = sym.get("code")
                         if code:
                             c.subscribed_codes.add(code)
                         c.subscribed_count = len(c.subscribed_codes)
-                        logger.info("Subscription retry succeeded", code=sym.get("code"))
+                        # D1: success clears retry state for this symbol.
+                        self._record_subscription_success(code)
+                        logger.info("Subscription retry succeeded", code=code)
                         # Bug 12: trigger alias propagation so strategies re-resolve
                         # symbols when subscribe succeeds after the initial
                         # connect sequence finished.
@@ -889,7 +1034,12 @@ class QuoteRuntime:
                             except Exception as exc:
                                 logger.warning("on_alias_map_updated_failed", error=str(exc))
                     else:
-                        c._failed_sub_symbols.append(sym)
+                        # D1: record failure → may move to _permanently_failed
+                        # after HFT_SUB_RETRY_MAX_ATTEMPTS. Permanent symbols
+                        # are NOT re-appended to _failed_sub_symbols.
+                        permanent = self._record_subscription_failure(code, now)
+                        if not permanent:
+                            c._failed_sub_symbols.append(sym)
                 if not c._failed_sub_symbols:
                     logger.info("All failed subscriptions resolved")
                     break
