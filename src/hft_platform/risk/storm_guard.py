@@ -147,6 +147,18 @@ class StormGuard:
         """
         self._loop = loop
 
+    def get_loop(self) -> asyncio.AbstractEventLoop | None:
+        """Return the bound engine event loop, or ``None`` if not yet bound.
+
+        H2 (2026-04-25): exposed publicly so bootstrap-built notification
+        callbacks can lazy-resolve the engine loop reference without poking
+        ``_loop`` directly. Bootstrap creates the callback during ``build()``
+        when ``HFTSystem.run()`` has not yet bound the loop; the closure must
+        re-read ``get_loop()`` on every fire so the first HALT does not
+        observe a stale ``None``.
+        """
+        return self._loop
+
     def reload_thresholds(self, config: dict) -> None:
         """Update thresholds from new config."""
         with self._state_lock:

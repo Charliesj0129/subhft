@@ -114,10 +114,15 @@ class MetricsRegistry:
                 _pn("stormguard_transitions_total"),
                 _pn("stormguard_halt_exempt_bypass_total"),
                 _pn("halt_drain_safety_intent_lost_total"),
+                # H2: HALT notification-callback dispatch observability
+                _pn("halt_callback_no_loop_total"),
+                _pn("halt_callback_schedule_failed_total"),
+                _pn("halt_callback_dispatched_total"),
                 _pn("order_actions_total"),
                 _pn("order_reject_total"),
                 _pn("order_contract_code_resolution_total"),
                 _pn("order_halt_skip_total"),
+                _pn("order_halt_post_dispatch_cancel_total"),
                 _pn("order_deadline_expired_total"),
                 _pn("phantom_order_candidates_total"),
                 _pn("phantom_recovery_releases_total"),
@@ -447,6 +452,23 @@ class MetricsRegistry:
             _pn("halt_drain_safety_intent_lost_total"),
             "Safety intents (CANCEL/FORCE_FLAT) lost during HALT drain re-queue",
         )
+        # H2 (2026-04-25): observability for cross-thread HALT notification dispatch.
+        # Production evidence: 8 days of HALT events with no Telegram delivery because
+        # ``asyncio.get_event_loop()`` raised RuntimeError in non-loop threads on Py3.12+
+        # and the bare ``except: pass`` swallowed the failure silently.
+        self.halt_callback_no_loop_total = Counter(
+            _pn("halt_callback_no_loop_total"),
+            "HALT notification callbacks dropped because no event loop was bound",
+        )
+        self.halt_callback_schedule_failed_total = Counter(
+            _pn("halt_callback_schedule_failed_total"),
+            "HALT notification callbacks that failed to schedule on the engine loop",
+        )
+        self.halt_callback_dispatched_total = Counter(
+            _pn("halt_callback_dispatched_total"),
+            "HALT notification callbacks successfully dispatched to the engine loop",
+            ["path"],  # "threadsafe" (cross-thread) or "direct" (same-loop)
+        )
         self.autonomy_mode = Gauge(
             _pn("autonomy_mode"),
             "Autonomy control-plane mode (0=NORMAL, 1=STRATEGY_QUARANTINED, 2=PLATFORM_REDUCE_ONLY, 3=HALT)",
@@ -499,6 +521,11 @@ class MetricsRegistry:
         self.order_halt_skip_total = Counter(
             _pn("order_halt_skip_total"),
             "Orders skipped in _api_worker because StormGuard transitioned to HALT",
+        )
+        self.order_halt_post_dispatch_cancel_total = Counter(
+            _pn("order_halt_post_dispatch_cancel_total"),
+            "H1: defensive cancels issued after StormGuard transitioned to HALT "
+            "during a broker dispatch await window (TOCTOU recovery)",
         )
         self.order_deadline_expired_total = Counter(
             _pn("order_deadline_expired_total"),

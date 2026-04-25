@@ -1080,13 +1080,55 @@ class RiskEngine:
 
                 dispatcher = self._notification_dispatcher
                 if dispatcher is not None:
+                    # H2 / F-5 (2026-04-25): never call ``asyncio.get_event_loop()``
+                    # bare — Python 3.12+ raises ``RuntimeError`` from non-loop
+                    # threads, and ``_check_daily_loss_halt`` is invoked from
+                    # the validate() hot path which can run inside the risk
+                    # worker task (loop thread) AND from sync test contexts.
+                    # Prefer the loop bound on StormGuard (set by HFTSystem.run
+                    # via ``bind_loop``); fall back to ``get_running_loop()``
+                    # only when on the loop thread itself.
+                    sg_loop = None
                     try:
-                        loop = asyncio.get_event_loop()
-                        if loop.is_running():
-                            total_pnl = sum(v._accumulated_loss.values()) + v._unrealized_pnl
-                            limit = v._default_max_daily_loss
-                            asyncio.create_task(dispatcher.notify_daily_loss(total_pnl, limit))
-                            asyncio.create_task(dispatcher.notify_halt("DAILY_LOSS_LIMIT_EXCEEDED"))
+                        sg_loop = self.storm_guard.get_loop() if self.storm_guard else None
+                    except Exception:  # noqa: BLE001
+                        sg_loop = None
+                    try:
+                        running = asyncio.get_running_loop()
                     except RuntimeError:
-                        pass  # No event loop — skip notification (e.g. sync test context)
+                        running = None
+                    target_loop = sg_loop if sg_loop is not None and not sg_loop.is_closed() else running
+                    if target_loop is not None:
+                        total_pnl = sum(v._accumulated_loss.values()) + v._unrealized_pnl
+                        limit = v._default_max_daily_loss
+                        try:
+                            if running is target_loop:
+                                # Same-thread fast path
+                                asyncio.create_task(dispatcher.notify_daily_loss(total_pnl, limit))
+                                asyncio.create_task(dispatcher.notify_halt("DAILY_LOSS_LIMIT_EXCEEDED"))
+                            else:
+                                # Cross-thread (validate may be invoked from a
+                                # broker/recorder worker thread). Use the
+                                # threadsafe scheduler so the coroutine actually
+                                # runs instead of being silently closed.
+                                asyncio.run_coroutine_threadsafe(
+                                    dispatcher.notify_daily_loss(total_pnl, limit),
+                                    target_loop,
+                                )
+                                asyncio.run_coroutine_threadsafe(
+                                    dispatcher.notify_halt("DAILY_LOSS_LIMIT_EXCEEDED"),
+                                    target_loop,
+                                )
+                        except RuntimeError as exc:
+                            logger.warning(
+                                "daily_loss_notification_schedule_failed",
+                                error=str(exc),
+                            )
+                    else:
+                        # No loop available (sync test context or pre-startup);
+                        # degrade gracefully instead of silently dropping.
+                        logger.warning(
+                            "daily_loss_notification_skipped_no_loop",
+                            msg="No engine loop bound — Telegram daily-loss alert dropped",
+                        )
                 return

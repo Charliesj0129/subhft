@@ -6,7 +6,7 @@ import socket
 import threading
 import time
 from datetime import date
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, Optional
 
 if TYPE_CHECKING:
     from hft_platform.feed_adapter.protocol import BrokerOrderCodec
@@ -1240,20 +1240,18 @@ class SystemBootstrapper:
                         risk_engine._notification_dispatcher = notification_dispatcher
                         logger.info("RiskEngine notification_dispatcher wired")
 
-                    # R11-C1+C2: Wire StormGuard halt callback + state transition notifications
-                    import asyncio as _asyncio
-
-                    _disp = notification_dispatcher
-
-                    def _on_halt_cb() -> None:
-                        try:
-                            loop = _asyncio.get_event_loop()
-                            if loop.is_running():
-                                loop.create_task(_disp.notify_halt("StormGuard HALT triggered"))
-                        except Exception:
-                            pass
-
-                    storm_guard._on_halt_callback = _on_halt_cb
+                    # R11-C1+C2: Wire StormGuard halt callback + state transition notifications.
+                    # H2 (2026-04-25): the original implementation called
+                    # ``asyncio.get_event_loop()`` from a daemon thread (StormGuard
+                    # ``trigger_halt`` is invoked by lease-refresh / supervisor /
+                    # ChannelGap threads). On Python 3.12 this raises ``RuntimeError``
+                    # because no current loop is bound to the calling thread, so the
+                    # bare ``except: pass`` silently dropped every Telegram alert.
+                    # Production evidence: 168h of logs with zero ``halt_callback_*``
+                    # entries despite multiple HALT events.
+                    storm_guard._on_halt_callback = _make_halt_notification_callback(
+                        storm_guard, notification_dispatcher
+                    )
                     logger.info("StormGuard on_halt_callback wired to NotificationDispatcher")
 
                     # R11-C3: Late-bind dispatcher + flattener into AutonomyMonitor
@@ -1385,6 +1383,88 @@ class SystemBootstrapper:
             startup_fill_reconciler=startup_fill_reconciler,
             deferred_tasks=deferred_tasks,
         )
+
+
+def _make_halt_notification_callback(storm_guard: Any, dispatcher: Any) -> Callable[[], Any]:
+    """H2 (2026-04-25): build a thread-safe HALT notification callback.
+
+    The returned callable is registered as ``StormGuard._on_halt_callback`` and
+    may be fired from ANY thread (engine loop, broker callback thread,
+    bootstrap lease-refresh daemon, supervisor). The previous inline
+    implementation used ``asyncio.get_event_loop()`` which raises
+    ``RuntimeError`` on Python 3.12+ when called from a non-loop thread, and
+    the wrapping ``except: pass`` silently swallowed every drop.
+
+    The new contract:
+    1. Look up the engine loop reference via ``storm_guard.get_loop()`` —
+       lazy-resolved on every fire because at construction time (build())
+       ``HFTSystem.run()`` has not yet called ``bind_loop``.
+    2. If no loop is bound or the loop is closed, increment
+       ``halt_callback_no_loop_total`` and log a structured warning. Returning
+       a coroutine to StormGuard would cause it to be closed unawaited, but
+       since this wrapper itself is synchronous (returns None), no coroutine
+       leaks — the dispatcher coroutine is created lazily inside the
+       cross-thread scheduler call below.
+    3. Otherwise, schedule the dispatcher coroutine via
+       ``asyncio.run_coroutine_threadsafe`` (safe from any thread) and let it
+       run fire-and-forget. Increment ``halt_callback_dispatched_total{path}``
+       on success — ``path="threadsafe"`` for cross-thread, ``path="direct"``
+       when the caller is already on the engine loop.
+
+    Returns a synchronous ``() -> None`` callable so StormGuard does not
+    need to await it. The dispatcher coroutine is scheduled but never
+    awaited from this callback — that is intentional fire-and-forget.
+    """
+    from hft_platform.observability.metrics import MetricsRegistry
+
+    def _on_halt_cb() -> None:
+        loop = storm_guard.get_loop()
+        if loop is None or loop.is_closed():
+            logger.warning(
+                "halt_callback_no_loop_bound",
+                msg="HALT notification dropped — engine loop not bound or already closed",
+            )
+            try:
+                MetricsRegistry.get().halt_callback_no_loop_total.inc()
+            except Exception:  # noqa: BLE001
+                pass
+            return
+        # Detect whether we are running on the engine loop thread itself: if so,
+        # ``asyncio.run_coroutine_threadsafe`` still works but is unnecessary —
+        # ``loop.create_task`` is the cheaper path. In practice HALT fires from
+        # daemon threads so ``threadsafe`` will be the dominant code path; we
+        # record the label so operators can see both.
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        path = "direct" if running is loop else "threadsafe"
+        try:
+            coro = dispatcher.notify_halt("StormGuard HALT triggered")
+            if path == "direct":
+                loop.create_task(coro)
+            else:
+                # run_coroutine_threadsafe takes a coroutine and schedules it on
+                # the target loop; the returned Future is intentionally not
+                # awaited here (fire-and-forget — StormGuard already logs
+                # callback errors via _halt_callback_done).
+                asyncio.run_coroutine_threadsafe(coro, loop)
+            try:
+                MetricsRegistry.get().halt_callback_dispatched_total.labels(path=path).inc()
+            except Exception:  # noqa: BLE001
+                pass
+            logger.info("halt_callback_dispatched", path=path)
+        except RuntimeError as exc:
+            # Loop closed between is_closed() check and schedule, or other
+            # transient scheduling error. Log and bump metric so operators
+            # see the failure instead of a silent drop.
+            logger.warning("halt_callback_schedule_failed", error=str(exc), path=path)
+            try:
+                MetricsRegistry.get().halt_callback_schedule_failed_total.inc()
+            except Exception:  # noqa: BLE001
+                pass
+
+    return _on_halt_cb
 
 
 async def wait_for_readiness(system: Any, *, timeout_s: float = 30.0) -> None:
