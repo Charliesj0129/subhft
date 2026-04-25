@@ -96,7 +96,8 @@ class ReconnectOrchestrator:
                 c.logged_in = False
                 c._callbacks_registered = False
                 c._clear_quote_pending()
-                c.subscribed_codes = set()
+                # D2: in-place clear (don't rebind — preserves identity).
+                c.subscribed_codes.clear()
                 c.subscribed_count = 0
                 c._refresh_quote_routes()
 

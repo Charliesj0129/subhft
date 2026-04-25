@@ -359,7 +359,9 @@ class ContractsRuntime:
         added = set(new_map) - set(old_map)
 
         if not self._client.api or not self._client.logged_in or not self._client.tick_callback:
-            self._client.subscribed_codes = set(new_map)
+            # D2: in-place reset preserves object identity for peer readers.
+            self._client.subscribed_codes.clear()
+            self._client.subscribed_codes.update(new_map.keys())
             self._client.subscribed_count = len(self._client.subscribed_codes)
             self._client._refresh_quote_routes()
             return

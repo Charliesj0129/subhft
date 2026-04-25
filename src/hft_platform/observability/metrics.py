@@ -373,6 +373,10 @@ class MetricsRegistry:
             ["reason", "exception_type"],
         )
         self.feed_resubscribe_total = Counter(_pn("feed_resubscribe_total"), "Feed resubscribe attempts", ["result"])
+        self.feed_resubscribe_skipped_concurrent_total = Counter(
+            _pn("feed_resubscribe_skipped_concurrent_total"),
+            "D2: Feed resubscribe attempts skipped because another caller held _resubscribe_lock",
+        )
         self.feed_last_event_ts = Gauge(
             _pn("feed_last_event_ts"), "Last feed event timestamp (unix seconds)", ["source"]
         )

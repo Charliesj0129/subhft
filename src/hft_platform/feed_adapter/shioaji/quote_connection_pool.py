@@ -815,7 +815,8 @@ class QuoteConnectionPool:
                     # Reset local subscription counters so subscribe_basket() doesn't
                     # immediately hit the MAX_SUBSCRIPTIONS guard on the second call.
                     # Mirrors what _resubscribe_all() does in subscription_manager.py.
-                    facade._client.subscribed_codes = set()
+                    # D2: in-place clear preserves object identity for peer readers.
+                    facade._client.subscribed_codes.clear()
                     facade._client.subscribed_count = 0
                     if facade.logged_in and active_cb is not None:
                         slot = self._slots[i] if i < len(self._slots) else None

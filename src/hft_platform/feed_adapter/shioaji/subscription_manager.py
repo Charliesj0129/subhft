@@ -223,8 +223,15 @@ class SubscriptionManager:
             c._record_api_latency("unsubscribe", start_ns, ok=False)
             logger.warning(f"Unsubscribe failed for {code}: {e}")
 
-    def _resubscribe_all(self) -> None:
-        """Re-subscribe all symbols, typically after a reconnect or recovery."""
+    def _resubscribe_all(self) -> None:  # noqa: C901  # D2: lock+cooldown+loop adds branches; refactor would obscure the lock contract
+        """Re-subscribe all symbols, typically after a reconnect or recovery.
+
+        D2: ``_resubscribe_lock`` serializes calls from the 4 caller threads
+        (watchdog, schedule_resubscribe daemon, SDK event_13/event_4 thread,
+        ``MarketDataService._attempt_resubscribe`` via ``to_thread``).
+        Concurrent callers no-op (``acquire(blocking=False)``) and bump
+        ``feed_resubscribe_skipped_concurrent_total``.
+        """
         c = self._client
         if not c.api or not c.logged_in or not c.tick_callback:
             return
@@ -234,37 +241,67 @@ class SubscriptionManager:
         quote_api = c._quote_api()
         if quote_api is None or not hasattr(quote_api, "subscribe"):
             return
-        now = timebase.now_s()
-        last = getattr(c, "_last_resubscribe_ts", 0.0)
-        cooldown = getattr(c, "resubscribe_cooldown", 1.5)
-        if now - last < cooldown:
-            return
-        c._last_resubscribe_ts = now  # type: ignore[attr-defined]
-        # Unsubscribe existing symbols from broker SDK before re-subscribing
-        # to prevent subscription count accumulation on soft recovery.
-        old_codes = set(c.subscribed_codes)
-        for sym in c.symbols:
-            code = sym.get("code")
-            if code and code in old_codes:
+
+        # D2: try-acquire the resubscribe lock. The lock is owned by the
+        # client (added in __init__) and may be absent on legacy mocks; fall
+        # back to a per-call lock so tests without mock setup still behave.
+        lock = getattr(c, "_resubscribe_lock", None)
+        if lock is None:
+            # Eager-create on first use; harmless on legacy paths because
+            # _resubscribe_all is the only call site that takes it.
+            import threading as _t
+            c._resubscribe_lock = _t.Lock()  # type: ignore[attr-defined]
+            lock = c._resubscribe_lock
+        if not lock.acquire(blocking=False):
+            metrics = getattr(c, "metrics", None)
+            counter = getattr(metrics, "feed_resubscribe_skipped_concurrent_total", None) if metrics else None
+            if counter is not None:
                 try:
-                    self._unsubscribe_symbol(sym)
-                except Exception as exc:
-                    logger.debug("unsubscribe_before_resubscribe_failed", code=code, error=str(exc))
-        c.subscribed_codes = set()
-        c.subscribed_count = 0
-        failed: list[dict[str, Any]] = []
-        for sym in c.symbols:
-            if c.subscribed_count >= c.MAX_SUBSCRIPTIONS:
-                logger.error("Subscription limit reached during resubscribe", limit=c.MAX_SUBSCRIPTIONS)
-                break
-            if self._subscribe_symbol(sym, c.tick_callback):
+                    counter.inc()
+                except Exception:  # noqa: BLE001
+                    pass
+            logger.debug("resubscribe_skipped_concurrent_caller")
+            return
+
+        try:
+            # Cooldown RMW now under the lock — no torn read/write.
+            now = timebase.now_s()
+            last = getattr(c, "_last_resubscribe_ts", 0.0)
+            cooldown = getattr(c, "resubscribe_cooldown", 1.5)
+            if now - last < cooldown:
+                return
+            c._last_resubscribe_ts = now  # type: ignore[attr-defined]
+            # Unsubscribe existing symbols from broker SDK before re-subscribing
+            # to prevent subscription count accumulation on soft recovery.
+            old_codes = set(c.subscribed_codes)
+            for sym in c.symbols:
                 code = sym.get("code")
-                if code:
-                    c.subscribed_codes.add(code)
-                c.subscribed_count = len(c.subscribed_codes)
-            else:
-                failed.append(sym)
-        c._refresh_quote_routes()
+                if code and code in old_codes:
+                    try:
+                        self._unsubscribe_symbol(sym)
+                    except Exception as exc:
+                        logger.debug("unsubscribe_before_resubscribe_failed", code=code, error=str(exc))
+            # D2: in-place clear preserves object identity. Peer readers
+            # holding a reference (e.g. the watchdog's snapshot path)
+            # always see a consistent live object — never an orphaned set.
+            c.subscribed_codes.clear()
+            c.subscribed_count = 0
+            failed: list[dict[str, Any]] = []
+            for sym in c.symbols:
+                if c.subscribed_count >= c.MAX_SUBSCRIPTIONS:
+                    logger.error("Subscription limit reached during resubscribe", limit=c.MAX_SUBSCRIPTIONS)
+                    break
+                if self._subscribe_symbol(sym, c.tick_callback):
+                    code = sym.get("code")
+                    if code:
+                        c.subscribed_codes.add(code)
+                    c.subscribed_count = len(c.subscribed_codes)
+                else:
+                    failed.append(sym)
+            c._refresh_quote_routes()
+        finally:
+            lock.release()
+
         if failed:
             # L2: mutate the deque in place rather than reassigning. The
             # retry daemon may have just appended a peer-thread failure;

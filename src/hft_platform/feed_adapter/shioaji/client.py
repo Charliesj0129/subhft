@@ -192,6 +192,11 @@ class ShioajiClient:
         self._load_config()
         self.subscribed_count = 0
         self.subscribed_codes: set[str] = set()
+        # D2: serializes _resubscribe_all (4 callers across 3 threads:
+        # watchdog, schedule_resubscribe daemon, SDK event_13/event_4 thread,
+        # MarketDataService._attempt_resubscribe via to_thread).
+        # try_acquire(blocking=False) so concurrent callers no-op.
+        self._resubscribe_lock: threading.Lock = threading.Lock()
         self.alias_to_actual: dict[str, str] = {}  # config code → callback code (e.g. TXFR1 → TXFE6)
         self.tick_callback: Callable[..., Any] | None = None
         self.metrics = MetricsRegistry.get()
@@ -773,7 +778,9 @@ class ShioajiClient:
             self._callbacks_registered = False
             self._contracts_ready = False
             self.ca_active = False
-            self.subscribed_codes = set()
+            # D2: in-place clear preserves object identity for concurrent
+            # readers (e.g. _resubscribe_all may be holding a snapshot).
+            self.subscribed_codes.clear()
             self.subscribed_count = 0
             self._clear_quote_pending()
             self._reconnect_backoff_s = float(os.getenv("HFT_RECONNECT_BACKOFF_S", "30"))
