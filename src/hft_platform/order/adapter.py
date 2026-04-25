@@ -2420,7 +2420,12 @@ class OrderAdapter:
             try:
                 item = await self._api_queue.get()
             except asyncio.CancelledError:
-                return
+                # P1-4: drain any residual coalesced pending before exit.
+                # Rare, but if a previous iteration stored items into
+                # ``_api_pending`` and we were cancelled before clearing,
+                # those dedup slots would leak otherwise.
+                self._release_pending_on_cancel()
+                raise
             try:
                 cmd: OrderCommand = (
                     self._materialize_typed_command(item)
@@ -2458,6 +2463,14 @@ class OrderAdapter:
                                 break
                         except asyncio.TimeoutError:
                             break
+                        except asyncio.CancelledError:
+                            # P1-4: Python 3.12 wait_for / Queue.get cancel race.
+                            # Even if ``wait_for`` successfully retrieved an item
+                            # (materialised into ``cmd`` above) we will never
+                            # reach the store step here; release anything that
+                            # was already staged. Re-raise after cleanup.
+                            self._release_pending_on_cancel()
+                            raise
 
                 pending = list(self._api_pending.values())
                 self._api_pending.clear()
@@ -2516,6 +2529,13 @@ class OrderAdapter:
                             self._dedup_commit(item.intent.idempotency_key, True, "dispatched", item.cmd_id)
                     except Exception:
                         await self._handle_dispatch_exception(intent=item.intent, cmd_id=item.cmd_id)
+            except asyncio.CancelledError:
+                # P1-4: shutdown / task-cancel path. Release any dedup slots
+                # for commands in ``_api_pending`` that we have not yet
+                # dispatched, so the same idempotency_key can be resubmitted
+                # cleanly on the next worker lifetime. Re-raise after cleanup.
+                self._release_pending_on_cancel()
+                raise
             except Exception:
                 logger.error("_api_worker: unexpected exception in dispatch loop", exc_info=True)
                 self.metrics.order_reject_total.inc()
@@ -2527,6 +2547,27 @@ class OrderAdapter:
                 for orphaned in self._api_pending.values():
                     self._dedup_release(orphaned.intent.idempotency_key)
                 self._api_pending.clear()
+
+    def _release_pending_on_cancel(self) -> None:
+        """P1-4: release dedup slots + drop `_api_pending` on cancellation.
+
+        Called from `_api_worker`'s CancelledError handlers so a shutdown
+        that catches us in the coalesce window or mid-dispatch-loop does
+        not leak dedup reservations. Counts commands for observability.
+        """
+        released = 0
+        for orphaned in self._api_pending.values():
+            try:
+                self._dedup_release(orphaned.intent.idempotency_key)
+            except Exception:  # noqa: BLE001 — dedup release must never raise
+                pass
+            released += 1
+        self._api_pending.clear()
+        if released:
+            try:
+                logger.warning("_api_worker_cancel_released_pending", count=released)
+            except Exception:  # noqa: BLE001 — log must never mask CancelledError
+                pass
 
     def _update_cb_metric(self) -> None:
         """Emit global circuit-breaker state to Prometheus (0=closed, 1=open)."""
