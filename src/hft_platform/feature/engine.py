@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import math
 import os
+import threading
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -245,6 +246,7 @@ class FeatureEngine:
         "_rust_fused_fallback_count",
         "_eviction_ttl_ns",
         "_eviction_last_run_ns",
+        "_state_lock",
     )
 
     def __init__(
@@ -256,6 +258,17 @@ class FeatureEngine:
         kernel_backend: str | None = None,
         feature_profile: FeatureProfile | None = None,
     ) -> None:
+        # M1: cross-thread lock for state dicts.
+        # `mark_gap_all` is invoked from the broker callback thread (via
+        # ``services/market_data.py`` setting it as a tick-dispatcher drop
+        # callback), while ``process_lob_update`` / ``reset_*`` /
+        # ``evict_stale_symbols`` run on the event loop. All mutations of
+        # ``_states``, ``_quality_flags_next``, ``_event_cache``,
+        # ``_last_update_ns``, ``_lob_kernel_states``, ``_warmup_ready_symbols``,
+        # ``_rust_kernels``, ``_rust_pipelines`` MUST be guarded by this lock.
+        # Critical sections must be SHORT — never hold the lock across an
+        # ``await``, kernel ``.update()`` call, or any I/O.
+        self._state_lock = threading.Lock()
         self._registry = registry or default_feature_registry()
         self._feature_set = self._registry.get(feature_set_id) if feature_set_id else self._registry.get_default()
         self._feature_ids = self._feature_set.feature_ids
@@ -332,6 +345,11 @@ class FeatureEngine:
         return dict(prof.params or {}) if prof is not None else {}
 
     def runtime_status(self) -> dict[str, Any]:
+        # M1: ``len(self._states)`` is GIL-atomic in CPython, but may be
+        # called from a non-event-loop thread (HTTP / monitor). Read under
+        # the lock for correctness against concurrent ``reset_all``.
+        with self._state_lock:
+            tracked = len(self._states)
         return {
             "feature_set_id": self.feature_set_id(),
             "schema_version": self.schema_version(),
@@ -340,7 +358,7 @@ class FeatureEngine:
             "emit_events": bool(self._emit_events),
             "active_profile_id": self.active_profile_id(),
             "profile_params": self.profile_params(),
-            "tracked_symbols": len(self._states),
+            "tracked_symbols": tracked,
         }
 
     def apply_profile(self, profile: FeatureProfile) -> None:
@@ -373,11 +391,18 @@ class FeatureEngine:
 
     def reset_symbol(self, symbol: str) -> None:
         symbol = str(symbol)
-        self._states.pop(symbol, None)
-        self._lob_kernel_states.pop(symbol, None)
-        self._last_update_ns.pop(symbol, None)
-        self._warmup_ready_symbols.discard(symbol)
-        kernel = self._rust_kernels.pop(symbol, None)
+        # M1: snapshot kernel/pipeline references inside the lock, then run
+        # ``.reset()`` outside (kernel.reset() can take arbitrary time / is a
+        # Rust call we should not block other threads on).
+        with self._state_lock:
+            self._states.pop(symbol, None)
+            self._lob_kernel_states.pop(symbol, None)
+            self._last_update_ns.pop(symbol, None)
+            self._warmup_ready_symbols.discard(symbol)
+            kernel = self._rust_kernels.pop(symbol, None)
+            pipeline = self._rust_pipelines.pop(symbol, None)
+            self._event_cache.pop(symbol, None)
+            self._quality_flags_next[symbol] = self._quality_flags_next.get(symbol, 0) | QUALITY_FLAG_STATE_RESET
         if kernel is not None:
             try:
                 reset = getattr(kernel, "reset", None)
@@ -385,7 +410,6 @@ class FeatureEngine:
                     reset()
             except Exception as _exc:  # noqa: BLE001
                 pass
-        pipeline = self._rust_pipelines.pop(symbol, None)
         if pipeline is not None:
             try:
                 reset = getattr(pipeline, "reset", None)
@@ -393,8 +417,6 @@ class FeatureEngine:
                     reset()
             except Exception as _exc:  # noqa: BLE001
                 pass
-        self._event_cache.pop(symbol, None)
-        self._quality_flags_next[symbol] = self._quality_flags_next.get(symbol, 0) | QUALITY_FLAG_STATE_RESET
 
     def mark_gap(self, symbol: str) -> None:
         """Mark the next feature update for *symbol* with QUALITY_FLAG_GAP.
@@ -402,23 +424,39 @@ class FeatureEngine:
         Call when upstream data gaps are detected (e.g., raw_queue drops)
         so strategies can distinguish missing data from normal silence.
         """
-        self._quality_flags_next[symbol] = self._quality_flags_next.get(symbol, 0) | QUALITY_FLAG_GAP
-
-    def mark_gap_all(self) -> None:
-        """Mark all tracked symbols with QUALITY_FLAG_GAP."""
-        for symbol in self._states:
+        with self._state_lock:
             self._quality_flags_next[symbol] = self._quality_flags_next.get(symbol, 0) | QUALITY_FLAG_GAP
 
+    def mark_gap_all(self) -> None:
+        """Mark all tracked symbols with QUALITY_FLAG_GAP.
+
+        M1: This method is invoked from the broker callback thread when the
+        tick dispatcher drops events. It iterates ``_states`` while the event
+        loop may be mutating it via ``process_lob_update``. We hold the lock
+        for the whole snapshot+OR loop because each operation is O(symbols)
+        and bounded; releasing between snapshot and OR would let
+        ``mark_gap_all`` lose GAP bits for symbols newly added in between.
+        Do NOT add I/O / logging / await inside this critical section.
+        """
+        with self._state_lock:
+            for symbol in self._states:
+                self._quality_flags_next[symbol] = (
+                    self._quality_flags_next.get(symbol, 0) | QUALITY_FLAG_GAP
+                )
+
     def reset_all(self) -> None:
-        for symbol in list(self._states):
-            self._quality_flags_next[symbol] = self._quality_flags_next.get(symbol, 0) | QUALITY_FLAG_STATE_RESET
-        self._states.clear()
-        self._lob_kernel_states.clear()
-        self._rust_kernels.clear()
-        self._rust_pipelines.clear()
-        self._last_update_ns.clear()
-        self._warmup_ready_symbols.clear()
-        self._event_cache.clear()
+        with self._state_lock:
+            for symbol in list(self._states):
+                self._quality_flags_next[symbol] = (
+                    self._quality_flags_next.get(symbol, 0) | QUALITY_FLAG_STATE_RESET
+                )
+            self._states.clear()
+            self._lob_kernel_states.clear()
+            self._rust_kernels.clear()
+            self._rust_pipelines.clear()
+            self._last_update_ns.clear()
+            self._warmup_ready_symbols.clear()
+            self._event_cache.clear()
 
     def reset_symbols(self, symbols: set[str]) -> None:
         for sym in symbols:
@@ -438,7 +476,12 @@ class FeatureEngine:
             return 0
         self._eviction_last_run_ns = now_ns
         cutoff_ns = now_ns - self._eviction_ttl_ns
-        stale = [sym for sym, ts in self._last_update_ns.items() if 0 < ts < cutoff_ns]
+        # M1: snapshot under the lock, then call ``reset_symbol`` outside
+        # the lock — ``reset_symbol`` re-acquires the same threading.Lock
+        # (re-entrant only via the *same* thread is fine because Python's
+        # ``threading.Lock`` is non-reentrant; releasing here avoids deadlock).
+        with self._state_lock:
+            stale = [sym for sym, ts in self._last_update_ns.items() if 0 < ts < cutoff_ns]
         for sym in stale:
             self.reset_symbol(sym)
         if stale:
@@ -517,9 +560,14 @@ class FeatureEngine:
         # EMA updates to prevent contamination.
         mid_price_x2 = getattr(stats_resolved, "mid_price_x2", None)
         if mid_price_x2 is not None and mid_price_x2 == 0:
-            prev = self._states.get(symbol)
+            # M1: snapshot prev + drain pending quality flags atomically.
+            with self._state_lock:
+                prev = self._states.get(symbol)
+                if prev is not None:
+                    qflags = int(self._quality_flags_next.pop(symbol, 0))
+                else:
+                    qflags = 0
             if prev is not None:
-                qflags = int(self._quality_flags_next.pop(symbol, 0))
                 qflags |= QUALITY_FLAG_PARTIAL
                 normalizer_seq = int(getattr(stats_resolved, "normalizer_seq", 0) or 0)
                 prev.seq = seq
@@ -529,7 +577,8 @@ class FeatureEngine:
                 if normalizer_seq > 0:
                     prev.normalizer_seq = normalizer_seq
                 # Keep prev.values and prev.warm_count unchanged (stale re-emit)
-                self._last_update_ns[symbol] = _now_ns()
+                with self._state_lock:
+                    self._last_update_ns[symbol] = _now_ns()
                 if not self._emit_events:
                     return None
                 evt = FeatureUpdateEvent(
@@ -545,15 +594,25 @@ class FeatureEngine:
                     feature_ids=self._feature_ids,
                     values=prev.values,
                 )
-                self._event_cache[symbol] = evt
+                with self._state_lock:
+                    self._event_cache[symbol] = evt
                 return evt
             return None  # No prev state yet — genuinely skip
 
-        prev = self._states.get(symbol)
-        if prev is None and len(self._states) >= self._max_symbols:
+        # M1: snapshot prev under the lock — broker thread mutates _states
+        # via reset_symbol(); without the lock, get() can race with pop().
+        with self._state_lock:
+            prev = self._states.get(symbol)
+            if prev is None and len(self._states) >= self._max_symbols:
+                cardinality_exceeded = True
+                current_count = len(self._states)
+            else:
+                cardinality_exceeded = False
+                current_count = 0
+        if cardinality_exceeded:
             logger.warning(
                 "feature_symbol_cardinality_exceeded",
-                current=len(self._states),
+                current=current_count,
                 limit=self._max_symbols,
                 symbol=symbol,
             )
@@ -573,7 +632,10 @@ class FeatureEngine:
             # DATA2-006: Do NOT pop quality flags on OOO — let them carry
             # forward to the next valid event. Popping here discards pending
             # GAP/RESET flags that strategies need to see.
-            qflags = int(self._quality_flags_next.get(symbol, 0))
+            # M1: read under lock; broker thread can be ORing GAP into the
+            # same key concurrently.
+            with self._state_lock:
+                qflags = int(self._quality_flags_next.get(symbol, 0))
             qflags |= QUALITY_FLAG_OUT_OF_ORDER
             # DATA-016: Track OOO drops for observability.
             self._ooo_drop_count += 1
@@ -610,29 +672,35 @@ class FeatureEngine:
                 return None
             changed_mask = self._compute_changed_mask(prev.values if prev else None, values)
             warmup_ready_mask = self._compute_warmup_ready_mask(warm_count, symbol)
-        qflags = int(self._quality_flags_next.pop(symbol, 0))
 
-        # Hot-path exception: in-place mutation to avoid per-tick allocation
-        if prev is not None:
-            prev.seq = seq
-            prev.source_ts_ns = source_ts_ns
-            prev.local_ts_ns = local_ts_ns
-            prev.values = values
-            prev.warm_count = warm_count
-            prev.quality_flags = qflags
-            prev.normalizer_seq = normalizer_seq
-        else:
-            self._states[symbol] = _FeatureState(
-                seq=seq,
-                source_ts_ns=source_ts_ns,
-                local_ts_ns=local_ts_ns,
-                values=values,
-                warm_count=warm_count,
-                quality_flags=qflags,
-                normalizer_seq=normalizer_seq,
-            )
+        # M1: drain pending quality flags + commit state under the lock.
+        # The broker thread may have ORed GAP into ``_quality_flags_next``
+        # between snapshot above and now; we MUST consume it here so the
+        # GAP bit reaches the strategy on this tick.
+        with self._state_lock:
+            qflags = int(self._quality_flags_next.pop(symbol, 0))
 
-        self._last_update_ns[symbol] = _now_ns()
+            # Hot-path exception: in-place mutation to avoid per-tick allocation
+            if prev is not None:
+                prev.seq = seq
+                prev.source_ts_ns = source_ts_ns
+                prev.local_ts_ns = local_ts_ns
+                prev.values = values
+                prev.warm_count = warm_count
+                prev.quality_flags = qflags
+                prev.normalizer_seq = normalizer_seq
+            else:
+                self._states[symbol] = _FeatureState(
+                    seq=seq,
+                    source_ts_ns=source_ts_ns,
+                    local_ts_ns=local_ts_ns,
+                    values=values,
+                    warm_count=warm_count,
+                    quality_flags=qflags,
+                    normalizer_seq=normalizer_seq,
+                )
+
+            self._last_update_ns[symbol] = _now_ns()
 
         if not self._emit_events:
             return None
@@ -655,7 +723,8 @@ class FeatureEngine:
             feature_ids=self._feature_ids,
             values=values,
         )
-        self._event_cache[symbol] = evt
+        with self._state_lock:
+            self._event_cache[symbol] = evt
         return evt
 
     def _compute_values(
