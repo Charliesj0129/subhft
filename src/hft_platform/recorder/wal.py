@@ -190,6 +190,12 @@ class WALWriter:
         """
         Atomic write: write to temp file, then rename.
         This prevents partial reads by the loader.
+
+        M2 (2026-04-25): cleanup uses ``finally:`` instead of ``except:`` so
+        orphan tmpfiles are removed even when the worker thread is killed by
+        SIGKILL or interpreter shutdown between fsync and rename. After a
+        successful rename the tmp_path no longer exists so the cleanup is a
+        no-op; on failure it removes the partial file and bumps a metric.
         """
         # Write to temp file in same directory (for atomic rename)
         dir_path = os.path.dirname(filename)
@@ -209,12 +215,21 @@ class WALWriter:
             os.rename(tmp_path, filename)
             # fsync directory to ensure rename is durable on disk (coalesced when configured)
             self._maybe_fsync_dir(dir_path, writer="wal")
-        except Exception as exc:
-            logger.debug("operation_fallback", error=str(exc))
-            # Clean up temp file on failure
+        finally:
+            # If rename succeeded tmp_path no longer exists; if it failed (or
+            # this thread is dying) we remove the orphan partial file.
             if os.path.exists(tmp_path):
-                os.unlink(tmp_path)
-            raise
+                try:
+                    os.unlink(tmp_path)
+                    if self._metrics:
+                        try:
+                            self._metrics.wal_orphan_tmp_cleaned_total.labels(
+                                location="wal_writer"
+                            ).inc()
+                        except Exception as exc:  # noqa: BLE001
+                            logger.debug("operation_fallback", error=str(exc))
+                except OSError as exc:
+                    logger.warning("wal_orphan_tmp_unlink_failed", path=tmp_path, error=str(exc))
 
     def _write_sync(self, filename: str, data: list):
         """Legacy blocking write (kept for compatibility)."""
@@ -532,6 +547,9 @@ class WALBatchWriter:
             seq = next(_file_seq)
             filename = f"{dir_path}/batch_{ts}_{seq}.jsonl"
             fd, tmp_path = tempfile.mkstemp(suffix=".tmp", dir=dir_path)
+            # M2: ``finally`` cleanup so SIGKILL between fsync and rename does
+            # not leave orphan tmp*.tmp files (production evidence: 8 such
+            # files aged 5–13 days in /app/.wal/).
             try:
                 with os.fdopen(fd, "wb") as f:
                     fcntl.flock(f.fileno(), fcntl.LOCK_EX)
@@ -544,11 +562,19 @@ class WALBatchWriter:
                         fcntl.flock(f.fileno(), fcntl.LOCK_UN)
                 os.rename(tmp_path, filename)
                 self._maybe_fsync_dir(dir_path)
-            except Exception as exc:
-                logger.debug("operation_fallback", error=str(exc))
+            finally:
                 if os.path.exists(tmp_path):
-                    os.unlink(tmp_path)
-                raise
+                    try:
+                        os.unlink(tmp_path)
+                        if self._metrics:
+                            try:
+                                self._metrics.wal_orphan_tmp_cleaned_total.labels(
+                                    location="wal_batch"
+                                ).inc()
+                            except Exception as exc:  # noqa: BLE001
+                                logger.debug("operation_fallback", error=str(exc))
+                    except OSError as exc:
+                        logger.warning("wal_orphan_tmp_unlink_failed", path=tmp_path, error=str(exc))
             file_count += 1
             current_lines = []
             current_bytes = 0

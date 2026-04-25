@@ -182,6 +182,8 @@ class MetricsRegistry:
                 _pn("latency_spans_dropped_total"),
                 _pn("clickhouse_connection_health"),
                 _pn("wal_corrupt_files_total"),
+                # M2 (2026-04-25): orphan tmp file cleanup observability
+                _pn("wal_orphan_tmp_cleaned_total"),
                 # Phase 12 P2 metrics
                 _pn("wal_batch_flush_total"),
                 _pn("wal_batch_flush_retry_total"),
@@ -816,6 +818,17 @@ class MetricsRegistry:
         self.wal_corrupt_files_total = Counter(
             _pn("wal_corrupt_files_total"),
             "Corrupt WAL files quarantined",
+        )
+        # M2 (2026-04-25): orphan tempfile cleanup. Production evidence found 8
+        # tmp*.tmp files in /app/.wal/ aged 5–13 days, indicating a writer
+        # crashed between ``mkstemp`` and ``os.rename`` (the existing
+        # ``except: unlink`` pattern only fires on exception, not SIGKILL or
+        # thread death). Counter is incremented by both the per-call
+        # ``finally:`` cleanup and the bootstrap-time orphan sweep.
+        self.wal_orphan_tmp_cleaned_total = Counter(
+            _pn("wal_orphan_tmp_cleaned_total"),
+            "Orphan WAL tempfiles cleaned up after writer crash / SIGKILL",
+            ["location"],  # "wal_writer", "wal_batch", "loader_manifest", "bootstrap_sweep"
         )
 
         # Phase 12 P2: Holiday Resilience & Scheduled WAL Import

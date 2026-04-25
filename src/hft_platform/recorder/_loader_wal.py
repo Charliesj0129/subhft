@@ -71,6 +71,10 @@ def save_manifest(svc: Any) -> None:
             except OSError:
                 pass
         fd, tmp_path = tempfile.mkstemp(suffix=".tmp", dir=manifest_dir)
+        # M2 (2026-04-25): finally-cleanup. Manifest writer is the most likely
+        # source of the 8 orphan tmp*.tmp files seen in production /app/.wal/
+        # because it runs on the loader thread which can be killed on
+        # SIGTERM during the rare-window between fsync and rename.
         try:
             with os.fdopen(fd, "w") as f:
                 for fname in sorted(svc._manifest):
@@ -87,10 +91,22 @@ def save_manifest(svc: Any) -> None:
                     os.close(dir_fd)
             except OSError:
                 pass  # Best-effort; rename itself is atomic
-        except Exception as _exc:  # noqa: BLE001
+        finally:
             if os.path.exists(tmp_path):
-                os.unlink(tmp_path)
-            raise
+                try:
+                    os.unlink(tmp_path)
+                    try:
+                        from hft_platform.observability.metrics import MetricsRegistry
+
+                        m = MetricsRegistry.get()
+                        if m is not None:
+                            m.wal_orphan_tmp_cleaned_total.labels(
+                                location="loader_manifest"
+                            ).inc()
+                    except Exception as _exc:  # noqa: BLE001
+                        pass
+                except OSError:
+                    pass
     except Exception as e:
         logger.warning("Failed to save manifest", error=str(e))
 

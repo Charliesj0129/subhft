@@ -110,6 +110,8 @@ class OrphanedFillDLQ:
             persist_dir = os.path.dirname(path) or "."
             os.makedirs(persist_dir, exist_ok=True)
             fd, tmp_path = tempfile.mkstemp(suffix=".tmp", dir=persist_dir)
+            # M2 (2026-04-25): finally-cleanup so orphan tmpfiles don't
+            # accumulate when the worker dies between fsync and rename.
             try:
                 with os.fdopen(fd, "wb") as f:
                     for fill in snapshot:
@@ -122,10 +124,12 @@ class OrphanedFillDLQ:
                     f.flush()
                     os.fsync(f.fileno())
                 os.rename(tmp_path, path)
-            except Exception:
+            finally:
                 if os.path.exists(tmp_path):
-                    os.unlink(tmp_path)
-                raise
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
             logger.info("fill_dlq_persisted", count=len(snapshot), path=path)
         except Exception as exc:
             logger.warning("fill_dlq_persist_failed", error=str(exc), path=path)

@@ -181,16 +181,25 @@ class PositionCheckpointWriter:
             prefix=".ckpt_",
             suffix=".tmp",
         )
+        # M2 (2026-04-25): switch from ``except: cleanup; raise`` to ``finally``
+        # so orphan ``.ckpt_*.tmp`` files are removed even on SIGKILL or
+        # interpreter-shutdown paths that bypass exception handlers.
         try:
             os.write(fd, final_bytes)
             os.fsync(fd)
             os.close(fd)
             os.rename(tmp_path, self._path)  # type: ignore[arg-type]
-        except BaseException:
-            os.close(fd) if not _is_closed(fd) else None
+        finally:
+            if not _is_closed(fd):
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
             if os.path.exists(tmp_path):
-                os.unlink(tmp_path)
-            raise
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
 
         logger.info(
             "checkpoint_written",

@@ -131,8 +131,17 @@ class DataWriter:
         )
         self._insert_semaphore = asyncio.Semaphore(self._max_concurrent_inserts)
 
-        # CC-4: WAL batch writer (lazy init)
+        # CC-4: WAL batch writer (lazy init).
+        # M2 (2026-04-25): protect lazy init with a dedicated lock so multiple
+        # batchers calling ``_get_wal_batch_writer`` concurrently from the
+        # ClickHouse insert thread pool cannot create racing WALBatchWriter
+        # instances (each spawning its own ``wal-batch-timer`` thread).
+        # Production evidence shows only 1 timer thread alive today, but the
+        # race is real — first concurrent invocations would have been observed
+        # only by chance ordering. Double-checked locking is correct here
+        # because ``_wal_batch_writer`` is a single-assignment slot.
         self._wal_batch_writer: Any = None
+        self._wal_batch_writer_init_lock = threading.Lock()
         self._wal_batch_enabled = os.getenv("HFT_WAL_BATCH_ENABLED", "1").lower() not in {
             "0",
             "false",
@@ -238,15 +247,34 @@ class DataWriter:
         self._health_tracker = tracker
 
     def _get_wal_batch_writer(self) -> Any:
-        """Lazy-init WAL batch writer (CC-4)."""
-        if self._wal_batch_writer is None and self._wal_batch_enabled:
-            try:
-                from hft_platform.recorder.wal import WALBatchWriter
+        """Lazy-init WAL batch writer (CC-4).
 
-                self._wal_batch_writer = WALBatchWriter(self.wal.wal_dir)
-            except Exception as _exc:  # noqa: BLE001
-                self._wal_batch_writer = None
-        return self._wal_batch_writer
+        M2 (2026-04-25): double-checked locking prevents two threads from
+        creating racing WALBatchWriter instances. Each WALBatchWriter spawns
+        its own ``wal-batch-timer`` daemon thread; without the lock a race
+        could leak background timers (memory + duplicate flush traffic).
+        Hot path is the un-locked first-read; the lock is only entered on
+        the very first call from the first batcher in a process lifetime.
+        """
+        if not self._wal_batch_enabled:
+            return None
+        # First check (lock-free fast path)
+        writer = self._wal_batch_writer
+        if writer is not None:
+            return writer
+        # Slow path: serialise initialisation
+        with self._wal_batch_writer_init_lock:
+            # Re-check after acquiring lock — another thread may have
+            # initialised the writer between our first read and the lock.
+            if self._wal_batch_writer is None:
+                try:
+                    from hft_platform.recorder.wal import WALBatchWriter
+
+                    self._wal_batch_writer = WALBatchWriter(self.wal.wal_dir)
+                except Exception as _exc:  # noqa: BLE001
+                    # Leave as None; subsequent calls will retry under the lock.
+                    self._wal_batch_writer = None
+            return self._wal_batch_writer
 
     def _get_table_lock(self, table: str) -> threading.Lock:
         """Get or create a per-table lock for ClickHouse inserts."""

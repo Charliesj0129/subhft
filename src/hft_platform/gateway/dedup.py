@@ -241,6 +241,8 @@ class IdempotencyStore:
             persist_dir = os.path.dirname(self._persist_path) or "."
             os.makedirs(persist_dir, exist_ok=True)
             fd, tmp_path = tempfile.mkstemp(suffix=".tmp", dir=persist_dir)
+            # M2 (2026-04-25): finally-cleanup so SIGKILL between fsync and
+            # rename does not leak orphan ``.tmp`` files.
             try:
                 with os.fdopen(fd, "wb") as f:
                     for rec in records_snapshot:
@@ -254,11 +256,12 @@ class IdempotencyStore:
                     f.flush()
                     os.fsync(f.fileno())
                 os.rename(tmp_path, self._persist_path)
-            except Exception as exc:
-                logger.debug("operation_fallback", error=str(exc))
+            finally:
                 if os.path.exists(tmp_path):
-                    os.unlink(tmp_path)
-                raise
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError as exc:
+                        logger.debug("operation_fallback", error=str(exc))
         except Exception as exc:
             logger.warning("IdempotencyStore persist failed", error=str(exc))
 

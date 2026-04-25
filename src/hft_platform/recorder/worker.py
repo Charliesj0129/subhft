@@ -315,6 +315,63 @@ _EXTRACTOR_COLUMNS = {
 }
 
 
+def _sweep_wal_orphan_tmpfiles(wal_dir: str, max_age_s: float = 300.0) -> int:
+    """M2 (2026-04-25): one-shot bootstrap-time orphan tmpfile cleanup.
+
+    Scans ``wal_dir`` for files matching ``tmp*.tmp`` (the
+    ``tempfile.mkstemp(suffix='.tmp')`` default pattern) older than
+    ``max_age_s`` seconds and unlinks them. Returns the number of files
+    removed. Bumps ``wal_orphan_tmp_cleaned_total{location="bootstrap_sweep"}``
+    once per file so operators can correlate disk-pressure alerts with
+    historical orphan accumulation.
+
+    The age guard exists because a peer process (e.g. the WAL loader) may
+    legitimately have an in-flight tmp file at this moment — we only touch
+    files that were definitely orphaned by a prior crash.
+    """
+    import glob
+    import time
+
+    if not os.path.isdir(wal_dir):
+        return 0
+
+    pattern = os.path.join(wal_dir, "tmp*.tmp")
+    now = time.time()
+    cleaned = 0
+    for path in glob.glob(pattern):
+        try:
+            st = os.stat(path)
+        except OSError:
+            continue
+        age_s = now - st.st_mtime
+        if age_s < max_age_s:
+            continue
+        try:
+            os.unlink(path)
+            cleaned += 1
+            logger.warning(
+                "wal_orphan_tmp_cleaned",
+                path=path,
+                age_s=round(age_s, 1),
+                size_bytes=st.st_size,
+            )
+            try:
+                from hft_platform.observability.metrics import MetricsRegistry
+
+                m = MetricsRegistry.get()
+                if m is not None:
+                    m.wal_orphan_tmp_cleaned_total.labels(
+                        location="bootstrap_sweep"
+                    ).inc()
+            except Exception as _exc:  # noqa: BLE001
+                pass
+        except OSError as exc:
+            logger.warning("wal_orphan_tmp_unlink_failed", path=path, error=str(exc))
+    if cleaned:
+        logger.info("wal_orphan_tmp_sweep_complete", cleaned_count=cleaned, wal_dir=wal_dir)
+    return cleaned
+
+
 class RecorderService:
     def __init__(self, queue: asyncio.Queue, _clickhouse_client=None):
         self.queue = queue
@@ -449,6 +506,18 @@ class RecorderService:
     async def run(self):
         self.running = True
         logger.info("Recorder started", mode=self._mode.value)
+
+        # M2 (2026-04-25): one-shot orphan tmpfile sweep at recorder bootstrap.
+        # Production evidence: 8 ``tmp*.tmp`` files aged 5–13 days in
+        # ``/app/.wal/``, indicating prior runs crashed between mkstemp and
+        # rename. The per-call ``finally:`` cleanup added in this commit
+        # prevents NEW orphans, but legacy orphans persist on disk. This
+        # sweep removes any tmp*.tmp older than 5 minutes (so we don't
+        # disturb in-flight writes from any peer process).
+        try:
+            _sweep_wal_orphan_tmpfiles(os.getenv("HFT_WAL_DIR", ".wal"))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("wal_orphan_tmp_sweep_failed", error=str(exc))
 
         # CE3-01: set wal_mode metric
         try:
