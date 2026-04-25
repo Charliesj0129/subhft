@@ -246,11 +246,20 @@ class ExecutionRouter:
         # P0-E1: acquire the resolver's lock (injected by bootstrap, shared
         # with OrderAdapter._order_id_map_lock) so this backfill writer is
         # mutually exclusive with broker-thread readers in ``_on_exec``.
+        # P1-8: emit a per-write debug log mirroring OrderAdapter's
+        # ``_set_order_id_mapping`` so every writer site is greppable under
+        # the ``order_id_map_set`` event with a stable ``source=`` tag.
         changed = False
         with resolver.lock:
             for broker_id in ids:
                 if broker_id not in resolver.order_id_map:
                     resolver.order_id_map[broker_id] = order_key
+                    logger.debug(
+                        "order_id_map_set",
+                        token=broker_id,
+                        order_key=order_key,
+                        source="execution_router_backfill",
+                    )
                     changed = True
         if changed:
             logger.debug(

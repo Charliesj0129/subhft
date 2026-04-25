@@ -146,13 +146,17 @@ class OrderAdapter:
         self.client = broker_client
         self._broker_codec = broker_codec
         # Map broker order IDs -> order_key ("strategy_id:intent_id")
-        # P0-E1: protected by a threading.Lock (not asyncio.Lock) because
+        # P0-E1: protected by a threading.RLock (not asyncio.Lock) because
         # ``_on_exec`` runs on the broker callback thread and calls the
         # resolver pre-hand-off (see ``services/system.py::_on_exec``).
         # Critical sections are small (single dict get / bounded-N eviction),
         # so event-loop latency impact is negligible.
+        # P1-8: re-entrant so batch writers (`_register_broker_ids`,
+        # `_load_order_id_map`) can hold the lock while delegating individual
+        # writes through ``_set_order_id_mapping`` / ``_del_order_id_mapping``
+        # without deadlocking. Same-thread re-acquire is O(1).
         self.order_id_map = order_id_map if order_id_map is not None else {}
-        self._order_id_map_lock = threading.Lock()
+        self._order_id_map_lock = threading.RLock()
         # Map order_key -> cmd.created_ns for e2e latency tracking (SLO-2)
         # Shared with ExecutionRouter for fill-side lookup
         self._cmd_created_ns_map: Dict[str, int] = cmd_created_ns_map if cmd_created_ns_map is not None else {}
@@ -935,6 +939,35 @@ class OrderAdapter:
         """Sliding window check."""
         return self.rate_limiter.check()
 
+    # ── P1-8: order_id_map mutation helpers ────────────────────────────────
+    # Every write into ``self.order_id_map`` MUST go through these helpers so
+    # the lock discipline cannot drift. ``_order_id_map_lock`` is an RLock so
+    # batch writers (`_register_broker_ids`) can hold it while delegating to
+    # the helpers without deadlocking. Each call emits a ``debug`` log with
+    # the ``source=`` argument for forensic tracing of the mutation site.
+
+    def _set_order_id_mapping(self, token: str, order_key: str, *, source: str) -> None:
+        """Set ``order_id_map[token] = order_key`` under the shared RLock.
+
+        ``source`` is a stable identifier for the call site, surfaced in the
+        debug log to help correlate broker-ID registration with downstream
+        order_key resolution failures.
+        """
+        with self._order_id_map_lock:
+            self.order_id_map[token] = order_key
+        logger.debug("order_id_map_set", token=token, order_key=order_key, source=source)
+
+    def _del_order_id_mapping(self, token: str, *, source: str) -> str | None:
+        """Pop ``order_id_map[token]`` under the shared RLock.
+
+        Returns the prior mapped value (or ``None`` if absent). Logs the
+        delete with ``source=`` for the same forensic reasons as the setter.
+        """
+        with self._order_id_map_lock:
+            prior = self.order_id_map.pop(token, None)
+        logger.debug("order_id_map_del", token=token, prior=prior, source=source)
+        return prior
+
     def _load_order_id_map(self) -> None:
         """Load order_id_map from disk on startup (restart-safe strategy resolution)."""
         path = self._order_id_map_persist_path
@@ -952,14 +985,16 @@ class OrderAdapter:
                     try:
                         obj = orjson.loads(raw)
                         if isinstance(obj, dict) and "k" in obj and "v" in obj:
-                            self.order_id_map[str(obj["k"])] = str(obj["v"])
+                            self._set_order_id_mapping(
+                                str(obj["k"]), str(obj["v"]), source="persisted_load"
+                            )
                             loaded += 1
                     except Exception:
                         continue
             # Enforce max size
             while len(self.order_id_map) > self._order_id_map_max_size:
                 first_key = next(iter(self.order_id_map))
-                del self.order_id_map[first_key]
+                self._del_order_id_mapping(first_key, source="persisted_evict")
             logger.info("order_id_map_loaded", count=loaded, path=path)
         except Exception as exc:
             logger.warning("order_id_map_load_failed", error=str(exc), path=path)
@@ -1047,8 +1082,13 @@ class OrderAdapter:
             if order_key not in pending:
                 pending.append(order_key)
             self._pending_fill_registered_at[order_key] = time.monotonic()
-            with self._order_id_map_lock:
-                self.order_id_map[custom_field_token] = order_key
+            # P1-8: route through the shared helper so every writer site has
+            # the same lock + audit-log discipline. Lock order is preserved
+            # (``_pending_fill_lock`` already held → helper takes the
+            # re-entrant ``_order_id_map_lock``).
+            self._set_order_id_mapping(
+                custom_field_token, order_key, source="register_pending_fill"
+            )
         self._maybe_persist_order_id_map()
 
     def _remove_pending_fill(self, order_key: str) -> None:
@@ -1270,8 +1310,9 @@ class OrderAdapter:
     def register_broker_ids_bulk(self, ids: Iterable[str], order_key: str) -> bool:
         """P0-E1: external-writer helper that acquires ``_order_id_map_lock``.
 
-        Callable from any thread (CPython ``threading.Lock`` is re-entrant
-        safe, not nestable, but our critical section is non-nested).
+        Callable from any thread (CPython ``threading.RLock`` is re-entrant
+        safe; our critical sections are non-nested except where a batch writer
+        delegates per-key writes through ``_set_order_id_mapping``).
         ExecutionRouter's ``_backfill_order_id_map`` calls this instead of
         mutating ``order_id_map`` directly so there is a single writer-side
         lock discipline across Decision and Execution planes.
@@ -1279,6 +1320,10 @@ class OrderAdapter:
         Returns True if any new mapping was added.
         """
         changed = False
+        # P1-8: hold the RLock across the whole batch so the get/set pair is
+        # atomic (no peer writer can slip a different value between the
+        # ``.get(key)`` check and the helper's write). The helper re-acquires
+        # the same RLock per write; re-entrant acquire is O(1).
         with self._order_id_map_lock:
             for broker_id in ids:
                 key = str(broker_id or "")
@@ -1286,7 +1331,7 @@ class OrderAdapter:
                     continue
                 if self.order_id_map.get(key) == order_key:
                     continue
-                self.order_id_map[key] = order_key
+                self._set_order_id_mapping(key, order_key, source="register_broker_ids_bulk")
                 changed = True
         return changed
 
@@ -1337,6 +1382,12 @@ class OrderAdapter:
         changed = False
         # P0-E1: synchronous lock, because broker-thread readers (_on_exec)
         # also take this lock. All critical sections here are dict ops only.
+        # P1-8: ``_order_id_map_lock`` is now an RLock so the per-key writes
+        # below can re-route through ``_set_order_id_mapping`` /
+        # ``_del_order_id_mapping`` (which take the lock again) without
+        # deadlocking. This ensures every mutation path emits a uniform
+        # ``order_id_map_set`` / ``order_id_map_del`` debug log keyed by
+        # ``source=``.
         with self._order_id_map_lock:
             # Evict oldest entries if at limit — skip entries whose order_key
             # is still in live_orders to prevent orphaning active fills (M6).
@@ -1352,7 +1403,7 @@ class OrderAdapter:
                         continue
                     if mapped_key in self._pending_fill_registered_at:
                         continue
-                    del self.order_id_map[k]
+                    self._del_order_id_mapping(k, source="register_broker_ids_evict")
                     evicted += 1
                     changed = True
                 logger.info("Evicted stale order IDs", count=evicted, remaining=len(self.order_id_map))
@@ -1361,7 +1412,7 @@ class OrderAdapter:
                 oid_key = str(oid)
                 if self.order_id_map.get(oid_key) == order_key:
                     continue
-                self.order_id_map[oid_key] = order_key
+                self._set_order_id_mapping(oid_key, order_key, source="register_broker_ids")
                 changed = True
         if changed:
             self._maybe_persist_order_id_map()
