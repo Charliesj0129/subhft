@@ -21,7 +21,6 @@ from hft_platform.contracts.execution import FillEvent, Side
 from hft_platform.execution.mtm import MarkToMarketCalculator
 from hft_platform.execution.positions import Position, PositionStore
 
-
 # ---------------------------------------------------------------------------
 # Fixtures (mirror tests/unit/test_position_store_unit.py)
 # ---------------------------------------------------------------------------
@@ -541,3 +540,77 @@ class TestR3_6_GetDrawdownPct:
             f"{valid_dds}: first 5={invalid[:5]!r}"
         )
         assert not writer_errors, f"writer crashed: {writer_errors!r}"
+
+
+# ---------------------------------------------------------------------------
+# R3-3 hole — atomic snapshot of positions + recovery
+#
+# Codex stop-time review (2026-04-25) caught: _build_positions_by_strategy
+# takes the positions snapshot and the recovery snapshot in TWO separate
+# _fill_lock acquisitions. _seed_from_recovery (positions.py:347-379) runs
+# inside the writer's critical section and atomically pops a recovery
+# entry into self.positions. If a writer interleaves between the reader's
+# two lock acquisitions, the entry vanishes from BOTH snapshots: it was
+# popped from recovery AFTER the positions snapshot (so missing there)
+# but the recovery snapshot was taken AFTER the pop (so missing there too).
+# Fix: snapshot_positions_with_recovery() returns both under one lock.
+
+
+class TestSnapshotPositionsWithRecoveryAtomic:
+    def test_recovery_does_not_disappear_during_concurrent_seed(
+        self, store: PositionStore
+    ) -> None:
+        """The merged (positions + recovery) view must NEVER lose an entry.
+
+        Race scenario (interleaved by hand via gates):
+          1. Reader takes positions snapshot → empty
+          2. Writer pops recovery, seeds positions[key]
+          3. Reader takes recovery snapshot → empty
+          4. Reader merges → entry LOST from both views
+
+        With the fix (atomic snapshot under one lock), step 1+3 happen
+        under one lock so the writer's pop+seed is either entirely before
+        or entirely after the reader's snapshot — the entry appears in
+        exactly one of the two views, never neither.
+        """
+        # Seed recovery with a known entry.
+        store._recovery_positions["acct1:strat1:RECOV"] = {
+            "account_id": "acct1",
+            "strategy_id": "strat1",
+            "symbol": "RECOV",
+            "net_qty": 7,
+            "avg_price_scaled": 1000_0000,
+            "realized_pnl_scaled": 0,
+            "fees_scaled": 0,
+        }
+
+        # The new public API must exist and atomically snapshot both.
+        positions_snap, recovery_snap = store.snapshot_positions_with_recovery()
+        # Pre-write: should appear in recovery, not in positions.
+        assert "acct1:strat1:RECOV" not in positions_snap
+        assert "acct1:strat1:RECOV" in recovery_snap
+
+        # Now drive a fill that triggers _seed_from_recovery.
+        fill = _make_fill(symbol="RECOV", qty=7, price=1000_0000)
+        store.on_fill(fill)
+
+        # After the seed, recovery must be empty and positions must contain
+        # the merged key.
+        positions_snap2, recovery_snap2 = store.snapshot_positions_with_recovery()
+        assert "acct1:strat1:RECOV" in positions_snap2
+        assert "acct1:strat1:RECOV" not in recovery_snap2
+
+    def test_recovery_snapshot_isolates_inner_dict(
+        self, store: PositionStore
+    ) -> None:
+        """Mutating the snapshot's recovery values must NOT affect the store."""
+        store._recovery_positions["acct1:strat1:ISO"] = {
+            "account_id": "acct1",
+            "strategy_id": "strat1",
+            "symbol": "ISO",
+            "net_qty": 3,
+        }
+        _, recovery_snap = store.snapshot_positions_with_recovery()
+        recovery_snap["acct1:strat1:ISO"]["net_qty"] = 999
+        # Original must be unaffected.
+        assert store._recovery_positions["acct1:strat1:ISO"]["net_qty"] == 3

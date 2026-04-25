@@ -912,17 +912,24 @@ class StrategyRunner:
             except Exception:
                 pass  # Fallback to Python path
 
+        recovery_snap: dict | None = None
         if not rust_fast_path:
-            if hasattr(self.position_store, "snapshot_positions"):
+            # R3-3 hole (2026-04-25): prefer the atomic API that snapshots
+            # positions AND recovery under one _fill_lock acquisition.
+            # Two separate snapshots race with _seed_from_recovery (writer
+            # pops recovery into positions atomically) and can lose entries
+            # from both views.
+            atomic_snap = getattr(
+                self.position_store, "snapshot_positions_with_recovery", None
+            )
+            if atomic_snap is not None:
+                raw, recovery_snap = atomic_snap()
+            elif hasattr(self.position_store, "snapshot_positions"):
                 raw = self.position_store.snapshot_positions()
             else:
                 raw = getattr(self.position_store, "positions", None)
                 if not isinstance(raw, dict):
                     return {}
-                # Wave 3 (2026-04-25): copy under _fill_lock to avoid
-                # racing with on_fill_async writers (asyncio.to_thread).
-                # hasattr guard preserves backward compat with mocks
-                # that lack the lock.
                 _fill_lock = getattr(self.position_store, "_fill_lock", None)
                 if _fill_lock is not None:
                     with _fill_lock:
@@ -955,20 +962,21 @@ class StrategyRunner:
         # into positions via first fill).  Recovery keys use format
         # "account:strategy:symbol" or "account:symbol".  Route entries with
         # strategy_id to the correct bucket; others go to "*" wildcard.
-        # Wave 3 (2026-04-25): on_fill mutates _recovery_positions under
-        # _fill_lock (pop + clear); snapshot under the same lock to avoid
-        # "dictionary changed size during iteration" RuntimeError.
-        recovery_raw = getattr(self.position_store, "_recovery_positions", None)
-        recovery: dict | None
-        if recovery_raw:
-            _fill_lock = getattr(self.position_store, "_fill_lock", None)
-            if _fill_lock is not None:
-                with _fill_lock:
+        # recovery_snap was set above by snapshot_positions_with_recovery
+        # for atomic consistency; fallback for stores without that API.
+        if recovery_snap is not None:
+            recovery: dict | None = recovery_snap if recovery_snap else None
+        else:
+            recovery_raw = getattr(self.position_store, "_recovery_positions", None)
+            if recovery_raw:
+                _fill_lock = getattr(self.position_store, "_fill_lock", None)
+                if _fill_lock is not None:
+                    with _fill_lock:
+                        recovery = dict(recovery_raw)
+                else:
                     recovery = dict(recovery_raw)
             else:
-                recovery = dict(recovery_raw)
-        else:
-            recovery = None
+                recovery = None
         if recovery:
             for rkey, rdata in recovery.items():
                 net_qty = rdata.get("net_qty", 0) if isinstance(rdata, dict) else 0

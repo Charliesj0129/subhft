@@ -589,6 +589,22 @@ class PositionStore:
             total += (mid - avg_price) * net_qty * multiplier
         return total
 
+    def snapshot_positions_with_recovery(self) -> tuple[dict, dict]:
+        # Atomically snapshot both `positions` and `_recovery_positions`
+        # under one acquisition. Callers that merge both views (e.g.
+        # StrategyRunner._build_positions_by_strategy) MUST use this
+        # instead of two separate snapshots — _seed_from_recovery pops
+        # a recovery entry into positions inside its own critical
+        # section, so two separate snapshots can lose the entry from
+        # both views (positions snap before pop, recovery snap after).
+        with self._fill_lock:
+            positions = {k: dataclasses.replace(v) for k, v in self.positions.items()}
+            recovery = {
+                k: dict(v) if isinstance(v, dict) else v
+                for k, v in self._recovery_positions.items()
+            }
+        return positions, recovery
+
     def snapshot_positions(self) -> dict:
         """Return a consistent deep copy of positions under fill lock.
 
