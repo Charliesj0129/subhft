@@ -903,7 +903,16 @@ class StrategyRunner:
                 raw = getattr(self.position_store, "positions", None)
                 if not isinstance(raw, dict):
                     return {}
-                raw = dict(raw)
+                # Wave 3 (2026-04-25): copy under _fill_lock to avoid
+                # racing with on_fill_async writers (asyncio.to_thread).
+                # hasattr guard preserves backward compat with mocks
+                # that lack the lock.
+                _fill_lock = getattr(self.position_store, "_fill_lock", None)
+                if _fill_lock is not None:
+                    with _fill_lock:
+                        raw = dict(raw)
+                else:
+                    raw = dict(raw)
 
             for key, value in raw.items():
                 if hasattr(value, "strategy_id") and hasattr(value, "symbol") and hasattr(value, "net_qty"):
