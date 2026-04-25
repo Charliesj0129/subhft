@@ -738,7 +738,9 @@ class TestShioajiClientFull(unittest.TestCase):
         self.client.logged_in = False
         self.client._event_callback_registered = True
         self.client._callbacks_registered = True
-        self.client._failed_sub_symbols = [{"code": "2330", "exchange": "TSE"}]
+        # L2: in-place mutation — _failed_sub_symbols is now a deque.
+        self.client._failed_sub_symbols.clear()
+        self.client._failed_sub_symbols.append({"code": "2330", "exchange": "TSE"})
         cb = MagicMock()
 
         iteration = {"n": 0}
@@ -760,7 +762,9 @@ class TestShioajiClientFull(unittest.TestCase):
         self.client.logged_in = True
         self.client._event_callback_registered = False
         self.client._callbacks_registered = True
-        self.client._failed_sub_symbols = [{"code": "2330", "exchange": "TSE"}]
+        # L2: in-place mutation — _failed_sub_symbols is now a deque.
+        self.client._failed_sub_symbols.clear()
+        self.client._failed_sub_symbols.append({"code": "2330", "exchange": "TSE"})
         cb = MagicMock()
 
         iteration = {"n": 0}

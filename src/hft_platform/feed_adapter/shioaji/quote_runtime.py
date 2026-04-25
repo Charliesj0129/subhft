@@ -843,16 +843,35 @@ class QuoteRuntime:
                         subscribed=c.subscribed_count,
                         limit=c.MAX_SUBSCRIPTIONS,
                         dropped=len(c._failed_sub_symbols),
-                        codes=[s.get("code") for s in c._failed_sub_symbols[:10]],
+                        codes=[s.get("code") for s in list(c._failed_sub_symbols)[:10]],
                     )
                     break
-                remaining: list[dict[str, Any]] = []
-                for sym in list(c._failed_sub_symbols):
+                # L2: drain in place via ``popleft`` and conditionally
+                # re-``append`` on failure. The previous pattern built a
+                # ``remaining`` list and reassigned ``c._failed_sub_symbols
+                # = remaining``, which lost any concurrent ``append`` from
+                # ``subscription_manager.py:112`` (event loop) that landed
+                # on the OLD list between snapshot and reassign. Drain +
+                # append-back keeps everything on the same deque object,
+                # and each individual deque op is GIL-atomic.
+                #
+                # Bound the work per pass to the size at entry so a
+                # peer-thread append during this pass does not livelock
+                # the loop here — those new entries are picked up on the
+                # next interval tick.
+                pending = len(c._failed_sub_symbols)
+                for _ in range(pending):
                     if not c._sub_retry_running:
-                        remaining.append(sym)
+                        break
+                    try:
+                        sym = c._failed_sub_symbols.popleft()
+                    except IndexError:
+                        break
+                    if not c._sub_retry_running:
+                        c._failed_sub_symbols.append(sym)
                         continue
                     if c.subscribed_count >= c.MAX_SUBSCRIPTIONS:
-                        remaining.append(sym)
+                        c._failed_sub_symbols.append(sym)
                         continue
                     if c._subscribe_symbol(sym, cb):
                         code = sym.get("code")
@@ -870,8 +889,7 @@ class QuoteRuntime:
                             except Exception as exc:
                                 logger.warning("on_alias_map_updated_failed", error=str(exc))
                     else:
-                        remaining.append(sym)
-                c._failed_sub_symbols = remaining
+                        c._failed_sub_symbols.append(sym)
                 if not c._failed_sub_symbols:
                     logger.info("All failed subscriptions resolved")
                     break
@@ -887,7 +905,7 @@ class QuoteRuntime:
                 logger.warning(
                     "Subscription retry: still pending",
                     count=len(c._failed_sub_symbols),
-                    codes=[s.get("code") for s in c._failed_sub_symbols[:10]],
+                    codes=[s.get("code") for s in list(c._failed_sub_symbols)[:10]],
                 )
             c._sub_retry_running = False
             c._set_thread_alive_metric("sub_retry", False)

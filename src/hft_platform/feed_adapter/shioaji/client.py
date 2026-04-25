@@ -389,8 +389,15 @@ class ShioajiClient:
         self._market_open_grace_s = float(os.getenv("HFT_MARKET_OPEN_GRACE_S", "60"))  # 60 seconds
         self._market_open_grace_active = False
 
-        # C2: Failed subscription tracking + retry thread
-        self._failed_sub_symbols: list[Dict[str, Any]] = []
+        # C2: Failed subscription tracking + retry thread.
+        # L2: backed by ``collections.deque`` — individual ``append`` /
+        # ``popleft`` ops are GIL-atomic in CPython, so the event loop
+        # (``subscription_manager.py:112`` append) and the retry daemon
+        # (``quote_runtime.py:_retry_loop`` drain) can mutate it without
+        # an explicit lock as long as nobody REBINDS the attribute.
+        # All call sites mutate in place via append / popleft / extend /
+        # clear; do NOT reassign ``_failed_sub_symbols = something``.
+        self._failed_sub_symbols: deque[Dict[str, Any]] = deque()
         self._sub_retry_running = False
         self._sub_retry_thread: threading.Thread | None = None
         self._contract_retry_s = float(os.getenv("HFT_CONTRACT_RETRY_S", "60"))

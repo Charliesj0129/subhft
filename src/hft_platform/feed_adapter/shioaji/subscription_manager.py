@@ -67,7 +67,11 @@ class SubscriptionManager:
                 callbacks_registered=c._callbacks_registered,
                 event_callback_registered=c._event_callback_registered,
             )
-            c._failed_sub_symbols = [sym for sym in c.symbols if isinstance(sym, dict)]
+            # L2: mutate the deque in place — never rebind the attribute,
+            # otherwise concurrent ``append`` from peers (or the retry
+            # daemon racing this re-init) lands on the orphaned object.
+            c._failed_sub_symbols.clear()
+            c._failed_sub_symbols.extend(sym for sym in c.symbols if isinstance(sym, dict))
             if c._failed_sub_symbols:
                 c._start_sub_retry_thread(cb)
             c._start_quote_watchdog()
@@ -77,7 +81,9 @@ class SubscriptionManager:
         quote_api = c._quote_api()
         if quote_api is None or not hasattr(quote_api, "subscribe"):
             logger.warning("Quote API unavailable; deferring quote subscription")
-            c._failed_sub_symbols = [sym for sym in c.symbols if isinstance(sym, dict)]
+            # L2: in-place mutation — see comment above.
+            c._failed_sub_symbols.clear()
+            c._failed_sub_symbols.extend(sym for sym in c.symbols if isinstance(sym, dict))
             if c._failed_sub_symbols:
                 c._start_sub_retry_thread(cb)
             c._start_quote_watchdog()
@@ -116,7 +122,7 @@ class SubscriptionManager:
             logger.warning(
                 "Failed subscriptions queued for retry",
                 count=len(c._failed_sub_symbols),
-                codes=[s.get("code") for s in c._failed_sub_symbols[:10]],
+                codes=[s.get("code") for s in list(c._failed_sub_symbols)[:10]],
             )
             c._start_sub_retry_thread(cb)
         c._start_quote_watchdog()
@@ -260,7 +266,13 @@ class SubscriptionManager:
                 failed.append(sym)
         c._refresh_quote_routes()
         if failed:
-            c._failed_sub_symbols = failed
+            # L2: mutate the deque in place rather than reassigning. The
+            # retry daemon may have just appended a peer-thread failure;
+            # rebinding to ``failed`` would silently drop it. Resubscribe
+            # is a fresh cycle so it is safe to clear pre-existing entries
+            # for symbols not in this batch.
+            c._failed_sub_symbols.clear()
+            c._failed_sub_symbols.extend(failed)
             logger.warning(
                 "Resubscribe had failures, queuing retry",
                 count=len(failed),

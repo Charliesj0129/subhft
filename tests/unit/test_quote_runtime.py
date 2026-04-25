@@ -245,6 +245,7 @@ class TestSubRetryCapacityAwareness:
     def test_retry_stops_at_capacity(self) -> None:
         """Retry loop should break immediately when subscribed_count >= MAX_SUBSCRIPTIONS."""
         import unittest.mock as mock
+        from collections import deque
 
         from hft_platform.feed_adapter.shioaji.quote_runtime import QuoteRuntime
 
@@ -253,10 +254,11 @@ class TestSubRetryCapacityAwareness:
         client.subscribed_count = 120
         # Must be False initially so start_sub_retry_thread doesn't early-return
         client._sub_retry_running = False
-        client._failed_sub_symbols = [
+        # L2: production type is collections.deque (in-place mutation only).
+        client._failed_sub_symbols = deque([
             {"code": "TXO35050D6", "exchange": "OPT"},
             {"code": "TXO35100D6", "exchange": "OPT"},
-        ]
+        ])
         client._contract_retry_s = 0.01
         client.logged_in = True
         client._callbacks_registered = True
@@ -276,6 +278,7 @@ class TestSubRetryCapacityAwareness:
     def test_retry_proceeds_when_under_capacity(self) -> None:
         """Retry loop should attempt resubscription when under capacity."""
         import unittest.mock as mock
+        from collections import deque
 
         from hft_platform.feed_adapter.shioaji.quote_runtime import QuoteRuntime
 
@@ -283,9 +286,10 @@ class TestSubRetryCapacityAwareness:
         client.MAX_SUBSCRIPTIONS = 120
         client.subscribed_count = 100
         client._sub_retry_running = False
-        client._failed_sub_symbols = [
+        # L2: production type is collections.deque (in-place mutation only).
+        client._failed_sub_symbols = deque([
             {"code": "TXO35050D6", "exchange": "OPT"},
-        ]
+        ])
         client._contract_retry_s = 0.01
         client.logged_in = True
         client._callbacks_registered = True
