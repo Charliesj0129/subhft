@@ -325,6 +325,105 @@ class OrderAdapter:
         """Inject StormGuard reference for live HALT checks (M1 gap closure)."""
         self._storm_guard = storm_guard
 
+    def _begin_dispatch_ticket(self, intent: OrderIntent) -> int | None:
+        """H1: open a dispatch ticket on StormGuard for HALT-TOCTOU detection.
+
+        Returns the ticket id when StormGuard is wired, or None when no
+        StormGuard is bound (unit-test path) or the dispatch is on the
+        HALT-allowed path (CANCEL/FORCE_FLAT, halt-exempt strategies, or
+        reduce-only intents — these are validated by ``_api_worker``'s
+        pre-check and do not need post-dispatch defensive cancellation).
+        ``begin_dispatch`` itself reapplies the validation, so a False
+        result here also short-circuits the broker call.
+        """
+        sg = self._storm_guard
+        if sg is None:
+            return None
+        begin = getattr(sg, "begin_dispatch", None)
+        if begin is None:
+            return None
+        try:
+            ok, _reason, ticket_id = begin(intent)
+        except Exception:  # noqa: BLE001 — never block dispatch on telemetry
+            return None
+        if not ok:
+            # StormGuard rejected at begin — propagate by returning a
+            # sentinel-like None plus letting the caller observe via
+            # ``ticket_id is None``. The pre-check in ``_api_worker``
+            # should have caught this; we still log and rely on the
+            # follow-on broker call to be skipped.
+            return None
+        return ticket_id
+
+    async def _end_dispatch_ticket(
+        self,
+        ticket_id: int | None,
+        intent: OrderIntent,
+        trade: Any,
+        cmd_id: int,
+    ) -> None:
+        """H1: close a dispatch ticket and emit a defensive cancel when
+        StormGuard transitioned to HALT during the broker await window.
+
+        Constitution constraint: cancels are always allowed during HALT
+        (`.agent/rules/25-architecture-governance.md §6`), so the
+        defensive cancel is dispatched directly via ``client.cancel_order``
+        (NOT ``place_order``). Idempotent w.r.t. ticket_id ``None``.
+        """
+        if ticket_id is None:
+            return
+        sg = self._storm_guard
+        if sg is None:
+            return
+        end = getattr(sg, "end_dispatch", None)
+        if end is None:
+            return
+        try:
+            halted_during_dispatch = bool(end(ticket_id))
+        except Exception:  # noqa: BLE001 — never crash the order path
+            return
+        if not halted_during_dispatch:
+            return
+        # HALT triggered while we were awaiting the broker. The broker may
+        # have accepted the order. Emit a defensive cancel and bump the
+        # dedicated metric so SREs can see TOCTOU recoveries in dashboards.
+        try:
+            self.metrics.order_halt_post_dispatch_cancel_total.inc()
+        except Exception:  # noqa: BLE001 — metric must never block
+            pass
+        if trade is None or trade is _GUARD_TIMEOUT:
+            # The broker call did not produce a trade object — nothing
+            # to cancel locally. The caller has already DLQ'd the intent.
+            logger.warning(
+                "halt_post_dispatch_no_trade",
+                intent_id=intent.intent_id,
+                strategy_id=intent.strategy_id,
+                symbol=intent.symbol,
+                cmd_id=cmd_id,
+            )
+            return
+        logger.warning(
+            "halt_post_dispatch_defensive_cancel",
+            intent_id=intent.intent_id,
+            strategy_id=intent.strategy_id,
+            symbol=intent.symbol,
+            cmd_id=cmd_id,
+        )
+        try:
+            await asyncio.wait_for(
+                self._run_blocking_call(self.client.cancel_order, trade),
+                timeout=self._api_timeout_s,
+            )
+        except Exception as exc:  # noqa: BLE001 — best-effort defensive cancel
+            logger.error(
+                "halt_post_dispatch_defensive_cancel_failed",
+                intent_id=intent.intent_id,
+                strategy_id=intent.strategy_id,
+                symbol=intent.symbol,
+                cmd_id=cmd_id,
+                error=str(exc),
+            )
+
     def _intent_reduces_position(self, intent: OrderIntent) -> bool:
         """Bug 24: True iff intent strictly reduces |net_position|.
 
@@ -2017,6 +2116,13 @@ class OrderAdapter:
                 # alias dict for legacy intents. See
                 # :meth:`_resolve_broker_contract_code` for ordering rationale.
                 order_contract_code = self._resolve_broker_contract_code(intent)
+                # H1: open a StormGuard ticket so a HALT triggered during the
+                # broker await window is observable post-dispatch and we can
+                # emit a defensive cancel for an order that may have reached
+                # the broker after we were told to stop. ``ticket_id`` is None
+                # when StormGuard is unwired (unit tests) — disabling the
+                # post-dispatch check is safe because there is no HALT source.
+                ticket_id = self._begin_dispatch_ticket(intent)
                 trade = await self._call_api(
                     "place_order",
                     self.client.place_order,
@@ -2033,6 +2139,11 @@ class OrderAdapter:
                     intent=intent,
                     **order_params,
                 )
+                # H1: must close the ticket before any return — pair with
+                # begin_dispatch on every code path. Defensive cancel is
+                # only emitted when HALT actually triggered mid-await AND a
+                # trade object was produced (otherwise nothing to cancel).
+                await self._end_dispatch_ticket(ticket_id, intent, trade, cmd.cmd_id)
                 if trade is None or trade is _GUARD_TIMEOUT:
                     _is_timeout = trade is _GUARD_TIMEOUT
                     _fail_reason = "api_timeout" if _is_timeout else "api_failure"
@@ -2307,12 +2418,20 @@ class OrderAdapter:
                     price_f = self.price_codec.descale(intent.symbol, intent.price)
 
                     logger.info("Amending Order", target=target_key, new_price=price_f)
+                    # H1: same TOCTOU window applies to AMEND because update_order
+                    # can also take ~395ms on Shioaji P95. The defensive cancel
+                    # post-HALT cancels the underlying live order (target_trade),
+                    # not the amend itself.
+                    amend_ticket_id = self._begin_dispatch_ticket(intent)
                     result = await self._call_api(
                         "update_order",
                         self.client.update_order,
                         target_trade,
                         price=price_f,
                         intent=intent,
+                    )
+                    await self._end_dispatch_ticket(
+                        amend_ticket_id, intent, target_trade, cmd.cmd_id
                     )
                     if result is None or result is _GUARD_TIMEOUT:
                         return False

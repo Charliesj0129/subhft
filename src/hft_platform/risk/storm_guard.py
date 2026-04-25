@@ -71,6 +71,13 @@ class StormGuard:
         # state lock and flushed via ``_emit_pending_transition`` afterwards
         # so Prometheus metric / audit locks never nest with ``_state_lock``.
         "_pending_transition_emit",
+        # H1: dispatch tickets recorded across ``begin_dispatch`` /
+        # ``end_dispatch``. ``trigger_halt`` flips ``halted`` on every
+        # outstanding ticket atomically under ``_state_lock`` so an
+        # in-flight broker call can detect a transition that happened
+        # mid-await and emit a defensive cancel.
+        "_inflight_dispatch_tickets",
+        "_next_ticket_id",
     )
 
     def __init__(
@@ -133,6 +140,12 @@ class StormGuard:
         self._loop: asyncio.AbstractEventLoop | None = None
         # P1 fix: transition side-effect queue flushed outside _state_lock.
         self._pending_transition_emit: list[dict[str, Any]] = []
+        # H1: in-flight dispatch tickets (ticket_id -> {halted: bool}).
+        # Populated by ``begin_dispatch`` and drained by ``end_dispatch``.
+        # ``trigger_halt`` marks every outstanding ticket as ``halted=True``
+        # under ``_state_lock`` so callers can issue a defensive cancel.
+        self._inflight_dispatch_tickets: dict[int, dict[str, Any]] = {}
+        self._next_ticket_id: int = 0
 
     def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         """Bind the engine event loop for cross-thread halt-callback dispatch.
@@ -629,6 +642,11 @@ class StormGuard:
         lease-refresh thread, broker callback thread). The coroutine halt-callback
         is scheduled via ``_fire_halt_callback`` which uses ``bind_loop()``'s
         engine-loop reference for cross-thread dispatch (P0-I4).
+
+        H1: marks every in-flight dispatch ticket as ``halted=True`` under
+        ``_state_lock``. Callers blocked in ``await broker.place_order()`` will
+        observe ``halted=True`` when they call ``end_dispatch`` and can emit a
+        defensive cancel for the order that completed during the HALT window.
         """
         fire_callback = False
         with self._state_lock:
@@ -638,6 +656,9 @@ class StormGuard:
             self._halt_entry_ts = now
             self._de_escalate_count = 0
             _, fire_callback = self._transition(StormGuardState.HALT, reason)
+            # H1: notify in-flight dispatches of the transition.
+            for ticket in self._inflight_dispatch_tickets.values():
+                ticket["halted"] = True
 
         # P1 fix: flush metrics + audit outside _state_lock.
         self._emit_pending_transition()
@@ -709,6 +730,48 @@ class StormGuard:
             if ok:
                 submit_fn()
             return ok, reason
+
+    def begin_dispatch(self, intent: OrderIntent) -> tuple[bool, str, int | None]:
+        """H1: atomic HALT validation + ticket allocation for async dispatches.
+
+        Returns ``(ok, reason, ticket_id)``. When ``ok`` is True the caller
+        has been issued an in-flight dispatch ticket which must be paired
+        with a single ``end_dispatch(ticket_id)`` call regardless of how
+        the dispatch terminates (success, exception, timeout). When ``ok``
+        is False ``ticket_id`` is None and no cleanup is required.
+
+        Unlike ``check_and_submit`` this is safe to use around an ``await``
+        on the broker SDK because the lock is **not** held across the
+        call; instead a concurrent ``trigger_halt`` flips the ticket's
+        ``halted`` flag (under ``_state_lock``), which the caller observes
+        in ``end_dispatch`` and uses to drive a defensive cancel — even if
+        the broker accepted the order during the HALT window.
+        """
+        with self._state_lock:
+            ok, reason = self._validate_locked(intent)
+            if not ok:
+                return False, reason, None
+            ticket_id = self._next_ticket_id
+            self._next_ticket_id += 1
+            self._inflight_dispatch_tickets[ticket_id] = {"halted": False}
+            return True, reason, ticket_id
+
+    def end_dispatch(self, ticket_id: int) -> bool:
+        """H1: drop the ticket allocated by ``begin_dispatch`` and report
+        whether HALT was triggered while it was outstanding.
+
+        Returns True iff a HALT transition occurred between
+        ``begin_dispatch`` and ``end_dispatch`` for this ticket. The caller
+        should treat True as "broker may have accepted the order during
+        the HALT window — emit a defensive cancel". False means either the
+        dispatch completed before any HALT, or the ticket id is unknown
+        (idempotent cleanup on shutdown / unit-test paths).
+        """
+        with self._state_lock:
+            ticket = self._inflight_dispatch_tickets.pop(ticket_id, None)
+        if ticket is None:
+            return False
+        return bool(ticket.get("halted", False))
 
     def set_position_provider(self, provider: Callable[[str, str], int] | None) -> None:
         """Bug 21: wire position provider post-construction.
