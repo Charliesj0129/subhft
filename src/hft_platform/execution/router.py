@@ -445,9 +445,21 @@ class ExecutionRouter:
                         _pre_realized = 0
                         if self._risk_engine is not None:
                             _pos_key = f"{fill_event.account_id}:{fill_event.strategy_id}:{fill_event.symbol}"
-                            _pre_pos = self.position_store.positions.get(_pos_key)
-                            if _pre_pos is not None:
-                                _pre_realized = _pre_pos.realized_pnl_scaled
+                            # Wave 3 (2026-04-25): snapshot the int under
+                            # _fill_lock so a concurrent on_fill_async
+                            # writer cannot clobber realized_pnl_scaled
+                            # between read and use. hasattr guard for
+                            # mocks lacking the lock.
+                            _fill_lock = getattr(self.position_store, "_fill_lock", None)
+                            if _fill_lock is not None:
+                                with _fill_lock:
+                                    _pre_pos = self.position_store.positions.get(_pos_key)
+                                    if _pre_pos is not None:
+                                        _pre_realized = _pre_pos.realized_pnl_scaled
+                            else:
+                                _pre_pos = self.position_store.positions.get(_pos_key)
+                                if _pre_pos is not None:
+                                    _pre_realized = _pre_pos.realized_pnl_scaled
 
                         if hasattr(self.position_store, "on_fill_async"):
                             delta = await self.position_store.on_fill_async(fill_event)
@@ -602,9 +614,17 @@ class ExecutionRouter:
                                     _pos_key_sd = (
                                         f"{fill_event.account_id}:{fill_event.strategy_id}:{fill_event.symbol}"
                                     )
-                                    _pre_pos_sd = self.position_store.positions.get(_pos_key_sd)
-                                    if _pre_pos_sd is not None:
-                                        _pre_realized_sd = _pre_pos_sd.realized_pnl_scaled
+                                    # Wave 3 (2026-04-25): _fill_lock-guarded snapshot.
+                                    _fill_lock_sd = getattr(self.position_store, "_fill_lock", None)
+                                    if _fill_lock_sd is not None:
+                                        with _fill_lock_sd:
+                                            _pre_pos_sd = self.position_store.positions.get(_pos_key_sd)
+                                            if _pre_pos_sd is not None:
+                                                _pre_realized_sd = _pre_pos_sd.realized_pnl_scaled
+                                    else:
+                                        _pre_pos_sd = self.position_store.positions.get(_pos_key_sd)
+                                        if _pre_pos_sd is not None:
+                                            _pre_realized_sd = _pre_pos_sd.realized_pnl_scaled
                                 delta = self.position_store.on_fill(fill_event)
                                 drained += 1
                                 # Persist fill via recorder queue (mapped) or WAL fallback
@@ -789,9 +809,17 @@ class ExecutionRouter:
                 _pre_realized_dlq = 0
                 if self._risk_engine is not None:
                     _pos_key = f"{fill.account_id}:{fill.strategy_id}:{fill.symbol}"
-                    _pre_pos = self.position_store.positions.get(_pos_key)
-                    if _pre_pos is not None:
-                        _pre_realized_dlq = _pre_pos.realized_pnl_scaled
+                    # Wave 3 (2026-04-25): _fill_lock-guarded snapshot.
+                    _fill_lock_dlq = getattr(self.position_store, "_fill_lock", None)
+                    if _fill_lock_dlq is not None:
+                        with _fill_lock_dlq:
+                            _pre_pos = self.position_store.positions.get(_pos_key)
+                            if _pre_pos is not None:
+                                _pre_realized_dlq = _pre_pos.realized_pnl_scaled
+                    else:
+                        _pre_pos = self.position_store.positions.get(_pos_key)
+                        if _pre_pos is not None:
+                            _pre_realized_dlq = _pre_pos.realized_pnl_scaled
 
                 if hasattr(self.position_store, "on_fill_async"):
                     delta = await self.position_store.on_fill_async(fill)
