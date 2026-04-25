@@ -1722,7 +1722,7 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
             # Signal FeatureEngine that data gaps occurred so downstream
             # quality_flags include GAP (strategies can detect missing data).
             fe = self.feature_engine
-            if fe is not None and self._raw_consecutive_drops == self._raw_drop_degrade_threshold:
+            if fe is not None and self._raw_consecutive_drops >= self._raw_drop_degrade_threshold:
                 try:
                     fe.mark_gap_all()
                 except Exception:  # noqa: BLE001
