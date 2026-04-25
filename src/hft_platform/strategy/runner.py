@@ -939,7 +939,20 @@ class StrategyRunner:
         # into positions via first fill).  Recovery keys use format
         # "account:strategy:symbol" or "account:symbol".  Route entries with
         # strategy_id to the correct bucket; others go to "*" wildcard.
-        recovery = getattr(self.position_store, "_recovery_positions", None)
+        # Wave 3 (2026-04-25): on_fill mutates _recovery_positions under
+        # _fill_lock (pop + clear); snapshot under the same lock to avoid
+        # "dictionary changed size during iteration" RuntimeError.
+        recovery_raw = getattr(self.position_store, "_recovery_positions", None)
+        recovery: dict | None
+        if recovery_raw:
+            _fill_lock = getattr(self.position_store, "_fill_lock", None)
+            if _fill_lock is not None:
+                with _fill_lock:
+                    recovery = dict(recovery_raw)
+            else:
+                recovery = dict(recovery_raw)
+        else:
+            recovery = None
         if recovery:
             for rkey, rdata in recovery.items():
                 net_qty = rdata.get("net_qty", 0) if isinstance(rdata, dict) else 0
