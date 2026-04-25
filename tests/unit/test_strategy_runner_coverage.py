@@ -569,12 +569,11 @@ class TestMiscSetters:
         runner.set_storm_guard(sg)
         assert runner._storm_guard is sg
 
-    def test_set_publish_sink(self, runner_factory):
-        """Line 414: set_publish_sink."""
-        runner, _, _ = runner_factory()
-        sink = MagicMock()
-        runner.set_publish_sink(sink)
-        assert runner._publish_sink is sink
+# P2 (2026-04-25): ``set_publish_sink`` removed — the runner never propagated
+# the sink to per-strategy ``StrategyContext`` instances, so the wired sink
+# was never invoked in production. Bootstrap no longer wires it. The test
+# that asserted ``runner._publish_sink is sink`` was therefore exercising a
+# dead path; it has been removed alongside the implementation.
 
 
 # ---------------------------------------------------------------------------

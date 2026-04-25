@@ -468,10 +468,6 @@ class StrategyRunner:
                 new_ref=(change.new_ref.display() if change.new_ref is not None else None),
             )
 
-    def set_publish_sink(self, sink: Any) -> None:
-        """Set the publish callback for strategy-to-bus publication."""
-        self._publish_sink = sink
-
     async def run(self):
         self.running = True
         start_cursor = self._start_cursor

@@ -2165,22 +2165,27 @@ class TestGetMidPriceFunction:
 
 
 # ===================================================================
-# AG. Publish sink wiring (line 1042-1043)
+# AG. Publish sink wiring (REMOVED 2026-04-25 — dead path)
 # ===================================================================
+# The former ``_publish_queue`` + ``set_publish_sink`` wiring was removed
+# under P2 because the runner never propagated the sink into per-strategy
+# ``StrategyContext`` instances, so the wired queue was unconsumed and would
+# silently drop after 64 events. Bootstrap no longer calls
+# ``set_publish_sink`` and the runner no longer exposes it. The test that
+# asserted the wiring is therefore obsolete and has been removed.
 
 
 class TestPublishSinkWiring:
-    """Verify publish sink lambda is wired into StrategyRunner."""
+    """Negative regression: confirm the dead publish-sink wiring is gone."""
 
     @pytest.mark.usefixtures("_sim_env", "_mock_services")
-    def test_publish_sink_is_wired_to_strategy_runner(self):
-        """Build wires a publish sink lambda into StrategyRunner (lines 1042-1043)."""
+    def test_publish_sink_is_not_wired(self):
+        """``set_publish_sink`` MUST NOT be invoked during bootstrap; the
+        runner has no such method anymore. Asserting the mock was not called
+        prevents a future re-introduction of the dead path."""
         registry = _build_with_mocks()
-        # set_publish_sink was called on the strategy_runner mock
-        registry.strategy_runner.set_publish_sink.assert_called_once()
-        # The argument should be a callable
-        call_args = registry.strategy_runner.set_publish_sink.call_args
-        assert callable(call_args[0][0])
+        # The mock would record any call regardless of method existence.
+        assert not registry.strategy_runner.set_publish_sink.called
 
 
 # ===================================================================

@@ -1022,12 +1022,17 @@ class SystemBootstrapper:
             position_store=position_store,
             symbol_metadata=symbol_metadata,
         )
-        # Phase 3: rejection feedback + strategy publish queues
+        # Phase 3: rejection feedback queue.
+        # P2 (2026-04-25): the former ``_publish_queue`` was wired into
+        # ``strategy_runner.set_publish_sink`` but nothing ever consumed it —
+        # ``BaseStrategy.publish``/``StrategyContext.publish_state`` lookups
+        # never reached this dict because the runner did not propagate its
+        # ``_publish_sink`` to per-strategy ``StrategyContext`` instances.
+        # The dead path silently drops messages after 64 events
+        # (``QueueFull``) and consumed memory for nothing. Removed.
         _rejection_queue: asyncio.Queue | None = None
-        _publish_queue: asyncio.Queue | None = None
         try:
             _rejection_queue = asyncio.Queue(maxsize=max(1, int(os.getenv("HFT_REJECTION_QUEUE_SIZE", "2048"))))
-            _publish_queue = asyncio.Queue(maxsize=64)
         except Exception as exc:
             logger.warning("phase3_queue_init_failed", error=str(exc))
 
@@ -1137,8 +1142,9 @@ class SystemBootstrapper:
 
                 md_service._post_connect_hooks.append(_populate_families_from_fubon)
 
-        if _publish_queue is not None:
-            strategy_runner.set_publish_sink(lambda ch, payload: _publish_queue.put_nowait((ch, payload)))
+        # P2 (2026-04-25): ``set_publish_sink`` wiring removed — the runner
+        # never propagated the sink to ``StrategyContext`` instances, so the
+        # queue was unconsumed and would silently drop after 64 events.
 
         recorder = RecorderService(recorder_queue)
         _gw_api_queue = getattr(order_adapter, "_api_queue", None) if _gateway_enabled else None
