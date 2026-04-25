@@ -1188,13 +1188,17 @@ class OrderAdapter:
         mismatch so the regression is loud.
         """
         tid = threading.get_ident()
-        if self._engine_thread_id is None:
+        # ``__slots__`` storage: tests that build adapters via ``__new__``
+        # without invoking ``__init__`` may not have the slot populated.
+        # ``getattr`` with default keeps the helper robust to both paths.
+        engine_tid = getattr(self, "_engine_thread_id", None)
+        if engine_tid is None:
             self._engine_thread_id = tid
             return
-        if tid != self._engine_thread_id:
+        if tid != engine_tid:
             raise RuntimeError(
                 "OrderAdapter terminal-tracking accessed from non-engine thread "
-                f"(expected={self._engine_thread_id} got={tid})"
+                f"(expected={engine_tid} got={tid})"
             )
 
     def _record_recent_terminal(self, order_key: str, reason: str) -> None:
