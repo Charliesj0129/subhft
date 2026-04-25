@@ -2676,49 +2676,87 @@ class OrderAdapter:
             self._emit_trace("order_dispatch_ok", intent, {"cmd_id": int(cmd.cmd_id)})
         return True
 
+    # M3: priority ordering for the api-queue eviction policy. Higher
+    # numbers preempt lower numbers when the queue is full. CANCEL and
+    # FORCE_FLAT are safety intents (must reach the broker even under
+    # pressure); AMEND mutates an existing live order and is preferred
+    # over NEW which can usually be retried by the strategy.
+    _API_INTENT_PRIORITY: dict[IntentType, int] = {
+        IntentType.CANCEL: 4,
+        IntentType.FORCE_FLAT: 3,
+        IntentType.AMEND: 2,
+        IntentType.NEW: 1,
+    }
+
+    @classmethod
+    def _api_intent_priority(cls, intent_type: IntentType | None) -> int:
+        if intent_type is None:
+            return 0
+        return cls._API_INTENT_PRIORITY.get(intent_type, 0)
+
     async def _enqueue_api(self, cmd: OrderCommand) -> bool:
-        """Enqueue command to API worker. Returns True on success, False if DLQ'd."""
+        """Enqueue command to API worker. Returns True on success, False if DLQ'd.
+
+        M3: when the queue is full, the incoming intent can preempt the
+        oldest queued intent of strictly lower priority (CANCEL > FORCE_FLAT
+        > AMEND > NEW). The evicted command is routed to the DLQ. NEW
+        intents never preempt anything — strategies retry them organically.
+        """
         try:
             self._api_queue.put_nowait(cmd)
             self._emit_trace("order_enqueue_api", cmd.intent, {"cmd_id": int(cmd.cmd_id)})
             return True
         except asyncio.QueueFull:
-            # H7: CANCEL is safety-critical — a lost CANCEL leaves a resting
-            # order at the broker with no local way to cancel. On queue-full,
-            # preempt the oldest NEW (DLQ it) so the CANCEL can proceed. If
-            # no NEW is present to evict, fall through to normal DLQ.
-            if cmd.intent.intent_type == IntentType.CANCEL:
-                evicted = self._evict_new_for_cancel()
-                if evicted is not None:
+            evictor_type = cmd.intent.intent_type
+            evicted = self._evict_lower_priority_for_safety_intent(evictor_type)
+            if evicted is not None:
+                evicted_type = evicted.intent.intent_type
+                try:
+                    self._api_queue.put_nowait(cmd)
+                except asyncio.QueueFull:
+                    # Race: queue filled again before we could put; put
+                    # the evicted command back and fall through to DLQ.
                     try:
-                        self._api_queue.put_nowait(cmd)
+                        self._api_queue.put_nowait(evicted)
                     except asyncio.QueueFull:
-                        # Race: queue filled again before we could put; put
-                        # the evicted NEW back and fall through to DLQ.
-                        try:
-                            self._api_queue.put_nowait(evicted)
-                        except asyncio.QueueFull:
-                            await self._add_to_dlq(
-                                evicted.intent,
-                                RejectionReason.RATE_LIMIT,
-                                "Lost during safety CANCEL eviction",
-                            )
-                    else:
-                        self._emit_trace(
-                            "order_enqueue_api_preempt",
-                            cmd.intent,
-                            {"cmd_id": int(cmd.cmd_id), "evicted_cmd_id": int(evicted.cmd_id)},
-                        )
-                        try:
-                            self.metrics.api_queue_cancel_priority_eviction_total.inc()
-                        except Exception:  # noqa: BLE001 — metric may not exist in tests
-                            pass
                         await self._add_to_dlq(
                             evicted.intent,
                             RejectionReason.RATE_LIMIT,
-                            "Preempted by safety CANCEL",
+                            "Lost during priority eviction race",
                         )
-                        return True
+                else:
+                    self._emit_trace(
+                        "order_enqueue_api_preempt",
+                        cmd.intent,
+                        {
+                            "cmd_id": int(cmd.cmd_id),
+                            "evicted_cmd_id": int(evicted.cmd_id),
+                            "evictor_intent_type": evictor_type.name,
+                            "evicted_intent_type": evicted_type.name,
+                        },
+                    )
+                    logger.warning(
+                        "api_queue_priority_eviction",
+                        stage="enqueue_api",
+                        evicted_cmd_id=int(evicted.cmd_id),
+                        evictor_cmd_id=int(cmd.cmd_id),
+                        evicted_intent_type=evicted_type.name,
+                        evictor_intent_type=evictor_type.name,
+                        queue_depth=self._api_queue.qsize(),
+                    )
+                    try:
+                        self.metrics.api_queue_priority_eviction_total.labels(
+                            evicted_intent_type=evicted_type.name,
+                            evictor_intent_type=evictor_type.name,
+                        ).inc()
+                    except Exception:  # noqa: BLE001 — metric must never block path
+                        pass
+                    await self._add_to_dlq(
+                        evicted.intent,
+                        RejectionReason.RATE_LIMIT,
+                        f"Preempted by higher-priority {evictor_type.name}",
+                    )
+                    return True
             logger.warning(
                 "API queue full - routing to DLQ",
                 cmd_id=cmd.cmd_id,
@@ -2731,30 +2769,62 @@ class OrderAdapter:
             await self._add_to_dlq(cmd.intent, RejectionReason.RATE_LIMIT, "API queue full")
             return False
 
-    def _evict_new_for_cancel(self) -> OrderCommand | None:
-        """Remove and return the oldest NEW-intent command from ``_api_queue``.
+    def _evict_lower_priority_for_safety_intent(
+        self, evictor_intent_type: IntentType
+    ) -> OrderCommand | None:
+        """M3: remove and return the oldest queued command whose intent
+        priority is strictly less than ``evictor_intent_type``.
 
-        Returns None if none found or the queue internals are unavailable.
+        Priority order from highest to lowest: CANCEL > FORCE_FLAT > AMEND
+        > NEW. Lowest-priority queued items are preferred targets so a
+        single high-priority arrival doesn't churn the entire queue.
         Accesses ``asyncio.Queue._queue`` (collections.deque) directly —
-        this is stable CPython behaviour but guarded with a try/except.
+        stable CPython behaviour but guarded with a try/except.
+        Returns None when no eligible victim exists or the queue internals
+        are unavailable.
         """
+        evictor_pri = self._api_intent_priority(evictor_intent_type)
+        if evictor_pri <= self._api_intent_priority(IntentType.NEW):
+            return None  # NEW (or unknown) cannot evict anything
         try:
             internal = self._api_queue._queue  # type: ignore[attr-defined]
         except AttributeError:
             return None
         if not internal:
             return None
-        for item in list(internal):
+        # Pick the lowest-priority victim, breaking ties by oldest (FIFO).
+        # ``enumerate(list(internal))`` snapshots the deque so concurrent
+        # mutations (defensive — single asyncio loop owns this queue) do
+        # not invalidate iteration.
+        target: tuple[int, OrderCommand] | None = None
+        target_pri = evictor_pri  # must be strictly lower than evictor
+        for idx, item in enumerate(list(internal)):
             intent = getattr(item, "intent", None)
             if intent is None:
                 continue
-            if intent.intent_type == IntentType.NEW:
-                try:
-                    internal.remove(item)
-                except ValueError:
-                    return None
-                return item
-        return None
+            pri = self._api_intent_priority(intent.intent_type)
+            if pri >= evictor_pri:
+                continue  # not evictable by this evictor
+            if target is None or pri < target_pri:
+                target = (idx, item)
+                target_pri = pri
+                if pri == self._api_intent_priority(IntentType.NEW):
+                    # Lowest possible victim already found at this index;
+                    # FIFO break: keep the first one found.
+                    break
+        if target is None:
+            return None
+        try:
+            internal.remove(target[1])
+        except ValueError:
+            return None
+        return target[1]
+
+    # H7 backwards-compat alias retained for any external callers; the
+    # new policy supersedes "evict NEW for CANCEL" with a general
+    # priority-based eviction. M3 (2026-04-25).
+    def _evict_new_for_cancel(self) -> OrderCommand | None:
+        return self._evict_lower_priority_for_safety_intent(IntentType.CANCEL)
 
     def submit_typed_command_nowait(self, frame: TypedOrderCommandFrame) -> None:
         """Prototype typed command ingress from GatewayService (avoids early materialization)."""

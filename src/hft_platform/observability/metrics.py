@@ -123,6 +123,7 @@ class MetricsRegistry:
                 _pn("order_contract_code_resolution_total"),
                 _pn("order_halt_skip_total"),
                 _pn("order_halt_post_dispatch_cancel_total"),
+                _pn("api_queue_priority_eviction_total"),
                 _pn("order_deadline_expired_total"),
                 _pn("phantom_order_candidates_total"),
                 _pn("phantom_recovery_releases_total"),
@@ -528,6 +529,15 @@ class MetricsRegistry:
             _pn("order_halt_post_dispatch_cancel_total"),
             "H1: defensive cancels issued after StormGuard transitioned to HALT "
             "during a broker dispatch await window (TOCTOU recovery)",
+        )
+        # M3 (2026-04-25): generalised api_queue priority eviction. Replaces
+        # the H7 ``api_queue_cancel_priority_eviction_total`` (CANCEL evicts
+        # NEW only) with a labelled counter keyed by both evictor and
+        # evicted intent types. CANCEL > FORCE_FLAT > AMEND > NEW.
+        self.api_queue_priority_eviction_total = Counter(
+            _pn("api_queue_priority_eviction_total"),
+            "OrderAdapter._api_queue priority-based evictions when full",
+            ["evicted_intent_type", "evictor_intent_type"],
         )
         self.order_deadline_expired_total = Counter(
             _pn("order_deadline_expired_total"),
