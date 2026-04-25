@@ -161,9 +161,32 @@ class TestPhantomFillReconciliation:
         client = MagicMock()
         adapter = OrderAdapter(config_path, queue, client)
 
-        # Simulate: order was dispatched, pending fill registered, then dispatch "failed"
+        # Simulate: order was dispatched, pending fill registered, then dispatch "failed".
+        # M4: seed canonical record store + legacy views.
+        from hft_platform.contracts.strategy import IntentType, OrderIntent
+        from hft_platform.order.adapter import _PhantomEntry
+
         order_key = "r47_maker:intent_42"
-        adapter._phantom_order_keys[order_key] = (time.monotonic(), "TXFD6")
+        synth_intent = OrderIntent(
+            intent_id=42,
+            strategy_id="r47_maker",
+            symbol="TXFD6",
+            intent_type=IntentType.NEW,
+            side=Side.BUY,
+            price=100_0000,
+            qty=1,
+        )
+        now_mono = time.monotonic()
+        adapter._phantom_records[order_key] = [
+            _PhantomEntry(
+                monotonic_ts=now_mono,
+                symbol="TXFD6",
+                created_ns=0,
+                intent=synth_intent,
+            )
+        ]
+        adapter._phantom_order_keys[order_key] = (now_mono, "TXFD6")
+        adapter._phantom_intents[order_key] = synth_intent
         adapter._pending_fill_index["TXFD6:BUY"] = [order_key]
         adapter._pending_fill_registered_at[order_key] = time.monotonic()
 
@@ -172,6 +195,7 @@ class TestPhantomFillReconciliation:
 
         assert result == "r47_maker"
         # Phantom key should be cleared after resolution
+        assert order_key not in adapter._phantom_records
         assert order_key not in adapter._phantom_order_keys
         # Pending fill index should be cleaned up
         assert "TXFD6:BUY" not in adapter._pending_fill_index
@@ -192,15 +216,39 @@ class TestPhantomFillReconciliation:
         client = MagicMock()
         adapter = OrderAdapter(config_path, queue, client)
 
-        # Simulate: pending fill was already swept (30s TTL expired), but phantom + cmd maps remain
+        # Simulate: pending fill was already swept (30s TTL expired), but phantom + cmd maps remain.
+        # M4: register through the canonical store and the legacy view.
+        from hft_platform.contracts.strategy import IntentType, OrderIntent
+        from hft_platform.order.adapter import _PhantomEntry
+
         phantom_key = "r47_maker:intent_99"
-        adapter._phantom_order_keys[phantom_key] = (time.monotonic(), "TXFD6")
+        synthetic_intent = OrderIntent(
+            intent_id=99,
+            strategy_id="r47_maker",
+            symbol="TXFD6",
+            intent_type=IntentType.NEW,
+            side=Side.BUY,
+            price=100_0000,
+            qty=1,
+        )
+        now_mono = time.monotonic()
+        adapter._phantom_records[phantom_key] = [
+            _PhantomEntry(
+                monotonic_ts=now_mono,
+                symbol="TXFD6",
+                created_ns=0,
+                intent=synthetic_intent,
+            )
+        ]
+        adapter._phantom_order_keys[phantom_key] = (now_mono, "TXFD6")
+        adapter._phantom_intents[phantom_key] = synthetic_intent
         # No pending_fill_index entry
 
         fill = _make_fill(symbol="TXFD6", side=Side.BUY, strategy_id="UNKNOWN")
         result = adapter.resolve_phantom_fill(fill)
 
         assert result == "r47_maker"
+        assert phantom_key not in adapter._phantom_records
         assert phantom_key not in adapter._phantom_order_keys
 
     @pytest.mark.asyncio

@@ -5,7 +5,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable, Iterable
-from typing import Any, Dict, TypeAlias, TypeGuard, cast
+from typing import Any, Dict, NamedTuple, TypeAlias, TypeGuard, cast
 
 import yaml
 from structlog import get_logger
@@ -31,6 +31,21 @@ logger = get_logger("order_adapter")
 _PENDING_SENTINEL = object()
 _TERMINAL_BEFORE_REGISTERED = object()
 _GUARD_TIMEOUT = object()
+
+
+class _PhantomEntry(NamedTuple):
+    """M4: per-occurrence phantom record. Multiple entries can share the
+    same ``(strategy_id, intent_id)`` key when an intent_id is reused in
+    the same process — each ``_PhantomEntry`` carries its own
+    ``created_ns`` (from ``timebase.now_ns()``) so resolution and
+    cleanup operate on the specific occurrence rather than overwriting
+    or losing the prior entry.
+    """
+
+    monotonic_ts: float
+    symbol: str
+    created_ns: int
+    intent: OrderIntent
 
 # Operations that mutate broker state and must not be retried if the
 # timed-out attempt might still succeed in the thread pool.
@@ -122,9 +137,21 @@ class OrderAdapter:
         "_cancel_inflight_max",
         "_cancel_inflight_ttl_s",
         "_engine_thread_id",
+        # M4: per-occurrence phantom storage. Replaces the parallel
+        # ``_phantom_order_keys`` + ``_phantom_intents`` dicts (each keyed
+        # by ``"strategy_id:intent_id"`` -> single tuple/intent) with a
+        # single dict whose values are append-only lists of
+        # ``_PhantomEntry`` so reusing the same intent_id within a process
+        # lifetime never overwrites a prior phantom record.
+        "_phantom_records",
+        # Backwards-compat read/write views — synced by the phantom
+        # helpers. Legacy tests that mutate these dicts directly still
+        # work because the helpers reconstruct them from
+        # ``_phantom_records``. Always reflect the LAST occurrence per
+        # key (matching the pre-M4 invariant).
         "_phantom_order_keys",
-        "_phantom_order_max",
         "_phantom_intents",
+        "_phantom_order_max",
         "_phantom_recovery_ttl_s",
         "_phantom_lock",
         "_audit_writer",
@@ -275,24 +302,29 @@ class OrderAdapter:
 
         # Phantom order tracking: timed-out mutating calls that may have succeeded at broker
         # R2-03: Bounded dict with TTL eviction (Architecture Governance Rule 12)
-        self._phantom_order_keys: dict[str, tuple[float, str]] = {}  # key -> (monotonic timestamp, symbol)
-        self._phantom_order_max: int = 1000
-        # Bug D (2026-04-20): preserve the originating intent so the recovery
-        # janitor can emit a was_approved=False feedback (releasing strategy
-        # pending counters) when the broker never sends a fill or cancel
-        # callback for a phantom (Shioaji client-side exceptions don't always
-        # reach the exchange, leaving R47 frozen on poisoned _pending_buy/sell).
+        # M4 (2026-04-25): per-occurrence list. The same (strategy_id,
+        # intent_id) can repeat within one process lifetime (DLQ replay,
+        # retry, or just intent_id reuse by the strategy) — each occurrence
+        # gets its own ``_PhantomEntry`` so neither side overwrites the
+        # other. Resolution and cleanup pop FIFO from the per-key list,
+        # keeping each occurrence independently traceable.
+        self._phantom_records: dict[str, list[_PhantomEntry]] = {}
+        # Backwards-compat views maintained by the helpers below. Legacy
+        # tests and metric scrapers can still read these dicts; writes
+        # through these dicts are picked up by ``_sync_phantom_views``
+        # on the next helper call.
+        self._phantom_order_keys: dict[str, tuple[float, str]] = {}
         self._phantom_intents: dict[str, OrderIntent] = {}
+        self._phantom_order_max: int = 1000
         self._phantom_recovery_ttl_s: float = float(
             os.getenv("HFT_PHANTOM_RECOVERY_TTL_S", "30")
         )
-        # P0-E2: serialises access to ``_phantom_order_keys`` and
-        # ``_phantom_intents``. Multiple coroutine tasks (``_call_api``,
-        # ``_handle_dispatch_exception``, ``release_stale_phantom_pendings``,
-        # ``resolve_phantom_fill``, ``clear_phantom_candidate``, and the
-        # over-capacity eviction branch inside ``_call_api``) can observe
-        # interleaved reads/writes; the previous unguarded
-        # ``[k for k, v in self._phantom_order_keys.items() if ...]``
+        # P0-E2 + M4: serialises access to ``_phantom_records``. Multiple
+        # coroutine tasks (``_call_api``, ``_handle_dispatch_exception``,
+        # ``release_stale_phantom_pendings``, ``resolve_phantom_fill``,
+        # ``clear_phantom_candidate``, and the over-capacity eviction branch
+        # inside ``_call_api``) can observe interleaved reads/writes; the
+        # previous unguarded list-comprehension over the records dict
         # inside the capacity eviction path could raise
         # ``RuntimeError: dictionary changed size during iteration`` when a
         # peer task popped keys. ``threading.Lock`` (not asyncio) because
@@ -724,17 +756,13 @@ class OrderAdapter:
         )
 
         if is_phantom_candidate:
-            phantom_key = f"{intent.strategy_id}:{intent.intent_id}"
-            # P0-E2: insert + over-capacity eviction under _phantom_lock.
+            # M4: append per-occurrence record under _phantom_lock so concurrent
+            # ``resolve_phantom_fill`` / ``clear_phantom_candidate`` cannot
+            # race with insert + capacity-eviction sweep.
             with self._phantom_lock:
-                self._phantom_order_keys[phantom_key] = (time.monotonic(), intent.symbol)
-                self._phantom_intents[phantom_key] = intent
-                if len(self._phantom_order_keys) > self._phantom_order_max:
-                    cutoff = time.monotonic() - 3600.0
-                    stale = [k for k, v in self._phantom_order_keys.items() if v[0] <= cutoff]
-                    for sk in stale:
-                        self._phantom_order_keys.pop(sk, None)
-                        self._phantom_intents.pop(sk, None)
+                phantom_key = self._register_phantom(intent)
+                if self._phantom_record_count() > self._phantom_order_max:
+                    self._evict_stale_phantom_records(max_age_s=3600.0)
             logger.warning(
                 "phantom_order_candidate_dispatch_failed",
                 strategy_id=intent.strategy_id,
@@ -754,6 +782,180 @@ class OrderAdapter:
         # may have reached the broker and fills arriving later need the
         # pending_fill_index for strategy_id resolution.
 
+    # ── M4: phantom record helpers ────────────────────────────────────────
+    # Multi-occurrence phantom storage. ``_phantom_records[key]`` is an
+    # append-only list of ``_PhantomEntry``, so the same intent_id reused
+    # within one process lifetime cannot overwrite a prior record.
+    # ALL writes go through these helpers and ALL reads under ``_phantom_lock``.
+
+    def _get_phantom_records(self) -> dict[str, list[_PhantomEntry]]:
+        """M4: lazy accessor for the canonical phantom store.
+
+        Tests construct OrderAdapter via ``__new__`` and seed only the
+        slots they exercise. ``_phantom_records`` may not be present on
+        those skeleton instances, so every helper that touches the
+        canonical store goes through this accessor which auto-initialises
+        on first use.
+        """
+        records = getattr(self, "_phantom_records", None)
+        if records is None:
+            records = {}
+            self._phantom_records = records
+        return records
+
+    def _get_phantom_legacy_keys(self) -> dict[str, tuple[float, str]]:
+        """M4: lazy accessor for the backwards-compat ``_phantom_order_keys``
+        view. Same auto-init rationale as ``_get_phantom_records``.
+        """
+        view = getattr(self, "_phantom_order_keys", None)
+        if view is None:
+            view = {}
+            self._phantom_order_keys = view
+        return view
+
+    def _get_phantom_legacy_intents(self) -> dict[str, OrderIntent]:
+        """M4: lazy accessor for the backwards-compat ``_phantom_intents`` view."""
+        view = getattr(self, "_phantom_intents", None)
+        if view is None:
+            view = {}
+            self._phantom_intents = view
+        return view
+
+    def _register_phantom(self, intent: OrderIntent) -> str:
+        """M4: append a new ``_PhantomEntry`` for ``intent``. Multiple
+        registrations with the same key (same ``strategy_id:intent_id``)
+        accumulate as separate list entries — none overwrites another.
+        Returns the canonical phantom key (``"strategy_id:intent_id"``).
+        Caller MUST be inside ``_phantom_lock`` already (insert is paired
+        with a capacity-eviction sweep).
+        """
+        phantom_key = f"{intent.strategy_id}:{intent.intent_id}"
+        entry = _PhantomEntry(
+            monotonic_ts=time.monotonic(),
+            symbol=intent.symbol,
+            created_ns=timebase.now_ns(),
+            intent=intent,
+        )
+        records = self._get_phantom_records()
+        records.setdefault(phantom_key, []).append(entry)
+        # Backwards-compat: keep the legacy views aligned with the LAST
+        # occurrence per key. The canonical multi-occurrence store remains
+        # ``_phantom_records``; legacy code reading these dicts sees the
+        # most recent occurrence (the pre-M4 contract).
+        self._get_phantom_legacy_keys()[phantom_key] = (entry.monotonic_ts, entry.symbol)
+        self._get_phantom_legacy_intents()[phantom_key] = entry.intent
+        return phantom_key
+
+    def _evict_stale_phantom_records(self, max_age_s: float = 3600.0) -> int:
+        """M4: drop ``_PhantomEntry`` items older than ``max_age_s``.
+        Removes empty per-key lists. Caller MUST be inside ``_phantom_lock``.
+        Returns the number of entries removed.
+        """
+        cutoff = time.monotonic() - max_age_s
+        removed = 0
+        empty_keys: list[str] = []
+        records_dict = self._get_phantom_records()
+        legacy_keys = self._get_phantom_legacy_keys()
+        legacy_intents = self._get_phantom_legacy_intents()
+        for key, records in records_dict.items():
+            kept = [r for r in records if r.monotonic_ts > cutoff]
+            removed += len(records) - len(kept)
+            if kept:
+                records_dict[key] = kept
+                # Resync legacy views to the surviving last occurrence.
+                last = kept[-1]
+                legacy_keys[key] = (last.monotonic_ts, last.symbol)
+                legacy_intents[key] = last.intent
+            else:
+                empty_keys.append(key)
+        for key in empty_keys:
+            records_dict.pop(key, None)
+            legacy_keys.pop(key, None)
+            legacy_intents.pop(key, None)
+        return removed
+
+    def _phantom_record_count(self) -> int:
+        """M4: total number of ``_PhantomEntry`` items across all keys.
+        Used by capacity-eviction. Caller MUST be inside ``_phantom_lock``.
+        """
+        return sum(len(records) for records in self._get_phantom_records().values())
+
+    def _phantom_drop_key(self, key: str) -> None:
+        """M4: drop ALL records for ``key`` and align legacy views.
+        Caller MUST be inside ``_phantom_lock``.
+        """
+        self._get_phantom_records().pop(key, None)
+        self._get_phantom_legacy_keys().pop(key, None)
+        self._get_phantom_legacy_intents().pop(key, None)
+
+    def _phantom_resync_legacy(self, key: str) -> None:
+        """M4: legacy-view sync for ``key`` after popping one occurrence.
+        If records remain, point the legacy dicts at the (new) last
+        occurrence; if none remain, drop the key from all dicts.
+        Caller MUST be inside ``_phantom_lock``.
+        """
+        records_dict = self._get_phantom_records()
+        legacy_keys = self._get_phantom_legacy_keys()
+        legacy_intents = self._get_phantom_legacy_intents()
+        records = records_dict.get(key)
+        if not records:
+            records_dict.pop(key, None)
+            legacy_keys.pop(key, None)
+            legacy_intents.pop(key, None)
+            return
+        last = records[-1]
+        legacy_keys[key] = (last.monotonic_ts, last.symbol)
+        legacy_intents[key] = last.intent
+
+    def _phantom_materialize_legacy(self) -> None:
+        """M4: build ``_phantom_records`` entries from any legacy
+        ``_phantom_order_keys`` rows that lack a canonical record.
+
+        Some tests still seed the legacy view directly (with or without
+        a paired ``_phantom_intents`` write); without this materialiser
+        ``resolve_phantom_fill`` and ``release_stale_phantom_pendings``
+        would silently miss those entries because they iterate the
+        canonical store. Caller MUST be inside ``_phantom_lock``.
+        """
+        records_dict = self._get_phantom_records()
+        legacy_keys = self._get_phantom_legacy_keys()
+        legacy_intents = self._get_phantom_legacy_intents()
+        for key, view in list(legacy_keys.items()):
+            if key in records_dict:
+                continue
+            try:
+                ts, symbol = view if isinstance(view, tuple) else (view, "")
+            except (TypeError, ValueError):
+                continue
+            intent = legacy_intents.get(key)
+            if intent is None:
+                # Synthesise a minimal intent so feedback / FIFO logic
+                # has something to work with. Strategy_id is parsed from
+                # the key; intent_id is opportunistic (best-effort).
+                strat = key.split(":", 1)[0] if ":" in key else key
+                rest = key.split(":", 1)[1] if ":" in key else ""
+                try:
+                    intent_id = int(rest)
+                except ValueError:
+                    intent_id = 0
+                intent = OrderIntent(
+                    intent_id=intent_id,
+                    strategy_id=strat,
+                    symbol=symbol or "",
+                    intent_type=IntentType.NEW,
+                    side=Side.BUY,
+                    price=0,
+                    qty=0,
+                )
+            records_dict[key] = [
+                _PhantomEntry(
+                    monotonic_ts=float(ts),
+                    symbol=symbol,
+                    created_ns=0,
+                    intent=intent,
+                )
+            ]
+
     async def release_stale_phantom_pendings(self, ttl_s: float | None = None) -> int:
         """Bug D (2026-04-20): release strategy pending counters for phantoms past TTL.
 
@@ -772,28 +974,37 @@ class OrderAdapter:
 
         Returns the number of phantoms released. Called from supervisor loop.
         """
-        if not self._phantom_order_keys:
+        # M4: materialise legacy-only entries (see ``resolve_phantom_fill``).
+        with self._phantom_lock:
+            self._phantom_materialize_legacy()
+        if not self._get_phantom_records():
             return 0
         ttl = ttl_s if ttl_s is not None else self._phantom_recovery_ttl_s
         now_mono = time.monotonic()
         released = 0
-        # P0-E2: snapshot + evict under _phantom_lock, emit feedback after.
-        # Feedback emission (``_send_dispatch_rejection``) calls into
+        # P0-E2 + M4: snapshot + per-occurrence evict under _phantom_lock,
+        # emit feedback after. ``_send_dispatch_rejection`` calls into
         # _rejection_sink.put_nowait; we intentionally release the lock
         # before that to avoid holding the phantom lock across queue I/O.
         expired: list[tuple[str, OrderIntent]] = []
         with self._phantom_lock:
-            for pkey, entry in list(self._phantom_order_keys.items()):
-                ts, _symbol = entry if isinstance(entry, tuple) else (entry, "")
-                if (now_mono - ts) < ttl:
-                    continue
-                intent = self._phantom_intents.pop(pkey, None)
-                self._phantom_order_keys.pop(pkey, None)
-                if intent is None:
-                    # Phantom registered before this fix shipped, or already
-                    # drained via resolve_phantom_fill — nothing to send.
-                    continue
-                expired.append((pkey, intent))
+            records_dict = self._get_phantom_records()
+            legacy_keys = self._get_phantom_legacy_keys()
+            legacy_intents = self._get_phantom_legacy_intents()
+            for pkey, records in list(records_dict.items()):
+                kept: list[_PhantomEntry] = []
+                for record in records:
+                    if (now_mono - record.monotonic_ts) < ttl:
+                        kept.append(record)
+                        continue
+                    expired.append((pkey, record.intent))
+                if kept:
+                    records_dict[pkey] = kept
+                    last = kept[-1]
+                    legacy_keys[pkey] = (last.monotonic_ts, last.symbol)
+                    legacy_intents[pkey] = last.intent
+                else:
+                    self._phantom_drop_key(pkey)
         for _pkey, intent in expired:
             self._send_dispatch_rejection(
                 intent,
@@ -810,7 +1021,7 @@ class OrderAdapter:
                 "phantom_recovery_swept",
                 released=released,
                 ttl_s=ttl,
-                remaining=len(self._phantom_order_keys),
+                remaining=len(self._get_phantom_records()),
             )
         return released
 
@@ -851,21 +1062,24 @@ class OrderAdapter:
     def get_phantom_candidates(self) -> frozenset[str]:
         """Return a frozen copy of phantom order keys for reconciliation.
 
-        P0-E2: snapshots under _phantom_lock so the frozenset construction is
-        not racing with a concurrent insert/pop.
+        P0-E2 + M4: snapshots under _phantom_lock so the frozenset construction
+        is not racing with a concurrent insert/pop. Returns one entry per key
+        regardless of how many occurrences are tracked under that key (the
+        external reconciler does not care about per-occurrence counts).
         """
         with self._phantom_lock:
-            return frozenset(self._phantom_order_keys.keys())
+            return frozenset(self._get_phantom_records().keys())
 
     def clear_phantom_candidate(self, key: str) -> None:
-        """Remove a phantom order key after reconciliation confirms resolution.
+        """Remove ALL phantom records for ``key`` after reconciliation confirms
+        resolution.
 
-        P0-E2: both dicts popped atomically under _phantom_lock so
-        reconciliation never sees a half-cleared entry.
+        P0-E2 + M4: pop entire per-key list atomically under _phantom_lock so
+        reconciliation never sees a half-cleared entry. Idempotent w.r.t.
+        unknown keys.
         """
         with self._phantom_lock:
-            self._phantom_order_keys.pop(key, None)
-            self._phantom_intents.pop(key, None)
+            self._phantom_drop_key(key)
 
     def resolve_phantom_fill(self, fill_event: Any) -> str | None:
         """Attempt to resolve an orphaned fill against phantom order candidates.
@@ -874,13 +1088,21 @@ class OrderAdapter:
         the broker. This method checks if any phantom candidate matches the fill
         by symbol and side, returning the strategy_id if found.
 
-        P0-E2: phantom dict mutations are now serialised under ``_phantom_lock``.
-        Called from ExecutionRouter on the event loop today; the lock
-        discipline keeps it safe if future reconciliation threads call in.
+        P0-E2 + M4: phantom dict mutations are now serialised under
+        ``_phantom_lock`` and operate on per-occurrence ``_PhantomEntry`` lists.
+        A single fill resolves a single FIFO occurrence — sibling occurrences
+        for the same intent_id (re-submitted within the same process) remain
+        intact and resolvable independently.
 
         Returns strategy_id or None.
         """
-        if not self._phantom_order_keys:
+        # M4: materialise any legacy-only entries so the canonical-store
+        # iteration below can resolve them (test fixtures still seed
+        # ``_phantom_order_keys`` directly without writing through the
+        # helpers).
+        with self._phantom_lock:
+            self._phantom_materialize_legacy()
+        if not self._get_phantom_records():
             return None
         symbol = getattr(fill_event, "symbol", "")
         side = getattr(fill_event, "side", None)
@@ -909,10 +1131,14 @@ class OrderAdapter:
                 if not pending:
                     del self._pending_fill_index[pf_key]
                 strategy_id = order_key.split(":", 1)[0] if ":" in order_key else order_key
-                # Clear phantom candidate if it matches (P0-E2: under phantom lock).
+                # M4: pop ONE phantom occurrence (FIFO) for ``order_key`` so a
+                # sibling occurrence (same intent_id, second submission) stays
+                # resolvable for its own fill.
                 with self._phantom_lock:
-                    self._phantom_order_keys.pop(order_key, None)
-                    self._phantom_intents.pop(order_key, None)
+                    records = self._get_phantom_records().get(order_key)
+                    if records:
+                        records.pop(0)
+                        self._phantom_resync_legacy(order_key)
                 logger.warning(
                     "phantom_fill_resolved_via_pending_index",
                     symbol=symbol,
@@ -927,18 +1153,24 @@ class OrderAdapter:
             # Snapshot inside the lock; process candidates below (still holding
             # the lock for the matching pop to avoid a concurrent task stealing
             # the same key between our match decision and the pop).
-            for pkey, entry in list(self._phantom_order_keys.items()):
-                # entry is (monotonic_ts, symbol_str)
-                p_ts, p_symbol = entry if isinstance(entry, tuple) else (entry, "")
+            for pkey, records in list(self._get_phantom_records().items()):
+                if not records:
+                    continue
+                # FIFO: examine the oldest record first. A symbol mismatch
+                # means we cannot use ANY occurrence under this key (they
+                # all share the same symbol since the same intent_id from
+                # the same strategy hits the same symbol), so move on.
+                head = records[0]
                 # Skip entries older than 2 hours (stale phantoms)
-                if (now_mono - p_ts) > 7200.0:
+                if (now_mono - head.monotonic_ts) > 7200.0:
                     continue
                 # C-2 fix: MUST verify symbol match to prevent cross-strategy misattribution
-                if p_symbol and p_symbol != symbol:
+                if head.symbol and head.symbol != symbol:
                     continue
                 strategy_id = pkey.split(":", 1)[0] if ":" in pkey else pkey
-                self._phantom_order_keys.pop(pkey, None)
-                self._phantom_intents.pop(pkey, None)
+                # M4: pop ONE occurrence FIFO; siblings retained.
+                records.pop(0)
+                self._phantom_resync_legacy(pkey)
                 logger.warning(
                     "phantom_fill_resolved_via_phantom_keys",
                     symbol=symbol,
@@ -3213,21 +3445,15 @@ class OrderAdapter:
                         # CANCEL/AMEND failures are not "phantom orders" — gating
                         # prevents spurious phantom_recovery_releases on cancels.
                         if intent is not None and intent.intent_type == IntentType.NEW:
-                            phantom_key = f"{intent.strategy_id}:{intent.intent_id}"
-                            # P0-E2: insert + over-capacity eviction under _phantom_lock.
-                            # Previously the list-comprehension at the ``_stale =`` line
-                            # could raise ``RuntimeError: dictionary changed size during
-                            # iteration`` when a peer task popped keys in parallel.
+                            # M4: append per-occurrence record under _phantom_lock.
+                            # Multiple registrations with the same key (intent_id
+                            # reused within process lifetime) accumulate as
+                            # separate entries; resolution / cleanup pop FIFO.
                             with self._phantom_lock:
-                                self._phantom_order_keys[phantom_key] = (time.monotonic(), intent.symbol)
-                                self._phantom_intents[phantom_key] = intent
-                                # R2-03: Evict entries older than 1 hour when over capacity
-                                if len(self._phantom_order_keys) > self._phantom_order_max:
-                                    cutoff = time.monotonic() - 3600.0
-                                    _stale = [k for k, v in self._phantom_order_keys.items() if v[0] <= cutoff]
-                                    for _sk in _stale:
-                                        self._phantom_order_keys.pop(_sk, None)
-                                        self._phantom_intents.pop(_sk, None)
+                                phantom_key = self._register_phantom(intent)
+                                # R2-03: Evict entries older than 1 hour when over capacity.
+                                if self._phantom_record_count() > self._phantom_order_max:
+                                    self._evict_stale_phantom_records(max_age_s=3600.0)
                             logger.warning(
                                 "phantom_order_candidate",
                                 strategy_id=intent.strategy_id,

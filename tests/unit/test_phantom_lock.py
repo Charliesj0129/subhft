@@ -158,10 +158,22 @@ async def test_release_stale_phantoms_is_reentry_safe(tmp_path):
     adapter = _make_adapter(tmp_path)
     import time as _time
 
-    # Seed an expired phantom.
+    from hft_platform.order.adapter import _PhantomEntry
+
+    # Seed an expired phantom (M4: canonical store + legacy view).
+    aged_ts = _time.monotonic() - 1000.0
+    intent_x = _intent("SX", 1)
     with adapter._phantom_lock:
-        adapter._phantom_order_keys["SX:1"] = (_time.monotonic() - 1000.0, "TMFD6")
-        adapter._phantom_intents["SX:1"] = _intent("SX", 1)
+        adapter._phantom_records["SX:1"] = [
+            _PhantomEntry(
+                monotonic_ts=aged_ts,
+                symbol="TMFD6",
+                created_ns=0,
+                intent=intent_x,
+            )
+        ]
+        adapter._phantom_order_keys["SX:1"] = (aged_ts, "TMFD6")
+        adapter._phantom_intents["SX:1"] = intent_x
 
     # Install a no-op rejection sink so _send_dispatch_rejection works.
     adapter._rejection_sink = asyncio.Queue()

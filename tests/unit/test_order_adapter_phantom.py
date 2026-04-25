@@ -73,10 +73,10 @@ def _make_adapter(tmp_config: str, *, client: Any | None = None) -> OrderAdapter
     return OrderAdapter(config_path=tmp_config, order_queue=order_q, broker_client=client)
 
 
-def _make_intent(intent_id: int = 1) -> OrderIntent:
+def _make_intent(intent_id: int = 1, strategy_id: str = "s1") -> OrderIntent:
     return OrderIntent(
         intent_id=intent_id,
-        strategy_id="s1",
+        strategy_id=strategy_id,
         symbol="2330",
         price=100_0000,
         qty=1,
@@ -143,9 +143,22 @@ async def test_release_stale_phantom_pendings_emits_recovery_feedback(tmp_config
     intent = _make_intent(intent_id=42)
     phantom_key = f"{intent.strategy_id}:{intent.intent_id}"
 
-    # Simulate phantom registration (mirrors adapter.py:2118-2123 path)
+    # Simulate phantom registration (mirrors adapter.py:2118-2123 path).
+    # M4: register via the canonical multi-occurrence store, then back-date
+    # the timestamp so the recovery sweep treats it as eligible.
     adapter._send_dispatch_rejection(intent, "dispatch_failed", phantom_pending=True)
-    adapter._phantom_order_keys[phantom_key] = (time.monotonic() - 999.0, intent.symbol)
+    from hft_platform.order.adapter import _PhantomEntry
+
+    aged_ts = time.monotonic() - 999.0
+    adapter._phantom_records[phantom_key] = [
+        _PhantomEntry(
+            monotonic_ts=aged_ts,
+            symbol=intent.symbol,
+            created_ns=0,
+            intent=intent,
+        )
+    ]
+    adapter._phantom_order_keys[phantom_key] = (aged_ts, intent.symbol)
     adapter._phantom_intents[phantom_key] = intent
 
     # Drain the initial phantom_pending feedback (was_approved=True)
@@ -156,6 +169,7 @@ async def test_release_stale_phantom_pendings_emits_recovery_feedback(tmp_config
     released = await adapter.release_stale_phantom_pendings(ttl_s=30.0)
 
     assert released == 1
+    assert phantom_key not in adapter._phantom_records
     assert phantom_key not in adapter._phantom_order_keys
     assert phantom_key not in adapter._phantom_intents
 
@@ -265,20 +279,33 @@ async def test_mutating_timeout_without_intent_no_phantom(tmp_config):
 
 
 def test_get_phantom_candidates_returns_frozenset(tmp_config):
-    """get_phantom_candidates returns a frozenset copy of tracked keys."""
+    """get_phantom_candidates returns a frozenset copy of tracked keys.
+
+    M4: keys come from the canonical ``_phantom_records`` store; the
+    legacy ``_phantom_order_keys`` view is kept aligned for back-compat
+    so this assertion still holds after upgrade.
+    """
     adapter = _make_adapter(tmp_config)
     import time
 
+    from hft_platform.order.adapter import _PhantomEntry
+
     now = time.monotonic()
-    adapter._phantom_order_keys["s1:1"] = (now, "TXFD6")
-    adapter._phantom_order_keys["s2:2"] = (now, "TXFD6")
+    intent_a = _make_intent(intent_id=1)
+    intent_b = _make_intent(intent_id=2, strategy_id="s2")
+    adapter._phantom_records["s1:1"] = [
+        _PhantomEntry(monotonic_ts=now, symbol="TXFD6", created_ns=0, intent=intent_a)
+    ]
+    adapter._phantom_records["s2:2"] = [
+        _PhantomEntry(monotonic_ts=now, symbol="TXFD6", created_ns=0, intent=intent_b)
+    ]
 
     result = adapter.get_phantom_candidates()
 
     assert isinstance(result, frozenset)
     assert result == frozenset({"s1:1", "s2:2"})
     # Mutating the returned set should not affect the adapter
-    assert len(adapter._phantom_order_keys) == 2
+    assert len(adapter._phantom_records) == 2
 
 
 def test_clear_phantom_candidate_removes_key(tmp_config):
@@ -357,7 +384,13 @@ async def test_deadline_expired_increments_metric(tmp_config):
 
 @pytest.mark.asyncio
 async def test_phantom_set_eviction_at_max_size(tmp_config):
-    """R2-03: Phantom set should evict old entries when exceeding max size."""
+    """R2-03: Phantom set should evict old entries when exceeding max size.
+
+    M4 (2026-04-25): the canonical store is ``_phantom_records``; legacy
+    ``_phantom_order_keys`` view is kept aligned by the helpers. Test
+    pre-fills records directly with stale timestamps and verifies that
+    the over-capacity sweep drops them.
+    """
     adapter = _make_adapter(tmp_config)
     adapter._phantom_order_max = 5  # Low cap for testing
     adapter._api_timeout_s = 0.01
@@ -365,11 +398,24 @@ async def test_phantom_set_eviction_at_max_size(tmp_config):
     # Pre-fill with old entries (simulate timestamps from 2 hours ago)
     import time
 
+    from hft_platform.order.adapter import _PhantomEntry
+
     old_ts = time.monotonic() - 7200.0  # 2 hours ago
     for i in range(6):
-        adapter._phantom_order_keys[f"old_strat:{i}"] = (old_ts, "TXFD6")
+        key = f"old_strat:{i}"
+        intent_old = _make_intent(intent_id=i, strategy_id="old_strat")
+        adapter._phantom_records[key] = [
+            _PhantomEntry(
+                monotonic_ts=old_ts,
+                symbol="TXFD6",
+                created_ns=0,
+                intent=intent_old,
+            )
+        ]
+        adapter._phantom_order_keys[key] = (old_ts, "TXFD6")
+        adapter._phantom_intents[key] = intent_old
 
-    assert len(adapter._phantom_order_keys) == 6
+    assert adapter._phantom_record_count() == 6
 
     # Trigger a new phantom via timeout — this should trigger eviction
     def _hang(*a, **kw):
@@ -379,5 +425,5 @@ async def test_phantom_set_eviction_at_max_size(tmp_config):
     await adapter._call_api("place_order", _hang, intent=intent, max_retries=0)
 
     # Old entries (>1 hour) should be evicted, only the new one remains
-    assert len(adapter._phantom_order_keys) <= adapter._phantom_order_max
-    assert f"{intent.strategy_id}:{intent.intent_id}" in adapter._phantom_order_keys
+    assert adapter._phantom_record_count() <= adapter._phantom_order_max
+    assert f"{intent.strategy_id}:{intent.intent_id}" in adapter._phantom_records
