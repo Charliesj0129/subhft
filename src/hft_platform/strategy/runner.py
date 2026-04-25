@@ -165,6 +165,7 @@ class StrategyRunner:
         "_strategy_pending_intents",
         "_strategy_pending_alpha_intent",
         "_strategy_pending_alpha_flat",
+        "_pending_intent_locks",
         "_circuit_threshold",
         "_circuit_recovery_threshold",
         "_circuit_cooldown_ns",
@@ -279,6 +280,12 @@ class StrategyRunner:
         self._strategy_pending_intents: dict[str, int] = {}
         self._strategy_pending_alpha_intent: dict[str, int] = {}
         self._strategy_pending_alpha_flat: dict[str, int] = {}
+        # P1-9: per-strategy asyncio.Lock guards the read-modify-write pattern
+        # on ``_strategy_pending_intents`` so two concurrent ``process_event``
+        # tasks for the same ``sid`` cannot interleave their increment and
+        # the periodic ``int_m.inc(pending) + reset to 0`` decrement step,
+        # which would otherwise drop intent counts on the floor.
+        self._pending_intent_locks: dict[str, asyncio.Lock] = {}
 
         # Circuit breaker: 3-state FSM (normal → degraded → halted) per strategy
         _threshold_env = os.getenv("HFT_STRATEGY_CIRCUIT_THRESHOLD", "10")
@@ -716,6 +723,20 @@ class StrategyRunner:
             if pending_alpha_flat and alpha_flat_m:
                 alpha_flat_m.inc(pending_alpha_flat)
             self._strategy_pending_alpha_flat[sid] = 0
+
+    def _get_pending_lock(self, sid: str) -> asyncio.Lock:
+        """P1-9: per-strategy lock for ``_strategy_pending_intents`` mutations.
+
+        Lazily creates the lock on first use via ``setdefault``. CPython's
+        ``setdefault`` assignment is GIL-atomic, so concurrent calls for the
+        same ``sid`` may construct two ``asyncio.Lock`` objects but only one
+        ends up in the dict — the loser is GC'd unused. This is acceptable
+        because no coroutine has been allowed to acquire the loser yet.
+        """
+        lock = self._pending_intent_locks.get(sid)
+        if lock is None:
+            lock = self._pending_intent_locks.setdefault(sid, asyncio.Lock())
+        return lock
 
     def _resolve_risk_submit(self, risk_queue: Any):
         if hasattr(risk_queue, "submit_nowait"):
@@ -1298,7 +1319,16 @@ class StrategyRunner:
                 if self._strategy_metrics_batch <= 1:
                     int_m.inc(len(intents))
                 else:
-                    self._strategy_pending_intents[sid] = self._strategy_pending_intents.get(sid, 0) + len(intents)
+                    # P1-9: serialise the read-modify-write so two concurrent
+                    # ``process_event`` tasks for the same ``sid`` cannot
+                    # lose increments. Without the lock, A reads 0, awaits
+                    # in a peer call (the bus consumer is single-task today
+                    # but tests/back-pressure paths can interleave), B reads
+                    # 0, both write — A's increment is dropped on the floor.
+                    async with self._get_pending_lock(sid):
+                        self._strategy_pending_intents[sid] = (
+                            self._strategy_pending_intents.get(sid, 0) + len(intents)
+                        )
             # Alpha liveness: track signal outcome and last active timestamp
             if self.metrics and self._diagnostic_metrics_enabled:
                 if intents:
@@ -1318,10 +1348,16 @@ class StrategyRunner:
                         else:
                             self._strategy_pending_alpha_flat[sid] = self._strategy_pending_alpha_flat.get(sid, 0) + 1
             if self._strategy_metrics_batch > 1 and (seq % self._strategy_metrics_batch == 0):
-                pending_intents = self._strategy_pending_intents.get(sid, 0)
-                if pending_intents and int_m:
-                    int_m.inc(pending_intents)
-                    self._strategy_pending_intents[sid] = 0
+                # P1-9: read+emit+reset of ``_strategy_pending_intents[sid]``
+                # must be atomic relative to the increment block above.
+                # Without the lock, the increment between read and reset
+                # would be wiped (A reads N, B increments to N+k, A writes
+                # 0 → k intents lost from metrics).
+                async with self._get_pending_lock(sid):
+                    pending_intents = self._strategy_pending_intents.get(sid, 0)
+                    if pending_intents and int_m:
+                        int_m.inc(pending_intents)
+                        self._strategy_pending_intents[sid] = 0
                 pending_alpha_intent = self._strategy_pending_alpha_intent.get(sid, 0)
                 if pending_alpha_intent and alpha_intent_m:
                     alpha_intent_m.inc(pending_alpha_intent)
