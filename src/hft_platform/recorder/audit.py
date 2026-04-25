@@ -82,6 +82,12 @@ class AuditWriter:
         "_queues_ready",
         "_queue_size",
         "_overflow_size",
+        # I-M2 (2026-04-25): cross-thread fallback. _loop and _loop_thread_id
+        # are captured in ``start()``; _put detects non-loop callers and
+        # schedules the actual queue mutation via call_soon_threadsafe.
+        "_loop",
+        "_loop_thread_id",
+        "_cross_thread_count",
     )
 
     _TABLE_NAMES: tuple[str, ...] = (
@@ -138,6 +144,10 @@ class AuditWriter:
         self._tasks: list[asyncio.Task[None]] = []
         self._running = False
         self._dropped: dict[str, int] = {name: 0 for name in self._TABLE_NAMES}
+        # I-M2: cross-thread bookkeeping. Captured in start(); read in _put.
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._loop_thread_id: int | None = None
+        self._cross_thread_count: int = 0
 
     # ------------------------------------------------------------------
     # Public logging methods (non-blocking, hot-path safe)
@@ -172,6 +182,13 @@ class AuditWriter:
         """
         if self._running:
             return
+
+        # I-M2: capture the engine loop + its thread id so _put can detect
+        # cross-thread callers (lease-refresh-thread → trigger_halt → audit,
+        # broker-callback-thread → trigger_storm → audit) and dispatch via
+        # call_soon_threadsafe instead of corrupting the loop's _ready deque.
+        self._loop = asyncio.get_running_loop()
+        self._loop_thread_id = threading.get_ident()
 
         # Create queues on the engine loop (getter semantics in Python 3.12 —
         # asyncio.Queue binds to the running loop on first put/get).
@@ -218,11 +235,17 @@ class AuditWriter:
         for table_name in self._TABLE_NAMES:
             await self._drain(table_name)
         self._tasks.clear()
+        # I-M2: clear loop binding so any late-arriving log_* call from a
+        # daemon thread falls back to overflow deque rather than scheduling
+        # on a closed loop.
+        self._loop = None
+        self._loop_thread_id = None
         logger.info(
             "AuditWriter stopped",
             dropped_orders=self._dropped.get("audit.orders_log", 0),
             dropped_risk=self._dropped.get("audit.risk_log", 0),
             dropped_guardrail=self._dropped.get("audit.guardrail_log", 0),
+            cross_thread_count=self._cross_thread_count,
         )
 
     # ------------------------------------------------------------------
@@ -235,6 +258,12 @@ class AuditWriter:
         P0-I3: Before ``start()`` binds asyncio.Queue instances, all writes land
         in ``_pre_start_buffer`` (thread-safe deque under a lock). This lets a
         daemon thread safely enqueue StormGuard transition rows during startup.
+
+        I-M2 (2026-04-25): post-start cross-thread callers (lease-refresh
+        thread, broker-callback thread) cannot safely call ``q.put_nowait``
+        directly — asyncio.Queue is documented not thread-safe (it calls
+        ``loop.call_soon`` internally). Detect non-loop thread context and
+        dispatch the actual queue mutation via ``loop.call_soon_threadsafe``.
 
         P1 sticky-first (guardrail only): when queue + overflow are both full,
         the ``audit.guardrail_log`` table drops the NEW entry instead of evicting
@@ -259,6 +288,39 @@ class AuditWriter:
                         self._dropped[table] = self._dropped.get(table, 0) + 1
             return
 
+        # I-M2: cross-thread detection. If we are not on the loop thread,
+        # schedule the actual put on the loop. The fast path (loop thread)
+        # avoids the call_soon_threadsafe overhead.
+        loop = self._loop
+        if loop is not None and threading.get_ident() != self._loop_thread_id:
+            self._cross_thread_count += 1
+            try:
+                from hft_platform.observability.metrics import MetricsRegistry
+
+                MetricsRegistry.get().audit_put_cross_thread_total.labels(table=table).inc()
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                loop.call_soon_threadsafe(self._do_put, table, data)
+            except RuntimeError:
+                # Loop closed/closing — fall back to overflow deque (still
+                # thread-safe via deque's append) so audit isn't lost.
+                overflow = self._overflow[table]
+                if overflow.maxlen is not None and len(overflow) < overflow.maxlen:
+                    overflow.append(data)
+                else:
+                    self._dropped[table] = self._dropped.get(table, 0) + 1
+            return
+
+        # Loop-thread path: existing fast path.
+        self._do_put(table, data)
+
+    def _do_put(self, table: str, data: dict[str, Any]) -> None:
+        """Actual queue mutation. MUST run on the loop thread.
+
+        Called directly from _put on the loop thread, or scheduled via
+        ``loop.call_soon_threadsafe`` from a non-loop thread.
+        """
         q = self._queues[table]
         if q is None:
             # Should not happen after _queues_ready — defensive fallback.

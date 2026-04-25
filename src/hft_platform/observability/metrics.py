@@ -1307,6 +1307,12 @@ class MetricsRegistry:
             "Audit events dropped due to queue full",
             ["table"],
         )
+        self.audit_put_cross_thread_total = Counter(
+            _pn("audit_put_cross_thread_total"),
+            "I-M2: AuditWriter._put invocations from a non-loop thread "
+            "(routed via call_soon_threadsafe instead of direct put_nowait)",
+            ["table"],
+        )
         self.intent_queue_full_total = Counter(
             _pn("intent_queue_full_total"),
             "Intents dropped due to QueueFull in StrategyRunner submit loop",
