@@ -105,10 +105,26 @@ def _get_symbol_net_qty(position_store: Any, symbol: str, strategy_id: str | Non
 
     O(n) over the position map, but only called during CLOSE_ONLY phase
     (not on every tick). Returns 0 if position_store is None or empty.
+
+    Wave 3 (2026-04-25): snapshot positions under _fill_lock (or via
+    snapshot_positions when available) so concurrent on_fill_async
+    writers cannot raise "dictionary changed size during iteration".
     """
     if position_store is None:
         return 0
-    positions = getattr(position_store, "positions", None)
+    snapshot_fn = getattr(position_store, "snapshot_positions", None)
+    if callable(snapshot_fn):
+        positions = snapshot_fn()
+    else:
+        raw = getattr(position_store, "positions", None)
+        if not raw:
+            return 0
+        _fill_lock = getattr(position_store, "_fill_lock", None)
+        if _fill_lock is not None:
+            with _fill_lock:
+                positions = dict(raw)
+        else:
+            positions = dict(raw)
     if not positions:
         return 0
     _total = 0
