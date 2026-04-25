@@ -76,6 +76,14 @@ class OrderAdapter:
         "_order_id_map_max_size",
         "_order_id_map_persist_interval_s",
         "_order_id_map_last_persist_s",
+        # H3: per-entry metadata for TTL-based ABA prevention. Sidecar to
+        # ``order_id_map`` so the (broker_id -> order_key) lookup API stays
+        # unchanged. ``_order_id_meta[broker_id] = (created_ns, state)`` where
+        # state is "live" until a terminal callback flips it to "terminal".
+        # On persist, terminal entries are filtered out; on load, entries
+        # older than ``HFT_ORDER_ID_MAP_TTL_S`` or already terminal are dropped.
+        "_order_id_meta",
+        "_order_id_map_ttl_ns",
         "running",
         "metrics",
         "latency",
@@ -94,6 +102,7 @@ class OrderAdapter:
         "_api_queue",
         "_api_coalesce_window_s",
         "_api_pending",
+        "_api_inflight",
         "_api_worker_task",
         "_supports_typed_command_ingress",
         "_trace_sampler",
@@ -168,6 +177,17 @@ class OrderAdapter:
         self._order_id_map_persist_path: str = os.getenv("HFT_ORDER_ID_MAP_PERSIST_PATH", ".state/order_id_map.jsonl")
         self._order_id_map_persist_interval_s: float = float(os.getenv("HFT_ORDER_ID_MAP_PERSIST_INTERVAL_S", "1.0"))
         self._order_id_map_last_persist_s: float = 0.0  # noqa: monotonic timestamp
+        # H3: per-entry metadata sidecar (broker_id -> (created_ns, state)).
+        # ``state`` is "live" or "terminal"; the persist filter drops terminal
+        # rows so a future restart cannot resurrect a stale (broker_id ->
+        # order_key) binding when the broker re-uses the same id (ABA).
+        self._order_id_meta: dict[str, tuple[int, str]] = {}
+        # H3: TTL for persisted entries. Default 24h (86400s) — anything older
+        # is assumed terminal at the broker even if no terminal callback was
+        # observed (callback loss, daemon-thread crash, etc.).
+        self._order_id_map_ttl_ns: int = int(
+            float(os.getenv("HFT_ORDER_ID_MAP_TTL_S", "86400")) * 1_000_000_000
+        )
         self._load_order_id_map()
         self._cmd_map_max_size = int(os.getenv("HFT_CMD_MAP_MAX_SIZE", "10000"))
         self.running = False
@@ -226,6 +246,11 @@ class OrderAdapter:
         )
         self._api_coalesce_window_s = float(os.getenv("HFT_API_COALESCE_WINDOW_S", "0.005"))  # precision-time
         self._api_pending: dict[tuple, OrderCommand] = {}
+        # P1-4 hole fix: snapshot of items lifted from _api_pending into the
+        # dispatch loop's local `pending` list. Drained per-iteration as each
+        # item is finalized; outer cancel/exception handlers release any
+        # remainder so dedup slots never leak.
+        self._api_inflight: list[OrderCommand] = []
         self._api_worker_task: asyncio.Task | None = None
         self._supports_typed_command_ingress = True
         self._trace_sampler = _get_trace_sampler()
@@ -1045,27 +1070,78 @@ class OrderAdapter:
     # the helpers without deadlocking. Each call emits a ``debug`` log with
     # the ``source=`` argument for forensic tracing of the mutation site.
 
-    def _set_order_id_mapping(self, token: str, order_key: str, *, source: str) -> None:
+    def _set_order_id_mapping(
+        self,
+        token: str,
+        order_key: str,
+        *,
+        source: str,
+        created_ns: int | None = None,
+        state: str = "live",
+    ) -> None:
         """Set ``order_id_map[token] = order_key`` under the shared RLock.
 
-        ``source`` is a stable identifier for the call site, surfaced in the
-        debug log to help correlate broker-ID registration with downstream
-        order_key resolution failures.
+        H3: also stamps ``_order_id_meta[token] = (created_ns, state)`` so
+        the persistence layer can drop terminal/expired entries on
+        restart. ``created_ns`` defaults to ``timebase.now_ns()`` for new
+        registrations; the loader supplies the persisted timestamp so a
+        round-trip preserves age. ``source`` is a stable identifier for
+        the call site, surfaced in the debug log to help correlate broker-ID
+        registration with downstream order_key resolution failures.
         """
+        ts_ns = int(created_ns) if created_ns is not None else timebase.now_ns()
         with self._order_id_map_lock:
             self.order_id_map[token] = order_key
-        logger.debug("order_id_map_set", token=token, order_key=order_key, source=source)
+            self._order_id_meta[token] = (ts_ns, state)
+        logger.debug(
+            "order_id_map_set",
+            token=token,
+            order_key=order_key,
+            source=source,
+            t_ns=ts_ns,
+            state=state,
+        )
 
     def _del_order_id_mapping(self, token: str, *, source: str) -> str | None:
         """Pop ``order_id_map[token]`` under the shared RLock.
 
         Returns the prior mapped value (or ``None`` if absent). Logs the
         delete with ``source=`` for the same forensic reasons as the setter.
+        H3: also drops the metadata sidecar entry.
         """
         with self._order_id_map_lock:
             prior = self.order_id_map.pop(token, None)
+            self._order_id_meta.pop(token, None)
         logger.debug("order_id_map_del", token=token, prior=prior, source=source)
         return prior
+
+    def _mark_order_id_terminal(self, order_key: str) -> int:
+        """H3: flag every broker_id mapped to ``order_key`` as terminal.
+
+        Called from ``on_terminal_state`` so the next persist drops these
+        rows, preventing a future restart from resurrecting (broker_id ->
+        order_key) bindings whose underlying order is already done — which
+        is the ABA window the broker exploits when it re-uses a numeric id.
+        Returns the number of entries marked. Idempotent.
+        """
+        marked = 0
+        with self._order_id_map_lock:
+            for token, mapped in list(self.order_id_map.items()):
+                if mapped != order_key:
+                    continue
+                meta = self._order_id_meta.get(token)
+                if meta is None:
+                    self._order_id_meta[token] = (timebase.now_ns(), "terminal")
+                else:
+                    self._order_id_meta[token] = (meta[0], "terminal")
+                marked += 1
+        if marked:
+            logger.debug(
+                "order_id_map_marked_terminal",
+                order_key=order_key,
+                count=marked,
+            )
+        return marked
 
     def _load_order_id_map(self) -> None:
         """Load order_id_map from disk on startup (restart-safe strategy resolution)."""
@@ -1119,10 +1195,14 @@ class OrderAdapter:
                     f.flush()
                     os.fsync(f.fileno())
                 os.rename(tmp_path, path)
-            except Exception:
+            finally:
+                # M2 (2026-04-25): finally-cleanup so orphan tmpfiles don't
+                # accumulate when the worker dies between fsync and rename.
                 if os.path.exists(tmp_path):
-                    os.unlink(tmp_path)
-                raise
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
             logger.info("order_id_map_persisted", count=len(snapshot), path=path)
         except Exception as exc:
             logger.warning("order_id_map_persist_failed", error=str(exc), path=path)
@@ -2687,6 +2767,13 @@ class OrderAdapter:
                 pending.sort(
                     key=lambda c: 0 if c.intent.intent_type in (IntentType.CANCEL, IntentType.FORCE_FLAT) else 1
                 )
+                # P1-4 hole fix: stage the snapshot in _api_inflight so
+                # cancel / unexpected-exception handlers see un-dispatched
+                # items and can release their dedup slots. Each branch below
+                # removes its item from _api_inflight only on the SUCCESS
+                # path; if CancelledError fires mid-await the remove is
+                # skipped and the outer handler picks the item up.
+                self._api_inflight = list(pending)
                 for item in pending:
                     _exempt = item.intent.intent_type in (
                         IntentType.CANCEL,
@@ -2714,6 +2801,10 @@ class OrderAdapter:
                             halt_exempt_blocked=self._is_strategy_halt_exempt(item.intent.strategy_id),
                         )
                         self._send_dispatch_rejection(item.intent, "dispatch_halt_skip")
+                        try:
+                            self._api_inflight.remove(item)
+                        except ValueError:
+                            pass
                         continue
                     if item.deadline_ns and time.monotonic_ns() > item.deadline_ns:
                         logger.warning(
@@ -2730,13 +2821,29 @@ class OrderAdapter:
                             "DEADLINE_EXPIRED",
                         )
                         self._send_dispatch_rejection(item.intent, "dispatch_deadline_expired")
+                        try:
+                            self._api_inflight.remove(item)
+                        except ValueError:
+                            pass
                         continue
                     try:
                         ok = await self._dispatch_to_api(item)
                         if ok:
                             self._dedup_commit(item.intent.idempotency_key, True, "dispatched", item.cmd_id)
+                        # Reached here = dispatch finished without cancel.
+                        # On a CancelledError flight from _dispatch_to_api,
+                        # this remove is skipped and the outer handler at
+                        # line ~2750 picks the item up via _api_inflight.
+                        try:
+                            self._api_inflight.remove(item)
+                        except ValueError:
+                            pass
                     except Exception:
                         await self._handle_dispatch_exception(intent=item.intent, cmd_id=item.cmd_id)
+                        try:
+                            self._api_inflight.remove(item)
+                        except ValueError:
+                            pass
             except asyncio.CancelledError:
                 # P1-4: shutdown / task-cancel path. Release any dedup slots
                 # for commands in ``_api_pending`` that we have not yet
@@ -2751,17 +2858,34 @@ class OrderAdapter:
                 self._update_cb_metric()
                 if current_cmd is not None:
                     self.strategy_cb_mgr.record_failure(current_cmd.intent.strategy_id)
-                # Release dedup slots for orphaned commands before clearing
+                # Release dedup slots for orphaned commands before clearing.
+                # P1-4 hole fix: also drain _api_inflight (un-dispatched
+                # snapshot items), not just _api_pending.
                 for orphaned in self._api_pending.values():
                     self._dedup_release(orphaned.intent.idempotency_key)
                 self._api_pending.clear()
+                for orphaned in self._api_inflight:
+                    self._dedup_release(orphaned.intent.idempotency_key)
+                self._api_inflight.clear()
 
     def _release_pending_on_cancel(self) -> None:
-        """P1-4: release dedup slots + drop `_api_pending` on cancellation.
+        """P1-4: release dedup slots + drop `_api_pending` AND `_api_inflight`
+        on cancellation.
 
         Called from `_api_worker`'s CancelledError handlers so a shutdown
-        that catches us in the coalesce window or mid-dispatch-loop does
-        not leak dedup reservations. Counts commands for observability.
+        that catches us in the coalesce window OR mid-dispatch-loop does
+        not leak dedup reservations.
+
+        Two collections to drain:
+          * ``_api_pending`` — items staged in the coalesce window but not
+            yet snapshotted into the dispatch loop.
+          * ``_api_inflight`` — items that were snapshotted (and removed
+            from ``_api_pending``) but have not yet been finalized
+            (dispatched / halted / deadline-expired / exception-handled).
+
+        Without draining ``_api_inflight``, a cancel during
+        ``await self._dispatch_to_api(item)`` would leak that item's dedup
+        reservation (P1-4 hole found by Codex stop-time review).
         """
         released = 0
         for orphaned in self._api_pending.values():
@@ -2771,6 +2895,13 @@ class OrderAdapter:
                 pass
             released += 1
         self._api_pending.clear()
+        for orphaned in self._api_inflight:
+            try:
+                self._dedup_release(orphaned.intent.idempotency_key)
+            except Exception:  # noqa: BLE001 — dedup release must never raise
+                pass
+            released += 1
+        self._api_inflight.clear()
         if released:
             try:
                 logger.warning("_api_worker_cancel_released_pending", count=released)
