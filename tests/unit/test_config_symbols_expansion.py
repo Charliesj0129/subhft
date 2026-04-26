@@ -511,8 +511,10 @@ class TestExpandFutures:
         _expand_futures("TX", "middle", {}, idx, result)
         assert len(result.errors) >= 1
 
-    def test_out_of_range_month_produces_error(self):
+    def test_out_of_range_month_produces_warning(self):
         # Only 2 contracts = only front and next (index 0, 1). "far" (idx=2) is out of range.
+        # Behavior: skip with warning so the build succeeds against subset broker caches
+        # (e.g. far months not yet listed by the exchange).
         contracts = [
             _make_futures_contract("TXFD7", root="TX", delivery_date=20270301),
             _make_futures_contract("TXFG7", root="TX", delivery_date=20270401),
@@ -520,7 +522,8 @@ class TestExpandFutures:
         result = _make_result()
         idx = _make_contract_index(contracts)
         _expand_futures("TX", "far", {}, idx, result)
-        assert len(result.errors) >= 1
+        assert len(result.errors) == 0
+        assert any("unavailable" in w for w in result.warnings)
 
     def test_r1_r2_contracts_filtered(self):
         contracts = [
@@ -675,12 +678,14 @@ class TestExpandOptions:
         _expand_options("TXO", "middle", "ATM", {}, idx, result)
         assert len(result.errors) >= 1
 
-    def test_out_of_range_month_produces_error(self):
+    def test_out_of_range_month_produces_warning(self):
         result = _make_result()
         idx = self._make_index()
-        # Only front month in index, "far" (idx=2) out of range
+        # Only front month in index, "far" (idx=2) out of range.
+        # Behavior: skip with warning so the build succeeds against subset broker caches.
         _expand_options("TXO", "far", "ATM", {}, idx, result)
-        assert len(result.errors) >= 1
+        assert len(result.errors) == 0
+        assert any("unavailable" in w for w in result.warnings)
 
     def test_unknown_selector_produces_error(self):
         result = _make_result()

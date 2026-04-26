@@ -174,9 +174,12 @@ def fetch_contracts_from_broker() -> list[dict[str, Any]]:
 def validate_symbols(
     symbols: list[dict[str, Any]],
     contract_index: ContractIndex | None = None,
-    max_subscriptions: int = 200,
+    max_subscriptions: int = 800,
 ) -> SymbolBuildResult:
-    """Validate a list of symbol entries for correctness and subscription limits."""
+    """Validate a list of symbol entries for correctness and subscription limits.
+
+    Default cap is the platform-wide total (4 quote connections × 200 per-conn limit).
+    """
     from hft_platform.config._symbols_types import VALID_EXCHANGES
 
     result = SymbolBuildResult(symbols=symbols)

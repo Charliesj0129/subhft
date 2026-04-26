@@ -514,11 +514,12 @@ class TestQuoteConnectionPoolThreadSafety:
 class TestSubscriptionLimitConstant:
     """Verify _MAX_SUBSCRIPTIONS_PER_CONN reflects real Shioaji SDK topic limit."""
 
-    def test_limit_is_120(self):
+    def test_limit_is_200(self):
         from hft_platform.feed_adapter.shioaji.quote_connection_pool import _MAX_SUBSCRIPTIONS_PER_CONN
 
-        # 128 real broker limit (256 topics / 2 topics per symbol), minus safety margin
-        assert _MAX_SUBSCRIPTIONS_PER_CONN == 120
+        # Shioaji per-connection quote subscription cap (raised from 120 to 200
+        # to fit a 4 conn × 200 = 800 universe). Aligns with broker doc cap.
+        assert _MAX_SUBSCRIPTIONS_PER_CONN == 200
 
     def test_client_default_matches_pool_limit(self, tmp_path, monkeypatch):
         monkeypatch.setenv("SHIOAJI_API_KEY", "TESTKEY123")
@@ -533,7 +534,7 @@ class TestSubscriptionLimitConstant:
             from hft_platform.feed_adapter.shioaji.client import ShioajiClient
 
             client = ShioajiClient(config_path=str(sym_path))
-            assert client.MAX_SUBSCRIPTIONS == 120
+            assert client.MAX_SUBSCRIPTIONS == 200
 
 
 class TestOptionsRoundRobinSharding:
@@ -709,8 +710,12 @@ class TestOptionsRoundRobinSharding:
                 mixed_count += 1
         assert mixed_count >= 2, "At least 2 of 3 option groups should have both calls and puts"
 
-    def test_production_scenario_3_conns_194_per_side(self, tmp_path, monkeypatch):
-        """Regression test: 3 conns, 194 calls + 194 puts must auto-trim, not reject."""
+    def test_production_scenario_3_conns_oversized_chain_trims(self, tmp_path, monkeypatch):
+        """Regression test: 3 conns, oversized option chain must auto-trim, not reject.
+
+        With cap=200 per conn and 2 option groups (group 0 holds the base future),
+        chain capacity is 400; 250 strikes × 2 sides = 500 options must trim to ≤ 400.
+        """
         from hft_platform.feed_adapter.shioaji.quote_connection_pool import _MAX_SUBSCRIPTIONS_PER_CONN
 
         pool = self._make_pool(tmp_path, num_conns=3)  # group 0=base, 1/2=options
@@ -719,8 +724,8 @@ class TestOptionsRoundRobinSharding:
         for c in pool._clients:
             c.logged_in = False
 
-        # Reproduce exact production config: 194 calls + 194 puts
-        strikes = list(range(26500, 26500 + 194 * 50, 50))
+        # 250 strikes × (call + put) = 500 options, exceeds 2 × 200 = 400 capacity → trim
+        strikes = list(range(26500, 26500 + 250 * 50, 50))
         opts = []
         for s in strikes:
             opts.append(
@@ -761,6 +766,6 @@ class TestOptionsRoundRobinSharding:
                 f"Group {g} has {count} symbols, exceeds {_MAX_SUBSCRIPTIONS_PER_CONN}"
             )
 
-        # Options should be trimmed but non-empty
+        # Options should be trimmed but non-empty (≤ 2 conns × cap)
         opt_count = sum(1 for s in data["symbols"] if s.get("exchange") == "OPT")
-        assert 200 <= opt_count <= 240, f"Expected 200-240 options after trim, got {opt_count}"
+        assert 360 <= opt_count <= 400, f"Expected 360-400 options after trim, got {opt_count}"

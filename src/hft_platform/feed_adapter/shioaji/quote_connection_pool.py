@@ -139,14 +139,29 @@ class QuoteConnectionPool:
         self._all_symbols: list[dict[str, Any]] = data.get("symbols", [])
 
         groups: dict[int, list[dict[str, Any]]] = {i: [] for i in range(num_conns)}
+        unassigned: list[dict[str, Any]] = []
         for sym in self._all_symbols:
-            g = sym.get("group", 0)
+            g = sym.get("group")
+            if g is None:
+                unassigned.append(sym)
+                continue
             if not isinstance(g, int) or g < 0 or g >= num_conns:
                 raise ValueError(
                     f"Symbol {sym.get('code', '?')} has group={g} "
                     f"but only {num_conns} connections configured (valid: 0..{num_conns - 1})"
                 )
             groups[g].append(sym)
+
+        if unassigned:
+            unassigned.sort(key=lambda s: (str(s.get("product_type") or ""), str(s.get("code") or "")))
+            for i, sym in enumerate(unassigned):
+                groups[i % num_conns].append(sym)
+            logger.info(
+                "auto_assigned_symbols_round_robin",
+                count=len(unassigned),
+                num_conns=num_conns,
+                per_group={g: len(s) for g, s in groups.items()},
+            )
 
         for g, syms in groups.items():
             if len(syms) > _MAX_SUBSCRIPTIONS_PER_CONN:
