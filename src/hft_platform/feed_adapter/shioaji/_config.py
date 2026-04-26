@@ -15,6 +15,8 @@ from typing import Any
 
 from structlog import get_logger
 
+from hft_platform.feed_adapter.shioaji.limits import DEFAULT_MAX_SUBSCRIPTIONS_PER_CONN
+
 logger = get_logger("feed_adapter.config")
 
 
@@ -50,7 +52,10 @@ class ShioajiClientConfig:
     """Immutable configuration for ShioajiClient, parsed from env + dict."""
 
     # --- Subscription ---
-    max_subscriptions: int = 200
+    # Per-connection cap is in *codes* (each code = 2 broker topics, see
+    # ``feed_adapter/shioaji/limits.py``). Default sourced from the shared
+    # constant so any future cap revisit only touches one file.
+    max_subscriptions: int = DEFAULT_MAX_SUBSCRIPTIONS_PER_CONN
     contracts_timeout: int = 10000
     fetch_contract: bool = True
     subscribe_trade: bool = True
@@ -214,7 +219,7 @@ def load_shioaji_config(
     )
 
     cfg = ShioajiClientConfig(
-        max_subscriptions=200,
+        max_subscriptions=int(settings.get("max_subscriptions", DEFAULT_MAX_SUBSCRIPTIONS_PER_CONN)),
         contracts_timeout=_env_int("SHIOAJI_CONTRACTS_TIMEOUT", 10000),
         fetch_contract=os.getenv("SHIOAJI_FETCH_CONTRACT", "1") != "0",
         subscribe_trade=os.getenv("SHIOAJI_SUBSCRIBE_TRADE", "1") != "0",
