@@ -29,6 +29,7 @@
 --   * On a system that has never materialized hft.fills, this migration is
 --     idempotent: the INSERT selects 0 rows and the RENAME still succeeds.
 
+-- Up
 CREATE TABLE IF NOT EXISTS hft.fills_new (
     ts_exchange Int64 Codec(DoubleDelta, LZ4),
     ts_local Int64 Codec(DoubleDelta, LZ4),
@@ -65,6 +66,7 @@ FROM hft.fills;
 RENAME TABLE hft.fills TO hft.fills_legacy_pre_rmt,
              hft.fills_new TO hft.fills;
 
+-- Down
 -- Run `OPTIMIZE TABLE hft.fills FINAL` during off-hours to force
 -- de-duplication of any rows already duplicated pre-migration. The
 -- engine will otherwise collapse duplicates lazily on the next merge.

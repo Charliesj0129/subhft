@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from typing import Iterable
 
 from structlog import get_logger
@@ -8,6 +9,41 @@ from structlog import get_logger
 logger = get_logger("recorder.schema")
 
 MIGRATIONS_DIR = os.path.join(os.path.dirname(__file__), "../migrations/clickhouse")
+
+# Markers must start a line; trailing text on the marker line is allowed and
+# discarded together with the marker. Without line anchoring, `-- Up: foo`
+# would split as `: foo` and ClickHouse would reject the leading colon.
+_MARKER_UP_RE = re.compile(r"^[ \t]*--[ \t]*Up\b.*$", re.MULTILINE)
+_MARKER_DOWN_RE = re.compile(r"^[ \t]*--[ \t]*Down\b.*$", re.MULTILINE)
+
+
+def _extract_up_statements(content: str) -> list[str]:
+    """Return executable SQL statements from a migration file's Up section.
+
+    Behavior:
+      * If `-- Down` exists at start-of-line, drop everything from that point on.
+      * If `-- Up` exists at start-of-line, keep only what follows the *last* Up marker.
+      * If no markers exist, treat the whole content as the Up section.
+      * Statements containing only `--` comment lines or whitespace are filtered
+        out (ClickHouse rejects them as `Empty query`).
+    """
+    down_match = _MARKER_DOWN_RE.search(content)
+    if down_match:
+        content = content[: down_match.start()]
+    up_matches = list(_MARKER_UP_RE.finditer(content))
+    if up_matches:
+        content = content[up_matches[-1].end() :]
+    out: list[str] = []
+    for raw in content.split(";"):
+        stripped = raw.strip()
+        if not stripped:
+            continue
+        has_executable = any(
+            line.strip() and not line.strip().startswith("--") for line in stripped.splitlines()
+        )
+        if has_executable:
+            out.append(stripped)
+    return out
 
 
 def _init_migrations_table(client) -> None:
@@ -70,15 +106,7 @@ def apply_schema(client, schema_path: str | None = None) -> None:
         with open(filepath, "r") as f:
             content = f.read()
 
-        # Parse Up section
-        up_content = content
-        if "-- Down" in content:
-            up_content = content.split("-- Down")[0]
-        if "-- Up" in up_content:
-            up_content = up_content.split("-- Up")[-1]
-
-        # Extract individual statements
-        statements = [stmt.strip() for stmt in up_content.split(";") if stmt.strip()]
+        statements = _extract_up_statements(content)
         total = len(statements)
         for idx, stmt in enumerate(statements):
             try:
