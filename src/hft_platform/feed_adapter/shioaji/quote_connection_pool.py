@@ -702,10 +702,33 @@ class QuoteConnectionPool:
                 logger.warning("options_refresh_no_contracts")
                 return False
 
-            # Find nearest expiry
-            dates = sorted(set(str(c.get("delivery_date", "")) for c in opts if c.get("delivery_date")))
-            if not dates:
+            # Find nearest non-expired expiry. Drop dates < today so a stale
+            # broker contract cache (containing already-expired chains) cannot
+            # bait the auto-refresh into mass-subscribing dead options.
+            # Cache uses 'YYYY/MM/DD' or 'YYYY-MM-DD'; parse before comparing.
+            from datetime import date as _date
+
+            today = _date.today()
+
+            def _parse_delivery(value: str) -> _date | None:
+                value = value.strip().replace("/", "-")
+                if len(value) != 10:
+                    return None
+                try:
+                    return _date.fromisoformat(value)
+                except ValueError:
+                    return None
+
+            active: dict[str, _date] = {}
+            for c in opts:
+                raw = str(c.get("delivery_date", ""))
+                parsed = _parse_delivery(raw)
+                if parsed is not None and parsed >= today:
+                    active[raw] = parsed
+            if not active:
+                logger.warning("options_refresh_no_active_expiry", cache_dates_seen=len(opts))
                 return False
+            dates = sorted(active.keys(), key=lambda k: active[k])
             nearest_date = dates[0]
 
             if self._options_expiry == nearest_date:
@@ -867,6 +890,10 @@ class QuoteConnectionPool:
             return
         if interval_s is None:
             interval_s = float(os.getenv("HFT_OPTIONS_REFRESH_S", "3600"))
+
+        if interval_s <= 0:
+            logger.info("options_refresh_thread_disabled", interval_s=interval_s)
+            return
 
         self._options_refresh_running = True
         self._refresh_stop_event.clear()

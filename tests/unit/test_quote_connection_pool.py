@@ -511,6 +511,65 @@ class TestQuoteConnectionPoolThreadSafety:
         assert pool._options_refresh_running is False
 
 
+class TestOptionsRefreshGuards:
+    """Defensive guards for the options auto-refresh background thread."""
+
+    def _make_pool(self, tmp_path, num_conns=1):
+        from hft_platform.feed_adapter.shioaji.quote_connection_pool import QuoteConnectionPool
+
+        sym_path = tmp_path / "symbols.yaml"
+        sym_path.write_text(yaml.safe_dump({"symbols": [{"code": "TXFC0", "exchange": "TAIFEX", "group": 0}]}))
+        return QuoteConnectionPool(str(sym_path), {}, num_conns=num_conns)
+
+    def test_thread_skipped_when_interval_zero(self, tmp_path):
+        """interval_s=0 must disable the refresh thread (do not start)."""
+        pool = self._make_pool(tmp_path)
+        pool.start_options_refresh_thread(interval_s=0)
+        assert pool._options_refresh_running is False
+        assert pool._refresh_thread is None
+
+    def test_thread_skipped_when_interval_negative(self, tmp_path):
+        """Negative interval_s must also be treated as disabled."""
+        pool = self._make_pool(tmp_path)
+        pool.start_options_refresh_thread(interval_s=-1)
+        assert pool._options_refresh_running is False
+
+    def test_refresh_skips_when_all_expiries_in_past(self, tmp_path, monkeypatch):
+        """Stale broker cache (all expiries < today) must not trigger subscribe storm."""
+        pool = self._make_pool(tmp_path)
+        pool._clients = [mock.MagicMock()]
+        pool._clients[0].logged_in = False
+        out_path = str(tmp_path / "live_with_options.yaml")
+        monkeypatch.setenv("SYMBOLS_CONFIG", out_path)
+
+        expired_opts = [
+            {"code": "TXO20000A0", "right": "C", "strike": "20000", "delivery_date": "2020/01/15", "reference": "20000"},
+            {"code": "TXO20000M0", "right": "P", "strike": "20000", "delivery_date": "2020/01/15", "reference": "20000"},
+        ]
+        with mock.patch.object(type(pool), "_load_options_from_cache", return_value=expired_opts):
+            assert pool.refresh_options_symbols() is False
+
+    def test_refresh_picks_nearest_active_skipping_expired(self, tmp_path, monkeypatch):
+        """When cache mixes expired + active dates, picks earliest *active* one."""
+        pool = self._make_pool(tmp_path, num_conns=2)
+        pool._all_symbols = [{"code": "TXFC0", "exchange": "TAIFEX", "group": 0}]
+        pool._clients = [mock.MagicMock() for _ in range(2)]
+        for c in pool._clients:
+            c.logged_in = False
+        out_path = str(tmp_path / "live_with_options.yaml")
+        monkeypatch.setenv("SYMBOLS_CONFIG", out_path)
+
+        opts = []
+        for date in ("2020/01/15", "2030/04/17", "2031/04/16"):  # one expired, two active
+            for s in (20000, 21000):
+                opts.append({"code": f"TXO{s}_{date[:4]}C", "right": "C", "strike": str(s), "delivery_date": date, "reference": "20500"})
+                opts.append({"code": f"TXO{s}_{date[:4]}P", "right": "P", "strike": str(s), "delivery_date": date, "reference": "20500"})
+
+        with mock.patch.object(type(pool), "_load_options_from_cache", return_value=opts):
+            assert pool.refresh_options_symbols() is True
+        assert pool._options_expiry == "2030/04/17"
+
+
 class TestSubscriptionLimitConstant:
     """Verify _MAX_SUBSCRIPTIONS_PER_CONN reflects real Shioaji SDK topic limit."""
 
@@ -565,7 +624,7 @@ class TestOptionsRoundRobinSharding:
                     "code": f"TXO{s}D6",
                     "right": "C",
                     "strike": str(s),
-                    "delivery_date": "2026/04/16",
+                    "delivery_date": "2030/04/17",
                     "reference": "20500",
                 }
             )
@@ -574,7 +633,7 @@ class TestOptionsRoundRobinSharding:
                     "code": f"TXO{s}P6",
                     "right": "P",
                     "strike": str(s),
-                    "delivery_date": "2026/04/16",
+                    "delivery_date": "2030/04/17",
                     "reference": "20500",
                 }
             )
@@ -621,7 +680,7 @@ class TestOptionsRoundRobinSharding:
                     "code": f"TXO{s}D6",
                     "right": "C",
                     "strike": str(s),
-                    "delivery_date": "2026/04/16",
+                    "delivery_date": "2030/04/17",
                     "reference": "20500",
                 }
             )
@@ -630,7 +689,7 @@ class TestOptionsRoundRobinSharding:
                     "code": f"TXO{s}P6",
                     "right": "P",
                     "strike": str(s),
-                    "delivery_date": "2026/04/16",
+                    "delivery_date": "2030/04/17",
                     "reference": "20500",
                 }
             )
@@ -674,7 +733,7 @@ class TestOptionsRoundRobinSharding:
                     "code": f"TXO{s}D6",
                     "right": "C",
                     "strike": str(s),
-                    "delivery_date": "2026/04/16",
+                    "delivery_date": "2030/04/17",
                     "reference": "20500",
                 }
             )
@@ -683,7 +742,7 @@ class TestOptionsRoundRobinSharding:
                     "code": f"TXO{s}P6",
                     "right": "P",
                     "strike": str(s),
-                    "delivery_date": "2026/04/16",
+                    "delivery_date": "2030/04/17",
                     "reference": "20500",
                 }
             )
@@ -733,7 +792,7 @@ class TestOptionsRoundRobinSharding:
                     "code": f"TXO{s}D6",
                     "right": "C",
                     "strike": str(s),
-                    "delivery_date": "2026/04/16",
+                    "delivery_date": "2030/04/17",
                     "reference": "33000",
                 }
             )
@@ -742,7 +801,7 @@ class TestOptionsRoundRobinSharding:
                     "code": f"TXO{s}P6",
                     "right": "P",
                     "strike": str(s),
-                    "delivery_date": "2026/04/16",
+                    "delivery_date": "2030/04/17",
                     "reference": "33000",
                 }
             )
