@@ -573,12 +573,16 @@ class TestOptionsRefreshGuards:
 class TestSubscriptionLimitConstant:
     """Verify _MAX_SUBSCRIPTIONS_PER_CONN reflects real Shioaji SDK topic limit."""
 
-    def test_limit_is_200(self):
+    def test_limit_is_120(self):
         from hft_platform.feed_adapter.shioaji.quote_connection_pool import _MAX_SUBSCRIPTIONS_PER_CONN
 
-        # Shioaji per-connection quote subscription cap (raised from 120 to 200
-        # to fit a 4 conn × 200 = 800 universe). Aligns with broker doc cap.
-        assert _MAX_SUBSCRIPTIONS_PER_CONN == 200
+        # Cap is in *codes*. Each code subscribes to 2 broker topics
+        # (Tick + BidAsk — see subscription_manager._subscribe_symbol).
+        # SinoPac Solace per-session topic budget is ~250 (empirically
+        # confirmed 2026-04-26 when conn 0 with 163 codes / 326 topics
+        # got rejected after ~127 codes / 254 topics). 120 × 2 = 240
+        # keeps a small headroom under that ceiling.
+        assert _MAX_SUBSCRIPTIONS_PER_CONN == 120
 
     def test_client_default_matches_pool_limit(self, tmp_path, monkeypatch):
         monkeypatch.setenv("SHIOAJI_API_KEY", "TESTKEY123")
@@ -593,7 +597,7 @@ class TestSubscriptionLimitConstant:
             from hft_platform.feed_adapter.shioaji.client import ShioajiClient
 
             client = ShioajiClient(config_path=str(sym_path))
-            assert client.MAX_SUBSCRIPTIONS == 200
+            assert client.MAX_SUBSCRIPTIONS == 120
 
 
 class TestOptionsRoundRobinSharding:
@@ -772,8 +776,8 @@ class TestOptionsRoundRobinSharding:
     def test_production_scenario_3_conns_oversized_chain_trims(self, tmp_path, monkeypatch):
         """Regression test: 3 conns, oversized option chain must auto-trim, not reject.
 
-        With cap=200 per conn and 2 option groups (group 0 holds the base future),
-        chain capacity is 400; 250 strikes × 2 sides = 500 options must trim to ≤ 400.
+        With cap=120 per conn and 2 option groups (group 0 holds the base future),
+        chain capacity is 240; 250 strikes × 2 sides = 500 options must trim to ≤ 240.
         """
         from hft_platform.feed_adapter.shioaji.quote_connection_pool import _MAX_SUBSCRIPTIONS_PER_CONN
 
@@ -783,7 +787,7 @@ class TestOptionsRoundRobinSharding:
         for c in pool._clients:
             c.logged_in = False
 
-        # 250 strikes × (call + put) = 500 options, exceeds 2 × 200 = 400 capacity → trim
+        # 250 strikes × (call + put) = 500 options, exceeds 2 × 120 = 240 capacity → trim
         strikes = list(range(26500, 26500 + 250 * 50, 50))
         opts = []
         for s in strikes:
@@ -825,6 +829,6 @@ class TestOptionsRoundRobinSharding:
                 f"Group {g} has {count} symbols, exceeds {_MAX_SUBSCRIPTIONS_PER_CONN}"
             )
 
-        # Options should be trimmed but non-empty (≤ 2 conns × cap)
+        # Options should be trimmed but non-empty (≤ 2 conns × cap = 240)
         opt_count = sum(1 for s in data["symbols"] if s.get("exchange") == "OPT")
-        assert 360 <= opt_count <= 400, f"Expected 360-400 options after trim, got {opt_count}"
+        assert 200 <= opt_count <= 240, f"Expected 200-240 options after trim, got {opt_count}"
