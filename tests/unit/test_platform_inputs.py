@@ -260,6 +260,36 @@ class TestFeedGapS:
         inp.md_service.get_active_feed_gap_s = None  # type: ignore[assignment]
         assert inp._feed_gap_s() == 150.0
 
+    def test_partial_feed_failure_still_triggers_unhealthy(self) -> None:
+        """Partial feed failure on a previously-active symbol must trigger
+        feed_reconnect_unhealthy.
+
+        Regression for the masking bug introduced by commit b80b950c
+        ('fix(ops): exclude inactive subscriptions from feed-gap reduce_only
+        trigger').  In that fix, ``get_active_feed_gap_s`` silently drops any
+        symbol whose gap exceeds an upper-bound threshold (default 300s) —
+        which means a formerly-active front-month future (e.g. TMFE6) that
+        suddenly stops getting events is removed from the calculation after
+        300s of silence, masking a real partial feed failure.
+
+        With the latched ever-active set design, the gap on the silent TMFE6
+        must surface and cross the 600s ``feed_gap_threshold_s`` so that
+        ``reduce_only_reasons()`` returns ``feed_reconnect_unhealthy``.
+        """
+        import time as _time
+
+        now = _time.time()
+        inp = _make_inputs(feed_gap=0.5, within_window=True)
+        # Simulate the latched-set md_service: max gap remains 0.5 because
+        # TXFE6 / MXFE6 still flow normally, but the active-aware accessor
+        # returns 2000s reflecting TMFE6's silent failure (still in the
+        # ever-active set).
+        inp.md_service.get_active_feed_gap_s.return_value = 2000.0
+        with patch("hft_platform.ops.platform_inputs.timebase") as tb:
+            tb.now_s.return_value = now
+            reasons = inp.reduce_only_reasons()
+        assert "feed_reconnect_unhealthy" in reasons
+
 
 # ---------------------------------------------------------------------------
 # _quote_flap_budget_exceeded

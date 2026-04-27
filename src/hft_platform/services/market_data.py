@@ -413,6 +413,16 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
 
         # Per-symbol feed gap monitoring (bounded by subscribed symbol count)
         self._symbol_last_tick: dict[str, float] = {}
+        # Per-symbol lifetime event count, used to gate entry into the
+        # ``_ever_active_symbols`` latched set.  The 5-event baseline
+        # (``_ACTIVE_BASELINE_EVENT_COUNT``) distinguishes a single
+        # subscription-handshake print from a symbol that is genuinely
+        # trading.  Once a symbol crosses the baseline it joins the
+        # latched set and stays there for the lifetime of the session,
+        # so subsequent silence on that symbol is treated as a real
+        # feed signal (not a structural illiquid quirk).
+        self._event_counts: dict[str, int] = {}
+        self._ever_active_symbols: set[str] = set()
         self._symbol_gap_threshold_s = float(os.getenv("HFT_SYMBOL_GAP_THRESHOLD_S", "6.0"))
         # Bug #36: per-symbol overrides for the watchdog gap threshold.
         # Format: HFT_SYMBOL_GAP_THRESHOLD_OVERRIDES="TXFG6=60,2207=120,..."
@@ -950,10 +960,30 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                 asks_len=asks_len,
             )
 
+    # Number of lifetime events a symbol must accumulate before it qualifies
+    # as "ever active" and joins the latched ``_ever_active_symbols`` set.
+    # 5 is chosen as a small but meaningful threshold:
+    #   * Distinguishes a one-shot subscription-handshake print (which often
+    #     fires once on subscribe and never again for chronically idle
+    #     options/far-month futures) from a symbol that is genuinely
+    #     trading.
+    #   * Small enough that any liquid front-month future or ETF crosses it
+    #     within milliseconds of the open, so the latched set populates
+    #     quickly after startup and feed-gap monitoring becomes accurate.
+    _ACTIVE_BASELINE_EVENT_COUNT: int = 5
+
     def _update_symbol_tick_inline(self, event: TickEvent | BidAskEvent) -> None:
         symbol = getattr(event, "symbol", None)
         if not symbol:
             return
+        # Track lifetime event count and latch the symbol into the
+        # ``_ever_active_symbols`` set on the baseline-crossing event.
+        # The ``count == K`` check (rather than ``count >= K``) avoids
+        # repeated set churn on every subsequent event after latch.
+        count = self._event_counts.get(symbol, 0) + 1
+        self._event_counts[symbol] = count
+        if count == self._ACTIVE_BASELINE_EVENT_COUNT:
+            self._ever_active_symbols.add(symbol)
         if self._symbol_tick_inline:
             self._symbol_last_tick[symbol] = time.monotonic()
         else:
@@ -1827,7 +1857,12 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
             self._resubscribe_attempts = 0
             # Clear stale per-symbol timestamps so symbols that fail to
             # re-subscribe don't permanently inflate feed gap metrics.
+            # Also reset the lifetime event counters and the latched
+            # ever-active set so a fresh post-reconnect cold-start window
+            # is observed before treating silence as a real feed signal.
             self._symbol_last_tick = {}
+            self._event_counts = {}
+            self._ever_active_symbols = set()
             # Fire post-reconnect callbacks (e.g. invalidate stale live orders)
             for cb in getattr(self, "_on_reconnect_callbacks", []):
                 try:
@@ -1987,45 +2022,48 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
             return max(now - ts for ts in snapshot.values())
         return max_gap
 
-    # Default lookback for "active" classification: a symbol whose most recent
-    # event is older than this is treated as chronically inactive (illiquid
-    # option leg, far-month futures during night session, suspended stock,
-    # etc.) and excluded from the platform_reduce_only feed-gap signal.
+    # Deprecated kwarg sentinel — the previous lookback-based design is
+    # retained as a deprecated parameter for callers that still pass it,
+    # but the value is ignored under the latched ever-active design.
     _ACTIVE_FEED_GAP_LOOKBACK_S_DEFAULT: float = 300.0
 
     def get_active_feed_gap_s(self, active_threshold_s: float | None = None) -> float:
-        """Return the max feed gap, restricted to *recently active* symbols.
+        """Return the max feed gap across *latched ever-active* futures symbols.
 
-        Rationale: with an 800-symbol universe (recent commit ``2568912a``)
-        the subscription set includes long-tail illiquid futures/options
-        whose gaps perpetually exceed any reasonable health threshold (e.g.
-        TMFI6=2148s, TXO29000R6=2400s).  These symbols are subscribed-but-
-        inactive and their staleness is structural, not a feed problem.
+        Latched-set semantics (revises commit ``b80b950c``):
 
-        A symbol is considered "active" when its most recent event arrived
-        within ``active_threshold_s`` seconds.  The returned value is the
-        maximum gap *among active symbols only* — so a single liquid feed
-        flowing at sub-second cadence yields a small number even if 700
-        long-tail symbols are stale.  When no symbol is active (e.g. early
-        startup before any tick), falls back to :meth:`get_max_feed_gap_s`
-        to preserve the existing dead-feed signal.
+        * A symbol enters ``_ever_active_symbols`` once it has accumulated
+          ``_ACTIVE_BASELINE_EVENT_COUNT`` (default 5) lifetime events.
+        * Once latched, the symbol is monitored for the rest of the
+          session — silence on a latched symbol is therefore a real
+          feed-gap signal, not a structural illiquid quirk.
+        * Symbols that never cross the baseline (e.g. TMFI6 / TXO29000R6
+          chronically idle far-OTM legs whose only print was the
+          subscription handshake) are invisible to this method.  Their
+          structural staleness no longer inflates the feed-gap signal.
 
-        The same product-type filtering as :meth:`get_max_feed_gap_s`
-        applies (futures only; options/equities excluded) so behaviour
-        outside the active-symbol restriction stays identical.
+        Rationale: the previous design (``b80b950c``) excluded a symbol
+        from the calculation when its gap exceeded a 300s upper bound.
+        That inadvertently masked real partial feed failures: a
+        front-month future that was actively trading and then suddenly
+        stopped getting events was silently dropped after 300s of
+        silence, and the remaining liquid feeds reported a healthy gap
+        even though a real outage had occurred on the dropped symbol.
+
+        Falls back to :meth:`get_max_feed_gap_s` when the latched set is
+        empty (legitimate cold start before any symbol has crossed the
+        5-event baseline).
 
         Args:
-            active_threshold_s: max age (seconds) for a symbol's last event
-                to count it as active.  Defaults to
-                ``_ACTIVE_FEED_GAP_LOOKBACK_S_DEFAULT`` (300s).
+            active_threshold_s: deprecated; ignored.  Retained for
+                backwards compatibility with callers from the
+                lookback-based design.  The latched ever-active set
+                replaces the upper-bound filter.
         """
-        threshold = (
-            float(active_threshold_s)
-            if active_threshold_s is not None
-            else self._ACTIVE_FEED_GAP_LOOKBACK_S_DEFAULT
-        )
+        del active_threshold_s  # deprecated, intentionally unused
         try:
             snapshot = dict(self._symbol_last_tick)
+            ever_active = frozenset(self._ever_active_symbols)
         except RuntimeError:
             return 0.0
 
@@ -2035,22 +2073,24 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         now = time.monotonic()
         max_active_gap = 0.0
         active_count = 0
-        for symbol, last_ts in snapshot.items():
+        for symbol in ever_active:
+            last_ts = snapshot.get(symbol)
+            if last_ts is None:
+                continue
             if any(symbol.startswith(p) for p in self._FEED_GAP_EXCLUDE_PREFIXES):
                 continue
             if not self._is_futures_symbol(symbol):
                 continue
-            gap = now - last_ts
-            if gap > threshold:
-                # Chronically inactive — exclude from the signal.
-                continue
             active_count += 1
+            gap = now - last_ts
             if gap > max_active_gap:
                 max_active_gap = gap
 
         if active_count == 0:
-            # No actively-flowing futures symbols — fall back to the legacy
-            # max-gap signal so genuine dead feeds still surface.
+            # No latched futures symbol yet — fall back to the legacy
+            # max-gap signal so genuine cold-start dead feeds still
+            # surface.  Once any symbol crosses the 5-event baseline,
+            # the latched signal takes over.
             return self.get_max_feed_gap_s()
         return max_active_gap
 

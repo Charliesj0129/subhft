@@ -566,8 +566,11 @@ def test_get_max_feed_gap_s_night_session_stocks_excluded():
 
 
 def test_get_active_feed_gap_s_excludes_chronically_inactive_symbol():
-    """Illiquid options/futures with >threshold gaps must be excluded from the
-    active gap signal so platform_reduce_only does not latch on stragglers."""
+    """Illiquid futures that never crossed the activity baseline must be
+    excluded from the active gap signal so platform_reduce_only does not
+    latch on stragglers.  Under the latched-set design, a symbol is
+    excluded by virtue of NEVER being in ``_ever_active_symbols`` (not
+    by an upper-bound gap filter)."""
     svc, *_ = _make_service()
     now = time.monotonic()
     svc._symbol_last_tick = {
@@ -575,35 +578,45 @@ def test_get_active_feed_gap_s_excludes_chronically_inactive_symbol():
         "TXFD6": now - 1.0,    # active front-month
         "TMFI6": now - 2148.0, # chronically stale far-month (real-world example)
     }
-    gap = svc.get_active_feed_gap_s(active_threshold_s=300.0)
+    # Only the actively-trading front-month contracts crossed the baseline.
+    svc._ever_active_symbols = {"TMFD6", "TXFD6"}
+    gap = svc.get_active_feed_gap_s()
     # Should reflect only TMFD6/TXFD6 (≤1.0s), not TMFI6 (2148s)
     assert gap < 5.0
 
 
 def test_get_active_feed_gap_s_falls_back_when_no_active_futures():
-    """If every futures symbol is chronically stale, fall back to legacy max."""
+    """If no symbol has ever crossed the activity baseline (legitimate
+    cold start), fall back to ``get_max_feed_gap_s``."""
     svc, *_ = _make_service()
     now = time.monotonic()
     svc._symbol_last_tick = {
         "TMFI6": now - 2148.0,
         "TXFI6": now - 2400.0,
     }
+    # No symbol has crossed the 5-event baseline yet → empty latched set.
+    svc._ever_active_symbols = set()
     gap = svc.get_active_feed_gap_s(active_threshold_s=300.0)
-    # Both stale → fall back to get_max_feed_gap_s, which returns ≥2148s
+    # Empty latched set → fall back to get_max_feed_gap_s, which returns ≥2148s
     assert gap >= 2000.0
 
 
-def test_get_active_feed_gap_s_default_threshold_uses_300s():
-    """Default active threshold is 300s — symbols within that window count."""
+def test_get_active_feed_gap_s_deprecated_kwarg_is_ignored():
+    """The ``active_threshold_s`` kwarg is deprecated under the latched-set
+    design.  Passing any value (including the legacy 300s default) must
+    have no effect on the returned gap."""
     svc, *_ = _make_service()
     now = time.monotonic()
     svc._symbol_last_tick = {
-        "TMFD6": now - 250.0,  # within 300s default → still active
-        "TMFI6": now - 1000.0, # beyond 300s → excluded
+        "TMFD6": now - 250.0,  # 250s silence on a latched symbol
     }
-    gap = svc.get_active_feed_gap_s()  # no explicit threshold
-    # Active set is {TMFD6} with gap ~250s, not 1000s
-    assert 240.0 < gap < 270.0
+    svc._ever_active_symbols = {"TMFD6"}
+    # Both calls must return the same latched silence (~250s) regardless
+    # of the deprecated kwarg.
+    gap_default = svc.get_active_feed_gap_s()
+    gap_legacy = svc.get_active_feed_gap_s(active_threshold_s=100.0)
+    assert 240.0 < gap_default < 270.0
+    assert 240.0 < gap_legacy < 270.0
 
 
 def test_get_active_feed_gap_s_empty_symbol_dict_returns_zero():
@@ -611,6 +624,102 @@ def test_get_active_feed_gap_s_empty_symbol_dict_returns_zero():
     svc._symbol_last_tick = {}
     gap = svc.get_active_feed_gap_s()
     assert gap == 0.0
+
+
+def test_partial_feed_failure_still_triggers_unhealthy():
+    """Regression for the masking bug introduced by commit b80b950c.
+
+    Scenario: TMFE6 (front-month future, normally 1000+ events/min) was
+    actively trading and crossed the activity baseline. It then stops
+    getting events (broker partial outage). After 2000s of silence the
+    pre-fix ``get_active_feed_gap_s`` would discard TMFE6 because its gap
+    exceeds the upper-bound threshold, and report only TXFE6's healthy
+    0.5s gap — masking the real partial failure.
+
+    The latched ever-active set must keep TMFE6 in the calculation; the
+    reported gap must therefore reflect the 2000s silence, which then
+    crosses the platform's 600s ``feed_gap_threshold_s`` upstream.
+    """
+    svc, *_ = _make_service()
+    now_mono = time.monotonic()
+    svc._symbol_last_tick = {
+        "TMFE6": now_mono - 2000.0,  # was actively trading, now silent
+        "TXFE6": now_mono - 0.5,     # still healthy front-month
+    }
+    # Both symbols crossed the activity baseline before the partial outage.
+    svc._ever_active_symbols = {"TMFE6", "TXFE6"}
+    gap = svc.get_active_feed_gap_s()
+    # Must report the 2000s silence on TMFE6, not the 0.5s healthy TXFE6.
+    assert gap >= 1900.0
+
+
+def test_chronically_idle_symbol_does_not_trigger_unhealthy():
+    """Subscribed-but-never-active illiquid symbols (e.g. TMFI6 with one
+    handshake print and no ongoing activity) must NOT inflate the active
+    feed gap.  They never enter the latched ever-active set, so they are
+    invisible to ``get_active_feed_gap_s``."""
+    svc, *_ = _make_service()
+    now_mono = time.monotonic()
+    svc._symbol_last_tick = {
+        "TMFI6": now_mono - 2148.0,  # chronically idle, 1 lifetime event
+        "TMFE6": now_mono - 0.5,     # actively trading front-month
+    }
+    # Only TMFE6 ever crossed the baseline.  TMFI6 had a single handshake
+    # print and never qualified as active.
+    svc._ever_active_symbols = {"TMFE6"}
+    gap = svc.get_active_feed_gap_s()
+    # Must reflect TMFE6 only (≤1.0s); TMFI6's 2148s silence is structural.
+    assert gap < 5.0
+
+
+def test_symbol_enters_active_set_after_baseline_events():
+    """A symbol must qualify as active only after crossing the baseline
+    event count (default 5).  Below baseline, the symbol is invisible to
+    ``get_active_feed_gap_s``; on the baseline-crossing event it enters
+    the latched set; further events keep it in the set (idempotent)."""
+    svc, *_ = _make_service()
+
+    event = SimpleNamespace(symbol="TMFE6")
+    baseline = svc._ACTIVE_BASELINE_EVENT_COUNT
+    assert baseline >= 1
+
+    # Below baseline: not in the ever-active set.
+    for _ in range(baseline - 1):
+        svc._update_symbol_tick_inline(event)
+    assert "TMFE6" not in svc._ever_active_symbols
+    assert svc._event_counts.get("TMFE6", 0) == baseline - 1
+
+    # Baseline-crossing event: enters the set.
+    svc._update_symbol_tick_inline(event)
+    assert "TMFE6" in svc._ever_active_symbols
+    assert svc._event_counts["TMFE6"] == baseline
+
+    # Subsequent events: still in set (idempotent).
+    for _ in range(10):
+        svc._update_symbol_tick_inline(event)
+    assert "TMFE6" in svc._ever_active_symbols
+    assert svc._event_counts["TMFE6"] == baseline + 10
+
+
+def test_active_set_latches_across_silence():
+    """Once latched, a symbol stays in ``_ever_active_symbols`` even after
+    long silence — silence is then a real feed-gap signal, not a reason
+    to drop the symbol from monitoring."""
+    svc, *_ = _make_service()
+
+    event = SimpleNamespace(symbol="TMFE6")
+    # Cross the baseline.
+    for _ in range(svc._ACTIVE_BASELINE_EVENT_COUNT):
+        svc._update_symbol_tick_inline(event)
+    assert "TMFE6" in svc._ever_active_symbols
+
+    # Simulate 600s of silence by rewinding the symbol's last-tick monotonic
+    # timestamp.  The latched set must NOT eject the symbol.
+    svc._symbol_last_tick["TMFE6"] = time.monotonic() - 600.0
+    assert "TMFE6" in svc._ever_active_symbols
+
+    gap = svc.get_active_feed_gap_s()
+    assert gap >= 590.0
 
 
 # ---------------------------------------------------------------------------
