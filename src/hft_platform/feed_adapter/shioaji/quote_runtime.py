@@ -249,7 +249,9 @@ class QuoteRuntime:
 
     def _bump_retry_metric(self, code: str, result: str) -> None:
         metrics = getattr(self._client, "metrics", None)
-        counter = getattr(metrics, "feed_subscription_retry_total", None) if metrics else None
+        if metrics is None:
+            return
+        counter = getattr(metrics, "feed_subscription_retry_total", None)
         if counter is None:
             return
         try:
@@ -260,7 +262,9 @@ class QuoteRuntime:
 
     def _bump_permanent_metric(self, code: str) -> None:
         metrics = getattr(self._client, "metrics", None)
-        counter = getattr(metrics, "feed_subscription_permanent_failures_total", None) if metrics else None
+        if metrics is None:
+            return
+        counter = getattr(metrics, "feed_subscription_permanent_failures_total", None)
         if counter is None:
             return
         try:
@@ -271,7 +275,9 @@ class QuoteRuntime:
 
     def _set_attempts_gauge(self, code: str, attempts: int) -> None:
         metrics = getattr(self._client, "metrics", None)
-        gauge = getattr(metrics, "feed_subscription_retry_attempts", None) if metrics else None
+        if metrics is None:
+            return
+        gauge = getattr(metrics, "feed_subscription_retry_attempts", None)
         if gauge is None:
             return
         try:
