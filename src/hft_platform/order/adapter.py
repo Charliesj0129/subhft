@@ -2845,9 +2845,11 @@ class OrderAdapter:
                     # post-HALT cancels the underlying live order (target_trade),
                     # not the amend itself.
                     amend_ticket_id = self._begin_dispatch_ticket(intent)
-                    result: Any = None
+                    # P3-?: rename to avoid mypy [no-redef] (shadows `result`
+                    # bound at line 2767 inside the CANCEL branch above).
+                    amend_result: Any = None
                     try:
-                        result = await self._call_api(
+                        amend_result = await self._call_api(
                             "update_order",
                             self.client.update_order,
                             target_trade,
@@ -2862,7 +2864,7 @@ class OrderAdapter:
                         await self._end_dispatch_ticket(
                             amend_ticket_id, intent, target_trade, cmd.cmd_id
                         )
-                    if result is None or result is _GUARD_TIMEOUT:
+                    if amend_result is None or amend_result is _GUARD_TIMEOUT:
                         return False
                     self.metrics.order_actions_total.labels(type="amend").inc()
                     self.rate_limiter.record()
