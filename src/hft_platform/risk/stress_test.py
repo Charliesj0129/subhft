@@ -106,6 +106,15 @@ def run_stress_test(
     Returns:
         List of ScenarioResult, one per scenario, in the same order as *scenarios*.
     """
+    # P3-?: vulture flagged `surface` and `risk_free_rate` as 100% unused; both
+    # are documented public-API parameters reserved for the future full
+    # re-pricing extension (cf. docstring above). Tests pass them consistently,
+    # so the right fix is to mark them used here — `del`-ing them is a no-op at
+    # runtime and silences vulture without breaking callers. When the
+    # re-pricing extension lands, replace the `del` lines with the actual
+    # consumers (IV lookup via `surface`, discount factor via `risk_free_rate`).
+    del surface  # reserved for IV lookup in future re-pricing
+    del risk_free_rate  # reserved for discount factor in future re-pricing
     results: list[ScenarioResult] = []
     for scenario in scenarios:
         if not positions:

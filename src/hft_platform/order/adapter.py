@@ -203,7 +203,7 @@ class OrderAdapter:
         self._order_id_map_max_size = int(os.getenv("HFT_ORDER_ID_MAP_MAX_SIZE", "10000"))
         self._order_id_map_persist_path: str = os.getenv("HFT_ORDER_ID_MAP_PERSIST_PATH", ".state/order_id_map.jsonl")
         self._order_id_map_persist_interval_s: float = float(os.getenv("HFT_ORDER_ID_MAP_PERSIST_INTERVAL_S", "1.0"))
-        self._order_id_map_last_persist_s: float = 0.0  # noqa: monotonic timestamp
+        self._order_id_map_last_persist_s: float = 0.0  # monotonic timestamp
         # H3: per-entry metadata sidecar (broker_id -> (created_ns, state)).
         # ``state`` is "live" or "terminal"; the persist filter drops terminal
         # rows so a future restart cannot resurrect a stale (broker_id ->
@@ -235,9 +235,9 @@ class OrderAdapter:
         self._live_orders_lock = asyncio.Lock()
         self._pending_order_keys: set[str] = set()
         # TTL sweep: evict orphaned live_orders entries (missed terminal callbacks)
-        self._live_orders_ttl_s: float = float(os.getenv("HFT_LIVE_ORDERS_TTL_S", "300"))  # noqa: duration
+        self._live_orders_ttl_s: float = float(os.getenv("HFT_LIVE_ORDERS_TTL_S", "300"))  # duration (s)
         self._live_orders_max_size: int = int(os.getenv("HFT_LIVE_ORDERS_MAX_SIZE", "10000"))
-        self._live_orders_last_sweep_s: float = 0.0  # noqa: monotonic timestamp
+        self._live_orders_last_sweep_s: float = 0.0  # monotonic timestamp
         self._live_orders_inserted_at: Dict[str, float] = {}  # order_key -> monotonic timestamp
         # Bounded deque: auto-evicts oldest entries when full (OOM protection)
         self._deferred_terminals: collections.deque[tuple[str, str, float]] = collections.deque(maxlen=256)
@@ -337,7 +337,7 @@ class OrderAdapter:
         # resolution in deal callbacks where order_id_map has no seed data (Shioaji futures).
         self._pending_fill_index: dict[str, list[str]] = {}
         self._pending_fill_registered_at: dict[str, float] = {}
-        self._pending_fill_ttl_s: float = float(os.getenv("HFT_PENDING_FILL_TTL_S", "7200"))  # noqa: duration
+        self._pending_fill_ttl_s: float = float(os.getenv("HFT_PENDING_FILL_TTL_S", "7200"))  # duration (s)
         # H6: opt-in strict mode. When enabled, resolve_strategy_from_deal
         # returns None on ambiguity (multiple pending entries for the same
         # symbol+side) so the caller routes to UNKNOWN / DLQ rather than
@@ -2845,9 +2845,11 @@ class OrderAdapter:
                     # post-HALT cancels the underlying live order (target_trade),
                     # not the amend itself.
                     amend_ticket_id = self._begin_dispatch_ticket(intent)
-                    result: Any = None
+                    # P3-?: rename to avoid mypy [no-redef] (shadows `result`
+                    # bound at line 2767 inside the CANCEL branch above).
+                    amend_result: Any = None
                     try:
-                        result = await self._call_api(
+                        amend_result = await self._call_api(
                             "update_order",
                             self.client.update_order,
                             target_trade,
@@ -2862,7 +2864,7 @@ class OrderAdapter:
                         await self._end_dispatch_ticket(
                             amend_ticket_id, intent, target_trade, cmd.cmd_id
                         )
-                    if result is None or result is _GUARD_TIMEOUT:
+                    if amend_result is None or amend_result is _GUARD_TIMEOUT:
                         return False
                     self.metrics.order_actions_total.labels(type="amend").inc()
                     self.rate_limiter.record()

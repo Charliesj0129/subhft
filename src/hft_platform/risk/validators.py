@@ -476,6 +476,91 @@ class DailyLossLimitValidator(RiskValidator):
         current = self._accumulated_loss.get(strategy_id, 0)
         self._accumulated_loss[strategy_id] = current + pnl_delta
 
+    def _evaluate_soft_limit(
+        self,
+        intent: OrderIntent,
+        total_pnl: int,
+    ) -> Tuple[bool, str] | None:
+        """Soft-limit recovery / rejection branch (P3-c2 extraction).
+
+        Returns:
+            ``None`` when soft limit is not active, or has just recovered
+            (caller should fall through to subsequent checks).
+            ``(True, reason)`` if a flat-cooldown bypass applies.
+            ``(False, reason)`` to reject the intent.
+        """
+        if not self.soft_limit_active:
+            return None
+
+        now_ns = timebase.now_ns()
+        # Recovery: loss must be below recovery threshold AND cooldown must
+        # have elapsed.
+        recovery_loss = -total_pnl  # positive = loss, negative = gain
+        if (
+            recovery_loss < self._soft_recovery_threshold_scaled
+            and now_ns >= self._soft_limit_cooldown_until_ns
+        ):
+            logger.info(
+                "DailyLossLimitValidator: soft limit recovered",
+                total_pnl=total_pnl,
+                recovery_threshold_scaled=self._soft_recovery_threshold_scaled,
+            )
+            self.soft_limit_active = False
+            self._soft_limit_cooldown_until_ns = 0
+            return None
+
+        current_pos: int | None = None
+        if self._position_provider is not None:
+            try:
+                current_pos = self._current_position(intent.symbol, intent.strategy_id)
+            except Exception:  # noqa: BLE001 — fail closed if position lookup breaks
+                current_pos = None
+        # Bug #39: maker-style strategies can deadlock in SOFT_LIMIT when
+        # flat because no intent qualifies as reduce-only, so PnL never
+        # moves and recovery_loss never improves. After the cooldown
+        # expires, allow new orders again only while flat. Once exposed,
+        # the existing SOFT_LIMIT reduce-only behavior still applies.
+        if current_pos == 0 and now_ns >= self._soft_limit_cooldown_until_ns:
+            logger.info(
+                "DailyLossLimitValidator: soft limit flat cooldown bypass",
+                strategy_id=intent.strategy_id,
+                total_pnl=total_pnl,
+            )
+            return True, "SOFT_LIMIT_FLAT_COOLDOWN_BYPASS"
+        return False, (
+            f"SOFT_LIMIT: loss={-total_pnl} >= threshold={self._soft_limit_threshold_scaled}"
+        )
+
+    def _evaluate_peak_drawdown(self, total_pnl: int) -> Tuple[bool, str] | None:
+        """Peak-drawdown rejection branch (P3-c2 extraction).
+
+        Returns ``(False, reason)`` when drawdown exceeds the limit (also sets
+        ``halt_triggered`` so the supervisor can escalate StormGuard); ``None``
+        otherwise.
+        """
+        if not self._intraday_pnl_enabled:
+            return None
+        if self._peak_pnl_scaled < self._peak_drawdown_min_peak_scaled:
+            return None
+        drawdown = self._peak_pnl_scaled - total_pnl
+        drawdown_limit = int(self._peak_drawdown_pct * self._peak_pnl_scaled)
+        if drawdown <= drawdown_limit:
+            return None
+        # Why: PEAK_DRAWDOWN must escalate to StormGuard HALT so
+        # autonomy_monitor.flatten_all() closes positions at market (per user
+        # 2026-04-20 — lock in profits on retracement). FORCE_FLAT and
+        # reduce-position intents bypass this gate earlier, so flatten orders
+        # still go through.
+        self.halt_triggered = True
+        logger.warning(
+            "DailyLossLimitValidator: peak drawdown exceeded",
+            peak_pnl_scaled=self._peak_pnl_scaled,
+            total_pnl=total_pnl,
+            drawdown=drawdown,
+            drawdown_limit=drawdown_limit,
+        )
+        return False, f"PEAK_DRAWDOWN: drawdown={drawdown} > limit={drawdown_limit}"
+
     def check(self, intent: OrderIntent) -> Tuple[bool, str]:
         # a. Bypass CANCEL and FORCE_FLAT for all checks
         if intent.intent_type in (IntentType.CANCEL, IntentType.FORCE_FLAT):
@@ -514,59 +599,16 @@ class DailyLossLimitValidator(RiskValidator):
         if self.halt_triggered and self._intraday_pnl_enabled:
             return False, "DAILY_LOSS_HALT_TRIGGERED"
 
-        # f. Soft limit recovery / rejection
-        if self.soft_limit_active:
-            now_ns = timebase.now_ns()
-            # Recovery: loss must be below recovery threshold AND cooldown must have elapsed
-            recovery_loss = -total_pnl  # positive = loss, negative = gain
-            if recovery_loss < self._soft_recovery_threshold_scaled and now_ns >= self._soft_limit_cooldown_until_ns:
-                logger.info(
-                    "DailyLossLimitValidator: soft limit recovered",
-                    total_pnl=total_pnl,
-                    recovery_threshold_scaled=self._soft_recovery_threshold_scaled,
-                )
-                self.soft_limit_active = False
-                self._soft_limit_cooldown_until_ns = 0
-            else:
-                current_pos: int | None = None
-                if self._position_provider is not None:
-                    try:
-                        current_pos = self._current_position(intent.symbol, intent.strategy_id)
-                    except Exception:  # noqa: BLE001 — fail closed if position lookup breaks
-                        current_pos = None
-                # Bug #39: maker-style strategies can deadlock in SOFT_LIMIT when
-                # flat because no intent qualifies as reduce-only, so PnL never
-                # moves and recovery_loss never improves. After the cooldown
-                # expires, allow new orders again only while flat. Once exposed,
-                # the existing SOFT_LIMIT reduce-only behavior still applies.
-                if current_pos == 0 and now_ns >= self._soft_limit_cooldown_until_ns:
-                    logger.info(
-                        "DailyLossLimitValidator: soft limit flat cooldown bypass",
-                        strategy_id=intent.strategy_id,
-                        total_pnl=total_pnl,
-                    )
-                    return True, "SOFT_LIMIT_FLAT_COOLDOWN_BYPASS"
-                return False, f"SOFT_LIMIT: loss={-total_pnl} >= threshold={self._soft_limit_threshold_scaled}"
+        # f. Soft limit recovery / rejection (extracted helper).
+        soft_decision = self._evaluate_soft_limit(intent, total_pnl)
+        if soft_decision is not None:
+            return soft_decision
 
-        # g. Peak drawdown check (before total_pnl >= 0 guard to handle positive-peak scenarios)
-        if self._intraday_pnl_enabled and self._peak_pnl_scaled >= self._peak_drawdown_min_peak_scaled:
-            drawdown = self._peak_pnl_scaled - total_pnl
-            drawdown_limit = int(self._peak_drawdown_pct * self._peak_pnl_scaled)
-            if drawdown > drawdown_limit:
-                # Why: PEAK_DRAWDOWN must escalate to StormGuard HALT so
-                # autonomy_monitor.flatten_all() closes positions at market
-                # (per user 2026-04-20 — lock in profits on retracement).
-                # FORCE_FLAT and reduce-position intents bypass this gate
-                # earlier, so flatten orders still go through.
-                self.halt_triggered = True
-                logger.warning(
-                    "DailyLossLimitValidator: peak drawdown exceeded",
-                    peak_pnl_scaled=self._peak_pnl_scaled,
-                    total_pnl=total_pnl,
-                    drawdown=drawdown,
-                    drawdown_limit=drawdown_limit,
-                )
-                return False, f"PEAK_DRAWDOWN: drawdown={drawdown} > limit={drawdown_limit}"
+        # g. Peak drawdown check — before total_pnl >= 0 guard to handle
+        # positive-peak scenarios (extracted helper).
+        peak_decision = self._evaluate_peak_drawdown(total_pnl)
+        if peak_decision is not None:
+            return peak_decision
 
         # h. Net gain or breakeven — no further loss checks needed
         if total_pnl >= 0:

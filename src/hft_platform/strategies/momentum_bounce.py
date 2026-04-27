@@ -22,8 +22,16 @@ from hft_platform.contracts.execution import FillEvent
 from hft_platform.contracts.strategy import Side
 from hft_platform.events import LOBStatsEvent
 from hft_platform.strategies.cascade_bounce import (
+    _DEFAULT_LOOKBACK_NS,
+    _DEFAULT_MAX_SPREAD_PTS,
+    _DEFAULT_MIN_VOL_SAMPLES,
+    _DEFAULT_SESSION_END_SEC,
+    _DEFAULT_SESSION_START_SEC,
+    _DEFAULT_TAKE_PROFIT_PTS,
+    _DEFAULT_TRIGGER_SIGMA,
     _MID_X2_POINT_SCALE,
     _PTS_SCALE,
+    _UTC_OFFSET_SEC,
     CascadeBounceStrategy,
 )
 
@@ -45,12 +53,42 @@ class MomentumBounceStrategy(CascadeBounceStrategy):
         trailing_stop_pts: int = _DEFAULT_TRAILING_STOP_PTS,
         stop_loss_pts: int = _DEFAULT_STOP_LOSS_PTS,
         max_hold_ns: int = _DEFAULT_MAX_HOLD_NS,
+        # Explicit forwarding of CBS typed params (was: **kwargs: object splat,
+        # which let wrong-type values reach CBS.__init__ and raise TypeError at
+        # runtime — the strategy never reached handle_event). Keep these in sync
+        # with CascadeBounceStrategy.__init__.
+        lookback_ns: int = _DEFAULT_LOOKBACK_NS,
+        trigger_sigma: float = _DEFAULT_TRIGGER_SIGMA,
+        take_profit_pts: int = _DEFAULT_TAKE_PROFIT_PTS,
+        min_vol_samples: int = _DEFAULT_MIN_VOL_SAMPLES,
+        session_start_sec: int = _DEFAULT_SESSION_START_SEC,
+        session_end_sec: int = _DEFAULT_SESSION_END_SEC,
+        utc_offset_sec: int = _UTC_OFFSET_SEC,
+        max_spread_pts: int = _DEFAULT_MAX_SPREAD_PTS,
+        detect_window_ns: int | None = None,
+        hold_ns: int | None = None,
+        move_threshold_bps: int | None = None,
+        stop_loss_bps: int | None = None,
+        cooldown_ns: int | None = None,
         **kwargs: object,
     ) -> None:
         super().__init__(
             strategy_id=strategy_id,
-            stop_loss_pts=stop_loss_pts,
+            lookback_ns=lookback_ns,
+            trigger_sigma=trigger_sigma,
             max_hold_ns=max_hold_ns,
+            take_profit_pts=take_profit_pts,
+            stop_loss_pts=stop_loss_pts,
+            min_vol_samples=min_vol_samples,
+            session_start_sec=session_start_sec,
+            session_end_sec=session_end_sec,
+            utc_offset_sec=utc_offset_sec,
+            max_spread_pts=max_spread_pts,
+            detect_window_ns=detect_window_ns,
+            hold_ns=hold_ns,
+            move_threshold_bps=move_threshold_bps,
+            stop_loss_bps=stop_loss_bps,
+            cooldown_ns=cooldown_ns,
             **kwargs,
         )
         self._trailing_stop_pts = int(trailing_stop_pts)
