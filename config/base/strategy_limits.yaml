@@ -14,6 +14,16 @@ global_defaults:
   max_price_cap: 5000.0              # Stocks: max 5,000 NTD per share
   max_price_cap_futures: 50000.0     # Futures: max 50,000 NTD (covers TMF/TXF/MXF)
   max_price_cap_options: 10000.0     # TXO options: max 10,000 NTD
+  # Per-symbol overrides cover metadata-resolution gaps post-rollover
+  # (2026-04-27 incident: TMFE6 absent from symbols.yaml -> product_type=""
+  # -> fallback to global 5000 cap rejected real ~404M scaled futures price).
+  # 500000.0 NTD raw = 5,000,000,000 scaled, ~12x headroom over TAIEX ~40,400 pts.
+  max_price_cap_TMFE6: 500000.0
+  max_price_cap_TMFD6: 500000.0
+  max_price_cap_TXFE6: 500000.0
+  max_price_cap_TXFD6: 500000.0
+  max_price_cap_MXFE6: 500000.0
+  max_price_cap_MXFD6: 500000.0
 
 strategies:
   MM_ALPHA_V1:
