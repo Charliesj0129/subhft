@@ -244,6 +244,9 @@ class FeatureEngine:
         "_warmup_ready_symbols",
         "_ooo_drop_count",
         "_rust_fused_fallback_count",
+        "_compute_values_none_count",
+        "_kernel_reset_failures_count",
+        "_l5_clear_error_count",
         "_eviction_ttl_ns",
         "_eviction_last_run_ns",
         "_state_lock",
@@ -315,6 +318,9 @@ class FeatureEngine:
         self._warmup_ready_symbols: set[str] = set()
         self._ooo_drop_count: int = 0
         self._rust_fused_fallback_count: int = 0
+        self._compute_values_none_count: int = 0
+        self._kernel_reset_failures_count: int = 0
+        self._l5_clear_error_count: int = 0
         # Stale symbol eviction (mirrors LOBEngine.evict_stale_symbols)
         self._eviction_ttl_ns: int = int(float(os.getenv("HFT_FEATURE_EVICTION_TTL_S", "3600")) * 1_000_000_000)
         self._eviction_last_run_ns: int = 0
@@ -409,14 +415,42 @@ class FeatureEngine:
                 if callable(reset):
                     reset()
             except Exception as _exc:  # noqa: BLE001
-                pass
+                # P3-? (B110): A failed kernel reset would otherwise be silent
+                # and the next ``_compute_values_rust`` call could surface
+                # poisoned state. Surface via counter + log so operators can
+                # see kernel health degrading. Do not re-raise — the reset
+                # path runs on the hot path and crashing is worse than
+                # tolerating a stale kernel for one tick.
+                self._kernel_reset_failures_count += 1
+                if (
+                    self._kernel_reset_failures_count <= 3
+                    or self._kernel_reset_failures_count % 100 == 0
+                ):
+                    logger.warning(
+                        "feature_kernel_reset_failed",
+                        symbol=symbol,
+                        kernel="lob_feature_kernel_v1",
+                        error=str(_exc),
+                        total_failures=self._kernel_reset_failures_count,
+                    )
         if pipeline is not None:
             try:
                 reset = getattr(pipeline, "reset", None)
                 if callable(reset):
                     reset()
             except Exception as _exc:  # noqa: BLE001
-                pass
+                self._kernel_reset_failures_count += 1
+                if (
+                    self._kernel_reset_failures_count <= 3
+                    or self._kernel_reset_failures_count % 100 == 0
+                ):
+                    logger.warning(
+                        "feature_kernel_reset_failed",
+                        symbol=symbol,
+                        kernel="rust_feature_pipeline_v1",
+                        error=str(_exc),
+                        total_failures=self._kernel_reset_failures_count,
+                    )
 
     def mark_gap(self, symbol: str) -> None:
         """Mark the next feature update for *symbol* with QUALITY_FLAG_GAP.
@@ -426,6 +460,25 @@ class FeatureEngine:
         """
         with self._state_lock:
             self._quality_flags_next[symbol] = self._quality_flags_next.get(symbol, 0) | QUALITY_FLAG_GAP
+
+    def _log_l5_clear_error(self, side: str, exc: BaseException) -> None:
+        """Emit a sampled warning when L5 access raises in ``_compute_mldm``.
+
+        Caller (``_compute_mldm``) is hot-path (per-tick); log is throttled
+        to the first 3 events plus every 100th. Counter
+        ``_l5_clear_error_count`` is incremented by the caller before
+        invocation. We deliberately do not OR a quality flag here:
+        ``_compute_mldm`` has no symbol context and the surrounding
+        BBO-shift / thin-book guard already zeros ``deep_net``, so the
+        downstream signal is safe — the goal is observability only.
+        """
+        if self._l5_clear_error_count <= 3 or self._l5_clear_error_count % 100 == 0:
+            logger.warning(
+                "feature_l5_clear_error",
+                side=side,
+                error=str(exc),
+                total_errors=self._l5_clear_error_count,
+            )
 
     def mark_gap_all(self) -> None:
         """Mark all tracked symbols with QUALITY_FLAG_GAP.
@@ -663,7 +716,24 @@ class FeatureEngine:
                 self.reset_symbol(symbol)
                 return None
         else:
-            values = self._compute_values(symbol, event, stats_resolved)
+            values_opt = self._compute_values(symbol, event, stats_resolved)
+            # P1-b: ``_compute_values`` returns ``None`` when a new symbol cannot
+            # be admitted (max-symbol cardinality, line ~762). Without this guard
+            # downstream code would feed ``None`` into ``math.isfinite`` and
+            # ``FeatureUpdateEvent``, raising ``TypeError`` on the hot path.
+            if values_opt is None:
+                self._compute_values_none_count += 1
+                if self._compute_values_none_count <= 3 or self._compute_values_none_count % 100 == 0:
+                    logger.warning(
+                        "feature_compute_values_none",
+                        symbol=symbol,
+                        kernel_backend=self._kernel_backend,
+                        max_symbols=self._max_symbols,
+                        kernel_states=len(self._lob_kernel_states),
+                        total_none=self._compute_values_none_count,
+                    )
+                return None
+            values = values_opt
             # NaN/Inf contamination guard — reset kernel state if detected
             ks = self._lob_kernel_states.get(symbol)
             if ks is not None and ks.has_nan():
@@ -1025,8 +1095,12 @@ class FeatureEngine:
                         cb4 = float(bids[3][1]) if len(bids[3]) > 1 else 0.0
                     if n_bid_levels > 4:
                         cb5 = float(bids[4][1]) if len(bids[4]) > 1 else 0.0
-                except Exception:
-                    pass
+                except Exception as _exc:  # noqa: BLE001
+                    # P3-? (L5 swallow): bad L5 records previously emitted
+                    # zero-depth silently. Surface via counter + log so
+                    # corrupted depth shows up in metrics.
+                    self._l5_clear_error_count += 1
+                    self._log_l5_clear_error("bid", _exc)
             if asks is not None:
                 try:
                     n_ask_levels = min(len(asks), 5)
@@ -1038,8 +1112,9 @@ class FeatureEngine:
                         ca4 = float(asks[3][1]) if len(asks[3]) > 1 else 0.0
                     if n_ask_levels > 4:
                         ca5 = float(asks[4][1]) if len(asks[4]) > 1 else 0.0
-                except Exception:
-                    pass
+                except Exception as _exc:  # noqa: BLE001
+                    self._l5_clear_error_count += 1
+                    self._log_l5_clear_error("ask", _exc)
 
         # BBO-shift guard: zero deep_net when best price changes
         bbo_shifted = ks.initialized and (best_bid != prev_best_bid or best_ask != prev_best_ask)
@@ -1120,14 +1195,26 @@ class FeatureEngine:
         # EMA alpha for ~50 tick window
         alpha = 0.04  # 2/(50+1) ≈ 0.039
 
-        signed_vol = float(trade_direction * volume)
+        # P3-b1: weight signed-volume by classifier confidence so a tick-rule
+        # classification (CONF_TICK_RULE=500) contributes half as much to the
+        # toxicity EMA as an at-quote classification (CONF_AT_QUOTE=1000).
+        # Confidence is scaled x1000 (see ``trade_classifier.py``); divide
+        # to get a 0..1 weight, clamped so an out-of-range value cannot
+        # amplify the signal beyond the at-quote ceiling.
+        weight = max(0.0, min(1.0, float(trade_confidence) / 1000.0))
+        signed_vol = float(trade_direction * volume) * weight
+        weighted_total = float(volume) * weight
         ks.tox_signed_vol_ema += alpha * (signed_vol - ks.tox_signed_vol_ema)
-        ks.tox_total_vol_ema += alpha * (float(volume) - ks.tox_total_vol_ema)
+        ks.tox_total_vol_ema += alpha * (weighted_total - ks.tox_total_vol_ema)
         ks.tox_tick_count += 1
 
     def _compute_values_rust(
         self, symbol: str, event: object | None, stats: LOBStatsEvent | _StatsTupleProxy
-    ) -> tuple[int, ...]:
+    ) -> tuple[int, ...] | None:
+        # P1-b: Return type widened to ``| None`` so the rust→python fallback
+        # below correctly forwards a cardinality-rejected ``None`` instead of
+        # claiming a non-None tuple. Caller (``_compute_values``) already
+        # handles None.
         if _RUST_LOB_FEATURE_KERNEL_V1 is None:
             # Safety fallback in case runtime extension is unavailable.
             self._kernel_backend = "python"

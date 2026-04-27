@@ -366,3 +366,54 @@ class TestNormalizationSkipCounter:
         assert result is None
         after = child._value.get()
         assert after == before + 1
+
+
+# ─────────────────────────────────────────────────────────────────────
+# P2-b (commit 26b4a68b): feed_time_skew gauge + 3 severity counters
+# ─────────────────────────────────────────────────────────────────────
+
+
+def test_validate_and_sync_timestamp_emits_severity_counters_and_current_gauge(
+    monkeypatch, normalizer
+):
+    """Three skews above the lag ceiling must each fire their severity bucket
+    exactly once (warn_1s / high_10s / critical_60s), and the gauge must
+    reflect the *current* clamped delta (not the historical max).
+    """
+    import hft_platform.feed_adapter.normalizer as norm
+
+    # Lower the lag ceiling to 1s so the warn_1s severity bucket is reachable
+    # via small positive deltas; cooldown 0 to bypass log throttling.
+    monkeypatch.setattr(norm, "_TS_MAX_LAG_NS", 1_000_000_000)
+    monkeypatch.setattr(norm, "_TS_SKEW_LOG_COOLDOWN_NS", 0)
+
+    metrics = normalizer.metrics
+    assert metrics is not None, "MetricsRegistry must be available for this test"
+
+    counter = metrics.feed_time_skew_over_threshold_total
+    warn_child = counter.labels(topic="tick", severity="warn_1s")
+    high_child = counter.labels(topic="tick", severity="high_10s")
+    crit_child = counter.labels(topic="tick", severity="critical_60s")
+    warn_before = warn_child._value.get()
+    high_before = high_child._value.get()
+    crit_before = crit_child._value.get()
+
+    exch_ts = 100_000_000_000  # 100s in ns
+
+    # warn_1s bucket: raw_delta = 2s > 1s ceiling, but <= 10s.
+    normalizer._last_skew_log_ns = 0  # cooldown is 0 anyway
+    normalizer._validate_and_sync_timestamp(exch_ts, exch_ts + 2_000_000_000, "tick", "2330")
+    # high_10s bucket: raw_delta = 15s > 10s but <= 60s.
+    normalizer._validate_and_sync_timestamp(exch_ts, exch_ts + 15_000_000_000, "tick", "2330")
+    # critical_60s bucket: raw_delta = 75s > 60s.
+    normalizer._validate_and_sync_timestamp(exch_ts, exch_ts + 75_000_000_000, "tick", "2330")
+
+    assert warn_child._value.get() == warn_before + 1
+    assert high_child._value.get() == high_before + 1
+    assert crit_child._value.get() == crit_before + 1
+
+    # Gauge must reflect the *current* (post-clamp) delta from the last call.
+    # After clamp, local_ts = exch_ts + _TS_MAX_LAG_NS (1s), so post-clamp
+    # delta is exactly 1_000_000_000 ns.
+    gauge_child = metrics.feed_time_skew_ns.labels(topic="tick")
+    assert gauge_child._value.get() == 1_000_000_000

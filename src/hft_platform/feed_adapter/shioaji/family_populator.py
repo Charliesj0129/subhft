@@ -132,7 +132,9 @@ def populate_resolver_from_shioaji(
     therefore no hook fires).
     """
     if today is None:
-        today = datetime.now(UTC).date()
+        # P3-?: project rule "always `timebase.now_ns()`" applies even on
+        # startup paths so the entire codebase has a single time source.
+        today = datetime.fromtimestamp(timebase.now_ns() / 1e9, tz=UTC).date()
     calendars, native_hints = _extract_futures(api)
     snapshot = build_snapshot_from_calendar(
         calendars,

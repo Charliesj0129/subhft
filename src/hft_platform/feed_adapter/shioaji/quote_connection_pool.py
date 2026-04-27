@@ -40,10 +40,19 @@ _METRIC_SUBSCRIBED = None
 _METRIC_LOGGED_IN = None
 _METRIC_LAST_DATA_AGE = None
 _METRIC_CONN_STATE = None
+# P1-d (2026-04-27): pool-level health rollup. Live signal showed 3 of 4
+# conns at state=2 with last_data_age 14,875s while only conn 3 carried
+# the entire 119-symbol load — if conn 3 dies the feed is silent. The
+# per-conn metrics above told us about each conn but no single signal
+# said "the pool itself is degraded" so dashboards / alerts had to roll
+# up themselves. This gauge does the rollup at source.
+_METRIC_POOL_DEGRADED = None
+_METRIC_POOL_DEGRADED_FRACTION = None
 
 
 def _ensure_metrics() -> None:
     global _METRIC_SUBSCRIBED, _METRIC_LOGGED_IN, _METRIC_LAST_DATA_AGE, _METRIC_CONN_STATE
+    global _METRIC_POOL_DEGRADED, _METRIC_POOL_DEGRADED_FRACTION
     if Gauge is None or _METRIC_SUBSCRIBED is not None:
         return
     _METRIC_SUBSCRIBED = Gauge(
@@ -65,6 +74,14 @@ def _ensure_metrics() -> None:
         "hft_quote_conn_state",
         "Connection state per quote connection (0=connected, 1=degraded, 2=recovering, 3=disconnected)",
         ["conn_id"],
+    )
+    _METRIC_POOL_DEGRADED = Gauge(
+        "hft_quote_pool_degraded",
+        "Quote connection pool is in degraded state (1 = >50%% of slots non-CONNECTED for >threshold)",
+    )
+    _METRIC_POOL_DEGRADED_FRACTION = Gauge(
+        "hft_quote_pool_degraded_fraction",
+        "Fraction of quote connection slots currently NOT in CONNECTED state (0.0 - 1.0)",
     )
 
 
@@ -220,6 +237,10 @@ class QuoteConnectionPool:
         "_per_facade_timeout_s",
         "_user_callback",
         "_symbols_input_path",
+        # P1-d: pool-degraded alert state
+        "_pool_degraded_since_mono",
+        "_pool_degraded_alerted",
+        "_pool_degraded_alert_after_s",
     )
 
     def __init__(self, symbols_path: str, shioaji_cfg: dict[str, Any], num_conns: int) -> None:
@@ -246,6 +267,14 @@ class QuoteConnectionPool:
         self._reconnect_trigger_s = float(os.getenv("HFT_FACADE_RECONNECT_TRIGGER_S", "10"))
         self._user_callback: Callable[..., Any] | None = None
         self._per_facade_timeout_s = float(os.getenv("HFT_PER_FACADE_TIMEOUT_S", "15"))
+        # P1-d: alert when >50%% of conns have been non-CONNECTED for >Ns.
+        # Default 5min so a brief reconnect storm does not trigger;
+        # configurable via HFT_QUOTE_POOL_DEGRADED_ALERT_AFTER_S.
+        self._pool_degraded_since_mono: float = 0.0
+        self._pool_degraded_alerted: bool = False
+        self._pool_degraded_alert_after_s = float(
+            os.getenv("HFT_QUOTE_POOL_DEGRADED_ALERT_AFTER_S", "300")
+        )
         # Remember the canonical input path so the auto-refresh writer can
         # detect (and refuse) self-clobber when an operator misconfigures
         # ``HFT_SYMBOLS_RUNTIME_SNAPSHOT`` (or legacy callers still expect
@@ -757,9 +786,18 @@ class QuoteConnectionPool:
         }
 
     def update_metrics(self) -> None:
-        """Push per-connection metrics to Prometheus gauges."""
+        """Push per-connection metrics to Prometheus gauges.
+
+        Also computes the P1-d pool-degraded rollup: if >50% of slots are
+        NOT in CONNECTED state for ``_pool_degraded_alert_after_s``
+        seconds, set ``hft_quote_pool_degraded`` and emit a CRITICAL log
+        once. The alert clears as soon as the pool returns to majority-
+        healthy so dashboards can correlate alert windows with recovery.
+        """
         _ensure_metrics()
         now = time.monotonic()
+        n_slots = len(self._slots)
+        n_unhealthy = 0
         for slot in self._slots:
             cid = str(slot.conn_id)
             if _METRIC_SUBSCRIBED is not None:
@@ -770,6 +808,49 @@ class QuoteConnectionPool:
                 _METRIC_LAST_DATA_AGE.labels(conn_id=cid).set(now - slot.last_data_mono)
             if _METRIC_CONN_STATE is not None:
                 _METRIC_CONN_STATE.labels(conn_id=cid).set(int(slot.state))
+            if slot.state != FacadeState.CONNECTED:
+                n_unhealthy += 1
+        # P1-d: pool-level rollup
+        fraction = (n_unhealthy / n_slots) if n_slots > 0 else 0.0
+        if _METRIC_POOL_DEGRADED_FRACTION is not None:
+            _METRIC_POOL_DEGRADED_FRACTION.set(fraction)
+        majority_unhealthy = n_slots > 0 and (2 * n_unhealthy) > n_slots
+        if majority_unhealthy:
+            if self._pool_degraded_since_mono == 0.0:
+                # First tick of the degradation window — start the timer.
+                self._pool_degraded_since_mono = now
+            elif (
+                not self._pool_degraded_alerted
+                and (now - self._pool_degraded_since_mono) >= self._pool_degraded_alert_after_s
+            ):
+                # We have been majority-degraded for long enough — fire
+                # the CRITICAL log exactly once until we recover. Keep the
+                # gauge raised for the entire window.
+                self._pool_degraded_alerted = True
+                logger.critical(
+                    "quote_pool_degraded",
+                    n_slots=n_slots,
+                    n_unhealthy=n_unhealthy,
+                    fraction=fraction,
+                    duration_s=now - self._pool_degraded_since_mono,
+                    threshold_s=self._pool_degraded_alert_after_s,
+                    hint="Quote pool has lost majority connectivity; check "
+                    "Shioaji broker session / reconnect logs",
+                )
+            if _METRIC_POOL_DEGRADED is not None:
+                _METRIC_POOL_DEGRADED.set(1.0 if self._pool_degraded_alerted else 0.0)
+        else:
+            # Recovery: clear timer + alert state, drop the gauge.
+            if self._pool_degraded_alerted:
+                logger.warning(
+                    "quote_pool_degraded_cleared",
+                    n_slots=n_slots,
+                    n_unhealthy=n_unhealthy,
+                )
+            self._pool_degraded_since_mono = 0.0
+            self._pool_degraded_alerted = False
+            if _METRIC_POOL_DEGRADED is not None:
+                _METRIC_POOL_DEGRADED.set(0.0)
 
     # ── Options auto-refresh ─────────────────────────────────────────────
 

@@ -834,3 +834,98 @@ class TestOptionsRoundRobinSharding:
         # Options should be trimmed but non-empty (≤ 2 conns × cap = 240)
         opt_count = sum(1 for s in data["symbols"] if s.get("exchange") == "OPT")
         assert 200 <= opt_count <= 240, f"Expected 200-240 options after trim, got {opt_count}"
+
+
+# ─────────────────────────────────────────────────────────────────────
+# P1-d (commit e6edea37): pool degraded gauge + debounced CRITICAL log
+# ─────────────────────────────────────────────────────────────────────
+
+
+class TestQuoteConnectionPoolDegradedRollup:
+    """Verify pool-level degraded gauge + debounced CRITICAL log (P1-d)."""
+
+    def _make_pool_with_4_slots(self, tmp_path):
+        """Build a pool with 4 connection slots and 4 mock facades — bypasses
+        ``create_facades`` so the test does not need a real Shioaji session.
+        """
+        from hft_platform.feed_adapter.shioaji.facade_slot import FacadeSlot, FacadeState
+        from hft_platform.feed_adapter.shioaji.quote_connection_pool import QuoteConnectionPool
+
+        symbols = [
+            {"code": f"SYM{g}", "exchange": "TSE", "group": g} for g in range(4)
+        ]
+        sym_path = tmp_path / "symbols.yaml"
+        sym_path.write_text(yaml.safe_dump({"symbols": symbols}))
+        pool = QuoteConnectionPool(str(sym_path), {}, num_conns=4)
+
+        # Fabricate 4 slots with mock facades; default state = RECOVERING.
+        pool._slots = []
+        pool._clients = []
+        for i in range(4):
+            facade = mock.MagicMock()
+            facade.logged_in = True
+            facade.subscribed_count = 0
+            slot = FacadeSlot(conn_id=str(i), facade=facade)
+            slot.state = FacadeState.CONNECTED  # start healthy
+            pool._slots.append(slot)
+            pool._clients.append(facade)
+        return pool
+
+    def test_pool_degraded_gauge_raises_after_threshold_and_logs_once(
+        self, tmp_path, monkeypatch
+    ):
+        """Three of four conns non-CONNECTED for >= alert window must raise the
+        ``hft_quote_pool_degraded`` gauge to 1, fraction to 0.75, and emit
+        the CRITICAL log exactly once even if the check runs again with
+        unchanged state.
+        """
+        import hft_platform.feed_adapter.shioaji.quote_connection_pool as qcp
+        from hft_platform.feed_adapter.shioaji.facade_slot import FacadeState
+
+        pool = self._make_pool_with_4_slots(tmp_path)
+        pool._pool_degraded_alert_after_s = 1.0  # tight threshold for the test
+
+        # Mark 3 of 4 conns DOWN.
+        pool._slots[0].state = FacadeState.RECOVERING
+        pool._slots[1].state = FacadeState.RECOVERING
+        pool._slots[2].state = FacadeState.DISCONNECTED
+        pool._slots[3].state = FacadeState.CONNECTED
+
+        # Drive time.monotonic via monkeypatch so we can step past the window
+        # deterministically (no real sleep).
+        clock = {"now": 1000.0}
+        monkeypatch.setattr(qcp.time, "monotonic", lambda: clock["now"])
+
+        # Patch the module-level logger to capture .critical/.warning calls.
+        mock_logger = mock.MagicMock()
+        monkeypatch.setattr(qcp, "logger", mock_logger)
+
+        # First tick: starts the degradation timer; gauge stays 0 (alert not raised yet).
+        pool.update_metrics()
+        assert pool._pool_degraded_since_mono == 1000.0
+        assert pool._pool_degraded_alerted is False
+        assert mock_logger.critical.call_count == 0
+
+        # Advance past the alert window — second tick should fire the CRITICAL log.
+        clock["now"] = 1002.0
+        pool.update_metrics()
+        assert pool._pool_degraded_alerted is True
+        assert mock_logger.critical.call_count == 1
+        crit_args = mock_logger.critical.call_args
+        assert crit_args[0][0] == "quote_pool_degraded"
+        # n_unhealthy=3 / n_slots=4 == 0.75
+        assert crit_args[1].get("n_slots") == 4
+        assert crit_args[1].get("n_unhealthy") == 3
+        assert abs(crit_args[1].get("fraction") - 0.75) < 1e-9
+
+        # Verify the pool-level gauges directly.
+        assert qcp._METRIC_POOL_DEGRADED_FRACTION._value.get() == 0.75
+        assert qcp._METRIC_POOL_DEGRADED._value.get() == 1.0
+
+        # Third tick with state unchanged: must NOT re-emit the CRITICAL log
+        # (debounced — alerted flag stays True until recovery).
+        clock["now"] = 1003.0
+        pool.update_metrics()
+        assert mock_logger.critical.call_count == 1, (
+            "CRITICAL log must be emitted exactly once until recovery"
+        )
