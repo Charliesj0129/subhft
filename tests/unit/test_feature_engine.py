@@ -1140,3 +1140,107 @@ def test_on_tick_clamps_out_of_range_confidence():
     assert abs(ks.tox_signed_vol_ema - expected) < 1e-9, (
         f"Expected clamped EMA {expected}, got {ks.tox_signed_vol_ema}"
     )
+
+
+# ─────────────────────────────────────────────────────────────────────
+# P1-b (commit dad6ee40): _compute_values None guard on cardinality reject
+# ─────────────────────────────────────────────────────────────────────
+
+
+def test_process_lob_stats_swallows_compute_values_none_without_typeerror():
+    """When ``_compute_values`` returns None (cardinality reject inside the
+    kernel-state map), ``process_lob_stats`` must skip the emit, increment
+    ``_compute_values_none_count``, and NOT raise TypeError on the hot path.
+    """
+    from unittest.mock import MagicMock, patch
+
+    eng = FeatureEngine()  # python backend by default
+    assert eng._compute_values_none_count == 0
+
+    mock_logger = MagicMock()
+    with (
+        patch.object(FeatureEngine, "_compute_values", return_value=None),
+        patch("hft_platform.feature.engine.logger", mock_logger),
+    ):
+        # Must not raise — previously this leaked None into FeatureUpdateEvent
+        # and raised ``TypeError: 'NoneType' is not iterable``.
+        result = eng.process_lob_stats(_stats(), local_ts_ns=2)
+
+    assert result is None
+    assert eng._compute_values_none_count == 1
+    mock_logger.warning.assert_called_once()
+    assert mock_logger.warning.call_args[0][0] == "feature_compute_values_none"
+
+
+# ─────────────────────────────────────────────────────────────────────
+# B110 (commit f9b60bcc): kernel reset failure surfaces via counter + log
+# ─────────────────────────────────────────────────────────────────────
+
+
+def test_reset_symbol_increments_kernel_reset_failures_when_kernel_reset_raises():
+    """If the per-symbol Rust kernel's ``.reset()`` raises, ``reset_symbol``
+    must catch it, increment ``_kernel_reset_failures_count``, emit a
+    structlog WARNING, and NOT re-raise (hot-path safety).
+    """
+    from unittest.mock import MagicMock, patch
+
+    eng = FeatureEngine()
+    eng.process_lob_stats(_stats(), local_ts_ns=1)
+    # Inject a kernel whose .reset() raises.
+    bad_kernel = MagicMock()
+    bad_kernel.reset.side_effect = RuntimeError("boom")
+    eng._rust_kernels["2330"] = bad_kernel
+
+    assert eng._kernel_reset_failures_count == 0
+    mock_logger = MagicMock()
+    with patch("hft_platform.feature.engine.logger", mock_logger):
+        # Must not propagate — reset_symbol runs on the hot path under
+        # NaN/Inf contamination guard.
+        eng.reset_symbol("2330")
+
+    assert eng._kernel_reset_failures_count == 1
+    bad_kernel.reset.assert_called_once()
+    mock_logger.warning.assert_called_once()
+    assert mock_logger.warning.call_args[0][0] == "feature_kernel_reset_failed"
+    # Engine still functional after the failure — next tick should produce an event.
+    evt = eng.process_lob_stats(_stats(ts=3), local_ts_ns=3)
+    assert evt is not None
+
+
+# ─────────────────────────────────────────────────────────────────────
+# L5 swallow (commit 276e6299): _compute_mldm IndexError counter + log
+# ─────────────────────────────────────────────────────────────────────
+
+
+def test_compute_mldm_increments_l5_clear_error_count_on_malformed_levels():
+    """When L5 access raises (malformed bid/ask rows that fail subscript /
+    len() inside the slicing block), ``_compute_mldm`` must increment
+    ``_l5_clear_error_count`` via ``_log_l5_clear_error`` and continue
+    without raising.
+    """
+    from unittest.mock import MagicMock, patch
+
+    eng = FeatureEngine()
+    ks = _LobKernelState()
+    eng._lob_kernel_states["2330"] = ks
+    # bids has length 5 (so n_bid_levels=5 and the inner slicing runs), but
+    # row index 1 is None — `len(None)` raises TypeError, which the
+    # except-Exception block must catch.
+    malformed_bids = [[1000, 5], None, [1002, 3], [1003, 4], [1004, 5]]
+    malformed_asks = [[1100, 5], [1101, 4], [1102, 3], [1103, 2], [1104, 1]]
+    event = MagicMock()
+    event.bids = malformed_bids
+    event.asks = malformed_asks
+
+    assert eng._l5_clear_error_count == 0
+    mock_logger = MagicMock()
+    with patch("hft_platform.feature.engine.logger", mock_logger):
+        # Must return without raising even though bids[1] is malformed.
+        result = eng._compute_mldm(ks, event, best_bid=1000, best_ask=1100)
+
+    # Counter incremented at least once (malformed bid path).
+    assert eng._l5_clear_error_count >= 1
+    # The warning fires through _log_l5_clear_error helper.
+    assert mock_logger.warning.called
+    # Result is a scalar int (signature contract).
+    assert isinstance(result, int)
