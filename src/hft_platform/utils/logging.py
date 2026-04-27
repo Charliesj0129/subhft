@@ -50,18 +50,45 @@ def _scrub_value_str(v: str) -> str:
     return v
 
 
+def _scrub_mapping(d: MutableMapping[str, Any]) -> MutableMapping[str, Any]:
+    """Apply key-name + value-string scrubbing to a single mapping level,
+    recursing into nested dict / list values."""
+    for key in list(d):
+        if any(p in key.lower() for p in _SENSITIVE_PATTERNS):
+            d[key] = _MASK
+            continue
+        v = d[key]
+        if isinstance(v, str):
+            d[key] = _scrub_value_str(v)
+        elif isinstance(v, dict):
+            _scrub_mapping(v)
+        elif isinstance(v, list):
+            d[key] = _scrub_list(v)
+    return d
+
+
+def _scrub_list(items: list[Any]) -> list[Any]:
+    """Walk a list, recursing into dict elements and scrubbing str elements
+    via the value regex. Returns the same list (mutated in place where safe)."""
+    for i, elem in enumerate(items):
+        if isinstance(elem, dict):
+            _scrub_mapping(elem)
+        elif isinstance(elem, str):
+            items[i] = _scrub_value_str(elem)
+        elif isinstance(elem, list):
+            items[i] = _scrub_list(elem)
+    return items
+
+
 def credential_scrubber(
     logger: Any, method_name: str, event_dict: MutableMapping[str, Any]
 ) -> MutableMapping[str, Any]:
-    """Structlog processor that masks sensitive field values."""
-    for key in list(event_dict):
-        if any(p in key.lower() for p in _SENSITIVE_PATTERNS):
-            event_dict[key] = _MASK
-            continue
-        v = event_dict[key]
-        if isinstance(v, str):
-            event_dict[key] = _scrub_value_str(v)
-    return event_dict
+    """Structlog processor that masks sensitive field values.
+
+    Recurses into nested dict / list values so a token nested inside a
+    `payload={...}` or `items=[{...}, ...]` structure is also redacted.
+    """
+    return _scrub_mapping(event_dict)
 
 
 def configure_logging(level: int = logging.INFO) -> None:

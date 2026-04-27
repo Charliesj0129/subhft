@@ -88,3 +88,13 @@ CREATE TABLE audit.orders_log (
 ) ENGINE = MergeTree()
 ORDER BY (strategy_id, ts_ns, symbol)
 TTL toDateTime(ts_ns / 1000000000) + INTERVAL 180 DAY DELETE;
+
+-- ============================================================
+-- Down (manual rollback — run if you need to revert this migration).
+-- ============================================================
+-- DROP TABLE IF EXISTS audit.risk_log;
+-- DROP TABLE IF EXISTS audit.guardrail_log;
+-- DROP TABLE IF EXISTS audit.orders_log;
+-- Then re-run the matching CREATE blocks from
+-- 20260301_001_initial_schema.sql (look for `audit.risk_log`,
+-- `audit.guardrail_log`, `audit.orders_log` sections).

@@ -106,3 +106,22 @@ def test_full_pipeline_does_not_leak_telegram_token_in_message() -> None:
         )
     out = buf.getvalue()
     assert _FAKE_TELEGRAM_TOKEN not in out, f"telegram token leaked in JSON: {out!r}"
+
+
+def test_scrubber_redacts_nested_dict_with_telegram_token() -> None:
+    out = credential_scrubber(
+        None,
+        "info",
+        {"event": "probe", "payload": {"telegram_token": _FAKE_TELEGRAM_TOKEN}},
+    )
+    assert out["payload"]["telegram_token"] == _MASK
+
+
+def test_scrubber_redacts_token_in_list_of_dicts() -> None:
+    out = credential_scrubber(
+        None,
+        "info",
+        {"items": [{"bot_token": _FAKE_TELEGRAM_TOKEN}, {"safe": "ok"}]},
+    )
+    assert out["items"][0]["bot_token"] == _MASK
+    assert out["items"][1]["safe"] == "ok"

@@ -17,7 +17,7 @@ from hft_platform.ops.evidence import get_shared_autonomy_evidence_writer
 from hft_platform.ops.platform_degrade import get_shared_platform_degrade_controller
 from hft_platform.risk.storm_guard import StormGuardState
 from hft_platform.services.bootstrap import SystemBootstrapper
-from hft_platform.services.heartbeat import write_heartbeat
+from hft_platform.services.heartbeat import DEFAULT_HEARTBEAT_PATH, write_heartbeat
 from hft_platform.utils.logging import configure_logging
 
 logger = get_logger("system")
@@ -861,7 +861,7 @@ class HFTSystem:
         loop = asyncio.get_running_loop()
         interval_s = 1.0
         last_tick = loop.time()
-        _heartbeat_path = os.getenv("HFT_HEARTBEAT_PATH", "/tmp/hft-heartbeat")
+        _heartbeat_path = os.getenv("HFT_HEARTBEAT_PATH", DEFAULT_HEARTBEAT_PATH)
         _heartbeat_interval_ticks = int(os.getenv("HFT_HEARTBEAT_INTERVAL_S", "30"))
         _heartbeat_tick = 0
 
