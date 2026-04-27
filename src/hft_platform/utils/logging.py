@@ -15,9 +15,14 @@ _SENSITIVE_PATTERNS: frozenset[str] = frozenset(
         "secret",
         "credential",
         "authorization",
+        # P0-b (2026-04-27): a prior Infra investigator session leaked a live
+        # Telegram bot token via the field name `telegram_token`. Add explicit
+        # bot-token substring matcher so any field whose key (case-insensitive)
+        # contains "bot_token" is masked before the JSON renderer serialises it.
+        "bot_token",
     }
 )
-_MASK = "***"
+_MASK = "***REDACTED***"
 _JWT_MASK = "***JWT***"
 
 # Bug #31: JWT (header.payload.signature, base64url) and Bearer tokens leak via
@@ -25,6 +30,12 @@ _JWT_MASK = "***JWT***"
 # them because the leaky key is "error". Scrub VALUES too.
 _JWT_RE = re.compile(r"eyJ[A-Za-z0-9_\-]{4,}\.[A-Za-z0-9_\-]{4,}\.[A-Za-z0-9_\-]{4,}")
 _BEARER_RE = re.compile(r"(?i)(bearer\s+)\S+")
+# P0-b (2026-04-27): Telegram bot-token format is `<bot_id>:<token>` where
+# bot_id is 8-11 digits and the token is 30+ url-safe-base64 chars. Scrub
+# matching values regardless of key name (covers `event=...8794586948:AAFP...`
+# style log messages where the token is embedded in a free-form string).
+_TELEGRAM_BOT_TOKEN_RE = re.compile(r"\b\d{8,11}:[A-Za-z0-9_\-]{30,}\b")
+_TELEGRAM_TOKEN_MASK = "***TELEGRAM_TOKEN***"
 
 
 def _scrub_value_str(v: str) -> str:
@@ -32,6 +43,10 @@ def _scrub_value_str(v: str) -> str:
         v = _JWT_RE.sub(_JWT_MASK, v)
     if "earer" in v:
         v = _BEARER_RE.sub(r"\1***", v)
+    # Cheap pre-check: a Telegram bot token always contains `:`. Skip regex
+    # for the common case (log messages with no colon).
+    if ":" in v:
+        v = _TELEGRAM_BOT_TOKEN_RE.sub(_TELEGRAM_TOKEN_MASK, v)
     return v
 
 
