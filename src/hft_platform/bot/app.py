@@ -25,6 +25,15 @@ last_day_report: datetime | None = None
 last_night_report: datetime | None = None
 last_ch_ok: datetime | None = None
 
+# P1-c (2026-04-27): track ATTEMPTS separately from successes so a heartbeat
+# that says `last_day=None last_night=None` after 8.7 days isn't ambiguous —
+# we can distinguish "scheduler never fired" from "scheduler fired but every
+# symbol returned no_data". Used by scheduler.py.
+last_day_attempt: datetime | None = None
+last_night_attempt: datetime | None = None
+consecutive_empty_attempts: int = 0
+DEAD_DATA_ALERT_THRESHOLD: int = 2  # warn after this many consecutive empty pushes
+
 
 @dataclass(slots=True)
 class LatestReportContext:
@@ -106,6 +115,35 @@ def _start_health_server_background() -> None:
 # ---------------------------------------------------------------------------
 
 
+async def _telegram_error_handler(update: Any, context: Any) -> None:
+    """P1-c (2026-04-27): catch otherwise-uncaught handler exceptions.
+
+    python-telegram-bot Application logs `No error handlers are registered`
+    when an exception escapes a handler. The most common case is
+    ``httpx.ConnectError`` during transient network outages — these were
+    previously spamming the log AND likely contributing to the bot wedging.
+
+    This handler:
+      * Logs via structlog (which has the credential scrubber pipeline),
+      * Increments a Prometheus counter labeled by exception class,
+      * Returns normally so the bot continues polling.
+    """
+    err = context.error
+    err_type = type(err).__name__ if err is not None else "Unknown"
+    _log.warning(
+        "bot.handler_error",
+        error_type=err_type,
+        error=str(err) if err is not None else "",
+        update_kind=type(update).__name__ if update is not None else "None",
+    )
+    try:
+        from hft_platform.observability.metrics import MetricsRegistry
+
+        MetricsRegistry.get().bot_handler_errors_total.labels(exception=err_type).inc()
+    except Exception:  # noqa: BLE001 — never crash the error handler itself
+        pass
+
+
 def create_app() -> Any:
     """Build and return a configured telegram.ext.Application."""
     from telegram.ext import Application, CommandHandler
@@ -136,6 +174,11 @@ def create_app() -> Any:
     app.add_handler(CommandHandler("flow", cmd_flow))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("pos", cmd_pos))
+
+    # P1-c: register error handler so httpx.ConnectError etc. are caught,
+    # logged via structlog (with secret scrubber), and counted in metrics
+    # instead of polluting logs and risking wedge state.
+    app.add_error_handler(_telegram_error_handler)
 
     schedule_jobs(app.job_queue)
 

@@ -1398,6 +1398,28 @@ class MetricsRegistry:
             "(payloads then fall through to the structlog audit_fallback path)",
             ["table", "reason"],
         )
+        # P1-c (2026-04-27): hft-bot was dead 8.7 days because a `httpx.ConnectError`
+        # (or similar) escaped a handler with no error handler registered.
+        # Counter is labeled by exception class so dashboards can distinguish
+        # transient network errors from logic bugs.
+        self.bot_handler_errors_total = Counter(
+            _pn("bot_handler_errors_total"),
+            "Telegram bot handler exceptions caught by the error handler "
+            "(would have crashed the polling loop pre-P1-c)",
+            ["exception"],
+        )
+        self.bot_dead_data_alerts_total = Counter(
+            _pn("bot_dead_data_alerts_total"),
+            "Consecutive-empty-attempt threshold breaches in the bot scheduler "
+            "(N pushes in a row returned no_data for every configured symbol)",
+            ["session"],
+        )
+        self.bot_rate_limited_total = Counter(
+            _pn("bot_rate_limited_total"),
+            "TelegramSender messages skipped due to client-side rate limit "
+            "(non-critical sends within the rate-limit window)",
+            ["critical"],
+        )
         self.intent_queue_full_total = Counter(
             _pn("intent_queue_full_total"),
             "Intents dropped due to QueueFull in StrategyRunner submit loop",
