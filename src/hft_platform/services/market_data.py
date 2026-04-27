@@ -1987,6 +1987,73 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
             return max(now - ts for ts in snapshot.values())
         return max_gap
 
+    # Default lookback for "active" classification: a symbol whose most recent
+    # event is older than this is treated as chronically inactive (illiquid
+    # option leg, far-month futures during night session, suspended stock,
+    # etc.) and excluded from the platform_reduce_only feed-gap signal.
+    _ACTIVE_FEED_GAP_LOOKBACK_S_DEFAULT: float = 300.0
+
+    def get_active_feed_gap_s(self, active_threshold_s: float | None = None) -> float:
+        """Return the max feed gap, restricted to *recently active* symbols.
+
+        Rationale: with an 800-symbol universe (recent commit ``2568912a``)
+        the subscription set includes long-tail illiquid futures/options
+        whose gaps perpetually exceed any reasonable health threshold (e.g.
+        TMFI6=2148s, TXO29000R6=2400s).  These symbols are subscribed-but-
+        inactive and their staleness is structural, not a feed problem.
+
+        A symbol is considered "active" when its most recent event arrived
+        within ``active_threshold_s`` seconds.  The returned value is the
+        maximum gap *among active symbols only* — so a single liquid feed
+        flowing at sub-second cadence yields a small number even if 700
+        long-tail symbols are stale.  When no symbol is active (e.g. early
+        startup before any tick), falls back to :meth:`get_max_feed_gap_s`
+        to preserve the existing dead-feed signal.
+
+        The same product-type filtering as :meth:`get_max_feed_gap_s`
+        applies (futures only; options/equities excluded) so behaviour
+        outside the active-symbol restriction stays identical.
+
+        Args:
+            active_threshold_s: max age (seconds) for a symbol's last event
+                to count it as active.  Defaults to
+                ``_ACTIVE_FEED_GAP_LOOKBACK_S_DEFAULT`` (300s).
+        """
+        threshold = (
+            float(active_threshold_s)
+            if active_threshold_s is not None
+            else self._ACTIVE_FEED_GAP_LOOKBACK_S_DEFAULT
+        )
+        try:
+            snapshot = dict(self._symbol_last_tick)
+        except RuntimeError:
+            return 0.0
+
+        if not snapshot:
+            return float(os.getenv("HFT_FEED_GAP_NO_DATA_S", "0.0"))
+
+        now = time.monotonic()
+        max_active_gap = 0.0
+        active_count = 0
+        for symbol, last_ts in snapshot.items():
+            if any(symbol.startswith(p) for p in self._FEED_GAP_EXCLUDE_PREFIXES):
+                continue
+            if not self._is_futures_symbol(symbol):
+                continue
+            gap = now - last_ts
+            if gap > threshold:
+                # Chronically inactive — exclude from the signal.
+                continue
+            active_count += 1
+            if gap > max_active_gap:
+                max_active_gap = gap
+
+        if active_count == 0:
+            # No actively-flowing futures symbols — fall back to the legacy
+            # max-gap signal so genuine dead feeds still surface.
+            return self.get_max_feed_gap_s()
+        return max_active_gap
+
     def get_feed_gaps_by_symbol(self) -> dict[str, float]:
         """Return feed gap for each symbol in seconds."""
         try:

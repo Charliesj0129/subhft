@@ -561,6 +561,59 @@ def test_get_max_feed_gap_s_night_session_stocks_excluded():
 
 
 # ---------------------------------------------------------------------------
+# get_active_feed_gap_s
+# ---------------------------------------------------------------------------
+
+
+def test_get_active_feed_gap_s_excludes_chronically_inactive_symbol():
+    """Illiquid options/futures with >threshold gaps must be excluded from the
+    active gap signal so platform_reduce_only does not latch on stragglers."""
+    svc, *_ = _make_service()
+    now = time.monotonic()
+    svc._symbol_last_tick = {
+        "TMFD6": now - 0.5,    # active front-month
+        "TXFD6": now - 1.0,    # active front-month
+        "TMFI6": now - 2148.0, # chronically stale far-month (real-world example)
+    }
+    gap = svc.get_active_feed_gap_s(active_threshold_s=300.0)
+    # Should reflect only TMFD6/TXFD6 (≤1.0s), not TMFI6 (2148s)
+    assert gap < 5.0
+
+
+def test_get_active_feed_gap_s_falls_back_when_no_active_futures():
+    """If every futures symbol is chronically stale, fall back to legacy max."""
+    svc, *_ = _make_service()
+    now = time.monotonic()
+    svc._symbol_last_tick = {
+        "TMFI6": now - 2148.0,
+        "TXFI6": now - 2400.0,
+    }
+    gap = svc.get_active_feed_gap_s(active_threshold_s=300.0)
+    # Both stale → fall back to get_max_feed_gap_s, which returns ≥2148s
+    assert gap >= 2000.0
+
+
+def test_get_active_feed_gap_s_default_threshold_uses_300s():
+    """Default active threshold is 300s — symbols within that window count."""
+    svc, *_ = _make_service()
+    now = time.monotonic()
+    svc._symbol_last_tick = {
+        "TMFD6": now - 250.0,  # within 300s default → still active
+        "TMFI6": now - 1000.0, # beyond 300s → excluded
+    }
+    gap = svc.get_active_feed_gap_s()  # no explicit threshold
+    # Active set is {TMFD6} with gap ~250s, not 1000s
+    assert 240.0 < gap < 270.0
+
+
+def test_get_active_feed_gap_s_empty_symbol_dict_returns_zero():
+    svc, *_ = _make_service()
+    svc._symbol_last_tick = {}
+    gap = svc.get_active_feed_gap_s()
+    assert gap == 0.0
+
+
+# ---------------------------------------------------------------------------
 # get_feed_gaps_by_symbol
 # ---------------------------------------------------------------------------
 

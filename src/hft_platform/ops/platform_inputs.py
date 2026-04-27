@@ -138,7 +138,14 @@ class PlatformDegradeInputs:
         return list(dict.fromkeys(reasons))
 
     def _feed_gap_s(self) -> float:
-        fn = getattr(self.md_service, "get_max_feed_gap_s", None)
+        # Prefer active-symbol-aware gap when md_service exposes it; falls back
+        # to the legacy global-max gap for backwards compatibility.  The active
+        # variant excludes chronically-inactive subscriptions (e.g. illiquid
+        # OTM options or far-month futures) whose stale gaps would otherwise
+        # latch platform_reduce_only when liquid feeds are flowing normally.
+        active_fn = getattr(self.md_service, "get_active_feed_gap_s", None)
+        max_fn = getattr(self.md_service, "get_max_feed_gap_s", None)
+        fn = active_fn if callable(active_fn) else max_fn
         if fn is None:
             return 0.0
         gap = fn()
