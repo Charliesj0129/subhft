@@ -18,7 +18,6 @@ Covers:
 - evaluate_typed_frame: with and without intent_view (lines 792-794)
 - typed_frame_view: fallback to full materialization (lines 801-806)
 - create_command_from_typed_frame: various paths (lines 809-818)
-- _is_halt_exempt: fallback to frozenset (line 875)
 - _emit_reject_metric: exception handling (lines 895-896)
 - _check_daily_loss_halt: notification dispatch path (lines 971-989)
 """
@@ -315,20 +314,6 @@ def test_create_typed_command_frame_returns_tuple(engine):
     assert isinstance(result[1], int)  # cmd_id
     assert isinstance(result[2], int)  # deadline
     assert result[5] is frame  # original frame preserved
-
-
-# ── _is_halt_exempt: fallback path ───────────────────────────────────────
-
-
-def test_is_halt_exempt_no_method_uses_frozenset(engine):
-    """_is_halt_exempt falls back to _halt_exempt_strategies frozenset."""
-    sg = MagicMock()
-    # Remove is_halt_exempt method to trigger fallback
-    del sg.is_halt_exempt
-    sg._halt_exempt_strategies = frozenset({"exempt_strat"})
-    engine.storm_guard = sg
-    assert engine._is_halt_exempt("exempt_strat") is True
-    assert engine._is_halt_exempt("other") is False
 
 
 # ── _emit_reject_metric: exception path ──────────────────────────────────

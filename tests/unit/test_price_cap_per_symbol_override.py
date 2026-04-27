@@ -137,3 +137,106 @@ def test_validator_without_override_rejects_due_to_global_fallback() -> None:
 
     assert not ok
     assert "PRICE_EXCEEDS_CAP" in reason
+
+
+def test_r47_tmfe6_price_passes_risk_cap(tmp_path: Path) -> None:
+    """RC-3 end-to-end: R47_MAKER_TMF intent for TMFE6 at scaled-int 40,200,000
+    must pass ``RiskEngine.evaluate`` when the per-symbol override is loaded
+    even though ``SymbolMetadata`` cannot resolve product_type for TMFE6.
+
+    Mirrors the live failure mode: TMFE6 is absent from the auto-generated
+    ``config/symbols.yaml``, so ``metadata.product_type("TMFE6")`` returns
+    ``""`` and ``_resolve_cap_raw`` would fall back to the global stock cap
+    (5,000 NTD raw → 50M scaled) without the per-symbol override.
+
+    The intent price is 4,020 raw points × 10,000 = 40,200,000 — well below
+    both 50M (broken cap) and 5B (override cap), but the regression doc
+    captured the 402M live-broker observation (40,200 × 10k). Both prices
+    must pass once the per-symbol override is honoured.
+    """
+    import asyncio
+
+    from hft_platform.risk.engine import RiskEngine
+
+    config_path = tmp_path / "strategy_limits.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "global_defaults": {
+                    "max_price_cap": 5000.0,
+                    "max_price_cap_futures": 50000.0,
+                    "max_price_cap_options": 10000.0,
+                    "max_price_cap_TMFE6": 500000.0,
+                    "tick_size": 0.01,
+                    "price_band_ticks": 20,
+                    "max_qty": 10,
+                    "max_notional": 10_000_000,
+                    "max_position_lots": 5,
+                    "max_daily_loss": 50_000_000,
+                },
+                "strategies": {},
+            }
+        )
+    )
+
+    intent_q: asyncio.Queue = asyncio.Queue()
+    order_q: asyncio.Queue = asyncio.Queue()
+    engine = RiskEngine(
+        str(config_path),
+        intent_q,
+        order_q,
+        price_scale_provider=_provider_with_broken_metadata(),
+    )
+
+    # Two probe prices both above the broken 50M fallback cap.
+    for raw_pts in (4_020, 40_200):
+        scaled_price = raw_pts * 10_000
+        decision = engine.evaluate(_intent("TMFE6", price=scaled_price))
+        assert decision.approved, (
+            f"Expected approval for TMFE6 @ {scaled_price:,} scaled "
+            f"(raw={raw_pts}), got reject={decision.reason_code!r}"
+        )
+
+
+def test_r47_tmfe6_price_rejected_without_override(tmp_path: Path) -> None:
+    """Companion negative test: removing the per-symbol override reproduces
+    the live RC-3 reject. Pins the regression so any future refactor of
+    ``_resolve_cap_raw`` cannot silently weaken the defence.
+    """
+    import asyncio
+
+    from hft_platform.risk.engine import RiskEngine
+
+    config_path = tmp_path / "strategy_limits.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "global_defaults": {
+                    "max_price_cap": 5000.0,
+                    "max_price_cap_futures": 50000.0,
+                    "max_price_cap_options": 10000.0,
+                    # NOTE: max_price_cap_TMFE6 deliberately absent.
+                    "tick_size": 0.01,
+                    "price_band_ticks": 20,
+                    "max_qty": 10,
+                    "max_notional": 10_000_000,
+                    "max_position_lots": 5,
+                    "max_daily_loss": 50_000_000,
+                },
+                "strategies": {},
+            }
+        )
+    )
+
+    intent_q: asyncio.Queue = asyncio.Queue()
+    order_q: asyncio.Queue = asyncio.Queue()
+    engine = RiskEngine(
+        str(config_path),
+        intent_q,
+        order_q,
+        price_scale_provider=_provider_with_broken_metadata(),
+    )
+
+    decision = engine.evaluate(_intent("TMFE6", price=402_000_000))
+    assert not decision.approved
+    assert "PRICE_EXCEEDS_CAP" in decision.reason_code

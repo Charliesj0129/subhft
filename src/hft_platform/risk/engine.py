@@ -970,12 +970,18 @@ class RiskEngine:
         return cmd
 
     def _is_halt_exempt(self, strategy_id: str) -> bool:
-        """Check if a strategy is halt-exempt via StormGuard."""
+        """Check if a strategy is halt-exempt via StormGuard's public API.
+
+        ``StormGuard.is_halt_exempt`` is the canonical entry point; the prior
+        ``getattr(sg, "_halt_exempt_strategies", ...)`` fallback was a
+        compatibility relic from before the public method existed and reached
+        through the slot wall, defeating future refactors of the storage
+        format. Removed 2026-04-27 alongside RC-3.
+        """
         sg = self.storm_guard
-        is_exempt = getattr(sg, "is_halt_exempt", None)
-        if callable(is_exempt):
-            return is_exempt(strategy_id)
-        return strategy_id in getattr(sg, "_halt_exempt_strategies", frozenset())
+        if sg is None:
+            return False
+        return bool(sg.is_halt_exempt(strategy_id))
 
     def _emit_reject_metric(self, strategy_id: str, reason: str) -> None:
         metrics = self.metrics

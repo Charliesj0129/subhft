@@ -42,7 +42,12 @@ class SubscriptionManager:
     def __init__(self, client: ShioajiClient) -> None:
         self._client = client
 
-    def subscribe_basket(self, cb: Callable[..., Any]) -> None:
+    def subscribe_basket(self, cb: Callable[..., Any]) -> None:  # noqa: C901
+        # Complexity: P2 #8 added the truncate-detection branch + post-loop
+        # signal which pushed the function from 15 → 16. Extracting the
+        # detection block into a helper would obscure the per-iteration
+        # control flow that this loop depends on, so the noqa is preferred
+        # here. See ``_signal_subscription_truncated`` for the alert path.
         """Subscribe to all configured symbols.
 
         Orchestrates callback registration, contract preflight, per-symbol
@@ -105,9 +110,29 @@ class SubscriptionManager:
             quote_version=c._quote_version,
             quote_version_mode=c._quote_version_mode,
         )
+        requested = len(c.symbols)
+        truncated_at_limit = False
         for sym in c.symbols:
             if c.subscribed_count >= c.MAX_SUBSCRIPTIONS:
-                logger.error("Subscription limit reached", limit=c.MAX_SUBSCRIPTIONS)
+                # P2 #8 (2026-04-27): RC-1 raised the ``_load_config`` ceiling
+                # to MAX_SUBSCRIPTIONS_PER_CLIENT (default 600) but this loop
+                # still gates at the per-conn cap (MAX_SUBSCRIPTIONS=120).
+                # When a deployment forgets to size ``HFT_QUOTE_CONNECTIONS``,
+                # 121–600 symbols are loaded but only the first 120 ever get
+                # subscribed. Previously this surfaced only as a single
+                # ``logger.error`` line — no Counter, no alert, no Telegram.
+                # We now bump ``feed_subscription_truncate_total{reason="conn_limit"}``
+                # and raise log severity to ``critical`` so the silent miss is
+                # observable. Notification dispatch happens once after the
+                # loop to avoid spamming on every iteration.
+                truncated_at_limit = True
+                logger.error(
+                    "Subscription limit reached",
+                    limit=c.MAX_SUBSCRIPTIONS,
+                    requested=requested,
+                    subscribed=c.subscribed_count,
+                    severity="critical",
+                )
                 break
             if self._subscribe_symbol(sym, cb):
                 code = sym.get("code")
@@ -117,6 +142,13 @@ class SubscriptionManager:
             else:
                 c._failed_sub_symbols.append(sym)
         c._refresh_quote_routes()
+        if truncated_at_limit:
+            self._signal_subscription_truncated(
+                reason="conn_limit",
+                requested=requested,
+                subscribed=c.subscribed_count,
+                limit=int(c.MAX_SUBSCRIPTIONS),
+            )
         logger.info("Quote subscription completed", subscribed=c.subscribed_count)
         if c._failed_sub_symbols:
             logger.warning(
@@ -287,9 +319,21 @@ class SubscriptionManager:
             c.subscribed_codes.clear()
             c.subscribed_count = 0
             failed: list[dict[str, Any]] = []
+            requested = len(c.symbols)
+            truncated_at_limit = False
             for sym in c.symbols:
                 if c.subscribed_count >= c.MAX_SUBSCRIPTIONS:
-                    logger.error("Subscription limit reached during resubscribe", limit=c.MAX_SUBSCRIPTIONS)
+                    # P2 #8 (2026-04-27): mirror subscribe_basket. The
+                    # resubscribe path also silently dropped 121+ symbols
+                    # before this fix.
+                    truncated_at_limit = True
+                    logger.error(
+                        "Subscription limit reached during resubscribe",
+                        limit=c.MAX_SUBSCRIPTIONS,
+                        requested=requested,
+                        subscribed=c.subscribed_count,
+                        severity="critical",
+                    )
                     break
                 if self._subscribe_symbol(sym, c.tick_callback):
                     code = sym.get("code")
@@ -301,6 +345,14 @@ class SubscriptionManager:
             c._refresh_quote_routes()
         finally:
             lock.release()
+
+        if truncated_at_limit:
+            self._signal_subscription_truncated(
+                reason="conn_limit",
+                requested=requested,
+                subscribed=c.subscribed_count,
+                limit=int(c.MAX_SUBSCRIPTIONS),
+            )
 
         if failed:
             # L2: mutate the deque in place rather than reassigning. The
@@ -365,3 +417,63 @@ class SubscriptionManager:
 
         c._order_callback = _order_cb  # type: ignore[attr-defined]
         c.api.set_order_callback(c._order_callback)  # type: ignore[attr-defined]
+
+    def _signal_subscription_truncated(
+        self,
+        *,
+        reason: str,
+        requested: int,
+        subscribed: int,
+        limit: int,
+    ) -> None:
+        """Bump the truncate metric and best-effort dispatch a critical alert.
+
+        P2 #8 fix (2026-04-27): RC-1 closed the ``_load_config`` silent-miss
+        but left the per-conn truncation in ``subscribe_basket`` /
+        ``_resubscribe_all`` silent. This helper bumps
+        ``feed_subscription_truncate_total{reason}`` and fans the event out
+        to the optional notification dispatcher attached to the client. Both
+        operations are guarded — neither metric bookkeeping nor alert
+        dispatch is allowed to crash the subscription pipeline.
+        """
+        c = self._client
+        metrics = getattr(c, "metrics", None)
+        counter = getattr(metrics, "feed_subscription_truncate_total", None) if metrics else None
+        if counter is not None:
+            try:
+                counter.labels(reason=reason).inc()
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("subscription_truncate_metric_bump_failed", error=str(exc))
+
+        dispatcher = getattr(c, "_notification_dispatcher", None)
+        if dispatcher is None or not hasattr(dispatcher, "notify_subscription_truncated"):
+            return
+        try:
+            import asyncio as _asyncio  # local import — non hot-path
+
+            coro = dispatcher.notify_subscription_truncated(
+                reason=reason,
+                requested=requested,
+                subscribed=subscribed,
+                limit=limit,
+            )
+            try:
+                loop = _asyncio.get_running_loop()
+                loop.create_task(coro)
+            except RuntimeError:
+                # subscribe_basket usually runs on the asyncio loop, but SDK
+                # callbacks (event_13/event_4) and worker threads do not.
+                # Best-effort run-to-completion; swallow failure so subscribe
+                # path never crashes on alert dispatch.
+                try:
+                    _asyncio.run(coro)
+                except Exception as run_exc:  # noqa: BLE001
+                    logger.warning(
+                        "subscription_truncated_alert_run_failed",
+                        error=str(run_exc),
+                    )
+        except Exception as notify_exc:  # noqa: BLE001
+            logger.warning(
+                "subscription_truncated_alert_dispatch_failed",
+                error=str(notify_exc),
+            )

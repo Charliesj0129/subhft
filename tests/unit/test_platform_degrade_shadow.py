@@ -233,3 +233,101 @@ class TestAutoRecovery:
         recovered = ctrl.check_auto_recovery(current_reasons=[], now_ns=61_000_000_001)
         assert recovered is True
         assert ctrl.reduce_only_active is False
+
+    def test_auto_recovery_clears_when_silent_symbols_dominate(self):
+        """End-to-end: when the upstream feed-gap signal correctly excludes
+        latched-but-silent symbols (RC-2 fix), repeated supervisor cycles
+        report empty reasons and auto-recovery elapses cleanly.
+
+        Regression for the production scenario where TMFI6 silence held
+        ``feed_reconnect_unhealthy`` re-firing every cycle for 3+ hours
+        even though front-month feeds were healthy.  After the fix the
+        upstream ``get_active_feed_gap_s`` does not report the silent
+        symbol's gap, so the controller's ``current_reasons`` list is
+        empty and the cooldown timer is allowed to elapse.
+        """
+        ctrl = PlatformDegradeController(auto_recovery_enabled=True, auto_recovery_cooldown_s=60)
+        ctrl.enter_reduce_only(reason="feed_reconnect_unhealthy")
+        # Simulate 5 consecutive supervisor cycles where the upstream
+        # signal (now correctly filtered) reports no reasons.
+        for cycle_ns in (1_000_000_000, 5_000_000_000, 10_000_000_000, 30_000_000_000, 50_000_000_000):
+            ctrl.check_auto_recovery(current_reasons=[], now_ns=cycle_ns)
+        assert ctrl.reduce_only_active is True  # still inside cooldown
+        recovered = ctrl.check_auto_recovery(current_reasons=[], now_ns=61_000_000_001)
+        assert recovered is True
+        assert ctrl.reduce_only_active is False
+
+
+class TestForceClear:
+    def setup_method(self):
+        reset_shared_platform_degrade_controller()
+
+    def teardown_method(self):
+        reset_shared_platform_degrade_controller()
+
+    def test_force_clear_returns_none_when_inactive(self):
+        ctrl = PlatformDegradeController()
+        assert ctrl.force_clear() is None
+        assert ctrl.reduce_only_active is False
+
+    def test_force_clear_exits_reduce_only(self):
+        ctrl = PlatformDegradeController()
+        ctrl.enter_reduce_only(reason="feed_reconnect_unhealthy")
+        ctrl.enter_reduce_only(reason="reconciliation_drift")
+        assert ctrl.reduce_only_active is True
+        transition = ctrl.force_clear(reason="operator_override")
+        assert transition is not None
+        assert ctrl.reduce_only_active is False
+        assert ctrl._active_reasons == set()
+
+    def test_force_clear_bypasses_non_recoverable_reasons(self):
+        """force_clear must work even when a non-auto-recoverable reason
+        (e.g. queue_depth_exceeded) is active — that's the operator
+        escape hatch."""
+        ctrl = PlatformDegradeController()
+        ctrl.enter_reduce_only(reason="queue_depth_exceeded")
+        ctrl.force_clear(reason="manual")
+        assert ctrl.reduce_only_active is False
+
+
+class TestManualRearmGateBridge:
+    def setup_method(self):
+        reset_shared_platform_degrade_controller()
+
+    def teardown_method(self):
+        reset_shared_platform_degrade_controller()
+
+    def test_manual_rearm_clears_reduce_only(self, tmp_path):
+        """ManualRearmGate.rearm_platform must clear the live shared
+        controller in addition to writing the persisted JSON flag.
+
+        Regression for RC-2: previously the JSON flag was never read by
+        the controller, so reduce_only could remain latched
+        indefinitely after operator confirmation.
+        """
+        from hft_platform.ops.manual_rearm import ManualRearmGate
+
+        ctrl = get_shared_platform_degrade_controller()
+        ctrl.enter_reduce_only(reason="feed_reconnect_unhealthy")
+        assert ctrl.reduce_only_active is True
+
+        gate = ManualRearmGate(state_path=tmp_path / "runtime_state.json")
+        gate.rearm_platform()
+
+        # Live controller must be cleared (force_clear bridge fired).
+        assert ctrl.reduce_only_active is False
+        assert ctrl._active_reasons == set()
+        # Persisted flag must also be cleared (JSON source of truth).
+        snapshot = gate.snapshot()
+        assert snapshot["platform"]["manual_rearm_required"] is False
+
+    def test_manual_rearm_when_no_shared_controller(self, tmp_path):
+        """Operator path must remain robust when no in-process controller
+        exists yet (fresh deployment / tooling context)."""
+        from hft_platform.ops.manual_rearm import ManualRearmGate
+
+        # Leave _shared_controller as None.
+        gate = ManualRearmGate(state_path=tmp_path / "runtime_state.json")
+        gate.rearm_platform()  # must not raise
+        snapshot = gate.snapshot()
+        assert snapshot["platform"]["manual_rearm_required"] is False

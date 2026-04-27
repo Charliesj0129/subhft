@@ -2420,3 +2420,335 @@ def test_enqueue_raw_sliding_window_storm():
     svc._enqueue_raw("TSE", {"code": "2330"})
     # Should have triggered storm via window check
     sg.trigger_storm.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# RC-2 v2: get_active_feed_gap_s subscription-membership de-latch
+# ---------------------------------------------------------------------------
+#
+# v1 (recency-window) was reverted because it silently dropped any latched
+# symbol whose silence exceeded the recency window — exactly the partial
+# outage masking pattern that b80b950c originally tried to address.
+#
+# v2 separates "expired contract" from "partial outage" via
+# ``client.subscribed_codes`` (set[str]).  ``contracts_runtime.refresh()``
+# discards expired codes from this set; latched symbols no longer in the
+# set are de-latched.  Symbols still in the set always contribute their
+# silence age to ``max_gap`` regardless of how long they have been silent.
+# ---------------------------------------------------------------------------
+
+
+def test_feed_gap_excludes_silent_latched_symbol():
+    """RC-2 v2: a latched symbol that has been removed from
+    ``client.subscribed_codes`` (typical case: contract expired, the
+    rollover routine in ``contracts_runtime`` discarded it) must NOT
+    contribute to ``max_gap`` and must be de-latched on the next call.
+
+    Real-world case that motivated the fix: TMFI6 accumulated 5 ticks
+    early in the session, latched into ``_ever_active_symbols``,
+    expired mid-session and was discarded from ``subscribed_codes``,
+    then dominated the max-gap signal for 3+ hours and locked the
+    platform in reduce_only.
+    """
+    svc, _bus, _raw, client = _make_service()
+    # Simulate post-rollover state: TMFI6 has expired and is no longer
+    # subscribed, while TMFD6/TXFD6 remain the active front-month codes.
+    client.subscribed_codes = {"TMFD6", "TXFD6"}
+    now = time.monotonic()
+    svc._symbol_last_tick = {
+        "TMFD6": now - 0.5,        # active front-month, still subscribed
+        "TXFD6": now - 1.0,        # active front-month, still subscribed
+        "TMFI6": now - 1200.0,     # latched but already unsubscribed
+    }
+    svc._ever_active_symbols = {"TMFD6", "TXFD6", "TMFI6"}
+    gap = svc.get_active_feed_gap_s()
+    # Must reflect only TMFD6/TXFD6 (≤1.0s), NOT 1200s from unsubscribed TMFI6.
+    assert gap < 5.0, f"unsubscribed TMFI6 leaked into max gap: {gap=}"
+    # TMFI6 must be auto-pruned from the latched set on this call.
+    assert "TMFI6" not in svc._ever_active_symbols
+    assert {"TMFD6", "TXFD6"}.issubset(svc._ever_active_symbols)
+
+
+def test_feed_gap_delatches_when_symbol_drops_from_subscriptions():
+    """When a latched symbol is removed from ``client.subscribed_codes``
+    (e.g. by contract-rollover machinery), the next call to
+    ``get_active_feed_gap_s`` must de-latch it so the latched set does
+    not grow unboundedly across long sessions or multi-day uptime."""
+    svc, _bus, _raw, client = _make_service()
+    client.subscribed_codes = {"TMFD6"}  # TMFI6 has rolled out
+    now = time.monotonic()
+    svc._symbol_last_tick = {
+        "TMFD6": now - 0.5,
+        "TMFI6": now - 3600.0,
+    }
+    svc._ever_active_symbols = {"TMFD6", "TMFI6"}
+    _ = svc.get_active_feed_gap_s()
+    # TMFI6 should be auto-pruned from the latched set.
+    assert "TMFI6" not in svc._ever_active_symbols
+    assert "TMFD6" in svc._ever_active_symbols
+
+
+def test_feed_gap_real_outage_still_surfaces():
+    """Defense-in-depth: a real partial outage on a previously-active
+    front-month that is still in ``subscribed_codes`` must STILL
+    surface — no time-based skip masks it.  This is the regression
+    that broke RC-2 v1 (recency window): silence ≥ recency was
+    silently dropped from ``max_gap``."""
+    svc, _bus, _raw, client = _make_service()
+    client.subscribed_codes = {"TXFD6", "TMFD6"}  # both still subscribed
+    now = time.monotonic()
+    svc._symbol_last_tick = {
+        "TXFD6": now - 0.5,    # healthy
+        "TMFD6": now - 250.0,  # silent 250s — partial outage
+    }
+    svc._ever_active_symbols = {"TXFD6", "TMFD6"}
+    gap = svc.get_active_feed_gap_s()
+    # TMFD6 silence must be reported in full.
+    assert gap >= 200.0, f"real outage masked: {gap=}"
+    # And both symbols stay latched (silence on a subscribed symbol
+    # does NOT trigger de-latch).
+    assert {"TXFD6", "TMFD6"} <= svc._ever_active_symbols
+
+
+def test_feed_gap_long_outage_on_subscribed_symbol_still_surfaces():
+    """Direct mirror of ``test_partial_feed_failure_still_triggers_unhealthy``
+    but with an explicit subscription-set on the client.  A latched
+    symbol silent for 2000s while still in ``subscribed_codes`` MUST
+    surface its full silence — no recency cap, no time-based mask."""
+    svc, _bus, _raw, client = _make_service()
+    client.subscribed_codes = {"TMFE6", "TXFE6"}  # both still subscribed
+    now = time.monotonic()
+    svc._symbol_last_tick = {
+        "TMFE6": now - 2000.0,  # 2000s silence on a subscribed symbol
+        "TXFE6": now - 0.5,
+    }
+    svc._ever_active_symbols = {"TMFE6", "TXFE6"}
+    gap = svc.get_active_feed_gap_s()
+    assert gap >= 1900.0, f"long outage on subscribed symbol masked: {gap=}"
+
+
+# ---------------------------------------------------------------------------
+# RC-2 v2 alias-resolution patch (Codex P1 #3)
+# ---------------------------------------------------------------------------
+#
+# ``client.subscribed_codes`` records *config-time* codes.  For rollover
+# aliases (TMFR1, TXFR1, …) these differ from the resolved month code
+# the broker callback delivers (TMFE6, TXFE6, …).  Quote callbacks
+# populate ``_ever_active_symbols`` with the resolved code, so a naive
+# ``symbol in subscribed_codes`` check would treat every alias-resolved
+# future as "unsubscribed" and silently mask its partial outage.
+#
+# ``ContractsRuntime.resolve_symbol_aliases()`` populates
+# ``client.alias_to_actual`` (config_code → resolved_code).  The
+# de-latch logic must union that mapping into the membership set.
+# ---------------------------------------------------------------------------
+
+
+def test_feed_gap_alias_resolved_symbol_not_delatched():
+    """``subscribed_codes`` holds the config alias (e.g. TMFR1) while the
+    broker callback latches the resolved month code (e.g. TMFE6) into
+    ``_ever_active_symbols``.  ``alias_to_actual`` is the source of
+    truth that bridges the two; the membership check MUST honour it,
+    otherwise a 2000s outage on TMFE6 would be silently de-latched
+    just because a healthy non-alias front-month exists alongside."""
+    svc, _bus, _raw, client = _make_service()
+    # Config used rollover aliases; broker resolved them mid-session.
+    client.subscribed_codes = {"TMFR1", "TXFE6"}
+    client.alias_to_actual = {"TMFR1": "TMFE6"}
+    now = time.monotonic()
+    svc._symbol_last_tick = {
+        "TMFE6": now - 2000.0,  # alias-resolved symbol, real outage
+        "TXFE6": now - 0.5,     # healthy non-alias front-month
+    }
+    svc._ever_active_symbols = {"TMFE6", "TXFE6"}
+    gap = svc.get_active_feed_gap_s()
+    # TMFE6 must remain a contributor: its 2000s silence MUST surface
+    # rather than being de-latched as "unsubscribed" against TMFR1.
+    assert gap >= 1900.0, f"alias-resolved outage masked: {gap=}"
+    assert "TMFE6" in svc._ever_active_symbols
+    assert "TXFE6" in svc._ever_active_symbols
+
+
+def test_feed_gap_alias_resolution_failure_falls_back_safe():
+    """If reading ``client.alias_to_actual`` raises (broken broker
+    adapter, partially-initialised state), the function MUST fall
+    back to the alias-blind path (``subscription_set = None``) so
+    every latched symbol contributes to ``max_gap``.  Defense-in-
+    depth: a broken resolver must never silently de-latch every
+    resolved future and mask a partial outage."""
+    svc, _bus, _raw, client = _make_service()
+
+    class _ExplodingMap:
+        """Drop-in for ``alias_to_actual`` that fails ``isinstance(dict)``
+        but raises when ``dict(...)`` snapshots it."""
+
+        def keys(self):  # pragma: no cover - never reached
+            raise RuntimeError("alias map exploded")
+
+    # Force ``isinstance(raw_alias_map, dict)`` to be True yet make
+    # ``dict(raw_alias_map)`` snapshot raise.  Subclassing dict and
+    # overriding ``__iter__`` is the cleanest way to guarantee both.
+    class _BoomDict(dict):
+        def __iter__(self):
+            raise RuntimeError("alias snapshot exploded")
+
+    client.subscribed_codes = {"TMFR1"}
+    client.alias_to_actual = _BoomDict({"TMFR1": "TMFE6"})
+    now = time.monotonic()
+    svc._symbol_last_tick = {
+        "TMFE6": now - 2000.0,  # alias-resolved symbol, real outage
+    }
+    svc._ever_active_symbols = {"TMFE6"}
+    gap = svc.get_active_feed_gap_s()
+    # Resolver failure → subscription_set=None → every latched symbol
+    # contributes → 2000s silence on TMFE6 surfaces in full.
+    assert gap >= 1900.0, f"resolver failure masked outage: {gap=}"
+    assert "TMFE6" in svc._ever_active_symbols
+
+
+def test_feed_gap_falls_back_when_subscriptions_unavailable():
+    """When ``client.subscribed_codes`` is missing or not a real set
+    (test fixtures using ``MagicMock``, brokers without a subscription
+    set), the membership de-latch must NOT engage and every latched
+    symbol must contribute to ``max_gap``.  This preserves the
+    partial-outage signal in any environment that cannot answer the
+    membership question authoritatively (Defense-in-Depth: missing
+    signal must not silently mask a partial failure)."""
+    svc, *_ = _make_service()
+    # NB: client is a plain MagicMock, so ``client.subscribed_codes``
+    # auto-resolves to a MagicMock attribute (not a real set).
+    now = time.monotonic()
+    svc._symbol_last_tick = {
+        "TMFE6": now - 2000.0,  # silent 2000s
+        "TXFE6": now - 0.5,
+    }
+    svc._ever_active_symbols = {"TMFE6", "TXFE6"}
+    gap = svc.get_active_feed_gap_s()
+    assert gap >= 1900.0, (
+        "fallback path must surface long silence on every latched symbol "
+        f"when membership cannot be determined: {gap=}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# RC-3 patches (Codex P1 #5 + P2 #6)
+# ---------------------------------------------------------------------------
+#
+# P1 #5: production runs with ``HFT_QUOTE_CONNECTIONS > 1`` use a
+#        ``QuoteConnectionPool`` as the platform's ``client`` handle.  The
+#        pool MUST aggregate ``subscribed_codes`` and ``alias_to_actual``
+#        across its underlying clients, otherwise ``subscription_set``
+#        stays ``None`` in production and the de-latch path never engages.
+#
+# P2 #6: when every latched symbol is de-latched in the same call (typical
+#        rollover window: new front-month subscribed but no tick has
+#        crossed the 5-event baseline; old contract just pruned), falling
+#        back to ``get_max_feed_gap_s`` re-scans ``_symbol_last_tick`` —
+#        which still contains the just-de-latched expired contract's stale
+#        gap — and falsely reports it as the active feed gap.  Must
+#        instead return ``0.0`` (honest "no active latched contract") and
+#        only fall back when membership was never resolvable.
+# ---------------------------------------------------------------------------
+
+
+def test_feed_gap_pool_aggregates_subscribed_codes():
+    """``QuoteConnectionPool.subscribed_codes`` MUST union the per-client
+    sets so ``MarketDataService.get_active_feed_gap_s`` can engage the
+    de-latch path under ``HFT_QUOTE_CONNECTIONS > 1``."""
+    from hft_platform.feed_adapter.shioaji.quote_connection_pool import (
+        QuoteConnectionPool,
+    )
+
+    pool = QuoteConnectionPool.__new__(QuoteConnectionPool)
+    client_a = SimpleNamespace(subscribed_codes={"TMFD6", "TXFD6"})
+    client_b = SimpleNamespace(subscribed_codes={"TXFD6", "MXFD6"})
+    pool._clients = [client_a, client_b]
+
+    aggregated = pool.subscribed_codes
+    assert aggregated == {"TMFD6", "TXFD6", "MXFD6"}
+    # Snapshot semantics: mutating the pool's view must NOT touch the
+    # underlying per-client sets.
+    aggregated.add("BOGUS")
+    assert "BOGUS" not in client_a.subscribed_codes
+    assert "BOGUS" not in client_b.subscribed_codes
+
+
+def test_feed_gap_pool_aggregates_alias_map():
+    """``QuoteConnectionPool.alias_to_actual`` MUST union the per-client
+    rollover maps so the alias-bridge survives the multi-conn config."""
+    from hft_platform.feed_adapter.shioaji.quote_connection_pool import (
+        QuoteConnectionPool,
+    )
+
+    pool = QuoteConnectionPool.__new__(QuoteConnectionPool)
+    client_a = SimpleNamespace(alias_to_actual={"TMFR1": "TMFE6"})
+    client_b = SimpleNamespace(alias_to_actual={"TXFR1": "TXFE6"})
+    pool._clients = [client_a, client_b]
+
+    aggregated = pool.alias_to_actual
+    assert aggregated == {"TMFR1": "TMFE6", "TXFR1": "TXFE6"}
+    # Snapshot semantics: mutating the pool's view must NOT touch the
+    # underlying per-client dicts.
+    aggregated["INJECTED"] = "BOGUS"
+    assert "INJECTED" not in client_a.alias_to_actual
+    assert "INJECTED" not in client_b.alias_to_actual
+
+
+def test_feed_gap_returns_zero_when_all_delatched():
+    """P2 #6 regression: when every latched symbol is de-latched in the
+    same call (rollover window: old contract just unsubscribed, new
+    front-month not yet baseline-active), the function MUST return
+    ``0.0`` instead of falling back to ``get_max_feed_gap_s``.  The
+    fallback would re-scan ``_symbol_last_tick`` and resurrect the
+    just-de-latched expired contract's stale gap, recreating the
+    rollover-window false-reduce-only the de-latch was meant to fix."""
+    svc, _bus, _raw, client = _make_service()
+    # New front-month subscribed; old TMFI6 has just rolled out.
+    client.subscribed_codes = {"TMFD7"}
+    client.alias_to_actual = {}
+    now = time.monotonic()
+    # ``_symbol_last_tick`` still carries TMFI6's stale 1200s gap (it
+    # has not been pruned from the per-symbol last-tick map).
+    svc._symbol_last_tick = {
+        "TMFI6": now - 1200.0,
+    }
+    # TMFI6 is the only latched symbol, and it is no longer in the
+    # subscription set — the loop will de-latch it.
+    svc._ever_active_symbols = {"TMFI6"}
+
+    gap = svc.get_active_feed_gap_s()
+
+    # Pre-fix: the fallback re-scanned ``_symbol_last_tick`` and
+    # returned 1200.0, tripping the 600s threshold and locking the
+    # platform into reduce-only across every rollover window.
+    # Post-fix: honest "no active latched contract right now".
+    assert gap == 0.0, f"stale gap leaked through fallback: {gap=}"
+    # And the de-latch was applied for real.
+    assert "TMFI6" not in svc._ever_active_symbols
+
+
+def test_feed_gap_falls_back_only_when_subscription_unknown():
+    """P2 #6 boundary: when ``subscription_set`` is ``None`` (membership
+    truly unknowable) AND no latched symbols qualified, the function
+    MUST still fall back to ``get_max_feed_gap_s`` to preserve the
+    cold-start dead-feed signal.  This is the ONLY case the fallback
+    is allowed to fire."""
+    svc, _bus, _raw, client = _make_service()
+    # Force ``subscription_set = None``: the MagicMock client returns a
+    # MagicMock for ``subscribed_codes`` which is not isinstance(set).
+    # Latched set is empty so ``active_count == 0`` via the empty loop,
+    # not via the de-latch path.
+    now = time.monotonic()
+    svc._symbol_last_tick = {
+        "TMFE6": now - 2500.0,  # genuinely-dead cold-start signal
+    }
+    svc._ever_active_symbols = set()  # no symbol latched yet
+
+    gap = svc.get_active_feed_gap_s()
+
+    # Membership unknown + nothing latched → fall back to legacy
+    # max-gap so cold-start dead feeds still surface.
+    assert gap >= 2400.0, (
+        "fallback must fire when membership is unknown and nothing is "
+        f"latched: {gap=}"
+    )

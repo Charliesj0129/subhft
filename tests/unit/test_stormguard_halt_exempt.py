@@ -307,3 +307,81 @@ class TestHaltFlattenSpoofPrevention:
             or adapter._is_strategy_halt_exempt(intent.strategy_id)
         )
         assert _halt_exempt is True
+
+
+# ── RC-3 Decision BUG#4: public API contract ────────────────────────────
+
+
+class TestStormGuardHaltExemptPublicAPI:
+    """Pin the contract that callers use ``StormGuard.is_halt_exempt`` —
+    never reach into the ``_halt_exempt_strategies`` slot. RC-3 (2026-04-27)
+    removed the legacy private-attribute fallback in
+    ``RiskEngine._is_halt_exempt`` / ``OrderAdapter._is_strategy_halt_exempt``.
+    """
+
+    def test_is_halt_exempt_returns_true_for_member(self) -> None:
+        sg = _make_storm_guard(StormGuardState.NORMAL, frozenset({"R47_MAKER_TMF"}))
+        assert sg.is_halt_exempt("R47_MAKER_TMF") is True
+
+    def test_is_halt_exempt_returns_false_for_non_member(self) -> None:
+        sg = _make_storm_guard(StormGuardState.NORMAL, frozenset({"R47_MAKER_TMF"}))
+        assert sg.is_halt_exempt("OTHER_STRAT") is False
+
+    def test_is_halt_exempt_matches_private_attr_for_every_strategy(self) -> None:
+        """Public API and (legacy) private slot MUST agree for every strategy
+        in the exempt set. Guarantees the refactor is observationally
+        equivalent to the prior private-attr peek."""
+        exempt = frozenset({"strat_a", "strat_b", "strat_c"})
+        sg = _make_storm_guard(StormGuardState.NORMAL, exempt)
+        for strat in exempt | {"missing"}:
+            public = sg.is_halt_exempt(strat)
+            private = strat in sg._halt_exempt_strategies
+            assert public == private, (
+                f"Public API divergence for {strat!r}: public={public} private={private}"
+            )
+
+    def test_grant_revoke_round_trip_via_public_api(self) -> None:
+        """``grant_halt_exemption`` / ``revoke_halt_exemption`` must be
+        observable via ``is_halt_exempt`` so callers never need to inspect
+        ``_halt_exempt_strategies`` directly."""
+        sg = _make_storm_guard(StormGuardState.NORMAL, frozenset())
+        assert sg.is_halt_exempt("dynamic_strat") is False
+        assert sg.grant_halt_exemption("dynamic_strat") is True
+        assert sg.is_halt_exempt("dynamic_strat") is True
+        assert sg.revoke_halt_exemption("dynamic_strat") is True
+        assert sg.is_halt_exempt("dynamic_strat") is False
+
+    def test_storm_guard_is_halt_exempt_public(self) -> None:
+        """RC-3 contract: ``RiskEngine`` and ``OrderAdapter`` route halt-exempt
+        decisions through ``StormGuard.is_halt_exempt``; if the public method
+        ever disappears the call sites must fail loudly rather than silently
+        approve."""
+        from hft_platform.order.adapter import OrderAdapter
+        from hft_platform.risk.engine import RiskEngine
+
+        sg = _make_storm_guard(StormGuardState.HALT, frozenset({"R47_MAKER_TMF"}))
+        # Public method exists, callable, returns bool.
+        assert callable(sg.is_halt_exempt)
+        assert isinstance(sg.is_halt_exempt("R47_MAKER_TMF"), bool)
+
+        # RiskEngine routes through the public method.
+        with pytest.MonkeyPatch.context() as m:
+            m.setattr(
+                RiskEngine,
+                "load_config",
+                lambda self: setattr(self, "config", {"global_defaults": {}}),
+            )
+            engine = RiskEngine(
+                "/dev/null",
+                asyncio.Queue(),
+                asyncio.Queue(),
+                storm_guard=sg,
+            )
+        assert engine._is_halt_exempt("R47_MAKER_TMF") is True
+        assert engine._is_halt_exempt("OTHER") is False
+
+        # OrderAdapter routes through the public method.
+        adapter = MagicMock(spec=OrderAdapter)
+        adapter._storm_guard = sg
+        assert OrderAdapter._is_strategy_halt_exempt(adapter, "R47_MAKER_TMF") is True
+        assert OrderAdapter._is_strategy_halt_exempt(adapter, "OTHER") is False

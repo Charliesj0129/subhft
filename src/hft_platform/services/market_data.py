@@ -1269,7 +1269,43 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                 try:
                     await asyncio.to_thread(self.client.reload_symbols)
                 except Exception as exc:
-                    logger.error("Symbol reload failed", error=str(exc))
+                    # Q3-fix (2026-04-27): symbol-reload failure used to be
+                    # invisible (logger.error only, no metric, no alert).
+                    # ``ShioajiClient._load_config`` now bumps the
+                    # ``feed_symbol_config_reload_total{result}`` Counter at
+                    # every exit branch, and AlertManager rule
+                    # ``SymbolConfigReloadFailed`` pages on it. The optional
+                    # ``_notification_dispatcher`` attribute (wired by
+                    # ``services/bootstrap.py``) lets us also fan out a
+                    # Telegram alert.
+                    logger.error(
+                        "Symbol reload failed",
+                        error=str(exc),
+                        severity="critical",
+                    )
+                    dispatcher = getattr(self, "_notification_dispatcher", None)
+                    if dispatcher is not None and hasattr(dispatcher, "notify_symbol_reload_failed"):
+                        try:
+                            symbols = getattr(self.client, "symbols", None) or []
+                            limit = int(
+                                getattr(self.client, "MAX_SUBSCRIPTIONS_PER_CLIENT", 0)
+                                or getattr(self.client, "MAX_SUBSCRIPTIONS", 0)
+                            )
+                            reason = (
+                                "exceeds_limit"
+                                if "exceeds limit" in str(exc).lower()
+                                else "other"
+                            )
+                            await dispatcher.notify_symbol_reload_failed(
+                                reason=reason,
+                                count=len(symbols),
+                                limit=limit,
+                            )
+                        except Exception as notify_exc:  # noqa: BLE001
+                            logger.warning(
+                                "symbol_reload_alert_dispatch_failed",
+                                error=str(notify_exc),
+                            )
 
     # -- symbol tick (legacy async path) ------------------------------------
 
@@ -2035,29 +2071,55 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
     def get_active_feed_gap_s(self, active_threshold_s: float | None = None) -> float:
         """Return the max feed gap across *latched ever-active* futures symbols.
 
-        Latched-set semantics (revises commit ``b80b950c``):
+        Latched-set semantics with **subscription-membership de-latch**
+        (revises commit ``b80b950c`` and the RC-2 v1 recency-window patch):
 
         * A symbol enters ``_ever_active_symbols`` once it has accumulated
           ``_ACTIVE_BASELINE_EVENT_COUNT`` (default 5) lifetime events.
         * Once latched, the symbol is monitored for the rest of the
-          session — silence on a latched symbol is therefore a real
-          feed-gap signal, not a structural illiquid quirk.
-        * Symbols that never cross the baseline (e.g. TMFI6 / TXO29000R6
-          chronically idle far-OTM legs whose only print was the
-          subscription handshake) are invisible to this method.  Their
-          structural staleness no longer inflates the feed-gap signal.
+          session — silence on a latched symbol is a candidate feed-gap
+          signal, NOT structural illiquidity.
+        * **Subscription-membership de-latch**: ``client.subscribed_codes``
+          (a ``set[str]`` updated by ``contracts_runtime`` whenever the
+          symbols.yaml manifest changes) is the canonical "should be
+          active right now" set.  A latched symbol that is no longer
+          present in ``subscribed_codes`` (typical case: contract
+          expired and was discarded by the rollover routine in
+          ``contracts_runtime.py``) is removed from
+          ``_ever_active_symbols`` and no longer contributes to
+          ``max_gap``.  The
+          ``feed_gap_latched_silent_symbols_total{action="unsubscribed"}``
+          counter is bumped per de-latch so operators can see *which*
+          symbol structurally exited.
 
-        Rationale: the previous design (``b80b950c``) excluded a symbol
-        from the calculation when its gap exceeded a 300s upper bound.
-        That inadvertently masked real partial feed failures: a
-        front-month future that was actively trading and then suddenly
-        stopped getting events was silently dropped after 300s of
-        silence, and the remaining liquid feeds reported a healthy gap
-        even though a real outage had occurred on the dropped symbol.
+        Why this design (vs. RC-2 v1 recency-window):
+
+        * RC-2 v1 (``HFT_FEED_GAP_LATCH_RECENCY_S=300``) silently dropped
+          any latched symbol whose silence exceeded the recency window
+          from ``max_gap``.  When other latched symbols were fresh, a
+          single symbol going dark for 2000s never surfaced — exactly
+          the partial-outage masking bug that ``b80b950c`` originally
+          tried (and failed) to address.
+        * Subscription membership cleanly separates the two cases:
+          - **Expired contract** (TMFI6 dropped from
+            ``subscribed_codes`` by contract-rollover machinery) →
+            de-latch, do not contribute to ``max_gap``.
+          - **Partial outage** (TMFE6 still in ``subscribed_codes`` but
+            silent for 2000s) → contributes its full silence age to
+            ``max_gap``, which trips ``feed_gap_threshold_s`` (default
+            600s) and surfaces the outage to PlatformDegrade.
+
+        * When ``client.subscribed_codes`` is unavailable (test fixtures
+          using ``MagicMock``, brokers without a subscription set, or
+          pre-registry cold-start), every latched symbol contributes —
+          equivalent to the legacy "all latched" behaviour.  This
+          preserves the partial-outage signal in any environment that
+          cannot answer the membership question authoritatively.
 
         Falls back to :meth:`get_max_feed_gap_s` when the latched set is
-        empty (legitimate cold start before any symbol has crossed the
-        5-event baseline).
+        empty after de-latching (legitimate cold start before any
+        symbol has crossed the 5-event baseline, or every latched
+        symbol just got de-subscribed).
 
         Args:
             active_threshold_s: deprecated; ignored.  Retained for
@@ -2075,9 +2137,80 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         if not snapshot:
             return float(os.getenv("HFT_FEED_GAP_NO_DATA_S", "0.0"))
 
+        # Resolve the authoritative subscription set.  We accept any
+        # ``set``/``frozenset`` exposed via ``client.subscribed_codes``
+        # (Shioaji + Fubon both expose this).  When the attribute is
+        # missing or is not a real set (e.g. ``MagicMock`` test
+        # fixtures), ``subscription_set`` stays ``None`` and we fall
+        # back to "every latched symbol contributes" — which preserves
+        # the partial-outage signal even when membership is unknown.
+        #
+        # Alias-resolved membership: ``subscribed_codes`` records
+        # config-time codes, which for rollover aliases (e.g. "TMFR1",
+        # "TXFR1") differ from the resolved month code that the broker
+        # callback actually delivers (e.g. "TMFE6").  Quote callbacks
+        # populate ``_ever_active_symbols`` with the resolved code, so
+        # comparing the latched set directly against ``subscribed_codes``
+        # would treat every alias-resolved future as "unsubscribed" and
+        # de-latch it — silently masking partial outages on the very
+        # contracts the platform is actively trading.  We therefore
+        # union the alias map (``client.alias_to_actual`` →
+        # config_code → resolved_code, populated by
+        # ``ContractsRuntime.resolve_symbol_aliases()``) into the set
+        # so resolved codes count as subscribed.  If the alias-map
+        # read raises, we drop back to ``subscription_set = None`` and
+        # let every latched symbol contribute (defense-in-depth: a
+        # broken resolver must never silently de-latch every resolved
+        # future and mask a partial outage).
+        subscription_set: frozenset[str] | None = None
+        client = getattr(self, "client", None)
+        if client is not None:
+            raw = getattr(client, "subscribed_codes", None)
+            if isinstance(raw, (set, frozenset)):
+                # Snapshot to a frozenset so concurrent rollover writes
+                # cannot mutate the membership view mid-iteration.
+                alias_codes = frozenset(raw)
+                resolved: set[str] = set(alias_codes)
+                try:
+                    raw_alias_map = getattr(client, "alias_to_actual", None)
+                    if isinstance(raw_alias_map, dict):
+                        # Snapshot to avoid concurrent-mutation tearing
+                        # while the rollover thread updates the map.
+                        alias_snapshot = dict(raw_alias_map)
+                        for cfg_code, actual_code in alias_snapshot.items():
+                            # Only union when both sides are non-empty
+                            # strings AND the alias is one we actually
+                            # subscribed to, so we don't claim
+                            # subscription to symbols we never asked for.
+                            if (
+                                isinstance(cfg_code, str)
+                                and isinstance(actual_code, str)
+                                and actual_code
+                                and cfg_code in alias_codes
+                            ):
+                                resolved.add(actual_code)
+                    subscription_set = frozenset(resolved)
+                except Exception:
+                    # Alias-resolver failure: leaving ``subscription_set``
+                    # at ``None`` reuses the existing fix-rc2-v2 fallback
+                    # (every latched symbol contributes to ``max_gap``).
+                    # That is strictly safer than acting on an alias-only
+                    # set, which would de-latch every alias-resolved
+                    # future the moment the alias map is unreadable.
+                    subscription_set = None
+
+        latched_silent_counter = None
+        if self.metrics_registry is not None:
+            latched_silent_counter = getattr(
+                self.metrics_registry,
+                "feed_gap_latched_silent_symbols_total",
+                None,
+            )
+
         now = time.monotonic()
         max_active_gap = 0.0
         active_count = 0
+
         for symbol in ever_active:
             last_ts = snapshot.get(symbol)
             if last_ts is None:
@@ -2086,17 +2219,61 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                 continue
             if not self._is_futures_symbol(symbol):
                 continue
+            # Subscription-membership de-latch.  Only enforced when we
+            # have a real subscription set to compare against; otherwise
+            # we cannot tell "expired" from "outage" and must err on the
+            # side of surfacing the outage (Defense-in-Depth: missing
+            # signal must not silently mask a partial failure).
+            if subscription_set is not None and symbol not in subscription_set:
+                # Set discard is GIL-atomic in CPython, safe alongside
+                # _update_symbol_tick_inline's add() on the producer
+                # thread (we never tear the set).
+                self._ever_active_symbols.discard(symbol)
+                if latched_silent_counter is not None:
+                    try:
+                        capped = self.metrics_registry.cap_symbol(symbol)
+                        latched_silent_counter.labels(
+                            symbol=capped, action="unsubscribed"
+                        ).inc()
+                    except Exception:
+                        pass
+                continue
+            age_s = now - last_ts
             active_count += 1
-            gap = now - last_ts
-            if gap > max_active_gap:
-                max_active_gap = gap
+            if age_s > max_active_gap:
+                max_active_gap = age_s
 
         if active_count == 0:
-            # No latched futures symbol yet — fall back to the legacy
-            # max-gap signal so genuine cold-start dead feeds still
-            # surface.  Once any symbol crosses the 5-event baseline,
-            # the latched signal takes over.
-            return self.get_max_feed_gap_s()
+            # Two distinct cases collapse here; we MUST distinguish them
+            # to avoid resurrecting stale gaps that the de-latch path
+            # just discarded.
+            #
+            # Case A — ``subscription_set is None`` (membership unknown:
+            # MagicMock test fixtures, brokers without a subscription
+            # set, pre-registry cold-start).  No symbol was de-latched
+            # in the loop above (the membership check short-circuits),
+            # so ``active_count == 0`` means there is genuinely no
+            # latched futures symbol.  Falling back to
+            # :meth:`get_max_feed_gap_s` surfaces cold-start dead feeds
+            # in any environment that cannot answer membership.
+            #
+            # Case B — ``subscription_set is not None`` and every
+            # latched symbol was de-latched (rollover window: new
+            # front-month subscribed but no tick has crossed the
+            # 5-event baseline yet; old contract was just unsubscribed
+            # by ``contracts_runtime`` and pruned from the latched set
+            # in the loop above).  Falling back to
+            # :meth:`get_max_feed_gap_s` would re-scan
+            # ``_symbol_last_tick`` — which still contains the
+            # just-de-latched expired contract's stale gap — and
+            # falsely report it as the active feed gap, recreating
+            # exactly the rollover-window false-reduce-only that the
+            # subscription-membership de-latch was added to fix.
+            # Return ``0.0`` so the rollover window honestly reports
+            # "no active latched contract right now" instead.
+            if subscription_set is None:
+                return self.get_max_feed_gap_s()
+            return 0.0
         return max_active_gap
 
     def get_feed_gaps_by_symbol(self) -> dict[str, float]:

@@ -54,7 +54,10 @@ from hft_platform.feed_adapter.shioaji._infra import (
 from hft_platform.feed_adapter.shioaji._infra import (
     update_quote_pending_metrics as _update_quote_pending_metrics_impl,
 )
-from hft_platform.feed_adapter.shioaji.limits import DEFAULT_MAX_SUBSCRIPTIONS_PER_CONN
+from hft_platform.feed_adapter.shioaji.limits import (
+    DEFAULT_MAX_SUBSCRIPTIONS_PER_CLIENT,
+    DEFAULT_MAX_SUBSCRIPTIONS_PER_CONN,
+)
 from hft_platform.feed_adapter.shioaji.tick_dispatcher import TickDispatcher
 from hft_platform.observability.metrics import MetricsRegistry
 
@@ -136,8 +139,20 @@ def dispatch_tick_cb(*args, **kwargs):
 
 class ShioajiClient:
     def __init__(self, config_path: str | None = None, shioaji_config: dict[str, Any] | None = None):
+        # Per-quote-connection cap (broker Solace topic budget). Preserved as
+        # ``MAX_SUBSCRIPTIONS`` for backward compatibility with quote_runtime
+        # and subscription_manager which gate per-conn subscribe loops.
         self.MAX_SUBSCRIPTIONS = int(
             (shioaji_config or {}).get("max_subscriptions", DEFAULT_MAX_SUBSCRIPTIONS_PER_CONN)
+        )
+        # Per-client preflight ceiling for the universe. RC-1 (2026-04-27):
+        # the rollover-resolved universe grew to 588 contracts; the old
+        # 120-cap raised in ``_load_config`` and silently broke reload-cycle.
+        # Default 600 (env-overridable via ``HFT_MAX_SUBSCRIPTIONS``) covers
+        # the post-2026-04-27 universe with headroom; sharding into per-conn
+        # buckets is enforced separately by QuoteConnectionPool.
+        self.MAX_SUBSCRIPTIONS_PER_CLIENT = int(
+            (shioaji_config or {}).get("max_subscriptions_per_client", DEFAULT_MAX_SUBSCRIPTIONS_PER_CLIENT)
         )
         self.contracts_timeout = int(os.getenv("SHIOAJI_CONTRACTS_TIMEOUT", "10000"))
         _cfg_fetch = (shioaji_config or {}).get("fetch_contract")
@@ -189,6 +204,10 @@ class ShioajiClient:
             self.api = None
         self.config_path = config_path
         self.symbols: List[Dict[str, Any]] = []
+        # Q3 (2026-04-27): metrics must exist BEFORE ``_load_config`` runs so
+        # the ``feed_symbol_config_reload_total`` Counter can be bumped at
+        # every exit branch. Moved up from after subscribed_codes init.
+        self.metrics = MetricsRegistry.get()
         self._load_config()
         self.subscribed_count = 0
         self.subscribed_codes: set[str] = set()
@@ -199,7 +218,6 @@ class ShioajiClient:
         self._resubscribe_lock: threading.Lock = threading.Lock()
         self.alias_to_actual: dict[str, str] = {}  # config code → callback code (e.g. TXFR1 → TXFE6)
         self.tick_callback: Callable[..., Any] | None = None
-        self.metrics = MetricsRegistry.get()
         _dispatch_async = os.getenv("HFT_SHIOAJI_QUOTE_DISPATCH_THREAD", "1").strip().lower() in {
             "1",
             "true",
@@ -705,51 +723,138 @@ class ShioajiClient:
             self,
         )
 
+    def _bump_symbol_reload_metric(self, result: str) -> None:
+        """Bump ``feed_symbol_config_reload_total{result=...}`` defensively.
+
+        Q3-fix (2026-04-27): make every ``_load_config`` exit branch
+        observable so symbol-reload failures (RC-1: 588 > 120) surface in
+        Prometheus instead of silently logging into the void.
+        """
+        try:
+            metric = getattr(self.metrics, "feed_symbol_config_reload_total", None)
+            if metric is not None:
+                metric.labels(result=result).inc()
+        except Exception:  # noqa: BLE001
+            # Never let metric bookkeeping crash the reload path.
+            pass
+
     def _load_config(self):
-        with open(self.config_path, "r") as f:
-            data = yaml.safe_load(f) or {}
-            self.symbols = data.get("symbols", [])
-            symbols_filter = {code.strip() for code in os.getenv("HFT_SYMBOLS", "").split(",") if code.strip()}
-            if symbols_filter:
-                before_count = len(self.symbols)
-                configured_codes = {str(s.get("code")) for s in self.symbols if s.get("code")}
-                expanded_filter = set(symbols_filter)
-                for code in symbols_filter:
-                    if len(code) >= 4 and code.endswith(("R1", "R2")):
-                        root = code[:-2].lower()
-                        month_tag = "front_month" if code.endswith("R1") else "far_month"
-                        for sym in self.symbols:
-                            tags = {str(tag).lower() for tag in sym.get("tags", [])}
-                            product_type = str(sym.get("product_type") or sym.get("type") or "").lower()
-                            if (
-                                product_type == "future"
-                                and root in tags
-                                and month_tag in tags
-                                and sym.get("code")
-                            ):
-                                expanded_filter.add(str(sym["code"]))
-                filtered = [s for s in self.symbols if str(s.get("code", "")) in expanded_filter]
-                if filtered:
-                    self.symbols = filtered
-                missing = sorted(symbols_filter - configured_codes)
-                logger.info(
-                    "HFT_SYMBOLS filter applied",
-                    requested=sorted(symbols_filter),
-                    expanded=sorted(expanded_filter),
-                    before=before_count,
-                    after=len(self.symbols),
-                    missing=missing,
+        try:
+            with open(self.config_path, "r") as f:
+                data = yaml.safe_load(f) or {}
+        except (OSError, yaml.YAMLError) as exc:
+            self._bump_symbol_reload_metric("parse_error")
+            logger.error(
+                "symbol_config_parse_error",
+                path=self.config_path,
+                error=str(exc),
+                severity="critical",
+            )
+            raise
+        except Exception as exc:  # noqa: BLE001
+            self._bump_symbol_reload_metric("other")
+            logger.error(
+                "symbol_config_load_other_error",
+                path=self.config_path,
+                error=str(exc),
+                severity="critical",
+            )
+            raise
+
+        self.symbols = data.get("symbols", [])
+        symbols_filter = {code.strip() for code in os.getenv("HFT_SYMBOLS", "").split(",") if code.strip()}
+        if symbols_filter:
+            before_count = len(self.symbols)
+            configured_codes = {str(s.get("code")) for s in self.symbols if s.get("code")}
+            expanded_filter = set(symbols_filter)
+            for code in symbols_filter:
+                if len(code) >= 4 and code.endswith(("R1", "R2")):
+                    root = code[:-2].lower()
+                    month_tag = "front_month" if code.endswith("R1") else "far_month"
+                    for sym in self.symbols:
+                        tags = {str(tag).lower() for tag in sym.get("tags", [])}
+                        product_type = str(sym.get("product_type") or sym.get("type") or "").lower()
+                        if (
+                            product_type == "future"
+                            and root in tags
+                            and month_tag in tags
+                            and sym.get("code")
+                        ):
+                            expanded_filter.add(str(sym["code"]))
+            filtered = [s for s in self.symbols if str(s.get("code", "")) in expanded_filter]
+            if filtered:
+                self.symbols = filtered
+            missing = sorted(symbols_filter - configured_codes)
+            logger.info(
+                "HFT_SYMBOLS filter applied",
+                requested=sorted(symbols_filter),
+                expanded=sorted(expanded_filter),
+                before=before_count,
+                after=len(self.symbols),
+                missing=missing,
+            )
+        # RC-1 (2026-04-27): preflight ceiling is the per-client universe
+        # bound (default 600), NOT the per-conn cap (120). The per-conn cap
+        # is enforced by QuoteConnectionPool sharding. ``_load_config`` used
+        # to compare against ``self.MAX_SUBSCRIPTIONS`` (per-conn 120) AND
+        # raised when ``HFT_ALLOW_TRUNCATE_SUBSCRIPTIONS`` was unset, which
+        # silently broke the 25-min reload cycle for the 588-symbol universe.
+        # New default: truncate-with-warn. Strict mode preserved via
+        # ``HFT_STRICT_SUBSCRIPTION_LIMIT=1``.
+        ceiling = int(self.MAX_SUBSCRIPTIONS_PER_CLIENT)
+        if len(self.symbols) > ceiling:
+            strict_mode = os.getenv("HFT_STRICT_SUBSCRIPTION_LIMIT", "0") == "1"
+            # Back-compat: ``HFT_ALLOW_TRUNCATE_SUBSCRIPTIONS`` defaults to "1"
+            # (truncate-with-warn). Setting it to "0" forces strict-raise even
+            # when ``HFT_STRICT_SUBSCRIPTION_LIMIT`` is unset.
+            allow_truncate = os.getenv("HFT_ALLOW_TRUNCATE_SUBSCRIPTIONS", "1") == "1"
+            if strict_mode or not allow_truncate:
+                self._bump_symbol_reload_metric("exceeds_limit")
+                logger.error(
+                    "symbol_list_exceeds_limit",
+                    limit=ceiling,
+                    count=len(self.symbols),
+                    strict_mode=strict_mode,
+                    severity="critical",
                 )
-            if len(self.symbols) > self.MAX_SUBSCRIPTIONS:
-                if os.getenv("HFT_ALLOW_TRUNCATE_SUBSCRIPTIONS") == "1":
-                    logger.warning(
-                        "Symbol list exceeds limit",
-                        limit=self.MAX_SUBSCRIPTIONS,
-                        count=len(self.symbols),
-                    )
-                    self.symbols = self.symbols[: self.MAX_SUBSCRIPTIONS]
-                else:
-                    raise ValueError(f"Symbol list exceeds limit ({len(self.symbols)} > {self.MAX_SUBSCRIPTIONS}).")
+                raise ValueError(f"Symbol list exceeds limit ({len(self.symbols)} > {ceiling}).")
+            self._bump_symbol_reload_metric("exceeds_limit")
+            logger.warning(
+                "symbol_list_exceeds_limit_truncated",
+                limit=ceiling,
+                count=len(self.symbols),
+                truncated_to=ceiling,
+                severity="warning",
+            )
+            self.symbols = self.symbols[:ceiling]
+        else:
+            # P2 #8 (2026-04-27): preflight pool-capacity advisory. RC-1
+            # made 121–600 symbols pass as ``result="ok"`` against the
+            # per-client ceiling, but ``SubscriptionManager`` still gates
+            # per-conn at ``DEFAULT_MAX_SUBSCRIPTIONS_PER_CONN`` (120).
+            # When ``HFT_QUOTE_CONNECTIONS`` is unset (single-conn deploy),
+            # the silently-truncated universe is the post-RC-1 silent miss.
+            # We advise here so ops sees the issue at config-load time
+            # instead of waiting for the next subscribe cycle. Subscribe-time
+            # truncation is still authoritatively recorded by
+            # ``feed_subscription_truncate_total`` in subscription_manager.
+            try:
+                num_conns = max(1, int(os.getenv("HFT_QUOTE_CONNECTIONS", "1")))
+            except (TypeError, ValueError):
+                num_conns = 1
+            pool_capacity = DEFAULT_MAX_SUBSCRIPTIONS_PER_CONN * num_conns
+            if len(self.symbols) > pool_capacity:
+                self._bump_symbol_reload_metric("exceeds_pool_capacity")
+                logger.error(
+                    "symbol_list_exceeds_pool_capacity",
+                    universe=len(self.symbols),
+                    per_conn_limit=DEFAULT_MAX_SUBSCRIPTIONS_PER_CONN,
+                    num_conns=num_conns,
+                    pool_capacity=pool_capacity,
+                    severity="critical",
+                )
+            else:
+                self._bump_symbol_reload_metric("ok")
 
         # Build map
         self.code_exchange_map = {s["code"]: s["exchange"] for s in self.symbols if s.get("code") and s.get("exchange")}

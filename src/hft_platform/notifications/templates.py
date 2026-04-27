@@ -107,6 +107,55 @@ def render_pre_market_pass() -> str:
     return "🟢 08:15 健檢 PASS. 策略將於 08:45 啟動."
 
 
+def render_symbol_reload_failed(reason: str, count: int, limit: int) -> str:
+    """Symbol config reload failed (RC-1 / Q3 fix).
+
+    Args:
+        reason: Result label (e.g. ``exceeds_limit``, ``parse_error``,
+            ``other``).
+        count: Number of symbols loaded from the config file (or 0 if
+            the file could not be parsed).
+        limit: Effective preflight ceiling at the moment of failure.
+
+    Returns:
+        Formatted symbol-reload failure notification string.
+    """
+    return (
+        "🔴 Symbol reload FAIL\n"
+        f"reason: {reason}\n"
+        f"count: {count}\n"
+        f"limit: {limit}\n"
+        "Subscriptions are stale until reload succeeds — check "
+        "config/symbols.yaml and HFT_MAX_SUBSCRIPTIONS."
+    )
+
+
+def render_subscription_truncated(reason: str, requested: int, subscribed: int, limit: int) -> str:
+    """Subscription truncated below configured universe (P2 #8 fix).
+
+    Args:
+        reason: Truncation reason label (currently ``conn_limit``).
+        requested: Number of symbols loaded into the client.
+        subscribed: Number of symbols actually subscribed before truncation.
+        limit: Per-conn cap (``MAX_SUBSCRIPTIONS_PER_CONN``) that triggered
+            truncation.
+
+    Returns:
+        Formatted subscription-truncation notification string.
+    """
+    missed = max(0, requested - subscribed)
+    return (
+        "🔴 Quote subscription TRUNCATED\n"
+        f"reason: {reason}\n"
+        f"requested: {requested}\n"
+        f"subscribed: {subscribed}\n"
+        f"missed: {missed}\n"
+        f"per_conn_limit: {limit}\n"
+        "Symbols loaded but NEVER subscribed — increase HFT_QUOTE_CONNECTIONS "
+        "or reduce config/symbols.yaml universe."
+    )
+
+
 def render_pre_market_fail(failed_checks: list[str]) -> str:
     """Pre-market health check failed; strategy will NOT start.
 

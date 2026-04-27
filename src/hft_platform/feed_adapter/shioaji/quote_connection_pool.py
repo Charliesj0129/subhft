@@ -72,6 +72,118 @@ _SHIOAJI_MAX_CONNECTIONS = 5
 _MAX_QUOTE_CONNECTIONS = _SHIOAJI_MAX_CONNECTIONS - 1
 _MAX_SUBSCRIPTIONS_PER_CONN = DEFAULT_MAX_SUBSCRIPTIONS_PER_CONN
 
+# Default path for runtime-refreshed snapshot (TXO chain auto-rotation output).
+# This MUST never collide with the canonical INPUT file pointed to by
+# ``SYMBOLS_CONFIG`` — overwriting the canonical file destroys hand-curated
+# metadata (product_type/tick_size/price_scale/point_value) and was the
+# 2026-04-27 root cause of B2 metadata gap (``config/symbols.yaml`` truncated
+# from 1868 → 370 lines, see commit log near this comment).
+_DEFAULT_RUNTIME_SNAPSHOT_PATH = "data/live_with_options.yaml"
+
+
+def _paths_collide(a: str, b: str) -> bool:
+    """Return True iff ``a`` and ``b`` resolve to the same on-disk file.
+
+    Uses ``realpath`` so symlinks / ``..`` segments / different but
+    equivalent relative paths all collapse to the canonical form before
+    comparison. Returns False if either path cannot be resolved (treated
+    as non-colliding so the caller can proceed; the surrounding writer
+    still validates the path before writing).
+    """
+    try:
+        return os.path.realpath(a) == os.path.realpath(b)
+    except OSError:
+        return False
+
+
+def _derive_sidecar_path(input_path: str) -> str:
+    """Build a sidecar snapshot path from ``input_path``.
+
+    Convention: ``<input_dir>/<input_stem>.runtime.yaml``. Lives next to
+    the canonical file so operators can find it, and the ``.runtime``
+    infix makes its transient nature obvious.
+    """
+    head, tail = os.path.split(input_path)
+    stem, ext = os.path.splitext(tail)
+    if not ext:
+        ext = ".yaml"
+    sidecar_name = f"{stem}.runtime{ext}"
+    return os.path.join(head, sidecar_name) if head else sidecar_name
+
+
+def _resolve_runtime_snapshot_path(symbols_input_path: str | None = None) -> str:
+    """Return the output path for QuoteConnectionPool's auto-refreshed snapshot.
+
+    Precedence:
+      1. ``HFT_SYMBOLS_RUNTIME_SNAPSHOT`` env var (explicit operator override)
+      2. ``_DEFAULT_RUNTIME_SNAPSHOT_PATH`` (``data/live_with_options.yaml``)
+
+    NEVER falls back to ``SYMBOLS_CONFIG`` — that variable points to the
+    INPUT file (canonical, hand-curated). Conflating input + output paths
+    caused B2 in 2026-04-27 (canonical ``config/symbols.yaml`` overwritten
+    with a 370-line transient snapshot lacking ``product_type`` etc.).
+
+    Self-clobber protection (codex round-4 P2 #9):
+
+    If ``symbols_input_path`` is provided and the resolved output path
+    points at the same file, the function tries — in order — to find a
+    path that is **guaranteed distinct** from the input:
+
+      1. Default ``_DEFAULT_RUNTIME_SNAPSHOT_PATH``.
+      2. Sidecar derived from the input path itself
+         (``<input_dir>/<input_stem>.runtime.yaml``).
+      3. ``RuntimeError`` — operator must set
+         ``HFT_SYMBOLS_RUNTIME_SNAPSHOT`` to a different path.
+
+    The previous implementation always returned the default on collision,
+    which silently re-clobbered the input when the operator pointed
+    ``SYMBOLS_CONFIG`` at ``data/live_with_options.yaml`` (i.e. used the
+    generated snapshot AS the canonical input).
+    """
+    snapshot = os.getenv("HFT_SYMBOLS_RUNTIME_SNAPSHOT", "").strip()
+    if not snapshot:
+        snapshot = _DEFAULT_RUNTIME_SNAPSHOT_PATH
+
+    if not symbols_input_path or not _paths_collide(symbols_input_path, snapshot):
+        return snapshot
+
+    # Stage 1: try the default sidecar.
+    if snapshot != _DEFAULT_RUNTIME_SNAPSHOT_PATH and not _paths_collide(
+        symbols_input_path, _DEFAULT_RUNTIME_SNAPSHOT_PATH
+    ):
+        logger.error(
+            "runtime_snapshot_path_collision",
+            requested=snapshot,
+            canonical_input=symbols_input_path,
+            fallback=_DEFAULT_RUNTIME_SNAPSHOT_PATH,
+            stage="env_override_to_default",
+        )
+        return _DEFAULT_RUNTIME_SNAPSHOT_PATH
+
+    # Stage 2: derive a sidecar adjacent to the input itself.
+    sidecar = _derive_sidecar_path(symbols_input_path)
+    if not _paths_collide(symbols_input_path, sidecar):
+        logger.error(
+            "runtime_snapshot_path_collision",
+            requested=snapshot,
+            canonical_input=symbols_input_path,
+            fallback=sidecar,
+            stage="default_to_sidecar",
+        )
+        return sidecar
+
+    # Stage 3: refuse — every candidate collides with the input. This is
+    # only reachable if the operator's canonical file is literally named
+    # ``<x>.runtime.yaml`` AND ``HFT_SYMBOLS_RUNTIME_SNAPSHOT`` points at
+    # the same file. Demand explicit operator action rather than
+    # silently overwriting hand-curated metadata.
+    raise RuntimeError(
+        "Symbols input path collides with every snapshot output candidate "
+        f"(input={symbols_input_path!r}, requested={snapshot!r}, "
+        f"sidecar={sidecar!r}). Set HFT_SYMBOLS_RUNTIME_SNAPSHOT to a "
+        "path that does not equal the canonical symbols file."
+    )
+
 
 def _clamp_max_subscriptions(config: dict[str, Any]) -> int:
     raw = config.get("max_subscriptions", _MAX_SUBSCRIPTIONS_PER_CONN)
@@ -107,6 +219,7 @@ class QuoteConnectionPool:
         "_reconnect_trigger_s",
         "_per_facade_timeout_s",
         "_user_callback",
+        "_symbols_input_path",
     )
 
     def __init__(self, symbols_path: str, shioaji_cfg: dict[str, Any], num_conns: int) -> None:
@@ -133,6 +246,11 @@ class QuoteConnectionPool:
         self._reconnect_trigger_s = float(os.getenv("HFT_FACADE_RECONNECT_TRIGGER_S", "10"))
         self._user_callback: Callable[..., Any] | None = None
         self._per_facade_timeout_s = float(os.getenv("HFT_PER_FACADE_TIMEOUT_S", "15"))
+        # Remember the canonical input path so the auto-refresh writer can
+        # detect (and refuse) self-clobber when an operator misconfigures
+        # ``HFT_SYMBOLS_RUNTIME_SNAPSHOT`` (or legacy callers still expect
+        # the writer to honour ``SYMBOLS_CONFIG``).
+        self._symbols_input_path: str = str(symbols_path)
 
         with open(symbols_path, "r") as f:
             data = yaml.safe_load(f) or {}
@@ -565,6 +683,69 @@ class QuoteConnectionPool:
                 result.extend(c._client.symbols)
             return result
 
+    @property
+    def subscribed_codes(self) -> set[str]:
+        """Aggregate subscribed-codes set across all underlying clients.
+
+        ``MarketDataService.get_active_feed_gap_s`` reads
+        ``client.subscribed_codes`` to separate "expired contract" (latched
+        but unsubscribed → safe to de-latch) from "partial outage" (still
+        subscribed but silent → must surface).  When ``HFT_QUOTE_CONNECTIONS
+        > 1`` the platform's ``client`` handle is this pool rather than a
+        single facade; without this aggregation the de-latch path silently
+        falls back to ``subscription_set=None`` and never engages.
+
+        Snapshot semantics: each underlying client may mutate its own set
+        concurrently (rollover refresh, contracts_runtime updates).  We
+        materialise into a fresh ``set`` so callers (which iterate or
+        membership-test) cannot tear with a concurrent writer.
+        """
+        result: set[str] = set()
+        # Snapshot the client list once: the pool's reconnect path can
+        # rebuild ``self._clients`` mid-iteration.
+        clients_snapshot = list(self._clients)
+        for client in clients_snapshot:
+            codes = getattr(client, "subscribed_codes", None)
+            if isinstance(codes, (set, frozenset)):
+                # Snapshot each per-client set too, so a concurrent writer
+                # on the underlying facade cannot mutate while we copy.
+                try:
+                    result.update(set(codes))
+                except RuntimeError:
+                    # set changed size during iteration on the underlying
+                    # facade — skip this slice; the partial union still
+                    # over-approximates "subscribed" which is the safer
+                    # direction (false-positive subscription preserves the
+                    # outage signal; false-negative would mask it).
+                    continue
+        return result
+
+    @property
+    def alias_to_actual(self) -> dict[str, str]:
+        """Aggregate alias→resolved-code map across all underlying clients.
+
+        Mirrors :pyattr:`subscribed_codes` for the rollover-alias bridge
+        consumed by ``MarketDataService.get_active_feed_gap_s``.  Per-client
+        maps are populated by ``ContractsRuntime.resolve_symbol_aliases``;
+        when distinct clients carry the same alias key, the later client
+        in the snapshot wins (deterministic, last-writer-wins; the resolved
+        code is identical across clients in normal operation because the
+        rollover machinery is single-source).
+        """
+        result: dict[str, str] = {}
+        clients_snapshot = list(self._clients)
+        for client in clients_snapshot:
+            mapping = getattr(client, "alias_to_actual", None)
+            if isinstance(mapping, dict):
+                try:
+                    result.update(dict(mapping))
+                except RuntimeError:
+                    # dict changed size during iteration on the underlying
+                    # facade — skip this slice; the partial union is safe
+                    # because every present mapping is itself authoritative.
+                    continue
+        return result
+
     def health(self) -> dict[int, dict[str, Any]]:
         return {
             i: {
@@ -796,10 +977,23 @@ class QuoteConnectionPool:
                     )
                     return False
 
-            out_path = os.getenv("SYMBOLS_CONFIG", "data/live_with_options.yaml")
+            # Write the auto-refreshed snapshot to a sidecar path — never to
+            # the canonical input file. ``_resolve_runtime_snapshot_path`` honours
+            # ``HFT_SYMBOLS_RUNTIME_SNAPSHOT`` and refuses to clobber the
+            # canonical INPUT (``self._symbols_input_path``) even if an operator
+            # accidentally points it there. See module-level docstring on
+            # ``_DEFAULT_RUNTIME_SNAPSHOT_PATH`` for the 2026-04-27 incident
+            # context (B2 metadata gap).
+            out_path = _resolve_runtime_snapshot_path(self._symbols_input_path)
             try:
+                # Ensure parent dir exists (default sidecar lives under
+                # gitignored ``data/`` which may not exist on a fresh clone).
+                parent = os.path.dirname(out_path)
+                if parent:
+                    os.makedirs(parent, exist_ok=True)
                 with open(out_path, "w") as f:
                     f.write("# Auto-refreshed by QuoteConnectionPool\n")
+                    f.write(f"# Source canonical: {self._symbols_input_path}\n")
                     f.write(f"# TXO nearest expiry: {nearest_date}\n")
                     f.write(f"# Group 0: Base ({len(base_symbols)})\n")
                     option_groups = self._option_target_groups()
@@ -807,7 +1001,7 @@ class QuoteConnectionPool:
                     f.write(f"# Trimmed options: {trimmed}\n\n")
                     yaml.dump({"symbols": symbols}, f, default_flow_style=False, allow_unicode=True)
             except Exception as exc:
-                logger.error("options_refresh_write_failed", error=str(exc))
+                logger.error("options_refresh_write_failed", error=str(exc), out_path=out_path)
                 return False
 
             self._options_expiry = nearest_date

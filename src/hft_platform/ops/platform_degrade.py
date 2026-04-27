@@ -148,6 +148,38 @@ class PlatformDegradeController:
             transition.record_transition(self.metrics)
         return transition
 
+    def force_clear(self, *, reason: str = "manual_rearm") -> AutonomyTransition | None:
+        """Operator escape hatch: clear all reasons and exit reduce_only.
+
+        Used by :meth:`hft_platform.ops.manual_rearm.ManualRearmGate.rearm_platform`
+        to bridge the previously broken interface — until this method
+        existed, manual rearm wrote a JSON flag that the controller
+        never consulted, so reduce_only could remain latched
+        indefinitely even after the operator confirmed.
+
+        This bypasses the auto-recovery cooldown and the
+        "all reasons must be empty" gate: the operator has explicitly
+        attested that conditions are safe.  Use sparingly; the auto
+        path is preferred when reasons clear naturally.
+
+        Returns the resulting :class:`AutonomyTransition`, or ``None``
+        if reduce_only was already inactive.
+        """
+        if not self.reduce_only_active:
+            return None
+        # Drop reasons before exit so observability reflects the manual
+        # override path rather than a phantom remaining condition.
+        cleared_reasons = sorted(self._active_reasons)
+        self._active_reasons.clear()
+        self._reason_last_log_ns.clear()
+        self._recovery_started_ns = 0
+        logger.warning(
+            "platform_reduce_only_force_cleared",
+            reason=reason,
+            cleared_reasons=cleared_reasons,
+        )
+        return self.exit_reduce_only(reason=f"manual_force_clear:{reason}")
+
     def check_auto_recovery(self, *, current_reasons: list[str], now_ns: int) -> bool:
         """Check if auto-recovery should trigger. Called from supervisor loop.
 

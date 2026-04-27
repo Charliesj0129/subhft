@@ -67,11 +67,26 @@ fi
 
 # Rounds / promotes / consecutive kills
 if [[ -f "$PROGRESS" ]]; then
-    rounds=$(wc -l < "$PROGRESS")
-    promotes=$(grep -c '"verdict":"PROMOTE"' "$PROGRESS" || true)
-    lines_in_tail=$(tail -n "$max_consec_kills" "$PROGRESS" 2>/dev/null | wc -l)
-    consec_kills=$(tail -n "$max_consec_kills" "$PROGRESS" 2>/dev/null \
-                   | grep -c '"verdict":"KILL"' || true)
+    # Count actual round-complete events. progress.jsonl is heterogeneous: dispatches,
+    # hook events, lead corrections, etc. all coexist with the round_complete records.
+    # Round_complete events use "final_verdict" (not "verdict", which appears on T1/T2
+    # task completion events with values like REJECT / T1_RECOMMEND_KILL).
+    # Tolerate JSON whitespace ("event":"x" vs "event": "x") in progress.jsonl
+    # — both forms are emitted depending on writer (compact json.dumps vs
+    # pretty json.dumps with indent). Without [[:space:]]* the guard
+    # silently undercounts and fails to halt at configured limits.
+    EVENT_PAT='"event":[[:space:]]*"r[0-9]*_round_complete"'
+    PROMOTE_PAT='"final_verdict":[[:space:]]*"PROMOTE"'
+    KILL_PAT='"final_verdict":[[:space:]]*"KILL"'
+    rounds=$(grep -cE "$EVENT_PAT" "$PROGRESS" || true)
+    promotes=$(grep -E "$EVENT_PAT" "$PROGRESS" \
+               | grep -cE "$PROMOTE_PAT" || true)
+    lines_in_tail=$(grep -E "$EVENT_PAT" "$PROGRESS" \
+                    | tail -n "$max_consec_kills" \
+                    | grep -c '^' || true)
+    consec_kills=$(grep -E "$EVENT_PAT" "$PROGRESS" \
+                   | tail -n "$max_consec_kills" \
+                   | grep -cE "$KILL_PAT" || true)
 
     (( rounds   >= max_rounds   )) && { echo "HALT: $rounds rounds >= max $max_rounds. Write final_summary.md and pause." >&2; exit 2; }
     (( promotes >= max_promotes )) && { echo "HALT: $promotes PROMOTEs >= max $max_promotes. Write final_summary.md and pause." >&2; exit 2; }

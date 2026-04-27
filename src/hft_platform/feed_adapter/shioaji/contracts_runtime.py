@@ -594,7 +594,55 @@ class ContractsRuntime:
             self._client._load_config()
             logger.info("Symbol config reloaded after contract refresh", symbol_count=len(self._client.symbols))
         except Exception as exc:
-            logger.warning("Symbol config reload failed after contract refresh", error=str(exc))
+            # Q3-fix (2026-04-27): contract-refresh reload-failure used to be
+            # invisible. ``_load_config`` itself now bumps the metric Counter;
+            # we additionally raise this from WARNING to ERROR with a
+            # ``severity="critical"`` tag and best-effort fan out to the
+            # optional dispatcher attached to the client.
+            logger.error(
+                "Symbol config reload failed after contract refresh",
+                error=str(exc),
+                severity="critical",
+            )
+            dispatcher = getattr(self._client, "_notification_dispatcher", None)
+            if dispatcher is not None and hasattr(dispatcher, "notify_symbol_reload_failed"):
+                try:
+                    import asyncio as _asyncio  # local import — non hot-path
+
+                    symbols = getattr(self._client, "symbols", None) or []
+                    limit = int(
+                        getattr(self._client, "MAX_SUBSCRIPTIONS_PER_CLIENT", 0)
+                        or getattr(self._client, "MAX_SUBSCRIPTIONS", 0)
+                    )
+                    reason = (
+                        "exceeds_limit"
+                        if "exceeds limit" in str(exc).lower()
+                        else "other"
+                    )
+                    coro = dispatcher.notify_symbol_reload_failed(
+                        reason=reason,
+                        count=len(symbols),
+                        limit=limit,
+                    )
+                    # contracts_runtime can be called from a worker thread
+                    # (contract_refresh_worker); schedule onto the running
+                    # loop if available, otherwise drop after logging.
+                    try:
+                        loop = _asyncio.get_running_loop()
+                        loop.create_task(coro)
+                    except RuntimeError:
+                        try:
+                            _asyncio.run(coro)
+                        except Exception as run_exc:  # noqa: BLE001
+                            logger.warning(
+                                "symbol_reload_alert_run_failed",
+                                error=str(run_exc),
+                            )
+                except Exception as notify_exc:  # noqa: BLE001
+                    logger.warning(
+                        "symbol_reload_alert_dispatch_failed",
+                        error=str(notify_exc),
+                    )
         finally:
             try:
                 if self._client.metrics and hasattr(self._client.metrics, "contract_refresh_total"):
@@ -637,11 +685,18 @@ class ContractsRuntime:
                 missing_sample=missing_codes[:10],
             )
             errors.append(f"missing_contracts:{len(missing_codes)}")
-        if len(self._client.symbols) > self._client.MAX_SUBSCRIPTIONS:
+        # RC-1 (2026-04-27): preflight bounds the universe against the
+        # per-client ceiling (default 600). The per-conn cap (120) is enforced
+        # by QuoteConnectionPool sharding, not at preflight.
+        preflight_ceiling = int(
+            getattr(self._client, "MAX_SUBSCRIPTIONS_PER_CLIENT", 0)
+            or self._client.MAX_SUBSCRIPTIONS
+        )
+        if len(self._client.symbols) > preflight_ceiling:
             logger.warning(
                 "preflight_subscription_count_exceeded",
                 symbol_count=len(self._client.symbols),
-                limit=self._client.MAX_SUBSCRIPTIONS,
+                limit=preflight_ceiling,
             )
             errors.append("subscription_count_exceeded")
         logger.info("preflight_complete", passed_all=(len(errors) == 0), errors=errors)

@@ -51,11 +51,11 @@ prep_runtime_over() { cat > "$1/budget.json" <<EOF
 {"started_at":"$(date -Iseconds -d '25 hours ago')","max_runtime_hours":24,"max_rounds":20,"max_promotes":3,"max_consecutive_kills":8}
 EOF
 }
-prep_rounds_over()  { prep_budget_only "$1"; for i in $(seq 1 20); do echo "{\"round\":$i,\"verdict\":\"KILL\"}" >> "$1/progress.jsonl"; done; }
-prep_promotes_over(){ prep_budget_only "$1"; for i in 1 2 3; do echo "{\"round\":$i,\"verdict\":\"PROMOTE\"}" >> "$1/progress.jsonl"; done; }
-prep_consec_kills() { prep_budget_only "$1"; echo '{"round":1,"verdict":"PROMOTE"}' >> "$1/progress.jsonl"; for i in $(seq 2 9); do echo "{\"round\":$i,\"verdict\":\"KILL\"}" >> "$1/progress.jsonl"; done; }
-prep_healthy()      { prep_budget_only "$1"; echo '{"round":1,"verdict":"KILL"}' >> "$1/progress.jsonl"; }
-prep_progress_only(){ echo '{"round":1,"verdict":"KILL"}' > "$1/progress.jsonl"; }
+prep_rounds_over()  { prep_budget_only "$1"; for i in $(seq 1 20); do echo "{\"event\":\"r${i}_round_complete\",\"round\":$i,\"final_verdict\":\"KILL\"}" >> "$1/progress.jsonl"; done; }
+prep_promotes_over(){ prep_budget_only "$1"; for i in 1 2 3; do echo "{\"event\":\"r${i}_round_complete\",\"round\":$i,\"final_verdict\":\"PROMOTE\"}" >> "$1/progress.jsonl"; done; }
+prep_consec_kills() { prep_budget_only "$1"; echo '{"event":"r1_round_complete","round":1,"final_verdict":"PROMOTE"}' >> "$1/progress.jsonl"; for i in $(seq 2 9); do echo "{\"event\":\"r${i}_round_complete\",\"round\":$i,\"final_verdict\":\"KILL\"}" >> "$1/progress.jsonl"; done; }
+prep_healthy()      { prep_budget_only "$1"; echo '{"event":"r1_round_complete","round":1,"final_verdict":"KILL"}' >> "$1/progress.jsonl"; }
+prep_progress_only(){ echo '{"event":"r1_round_complete","round":1,"final_verdict":"KILL"}' > "$1/progress.jsonl"; }
 prep_bad_budget()   { cat > "$1/budget.json" <<EOF
 {"started_at":"not-a-date","max_runtime_hours":24,"max_rounds":20,"max_promotes":3,"max_consecutive_kills":8}
 EOF

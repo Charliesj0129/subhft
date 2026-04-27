@@ -40,6 +40,22 @@ groups:
         summary: "Feed reconnect exception detected"
         description: "Reconnect raised exception at least once in the last 5m."
 
+  - alert: SymbolConfigReloadFailed
+    expr: increase(feed_symbol_config_reload_total{result!="ok"}[5m]) > 0
+    for: 1m
+    labels:
+        severity: critical
+    annotations:
+        summary: "Symbol reload preflight failed"
+        description: |
+          ShioajiClient._load_config() exited with result="{{ $labels.result }}"
+          at least once in the last 5m. Symbol subscriptions are stale until
+          the next successful reload (~25min cadence). RC-1 root cause:
+          universe size > HFT_MAX_SUBSCRIPTIONS preflight ceiling. Check
+          recent config/symbols.yaml diffs and ensure HFT_MAX_SUBSCRIPTIONS
+          >= len(symbols).
+        runbook_url: "docs/runbooks/SymbolConfigReloadFailed.md"
+
   - alert: FeedReconnectFailureRatioHigh
     expr: |
       (

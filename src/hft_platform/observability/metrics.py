@@ -175,6 +175,7 @@ class MetricsRegistry:
                 _pn("reconciliation_discrepancy_count"),
                 _pn("recorder_insert_retry_total"),
                 _pn("feed_gap_by_symbol_seconds"),
+                _pn("feed_gap_latched_silent_symbols_total"),
                 # Phase 12 metrics
                 _pn("shioaji_keepalive_failures_total"),
                 _pn("quote_version_switch_total"),
@@ -332,6 +333,11 @@ class MetricsRegistry:
                 _pn("strategy_events_received_total"),
                 _pn("alias_resolution_coverage_ratio"),
                 _pn("reconciliation_drift_streak"),
+                # Q3 (2026-04-27): symbol config reload result observability.
+                _pn("feed_symbol_config_reload_total"),
+                # P2 #8 (2026-04-27): per-conn subscription truncation —
+                # universe loaded but per-conn cap silently capped subscribe.
+                _pn("feed_subscription_truncate_total"),
             ]
         )
         # Market Data
@@ -392,6 +398,37 @@ class MetricsRegistry:
             _pn("feed_subscription_retry_attempts"),
             "D1: current attempt counter per symbol (resets to 0 on success)",
             ["symbol"],
+        )
+        # Q3 (2026-04-27): symbol config reload preflight result observability.
+        # Bumped at every ``ShioajiClient._load_config`` exit branch so symbol
+        # reload failures (RC-1: 588 > 120) surface in Prometheus instead of
+        # silently logging into the void. Result label values:
+        #   ok            — config loaded and within preflight ceiling
+        #   exceeds_limit — universe size > MAX_SUBSCRIPTIONS_PER_CLIENT
+        #   parse_error   — yaml.YAMLError or OSError reading config
+        #   other         — unexpected exception during load
+        self.feed_symbol_config_reload_total = Counter(
+            _pn("feed_symbol_config_reload_total"),
+            "Q3: symbol config reload result (ok|exceeds_limit|exceeds_pool_capacity|parse_error|other)",
+            ["result"],
+        )
+        # P2 #8 (2026-04-27): silent-miss guard for the gap RC-1 left open.
+        # ``_load_config`` now passes 121–600 symbols as ok against the
+        # per-client ceiling (default 600), but ``subscribe_basket`` /
+        # ``_resubscribe_all`` still gate at the per-conn cap
+        # (``MAX_SUBSCRIPTIONS_PER_CONN`` = 120). When a deployment forgets
+        # to size ``HFT_QUOTE_CONNECTIONS``, half the universe gets loaded
+        # but never subscribed — and there was no Counter / alert path for
+        # that condition. This Counter is bumped at the actual truncation
+        # site in ``SubscriptionManager.subscribe_basket`` /
+        # ``_resubscribe_all`` so the silent-miss surfaces in Prometheus
+        # within seconds of the next subscribe cycle. Reason label values:
+        #   conn_limit             — per-conn cap reached during subscribe
+        #                            (universe > effective pool capacity)
+        self.feed_subscription_truncate_total = Counter(
+            _pn("feed_subscription_truncate_total"),
+            "P2 #8: subscription truncated below configured universe (reason=conn_limit)",
+            ["reason"],
         )
         self.feed_last_event_ts = Gauge(
             _pn("feed_last_event_ts"), "Last feed event timestamp (unix seconds)", ["source"]
@@ -809,6 +846,21 @@ class MetricsRegistry:
             _pn("feed_gap_by_symbol_seconds"),
             "Feed gap per symbol (seconds since last tick)",
             ["symbol"],
+        )
+        # RC-2 fix (subscription-membership variant): count latched symbols
+        # de-latched from ``_ever_active_symbols`` by ``get_active_feed_gap_s``
+        # because they are no longer in ``client.subscribed_codes`` (typical
+        # case: contract expired and was discarded by ``contracts_runtime``
+        # rollover).  Cardinality is bounded by ``cap_symbol`` (caps unique
+        # symbols at HFT_METRICS_MAX_LABEL_SYMBOLS, default 200; overflow →
+        # "_other").  ``action`` is currently ``{"unsubscribed"}``; the
+        # label is retained as a dimension for future de-latch reasons
+        # (e.g. ``"manual_rearm"``) without breaking dashboards.
+        self.feed_gap_latched_silent_symbols_total = Counter(
+            _pn("feed_gap_latched_silent_symbols_total"),
+            "Latched symbols de-latched by get_active_feed_gap_s "
+            "(reason captured in 'action' label, e.g. 'unsubscribed')",
+            ["symbol", "action"],
         )
 
         # Phase 12: Market Data Robustness & Database Writing Upgrades

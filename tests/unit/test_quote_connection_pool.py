@@ -540,7 +540,7 @@ class TestOptionsRefreshGuards:
         pool._clients = [mock.MagicMock()]
         pool._clients[0].logged_in = False
         out_path = str(tmp_path / "live_with_options.yaml")
-        monkeypatch.setenv("SYMBOLS_CONFIG", out_path)
+        monkeypatch.setenv("HFT_SYMBOLS_RUNTIME_SNAPSHOT", out_path)  # fix-rc4: writer uses runtime-snapshot env
 
         expired_opts = [
             {"code": "TXO20000A0", "right": "C", "strike": "20000", "delivery_date": "2020/01/15", "reference": "20000"},
@@ -557,7 +557,9 @@ class TestOptionsRefreshGuards:
         for c in pool._clients:
             c.logged_in = False
         out_path = str(tmp_path / "live_with_options.yaml")
-        monkeypatch.setenv("SYMBOLS_CONFIG", out_path)
+        # 2026-04-27 fix-rc4: writer no longer honours SYMBOLS_CONFIG; use the
+        # dedicated runtime-snapshot env var instead.
+        monkeypatch.setenv("HFT_SYMBOLS_RUNTIME_SNAPSHOT", out_path)
 
         opts = []
         for date in ("2020/01/15", "2030/04/17", "2031/04/16"):  # one expired, two active
@@ -643,7 +645,7 @@ class TestOptionsRoundRobinSharding:
             )
 
         out_path = str(tmp_path / "live_with_options.yaml")
-        monkeypatch.setenv("SYMBOLS_CONFIG", out_path)
+        monkeypatch.setenv("HFT_SYMBOLS_RUNTIME_SNAPSHOT", out_path)  # fix-rc4: writer uses runtime-snapshot env
 
         with mock.patch.object(type(pool), "_load_options_from_cache", return_value=opts):
             result = pool.refresh_options_symbols()
@@ -699,7 +701,7 @@ class TestOptionsRoundRobinSharding:
             )
 
         out_path = str(tmp_path / "live_with_options.yaml")
-        monkeypatch.setenv("SYMBOLS_CONFIG", out_path)
+        monkeypatch.setenv("HFT_SYMBOLS_RUNTIME_SNAPSHOT", out_path)  # fix-rc4: writer uses runtime-snapshot env
 
         with mock.patch.object(type(pool), "_load_options_from_cache", return_value=opts):
             result = pool.refresh_options_symbols()
@@ -752,7 +754,7 @@ class TestOptionsRoundRobinSharding:
             )
 
         out_path = str(tmp_path / "live_with_options.yaml")
-        monkeypatch.setenv("SYMBOLS_CONFIG", out_path)
+        monkeypatch.setenv("HFT_SYMBOLS_RUNTIME_SNAPSHOT", out_path)  # fix-rc4: writer uses runtime-snapshot env
 
         with mock.patch.object(type(pool), "_load_options_from_cache", return_value=opts):
             result = pool.refresh_options_symbols()
@@ -811,7 +813,7 @@ class TestOptionsRoundRobinSharding:
             )
 
         out_path = str(tmp_path / "live_with_options.yaml")
-        monkeypatch.setenv("SYMBOLS_CONFIG", out_path)
+        monkeypatch.setenv("HFT_SYMBOLS_RUNTIME_SNAPSHOT", out_path)  # fix-rc4: writer uses runtime-snapshot env
 
         with mock.patch.object(type(pool), "_load_options_from_cache", return_value=opts):
             result = pool.refresh_options_symbols()

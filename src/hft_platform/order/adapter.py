@@ -2174,14 +2174,18 @@ class OrderAdapter:
             self._dedup_store.release(key)
 
     def _is_strategy_halt_exempt(self, strategy_id: str) -> bool:
-        """Check if a strategy is halt-exempt via StormGuard."""
+        """Check if a strategy is halt-exempt via StormGuard's public API.
+
+        Uses ``StormGuard.is_halt_exempt`` exclusively; the prior
+        ``getattr(sg, "_halt_exempt_strategies", ...)`` fallback reached past
+        the public surface into ``__slots__``-protected state and would
+        silently approve every strategy if the slot were renamed.
+        Removed 2026-04-27 alongside RC-3.
+        """
         sg = self._storm_guard
         if sg is None:
             return False
-        is_exempt = getattr(sg, "is_halt_exempt", None)
-        if callable(is_exempt):
-            return is_exempt(strategy_id)
-        return strategy_id in getattr(sg, "_halt_exempt_strategies", frozenset())
+        return bool(sg.is_halt_exempt(strategy_id))
 
     async def _add_to_dlq(
         self,
@@ -2535,27 +2539,33 @@ class OrderAdapter:
                 # when StormGuard is unwired (unit tests) — disabling the
                 # post-dispatch check is safe because there is no HALT source.
                 ticket_id = self._begin_dispatch_ticket(intent)
-                trade = await self._call_api(
-                    "place_order",
-                    self.client.place_order,
-                    contract_code=order_contract_code,
-                    exchange=exchange,
-                    action=action_str,
-                    price=price_float,
-                    qty=intent.qty,
-                    order_type=tif_str,
-                    tif=tif_str,
-                    custom_field=c_field,
-                    product_type=product_type,
-                    price_type=price_type,
-                    intent=intent,
-                    **order_params,
-                )
-                # H1: must close the ticket before any return — pair with
-                # begin_dispatch on every code path. Defensive cancel is
-                # only emitted when HALT actually triggered mid-await AND a
-                # trade object was produced (otherwise nothing to cancel).
-                await self._end_dispatch_ticket(ticket_id, intent, trade, cmd.cmd_id)
+                trade: Any = None
+                try:
+                    trade = await self._call_api(
+                        "place_order",
+                        self.client.place_order,
+                        contract_code=order_contract_code,
+                        exchange=exchange,
+                        action=action_str,
+                        price=price_float,
+                        qty=intent.qty,
+                        order_type=tif_str,
+                        tif=tif_str,
+                        custom_field=c_field,
+                        product_type=product_type,
+                        price_type=price_type,
+                        intent=intent,
+                        **order_params,
+                    )
+                finally:
+                    # F-D1: ticket MUST be closed even when the broker call
+                    # raises (OSError/TimeoutError/ConnectionError/RuntimeError
+                    # are caught by the outer except). Without this finally,
+                    # exception-failed dispatches leak tickets in
+                    # _inflight_dispatch_tickets forever. trade is None on
+                    # exception → _end_dispatch_ticket skips the defensive
+                    # cancel branch (no broker artefact to cancel).
+                    await self._end_dispatch_ticket(ticket_id, intent, trade, cmd.cmd_id)
                 if trade is None or trade is _GUARD_TIMEOUT:
                     _is_timeout = trade is _GUARD_TIMEOUT
                     _fail_reason = "api_timeout" if _is_timeout else "api_failure"
@@ -2835,16 +2845,23 @@ class OrderAdapter:
                     # post-HALT cancels the underlying live order (target_trade),
                     # not the amend itself.
                     amend_ticket_id = self._begin_dispatch_ticket(intent)
-                    result = await self._call_api(
-                        "update_order",
-                        self.client.update_order,
-                        target_trade,
-                        price=price_f,
-                        intent=intent,
-                    )
-                    await self._end_dispatch_ticket(
-                        amend_ticket_id, intent, target_trade, cmd.cmd_id
-                    )
+                    result: Any = None
+                    try:
+                        result = await self._call_api(
+                            "update_order",
+                            self.client.update_order,
+                            target_trade,
+                            price=price_f,
+                            intent=intent,
+                        )
+                    finally:
+                        # F-D1: ticket close paired with begin_dispatch via
+                        # finally so broker exceptions don't leak tickets.
+                        # target_trade is the AMEND target — defensive cancel
+                        # cancels the underlying live order on HALT mid-await.
+                        await self._end_dispatch_ticket(
+                            amend_ticket_id, intent, target_trade, cmd.cmd_id
+                        )
                     if result is None or result is _GUARD_TIMEOUT:
                         return False
                     self.metrics.order_actions_total.labels(type="amend").inc()

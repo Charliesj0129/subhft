@@ -506,6 +506,100 @@ class NotificationDispatcher:
         )
         await self._emit_or_legacy(alert, msg, critical=False)
 
+    async def notify_symbol_reload_failed(
+        self,
+        reason: str,
+        count: int,
+        limit: int,
+    ) -> None:
+        """Notify operator that ``ShioajiClient._load_config`` failed.
+
+        Q3-fix (2026-04-27): symbol-reload failures used to surface only as
+        a ``logger.error`` line. This dispatcher entrypoint plus the
+        ``feed_symbol_config_reload_total`` Counter and the
+        ``SymbolConfigReloadFailed`` Prometheus rule close the observation
+        gap so RC-1-style regressions page within minutes.
+
+        Args:
+            reason: Result label (e.g. ``exceeds_limit``, ``parse_error``,
+                ``other``).
+            count: Number of symbols loaded from the config file (or 0 if
+                the file could not be parsed).
+            limit: Effective preflight ceiling at the moment of failure.
+        """
+        msg = templates.render_symbol_reload_failed(reason=reason, count=count, limit=limit)
+        logger.error(
+            "dispatcher.notify_symbol_reload_failed",
+            reason=reason,
+            count=count,
+            limit=limit,
+        )
+        alert = Alert(
+            alert_id=_make_alert_id(),
+            severity=AlertSeverity.CRITICAL,
+            category="infra",
+            source="symbol_reload",
+            title=f"Symbol reload FAILED ({reason})",
+            detail=msg,
+            ts_ns=timebase.now_ns(),
+            dedup_key=f"symbol_reload:{reason}",
+            metadata={"reason": reason, "count": count, "limit": limit},
+        )
+        await self._emit_or_legacy(alert, msg, critical=True)
+
+    async def notify_subscription_truncated(
+        self,
+        reason: str,
+        requested: int,
+        subscribed: int,
+        limit: int,
+    ) -> None:
+        """Notify operator that quote subscription was truncated below the
+        configured universe.
+
+        P2 #8 fix (2026-04-27): closes the silent-miss gap RC-1 left open.
+        ``ShioajiClient._load_config`` accepts up to
+        ``MAX_SUBSCRIPTIONS_PER_CLIENT`` (default 600) symbols, but
+        ``SubscriptionManager`` still gates per-conn at
+        ``MAX_SUBSCRIPTIONS_PER_CONN`` (120). When a deployment forgets to
+        size ``HFT_QUOTE_CONNECTIONS``, half the universe gets loaded but
+        never subscribed — and previously there was no alert path. This
+        entrypoint pages within seconds of the truncation event.
+
+        Args:
+            reason: Truncation reason label (currently ``conn_limit``).
+            requested: Number of symbols loaded into the client.
+            subscribed: Number of symbols actually subscribed.
+            limit: Per-conn cap that triggered truncation.
+        """
+        msg = templates.render_subscription_truncated(
+            reason=reason, requested=requested, subscribed=subscribed, limit=limit
+        )
+        logger.error(
+            "dispatcher.notify_subscription_truncated",
+            reason=reason,
+            requested=requested,
+            subscribed=subscribed,
+            limit=limit,
+        )
+        alert = Alert(
+            alert_id=_make_alert_id(),
+            severity=AlertSeverity.CRITICAL,
+            category="infra",
+            source="quote_subscription",
+            title=f"Quote subscription TRUNCATED ({reason})",
+            detail=msg,
+            ts_ns=timebase.now_ns(),
+            dedup_key=f"subscription_truncated:{reason}",
+            metadata={
+                "reason": reason,
+                "requested": requested,
+                "subscribed": subscribed,
+                "limit": limit,
+            },
+        )
+        await self._emit_or_legacy(alert, msg, critical=True)
+
     async def notify_pre_market_fail(self, failed_checks: list[str]) -> None:
         """Notify operator that the pre-market health check failed.
 
