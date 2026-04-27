@@ -105,7 +105,7 @@ def _make_inputs(
 class TestConstruction:
     def test_default_threshold_values(self) -> None:
         inp = _make_inputs()
-        assert inp.feed_gap_threshold_s == 120.0
+        assert inp.feed_gap_threshold_s == 600.0
         assert inp.reconnect_pending_threshold_s == 60.0
         assert inp.reconnect_flap_budget == 5
         assert inp.queue_depth_threshold == 5000
@@ -246,7 +246,8 @@ class TestFeedGapS:
 
         now = _time.time()
         inp = _make_inputs(feed_gap=2000.0, within_window=True)
-        inp.md_service.get_active_feed_gap_s.return_value = 200.0
+        # Active gap above the 600s default threshold → still must trigger.
+        inp.md_service.get_active_feed_gap_s.return_value = 800.0
         with patch("hft_platform.ops.platform_inputs.timebase") as tb:
             tb.now_s.return_value = now
             reasons = inp.reduce_only_reasons()

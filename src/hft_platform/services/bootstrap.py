@@ -307,7 +307,7 @@ class SystemBootstrapper:
             metrics=metrics,
         )
         inputs.configure_thresholds(
-            feed_gap_threshold_s=_env_float("HFT_PLATFORM_REDUCE_ONLY_FEED_GAP_S", 120.0, min_value=1.0),
+            feed_gap_threshold_s=_env_float("HFT_PLATFORM_REDUCE_ONLY_FEED_GAP_S", 600.0, min_value=1.0),
             reconnect_pending_threshold_s=_env_float(
                 "HFT_PLATFORM_REDUCE_ONLY_RECONNECT_PENDING_S",
                 60.0,

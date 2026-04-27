@@ -46,7 +46,7 @@ class PlatformDegradeInputs:
     redis_client: Any | None = None
     redis_healthcheck: Callable[[], bool] | None = None
     metrics: Any | None = None
-    feed_gap_threshold_s: float = 120.0
+    feed_gap_threshold_s: float = 600.0
     reconnect_pending_threshold_s: float = 60.0
     reconnect_flap_budget: int = 5
     queue_depth_threshold: int = 5000
