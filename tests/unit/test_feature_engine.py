@@ -1097,3 +1097,46 @@ def test_nan_guard_runs_on_rust_fused_path():
 
     # State for symbol must be cleared by reset_symbol
     assert eng._states.get("2330") is None
+
+
+# ─────────────────────────────────────────────────────────────────────
+# P3-b1: trade_confidence weighting in on_tick
+# ─────────────────────────────────────────────────────────────────────
+
+
+def test_on_tick_weights_signed_volume_by_confidence():
+    """At-quote (conf=1000) must move toxicity EMA twice as much as tick-rule (conf=500).
+
+    Single-tick test: with cold state, an EMA of 0 transitions to ``alpha *
+    weighted_signed_vol``, so the ratio of state magnitudes equals the ratio
+    of weights (1000/500 == 2).
+    """
+    eng_at_quote = FeatureEngine()
+    eng_tick_rule = FeatureEngine()
+
+    eng_at_quote.on_tick("2330", price=1000000, volume=100, trade_direction=1, trade_confidence=1000)
+    eng_tick_rule.on_tick("2330", price=1000000, volume=100, trade_direction=1, trade_confidence=500)
+
+    ks_high = eng_at_quote._lob_kernel_states["2330"]
+    ks_low = eng_tick_rule._lob_kernel_states["2330"]
+
+    assert ks_high.tox_signed_vol_ema > 0
+    assert ks_low.tox_signed_vol_ema > 0
+    ratio = ks_high.tox_signed_vol_ema / ks_low.tox_signed_vol_ema
+    assert abs(ratio - 2.0) < 1e-9, f"Expected 2.0x weighting, got {ratio}"
+
+    ratio_total = ks_high.tox_total_vol_ema / ks_low.tox_total_vol_ema
+    assert abs(ratio_total - 2.0) < 1e-9, f"Expected 2.0x weighting on total, got {ratio_total}"
+
+
+def test_on_tick_clamps_out_of_range_confidence():
+    """Confidence values above 1000 must be clamped to 1.0, not amplified."""
+    eng = FeatureEngine()
+
+    eng.on_tick("2330", price=1000000, volume=100, trade_direction=1, trade_confidence=5000)
+    ks = eng._lob_kernel_states["2330"]
+
+    expected = 0.04 * 100.0  # alpha * weighted_signed_vol with weight=1.0
+    assert abs(ks.tox_signed_vol_ema - expected) < 1e-9, (
+        f"Expected clamped EMA {expected}, got {ks.tox_signed_vol_ema}"
+    )

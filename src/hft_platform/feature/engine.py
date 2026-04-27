@@ -1195,9 +1195,17 @@ class FeatureEngine:
         # EMA alpha for ~50 tick window
         alpha = 0.04  # 2/(50+1) ≈ 0.039
 
-        signed_vol = float(trade_direction * volume)
+        # P3-b1: weight signed-volume by classifier confidence so a tick-rule
+        # classification (CONF_TICK_RULE=500) contributes half as much to the
+        # toxicity EMA as an at-quote classification (CONF_AT_QUOTE=1000).
+        # Confidence is scaled x1000 (see ``trade_classifier.py``); divide
+        # to get a 0..1 weight, clamped so an out-of-range value cannot
+        # amplify the signal beyond the at-quote ceiling.
+        weight = max(0.0, min(1.0, float(trade_confidence) / 1000.0))
+        signed_vol = float(trade_direction * volume) * weight
+        weighted_total = float(volume) * weight
         ks.tox_signed_vol_ema += alpha * (signed_vol - ks.tox_signed_vol_ema)
-        ks.tox_total_vol_ema += alpha * (float(volume) - ks.tox_total_vol_ema)
+        ks.tox_total_vol_ema += alpha * (weighted_total - ks.tox_total_vol_ema)
         ks.tox_tick_count += 1
 
     def _compute_values_rust(
