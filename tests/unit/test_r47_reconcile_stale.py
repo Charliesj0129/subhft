@@ -23,7 +23,6 @@ from unittest.mock import MagicMock
 import pytest
 
 from hft_platform.contracts.execution import OrderEvent, OrderStatus
-from hft_platform.contracts.strategy import Side
 from hft_platform.events import LOBStatsEvent
 
 _PRICE_SCALE = 10000
