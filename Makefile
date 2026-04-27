@@ -153,10 +153,15 @@ benchmark-compare: ## Compare current benchmarks against baseline
 # ============================================================================
 
 start: ## Start services with Docker Compose (default)
-	docker compose up -d --build
+	# P2-d (2026-04-27): export GIT_SHA + BUILD_TS for docker-compose build args
+	HFT_GIT_SHA=$$(git rev-parse HEAD 2>/dev/null || echo unknown) \
+		HFT_BUILD_TS=$$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+		docker compose up -d --build
 
 start-engine: ## Start HFT engine + core infra only — single runtime (no maintenance shell)
-	docker compose up -d --build clickhouse redis hft-engine wal-loader
+	HFT_GIT_SHA=$$(git rev-parse HEAD 2>/dev/null || echo unknown) \
+		HFT_BUILD_TS=$$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+		docker compose up -d --build clickhouse redis hft-engine wal-loader
 
 start-monitor: ## Start observability stack only
 	docker compose up -d prometheus grafana alertmanager node-exporter

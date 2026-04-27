@@ -75,6 +75,16 @@ FROM python:3.12-slim-bookworm
 
 WORKDIR /app
 
+# P2-d (2026-04-27): bake commit SHA + build timestamp into the image so the
+# startup banner can read them and Prometheus can expose
+# `hft_build_info{git_sha,build_ts}=1` for image-drift detection across
+# services. Use --build-arg from CI / Makefile / scripts/deploy.sh.
+ARG GIT_SHA=unknown
+ARG BUILD_TS=unknown
+ENV HFT_GIT_SHA=${GIT_SHA} \
+    HFT_BUILD_TS=${BUILD_TS}
+RUN echo "${GIT_SHA}" > /app/REVISION && echo "${BUILD_TS}" > /app/BUILD_TS
+
 # Create non-root user
 RUN groupadd -g 1000 hftuser && useradd -m -u 1000 -g hftuser hftuser
 

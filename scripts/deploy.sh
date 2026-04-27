@@ -30,6 +30,7 @@ REMOTE_DIR="${DEPLOY_ROOT:-/home/charl/subhft}"
 
 DRY_RUN=false
 ROLLBACK_SHA=""
+CONFIRM_LIVE=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -41,6 +42,15 @@ while [[ $# -gt 0 ]]; do
             ROLLBACK_SHA="${2:?'--rollback requires a git SHA argument'}"
             shift 2
             ;;
+        # P2-c (2026-04-27): operator must explicitly opt into LIVE deploys
+        # by passing --confirm-live AND having both HFT_MODE=live and
+        # HFT_ORDER_MODE=live in the env. Anything else (sim, paper, shadow)
+        # forcibly clears HFT_LIVE_CONFIRM so a stale value from a prior
+        # live deploy can never persist into a sim re-deploy.
+        --confirm-live)
+            CONFIRM_LIVE=true
+            shift
+            ;;
         -h|--help)
             head -14 "$0" | tail -13
             exit 0
@@ -51,6 +61,47 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# ── Live-deploy safety (P2-c) ────────────────────────────────────────────
+#
+# A previous incident left `HFT_LIVE_CONFIRM=yes-i-know` in the deploy env-file
+# from a prior live deploy. Re-deploying with HFT_MODE=sim happily picked up
+# the stale flag, leaving the system one config flip away from real-money mode.
+#
+# Policy:
+#   * If HFT_MODE=sim OR HFT_ORDER_MODE=sim OR HFT_ORDER_SHADOW_MODE=1:
+#     forcibly UNSET HFT_LIVE_CONFIRM in this script's env. (We can't reach
+#     into the remote .env file from here without ssh — we instead pass an
+#     explicit override to docker compose.)
+#   * If HFT_MODE=live AND HFT_ORDER_MODE=live: require --confirm-live AND
+#     interactively re-type a confirmation phrase. Without --confirm-live
+#     we abort.
+#
+_HFT_MODE="${HFT_MODE:-sim}"
+_HFT_ORDER_MODE="${HFT_ORDER_MODE:-sim}"
+_HFT_ORDER_SHADOW_MODE="${HFT_ORDER_SHADOW_MODE:-0}"
+
+if [[ "$_HFT_MODE" == "sim" ]] || [[ "$_HFT_ORDER_MODE" == "sim" ]] \
+        || [[ "$_HFT_ORDER_SHADOW_MODE" == "1" ]]; then
+    if [[ -n "${HFT_LIVE_CONFIRM:-}" ]]; then
+        echo "==> Non-live deploy detected (mode=${_HFT_MODE} order_mode=${_HFT_ORDER_MODE} shadow=${_HFT_ORDER_SHADOW_MODE});"
+        echo "    clearing stale HFT_LIVE_CONFIRM='${HFT_LIVE_CONFIRM}' before container bootstrap."
+    fi
+    unset HFT_LIVE_CONFIRM
+elif [[ "$_HFT_MODE" == "live" ]] && [[ "$_HFT_ORDER_MODE" == "live" ]]; then
+    if [[ "$CONFIRM_LIVE" != "true" ]]; then
+        echo "ERROR: HFT_MODE=live AND HFT_ORDER_MODE=live require --confirm-live flag." >&2
+        echo "       Refusing to deploy without explicit operator confirmation." >&2
+        exit 1
+    fi
+    echo "==> LIVE deploy requested. Type 'I AM DEPLOYING REAL MONEY' to proceed:"
+    read -r _confirm_phrase
+    if [[ "$_confirm_phrase" != "I AM DEPLOYING REAL MONEY" ]]; then
+        echo "ERROR: phrase mismatch — aborting LIVE deploy." >&2
+        exit 1
+    fi
+    echo "==> LIVE deploy confirmed by operator."
+fi
 
 # ── Resolve image name ───────────────────────────────────────────────────
 
@@ -82,8 +133,14 @@ IMAGE_TAG="${FULL_IMAGE}:${DEPLOY_SHA}"
 
 # ── Build ─────────────────────────────────────────────────────────────────
 
-echo "==> Building Docker image: ${IMAGE_TAG}"
-docker build -t "${IMAGE_TAG}" -t "${FULL_IMAGE}:latest" .
+# P2-d (2026-04-27): pass GIT_SHA + BUILD_TS as build-args so the runtime
+# image can render them in the startup banner / Prometheus build_info gauge.
+BUILD_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+echo "==> Building Docker image: ${IMAGE_TAG} (sha=${DEPLOY_SHA} ts=${BUILD_TS})"
+docker build \
+    --build-arg "GIT_SHA=${DEPLOY_SHA}" \
+    --build-arg "BUILD_TS=${BUILD_TS}" \
+    -t "${IMAGE_TAG}" -t "${FULL_IMAGE}:latest" .
 
 if [[ "$DRY_RUN" == "true" ]]; then
     echo "==> DRY RUN: Image built successfully. Skipping push and deploy."
