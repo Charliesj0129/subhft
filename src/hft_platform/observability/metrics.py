@@ -937,17 +937,35 @@ class MetricsRegistry:
             "Whether market open grace period is active (1=active, 0=inactive)",
         )
         # WAL directory monitoring (C5)
+        # NB: pre-P2-a these gauges only counted top-level *.jsonl files,
+        # ignoring archive/ (34k+ files, 3 GB) and dlq/. The legacy unlabeled
+        # gauges below are now set to the ACTIVE-tier subset for backward
+        # compatibility; new code should consume the tiered variants.
         self.wal_directory_size_bytes = Gauge(
             _pn("wal_directory_size_bytes"),
-            "Total size of WAL directory in bytes",
+            "Active-tier WAL directory size in bytes (legacy; use wal_directory_bytes for tiered)",
         )
         self.wal_file_count = Gauge(
             _pn("wal_file_count"),
-            "Number of pending WAL files",
+            "Active-tier WAL file count (legacy; use wal_file_count_tiered for tiered)",
         )
         self.wal_oldest_file_age_seconds = Gauge(
             _pn("wal_oldest_file_age_seconds"),
-            "Age of oldest WAL file in seconds",
+            "Age of oldest active-tier WAL file in seconds",
+        )
+        # P2-a (2026-04-27): tiered WAL gauges. Labels: tier=active|archive|dlq.
+        # Required because archive/ & dlq/ accumulated 3 GB unseen by the
+        # legacy non-recursive scan in _check_wal_accumulation.
+        self.wal_directory_bytes = Gauge(
+            _pn("wal_directory_bytes"),
+            "WAL directory size in bytes by tier (active=top-level *.jsonl, "
+            "archive=archive/, dlq=dlq/)",
+            ["tier"],
+        )
+        self.wal_file_count_tiered = Gauge(
+            _pn("wal_file_count_tiered"),
+            "WAL file count by tier (active=top-level, archive=archive/, dlq=dlq/)",
+            ["tier"],
         )
 
         # Phase 12 P2.2: Database & Market Data Optimizations
