@@ -1381,6 +1381,23 @@ class MetricsRegistry:
             "(routed via call_soon_threadsafe instead of direct put_nowait)",
             ["table"],
         )
+        # P1-a (2026-04-27): observability for audit ClickHouse persistence.
+        # Previously the audit_overflow_total metric was incremented inside
+        # AuditWriter under a try/except that silently swallowed AttributeError
+        # because no such metric was declared. Now declared here for real, plus
+        # a new audit_persist_failures_total to surface CH-write exceptions.
+        self.audit_overflow_total = Counter(
+            _pn("audit_overflow_total"),
+            "Audit events spilled into the secondary overflow deque "
+            "(primary asyncio.Queue was full at put_nowait time)",
+            ["table"],
+        )
+        self.audit_persist_failures_total = Counter(
+            _pn("audit_persist_failures_total"),
+            "Audit batch writes that raised an exception against ClickHouse "
+            "(payloads then fall through to the structlog audit_fallback path)",
+            ["table", "reason"],
+        )
         self.intent_queue_full_total = Counter(
             _pn("intent_queue_full_total"),
             "Intents dropped due to QueueFull in StrategyRunner submit loop",

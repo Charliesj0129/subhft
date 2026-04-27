@@ -185,14 +185,37 @@ class TestAuditWriterCrossThread:
                 f"expected {2 * N} rows enqueued, got {len(rows)}"
             )
 
-            # Every item must be a dict with the expected schema.
+            # P1-a (2026-04-27): _flush_batch now normalizes rows to canonical
+            # DDL schema before handing to the writer. Pre-flush rows (still in
+            # queue or overflow) keep their raw shape; post-flush rows (in
+            # ``sink.batches``) have extras moved into the JSON ``details``
+            # column. Resolve both forms to recover (src, i).
+            import json as _json
+
+            def _src_and_i(row: dict) -> tuple[str, int] | None:
+                if "src" in row and "i" in row:
+                    return row["src"], row["i"]
+                details_blob = row.get("details", "")
+                if not details_blob:
+                    return None
+                try:
+                    parsed = _json.loads(details_blob)
+                except (ValueError, TypeError):
+                    return None
+                if "src" in parsed and "i" in parsed:
+                    return parsed["src"], parsed["i"]
+                return None
+
             seen_loop: set[int] = set()
             seen_thread: set[int] = set()
             for row in rows:
-                if row["src"] == "loop":
-                    seen_loop.add(row["i"])
+                resolved = _src_and_i(row)
+                assert resolved is not None, f"row missing (src, i): {row!r}"
+                src, idx = resolved
+                if src == "loop":
+                    seen_loop.add(idx)
                 else:
-                    seen_thread.add(row["i"])
+                    seen_thread.add(idx)
 
             assert seen_loop == set(range(N))
             assert seen_thread == set(range(N))

@@ -42,6 +42,80 @@ _DEFAULT_OVERFLOW_SIZE = 50_000
 _DEFAULT_GUARDRAIL_OVERFLOW_SIZE = 100_000
 _GUARDRAIL_TABLE = "audit.guardrail_log"
 
+# P1-a (2026-04-27): canonical column schemas for each audit table.
+# Producers emit different optional fields per call site (e.g. AMEND uses
+# new_price, CANCEL uses target_key, dispatch_failed uses error). The
+# ClickHouse insert path (DataWriter._ch_insert) infers columns from the
+# first row of the batch and would otherwise silently drop fields present in
+# later rows. ``_normalize_row`` fills missing keys with type-appropriate
+# defaults so every batched row has the same shape, matching the DDL in
+# 20260427_001_audit_schema_alignment.sql.
+_AUDIT_SCHEMA_DEFAULTS: dict[str, dict[str, Any]] = {
+    "audit.orders_log": {
+        "ts_ns": 0,
+        "event": "",
+        "intent_type": "",
+        "order_key": "",
+        "target_key": "",
+        "symbol": "",
+        "side": "",
+        "price": 0,
+        "new_price": 0,
+        "qty": 0,
+        "strategy_id": "",
+        "cmd_id": 0,
+        "error": "",
+        "details": "",
+    },
+    "audit.risk_log": {
+        "ts_ns": 0,
+        "strategy_id": "",
+        "symbol": "",
+        "intent_type": 0,
+        "price": 0,
+        "qty": 0,
+        "approved": 0,
+        "reason_code": "",
+    },
+    "audit.guardrail_log": {
+        "ts_ns": 0,
+        "old_state": "",
+        "new_state": "",
+        "reason": "",
+    },
+}
+
+
+def _normalize_row(table: str, row: dict[str, Any]) -> dict[str, Any]:
+    """Return a row dict matching the canonical schema for ``table``.
+
+    Missing keys are filled with type-appropriate defaults; extra keys are
+    JSON-encoded into ``details`` (orders_log only — other tables drop them
+    to avoid schema drift). ``approved`` (bool→UInt8) is coerced if present.
+    """
+    schema = _AUDIT_SCHEMA_DEFAULTS.get(table)
+    if schema is None:
+        return row
+    out = dict(schema)
+    extras: dict[str, Any] = {}
+    for k, v in row.items():
+        if k in schema:
+            if k == "approved":
+                out[k] = 1 if bool(v) else 0
+            else:
+                out[k] = v
+        else:
+            extras[k] = v
+    if extras and "details" in schema:
+        try:
+            import json
+
+            out["details"] = json.dumps(extras, default=str, separators=(",", ":"))
+        except Exception:  # noqa: BLE001 — never crash the audit path on json
+            out["details"] = ""
+    return out
+
+
 # Bug #30: structlog method signature is `meth(event, *args, **kw)` plus a few
 # other reserved kwargs it injects. Splatting a row dict containing any of these
 # keys raises TypeError. Rename to `row_*` prefix in fallback path.
@@ -411,11 +485,30 @@ class AuditWriter:
                     await self._flush_batch(table_name, batch)
                     batch = []
 
-                # Drain overflow deque into main queue after flush frees space
+                # Drain overflow deque into main queue after flush frees space.
+                # P3-a2 (2026-04-27): self._queues[table_name] is typed
+                # ``Queue | None`` because stop() clears the queue ref. When
+                # _flush_loop runs concurrently with stop(), accessing
+                # ``.put_nowait`` on None would raise AttributeError. Treat
+                # that race as queue-closed and increment a labeled drop
+                # counter so we know about it instead of crashing the loop.
                 overflow = self._overflow[table_name]
                 while overflow:
+                    cur_queue = self._queues[table_name]
+                    if cur_queue is None:
+                        # Queue cleared mid-loop — abandon overflow drain;
+                        # _drain() will collect from overflow at shutdown.
+                        try:
+                            from hft_platform.observability.metrics import MetricsRegistry
+
+                            MetricsRegistry.get().audit_dropped_total.labels(
+                                table=table_name
+                            ).inc(len(overflow))
+                        except Exception:  # noqa: BLE001
+                            pass
+                        break
                     try:
-                        self._queues[table_name].put_nowait(overflow[0])
+                        cur_queue.put_nowait(overflow[0])
                         overflow.popleft()
                     except asyncio.QueueFull:
                         break
@@ -464,14 +557,33 @@ class AuditWriter:
             return
 
         if self._writer is not None:
+            # P1-a (2026-04-27): normalize rows to the canonical DDL schema
+            # before handing to the writer. Each producer call site emits a
+            # different subset of optional fields; without normalization the
+            # writer's "infer columns from first row" path silently drops
+            # fields present only in later rows. See _normalize_row docstring.
+            normalized = [_normalize_row(table_name, row) for row in batch]
             try:
-                await self._writer.write(table_name, batch)
+                await self._writer.write(table_name, normalized)
                 return
             except Exception as exc:
+                # P1-a: surface persistence failures via a labeled metric so
+                # ops dashboards can detect audit-write degradation without
+                # tailing structlog. ``reason`` keeps cardinality bounded by
+                # using the exception class name (not the full message).
+                try:
+                    from hft_platform.observability.metrics import MetricsRegistry
+
+                    MetricsRegistry.get().audit_persist_failures_total.labels(
+                        table=table_name, reason=type(exc).__name__
+                    ).inc()
+                except Exception:  # noqa: BLE001
+                    pass
                 logger.error(
                     "Audit ClickHouse write failed, falling back to structlog",
                     table=table_name,
                     error=str(exc),
+                    error_type=type(exc).__name__,
                     batch_size=len(batch),
                 )
 
@@ -496,6 +608,19 @@ class AuditWriter:
     def dropped_counts(self) -> dict[str, int]:
         """Return per-table drop counts for observability."""
         return dict(self._dropped)
+
+    def set_writer(self, writer: Any) -> None:
+        """Attach (or replace) the ClickHouse-bound writer after construction.
+
+        P1-a (2026-04-27): the singleton ``AuditWriter`` is created lazily on
+        the first ``log_*`` call (often from a daemon thread before the engine
+        loop is up — see P0-I3 in the module docstring). The recorder's
+        ``DataWriter`` only becomes available later in startup. ``set_writer``
+        lets ``services.system._run_internal`` attach the recorder writer once
+        both objects exist, so audit rows actually land in ClickHouse instead
+        of falling through to the structlog ``audit_fallback`` path.
+        """
+        self._writer = writer
 
 
 def get_audit_writer(
