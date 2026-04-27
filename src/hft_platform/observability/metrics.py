@@ -107,6 +107,7 @@ class MetricsRegistry:
                 _pn("lob_snapshots_total"),
                 _pn("feed_last_event_ts"),
                 _pn("feed_time_skew_ns"),
+                _pn("feed_time_skew_over_threshold_total"),
                 _pn("strategy_latency_ns"),
                 _pn("strategy_intents_total"),
                 _pn("risk_reject_total"),
@@ -435,8 +436,20 @@ class MetricsRegistry:
         )
         self.feed_time_skew_ns = Gauge(
             _pn("feed_time_skew_ns"),
-            "Feed time skew (local_ts - exch_ts) in ns",
+            "Feed time skew (local_ts - exch_ts) in ns — current observed delta after clamp",
             ["topic"],
+        )
+        # P2-b (2026-04-27): the gauge above used to stick at the worst-ever
+        # raw delta because it was only `set()` inside the over-threshold
+        # branch and was never reset. We now also `set()` it on every
+        # validated timestamp (current delta, post-clamp) so the gauge
+        # reflects "now", not "worst seen". The `_over_threshold` counter
+        # below is the durable record of how often we actually saw skews
+        # above the configured ceilings (1s / 10s / 60s).
+        self.feed_time_skew_over_threshold_total = Counter(
+            _pn("feed_time_skew_over_threshold_total"),
+            "Feed events with local_ts - exch_ts above a severity threshold",
+            ["topic", "severity"],  # severity: warn_1s | high_10s | critical_60s
         )
         self.shioaji_api_latency_ms = Histogram(
             _pn("shioaji_api_latency_ms"),

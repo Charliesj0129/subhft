@@ -612,26 +612,64 @@ class MarketDataNormalizer:
         """Clamp future exchange timestamps and sync/cap local_ts against exch_ts.
 
         Returns ``(exch_ts, local_ts)`` after all adjustments.
+
+        P2-b: The gauge ``feed_time_skew_ns`` previously only updated inside
+        the over-threshold branch, so it stuck at the worst raw delta ever
+        seen (a 7,997s value from a stale ts_epoch was observed in the
+        live signal). It now reflects the *current* delta on every event
+        (post-clamp), and a separate counter
+        ``feed_time_skew_over_threshold_total{topic, severity}`` records
+        how often we actually exceeded 1s / 10s / 60s — that is the
+        durable observability handle, not the gauge.
         """
+        raw_delta: int = 0
         if exch_ts:
             exch_ts = _clamp_future_ts(exch_ts, local_ts, topic, symbol)
             if local_ts < exch_ts:
                 local_ts = exch_ts
             else:
-                delta = local_ts - exch_ts
-                if _TS_MAX_LAG_NS and delta > _TS_MAX_LAG_NS:
+                raw_delta = local_ts - exch_ts
+                if _TS_MAX_LAG_NS and raw_delta > _TS_MAX_LAG_NS:
                     if _TS_SKEW_LOG_COOLDOWN_NS and (local_ts - self._last_skew_log_ns > _TS_SKEW_LOG_COOLDOWN_NS):
+                        # Live signal showed 3 distinct mis-epoched
+                        # contracts (EXFF6 ~3.95 days, TXFG6 ~33 min,
+                        # MXFF6 ~7.5s) all collapsing to the clamp ceiling
+                        # in the gauge, with no way to tell them apart.
+                        # Always include the broker code + raw / clamped
+                        # delta so the warning carries enough context to
+                        # triage the underlying ts_epoch problem.
                         logger.warning(
-                            "Feed time skew",
+                            "feed_time_skew",
                             topic=topic,
                             symbol=symbol,
-                            delta_ns=delta,
+                            raw_delta_ns=raw_delta,
+                            clamped_delta_ns=_TS_MAX_LAG_NS,
                             max_ns=_TS_MAX_LAG_NS,
                         )
                         self._last_skew_log_ns = local_ts
                     if self.metrics:
-                        self.metrics.feed_time_skew_ns.labels(topic=topic).set(delta)
+                        # Sample over-threshold events at three severities
+                        # so dashboards can alert on "any skew >1s" without
+                        # being drowned by routine sub-second jitter.
+                        if raw_delta > 60_000_000_000:
+                            self.metrics.feed_time_skew_over_threshold_total.labels(
+                                topic=topic, severity="critical_60s"
+                            ).inc()
+                        elif raw_delta > 10_000_000_000:
+                            self.metrics.feed_time_skew_over_threshold_total.labels(
+                                topic=topic, severity="high_10s"
+                            ).inc()
+                        else:
+                            self.metrics.feed_time_skew_over_threshold_total.labels(
+                                topic=topic, severity="warn_1s"
+                            ).inc()
                     local_ts = exch_ts + _TS_MAX_LAG_NS
+            # P2-b: gauge always reflects the current (post-clamp) delta
+            # so "feed_time_skew_ns" answers "right now, how skewed is this
+            # topic?" instead of "what is the worst delta ever seen?".
+            if self.metrics:
+                current_delta = local_ts - exch_ts
+                self.metrics.feed_time_skew_ns.labels(topic=topic).set(current_delta)
         return exch_ts, local_ts
 
     def _record_latency_metrics(self, exch_ts: int, local_ts: int, last_ts_attr: str) -> None:
