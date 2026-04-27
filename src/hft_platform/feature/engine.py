@@ -245,6 +245,7 @@ class FeatureEngine:
         "_ooo_drop_count",
         "_rust_fused_fallback_count",
         "_compute_values_none_count",
+        "_kernel_reset_failures_count",
         "_eviction_ttl_ns",
         "_eviction_last_run_ns",
         "_state_lock",
@@ -317,6 +318,7 @@ class FeatureEngine:
         self._ooo_drop_count: int = 0
         self._rust_fused_fallback_count: int = 0
         self._compute_values_none_count: int = 0
+        self._kernel_reset_failures_count: int = 0
         # Stale symbol eviction (mirrors LOBEngine.evict_stale_symbols)
         self._eviction_ttl_ns: int = int(float(os.getenv("HFT_FEATURE_EVICTION_TTL_S", "3600")) * 1_000_000_000)
         self._eviction_last_run_ns: int = 0
@@ -411,14 +413,42 @@ class FeatureEngine:
                 if callable(reset):
                     reset()
             except Exception as _exc:  # noqa: BLE001
-                pass
+                # P3-? (B110): A failed kernel reset would otherwise be silent
+                # and the next ``_compute_values_rust`` call could surface
+                # poisoned state. Surface via counter + log so operators can
+                # see kernel health degrading. Do not re-raise — the reset
+                # path runs on the hot path and crashing is worse than
+                # tolerating a stale kernel for one tick.
+                self._kernel_reset_failures_count += 1
+                if (
+                    self._kernel_reset_failures_count <= 3
+                    or self._kernel_reset_failures_count % 100 == 0
+                ):
+                    logger.warning(
+                        "feature_kernel_reset_failed",
+                        symbol=symbol,
+                        kernel="lob_feature_kernel_v1",
+                        error=str(_exc),
+                        total_failures=self._kernel_reset_failures_count,
+                    )
         if pipeline is not None:
             try:
                 reset = getattr(pipeline, "reset", None)
                 if callable(reset):
                     reset()
             except Exception as _exc:  # noqa: BLE001
-                pass
+                self._kernel_reset_failures_count += 1
+                if (
+                    self._kernel_reset_failures_count <= 3
+                    or self._kernel_reset_failures_count % 100 == 0
+                ):
+                    logger.warning(
+                        "feature_kernel_reset_failed",
+                        symbol=symbol,
+                        kernel="rust_feature_pipeline_v1",
+                        error=str(_exc),
+                        total_failures=self._kernel_reset_failures_count,
+                    )
 
     def mark_gap(self, symbol: str) -> None:
         """Mark the next feature update for *symbol* with QUALITY_FLAG_GAP.
