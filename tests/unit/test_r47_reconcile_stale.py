@@ -218,3 +218,42 @@ class TestReconcileStaleQuotesUnderGateBlock:
             f"D1: expected 2 cancels (both sides stale), got {len(cancels)}. "
             f"All intents: {[str(getattr(i,'intent_type','?')) for i in intents]}"
         )
+
+
+class TestReconcileStaleQuotesNoneGuard:
+    """P3-a1: defense-in-depth — `event.mid_price_x2` and `event.spread_scaled`
+    are typed `int | None`. Today on_stats guards before delegating but the
+    contract is brittle. The local guard inside `_reconcile_stale_quotes` and
+    `_generate_quotes` must short-circuit when either is None, so the function
+    never crashes if invoked with a partially-populated event."""
+
+    def test_reconcile_stale_quotes_returns_on_none_mid(self, strategy):
+        """`_reconcile_stale_quotes` must not raise on `mid_price_x2 is None`."""
+        ev = LOBStatsEvent(
+            symbol="TMFE6",
+            ts=0,
+            imbalance=0.0,
+            best_bid=0,
+            best_ask=0,
+            bid_depth=0,
+            ask_depth=0,
+            mid_price_x2=None,
+            spread_scaled=3_0000,
+        )
+        # Direct call: must not raise even when on_stats guard is bypassed.
+        strategy._reconcile_stale_quotes(ev)
+
+    def test_reconcile_stale_quotes_returns_on_none_spread(self, strategy):
+        """`_reconcile_stale_quotes` must not raise on `spread_scaled is None`."""
+        ev = LOBStatsEvent(
+            symbol="TMFE6",
+            ts=0,
+            imbalance=0.0,
+            best_bid=0,
+            best_ask=0,
+            bid_depth=0,
+            ask_depth=0,
+            mid_price_x2=3_7759_0000 * 2,
+            spread_scaled=None,
+        )
+        strategy._reconcile_stale_quotes(ev)

@@ -860,6 +860,14 @@ class R47MakerStrategy(SimpleMarketMaker):
         """
         if self._stale_quote_max_scaled <= 0:
             return
+        # P3-a1: defense-in-depth — `event.mid_price_x2` and `event.spread_scaled`
+        # are typed `int | None`. Today the only caller (`on_stats`) guards before
+        # delegating, but the signature would otherwise lie. Without this local
+        # guard, `event.mid_price_x2 // 2` would raise TypeError if a future
+        # caller forgets to pre-validate. (Same reason the spread-gate on_stats
+        # already early-returns on None.)
+        if event.mid_price_x2 is None or event.spread_scaled is None:
+            return
         exec_sym = self._exec_symbol(event.symbol)
         mid_scaled = event.mid_price_x2 // 2
         max_dist = self._stale_quote_max_scaled
@@ -927,6 +935,13 @@ class R47MakerStrategy(SimpleMarketMaker):
         now_ns = _now_ns()
         last_q = self._last_quote_ns.get(exec_sym, 0)
         if last_q > 0 and (now_ns - last_q) < self._QUOTE_COOLDOWN_NS:
+            return
+
+        # P3-a1: defense-in-depth — narrow `mid_price_x2`/`spread_scaled` from
+        # `int | None` to `int`. on_stats already guards, but mypy cannot see
+        # narrowing across calls; without this, mid * spread arithmetic below
+        # would raise TypeError in any future caller that skipped on_stats.
+        if event.mid_price_x2 is None or event.spread_scaled is None:
             return
 
         mfg = self._get_mfg(symbol)
