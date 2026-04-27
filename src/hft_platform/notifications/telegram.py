@@ -120,11 +120,24 @@ class TelegramSender:
         """Send a single <=4096-char message to the configured chat."""
         now = time.monotonic()
         if not critical and (now - self._last_send_ts) < self._rate_limit_s:
-            logger.debug(
+            # P3-b2 (2026-04-27): rate-limit drops were previously logged at
+            # DEBUG only AND silently merged with "send failed" via the bool
+            # return. Bump to INFO + dedicated metric so dashboards can
+            # distinguish "client-side throttled" from "downstream failure".
+            logger.info(
                 "telegram.rate_limited",
                 elapsed_s=round(now - self._last_send_ts, 3),
                 rate_limit_s=self._rate_limit_s,
+                critical=critical,
             )
+            try:
+                from hft_platform.observability.metrics import MetricsRegistry
+
+                MetricsRegistry.get().bot_rate_limited_total.labels(
+                    critical=str(critical).lower()
+                ).inc()
+            except Exception:  # noqa: BLE001
+                pass
             return False
 
         if aiohttp is None:  # pragma: no cover

@@ -1438,6 +1438,21 @@ class MetricsRegistry:
             "(non-critical sends within the rate-limit window)",
             ["critical"],
         )
+        # P2-d (2026-04-27): build_info gauge — labeled with git_sha and
+        # build_ts read from env (baked at image build time). Always set to 1
+        # so dashboards can detect drift across services / instances by
+        # `count by (git_sha) (hft_build_info) > 1`.
+        self.hft_build_info = Gauge(
+            _pn("build_info"),
+            "Build identity for this process (constant 1) — labels expose git_sha and build_ts",
+            ["git_sha", "build_ts"],
+        )
+        try:
+            _git_sha = os.environ.get("HFT_GIT_SHA", "unknown") or "unknown"
+            _build_ts = os.environ.get("HFT_BUILD_TS", "unknown") or "unknown"
+            self.hft_build_info.labels(git_sha=_git_sha, build_ts=_build_ts).set(1)
+        except Exception:  # noqa: BLE001
+            pass
         self.intent_queue_full_total = Counter(
             _pn("intent_queue_full_total"),
             "Intents dropped due to QueueFull in StrategyRunner submit loop",

@@ -1001,7 +1001,15 @@ class HFTSystem:
                     self.storm_guard.trigger_halt(f"KILL_SWITCH_FILE: {_ks_reason}")
                     logger.critical("Kill switch file detected", path=kill_switch_path, reason=_ks_reason)
 
-            # R11-C4: Telegram /stop emergency halt via Redis key
+            # R11-C4: Telegram /stop emergency halt via Redis key.
+            # P2-e (2026-04-27): the file-based kill-switch above (lines
+            # 991-1002) ALREADY runs every supervise tick regardless of
+            # Redis availability — it is the canonical emergency halt path.
+            # The Redis-key check here is a secondary signal for /stop bot
+            # commands. If Redis is unreachable the file check still runs
+            # next tick, so the previous "Redis unavailable — fall back to
+            # file-based kill switch" comment was misleading. Replace with a
+            # truthful description.
             _redis_halt = getattr(self, "_redis_client", None)
             if _redis_halt is not None and self.storm_guard.state != StormGuardState.HALT:
                 try:
@@ -1010,7 +1018,10 @@ class HFTSystem:
                         self.storm_guard.trigger_halt("TELEGRAM_EMERGENCY_HALT")
                         logger.critical("Telegram /stop emergency halt activated")
                 except Exception:
-                    pass  # Redis unavailable — fall back to file-based kill switch
+                    # Redis unavailable — kill-switch FILE check at lines
+                    # 991-1002 runs every tick and provides the always-on
+                    # halt path; nothing more to do here.
+                    pass
 
             t_gateway = self.tasks.get("exec_gateway")
             # Check Health for all critical services
