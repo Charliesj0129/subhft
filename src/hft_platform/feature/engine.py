@@ -244,6 +244,7 @@ class FeatureEngine:
         "_warmup_ready_symbols",
         "_ooo_drop_count",
         "_rust_fused_fallback_count",
+        "_compute_values_none_count",
         "_eviction_ttl_ns",
         "_eviction_last_run_ns",
         "_state_lock",
@@ -315,6 +316,7 @@ class FeatureEngine:
         self._warmup_ready_symbols: set[str] = set()
         self._ooo_drop_count: int = 0
         self._rust_fused_fallback_count: int = 0
+        self._compute_values_none_count: int = 0
         # Stale symbol eviction (mirrors LOBEngine.evict_stale_symbols)
         self._eviction_ttl_ns: int = int(float(os.getenv("HFT_FEATURE_EVICTION_TTL_S", "3600")) * 1_000_000_000)
         self._eviction_last_run_ns: int = 0
@@ -663,7 +665,24 @@ class FeatureEngine:
                 self.reset_symbol(symbol)
                 return None
         else:
-            values = self._compute_values(symbol, event, stats_resolved)
+            values_opt = self._compute_values(symbol, event, stats_resolved)
+            # P1-b: ``_compute_values`` returns ``None`` when a new symbol cannot
+            # be admitted (max-symbol cardinality, line ~762). Without this guard
+            # downstream code would feed ``None`` into ``math.isfinite`` and
+            # ``FeatureUpdateEvent``, raising ``TypeError`` on the hot path.
+            if values_opt is None:
+                self._compute_values_none_count += 1
+                if self._compute_values_none_count <= 3 or self._compute_values_none_count % 100 == 0:
+                    logger.warning(
+                        "feature_compute_values_none",
+                        symbol=symbol,
+                        kernel_backend=self._kernel_backend,
+                        max_symbols=self._max_symbols,
+                        kernel_states=len(self._lob_kernel_states),
+                        total_none=self._compute_values_none_count,
+                    )
+                return None
+            values = values_opt
             # NaN/Inf contamination guard — reset kernel state if detected
             ks = self._lob_kernel_states.get(symbol)
             if ks is not None and ks.has_nan():
@@ -1127,7 +1146,11 @@ class FeatureEngine:
 
     def _compute_values_rust(
         self, symbol: str, event: object | None, stats: LOBStatsEvent | _StatsTupleProxy
-    ) -> tuple[int, ...]:
+    ) -> tuple[int, ...] | None:
+        # P1-b: Return type widened to ``| None`` so the rust→python fallback
+        # below correctly forwards a cardinality-rejected ``None`` instead of
+        # claiming a non-None tuple. Caller (``_compute_values``) already
+        # handles None.
         if _RUST_LOB_FEATURE_KERNEL_V1 is None:
             # Safety fallback in case runtime extension is unavailable.
             self._kernel_backend = "python"
