@@ -77,9 +77,14 @@ def test_credential_scrubber_passthrough_non_string_values():
 
 
 def test_credential_scrubber_existing_key_masking_still_works():
+    """Mask string updated from `***` to `***REDACTED***` in P0-b 2026-04-27.
+
+    Reason: explicit per-spec mask token aids log search ("show me every
+    redaction in the last hour: `grep '***REDACTED***'`")."""
     event_dict = {"api_key": "secret-value-123", "user": "alice"}
     out = credential_scrubber(None, "info", event_dict)
-    assert out["api_key"] == "***"
+    assert out["api_key"] == "***REDACTED***"
+    assert "secret-value-123" not in str(out)
     assert out["user"] == "alice"
 
 

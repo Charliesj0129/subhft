@@ -950,17 +950,35 @@ class MetricsRegistry:
             "Whether market open grace period is active (1=active, 0=inactive)",
         )
         # WAL directory monitoring (C5)
+        # NB: pre-P2-a these gauges only counted top-level *.jsonl files,
+        # ignoring archive/ (34k+ files, 3 GB) and dlq/. The legacy unlabeled
+        # gauges below are now set to the ACTIVE-tier subset for backward
+        # compatibility; new code should consume the tiered variants.
         self.wal_directory_size_bytes = Gauge(
             _pn("wal_directory_size_bytes"),
-            "Total size of WAL directory in bytes",
+            "Active-tier WAL directory size in bytes (legacy; use wal_directory_bytes for tiered)",
         )
         self.wal_file_count = Gauge(
             _pn("wal_file_count"),
-            "Number of pending WAL files",
+            "Active-tier WAL file count (legacy; use wal_file_count_tiered for tiered)",
         )
         self.wal_oldest_file_age_seconds = Gauge(
             _pn("wal_oldest_file_age_seconds"),
-            "Age of oldest WAL file in seconds",
+            "Age of oldest active-tier WAL file in seconds",
+        )
+        # P2-a (2026-04-27): tiered WAL gauges. Labels: tier=active|archive|dlq.
+        # Required because archive/ & dlq/ accumulated 3 GB unseen by the
+        # legacy non-recursive scan in _check_wal_accumulation.
+        self.wal_directory_bytes = Gauge(
+            _pn("wal_directory_bytes"),
+            "WAL directory size in bytes by tier (active=top-level *.jsonl, "
+            "archive=archive/, dlq=dlq/)",
+            ["tier"],
+        )
+        self.wal_file_count_tiered = Gauge(
+            _pn("wal_file_count_tiered"),
+            "WAL file count by tier (active=top-level, archive=archive/, dlq=dlq/)",
+            ["tier"],
         )
 
         # Phase 12 P2.2: Database & Market Data Optimizations
@@ -1394,6 +1412,60 @@ class MetricsRegistry:
             "(routed via call_soon_threadsafe instead of direct put_nowait)",
             ["table"],
         )
+        # P1-a (2026-04-27): observability for audit ClickHouse persistence.
+        # Previously the audit_overflow_total metric was incremented inside
+        # AuditWriter under a try/except that silently swallowed AttributeError
+        # because no such metric was declared. Now declared here for real, plus
+        # a new audit_persist_failures_total to surface CH-write exceptions.
+        self.audit_overflow_total = Counter(
+            _pn("audit_overflow_total"),
+            "Audit events spilled into the secondary overflow deque "
+            "(primary asyncio.Queue was full at put_nowait time)",
+            ["table"],
+        )
+        self.audit_persist_failures_total = Counter(
+            _pn("audit_persist_failures_total"),
+            "Audit batch writes that raised an exception against ClickHouse "
+            "(payloads then fall through to the structlog audit_fallback path)",
+            ["table", "reason"],
+        )
+        # P1-c (2026-04-27): hft-bot was dead 8.7 days because a `httpx.ConnectError`
+        # (or similar) escaped a handler with no error handler registered.
+        # Counter is labeled by exception class so dashboards can distinguish
+        # transient network errors from logic bugs.
+        self.bot_handler_errors_total = Counter(
+            _pn("bot_handler_errors_total"),
+            "Telegram bot handler exceptions caught by the error handler "
+            "(would have crashed the polling loop pre-P1-c)",
+            ["exception"],
+        )
+        self.bot_dead_data_alerts_total = Counter(
+            _pn("bot_dead_data_alerts_total"),
+            "Consecutive-empty-attempt threshold breaches in the bot scheduler "
+            "(N pushes in a row returned no_data for every configured symbol)",
+            ["session"],
+        )
+        self.bot_rate_limited_total = Counter(
+            _pn("bot_rate_limited_total"),
+            "TelegramSender messages skipped due to client-side rate limit "
+            "(non-critical sends within the rate-limit window)",
+            ["critical"],
+        )
+        # P2-d (2026-04-27): build_info gauge — labeled with git_sha and
+        # build_ts read from env (baked at image build time). Always set to 1
+        # so dashboards can detect drift across services / instances by
+        # `count by (git_sha) (hft_build_info) > 1`.
+        self.hft_build_info = Gauge(
+            _pn("build_info"),
+            "Build identity for this process (constant 1) — labels expose git_sha and build_ts",
+            ["git_sha", "build_ts"],
+        )
+        try:
+            _git_sha = os.environ.get("HFT_GIT_SHA", "unknown") or "unknown"
+            _build_ts = os.environ.get("HFT_BUILD_TS", "unknown") or "unknown"
+            self.hft_build_info.labels(git_sha=_git_sha, build_ts=_build_ts).set(1)
+        except Exception:  # noqa: BLE001
+            pass
         self.intent_queue_full_total = Counter(
             _pn("intent_queue_full_total"),
             "Intents dropped due to QueueFull in StrategyRunner submit loop",

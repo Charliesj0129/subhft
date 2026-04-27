@@ -17,7 +17,7 @@ from hft_platform.ops.evidence import get_shared_autonomy_evidence_writer
 from hft_platform.ops.platform_degrade import get_shared_platform_degrade_controller
 from hft_platform.risk.storm_guard import StormGuardState
 from hft_platform.services.bootstrap import SystemBootstrapper
-from hft_platform.services.heartbeat import write_heartbeat
+from hft_platform.services.heartbeat import DEFAULT_HEARTBEAT_PATH, write_heartbeat
 from hft_platform.utils.logging import configure_logging
 
 logger = get_logger("system")
@@ -439,19 +439,25 @@ class HFTSystem:
                 from hft_platform.recorder.audit import get_audit_writer
 
                 self._audit_writer = get_audit_writer()
+                # P1-a (2026-04-27): wire the recorder's DataWriter so audit
+                # rows actually land in ClickHouse. Previously this call was
+                # `get_audit_writer()` with no writer arg; AuditWriter._writer
+                # stayed None and every batch fell through to the structlog
+                # ``audit_fallback`` log path (Bug #19), leaving audit.*
+                # tables empty.
+                #
+                # Companion fix: 20260427_001_audit_schema_alignment.sql
+                # rewrites the DDL to match producer payloads — without that
+                # migration this wiring would just trade silent fallback for
+                # noisy CH write errors.
+                _recorder_writer = getattr(self.recorder, "writer", None)
+                if _recorder_writer is not None and hasattr(self._audit_writer, "set_writer"):
+                    self._audit_writer.set_writer(_recorder_writer)
                 await self._audit_writer.start()
-                # Bug #19: get_audit_writer() is invoked here without a CH
-                # writer adapter, so every batch falls through to the
-                # structlog `audit_fallback` path. That's the *current*
-                # design — log aggregation captures it — but it means
-                # `audit.orders_log`, `audit.risk_log`, `audit.guardrail_log`
-                # are NOT populated in ClickHouse. Surface that fact loudly
-                # at startup so operators know the audit-trail story before
-                # they try to query the tables. Proper CH wiring needs a
-                # per-table schema mapper (see audit producer dicts vs
-                # 20260301_001_initial_schema.sql column lists) — out of
-                # scope for this fix.
                 if getattr(self._audit_writer, "_writer", None) is None:
+                    # Recorder writer was unavailable at start time (rare —
+                    # implies recorder failed to construct). Keep the warning
+                    # so operators still see the degraded mode.
                     logger.warning(
                         "audit_writer_persistence_mode_structlog",
                         message=(
@@ -461,7 +467,11 @@ class HFTSystem:
                         ),
                     )
                 else:
-                    logger.info("AuditWriter started", persistence="clickhouse")
+                    logger.info(
+                        "audit_writer_started",
+                        persistence="clickhouse",
+                        writer_type=type(_recorder_writer).__name__,
+                    )
                 # Inject audit writer into OrderAdapter for order lifecycle logging
                 if hasattr(self.order_adapter, "set_audit_writer"):
                     self.order_adapter.set_audit_writer(self._audit_writer)
@@ -851,7 +861,7 @@ class HFTSystem:
         loop = asyncio.get_running_loop()
         interval_s = 1.0
         last_tick = loop.time()
-        _heartbeat_path = os.getenv("HFT_HEARTBEAT_PATH", "/tmp/hft-heartbeat")
+        _heartbeat_path = os.getenv("HFT_HEARTBEAT_PATH", DEFAULT_HEARTBEAT_PATH)
         _heartbeat_interval_ticks = int(os.getenv("HFT_HEARTBEAT_INTERVAL_S", "30"))
         _heartbeat_tick = 0
 
@@ -991,7 +1001,15 @@ class HFTSystem:
                     self.storm_guard.trigger_halt(f"KILL_SWITCH_FILE: {_ks_reason}")
                     logger.critical("Kill switch file detected", path=kill_switch_path, reason=_ks_reason)
 
-            # R11-C4: Telegram /stop emergency halt via Redis key
+            # R11-C4: Telegram /stop emergency halt via Redis key.
+            # P2-e (2026-04-27): the file-based kill-switch above (lines
+            # 991-1002) ALREADY runs every supervise tick regardless of
+            # Redis availability — it is the canonical emergency halt path.
+            # The Redis-key check here is a secondary signal for /stop bot
+            # commands. If Redis is unreachable the file check still runs
+            # next tick, so the previous "Redis unavailable — fall back to
+            # file-based kill switch" comment was misleading. Replace with a
+            # truthful description.
             _redis_halt = getattr(self, "_redis_client", None)
             if _redis_halt is not None and self.storm_guard.state != StormGuardState.HALT:
                 try:
@@ -1000,7 +1018,10 @@ class HFTSystem:
                         self.storm_guard.trigger_halt("TELEGRAM_EMERGENCY_HALT")
                         logger.critical("Telegram /stop emergency halt activated")
                 except Exception:
-                    pass  # Redis unavailable — fall back to file-based kill switch
+                    # Redis unavailable — kill-switch FILE check at lines
+                    # 991-1002 runs every tick and provides the always-on
+                    # halt path; nothing more to do here.
+                    pass
 
             t_gateway = self.tasks.get("exec_gateway")
             # Check Health for all critical services

@@ -60,6 +60,13 @@ def _compute_yaml_hash(yaml_paths: list[str]) -> str:
 
 
 def _get_git_sha() -> str:
+    # P2-d (2026-04-27): prefer the build-time env var baked by Dockerfile
+    # via --build-arg GIT_SHA. The container runtime has no .git directory,
+    # so the subprocess fallback below would always return "unknown".
+    env_sha = os.environ.get("HFT_GIT_SHA", "").strip()
+    if env_sha and env_sha != "unknown":
+        # Match the abbreviated form returned by `git rev-parse --short`.
+        return env_sha[:7]
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
