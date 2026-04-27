@@ -1,0 +1,129 @@
+alpha_id: r52_amhp_dynamic_spread
+name: "AMHP Dynamic-Spread Maker (TMFD6)"
+version: "0.1.0"
+status: prototype
+owner: charlie
+strategy_type: maker
+instrument: TMFD6
+round_id: R52
+candidate_id: C1
+run_label: "alpha-research-20260425-hawkes-amhp"
+
+instruments:
+  - TMFD6
+
+paper_refs:
+  - "AMHP-2024"          # User-supplied "六、AMHP" + "七、應用場景"
+  - "1105.3115"           # Gueant-Lehalle-Tapia inventory risk
+  - "2403.02572"          # Lokin-Yu fill probabilities
+
+# --- Latency / cost realism ---
+latency_profile: "v2026-04-24_measured"
+latency_profile_detail:
+  submit_p95_ms: 395
+  modify_p95_ms: 395
+  cancel_p95_ms: 59
+  asymmetry_note: "cancel 6.7x faster than submit; structurally favors dynamic re-quote"
+
+cost_model:
+  rt_cost_pts: 4               # TMF retail RT (40 NTD); cited from feedback_taifex_fee_structure.md
+  rt_cost_ntd: 40
+  per_side_cost_pts: 2
+  point_value_ntd: 10           # TMFD6
+  cost_drag_pct: 100            # bright-line WARN (T2 §H2) — mitigated by L1 hard floor
+
+# --- Data window for T5 backtest ---
+backtest_window:
+  start_date: "2026-01-27"
+  end_date: "2026-03-26"
+  days: 31
+  symbol: TMFD6
+  source: "ClickHouse hft.market_data (CK direct ground truth — not power-prob queue model)"
+
+# --- AMHP Layer-2 signals ---
+signals:
+  amhp_rho_hat:
+    description: "Aggregate branching ratio sum over multi-scale Hawkes (ms/min/hr)"
+    output_range: "[0.0, ~1.0)"
+    critical_threshold: 0.85    # AMHP §6.4 criticality alarm
+    pass_band_per_day: "1-4%"   # K5 kill flag
+
+  amhp_iir:
+    description: "Intensity-imbalance ratio (lambda_buy - lambda_sell)/(lambda_buy + lambda_sell)"
+    output_range: "[-1.0, +1.0]"
+
+  amhp_rho_per_scale:
+    description: "Per-scale ρ_k (ms/min/hr) for K4 multi-scale ACF check"
+
+# --- Layer-1 spread modulator parameters ---
+parameters:
+  base_spread_pts: 5            # HARD floor — never narrow below
+  alpha_rho: 1.6                # multiplier coefficient on (rho_hat - rho_low)
+  alpha_iir: 0.9                # multiplier coefficient on |IIR|
+  rho_low: 0.55                 # multiplier inactive below
+  rho_tense: 0.75
+  rho_critical: 0.85            # AMHP §6.4 criticality alarm
+  iir_tense: 0.45
+  iir_critical: 0.70
+  mult_cap: 3.0                 # spread multiplier upper bound (critical regime)
+  asym_R: 1.5                   # alpha_sell_sell / alpha_buy_buy panic-sell prior
+  max_pos: 3                    # R47 structural property — V-shape recovery
+  beta_ms: 6.93                 # ln(2)/0.10 s
+  beta_min: 0.01155             # ln(2)/60 s
+  beta_hr: 0.0001925             # ln(2)/3600 s
+
+# --- Day-level covariate coefficients (load-bearing T2 flag #1 — must fit in T5) ---
+covariate_coefficients:
+  gamma_lob: 0.0                # LOB imbalance z (intraday — collapses to per-quote per DA T2 §S6)
+  gamma_dist: 0.0               # distance-to-daily-limit z (intraday — collapses to per-quote)
+  gamma_io: 0.0                 # foreign-IO daily z-score (LOAD-BEARING — K2)
+  gamma_us: 0.0                 # US overnight return ±30 min open (LOAD-BEARING — K2)
+  fit_method: "OLS on daily aggregated trade arrivals (placeholder; T5 fits via 31d MLE)"
+
+# --- T2 pre-registered conditional kill flags (instrument every flag in T5) ---
+kill_flags:
+  K1_q_d_day_distribution:
+    metric: "max_day_pct ≤ 25% AND winning_days ≥ 5"
+    rationale: "R47-A1 single-day-dominance pathology must not recur (96.9% from one day in A1)"
+  K2_covariate_significance:
+    metric: "gamma_io and gamma_us 95% CIs both exclude zero"
+    rationale: "Diffusion mechanism rests on day-level covariates per DA T2 §S6"
+  K3_modulator_per_fill_gain:
+    metric: ">= 1.75 pt/fill above R47 baseline"
+    rationale: "H1 floor of 8 pt requires AMHP gain at upper-band priors (T1 §3 §10)"
+  K4_multiscale_acf:
+    metric: "min_acf and hr_acf effect sizes non-trivial vs ms_acf"
+    rationale: "If trade ACF flat at min/hr lags, C1 collapses to vanilla Hawkes C6"
+  K5_rho_critical_frequency:
+    metric: "rho_hat > 0.85 frequency in 1–4% of trading minutes"
+    rationale: "Outside band → C1 modulator misspecified for TMFD6 microstructure"
+
+# --- A1-tightened survivor criteria (per shared-context.yaml lines 100-107) ---
+a1_tightened_criteria:
+  max_day_pct_of_total_pnl: 25
+  min_winning_days: 5
+  jackknife_sign_flip_forbidden: true
+  bootstrap_ci_must_exclude_zero: true
+  min_distinct_fill_days: 5
+  profile_conditionality_caveat_required: true
+
+# --- Platform integration ---
+platform_integration:
+  feature_set_version: "lob_shared_v3"
+  fe_slots_needed: 5            # rho_hat, IIR, rho_ms, rho_min, rho_hr (or compute in-strategy)
+  fe_slot_strategy: "in_strategy"  # Compute inside strategy (no FE schema bump)
+  config_keys:
+    - "strategies.r52_amhp_dynamic_spread.alpha_rho"
+    - "strategies.r52_amhp_dynamic_spread.alpha_iir"
+    - "strategies.r52_amhp_dynamic_spread.rho_critical"
+    - "strategies.r52_amhp_dynamic_spread.gamma_io"
+    - "strategies.r52_amhp_dynamic_spread.gamma_us"
+  risk_limits:
+    max_pos: 3
+    stop_loss_pts: null
+    halt_exempt: false
+
+# --- Provenance ---
+t1_artifact: "docs/alpha-research/round-1-hawkes-amhp/artifacts/t1_researcher_c1.md"
+t2_artifact: "docs/alpha-research/round-1-hawkes-amhp/artifacts/t2_devils_advocate_c1.md"
+da_verdict: "APPROVE-CONDITIONAL — T1=0 FAIL, T2=0 FAIL, 1 bright-line WARN (cost-drag 100%), 1 S6 WARN (γ_io/γ_us load-bearing)"
