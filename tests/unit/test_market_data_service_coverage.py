@@ -689,16 +689,47 @@ def test_symbol_enters_active_set_after_baseline_events():
     assert "TMFE6" not in svc._ever_active_symbols
     assert svc._event_counts.get("TMFE6", 0) == baseline - 1
 
-    # Baseline-crossing event: enters the set.
+    # Baseline-crossing event: enters the set and the per-symbol counter
+    # is reclaimed (no further hot-path counter ops once latched).
     svc._update_symbol_tick_inline(event)
     assert "TMFE6" in svc._ever_active_symbols
-    assert svc._event_counts["TMFE6"] == baseline
+    assert "TMFE6" not in svc._event_counts
 
-    # Subsequent events: still in set (idempotent).
+    # Subsequent events: still in set (idempotent) and the counter must
+    # remain reclaimed — the hot path skips counter ops after latch to
+    # honour the Allocator Law (no per-event int allocations forever).
     for _ in range(10):
         svc._update_symbol_tick_inline(event)
     assert "TMFE6" in svc._ever_active_symbols
-    assert svc._event_counts["TMFE6"] == baseline + 10
+    assert "TMFE6" not in svc._event_counts
+
+
+def test_event_counter_reclaimed_after_latch():
+    """Hot-path Allocator Law: once a symbol joins the latched set, the
+    per-symbol counter must be removed so subsequent events do NOT
+    allocate a fresh ``int`` object every tick.  Pre-fix behaviour
+    incremented the counter forever and dominated GC pressure under the
+    800-symbol universe (commit ``2568912a``).
+    """
+    svc, *_ = _make_service()
+
+    event = SimpleNamespace(symbol="TMFE6")
+    baseline = svc._ACTIVE_BASELINE_EVENT_COUNT
+
+    # Cross the baseline.
+    for _ in range(baseline):
+        svc._update_symbol_tick_inline(event)
+    assert "TMFE6" in svc._ever_active_symbols
+    # Counter slot reclaimed on the latch event.
+    assert "TMFE6" not in svc._event_counts
+
+    # 1000 further events: the counter slot must remain absent.  This is
+    # the regression we want to pin: under the old design ``_event_counts``
+    # would now hold ``baseline + 1000`` and a new int object had been
+    # allocated for every increment.
+    for _ in range(1000):
+        svc._update_symbol_tick_inline(event)
+    assert "TMFE6" not in svc._event_counts
 
 
 def test_active_set_latches_across_silence():

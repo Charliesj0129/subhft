@@ -976,14 +976,19 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         symbol = getattr(event, "symbol", None)
         if not symbol:
             return
-        # Track lifetime event count and latch the symbol into the
-        # ``_ever_active_symbols`` set on the baseline-crossing event.
-        # The ``count == K`` check (rather than ``count >= K``) avoids
-        # repeated set churn on every subsequent event after latch.
-        count = self._event_counts.get(symbol, 0) + 1
-        self._event_counts[symbol] = count
-        if count == self._ACTIVE_BASELINE_EVENT_COUNT:
-            self._ever_active_symbols.add(symbol)
+        # Track lifetime event count only until the symbol joins the
+        # latched ``_ever_active_symbols`` set.  After latch the counter
+        # is reclaimed and subsequent events skip the counter ops
+        # entirely — this keeps the hot path Allocator-Law-compliant
+        # (no fresh ``int`` object allocated per event for symbols that
+        # have already qualified).
+        if symbol not in self._ever_active_symbols:
+            count = self._event_counts.get(symbol, 0) + 1
+            if count >= self._ACTIVE_BASELINE_EVENT_COUNT:
+                self._ever_active_symbols.add(symbol)
+                self._event_counts.pop(symbol, None)
+            else:
+                self._event_counts[symbol] = count
         if self._symbol_tick_inline:
             self._symbol_last_tick[symbol] = time.monotonic()
         else:
