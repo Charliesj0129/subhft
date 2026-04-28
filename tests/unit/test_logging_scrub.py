@@ -125,3 +125,31 @@ def test_scrubber_redacts_token_in_list_of_dicts() -> None:
     )
     assert out["items"][0]["bot_token"] == _MASK
     assert out["items"][1]["safe"] == "ok"
+
+
+def test_scrubber_handles_non_str_keys_in_nested_dict() -> None:
+    """Regression: nested dicts may carry int / tuple keys (e.g. metric labels
+    keyed by port number, ts_ns, or (account, strategy) tuples). The scrubber
+    must skip the key-pattern check for non-str keys instead of crashing on
+    `key.lower()`. Live incident 2026-04-28: `quote_connection_pool.py:306`
+    bootstrap log carried a nested dict with int keys, crashing hft-engine
+    on startup with AttributeError: 'int' object has no attribute 'lower'."""
+    out = credential_scrubber(
+        None,
+        "info",
+        {"event": "pool_init", "by_port": {6001: "ok", 6002: "ok"}},
+    )
+    assert out["by_port"] == {6001: "ok", 6002: "ok"}
+
+
+def test_scrubber_still_scrubs_str_values_under_non_str_keys() -> None:
+    """Even when the KEY is non-str, the VALUE-string regex must still run so
+    a Telegram-token-shaped string under int/tuple keys is redacted."""
+    out = credential_scrubber(
+        None,
+        "info",
+        {"items": {1: _FAKE_TELEGRAM_TOKEN, 2: "safe"}},
+    )
+    assert _FAKE_TELEGRAM_TOKEN not in out["items"][1]
+    assert _TELEGRAM_TOKEN_MASK in out["items"][1]
+    assert out["items"][2] == "safe"

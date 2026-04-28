@@ -50,11 +50,13 @@ def _scrub_value_str(v: str) -> str:
     return v
 
 
-def _scrub_mapping(d: MutableMapping[str, Any]) -> MutableMapping[str, Any]:
+def _scrub_mapping(d: MutableMapping[Any, Any]) -> MutableMapping[Any, Any]:
     """Apply key-name + value-string scrubbing to a single mapping level,
-    recursing into nested dict / list values."""
+    recursing into nested dict / list values. Non-str keys (e.g. int, tuple
+    in metric labels) are skipped for the key-pattern check but their values
+    are still recursed into."""
     for key in list(d):
-        if any(p in key.lower() for p in _SENSITIVE_PATTERNS):
+        if isinstance(key, str) and any(p in key.lower() for p in _SENSITIVE_PATTERNS):
             d[key] = _MASK
             continue
         v = d[key]
