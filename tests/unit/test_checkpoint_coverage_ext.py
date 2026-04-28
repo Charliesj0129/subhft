@@ -87,17 +87,42 @@ class TestWriteCheckpointAtomicFailure:
         assert len(tmp_files) == 0
 
     def test_cleanup_on_write_failure(self, tmp_path):
-        """When os.write fails, the temp file should be cleaned up."""
+        """When the buffered ``f.write`` fails, the temp file should be cleaned up.
+
+        After the 2026-04-28 fix-fd-race refactor, write_checkpoint uses
+        ``with os.fdopen(fd, "wb") as f: f.write(...)`` instead of raw
+        ``os.write(fd, ...)``. We patch ``os.fdopen`` to return a context
+        manager whose ``write`` raises so the failure path is exercised.
+        """
         ckpt_path = str(tmp_path / "ckpt.json")
         store = _make_store(positions={"acc:strat:S": {"symbol": "S", "net_qty": 1}})
         writer = PositionCheckpointWriter(store, path=ckpt_path, interval_s=60)
 
-        original_write = os.write
+        real_fdopen = os.fdopen
 
-        def failing_write(fd, data):
-            raise OSError("write failed")
+        def failing_fdopen(fd, mode, *args, **kwargs):
+            real_file = real_fdopen(fd, mode, *args, **kwargs)
 
-        with patch("os.write", side_effect=failing_write):
+            class FailingFile:
+                def __enter__(self_inner):
+                    return self_inner
+
+                def __exit__(self_inner, exc_type, exc, tb):
+                    real_file.close()
+                    return False
+
+                def write(self_inner, data):
+                    raise OSError("write failed")
+
+                def flush(self_inner):
+                    return None
+
+                def fileno(self_inner):
+                    return real_file.fileno()
+
+            return FailingFile()
+
+        with patch("hft_platform.execution.checkpoint.os.fdopen", side_effect=failing_fdopen):
             with pytest.raises(OSError, match="write failed"):
                 writer.write_checkpoint()
 

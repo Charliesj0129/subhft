@@ -10,7 +10,6 @@ import pytest
 
 from hft_platform.execution.checkpoint import (
     PositionCheckpointWriter,
-    _is_closed,
     _taifex_trading_date,
 )
 
@@ -228,25 +227,6 @@ class TestClearCheckpoint:
         # Should not raise; just verifies it resolves a path
         result = PositionCheckpointWriter.clear_checkpoint(None)
         assert isinstance(result, bool)
-
-
-# ---------------------------------------------------------------------------
-# _is_closed helper
-# ---------------------------------------------------------------------------
-
-
-class TestIsClosed:
-    def test_open_fd_returns_false(self, tmp_path):
-        f = open(tmp_path / "test.txt", "w")
-        fd = f.fileno()
-        assert _is_closed(fd) is False
-        f.close()
-
-    def test_closed_fd_returns_true(self, tmp_path):
-        f = open(tmp_path / "test.txt", "w")
-        fd = f.fileno()
-        f.close()
-        assert _is_closed(fd) is True
 
 
 # ---------------------------------------------------------------------------
