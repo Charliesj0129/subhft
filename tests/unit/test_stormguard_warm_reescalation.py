@@ -35,7 +35,20 @@ class _StubDetector:
         self._burst = burst
 
 
-def _make_sg(cooldown_s: float = 300.0, de_n: int = 1, warm_cd: float = 300.0) -> tuple[StormGuard, _StubDetector]:
+def _make_sg(
+    cooldown_s: float = 300.0,
+    de_n: int = 1,
+    warm_cd: float = 300.0,
+    warm_cooldown_s: float = 0.0,
+) -> tuple[StormGuard, _StubDetector]:
+    """Create a StormGuard for re-escalation tests.
+
+    P4 (2026-04-28): ``warm_cooldown_s`` defaults to 0.0 here because these
+    tests focus on **re-escalation** suppression after WARM->NORMAL — the
+    de-escalation timing itself is exercised by
+    ``test_stormguard_warm_cooldown.py``. Setting WARM cooldown to 0 lets
+    these tests still de-escalate via the ``de_n`` threshold alone.
+    """
     detector = _StubDetector(score=0.0)
     with patch.dict(
         os.environ,
@@ -43,6 +56,7 @@ def _make_sg(cooldown_s: float = 300.0, de_n: int = 1, warm_cd: float = 300.0) -
             "HFT_STORMGUARD_STORM_COOLDOWN_S": str(cooldown_s),
             "HFT_STORMGUARD_DE_ESCALATE_N": str(de_n),
             "HFT_STORMGUARD_WARM_REESCALATION_COOLDOWN_S": str(warm_cd),
+            "HFT_STORMGUARD_WARM_COOLDOWN_S": str(warm_cooldown_s),
         },
     ):
         sg = StormGuard(thresholds=RiskThresholds(), drift_burst_detector=detector)

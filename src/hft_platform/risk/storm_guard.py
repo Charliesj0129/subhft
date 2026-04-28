@@ -45,6 +45,22 @@ class StormGuard:
         "_storm_cooldown_s",
         "_halt_cooldown_s",
         "_halt_entry_ts",
+        # P4 (2026-04-28): WARM de-escalation cooldown. Previously the
+        # ``cooldown_ok`` branch in ``update()`` fell through to ``True`` for
+        # WARM, so WARM->NORMAL was gated only by ``_de_escalate_threshold``
+        # consecutive clears (~5s at 1Hz update cadence). Production logs on
+        # 2026-04-28 showed three EXFE6 NORMAL<->WARM flap cycles with WARM
+        # durations of ~5s, despite the de-escalation log line claiming
+        # ``cooldown_s=30.0``. This pair of slots adds explicit WARM cooldown.
+        "_warm_entry_ts",
+        "_warm_cooldown_s",
+        # P4 (2026-04-28): toxicity hysteresis band. ``update_with_lob`` enters
+        # WARM at toxicity>``_warm_toxicity_entry`` (default 0.5) but, while
+        # already in WARM, re-arms ``_warm_entry_ts`` while toxicity stays
+        # above ``_warm_toxicity_exit`` (default 0.4). Combined with
+        # ``_warm_cooldown_s`` this prevents borderline-toxicity oscillation.
+        "_warm_toxicity_entry",
+        "_warm_toxicity_exit",
         "_de_escalate_threshold",
         "_on_halt_callback",
         "_drift_burst_detector",
@@ -98,6 +114,19 @@ class StormGuard:
         self._storm_cooldown_s: float = float(os.getenv("HFT_STORMGUARD_STORM_COOLDOWN_S", "30"))  # precision-time
         self._halt_cooldown_s: float = float(os.getenv("HFT_STORMGUARD_HALT_COOLDOWN_S", "60"))  # precision-time
         self._halt_entry_ts: float = 0.0  # precision-time
+        # P4 (2026-04-28): WARM cooldown — see __slots__ comment for context.
+        # Default 30s mirrors the storm cooldown so the misleading legacy log
+        # message ("cooldown_s=30.0") becomes truthful for WARM by default.
+        self._warm_entry_ts: float = 0.0  # precision-time
+        self._warm_cooldown_s: float = float(os.getenv("HFT_STORMGUARD_WARM_COOLDOWN_S", "30"))  # precision-time
+        # P4 (2026-04-28): toxicity hysteresis band — entry strictly above
+        # ``_warm_toxicity_entry`` (default 0.5), exit only when toxicity
+        # falls strictly below ``_warm_toxicity_exit`` (default 0.4) AND the
+        # WARM cooldown elapses. Both knobs are floats: toxicity is a
+        # research metric, not money/quantity (see "alpha float exception"
+        # in 25-architecture-governance.md §11), so float is acceptable here.
+        self._warm_toxicity_entry: float = float(os.getenv("HFT_STORMGUARD_WARM_TOXICITY_ENTRY", "0.5"))
+        self._warm_toxicity_exit: float = float(os.getenv("HFT_STORMGUARD_WARM_TOXICITY_EXIT", "0.4"))
         self._de_escalate_threshold: int = int(os.getenv("HFT_STORMGUARD_DE_ESCALATE_N", "5"))
         self._on_halt_callback = on_halt_callback
         self._drift_burst_detector = drift_burst_detector
@@ -304,6 +333,13 @@ class StormGuard:
                 else:
                     # Escalation: always instant (safety-first)
                     self._de_escalate_count = 0
+                    # P4 (2026-04-28): record WARM entry timestamp on the
+                    # NORMAL->WARM (or any-lower->WARM) boundary so de-escalation
+                    # can enforce ``_warm_cooldown_s``. Previously this slot
+                    # did not exist and WARM->NORMAL fired after only the
+                    # ``_de_escalate_threshold`` clears (~5s at 1Hz cadence).
+                    if new_state >= StormGuardState.WARM and self.state < StormGuardState.WARM:
+                        self._warm_entry_ts = now
                     if new_state >= StormGuardState.STORM and self.state < StormGuardState.STORM:
                         self._storm_entry_ts = now
                     if new_state == StormGuardState.HALT:
@@ -322,12 +358,31 @@ class StormGuard:
                     )
                     current_state = self.state
                     return current_state
-                # De-escalation from any elevated state requires cooldown + N consecutive clears
+                # De-escalation from any elevated state requires cooldown + N consecutive clears.
+                # P4 (2026-04-28): WARM now has its own cooldown gate. Previously the
+                # WARM branch fell through to ``cooldown_ok = True`` so de-escalation was
+                # gated only by ``_de_escalate_threshold`` consecutive clears (~5s at 1Hz),
+                # while the legacy log line printed ``cooldown_s=30.0`` — misleading
+                # operators into believing 30s cooldown was enforced when it was not.
                 if self.state == StormGuardState.HALT:
+                    cooldown_s_for_log = self._halt_cooldown_s
                     cooldown_ok = (now - self._halt_entry_ts) >= self._halt_cooldown_s
                 elif self.state >= StormGuardState.STORM:
+                    cooldown_s_for_log = self._storm_cooldown_s
                     cooldown_ok = (now - self._storm_entry_ts) >= self._storm_cooldown_s
+                elif self.state >= StormGuardState.WARM:
+                    cooldown_s_for_log = self._warm_cooldown_s
+                    # If ``_warm_entry_ts`` is 0.0 (never set, e.g. legacy state
+                    # restored before P4), treat as immediate cooldown elapsed
+                    # to preserve original behaviour rather than locking WARM
+                    # forever; new WARM entries always set the timestamp so
+                    # this only matters during the upgrade window.
+                    cooldown_ok = (
+                        self._warm_entry_ts == 0.0
+                        or (now - self._warm_entry_ts) >= self._warm_cooldown_s
+                    )
                 else:
+                    cooldown_s_for_log = 0.0
                     cooldown_ok = True
 
                 if cooldown_ok:
@@ -342,16 +397,18 @@ class StormGuard:
                         # Record WARM→lower de-escalation for drift-burst re-escalation cooldown
                         if old_for_log == StormGuardState.WARM and new_state < StormGuardState.WARM:
                             self._warm_deescalation_ts = now
-                        # Reset storm entry timestamp so next STORM gets fresh cooldown
+                        # Reset entry timestamps so the next escalation gets a fresh cooldown.
                         self._storm_entry_ts = 0.0
+                        # P4: also reset WARM entry timestamp; mirrors the
+                        # storm reset and prevents stale comparisons when
+                        # state subsequently re-enters WARM.
+                        self._warm_entry_ts = 0.0
                         _, fire_callback = self._transition(new_state, "Recovery")
                         logger.info(
                             "StormGuard de-escalated after hysteresis",
                             from_state=old_for_log.name,
                             to_state=new_state.name,
-                            cooldown_s=self._halt_cooldown_s
-                            if old_for_log == StormGuardState.HALT
-                            else self._storm_cooldown_s,
+                            cooldown_s=cooldown_s_for_log,
                             threshold=self._de_escalate_threshold,
                         )
                 else:
@@ -417,27 +474,60 @@ class StormGuard:
 
         result = detector.evaluate(mid_price_x2, spread_scaled, imbalance, ts)
 
-        # Determine escalation target from toxicity signal
-        # Only escalate, never de-escalate (additive safety)
+        # Determine escalation target from toxicity signal.
+        # Only escalate, never de-escalate (additive safety).
+        # P4 (2026-04-28): WARM entry uses ``_warm_toxicity_entry`` (default
+        # 0.5); when already in WARM the hold band runs from
+        # ``_warm_toxicity_exit`` (default 0.4) up to the entry threshold.
+        # Toxicity scores in the hold band do not initiate a new WARM but
+        # also do not let an existing WARM die — they re-arm
+        # ``_warm_entry_ts`` so update()'s de-escalation cannot fire while
+        # toxicity remains elevated. Production 2026-04-28 flap saw scores
+        # of 0.503/0.509/0.514 hovering just above 0.5 — the band rules out
+        # the oscillation.
+        target: StormGuardState | None
+        reason = ""
         if result.burst_detected and result.toxicity_score > 0.9:
             target = StormGuardState.HALT
             reason = f"DriftBurst HALT: toxicity={result.toxicity_score:.3f}"
         elif result.toxicity_score > 0.8:
             target = StormGuardState.STORM
             reason = f"DriftBurst STORM: toxicity={result.toxicity_score:.3f}"
-        elif result.toxicity_score > 0.5:
+        elif result.toxicity_score > self._warm_toxicity_entry:
             target = StormGuardState.WARM
             reason = f"DriftBurst WARM: toxicity={result.toxicity_score:.3f}"
+        elif (
+            self.state == StormGuardState.WARM
+            and result.toxicity_score > self._warm_toxicity_exit
+        ):
+            # Hold-band: not high enough to (re-)enter WARM but high enough
+            # to keep an existing WARM alive. ``target = None`` skips the
+            # escalation branches and lands in the hold-band re-arm below.
+            target = None
         else:
             return self.state
 
         # Only escalate — never de-escalate from drift burst
         fire_callback = False
         with self._state_lock:
+            now = time.monotonic()
+            if target is None:
+                # P4: hysteresis hold-band re-arm. Re-set ``_warm_entry_ts``
+                # so update()'s de-escalation does not fire WARM->NORMAL
+                # while toxicity is still above the exit threshold. This
+                # only applies while currently in WARM (guarded by the
+                # outer elif above).
+                if self.state == StormGuardState.WARM:
+                    self._warm_entry_ts = now
+                current_state = self.state
+                # P1 fix: flush metrics + audit outside _state_lock.
+                # We don't transition here, so no pending entries — but
+                # call is a no-op when empty.
+                self._emit_pending_transition()
+                return current_state
             # WARM re-escalation cooldown: suppress if we recently de-escalated
             # from WARM. Prevents 58/58 flip-flop when toxicity oscillates near
             # the 0.5 boundary. Higher states (STORM/HALT) bypass this guard.
-            now = time.monotonic()
             if (
                 target == StormGuardState.WARM
                 and self.state < StormGuardState.WARM
@@ -447,6 +537,12 @@ class StormGuard:
                 return self.state
             if target > self.state:
                 self._de_escalate_count = 0
+                # P4 (2026-04-28): mirror update()'s WARM-entry timestamp so
+                # WARM cooldown is enforced regardless of which entry path
+                # (drawdown/latency/feed-gap via update() vs. drift-burst
+                # toxicity via update_with_lob()) raised the alarm.
+                if target >= StormGuardState.WARM and self.state < StormGuardState.WARM:
+                    self._warm_entry_ts = now
                 if target >= StormGuardState.STORM and self.state < StormGuardState.STORM:
                     self._storm_entry_ts = now
                 if target == StormGuardState.HALT:
@@ -459,6 +555,14 @@ class StormGuard:
                     toxicity_score=f"{result.toxicity_score:.3f}",
                     burst_detected=result.burst_detected,
                 )
+            elif (
+                target == StormGuardState.WARM
+                and self.state == StormGuardState.WARM
+            ):
+                # P4: already in WARM and toxicity still above ENTRY
+                # threshold — pin ``_warm_entry_ts`` so de-escalation does
+                # not fire while the alarm itself is still active.
+                self._warm_entry_ts = now
 
             current_state = self.state
 
