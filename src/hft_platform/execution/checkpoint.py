@@ -175,31 +175,42 @@ class PositionCheckpointWriter:
         if parent:
             os.makedirs(parent, exist_ok=True)
 
-        # Atomic write: write to temp then rename
+        # Atomic write: write to temp then rename.
+        #
+        # Bug e1967c0c (2026-04-25) regressed this path by introducing a
+        # raw ``os.close(fd)`` followed by a ``finally``-block ``_is_closed``
+        # probe + second ``os.close(fd)``. Between the two ``close`` calls
+        # the kernel reused the freed fd integer for the WAL batch-timer
+        # daemon thread's brand-new ``tempfile.mkstemp`` fd, and the
+        # second ``os.close`` ripped that fd out from under the WAL
+        # writer — surfacing as ``[Errno 9] Bad file descriptor`` on its
+        # next ``write/flush/fsync``. Switching to ``with os.fdopen(fd, "wb")``
+        # mirrors the 7 sibling sites (``fill_dlq``, ``gateway/dedup``,
+        # ``router``, ``canary``, ``recorder/_loader_*``) and guarantees fd
+        # ownership transfers cleanly to the file object: it is closed
+        # exactly once, on both the success and exception paths.
         fd, tmp_path = tempfile.mkstemp(
             dir=parent or ".",
             prefix=".ckpt_",
             suffix=".tmp",
         )
-        # M2 (2026-04-25): switch from ``except: cleanup; raise`` to ``finally``
-        # so orphan ``.ckpt_*.tmp`` files are removed even on SIGKILL or
-        # interpreter-shutdown paths that bypass exception handlers.
         try:
-            os.write(fd, final_bytes)
-            os.fsync(fd)
-            os.close(fd)
+            with os.fdopen(fd, "wb") as f:
+                f.write(final_bytes)
+                f.flush()
+                # Durability: fsync MUST happen before close+rename so the
+                # data is on stable storage prior to the atomic rename.
+                os.fsync(f.fileno())
             os.rename(tmp_path, self._path)  # type: ignore[arg-type]
-        finally:
-            if not _is_closed(fd):
-                try:
-                    os.close(fd)
-                except OSError:
-                    pass
+        except BaseException:
+            # ``with`` already closed the fd. Only the temp path may still
+            # be on disk if rename failed or the write/fsync raised.
             if os.path.exists(tmp_path):
                 try:
                     os.unlink(tmp_path)
                 except OSError:
                     pass
+            raise
 
         logger.info(
             "checkpoint_written",
@@ -287,12 +298,3 @@ class PositionCheckpointWriter:
             return True
         logger.info("checkpoint_clear_no_file", path=resolved_path)
         return False
-
-
-def _is_closed(fd: int) -> bool:
-    """Check if a file descriptor is already closed."""
-    try:
-        os.fstat(fd)
-        return False
-    except OSError:
-        return True
