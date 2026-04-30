@@ -28,3 +28,13 @@ def test_node_exporter_compose_service_matches_scrape_target() -> None:
     node_exporter = services["node-exporter"]
     assert node_exporter["pid"] == "host"
     assert node_exporter.get("network_mode") != "host"
+
+
+def test_node_exporter_production_overlay_shares_prometheus_network() -> None:
+    production_config = _load_yaml("docker-compose.production.yml")
+    services = production_config["services"]
+
+    assert "prometheus" in services
+    assert "node-exporter" in services
+    assert "hft-internal" in services["prometheus"]["networks"]
+    assert "hft-internal" in services["node-exporter"]["networks"]

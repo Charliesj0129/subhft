@@ -81,6 +81,8 @@ services:
   node-exporter:
     <<: *security-common
     read_only: true
+    networks:
+      - hft-internal
 
   prometheus:
     <<: *security-common
