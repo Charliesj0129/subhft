@@ -14,6 +14,7 @@ from hft_platform.core.pricing import PriceCodec
 from hft_platform.core.session_hooks import SessionHookManager
 from hft_platform.observability.health import HealthServer
 from hft_platform.ops.evidence import get_shared_autonomy_evidence_writer
+from hft_platform.ops.manual_rearm import ManualRearmGate
 from hft_platform.ops.platform_degrade import get_shared_platform_degrade_controller
 from hft_platform.risk.storm_guard import StormGuardState
 from hft_platform.services.bootstrap import SystemBootstrapper
@@ -206,6 +207,8 @@ class HFTSystem:
         self.platform_degrade_controller = (
             getattr(self.registry, "platform_degrade_controller", None) or get_shared_platform_degrade_controller()
         )
+        self.manual_rearm_gate = ManualRearmGate()
+        self._last_platform_rearm_request_seen = 0.0
         self.platform_degrade_inputs = getattr(
             self.registry, "platform_degrade_inputs", None
         ) or self.bootstrapper.build_platform_degrade_inputs(
@@ -836,6 +839,7 @@ class HFTSystem:
         self._task_started_at[name] = timebase.now_s()
 
     def _update_platform_degrade_state(self) -> None:
+        self._consume_platform_rearm_request()
         controller = getattr(self, "platform_degrade_controller", None)
         inputs = getattr(self, "platform_degrade_inputs", None)
         if controller is None or inputs is None:
@@ -847,6 +851,35 @@ class HFTSystem:
             current_reasons=reasons,
             now_ns=timebase.now_ns(),
         )
+
+    def _consume_platform_rearm_request(self) -> None:
+        gate = getattr(self, "manual_rearm_gate", None)
+        controller = getattr(self, "platform_degrade_controller", None)
+        if gate is None or controller is None:
+            return
+        try:
+            state = gate.snapshot()
+        except Exception as exc:
+            logger.warning("manual_rearm_state_read_failed", error=str(exc))
+            return
+
+        platform = state.get("platform")
+        if not isinstance(platform, dict):
+            return
+        try:
+            requested_at = float(platform.get("rearm_requested_at") or 0.0)
+        except (TypeError, ValueError):
+            requested_at = 0.0
+
+        last_seen = float(getattr(self, "_last_platform_rearm_request_seen", 0.0))
+        if requested_at <= last_seen:
+            return
+        self._last_platform_rearm_request_seen = requested_at
+
+        if bool(platform.get("manual_rearm_required")):
+            return
+        if getattr(controller, "reduce_only_active", False):
+            controller.force_clear(reason="manual_rearm_gate")
 
     async def _supervise(self):
         """

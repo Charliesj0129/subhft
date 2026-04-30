@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from hft_platform.core import timebase
+
 DEFAULT_RUNTIME_STATE_PATH = Path("outputs/production_rollout/autonomy/runtime_state.json")
 
 
@@ -39,6 +41,7 @@ class ManualRearmGate:
         platform_state = self._platform_section(state)
         platform_state["manual_rearm_required"] = False
         platform_state["reason"] = None
+        platform_state["rearm_requested_at"] = timebase.now_s()
         self._write_state(state)
 
         # Best-effort: bridge the live controller.  We import lazily to

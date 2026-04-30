@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+from unittest import mock
+
 from hft_platform.contracts.strategy import IntentType
+from hft_platform.ops.manual_rearm import ManualRearmGate
 from hft_platform.ops.platform_degrade import (
     _AUTO_RECOVERABLE_REASONS,
     PlatformDegradeController,
     get_shared_platform_degrade_controller,
     reset_shared_platform_degrade_controller,
 )
+from hft_platform.services.system import HFTSystem
 
 
 class TestShadowModeBypass:
@@ -331,3 +335,46 @@ class TestManualRearmGateBridge:
         gate.rearm_platform()  # must not raise
         snapshot = gate.snapshot()
         assert snapshot["platform"]["manual_rearm_required"] is False
+
+
+class TestHFTSystemManualRearmRequest:
+    def test_system_consumes_platform_rearm_request_once(self, tmp_path):
+        state_path = tmp_path / "runtime_state.json"
+        state_path.write_text(
+            (
+                '{"platform":{"manual_rearm_required":false,'
+                '"reason":null,"rearm_requested_at":123},"strategies":{}}'
+            ),
+            encoding="utf-8",
+        )
+        system = object.__new__(HFTSystem)
+        system._last_platform_rearm_request_seen = 0.0
+        system.manual_rearm_gate = ManualRearmGate(state_path=state_path)
+        system.platform_degrade_controller = mock.Mock()
+        system.platform_degrade_controller.reduce_only_active = True
+
+        system._consume_platform_rearm_request()
+        system._consume_platform_rearm_request()
+
+        system.platform_degrade_controller.force_clear.assert_called_once_with(reason="manual_rearm_gate")
+        assert system._last_platform_rearm_request_seen == 123.0
+
+    def test_system_does_not_force_clear_when_manual_rearm_still_required(self, tmp_path):
+        state_path = tmp_path / "runtime_state.json"
+        state_path.write_text(
+            (
+                '{"platform":{"manual_rearm_required":true,'
+                '"reason":"clickhouse_unhealthy","rearm_requested_at":123},"strategies":{}}'
+            ),
+            encoding="utf-8",
+        )
+        system = object.__new__(HFTSystem)
+        system._last_platform_rearm_request_seen = 0.0
+        system.manual_rearm_gate = ManualRearmGate(state_path=state_path)
+        system.platform_degrade_controller = mock.Mock()
+        system.platform_degrade_controller.reduce_only_active = True
+
+        system._consume_platform_rearm_request()
+
+        system.platform_degrade_controller.force_clear.assert_not_called()
+        assert system._last_platform_rearm_request_seen == 123.0

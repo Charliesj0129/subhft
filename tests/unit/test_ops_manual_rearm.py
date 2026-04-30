@@ -221,6 +221,25 @@ class TestRearmPlatform:
         assert reloaded["platform"]["manual_rearm_required"] is False
         assert reloaded["platform"]["reason"] is None
 
+    def test_rearm_platform_writes_rearm_request_marker(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        path = tmp_path / "state.json"
+        _write_state(
+            path,
+            {
+                "platform": {"manual_rearm_required": True, "reason": "clickhouse_unhealthy"},
+                "strategies": {},
+            },
+        )
+        monkeypatch.setattr("hft_platform.ops.manual_rearm.timebase.now_s", lambda: 123.5)
+
+        gate = ManualRearmGate(state_path=path)
+        gate.rearm_platform()
+
+        reloaded = json.loads(path.read_text(encoding="utf-8"))
+        assert reloaded["platform"]["manual_rearm_required"] is False
+        assert reloaded["platform"]["reason"] is None
+        assert reloaded["platform"]["rearm_requested_at"] == 123.5
+
     def test_rearm_platform_when_already_false(self, tmp_path: Path) -> None:
         path = tmp_path / "state.json"
         _write_state(
