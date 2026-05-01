@@ -60,6 +60,12 @@ jobs:
       - name: HFT discipline enforcement
         run: make discipline
 
+      - name: Alpha latency profile audit (Gate D)
+        # Block PRs that add a promotion/validation scorecard without a
+        # latency profile reference or that fall outside Gate D 80% tolerance.
+        # Passes silently when no scorecards exist.
+        run: make latency-audit
+
       - name: Detect float in financial paths
         run: |
           FOUND=$(grep -rnE ':\s*float\b|float\(' \

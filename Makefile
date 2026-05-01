@@ -267,6 +267,9 @@ security-audit: ## Dependency security scan with pip-audit fallback to pip check
 		uv run python -m pip check | tee -a audit-output.txt; \
 	fi
 
+latency-audit: ## Validate alpha scorecards declare latency profile + pass Gate D 80% tolerance
+	uv run python -m hft_platform.alpha.latency_audit --strict
+
 # ============================================================================
 # Failure Simulation / Drill Targets
 # ============================================================================
