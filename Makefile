@@ -205,7 +205,7 @@ clean-all: clean clean-rust ## Clean everything
 
 ci: format-check lint typecheck dependency-boundary test-hygiene-check coverage ## Run full CI pipeline locally
 
-.PHONY: test-unit-ci coverage-branch-gate coverage-markdown test-integration-ci test-clickhouse-writer-smoke
+.PHONY: test-unit-ci coverage-branch-gate coverage-domain coverage-markdown test-integration-ci test-clickhouse-writer-smoke
 .PHONY: perf-gate-default perf-gate-recorder-io perf-gate-risk-heavy perf-gate-feature-rust
 .PHONY: benchmark-ci benchmark-darwin-gate drill-gateway-wal-hardening
 .PHONY: research-feature-benchmark-matrix render-research-promotion-report security-audit
@@ -216,6 +216,9 @@ test-unit-ci: ## Run unit tests in CI mode and emit coverage.xml
 
 coverage-branch-gate: ## Enforce minimum coverage threshold from latest unit-test run
 	uv run coverage report --fail-under=70
+
+coverage-domain: ## Enforce per-package coverage floors (risk/order/execution/gateway/recorder/alpha)
+	uv run python scripts/check_coverage_domains.py coverage.xml
 
 coverage-markdown: ## Print coverage summary in markdown-friendly text
 	uv run coverage report

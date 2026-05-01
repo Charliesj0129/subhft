@@ -306,6 +306,12 @@ jobs:
       - name: Check branch coverage
         run: make coverage-branch-gate
 
+      - name: Check domain coverage floors
+        # Per-package floors above the global 70% baseline for
+        # money-touching domains (risk/order/execution/gateway/recorder/alpha).
+        # Source: scripts/check_coverage_domains.py
+        run: make coverage-domain
+
       - name: Upload coverage to GitHub Summary
         if: always()
         run: |
