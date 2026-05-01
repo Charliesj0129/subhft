@@ -24,9 +24,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-SYSTEM_SRC = (
-    Path(__file__).resolve().parents[2] / "src" / "hft_platform" / "services" / "system.py"
-)
+SYSTEM_SRC = Path(__file__).resolve().parents[2] / "src" / "hft_platform" / "services" / "system.py"
 
 
 def test_recover_precedes_exec_router_start():

@@ -413,6 +413,7 @@ class ExecutionRouter:
                                 # broker's actual fill count (today: 70 vs 106).
                                 if self._recorder_queue is not None and self._symbol_metadata is not None:
                                     from hft_platform.recorder.mapper import map_event_to_record  # noqa: PLC0415
+
                                     _orphan_mapped = map_event_to_record(
                                         fill_event, self._symbol_metadata, self._price_codec
                                     )
@@ -588,6 +589,7 @@ class ExecutionRouter:
                                 # Bug #32-B: persist to CH before continuing (same as main loop).
                                 if self._recorder_queue is not None and self._symbol_metadata is not None:
                                     from hft_platform.recorder.mapper import map_event_to_record  # noqa: PLC0415
+
                                     _sd_mapped = map_event_to_record(
                                         fill_event, self._symbol_metadata, self._price_codec
                                     )

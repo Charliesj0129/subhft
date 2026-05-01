@@ -569,6 +569,7 @@ class TestMiscSetters:
         runner.set_storm_guard(sg)
         assert runner._storm_guard is sg
 
+
 # P2 (2026-04-25): ``set_publish_sink`` removed — the runner never propagated
 # the sink to per-strategy ``StrategyContext`` instances, so the wired sink
 # was never invoked in production. Bootstrap no longer wires it. The test

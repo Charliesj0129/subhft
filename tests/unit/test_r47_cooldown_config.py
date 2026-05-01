@@ -19,6 +19,7 @@ import pytest
 @pytest.fixture()
 def strategy_cls():
     from hft_platform.strategies.r47_maker import R47MakerStrategy
+
     return R47MakerStrategy
 
 
@@ -28,21 +29,18 @@ class TestQuoteCooldownConfigurable:
         # Shioaji P95 RTT ~800ms — default must cover it.
         assert s._QUOTE_COOLDOWN_NS == 1_000_000_000, (
             f"D2: default quote cooldown must be 1000 ms to exceed Shioaji RTT; "
-            f"got {s._QUOTE_COOLDOWN_NS} ns (= {s._QUOTE_COOLDOWN_NS/1_000_000} ms)"
+            f"got {s._QUOTE_COOLDOWN_NS} ns (= {s._QUOTE_COOLDOWN_NS / 1_000_000} ms)"
         )
 
     def test_explicit_cooldown_respected(self, strategy_cls):
-        s = strategy_cls(strategy_id="r47_test", spread_threshold_pts=5, max_pos=1,
-                         quote_cooldown_ms=500)
+        s = strategy_cls(strategy_id="r47_test", spread_threshold_pts=5, max_pos=1, quote_cooldown_ms=500)
         assert s._QUOTE_COOLDOWN_NS == 500_000_000
 
     def test_zero_cooldown_disables(self, strategy_cls):
-        s = strategy_cls(strategy_id="r47_test", spread_threshold_pts=5, max_pos=1,
-                         quote_cooldown_ms=0)
+        s = strategy_cls(strategy_id="r47_test", spread_threshold_pts=5, max_pos=1, quote_cooldown_ms=0)
         assert s._QUOTE_COOLDOWN_NS == 0
 
     def test_high_cooldown_accepted(self, strategy_cls):
         # Operator tune-up for congested conditions (e.g. 5 s).
-        s = strategy_cls(strategy_id="r47_test", spread_threshold_pts=5, max_pos=1,
-                         quote_cooldown_ms=5000)
+        s = strategy_cls(strategy_id="r47_test", spread_threshold_pts=5, max_pos=1, quote_cooldown_ms=5000)
         assert s._QUOTE_COOLDOWN_NS == 5_000_000_000

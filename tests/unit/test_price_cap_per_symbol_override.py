@@ -87,8 +87,7 @@ def test_yaml_declares_per_symbol_override(config_path: Path, symbol: str) -> No
     defaults = cfg.get("global_defaults") or {}
     key = f"max_price_cap_{symbol}"
     assert key in defaults, (
-        f"{config_path.relative_to(REPO_ROOT)}: missing {key!r} — "
-        f"per-symbol override required for rollover safety."
+        f"{config_path.relative_to(REPO_ROOT)}: missing {key!r} — per-symbol override required for rollover safety."
     )
     # Sanity: the override must be high enough to admit a TAIEX-sized price
     # (~40,400 NTD raw). 50000.0 is the minimum safe value; we recommend
@@ -110,9 +109,7 @@ def test_validator_admits_real_taiex_price_with_override() -> None:
             "max_price_cap_TMFE6": 500000.0,
         }
     }
-    validator = PriceBandValidator(
-        cfg, price_scale_provider=_provider_with_broken_metadata()
-    )
+    validator = PriceBandValidator(cfg, price_scale_provider=_provider_with_broken_metadata())
 
     # TAIEX ~40,400 pts × 10,000 = 404_000_000 scaled — real prod price.
     ok, reason = validator.check(_intent("TMFE6", price=404_000_000))
@@ -129,9 +126,7 @@ def test_validator_without_override_rejects_due_to_global_fallback() -> None:
             # No TMFE6 override -> falls back to global 5000.
         }
     }
-    validator = PriceBandValidator(
-        cfg, price_scale_provider=_provider_with_broken_metadata()
-    )
+    validator = PriceBandValidator(cfg, price_scale_provider=_provider_with_broken_metadata())
 
     ok, reason = validator.check(_intent("TMFE6", price=404_000_000))
 

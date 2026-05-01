@@ -105,6 +105,7 @@ def test_warm_reescalation_allowed_after_cooldown():
     assert sg.state == StormGuardState.NORMAL
 
     import time
+
     time.sleep(0.02)
 
     det.set(score=0.53)
@@ -133,6 +134,8 @@ def test_symbol_forwarded_to_log():
     det.set(score=0.6)
     with patch("hft_platform.risk.storm_guard.logger") as mock_logger:
         sg.update_with_lob(mid_price_x2=1000, spread_scaled=10, symbol="TMFE6")
-    info_calls = [c for c in mock_logger.info.call_args_list if c.args and c.args[0] == "StormGuard drift_burst escalation"]
+    info_calls = [
+        c for c in mock_logger.info.call_args_list if c.args and c.args[0] == "StormGuard drift_burst escalation"
+    ]
     assert info_calls, "drift_burst escalation log should fire"
     assert info_calls[0].kwargs.get("symbol") == "TMFE6"

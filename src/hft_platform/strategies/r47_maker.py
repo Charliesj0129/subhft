@@ -462,6 +462,7 @@ class R47MakerStrategy(SimpleMarketMaker):
         self._metric_inflight_oids = None
         try:
             from hft_platform.observability.metrics import MetricsRegistry as _MR
+
             m = _MR.get()
             self._metric_stale_cancels = getattr(m, "strategy_stale_cancels_total", None)
             self._metric_inflight_oids = getattr(m, "strategy_inflight_oids", None)

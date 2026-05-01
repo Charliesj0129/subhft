@@ -99,9 +99,7 @@ def test_warm_does_not_deescalate_before_cooldown_elapses():
     # cooldown gate keeps state at WARM.
     for _ in range(5):
         state = sg.update(latency_us=0)
-    assert state == StormGuardState.WARM, (
-        "WARM must hold while _warm_cooldown_s has not elapsed (production bug)"
-    )
+    assert state == StormGuardState.WARM, "WARM must hold while _warm_cooldown_s has not elapsed (production bug)"
 
 
 def test_warm_deescalates_after_cooldown_elapsed_and_n_clears():
@@ -155,8 +153,7 @@ def test_warm_deescalation_log_reports_warm_cooldown_not_storm():
 
     # Find the de-escalation log call and assert it shows WARM cooldown.
     deesc_calls = [
-        c for c in mock_log.info.call_args_list
-        if c.args and c.args[0] == "StormGuard de-escalated after hysteresis"
+        c for c in mock_log.info.call_args_list if c.args and c.args[0] == "StormGuard de-escalated after hysteresis"
     ]
     assert deesc_calls, "expected de-escalation log entry"
     kwargs = deesc_calls[0].kwargs
@@ -180,9 +177,7 @@ def test_drift_burst_warm_entry_arms_warm_cooldown():
     detector.set(score=0.55)
     state = sg.update_with_lob(mid_price_x2=1000, spread_scaled=10, symbol="EXFE6")
     assert state == StormGuardState.WARM
-    assert sg._warm_entry_ts > 0, (
-        "drift-burst WARM entry must arm _warm_entry_ts (P4)"
-    )
+    assert sg._warm_entry_ts > 0, "drift-burst WARM entry must arm _warm_entry_ts (P4)"
 
     # Drop toxicity to zero (no detector fire) and run update() with clean inputs.
     # Pre-fix this would have de-escalated immediately because _warm_entry_ts
@@ -190,8 +185,7 @@ def test_drift_burst_warm_entry_arms_warm_cooldown():
     detector.set(score=0.0)
     sg.update(drawdown_bps=0, latency_us=0, feed_gap_s=0.0)
     assert sg.state == StormGuardState.WARM, (
-        "WARM must hold while _warm_cooldown_s has not elapsed even when entry "
-        "was via drift-burst"
+        "WARM must hold while _warm_cooldown_s has not elapsed even when entry was via drift-burst"
     )
 
 
@@ -218,9 +212,7 @@ def test_toxicity_hysteresis_holds_warm_in_band():
     detector.set(score=0.45)
     state = sg.update_with_lob(mid_price_x2=1000, spread_scaled=10, symbol="EXFE6")
     assert state == StormGuardState.WARM, "hold-band toxicity must keep WARM"
-    assert sg._warm_entry_ts >= initial_ts, (
-        "hold-band toxicity must re-arm _warm_entry_ts"
-    )
+    assert sg._warm_entry_ts >= initial_ts, "hold-band toxicity must re-arm _warm_entry_ts"
 
 
 def test_toxicity_below_exit_lets_warm_deescalate_after_cooldown():
@@ -286,6 +278,4 @@ def test_warm_entry_ts_resets_after_full_deescalation():
     sg._warm_entry_ts = sg._warm_entry_ts - 31.0
     sg.update(latency_us=0)
     assert sg.state == StormGuardState.NORMAL
-    assert sg._warm_entry_ts == 0.0, (
-        "_warm_entry_ts must reset after de-escalation so next WARM gets fresh cooldown"
-    )
+    assert sg._warm_entry_ts == 0.0, "_warm_entry_ts must reset after de-escalation so next WARM gets fresh cooldown"

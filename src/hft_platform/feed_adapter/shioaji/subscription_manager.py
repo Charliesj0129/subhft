@@ -282,6 +282,7 @@ class SubscriptionManager:
             # Eager-create on first use; harmless on legacy paths because
             # _resubscribe_all is the only call site that takes it.
             import threading as _t
+
             c._resubscribe_lock = _t.Lock()  # type: ignore[attr-defined]
             lock = c._resubscribe_lock
         if not lock.acquire(blocking=False):

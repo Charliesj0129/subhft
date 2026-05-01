@@ -83,8 +83,7 @@ def test_set_helper_emits_debug_log_with_source():
     # Assert logger.debug was called with the expected event + source.
     call_args_list = mock_logger.debug.call_args_list
     assert any(
-        ("order_id_map_set",) == call.args and call.kwargs.get("source") == "unit_set_log"
-        for call in call_args_list
+        ("order_id_map_set",) == call.args and call.kwargs.get("source") == "unit_set_log" for call in call_args_list
     ), f"expected debug('order_id_map_set', source='unit_set_log') in {call_args_list}"
 
 
@@ -95,8 +94,7 @@ def test_del_helper_emits_debug_log_with_source():
         adapter._del_order_id_mapping("TOKEN2", source="unit_del_log")
     call_args_list = mock_logger.debug.call_args_list
     assert any(
-        ("order_id_map_del",) == call.args and call.kwargs.get("source") == "unit_del_log"
-        for call in call_args_list
+        ("order_id_map_del",) == call.args and call.kwargs.get("source") == "unit_del_log" for call in call_args_list
     ), f"expected debug('order_id_map_del', source='unit_del_log') in {call_args_list}"
 
 

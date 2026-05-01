@@ -150,12 +150,8 @@ def test_subscribe_basket_bumps_truncate_metric_and_logs_critical(monkeypatch, c
     # stdout/stderr by default — capsys captures both.
     captured = capsys.readouterr()
     combined = captured.out + captured.err
-    assert "Subscription limit reached" in combined, (
-        "truncate event must be logged"
-    )
-    assert "severity=critical" in combined, (
-        f"truncate log must carry severity=critical, got: {combined!r}"
-    )
+    assert "Subscription limit reached" in combined, "truncate event must be logged"
+    assert "severity=critical" in combined, f"truncate log must carry severity=critical, got: {combined!r}"
 
 
 def test_subscribe_basket_no_metric_bump_when_under_per_conn_cap(monkeypatch):
@@ -240,12 +236,8 @@ def test_load_config_exceeds_pool_capacity_single_conn(tmp_path, monkeypatch):
     assert len(client.symbols) == 588
     after_pool = _counter_value(counter, result="exceeds_pool_capacity")
     after_ok = _counter_value(counter, result="ok")
-    assert after_pool - before_pool == 1.0, (
-        "single-conn deploy with 588 symbols MUST bump exceeds_pool_capacity"
-    )
-    assert after_ok == before_ok, (
-        "ok branch must NOT fire when pool capacity is exceeded"
-    )
+    assert after_pool - before_pool == 1.0, "single-conn deploy with 588 symbols MUST bump exceeds_pool_capacity"
+    assert after_ok == before_ok, "ok branch must NOT fire when pool capacity is exceeded"
 
 
 def test_load_config_pool_capacity_ok_with_enough_conns(tmp_path, monkeypatch):
@@ -273,9 +265,7 @@ def test_load_config_pool_capacity_ok_with_enough_conns(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("bad_value", ["abc", "", "-1"])
-def test_load_config_invalid_quote_connections_falls_back_to_one(
-    tmp_path, monkeypatch, bad_value
-):
+def test_load_config_invalid_quote_connections_falls_back_to_one(tmp_path, monkeypatch, bad_value):
     """Garbage HFT_QUOTE_CONNECTIONS → safely treated as 1 (preflight still fires)."""
     config_path = tmp_path / "symbols.yaml"
     config_path.write_text(yaml.dump({"symbols": _make_symbols(300)}))
@@ -293,6 +283,5 @@ def test_load_config_invalid_quote_connections_falls_back_to_one(
 
     after_pool = _counter_value(counter, result="exceeds_pool_capacity")
     assert after_pool - before_pool == 1.0, (
-        f"invalid HFT_QUOTE_CONNECTIONS={bad_value!r} must fall back to 1, "
-        "and 300 > 120 × 1 → exceeds_pool_capacity"
+        f"invalid HFT_QUOTE_CONNECTIONS={bad_value!r} must fall back to 1, and 300 > 120 × 1 → exceeds_pool_capacity"
     )

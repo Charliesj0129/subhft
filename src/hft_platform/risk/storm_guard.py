@@ -377,10 +377,7 @@ class StormGuard:
                     # to preserve original behaviour rather than locking WARM
                     # forever; new WARM entries always set the timestamp so
                     # this only matters during the upgrade window.
-                    cooldown_ok = (
-                        self._warm_entry_ts == 0.0
-                        or (now - self._warm_entry_ts) >= self._warm_cooldown_s
-                    )
+                    cooldown_ok = self._warm_entry_ts == 0.0 or (now - self._warm_entry_ts) >= self._warm_cooldown_s
                 else:
                     cooldown_s_for_log = 0.0
                     cooldown_ok = True
@@ -496,10 +493,7 @@ class StormGuard:
         elif result.toxicity_score > self._warm_toxicity_entry:
             target = StormGuardState.WARM
             reason = f"DriftBurst WARM: toxicity={result.toxicity_score:.3f}"
-        elif (
-            self.state == StormGuardState.WARM
-            and result.toxicity_score > self._warm_toxicity_exit
-        ):
+        elif self.state == StormGuardState.WARM and result.toxicity_score > self._warm_toxicity_exit:
             # Hold-band: not high enough to (re-)enter WARM but high enough
             # to keep an existing WARM alive. ``target = None`` skips the
             # escalation branches and lands in the hold-band re-arm below.
@@ -555,10 +549,7 @@ class StormGuard:
                     toxicity_score=f"{result.toxicity_score:.3f}",
                     burst_detected=result.burst_detected,
                 )
-            elif (
-                target == StormGuardState.WARM
-                and self.state == StormGuardState.WARM
-            ):
+            elif target == StormGuardState.WARM and self.state == StormGuardState.WARM:
                 # P4: already in WARM and toxicity still above ENTRY
                 # threshold — pin ``_warm_entry_ts`` so de-escalation does
                 # not fire while the alarm itself is still active.

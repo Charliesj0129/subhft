@@ -543,8 +543,20 @@ class TestOptionsRefreshGuards:
         monkeypatch.setenv("HFT_SYMBOLS_RUNTIME_SNAPSHOT", out_path)  # fix-rc4: writer uses runtime-snapshot env
 
         expired_opts = [
-            {"code": "TXO20000A0", "right": "C", "strike": "20000", "delivery_date": "2020/01/15", "reference": "20000"},
-            {"code": "TXO20000M0", "right": "P", "strike": "20000", "delivery_date": "2020/01/15", "reference": "20000"},
+            {
+                "code": "TXO20000A0",
+                "right": "C",
+                "strike": "20000",
+                "delivery_date": "2020/01/15",
+                "reference": "20000",
+            },
+            {
+                "code": "TXO20000M0",
+                "right": "P",
+                "strike": "20000",
+                "delivery_date": "2020/01/15",
+                "reference": "20000",
+            },
         ]
         with mock.patch.object(type(pool), "_load_options_from_cache", return_value=expired_opts):
             assert pool.refresh_options_symbols() is False
@@ -564,8 +576,24 @@ class TestOptionsRefreshGuards:
         opts = []
         for date in ("2020/01/15", "2030/04/17", "2031/04/16"):  # one expired, two active
             for s in (20000, 21000):
-                opts.append({"code": f"TXO{s}_{date[:4]}C", "right": "C", "strike": str(s), "delivery_date": date, "reference": "20500"})
-                opts.append({"code": f"TXO{s}_{date[:4]}P", "right": "P", "strike": str(s), "delivery_date": date, "reference": "20500"})
+                opts.append(
+                    {
+                        "code": f"TXO{s}_{date[:4]}C",
+                        "right": "C",
+                        "strike": str(s),
+                        "delivery_date": date,
+                        "reference": "20500",
+                    }
+                )
+                opts.append(
+                    {
+                        "code": f"TXO{s}_{date[:4]}P",
+                        "right": "P",
+                        "strike": str(s),
+                        "delivery_date": date,
+                        "reference": "20500",
+                    }
+                )
 
         with mock.patch.object(type(pool), "_load_options_from_cache", return_value=opts):
             assert pool.refresh_options_symbols() is True
@@ -851,9 +879,7 @@ class TestQuoteConnectionPoolDegradedRollup:
         from hft_platform.feed_adapter.shioaji.facade_slot import FacadeSlot, FacadeState
         from hft_platform.feed_adapter.shioaji.quote_connection_pool import QuoteConnectionPool
 
-        symbols = [
-            {"code": f"SYM{g}", "exchange": "TSE", "group": g} for g in range(4)
-        ]
+        symbols = [{"code": f"SYM{g}", "exchange": "TSE", "group": g} for g in range(4)]
         sym_path = tmp_path / "symbols.yaml"
         sym_path.write_text(yaml.safe_dump({"symbols": symbols}))
         pool = QuoteConnectionPool(str(sym_path), {}, num_conns=4)
@@ -871,9 +897,7 @@ class TestQuoteConnectionPoolDegradedRollup:
             pool._clients.append(facade)
         return pool
 
-    def test_pool_degraded_gauge_raises_after_threshold_and_logs_once(
-        self, tmp_path, monkeypatch
-    ):
+    def test_pool_degraded_gauge_raises_after_threshold_and_logs_once(self, tmp_path, monkeypatch):
         """Three of four conns non-CONNECTED for >= alert window must raise the
         ``hft_quote_pool_degraded`` gauge to 1, fraction to 0.75, and emit
         the CRITICAL log exactly once even if the check runs again with
@@ -926,6 +950,4 @@ class TestQuoteConnectionPoolDegradedRollup:
         # (debounced — alerted flag stays True until recovery).
         clock["now"] = 1003.0
         pool.update_metrics()
-        assert mock_logger.critical.call_count == 1, (
-            "CRITICAL log must be emitted exactly once until recovery"
-        )
+        assert mock_logger.critical.call_count == 1, "CRITICAL log must be emitted exactly once until recovery"

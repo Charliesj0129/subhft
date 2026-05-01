@@ -104,11 +104,8 @@ class TestWalFirstCHHealthGauge(unittest.IsolatedAsyncioTestCase):
 
         # In direct mode the fix must NOT touch the CH gauge at startup; that
         # is DataWriter.connect_async()'s responsibility.
-        set_calls = [
-            call.args for call in fake_registry.clickhouse_connection_health.set.call_args_list
-        ]
+        set_calls = [call.args for call in fake_registry.clickhouse_connection_health.set.call_args_list]
         assert set_calls == [], (
-            f"worker.run() must not set clickhouse_connection_health in direct mode; "
-            f"observed calls: {set_calls}"
+            f"worker.run() must not set clickhouse_connection_health in direct mode; observed calls: {set_calls}"
         )
         fake_registry.wal_mode.set.assert_called_with(0)

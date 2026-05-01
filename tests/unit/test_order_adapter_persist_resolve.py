@@ -117,11 +117,7 @@ def test_load_order_id_map_skips_blank_lines(tmp_path, tmp_config):
 
     map_path = tmp_path / "oid_map.jsonl"
     now_ns = timebase.now_ns()
-    content = (
-        b"\n"
-        + orjson.dumps({"k": "K1", "v": "V1", "t_ns": now_ns, "s": "live"})
-        + b"\n\n"
-    )
+    content = b"\n" + orjson.dumps({"k": "K1", "v": "V1", "t_ns": now_ns, "s": "live"}) + b"\n\n"
     map_path.write_bytes(content)
 
     with patch.dict(os.environ, {"HFT_ORDER_ID_MAP_PERSIST_PATH": str(map_path)}):
@@ -165,10 +161,7 @@ def test_load_order_id_map_enforces_max_size(tmp_path, tmp_config):
     map_path = tmp_path / "oid_map.jsonl"
     now_ns = timebase.now_ns()
     # Write 5 entries but cap max size at 3
-    lines = [
-        orjson.dumps({"k": f"K{i}", "v": f"V{i}", "t_ns": now_ns, "s": "live"}) + b"\n"
-        for i in range(5)
-    ]
+    lines = [orjson.dumps({"k": f"K{i}", "v": f"V{i}", "t_ns": now_ns, "s": "live"}) + b"\n" for i in range(5)]
     map_path.write_bytes(b"".join(lines))
 
     with patch.dict(

@@ -254,10 +254,7 @@ class TestOrderIdMapPersistence:
                 # H3: pre-seed with the new schema (k, v, t_ns, s) so the
                 # loader does not drop entries as legacy/stale.
                 for k, v in pre_seed.items():
-                    f.write(
-                        orjson.dumps({"k": k, "v": v, "t_ns": now_ns, "s": "live"})
-                        + b"\n"
-                    )
+                    f.write(orjson.dumps({"k": k, "v": v, "t_ns": now_ns, "s": "live"}) + b"\n")
 
         with patch.dict(os.environ, {"HFT_ORDER_ID_MAP_PERSIST_PATH": persist_path}):
             adapter = OrderAdapter(

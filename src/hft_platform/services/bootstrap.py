@@ -1137,6 +1137,7 @@ class SystemBootstrapper:
                     note="Fubon contract-family populator not yet implemented; legacy rebind path active.",
                 )
             else:
+
                 def _populate_families_from_fubon() -> None:
                     try:
                         populate_resolver_from_fubon(family_resolver, md_client)

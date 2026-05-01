@@ -36,6 +36,7 @@ def _bare_client() -> mod.ShioajiClient:
     # L2: production type is ``collections.deque``; use the same here so
     # ``.append`` / ``.popleft`` behave the same.
     from collections import deque
+
     client._failed_sub_symbols: deque = deque()
     client._sub_retry_running = False
     client._sub_retry_thread = None

@@ -83,15 +83,10 @@ def test_legacy_schema_is_dropped_on_load(tmp_path: Path):
     """Pre-H3 ``{k, v}`` rows have no creation timestamp or state.
     Resurrecting them is the ABA attack window — they must be skipped."""
     persist = tmp_path / "order_id_map.jsonl"
-    persist.write_text(
-        '{"k":"BR1","v":"s1:1"}\n'
-        '{"k":"BR2","v":"s2:2"}\n'
-    )
+    persist.write_text('{"k":"BR1","v":"s1:1"}\n{"k":"BR2","v":"s2:2"}\n')
     adapter = _make_adapter(persist)
     adapter._load_order_id_map()
-    assert adapter.order_id_map == {}, (
-        "legacy schema entries must be dropped on load to prevent ABA"
-    )
+    assert adapter.order_id_map == {}, "legacy schema entries must be dropped on load to prevent ABA"
 
 
 def test_ttl_expired_entries_dropped_on_load(tmp_path: Path):
@@ -102,8 +97,10 @@ def test_ttl_expired_entries_dropped_on_load(tmp_path: Path):
     stale_ns = now_ns - 25 * 3600 * 1_000_000_000
     fresh_ns = now_ns - 60 * 1_000_000_000  # 60 seconds old — fresh
     persist.write_text(
-        json.dumps({"k": "STALE", "v": "s1:old", "t_ns": stale_ns, "s": "live"}) + "\n"
-        + json.dumps({"k": "FRESH", "v": "s2:new", "t_ns": fresh_ns, "s": "live"}) + "\n"
+        json.dumps({"k": "STALE", "v": "s1:old", "t_ns": stale_ns, "s": "live"})
+        + "\n"
+        + json.dumps({"k": "FRESH", "v": "s2:new", "t_ns": fresh_ns, "s": "live"})
+        + "\n"
     )
     adapter = _make_adapter(persist, ttl_s=86400.0)
     adapter._load_order_id_map()
@@ -115,8 +112,10 @@ def test_terminal_state_entries_dropped_on_load(tmp_path: Path):
     persist = tmp_path / "order_id_map.jsonl"
     now_ns = timebase.now_ns()
     persist.write_text(
-        json.dumps({"k": "T1", "v": "s1:done", "t_ns": now_ns, "s": "terminal"}) + "\n"
-        + json.dumps({"k": "L1", "v": "s2:live", "t_ns": now_ns, "s": "live"}) + "\n"
+        json.dumps({"k": "T1", "v": "s1:done", "t_ns": now_ns, "s": "terminal"})
+        + "\n"
+        + json.dumps({"k": "L1", "v": "s2:live", "t_ns": now_ns, "s": "live"})
+        + "\n"
     )
     adapter = _make_adapter(persist)
     adapter._load_order_id_map()
@@ -186,7 +185,8 @@ def test_load_skips_corrupt_lines(tmp_path: Path):
     now_ns = timebase.now_ns()
     persist.write_text(
         "not json at all\n"
-        + json.dumps({"k": "OK", "v": "s1:1", "t_ns": now_ns, "s": "live"}) + "\n"
+        + json.dumps({"k": "OK", "v": "s1:1", "t_ns": now_ns, "s": "live"})
+        + "\n"
         + "{partial: bad\n"
     )
     adapter = _make_adapter(persist)
@@ -200,9 +200,7 @@ def test_zero_ttl_disables_age_filter(tmp_path: Path):
     truth for active orders. Only state filter (terminal) still applies."""
     persist = tmp_path / "order_id_map.jsonl"
     very_old_ns = timebase.now_ns() - 365 * 24 * 3600 * 1_000_000_000  # 1 year old
-    persist.write_text(
-        json.dumps({"k": "ANCIENT", "v": "s1:old", "t_ns": very_old_ns, "s": "live"}) + "\n"
-    )
+    persist.write_text(json.dumps({"k": "ANCIENT", "v": "s1:old", "t_ns": very_old_ns, "s": "live"}) + "\n")
     adapter = _make_adapter(persist, ttl_s=0.0)
     adapter._load_order_id_map()
     assert adapter.order_id_map == {"ANCIENT": "s1:old"}
@@ -243,12 +241,7 @@ def test_legacy_load_metric_skipped_legacy_count(tmp_path: Path, legacy_count: i
     This test just verifies the loader does not raise and dropped count is
     consistent — important so the upgrade path is observable in production."""
     persist = tmp_path / "order_id_map.jsonl"
-    persist.write_text(
-        "\n".join(
-            json.dumps({"k": f"LEG{i}", "v": f"s:{i}"}) for i in range(legacy_count)
-        )
-        + "\n"
-    )
+    persist.write_text("\n".join(json.dumps({"k": f"LEG{i}", "v": f"s:{i}"}) for i in range(legacy_count)) + "\n")
     adapter = _make_adapter(persist)
     adapter._load_order_id_map()
     assert len(adapter.order_id_map) == 0
