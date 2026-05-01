@@ -229,16 +229,21 @@ class MarketDataReconnectMixin:
 
             calendar = get_calendar()
             now_dt = dt.datetime.fromtimestamp(timebase.now_s(), tz=calendar._tz)
-            return calendar.is_trading_hours(now_dt, product_type=product_type)
+            in_hours = calendar.is_trading_hours(now_dt, product_type=product_type)
         except Exception:
             now_dt = dt.datetime.fromtimestamp(
                 timebase.now_s(),
                 tz=dt.timezone(dt.timedelta(hours=8)),
             )
             if now_dt.weekday() >= 5:
-                return False
-            minute = now_dt.hour * 60 + now_dt.minute
-            return (8 * 60 + 45) <= minute <= (13 * 60 + 45)
+                in_hours = False
+            else:
+                minute = now_dt.hour * 60 + now_dt.minute
+                in_hours = (8 * 60 + 45) <= minute <= (13 * 60 + 45)
+        metrics_registry = getattr(self, "metrics_registry", None)
+        if metrics_registry and hasattr(metrics_registry, "market_trading_hours_active"):
+            metrics_registry.market_trading_hours_active.set(1 if in_hours else 0)
+        return in_hours
 
     def _is_market_open_grace_period(self: Any) -> bool:
         """Check if within grace period after market open (C4)."""
