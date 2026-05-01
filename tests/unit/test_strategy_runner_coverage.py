@@ -770,6 +770,7 @@ class TestBuildPositionsRecovery:
         pos_store = MagicMock()
         del pos_store._rust_tracker
         del pos_store.snapshot_positions
+        del pos_store.snapshot_positions_with_recovery
         pos_store.positions = {}
         pos_store._recovery_positions = {
             "acct:strat_r:TSMC": {"net_qty": 3},
@@ -786,6 +787,7 @@ class TestBuildPositionsRecovery:
         pos_store = MagicMock()
         del pos_store._rust_tracker
         del pos_store.snapshot_positions
+        del pos_store.snapshot_positions_with_recovery
         pos_store.positions = {}
         pos_store._recovery_positions = {
             "acct:strat_r:TSMC": {"net_qty": 0},

@@ -21,6 +21,8 @@ from hft_platform.contracts.execution import FillEvent, Side
 from hft_platform.execution.mtm import MarkToMarketCalculator
 from hft_platform.execution.positions import Position, PositionStore
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
 # ---------------------------------------------------------------------------
 # Fixtures (mirror tests/unit/test_position_store_unit.py)
 # ---------------------------------------------------------------------------
@@ -197,7 +199,7 @@ class TestR3_1_MtMCalculator:
 
 class TestR3_2_BuildPositionsByStrategyFallback:
     def _runner_source(self) -> str:
-        return Path("/home/charlie/hft_platform/src/hft_platform/strategy/runner.py").read_text()
+        return (_REPO_ROOT / "src/hft_platform/strategy/runner.py").read_text()
 
     def test_fallback_dict_copy_is_lock_guarded(self) -> None:
         """Source-level audit: `dict(raw)` fallback in
@@ -401,7 +403,7 @@ class TestR3_5_RouterPreRealizedSnapshot:
     """
 
     def _router_source(self) -> str:
-        return Path("/home/charlie/hft_platform/src/hft_platform/execution/router.py").read_text()
+        return (_REPO_ROOT / "src/hft_platform/execution/router.py").read_text()
 
     def test_pre_realized_reads_are_lock_guarded(self) -> None:
         src = self._router_source()
@@ -431,7 +433,7 @@ class TestR3_5_RouterPreRealizedSnapshot:
 
 class TestR3_6_GetDrawdownPct:
     def _positions_source(self) -> str:
-        return Path("/home/charlie/hft_platform/src/hft_platform/execution/positions.py").read_text()
+        return (_REPO_ROOT / "src/hft_platform/execution/positions.py").read_text()
 
     def test_drawdown_read_pair_is_lock_guarded(self) -> None:
         """Source-level audit: get_drawdown_pct's read of

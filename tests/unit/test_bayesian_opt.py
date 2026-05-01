@@ -144,6 +144,15 @@ _MOCK_LATENCY = {
 # ---------------------------------------------------------------------------
 
 
+try:
+    import optuna  # noqa: F401
+
+    _HAS_OPTUNA = True
+except ImportError:
+    _HAS_OPTUNA = False
+
+
+@pytest.mark.skipif(not _HAS_OPTUNA, reason="optuna removed in convergence cleanup; TestRunBayesianOpt requires it")
 class TestRunBayesianOpt:
     """Test run_bayesian_opt with mocked dependencies."""
 
