@@ -314,7 +314,7 @@ class DataCollector:
             ORDER BY vol DESC
             LIMIT 1
             {_SETTINGS}
-        """
+        """  # nosec B608
         try:
             rows = self._execute(sql, None)
         except Exception as exc:  # noqa: BLE001
@@ -475,7 +475,7 @@ class DataCollector:
             WHERE symbol = %(symbol)s
               AND {time_filter}
             {_SETTINGS}
-        """
+        """  # nosec B608
         sql = sql.replace(
             "FROM hft.ohlcv_1m",
             """FROM (
@@ -527,7 +527,7 @@ class DataCollector:
             GROUP BY ts
             ORDER BY ts
             {_SETTINGS}
-        """
+        """  # nosec B608
         sql = sql.replace(
             "FROM hft.ohlcv_1m",
             """FROM (
@@ -590,7 +590,7 @@ class DataCollector:
             GROUP BY bucket
             ORDER BY bucket
             {_SETTINGS}
-        """
+        """  # nosec B608
         params = {"symbol": symbol}
         rows = self._execute(sql, params)
         result: list[FlowBar] = []
@@ -636,7 +636,7 @@ class DataCollector:
             FROM ordered
             ORDER BY ts
             {_SETTINGS}
-        """
+        """  # nosec B608
         params = {"symbol": symbol}
         rows = self._execute(sql, params)
         result: list[LargeTrade] = []
@@ -680,7 +680,7 @@ class DataCollector:
             GROUP BY spread_pts
             ORDER BY spread_pts
             SETTINGS max_memory_usage = 3000000000
-        """
+        """  # nosec B608
         params = {"symbol": symbol}
         rows = self._execute(sql, params)
         return {int(row[0]): int(row[1]) for row in rows}
@@ -702,7 +702,7 @@ class DataCollector:
             GROUP BY hour
             ORDER BY hour
             {_SETTINGS}
-        """
+        """  # nosec B608
         params = {"symbol": symbol}
         rows = self._execute(sql, params)
         result: list[DepthBar] = []
@@ -793,7 +793,7 @@ class DataCollector:
                 WHERE symbol = %(symbol)s
                   AND type = 'Tick'
                   AND {tf}
-            """
+            """  # nosec B608
             parts.append(part)
 
         sql = " UNION ALL ".join(parts) + f" ORDER BY day DESC {_SETTINGS}"

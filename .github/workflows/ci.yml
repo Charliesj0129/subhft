@@ -711,18 +711,17 @@ jobs:
         run: make security-audit
 
       - name: Code security scan (bandit)
-        continue-on-error: true  # pre-existing findings (104 High)
+        # Fail-closed at -ll (medium+). B608 SQL-string findings carry
+        # `# nosec B608` annotations after upstream input validation.
         run: uv run bandit -r src/hft_platform/ -c pyproject.toml -ll -q
 
       - name: Secret scanning (gitleaks)
-        continue-on-error: true  # pre-existing findings in history
         uses: gitleaks/gitleaks-action@dcedce43c6f43de0b836d1fe38946645c9c638dc  # v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: License compliance check
-        run: uv run pip-licenses --format=markdown --fail-on-licenses="GPL-2.0-only;GPL-2.0-or-later;GPL-3.0-only;GPL-3.0-or-later" || true
-        continue-on-error: true
+        run: uv run pip-licenses --format=markdown --fail-on="GPL-2.0-only;GPL-2.0-or-later;GPL-3.0-only;GPL-3.0-or-later"
 
       - name: Security Summary
         if: always()
