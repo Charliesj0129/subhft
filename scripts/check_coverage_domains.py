@@ -49,6 +49,10 @@ PACKAGE_FLOORS: dict[str, float] = {
     # while we incrementally add unit coverage. Bump as coverage grows.
     ".": 67.0,
     "ipc": 64.0,
+    # strategies.alpha is live alpha strategy bindings exercised primarily
+    # via integration / promotion gates rather than unit tests. Pinned
+    # ratchet anchor; raise once unit coverage lands.
+    "strategies.alpha": 22.0,
 }
 
 # Floor applied to packages not listed in PACKAGE_FLOORS.
