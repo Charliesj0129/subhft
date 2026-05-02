@@ -26,6 +26,7 @@ def _scan(source: str, path: str) -> list:
 
 # ---- positive: violations expected ----------------------------------------
 
+
 def test_class_attr_price_float_in_contracts_is_flagged() -> None:
     src = "class Q:\n    price: float = 0.0\n"
     vs = _scan(src, "src/hft_platform/contracts/order.py")
@@ -66,6 +67,7 @@ def test_interior_pattern_max_loss_amount_is_flagged() -> None:
 
 
 # ---- negative: should NOT be flagged --------------------------------------
+
 
 def test_int_price_is_not_flagged() -> None:
     src = "class Q:\n    price: int = 0\n"
