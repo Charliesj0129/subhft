@@ -116,7 +116,9 @@ class TestShioajiClientFull(unittest.TestCase):
         # import dispatch_tick_cb` — that picks up the freshest function each call. The shim
         # `shioaji_client.dispatch_tick_cb` is name-bound at shim-load and goes stale if any other
         # test reloads the inner module mid-suite, causing a false assert_called_with mismatch.
-        self.mock_api_instance.quote.set_on_tick_stk_v1_callback.assert_called_with(_shioaji_inner_client.dispatch_tick_cb)
+        self.mock_api_instance.quote.set_on_tick_stk_v1_callback.assert_called_with(
+            _shioaji_inner_client.dispatch_tick_cb
+        )
 
     def test_callback_retry_loop_sets_registered(self):
         self.client.logged_in = True
