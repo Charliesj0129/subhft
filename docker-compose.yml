@@ -293,7 +293,6 @@ services:
     image: prom/node-exporter:v1.8.2
     container_name: node-exporter
     pid: host
-    network_mode: host
     volumes:
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro

@@ -192,6 +192,7 @@ class MetricsRegistry:
                 _pn("wal_batch_flush_retry_total"),
                 _pn("session_refresh_total"),
                 _pn("market_open_grace_active"),
+                _pn("market_trading_hours_active"),
                 _pn("wal_directory_size_bytes"),
                 _pn("wal_file_count"),
                 _pn("wal_oldest_file_age_seconds"),
@@ -947,6 +948,10 @@ class MetricsRegistry:
         self.market_open_grace_active = Gauge(
             _pn("market_open_grace_active"),
             "Whether market open grace period is active (1=active, 0=inactive)",
+        )
+        self.market_trading_hours_active = Gauge(
+            _pn("market_trading_hours_active"),
+            "Whether the market-data watchdog currently considers the market open",
         )
         # WAL directory monitoring (C5)
         # NB: pre-P2-a these gauges only counted top-level *.jsonl files,

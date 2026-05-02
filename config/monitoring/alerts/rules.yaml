@@ -13,7 +13,7 @@ groups:
 
   # Feed Health
   - alert: FeedGapCritical
-    expr: rate(feed_events_total[30s]) == 0
+    expr: rate(feed_events_total[30s]) == 0 and market_trading_hours_active == 1
     for: 5s
     labels:
         severity: critical

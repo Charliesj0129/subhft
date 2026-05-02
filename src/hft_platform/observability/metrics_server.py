@@ -89,7 +89,7 @@ def _collect_partial(start_response: Any) -> list[bytes]:
             for metric_family in collector.collect():
                 for sample in metric_family.samples:
                     labels = ",".join(f'{k}="{v}"' for k, v in sorted(sample.labels.items()))
-                    name = f"{metric_family.name}{sample.name}" if sample.name else metric_family.name
+                    name = sample.name or metric_family.name
                     if labels:
                         lines.append(f"{name}{{{labels}}} {sample.value}")
                     else:

@@ -181,6 +181,24 @@ class TestGetHealth:
         h = t.get_health()
         assert h["window_s"] == t._window_s
 
+    def test_get_health_expires_stale_degraded_state(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        now = [100.0]
+        monkeypatch.setattr("hft_platform.recorder.health.time.monotonic", lambda: now[0])
+
+        tracker = PipelineHealthTracker()
+        tracker._metrics = None
+        tracker._window_s = 1.0
+
+        tracker.record_event("wal_fallback", table="audit.guardrail_log", count=1)
+        assert tracker.get_health()["state"] == "DEGRADED"
+
+        now[0] = 102.0
+        health = tracker.get_health()
+
+        assert health["state"] == "HEALTHY"
+        assert health["state_value"] == 0
+        assert health["events_in_window"] == 0
+
 
 # ── prune ────────────────────────────────────────────────────────────
 

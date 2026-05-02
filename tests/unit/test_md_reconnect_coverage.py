@@ -322,6 +322,19 @@ class TestIsTradingHoursFallback:
             tb.now_s.return_value = aware.timestamp()
             assert md._is_trading_hours() is False
 
+    def test_trading_hours_updates_prometheus_gate(self, md: _FakeMD) -> None:
+        metrics = MagicMock()
+        md.metrics_registry = metrics
+        cst = dt.timezone(dt.timedelta(hours=8))
+        aware = dt.datetime(2024, 1, 15, 7, 0, 0, tzinfo=cst)
+        with (
+            patch("hft_platform.services._md_reconnect.timebase") as tb,
+            patch("hft_platform.core.market_calendar.get_calendar", side_effect=ImportError),
+        ):
+            tb.now_s.return_value = aware.timestamp()
+            assert md._is_trading_hours() is False
+        metrics.market_trading_hours_active.set.assert_called_once_with(0)
+
     def test_calendar_path_when_available(self, md: _FakeMD) -> None:
         """Calendar available uses calendar.is_trading_hours (lines 230-232)."""
         mock_cal = MagicMock()

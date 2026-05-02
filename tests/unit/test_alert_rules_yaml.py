@@ -46,6 +46,17 @@ def test_alpha_signal_silent_gates_on_nonzero_timestamp():
     )
 
 
+def test_feed_gap_critical_gates_on_trading_hours():
+    """FeedGapCritical must not fire during exchange holidays or closed sessions."""
+    alerts = _load_alerts_by_name()
+    assert "FeedGapCritical" in alerts
+    expr = alerts["FeedGapCritical"]["expr"]
+    assert "market_trading_hours_active == 1" in expr, (
+        "FeedGapCritical must use the runtime trading-hours gauge so a restart "
+        f"during holidays/off-hours does not page Telegram. Current expression: {expr!r}"
+    )
+
+
 def test_feature_plane_latency_threshold_above_measured_p99():
     """FeaturePlaneLatencyP99High threshold must be realistic for the deploy target.
 

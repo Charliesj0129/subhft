@@ -134,6 +134,15 @@ class PipelineHealthTracker:
         cutoff = now - self._window_s
 
         with self._lock:
+            old_state = self._state
+            self._state = self._compute_state(now)
+            if self._state != old_state and self._metrics:
+                try:
+                    self._metrics.pipeline_health_state.set(int(self._state))
+                except Exception as exc:
+                    logger.debug("operation_fallback", error=str(exc))
+                    pass
+
             window_events = [(ts, et, m) for ts, et, m in self._events if ts >= cutoff]
             event_counts: dict[str, int] = {}
             for _ts, et, _m in window_events:
