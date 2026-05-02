@@ -9,6 +9,7 @@ Covers RateLimiter and PerSymbolRateLimiter including:
 - _evict_idle triggering
 - env-var defaults
 """
+
 import os
 from collections import deque
 from unittest.mock import patch
@@ -18,7 +19,6 @@ from hft_platform.core.rate_limiter import (
     PerSymbolRateResult,
     RateLimiter,
 )
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
@@ -36,6 +36,7 @@ def _mock_now(value: float):
 # ─────────────────────────────────────────────────────────────────────────────
 # RateLimiter
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class TestRateLimiter:
     def test_check_returns_true_below_soft_cap(self):
@@ -127,6 +128,7 @@ class TestRateLimiter:
 # PerSymbolRateLimiter
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class TestPerSymbolRateLimiter:
     def test_check_unknown_symbol_returns_ok(self):
         prl = PerSymbolRateLimiter(soft_limit=10, hard_limit=20, window_s=60.0)
@@ -210,8 +212,8 @@ class TestPerSymbolRateLimiter:
 
     def test_evict_idle_removes_empty_windows_only(self):
         prl = PerSymbolRateLimiter(soft_limit=10, hard_limit=20, window_s=60.0)
-        prl._windows["LIVE"] = deque([990.0, 995.0])   # recent — should survive
-        prl._windows["STALE"] = deque([1.0])            # expired — should be removed
+        prl._windows["LIVE"] = deque([990.0, 995.0])  # recent — should survive
+        prl._windows["STALE"] = deque([1.0])  # expired — should be removed
         prl._call_count = 99
         with _mock_now(1000.0):
             prl.record("ANY_SYMBOL")

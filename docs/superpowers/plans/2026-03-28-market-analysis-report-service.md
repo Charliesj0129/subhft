@@ -2813,10 +2813,10 @@ After all 10 tasks are complete:
 - [ ] Run `uv run mypy src/hft_platform/reports/` — clean (or minimal type: ignore)
 - [ ] Test dry-run against real CH data on remote:
   ```bash
-  ssh charl@100.91.176.126 "cd ~/subhft && HFT_REPORT_ENABLED=1 python -m hft_platform.reports.pipeline --session night --date 2026-03-27 --debug --dry-run"
+  ssh ${REMOTE_USER}@${REMOTE_HOST} "cd ~/subhft && HFT_REPORT_ENABLED=1 python -m hft_platform.reports.pipeline --session night --date 2026-03-27 --debug --dry-run"
   ```
 - [ ] If dry-run looks good, test real send to owner channel:
   ```bash
-  ssh charl@100.91.176.126 "cd ~/subhft && HFT_REPORT_ENABLED=1 python -m hft_platform.reports.pipeline --session night --date 2026-03-27"
+  ssh ${REMOTE_USER}@${REMOTE_HOST} "cd ~/subhft && HFT_REPORT_ENABLED=1 python -m hft_platform.reports.pipeline --session night --date 2026-03-27"
   ```
 - [ ] Set up cron entries on remote machine (see spec §8)

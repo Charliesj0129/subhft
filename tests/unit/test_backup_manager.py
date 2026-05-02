@@ -60,10 +60,19 @@ def test_run_daily_returns_false_when_disabled():
 
 
 def test_cleanup_removes_old_backups(tmp_path):
+    from datetime import datetime, timedelta
+
     from hft_platform.ops.backup import BackupManager
 
-    # Create fake backup dirs: 3 old + 1 recent
-    for name in ["daily_20260213", "daily_20260218", "daily_20260222", "daily_20260324"]:
+    # Use relative-to-today dates so this test does not rot as time advances.
+    today = datetime.now()
+    recent_name = f"daily_{(today - timedelta(days=5)).strftime('%Y%m%d')}"
+    old_names = [
+        f"daily_{(today - timedelta(days=80)).strftime('%Y%m%d')}",
+        f"daily_{(today - timedelta(days=70)).strftime('%Y%m%d')}",
+        f"daily_{(today - timedelta(days=40)).strftime('%Y%m%d')}",
+    ]
+    for name in [*old_names, recent_name]:
         (tmp_path / name).mkdir()
         (tmp_path / name / "data.bin").write_bytes(b"x")
 
@@ -71,11 +80,9 @@ def test_cleanup_removes_old_backups(tmp_path):
     mgr._cleanup_old_backups()
 
     remaining = sorted(d.name for d in tmp_path.iterdir() if d.is_dir())
-    assert "daily_20260324" in remaining
-    # All 3 old ones should be removed (age > 30)
-    assert "daily_20260213" not in remaining
-    assert "daily_20260218" not in remaining
-    assert "daily_20260222" not in remaining  # borderline: 31 > 30
+    assert recent_name in remaining
+    for old in old_names:
+        assert old not in remaining
 
 
 def test_cleanup_ignores_non_matching_dirs(tmp_path):

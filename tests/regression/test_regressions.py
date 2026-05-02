@@ -150,7 +150,7 @@ def test_long_strategy_id_fallback(mock_load):
     cmd = OrderCommand(1, intent, time.time_ns() + 1_000_000_000, 0)
     asyncio.run(adapter._dispatch_to_api(cmd))
 
-    assert client.place_order.call_args.kwargs["custom_field"] == ""
+    assert client.place_order.call_args.kwargs["custom_field"] == "strate"
     assert adapter.order_id_map["S99"] == f"{strategy_id}:9"
     assert adapter.order_id_map["O99"] == f"{strategy_id}:9"
 

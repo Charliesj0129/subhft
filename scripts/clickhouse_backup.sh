@@ -11,7 +11,11 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
 cd "$PROJECT_DIR"
 
-exec uv run python -c "
+# Run inside hft-engine container where clickhouse_driver is installed.
+# Pass through HFT_BACKUP_ENABLED from host env (crontab sets it).
+exec docker compose exec -T \
+    -e HFT_BACKUP_ENABLED="${HFT_BACKUP_ENABLED:-1}" \
+    hft-engine python -c "
 from hft_platform.ops.backup import BackupManager
 import sys
 

@@ -87,19 +87,22 @@ class FubonAccountGateway:
     # BrokerProtocol-aligned methods
     # ------------------------------------------------------------------ #
 
-    def get_positions(self) -> list[Any]:
+    def get_positions(self) -> list[Any] | None:
         """Get positions (BrokerProtocol-aligned).
 
         Delegates to :meth:`get_inventories`.
 
         Returns:
-            List of position/inventory items.
+            List of position/inventory items, or None if broker unreachable.
         """
         try:
             return self.get_inventories()
         except Exception as exc:
             self.log.error("fubon_get_positions_failed", error=str(exc))
-            return []
+            # Protocol: None = broker state unknown; [] = confirmed empty.
+            # Failure must return None so reconciliation doesn't treat
+            # "broker unreachable" as "confirmed no positions".
+            return None
 
     def get_account_balance(self, account: Any = None) -> Any:
         """Get account balance (BrokerProtocol-aligned).

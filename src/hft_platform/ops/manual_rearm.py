@@ -23,11 +23,38 @@ class ManualRearmGate:
         self._write_state(state)
 
     def rearm_platform(self) -> None:
+        """Persist the manual-rearm flag AND clear the live controller.
+
+        Prior to this fix the rearm wrote a JSON flag that the
+        :class:`~hft_platform.ops.platform_degrade.PlatformDegradeController`
+        never consulted.  Operators reported reduce_only staying latched
+        for hours after they had confirmed conditions were safe.
+
+        We now also call ``force_clear`` on the shared controller (if
+        one exists in this process) so the live state mirrors the
+        persisted flag.  The persistence step is unconditional so a
+        cold-start process picks up the rearmed state.
+        """
         state = self._load_state()
         platform_state = self._platform_section(state)
         platform_state["manual_rearm_required"] = False
         platform_state["reason"] = None
         self._write_state(state)
+
+        # Best-effort: bridge the live controller.  We import lazily to
+        # avoid a circular import (``platform_degrade`` does not depend
+        # on ``manual_rearm``).
+        try:
+            import hft_platform.ops.platform_degrade as _pd
+
+            with _pd._shared_controller_lock:
+                ctrl = _pd._shared_controller
+            if ctrl is not None:
+                ctrl.force_clear(reason="manual_rearm_gate")
+        except Exception:
+            # Persistence above is the source of truth; swallow any
+            # runtime-coupling error to keep the operator path robust.
+            pass
 
     def requires_manual_rearm(self, scope: str, *, strategy_id: str | None = None) -> bool:
         state = self._load_state()

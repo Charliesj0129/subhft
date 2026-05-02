@@ -1,8 +1,12 @@
-# docker-compose.production.yml — Production hardening overlay
+# docker-compose.production.yml — Production overlay (resources + security)
 # Usage: docker compose -f docker-compose.yml -f docker-compose.production.yml up -d
 #
-# Applies: no-new-privileges, read_only where safe, 127.0.0.1 port binding,
-# internal bridge network, tmpfs for ephemeral dirs.
+# Purpose: All production-specific overrides in one file:
+# - Resource limits (CPU/memory, configurable via HFT_CPU_LIMIT / HFT_MEM_LIMIT)
+# - Security hardening (no-new-privileges, read_only, 127.0.0.1 port binding)
+# - Internal bridge network isolation
+# - Production alertmanager config
+# - Rust fused paths remain disabled until parity gate passes (tracked in docs/TODO.md)
 
 networks:
   hft-internal:
@@ -21,6 +25,14 @@ services:
 
   hft-engine:
     <<: *security-common
+    environment:
+      - HFT_FUSED_NORMALIZER=${HFT_FUSED_NORMALIZER:-0}
+      - HFT_FEATURE_ENGINE_BACKEND=${HFT_FEATURE_ENGINE_BACKEND:-python}
+    deploy:
+      resources:
+        limits:
+          cpus: '${HFT_CPU_LIMIT:-2.0}'
+          memory: ${HFT_MEM_LIMIT:-4096M}
     ports:
       - "127.0.0.1:${HFT_PROM_PORT:-9090}:9090"
       - "127.0.0.1:${HFT_HEALTH_PORT:-8080}:8080"
@@ -89,16 +101,8 @@ services:
     read_only: true
     tmpfs:
       - /tmp:size=32M
-    networks:
-      - hft-internal
-
-  grafana:
-    <<: *security-common
-    ports:
-      - "127.0.0.1:3000:3000"
-    read_only: true
-    tmpfs:
-      - /tmp:size=64M
+    volumes:
+      - ${HFT_ALERTMANAGER_CONFIG:-./config/monitoring/alerts/alertmanager.production.yml}:/etc/alertmanager/alertmanager.yml:ro
     networks:
       - hft-internal
 

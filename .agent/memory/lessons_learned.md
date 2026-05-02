@@ -115,3 +115,10 @@
 **Context**: `fubon-neo` requires a platform-specific `.whl` file and is unavailable via `pip install`. Unconditional imports break environments without the SDK (CI, dev machines without the file).
 **Fix**: All Fubon modules gate on `try: import fubon_neo except ImportError: fubon_neo = None`. The broker silently skips registration; `get_broker_factory("fubon")` then raises `ValueError` with a clear message.
 **Rule**: Guard every `import fubon_neo` with a `try/except ImportError`. Note: package name uses hyphen (`fubon-neo` in `pyproject.toml`) but import uses underscore (`fubon_neo`).
+
+## [BUG] Non-reentrant `threading.Lock` self-deadlocks when writers emit metrics via public reader API (2026-04)
+
+**Context**: Wave 3 of debug-team concurrency fixes added `with self._fill_lock:` to `PositionStore.get_drawdown_pct` to snapshot the (peak, current) PnL pair atomically against writers. But `_on_fill_python` and `_on_fill_rust` both call `self.get_drawdown_pct()` to push the `portfolio_drawdown_pct` Prometheus gauge from inside their own `with self._fill_lock:` block. `threading.Lock` is non-reentrant → every fill timed out at 30s, breaking 13 unit tests.
+**Fix**: Split into a private `_get_drawdown_pct_locked()` (assumes caller holds lock) and a public `get_drawdown_pct()` that acquires-then-delegates. Writer call sites switched to the `_locked` variant.
+**Rule**: When promoting a public reader to acquire a non-reentrant lock, audit ALL writer call sites for self-recursion via metric emission, observability hooks, or any "tell me my own state" pattern. The locked/unlocked split is the canonical fix — don't reach for `RLock` (it hides reentrance bugs in adjacent code).
+**Commits**: `f2126f96` (R3-6 introduced bug), `63cac7ec` (R3-6 hole fix).

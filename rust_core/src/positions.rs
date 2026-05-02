@@ -113,8 +113,12 @@ impl RustPositionTracker {
 
             pos.net_qty += signed_fill_qty;
 
-            // If we flipped sides, the remainder starts at the new fill price
-            if (current_sign > 0 && pos.net_qty < 0) || (current_sign < 0 && pos.net_qty > 0) {
+            if pos.net_qty == 0 {
+                // Closed to flat — reset avg_price (match Python Position.update)
+                pos.avg_price_scaled = 0;
+            } else if (current_sign > 0 && pos.net_qty < 0) || (current_sign < 0 && pos.net_qty > 0)
+            {
+                // Flipped sides — remainder starts at the new fill price
                 pos.avg_price_scaled = price_scaled;
             }
         } else {
@@ -128,7 +132,8 @@ impl RustPositionTracker {
                 let total_val = pos.net_qty * pos.avg_price_scaled + signed_fill_qty * price_scaled;
                 pos.net_qty += signed_fill_qty;
                 if pos.net_qty != 0 {
-                    pos.avg_price_scaled = total_val / pos.net_qty;
+                    // Round-to-nearest matching Python: (2*total + net) // (2*net)
+                    pos.avg_price_scaled = (2 * total_val + pos.net_qty) / (2 * pos.net_qty);
                 }
             }
         }

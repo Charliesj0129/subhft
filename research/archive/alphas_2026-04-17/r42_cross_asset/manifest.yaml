@@ -1,0 +1,64 @@
+id: r42_cross_asset
+name: "Cross-Asset Session-Level Signals on TXFD6"
+status: EXPLORATORY_INCOMPLETE
+created: 2026-04-07
+author: claude
+instrument: TXFD6
+horizon: session (1 trade/day)
+data_sources:
+  - TXFD6 golden parquet: 19 dates total, 11 with day-session data (Feb-Apr 2026)
+  - TMFD6 golden parquet: 11 dates (11 overlap with TXFD6)
+  - MXFD6 golden parquet: 11 dates (11 overlap with TXFD6)
+  - TXO tick data: 102 instruments, 6 overlap dates with TXFD6
+  - TAIFEX OI daily: 58 dates, 18 overlap with TXFD6
+
+usable_day_session_dates: 9-11  # only these have day-session tick data
+
+scripts:
+  - research/scripts/r42_cross_asset.py
+
+signals_tested: 8
+
+findings:
+  signal_1_tx_mxf_leadlag:
+    status: DEAD
+    detail: "Contemporaneous corr=0.97 but lead-lag near zero at 15/30/60min. Confirms R28."
+  signal_2_pcoi_ratio:
+    status: DEAD
+    detail: "IC=-0.20, p=0.63, n=8. No predictive power."
+  signal_3_overnight_gap:
+    status: DEAD
+    detail: "IC=0.07, p=0.87, n=8. No signal."
+  signal_4_range_breakout:
+    status: INTERESTING_BUT_UNDERPOWERED
+    detail: "Win rate 67%, avg net +90.6 pts/trade, n=9. Two large losses. Need 60+ days."
+  signal_5_dow_effect:
+    status: DEAD
+    detail: "ANOVA p=0.70, n=9. No systematic DOW pattern."
+  signal_6_daily_reversal:
+    status: INTERESTING_BUT_UNDERPOWERED
+    detail: "AC(1)=-0.62, permutation p=0.083, 7/8 reversals. Need 60+ days."
+  signal_7_txo_tick_volume:
+    status: DEAD
+    detail: "Only 2 observations from 6 overlap dates. Insufficient data."
+  signal_8_dealer_oi_change:
+    status: PROMISING_BUT_UNDERPOWERED
+    detail: >
+      IC=-0.70, nominal p=0.037, permutation p=0.043, n=9.
+      Bootstrap 95% CI: [-0.94, -0.11].
+      Does NOT survive Bonferroni correction (threshold=0.006 for 8 tests).
+      Interpretation: When dealers increase net long, next-day TXFD6 tends to decline.
+      Could be contrarian signal (dealers hedging) or spurious at n=9.
+
+verdict: >
+  NO SIGNAL IS TRADEABLE AT CURRENT SAMPLE SIZE.
+  Signal 8 (dealer OI change, IC=-0.70) is the most promising but fails
+  multiple-testing correction. Signal 6 (daily reversal, AC=-0.62) and
+  Signal 4 (range breakout, 67% WR) are interesting but statistically
+  insignificant at n=9. All results are exploratory only.
+
+  BLOCKING ISSUE: Only 9-11 day-session dates available. Need 60+ for
+  any meaningful inference at session-level (1 obs/day) granularity.
+
+  RECOMMENDATION: Continue collecting TXFD6 day-session data. Re-evaluate
+  dealer OI signal after 60+ trading days. Do not trade any of these signals.

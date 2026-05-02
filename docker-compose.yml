@@ -1,6 +1,14 @@
 x-hft-common: &hft-common
   env_file: .env
-  build: .
+  # P2-d (2026-04-27): pass GIT_SHA + BUILD_TS as build args so the runtime
+  # image can render them in the startup banner / Prometheus build_info gauge.
+  # `make start` exports these via the Makefile's `start` target; manual
+  # `docker compose up --build` callers should pass them too (see deploy.sh).
+  build:
+    context: .
+    args:
+      GIT_SHA: "${HFT_GIT_SHA:-unknown}"
+      BUILD_TS: "${HFT_BUILD_TS:-unknown}"
   image: ${HFT_IMAGE:-hft-platform:latest}
   restart: always
   # Common Environment for all HFT services
@@ -33,9 +41,9 @@ x-hft-common: &hft-common
     - HFT_CH_MAX_CONCURRENT_INSERTS=${HFT_CH_MAX_CONCURRENT_INSERTS:-2}
     - HFT_CH_INSERT_CHUNK_ROWS=${HFT_CH_INSERT_CHUNK_ROWS:-256}
     - HFT_WAL_LOADER_CONCURRENCY=${HFT_WAL_LOADER_CONCURRENCY:-1}
-    - HFT_INSERT_MAX_RETRIES=${HFT_WAL_INSERT_MAX_RETRIES:-4}
-    - HFT_INSERT_BASE_DELAY_S=${HFT_WAL_INSERT_BASE_DELAY_S:-0.6}
-    - HFT_INSERT_MAX_BACKOFF_S=${HFT_WAL_INSERT_MAX_BACKOFF_S:-8.0}
+    - HFT_INSERT_MAX_RETRIES=${HFT_INSERT_MAX_RETRIES:-4}
+    - HFT_INSERT_BASE_DELAY_S=${HFT_INSERT_BASE_DELAY_S:-0.6}
+    - HFT_INSERT_MAX_BACKOFF_S=${HFT_INSERT_MAX_BACKOFF_S:-8.0}
     - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set in .env}
     - HFT_RECONNECT_DAYS=${HFT_RECONNECT_DAYS:-}
     - HFT_RECONNECT_HOURS=${HFT_RECONNECT_HOURS:-}
@@ -53,13 +61,60 @@ x-hft-common: &hft-common
     - HFT_MONITOR_REDIS_HOST=${HFT_MONITOR_REDIS_HOST:-redis}
     - HFT_MONITOR_REDIS_PORT=${HFT_MONITOR_REDIS_PORT:-6379}
     - HFT_MONITOR_REDIS_PASSWORD=${HFT_MONITOR_REDIS_PASSWORD:-${REDIS_PASSWORD}}
-    - HFT_STORMGUARD_FEED_GAP_HALT_S=${HFT_STORMGUARD_FEED_GAP_HALT_S:-30}
+    # --- StormGuard ---
+    - HFT_STORMGUARD_FEED_GAP_STORM_S=${HFT_STORMGUARD_FEED_GAP_STORM_S:-30}
+    - HFT_STORMGUARD_LATENCY_STORM_US=${HFT_STORMGUARD_LATENCY_STORM_US:-10000000}
+    - HFT_STORMGUARD_LATENCY_WARM_US=${HFT_STORMGUARD_LATENCY_WARM_US:-5000000}
+    - HFT_STORMGUARD_STORM_COOLDOWN_S=${HFT_STORMGUARD_STORM_COOLDOWN_S:-30}
+    - HFT_STORMGUARD_DE_ESCALATE_N=${HFT_STORMGUARD_DE_ESCALATE_N:-5}
+    - HFT_STORMGUARD_DRIFT_BURST_ENABLED=${HFT_STORMGUARD_DRIFT_BURST_ENABLED:-0}
+    - HFT_STORMGUARD_HALT_EXEMPT_STRATEGIES=${HFT_STORMGUARD_HALT_EXEMPT_STRATEGIES:-}
+    - HFT_STORMGUARD_FEATURE_RECOVERY_HOLD_S=${HFT_STORMGUARD_FEATURE_RECOVERY_HOLD_S:-5}
+    # --- Strategy ---
+    - HFT_STRATEGY_TIMEOUT_MS=${HFT_STRATEGY_TIMEOUT_MS:-50}
+    - HFT_STRATEGY_TIMEOUT_STRIKES=${HFT_STRATEGY_TIMEOUT_STRIKES:-3}
+    - HFT_STRATEGY_TIMEOUT_RECOVER_S=${HFT_STRATEGY_TIMEOUT_RECOVER_S:-60}
+    - HFT_DEFAULT_INTENT_TTL_MS=${HFT_DEFAULT_INTENT_TTL_MS:-5000}
+    - HFT_MAX_INTENTS_PER_EVENT=${HFT_MAX_INTENTS_PER_EVENT:-20}
+    - HFT_STALE_EVENT_THRESHOLD_MS=${HFT_STALE_EVENT_THRESHOLD_MS:-500}
+    # --- Gateway ---
+    - HFT_GATEWAY_HALT_CANCEL=${HFT_GATEWAY_HALT_CANCEL:-1}
+    - HFT_GATEWAY_DEGRADE_ON_STORM=${HFT_GATEWAY_DEGRADE_ON_STORM:-1}
+    # --- Feature Engine ---
+    - HFT_FEATURE_ENGINE_EMIT_EVENTS=${HFT_FEATURE_ENGINE_EMIT_EVENTS:-1}
+    - HFT_FEATURE_FAILURE_ESCALATE=${HFT_FEATURE_FAILURE_ESCALATE:-10}
+    - HFT_NORM_FAILURE_ESCALATE=${HFT_NORM_FAILURE_ESCALATE:-50}
+    # --- Market Data ---
+    - HFT_RAW_QUEUE_SIZE=${HFT_RAW_QUEUE_SIZE:-10000}
+    - HFT_RAW_QUEUE_HIGH_WATERMARK=${HFT_RAW_QUEUE_HIGH_WATERMARK:-0.8}
+    - HFT_MD_RECORD_DIRECT=${HFT_MD_RECORD_DIRECT:-1}
+    - HFT_RECORDER_DROP_ON_FULL=${HFT_RECORDER_DROP_ON_FULL:-1}
+    - HFT_WATCHDOG_INTERVAL_S=${HFT_WATCHDOG_INTERVAL_S:-1.0}
+    - HFT_SYMBOL_GAP_THRESHOLD_S=${HFT_SYMBOL_GAP_THRESHOLD_S:-6.0}
+    - HFT_TRADE_CLASSIFICATION_ENABLED=${HFT_TRADE_CLASSIFICATION_ENABLED:-1}
+    # --- Bus Overflow ---
+    - HFT_BUS_OVERFLOW_HALT_THRESHOLD=${HFT_BUS_OVERFLOW_HALT_THRESHOLD:-3}
+    - HFT_BUS_OVERFLOW_RATE_THRESHOLD=${HFT_BUS_OVERFLOW_RATE_THRESHOLD:-10}
+    - HFT_BUS_OVERFLOW_WINDOW_S=${HFT_BUS_OVERFLOW_WINDOW_S:-60}
+    - HFT_BUS_DRAIN_TIMEOUT_MS=${HFT_BUS_DRAIN_TIMEOUT_MS:-500}
+    # --- Risk DLQ ---
+    - HFT_RISK_DLQ_DRAIN_INTERVAL=${HFT_RISK_DLQ_DRAIN_INTERVAL:-50}
+    - HFT_RISK_DLQ_TTL_S=${HFT_RISK_DLQ_TTL_S:-30}
+    # --- Platform ---
+    - HFT_GC_DISABLE_TRADING=${HFT_GC_DISABLE_TRADING:-0}
+    - HFT_PLATFORM_AUTO_RECOVERY_ENABLED=${HFT_PLATFORM_AUTO_RECOVERY_ENABLED:-1}
+    - HFT_PLATFORM_AUTO_RECOVERY_COOLDOWN_S=${HFT_PLATFORM_AUTO_RECOVERY_COOLDOWN_S:-60}
+    - HFT_PNL_EXPORTER_ENABLED=${HFT_PNL_EXPORTER_ENABLED:-1}
+    - HFT_CH_SHUTDOWN_TIMEOUT_S=${HFT_CH_SHUTDOWN_TIMEOUT_S:-30}
+    - HFT_QUOTE_CONNECTIONS=${HFT_QUOTE_CONNECTIONS:-1}
+    # --- Misc ---
     - HFT_ORDER_SHADOW_MODE=${HFT_ORDER_SHADOW_MODE:-0}
     - HFT_SESSION_GOVERNOR_ENABLED=${HFT_SESSION_GOVERNOR_ENABLED:-0}
     - HFT_ENV=${HFT_ENV:-dev}
     - PYTHONDONTWRITEBYTECODE=1
   volumes:
     - ./.wal:/app/.wal
+    - ./.state:/app/.state
     - ./data:/app/data
     - ./config:/app/config
     - ./scripts:/app/scripts
@@ -88,10 +143,11 @@ services:
     # Removed default network_mode: ${HFT_NETWORK_MODE:-bridge} to allow proper DNS resolution
     # network_mode: ${HFT_NETWORK_MODE:-}
     ports:
-      - "${HFT_PROM_PORT:-9090}:9090"
-      - "${HFT_HEALTH_PORT:-8080}:8080"
+      - "127.0.0.1:${HFT_PROM_PORT:-9090}:9090"
+      - "127.0.0.1:${HFT_HEALTH_PORT:-8080}:8080"
     volumes:
       - ./.wal:/app/.wal
+      - ./.state:/app/.state
       - ./data:/app/data
       - ./config:/app/config
       - ./scripts:/app/scripts
@@ -103,7 +159,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '${HFT_CPU_LIMIT:-4.0}'
+          cpus: '${HFT_CPU_LIMIT:-2.0}'
           memory: ${HFT_MEM_LIMIT:-4G}
     depends_on:
       clickhouse:
@@ -148,7 +204,7 @@ services:
       resources:
         limits:
           cpus: '4.0'
-          memory: 8G
+          memory: 12G
     healthcheck:
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1"]
       interval: 30s
@@ -178,7 +234,7 @@ services:
         max-size: "50m"
         max-file: "5"
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a ${REDIS_PASSWORD} ping | grep PONG"]
+      test: ["CMD-SHELL", "REDISCLI_AUTH=${REDIS_PASSWORD} redis-cli ping | grep PONG"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -265,14 +321,24 @@ services:
     image: prom/prometheus:v2.51.0
     container_name: prometheus
     ports:
-      - "9091:9090"
+      - "127.0.0.1:9091:9090"
     volumes:
       - ./config/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ./config/monitoring/alerts/rules.yaml:/etc/prometheus/alerts/rules.yaml:ro
+      # Directory mount (not file mount) — 2026-04-25. File bind-mounts pin to
+      # the host file's inode at container start; `git pull` replaces the file
+      # via rename(), the container keeps pointing at the (defunct) old inode,
+      # and SIGHUP reloads read stale content. Directory mounts are re-resolved
+      # on every read, so `curl -X POST .../-/reload` picks up the new rules.yaml.
+      # Prometheus only loads `rules.yaml` via `rule_files:` in prometheus.yml;
+      # the other files in this directory (alertmanager.yml*) are ignored.
+      - ./config/monitoring/alerts:/etc/prometheus/alerts:ro
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.retention.time=30d"
       - "--storage.tsdb.path=/prometheus"
+      # Enables `curl -X POST http://localhost:9091/-/reload` so rules.yaml can
+      # be applied without bouncing the container (2026-04-25).
+      - "--web.enable-lifecycle"
     depends_on:
       - hft-engine
       - alertmanager
@@ -296,7 +362,7 @@ services:
     image: prom/alertmanager:v0.27.0
     container_name: alertmanager
     ports:
-      - "9093:9093"
+      - "127.0.0.1:9093:9093"
     volumes:
       - ${HFT_ALERTMANAGER_CONFIG:-./config/monitoring/alerts/alertmanager.yml}:/etc/alertmanager/alertmanager.yml:ro
     command:
@@ -325,7 +391,7 @@ services:
       - ./config/monitoring/loki.yml:/etc/loki/local-config.yaml:ro
     command: -config.file=/etc/loki/local-config.yaml
     ports:
-      - "3100:3100"
+      - "127.0.0.1:3100:3100"
     restart: unless-stopped
     deploy:
       resources:
@@ -367,7 +433,7 @@ services:
     environment:
       - HFT_TELEGRAM_BOT_TOKEN=${HFT_TELEGRAM_BOT_TOKEN:?HFT_TELEGRAM_BOT_TOKEN must be set}
       - HFT_TELEGRAM_CHAT_ID=${HFT_TELEGRAM_CHAT_ID:?HFT_TELEGRAM_CHAT_ID must be set}
-      - HFT_REPORT_SYMBOLS=${HFT_REPORT_SYMBOLS:-TXFD6}
+      - HFT_REPORT_SYMBOLS=${HFT_REPORT_SYMBOLS:-TXFR1}
       - HFT_CLICKHOUSE_HOST=clickhouse
       - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set in .env}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}

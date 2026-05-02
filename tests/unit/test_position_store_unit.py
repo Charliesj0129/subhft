@@ -49,6 +49,9 @@ def _disable_rust(monkeypatch: pytest.MonkeyPatch) -> None:
         "hft_platform.observability.metrics.MetricsRegistry.get",
         staticmethod(lambda: None),
     )
+    import hft_platform.execution.positions as _positions
+
+    monkeypatch.setattr(_positions, "_MIN_PEAK_SCALED", 2_000_000)
 
 
 @pytest.fixture()

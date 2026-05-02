@@ -61,7 +61,9 @@ def _make_ctx(position: int = 0) -> StrategyContext:
     def _scale_price(_symbol: str, price: int) -> int:
         return int(price)
 
-    return StrategyContext(positions=positions, strategy_id="cascade_bounce", intent_factory=_intent_factory, price_scaler=_scale_price)
+    return StrategyContext(
+        positions=positions, strategy_id="cascade_bounce", intent_factory=_intent_factory, price_scaler=_scale_price
+    )
 
 
 def _make_fill(side: Side, price_points: int, order_id: str = "entry-1") -> FillEvent:
@@ -131,20 +133,20 @@ class TestCBSInitialization:
         assert cbs._session_start_sec == 33300
         assert cbs._session_end_sec == 48900
 
-    def test_strategy_registry_uses_normalized_tmfd6_params(self) -> None:
+    def test_strategy_registry_uses_normalized_tmf_params(self) -> None:
         cfg = yaml.safe_load(Path("config/base/strategies.yaml").read_text(encoding="utf-8"))
         enabled = {item["id"]: item["enabled"] for item in cfg["strategies"]}
-        cbs = next(item for item in cfg["strategies"] if item["id"] == "CBS_TMFD6")
+        cbs = next(item for item in cfg["strategies"] if item["id"] == "CBS_TMF")
         params = cbs["params"]
 
-        assert enabled["OPPORTUNISTIC_MM_TMFD6"] is False
-        assert enabled["CBS_TMFD6"] is True
+        assert enabled["OPPORTUNISTIC_MM_TMF"] is False
+        assert enabled["CBS_TMF"] is False  # Disabled: 0/84 contrarian, 0/6 momentum configs profitable
         assert params["lookback_ns"] > 0
         assert params["trigger_sigma"] > 0
         assert params["take_profit_pts"] > 0
         assert params["stop_loss_pts"] > 0
-        assert params["session_start_sec"] == 33300  # 09:15 TWN fallback gate
-        assert params["session_end_sec"] == 48900    # 13:35 TWN fallback gate
+        assert params["session_start_sec"] == 0  # full-day fallback; SessionGovernor is authoritative in prod
+        assert params["session_end_sec"] == 86400
 
 
 class TestCBSSessionGate:
@@ -166,6 +168,13 @@ class TestCBSSessionGate:
         intents = cbs.handle_event(ctx, _make_stats(ts=start_ts + 30 * _ONE_SEC_NS, points=32_990))
 
         assert len(intents) == 1
+
+    def test_overnight_session_wraparound_is_supported(self) -> None:
+        cbs = _all_session_cbs(session_start_sec=15 * 3600, session_end_sec=5 * 3600)
+
+        assert cbs._in_session(0) is False  # 08:00 TWN
+        assert cbs._in_session(8 * 3600 * _ONE_SEC_NS) is True  # 16:00 TWN
+        assert cbs._in_session(17 * 3600 * _ONE_SEC_NS) is True  # 01:00 TWN next day
 
 
 class TestCBSNormalizedEntry:
@@ -321,3 +330,64 @@ class TestCBSExitStateMachine:
         assert cbs._state["TMFD6"] == "idle"
         assert cbs._direction["TMFD6"] == 0
         assert cbs._next_allowed_ts["TMFD6"] == entry_ts + 120 * _ONE_SEC_NS
+
+
+class TestCBSSpreadGuard:
+    def test_wide_spread_blocks_entry(self) -> None:
+        """Entry is skipped when spread exceeds max_spread_pts."""
+        cbs = _all_session_cbs(max_spread_pts=3)
+        ctx = _make_ctx()
+        _seed_low_vol_history(cbs, ctx)
+
+        # Wide spread: 5 pts = 50000 scaled
+        wide_event = LOBStatsEvent(
+            symbol="TMFD6",
+            ts=_TS_0930_UTC_NS + 30 * _ONE_SEC_NS,
+            imbalance=0.0,
+            best_bid=_scaled_price(32_988),
+            best_ask=_scaled_price(32_993),  # 5 pts spread
+            bid_depth=10,
+            ask_depth=10,
+            mid_price_x2=_mid_x2(32_990),
+            spread_scaled=5 * 10_000,
+        )
+        intents = cbs.handle_event(ctx, wide_event)
+        assert intents == []
+        assert cbs._state["TMFD6"] == "idle"
+
+    def test_normal_spread_allows_entry(self) -> None:
+        """Entry proceeds when spread is within max_spread_pts."""
+        cbs = _all_session_cbs(max_spread_pts=3)
+        ctx = _make_ctx()
+        _seed_low_vol_history(cbs, ctx)
+
+        # Normal spread: 1 pt = 10000 scaled, with large move to trigger entry
+        normal_event = _make_stats(ts=_TS_0930_UTC_NS + 30 * _ONE_SEC_NS, points=32_990)
+        intents = cbs.handle_event(ctx, normal_event)
+        # With 1-pt spread and a 10-pt move (33000→32990), should trigger
+        assert len(intents) > 0
+
+    def test_zero_spread_blocks_entry(self) -> None:
+        """Zero or negative spread is treated as invalid and blocks entry."""
+        cbs = _all_session_cbs(max_spread_pts=3)
+        ctx = _make_ctx()
+        _seed_low_vol_history(cbs, ctx)
+
+        zero_spread_event = LOBStatsEvent(
+            symbol="TMFD6",
+            ts=_TS_0930_UTC_NS + 30 * _ONE_SEC_NS,
+            imbalance=0.0,
+            best_bid=_scaled_price(32_990),
+            best_ask=_scaled_price(32_990),
+            bid_depth=10,
+            ask_depth=10,
+            mid_price_x2=_mid_x2(32_990),
+            spread_scaled=0,
+        )
+        intents = cbs.handle_event(ctx, zero_spread_event)
+        assert intents == []
+
+    def test_default_max_spread_is_3pts(self) -> None:
+        """Default max_spread_pts is 3."""
+        cbs = CascadeBounceStrategy()
+        assert cbs._max_spread_scaled == 3 * 10_000

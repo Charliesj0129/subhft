@@ -408,6 +408,113 @@ def check_except_without_reraise(tree: ast.Module, path: Path) -> list[Violation
 
 
 
+# Money-related field-name fragments. Matched as exact name, prefix
+# ("<pat>_..."), suffix ("..._<pat>"), or interior ("..._<pat>_...").
+_MONEY_FIELD_PATTERNS: tuple[str, ...] = (
+    "price", "bid", "ask", "mid",
+    "balance", "equity", "cash", "capital", "notional",
+    "pnl", "profit", "loss",
+    "fee", "commission", "tax", "cost",
+    "premium",
+)
+
+# Domains where money values must be Decimal/scaled-int per CLAUDE.md Law 4.
+_MONEY_DOMAIN_PARTS = frozenset({"contracts", "order", "execution", "risk"})
+
+# Files exempt from HFT-P004. Scenario / what-if simulation code legitimately
+# uses float for synthetic inputs (e.g., underlying_price sweeps in stress
+# tests). Live trading paths in those domains remain enforced.
+_HFT_P004_EXEMPT_FILES = frozenset({"stress_test.py"})
+
+
+def _is_money_field_name(name: str) -> bool:
+    lower = name.lower()
+    for pattern in _MONEY_FIELD_PATTERNS:
+        if (
+            lower == pattern
+            or lower.endswith("_" + pattern)
+            or lower.startswith(pattern + "_")
+            or "_" + pattern + "_" in lower
+        ):
+            return True
+    return False
+
+
+def _is_float_annotation(annotation: ast.expr | None) -> bool:
+    """True if annotation resolves to bare `float`, `Optional[float]`, or `float | None`."""
+    if annotation is None:
+        return False
+    if isinstance(annotation, ast.Name) and annotation.id == "float":
+        return True
+    if isinstance(annotation, ast.Subscript):
+        return _is_float_annotation(annotation.slice)
+    if isinstance(annotation, ast.BinOp) and isinstance(annotation.op, ast.BitOr):
+        return _is_float_annotation(annotation.left) or _is_float_annotation(annotation.right)
+    if isinstance(annotation, ast.Tuple):
+        return any(_is_float_annotation(e) for e in annotation.elts)
+    return False
+
+
+def check_no_float_money(tree: ast.Module, path: Path) -> list[Violation]:
+    """HFT-P004: float annotation on money-related field in price-precision domains.
+
+    Enforces CLAUDE.md Law 4 (Precision): never use float for prices, balances,
+    fees, P&L, or notionals. Use Decimal or scaled int (x10000).
+
+    Scope: contracts/, order/, execution/, risk/ (excluding stress_test.py).
+    """
+    if _is_test_file(path):
+        return []
+    if path.name in _HFT_P004_EXEMPT_FILES:
+        return []
+    parts = set(path.parts)
+    if not (parts & _MONEY_DOMAIN_PARTS):
+        return []
+
+    violations: list[Violation] = []
+
+    for node in ast.walk(tree):
+        # Annotated assignment / class attr:  price: float = 0.0
+        if isinstance(node, ast.AnnAssign):
+            target = node.target
+            name: str | None = None
+            if isinstance(target, ast.Name):
+                name = target.id
+            elif isinstance(target, ast.Attribute):
+                name = target.attr
+            if name and _is_money_field_name(name) and _is_float_annotation(node.annotation):
+                violations.append(Violation(
+                    file=str(path),
+                    line=node.lineno,
+                    severity=Severity.HIGH,
+                    rule_id="HFT-P004",
+                    message=f"'{name}: float' violates Law 4 (Precision); use Decimal or scaled int x10000",
+                ))
+
+        # Function parameter annotations:  def buy(price: float, ...)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            arg_groups = (node.args.args, node.args.posonlyargs, node.args.kwonlyargs)
+            for group in arg_groups:
+                for arg in group:
+                    if (
+                        arg.arg
+                        and _is_money_field_name(arg.arg)
+                        and _is_float_annotation(arg.annotation)
+                    ):
+                        violations.append(Violation(
+                            file=str(path),
+                            line=arg.lineno,
+                            severity=Severity.HIGH,
+                            rule_id="HFT-P004",
+                            message=(
+                                f"parameter '{arg.arg}: float' violates Law 4 (Precision); "
+                                "use Decimal or scaled int x10000"
+                            ),
+                        ))
+
+    return violations
+
+
 def check_file_size(tree: ast.Module, path: Path) -> list[Violation]:
     """HFT-S001: File size enforcement (800 line warning, 1500 line critical).
 
@@ -446,6 +553,7 @@ ALL_CHECKS = [
     check_pytest_in_sys_modules,
     check_architecture_boundaries,
     check_hot_path_antipatterns,
+    check_no_float_money,
     check_except_without_reraise,
     check_file_size,
 ]
@@ -536,7 +644,10 @@ def print_report(
 # Rules that are hard boundaries (fail CI immediately).
 # D-rules (D001/D002/D003) are reported but non-blocking in default mode.
 # Only architecture (A*) and performance (P*) rules cause CI failure.
-_BLOCKING_RULES = frozenset({"HFT-A001", "HFT-A002", "HFT-A003", "HFT-P001", "HFT-P002", "HFT-P003"})
+_BLOCKING_RULES = frozenset({
+    "HFT-A001", "HFT-A002", "HFT-A003",
+    "HFT-P001", "HFT-P002", "HFT-P003", "HFT-P004",
+})
 
 
 def should_fail(violations: list[Violation], *, strict: bool = False) -> bool:

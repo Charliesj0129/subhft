@@ -135,6 +135,8 @@ class TestPriceBandValidatorWithLOB(unittest.TestCase):
 
         # Mock LOB engine
         self.mock_lob = MagicMock()
+        self.mock_lob.get_book.return_value = None
+        self.mock_lob.get_l1_scaled.return_value = None
 
     def tearDown(self):
         self.metrics_patcher.stop()
@@ -290,6 +292,8 @@ class TestPriceBandValidatorMidPriceRetrieval(unittest.TestCase):
     def test_get_mid_price_returns_scaled_value(self):
         """_get_mid_price should return scaled integer."""
         mock_lob = MagicMock()
+        mock_lob.get_book.return_value = None
+        mock_lob.get_l1_scaled.return_value = None
         # LOB stores mid_price already in scaled units (mid_price_x2 / 2.0)
         mock_lob.get_book_snapshot.return_value = {
             "symbol": "2330",
@@ -305,6 +309,8 @@ class TestPriceBandValidatorMidPriceRetrieval(unittest.TestCase):
     def test_get_mid_price_returns_none_on_error(self):
         """_get_mid_price should return None on error."""
         mock_lob = MagicMock()
+        mock_lob.get_book.return_value = None
+        mock_lob.get_l1_scaled.return_value = None
         mock_lob.get_book_snapshot.side_effect = Exception("Error")
 
         validator = PriceBandValidator(self.config, lob=mock_lob)

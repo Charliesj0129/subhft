@@ -7,6 +7,7 @@ All prices are received as scaled int (x10000) and unscaled at the SDK boundary.
 from __future__ import annotations
 
 import time
+from decimal import Decimal
 from typing import Any
 
 from structlog import get_logger
@@ -16,6 +17,7 @@ from hft_platform.feed_adapter.fubon.order_codec import FubonOrderCodec
 logger = get_logger("feed_adapter.fubon.order_gateway")
 
 PRICE_SCALE = 10000
+_PRICE_SCALE_D = Decimal(PRICE_SCALE)
 
 
 class FubonOrderGateway:
@@ -69,7 +71,7 @@ class FubonOrderGateway:
         sdk = self._require_sdk("place_order")
         if symbol is None or price is None or qty is None or side is None:
             raise TypeError("symbol, price, qty, and side are required")
-        sdk_price = price / PRICE_SCALE
+        sdk_price = float(Decimal(price) / _PRICE_SCALE_D)
         bs_action = self._codec.encode_side(side)
         time_in_force = self._codec.encode_tif(tif)
         pt = self._codec.encode_price_type(price_type)
@@ -132,7 +134,7 @@ class FubonOrderGateway:
         sdk = self._require_sdk("place_futopt_order")
         if symbol is None or price is None or qty is None or side is None:
             raise TypeError("symbol, price, qty, and side are required")
-        sdk_price = price / PRICE_SCALE
+        sdk_price = float(Decimal(price) / _PRICE_SCALE_D)
         bs_action = self._codec.encode_side(side)
         time_in_force = self._codec.encode_tif(tif)
         pt = self._codec.encode_price_type(price_type)
@@ -247,7 +249,7 @@ class FubonOrderGateway:
             return None
         order_id = self._extract_order_id(trade, "update_order")
         sdk = self._require_sdk("update_order")
-        sdk_price = price / PRICE_SCALE if price is not None else None
+        sdk_price = float(Decimal(price) / _PRICE_SCALE_D) if price is not None else None
         modify_kwargs: dict[str, Any] = {"order_id": order_id}
         if sdk_price is not None:
             modify_kwargs["price"] = sdk_price

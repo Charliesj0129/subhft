@@ -593,3 +593,53 @@ class TestMalformedScorecard:
         results = audit_alphas(tmp_path)
         assert len(results) == 1
         assert results[0].has_profile is False
+
+
+# =============================================================================
+# _strict_exit_code — CI gate exit semantics
+# =============================================================================
+
+
+class TestStrictExitCode:
+    def test_empty_results_exit_zero(self) -> None:
+        from hft_platform.alpha.latency_audit import _strict_exit_code
+
+        assert _strict_exit_code([]) == 0
+
+    def test_all_compliant_exit_zero(self, tmp_path: Path) -> None:
+        from hft_platform.alpha.latency_audit import _strict_exit_code, audit_alphas
+
+        _write_profiles(tmp_path)
+        _write_scorecard(tmp_path, "good", _COMPLIANT_SCORECARD)
+
+        results = audit_alphas(tmp_path)
+        assert _strict_exit_code(results) == 0
+
+    def test_missing_profile_exit_one(self, tmp_path: Path) -> None:
+        from hft_platform.alpha.latency_audit import _strict_exit_code, audit_alphas
+
+        _write_profiles(tmp_path)
+        _write_scorecard(tmp_path, "no_prof", {"alpha_id": "no_prof"})
+
+        results = audit_alphas(tmp_path)
+        assert _strict_exit_code(results) == 1
+
+    def test_invalid_profile_exit_one(self, tmp_path: Path) -> None:
+        from hft_platform.alpha.latency_audit import _strict_exit_code, audit_alphas
+
+        _write_profiles(tmp_path)
+        _write_scorecard(tmp_path, "bad", _INVALID_PROFILE_SCORECARD)
+
+        results = audit_alphas(tmp_path)
+        assert _strict_exit_code(results) == 1
+
+    def test_missing_stress_exit_one(self, tmp_path: Path) -> None:
+        from hft_platform.alpha.latency_audit import _strict_exit_code, audit_alphas
+
+        _write_profiles(tmp_path)
+        sc = dict(_COMPLIANT_SCORECARD)
+        sc.pop("stress_test", None)
+        _write_scorecard(tmp_path, "no_stress", sc)
+
+        results = audit_alphas(tmp_path)
+        assert _strict_exit_code(results) == 1

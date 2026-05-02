@@ -48,6 +48,7 @@ class ShmSnapshotWriter:
     """Engine-side writer: creates SHM segment and publishes snapshots.
 
     Single-writer only — must be called from the same thread/process.
+    Supports context manager protocol for deterministic cleanup.
     """
 
     __slots__ = ("_table", "_name", "_max_symbols")
@@ -71,6 +72,25 @@ class ShmSnapshotWriter:
         """Write a snapshot to the given slot (fire-and-forget, ~50ns)."""
         self._table.write_slot(slot_idx, ts_ns, symbol_hash, lob_fields, features)
 
+    def close(self) -> None:
+        """Release the SHM segment. Safe to call multiple times."""
+        if self._table is not None:
+            logger.info("shm_snapshot_writer_closing", name=self._name)
+            self._table = None  # Drop reference; Rust Drop trait should handle unlink
+
+    def __del__(self) -> None:
+        """Best-effort cleanup on GC."""
+        try:
+            self.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def __enter__(self) -> "ShmSnapshotWriter":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
     @property
     def max_symbols(self) -> int:
         return self._max_symbols
@@ -80,6 +100,7 @@ class ShmSnapshotReader:
     """Monitor-side reader: opens existing SHM segment and reads snapshots.
 
     Thread-safe for concurrent readers (seqlock protocol).
+    Supports context manager protocol for deterministic cleanup.
     """
 
     __slots__ = ("_table", "_name", "_max_symbols")
@@ -109,6 +130,17 @@ class ShmSnapshotReader:
     def global_version(self) -> int:
         """Read the global version counter."""
         return self._table.global_version()
+
+    def close(self) -> None:
+        """Release the reference to the SHM segment. Safe to call multiple times."""
+        if self._table is not None:
+            self._table = None  # Readers do not own/unlink the segment
+
+    def __enter__(self) -> "ShmSnapshotReader":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
 
     @property
     def max_symbols(self) -> int:

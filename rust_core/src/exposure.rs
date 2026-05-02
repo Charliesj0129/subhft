@@ -68,16 +68,16 @@ impl RustExposureStore {
             return (false, 1);
         }
 
-        // Per-strategy limit
+        // Per-strategy limit — aggregate across all symbols for this (account, strategy)
         if let Some(&limit) = self.limits.get(strategy_id) {
             if limit > 0 {
-                let key = (
-                    account.to_string(),
-                    strategy_id.to_string(),
-                    symbol.to_string(),
-                );
-                let current = self.exposure.get(&key).copied().unwrap_or(0);
-                if current + notional > limit {
+                let strategy_total: i64 = self
+                    .exposure
+                    .iter()
+                    .filter(|((a, s, _), _)| a == account && s == strategy_id)
+                    .map(|(_, &v)| v)
+                    .sum();
+                if strategy_total + notional > limit {
                     return (false, 2);
                 }
             }

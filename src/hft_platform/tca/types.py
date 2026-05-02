@@ -6,18 +6,6 @@ from dataclasses import dataclass
 
 
 @dataclass(slots=True, frozen=True)
-class FeeSchedule:
-    """Fee schedule for a single futures product."""
-
-    symbol: str
-    commission_per_contract: int  # NTD (plain, not scaled)
-    tax_rate_bps: float  # bps of notional, sell-side only
-    tax_side: str  # "sell"
-    tick_size: float
-    point_value: int  # NTD per point
-
-
-@dataclass(slots=True, frozen=True)
 class FeeBreakdown:
     """Per-trade fee breakdown. All fields NTD scaled x10000."""
 

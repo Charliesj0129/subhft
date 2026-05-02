@@ -12,11 +12,29 @@ from zoneinfo import ZoneInfo
 import structlog
 
 from hft_platform.bot.app import owner_only
+from hft_platform.reports.models import ComposedReport
 
 _log = structlog.get_logger(__name__)
 _TZ = ZoneInfo("Asia/Taipei")
 
 PLATFORM_SCALE = 10_000
+
+# ---------------------------------------------------------------------------
+# Position store reference — set by bootstrap or bot app setup
+# ---------------------------------------------------------------------------
+
+_position_store_ref = None
+
+
+def set_position_store(store: object) -> None:
+    """Set the PositionStore reference for bot commands."""
+    global _position_store_ref  # noqa: PLW0603
+    _position_store_ref = store
+
+
+def _get_position_store() -> object | None:
+    """Return the current PositionStore reference (or None)."""
+    return _position_store_ref
 
 
 def _parse_report_args(args: list[str]) -> tuple[str, str | None]:
@@ -94,7 +112,9 @@ async def cmd_start(update: Any, context: Any) -> None:
     text = (
         "HFT 市場分析 Bot\n\n"
         "可用指令：\n"
-        "/report [symbol] [day|night] — 完整分析報告\n"
+        "/report [symbol] [day|night] — Hybrid LLM 報告\n"
+        "/report_rule [symbol] [day|night] — 規則版報告\n"
+        "/ask <問題> — 追問最近一次 manual hybrid 報告\n"
         "/levels [symbol] — 支撐壓力位\n"
         "/flow [symbol] — 流向摘要\n"
         "/status — Bot 運行狀態\n\n"
@@ -107,7 +127,7 @@ async def cmd_start(update: Any, context: Any) -> None:
 async def cmd_report(update: Any, context: Any) -> None:
     """Handle /report [symbol] [day|night] command."""
     import hft_platform.bot.app as bot_app
-    from hft_platform.reports.pipeline import build_report, resolve_trading_date
+    from hft_platform.reports.pipeline import build_hybrid_report_async, resolve_trading_date
 
     symbol, session = _parse_report_args(context.args or [])
     if session is None:
@@ -116,12 +136,56 @@ async def cmd_report(update: Any, context: Any) -> None:
 
     date = resolve_trading_date(session)
     await update.message.reply_text(f"產生報告中... ({symbol} {session} {date})")
+    bot_app.latest_manual_report_context = None
 
     try:
-        composed = build_report(session, date, symbol)
+        result = await build_hybrid_report_async(session, date, symbol)
         bot_app.last_ch_ok = datetime.now(_TZ)
     except Exception as exc:
         _log.error("bot.report_error", exc=str(exc), exc_info=True)
+        await update.message.reply_text(f"報告產生失敗：{exc}")
+        return
+
+    if result.composed is None:
+        await update.message.reply_text("該時段無交易資料")
+        return
+
+    if result.decision is not None and result.dossier is not None:
+        bot_app.latest_manual_report_context = bot_app.LatestReportContext(
+            symbol=result.dossier.symbol,
+            session=result.dossier.session,
+            date=result.dossier.date,
+            dossier=result.dossier,
+            decision=result.decision,
+        )
+
+    await _send_composed(update, context, result.composed)
+
+    if session == "day":
+        bot_app.last_day_report = datetime.now(_TZ)
+    else:
+        bot_app.last_night_report = datetime.now(_TZ)
+
+
+@owner_only
+async def cmd_report_rule(update: Any, context: Any) -> None:
+    """Handle /report_rule [symbol] [day|night] command."""
+    import hft_platform.bot.app as bot_app
+    from hft_platform.reports.pipeline import build_report, resolve_trading_date
+
+    symbol, session = _parse_report_args(context.args or [])
+    if session is None:
+        now = datetime.now(_TZ)
+        session = "day" if 7 <= now.hour < 15 else "night"
+
+    date = resolve_trading_date(session)
+    await update.message.reply_text(f"產生規則版報告中... ({symbol} {session} {date})")
+
+    try:
+        composed = await asyncio.to_thread(build_report, session, date, symbol)
+        bot_app.last_ch_ok = datetime.now(_TZ)
+    except Exception as exc:
+        _log.error("bot.report_rule_error", exc=str(exc), exc_info=True)
         await update.message.reply_text(f"報告產生失敗：{exc}")
         return
 
@@ -129,6 +193,44 @@ async def cmd_report(update: Any, context: Any) -> None:
         await update.message.reply_text("該時段無交易資料")
         return
 
+    await _send_composed(update, context, composed)
+
+    if session == "day":
+        bot_app.last_day_report = datetime.now(_TZ)
+    else:
+        bot_app.last_night_report = datetime.now(_TZ)
+
+
+@owner_only
+async def cmd_ask(update: Any, context: Any) -> None:
+    """Handle /ask <question> for the latest manual hybrid report."""
+    import hft_platform.bot.app as bot_app
+
+    latest_context = bot_app.latest_manual_report_context
+    if latest_context is None:
+        await update.message.reply_text("目前沒有可追問的 hybrid 報告，請先執行 /report")
+        return
+    if latest_context.decision is None:
+        await update.message.reply_text("最近一次 /report 沒有成功產生 LLM 判讀，請先重新執行 /report")
+        return
+
+    question = " ".join(context.args or []).strip()
+    if not question:
+        await update.message.reply_text("用法：/ask <問題>")
+        return
+
+    try:
+        from hft_platform.reports.llm_reasoner import answer_followup_question
+    except ImportError:
+        await update.message.reply_text("追問功能尚未啟用")
+        return
+
+    answer = await answer_followup_question(latest_context, question)
+    await update.message.reply_text(answer, parse_mode="HTML")
+
+
+async def _send_composed(update: Any, context: Any, composed: ComposedReport) -> None:
+    """Send a composed report to the current chat with Telegram-safe pacing."""
     chat_id = update.effective_chat.id
     for i, part in enumerate(composed.messages):
         if part.kind == "text":
@@ -137,11 +239,6 @@ async def cmd_report(update: Any, context: Any) -> None:
             await context.bot.send_photo(chat_id=chat_id, photo=io.BytesIO(part.image), caption=part.caption)
         if i < len(composed.messages) - 1:
             await asyncio.sleep(1.5)
-
-    if session == "day":
-        bot_app.last_day_report = datetime.now(_TZ)
-    else:
-        bot_app.last_night_report = datetime.now(_TZ)
 
 
 @owner_only
@@ -280,5 +377,70 @@ async def cmd_status(update: Any, context: Any) -> None:
         lines.append(f"ClickHouse: 最後成功 {ch_mins} 分鐘前")
     else:
         lines.append("ClickHouse: 尚未連線")
+
+    await update.message.reply_text("\n".join(lines))
+
+
+@owner_only
+async def cmd_pos(update: Any, context: Any) -> None:
+    """Handle /pos [strategy_id] command — show per-strategy position breakdown."""
+    store = _get_position_store()
+    if store is None:
+        await update.message.reply_text("Position store 未連接")
+        return
+
+    args = context.args or []
+    filter_strategy = args[0] if args else None
+
+    positions = getattr(store, "positions", {})
+    if not positions:
+        await update.message.reply_text("無持倉")
+        return
+
+    # Group by strategy_id — skip flat (net_qty == 0) positions
+    by_strategy: dict[str, list[tuple[str, int]]] = {}
+    for _key, pos in positions.items():
+        if pos.net_qty == 0:
+            continue
+        strat = getattr(pos, "strategy_id", "?")
+        if filter_strategy and strat != filter_strategy:
+            continue
+        by_strategy.setdefault(strat, []).append((pos.symbol, pos.net_qty))
+
+    # Include recovery positions
+    recovery = getattr(store, "_recovery_positions", {})
+    for _rkey, rdata in recovery.items():
+        if not isinstance(rdata, dict):
+            continue
+        qty = int(rdata.get("net_qty", 0))
+        if qty == 0:
+            continue
+        strat = rdata.get("strategy_id", "?")
+        if filter_strategy and strat != filter_strategy:
+            continue
+        by_strategy.setdefault(strat, []).append((rdata.get("symbol", "?"), qty))
+
+    if not by_strategy:
+        msg = f"策略 {filter_strategy} 無持倉" if filter_strategy else "無持倉"
+        await update.message.reply_text(msg)
+        return
+
+    lines: list[str] = ["倉位明細\n"]
+    total_by_symbol: dict[str, int] = {}
+    for strat in sorted(by_strategy):
+        lines.append(f"[{strat}]")
+        for symbol, qty in sorted(by_strategy[strat]):
+            sign = "+" if qty > 0 else ""
+            lines.append(f"  {symbol}: {sign}{qty}")
+            total_by_symbol[symbol] = total_by_symbol.get(symbol, 0) + qty
+        lines.append("")
+
+    # Aggregate footer — only shown when multiple strategies are present
+    if len(by_strategy) > 1:
+        lines.append("[合計]")
+        for symbol in sorted(total_by_symbol):
+            qty = total_by_symbol[symbol]
+            sign = "+" if qty > 0 else ""
+            lines.append(f"  {symbol}: {sign}{qty}")
 
     await update.message.reply_text("\n".join(lines))

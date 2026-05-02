@@ -9,8 +9,8 @@ from hft_platform.strategy.base import BaseStrategy
 
 
 class _Depth:
-    best_bid = 1000000
-    best_ask = 1001000
+    best_bid = 100.0
+    best_ask = 100.1
     best_bid_qty = 30
     best_ask_qty = 20
 
@@ -118,7 +118,7 @@ def test_lob_feature_mode_instantiates_lob_and_feature_engines(monkeypatch):
     adapter = hbt_adapter.HftBacktestAdapter(
         strategy=strategy,
         asset_symbol="AAA",
-        data_path="dummy",
+        data="dummy",
         feature_mode="lob_feature",
     )
     assert adapter._lob_engine is not None
@@ -133,7 +133,7 @@ def test_stats_only_mode_no_lob_engine(monkeypatch):
     adapter = hbt_adapter.HftBacktestAdapter(
         strategy=strategy,
         asset_symbol="AAA",
-        data_path="dummy",
+        data="dummy",
         feature_mode="stats_only",
     )
     assert adapter._lob_engine is None
@@ -146,7 +146,7 @@ def test_lob_feature_mode_feature_source_in_ctx(monkeypatch):
     adapter = hbt_adapter.HftBacktestAdapter(
         strategy=strategy,
         asset_symbol="AAA",
-        data_path="dummy",
+        data="dummy",
         feature_mode="lob_feature",
     )
     # ctx._feature_source must be a callable bound to the feature engine instance
@@ -160,7 +160,7 @@ def test_lob_feature_mode_feature_view_source_in_ctx(monkeypatch):
     adapter = hbt_adapter.HftBacktestAdapter(
         strategy=strategy,
         asset_symbol="AAA",
-        data_path="dummy",
+        data="dummy",
         feature_mode="lob_feature",
     )
     assert callable(adapter.ctx._feature_view_source)
@@ -173,7 +173,7 @@ def test_stats_only_mode_feature_source_none(monkeypatch):
     adapter = hbt_adapter.HftBacktestAdapter(
         strategy=strategy,
         asset_symbol="AAA",
-        data_path="dummy",
+        data="dummy",
         feature_mode="stats_only",
     )
     assert adapter.ctx._feature_source is None
@@ -185,7 +185,7 @@ def test_lob_feature_mode_populates_spread_scaled(monkeypatch):
     adapter = hbt_adapter.HftBacktestAdapter(
         strategy=strategy,
         asset_symbol="AAA",
-        data_path="dummy",
+        data="dummy",
         feature_mode="lob_feature",
         price_scale=10_000,
     )
@@ -200,7 +200,7 @@ def test_lob_feature_mode_spread_value_is_integer(monkeypatch):
     adapter = hbt_adapter.HftBacktestAdapter(
         strategy=strategy,
         asset_symbol="AAA",
-        data_path="dummy",
+        data="dummy",
         feature_mode="lob_feature",
         price_scale=10_000,
     )
@@ -216,7 +216,7 @@ def test_lob_feature_mode_feature_tuple_available_via_ctx(monkeypatch):
     adapter = hbt_adapter.HftBacktestAdapter(
         strategy=strategy,
         asset_symbol="AAA",
-        data_path="dummy",
+        data="dummy",
         feature_mode="lob_feature",
     )
     adapter.run()
@@ -235,12 +235,15 @@ def test_lob_feature_mode_mid_price_x2_is_sum_of_bid_ask(monkeypatch):
     adapter = hbt_adapter.HftBacktestAdapter(
         strategy=strategy,
         asset_symbol="AAA",
-        data_path="dummy",
+        data="dummy",
         feature_mode="lob_feature",
         price_scale=10_000,
     )
     adapter.run()
-    # _Depth has best_bid=1000000, best_ask=1001000
-    # mid_price_x2 = bid + ask = 2001000
+    # _Depth has best_bid=100.0, best_ask=100.1 (native hftbacktest float prices)
+    # After rescaling by price_scale=10_000:
+    #   bid_scaled = int(round(100.0 * 10_000)) = 1_000_000
+    #   ask_scaled = int(round(100.1 * 10_000)) = 1_001_000
+    # mid_price_x2 = bid_scaled + ask_scaled = 2_001_000
     if strategy.recorded_mid is not None:
-        assert strategy.recorded_mid == 1000000 + 1001000
+        assert strategy.recorded_mid == 1_000_000 + 1_001_000

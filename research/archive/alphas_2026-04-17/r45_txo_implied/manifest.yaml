@@ -1,0 +1,63 @@
+alpha_id: r45_txo_implied
+name: "TXO Options-Implied Signals for TXFD6"
+status: PARKED
+created: 2026-04-07
+author: claude
+
+description: >
+  Investigate whether TXO (台指選擇權) options data — tick-level trades
+  and daily OI by strike — contain exploitable information for predicting
+  TXFD6 futures movements.
+
+hypotheses:
+  - "Put/Call volume ratio at intraday level predicts TXFD6 direction"
+  - "IV skew changes predict TXFD6 moves"
+  - "Large option trades reveal institutional directional bets"
+  - "Max Pain (strike with max OI) acts as attractor for TXFD6"
+  - "Dealer net OI changes predict next-day returns"
+
+data_requirements:
+  txo_tick:
+    source: "research/data/real/golden/TXO*/"
+    instruments: 102
+    format: "golden parquet (price_scaled x1e6)"
+    dates_b6_n6: 6  # Feb series, overlaps TXFD6
+    dates_c6_o6: 6  # Mar series, NO TXFD6 overlap
+  txo_oi:
+    source: "research/data/raw/taifex_oi/"
+    dates: 58
+    fields: [strike, expiry, cp, total_oi, settlement_price, volume,
+             dealer_long_oi, dealer_short_oi, dealer_net_oi, dealer_fraction]
+  txfd6:
+    source: "research/data/real/golden/TXFD6/"
+    dates: 19
+
+overlap:
+  intraday_txo_txfd6: 6  # but only deep OTM strikes, effectively 0 usable
+  daily_oi_txfd6: 18
+
+findings:
+  intraday: >
+    INFEASIBLE. The 6 overlapping dates (B6/N6 Feb series) only cover
+    strikes 22400-23400, which are ~9000 pts deep OTM relative to TXFD6
+    at 31700-34600. Zero call trades, 132 put trades total.
+    The C6/O6 (Mar) series has near-ATM strikes with decent activity
+    (8778 put ticks) but zero date overlap with TXFD6.
+
+  cross_day_oi:
+    top3_oi_share: "IC=+0.57, p=0.017, n=17 — strongest but likely spurious"
+    d_dealer_put_net: "IC=-0.42, p=0.090, n=17 — suggestive"
+    d_dealer_call_net: "IC=-0.41, p=0.098, n=17 — suggestive"
+    pc_vol_ratio: "IC=-0.31, p=0.228, n=16 — weak"
+    max_pain_dist: "IC=-0.03, p=0.918, n=16 — no signal"
+
+verdict: >
+  PARK. Two fundamental blockers:
+  (1) Intraday TXO tick data has no usable overlap with TXFD6.
+  (2) Cross-day OI signals show suggestive IC for dealer positioning
+  changes (IC ~ -0.42) but n=17 is far too small for conclusions.
+  Reactivate when 40+ overlapping TXO+TXFD6 days are available.
+
+reactivation_criteria:
+  - "40+ days of overlapping TXO tick + TXFD6 tick data at near-ATM strikes"
+  - "OR: 60+ days of OI + TXFD6 daily data for cross-day IC validation"

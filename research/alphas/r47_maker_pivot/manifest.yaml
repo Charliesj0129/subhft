@@ -1,0 +1,53 @@
+alpha_id: r47_maker_pivot
+name: "Three-Layer Maker Strategy (PE + Queue + MFG)"
+version: "0.1.0"
+status: prototype
+owner: charlie
+strategy_type: maker
+instrument: TMFD6
+
+instruments:
+  - TMFD6
+
+paper_refs:
+  - "1105.3115"   # Gueant-Lehalle-Tapia Inventory Risk
+  - "1206.4810"   # Fodra-Labadie Directional Bets
+  - "1806.05849"  # Gao-Wang Latency-Aware MM
+  - "2403.02572"  # Lokin-Yu Fill Probabilities
+  - "2508.16588"  # Wang+ Selective Quoting
+
+signals:
+  d1_pe_entropy:
+    input: QI_1 (feature[10] l1_imbalance_ppm)
+    method: Bandt-Pompe ordinal patterns D=4
+    output: normalized Shannon entropy H
+    gate0_result: "PASS — median H=0.724, P(H<0.85)=89.9%"
+
+  d2_queue_survival:
+    input: L1 bid_qty/ask_qty (features[8,9])
+    method: M/M/1 birth-death depletion probability
+    output: P(depletion) per side
+    gate0_result: "PASS — ρ(QS,QI)=0.033, 94.1% lead >36ms"
+
+  d3_mfg_inventory:
+    input: signed trade flow (TickEvent.trade_direction * volume)
+    method: cumulative flow EMA + z-score
+    output: capitulation z-score + flow direction
+    gate0_result: "PASS — kurtosis=147814, 613 events/day"
+
+parameters:
+  pe_safe_threshold: 0.85
+  pe_danger_threshold: 0.55
+  pe_window: 100
+  queue_cancel_threshold: 0.7
+  queue_ema_alpha: 0.05
+  mfg_skew_z_threshold: 2.0
+  mfg_ema_alpha: 0.01
+  spread_threshold_pts: 1
+  toxicity_max: 700
+
+gate0_economics:
+  rt_cost_pts: 0.30
+  naive_profitable_fill_pct: 37.4
+  target_profitable_fill_pct: 57.0
+  note: "All naive spread buckets negative. Need signal gating to raise P(profitable) from 37% to 57%+"

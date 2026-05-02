@@ -472,7 +472,7 @@ class TestSchemaExtractors:
         row = {"trade_id": "T1", "order_id": "O1", "symbol": "TSE001"}
         result = _extract_fill(row)
         assert result is not None
-        assert result["trade_id"] == "T1"
+        assert result["fill_id"] == "T1"
 
     def test_extractor_returns_none_on_error(self):
         from hft_platform.recorder.worker import _extract_market_data
@@ -504,7 +504,6 @@ class TestLoaderBatchParsing:
 async def test_writer_wal_fallback_columnar(tmp_path, monkeypatch):
     """write_columnar falls back to WAL when CH is not connected."""
     monkeypatch.setenv("HFT_CLICKHOUSE_ENABLED", "0")
-    monkeypatch.setenv("HFT_DISABLE_CLICKHOUSE", "1")
     monkeypatch.setenv("HFT_WAL_BATCH_ENABLED", "0")
 
     from hft_platform.recorder.writer import DataWriter

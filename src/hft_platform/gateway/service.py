@@ -10,8 +10,8 @@ Architecture (D2):
     3. exposure.check_and_update(key, intent)   → reject if overshoot
     4. risk_engine.evaluate(intent)             → synchronous
     5. risk_engine.create_command(intent)       → synchronous
-    6. dedup.commit(key, approved, reason, cmd_id)
-    7. order_adapter._api_queue.put_nowait(cmd)
+    6. order_adapter._api_queue.put_nowait(cmd)
+    7. dedup.commit(key, approved, reason, cmd_id) [after dispatch outcome]
 - Latency histogram CE2-07 wraps steps 1-7.
 """
 
@@ -24,7 +24,8 @@ from typing import Any
 
 from structlog import get_logger
 
-from hft_platform.contracts.strategy import IntentType
+from hft_platform.contracts.strategy import IntentType, RiskFeedback
+from hft_platform.core import timebase
 from hft_platform.gateway.channel import (
     IntentEnvelope,
     LocalIntentChannel,
@@ -92,6 +93,7 @@ class GatewayService:
         storm_guard: Any,  # deferred: StormGuard lives in hft_platform.risk — avoids circular import
         policy: GatewayPolicy,
         leader_lease: Any | None = None,
+        rejection_sink: asyncio.Queue | None = None,
     ) -> None:
         self._channel = channel
         self._risk_engine = risk_engine
@@ -100,6 +102,11 @@ class GatewayService:
         self._dedup = dedup_store
         self._storm_guard = storm_guard
         self._policy = policy
+        self._rejection_sink: asyncio.Queue | None = rejection_sink
+        # Wire channel TTL expiry callback so strategy gets RiskFeedback
+        # even when the envelope is dropped at the channel level (Bug #5b).
+        if hasattr(channel, "set_on_ttl_expired"):
+            channel.set_on_ttl_expired(self._on_channel_ttl_expired)
         self.running = False
         self._dispatched = 0
         self._rejected = 0
@@ -109,6 +116,8 @@ class GatewayService:
         self._gateway_reject_metric_cache: dict[str, Any] = {}
         self._gateway_dispatch_latency_metric = None
         self._gateway_depth_metric = None
+        self._gateway_dlq_metric = None
+        self._gateway_exposure_metric = None
         self._gateway_dedup_hits_metric = None
         self._gateway_reject_counter = 0
         self._gateway_latency_counter = 0
@@ -156,20 +165,38 @@ class GatewayService:
             default_dedup_every,
         )
         self._metrics_enabled = not (
-            policy == "minimal" and _bool_env(os.getenv("HFT_GATEWAY_METRICS", "1"), default=True) is False
+            obs_policy == "minimal" and _bool_env(os.getenv("HFT_GATEWAY_METRICS", "1"), default=True) is False
         )
         self._metrics_enabled = _bool_env(os.getenv("HFT_GATEWAY_METRICS", "1"), default=self._metrics_enabled)
         self._refresh_metrics_registry()
 
     # ── Main loop ─────────────────────────────────────────────────────────
 
+    async def _exposure_expiry_loop(self) -> None:
+        """Periodically expire stale per-order exposure reservations."""
+        ttl_s = float(os.getenv("HFT_EXPOSURE_ORDER_TTL_S", "30"))
+        interval_s = max(5.0, ttl_s / 3)
+        while self.running:
+            try:
+                await asyncio.sleep(interval_s)
+                if hasattr(self._exposure, "expire_stale_orders"):
+                    expired = self._exposure.expire_stale_orders(ttl_s)
+                    if expired > 0:
+                        logger.info("exposure_ttl_expired", count=expired, ttl_s=ttl_s)
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.warning("exposure_expiry_loop_error", error=str(exc))
+
     async def run(self) -> None:
         self.running = True
         logger.info("GatewayService started")
+        self._exposure_expiry_task: asyncio.Task | None = None
         try:
             if self._leader_lease is not None:
                 await self._leader_lease_tick()
                 self._leader_lease_task = asyncio.create_task(self._leader_lease_loop())
+            self._exposure_expiry_task = asyncio.create_task(self._exposure_expiry_loop())
             while self.running:
                 receive_raw = getattr(self._channel, "receive_raw", None)
                 if callable(receive_raw):
@@ -190,6 +217,14 @@ class GatewayService:
             logger.info("GatewayService stopping")
         finally:
             self.running = False
+            expiry_task = self._exposure_expiry_task
+            self._exposure_expiry_task = None
+            if expiry_task is not None:
+                expiry_task.cancel()
+                try:
+                    await expiry_task
+                except (asyncio.CancelledError, Exception):
+                    pass
             lease_task = self._leader_lease_task
             self._leader_lease_task = None
             if lease_task is not None:
@@ -233,31 +268,83 @@ class GatewayService:
                 existing = self._dedup.check_or_reserve(key)
         else:
             existing = None
-        if existing is not None and existing.approved is not None:
+        if existing is not None:
+            if existing.approved is not None:
+                # Committed dedup hit — return cached decision
+                self._dedup_hits += 1
+                self._inc_dedup_hit_metric()
+                self._emit_trace(
+                    "gateway_dedup_hit",
+                    getattr(intent, "trace_id", ""),
+                    {
+                        "ack_token": envelope.ack_token,
+                        "key": key,
+                        "approved": existing.approved,
+                        "reason": getattr(existing, "reason_code", ""),
+                    },
+                )
+                logger.debug(
+                    "Dedup hit — returning cached decision",
+                    key=key,
+                    approved=existing.approved,
+                    reason=existing.reason_code,
+                )
+                return
+            # Bug #7: Reserved but not yet committed (in-flight duplicate).
+            # Reject to prevent race where two envelopes with the same key
+            # both proceed through the pipeline and double-commit.
             self._dedup_hits += 1
             self._inc_dedup_hit_metric()
-            self._emit_trace(
-                "gateway_dedup_hit",
-                getattr(intent, "trace_id", ""),
-                {
-                    "ack_token": envelope.ack_token,
-                    "key": key,
-                    "approved": existing.approved,
-                    "reason": getattr(existing, "reason_code", ""),
-                },
-            )
-            logger.debug(
-                "Dedup hit — returning cached decision",
+            logger.warning(
+                "Dedup in-flight duplicate rejected",
                 key=key,
-                approved=existing.approved,
-                reason=existing.reason_code,
+                ack_token=envelope.ack_token,
             )
+            self._rejected += 1
+            self._emit_reject("DEDUP_IN_FLIGHT")
+            self._send_rejection_feedback(intent, "DEDUP_IN_FLIGHT")
+            self._record_latency(t0)
             return
 
-        # Step 2: Policy gate
+        # Step 1b: Per-intent TTL check (mirrors RiskEngine.run() line 409)
+        _ttl_ns = getattr(intent, "ttl_ns", 0)
+        _ts_ns = getattr(intent, "timestamp_ns", 0)
+        if _ttl_ns > 0 and _ts_ns > 0:
+            _age_ns = timebase.now_ns() - _ts_ns
+            if _age_ns > _ttl_ns:
+                logger.warning(
+                    "gateway_intent_ttl_expired",
+                    intent_id=getattr(intent, "intent_id", 0),
+                    strategy_id=getattr(intent, "strategy_id", ""),
+                    symbol=getattr(intent, "symbol", ""),
+                    age_ms=_age_ns / 1_000_000,
+                    ttl_ms=_ttl_ns / 1_000_000,
+                )
+                if key:
+                    if is_typed_view and hasattr(self._dedup, "commit_typed"):
+                        self._dedup.commit_typed(key, False, "TTL_EXPIRED", 0)
+                    else:
+                        self._dedup.commit(key, False, "TTL_EXPIRED", 0)
+                self._rejected += 1
+                self._emit_reject("TTL_EXPIRED")
+                self._send_rejection_feedback(intent, "TTL_EXPIRED")
+                self._record_latency(t0)
+                return
+
+        # Step 2: Policy gate (pass strategy_id for halt-exempt awareness)
         sg_state = self._storm_guard.state
+        _strategy_id = str(getattr(intent, "strategy_id", ""))
         if is_typed_view and hasattr(self._policy, "gate_typed"):
-            allowed, reason = self._policy.gate_typed(intent_type_value, sg_state)
+            # Bug 22: pass symbol/side/qty so typed fast-path also enables
+            # reduce-only bypass in HALT/DEGRADE (same as slow path via gate()).
+            allowed, reason = self._policy.gate_typed(
+                intent_type_value,
+                sg_state,
+                strategy_id=_strategy_id,
+                symbol=str(getattr(intent, "symbol", "")),
+                side=int(getattr(intent, "side", 0) or 0),
+                qty=int(getattr(intent, "qty", 0) or 0),
+            )
         else:
             allowed, reason = self._policy.gate(intent, sg_state)
         if not allowed:
@@ -273,16 +360,17 @@ class GatewayService:
                 {"reason": reason, "stage": "policy", "ack_token": envelope.ack_token},
             )
             logger.debug("Gateway policy rejected", reason=reason, ack_token=envelope.ack_token)
+            self._send_rejection_feedback(intent, reason)
             self._record_latency(t0)
             return
 
-        # Step 3: Exposure check
-        exp_key = ExposureKey(
-            account="default",
-            strategy_id=intent.strategy_id,
-            symbol=intent.symbol,
-        )
-        if intent_type_value != int(IntentType.CANCEL):
+        # Step 3: Exposure check. ``ExposureKey.from_intent`` derives the
+        # canonical symbol from ``intent.contract.display()`` when set
+        # (Gate 3) so bucketing is stable across structured/legacy intents.
+        exp_key = ExposureKey.from_intent(intent, account="default")
+        _order_key = key  # idempotency_key — used for per-order exposure tracking
+        _target_order_key = getattr(intent, "target_order_id", "") or ""
+        if intent_type_value not in (int(IntentType.CANCEL), int(IntentType.FORCE_FLAT)):
             try:
                 if is_typed_view and hasattr(self._exposure, "check_and_update_typed"):
                     exp_ok, exp_reason = self._exposure.check_and_update_typed(
@@ -290,9 +378,15 @@ class GatewayService:
                         intent_type=intent_type_value,
                         price=int(intent.price),
                         qty=int(intent.qty),
+                        order_key=_order_key,
+                        target_order_key=_target_order_key,
                     )
                 else:
-                    exp_ok, exp_reason = self._exposure.check_and_update(exp_key, intent)
+                    exp_ok, exp_reason = self._exposure.check_and_update(
+                        exp_key,
+                        intent,
+                        order_key=_order_key,
+                    )
             except ExposureLimitError as exc:
                 # Symbol-cardinality hard limit reached; reject and commit dedup so
                 # the same key is not retried in a busy-loop (CE2-12).
@@ -312,6 +406,7 @@ class GatewayService:
                     ack_token=envelope.ack_token,
                     error=str(exc),
                 )
+                self._send_rejection_feedback(intent, "EXPOSURE_SYMBOL_LIMIT")
                 self._record_latency(t0)
                 return
             if not exp_ok:
@@ -331,14 +426,36 @@ class GatewayService:
                     reason=exp_reason,
                     ack_token=envelope.ack_token,
                 )
+                self._send_rejection_feedback(intent, exp_reason)
                 self._record_latency(t0)
                 return
 
         # Step 4: Risk evaluate (synchronous, CPU-only)
-        if typed_frame is not None and hasattr(self._risk_engine, "evaluate_typed_frame"):
-            decision = self._risk_engine.evaluate_typed_frame(typed_frame, intent_view=intent)
-        else:
-            decision = self._risk_engine.evaluate(intent)
+        try:
+            if typed_frame is not None and hasattr(self._risk_engine, "evaluate_typed_frame"):
+                decision = self._risk_engine.evaluate_typed_frame(typed_frame, intent_view=intent)
+            else:
+                decision = self._risk_engine.evaluate(intent)
+        except Exception:
+            # Release exposure reserved in step 3 before re-raising
+            if intent_type_value != int(IntentType.CANCEL):
+                if is_typed_view and hasattr(self._exposure, "release_exposure_typed"):
+                    self._exposure.release_exposure_typed(
+                        exp_key,
+                        intent_type=intent_type_value,
+                        price=int(intent.price),
+                        qty=int(intent.qty),
+                    )
+                else:
+                    self._exposure.release_exposure(exp_key, intent)
+            # CF-1: Release dedup slot reserved in step 1 so the same
+            # idempotency_key can be retried after a transient error.
+            if key:
+                if is_typed_view and hasattr(self._dedup, "release_typed"):
+                    self._dedup.release_typed(key)
+                else:
+                    self._dedup.release(key)
+            raise
 
         if decision.approved and not self._is_dispatch_leader():
             self._rejected += 1
@@ -363,6 +480,7 @@ class GatewayService:
                 else:
                     self._exposure.release_exposure(exp_key, intent)
             logger.debug("Gateway standby suppressed broker dispatch (not leader)", ack_token=envelope.ack_token)
+            self._send_rejection_feedback(intent, "NOT_LEADER")
             self._record_latency(t0)
             self._update_channel_depth_metric()
             return
@@ -388,20 +506,28 @@ class GatewayService:
                 else:
                     cmd = self._risk_engine.create_command(decision.intent)
                 cmd_id_for_commit = int(cmd.cmd_id)
-            # Step 6: Commit dedup
-            if is_typed_view and hasattr(self._dedup, "commit_typed"):
-                self._dedup.commit_typed(key, True, "OK", cmd_id_for_commit)
-            else:
-                self._dedup.commit(key, True, "OK", cmd_id_for_commit)
-            # Step 7: Dispatch to order adapter
+            # Step 6: Dispatch to order adapter (dedup committed AFTER outcome is known)
+            # Bug #6: use put() with short timeout instead of put_nowait() to
+            # tolerate transient _api_queue fullness (gives _api_worker ~10ms to drain).
+            _dispatch_ok = False
             try:
                 if typed_cmd_frame is not None and callable(typed_submit):
                     typed_submit(typed_cmd_frame)
+                    _dispatch_ok = True
                 else:
-                    self._order_adapter._api_queue.put_nowait(cmd)
+                    try:
+                        self._order_adapter._api_queue.put_nowait(cmd)
+                        _dispatch_ok = True
+                    except asyncio.QueueFull:
+                        await asyncio.wait_for(
+                            self._order_adapter._api_queue.put(cmd),
+                            timeout=0.01,
+                        )
+                        _dispatch_ok = True
                 self._dispatched += 1
-            except asyncio.QueueFull:
+            except (asyncio.QueueFull, asyncio.TimeoutError):
                 self._rejected += 1
+                # Commit dedup as rejected — must happen after the failed dispatch attempt
                 if is_typed_view and hasattr(self._dedup, "commit_typed"):
                     self._dedup.commit_typed(key, False, "ORDER_QUEUE_FULL", 0)
                 else:
@@ -413,7 +539,28 @@ class GatewayService:
                     {"reason": "ORDER_QUEUE_FULL", "stage": "dispatch", "ack_token": envelope.ack_token},
                 )
                 logger.warning("Order queue full — intent dropped", ack_token=envelope.ack_token)
+                self._send_rejection_feedback(intent, "ORDER_QUEUE_FULL")
+                # Release exposure reserved in step 3 (mirrors the risk-rejection path)
+                if intent_type_value != int(IntentType.CANCEL):
+                    if is_typed_view and hasattr(self._exposure, "release_exposure_typed"):
+                        self._exposure.release_exposure_typed(
+                            exp_key,
+                            intent_type=intent_type_value,
+                            price=int(intent.price),
+                            qty=int(intent.qty),
+                            order_key=_order_key,
+                            target_order_key=_target_order_key,
+                        )
+                    else:
+                        self._exposure.release_exposure(exp_key, intent, order_key=_order_key)
             else:
+                # Exposure is held post-dispatch until fill/cancel/TTL expiry.
+                # Per-order tracking + periodic expire_stale_orders() prevents leaks.
+                # Commit dedup as approved only after successful dispatch
+                if is_typed_view and hasattr(self._dedup, "commit_typed"):
+                    self._dedup.commit_typed(key, True, "OK", cmd_id_for_commit)
+                else:
+                    self._dedup.commit(key, True, "OK", cmd_id_for_commit)
                 self._emit_trace(
                     "gateway_dispatch",
                     getattr(intent, "trace_id", ""),
@@ -443,17 +590,118 @@ class GatewayService:
                         intent_type=intent_type_value,
                         price=int(intent.price),
                         qty=int(intent.qty),
+                        order_key=_order_key,
+                        target_order_key=_target_order_key,
                     )
                 else:
-                    self._exposure.release_exposure(exp_key, intent)
+                    self._exposure.release_exposure(exp_key, intent, order_key=_order_key)
             logger.debug(
                 "Risk rejected intent",
                 reason=decision.reason_code,
                 ack_token=envelope.ack_token,
             )
+            self._send_rejection_feedback(intent, decision.reason_code)
 
         self._record_latency(t0)
         self._update_channel_depth_metric()
+
+    # ── Rejection feedback ──────────────────────────────────────────────
+
+    def _send_rejection_feedback(self, intent: Any, reason_code: str) -> None:
+        """Send RiskFeedback to strategy via shared rejection queue.
+
+        Mirrors the pattern in RiskEngine.run() so strategies receive
+        on_risk_feedback() callbacks regardless of gateway vs legacy path.
+        """
+        if self._rejection_sink is None:
+            return
+        try:
+            self._rejection_sink.put_nowait(
+                RiskFeedback(
+                    intent_id=getattr(intent, "intent_id", 0),
+                    strategy_id=getattr(intent, "strategy_id", ""),
+                    symbol=getattr(intent, "symbol", ""),
+                    reason_code=reason_code,
+                    timestamp_ns=timebase.now_ns(),
+                    side=getattr(intent, "side", None),
+                )
+            )
+        except asyncio.QueueFull:
+            logger.warning("gateway_rejection_sink_overflow", reason=reason_code)
+            try:
+                metrics = self._metrics_or_refresh()
+                if metrics is not None:
+                    metrics.rejection_sink_overflow_total.inc()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def set_rejection_sink(self, sink: asyncio.Queue | None) -> None:
+        """Public setter for rejection feedback queue (bootstrap wiring)."""
+        self._rejection_sink = sink
+
+    def _on_channel_ttl_expired(self, envelope: Any) -> None:
+        """Callback from LocalIntentChannel when envelope expires at channel level.
+
+        Extracts intent info from the envelope and sends RiskFeedback so the
+        strategy is notified of the drop (Bug #5b: channel TTL was silent).
+        """
+        intent = getattr(envelope, "intent", None)
+        if intent is None:
+            # TypedIntentEnvelope — extract from payload tuple
+            payload = getattr(envelope, "payload", None)
+            if payload and len(payload) >= 15:
+                self._send_rejection_feedback_fields(
+                    intent_id=int(payload[1]),
+                    strategy_id=str(payload[2]),
+                    symbol=str(payload[3]),
+                    side=int(payload[5]),
+                    reason_code="CHANNEL_TTL_EXPIRED",
+                )
+                return
+        if intent is not None:
+            self._send_rejection_feedback(intent, "CHANNEL_TTL_EXPIRED")
+
+    def _send_rejection_feedback_fields(
+        self, intent_id: int, strategy_id: str, symbol: str, side: int | None, reason_code: str
+    ) -> None:
+        """Send RiskFeedback from raw fields (for typed envelopes without materialized intent)."""
+        if self._rejection_sink is None:
+            return
+        from hft_platform.contracts.strategy import Side as SideEnum
+
+        try:
+            _side = SideEnum(side) if side is not None else None
+        except (ValueError, TypeError):
+            _side = None
+        try:
+            self._rejection_sink.put_nowait(
+                RiskFeedback(
+                    intent_id=intent_id,
+                    strategy_id=strategy_id,
+                    symbol=symbol,
+                    reason_code=reason_code,
+                    timestamp_ns=timebase.now_ns(),
+                    side=_side,
+                )
+            )
+        except asyncio.QueueFull:
+            logger.warning("gateway_rejection_sink_overflow", reason=reason_code)
+            try:
+                metrics = self._metrics_or_refresh()
+                if metrics is not None:
+                    metrics.rejection_sink_overflow_total.inc()
+            except Exception:  # noqa: BLE001
+                pass
+
+    # ── Policy control ───────────────────────────────────────────────────
+
+    def set_halt(self) -> None:
+        """Propagate HALT from supervisor to gateway policy."""
+        self._policy.set_halt()
+
+    def set_normal(self) -> None:
+        """Reset gateway policy to NORMAL (manual recovery after HALT)."""
+        self._policy.set_normal()
 
     # ── Health ────────────────────────────────────────────────────────────
 
@@ -518,6 +766,12 @@ class GatewayService:
             metric = self._gateway_depth_metric or metrics.gateway_intent_channel_depth
             self._gateway_depth_metric = metric
             metric.set(self._channel.qsize())
+            dlq_metric = self._gateway_dlq_metric or metrics.gateway_dlq_size
+            self._gateway_dlq_metric = dlq_metric
+            dlq_metric.set(self._channel.dlq_size())
+            exposure_metric = self._gateway_exposure_metric or metrics.gateway_exposure_global_notional_scaled
+            self._gateway_exposure_metric = exposure_metric
+            exposure_metric.set(self._exposure.global_notional)
         except Exception as exc:  # noqa: BLE001
             logger.debug("metrics_emit_failed", stage="channel_depth", error=str(exc))
 
@@ -531,10 +785,14 @@ class GatewayService:
             if self._metrics is not None:
                 self._gateway_dispatch_latency_metric = self._metrics.gateway_dispatch_latency_ns
                 self._gateway_depth_metric = self._metrics.gateway_intent_channel_depth
+                self._gateway_dlq_metric = self._metrics.gateway_dlq_size
+                self._gateway_exposure_metric = self._metrics.gateway_exposure_global_notional_scaled
                 self._gateway_dedup_hits_metric = self._metrics.gateway_dedup_hits_total
             else:
                 self._gateway_dispatch_latency_metric = None
                 self._gateway_depth_metric = None
+                self._gateway_dlq_metric = None
+                self._gateway_exposure_metric = None
                 self._gateway_dedup_hits_metric = None
         except Exception as exc:
             logger.debug("operation_fallback", error=str(exc))
@@ -543,6 +801,8 @@ class GatewayService:
             self._gateway_reject_metric_cache.clear()
             self._gateway_dispatch_latency_metric = None
             self._gateway_depth_metric = None
+            self._gateway_dlq_metric = None
+            self._gateway_exposure_metric = None
             self._gateway_dedup_hits_metric = None
 
     def _emit_trace(self, stage: str, trace_id: str, payload: dict[str, Any]) -> None:

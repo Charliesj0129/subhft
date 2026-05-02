@@ -52,8 +52,8 @@ class TestBuildBrokerClientsSelection:
         return SystemBootstrapper(settings={})
 
     def test_shioaji_path_uses_shioaji_facade(self, bootstrapper: SystemBootstrapper) -> None:
-        """broker_id='shioaji' instantiates ShioajiClientFacade."""
-        with patch("hft_platform.services.bootstrap.ShioajiClientFacade") as mock_facade:
+        """broker_id='shioaji' instantiates ShioajiClientFacade (lazy local import)."""
+        with patch("hft_platform.feed_adapter.shioaji.facade.ShioajiClientFacade") as mock_facade:
             mock_facade.return_value = MagicMock()
             md, order = bootstrapper._build_broker_clients(
                 role="engine",
@@ -68,31 +68,22 @@ class TestBuildBrokerClientsSelection:
         mock_fubon_facade_cls = MagicMock()
         mock_fubon_facade_cls.return_value = MagicMock()
 
+        fake_module = MagicMock()
+        fake_module.FubonClientFacade = mock_fubon_facade_cls
         with patch.dict(
             "sys.modules",
             {
                 "hft_platform.feed_adapter.fubon": MagicMock(),
-                "hft_platform.feed_adapter.fubon.facade": MagicMock(FubonClientFacade=mock_fubon_facade_cls),
+                "hft_platform.feed_adapter.fubon.facade": fake_module,
             },
         ):
-            with patch("hft_platform.services.bootstrap.ShioajiClientFacade"):
-                import hft_platform.services.bootstrap as bs_mod
-
-                with patch.object(
-                    bs_mod,
-                    "__import__",
-                    create=True,
-                ):
-                    fake_module = MagicMock()
-                    fake_module.FubonClientFacade = mock_fubon_facade_cls
-                    with patch.dict("sys.modules", {"hft_platform.feed_adapter.fubon.facade": fake_module}):
-                        md, order = bootstrapper._build_broker_clients(
-                            role="engine",
-                            symbols_path="config/symbols.yaml",
-                            base_shioaji_cfg={},
-                            broker_id="fubon",
-                        )
-                        assert mock_fubon_facade_cls.call_count == 2
+            md, order = bootstrapper._build_broker_clients(
+                role="engine",
+                symbols_path="config/symbols.yaml",
+                base_shioaji_cfg={},
+                broker_id="fubon",
+            )
+            assert mock_fubon_facade_cls.call_count == 2
 
     def test_non_engine_role_returns_noop_clients(self, bootstrapper: SystemBootstrapper) -> None:
         """Non-engine roles get no-op clients regardless of broker_id."""

@@ -1,11 +1,10 @@
 import asyncio
 import fcntl
+import itertools
 import os
 import tempfile
 import threading
 import time
-import warnings
-from glob import glob
 from typing import Any
 
 from structlog import get_logger
@@ -34,6 +33,9 @@ from hft_platform.core import timebase
 from hft_platform.observability.metrics import MetricsRegistry
 
 logger = get_logger("recorder.wal")
+
+
+_file_seq = itertools.count()
 
 
 class WALWriter:
@@ -170,7 +172,8 @@ class WALWriter:
             return self._handle_disk_pressure_skip(table, len(data), writer="wal")
 
         ts = int(timebase.now_ns())
-        filename = f"{self.wal_dir}/{table}_{ts}.jsonl"
+        seq = next(_file_seq)
+        filename = f"{self.wal_dir}/{table}_{ts}_{seq}.jsonl"
 
         loop = asyncio.get_running_loop()
         try:
@@ -187,6 +190,12 @@ class WALWriter:
         """
         Atomic write: write to temp file, then rename.
         This prevents partial reads by the loader.
+
+        M2 (2026-04-25): cleanup uses ``finally:`` instead of ``except:`` so
+        orphan tmpfiles are removed even when the worker thread is killed by
+        SIGKILL or interpreter shutdown between fsync and rename. After a
+        successful rename the tmp_path no longer exists so the cleanup is a
+        no-op; on failure it removes the partial file and bumps a metric.
         """
         # Write to temp file in same directory (for atomic rename)
         dir_path = os.path.dirname(filename)
@@ -206,12 +215,19 @@ class WALWriter:
             os.rename(tmp_path, filename)
             # fsync directory to ensure rename is durable on disk (coalesced when configured)
             self._maybe_fsync_dir(dir_path, writer="wal")
-        except Exception as exc:
-            logger.debug("operation_fallback", error=str(exc))
-            # Clean up temp file on failure
+        finally:
+            # If rename succeeded tmp_path no longer exists; if it failed (or
+            # this thread is dying) we remove the orphan partial file.
             if os.path.exists(tmp_path):
-                os.unlink(tmp_path)
-            raise
+                try:
+                    os.unlink(tmp_path)
+                    if self._metrics:
+                        try:
+                            self._metrics.wal_orphan_tmp_cleaned_total.labels(location="wal_writer").inc()
+                        except Exception as exc:  # noqa: BLE001
+                            logger.debug("operation_fallback", error=str(exc))
+                except OSError as exc:
+                    logger.warning("wal_orphan_tmp_unlink_failed", path=tmp_path, error=str(exc))
 
     def _write_sync(self, filename: str, data: list):
         """Legacy blocking write (kept for compatibility)."""
@@ -246,6 +262,13 @@ class WALBatchWriter:
         self._buffer_rows = 0
         self._buffer_bytes = 0  # Approximate
         self._lock = threading.Lock()
+        # P0-I2 (2026-04-24): serialises the physical write phase
+        # (``_write_batch_sync``) so the background timer thread and async
+        # ``flush()`` (which offloads via run_in_executor) never enter the
+        # critical section simultaneously. Without this, two threads can race
+        # on the shared ``_file_seq`` counter and the parent directory fsync,
+        # producing duplicate/racing WAL files.
+        self._write_lock = threading.Lock()
         self._last_flush_ts = time.monotonic()
 
         # Disk space check (reuse WALWriter's approach)
@@ -264,6 +287,10 @@ class WALBatchWriter:
         except Exception as exc:
             logger.debug("operation_fallback", error=str(exc))
             self._metrics = None
+
+        # Circuit breaker for merge-back retry in _flush_timer_loop
+        self._merge_back_consecutive_failures: int = 0
+        self._merge_back_max_failures: int = 3
 
         # Background flush timer
         self._timer_running = True
@@ -459,7 +486,20 @@ class WALBatchWriter:
                     pass
             return True
         except Exception as e:
-            logger.critical("WAL batch write failed", error=str(e))
+            logger.critical(
+                "WAL batch write failed — merging data back for retry",
+                error=str(e),
+                rows=flush_rows,
+            )
+            # Merge failed data back into the active buffer so it can be retried
+            # on the next flush cycle (same pattern as _flush_timer_loop).
+            with self._lock:
+                for table, rows_list in flush_data.items():
+                    self._buffer.setdefault(table, []).extend(rows_list)
+                for table, cols_list in flush_columnar.items():
+                    self._columnar_buffer.setdefault(table, []).extend(cols_list)
+                self._buffer_rows += flush_rows
+                self._buffer_bytes += flush_bytes
             if self._metrics:
                 try:
                     self._metrics.wal_batch_flush_total.labels(result="error").inc()
@@ -474,7 +514,23 @@ class WALBatchWriter:
         _approx_bytes: int,
         columnar_data: dict[str, list[tuple[list[str], list[list[Any]], int]]] | None = None,
     ) -> None:
-        """Write multi-table WAL file(s) atomically. EC-3: splits on size limit."""
+        """Write multi-table WAL file(s) atomically. EC-3: splits on size limit.
+
+        P0-I2: ``_write_lock`` serialises all physical writes so the background
+        timer thread and the async ``flush()`` path (executor-scheduled) cannot
+        enter this section concurrently. Lock is held for the entire write
+        phase including tempfile create → fsync → rename.
+        """
+        with self._write_lock:
+            self._write_batch_sync_locked(data, _approx_bytes, columnar_data)
+
+    def _write_batch_sync_locked(
+        self,
+        data: dict[str, list[dict[str, Any]]],
+        _approx_bytes: int,
+        columnar_data: dict[str, list[tuple[list[str], list[list[Any]], int]]] | None = None,
+    ) -> None:
+        """Actual write implementation. MUST be called with ``_write_lock`` held."""
         dir_path = self._wal_dir
         current_bytes = 0
         current_lines: list[bytes] = []
@@ -485,9 +541,13 @@ class WALBatchWriter:
             nonlocal current_bytes, current_lines, file_count
             if not current_lines:
                 return
-            ts = int(timebase.now_ns()) + file_count
-            filename = f"{dir_path}/batch_{ts}.jsonl"
+            ts = int(timebase.now_ns())
+            seq = next(_file_seq)
+            filename = f"{dir_path}/batch_{ts}_{seq}.jsonl"
             fd, tmp_path = tempfile.mkstemp(suffix=".tmp", dir=dir_path)
+            # M2: ``finally`` cleanup so SIGKILL between fsync and rename does
+            # not leave orphan tmp*.tmp files (production evidence: 8 such
+            # files aged 5–13 days in /app/.wal/).
             try:
                 with os.fdopen(fd, "wb") as f:
                     fcntl.flock(f.fileno(), fcntl.LOCK_EX)
@@ -500,11 +560,17 @@ class WALBatchWriter:
                         fcntl.flock(f.fileno(), fcntl.LOCK_UN)
                 os.rename(tmp_path, filename)
                 self._maybe_fsync_dir(dir_path)
-            except Exception as exc:
-                logger.debug("operation_fallback", error=str(exc))
+            finally:
                 if os.path.exists(tmp_path):
-                    os.unlink(tmp_path)
-                raise
+                    try:
+                        os.unlink(tmp_path)
+                        if self._metrics:
+                            try:
+                                self._metrics.wal_orphan_tmp_cleaned_total.labels(location="wal_batch").inc()
+                            except Exception as exc:  # noqa: BLE001
+                                logger.debug("operation_fallback", error=str(exc))
+                    except OSError as exc:
+                        logger.warning("wal_orphan_tmp_unlink_failed", path=tmp_path, error=str(exc))
             file_count += 1
             current_lines = []
             current_bytes = 0
@@ -578,12 +644,13 @@ class WALBatchWriter:
                 elapsed_ms = (time.monotonic() - self._last_flush_ts) * 1000
                 if self._buffer_rows == 0 or elapsed_ms < self._batch_interval_ms:
                     continue
-                # Need flush
+                # Swap to new empty dicts — new writers go to fresh buffers
                 flush_data = self._buffer
                 flush_columnar = self._columnar_buffer
                 self._buffer = {}
                 self._columnar_buffer = {}
                 flush_rows = self._buffer_rows
+                flush_bytes = self._buffer_bytes
                 self._buffer_rows = 0
                 self._buffer_bytes = 0
                 self._last_flush_ts = time.monotonic()
@@ -604,23 +671,66 @@ class WALBatchWriter:
                         except Exception as exc:
                             logger.debug("operation_fallback", error=str(exc))
                             pass
+                    self._merge_back_consecutive_failures = 0
                 except Exception as e:
-                    logger.error("WAL batch timer flush failed", error=str(e))
-                    if self._metrics:
-                        try:
-                            self._metrics.wal_batch_flush_total.labels(result="error").inc()
-                        except Exception as exc:
-                            logger.debug("operation_fallback", error=str(exc))
-                            pass
+                    self._merge_back_consecutive_failures += 1
+                    if self._merge_back_consecutive_failures >= self._merge_back_max_failures:
+                        # P1 fix: compute the ACTUAL dropped-row count including
+                        # anything that may have re-accumulated in flush_data /
+                        # flush_columnar (the snapshot taken under lock is the
+                        # authoritative drop size).
+                        _dropped_rows = sum(len(v) for v in flush_data.values()) + sum(
+                            seg[2] for segs in flush_columnar.values() for seg in segs
+                        )
+                        logger.warning(
+                            "WAL merge-back circuit breaker tripped — dropping data",
+                            rows=_dropped_rows,
+                            flush_rows=flush_rows,
+                            consecutive_failures=self._merge_back_consecutive_failures,
+                            error=str(e),
+                        )
+                        self._merge_back_consecutive_failures = 0
+                        if self._metrics:
+                            try:
+                                # Count per-row so disk-pressure alerts fire on the
+                                # true data-loss volume, not once per circuit-breaker trip.
+                                self._metrics.wal_batch_flush_total.labels(result="dropped").inc(max(1, _dropped_rows))
+                            except Exception as exc:
+                                logger.debug("operation_fallback", error=str(exc))
+                    else:
+                        logger.error(
+                            "WAL batch timer flush failed — merging data back for retry",
+                            error=str(e),
+                            rows=flush_rows,
+                            consecutive_failures=self._merge_back_consecutive_failures,
+                        )
+                        # Merge failed data back into active buffer for retry
+                        with self._lock:
+                            for table, rows_list in flush_data.items():
+                                self._buffer.setdefault(table, []).extend(rows_list)
+                            for table, cols_list in flush_columnar.items():
+                                self._columnar_buffer.setdefault(table, []).extend(cols_list)
+                            self._buffer_rows += flush_rows
+                            self._buffer_bytes += flush_bytes
+                        if self._metrics:
+                            try:
+                                self._metrics.wal_batch_flush_total.labels(result="error").inc()
+                            except Exception as exc:
+                                logger.debug("operation_fallback", error=str(exc))
+                                pass
 
     def stop(self) -> None:
         """Stop the background timer and flush remaining data."""
         self._timer_running = False
+        if self._timer_thread is not None:
+            self._timer_thread.join(timeout=5.0)
         # Final sync flush
         with self._lock:
             if (self._buffer or self._columnar_buffer) and self._buffer_rows > 0:
                 flush_data = self._buffer
                 flush_columnar = self._columnar_buffer
+                flush_rows = self._buffer_rows
+                flush_bytes = self._buffer_bytes
                 self._buffer = {}
                 self._columnar_buffer = {}
                 self._buffer_rows = 0
@@ -628,78 +738,26 @@ class WALBatchWriter:
             else:
                 flush_data = {}
                 flush_columnar = {}
+                flush_rows = 0
+                flush_bytes = 0
         if flush_data or flush_columnar:
             try:
                 t0 = time.monotonic()
                 self._write_batch_sync(flush_data, 0, flush_columnar)
                 self._record_wal_write_latency("batch_stop_flush", (time.monotonic() - t0) * 1000.0)
             except Exception as e:
-                logger.error("WAL batch final flush failed", error=str(e))
+                logger.error(
+                    "WAL batch final flush failed — merging data back",
+                    error=str(e),
+                    rows=flush_rows,
+                )
+                # Merge failed data back so caller can inspect/retry
+                with self._lock:
+                    for table, rows_list in flush_data.items():
+                        self._buffer.setdefault(table, []).extend(rows_list)
+                    for table, cols_list in flush_columnar.items():
+                        self._columnar_buffer.setdefault(table, []).extend(cols_list)
+                    self._buffer_rows += flush_rows
+                    self._buffer_bytes += flush_bytes
 
-
-class WALReplayer:
-    """DEPRECATED — use ``WALLoaderService`` (``recorder/loader.py``) instead.
-
-    Known bugs that make this class unsafe for production use:
-
-    **C3 — Filename parsing incompatibility**: The table name is extracted via
-    ``fname.rsplit("_", 1)[0]``, which yields ``"batch"`` for files written by
-    ``WALBatchWriter`` (format: ``batch_{ts}.jsonl``).  ``"batch"`` is not a
-    valid ClickHouse table name, so replay silently inserts into the wrong
-    target or errors out.
-
-    **C4 — Missing idempotency guard**: If ``os.remove()`` raises after a
-    successful ClickHouse insert, the same WAL file will be replayed again on
-    the next startup, causing duplicate rows.  ``WALLoaderService`` tracks
-    replayed files and is dedup-aware.
-
-    Migration: replace ``WALReplayer(wal_dir, sender)`` with
-    ``WALLoaderService`` from ``hft_platform.recorder.loader``.
-    """
-
-    def __init__(self, wal_dir: str, sender_func):
-        warnings.warn(
-            "WALReplayer is deprecated and has known bugs (C3: broken filename "
-            "parsing for WALBatchWriter files; C4: no idempotency guard on "
-            "os.remove failure). Use WALLoaderService from "
-            "hft_platform.recorder.loader instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        self.wal_dir = wal_dir
-        self.sender_func = sender_func  # Async function(table, data) -> bool
-
-    async def replay(self):
-        """Scans directory and attempts to replay files."""
-        files = sorted(glob(f"{self.wal_dir}/*.jsonl"))
-        if not files:
-            return
-
-        logger.info("Found WAL files", count=len(files))
-
-        for fpath in files:
-            # Parse table name from filename provided it matches table_timestamp.jsonl
-            fname = os.path.basename(fpath)
-            table = fname.rsplit("_", 1)[0]
-
-            try:
-                data = []
-                with open(fpath, "r") as f:
-                    for line in f:
-                        if line.strip():
-                            data.append(_loads(line))
-
-                if data:
-                    success = await self.sender_func(table, data)
-                    if success:
-                        os.remove(fpath)
-                        logger.info("Replayed and deleted WAL", file=fname)
-                    else:
-                        logger.warning("Replay failed, keeping WAL", file=fname)
-                        break  # Stop on first failure to preserve order?
-                else:
-                    # Empty file
-                    os.remove(fpath)
-            except Exception as e:
-                logger.error("Corrupt WAL file", file=fname, error=str(e))
                 # Move to corrupt dir?

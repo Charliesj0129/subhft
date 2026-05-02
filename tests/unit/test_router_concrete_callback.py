@@ -198,20 +198,32 @@ class TestCacheWarmup:
         # Should be cached after first miss.
         assert mod.TOPIC_CODE_CACHE.get("Q/TSE/9999") == "9999"
 
-    def test_cache_max_respected_post_warmup(self, monkeypatch: object) -> None:
-        """Post-warmup, cache writes are skipped when at capacity."""
+    def test_cache_max_triggers_coarse_reset_then_add(self, monkeypatch: object) -> None:
+        """L1: when at capacity, the cache performs a coarse reset and then
+        adds the new entry (always under CLIENT_REGISTRY_LOCK). The previous
+        post-warmup fast path silently dropped the new entry, but it also
+        bypassed the lock, allowing a race with
+        ``_clear_topic_code_cache_locked``. Unifying both paths under the
+        lock means the cap-reached behavior is now ``clear()`` + insert.
+        """
         import hft_platform.feed_adapter.shioaji.router as r
 
         c1 = _DummyClient("c1")
         mod._registry_register(c1)
         mod._registry_rebind_codes(c1, ["2330"])
 
-        # Simulate near-max cache.
+        # Simulate at-max cache.
         monkeypatch.setattr(r, "_TOPIC_CODE_CACHE_MAX", 5)  # type: ignore[attr-defined]
         mod.TOPIC_CODE_CACHE.clear()
         for i in range(5):
             mod.TOPIC_CODE_CACHE[f"topic_{i}"] = f"code_{i}"
 
-        # At max — new entry should NOT be added.
+        # At max — coarse reset clears the cache, then the new entry is
+        # written, leaving the cache with just the new entry.
         mod._extract_code_from_topic("Q/TSE/NEW_CODE")
-        assert "Q/TSE/NEW_CODE" not in mod.TOPIC_CODE_CACHE
+        assert "Q/TSE/NEW_CODE" in mod.TOPIC_CODE_CACHE
+        assert len(mod.TOPIC_CODE_CACHE) == 1, (
+            "Coarse reset (clear + insert) is the documented cap-reached "
+            "behavior; if this changes, update the L1 fix in router.py "
+            "to preserve concurrent-safety guarantees."
+        )

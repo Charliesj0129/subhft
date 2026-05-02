@@ -35,6 +35,41 @@ def test_price_band_validator():
     assert ok
 
 
+def test_price_band_qty_zero_rejected():
+    cfg = {"global_defaults": {"max_price_cap": 1.0}}
+    validator = PriceBandValidator(cfg)
+
+    ok, reason = validator.check(_intent(10000, 0))
+    assert not ok
+    assert reason == "QTY_ZERO_OR_NEG"
+
+
+def test_price_band_qty_negative_rejected():
+    cfg = {"global_defaults": {"max_price_cap": 1.0}}
+    validator = PriceBandValidator(cfg)
+
+    ok, reason = validator.check(_intent(10000, -1))
+    assert not ok
+    assert reason == "QTY_ZERO_OR_NEG"
+
+
+def test_price_band_cancel_with_qty_zero_allowed():
+    cfg = {"global_defaults": {"max_price_cap": 1.0}}
+    validator = PriceBandValidator(cfg)
+
+    ok, _ = validator.check(_intent(10000, 0, intent_type=IntentType.CANCEL))
+    assert ok
+
+
+def test_price_band_valid_qty_passes():
+    cfg = {"global_defaults": {"max_price_cap": 1.0}}
+    validator = PriceBandValidator(cfg)
+
+    ok, reason = validator.check(_intent(10000, 1))
+    assert ok
+    assert reason == "OK"
+
+
 def test_max_notional_validator():
     cfg = {"global_defaults": {"max_notional": 5}}
     validator = MaxNotionalValidator(cfg)

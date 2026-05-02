@@ -72,3 +72,12 @@ def test_unregister_metric_prefixes_handles_keyerror(monkeypatch):
     # Should not raise even when unregister throws KeyError
     _unregister_metric_prefixes(["test_prefix_keyerror"])
     assert "test_prefix_keyerror_total" in REGISTRY._names_to_collectors  # type: ignore[attr-defined]
+
+
+def test_metrics_registry_has_process_raw_error_total():
+    """MetricsRegistry exposes process_raw_error_total counter for LOB/feature/publish errors."""
+    MetricsRegistry._instance = None
+    registry = MetricsRegistry.get()
+    assert hasattr(registry, "process_raw_error_total")
+    # Verify it is callable for incrementing (has .inc())
+    assert callable(registry.process_raw_error_total.inc)

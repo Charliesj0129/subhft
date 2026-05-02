@@ -230,8 +230,12 @@ def extract_time_segments(sd: SessionData) -> list[SegmentFact]:
 
     return [
         _build_segment_fact(
-            name, seg_bars[name], seg_trades[name], seg_bars_5m[name],
-            session_total, time_ranges,
+            name,
+            seg_bars[name],
+            seg_trades[name],
+            seg_bars_5m[name],
+            session_total,
+            time_ranges,
         )
         for name in segment_names
     ]
@@ -253,9 +257,7 @@ def extract_chip_facts(sd: SessionData) -> ChipFacts:
     clusters: list[ChipCluster] = []
     for center_price, _total_vol in raw_clusters:
         # Find trades belonging to this cluster (within tolerance)
-        cluster_trades = [
-            t for t in trades if abs(t.price - center_price) <= 50_000
-        ]
+        cluster_trades = [t for t in trades if abs(t.price - center_price) <= 50_000]
         if not cluster_trades:
             continue
 
@@ -570,11 +572,7 @@ def extract_cross_day_facts(
     prev = prev_days[0]
 
     # Volume change
-    vol_change = (
-        (sd.volume - prev.volume) / prev.volume * 100.0
-        if prev.volume > 0
-        else 0.0
-    )
+    vol_change = (sd.volume - prev.volume) / prev.volume * 100.0 if prev.volume > 0 else 0.0
 
     # Price position relative to previous day range
     if sd.close > prev.high:
@@ -603,10 +601,7 @@ def extract_cross_day_facts(
     total_dn = sum(b.downtick_vol for b in sd.flow_5m)
     today_ud = total_up / total_dn if total_dn > 0 else 1.0
 
-    flow_reversal = (
-        (today_ud < 0.95 and prev.ud_ratio > 1.05)
-        or (today_ud > 1.05 and prev.ud_ratio < 0.95)
-    )
+    flow_reversal = (today_ud < 0.95 and prev.ud_ratio > 1.05) or (today_ud > 1.05 and prev.ud_ratio < 0.95)
 
     return CrossDayFacts(
         prev_days=prev_days,

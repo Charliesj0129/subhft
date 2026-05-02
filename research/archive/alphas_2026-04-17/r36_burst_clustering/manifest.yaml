@@ -1,0 +1,34 @@
+alpha_id: r36_burst_clustering
+title: "Burst Clustering Detection for Institutional Flow"
+instrument: TXFD6
+owner: charlie
+status: research
+created: 2026-04-07
+hypothesis: >
+  Institutional algo-splitting creates bursts of same-direction 1-lot trades
+  in short time windows. The direction of these bursts predicts forward returns.
+  Burst periods amplify OFI signal predictiveness.
+
+methods:
+  - name: "Method A: Fixed-window rolling OFI intensity"
+    description: "net(buy-sell) / count in rolling 10s/30s window"
+  - name: "Method B: Hawkes self-exciting process"
+    description: "Buy/sell intensity via self-exciting point process"
+
+paper_refs:
+  - "Bacry et al. (2015) Hawkes processes in finance"
+  - "Cont et al. (2014) Price impact of order flow imbalance"
+
+data_requirements:
+  - "TXFD6 L2 hftbt.npz (trade + L1 quote events)"
+  - "Regular session only (08:45-13:45 TW)"
+
+cost_model:
+  rt_cost_pts: 4.7
+  spread_assumption: "4 pts median"
+  fee_structure: "TAIFEX retail, no rebates, 2.0 bps sell tax"
+
+baseline_comparison:
+  signal: "R32b KDJ(QI_1)"
+  ic: 0.092
+  horizon: "fwd_3 event bars"

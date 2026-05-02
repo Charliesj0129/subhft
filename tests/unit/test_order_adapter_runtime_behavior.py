@@ -12,6 +12,7 @@ submit_typed_command_nowait invalid frame.
 from __future__ import annotations
 
 import asyncio
+import os
 import time as _time
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -26,7 +27,7 @@ from hft_platform.contracts.strategy import (
     StormGuardState,
 )
 from hft_platform.core import timebase
-from hft_platform.order.adapter import OrderAdapter, _is_typed_order_cmd_frame
+from hft_platform.order.adapter import _GUARD_TIMEOUT, OrderAdapter, _is_typed_order_cmd_frame
 from hft_platform.order.deadletter import RejectionReason
 
 # ── Fixtures ───────────────────────────────────────────────────────────────
@@ -48,9 +49,10 @@ def tmp_config(tmp_path):
 
 
 @pytest.fixture(autouse=True)
-def _mock_infra():
+def _mock_infra(tmp_path):
     """Patch heavy infra so tests don't need full stack."""
     with (
+        patch.dict(os.environ, {"HFT_ORDER_ID_MAP_PERSIST_PATH": str(tmp_path / "oid_map.jsonl")}),
         patch("hft_platform.order.adapter.MetricsRegistry") as mm,
         patch("hft_platform.order.adapter.LatencyRecorder") as ml,
         patch("hft_platform.order.adapter.SymbolMetadata"),
@@ -347,7 +349,7 @@ async def test_register_broker_ids_from_dict(tmp_config):
     trade = {"seq_no": "S1", "ord_no": "O1"}
     await adapter._register_broker_ids("s1:1", trade)
 
-    async with adapter._order_id_map_lock:
+    with adapter._order_id_map_lock:
         assert adapter.order_id_map.get("S1") == "s1:1"
         assert adapter.order_id_map.get("O1") == "s1:1"
 
@@ -363,7 +365,7 @@ async def test_register_broker_ids_from_object(tmp_config):
     trade.order = None
     await adapter._register_broker_ids("s1:2", trade)
 
-    async with adapter._order_id_map_lock:
+    with adapter._order_id_map_lock:
         assert adapter.order_id_map.get("SQ1") == "s1:2"
 
 
@@ -379,7 +381,7 @@ async def test_register_broker_ids_eviction(tmp_config):
     trade = {"seq_no": "NEW_ID"}
     await adapter._register_broker_ids("s1:99", trade)
 
-    async with adapter._order_id_map_lock:
+    with adapter._order_id_map_lock:
         assert adapter.order_id_map.get("NEW_ID") == "s1:99"
         assert len(adapter.order_id_map) <= 5
 
@@ -391,7 +393,7 @@ async def test_register_broker_ids_nested_order(tmp_config):
     trade = {"order": {"seq_no": "NESTED_SEQ"}}
     await adapter._register_broker_ids("s1:3", trade)
 
-    async with adapter._order_id_map_lock:
+    with adapter._order_id_map_lock:
         assert adapter.order_id_map.get("NESTED_SEQ") == "s1:3"
 
 
@@ -606,7 +608,7 @@ async def test_call_api_semaphore_timeout(tmp_config):
         await adapter._api_semaphore.acquire()
 
     result = await adapter._call_api("test_op", MagicMock())
-    assert result is None
+    assert result is _GUARD_TIMEOUT
 
     for _ in range(adapter._api_max_inflight):
         adapter._api_semaphore.release()
@@ -727,3 +729,99 @@ def test_emit_trace_with_sampler(tmp_config):
     intent = _make_cmd().intent
     adapter._emit_trace("order_dispatch_start", intent, {"cmd_id": 1, "intent_type": 0})
     sampler.emit.assert_called_once()
+
+
+# ── _api_worker exception handler ──────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_api_worker_continues_after_unexpected_exception(tmp_config):
+    """_api_worker catches unexpected exceptions and continues processing subsequent items."""
+    adapter = _make_adapter(tmp_config)
+    adapter.running = True
+    adapter.circuit_breaker = MagicMock()
+
+    call_count = 0
+
+    async def dispatch_side_effect(cmd):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise KeyError("unexpected broker field missing")
+        # second call succeeds silently
+
+    adapter._dispatch_to_api = dispatch_side_effect
+
+    # Put commands one at a time with a small gap so they are processed in
+    # separate loop iterations (coalesce window is 0 by default).
+    cmd1 = _make_cmd(intent_id=1)
+    adapter._api_queue.put_nowait(cmd1)
+
+    task = asyncio.create_task(adapter._api_worker())
+    # Allow the first item (which raises) to be processed
+    await asyncio.sleep(0.02)
+
+    # Now put second command — worker must still be alive to receive it
+    cmd2 = _make_cmd(intent_id=2)
+    adapter._api_queue.put_nowait(cmd2)
+    await asyncio.sleep(0.02)
+
+    adapter.running = False
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    # Worker processed both items (continued after first exception)
+    assert call_count == 2
+    # Bug D' hygiene: NEW intents are phantom candidates → _handle_dispatch_exception
+    # does NOT inflate order_reject_total or trip circuit_breaker (the order may
+    # have reached the broker; counting it as a real reject corrupts dashboards).
+    # Phantom-candidate counter IS incremented instead.
+    adapter.metrics.order_reject_total.inc.assert_not_called()
+    adapter.circuit_breaker.record_failure.assert_not_called()
+    adapter.metrics.phantom_order_candidates_total.inc.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_api_worker_cancelled_error_exits_immediately(tmp_config):
+    """CancelledError during queue.get() causes _api_worker to exit cleanly."""
+    adapter = _make_adapter(tmp_config)
+    adapter.running = True
+
+    task = asyncio.create_task(adapter._api_worker())
+    await asyncio.sleep(0.01)
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    assert task.done()
+
+
+@pytest.mark.asyncio
+async def test_api_worker_materialize_exception_increments_metrics(tmp_config):
+    """Exception from _materialize_typed_command triggers metrics + cb failure."""
+    adapter = _make_adapter(tmp_config)
+    adapter.running = True
+    adapter.circuit_breaker = MagicMock()
+
+    # Put a typed frame that will cause _materialize_typed_command to raise
+    with patch.object(adapter, "_materialize_typed_command", side_effect=ValueError("bad frame")):
+        # Use a typed frame so _materialize_typed_command is called
+        typed_frame = ("typed_order_cmd_v1", 0, 0, 0, 0, None)
+        adapter._api_queue.put_nowait(typed_frame)
+
+        task = asyncio.create_task(adapter._api_worker())
+        await asyncio.sleep(0.05)
+        adapter.running = False
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    adapter.metrics.order_reject_total.inc.assert_called()
+    adapter.circuit_breaker.record_failure.assert_called()

@@ -90,7 +90,6 @@ async def test_batcher_backpressure_drop_oldest():
 @pytest.mark.asyncio
 async def test_data_writer_wal_fallback(tmp_path, monkeypatch):
     monkeypatch.setenv("HFT_CLICKHOUSE_ENABLED", "0")
-    monkeypatch.setenv("HFT_DISABLE_CLICKHOUSE", "1")
     monkeypatch.setenv("HFT_WAL_BATCH_ENABLED", "0")
 
     writer = DataWriter(wal_dir=str(tmp_path))

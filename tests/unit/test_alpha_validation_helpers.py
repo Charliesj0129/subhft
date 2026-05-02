@@ -6,10 +6,8 @@ Covers all public helper functions targeting untested branches.
 from __future__ import annotations
 
 import json
-import os
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -30,7 +28,6 @@ from hft_platform.alpha._validation_helpers import (
     _validate_alpha_id,
     _write_json,
 )
-
 
 # ---------------------------------------------------------------------------
 # _validate_alpha_id
@@ -105,6 +102,7 @@ def test_resolve_data_path_relative_joined_to_root(tmp_path):
 
 def _make_validation_config(allowed_data_roots=()) -> "ValidationConfig":
     from hft_platform.alpha._validation_types import ValidationConfig
+
     return ValidationConfig(
         alpha_id="test_alpha",
         data_paths=[],
@@ -253,6 +251,7 @@ def test_dataset_row_count_returns_none_when_arr_operations_fail(tmp_path, monke
     np.save(str(p), arr)
     # Patch np.asarray to raise inside the try block
     import hft_platform.alpha._validation_helpers as vh
+
     original_asarray = np.asarray
 
     def _bad_asarray(x):
@@ -431,6 +430,7 @@ def test_make_validation_artifact_dir_creates_dir(tmp_path):
 
 def test_ensure_project_root_on_path_adds_root_to_sys_path(tmp_path):
     import sys
+
     (tmp_path / "research").mkdir()
     _ensure_project_root_on_path(tmp_path)
     assert str(tmp_path) in sys.path

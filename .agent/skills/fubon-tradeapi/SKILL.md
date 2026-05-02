@@ -1,3 +1,4 @@
+<!-- REVIEW-2026-04-17: unreferenced by rules/workflows/teams/agents. Confirm or delete. -->
 ---
 name: fubon-tradeapi
 description: Use when integrating Fubon (富邦) TradeAPI as a broker, implementing the Fubon feed adapter, diagnosing Fubon connection/order issues, or comparing Fubon vs Shioaji capabilities.

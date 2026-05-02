@@ -135,8 +135,11 @@ class WALLoaderService:
         self._dedup_enabled = os.getenv("HFT_WAL_DEDUP_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
 
         # EC-2: WAL file timestamp ordering
-        self._strict_order = os.getenv("HFT_WAL_STRICT_ORDER", "0").lower() in {"1", "true", "yes", "on"}
+        self._strict_order = os.getenv("HFT_WAL_STRICT_ORDER", "1").lower() in {"1", "true", "yes", "on"}
         self._last_processed_ts: int = 0
+        # CC-3: Lock protecting _last_processed_ts and _processed_files_total
+        # across parallel ThreadPoolExecutor workers.
+        self._loader_stats_lock = threading.Lock()
 
         # CE3-03: Shard claim registry
         from hft_platform.recorder.shard_claim import FileClaimRegistry

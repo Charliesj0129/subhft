@@ -123,17 +123,12 @@ def _semantic_checks(cfg: HftConfig) -> List[str]:
     if cfg.intraday_pnl is not None:
         pnl = cfg.intraday_pnl
         if pnl.soft_limit_ntd < 0:
-            errors.append(
-                f"intraday_pnl.soft_limit_ntd must be non-negative, got {pnl.soft_limit_ntd}"
-            )
+            errors.append(f"intraday_pnl.soft_limit_ntd must be non-negative, got {pnl.soft_limit_ntd}")
         if pnl.hard_limit_ntd < 0:
-            errors.append(
-                f"intraday_pnl.hard_limit_ntd must be non-negative, got {pnl.hard_limit_ntd}"
-            )
+            errors.append(f"intraday_pnl.hard_limit_ntd must be non-negative, got {pnl.hard_limit_ntd}")
         if pnl.soft_limit_ntd > pnl.hard_limit_ntd:
             errors.append(
-                f"intraday_pnl.soft_limit_ntd ({pnl.soft_limit_ntd}) "
-                f"exceeds hard_limit_ntd ({pnl.hard_limit_ntd})"
+                f"intraday_pnl.soft_limit_ntd ({pnl.soft_limit_ntd}) exceeds hard_limit_ntd ({pnl.hard_limit_ntd})"
             )
 
     return errors

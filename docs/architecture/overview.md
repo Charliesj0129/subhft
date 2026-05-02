@@ -65,16 +65,25 @@ Build: `uv run maturin develop --manifest-path rust_core/Cargo.toml`
 
 ## Storage
 
-- **WAL**: jsonl files under `.wal/`
-- **ClickHouse**: `hft.market_data`, `hft.orders`, `hft.trades`, `hft.ohlcv_1m`, `hft.latency_stats_1m`, `hft.latency_spans`
-- **Migrations**: `src/hft_platform/migrations/clickhouse/`
+- **WAL**: jsonl files under `.wal/` (WAL-first mode: `HFT_RECORDER_MODE=wal_first`)
+- **ClickHouse** (15 migrations, 13+ tables):
+  - Core: `hft.market_data` (6mo TTL), `hft.orders`, `hft.trades`/`hft.fills` (1yr TTL)
+  - Derived: `hft.ohlcv_1m` (MV), `hft.latency_stats_1m` (MV)
+  - Operations: `hft.pnl_snapshots` (90d), `hft.shadow_orders` (30d), `hft.reconciliation` (1yr)
+  - TCA: `hft.slippage_records` (90d), decision_price/arrival_price in fills
+  - Audit: `hft.config_snapshots` (1yr), `hft.daily_reports`, `hft.liquidity_gate_events`
+  - Replay: `hft.wal_dedup` (WAL replay deduplication)
+  - Audit namespace: `audit.*` (2yr TTL, compliance)
+- **Migrations**: `src/hft_platform/migrations/clickhouse/` (auto-applied on boot)
 
 ---
 
 ## Related Docs
 
-- `docs/README.md` — documentation index
-- `docs/getting_started.md` — full usage guide
-- `docs/config_reference.md` — configuration reference
-- `docs/observability_minimal.md` — metrics & alerts
+- [docs/README.md](../README.md) — documentation index
+- [Getting Started](../guides/getting-started.md) — full usage guide
+- [Config Reference](../guides/config-reference.md) — configuration reference
+- [Observability](../operations/observability.md) — metrics & alerts
+- [Modules Reference](../MODULES_REFERENCE.md) — consolidated codebase map
+- [Env Vars Reference](../operations/env-vars-reference.md) — 60+ environment variables
 - `CLAUDE.md` — AI context & HFT Laws

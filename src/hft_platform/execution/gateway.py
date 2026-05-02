@@ -1,3 +1,4 @@
+import asyncio
 from typing import Any
 
 from structlog import get_logger
@@ -13,6 +14,10 @@ class ExecutionGateway:
     """
     Outbound execution gateway (OrderAdapter wrapper).
     Keeps execution IO isolated from routing/normalization.
+
+    NOTE: This class is a monitoring wrapper around OrderAdapter. It does NOT
+    call adapter.run() — that is started separately by the service supervisor
+    to avoid duplicate consumers on the same order_queue and _api_queue.
     """
 
     def __init__(self, adapter: OrderAdapter):
@@ -24,15 +29,13 @@ class ExecutionGateway:
         self.running = True
         logger.info("ExecutionGateway started")
         self.metrics.execution_gateway_alive.set(1)
-        self.metrics.execution_gateway_heartbeat_ts.set(timebase.now_s())
         try:
-            await self.adapter.run()
-        except Exception as exc:
-            logger.debug("operation_fallback", error=str(exc))
-            self.metrics.execution_gateway_errors_total.inc()
-            raise
+            while self.running and self.adapter.running:
+                self.metrics.execution_gateway_heartbeat_ts.set(timebase.now_s())
+                await asyncio.sleep(5.0)
         finally:
             self.metrics.execution_gateway_alive.set(0)
+            logger.info("ExecutionGateway stopped")
 
     def stop(self) -> None:
         self.running = False

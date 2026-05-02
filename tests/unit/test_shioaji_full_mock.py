@@ -13,7 +13,9 @@ from prometheus_client.openmetrics.exposition import generate_latest as generate
 # We will mock the module `shioaji` in `sys.modules` or rely on `sj` being None check if we can't install it.
 # However, we want to test the logic when `sj` IS present.
 # So we must patch `hft_platform.feed_adapter.shioaji_client.sj`
-from hft_platform.feed_adapter.shioaji_client import ShioajiClient, dispatch_tick_cb
+from hft_platform.feed_adapter import shioaji_client as _shioaji_client  # noqa: F401  (module init side-effect)
+from hft_platform.feed_adapter.shioaji import client as _shioaji_inner_client
+from hft_platform.feed_adapter.shioaji_client import ShioajiClient
 from hft_platform.observability.metrics import MetricsRegistry
 
 
@@ -109,7 +111,14 @@ class TestShioajiClientFull(unittest.TestCase):
         # Verify subscriptions
         # 2 symbols * 2 quote types = 4 subscribes
         self.assertEqual(self.mock_api_instance.quote.subscribe.call_count, 4)
-        self.mock_api_instance.quote.set_on_tick_stk_v1_callback.assert_called_with(dispatch_tick_cb)
+        # Resolve against the inner module (hft_platform.feed_adapter.shioaji.client) at assert time.
+        # Production quote_runtime.py:410 does a local `from hft_platform.feed_adapter.shioaji.client
+        # import dispatch_tick_cb` — that picks up the freshest function each call. The shim
+        # `shioaji_client.dispatch_tick_cb` is name-bound at shim-load and goes stale if any other
+        # test reloads the inner module mid-suite, causing a false assert_called_with mismatch.
+        self.mock_api_instance.quote.set_on_tick_stk_v1_callback.assert_called_with(
+            _shioaji_inner_client.dispatch_tick_cb
+        )
 
     def test_callback_retry_loop_sets_registered(self):
         self.client.logged_in = True
@@ -738,7 +747,9 @@ class TestShioajiClientFull(unittest.TestCase):
         self.client.logged_in = False
         self.client._event_callback_registered = True
         self.client._callbacks_registered = True
-        self.client._failed_sub_symbols = [{"code": "2330", "exchange": "TSE"}]
+        # L2: in-place mutation — _failed_sub_symbols is now a deque.
+        self.client._failed_sub_symbols.clear()
+        self.client._failed_sub_symbols.append({"code": "2330", "exchange": "TSE"})
         cb = MagicMock()
 
         iteration = {"n": 0}
@@ -760,7 +771,9 @@ class TestShioajiClientFull(unittest.TestCase):
         self.client.logged_in = True
         self.client._event_callback_registered = False
         self.client._callbacks_registered = True
-        self.client._failed_sub_symbols = [{"code": "2330", "exchange": "TSE"}]
+        # L2: in-place mutation — _failed_sub_symbols is now a deque.
+        self.client._failed_sub_symbols.clear()
+        self.client._failed_sub_symbols.append({"code": "2330", "exchange": "TSE"})
         cb = MagicMock()
 
         iteration = {"n": 0}

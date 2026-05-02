@@ -31,10 +31,9 @@ def _patch_storm_externals():
     with (
         patch("hft_platform.risk.storm_guard.MetricsRegistry.get", return_value=mock_metrics),
         patch("hft_platform.recorder.audit.get_audit_writer", return_value=mock_audit),
-        patch("hft_platform.risk.storm_guard.timebase") as mock_tb,
+        patch("hft_platform.risk.storm_guard.time") as mock_time,
     ):
-        mock_tb.now_s = _now_s
-        mock_tb.now_ns = _now_ns
+        mock_time.monotonic = lambda: time_val[0]
         _patch_storm_externals.advance = lambda s: time_val.__setitem__(0, time_val[0] + s)  # type: ignore[attr-defined]
         yield
 

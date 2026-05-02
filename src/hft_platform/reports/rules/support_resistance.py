@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from hft_platform.contracts.types import ScaledPrice
+from hft_platform.contracts.types import PLATFORM_SCALE, ScaledPrice
 from hft_platform.reports.models import Bar5m, LargeTrade, PriceLevel, SessionData
 
 __all__ = [
@@ -19,8 +19,6 @@ __all__ = [
     "find_volume_at_price",
     "find_failed_breakouts",
 ]
-
-PLATFORM_SCALE: int = 10_000
 
 
 def _fmt(price: int) -> str:

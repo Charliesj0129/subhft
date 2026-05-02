@@ -36,7 +36,7 @@ class TestCrossedBookDetection(unittest.TestCase):
             adapter = adapter_mod.HftBacktestAdapter(
                 strategy=strategy,
                 asset_symbol="2330",
-                data_path="dummy.npz",
+                data="dummy.npz",
             )
             adapter._wait_status_mode = "modern"
             return adapter, strategy
@@ -131,7 +131,7 @@ class TestZeroQtyHandling(unittest.TestCase):
             adapter = adapter_mod.HftBacktestAdapter(
                 strategy=strategy,
                 asset_symbol="2330",
-                data_path="dummy.npz",
+                data="dummy.npz",
             )
             return adapter
 

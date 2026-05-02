@@ -45,7 +45,7 @@ __all__ = [
 ]
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class Bar5m:
     """5-minute OHLCV bar."""
 
@@ -58,7 +58,7 @@ class Bar5m:
     ticks: int
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class FlowBar:
     """5-minute order-flow summary bar."""
 
@@ -72,7 +72,7 @@ class FlowBar:
     net_flow: int
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class LargeTrade:
     """A single large-print trade event.
 
@@ -85,7 +85,7 @@ class LargeTrade:
     direction: str
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class DepthBar:
     """Hourly depth imbalance summary."""
 
@@ -95,7 +95,7 @@ class DepthBar:
     bid_ratio: float
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class SessionData:
     """Full session snapshot for one symbol on one date."""
 
@@ -115,7 +115,7 @@ class SessionData:
     depth_imbalance: list[DepthBar]
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class PriceLevel:
     """A price support or resistance level with strength score.
 
@@ -127,7 +127,7 @@ class PriceLevel:
     reason: str
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class SignalReport:
     """Derived signal analysis built from SessionData."""
 
@@ -147,7 +147,7 @@ class SignalReport:
     rule_scores: dict[str, float]
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class Scenario:
     """A single directional scenario with probability estimate."""
 
@@ -159,7 +159,7 @@ class Scenario:
     description: str
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class KeyLevel:
     """A key price level for scenario planning.
 
@@ -172,7 +172,7 @@ class KeyLevel:
     reason: str
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class ScenarioReport:
     """Full scenario plan derived from a SignalReport."""
 
@@ -201,7 +201,7 @@ class ChannelConfig:
 # ---------------------------------------------------------------------------
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class SegmentFact:
     """Facts about a single time segment within a session."""
 
@@ -218,7 +218,7 @@ class SegmentFact:
     dominant_side: str  # "bull" / "bear" / "neutral"
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class ChipCluster:
     """A cluster of large trades near a price level."""
 
@@ -233,7 +233,7 @@ class ChipCluster:
     time_range: str
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class ChipFacts:
     """Aggregated chip structure from large trades + volume-at-price."""
 
@@ -246,7 +246,7 @@ class ChipFacts:
     net_ratio: float
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class FlowFacts:
     """Session-level order flow facts."""
 
@@ -260,7 +260,7 @@ class FlowFacts:
     eod_drift: float
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class StructureFacts:
     """Price structure facts."""
 
@@ -272,7 +272,7 @@ class StructureFacts:
     session_low: PriceLevel
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class VolatilityFacts:
     """Volatility metrics derived from 5m bars."""
 
@@ -282,7 +282,7 @@ class VolatilityFacts:
     atr_session: int
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class DaySnapshot:
     """Summary of a single previous trading day/session."""
 
@@ -297,7 +297,7 @@ class DaySnapshot:
     net_flow: int
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class CrossDayFacts:
     """Cross-day comparison facts."""
 
@@ -308,7 +308,7 @@ class CrossDayFacts:
     flow_reversal: bool
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class FactReport:
     """Complete Layer 1 output."""
 
@@ -326,7 +326,7 @@ class FactReport:
 # ---------------------------------------------------------------------------
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class Evidence:
     """A single piece of evidence for bias determination."""
 
@@ -336,7 +336,7 @@ class Evidence:
     weight: float
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class BiasJudgment:
     """Overall market bias with evidence chain."""
 
@@ -346,7 +346,7 @@ class BiasJudgment:
     summary: str
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class EnrichedLevel:
     """Support/resistance level with confluence information."""
 
@@ -357,7 +357,7 @@ class EnrichedLevel:
     confluence_count: int
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class NarrativeReport:
     """Time-segment narrative output."""
 
@@ -366,7 +366,7 @@ class NarrativeReport:
     conclusion: str
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class ReasoningReport:
     """Complete Layer 2 output."""
 
@@ -381,7 +381,7 @@ class ReasoningReport:
 # ---------------------------------------------------------------------------
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class MessagePart:
     """A single part of the composed report."""
 
@@ -392,7 +392,7 @@ class MessagePart:
     min_tier: str = "free"
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class ComposedReport:
     """Complete Layer 3 output."""
 

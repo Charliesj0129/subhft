@@ -37,16 +37,34 @@ class FakeEvidenceWriter:
         return "/fake/evidence/daily_summary.json"
 
 
+class _FakePosition:
+    """Minimal Position stand-in with net_qty."""
+
+    __slots__ = ("net_qty",)
+
+    def __init__(self, net_qty: int) -> None:
+        self.net_qty = net_qty
+
+
 class FakePositionStore:
-    """Returns a canned open-position list."""
+    """Returns canned positions via snapshot_positions() + total_pnl."""
 
-    __slots__ = ("_positions",)
+    __slots__ = ("_positions", "_total_pnl")
 
-    def __init__(self, positions: dict[str, int] | None = None) -> None:
-        self._positions = positions or {}
+    def __init__(
+        self,
+        positions: dict[str, int] | None = None,
+        total_pnl: int = 0,
+    ) -> None:
+        self._positions = {k: _FakePosition(v) for k, v in (positions or {}).items()}
+        self._total_pnl = total_pnl
 
-    def get_all_positions(self) -> dict[str, int]:
+    def snapshot_positions(self) -> dict[str, Any]:
         return dict(self._positions)
+
+    @property
+    def total_pnl(self) -> int:
+        return self._total_pnl
 
 
 class FakeStormGuard:
@@ -119,31 +137,35 @@ class TestDailyReportService:
     """DailyReportService unit tests."""
 
     def test_generate_and_send_report(self) -> None:
-        """CLOSED callback triggers report with correct aggregates from CH."""
-        # Aggregate row: (sum_pnl, buy_count, sell_count, fill_count, sum_fee)
-        ch = FakeCHClient(rows=[(50000, 10, 8, 18, 3200)])
+        """CLOSED callback triggers report with correct aggregates from CH + PnL from store."""
+        # Aggregate row: (buy_count, sell_count, fill_count, sum_fee)
+        ch = FakeCHClient(rows=[(10, 8, 18, 3200)])
         dispatcher = FakeNotificationDispatcher()
         evidence = FakeEvidenceWriter()
+        # total_pnl in scaled int (x10000): 500000 → 50 NTD
+        position_store = FakePositionStore(total_pnl=500000)
         svc = _make_service(
             ch_client=ch,
             notification_dispatcher=dispatcher,
             evidence_writer=evidence,
+            position_store=position_store,
         )
 
         asyncio.run(svc.on_session_closed("equity"))
 
         assert len(dispatcher.calls) == 1
         call = dispatcher.calls[0]
-        assert call["pnl_ntd"] == 50000
+        assert call["pnl_ntd"] == 50  # 500000 // 10000
         assert call["buys"] == 10
         assert call["sells"] == 8
         assert call["fills"] == 18
 
     def test_evidence_written_on_close(self) -> None:
         """Evidence summary JSON is written alongside the notification."""
-        ch = FakeCHClient(rows=[(1000, 5, 3, 8, 100)])
+        ch = FakeCHClient(rows=[(5, 3, 8, 100)])
         evidence = FakeEvidenceWriter()
-        svc = _make_service(ch_client=ch, evidence_writer=evidence)
+        position_store = FakePositionStore(total_pnl=10000000)  # 1000 NTD
+        svc = _make_service(ch_client=ch, evidence_writer=evidence, position_store=position_store)
 
         asyncio.run(svc.on_session_closed("equity"))
 
@@ -193,7 +215,7 @@ class TestDailyReportService:
 
     def test_phase_callback_triggers_on_closed(self) -> None:
         """Phase callback triggers report when phase is CLOSED."""
-        ch = FakeCHClient(rows=[(0, 0, 0, 0, 0)])
+        ch = FakeCHClient(rows=[(0, 0, 0, 0)])
         dispatcher = FakeNotificationDispatcher()
         svc = _make_service(ch_client=ch, notification_dispatcher=dispatcher)
 
@@ -208,14 +230,14 @@ class TestDailyReportService:
         assert status == "flat"
 
     def test_position_status_open(self) -> None:
-        """Position status reports count when positions exist."""
-        svc = _make_service(position_store=FakePositionStore({"2330": 100, "2317": -50}))
+        """Position status reports count when non-zero positions exist."""
+        svc = _make_service(position_store=FakePositionStore({"acct:s:2330": 100, "acct:s:2317": -50}))
         status = svc._get_position_status()
         assert "2 open" in status
 
     def test_phase_callback_handles_string_phase(self) -> None:
         """Phase callback handles string phase names (not just enum)."""
-        ch = FakeCHClient(rows=[(0, 0, 0, 0, 0)])
+        ch = FakeCHClient(rows=[(0, 0, 0, 0)])
         dispatcher = FakeNotificationDispatcher()
         svc = _make_service(ch_client=ch, notification_dispatcher=dispatcher)
 

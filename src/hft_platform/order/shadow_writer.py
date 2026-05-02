@@ -7,11 +7,9 @@ from typing import Any
 
 from structlog import get_logger
 
-logger = get_logger("order.shadow_writer")
+from hft_platform.infra.ch_client import get_ch_client
 
-_INSERT_SQL = (
-    "INSERT INTO hft.shadow_orders (ts_ns, strategy_id, symbol, side, price, qty, intent_type, intent_id) VALUES"
-)
+logger = get_logger("order.shadow_writer")
 
 _RECORD_KEYS: tuple[str, ...] = (
     "ts_ns",
@@ -26,17 +24,8 @@ _RECORD_KEYS: tuple[str, ...] = (
 
 
 def _get_ch_client() -> Any:
-    """Return a clickhouse_driver Client connected via env-configured host."""
-    try:
-        from clickhouse_driver import Client
-    except ImportError as exc:
-        raise RuntimeError("clickhouse_driver is not installed") from exc
-
-    host = os.getenv("HFT_CLICKHOUSE_HOST", "localhost")
-    port = int(os.getenv("HFT_CLICKHOUSE_PORT", "9000"))
-    user = os.getenv("HFT_CLICKHOUSE_USER", "default")
-    password = os.getenv("HFT_CLICKHOUSE_PASSWORD", "")
-    return Client(host=host, port=port, user=user, password=password)
+    """Return the project-standard clickhouse_connect client."""
+    return get_ch_client()
 
 
 class ShadowOrderWriter:
@@ -95,7 +84,7 @@ class ShadowOrderWriter:
 
         try:
             client = _get_ch_client()
-            client.execute(_INSERT_SQL, rows)
+            client.insert("hft.shadow_orders", rows, column_names=list(_RECORD_KEYS))
             logger.debug("Shadow orders flushed", count=len(rows))
         except Exception as exc:
             logger.warning(

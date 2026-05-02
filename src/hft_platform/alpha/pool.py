@@ -388,6 +388,8 @@ def _ic_weighted(data: np.ndarray, returns: np.ndarray | None) -> np.ndarray:
 
 
 def _mean_variance(data: np.ndarray, returns: np.ndarray | None) -> np.ndarray:
+    if data.shape[1] < 2:
+        return _equal_weight(data.shape[0])
     cov = np.cov(data)
     cov = np.nan_to_num(cov, nan=0.0, posinf=0.0, neginf=0.0)
     cov += np.eye(cov.shape[0], dtype=np.float64) * 1e-6

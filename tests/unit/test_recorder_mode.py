@@ -1,5 +1,7 @@
 """Tests for CE3-01: RecorderMode enum and get_recorder_mode()."""
 
+import pytest
+
 from hft_platform.recorder.mode import RecorderMode, get_recorder_mode
 
 
@@ -23,7 +25,8 @@ def test_explicit_wal_first(monkeypatch):
 
 def test_disable_clickhouse_maps_to_wal_first(monkeypatch):
     monkeypatch.setenv("HFT_DISABLE_CLICKHOUSE", "1")
-    assert get_recorder_mode() == RecorderMode.WAL_FIRST
+    with pytest.warns(DeprecationWarning, match="HFT_DISABLE_CLICKHOUSE is deprecated"):
+        assert get_recorder_mode() == RecorderMode.WAL_FIRST
 
 
 def test_invalid_value_falls_back_to_direct(monkeypatch):

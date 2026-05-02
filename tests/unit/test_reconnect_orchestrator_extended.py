@@ -259,8 +259,8 @@ def test_is_trading_hours_fallback_weekend(mock_tb, orch):
 
 
 @patch("hft_platform.feed_adapter.shioaji.reconnect_orchestrator.timebase")
-def test_is_trading_hours_fallback_weekday_in_hours(mock_tb, orch):
-    """Fallback path returns True on weekday during trading hours."""
+def test_is_trading_hours_fallback_weekday_day_session(mock_tb, orch):
+    """Fallback path returns True on weekday during day session (08:45-13:45)."""
     import datetime as dt
 
     friday_10am = dt.datetime(2026, 3, 20, 10, 0, 0, tzinfo=dt.timezone(dt.timedelta(hours=8)))
@@ -271,6 +271,90 @@ def test_is_trading_hours_fallback_weekday_in_hours(mock_tb, orch):
         side_effect=ImportError("no calendar"),
     ):
         assert orch.is_trading_hours() is True
+
+
+@patch("hft_platform.feed_adapter.shioaji.reconnect_orchestrator.timebase")
+def test_is_trading_hours_fallback_weekday_night_session(mock_tb, orch):
+    """Fallback path returns True during night session (15:00-05:00)."""
+    import datetime as dt
+
+    # 22:00 Taiwan time on a Wednesday — firmly in night session
+    wed_22 = dt.datetime(2026, 3, 18, 22, 0, 0, tzinfo=dt.timezone(dt.timedelta(hours=8)))
+    mock_tb.now_s.return_value = wed_22.timestamp()
+
+    with patch(
+        "hft_platform.core.market_calendar.get_calendar",
+        side_effect=ImportError("no calendar"),
+    ):
+        assert orch.is_trading_hours() is True
+
+
+@patch("hft_platform.feed_adapter.shioaji.reconnect_orchestrator.timebase")
+def test_is_trading_hours_fallback_weekday_night_session_early_morning(mock_tb, orch):
+    """Fallback returns True at 03:00 Taiwan time (still night session)."""
+    import datetime as dt
+
+    thu_3am = dt.datetime(2026, 3, 19, 3, 0, 0, tzinfo=dt.timezone(dt.timedelta(hours=8)))
+    mock_tb.now_s.return_value = thu_3am.timestamp()
+
+    with patch(
+        "hft_platform.core.market_calendar.get_calendar",
+        side_effect=ImportError("no calendar"),
+    ):
+        assert orch.is_trading_hours() is True
+
+
+@patch("hft_platform.feed_adapter.shioaji.reconnect_orchestrator.timebase")
+def test_is_trading_hours_fallback_weekday_session_gap(mock_tb, orch):
+    """Fallback returns False during 05:01-08:44 gap between sessions."""
+    import datetime as dt
+
+    # 06:30 Taiwan time — between night session close and day session open
+    thu_630 = dt.datetime(2026, 3, 19, 6, 30, 0, tzinfo=dt.timezone(dt.timedelta(hours=8)))
+    mock_tb.now_s.return_value = thu_630.timestamp()
+
+    with patch(
+        "hft_platform.core.market_calendar.get_calendar",
+        side_effect=ImportError("no calendar"),
+    ):
+        assert orch.is_trading_hours() is False
+
+
+@patch("hft_platform.feed_adapter.shioaji.reconnect_orchestrator.timebase")
+def test_is_trading_hours_fallback_weekday_between_sessions(mock_tb, orch):
+    """Fallback returns False during 13:46-14:59 gap between day and night."""
+    import datetime as dt
+
+    wed_14 = dt.datetime(2026, 3, 18, 14, 30, 0, tzinfo=dt.timezone(dt.timedelta(hours=8)))
+    mock_tb.now_s.return_value = wed_14.timestamp()
+
+    with patch(
+        "hft_platform.core.market_calendar.get_calendar",
+        side_effect=ImportError("no calendar"),
+    ):
+        assert orch.is_trading_hours() is False
+
+
+@patch("hft_platform.feed_adapter.shioaji.reconnect_orchestrator.timebase")
+def test_is_trading_hours_uses_futures_product_type(mock_tb, orch):
+    """Calendar path must call is_trading_hours with product_type='future'."""
+    import datetime as dt
+
+    mock_calendar = MagicMock()
+    mock_calendar._tz = dt.timezone(dt.timedelta(hours=8))
+    mock_calendar.is_trading_hours.return_value = True
+    mock_tb.now_s.return_value = 1742475600.0  # arbitrary
+
+    with patch(
+        "hft_platform.core.market_calendar.get_calendar",
+        return_value=mock_calendar,
+    ):
+        result = orch.is_trading_hours()
+
+    assert result is True
+    # Verify product_type="future" was passed
+    call_kwargs = mock_calendar.is_trading_hours.call_args
+    assert call_kwargs[1].get("product_type") == "future" or (len(call_kwargs[0]) > 1 and call_kwargs[0][1] == "future")
 
 
 # ------------------------------------------------------------------ #

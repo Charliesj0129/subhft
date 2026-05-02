@@ -91,7 +91,7 @@ class ReportSender:
         Uses ``requests`` (sync, in thread) if available, else ``aiohttp``.
         """
         if _requests is not None:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             resp = await loop.run_in_executor(
                 None,
                 lambda: _requests.post(url, json=payload, timeout=30),
@@ -177,7 +177,7 @@ class ReportSender:
         Uses ``requests`` (sync, in thread) if available, else ``aiohttp``.
         """
         if _requests is not None:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             resp = await loop.run_in_executor(
                 None,
                 lambda: _requests.post(url, data=data, files=files, timeout=30),

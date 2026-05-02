@@ -8,6 +8,8 @@ formatting directives.
 
 from __future__ import annotations
 
+from html import escape
+
 
 def render_halt(reason: str) -> str:
     """Critical: trading has been halted.
@@ -18,7 +20,7 @@ def render_halt(reason: str) -> str:
     Returns:
         Formatted HALT alert string.
     """
-    return f"🔴 HALT: {reason}. All trading stopped. Manual recovery required."
+    return f"🔴 HALT: {escape(reason)}. All trading stopped. Manual recovery required."
 
 
 def render_daily_loss(pnl_ntd: int, limit_ntd: int) -> str:
@@ -93,7 +95,7 @@ def render_stormguard_change(old: str, new: str, reason: str) -> str:
     Returns:
         Formatted StormGuard state-change alert string.
     """
-    return f"🟡 StormGuard: {old} → {new}. Reason: {reason}."
+    return f"🟡 StormGuard: {escape(old)} → {escape(new)}. Reason: {escape(reason)}."
 
 
 def render_pre_market_pass() -> str:
@@ -103,6 +105,55 @@ def render_pre_market_pass() -> str:
         Formatted pre-market PASS notification string.
     """
     return "🟢 08:15 健檢 PASS. 策略將於 08:45 啟動."
+
+
+def render_symbol_reload_failed(reason: str, count: int, limit: int) -> str:
+    """Symbol config reload failed (RC-1 / Q3 fix).
+
+    Args:
+        reason: Result label (e.g. ``exceeds_limit``, ``parse_error``,
+            ``other``).
+        count: Number of symbols loaded from the config file (or 0 if
+            the file could not be parsed).
+        limit: Effective preflight ceiling at the moment of failure.
+
+    Returns:
+        Formatted symbol-reload failure notification string.
+    """
+    return (
+        "🔴 Symbol reload FAIL\n"
+        f"reason: {reason}\n"
+        f"count: {count}\n"
+        f"limit: {limit}\n"
+        "Subscriptions are stale until reload succeeds — check "
+        "config/symbols.yaml and HFT_MAX_SUBSCRIPTIONS."
+    )
+
+
+def render_subscription_truncated(reason: str, requested: int, subscribed: int, limit: int) -> str:
+    """Subscription truncated below configured universe (P2 #8 fix).
+
+    Args:
+        reason: Truncation reason label (currently ``conn_limit``).
+        requested: Number of symbols loaded into the client.
+        subscribed: Number of symbols actually subscribed before truncation.
+        limit: Per-conn cap (``MAX_SUBSCRIPTIONS_PER_CONN``) that triggered
+            truncation.
+
+    Returns:
+        Formatted subscription-truncation notification string.
+    """
+    missed = max(0, requested - subscribed)
+    return (
+        "🔴 Quote subscription TRUNCATED\n"
+        f"reason: {reason}\n"
+        f"requested: {requested}\n"
+        f"subscribed: {subscribed}\n"
+        f"missed: {missed}\n"
+        f"per_conn_limit: {limit}\n"
+        "Symbols loaded but NEVER subscribed — increase HFT_QUOTE_CONNECTIONS "
+        "or reduce config/symbols.yaml universe."
+    )
 
 
 def render_pre_market_fail(failed_checks: list[str]) -> str:
@@ -152,7 +203,7 @@ def render_reconnect_alert(count: int, flap_status: str) -> str:
     Returns:
         Formatted reconnect alert string.
     """
-    return f"🟡 券商重連 (第 {count} 次). Flap 狀態: {flap_status}."
+    return f"🟡 券商重連 (第 {count} 次). Flap 狀態: {escape(flap_status)}."
 
 
 def render_process_restart(attempt: int, max_attempts: int) -> str:
@@ -268,7 +319,7 @@ def render_flatten_result(
         f"{icon} Flatten [{scope}]: closed={fully_closed} partial={partially_closed} failed={failed}",
     ]
     if failed_symbols:
-        lines.append(f"Failed: {', '.join(failed_symbols[:5])}")
+        lines.append(f"Failed: {', '.join(escape(s) for s in failed_symbols[:5])}")
     return "\n".join(lines)
 
 
@@ -292,7 +343,7 @@ def render_heartbeat(
     """
     return (
         f"💓 Heartbeat | State: {autonomy_state} | "
-        f"PnL: {pnl_scaled} | Strategies: {strategies_active} | Feed: {feed_status}"
+        f"PnL: {pnl_scaled // 10000} NTD | Strategies: {strategies_active} | Feed: {feed_status}"
     )
 
 
@@ -440,6 +491,38 @@ def render_margin_critical(ratio: float, used: int, available: int) -> str:
     return f"🚨 保證金危急 — 已進入 reduce-only\n使用率: {ratio:.1%}\n已用: {used:,} NTD\n可用: {available:,} NTD"
 
 
+def render_position_stuck(
+    *,
+    strategy_id: str,
+    symbol: str,
+    net_qty: int,
+    age_s: int,
+    unrealized_ntd: int | None = None,
+) -> str:
+    """Bug 27: position held too long without any new fills — possible deadlock.
+
+    Args:
+        strategy_id: Strategy that owns the stuck position.
+        symbol: Instrument symbol.
+        net_qty: Signed quantity (positive=long, negative=short).
+        age_s: Seconds since last fill on this position.
+        unrealized_ntd: Current unrealized PnL in NTD (optional).
+
+    Returns:
+        Formatted Telegram alert string.
+    """
+    side = "LONG" if net_qty > 0 else "SHORT"
+    upnl_line = f"\n未實現損益: {unrealized_ntd:+d} NTD" if unrealized_ntd is not None else ""
+    return (
+        f"⚠️ 部位卡住\n"
+        f"策略: {escape(strategy_id)}\n"
+        f"合約: {escape(symbol)}  方向: {side}  口數: {abs(net_qty)}\n"
+        f"持有時間: {age_s // 60} 分 {age_s % 60} 秒 (無新成交)"
+        f"{upnl_line}\n"
+        f"請檢查策略是否 deadlock。"
+    )
+
+
 def render_backup_failed(
     *,
     date_str: str,
@@ -456,7 +539,7 @@ def render_backup_failed(
     Returns:
         Formatted backup failure notification string.
     """
-    return f"🔴 BACKUP 失敗 {date_str}\n錯誤: {error}\n最後成功備份: {last_success_date}\n請立即檢查備份磁碟"
+    return f"🔴 BACKUP 失敗 {date_str}\n錯誤: {escape(error)}\n最後成功備份: {last_success_date}\n請立即檢查備份磁碟"
 
 
 def render_position_recovery(
@@ -488,6 +571,19 @@ def render_position_recovery(
     return "\n".join(lines)
 
 
+def render_tca_pnl_supplement(*, tca_section: str, pnl_section: str) -> str:
+    """TCA + PnL supplement for the daily report.
+
+    Args:
+        tca_section: Formatted TCA (Transaction Cost Analysis) section text.
+        pnl_section: Formatted PnL breakdown section text.
+
+    Returns:
+        Multi-line formatted TCA and PnL supplement string.
+    """
+    return f"📊 TCA & PnL Supplement\n\n{tca_section}\n\n{pnl_section}"
+
+
 def render_position_recovery_failed(
     *,
     source: str,
@@ -507,7 +603,7 @@ def render_position_recovery_failed(
     lines = [
         "🔴 部位恢復失敗 — HALT",
         f"來源: {source}",
-        f"原因: {reason}",
+        f"原因: {escape(reason)}",
     ]
     for m in mismatches[:5]:
         symbol = m.get("symbol", "?")
@@ -516,3 +612,19 @@ def render_position_recovery_failed(
         lines.append(f"  {symbol}: ckpt={ckpt_qty} broker={broker_qty}")
     lines.append("請手動確認部位後重啟")
     return "\n".join(lines)
+
+
+def render_canary_action(alpha_id: str, action: str, reason: str) -> str:
+    """Canary rollback or graduation notification.
+
+    Args:
+        alpha_id: Alpha identifier.
+        action: Action taken ("rolled_back" or "graduated").
+        reason: Human-readable reason.
+
+    Returns:
+        Formatted canary action alert string.
+    """
+    icon = "🔴" if action == "rolled_back" else "🟢"
+    label = "ROLLBACK" if action == "rolled_back" else "GRADUATED"
+    return f"{icon} Canary {label}: {escape(alpha_id)}\n{escape(reason)}"

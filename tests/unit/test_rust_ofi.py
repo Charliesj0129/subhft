@@ -66,21 +66,16 @@ def test_ofi_parity_rust_vs_numba():
     # Rust expects 1D arrays
     rust_result = rust_factor.compute(bid_p, ask_p, bid_v, ask_v)
 
-    # 3. Compare
-    # Check if Python result is inverted
-    # Implementation recall: return -_compute_ofi_numba(...)
-    # Rust implementation: return ofi
-
-    # So we expect py_result == -rust_result
+    # 3. Compare — both Python and Rust now use bid_flow - ask_flow convention
     np.testing.assert_allclose(
         py_result,
-        -rust_result,
+        rust_result,
         rtol=1e-10,
         atol=1e-10,
-        err_msg="Rust OFI does not match Python OFI (sign inverted check)",
+        err_msg="Rust OFI does not match Python OFI",
     )
 
-    print("\nParity Confirmed: Python(Inverted) == -1 * Rust(Raw)")
+    print("\nParity Confirmed: Python OFI == Rust OFI (bid_flow - ask_flow)")
 
 
 if __name__ == "__main__":

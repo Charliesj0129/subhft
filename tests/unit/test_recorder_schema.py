@@ -72,3 +72,78 @@ def test_ensure_price_scaled_views_repairs() -> None:
     client = MagicMock()
     assert schema.ensure_price_scaled_views(client) is False
     client.command.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _extract_up_statements — parser edge cases (regression: 2026-04-26 outage
+# where `-- Up:` and comment-only fragments stalled all migrations since
+# 2026-03-23, leading to 13 missing migrations and ClickHouse insert failures).
+# ---------------------------------------------------------------------------
+
+
+def test_extract_up_statements_marker_with_trailing_text() -> None:
+    """`-- Up: comment` must be treated as a marker, not split into `: comment`.
+
+    Pre-fix the splitter took everything after the literal `-- Up`, which left
+    `: post-market reconciliation` as the first token — ClickHouse rejected
+    the leading colon as a syntax error and blocked all later migrations.
+    """
+    content = (
+        "-- Up: post-market 3-way reconciliation results table\n"
+        "CREATE TABLE foo (x Int64) ENGINE=MergeTree ORDER BY x;\n"
+        "-- Down\n"
+        "DROP TABLE foo;\n"
+    )
+    statements = schema._extract_up_statements(content)
+    assert len(statements) == 1
+    assert statements[0].startswith("CREATE TABLE foo")
+    assert not statements[0].lstrip().startswith(":")
+
+
+def test_extract_up_statements_skips_comment_only_fragments() -> None:
+    """Header / trailing comment blocks must not be sent to ClickHouse.
+
+    Pre-fix a file like the fills-RMT migration produced fragments that were
+    only `--` lines; ClickHouse returned `Empty query (SYNTAX_ERROR)`.
+    """
+    content = (
+        "-- header doc line 1\n"
+        "-- header doc line 2\n"
+        "\n"
+        "-- Up\n"
+        "CREATE TABLE foo (x Int64) ENGINE=MergeTree ORDER BY x;\n"
+        "\n"
+        "-- trailing operational note\n"
+        "-- another note\n"
+    )
+    statements = schema._extract_up_statements(content)
+    assert len(statements) == 1
+    assert statements[0].startswith("CREATE TABLE foo")
+
+
+def test_extract_up_statements_no_markers() -> None:
+    """A file with no `-- Up`/`-- Down` markers parses as one Up section."""
+    content = (
+        "CREATE TABLE foo (x Int64) ENGINE=MergeTree ORDER BY x;\n"
+        "CREATE TABLE bar (y Int64) ENGINE=MergeTree ORDER BY y;\n"
+    )
+    statements = schema._extract_up_statements(content)
+    assert len(statements) == 2
+
+
+def test_extract_up_statements_strips_down_section() -> None:
+    """Statements inside `-- Down` must never be returned."""
+    content = "-- Up\nCREATE TABLE foo (x Int64) ENGINE=MergeTree ORDER BY x;\n-- Down\nDROP TABLE foo;\n"
+    statements = schema._extract_up_statements(content)
+    assert len(statements) == 1
+    assert "DROP" not in statements[0]
+
+
+def test_extract_up_statements_marker_must_be_at_line_start() -> None:
+    """A `-- Up` substring inside a SQL comment mid-statement is NOT a marker."""
+    content = "-- Up\nCREATE TABLE foo (\n    x Int64  -- Updated to wider int\n) ENGINE=MergeTree ORDER BY x;\n"
+    statements = schema._extract_up_statements(content)
+    assert len(statements) == 1
+    assert "CREATE TABLE foo" in statements[0]
+    # The mid-statement `-- Updated...` must not have caused a re-split.
+    assert "Updated to wider int" in statements[0]

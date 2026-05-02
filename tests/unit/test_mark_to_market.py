@@ -157,3 +157,38 @@ class TestMarkToMarket:
         result = store.mark_to_market({"2330": 201_0000})
 
         assert isinstance(result, int)
+
+    def test_sentinel_avg_price_skipped_in_positions(self, store: PositionStore) -> None:
+        """Positions with avg_price_scaled=-1 sentinel (unknown cost basis) are excluded from MtM."""
+        pos = Position("acct1", "strat1", "TXFD6")
+        pos.net_qty = 1
+        pos.avg_price_scaled = -1  # broker-only recovery sentinel
+        store.positions["acct1:strat1:TXFD6"] = pos
+
+        result = store.mark_to_market({"TXFD6": 200_0000})
+
+        assert result == 0  # must NOT produce (200_0000 - (-1)) * 1 = astronomical value
+
+    def test_sentinel_avg_price_skipped_in_recovery(self, store: PositionStore) -> None:
+        """Recovery positions with avg_price_scaled=-1 sentinel are excluded from MtM."""
+        store._recovery_positions["acct1:TXFD6"] = {
+            "symbol": "TXFD6",
+            "net_qty": 2,
+            "avg_price_scaled": -1,
+        }
+
+        result = store.mark_to_market({"TXFD6": 200_0000})
+
+        assert result == 0
+
+    def test_valid_recovery_positions_included(self, store: PositionStore) -> None:
+        """Recovery positions with valid avg_price are included in MtM."""
+        store._recovery_positions["acct1:TXFD6"] = {
+            "symbol": "TXFD6",
+            "net_qty": 1,
+            "avg_price_scaled": 100_0000,
+        }
+
+        result = store.mark_to_market({"TXFD6": 102_0000})
+
+        assert result == 2_0000

@@ -58,6 +58,7 @@ ScaledFee = NewType("ScaledFee", int)       # x10000
 | 20260327_004 | liquidity_gate_events | Liquidity gate state transitions |
 | 20260328_001 | (alter market_data) | EMO trade direction classification |
 | 20260330_001 | (alter market_data, orders, fills) | Multi-instrument: instrument_type, underlying, strike, option_right, expiry |
+| 20260401_001 | wal_dedup | WAL replay deduplication tracking |
 
 ## Rust Boundary (rust_core via PyO3)
 

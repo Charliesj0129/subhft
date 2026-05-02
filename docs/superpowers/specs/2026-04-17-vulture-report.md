@@ -1,0 +1,6 @@
+src/hft_platform/monitor/_tui.py:46: unused variable 'signum' (100% confidence)
+src/hft_platform/ops/position_flattener.py:50: unused variable 'track_id' (100% confidence)
+src/hft_platform/recorder/schema.py:26: unused variable 'schema_path' (100% confidence)
+src/hft_platform/reports/rules/informed_flow.py:143: unused variable 'time_window_s' (100% confidence)
+src/hft_platform/risk/stress_test.py:88: unused variable 'surface' (100% confidence)
+src/hft_platform/risk/stress_test.py:92: unused variable 'risk_free_rate' (100% confidence)

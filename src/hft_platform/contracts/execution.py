@@ -31,6 +31,7 @@ class OrderEvent:
     side: Side
     ingest_ts_ns: int  # Local receive time
     broker_ts_ns: int  # Broker event time
+    client_order_id: str = ""  # Stable internal order key ("strategy_id:intent_id")
 
 
 @dataclass(slots=True)
@@ -55,6 +56,7 @@ class FillEvent:
     # TCA: passthrough from OrderCommand for slippage decomposition
     decision_price: int = 0  # LOB mid-price at signal time (x10000)
     arrival_price: int = 0  # Price at order submit time (x10000)
+    client_order_id: str = ""  # Stable internal order key ("strategy_id:intent_id")
 
 
 @dataclass(slots=True)

@@ -36,6 +36,8 @@ DEFAULT_LATENCY_PROFILE = "sim_p95_v2026-02-26"
 
 class AlphaStatus(str, Enum):
     DRAFT = "DRAFT"
+    GATE_ZERO = "GATE_ZERO"
+    PROTOTYPE = "PROTOTYPE"
     GATE_A = "GATE_A"
     GATE_B = "GATE_B"
     GATE_C = "GATE_C"
@@ -80,6 +82,12 @@ class AlphaManifest:
     # Must match src/hft_platform/feature/registry.FEATURE_SET_VERSION before Gate D.
     # None = no feature set dependency declared (acceptable for signal-only alphas).
     feature_set_version: str | None = None
+    # Backtest engine selection (standardized backtest engine, 2026-04-15).
+    # "taker" = HftNativeRunner (IC-based threshold crossing).
+    # "maker" = MakerEngine (CK-direct queue depletion).
+    strategy_type: str = "taker"
+    # Primary instrument for backtest data source (e.g. "TMFD6", "TXFD6").
+    instrument: str = ""
 
     def __post_init__(self) -> None:
         bad_roles = set(self.roles_used) - VALID_ROLES
@@ -114,6 +122,8 @@ class AlphaManifest:
             roles_used=tuple(str(r) for r in data.get("roles_used", ())),
             skills_used=tuple(str(s) for s in data.get("skills_used", ())),
             feature_set_version=str(data["feature_set_version"]) if data.get("feature_set_version") else None,
+            strategy_type=str(data.get("strategy_type", "taker")),
+            instrument=str(data.get("instrument", "")),
         )
 
 

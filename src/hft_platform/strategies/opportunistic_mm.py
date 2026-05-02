@@ -28,8 +28,9 @@ from __future__ import annotations
 
 from structlog import get_logger
 
-from hft_platform.events import FeatureUpdateEvent, LOBStatsEvent
+from hft_platform.events import FeatureUpdateEvent, GapEvent, LOBStatsEvent
 from hft_platform.strategies.simple_mm import SimpleMarketMaker
+from hft_platform.strategy.base import QUALITY_FLAGS_CORRUPT
 
 logger = get_logger("strategy.opportunistic_mm")
 
@@ -121,8 +122,17 @@ class OpportunisticMM(SimpleMarketMaker):
 
     def on_features(self, event: FeatureUpdateEvent) -> None:
         """Cache latest feature tuple for use in on_stats."""
-        if event.values is not None:
-            self._feature_cache[event.symbol] = event.values
+        if event.values is None:
+            return
+        # Skip corrupted features (GAP, STATE_RESET, OUT_OF_ORDER)
+        if event.quality_flags & QUALITY_FLAGS_CORRUPT:
+            logger.debug(
+                "opmm_features_skipped_corrupt",
+                symbol=event.symbol,
+                quality_flags=event.quality_flags,
+            )
+            return
+        self._feature_cache[event.symbol] = event.values
 
     def _check_reversal_condition(self, symbol: str) -> bool:
         """Check if current market state suggests a reversal (favorable for maker).
@@ -269,6 +279,17 @@ class OpportunisticMM(SimpleMarketMaker):
                 gate_passed_n=self._gate_passed_count,
             )
         super().on_stats(event)
+
+    def on_gap(self, event: GapEvent) -> None:
+        """Reset stale streaming state after bus overflow."""
+        self._feature_cache.clear()
+        self._bid_oid = None
+        self._ask_oid = None
+        logger.warning(
+            "opmm_gap_event_state_reset",
+            missed=event.missed_count,
+            strategy=self.strategy_id,
+        )
 
     @property
     def spread_threshold_pts(self) -> int:

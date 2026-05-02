@@ -59,6 +59,13 @@ class DiskPressureMonitor:
         self._interval = (
             check_interval_s if check_interval_s is not None else float(os.getenv("HFT_DISK_CHECK_INTERVAL_S", "10"))
         )
+        # Hysteresis band: to leave a level, size must fall below threshold * (1 - band).
+        # Prevents thrash when WAL size oscillates within a few MB of a threshold
+        # (observed: 31 level changes + 28 recoveries/24h near 100 MB boundary).
+        self._hysteresis_fraction = max(
+            0.0,
+            min(0.5, float(os.getenv("HFT_WAL_HYSTERESIS_FRACTION", "0.10"))),
+        )
 
         self._level = DiskPressureLevel.OK
         self._lock = threading.Lock()
@@ -109,10 +116,10 @@ class DiskPressureMonitor:
 
     def _check(self) -> None:
         wal_size_mb = self._wal_dir_size_mb()
-        new_level = self._compute_level(wal_size_mb)
 
         with self._lock:
             old_level = self._level
+            new_level = self._compute_level(wal_size_mb, current=old_level)
             if new_level == old_level:
                 return
             self._level = new_level
@@ -159,11 +166,40 @@ class DiskPressureMonitor:
             pass
         return total / (1024 * 1024)
 
-    def _compute_level(self, size_mb: float) -> DiskPressureLevel:
+    def _compute_level(
+        self,
+        size_mb: float,
+        current: DiskPressureLevel = DiskPressureLevel.OK,
+    ) -> DiskPressureLevel:
+        """Compute pressure level with downward hysteresis band.
+
+        Escalation (current < target) uses the raw thresholds.
+        De-escalation (current > target) requires size < threshold * (1 - band),
+        preventing 1-byte thrash when size oscillates near a boundary.
+        """
+        band = 1.0 - self._hysteresis_fraction
+        warn_exit = self._warn_mb * band
+        critical_exit = self._critical_mb * band
+        halt_exit = self._halt_mb * band
+
+        # Always escalate immediately (safety-first)
         if size_mb >= self._halt_mb:
             return DiskPressureLevel.HALT
+        if current == DiskPressureLevel.HALT:
+            if size_mb >= halt_exit:
+                return DiskPressureLevel.HALT
+            # fall through to re-evaluate lower levels
+
         if size_mb >= self._critical_mb:
             return DiskPressureLevel.CRITICAL
+        if current == DiskPressureLevel.CRITICAL:
+            if size_mb >= critical_exit:
+                return DiskPressureLevel.CRITICAL
+
         if size_mb >= self._warn_mb:
             return DiskPressureLevel.WARN
+        if current == DiskPressureLevel.WARN:
+            if size_mb >= warn_exit:
+                return DiskPressureLevel.WARN
+
         return DiskPressureLevel.OK

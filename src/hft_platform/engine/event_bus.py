@@ -1,13 +1,15 @@
 import asyncio
+import collections
 import importlib
 import os
+import time
 from typing import Any, Callable, List, Optional
 
 from structlog import get_logger
 
+from hft_platform.core import timebase
+from hft_platform.events import GapEvent
 from hft_platform.observability.metrics import MetricsRegistry
-
-# from collections import deque
 
 logger = get_logger("event_bus")
 
@@ -79,14 +81,15 @@ class _PyFastTickRingBuffer:
         is_odd_lot: bool,
         exch_ts: int,
     ) -> None:
+        # Skip redundant coercions — normalizer already guarantees correct types
         self.buffer[int(idx) % self.size] = (
-            str(symbol),
-            int(price),
-            int(volume),
-            int(total_volume),
-            bool(is_simtrade),
-            bool(is_odd_lot),
-            int(exch_ts),
+            symbol,
+            price,
+            volume,
+            total_volume,
+            is_simtrade,
+            is_odd_lot,
+            exch_ts,
         )
 
     def get(self, idx: int) -> Any | None:
@@ -329,7 +332,10 @@ class RingBufferBus:
         self.write_lock = asyncio.Lock()
         self.metrics = MetricsRegistry.get()
         # Event for lock-free notification (optional)
+        # Per-consumer signals to avoid lost-wakeup race (DEC-02)
         self.signal = None if _WAIT_MODE == "spin" else asyncio.Event()
+        self._consumer_signals: list[asyncio.Event] = []
+        self._consumer_positions: dict[str, int] = {}
         self._notify_every = max(1, int(os.getenv("HFT_BUS_NOTIFY_EVERY", "1")))
         self._notify_counter = 0
         self._spin_sleep = float(os.getenv("HFT_BUS_SPIN_SLEEP", "0"))
@@ -338,11 +344,36 @@ class RingBufferBus:
         self._storm_guard = storm_guard
         # Overflow threshold for triggering HALT (consecutive overflows)
         self._overflow_halt_threshold = int(os.getenv("HFT_BUS_OVERFLOW_HALT_THRESHOLD", "3"))
-        self._overflow_count = 0
+        self._overflow_count = 0  # legacy global (kept for backward compat metrics)
+        self._overflow_count_per_consumer: dict[str, int] = {}  # per-consumer overflow tracking
+        # Sliding-window overflow rate tracker (XB-03)
+        self._overflow_window_s: float = float(os.getenv("HFT_BUS_OVERFLOW_WINDOW_S", "60.0"))
+        self._overflow_rate_threshold: int = int(os.getenv("HFT_BUS_OVERFLOW_RATE_THRESHOLD", "10"))
+        self._overflow_timestamps: collections.deque[float] = collections.deque(
+            maxlen=self._overflow_rate_threshold * 2,
+        )
 
     def set_storm_guard(self, storm_guard: Any) -> None:
         """Set StormGuard reference for overflow HALT triggering."""
         self._storm_guard = storm_guard
+
+    def _record_overflow_rate(self) -> None:
+        """Record an overflow timestamp and check sliding-window rate threshold (XB-03)."""
+        now = time.monotonic()
+        self._overflow_timestamps.append(now)
+        # Evict timestamps older than the window
+        cutoff = now - self._overflow_window_s
+        while self._overflow_timestamps and self._overflow_timestamps[0] < cutoff:
+            self._overflow_timestamps.popleft()
+        if len(self._overflow_timestamps) >= self._overflow_rate_threshold and self._storm_guard is not None:
+            rate_count = len(self._overflow_timestamps)
+            self._storm_guard.trigger_halt(f"EventBus overflow rate: {rate_count} in {self._overflow_window_s}s")
+            logger.critical(
+                "StormGuard HALT triggered due to EventBus overflow rate",
+                overflow_rate=rate_count,
+                window_s=self._overflow_window_s,
+                threshold=self._overflow_rate_threshold,
+            )
 
     def _store_fallback(self, seq: int, event: Any) -> None:
         """Write event to the generic fallback buffer (Rust PyObj ring or Python list)."""
@@ -499,11 +530,11 @@ class RingBufferBus:
             self._use_typed_book_rings
             and self._lobstats_ring is not None
             and isinstance(event, tuple)
-            and len(event) == 9
+            and len(event) == 10
             and isinstance(event[0], str)
         ):
             try:
-                symbol, ts, mid_x2, spread, imbalance, best_bid, best_ask, bid_depth, ask_depth = event
+                _tag, symbol, ts, mid_x2, spread, imbalance, best_bid, best_ask, bid_depth, ask_depth = event
                 self._lobstats_ring.set_stats(
                     next_seq,
                     symbol,
@@ -531,7 +562,13 @@ class RingBufferBus:
         self._notify_counter += 1
 
     def _notify(self) -> None:
-        if self.signal is not None and self._notify_counter % self._notify_every == 0:
+        if self._notify_counter % self._notify_every != 0:
+            return
+        # Set per-consumer signals (DEC-02: avoids lost-wakeup race)
+        for sig in self._consumer_signals:
+            sig.set()
+        # Legacy shared signal for backward compatibility
+        if self.signal is not None:
             self.signal.set()
 
     def publish_nowait(self, event: Any) -> None:
@@ -576,135 +613,222 @@ class RingBufferBus:
             if self.signal is not None:
                 self.signal.set()
 
-    async def consume(self, start_cursor: int | None = None):
+    async def consume(self, start_cursor: int | None = None, consumer_name: str = "unknown"):
         """Async generator for consuming events."""
         # If start_cursor is None, join at current (latest).
         # To replay from beginning, pass -1.
         local_seq = self.cursor if start_cursor is None else start_cursor
+        # Per-consumer signal to avoid lost-wakeup race (DEC-02)
+        my_signal: asyncio.Event | None = None
+        if self.signal is not None:
+            my_signal = asyncio.Event()
+            self._consumer_signals.append(my_signal)
+        lag_gauge = self.metrics.bus_consumer_lag.labels(consumer=consumer_name) if self.metrics else None
 
-        while True:
-            # Wait for data
-            while self.cursor <= local_seq:
-                if self.signal is not None:
-                    await self.signal.wait()
-                    # Allow other consumers to proceed without contention.
-                    self.signal.clear()
-                else:
-                    # Spin-wait mode: lock-free signaling via cursor polling.
-                    if self._spin_sleep <= 0:
-                        for _ in range(self._spin_budget):
-                            if self.cursor > local_seq:
-                                break
-                        if self.cursor <= local_seq:
-                            await asyncio.sleep(0)
+        try:
+            while True:
+                # Wait for data
+                while self.cursor <= local_seq:
+                    if my_signal is not None:
+                        await my_signal.wait()
+                        my_signal.clear()
                     else:
-                        await asyncio.sleep(self._spin_sleep)
+                        # Spin-wait mode: lock-free signaling via cursor polling.
+                        if self._spin_sleep <= 0:
+                            for _ in range(self._spin_budget):
+                                if self.cursor > local_seq:
+                                    break
+                            if self.cursor <= local_seq:
+                                await asyncio.sleep(0)
+                        else:
+                            await asyncio.sleep(self._spin_sleep)
 
-            # Catch up batch
-            current_cursor = self.cursor
-            # Don't read more than size at once (buffer wrap protection for very slow consumer)
-            if current_cursor - local_seq > self.size:
-                # Lagged too much, skip to latest - size
-                self.metrics.bus_overflow_total.inc()
-                self._overflow_count += 1
-                lag = current_cursor - local_seq
-                logger.error(
-                    "CRITICAL: Consumer lagged too much, data loss occurred",
-                    lag=lag,
-                    overflow_count=self._overflow_count,
-                    threshold=self._overflow_halt_threshold,
-                )
+                # Catch up batch
+                current_cursor = self.cursor
+                # Don't read more than size at once (buffer wrap protection for very slow consumer)
+                if current_cursor - local_seq > self.size:
+                    # Lagged too much, skip to latest - size
+                    self.metrics.bus_overflow_total.inc()
+                    self._overflow_count += 1  # legacy global
+                    _consumer_ov = self._overflow_count_per_consumer.get(consumer_name, 0) + 1
+                    self._overflow_count_per_consumer[consumer_name] = _consumer_ov
+                    self._record_overflow_rate()
+                    lag = current_cursor - local_seq
+                    first_missed = local_seq + 1
+                    last_missed = current_cursor - self.size
+                    logger.error(
+                        "CRITICAL: Consumer lagged too much, data loss occurred",
+                        consumer=consumer_name,
+                        lag=lag,
+                        overflow_count=_consumer_ov,
+                        threshold=self._overflow_halt_threshold,
+                    )
 
-                # Trigger StormGuard HALT on repeated overflows
-                if self._overflow_count >= self._overflow_halt_threshold and self._storm_guard is not None:
-                    halt_msg = f"EventBus overflow: {self._overflow_count} overflows, lag={lag}"
-                    self._storm_guard.trigger_halt(halt_msg)
-                    logger.critical("StormGuard HALT triggered due to EventBus overflow")
+                    # Trigger StormGuard HALT on repeated overflows (per-consumer)
+                    if _consumer_ov >= self._overflow_halt_threshold and self._storm_guard is not None:
+                        halt_msg = f"EventBus overflow: consumer={consumer_name}, {_consumer_ov} overflows, lag={lag}"
+                        self._storm_guard.trigger_halt(halt_msg)
+                        logger.critical("StormGuard HALT triggered due to EventBus overflow", consumer=consumer_name)
 
-                local_seq = current_cursor - self.size
+                    local_seq = current_cursor - self.size
 
-            while local_seq < current_cursor:
-                local_seq += 1
-                kind = self._kind_ring[local_seq % self.size] if self._kind_ring is not None else 0
-                if kind == 1 and self._tick_ring is not None:
-                    event = self._tick_ring.get(local_seq)
-                elif kind == 2 and self._bidask_ring is not None:
-                    event = self._bidask_ring.get(local_seq)
-                elif kind == 3 and self._lobstats_ring is not None:
-                    event = self._lobstats_ring.get(local_seq)
-                elif self._use_rust and self._ring is not None:
-                    event = self._ring.get(local_seq)
-                else:
-                    buffer = self.buffer
-                    if buffer is None:
-                        buffer = [None] * self.size
-                        self.buffer = buffer
-                    event = buffer[local_seq % self.size]
-                if event is not None:
-                    yield event
-                # yield to loop to allow other tasks to run if batch is huge
-                # if local_seq % 100 == 0: await asyncio.sleep(0)
+                    # Inject GapEvent so downstream strategies can reset stale state
+                    self._consumer_positions[consumer_name] = local_seq
+                    if lag_gauge is not None:
+                        lag_gauge.set(self.cursor - local_seq)
+                    self.metrics.bus_gap_events_total.inc()
+                    yield GapEvent(
+                        missed_count=lag - self.size,
+                        first_missed_seq=first_missed,
+                        last_missed_seq=last_missed,
+                        ts=timebase.now_ns(),
+                    )
 
-    async def consume_batch(self, batch_size: int, start_cursor: int | None = None):
+                while local_seq < current_cursor:
+                    local_seq += 1
+                    kind = self._kind_ring[local_seq % self.size] if self._kind_ring is not None else 0
+                    if kind == 1 and self._tick_ring is not None:
+                        event = self._tick_ring.get(local_seq)
+                    elif kind == 2 and self._bidask_ring is not None:
+                        event = self._bidask_ring.get(local_seq)
+                    elif kind == 3 and self._lobstats_ring is not None:
+                        raw = self._lobstats_ring.get(local_seq)
+                        # Prepend "lobstats" tag so strategy dispatch matches
+                        event = ("lobstats",) + raw if raw is not None else None
+                    elif self._use_rust and self._ring is not None:
+                        event = self._ring.get(local_seq)
+                    else:
+                        buffer = self.buffer
+                        if buffer is None:
+                            buffer = [None] * self.size
+                            self.buffer = buffer
+                        event = buffer[local_seq % self.size]
+                    if event is not None:
+                        yield event
+
+                # Track consumer position and report lag
+                self._consumer_positions[consumer_name] = local_seq
+                if lag_gauge is not None:
+                    lag_gauge.set(self.cursor - local_seq)
+
+                # Successful catch-up with no overflow — reset per-consumer counter
+                if self._overflow_count_per_consumer.get(consumer_name, 0) > 0:
+                    self._overflow_count_per_consumer[consumer_name] = 0
+                if self._overflow_count > 0:
+                    self._overflow_count = 0  # legacy global
+        finally:
+            # Unregister per-consumer signal on generator close
+            if my_signal is not None and my_signal in self._consumer_signals:
+                self._consumer_signals.remove(my_signal)
+            self._consumer_positions.pop(consumer_name, None)
+            self._overflow_count_per_consumer.pop(consumer_name, None)
+
+    async def consume_batch(self, batch_size: int, start_cursor: int | None = None, consumer_name: str = "unknown"):
         """Async generator yielding lists of events."""
         batch_size = max(1, batch_size)
         local_seq = self.cursor if start_cursor is None else start_cursor
+        # Per-consumer signal (DEC-02)
+        my_signal: asyncio.Event | None = None
+        if self.signal is not None:
+            my_signal = asyncio.Event()
+            self._consumer_signals.append(my_signal)
+        lag_gauge = self.metrics.bus_consumer_lag.labels(consumer=consumer_name) if self.metrics else None
 
-        while True:
-            while self.cursor <= local_seq:
-                if self.signal is not None:
-                    await self.signal.wait()
-                    self.signal.clear()
-                else:
-                    if self._spin_sleep <= 0:
-                        for _ in range(self._spin_budget):
-                            if self.cursor > local_seq:
-                                break
-                        if self.cursor <= local_seq:
-                            await asyncio.sleep(0)
+        try:
+            while True:
+                while self.cursor <= local_seq:
+                    if my_signal is not None:
+                        await my_signal.wait()
+                        my_signal.clear()
                     else:
-                        await asyncio.sleep(self._spin_sleep)
+                        if self._spin_sleep <= 0:
+                            for _ in range(self._spin_budget):
+                                if self.cursor > local_seq:
+                                    break
+                            if self.cursor <= local_seq:
+                                await asyncio.sleep(0)
+                        else:
+                            await asyncio.sleep(self._spin_sleep)
 
-            current_cursor = self.cursor
-            if current_cursor - local_seq > self.size:
-                self.metrics.bus_overflow_total.inc()
-                self._overflow_count += 1
-                lag = current_cursor - local_seq
-                logger.error(
-                    "CRITICAL: Consumer batch lagged too much, data loss occurred",
-                    lag=lag,
-                    overflow_count=self._overflow_count,
-                    threshold=self._overflow_halt_threshold,
-                )
+                current_cursor = self.cursor
+                if current_cursor - local_seq > self.size:
+                    self.metrics.bus_overflow_total.inc()
+                    self._overflow_count += 1  # legacy global
+                    _consumer_ov = self._overflow_count_per_consumer.get(consumer_name, 0) + 1
+                    self._overflow_count_per_consumer[consumer_name] = _consumer_ov
+                    self._record_overflow_rate()
+                    lag = current_cursor - local_seq
+                    first_missed = local_seq + 1
+                    last_missed = current_cursor - self.size
+                    logger.error(
+                        "CRITICAL: Consumer batch lagged too much, data loss occurred",
+                        consumer=consumer_name,
+                        lag=lag,
+                        overflow_count=_consumer_ov,
+                        threshold=self._overflow_halt_threshold,
+                    )
 
-                # Trigger StormGuard HALT on repeated overflows
-                if self._overflow_count >= self._overflow_halt_threshold and self._storm_guard is not None:
-                    halt_msg = f"EventBus batch overflow: {self._overflow_count} overflows, lag={lag}"
-                    self._storm_guard.trigger_halt(halt_msg)
-                    logger.critical("StormGuard HALT triggered due to EventBus batch overflow")
+                    if _consumer_ov >= self._overflow_halt_threshold and self._storm_guard is not None:
+                        halt_msg = (
+                            f"EventBus batch overflow: consumer={consumer_name}, {_consumer_ov} overflows, lag={lag}"
+                        )
+                        self._storm_guard.trigger_halt(halt_msg)
+                        logger.critical(
+                            "StormGuard HALT triggered due to EventBus batch overflow", consumer=consumer_name
+                        )
 
-                local_seq = current_cursor - self.size
+                    local_seq = current_cursor - self.size
 
-            batch: List[Any] = []
-            while local_seq < current_cursor and len(batch) < batch_size:
-                local_seq += 1
-                kind = self._kind_ring[local_seq % self.size] if self._kind_ring is not None else 0
-                if kind == 1 and self._tick_ring is not None:
-                    event = self._tick_ring.get(local_seq)
-                elif kind == 2 and self._bidask_ring is not None:
-                    event = self._bidask_ring.get(local_seq)
-                elif kind == 3 and self._lobstats_ring is not None:
-                    event = self._lobstats_ring.get(local_seq)
-                elif self._use_rust and self._ring is not None:
-                    event = self._ring.get(local_seq)
-                else:
-                    buffer = self.buffer
-                    if buffer is None:
-                        buffer = [None] * self.size
-                        self.buffer = buffer
-                    event = buffer[local_seq % self.size]
-                if event is not None:
-                    batch.append(event)
+                    # Inject GapEvent into batch so downstream strategies can reset stale state
+                    self._consumer_positions[consumer_name] = local_seq
+                    if lag_gauge is not None:
+                        lag_gauge.set(self.cursor - local_seq)
+                    self.metrics.bus_gap_events_total.inc()
+                    gap_event = GapEvent(
+                        missed_count=lag - self.size,
+                        first_missed_seq=first_missed,
+                        last_missed_seq=last_missed,
+                        ts=timebase.now_ns(),
+                    )
+                    yield [gap_event]
 
-            if batch:
-                yield batch
+                batch: List[Any] = []
+                while local_seq < current_cursor and len(batch) < batch_size:
+                    local_seq += 1
+                    kind = self._kind_ring[local_seq % self.size] if self._kind_ring is not None else 0
+                    if kind == 1 and self._tick_ring is not None:
+                        event = self._tick_ring.get(local_seq)
+                    elif kind == 2 and self._bidask_ring is not None:
+                        event = self._bidask_ring.get(local_seq)
+                    elif kind == 3 and self._lobstats_ring is not None:
+                        raw = self._lobstats_ring.get(local_seq)
+                        # Prepend "lobstats" tag so strategy dispatch matches
+                        event = ("lobstats",) + raw if raw is not None else None
+                    elif self._use_rust and self._ring is not None:
+                        event = self._ring.get(local_seq)
+                    else:
+                        buffer = self.buffer
+                        if buffer is None:
+                            buffer = [None] * self.size
+                            self.buffer = buffer
+                        event = buffer[local_seq % self.size]
+                    if event is not None:
+                        batch.append(event)
+
+                if batch:
+                    yield batch
+
+                # Track consumer position and report lag
+                self._consumer_positions[consumer_name] = local_seq
+                if lag_gauge is not None:
+                    lag_gauge.set(self.cursor - local_seq)
+
+                if self._overflow_count_per_consumer.get(consumer_name, 0) > 0:
+                    self._overflow_count_per_consumer[consumer_name] = 0
+                if self._overflow_count > 0:
+                    self._overflow_count = 0
+        finally:
+            if my_signal is not None and my_signal in self._consumer_signals:
+                self._consumer_signals.remove(my_signal)
+            self._consumer_positions.pop(consumer_name, None)
+            self._overflow_count_per_consumer.pop(consumer_name, None)

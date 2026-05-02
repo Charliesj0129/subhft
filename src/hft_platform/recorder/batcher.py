@@ -133,11 +133,12 @@ class GlobalMemoryGuard:
     lowest-priority batchers drop first.
     """
 
-    # Priority: higher = more important (market_data most important)
+    # Priority: higher = more important. Fills/orders must never be evicted
+    # for market data — financial integrity outranks tick completeness.
     DEFAULT_PRIORITIES: dict[str, int] = {
+        "hft.fills": 110,
+        "hft.orders": 105,
         "hft.market_data": 100,
-        "hft.orders": 90,
-        "hft.trades": 80,
         "hft.risk_log": 50,  # Also matches hft.logs
         "hft.logs": 50,
         "hft.backtest_runs": 30,
@@ -203,7 +204,12 @@ class GlobalMemoryGuard:
         """Check if adding rows would exceed budget.
 
         Returns number of rows allowed (may be less than requested).
-        If budget exceeded, drops from lowest-priority batchers first.
+        If budget exceeded, schedules deferred eviction on lowest-priority
+        batchers via ``_pending_eviction_count``.  Each batcher applies its
+        own eviction under its own lock in ``apply_pending_eviction()``.
+
+        This avoids mutating another batcher's ``_active`` buffer without
+        holding that batcher's lock (C3 fix).
         """
         drop_events: list[tuple[str, int, int]] = []
         with self._state_lock:
@@ -228,7 +234,8 @@ class GlobalMemoryGuard:
                 if available <= 0:
                     continue
                 drop = min(excess, available)
-                batcher._active.drop_oldest(drop)
+                # Defer eviction: batcher applies under its own lock
+                batcher._pending_eviction_count += drop
                 batcher.dropped_count += drop
                 self._total_rows = max(0, self._total_rows - drop)
                 excess -= drop
@@ -338,6 +345,13 @@ class Batcher:
         self.dropped_count = 0
         self.total_count = 0
 
+        # Reinject circuit breaker: stop re-injecting after N consecutive failures
+        self._reinject_consecutive_failures = 0
+        self._reinject_max_failures = int(os.getenv("HFT_BATCHER_REINJECT_MAX", "3"))
+
+        # Deferred eviction from GlobalMemoryGuard (C3 fix)
+        self._pending_eviction_count: int = 0
+
         # Legacy compat: buffer property
         # (tests may access batcher.buffer directly)
 
@@ -388,6 +402,15 @@ class Batcher:
         elif isinstance(extracted, (list, tuple)):
             self._active.append_values(extracted)
 
+    def _apply_pending_eviction_locked(self) -> None:
+        """Apply deferred eviction under our own lock (C3 fix)."""
+        pending = self._pending_eviction_count
+        if pending > 0:
+            self._pending_eviction_count = 0
+            actual_drop = min(pending, self._active.row_count)
+            if actual_drop > 0:
+                self._active.drop_oldest(actual_drop)
+
     async def add(self, row: Any):
         extracted = self._extract_row(row)
         if extracted is None:
@@ -395,6 +418,7 @@ class Batcher:
 
         flush_buf: ColumnarBuffer | None = None
         async with self.lock:
+            self._apply_pending_eviction_locked()
             self.total_count += 1
 
             # EC-1: Check global memory budget
@@ -434,6 +458,7 @@ class Batcher:
 
         flush_buf: ColumnarBuffer | None = None
         async with self.lock:
+            self._apply_pending_eviction_locked()
             self.total_count += len(extracted_list)
 
             # EC-1: Check global memory budget
@@ -528,12 +553,14 @@ class Batcher:
             self._memory_guard.note_rows_removed(flush_buf.row_count)
         return flush_buf
 
-    def _wal_emergency_dump(self, flush_buf: ColumnarBuffer) -> None:
+    def _wal_emergency_dump(self, flush_buf: ColumnarBuffer) -> bool:
         """Last-resort WAL dump when the normal write path fails entirely.
 
         Writes buffer contents as JSONL to the WAL directory so data is not
         silently lost on double-fault (writer failure + WAL fallback failure).
         This method MUST NOT raise — any failure is logged and accepted.
+
+        Returns True if WAL dump succeeded, False otherwise.
         """
         try:
             rows = flush_buf.to_row_dicts()
@@ -543,25 +570,30 @@ class Batcher:
                 table=self.table_name,
                 error=str(e),
             )
-            return
+            return False
 
         if not rows:
-            return
+            return True
 
         try:
             wal_dir = os.getenv("HFT_WAL_DIR", ".wal")
             os.makedirs(wal_dir, exist_ok=True)
             ts_ns = timebase.now_ns()
-            filename = f"emergency_{self.table_name}_{ts_ns}.jsonl"
+            filename = f"emergency_{ts_ns}.jsonl"
             filepath = os.path.join(wal_dir, filename)
 
+            header = {"__wal_table__": self.table_name, "__row_count__": len(rows)}
             with open(filepath, "wb") as f:
-                for row in rows:
-                    if _orjson is not None:
-                        line = _orjson.dumps(row) + b"\n"
-                    else:
-                        line = json.dumps(row, default=str).encode() + b"\n"
-                    f.write(line)
+                if _orjson is not None:
+                    f.write(_orjson.dumps(header) + b"\n")
+                    for row in rows:
+                        f.write(_orjson.dumps(row) + b"\n")
+                else:
+                    f.write(json.dumps(header, default=str).encode() + b"\n")
+                    for row in rows:
+                        f.write(json.dumps(row, default=str).encode() + b"\n")
+                f.flush()
+                os.fsync(f.fileno())
 
             logger.warning(
                 "emergency_wal_dump_written",
@@ -569,6 +601,7 @@ class Batcher:
                 row_count=len(rows),
                 path=filepath,
             )
+            return True
         except Exception as e:
             logger.error(
                 "emergency_wal_dump_failed",
@@ -576,6 +609,7 @@ class Batcher:
                 row_count=len(rows),
                 error=str(e),
             )
+            return False
 
     async def _write_flush_buffer(self, flush_buf: ColumnarBuffer) -> None:
         if self.writer:
@@ -601,7 +635,11 @@ class Batcher:
                     table=self.table_name,
                     count=flush_buf.row_count,
                 )
-                self._wal_emergency_dump(flush_buf)
+                wal_ok = self._wal_emergency_dump(flush_buf)
+                if not wal_ok:
+                    await self._reinject_failed_buffer(flush_buf)
+                    flush_buf.clear()  # Release standby reference to prevent memory leak
+                    return
             except ConnectionError as e:
                 logger.error(
                     "Connection error during write",
@@ -609,7 +647,11 @@ class Batcher:
                     error=str(e),
                     count=flush_buf.row_count,
                 )
-                self._wal_emergency_dump(flush_buf)
+                wal_ok = self._wal_emergency_dump(flush_buf)
+                if not wal_ok:
+                    await self._reinject_failed_buffer(flush_buf)
+                    flush_buf.clear()
+                    return
             except Exception as e:
                 logger.error(
                     "Write failed",
@@ -618,5 +660,84 @@ class Batcher:
                     error_type=type(e).__name__,
                     count=flush_buf.row_count,
                 )
-                self._wal_emergency_dump(flush_buf)
+                wal_ok = self._wal_emergency_dump(flush_buf)
+                if not wal_ok:
+                    await self._reinject_failed_buffer(flush_buf)
+                    flush_buf.clear()
+                    return
+        # Successful write (or WAL fallback succeeded) — reset reinject counter
+        self._reinject_consecutive_failures = 0
+        row_count = flush_buf.row_count
         flush_buf.clear()
+        # Record flush metrics (must never raise — wrap defensively)
+        if row_count > 0:
+            try:
+                from hft_platform.observability.metrics import MetricsRegistry  # lazy import to avoid circular deps
+
+                m = MetricsRegistry.get()
+                m.recorder_batches_flushed_total.labels(table=self.table_name).inc()
+                m.recorder_rows_flushed_total.labels(table=self.table_name).inc(row_count)
+            except Exception:  # noqa: BLE001
+                pass  # Metrics must never break the recording path
+
+    async def _reinject_failed_buffer(self, flush_buf: ColumnarBuffer) -> None:
+        """Re-inject failed flush buffer rows back into active for retry.
+
+        Called when BOTH the primary CH write and the emergency WAL dump fail
+        (double-fault). Rows are merged back into the active buffer so they
+        can be retried on the next flush cycle instead of being lost.
+
+        A circuit breaker stops re-injection after ``_reinject_max_failures``
+        consecutive double-faults to prevent infinite retry loops when both
+        CH and disk are permanently down.
+        """
+        self._reinject_consecutive_failures += 1
+        if self._reinject_consecutive_failures > self._reinject_max_failures:
+            logger.critical(
+                "reinject_circuit_breaker_open",
+                table=self.table_name,
+                consecutive_failures=self._reinject_consecutive_failures,
+                row_count=flush_buf.row_count,
+                msg="PERMANENT DATA LOSS — reinject limit exceeded, dropping rows",
+            )
+            try:
+                from hft_platform.observability.metrics import MetricsRegistry  # lazy import to avoid circular deps
+
+                MetricsRegistry.get().recorder_reinject_circuit_breaker_drops_total.labels(table=self.table_name).inc(
+                    flush_buf.row_count
+                )
+            except Exception:
+                pass
+            if self._health_tracker:
+                try:
+                    self._health_tracker.record_event("data_loss", table=self.table_name, count=flush_buf.row_count)
+                except Exception:
+                    pass
+            return
+
+        try:
+            rows = flush_buf.to_row_dicts()
+            if not rows:
+                return
+            async with self.lock:
+                for row in rows:
+                    self._active.append_row(row)
+                if self._memory_guard is not None:
+                    self._memory_guard.note_rows_added(len(rows))
+            logger.critical(
+                "reinject_failed_buffer",
+                table=self.table_name,
+                row_count=len(rows),
+                attempt=self._reinject_consecutive_failures,
+                max_attempts=self._reinject_max_failures,
+                msg="Both CH and WAL failed — rows re-injected for retry",
+            )
+        except Exception as e:
+            logger.critical(
+                "reinject_failed_buffer_failed",
+                table=self.table_name,
+                error=str(e),
+                msg="PERMANENT DATA LOSS — could not re-inject rows",
+            )
+            if self._health_tracker:
+                self._health_tracker.record_event("data_loss", table=self.table_name)

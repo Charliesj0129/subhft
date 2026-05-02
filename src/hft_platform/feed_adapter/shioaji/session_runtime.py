@@ -173,7 +173,12 @@ class SessionRuntime:
                         c._record_api_latency("login", start_ns, ok=ok_fb)
                         if ok_fb:
                             login_fetch_contract = False
-                            c.fetch_contract = False
+                            # NOTE: do NOT mutate c.fetch_contract here.
+                            # The local flag `login_fetch_contract` is enough to track
+                            # that this attempt skipped contract fetch.  Mutating the
+                            # persistent c.fetch_contract to False would prevent the
+                            # post-login _ensure_contracts() call at line 196 from
+                            # running, leaving contracts_ready=False permanently.
                             ok = True
                         else:
                             c._last_login_error = str(err_fb) if err_fb is not None else "unknown"
@@ -193,8 +198,31 @@ class SessionRuntime:
 
                 if ok:
                     logger.info("Login successful (API Key)", attempt=attempt)
-                    if not login_fetch_contract:
+                    if not login_fetch_contract and c.fetch_contract:
                         c._ensure_contracts()
+                    # Verify contracts regardless of which login path was used.
+                    contracts_ok = c.contracts_ready
+                    c._contracts_ready = contracts_ok
+                    if contracts_ok:
+                        logger.info("Contracts loaded", ready=True)
+                    elif c.fetch_contract:
+                        # This connection was configured to fetch contracts but
+                        # contracts_ready is still False — orders will be blocked.
+                        logger.error(
+                            "Contracts not available after login — order placement will be blocked",
+                            fetch_contract_attempted=login_fetch_contract,
+                            ready=False,
+                        )
+                    else:
+                        # Quote-only connection (fetch_contract=False): contracts are
+                        # intentionally not fetched (e.g. QuoteConnectionPool group_id>0
+                        # skips contracts to save ~27 MB per connection).
+                        # contracts_ready=False is expected here — not an error.
+                        logger.debug(
+                            "Contracts not fetched (quote-only connection)",
+                            fetch_contract_configured=False,
+                            ready=False,
+                        )
                     if c.activate_ca:
                         if not pid:
                             logger.warning("CA activation requested but missing SHIOAJI_PERSON_ID")
@@ -212,6 +240,7 @@ class SessionRuntime:
                                 logger.error("CA activation failed", error=str(exc))
                     c.logged_in = True
                     c._last_session_refresh_ts = timebase.now_s()
+                    c._release_session_lock()
                     return True
 
                 if attempt < attempts_total:

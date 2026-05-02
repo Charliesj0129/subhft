@@ -24,8 +24,8 @@ class GreeksResult:
     delta: float
     gamma: float
     theta: float  # per calendar day, sign convention: negative for long
-    vega: float   # per 1% move in implied vol (per 0.01 sigma)
-    rho: float    # per 1% move in risk-free rate (per 0.01)
+    vega: float  # per 1% move in implied vol (per 0.01 sigma)
+    rho: float  # per 1% move in risk-free rate (per 0.01)
 
 
 @dataclass(slots=True)
@@ -43,8 +43,8 @@ class AggregatedGreeks:
 
     net_delta: float
     net_gamma: float
-    net_theta_ntd: float   # NTD per calendar day
-    net_vega_ntd: float    # NTD per 1% vol move
+    net_theta_ntd: float  # NTD per calendar day
+    net_vega_ntd: float  # NTD per 1% vol move
     positions: tuple[PositionGreeks, ...]
 
 
@@ -79,8 +79,12 @@ def compute_greeks(
             delta = -disc if F < K else 0.0
         return GreeksResult(delta=delta, gamma=0.0, theta=0.0, vega=0.0, rho=0.0)
 
+    # Guard against non-positive F or K (corrupted market data)
+    if F <= 0.0 or K <= 0.0:
+        return GreeksResult(delta=0.0, gamma=0.0, theta=0.0, vega=0.0, rho=0.0)
+
     sqrt_T = math.sqrt(T)
-    d1 = (math.log(F / K) + 0.5 * sigma ** 2 * T) / (sigma * sqrt_T)
+    d1 = (math.log(F / K) + 0.5 * sigma**2 * T) / (sigma * sqrt_T)
     d2 = d1 - sigma * sqrt_T
 
     N = norm.cdf

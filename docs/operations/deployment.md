@@ -138,12 +138,9 @@ docker compose up -d clickhouse redis
 docker compose up -d --build hft-engine
 ```
 
-## 6. Swarm（可選）
+## 6. Production Overlay
 ```bash
-docker swarm init 2>/dev/null || true
-docker build -t ${HFT_IMAGE:-hft-platform:latest} .
-docker stack deploy -c docker-stack.yml hft
-docker service logs -f hft_hft-engine
+docker compose -f docker-compose.yml -f docker-compose.production.yml up -d
 ```
 
 ## 7. Ops / Host Tuning（低延遲）

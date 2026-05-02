@@ -15,8 +15,13 @@ from hft_platform.execution.positions import Position, PositionStore
 
 def _make_store_with_positions(positions: dict[str, Position]) -> PositionStore:
     """Build a PositionStore pre-loaded with given positions (no fills needed)."""
+    import threading
+
     store = PositionStore.__new__(PositionStore)
     store.positions = dict(positions)
+    # Wave 3 (2026-04-25): MtM.calculate now calls snapshot_positions()
+    # which acquires _fill_lock; provide it for __new__-built stores.
+    store._fill_lock = threading.Lock()
     return store
 
 
@@ -169,3 +174,90 @@ class TestMetricEmission:
         assert total == expected
         # Verify the gauge was set (read its internal value)
         assert portfolio_unrealized_pnl._value.get() == expected
+
+
+class TestFuturesMultiplier:
+    def test_long_futures_unrealized_applies_multiplier(self):
+        """Long 2 MXF @ 19000, mid=19050, multiplier=50 => pnl = (19050-19000)*2*50 * SCALE."""
+        pos = Position("acc", "strat", "MXF")
+        pos.net_qty = 2
+        pos.avg_price_scaled = 19_000 * SCALE
+
+        def _multiplier_fn(symbol: str) -> int:
+            return 50 if symbol == "MXF" else 1
+
+        store = _make_store_with_positions({"acc:strat:MXF": pos})
+        calc = MarkToMarketCalculator(
+            store,
+            _mid_prices({"MXF": 19_050 * SCALE}),
+            multiplier_fn=_multiplier_fn,
+        )
+
+        result = calc.calculate()
+        # (19050 - 19000) * 2 * 50 * SCALE = 50 * 2 * 50 * SCALE = 5_000_000
+        expected = 50 * SCALE * 2 * 50
+        assert result["acc:strat:MXF"] == expected
+
+    def test_short_futures_unrealized_applies_multiplier(self):
+        """Short 1 TXF @ 20000, mid=19800, multiplier=200 => pnl = (20000-19800)*1*200 * SCALE."""
+        pos = Position("acc", "strat", "TXF")
+        pos.net_qty = -1
+        pos.avg_price_scaled = 20_000 * SCALE
+
+        def _multiplier_fn(symbol: str) -> int:
+            return 200 if symbol == "TXF" else 1
+
+        store = _make_store_with_positions({"acc:strat:TXF": pos})
+        calc = MarkToMarketCalculator(
+            store,
+            _mid_prices({"TXF": 19_800 * SCALE}),
+            multiplier_fn=_multiplier_fn,
+        )
+
+        result = calc.calculate()
+        # (20000 - 19800) * 1 * 200 * SCALE = 200 * 1 * 200 * SCALE = 40_000_000
+        expected = 200 * SCALE * 1 * 200
+        assert result["acc:strat:TXF"] == expected
+
+    def test_futures_multiplier_difference_from_stock(self):
+        """Futures PnL is multiplier times larger than the equivalent stock PnL."""
+        # Stock position (multiplier=1)
+        pos_stock = Position("acc", "strat", "STOCK")
+        pos_stock.net_qty = 10
+        pos_stock.avg_price_scaled = 100 * SCALE
+
+        store_stock = _make_store_with_positions({"acc:strat:STOCK": pos_stock})
+        calc_stock = MarkToMarketCalculator(
+            store_stock,
+            _mid_prices({"STOCK": 110 * SCALE}),
+        )
+        pnl_stock = calc_stock.calculate()["acc:strat:STOCK"]
+
+        # Futures position with multiplier=10 (TMF)
+        pos_futures = Position("acc", "strat", "TMF")
+        pos_futures.net_qty = 10
+        pos_futures.avg_price_scaled = 100 * SCALE
+
+        store_futures = _make_store_with_positions({"acc:strat:TMF": pos_futures})
+        calc_futures = MarkToMarketCalculator(
+            store_futures,
+            _mid_prices({"TMF": 110 * SCALE}),
+            multiplier_fn=lambda sym: 10 if sym == "TMF" else 1,
+        )
+        pnl_futures = calc_futures.calculate()["acc:strat:TMF"]
+
+        assert pnl_futures == pnl_stock * 10
+
+    def test_default_multiplier_fn_is_one_for_backward_compat(self):
+        """When no multiplier_fn is provided, multiplier defaults to 1 (stock behavior)."""
+        pos = Position("acc", "strat", "SYM")
+        pos.net_qty = 5
+        pos.avg_price_scaled = 100 * SCALE
+
+        store = _make_store_with_positions({"acc:strat:SYM": pos})
+        # No multiplier_fn argument — backward-compatible default
+        calc = MarkToMarketCalculator(store, _mid_prices({"SYM": 110 * SCALE}))
+
+        result = calc.calculate()
+        # (110-100) * 5 * 1 * SCALE = 50 * SCALE = 500_000
+        assert result["acc:strat:SYM"] == 10 * SCALE * 5

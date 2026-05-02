@@ -1,0 +1,119 @@
+alpha_id: c1_revalidation_txfd6_chavez_casillas_adaptive
+name: "C1 re-validation — TXFD6 Chávez-Casillas adaptive maker"
+version: "0.1.0"
+status: prototype
+owner: alpha-research-20260426-1957-revalidation
+strategy_type: maker
+instrument: "TXFD6"
+instruments:
+  - TXFD6
+
+# ============================================================================
+# RE-VALIDATION BANNER (2026-04-27)
+# ============================================================================
+revalidation_context: |
+  Original C1 (R1, 2026-04-26) was T2-killed via Kill Checklist alone with
+  NO empirical backtest evidence. Under the new 2026-04-27 user-mandated
+  rule "kill requires backtest", the original kill is invalidated.
+  This implementation produces the missing scorecard.
+revalidation_round: R1
+original_t2_verdict: "REJECT (H1+H4+H5; S2+S3+S4+S6) — invalidated 2026-04-27"
+revalidation_data_correction: |
+  Original H4 FAIL cited TXFD6 = 19 days (per stale shared-context.yaml).
+  CK actual (verified 2026-04-27): 30 BidAsk days / 31 Tick days, range
+  2026-01-26 to 2026-04-15, with two large calendar gaps (Feb 7-22,
+  Feb 26-Mar 19). Total 9.6M BidAsk rows / 1.4M Tick rows. H4 floor
+  (>=20 days) genuinely passes on row+day count; gap structure must be
+  surfaced in scorecard.
+# ============================================================================
+
+hypothesis: >
+  Chávez-Casillas et al. (2024) adaptive demand-function quoting on TXFD6,
+  restricted to the spread >= 4 pt working zone (T1 §Hypothesis #2). Posting
+  distance delta* is computed online from a rolling 30-min demand fit
+  (y = alpha + beta * delta) with tau = 5 min exponential decay and refit
+  every 5 s. Microprice (Stoikov 2014) replaces mid as reservation reference.
+  Cost RT 3.0 pt (TXFD6 retail). T1 best-case expected_edge ~7.5 pt vs
+  6 pt 2x floor (25% margin).
+
+mechanism_class: pure_maker
+
+distinction_from_killed_classes:
+  - name: "TMFD6-multi-instrument (R51-C1b)"
+    distinction: "Different instrument (TXFD6, single leg)."
+  - name: "Stoll-3-component-classical (R52-R6)"
+    distinction: >
+      F9 cost-tier carve-out. Uses Chávez-Casillas adaptive demand function,
+      NOT Stoll order-processing+inventory+adverse-selection decomposition.
+  - name: "Avellaneda-Stoikov-baseline (R52-R3)"
+    distinction: >
+      Adaptive delta* from random-coefficient demand function, NOT inventory-
+      penalty-CARA-utility A-S construction. q-proportional fixed skew at q=1
+      not used (skew comes from asymmetric demand-coefficient drift).
+  - name: "R47 maker baseline (TMFD6)"
+    distinction: >
+      TXFD6 not TMFD6. Adaptive delta* per Chávez-Casillas, not fixed
+      touch-quoting. Spread eligibility 4 pt (TXFD6 working zone).
+  - name: "spread-conditional-maker (R16)"
+    distinction: >
+      R16 conditioned on observed-spread only. C1 conditions on
+      (spread eligibility) AND (Chávez-Casillas adaptive delta* > 0 with
+      positive expected fill-PnL after demand-function update).
+
+paper_refs:
+  - 2024_Chavez-Casillas_Figueroa-Lopez_Yu_Zhang_adaptive_MM_inventory_liquidation_arxiv2405.11444
+  - 2014_Stoikov_microprice
+  - 2018_Krause_Fiegen_Guhr_emergence_stylized_facts_arxiv1812.07369
+  - feedback_taifex_fee_structure
+  - r47_maker_strategy
+  - r47_structural_properties
+
+parameters:
+  spread_threshold_pts: 4               # T1 working zone
+  max_pos: 1                             # T5 swept {1, 3}
+  inventory_skew_tenths: 2               # 0.2 ticks/contract
+  fit_window_sec: 1800                   # 30 min (T1 risk #2 commitment)
+  fit_decay_tau_sec: 300                 # 5 min (T1 risk #2 commitment)
+  fit_refresh_sec: 5                     # 5 s (T1 risk #2 commitment)
+  fit_min_samples: 50
+  delta_min_ticks: 0
+  delta_max_ticks: 3
+
+latency_profile: "r47_maker_shioaji_p95_v2026-04-24_measured"
+
+# Cost model cited from memory/feedback_taifex_fee_structure.md
+# (user-confirmed 2026-04-18)
+cost_model:
+  source_memo: "memory/feedback_taifex_fee_structure.md"
+  TXFD6:
+    commission_pts_per_side: 0.3
+    tax_pts_per_side: 1.2
+    rt_cost_pts: 3.0
+    point_value_ntd: 200
+
+# F-carve-out claims (mandatory in F1-F9 inheritance)
+f_carve_outs:
+  F9_stoll_compositional_ceiling:
+    claim: "different cost-tier instrument (TXFD6 vs TMFD6)"
+    quantitative: "TXFD6 RT 3.0 pt (cost_drag 75% in spread>=4pt zone) vs TMFD6 RT 4.0 pt (100%)"
+    note: "25% lower drag in working regime, NOT unconditional."
+  F2_shioaji_latency_wedge:
+    claim: "PARTIAL — holding-period amortization >= 60s"
+    note: "Wedge accepted at 7.3 pt fixed; amortization via 5-30s holding period (T1 §Horizon)."
+
+gate_c_survivor_criteria:
+  max_day_concentration_pct: 25
+  winning_days_min: 5
+  jackknife_no_sign_flip: true
+  bootstrap_ci_excludes_zero: true
+  fills_distinct_days_min: 5
+  profile_conditionality_caveat: "(latency_profile=v2026-04-24_measured, cost_tier=retail_shioaji_taifex)"
+
+governance:
+  t1_proposal: outputs/team_artifacts/alpha-research/round-1/artifacts/T1_R1_C1_researcher_proposal_README.md
+  t2_review_original: outputs/team_artifacts/alpha-research/round-1/artifacts/T2_R1_C1_devils_advocate_review_README.md
+  scorecard: outputs/team_artifacts/alpha-research/re-validation-2026-04-27/C1/scorecard.md
+
+notes:
+  - "Research-module float exception (Rule 11 of 25-architecture-governance). Demand-function regression uses floats (intrinsic to Chávez-Casillas method); strategy decisions use scaled-integer arithmetic."
+  - "TXFD6 price scale: x10_000 (live platform), x1_000_000 (CK storage)."

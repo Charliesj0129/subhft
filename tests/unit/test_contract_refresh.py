@@ -30,9 +30,14 @@ def _bare_client() -> mod.ShioajiClient:
     client.metrics = MagicMock()
     client.metrics.stormguard_mode = MagicMock()
     client.allow_synthetic_contracts = False
+    client.MAX_SUBSCRIPTIONS = 200
     client.subscribed_codes: set[str] = set()
     client.subscribed_count = 0
-    client._failed_sub_symbols: list = []
+    # L2: production type is ``collections.deque``; use the same here so
+    # ``.append`` / ``.popleft`` behave the same.
+    from collections import deque
+
+    client._failed_sub_symbols: deque = deque()
     client._sub_retry_running = False
     client._sub_retry_thread = None
     client._contract_retry_s = 60.0
@@ -94,12 +99,17 @@ def test_failed_sub_tracked():
     assert sym in client._failed_sub_symbols
 
 
-def test_retry_thread_resolves_symbols():
+def test_retry_thread_resolves_symbols(monkeypatch):
     """_start_sub_retry_thread: succeeds on second attempt → _failed_sub_symbols cleared."""
+    # D1 per-symbol backoff schedule starts at 60s; shrink for test wall-clock budget.
+    from hft_platform.feed_adapter.shioaji import quote_runtime as _qr
+
+    monkeypatch.setattr(_qr.QuoteRuntime, "_RETRY_BACKOFF_SCHEDULE_S", (0.05, 0.05, 0.05))
+
     client = _bare_client()
 
     sym = {"code": "TXO_RETRY", "exchange": "TAIFEX"}
-    client._failed_sub_symbols = [sym]
+    client._failed_sub_symbols.append(sym)
 
     call_count = {"n": 0}
 
@@ -120,7 +130,7 @@ def test_retry_thread_resolves_symbols():
     if client._sub_retry_thread is not None:
         client._sub_retry_thread.join(timeout=0.5)
 
-    assert client._failed_sub_symbols == [], "All failed subscriptions should be resolved"
+    assert len(client._failed_sub_symbols) == 0, "All failed subscriptions should be resolved"
     assert "TXO_RETRY" in client.subscribed_codes
 
 

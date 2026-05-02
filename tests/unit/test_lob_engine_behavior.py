@@ -33,6 +33,24 @@ class TestBookStateInit:
         assert bs.asks == []
         assert bs.mid_price_x2 == 0
 
+    def test_lock_is_real_lock_by_default(self):
+        """H11: HFT_LOB_LOCKS default must be enabled so apply_update
+        is not racy against concurrent readers under HFT_LOB_READ_LOCKS=1.
+        Torn reads occurred silently because the NoopLock context was
+        still acquired on the read side but protected nothing."""
+        from threading import Lock as _RealLock
+
+        import hft_platform.feed_adapter.lob_engine as mod
+
+        assert mod._LOCKS_ENABLED is True
+        bs = BookState("2330")
+        # The real threading.Lock is not a class, so check it quacks like one:
+        assert hasattr(bs.lock, "acquire")
+        assert hasattr(bs.lock, "release")
+        assert not isinstance(bs.lock, mod._NoopLock)
+        # Sanity check: the type matches the module-level Lock factory.
+        assert type(bs.lock).__module__ == _RealLock.__module__
+
     def test_rust_state_disabled(self):
         import hft_platform.feed_adapter.lob_engine as mod
 
@@ -162,6 +180,22 @@ class TestApplyUpdate:
             bs._rust_state = None
             bs.apply_update([], [], 100)
             assert bs.local_ts > 0
+        finally:
+            mod._LOCAL_TS_ENABLED = old
+
+    def test_get_stats_propagates_local_ts(self):
+        import hft_platform.feed_adapter.lob_engine as mod
+
+        old = mod._LOCAL_TS_ENABLED
+        mod._LOCAL_TS_ENABLED = True
+        try:
+            bs = BookState("2330")
+            bs._rust_state = None
+            bids = np.array([[1000000, 10]], dtype=np.int64)
+            asks = np.array([[1010000, 5]], dtype=np.int64)
+            bs.apply_update(bids, asks, 100)
+            stats = bs.get_stats()
+            assert stats.local_ts == bs.local_ts
         finally:
             mod._LOCAL_TS_ENABLED = old
 
@@ -324,7 +358,7 @@ class TestGetStatsTuple:
         mock_rs.get_stats_tuple.return_value = (1, 2, 3, 4, 5, 6)
         bs._rust_state = mock_rs
         result = bs.get_stats_tuple()
-        assert result == (1, 2, 3, 4, 5, 6)
+        assert result == ("lobstats", 1, 2, 3, 4, 5, 6)
 
     def test_rust_exception_fallback(self):
         bs = BookState("2330")
@@ -351,3 +385,32 @@ class TestGetStatsTuple:
         bs._rust_state = None
         result = bs.get_stats_tuple()
         assert isinstance(result, tuple)
+
+
+# ── LOBEngine.get_mid_price ─────────────────────────────────────────────
+
+
+class TestLOBEngineGetMidPrice:
+    def test_returns_mid_price_for_known_symbol(self):
+        from hft_platform.feed_adapter.lob_engine import LOBEngine
+
+        engine = LOBEngine()
+        bs = BookState("TXFD6")
+        bs.mid_price_x2 = 400_0000  # bid 195 + ask 205 = 400 (x10000)
+        engine.books["TXFD6"] = bs
+        assert engine.get_mid_price("TXFD6") == 200_0000  # 200 x10000
+
+    def test_returns_none_for_unknown_symbol(self):
+        from hft_platform.feed_adapter.lob_engine import LOBEngine
+
+        engine = LOBEngine()
+        assert engine.get_mid_price("UNKNOWN") is None
+
+    def test_returns_none_when_mid_price_x2_is_zero(self):
+        from hft_platform.feed_adapter.lob_engine import LOBEngine
+
+        engine = LOBEngine()
+        bs = BookState("TXFD6")
+        bs.mid_price_x2 = 0  # empty or one-sided book
+        engine.books["TXFD6"] = bs
+        assert engine.get_mid_price("TXFD6") is None
