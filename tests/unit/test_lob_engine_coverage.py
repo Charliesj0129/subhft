@@ -11,22 +11,23 @@ Focuses on branches not covered by existing tests:
 - LOBEngine.get_book_snapshot
 - LOBEngine metrics paths
 """
+
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
 
 import hft_platform.feed_adapter.lob_engine as lob_mod
-from hft_platform.events import BidAskEvent, LOBStatsEvent, MetaData, TickEvent
+from hft_platform.events import BidAskEvent, FusedBookStats, LOBStatsEvent, MetaData, TickEvent
 from hft_platform.feed_adapter.lob_engine import BookState, LOBEngine, _NoopLock
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_bids_np():
     return np.array([[1000000, 10], [999000, 5]], dtype=np.int64)
@@ -65,6 +66,7 @@ def _make_tick_event(symbol="2330", price=1_000_000, volume=5, ts=1_000_000_000)
 # _NoopLock
 # ---------------------------------------------------------------------------
 
+
 class TestNoopLock:
     def test_noop_lock_exit_returns_false(self):
         lock = _NoopLock()
@@ -82,6 +84,7 @@ class TestNoopLock:
 # ---------------------------------------------------------------------------
 # BookState — pure Python _recompute (Rust disabled)
 # ---------------------------------------------------------------------------
+
 
 class TestBookStatePureRecompute:
     @pytest.fixture
@@ -146,6 +149,7 @@ class TestBookStatePureRecompute:
 # BookState — get_stats, get_stats_tuple
 # ---------------------------------------------------------------------------
 
+
 class TestBookStateStats:
     @pytest.fixture
     def book(self, monkeypatch):
@@ -167,10 +171,11 @@ class TestBookStateStats:
     def test_get_stats_tuple_returns_tuple(self, book):
         t = book.get_stats_tuple()
         assert isinstance(t, tuple)
-        assert len(t) == 9
-        assert t[0] == "2330"
-        assert t[5] == 1000000  # best_bid
-        assert t[6] == 1001000  # best_ask
+        assert len(t) == 10
+        assert t[0] == "lobstats"
+        assert t[1] == "2330"
+        assert t[6] == 1000000  # best_bid
+        assert t[7] == 1001000  # best_ask
 
     def test_get_stats_empty_book(self, monkeypatch):
         monkeypatch.setattr(lob_mod, "_RustBookState", None)
@@ -188,13 +193,15 @@ class TestBookStateStats:
         b = BookState("LIST")
         b.apply_update([[1000000, 10]], [[1001000, 8]], 1_000_000_000)
         t = b.get_stats_tuple()
-        assert t[5] == 1000000
-        assert t[6] == 1001000
+        assert t[0] == "lobstats"
+        assert t[6] == 1000000
+        assert t[7] == 1001000
 
 
 # ---------------------------------------------------------------------------
 # BookState — apply_update_with_stats_fields
 # ---------------------------------------------------------------------------
+
 
 class TestApplyUpdateWithStats:
     def test_apply_update_with_stats(self, monkeypatch):
@@ -244,6 +251,7 @@ class TestApplyUpdateWithStats:
 # LOBEngine — tuple fast-paths in process_event
 # ---------------------------------------------------------------------------
 
+
 class TestLOBEngineTupleFastPath:
     def test_process_bidask_tuple_6_fields(self, monkeypatch):
         monkeypatch.setattr(lob_mod, "_STATS_NONE", False)
@@ -262,8 +270,19 @@ class TestLOBEngineTupleFastPath:
         bids = np.array([[1000000, 10]], dtype=np.int64)
         asks = np.array([[1001000, 8]], dtype=np.int64)
         event_tuple = (
-            "bidask", "2330", bids, asks, 1_000_000_000, False,
-            1000000, 1001000, 10, 8, 1000500.0, 1000.0, 0.111,
+            "bidask",
+            "2330",
+            bids,
+            asks,
+            1_000_000_000,
+            False,
+            1000000,
+            1001000,
+            10,
+            8,
+            1000500.0,
+            1000.0,
+            0.111,
         )
         result = engine.process_event(event_tuple)
         assert isinstance(result, LOBStatsEvent)
@@ -311,6 +330,7 @@ class TestLOBEngineTupleFastPath:
 # LOBEngine — BidAskEvent with stats and fused bypass
 # ---------------------------------------------------------------------------
 
+
 class TestLOBEngineEventDispatch:
     def test_process_bidask_event_with_stats(self, monkeypatch):
         monkeypatch.setattr(lob_mod, "_FUSED_BYPASS", False)
@@ -357,7 +377,7 @@ class TestLOBEngineEventDispatch:
             symbol="2330",
             bids=bids,
             asks=asks,
-            fused_stats=(1000000, 1001000, 10, 8, 2001000, 1000, 0.111),
+            fused_stats=FusedBookStats(1000000, 1001000, 10, 8, 2001000, 1000, 0.111),
         )
         result = engine.process_event(event)
         book = engine.get_book("2330")
@@ -370,7 +390,7 @@ class TestLOBEngineEventDispatch:
         meta1 = MetaData(seq=1, topic="bidask", source_ts=2_000_000_000, local_ts=2_000_000_000)
         bids = np.array([[1000000, 10]], dtype=np.int64)
         asks = np.array([[1001000, 8]], dtype=np.int64)
-        fused = (1000000, 1001000, 10, 8, 2001000, 1000, 0.1)
+        fused = FusedBookStats(1000000, 1001000, 10, 8, 2001000, 1000, 0.1)
         engine.process_event(BidAskEvent(meta=meta1, symbol="2330", bids=bids, asks=asks, fused_stats=fused))
         book = engine.get_book("2330")
         v_before = book.version
@@ -383,6 +403,7 @@ class TestLOBEngineEventDispatch:
 # ---------------------------------------------------------------------------
 # LOBEngine — get_book_snapshot
 # ---------------------------------------------------------------------------
+
 
 class TestGetBookSnapshot:
     def test_missing_symbol_returns_none(self):
@@ -429,6 +450,7 @@ class TestGetBookSnapshot:
 # ---------------------------------------------------------------------------
 # LOBEngine — get_l1_scaled
 # ---------------------------------------------------------------------------
+
 
 class TestGetL1Scaled:
     def test_missing_symbol_returns_none(self):
@@ -477,6 +499,7 @@ class TestGetL1Scaled:
 # LOBEngine — metrics
 # ---------------------------------------------------------------------------
 
+
 class TestLOBEngineMetrics:
     def test_record_lob_metrics_no_metrics_enabled(self):
         """When metrics are disabled, _record_lob_metrics is a no-op."""
@@ -493,7 +516,10 @@ class TestLOBEngineMetrics:
         engine._flush_metrics()  # Should not raise when metrics disabled
         assert engine._metrics_enabled is False
 
-    def test_start_metrics_worker_only_once(self):
+    def test_start_metrics_worker_only_once(self, monkeypatch):
+        import hft_platform.feed_adapter.lob_engine as _lob_mod
+
+        monkeypatch.setattr(_lob_mod, "_METRICS_ENABLED", True)
         engine = LOBEngine()
         loop = asyncio.new_event_loop()
         try:
@@ -505,7 +531,43 @@ class TestLOBEngineMetrics:
         finally:
             if engine._metrics_task:
                 engine._metrics_task.cancel()
+                # LF-2: Run the loop briefly so the CancelledError is processed
+                # and the coroutine is properly awaited, preventing RuntimeWarning.
+                loop.run_until_complete(asyncio.sleep(0))
             loop.close()
+
+    def test_start_metrics_worker_skipped_when_metrics_disabled(self):
+        """LF-4: Metrics worker must not start when _METRICS_ENABLED is False."""
+        engine = LOBEngine()
+        loop = asyncio.new_event_loop()
+        try:
+            engine.start_metrics_worker(loop, interval_ms=5)
+            assert engine._metrics_task is None
+        finally:
+            loop.close()
+
+    def test_stop_cancels_metrics_task(self, monkeypatch):
+        """LF-1: LOBEngine.stop() must cancel the _metrics_task."""
+        import hft_platform.feed_adapter.lob_engine as _lob_mod
+
+        monkeypatch.setattr(_lob_mod, "_METRICS_ENABLED", True)
+        engine = LOBEngine()
+        loop = asyncio.new_event_loop()
+        try:
+            engine.start_metrics_worker(loop, interval_ms=5)
+            assert engine._metrics_task is not None
+            engine.stop()
+            assert engine._metrics_task.cancelling()
+            # Run loop briefly so CancelledError is processed (prevents RuntimeWarning)
+            loop.run_until_complete(asyncio.sleep(0))
+        finally:
+            loop.close()
+
+    def test_stop_is_safe_when_no_metrics_task(self):
+        """LF-1: stop() must be safe when _metrics_task is None."""
+        engine = LOBEngine()
+        engine.stop()  # Must not raise
+        assert engine._metrics_task is None
 
     def test_get_book_caches_last_symbol(self):
         engine = LOBEngine()
@@ -522,3 +584,24 @@ class TestLOBEngineMetrics:
         assert engine._last_symbol == "BBBB"
         assert engine._last_book is b_b
         assert b_a is not b_b
+
+    def test_flush_metrics_applies_cap_symbol_guard(self):
+        """cap_symbol() must be applied at label-emission time to prevent cardinality explosion."""
+        engine = LOBEngine()
+        mock_metrics = MagicMock()
+        # cap_symbol returns "_other" for symbols beyond the cap
+        mock_metrics.cap_symbol.return_value = "_other"
+        engine.metrics = mock_metrics
+        engine._metrics_enabled = True
+
+        # Inject a pending update and snapshot
+        engine._metrics_pending_updates[("RARE_SYM", "bid")] = 3
+        engine._metrics_pending_snapshots["RARE_SYM"] = 1
+
+        engine._flush_metrics()
+
+        # cap_symbol must have been called for both emission points
+        assert mock_metrics.cap_symbol.call_count == 2
+        # The label passed to Prometheus must be the capped value, not the raw symbol
+        mock_metrics.lob_updates_total.labels.assert_called_once_with(symbol="_other", type="bid")
+        mock_metrics.lob_snapshots_total.labels.assert_called_once_with(symbol="_other")

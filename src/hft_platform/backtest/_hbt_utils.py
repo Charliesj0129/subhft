@@ -150,7 +150,13 @@ def dispatch_strategy(adapter: object, event: object, feature_event: object | No
         more = adapter.strategy.handle_event(adapter.ctx, feature_event)  # type: ignore[attr-defined]
         if more:
             intents.extend(more)
+    risk_eval = getattr(adapter, "_risk_evaluator", None)
     for intent in intents:
+        if risk_eval is not None:
+            decision = risk_eval.evaluate(intent)
+            if not decision.approved:
+                adapter._record_rejection(intent, decision.reason_code)  # type: ignore[attr-defined]
+                continue
         adapter.execute_intent(intent)  # type: ignore[attr-defined]
 
 
@@ -183,22 +189,27 @@ def detect_wait_status_mode() -> str:
 # ---------------------------------------------------------------------------
 # Tick size inference
 # ---------------------------------------------------------------------------
-def infer_tick_size_from_data(data_path: str) -> float:
+def infer_tick_size_from_data(data_path: str | np.ndarray) -> float:
     """Infer a positive tick size from research.npy or hftbt.npz price fields.
+
+    Also accepts a numpy ndarray directly (e.g. from ChDataSource.load_day).
 
     Falls back to 1.0 when the source cannot be loaded or the price ladder
     does not expose a usable positive increment.
     """
     try:
-        loaded = np.load(data_path, allow_pickle=False)
-        try:
-            if isinstance(loaded, np.lib.npyio.NpzFile):
-                arr = np.asarray(loaded["data"])
-            else:
-                arr = np.asarray(loaded)
-        finally:
-            if hasattr(loaded, "close"):
-                loaded.close()
+        if isinstance(data_path, np.ndarray):
+            arr = data_path
+        else:
+            loaded = np.load(data_path, allow_pickle=False)
+            try:
+                if isinstance(loaded, np.lib.npyio.NpzFile):
+                    arr = np.asarray(loaded["data"])
+                else:
+                    arr = np.asarray(loaded)
+            finally:
+                if hasattr(loaded, "close"):
+                    loaded.close()
     except Exception as exc:
         logger.debug("operation_fallback", error=str(exc))
         return 1.0

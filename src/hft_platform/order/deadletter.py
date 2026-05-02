@@ -21,12 +21,21 @@ from typing import Any, Dict, List, Optional
 from structlog import get_logger
 
 from hft_platform.core import timebase
+from hft_platform.observability.metrics import MetricsRegistry
 
 logger = get_logger("order.deadletter")
 
 
 class RejectionReason(str, Enum):
-    """Categorized reasons for order rejection."""
+    """Categorized reasons for order rejection.
+
+    Bug #37: previously 10+ distinct rejection paths in adapter.py shared the
+    generic VALIDATION_ERROR label, making metrics & DLQ entries impossible to
+    triage by category. The specific *_TARGET_* / PLATFORM_REDUCE_ONLY /
+    IDEMPOTENCY_DUPLICATE / BROKER_CODEC_MISSING values were added so each
+    rejection path has a distinct, queryable reason. VALIDATION_ERROR now
+    means "upstream RiskEngine validator rejected the intent" only.
+    """
 
     CIRCUIT_BREAKER = "circuit_breaker"
     RATE_LIMIT = "rate_limit"
@@ -35,6 +44,16 @@ class RejectionReason(str, Enum):
     VALIDATION_ERROR = "validation_error"
     BROKER_REJECT = "broker_reject"
     DEADLINE_EXCEEDED = "deadline_exceeded"
+    STORMGUARD_HALT = "stormguard_halt"
+    IDEMPOTENCY_DUPLICATE = "idempotency_duplicate"
+    PLATFORM_REDUCE_ONLY = "platform_reduce_only"
+    BROKER_CODEC_MISSING = "broker_codec_missing"
+    CANCEL_TARGET_NOT_FOUND = "cancel_target_not_found"
+    CANCEL_TARGET_PENDING = "cancel_target_pending"
+    CANCEL_TARGET_TERMINAL = "cancel_target_terminal"
+    AMEND_TARGET_NOT_FOUND = "amend_target_not_found"
+    AMEND_TARGET_PENDING = "amend_target_pending"
+    AMEND_TARGET_TERMINAL = "amend_target_terminal"
     UNKNOWN = "unknown"
 
 
@@ -55,6 +74,7 @@ class DeadLetterEntry:
     metadata: Dict[str, Any] = field(default_factory=dict)
     retry_count: int = 0
     trace_id: str = ""
+    halt_exempt_blocked: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -94,6 +114,9 @@ class DeadLetterQueue:
         self.total_entries = 0
         self.total_flushed = 0
 
+        # Metrics
+        self._metrics = MetricsRegistry.get()
+
         logger.info("DeadLetterQueue initialized", dir=str(self.dlq_dir), max_buffer=max_buffer_size)
 
     async def add(
@@ -109,6 +132,7 @@ class DeadLetterQueue:
         intent_type: str = "NEW",
         metadata: Optional[Dict[str, Any]] = None,
         trace_id: str = "",
+        halt_exempt_blocked: bool = False,
     ) -> None:
         """Add a rejected order to the dead letter queue."""
         entry = DeadLetterEntry(
@@ -124,11 +148,16 @@ class DeadLetterQueue:
             intent_type=intent_type,
             metadata=metadata or {},
             trace_id=trace_id,
+            halt_exempt_blocked=halt_exempt_blocked,
         )
 
         async with self._lock:
             self._buffer.append(entry)
             self.total_entries += 1
+            try:
+                self._metrics.dlq_size_total.labels(source="order").inc()
+            except Exception:
+                pass  # Metrics must never block DLQ operation
 
             # Flush to disk if buffer is full
             if len(self._buffer) >= self.max_buffer_size:
@@ -181,10 +210,26 @@ class DeadLetterQueue:
                 for entry in entries:
                     f.write(json.dumps(entry.to_dict()) + "\n")
             logger.info("DLQ flushed to disk", file=str(filename), count=len(entries))
+            self._cleanup_old_files()
             return len(entries)
         except Exception as e:
             logger.error("DLQ flush failed", error=str(e))
             return 0
+
+    def _cleanup_old_files(self) -> None:
+        """Delete DLQ files older than HFT_DLQ_RETAIN_DAYS (default: 7)."""
+        retain_days = int(os.getenv("HFT_DLQ_RETAIN_DAYS", "7"))
+        cutoff = timebase.now_s() - retain_days * 86400
+        deleted = 0
+        for fpath in self.dlq_dir.glob("dlq_*.jsonl"):
+            try:
+                if os.path.getmtime(fpath) < cutoff:
+                    fpath.unlink()
+                    deleted += 1
+            except Exception as e:
+                logger.warning("DLQ cleanup failed for file", file=str(fpath), error=str(e))
+        if deleted:
+            logger.info("DLQ old files removed", count=deleted, retain_days=retain_days)
 
     async def get_stats(self) -> Dict[str, int]:
         """Get queue statistics."""

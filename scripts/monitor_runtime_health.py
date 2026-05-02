@@ -1,14 +1,60 @@
 #!/usr/bin/env python3
-import json
 import os
 import time
-from typing import Dict, List, Tuple
+from typing import Dict, Iterable, List, Tuple
 
 import clickhouse_connect
 import requests
 from structlog import get_logger
 
 logger = get_logger("monitor.runtime")
+
+
+def _is_trading_hours_now(product_type: str = "future") -> bool:
+    """Return True if current time is within TAIFEX trading hours.
+
+    Falls back to a simple TW weekday window when market_calendar is unavailable.
+    """
+    try:
+        import datetime as _dt
+
+        from hft_platform.core.market_calendar import get_calendar
+
+        cal = get_calendar()
+        now = _dt.datetime.now(cal._tz)
+        return cal.is_trading_hours(now, product_type=product_type)
+    except Exception:
+        import datetime as _dt
+
+        tz = _dt.timezone(_dt.timedelta(hours=8))
+        now = _dt.datetime.now(tz)
+        if now.weekday() >= 5:
+            return False
+        minute = now.hour * 60 + now.minute
+        return (8 * 60 + 45) <= minute <= (13 * 60 + 45)
+
+_FEED_GAP_EXCLUDE_PREFIXES = (
+    "TXO",
+    "TEO",
+    "TFO",
+    "XIO",
+    "GTO",
+    "TGO",
+    "G2O",
+    "T4O",
+    "T5O",
+    "T5F",
+    "UDF",
+    "GTF",
+    "BTF",
+    "RHF",
+    "SPF",
+    "UNF",
+    "E4F",
+    "NYF",
+    "EXF",
+    "ZEF",
+)
 
 
 def _float_env(name: str, default: float) -> float:
@@ -51,6 +97,33 @@ def _parse_metrics(text: str) -> Dict[str, List[Tuple[Dict[str, str], float]]]:
     return metrics
 
 
+def _csv_env(name: str) -> set[str]:
+    raw = os.getenv(name, "")
+    return {part.strip() for part in raw.split(",") if part.strip()}
+
+
+def _is_core_futures_symbol(symbol: str) -> bool:
+    if not symbol or not symbol[0].isalpha():
+        return False
+    return not any(symbol.startswith(prefix) for prefix in _FEED_GAP_EXCLUDE_PREFIXES)
+
+
+def _filtered_feed_gap_values(
+    samples: Iterable[Tuple[Dict[str, str], float]],
+    allowlist: set[str] | None = None,
+) -> list[float]:
+    values: list[float] = []
+    for labels, value in samples:
+        symbol = labels.get("symbol", "")
+        if allowlist:
+            if symbol in allowlist:
+                values.append(value)
+            continue
+        if _is_core_futures_symbol(symbol):
+            values.append(value)
+    return values
+
+
 def _post_webhook(url: str, payload: Dict[str, object]) -> None:
     try:
         requests.post(url, json=payload, timeout=5)
@@ -65,7 +138,7 @@ def _query_scalar(client: clickhouse_connect.driver.Client, sql: str, parameters
     return result.result_rows[0][0]
 
 
-def main() -> None:
+def main() -> None:  # noqa: C901
     interval_s = _float_env("HFT_MONITOR_INTERVAL_S", 10.0)
     metrics_url = os.getenv("HFT_MONITOR_METRICS_URL", "http://localhost:9090/metrics")
     clickhouse_host = os.getenv("HFT_CLICKHOUSE_HOST") or os.getenv("CLICKHOUSE_HOST") or "clickhouse"
@@ -77,8 +150,17 @@ def main() -> None:
     wal_rate_warn = _float_env("HFT_MONITOR_WAL_RATE_WARN", 1.0)
     ingest_rate_min = _float_env("HFT_MONITOR_INGEST_RATE_MIN", 1.0)
     max_ingest_lag_s = _float_env("HFT_MONITOR_MAX_INGEST_LAG_S", 5.0)
+    feed_gap_allowlist = _csv_env("HFT_MONITOR_FEED_GAP_SYMBOLS") or _csv_env("HFT_SYMBOLS") or None
     webhook_url = os.getenv("HFT_MONITOR_ALERT_WEBHOOK", "")
     run_once = os.getenv("HFT_MONITOR_ONCE", "0") in {"1", "true", "yes"}
+    skip_off_hours = os.getenv("HFT_MONITOR_SKIP_OFF_HOURS", "1") in {"1", "true", "yes"}
+    off_hours_product = os.getenv("HFT_MONITOR_PRODUCT_TYPE", "future")
+    off_hours_log_interval_s = _float_env("HFT_MONITOR_OFF_HOURS_LOG_INTERVAL_S", 300.0)
+    last_off_hours_log_ts = 0.0
+    # Alert types suppressed when outside trading hours (liquidity/ingestion noise).
+    # Connectivity / crash alerts (metrics_fetch, clickhouse, future_rows, wal_fallback)
+    # remain active 24/7.
+    off_hours_suppressed_types = {"feed_gap", "ingest_rate", "ingest_lag"}
 
     ch_client = clickhouse_connect.get_client(
         host=clickhouse_host,
@@ -118,7 +200,10 @@ def main() -> None:
                     )
             last_wal_total = wal_total
 
-            feed_gaps = [v for _, v in metrics.get("feed_gap_by_symbol_seconds", [])]
+            feed_gaps = _filtered_feed_gap_values(
+                metrics.get("feed_gap_by_symbol_seconds", []),
+                allowlist=feed_gap_allowlist,
+            )
             if feed_gaps:
                 feed_gap_max = max(feed_gaps)
                 if feed_gap_max >= feed_gap_warn_s:
@@ -163,6 +248,19 @@ def main() -> None:
                     alerts.append({"type": "ingest_rate", "severity": "warning", "rate": rate})
         except Exception as exc:
             alerts.append({"type": "clickhouse", "severity": "warning", "error": str(exc)})
+
+        # --- Filter off-hours liquidity/ingestion alerts ---
+        in_trading = _is_trading_hours_now(off_hours_product) if skip_off_hours else True
+        if not in_trading:
+            suppressed = [a for a in alerts if a.get("type") in off_hours_suppressed_types]
+            alerts = [a for a in alerts if a.get("type") not in off_hours_suppressed_types]
+            if suppressed and (now - last_off_hours_log_ts) >= off_hours_log_interval_s:
+                logger.info(
+                    "Runtime monitor off-hours alerts suppressed",
+                    count=len(suppressed),
+                    types=sorted({str(a.get("type")) for a in suppressed}),
+                )
+                last_off_hours_log_ts = now
 
         # --- Emit + optional webhook ---
         if alerts:

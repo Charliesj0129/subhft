@@ -64,6 +64,7 @@ class FeeCalculator:
             schedules[product_code] = {
                 "commission_per_contract": int(cfg.get("commission_per_contract", 0)),
                 "tax_rate_bps_x100": int(round(float(tax_rate_bps) * 100)),
+                "tax_per_contract": int(cfg.get("tax_per_contract", 0)),
                 "tax_side": str(cfg.get("tax_side", "sell")),
                 "tick_size_x100": int(round(float(tick_size) * 100)),
                 "point_value": int(cfg.get("point_value", 1)),
@@ -77,13 +78,28 @@ class FeeCalculator:
         return cls(schedules, symbol_to_product=symbol_map)
 
     def _resolve_product(self, symbol: str) -> str | None:
-        """Resolve broker symbol to product code."""
+        """Resolve broker symbol to product code.
+
+        Lookup order:
+        1. Exact match in symbol_map (e.g. TXFD6 → TX)
+        2. Symbol itself is a product code (e.g. TXF → TXF schedule)
+        3. Root prefix match: strip 2-char month suffix (e.g. TMFE6 → TMF → XMT)
+        """
         product = self._symbol_to_product.get(symbol)
         if product is not None:
             return product
         # Fallback: check if symbol itself is a product code
         if symbol in self._schedules:
             return symbol
+        # Root-prefix fallback: strip trailing month code (e.g. TMFE6 → TMF)
+        # TAIFEX futures: root (3 chars) + month letter + year digit = 5+ chars
+        if len(symbol) >= 5:
+            root = symbol[:-2]  # strip month letter + year digit
+            product = self._symbol_to_product.get(root)
+            if product is not None:
+                return product
+            if root in self._schedules:
+                return root
         return None
 
     def compute(self, symbol: str, side: str, qty: int, price_scaled: int) -> FeeBreakdown:
@@ -100,6 +116,7 @@ class FeeCalculator:
         """
         product = self._resolve_product(symbol)
         if product is None:
+            logger.warning("unknown_symbol_no_fees", symbol=symbol)
             return _ZERO
 
         schedule = self._schedules.get(product)
@@ -112,6 +129,7 @@ class FeeCalculator:
 
         comm_per_contract: int = schedule["commission_per_contract"]
         tax_rate_x100: int = schedule["tax_rate_bps_x100"]
+        tax_per_contract: int = schedule["tax_per_contract"]
         tax_side: str = schedule["tax_side"]
         tick_size_x100: int = schedule["tick_size_x100"]
         point_value: int = schedule["point_value"]
@@ -119,18 +137,26 @@ class FeeCalculator:
         # Commission: comm_per_contract * abs_qty, scaled x10000
         commission = comm_per_contract * abs_qty * 10000
 
-        # Tax: sell-side only, pure integer arithmetic
+        # Tax: apply based on tax_side (sell, buy, or both), pure integer arithmetic
         tax = 0
-        if side == "SELL" and tax_side == "sell":
-            # notional_x100 = price_scaled * abs_qty * point_value * 100 // tick_size_x100
-            # This gives notional in NTD * 100 (extra factor for precision)
-            notional_x100 = price_scaled * abs_qty * point_value * 100 // tick_size_x100
-            # tax in NTD scaled x10000:
-            # tax_rate is in bps*100 (e.g. 2.0 bps -> 200)
-            # 1 bps = 1/10000, so tax_rate_x100 / 100 bps = tax_rate_x100 / (100 * 10000) of notional
-            # tax = notional * tax_rate_x100 / (100 * 10000), then scale x10000
-            # tax_scaled = notional_x100 * tax_rate_x100 // (10000 * 100)
-            tax = notional_x100 * tax_rate_x100 // (10000 * 100)
+        apply_tax = (
+            tax_side == "both" or (tax_side == "sell" and side == "SELL") or (tax_side == "buy" and side == "BUY")
+        )
+        if apply_tax:
+            if tax_per_contract > 0:
+                # Flat per-contract tax: tax_per_contract * abs_qty, scaled x10000
+                tax = tax_per_contract * abs_qty * 10000
+            else:
+                # Percentage-based tax: rate in bps
+                # notional_x100 = price_scaled * abs_qty * point_value * 100 // tick_size_x100
+                # This gives notional in NTD * 100 (extra factor for precision)
+                notional_x100 = price_scaled * abs_qty * point_value * 100 // tick_size_x100
+                # tax in NTD scaled x10000:
+                # tax_rate is in bps*100 (e.g. 2.0 bps -> 200)
+                # 1 bps = 1/10000, so tax_rate_x100 / 100 bps = tax_rate_x100 / (100 * 10000) of notional
+                # tax = notional * tax_rate_x100 / (100 * 10000), then scale x10000
+                # tax_scaled = notional_x100 * tax_rate_x100 // (10000 * 100)
+                tax = notional_x100 * tax_rate_x100 // (10000 * 100)
 
         total = commission + tax
         return FeeBreakdown(commission=commission, tax=tax, total=total)

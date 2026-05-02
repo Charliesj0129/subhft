@@ -12,6 +12,12 @@ from hft_platform.feed_adapter.fubon.order_gateway import FubonOrderGateway
 from hft_platform.feed_adapter.fubon.quote_runtime import FubonQuoteRuntime as StubQuoteRuntime
 from hft_platform.feed_adapter.fubon.session_runtime import FubonSessionRuntime
 
+
+def _new_client() -> FubonClient:
+    with pytest.warns(DeprecationWarning, match="FubonClient is deprecated"):
+        return FubonClient()
+
+
 # ------------------------------------------------------------------ #
 # Init / properties
 # ------------------------------------------------------------------ #
@@ -19,22 +25,22 @@ from hft_platform.feed_adapter.fubon.session_runtime import FubonSessionRuntime
 
 class TestFubonClientInit:
     def test_fubon_client_init(self) -> None:
-        client = FubonClient()
+        client = _new_client()
         assert client.logged_in is False
         assert client.api is None
 
     def test_fubon_client_has_slots(self) -> None:
         assert hasattr(FubonClient, "__slots__")
-        client = FubonClient()
+        client = _new_client()
         with pytest.raises(AttributeError):
             client.nonexistent_attr = 42  # type: ignore[attr-defined]
 
     def test_fubon_client_logged_in_property(self) -> None:
-        client = FubonClient()
+        client = _new_client()
         assert client.logged_in is False
 
     def test_fubon_client_sub_components_initialised(self) -> None:
-        client = FubonClient()
+        client = _new_client()
         assert client._order_gateway is not None
         assert client._account_gateway is not None
         assert client._quote_runtime is not None
@@ -47,7 +53,7 @@ class TestFubonClientInit:
 
 class TestFubonClientOrderDelegation:
     def test_place_order_delegates(self) -> None:
-        client = FubonClient()
+        client = _new_client()
         mock_gw = MagicMock(spec=FubonOrderGateway)
         mock_gw.place_order.return_value = "ok"
         client._order_gateway = mock_gw
@@ -62,7 +68,7 @@ class TestFubonClientOrderDelegation:
         assert result == "ok"
 
     def test_cancel_order_delegates(self) -> None:
-        client = FubonClient()
+        client = _new_client()
         mock_gw = MagicMock(spec=FubonOrderGateway)
         mock_gw.cancel_order.return_value = "cancelled"
         client._order_gateway = mock_gw
@@ -72,7 +78,7 @@ class TestFubonClientOrderDelegation:
         assert result == "cancelled"
 
     def test_update_order_delegates(self) -> None:
-        client = FubonClient()
+        client = _new_client()
         mock_gw = MagicMock(spec=FubonOrderGateway)
         mock_gw.update_order.return_value = "updated"
         client._order_gateway = mock_gw
@@ -93,7 +99,7 @@ class TestFubonClientOrderDelegation:
 
 class TestFubonClientAccountDelegation:
     def test_get_positions_delegates(self) -> None:
-        client = FubonClient()
+        client = _new_client()
         mock_acct = MagicMock()
         mock_acct.get_inventories.return_value = [{"symbol": "2330"}]
         client._account_gateway = mock_acct
@@ -103,7 +109,7 @@ class TestFubonClientAccountDelegation:
         assert result == [{"symbol": "2330"}]
 
     def test_get_account_balance_delegates(self) -> None:
-        client = FubonClient()
+        client = _new_client()
         mock_acct = MagicMock()
         mock_acct.get_accounting.return_value = {"balance": 100}
         client._account_gateway = mock_acct
@@ -113,7 +119,7 @@ class TestFubonClientAccountDelegation:
         assert result == {"balance": 100}
 
     def test_get_margin_delegates(self) -> None:
-        client = FubonClient()
+        client = _new_client()
         mock_acct = MagicMock()
         mock_acct.get_margin.return_value = {"margin": 50}
         client._account_gateway = mock_acct
@@ -130,7 +136,7 @@ class TestFubonClientAccountDelegation:
 
 class TestFubonClientQuoteDelegation:
     def test_subscribe_basket_registers_and_subscribes(self) -> None:
-        client = FubonClient()
+        client = _new_client()
         mock_qr = MagicMock()
         client._quote_runtime = mock_qr
         client._symbols = ["2330", "2317"]
@@ -141,7 +147,7 @@ class TestFubonClientQuoteDelegation:
         mock_qr.subscribe.assert_called_once_with(["2330", "2317"])
 
     def test_subscribe_basket_no_symbols(self) -> None:
-        client = FubonClient()
+        client = _new_client()
         mock_qr = MagicMock()
         client._quote_runtime = mock_qr
         client._symbols = []
@@ -152,7 +158,7 @@ class TestFubonClientQuoteDelegation:
         mock_qr.subscribe.assert_not_called()
 
     def test_close_stops_quote_runtime(self) -> None:
-        client = FubonClient()
+        client = _new_client()
         mock_qr = MagicMock()
         client._quote_runtime = mock_qr
 
@@ -161,7 +167,7 @@ class TestFubonClientQuoteDelegation:
         assert client.logged_in is False
 
     def test_shutdown_delegates_to_close(self) -> None:
-        client = FubonClient()
+        client = _new_client()
         mock_qr = MagicMock()
         client._quote_runtime = mock_qr
 
@@ -177,7 +183,7 @@ class TestFubonClientQuoteDelegation:
 
 class TestFubonClientCallbacks:
     def test_set_execution_callbacks_stores(self) -> None:
-        client = FubonClient()
+        client = _new_client()
         on_order = MagicMock()
         on_deal = MagicMock()
 
@@ -193,31 +199,31 @@ class TestFubonClientCallbacks:
 
 class TestFubonClientPlaceholders:
     def test_fetch_snapshots_returns_empty(self) -> None:
-        client = FubonClient()
+        client = _new_client()
         assert client.fetch_snapshots() == []
 
     def test_list_profit_loss_returns_empty(self) -> None:
-        client = FubonClient()
+        client = _new_client()
         assert client.list_profit_loss() == []
 
     def test_list_position_detail_returns_empty(self) -> None:
-        client = FubonClient()
+        client = _new_client()
         assert client.list_position_detail() == []
 
     def test_get_exchange_returns_empty_string(self) -> None:
-        client = FubonClient()
+        client = _new_client()
         assert client.get_exchange("2330") == ""
 
     def test_validate_symbols_returns_empty(self) -> None:
-        client = FubonClient()
+        client = _new_client()
         assert client.validate_symbols() == []
 
     def test_get_contract_refresh_status_returns_empty_dict(self) -> None:
-        client = FubonClient()
+        client = _new_client()
         assert client.get_contract_refresh_status() == {}
 
     def test_resubscribe_returns_true(self) -> None:
-        client = FubonClient()
+        client = _new_client()
         assert client.resubscribe() is True
 
 
@@ -245,14 +251,14 @@ class TestFubonSessionRuntime:
 # ------------------------------------------------------------------ #
 
 
-class TestLegacyStubImports:
-    """Ensure the old stub modules (account.py, quote.py) are still importable."""
+class TestCanonicalImports:
+    """Verify canonical account_gateway / quote_runtime modules are importable."""
 
-    def test_stub_account_gateway_importable(self) -> None:
+    def test_account_gateway_importable(self) -> None:
         gw = StubAccountGateway(sdk=None)
         assert gw._sdk is None
 
-    def test_stub_quote_runtime_importable(self) -> None:
+    def test_quote_runtime_importable(self) -> None:
         rt = StubQuoteRuntime(sdk=None)
         assert rt._sdk is None
 

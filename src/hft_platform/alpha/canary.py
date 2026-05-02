@@ -7,6 +7,7 @@ Supports auto-rollback, escalation tiers, and graduation.
 from __future__ import annotations
 
 import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -196,35 +197,47 @@ class CanaryMonitor:
         yaml_path = Path(canary["_path"])
         old_weight = float(canary.get("weight", 0.0))
 
+        # Build a new dict — never mutate the original (immutability rule)
+        updated = {**canary}
+
         if status.state == "rolled_back":
-            canary["weight"] = 0.0
-            canary["enabled"] = False
+            updated["weight"] = 0.0
+            updated["enabled"] = False
             new_weight = 0.0
         elif status.state == "escalated":
             new_weight = self._next_tier_weight(old_weight) or old_weight
-            canary["weight"] = new_weight
+            updated["weight"] = new_weight
         elif status.state == "graduated":
             max_tier = _ESCALATION_TIERS[-1]
             new_weight = max(old_weight, max_tier)
-            canary["weight"] = new_weight
+            updated["weight"] = new_weight
             # Remove canary-specific guardrails to indicate graduated
-            canary.pop("rollback", None)
+            updated.pop("rollback", None)
         else:
             # hold — no-op
             return
 
-        # Remove internal path key before writing
-        path_key = canary.pop("_path", None)
-        yaml_path.write_text(yaml.safe_dump(canary, sort_keys=False))
-        if path_key:
-            canary["_path"] = path_key
+        # Exclude internal path key from the persisted YAML
+        updated_for_write = {k: v for k, v in updated.items() if k != "_path"}
+
+        # Atomic write: write to temp file then rename (POSIX-atomic).
+        # M2 (2026-04-25): switch to ``finally`` so orphan tmpfiles are removed
+        # on SIGKILL / interpreter-shutdown paths that bypass exception
+        # handlers.
+        tmp_fd, tmp_path = tempfile.mkstemp(dir=yaml_path.parent, suffix=".tmp")
+        try:
+            with os.fdopen(tmp_fd, "w") as f:
+                f.write(yaml.safe_dump(updated_for_write, sort_keys=False))
+            Path(tmp_path).replace(yaml_path)
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
 
         logger.info(
             "canary.apply",
             alpha_id=status.alpha_id,
             action=status.state,
             old_weight=old_weight,
-            new_weight=canary["weight"],
+            new_weight=new_weight,
         )
 
         # Best-effort audit log
@@ -235,7 +248,7 @@ class CanaryMonitor:
                 alpha_id=status.alpha_id,
                 action=status.state,
                 old_weight=old_weight,
-                new_weight=float(canary["weight"]),
+                new_weight=float(new_weight),
                 reason=status.reason,
                 checks=status.checks,
             )

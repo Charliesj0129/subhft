@@ -170,7 +170,7 @@ class TestRunGridParallel:
 
 
 class TestOptimizeParametersParallel:
-    def test_output_format_matches_sequential(self):
+    def test_output_format_matches_sequential(self, recwarn):
         """Verify output dict has all expected top-level keys."""
         cfg = _make_validation_config()
         out = _optimize_parameters(
@@ -196,6 +196,7 @@ class TestOptimizeParametersParallel:
             "risks",
         }
         assert required_keys.issubset(set(out.keys()))
+        assert not [w for w in recwarn if issubclass(w.category, DeprecationWarning)]
 
     def test_all_grid_points_in_trials(self):
         """Each unique threshold in the grid produces exactly one trial row."""

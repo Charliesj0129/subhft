@@ -75,33 +75,63 @@ class TrackGate:
     Designed to be read from the strategy hot path with minimal overhead.
     """
 
-    __slots__ = ("_symbol_to_track", "_track_phases", "_warned_unknown", "_default_open")
+    # Phase priority: OPEN > CLOSE_ONLY > FORCE_FLAT > CLOSED
+    _PHASE_PRIORITY: dict[SessionPhase, int] = {
+        SessionPhase.OPEN: 3,
+        SessionPhase.CLOSE_ONLY: 2,
+        SessionPhase.FORCE_FLAT: 1,
+        SessionPhase.CLOSED: 0,
+    }
+
+    __slots__ = ("_symbol_to_tracks", "_track_phases", "_warned_unknown", "_default_open")
 
     def __init__(self) -> None:
-        self._symbol_to_track: dict[str, str] = {}
+        self._symbol_to_tracks: dict[str, list[str]] = {}
         self._track_phases: dict[str, SessionPhase] = {}
         self._warned_unknown: set[str] = set()
         self._default_open: bool = os.getenv("HFT_TRACK_GATE_DEFAULT_OPEN", "0") in ("1", "true", "yes")
 
     def register_symbol(self, symbol: str, track_name: str) -> None:
-        """Register a symbol to a track."""
-        self._symbol_to_track[symbol] = track_name
+        """Register a symbol to a track. Supports multi-track symbols."""
+        tracks = self._symbol_to_tracks.get(symbol)
+        if tracks is None:
+            self._symbol_to_tracks[symbol] = [track_name]
+        elif track_name not in tracks:
+            tracks.append(track_name)
 
     def set_track_phase(self, track_name: str, phase: SessionPhase) -> None:
         """Update the current phase for a track."""
         self._track_phases[track_name] = phase
 
     def get_phase(self, symbol: str) -> SessionPhase:
-        """Return current phase for *symbol*. Unknown symbols default to CLOSED."""
-        track = self._symbol_to_track.get(symbol)
-        if track is None:
+        """Return current phase for *symbol*.
+
+        When a symbol belongs to multiple tracks (e.g. futures_day + futures_night),
+        return the most permissive phase (OPEN > CLOSE_ONLY > FORCE_FLAT > CLOSED).
+        """
+        tracks = self._symbol_to_tracks.get(symbol)
+        if tracks is None:
             if self._default_open:
                 return SessionPhase.OPEN
             if symbol not in self._warned_unknown:
                 self._warned_unknown.add(symbol)
                 logger.warning("track_gate_unknown_symbol_blocked", symbol=symbol, default_phase="CLOSED")
             return SessionPhase.CLOSED
-        return self._track_phases.get(track, SessionPhase.CLOSED)
+        if len(tracks) == 1:
+            return self._track_phases.get(tracks[0], SessionPhase.CLOSED)
+        # Multi-track: pick the most permissive phase
+        best = SessionPhase.CLOSED
+        best_pri = 0
+        _pri = self._PHASE_PRIORITY
+        for t in tracks:
+            phase = self._track_phases.get(t, SessionPhase.CLOSED)
+            p = _pri.get(phase, 0)
+            if p > best_pri:
+                best = phase
+                best_pri = p
+                if best_pri == 3:  # OPEN — can't do better
+                    break
+        return best
 
     @property
     def track_phases(self) -> dict[str, SessionPhase]:
@@ -109,9 +139,9 @@ class TrackGate:
         return dict(self._track_phases)
 
     @property
-    def symbol_to_track(self) -> dict[str, str]:
-        """Read-only snapshot of symbol -> track mapping."""
-        return dict(self._symbol_to_track)
+    def symbol_to_track(self) -> dict[str, list[str]]:
+        """Read-only snapshot of symbol -> tracks mapping."""
+        return dict(self._symbol_to_tracks)
 
 
 # ---------------------------------------------------------------------------
@@ -175,6 +205,30 @@ class SessionGovernor:
         """Expose the TrackGate for injection into StrategyRunner."""
         return self._track_gate
 
+    def resolve_symbol_aliases(self, alias_map: dict[str, str] | None = None) -> None:
+        """Re-register symbols using alias→actual mapping.
+
+        Called after broker login when alias_to_actual is populated.
+        For each track, if a symbol has an alias mapping, register the actual
+        code alongside or instead of the alias in the TrackGate.
+        """
+        if not alias_map:
+            return
+        for track_name, track_cfg in self._tracks.items():
+            new_symbols = []
+            for symbol in track_cfg.symbols:
+                actual = alias_map.get(symbol, symbol)
+                new_symbols.append(actual)
+                if actual != symbol:
+                    self._track_gate.register_symbol(actual, track_name)
+                    logger.info(
+                        "session_governor_alias_resolved",
+                        track=track_name,
+                        alias=symbol,
+                        actual=actual,
+                    )
+            track_cfg.symbols = new_symbols
+
     def register_phase_callback(self, callback: Callable[[str, SessionPhase, SessionPhase], None]) -> None:
         """Register a callback invoked on phase transitions: (track, old, new)."""
         self._phase_callbacks.append(callback)
@@ -208,7 +262,12 @@ class SessionGovernor:
         for item, minutes in zip(cfg.schedule, schedule_minutes, strict=False):
             if prev_minutes is not None and minutes < prev_minutes:
                 point_date += timedelta(days=1)
-            phase = _PHASE_NAME_MAP[str(item["phase"]).strip().lower()]
+            phase_key = str(item["phase"]).strip().lower()
+            if phase_key not in _PHASE_NAME_MAP:
+                valid = ", ".join(sorted(_PHASE_NAME_MAP))
+                msg = f"Invalid session phase '{item['phase']}' in track config. Valid phases: {valid}"
+                raise ValueError(msg)
+            phase = _PHASE_NAME_MAP[phase_key]
             points.append(
                 (
                     datetime.combine(point_date, dt_time(hour=minutes // 60, minute=minutes % 60), tzinfo=self._tz),
@@ -253,12 +312,68 @@ class SessionGovernor:
                 except RuntimeError:
                     logger.warning("session_force_flat_without_running_loop", track=track_name)
                 else:
-                    loop.create_task(self._position_flattener.flatten_track(track_name, list(track_cfg.symbols)))
+                    task = loop.create_task(self._position_flattener.flatten_track(track_name, list(track_cfg.symbols)))
+                    task._flatten_retry_count = 0  # type: ignore[attr-defined]
+                    task._flatten_track_name = track_name  # type: ignore[attr-defined]
+                    task.add_done_callback(self._on_flatten_task_done)
         for cb in self._phase_callbacks:
             try:
                 cb(track_name, old_phase, new_phase)
             except Exception as exc:  # noqa: BLE001
                 logger.error("session_phase_callback_error", error=str(exc))
+
+    _MAX_FLATTEN_RETRIES: int = 2
+
+    def _on_flatten_task_done(self, task: asyncio.Task[None]) -> None:
+        """Log errors from fire-and-forget flatten tasks; retry up to _MAX_FLATTEN_RETRIES times."""
+        if task.cancelled():
+            logger.warning("session_flatten_task_cancelled")
+            return
+        exc = task.exception()
+        if exc is not None:
+            retry_count = getattr(task, "_flatten_retry_count", 0)
+            track_name = getattr(task, "_flatten_track_name", "unknown")
+            logger.critical(
+                "session_flatten_task_failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+                retry=retry_count,
+                track=track_name,
+            )
+            # Send notification if dispatcher available
+            if self._notification_dispatcher is not None:
+                try:
+                    asyncio.ensure_future(
+                        self._notification_dispatcher.notify_flatten_result(
+                            scope=track_name,
+                            fully_closed=0,
+                            partially_closed=0,
+                            failed=1,
+                            failed_symbols=[f"flatten_exception: {type(exc).__name__}"],
+                        )
+                    )
+                except Exception as _notify_exc:  # noqa: BLE001
+                    logger.warning("session_flatten_notify_failed", error=str(_notify_exc))
+
+            # Retry if under limit
+            if retry_count < self._MAX_FLATTEN_RETRIES and self._position_flattener is not None:
+                track_cfg = self._tracks.get(track_name)
+                if track_cfg is not None:
+                    logger.warning(
+                        "session_flatten_task_retry",
+                        track=track_name,
+                        retry=retry_count + 1,
+                    )
+                    try:
+                        loop = asyncio.get_running_loop()
+                    except RuntimeError:
+                        return
+                    new_task = loop.create_task(
+                        self._position_flattener.flatten_track(track_name, list(track_cfg.symbols))
+                    )
+                    new_task._flatten_retry_count = retry_count + 1  # type: ignore[attr-defined]
+                    new_task._flatten_track_name = track_name  # type: ignore[attr-defined]
+                    new_task.add_done_callback(self._on_flatten_task_done)
 
     def get_phase(self, symbol: str) -> SessionPhase:
         """Return current phase for a symbol."""

@@ -84,6 +84,11 @@ def _patch_metrics(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+@pytest.fixture(autouse=True)
+def _isolate_fill_dedup(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HFT_FILL_DEDUP_PERSIST_PATH", str(tmp_path / "fill_dedup.jsonl"))
+
+
 @pytest.fixture()
 def bus() -> MagicMock:
     b = MagicMock()
@@ -551,9 +556,7 @@ async def test_create_task_with_error_handling_success() -> None:
 
 
 @pytest.mark.asyncio
-async def test_e2e_latency_observed_when_cmd_created_ns_known(
-    bus: MagicMock, position_store: MagicMock
-) -> None:
+async def test_e2e_latency_observed_when_cmd_created_ns_known(bus: MagicMock, position_store: MagicMock) -> None:
     """When cmd_created_ns_map contains the order_key for a fill, latency is observed."""
     q: asyncio.Queue = asyncio.Queue()
     order_id_map: dict[str, str] = {"ORD001": "strat1:42"}
@@ -578,9 +581,7 @@ async def test_e2e_latency_observed_when_cmd_created_ns_known(
 
 
 @pytest.mark.asyncio
-async def test_e2e_latency_not_observed_when_order_key_missing(
-    bus: MagicMock, position_store: MagicMock
-) -> None:
+async def test_e2e_latency_not_observed_when_order_key_missing(bus: MagicMock, position_store: MagicMock) -> None:
     """When order_id_map has no entry for fill.order_id, no latency is observed."""
     q: asyncio.Queue = asyncio.Queue()
     order_id_map: dict[str, str] = {}  # no mapping
@@ -603,10 +604,91 @@ async def test_e2e_latency_not_observed_when_order_key_missing(
     r.metrics.e2e_order_latency_ns.observe.assert_not_called()
 
 
+# ---------------------------------------------------------------------------
+# Direct order recording safety net (H5 fix)
+# ---------------------------------------------------------------------------
+
+
 @pytest.mark.asyncio
-async def test_e2e_latency_not_observed_when_created_ns_zero(
-    bus: MagicMock, position_store: MagicMock
-) -> None:
+async def test_order_event_recorded_directly_to_recorder_queue(bus: MagicMock, position_store: MagicMock) -> None:
+    """OrderEvents should be written directly to recorder_queue to survive ring buffer overwrite."""
+    from unittest.mock import patch
+
+    recorder_q: asyncio.Queue = asyncio.Queue(maxsize=100)
+    symbol_meta = MagicMock()
+    price_codec = MagicMock()
+
+    q: asyncio.Queue = asyncio.Queue()
+    order_id_map: dict[str, str] = {}
+    handler = MagicMock()
+    r = ExecutionRouter(bus, q, order_id_map, position_store, handler)
+    r._recorder_queue = recorder_q
+    r._symbol_metadata = symbol_meta
+    r._price_codec = price_codec
+
+    raw = _make_order_raw(status="Submitted")
+    await r.raw_queue.put(raw)
+
+    with patch("hft_platform.recorder.mapper.map_event_to_record", return_value=("orders", {"id": "O1"})):
+        task = asyncio.create_task(r.run())
+        await r.raw_queue.join()
+        r.running = False
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    assert not recorder_q.empty(), "OrderEvent should be recorded directly to recorder_queue"
+    item = recorder_q.get_nowait()
+    assert item["topic"] == "orders"
+
+
+# ---------------------------------------------------------------------------
+# DLQ retry uses on_fill_async (H2 fix)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dlq_retry_uses_on_fill_async(router: ExecutionRouter, position_store: MagicMock, bus: MagicMock) -> None:
+    """_retry_orphaned_fills must use on_fill_async, not blocking on_fill."""
+    from unittest.mock import patch
+
+    from hft_platform.contracts.execution import FillEvent
+
+    fake_fill = FillEvent(
+        fill_id="F001",
+        account_id="acct1",
+        order_id="ORD001",
+        strategy_id="strat1",
+        symbol="2330",
+        side=1,
+        qty=1,
+        price=1_000_000,
+        fee=0,
+        tax=0,
+        ingest_ts_ns=1_000_000_000,
+        match_ts_ns=1_000_000_000,
+    )
+
+    # Mock the DLQ to return one resolved fill
+    mock_dlq = MagicMock()
+    mock_dlq.count = 1
+    mock_dlq.retry = MagicMock(return_value=([fake_fill], []))
+
+    with patch(
+        "hft_platform.execution.fill_dlq.get_orphaned_fill_dlq",
+        return_value=mock_dlq,
+    ):
+        await router._retry_orphaned_fills()
+
+    # on_fill_async should be called, NOT on_fill
+    position_store.on_fill_async.assert_awaited_once_with(fake_fill)
+    position_store.on_fill.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_e2e_latency_not_observed_when_created_ns_zero(bus: MagicMock, position_store: MagicMock) -> None:
     """When cmd_created_ns is 0 (unset), no latency is observed."""
     q: asyncio.Queue = asyncio.Queue()
     order_id_map: dict[str, str] = {"ORD001": "strat1:42"}
@@ -627,3 +709,89 @@ async def test_e2e_latency_not_observed_when_created_ns_zero(
         pass
 
     r.metrics.e2e_order_latency_ns.observe.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# DLQ retry TCA enrichment (M4 fix)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dlq_retry_enriches_fill_with_tca_prices(
+    router: ExecutionRouter, position_store: MagicMock, bus: MagicMock
+) -> None:
+    """DLQ-resolved fills should be enriched with TCA decision/arrival prices."""
+    from unittest.mock import patch
+
+    from hft_platform.contracts.execution import FillEvent
+
+    fake_fill = FillEvent(
+        fill_id="F001",
+        account_id="acct1",
+        order_id="ORD001",
+        strategy_id="strat1",
+        symbol="2330",
+        side=1,
+        qty=1,
+        price=1_000_000,
+        fee=0,
+        tax=0,
+        ingest_ts_ns=1_000_000_000,
+        match_ts_ns=1_000_000_000,
+    )
+
+    # Seed order_id_map and TCA map
+    router._order_id_map["ORD001"] = "strat1:42"
+    router._cmd_tca_map["strat1:42"] = (5_000_000, 5_010_000)
+
+    mock_dlq = MagicMock()
+    mock_dlq.count = 1
+    mock_dlq.retry = MagicMock(return_value=([fake_fill], []))
+
+    with patch(
+        "hft_platform.execution.fill_dlq.get_orphaned_fill_dlq",
+        return_value=mock_dlq,
+    ):
+        await router._retry_orphaned_fills()
+
+    # TCA prices should be enriched on the fill
+    assert fake_fill.decision_price == 5_000_000
+    assert fake_fill.arrival_price == 5_010_000
+
+
+@pytest.mark.asyncio
+async def test_fill_enrichment_uses_prefix_matched_order_key(bus: MagicMock, position_store: MagicMock) -> None:
+    """Broker fills can extend order IDs; enrichment must still resolve the original order_key."""
+    q: asyncio.Queue = asyncio.Queue()
+    order_id_map: dict[str, str] = {"ORD001": "strat1:42"}
+    cmd_created_ns_map: dict[str, int] = {"strat1:42": 1_000_000_000}
+    cmd_tca_map: dict[str, tuple[int, int]] = {"strat1:42": (5_000_000, 5_010_000)}
+    handler = MagicMock()
+    router = ExecutionRouter(
+        bus,
+        q,
+        order_id_map,
+        position_store,
+        handler,
+        cmd_created_ns_map=cmd_created_ns_map,
+        cmd_tca_map=cmd_tca_map,
+    )
+
+    raw = _make_deal_raw(order_id="ORD001-A", strategy_id="strat1", ingest_ts_ns=1_005_000_000)
+    await router.raw_queue.put(raw)
+
+    task = asyncio.create_task(router.run())
+    await router.raw_queue.join()
+    router.running = False
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    published = bus.publish_many_nowait.call_args[0][0]
+    fill = published[1]
+    assert fill.client_order_id == "strat1:42"
+    assert fill.decision_price == 5_000_000
+    assert fill.arrival_price == 5_010_000
+    router.metrics.e2e_order_latency_ns.observe.assert_called_once_with(5_000_000)

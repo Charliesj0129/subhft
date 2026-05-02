@@ -335,7 +335,10 @@ def _compute_equity_curve(
     """Compute equity curve from prices and positions with fee deduction.
 
     ``pnl_step = positions[:-1] * diff(prices)`` captures mark-to-market PnL.
-    Fees are proportional to turnover (absolute position change) times price.
+    Fees are asymmetric per TAIFEX structure:
+      - buys:  taker_fee_bps
+      - sells: taker_fee_bps + sell_tax_bps (securities transaction tax)
+    maker_fee_bps is reserved for future maker/taker split modelling (not applied).
     """
     n = min(prices.size, positions.size)
     base = config.initial_equity if initial_equity is None else float(initial_equity)
@@ -345,9 +348,22 @@ def _compute_equity_curve(
     pos = positions[:n]
 
     pnl_step = pos[:-1] * np.diff(px)
-    turnover = np.abs(np.diff(pos, prepend=0))
-    fee_rate = max(config.taker_fee_bps, 0.0) / 10_000.0
-    fee_step = turnover[1:] * np.abs(px[1:]) * fee_rate
+
+    # Asymmetric TAIFEX fee model:
+    #   buys  → taker_fee_bps only
+    #   sells → taker_fee_bps + sell_tax_bps (securities transaction tax)
+    # maker_fee_bps is preserved in BacktestConfig for future maker/taker split
+    # modelling but is NOT applied here (conservative taker-only assumption).
+    pos_change = np.diff(pos, prepend=0.0)
+    buys = np.maximum(pos_change, 0.0)  # shares added (long entry / short cover)
+    sells = np.maximum(-pos_change, 0.0)  # shares removed (long exit / short entry)
+
+    buy_fee_rate = max(config.taker_fee_bps, 0.0) / 10_000.0
+    sell_fee_rate = (max(config.taker_fee_bps, 0.0) + max(config.sell_tax_bps, 0.0)) / 10_000.0
+
+    buy_fee = buys[1:] * np.abs(px[1:]) * buy_fee_rate
+    sell_fee = sells[1:] * np.abs(px[1:]) * sell_fee_rate
+    fee_step = buy_fee + sell_fee
     pnl_after_fee = pnl_step - fee_step
     pnl_cum = np.cumsum(pnl_after_fee, dtype=np.float64)
 
@@ -408,7 +424,7 @@ def _run_adapter_slice(
     adapter = HftBacktestAdapter(
         strategy=bridge,
         asset_symbol=symbol,
-        data_path=npz_path,
+        data=npz_path,
         latency_us=latency_us,
         maker_fee=float(config.maker_fee_bps) / 10_000.0,
         taker_fee=float(config.taker_fee_bps) / 10_000.0,
@@ -744,6 +760,7 @@ class HftNativeRunner:
         oos_mid = _cat(oos_mid_list)
         oos_pos = _cat(oos_pos_list)
         all_signals = _cat(is_signals_list + oos_signals_list)
+        all_mid = _cat(is_mid_list + oos_mid_list)
         all_pos = _cat(is_pos_list + oos_pos_list)
         all_volume = _cat(volumes)
 
@@ -782,6 +799,7 @@ class HftNativeRunner:
             run_id=run_id,
             config_hash=_hash_config(self.config),
             latency_profile=latency_profile,
+            mid_prices=all_mid,
         )
 
     def run_walk_forward(

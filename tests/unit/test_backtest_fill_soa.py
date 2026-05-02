@@ -95,7 +95,7 @@ def test_fill_log_is_numpy_soa(monkeypatch):
     adapter = hbt_adapter.HftBacktestAdapter(
         strategy=_BuyStrategy("t"),
         asset_symbol="X",
-        data_path="d",
+        data="d",
     )
     assert isinstance(adapter._fill_ts_ns, np.ndarray)
     assert isinstance(adapter._fill_delta, np.ndarray)
@@ -112,7 +112,7 @@ def test_fill_log_no_list_append(monkeypatch):
     adapter = hbt_adapter.HftBacktestAdapter(
         strategy=_BuyStrategy("t"),
         asset_symbol="X",
-        data_path="d",
+        data="d",
     )
     assert adapter._fill_count == 0
     adapter._record_fill(100, 1, 1, 20010)
@@ -128,7 +128,7 @@ def test_fill_log_capacity_overflow_handled(monkeypatch):
     adapter = hbt_adapter.HftBacktestAdapter(
         strategy=_BuyStrategy("t"),
         asset_symbol="X",
-        data_path="d",
+        data="d",
     )
     # Force small capacity for test
     adapter._fill_ts_ns = np.zeros(2, dtype=np.int64)
@@ -152,7 +152,7 @@ def test_fill_stats_vectorized(monkeypatch):
     adapter = hbt_adapter.HftBacktestAdapter(
         strategy=_BuyStrategy("t"),
         asset_symbol="X",
-        data_path="d",
+        data="d",
     )
     adapter._total_buy_fills = 3
     adapter._total_sell_fills = 1
@@ -175,7 +175,7 @@ def test_fill_stats_adverse_selection(monkeypatch):
     adapter = hbt_adapter.HftBacktestAdapter(
         strategy=_BuyStrategy("t"),
         asset_symbol="X",
-        data_path="d",
+        data="d",
     )
     adapter._total_buy_fills = 2
     # Buy at mid_x2=20000, next mid_x2=19990 (price dropped → adverse for buyer)
@@ -193,7 +193,7 @@ def test_fill_log_backward_compat(monkeypatch):
     adapter = hbt_adapter.HftBacktestAdapter(
         strategy=_BuyStrategy("t"),
         asset_symbol="X",
-        data_path="d",
+        data="d",
     )
     adapter._record_fill(100, 1, 1, 20010)
     log = adapter._fill_log
@@ -211,7 +211,7 @@ def test_fill_mid_price_x2_is_integer(monkeypatch):
     adapter = hbt_adapter.HftBacktestAdapter(
         strategy=_BuyStrategy("t"),
         asset_symbol="X",
-        data_path="d",
+        data="d",
     )
     adapter._record_fill(0, 1, 1, 20010)
     assert adapter._fill_mid_price_x2.dtype == np.int64
@@ -225,7 +225,7 @@ def test_fill_count_starts_at_zero(monkeypatch):
     adapter = hbt_adapter.HftBacktestAdapter(
         strategy=_BuyStrategy("t"),
         asset_symbol="X",
-        data_path="d",
+        data="d",
     )
     assert adapter._fill_count == 0
     assert adapter.fill_stats["n_fill_events"] == 0

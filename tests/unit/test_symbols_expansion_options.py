@@ -6,8 +6,6 @@ with KeyError / missing fields, then pass after _enrich_option_entry() is added.
 
 from __future__ import annotations
 
-import pytest
-
 from hft_platform.config._symbols_expansion import build_entry
 from hft_platform.config._symbols_types import SymbolBuildResult
 
@@ -24,7 +22,12 @@ def _make_result() -> SymbolBuildResult:
 def test_build_entry_option_populates_right_from_option_right() -> None:
     """option_right='OptionCall' in contract → entry['right'] == 'C'."""
     result = _make_result()
-    contract = {"code": "TXO22500C6", "option_right": "OptionCall", "strike_price": 22500, "delivery_date": "2026-04-15"}
+    contract = {
+        "code": "TXO22500C6",
+        "option_right": "OptionCall",
+        "strike_price": 22500,
+        "delivery_date": "2026-04-15",
+    }
     entry = build_entry("TXO22500C6", {"product_type": "option"}, contract, result)
     assert entry is not None
     assert entry["right"] == "C"
@@ -38,7 +41,12 @@ def test_build_entry_option_populates_right_from_option_right() -> None:
 def test_build_entry_option_populates_strike() -> None:
     """contract with strike_price=22500 → entry['strike'] == 22500."""
     result = _make_result()
-    contract = {"code": "TXO22500C6", "option_right": "OptionCall", "strike_price": 22500, "delivery_date": "2026-04-15"}
+    contract = {
+        "code": "TXO22500C6",
+        "option_right": "OptionCall",
+        "strike_price": 22500,
+        "delivery_date": "2026-04-15",
+    }
     entry = build_entry("TXO22500C6", {"product_type": "option"}, contract, result)
     assert entry is not None
     assert entry["strike"] == 22500
@@ -52,7 +60,12 @@ def test_build_entry_option_populates_strike() -> None:
 def test_build_entry_option_populates_expiry() -> None:
     """contract with delivery_date='2026-04-15' → entry['expiry'] == '2026-04-15'."""
     result = _make_result()
-    contract = {"code": "TXO22500C6", "option_right": "OptionCall", "strike_price": 22500, "delivery_date": "2026-04-15"}
+    contract = {
+        "code": "TXO22500C6",
+        "option_right": "OptionCall",
+        "strike_price": 22500,
+        "delivery_date": "2026-04-15",
+    }
     entry = build_entry("TXO22500C6", {"product_type": "option"}, contract, result)
     assert entry is not None
     assert entry["expiry"] == "2026-04-15"
@@ -66,7 +79,12 @@ def test_build_entry_option_populates_expiry() -> None:
 def test_build_entry_option_defaults_point_value() -> None:
     """TXO contract with no attrs point_value → entry['point_value'] == 50."""
     result = _make_result()
-    contract = {"code": "TXO22500C6", "option_right": "OptionCall", "strike_price": 22500, "delivery_date": "2026-04-15"}
+    contract = {
+        "code": "TXO22500C6",
+        "option_right": "OptionCall",
+        "strike_price": 22500,
+        "delivery_date": "2026-04-15",
+    }
     entry = build_entry("TXO22500C6", {"product_type": "option"}, contract, result)
     assert entry is not None
     assert entry["point_value"] == 50
@@ -75,7 +93,12 @@ def test_build_entry_option_defaults_point_value() -> None:
 def test_build_entry_option_point_value_from_attrs() -> None:
     """attrs with point_value=100 takes precedence over default → entry['point_value'] == 100."""
     result = _make_result()
-    contract = {"code": "TXO22500C6", "option_right": "OptionCall", "strike_price": 22500, "delivery_date": "2026-04-15"}
+    contract = {
+        "code": "TXO22500C6",
+        "option_right": "OptionCall",
+        "strike_price": 22500,
+        "delivery_date": "2026-04-15",
+    }
     entry = build_entry("TXO22500C6", {"product_type": "option", "point_value": 100}, contract, result)
     assert entry is not None
     assert entry["point_value"] == 100
@@ -89,7 +112,12 @@ def test_build_entry_option_point_value_from_attrs() -> None:
 def test_build_entry_option_defaults_price_scale() -> None:
     """No price_scale in attrs or contract → defaults to 10000."""
     result = _make_result()
-    contract = {"code": "TXO22500C6", "option_right": "OptionCall", "strike_price": 22500, "delivery_date": "2026-04-15"}
+    contract = {
+        "code": "TXO22500C6",
+        "option_right": "OptionCall",
+        "strike_price": 22500,
+        "delivery_date": "2026-04-15",
+    }
     entry = build_entry("TXO22500C6", {"product_type": "option"}, contract, result)
     assert entry is not None
     assert entry.get("price_scale", 10000) == 10000
@@ -103,7 +131,12 @@ def test_build_entry_option_defaults_price_scale() -> None:
 def test_build_entry_option_underlying_mapping() -> None:
     """TXO code → entry['underlying'] == 'TX'."""
     result = _make_result()
-    contract = {"code": "TXO22500C6", "option_right": "OptionCall", "strike_price": 22500, "delivery_date": "2026-04-15"}
+    contract = {
+        "code": "TXO22500C6",
+        "option_right": "OptionCall",
+        "strike_price": 22500,
+        "delivery_date": "2026-04-15",
+    }
     entry = build_entry("TXO22500C6", {"product_type": "option"}, contract, result)
     assert entry is not None
     assert entry["underlying"] == "TX"

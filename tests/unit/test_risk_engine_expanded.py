@@ -238,6 +238,7 @@ class TestEvaluateRustValidator:
     def test_rust_uncovered_validators_populated_on_init(self, engine: RiskEngine) -> None:
         """Verify _rust_uncovered_validators contains PositionLimit and DailyLossLimit."""
         from hft_platform.risk.validators import DailyLossLimitValidator, PositionLimitValidator
+
         types = {type(v) for v in engine._rust_uncovered_validators}
         assert PositionLimitValidator in types
         assert DailyLossLimitValidator in types
@@ -280,7 +281,37 @@ class TestCreateCommand:
         now = time.monotonic_ns()
         cmd = engine.create_command(intent)
         assert cmd.deadline_ns > now
-        assert cmd.deadline_ns - now <= 600_000_000  # within ~600ms
+        assert cmd.deadline_ns - now <= 5_100_000_000  # default command deadline ~= 5s
+
+    def test_deadline_uses_remaining_intent_ttl(self, engine: RiskEngine) -> None:
+        import time
+
+        from hft_platform.core import timebase
+
+        intent = _make_intent()
+        intent.ttl_ns = 5_000_000_000
+        intent.timestamp_ns = timebase.now_ns()
+        now = time.monotonic_ns()
+        cmd = engine.create_command(intent)
+
+        remaining_ns = cmd.deadline_ns - now
+        assert remaining_ns > 4_000_000_000
+        assert remaining_ns <= 5_100_000_000
+
+    def test_deadline_shrinks_when_intent_already_aged(self, engine: RiskEngine) -> None:
+        import time
+
+        from hft_platform.core import timebase
+
+        intent = _make_intent()
+        intent.ttl_ns = 5_000_000_000
+        intent.timestamp_ns = timebase.now_ns() - 4_000_000_000
+        now = time.monotonic_ns()
+        cmd = engine.create_command(intent)
+
+        remaining_ns = cmd.deadline_ns - now
+        assert remaining_ns > 0
+        assert remaining_ns < 1_500_000_000
 
     def test_cmd_id_monotonic(self, engine: RiskEngine) -> None:
         intent = _make_intent()

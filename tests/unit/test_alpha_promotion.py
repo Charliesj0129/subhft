@@ -103,6 +103,7 @@ def test_promote_alpha_force_override(tmp_path: Path):
             drift_alerts=5,
             execution_reject_rate=0.2,
             force=True,
+            force_reason="test: override for unit test",
         )
     )
     assert result.approved

@@ -33,8 +33,8 @@ def run_feed(adapter: object) -> object:
         if not validate_depth(best_bid, best_ask):
             continue
 
-        best_bid_int = int(best_bid)
-        best_ask_int = int(best_ask)
+        best_bid_int = int(round(float(best_bid) * adapter.price_scale))  # type: ignore[attr-defined]
+        best_ask_int = int(round(float(best_ask) * adapter.price_scale))  # type: ignore[attr-defined]
         ts_ns = int(adapter.hbt.current_timestamp)  # type: ignore[attr-defined]
 
         event, feature_event = build_lob_event(

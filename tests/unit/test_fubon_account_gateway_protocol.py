@@ -73,10 +73,11 @@ class TestGetPositions:
         assert len(result) == 2
         mock_sdk.stock.inventories.assert_called_once()
 
-    def test_returns_empty_on_failure(self, gateway: FubonAccountGateway, mock_sdk: MagicMock) -> None:
+    def test_returns_none_on_failure(self, gateway: FubonAccountGateway, mock_sdk: MagicMock) -> None:
+        """Protocol: None = broker state unknown (not [] = confirmed empty)."""
         mock_sdk.stock.inventories.side_effect = RuntimeError("connection lost")
         result = gateway.get_positions()
-        assert result == []
+        assert result is None
 
 
 # ------------------------------------------------------------------ #

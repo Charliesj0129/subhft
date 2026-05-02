@@ -298,20 +298,18 @@ class TestNormalizeTick:
         assert result.is_odd_lot is True
 
     def test_zero_close_price(self, tmp_path, monkeypatch):
-        """Zero close produces zero price."""
+        """Zero close is a Shioaji 'no data' sentinel — must be filtered (returns None)."""
         norm = _make_normalizer(tmp_path, monkeypatch=monkeypatch)
         payload = {"code": "2330", "close": 0.0, "volume": 1, "ts": 0}
         result = norm.normalize_tick(payload)
-        assert isinstance(result, TickEvent)
-        assert result.price == 0
+        assert result is None
 
     def test_none_close_price(self, tmp_path, monkeypatch):
-        """None close produces zero price."""
+        """None close is treated as zero/missing price — returns None (H4 fix)."""
         norm = _make_normalizer(tmp_path, monkeypatch=monkeypatch)
         payload = {"code": "2330", "close": None, "volume": 1, "ts": 0}
         result = norm.normalize_tick(payload)
-        assert isinstance(result, TickEvent)
-        assert result.price == 0
+        assert result is None
 
     def test_scale_factor_applied(self, tmp_path, monkeypatch):
         """Different symbol scale factors produce correct scaled prices."""

@@ -7,11 +7,19 @@ forwarding to registered callbacks.
 Design notes
 ------------
 - **Allocator Law**: Translation buffers (_tick_buffer, _bidask_buffer) are
-  pre-allocated once in ``__init__`` and reused by overwriting values in each
-  callback invocation.  No per-tick heap allocation.
-- **Precision Law**: Canonical callbacks receive x10000 scaled integer prices.
-- **Precision Law**: Float prices are scaled to canonical x10000 integers at
-  this boundary before they leave the adapter.
+  pre-allocated once in ``__init__`` and reused as *workspace* to avoid
+  intermediate allocations during the field-translation step.  However, a
+  fresh snapshot dict is created for every callback invocation so the
+  callback (and any downstream async queue) receives an independent object
+  that cannot be overwritten by the next WebSocket message.
+- **Thread Safety**: Fubon WebSocket callbacks run in a separate thread; the
+  consumer runs in an asyncio event loop.  The snapshot dict ensures that by
+  the time the event loop dequeues the message the values are still correct —
+  the workspace buffer may already have been overwritten by the next callback.
+- **Precision Law**: Raw float prices are passed through to the normalizer,
+  which applies per-symbol scaling (x10000 or as configured in symbols.yaml).
+  Pre-scaling here would cause double-scaling since the normalizer always
+  scales its input.
 - **Boundary Law**: All Fubon-specific names are translated to canonical keys
   (``code``, ``close``, ``volume``, ``bid_price``, ``ask_price``, etc.) so
   the normalizer can process them without broker awareness.
@@ -29,9 +37,6 @@ from hft_platform.core import timebase
 
 logger = get_logger("feed_adapter.fubon.quote_runtime")
 
-# Precision Law: all prices are scaled int x10000.
-_PRICE_SCALE: int = 10_000
-
 # Number of order book levels forwarded from the Fubon L5 feed.
 _BOOK_LEVELS: int = 5
 
@@ -46,6 +51,7 @@ class FubonQuoteRuntime:
         "_watchdog_thread",
         "_subscribed",
         "_running",
+        "_stopped",
         "_tick_buffer",
         "_bidask_buffer",
         "_last_data_ts",
@@ -63,12 +69,20 @@ class FubonQuoteRuntime:
         self._watchdog_thread: threading.Thread | None = None
         self._subscribed: set[str] = set()
         self._running: bool = False
+        # Set True once ``stop()`` has been invoked. The Fubon SDK retains
+        # bound references to _on_fubon_trade / _on_fubon_book after stop,
+        # so late-arriving callbacks could still double-publish into the
+        # canonical pipeline during a resubscribe (P1, 2026-04-24). The
+        # callbacks check this flag first and silently drop once stopped.
+        self._stopped: bool = False
         self._last_data_ts: float = 0.0
         self.log = logger
 
-        # Pre-allocated translation buffers (Allocator Law).
-        # Values are overwritten on each callback — the *same dict object*
-        # is reused every time to avoid per-tick heap allocation.
+        # Pre-allocated translation buffers used as *workspace* (Allocator Law).
+        # Values are overwritten on each callback to perform field translation
+        # without intermediate allocations.  A fresh snapshot dict is then
+        # passed to the registered callback — see _on_fubon_trade /
+        # _on_fubon_book for details.
         self._tick_buffer: dict[str, Any] = {
             "code": "",
             "close": 0,
@@ -158,7 +172,9 @@ class FubonQuoteRuntime:
 
     def _on_fubon_trade(self, data: Any) -> None:
         """Translate a Fubon trade event to canonical tick dict and forward."""
-        if self._on_tick is None:
+        # P1 (2026-04-24): the SDK keeps a bound reference to this method
+        # after stop(); late deliveries must not leak into the pipeline.
+        if self._stopped or self._on_tick is None:
             return
         try:
             buf = self._tick_buffer
@@ -173,20 +189,33 @@ class FubonQuoteRuntime:
             # Convert timestamp to nanoseconds
             ts_ns = _ts_to_ns(ts_raw)
 
-            # Overwrite pre-allocated buffer (no new dict)
+            # Pass raw float price — the normalizer applies per-symbol scaling.
+            # Pre-scaling here would cause double-scaling (DATA-001).
             buf["code"] = symbol
-            buf["close"] = _scale_price(price_raw)
+            buf["close"] = price_raw
             buf["volume"] = volume
             buf["ts"] = ts_ns
 
             self._last_data_ts = time.monotonic()
-            self._on_tick(buf)
+            # Create a fresh snapshot dict so the async consumer receives an
+            # independent object.  The workspace buf may be overwritten by the
+            # next callback before the event loop dequeues this message.
+            self._on_tick(
+                {
+                    "code": buf["code"],
+                    "close": buf["close"],
+                    "volume": buf["volume"],
+                    "ts": buf["ts"],
+                }
+            )
         except Exception as exc:
             self.log.error("Fubon trade callback error", error=str(exc))
 
     def _on_fubon_book(self, data: Any) -> None:
         """Translate a Fubon book event to canonical bidask dict and forward."""
-        if self._on_bidask is None:
+        # P1 (2026-04-24): the SDK keeps a bound reference to this method
+        # after stop(); late deliveries must not leak into the pipeline.
+        if self._stopped or self._on_bidask is None:
             return
         try:
             buf = self._bidask_buffer
@@ -213,16 +242,28 @@ class FubonQuoteRuntime:
             av = buf["ask_volume"]
 
             for i in range(_BOOK_LEVELS):
-                bp[i] = _scale_price(bid_prices_raw[i]) if i < n_bp else 0
+                bp[i] = bid_prices_raw[i] if i < n_bp else 0
                 bv[i] = int(bid_sizes_raw[i]) if i < n_bv else 0
-                ap[i] = _scale_price(ask_prices_raw[i]) if i < n_ap else 0
+                ap[i] = ask_prices_raw[i] if i < n_ap else 0
                 av[i] = int(ask_sizes_raw[i]) if i < n_av else 0
 
             buf["code"] = symbol
             buf["ts"] = ts_ns
 
             self._last_data_ts = time.monotonic()
-            self._on_bidask(buf)
+            # Create a fresh snapshot dict with copies of the inner lists so
+            # the async consumer is fully isolated from the workspace buffer.
+            # list(bp) is safe because the elements are ints (immutable).
+            self._on_bidask(
+                {
+                    "code": buf["code"],
+                    "bid_price": list(bp),
+                    "bid_volume": list(bv),
+                    "ask_price": list(ap),
+                    "ask_volume": list(av),
+                    "ts": buf["ts"],
+                }
+            )
         except Exception as exc:
             self.log.error("Fubon book callback error", error=str(exc))
 
@@ -268,7 +309,13 @@ class FubonQuoteRuntime:
     # ------------------------------------------------------------------ #
 
     def stop(self) -> None:
-        """Stop the watchdog and unsubscribe all symbols."""
+        """Stop the watchdog and unsubscribe all symbols.
+
+        Sets ``_stopped`` before unsubscribing so that any callbacks still
+        queued by the Fubon SDK drop their payloads instead of emitting
+        them into the canonical pipeline (P1, 2026-04-24).
+        """
+        self._stopped = True
         self._running = False
         if self._subscribed:
             self.unsubscribe(list(self._subscribed))
@@ -301,8 +348,12 @@ def _ts_to_ns(ts_val: Any) -> int:
     return timebase.coerce_ns(ts_val)
 
 
-def _scale_price(price_val: Any) -> int:
-    """Scale Fubon prices to canonical x10000 integer units."""
-    if price_val is None:
-        return 0
-    return int(round(float(price_val) * _PRICE_SCALE))
+def _coerce_price(raw: Any) -> float:
+    """Coerce a raw Fubon quote price to float for normalizer consumption.
+
+    The normalizer applies per-symbol scaling (x10000 or as configured).
+    This function only handles type coercion, NOT scaling.
+    """
+    if raw is None:
+        return 0.0
+    return float(raw)

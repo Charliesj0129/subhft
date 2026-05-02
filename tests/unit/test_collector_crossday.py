@@ -1,4 +1,5 @@
 """Test Q7 cross-day query in DataCollector."""
+
 from __future__ import annotations
 
 from unittest.mock import patch

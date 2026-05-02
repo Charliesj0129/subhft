@@ -45,7 +45,16 @@ async def test_normalizer_flow(symbols_cfg):
     # Test Fill Normalization
     raw_fill = RawExecEvent(
         "deal",
-        {"seq_no": "D001", "ord_no": "O123", "code": "2330", "action": "Buy", "quantity": 1, "price": 500, "ts": ts},
+        {
+            "seq_no": "D001",
+            "ord_no": "O123",
+            "code": "2330",
+            "action": "Buy",
+            "quantity": 1,
+            "price": 500,
+            "ts": ts,
+            "account_id": "ACC1",
+        },
         ts,
     )
 
@@ -72,6 +81,7 @@ def test_normalizer_strategy_id_from_order_key(symbols_cfg):
     event = norm.normalize_order(raw_order)
     assert isinstance(event, OrderEvent)
     assert event.strategy_id == "stratA"
+    assert event.client_order_id == "stratA:7"
 
 
 @pytest.mark.asyncio

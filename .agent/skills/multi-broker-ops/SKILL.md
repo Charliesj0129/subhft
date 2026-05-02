@@ -1,3 +1,4 @@
+<!-- REVIEW-2026-04-17: unreferenced by rules/workflows/teams/agents. Confirm or delete. -->
 ---
 name: multi-broker-ops
 description: Use when setting up multi-broker support, switching between brokers (Shioaji/Fubon), configuring broker-specific credentials, or diagnosing broker failover and routing issues.

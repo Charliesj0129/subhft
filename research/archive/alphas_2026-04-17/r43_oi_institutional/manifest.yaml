@@ -1,0 +1,24 @@
+alpha_id: r43_oi_institutional
+name: "Institutional OI (Dealer) Signals on TXFD6"
+status: KILLED
+kill_date: "2026-04-07"
+kill_reason: "R42 IC=-0.70 (n=9) does not replicate on n=15 (IC=-0.096, p=0.73). All 17 signals tested: zero significance. Daily return AC=-0.62 also artifact (AC=-0.15 on n=12)."
+
+instrument: TXFD6
+horizon: daily (next-day)
+data_source: TAIFEX OI (dealer only)
+data_dates: 57 (2026-01-02 to 2026-04-02)
+price_dates: 18 (TXFD6 golden parquet)
+oi_return_pairs: 15
+
+signals_tested: 17
+best_signal: max_pain_chg
+best_ic: -0.319
+best_pvalue: 0.246
+
+strategy_sharpe: 0.42
+strategy_max_dd_pts: -2087
+strategy_win_rate: 0.533
+
+scripts:
+  - research/scripts/r43_oi_institutional.py

@@ -3,10 +3,7 @@
 from __future__ import annotations
 
 import json
-import os
-from pathlib import Path
 
-import pytest
 import yaml
 
 from hft_platform.config._symbols_contracts import (
@@ -22,7 +19,6 @@ from hft_platform.config._symbols_types import (
     ContractIndex,
     SymbolBuildResult,
 )
-
 
 # ---------------------------------------------------------------------------
 # load_metrics_cache

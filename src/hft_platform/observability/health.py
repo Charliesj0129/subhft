@@ -140,10 +140,11 @@ class HealthServer:
 
         # 4. Critical tasks alive
         tasks: dict[str, Any] = getattr(self._system, "tasks", {})
-        critical_tasks = ["md", "strat", "order", "recorder", "risk"]
-        # Conditionally add gateway if enabled
+        critical_tasks = ["md", "strat", "order", "recorder"]
         if os.getenv("HFT_GATEWAY_ENABLED", "0") == "1":
             critical_tasks.append("gateway")
+        else:
+            critical_tasks.append("risk")
         tasks_alive: dict[str, bool] = {}
         for name in critical_tasks:
             task = tasks.get(name)
@@ -171,7 +172,7 @@ class HealthServer:
             degraded_reasons.append("feed_disconnected")
 
         # 7. ClickHouse write health
-        recorder_service = getattr(self._system, "recorder_service", None)
+        recorder_service = getattr(self._system, "recorder", None)
         if recorder_service is not None:
             ch_healthy = getattr(recorder_service, "healthy", None)
             last_write_ok = getattr(recorder_service, "last_write_ok", None)
@@ -209,6 +210,19 @@ class HealthServer:
             checks["queue_pressure"] = queue_pressure
         if any_pressure:
             degraded_reasons.append("queue_pressure_high")
+
+        # 8b. Execution dict pressure (pending fill index, api_pending)
+        _oa = getattr(self._system, "order_adapter", None)
+        if _oa is not None:
+            _pfi_size = len(getattr(_oa, "_pending_fill_index", {}))
+            _api_pend_size = len(getattr(_oa, "_api_pending", {}))
+            _max_exec_dict = int(os.getenv("HFT_HEALTH_EXEC_DICT_MAX", "500"))
+            checks["exec_dicts"] = {
+                "pending_fill_index": _pfi_size,
+                "api_pending": _api_pend_size,
+            }
+            if _pfi_size > _max_exec_dict or _api_pend_size > _max_exec_dict:
+                degraded_reasons.append("exec_dict_pressure_high")
 
         # 9. Order path: task alive AND broker connected
         order_task = tasks.get("order")

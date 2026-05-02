@@ -1,7 +1,7 @@
 #!/bin/bash
 # ClickHouse init script: create hft_app user with least-privilege access.
-# Placed in /docker-entrypoint-initdb.d/ via docker-stack.yml volume mount.
-# Uses env vars set in docker-stack.yml: HFT_CH_APP_USER, HFT_CH_APP_PASSWORD.
+# Placed in /docker-entrypoint-initdb.d/ via docker-compose volume mount.
+# Uses env vars: HFT_CH_APP_USER, HFT_CH_APP_PASSWORD.
 
 set -e
 

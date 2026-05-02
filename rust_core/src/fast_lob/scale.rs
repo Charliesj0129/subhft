@@ -54,7 +54,7 @@ pub fn scale_book(
     let mut idx = 0usize;
     for (&p, &v) in prices.iter().zip(vols.iter()) {
         if p > 0.0 {
-            out_view[(idx, 0)] = (p * scale as f64) as i64;
+            out_view[(idx, 0)] = (p * scale as f64).round_ties_even() as i64;
             out_view[(idx, 1)] = v;
             idx += 1;
         }
@@ -181,7 +181,7 @@ pub(super) fn scale_side_with_stats(
 
     for (&p, &v) in prices.iter().zip(vols.iter()) {
         if p > 0.0 {
-            let scaled = (p * scale as f64) as i64;
+            let scaled = (p * scale as f64).round_ties_even() as i64;
             out_view[(idx, 0)] = scaled;
             out_view[(idx, 1)] = v;
             if idx == 0 {
@@ -215,7 +215,7 @@ pub(super) fn scale_book_seq_inner(
                 let p: f64 = p_obj.extract()?;
                 let v: i64 = v_obj.extract()?;
                 if p > 0.0 {
-                    flat.push((p * scale as f64) as i64);
+                    flat.push((p * scale as f64).round_ties_even() as i64);
                     flat.push(v);
                 }
             }

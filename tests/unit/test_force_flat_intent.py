@@ -69,7 +69,7 @@ class TestStormGuardForceFlat:
         intent = _make_intent(IntentType.NEW)
         allowed, reason = sg.validate(intent)
         assert allowed is False
-        assert reason == "STORMGUARD_STORM_NEW_BLOCKED"
+        assert reason == "STORMGUARD_STORM_BLOCKED"
 
 
 class TestPlatformDegradeForceFlat:

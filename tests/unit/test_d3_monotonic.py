@@ -30,7 +30,7 @@ class TestStormGuardMonotonic:
         sg._de_escalate_threshold = 1
 
         with patch("time.monotonic", return_value=100.0):
-            sg.transition(StormGuardState.HALT, "test")
+            sg.trigger_halt("test")
 
         assert sg._halt_entry_ts == 100.0
 
@@ -43,13 +43,13 @@ class TestStormGuardMonotonic:
         assert sg.state != StormGuardState.HALT
 
     def test_last_state_change_uses_monotonic(self):
-        from hft_platform.risk.storm_guard import StormGuard, StormGuardState
+        from hft_platform.risk.storm_guard import StormGuard
 
         sg = StormGuard()
         sg.metrics = MagicMock()
 
         with patch("time.monotonic", return_value=42.0):
-            sg.transition(StormGuardState.WARM, "test")
+            sg.update(drawdown_bps=sg.thresholds.warm_drawdown_bps - 1)
 
         assert sg.last_state_change == 42.0
 
@@ -111,6 +111,8 @@ class TestRiskEngineDeadlineMonotonic:
 
         mock_intent = MagicMock()
         mock_intent.trace_id = "t1"
+        mock_intent.ttl_ns = 500_000_000
+        mock_intent.timestamp_ns = 0
 
         with patch("time.monotonic_ns", return_value=5_000_000_000):
             cmd = engine.create_command(mock_intent)

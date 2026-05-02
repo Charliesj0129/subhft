@@ -1,0 +1,137 @@
+{
+  "r30_rfsv_vol_timing": {
+    "n_ticks": 692337,
+    "n_trades": 2,
+    "gross_pnl_pts": 60.5,
+    "total_cost_pts": 7.84,
+    "net_pnl_pts": 52.66,
+    "sharpe": 2.3988,
+    "is_sharpe": 2.9154,
+    "oos_sharpe": 0.0,
+    "max_dd_pts": 0.0,
+    "win_rate": 0.5,
+    "avg_hold_ticks": 2249,
+    "daily_pnls": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      -24.42,
+      77.08,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "gate_c": {
+      "gate_c_pass": false,
+      "checks": {
+        "sharpe_positive": {
+          "pass": true,
+          "value": 2.3988094121701753,
+          "threshold": "> 0"
+        },
+        "oos_sharpe_positive": {
+          "pass": false,
+          "value": 0.0,
+          "threshold": "> 0"
+        },
+        "is_oos_gap": {
+          "pass": false,
+          "value": 1.0,
+          "threshold": "< 0.5 (50% gap)"
+        },
+        "hurst_reasonable": {
+          "pass": true,
+          "value": 0.02076169746018474,
+          "threshold": "[0.01, 0.49]"
+        },
+        "max_dd_acceptable": {
+          "pass": true,
+          "value": 0.0,
+          "threshold": "< 100 pts"
+        },
+        "min_trades": {
+          "pass": false,
+          "value": 2,
+          "threshold": ">= 10"
+        }
+      }
+    },
+    "hurst_h_final": 0.0208
+  },
+  "r30_zumbach_vol_feedback": {
+    "n_ticks": 692337,
+    "n_trades": 5717,
+    "gross_pnl_pts": -1993.0,
+    "total_cost_pts": 22410.64,
+    "net_pnl_pts": -24403.64,
+    "sharpe": -19.8798,
+    "is_sharpe": -22.013,
+    "oos_sharpe": -18.833,
+    "max_dd_pts": 24851.96,
+    "win_rate": 0.4014,
+    "avg_hold_ticks": 116,
+    "daily_pnls": [
+      -204.82,
+      -549.58,
+      -554.66,
+      -2023.82,
+      -1827.04,
+      -1293.44,
+      -1968.86,
+      -872.56,
+      -1837.0,
+      -71.84,
+      229.98,
+      -2462.4,
+      -1667.42,
+      -482.86,
+      -1915.88,
+      -3748.3,
+      -2454.22,
+      -816.8,
+      117.88
+    ],
+    "gate_c": {
+      "gate_c_pass": false,
+      "checks": {
+        "tra_positive": {
+          "pass": false,
+          "value": -3.9337700867070723e-13,
+          "threshold": "> 0 (Zumbach effect present)"
+        },
+        "sharpe_positive": {
+          "pass": false,
+          "value": -19.879788294536848,
+          "threshold": "> 0"
+        },
+        "oos_sharpe_positive": {
+          "pass": false,
+          "value": -18.832995533745475,
+          "threshold": "> 0"
+        },
+        "max_dd_acceptable": {
+          "pass": false,
+          "value": 24851.9599999969,
+          "threshold": "< 100 pts"
+        },
+        "min_trades": {
+          "pass": true,
+          "value": 5717,
+          "threshold": ">= 10"
+        }
+      }
+    },
+    "tra_stat": -0.0
+  }
+}

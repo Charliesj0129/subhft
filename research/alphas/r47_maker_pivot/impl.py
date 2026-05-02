@@ -1,0 +1,561 @@
+"""R47 Maker Pivot — Three-Layer Maker Strategy for TXFD6.
+
+Gate 0 validated signals:
+  D1: Permutation Entropy H on QI_1 — regime gate (H-only, C dropped)
+  D2: Queue Survival — cancel trigger via M/M/1 rate estimation
+  D3: MFG Inventory Proxy — quote skew via cumulative signed flow
+
+Gate 0 key findings:
+  - TXFD6 QI_1 is HIGHLY structured (median H=0.724, not random)
+  - Queue survival is independent of QI_1 (ρ=0.033)
+  - 94.1% of wall depletion signals fire >36ms before event
+  - Naive maker: 37% fills profitable, target: 57%+ with signal gating
+  - RT cost = 0.30 pts on TXFD6 (trivial)
+
+Architecture:
+  Layer 1 (Regime, ~30-60s):  PE entropy H → quote / no-quote gate
+  Layer 2 (Tactical, ~1-10s): Queue survival → cancel trigger
+  Layer 3 (Strategic, ~1-5m):  MFG inventory → quote skew modifier
+"""
+
+from __future__ import annotations
+
+import math
+from collections import deque
+
+from structlog import get_logger
+
+from hft_platform.events import (
+    FeatureUpdateEvent,
+    LOBStatsEvent,
+    TickEvent,
+)
+from hft_platform.strategies.simple_mm import SimpleMarketMaker
+
+logger = get_logger("strategy.r47_maker")
+
+# Feature indices (lob_shared_v3)
+_IDX_BEST_BID = 0
+_IDX_BEST_ASK = 1
+_IDX_L1_BID_QTY = 8
+_IDX_L1_ASK_QTY = 9
+_IDX_L1_IMBALANCE_PPM = 10
+_IDX_TOXICITY_EMA50_X1000 = 21
+
+_PRICE_SCALE = 10000
+_LOG_INTERVAL = 500
+
+
+# ── D1: Permutation Entropy ──────────────────────────────────────────────
+
+class _PEState:
+    """Sliding-window Permutation Entropy on QI_1 (D=4, pre-allocated)."""
+
+    __slots__ = (
+        "_d", "_n_patterns", "_h_max", "_window_size",
+        "_qi_buf", "_qi_len", "_pattern_counts", "_pat_deque",
+        "_h", "_warmup_done",
+    )
+
+    def __init__(self, d: int = 4, window: int = 100) -> None:
+        self._d = d
+        self._n_patterns = math.factorial(d)  # 24 for D=4
+        self._h_max = math.log2(self._n_patterns)
+        self._window_size = window
+        # Circular buffer for last D QI values (ordinal ranking)
+        self._qi_buf: deque[float] = deque(maxlen=d)
+        self._qi_len = 0
+        # Pattern histogram (pre-allocated, fixed size 24)
+        self._pattern_counts = [0] * self._n_patterns
+        # Sliding window of pattern indices
+        pat_win = window - d + 1
+        self._pat_deque: deque[int] = deque(maxlen=pat_win)
+        self._h: float = 1.0  # start at max entropy (safe)
+        self._warmup_done = False
+
+    def update(self, qi_value: float) -> float:
+        """Update with new QI_1 value, return normalized entropy H."""
+        self._qi_buf.append(qi_value)
+        self._qi_len += 1
+
+        if self._qi_len < self._d:
+            return self._h
+
+        # Compute ordinal pattern from last D values
+        buf = list(self._qi_buf)
+        pattern_id = self._rank_to_id(buf)
+
+        # Add to sliding window
+        if len(self._pat_deque) == self._pat_deque.maxlen:
+            # Remove oldest
+            old = self._pat_deque[0]
+            self._pattern_counts[old] -= 1
+        self._pat_deque.append(pattern_id)
+        self._pattern_counts[pattern_id] += 1
+
+        n_samples = len(self._pat_deque)
+        if n_samples < 20:
+            return self._h
+
+        self._warmup_done = True
+
+        # Compute Shannon entropy from histogram
+        h = 0.0
+        for c in self._pattern_counts:
+            if c > 0:
+                p = c / n_samples
+                h -= p * math.log2(p)
+        self._h = h / self._h_max if self._h_max > 0 else 0.0
+        return self._h
+
+    @staticmethod
+    def _rank_to_id(vals: list[float]) -> int:
+        """Map D values to pattern index via Lehmer code (factorial number system).
+
+        Produces a bijective mapping from permutations to 0..D!-1.
+        For D=4: 24 unique indices guaranteed (no collisions).
+        """
+        d = len(vals)
+        # Compute ranks: rank[i] = number of values less than vals[i]
+        # (with tie-breaking by position for stability)
+        ranks = [0] * d
+        for i in range(d):
+            for j in range(d):
+                if vals[j] < vals[i] or (vals[j] == vals[i] and j < i):
+                    ranks[i] += 1
+        # Lehmer code: for each position, count how many remaining
+        # values in the suffix are smaller than the current rank
+        idx = 0
+        factorials = [1] * d  # factorials[i] = (d-1-i)!
+        f = 1
+        for i in range(d - 1, -1, -1):
+            factorials[i] = f
+            f *= (d - i)
+        for i in range(d):
+            # Count inversions: how many ranks[j] < ranks[i] for j > i
+            count = 0
+            for j in range(i + 1, d):
+                if ranks[j] < ranks[i]:
+                    count += 1
+            idx += count * factorials[i]
+        return idx
+
+    @property
+    def h(self) -> float:
+        return self._h
+
+    @property
+    def warmed_up(self) -> bool:
+        return self._warmup_done
+
+
+# ── D2: Queue Survival ───────────────────────────────────────────────────
+
+class _QueueState:
+    """M/M/1 queue survival estimation from L1 snapshot diffs."""
+
+    __slots__ = (
+        "_ema_alpha",
+        "_lambda_bid", "_mu_bid", "_lambda_ask", "_mu_ask",
+        "_prev_bv", "_prev_av",
+        "_p_depl_bid", "_p_depl_ask",
+        "_warmed_up", "_update_count",
+    )
+
+    def __init__(self, ema_alpha: float = 0.05) -> None:
+        self._ema_alpha = ema_alpha
+        self._lambda_bid = 1.0
+        self._mu_bid = 1.0
+        self._lambda_ask = 1.0
+        self._mu_ask = 1.0
+        self._prev_bv: int = 0
+        self._prev_av: int = 0
+        self._p_depl_bid: float = 0.5
+        self._p_depl_ask: float = 0.5
+        self._warmed_up = False
+        self._update_count = 0
+
+    def update(self, bid_qty: int, ask_qty: int) -> tuple[float, float]:
+        """Update with L1 quantities, return (P_depl_bid, P_depl_ask)."""
+        self._update_count += 1
+
+        if self._update_count < 2:
+            self._prev_bv = bid_qty
+            self._prev_av = ask_qty
+            return self._p_depl_bid, self._p_depl_ask
+
+        if self._update_count > 50:
+            self._warmed_up = True
+
+        alpha = self._ema_alpha
+        d_bid = bid_qty - self._prev_bv
+        d_ask = ask_qty - self._prev_av
+
+        # Separate arrivals (positive delta) and departures (negative delta)
+        if d_bid > 0:
+            self._lambda_bid = alpha * d_bid + (1 - alpha) * self._lambda_bid
+        elif d_bid < 0:
+            self._mu_bid = alpha * (-d_bid) + (1 - alpha) * self._mu_bid
+
+        if d_ask > 0:
+            self._lambda_ask = alpha * d_ask + (1 - alpha) * self._lambda_ask
+        elif d_ask < 0:
+            self._mu_ask = alpha * (-d_ask) + (1 - alpha) * self._mu_ask
+
+        # Gambler's ruin depletion probability
+        q_bid = max(bid_qty, 1)
+        q_ask = max(ask_qty, 1)
+
+        rho_bid = self._mu_bid / max(self._lambda_bid, 1e-6)
+        rho_ask = self._mu_ask / max(self._lambda_ask, 1e-6)
+
+        # P(depletion) = min(1, (mu/lambda)^q) — clamped
+        self._p_depl_bid = min(1.0, rho_bid ** q_bid) if rho_bid > 0 else 0.0
+        self._p_depl_ask = min(1.0, rho_ask ** q_ask) if rho_ask > 0 else 0.0
+
+        self._prev_bv = bid_qty
+        self._prev_av = ask_qty
+        return self._p_depl_bid, self._p_depl_ask
+
+    @property
+    def p_depl_bid(self) -> float:
+        return self._p_depl_bid
+
+    @property
+    def p_depl_ask(self) -> float:
+        return self._p_depl_ask
+
+    @property
+    def warmed_up(self) -> bool:
+        return self._warmed_up
+
+
+# ── D3: MFG Inventory Proxy ──────────────────────────────────────────────
+
+class _MFGState:
+    """Cumulative signed flow proxy for MM inventory estimation."""
+
+    __slots__ = (
+        "_ema_alpha", "_signed_flow_ema", "_flow_std_ema",
+        "_capitulation_z",
+        "_update_count", "_warmed_up",
+    )
+
+    def __init__(self, ema_alpha: float = 0.01) -> None:
+        self._ema_alpha = ema_alpha
+        self._signed_flow_ema: float = 0.0
+        self._flow_std_ema: float = 1.0  # avoid div-by-zero
+        self._capitulation_z: float = 0.0
+        self._update_count = 0
+        self._warmed_up = False
+
+    def update_tick(self, direction: int, volume: int) -> None:
+        """Update with signed trade event."""
+        self._update_count += 1
+        if self._update_count > 200:
+            self._warmed_up = True
+
+        signed = direction * volume
+        alpha = self._ema_alpha
+        self._signed_flow_ema = alpha * signed + (1 - alpha) * self._signed_flow_ema
+        # Track std via EMA of squared deviation
+        dev_sq = (signed - self._signed_flow_ema) ** 2
+        self._flow_std_ema = alpha * dev_sq + (1 - alpha) * self._flow_std_ema
+        std = max(math.sqrt(self._flow_std_ema), 1e-6)
+        self._capitulation_z = abs(self._signed_flow_ema) / std
+
+    @property
+    def capitulation_z(self) -> float:
+        return self._capitulation_z
+
+    @property
+    def flow_direction(self) -> int:
+        """Direction of cumulative flow: +1 = net buying, -1 = net selling."""
+        if self._signed_flow_ema > 0:
+            return 1
+        elif self._signed_flow_ema < 0:
+            return -1
+        return 0
+
+    @property
+    def warmed_up(self) -> bool:
+        return self._warmed_up
+
+
+# ── R47 Strategy ─────────────────────────────────────────────────────────
+
+class R47MakerStrategy(SimpleMarketMaker):
+    """Three-layer maker strategy with PE regime gate, queue survival
+    cancel trigger, and MFG inventory skew.
+
+    Parameters
+    ----------
+    pe_danger_threshold : float
+        PE entropy H below which market is too structured (trending).
+        Quote very conservatively or pull.
+    queue_cancel_threshold : float
+        P(depletion) above which to cancel near-side quote.
+    mfg_skew_z_threshold : float
+        MFG |z-score| above which to apply inventory skew.
+    spread_threshold_pts : int
+        Minimum spread in points to quote (inherited from OpMM concept).
+    toxicity_max : int
+        Maximum toxicity x1000 to allow quoting.
+    """
+
+    def __init__(
+        self,
+        strategy_id: str = "r47_maker",
+        # D1: PE
+        pe_danger_threshold: float = 0.55,
+        pe_window: int = 100,
+        # D2: Queue
+        queue_cancel_threshold: float = 0.7,
+        queue_ema_alpha: float = 0.05,
+        # D3: MFG
+        mfg_skew_z_threshold: float = 2.0,
+        mfg_ema_alpha: float = 0.01,
+        # Gates
+        spread_threshold_pts: int = 1,  # TXFD6: breakeven 0.15 pts
+        toxicity_max: int = 700,
+        # Cross-instrument execution
+        trade_symbol: str = "",  # if set, place orders on this symbol instead of signal symbol
+        **kwargs: object,
+    ) -> None:
+        super().__init__(strategy_id=strategy_id, **kwargs)
+        self._trade_symbol = trade_symbol
+
+        # D1
+        self._pe_danger = pe_danger_threshold
+        self._pe_danger = pe_danger_threshold
+        self._pe_states: dict[str, _PEState] = {}
+        self._pe_window = pe_window
+
+        # D2
+        self._queue_cancel_thresh = queue_cancel_threshold
+        self._queue_states: dict[str, _QueueState] = {}
+        self._queue_ema = queue_ema_alpha
+
+        # D3
+        self._mfg_skew_z_thresh = mfg_skew_z_threshold
+        self._mfg_states: dict[str, _MFGState] = {}
+        self._mfg_ema = mfg_ema_alpha
+
+        # Gates
+        self._spread_thresh_scaled = spread_threshold_pts * _PRICE_SCALE
+        self._toxicity_max = toxicity_max
+
+        # Feature cache
+        self._feature_cache: dict[str, tuple[int | float, ...]] = {}
+
+        # Counters
+        self._stats_count = 0
+        self._pe_blocked = 0
+        self._queue_suppressed = 0
+        self._mfg_skewed = 0
+        self._spread_blocked = 0
+        self._toxicity_blocked = 0
+        self._quotes_sent = 0
+
+        # D2 quote suppression flags (set in on_features, read in on_stats)
+        self._suppress_bid: bool = False
+        self._suppress_ask: bool = False
+
+        logger.info(
+            "R47MakerStrategy initialized",
+            pe_danger=pe_danger_threshold,
+            queue_cancel=queue_cancel_threshold,
+            mfg_z=mfg_skew_z_threshold,
+            spread_pts=spread_threshold_pts,
+        )
+
+    def _get_pe(self, symbol: str) -> _PEState:
+        state = self._pe_states.get(symbol)
+        if state is None:
+            state = _PEState(d=4, window=self._pe_window)
+            self._pe_states[symbol] = state
+        return state
+
+    def _get_queue(self, symbol: str) -> _QueueState:
+        state = self._queue_states.get(symbol)
+        if state is None:
+            state = _QueueState(ema_alpha=self._queue_ema)
+            self._queue_states[symbol] = state
+        return state
+
+    def _get_mfg(self, symbol: str) -> _MFGState:
+        state = self._mfg_states.get(symbol)
+        if state is None:
+            state = _MFGState(ema_alpha=self._mfg_ema)
+            self._mfg_states[symbol] = state
+        return state
+
+    def _exec_symbol(self, signal_symbol: str) -> str:
+        """Return the symbol to use for order placement and position tracking."""
+        return self._trade_symbol if self._trade_symbol else signal_symbol
+
+    # ── Event Handlers ────────────────────────────────────────────────
+
+    def on_tick(self, event: TickEvent) -> None:
+        """D3: Update MFG signed flow on each trade."""
+        symbol = event.symbol
+        mfg = self._get_mfg(symbol)
+        direction = getattr(event, "trade_direction", 0)
+        volume = event.volume if event.volume else 1
+        if direction != 0:
+            mfg.update_tick(direction, volume)
+
+    def on_features(self, event: FeatureUpdateEvent) -> None:
+        """Cache features + update D1 PE and D2 Queue states."""
+        if event.values is None:
+            return
+        symbol = event.symbol
+        self._feature_cache[symbol] = event.values
+
+        features = event.values
+
+        # D1: Update PE with QI_1 (L1 imbalance)
+        if len(features) > _IDX_L1_IMBALANCE_PPM:
+            qi_val = float(features[_IDX_L1_IMBALANCE_PPM]) / 1_000_000
+            pe = self._get_pe(symbol)
+            pe.update(qi_val)
+
+        # D2: Update queue state with L1 quantities
+        if len(features) > _IDX_L1_ASK_QTY:
+            bid_qty = int(features[_IDX_L1_BID_QTY])
+            ask_qty = int(features[_IDX_L1_ASK_QTY])
+            queue = self._get_queue(symbol)
+            queue.update(bid_qty, ask_qty)
+
+            # D2: Set quote suppression flags for on_stats()
+            # Since BaseStrategy.buy/sell don't return order IDs,
+            # we suppress the NEXT quote placement instead of cancelling.
+            # This is the same effective pattern as OpMM's spread gate.
+            self._suppress_bid = False
+            self._suppress_ask = False
+            if queue.warmed_up:
+                if queue.p_depl_bid > self._queue_cancel_thresh:
+                    self._suppress_bid = True
+                if queue.p_depl_ask > self._queue_cancel_thresh:
+                    self._suppress_ask = True
+                if self._suppress_bid or self._suppress_ask:
+                    self._queue_suppressed += 1
+
+    def on_stats(self, event: LOBStatsEvent) -> None:
+        """Main quoting logic with 3-layer gating."""
+        symbol = event.symbol
+        self._stats_count += 1
+
+        # ── Validity guard ────────────────────────────────────────────
+        if (event.mid_price_x2 is None or event.spread_scaled is None
+                or event.mid_price_x2 <= 0 or event.spread_scaled <= 0):
+            return
+
+        # ── Spread gate (hard floor) ──────────────────────────────────
+        if event.spread_scaled < self._spread_thresh_scaled:
+            self._spread_blocked += 1
+            return  # suppress all quotes this tick
+
+        # ── Toxicity gate ─────────────────────────────────────────────
+        features = self._feature_cache.get(symbol)
+        if features and len(features) > _IDX_TOXICITY_EMA50_X1000:
+            toxicity = int(features[_IDX_TOXICITY_EMA50_X1000])
+            if toxicity > self._toxicity_max:
+                self._toxicity_blocked += 1
+                return  # suppress all quotes this tick
+
+        # ── D1: PE Regime Gate ────────────────────────────────────────
+        pe = self._get_pe(symbol)
+        if pe.warmed_up:
+            h = pe.h
+            if h < self._pe_danger:
+                # Market too structured (trending) — do NOT quote
+                self._pe_blocked += 1
+                if self._stats_count % _LOG_INTERVAL == 1:
+                    logger.debug("r47_pe_blocked", symbol=symbol, h=round(h, 4))
+                return  # suppress all quotes this tick
+
+        # ── D3: MFG Asymmetric Spread Widening ────────────────────────
+        # When MM capitulation is imminent, WIDEN spread on the side
+        # that will be hit by their forced liquidation. This charges a
+        # premium for absorbing their flow (not a level shift).
+        mfg = self._get_mfg(symbol)
+        mfg_widen_bid = 0  # additional width added to bid side
+        mfg_widen_ask = 0  # additional width added to ask side
+        if mfg.warmed_up and mfg.capitulation_z > self._mfg_skew_z_thresh:
+            tick_size = max(1, event.spread_scaled * 50 // 100)
+            skew_mult = min(3, int(mfg.capitulation_z - self._mfg_skew_z_thresh + 1))
+            widen_amount = tick_size * skew_mult
+            if mfg.flow_direction > 0:
+                # Net buying → MM accumulated short → will buy to cover
+                # Widen ASK (charge premium for selling to them)
+                mfg_widen_ask = widen_amount
+            elif mfg.flow_direction < 0:
+                # Net selling → MM accumulated long → will sell to flatten
+                # Widen BID (charge premium for buying from them)
+                mfg_widen_bid = widen_amount
+            self._mfg_skewed += 1
+
+        # ── Quote Generation (modified SimpleMM) ──────────────────────
+        mid_price_x2 = event.mid_price_x2
+        spread_scaled = event.spread_scaled
+        imbalance = event.imbalance
+        exec_sym = self._exec_symbol(symbol)
+        pos = self.position(exec_sym)
+
+        # Micro price with imbalance
+        imbalance_adj = int(imbalance * spread_scaled * 20 * 2 // 100)
+        micro_price_x2 = mid_price_x2 + imbalance_adj
+
+        # Inventory skew
+        tick_size_scaled = max(1, spread_scaled * 50 // 100)
+        skew_x2 = -(pos * tick_size_scaled * 2) // 5
+
+        fair_value_x2 = micro_price_x2 + skew_x2
+
+        # Quote width — widen if PE indicates intermediate structure
+        half_spread_scaled = max(1, spread_scaled // 2)
+        pe_width_mult = 2 if (pe.warmed_up and pe.h < 0.70) else 1
+
+        base_width = max(tick_size_scaled, half_spread_scaled) * pe_width_mult
+
+        # D3: Asymmetric spread widening (add extra width on capitulation side)
+        bid_width = base_width + mfg_widen_bid
+        ask_width = base_width + mfg_widen_ask
+
+        bid_price_scaled = (fair_value_x2 - bid_width * 2) // 2
+        ask_price_scaled = (fair_value_x2 + ask_width * 2) // 2
+
+        # ── Execution with D2 quote suppression ───────────────────────
+        max_pos = self._max_pos
+        qty = 1
+
+        if pos < max_pos and not self._suppress_bid:
+            self.buy(exec_sym, bid_price_scaled, qty)
+        if pos > -max_pos and not self._suppress_ask:
+            self.sell(exec_sym, ask_price_scaled, qty)
+
+        self._quotes_sent += 1
+
+        # ── Periodic logging ──────────────────────────────────────────
+        if self._stats_count % _LOG_INTERVAL == 1:
+            logger.info(
+                "r47_stats",
+                symbol=symbol,
+                h=round(pe.h, 4) if pe.warmed_up else None,
+                p_depl_bid=round(self._get_queue(symbol).p_depl_bid, 3),
+                p_depl_ask=round(self._get_queue(symbol).p_depl_ask, 3),
+                mfg_z=round(mfg.capitulation_z, 2) if mfg.warmed_up else None,
+                spread_pts=event.spread_scaled // _PRICE_SCALE,
+                pos=pos,
+                quotes=self._quotes_sent,
+                pe_blk=self._pe_blocked,
+                q_suppress=self._queue_suppressed,
+                mfg_skew=self._mfg_skewed,
+                spr_blk=self._spread_blocked,
+                tox_blk=self._toxicity_blocked,
+            )
+
+    # Note: cancel-by-order-id is not possible because BaseStrategy.buy()/sell()
+    # don't return order IDs. Quote suppression (not placing new quotes) is the
+    # effective mechanism — same pattern as OpportunisticMM's spread gate.

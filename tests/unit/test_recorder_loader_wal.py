@@ -9,10 +9,9 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
 import threading
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -27,7 +26,6 @@ from hft_platform.recorder._loader_wal import (
     process_single_file,
     save_manifest,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
@@ -77,6 +75,9 @@ class TestExtractFileTs:
     def test_valid_filename(self):
         assert extract_file_ts("market_data_1234567890.jsonl") == 1234567890
 
+    def test_batch_writer_filename_uses_middle_timestamp_not_sequence(self):
+        assert extract_file_ts("batch_1775792429113485521_3813.jsonl") == 1775792429113485521
+
     def test_underscore_in_table_name(self):
         assert extract_file_ts("risk_log_9999.jsonl") == 9999
 
@@ -102,8 +103,8 @@ class TestParseTableFromFilename:
     def test_orders(self):
         assert parse_table_from_filename("orders_456.jsonl") == "orders"
 
-    def test_fills_maps_to_trades(self):
-        assert parse_table_from_filename("fills_789.jsonl") == "trades"
+    def test_fills_maps_to_fills(self):
+        assert parse_table_from_filename("fills_789.jsonl") == "fills"
 
     def test_risk_log(self):
         assert parse_table_from_filename("risk_log_111.jsonl") == "risk_log"
@@ -136,8 +137,8 @@ class TestParseBatchTableName:
     def test_orders(self):
         assert parse_batch_table_name("orders") == "orders"
 
-    def test_fills_to_trades(self):
-        assert parse_batch_table_name("fills") == "trades"
+    def test_fills_to_fills(self):
+        assert parse_batch_table_name("fills") == "fills"
 
     def test_trades_to_trades(self):
         assert parse_batch_table_name("trades") == "trades"

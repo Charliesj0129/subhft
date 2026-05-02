@@ -7,7 +7,7 @@ monitor:
   data_source: auto
 
 symbols:
-  - code: MXFD6
+  - code: MXFR1
     alpha_ids: []
-  - code: TXFD6
+  - code: TXFR1
     alpha_ids: []

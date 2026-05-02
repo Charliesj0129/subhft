@@ -1,0 +1,42 @@
+# R30 RFSV Vol-Timing Alpha Configuration (v2 — post-Challenger)
+# Paper: Gatheral, Jaisson, Rosenbaum (2014) arXiv:1410.3394
+
+alpha_id: r30_rfsv_vol_timing
+target_symbol: TMFD6
+target_exchange: TAIFEX
+
+# Realized volatility computation
+rv_window_ticks: 300          # ticks per RV bucket (~5 min)
+rv_history_size: 128          # number of RV buckets retained
+min_rv_buckets: 16            # Execution fix: minimum buckets before H estimation
+
+# Hurst exponent estimation (A-1 fix: dense lags + WLS)
+variogram_max_lag: 12         # use lags 1..12 (dense, not sparse)
+h_update_interval: 4          # re-estimate H every N buckets
+h_clip_lo: 0.01
+h_clip_hi: 0.49
+h_initial: 0.1               # universal rough vol starting point
+h_ema_alpha: 0.3             # smoothing for H estimates
+
+# RFSV forecast (A-2 fix: exact fBm conditional expectation)
+forecast_horizon: 4           # buckets ahead (~20 min)
+forecast_lookback: 32         # past buckets for covariance-based forecast
+cov_regularize: 1.0e-8        # Tikhonov regularization for matrix inversion
+
+# Combined signal (A-3 fix: vol-timing + directional component)
+signal_smoothing: 0.15
+signal_clip: 1.0
+warmup_buckets: 16            # A-4 fix: reduced from 48
+volofvol_weight: 0.6          # weight of vol-timing component
+direction_weight: 0.4         # weight of return-sign directional component
+return_ema_alpha: 0.05        # EMA alpha for return direction tracker
+
+# Position sizing (downstream consumer)
+max_exposure_multiplier: 2.0
+min_exposure_multiplier: 0.2
+
+# Kill conditions (Gate C)
+kill_conditions:
+  h_cv_threshold: 0.5        # H coefficient of variation > 0.5 = unstable
+  rfsv_vs_har_qlike: 0.0     # RFSV must beat HAR on QLIKE (negative = better)
+  sharpe_improvement: 0.3     # vol-timing must add > 0.3 Sharpe vs flat sizing

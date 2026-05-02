@@ -48,6 +48,7 @@
 |-----|-------------|
 | [Architecture Overview](architecture/overview.md) | Architecture entry point → canonical source |
 | [Current Architecture](architecture/current-architecture.md) | Canonical architecture baseline (7 planes) |
+| [Pipeline Chains](architecture/pipeline-chains.md) | End-to-end data flow (6 chains, hop-by-hop) |
 | [Multi-Broker Support](architecture/multi-broker-support.md) | Multi-broker ADR (Shioaji + Fubon) |
 | [Signal Monitor Design](architecture/signal-monitor-design.md) | Signal Monitor TUI design |
 | [Rust/PyO3](architecture/rust_pyo3.md) | Rust/PyO3 boundary spec |
@@ -56,7 +57,9 @@
 | [Shioaji Resilience](architecture/shioaji-client-resilience-decoupling-plan.md) | Shioaji 韌性補強與解耦 |
 | [Naming Conventions](guides/naming-conventions.md) | File/code/metric naming rules |
 | [Performance Report](reports/performance-report.md) | Latency benchmarks |
-| [Modules Reference](MODULES_REFERENCE.md) | Consolidated codebase map |
+| [Modules Reference](MODULES_REFERENCE.md) | Consolidated codebase map (37 packages, ~210 files) |
+| [Module Deep-Dives](modules/README.md) | Per-module documentation (32 packages) |
+| [CODEMAPS/](CODEMAPS/) | Quick-reference codemaps (architecture, backend, data, dependencies) |
 | [ADRs](adr/) | Architecture decision records |
 
 ## Project TODOs & Tech Debt

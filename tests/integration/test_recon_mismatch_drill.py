@@ -46,6 +46,8 @@ async def test_recon_small_mismatch_detected():
         config=config,
         storm_guard=storm_guard,
     )
+    recon._critical_drift_debounce = 1  # bypass debounce for test
+    recon.broker_zero_debounce_observations = 1  # bypass broker-zero debounce
 
     await recon.sync_portfolio()
 
@@ -88,6 +90,8 @@ async def test_recon_large_mismatch_triggers_halt():
         config=config,
         storm_guard=storm_guard,
     )
+    recon._critical_drift_debounce = 1  # bypass debounce for test
+    recon.broker_zero_debounce_observations = 1  # bypass broker-zero debounce
 
     await recon.sync_portfolio()
 
@@ -131,6 +135,7 @@ async def test_recon_sign_mismatch_triggers_halt():
         config=config,
         storm_guard=storm_guard,
     )
+    recon._critical_drift_debounce = 1  # bypass debounce for test
 
     await recon.sync_portfolio()
 

@@ -103,6 +103,9 @@ discipline: ## Run AST-based discipline enforcement (9 rules)
 discipline-strict: ## Run discipline enforcement in strict mode (warnings block too)
 	uv run python scripts/check_discipline.py --ci --strict
 
+discipline-hft: ## HFT hard-fail discipline gate (incl. HFT-P004 no-float-money)
+	uv run python scripts/check_discipline.py --ci
+
 git-precheck: ## Run git precondition checks (AWG-01/03) before merge/rebase
 	bash scripts/check_git_preconditions.sh --pre-merge
 
@@ -153,10 +156,15 @@ benchmark-compare: ## Compare current benchmarks against baseline
 # ============================================================================
 
 start: ## Start services with Docker Compose (default)
-	docker compose up -d --build
+	# P2-d (2026-04-27): export GIT_SHA + BUILD_TS for docker-compose build args
+	HFT_GIT_SHA=$$(git rev-parse HEAD 2>/dev/null || echo unknown) \
+		HFT_BUILD_TS=$$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+		docker compose up -d --build
 
 start-engine: ## Start HFT engine + core infra only — single runtime (no maintenance shell)
-	docker compose up -d --build clickhouse redis hft-engine wal-loader
+	HFT_GIT_SHA=$$(git rev-parse HEAD 2>/dev/null || echo unknown) \
+		HFT_BUILD_TS=$$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+		docker compose up -d --build clickhouse redis hft-engine wal-loader
 
 start-monitor: ## Start observability stack only
 	docker compose up -d prometheus grafana alertmanager node-exporter
@@ -172,14 +180,6 @@ stop: ## Stop services with Docker Compose
 
 logs: ## Show hft-engine logs (Docker Compose)
 	docker compose logs -f hft-engine
-
-swarm-start: ## Build image and deploy Docker Swarm stack (optional)
-	docker swarm init >/dev/null 2>&1 || true
-	docker build -t $${HFT_IMAGE:-hft-platform:latest} .
-	docker stack deploy -c docker-stack.yml hft
-
-swarm-stop: ## Remove Docker Swarm stack
-	docker stack rm hft
 
 swarm-logs: ## Show hft-engine service logs (Swarm)
 	docker service logs -f hft_hft-engine
@@ -208,7 +208,7 @@ clean-all: clean clean-rust ## Clean everything
 
 ci: format-check lint typecheck dependency-boundary test-hygiene-check coverage ## Run full CI pipeline locally
 
-.PHONY: test-unit-ci coverage-branch-gate coverage-markdown test-integration-ci test-clickhouse-writer-smoke
+.PHONY: test-unit-ci coverage-branch-gate coverage-domain coverage-markdown test-integration-ci test-clickhouse-writer-smoke
 .PHONY: perf-gate-default perf-gate-recorder-io perf-gate-risk-heavy perf-gate-feature-rust
 .PHONY: benchmark-ci benchmark-darwin-gate drill-gateway-wal-hardening
 .PHONY: research-feature-benchmark-matrix render-research-promotion-report security-audit
@@ -219,6 +219,9 @@ test-unit-ci: ## Run unit tests in CI mode and emit coverage.xml
 
 coverage-branch-gate: ## Enforce minimum coverage threshold from latest unit-test run
 	uv run coverage report --fail-under=70
+
+coverage-domain: ## Enforce per-package coverage floors (risk/order/execution/gateway/recorder/alpha)
+	uv run python scripts/check_coverage_domains.py coverage.xml
 
 coverage-markdown: ## Print coverage summary in markdown-friendly text
 	uv run coverage report
@@ -269,6 +272,9 @@ security-audit: ## Dependency security scan with pip-audit fallback to pip check
 		echo "pip-audit unavailable; fallback to pip check" | tee audit-output.txt; \
 		uv run python -m pip check | tee -a audit-output.txt; \
 	fi
+
+latency-audit: ## Validate alpha scorecards declare latency profile + pass Gate D 80% tolerance
+	uv run python -m hft_platform.alpha.latency_audit --strict
 
 # ============================================================================
 # Failure Simulation / Drill Targets
@@ -506,8 +512,8 @@ research-clean: ## Remove research cache artifacts (__pycache__, .pyc, numba cac
 research-audit: ## Audit research pipeline contract and write report
 	$(PY) -m research.factory audit
 
-research-audit-strict: ## Strict audit alias for CI compatibility
-	$(PY) -m research.factory audit
+research-audit-strict: ## Strict audit (--fail-on-warning) for CI compatibility
+	$(PY) -m research.factory audit --fail-on-warning
 
 research-index: ## Build machine-readable research pipeline index
 	$(PY) -m research.factory index

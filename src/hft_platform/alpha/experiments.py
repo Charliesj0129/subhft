@@ -574,7 +574,7 @@ def gc_experiment_runs(
 
     tracker = ExperimentTracker(base_dir=base_dir)
     runs = tracker.list_runs()
-    cutoff = datetime.now(tz=UTC) - timedelta(days=max(0, int(older_than_days)))
+    cutoff = datetime.fromtimestamp(timebase.now_s(), tz=UTC) - timedelta(days=max(0, int(older_than_days)))
 
     promoted_run_ids: set[str] = set()
     promo_path = Path(promotions_dir)

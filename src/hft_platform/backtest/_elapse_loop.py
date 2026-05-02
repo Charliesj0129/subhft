@@ -39,8 +39,8 @@ def run_elapse(adapter: object) -> object:
         if not validate_depth(best_bid, best_ask):
             continue
 
-        best_bid_int = int(best_bid)
-        best_ask_int = int(best_ask)
+        best_bid_int = int(round(float(best_bid) * adapter.price_scale))  # type: ignore[attr-defined]
+        best_ask_int = int(round(float(best_ask) * adapter.price_scale))  # type: ignore[attr-defined]
         ts_ns = int(adapter.hbt.current_timestamp)  # type: ignore[attr-defined]
 
         # Access trades that occurred during this elapse interval
@@ -62,9 +62,9 @@ def run_elapse(adapter: object) -> object:
         # Attach last_trades to event for MM strategies (best-effort)
         if last_trades is not None:
             try:
-                event.last_trades = last_trades  # type: ignore[attr-defined]
-            except AttributeError:
-                pass  # __slots__ dataclass — skip
+                object.__setattr__(event, "last_trades", last_trades)
+            except (AttributeError, TypeError):
+                pass
 
         process_fills(adapter, ts_ns, best_bid_int, best_ask_int)
         dispatch_strategy(adapter, event, feature_event)

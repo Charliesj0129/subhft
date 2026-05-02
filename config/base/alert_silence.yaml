@@ -1,0 +1,2 @@
+# Default silence rules (empty — no alerts silenced by default).
+rules: []

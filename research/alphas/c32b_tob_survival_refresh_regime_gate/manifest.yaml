@@ -1,0 +1,117 @@
+alpha_id: c32b_tob_survival_refresh_regime_gate_rescue
+name: "TOB-survival refresh regime gate (R47 refresh-cadence modulator)"
+version: "0.1.0"
+status: prototype
+owner: alpha-research-20260418-reboot
+strategy_type: maker
+instrument: "TMFD6"
+instruments:
+  - TMFD6
+
+hypothesis: >
+  On TMFD6 minutes where top-of-book survival is high (rolling 5-min median
+  of per-minute median TOB-survival > 200 ms), delaying R47's cancel-and-
+  repost on non-mid-moving LOB events preserves queue priority and lifts
+  expected fill probability per quote-life. The modulator issues no new
+  orders: incremental RT cost = 0. Threshold and hold cap (200 ms / 250 ms)
+  are IS-selected per R6 T1 and DA-validated.
+
+mechanism_class: exec_support_signal
+
+precedent:
+  r2_c32: "KILLED at T2 on S2+S3 evidence gaps (T1 had no IS/OOS partition and trade-count under deployed filter not supplied). R6 C32b pre-closes both: IS/OOS 10d/4d with 200ms IS-selected threshold; 22,391 trades under spread>=5 filter."
+
+distinction_from_killed_classes:
+  - name: "R51-C3b static rule (stale-quote-suppression-static)"
+    distinction: >
+      R51-C3b was a REGIME-AGNOSTIC refresh suppression, which failed by
+      averaging high-survival (benign) and low-survival (adverse) regimes.
+      C32b is REGIME-GATED (only applies during measured high-survival
+      minutes), which preserves the favorable subset.
+  - name: "C8 queue repricer"
+    distinction: >
+      C8 used queue signal to change QUOTE PRICE pre-post. C32b does not
+      change quote price; it only changes refresh TIMING.
+  - name: "C16 quote-age throttle"
+    distinction: >
+      C16 needed broker-side order_id (F4 infra). C32b operates purely on
+      LOB timestamps + scoped rolling median.
+  - name: "R1 amplify-on-maxpos-1 meta-kill"
+    distinction: >
+      C32b does NOT modulate max_pos. No amplification/disable-gate pattern.
+      Not in the AMPLIFY-on-max_pos=1 meta-killed class.
+
+paper_refs:
+  - r47_maker_strategy
+  - r47_structural_properties
+  - feedback_taifex_fee_structure
+  - "2017 Moallemi-Yuan Queue value on LOB"
+  - "2014 Maglaras multi-class LOB with heterogeneous agents"
+  - "1995 Biais-Hillion-Spatt LOB"
+  - "2014 Stoikov-Waeber Optimal asset liquidation"
+
+signals:
+  reuse: "Base R47 unchanged (spread gate + max_pos + skew). Modulator layer overlays refresh-cadence hook only."
+
+parameters:
+  tob_median_threshold_ms: 200      # FROZEN (IS-selected, DA-validated)
+  max_delay_hold_ms: 250            # FROZEN (role-template cap)
+  tick_size_pts: 1                  # TMFD6 tick size
+  tob_window_minutes: 5             # Rolling window
+  min_events_per_minute: 20         # Minimum samples for per-minute median
+
+latency_profile: "shioaji_sim_p95_v2026-03-04"
+
+# Cost model — cited from memory/feedback_taifex_fee_structure.md
+# (user-confirmed 2026-03-26 for TMF RT). C32b adds ZERO incremental RT.
+# R5 cost-physics lesson applied: "incremental cost = 0" verified physically
+# (modulator never issues new place_order / cancel_order; hook only answers
+# should-delay yes/no; a True return causes FEWER cancel messages).
+cost_model:
+  source_memo: "memory/feedback_taifex_fee_structure.md"
+  confirmed_by_user: "2026-03-26 (TMF RT)"
+  TMFD6:
+    commission_pts_per_side: 1.3
+    tax_pts_per_side: 0.7
+    rt_cost_pts: 4.0
+    point_value_ntd: 10
+    median_spread_pts: 2
+    cost_drag_pct_if_spread_capture: 200
+    note: "200% cost drag is a property of the BASE R47-TMF deployment; C32b does not fix or worsen it."
+  c32b_incremental:
+    rt_cost_delta_pts: 0.0
+    note: "Physically verified: modulator never places new orders or cancels additional orders. Fewer cancels are possible under hold mechanism; no new fills (same R47 fill path), so no new RT cost."
+
+coexistence_with_deployed_r47:
+  deployed_baseline: "R47 deployed on TMFD6 spr>=5 max_pos=1 (maker)"
+  c32b_overlay: "refresh-cadence modulator; same instrument, same max_pos, same spread gate, same quote price"
+  conflict_risk: "None — C32b sits inside the R47 runtime as a boolean hook on refresh decisions."
+
+expected_edge:
+  fill_sim_apr_10: "+5.8% expected fills, -56% resets, +53 pt gross capture upper bound"
+  projected_14_day_gross: "+200 to +400 pt (queue-share scaled: +10-20 pt/day net)"
+  da_gate_c_thresholds:
+    mean_daily_lift_pts: 10
+    p_value: 0.05
+    oos_mean_non_negative: true
+    execution_model: "bid/ask (mid-price = automatic REJECT)"
+
+governance:
+  t1_proposal: outputs/team_artifacts/alpha-research/round-6/artifacts/researcher_t1_proposal.md
+  t1_counterfactual: outputs/team_artifacts/alpha-research/round-6/artifacts/researcher_t1_counterfactual_result.md
+  t1_fill_sim_apr10: outputs/team_artifacts/alpha-research/round-6/artifacts/c32b_apr10_fill_sim.py
+  t2_review: outputs/team_artifacts/alpha-research/round-6/artifacts/da_t2_kill_checklist.md
+  t2_verdict: APPROVE
+  t2_tier1_fails: 0
+  t2_tier2_fails: 0
+  t2_warns:
+    - "WARN #1: Cost-drag 200% — property of base R47; C32b does not fix."
+    - "WARN #2: OOS trigger rate 60% borderline ambient (not 98.74% C27-degenerate; monitor on held-out)."
+    - "WARN #3: S6 regime-rarity — counterfactual on spread>=5pt subset (0.05-1.75% of current-regime minutes)."
+    - "WARN #4: Fill-sim lift modest +5.8%; T5 must deliver >+10pt/day mean lift."
+    - "WARN #5: H4 marginal on literal 20-day rule (14 days test window); PASS on methodology (22K trades × 10/10 sign-consistency)."
+
+notes:
+  - "Research-module float exception (Rule 11 of 25-architecture-governance). Strategy operates on integer prices from CK (scale=1_000_000); live pipeline uses x10_000."
+  - "Threshold 200ms is FROZEN (IS-selected, DA-validated). Do NOT retune in T4/T5."
+  - "Max hold 250ms is FROZEN (role-template cap). Release fires on mid-move, regime flip, or timeout."

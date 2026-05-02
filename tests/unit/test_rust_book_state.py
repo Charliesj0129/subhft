@@ -202,6 +202,12 @@ class TestRustBookStateParity:
         rust_book.apply_update(sample_bids, sample_asks, 1000)
         rust_stats = rust_book.get_stats_tuple()
 
+        # Python path now prepends "lobstats" tag: (lobstats, symbol, ts, ...)
+        # Rust path returns raw 9-tuple: (symbol, ts, ...)
+        # Strip the leading "lobstats" tag from Python stats for comparison
+        if py_stats[0] == "lobstats":
+            py_stats = py_stats[1:]
+
         # Compare all 9 fields
         assert py_stats[0] == rust_stats[0]  # symbol
         assert py_stats[1] == rust_stats[1]  # exch_ts

@@ -9,14 +9,9 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
-import tempfile
-import threading
 import time
 from typing import Any
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 from hft_platform.recorder._loader_dlq import (
     check_wal_accumulation,
@@ -27,7 +22,6 @@ from hft_platform.recorder._loader_dlq import (
     replay_dlq,
     write_to_dlq,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

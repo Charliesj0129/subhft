@@ -38,7 +38,7 @@ class PyPosition:
         self.realized_pnl_scaled = 0
         self.fees_scaled = 0
 
-    def update(self, side: int, qty: int, price_scaled: int, fee: int, tax: int):
+    def update(self, side: int, qty: int, price_scaled: int, fee: int, tax: int, multiplier: int = 1):
         is_buy = side == 0
         signed_fill_qty = qty if is_buy else -qty
 
@@ -52,12 +52,14 @@ class PyPosition:
         if closing:
             close_qty = min(abs(self.net_qty), qty)
             if is_buy:
-                pnl = (self.avg_price_scaled - price_scaled) * close_qty
+                pnl = (self.avg_price_scaled - price_scaled) * close_qty * multiplier
             else:
-                pnl = (price_scaled - self.avg_price_scaled) * close_qty
+                pnl = (price_scaled - self.avg_price_scaled) * close_qty * multiplier
             self.realized_pnl_scaled += pnl
             self.net_qty += signed_fill_qty
-            if (current_sign > 0 and self.net_qty < 0) or (current_sign < 0 and self.net_qty > 0):
+            if self.net_qty == 0:
+                self.avg_price_scaled = 0
+            elif (current_sign > 0 and self.net_qty < 0) or (current_sign < 0 and self.net_qty > 0):
                 self.avg_price_scaled = price_scaled
         else:
             if self.net_qty == 0:
@@ -67,7 +69,8 @@ class PyPosition:
                 total_val = self.net_qty * self.avg_price_scaled + signed_fill_qty * price_scaled
                 self.net_qty += signed_fill_qty
                 if self.net_qty != 0:
-                    self.avg_price_scaled = total_val // self.net_qty
+                    # Round-to-nearest matching production Position.update()
+                    self.avg_price_scaled = (2 * total_val + self.net_qty) // (2 * self.net_qty)
 
 
 BUY = 0
@@ -91,7 +94,7 @@ def _make_fill(side, qty, price, fee=0, tax=0, ts=0):
     )
 
 
-def _run_parity(fills):
+def _run_parity(fills, multiplier=1):
     """Run fill sequence through both Rust and Python, assert identical output."""
     TrackerCls = _load_rust_tracker()
     if TrackerCls is None:
@@ -102,8 +105,8 @@ def _run_parity(fills):
     key = "ACC:STRAT:SYM"
 
     for side, qty, price, fee, tax in fills:
-        r_net, r_avg, r_pnl, r_fees = rust.update(key, side, qty, price, fee, tax, 0)
-        py.update(side, qty, price, fee, tax)
+        r_net, r_avg, r_pnl, r_fees = rust.update(key, side, qty, price, fee, tax, 0, multiplier)
+        py.update(side, qty, price, fee, tax, multiplier)
 
         assert r_net == py.net_qty, f"net_qty mismatch: rust={r_net} py={py.net_qty}"
         assert r_avg == py.avg_price_scaled, f"avg mismatch: rust={r_avg} py={py.avg_price_scaled}"
@@ -225,6 +228,64 @@ def test_rust_get_and_reset():
     tracker.reset(key)
     assert tracker.get(key) == (0, 0, 0, 0)
     assert tracker.len() == 0
+
+
+def test_futures_multiplier_tmf():
+    """TMF multiplier=10: PnL should be scaled by multiplier."""
+    py = _run_parity(
+        [
+            (BUY, 3, 10000, 0, 0),
+            (SELL, 3, 10100, 0, 0),
+        ],
+        multiplier=10,
+    )
+    assert py.net_qty == 0
+    # PnL = (10100 - 10000) * 3 * 10 = 3000
+    assert py.realized_pnl_scaled == 3000
+
+
+def test_futures_multiplier_txf():
+    """TXF multiplier=200: PnL should be scaled by multiplier."""
+    py = _run_parity(
+        [
+            (SELL, 2, 200000, 0, 0),
+            (BUY, 2, 199500, 0, 0),
+        ],
+        multiplier=200,
+    )
+    assert py.net_qty == 0
+    # PnL = (200000 - 199500) * 2 * 200 = 200000
+    assert py.realized_pnl_scaled == 200000
+
+
+def test_avg_price_rounding_edge():
+    """Odd fills that trigger rounding: buy 3@1001 then buy 2@1002.
+
+    total_val = 3*1001 + 2*1002 = 3003 + 2004 = 5007
+    new_net = 5
+    Exact avg = 1001.4 → rounded to nearest = 1001
+    Formula: (2*5007 + 5) // (2*5) = 10019 // 10 = 1001
+    """
+    py = _run_parity(
+        [
+            (BUY, 3, 1001, 0, 0),
+            (BUY, 2, 1002, 0, 0),
+        ]
+    )
+    assert py.net_qty == 5
+    assert py.avg_price_scaled == 1001
+
+
+def test_close_to_flat_resets_avg():
+    """After closing to flat, avg_price should be 0."""
+    py = _run_parity(
+        [
+            (BUY, 5, 10000, 0, 0),
+            (SELL, 5, 10500, 0, 0),
+        ]
+    )
+    assert py.net_qty == 0
+    assert py.avg_price_scaled == 0
 
 
 def test_multiple_keys():

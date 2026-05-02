@@ -1,5 +1,7 @@
 """Tests for Phase 3 bootstrap wiring."""
+
 from __future__ import annotations
+
 import asyncio
 
 
@@ -15,6 +17,7 @@ def test_publish_sink_queue_bounded():
 
 def test_strategy_yaml_has_electronic_eye():
     import yaml
+
     with open("config/base/strategies.yaml") as f:
         data = yaml.safe_load(f)
     strategies = data.get("strategies", [])

@@ -2,6 +2,6 @@
 
 from hft_platform.tca.analyzer import TCAAnalyzer
 from hft_platform.tca.fee_calculator import FeeCalculator
-from hft_platform.tca.types import FeeBreakdown, FeeSchedule, SlippageBreakdown, TCADailyReport
+from hft_platform.tca.types import FeeBreakdown, SlippageBreakdown, TCADailyReport
 
-__all__ = ["FeeBreakdown", "FeeCalculator", "FeeSchedule", "SlippageBreakdown", "TCAAnalyzer", "TCADailyReport"]
+__all__ = ["FeeBreakdown", "FeeCalculator", "SlippageBreakdown", "TCAAnalyzer", "TCADailyReport"]

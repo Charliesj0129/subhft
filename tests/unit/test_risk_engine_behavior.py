@@ -319,6 +319,78 @@ async def test_run_exception_in_evaluate_continues(engine):
 
 
 @pytest.mark.asyncio
+async def test_run_exception_increments_error_counter(engine):
+    """Exception in evaluate increments risk_engine_error_total with correct error_type label."""
+    mock_counter = MagicMock()
+    mock_metrics = MagicMock()
+    mock_metrics.risk_engine_error_total = mock_counter
+    engine.metrics = mock_metrics
+
+    original_evaluate = engine.evaluate
+
+    call_count = [0]
+
+    def bad_evaluate(intent):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            raise RuntimeError("injected error for counter test")
+        return original_evaluate(intent)
+
+    engine.evaluate = bad_evaluate
+
+    engine.intent_queue.put_nowait(_intent(intent_id=10))
+    engine.intent_queue.put_nowait(_intent(intent_id=11))
+
+    task = asyncio.create_task(engine.run())
+    await asyncio.sleep(0.1)
+    engine.running = False
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    mock_counter.labels.assert_called_once_with(error_type="RuntimeError")
+    mock_counter.labels.return_value.inc.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_run_exception_metric_failure_does_not_mask_error(engine):
+    """If metric increment itself raises, the original error path still completes normally."""
+    broken_counter = MagicMock()
+    broken_counter.labels.side_effect = Exception("metrics broken")
+    mock_metrics = MagicMock()
+    mock_metrics.risk_engine_error_total = broken_counter
+    engine.metrics = mock_metrics
+
+    call_count = [0]
+    original_evaluate = engine.evaluate
+
+    def bad_evaluate(intent):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            raise ValueError("trigger metric failure path")
+        return original_evaluate(intent)
+
+    engine.evaluate = bad_evaluate
+
+    engine.intent_queue.put_nowait(_intent(intent_id=20))
+    engine.intent_queue.put_nowait(_intent(intent_id=21))
+
+    task = asyncio.create_task(engine.run())
+    await asyncio.sleep(0.1)
+    engine.running = False
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    # Loop continued: second intent was processed
+    assert call_count[0] >= 2
+
+
+@pytest.mark.asyncio
 async def test_run_cancelled_error_stops_loop(engine):
     task = asyncio.create_task(engine.run())
     await asyncio.sleep(0.01)

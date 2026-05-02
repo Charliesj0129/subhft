@@ -39,38 +39,29 @@ class TestCLISmoke(unittest.TestCase):
             self.assertIsNone(result)
 
     def test_run_command_mocked(self):
-        # We need to handle the local import of prometheus_client
-        # We can patch exception if import fails, or patch the module if it exists
+        with (
+            patch("hft_platform.observability.metrics_server.start_resilient_metrics_server") as mock_metrics,
+            patch("hft_platform.observability.metrics.MetricsRegistry"),
+            patch("hft_platform.main.HFTSystem") as mock_sys_cls,
+            patch("hft_platform.cli._run.load_settings", return_value=({"mode": "sim", "prometheus_port": 9090}, {})),
+        ):
+            mock_sys = mock_sys_cls.return_value
 
-        # Mock sys.modules to inject prometheus_client mock
-        mock_prom_mod = MagicMock()
-        mock_start_http = MagicMock()
-        mock_prom_mod.start_http_server = mock_start_http
+            async def async_run():
+                pass
 
-        with patch.dict(sys.modules, {"prometheus_client": mock_prom_mod}):
-            with patch("hft_platform.main.HFTSystem") as mock_sys_cls:
-                mock_sys = mock_sys_cls.return_value
+            mock_sys.run.side_effect = async_run
 
-                async def async_run():
-                    pass
+            args = MagicMock()
+            args.mode = "sim"
+            args.simulation = True
+            args.symbols = ["2330"]
+            args.strategy = "demo"
 
-                mock_sys.run.side_effect = async_run
+            cmd_run(args)
 
-                args = MagicMock()
-                args.mode = "sim"
-                args.simulation = True
-                args.symbols = ["2330"]
-                args.strategy = "demo"
-
-                # Mock load_settings to return valid settings
-                # cmd_run calls load_settings
-                with patch(
-                    "hft_platform.cli._run.load_settings", return_value=({"mode": "sim", "prometheus_port": 9090}, {})
-                ):
-                    cmd_run(args)
-
-                mock_sys_cls.assert_called()
-                mock_start_http.assert_called()
+            mock_sys_cls.assert_called()
+            mock_metrics.assert_called_once_with(9090)
 
     def test_main_dispatch(self):
         with patch("hft_platform.cli._run.cmd_init") as mock_init:

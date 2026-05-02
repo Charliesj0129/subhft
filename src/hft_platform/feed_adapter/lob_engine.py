@@ -2,19 +2,19 @@ import asyncio
 import importlib
 import os
 from threading import Lock
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Optional, Union, cast
 
 import numpy as np
 from structlog import get_logger
 
 from hft_platform.core import timebase
-from hft_platform.events import BidAskEvent, LOBStatsEvent, TickEvent
+from hft_platform.events import BidAskEvent, BookStats, LOBStatsEvent, TickEvent
 from hft_platform.observability.metrics import MetricsRegistry
 
 logger = get_logger("feed_adapter.lob")
 
 _RUST_ENABLED = os.getenv("HFT_RUST_ACCEL", "1").lower() not in {"0", "false", "no", "off"}
-_LOCKS_ENABLED = os.getenv("HFT_LOB_LOCKS", "0").lower() not in {"0", "false", "no", "off"}
+_LOCKS_ENABLED = os.getenv("HFT_LOB_LOCKS", "1").lower() not in {"0", "false", "no", "off"}
 _READ_LOCKS_ENABLED = os.getenv("HFT_LOB_READ_LOCKS", "1").lower() not in {
     "0",
     "false",
@@ -58,6 +58,8 @@ except Exception as exc:
 
 
 class _NoopLock:
+    __slots__ = ()
+
     def __enter__(self):
         return self
 
@@ -85,7 +87,9 @@ class BookState:
         "last_volume",
         "bid_depth_total",
         "ask_depth_total",
+        "normalizer_seq",
         "_rust_state",
+        "_cached_stats",
     )
 
     def __init__(self, symbol: str):
@@ -108,6 +112,11 @@ class BookState:
         self.last_volume: int = 0
         self.bid_depth_total: int = 0
         self.ask_depth_total: int = 0
+        self.normalizer_seq: int = 0
+
+        # _cached_stats retained as a slot placeholder; no longer used at runtime
+        # (get_stats() now creates a new LOBStatsEvent per tick to avoid shared-ref corruption).
+        self._cached_stats: Any = None
 
         # Rust-accelerated book state (opt-in)
         self._rust_state: Any = None
@@ -120,9 +129,12 @@ class BookState:
     def apply_update(self, bids: Union[np.ndarray, list], asks: Union[np.ndarray, list], exch_ts: int):
         """Atomic update (Snapshot style full-replace for Top-N streams)."""
         with self.lock:
-            if exch_ts < self.exch_ts:
-                # Late packet
+            if exch_ts > 0 and exch_ts < self.exch_ts:
+                # Late packet — skip stale data
                 return
+            # DATA-007: Preserve valid timestamp when new update has ts=0.
+            if exch_ts == 0 and self.exch_ts > 0:
+                exch_ts = self.exch_ts
 
             if _FORCE_NUMPY and _RUST_ENABLED:
                 if isinstance(bids, np.ndarray):
@@ -163,9 +175,17 @@ class BookState:
                         bids_2d = self.bids.reshape(-1, 2) if self.bids.ndim == 1 else self.bids
                         asks_2d = self.asks.reshape(-1, 2) if self.asks.ndim == 1 else self.asks
                         rs.apply_update(bids_2d, asks_2d, exch_ts)
-                        self.mid_price_x2 = rs.mid_price_x2
-                        self.spread = rs.spread
-                        self.imbalance = rs.imbalance
+                        # Crossed-book guard: Shioaji can emit best_bid > best_ask
+                        # during auction transitions. Zero out stats to prevent
+                        # negative spread propagating into FeatureEngine EMA state.
+                        if rs.spread < 0:
+                            self.mid_price_x2 = 0
+                            self.spread = 0
+                            self.imbalance = 0.0
+                        else:
+                            self.mid_price_x2 = rs.mid_price_x2
+                            self.spread = rs.spread
+                            self.imbalance = rs.imbalance
                         self.bid_depth_total = rs.bid_depth_total
                         self.ask_depth_total = rs.ask_depth_total
                         self.version += 1
@@ -177,7 +197,7 @@ class BookState:
 
     def update_tick(self, price: int, volume: int, exch_ts: int):
         with self.lock:
-            if exch_ts < self.exch_ts:
+            if exch_ts > 0 and exch_ts < self.exch_ts:
                 return
 
             self.exch_ts = exch_ts
@@ -205,9 +225,16 @@ class BookState:
                 ) = _RUST_COMPUTE_STATS(self.bids, self.asks)
                 self.bid_depth_total = int(bid_depth_total)
                 self.ask_depth_total = int(ask_depth_total)
-                self.mid_price_x2 = int(best_bid) + int(best_ask)
-                self.spread = int(best_ask) - int(best_bid)
-                self.imbalance = float(imbalance)
+                bb = int(best_bid)
+                ba = int(best_ask)
+                if bb > 0 and ba > 0 and ba >= bb:
+                    self.mid_price_x2 = bb + ba
+                    self.spread = ba - bb
+                    self.imbalance = float(imbalance)
+                else:
+                    self.mid_price_x2 = 0
+                    self.spread = 0
+                    self.imbalance = 0.0
                 return
             except Exception as exc:
                 logger.debug("rust_compute_stats_fallback", symbol=self.symbol, error=str(exc))
@@ -250,7 +277,11 @@ class BookState:
             ask_vol_top = 0
 
         # 2. Price Stats
-        if best_bid > 0 and best_ask > 0:
+        # Guard against crossed book (best_bid > best_ask), which Shioaji can
+        # temporarily emit during auction transitions. Treat as invalid — same
+        # as the else branch — to prevent negative spread propagating into
+        # FeatureEngine EMA state.
+        if best_bid > 0 and best_ask > 0 and best_ask >= best_bid:
             self.mid_price_x2 = best_bid + best_ask
             self.spread = best_ask - best_bid
 
@@ -277,6 +308,12 @@ class BookState:
             else:
                 best_ask = int(self.asks[0][0]) if self.asks else 0
 
+            # Always create a new LOBStatsEvent per tick.
+            # Previously the same object was mutated in-place and returned; multiple
+            # consumers (StrategyRunner, RecorderService, FeatureEngine) held the same
+            # reference, so the next tick's mutation corrupted data still being read.
+            # A slotted dataclass with only primitive fields is cheap to allocate;
+            # correctness outweighs the minor allocation cost here.
             return LOBStatsEvent(
                 symbol=self.symbol,
                 ts=self.exch_ts,
@@ -287,6 +324,8 @@ class BookState:
                 best_ask=best_ask,
                 bid_depth=int(self.bid_depth_total),
                 ask_depth=int(self.ask_depth_total),
+                normalizer_seq=self.normalizer_seq,
+                local_ts=self.local_ts,
             )
 
     def get_stats_tuple(self) -> tuple:
@@ -294,7 +333,8 @@ class BookState:
             rs = self._rust_state
             if rs is not None:
                 try:
-                    return rs.get_stats_tuple()
+                    rust_t = rs.get_stats_tuple()
+                    return ("lobstats",) + rust_t
                 except Exception as exc:
                     logger.debug("rust_stats_tuple_fallback", symbol=self.symbol, error=str(exc))
             if isinstance(self.bids, np.ndarray):
@@ -308,6 +348,7 @@ class BookState:
                 best_ask = int(self.asks[0][0]) if self.asks else 0
 
             return (
+                "lobstats",  # [0] tag for runner tuple guard
                 self.symbol,
                 self.exch_ts,
                 self.mid_price_x2,  # Integer (best_bid + best_ask)
@@ -324,7 +365,7 @@ class BookState:
         bids: Union[np.ndarray, list],
         asks: Union[np.ndarray, list],
         exch_ts: int,
-        stats: tuple[int, int, int, int, float, float, float],
+        stats: BookStats,
     ) -> None:
         self.apply_update_with_stats_fields(bids, asks, exch_ts, *stats)
 
@@ -342,7 +383,7 @@ class BookState:
         imbalance: float,
     ) -> None:
         with self.lock:
-            if exch_ts < self.exch_ts:
+            if exch_ts > 0 and exch_ts < self.exch_ts:
                 return
 
             if _FORCE_NUMPY and _RUST_ENABLED:
@@ -377,15 +418,50 @@ class BookState:
 
             self.bid_depth_total = int(bid_depth)
             self.ask_depth_total = int(ask_depth)
-            self.mid_price_x2 = int(best_bid) + int(best_ask)
-            self.spread = int(best_ask) - int(best_bid)
-            self.imbalance = float(imbalance)
+            _bid = int(best_bid)
+            _ask = int(best_ask)
+            if _bid > 0 and _ask > 0 and _ask >= _bid:
+                self.mid_price_x2 = _bid + _ask
+                self.spread = _ask - _bid
+                self.imbalance = float(imbalance)
+            else:
+                self.mid_price_x2 = 0
+                self.spread = 0
+                self.imbalance = 0.0
             self.version += 1
 
 
 class LOBEngine:
+    __slots__ = (
+        "books",
+        "metrics",
+        "_metrics_enabled",
+        "_metrics_batch",
+        "_metrics_pending_updates",
+        "_metrics_pending_snapshots",
+        "_metrics_pending_total",
+        "_metrics_flush_requested",
+        "_metrics_task",
+        "_last_symbol",
+        "_last_book",
+        "feature_engine",
+        "_max_symbols",
+        "_metrics_max_label_symbols",
+        "_metrics_known_symbols",
+        "_eviction_ttl_ns",
+        "_eviction_last_run_ns",
+        "_symbol_metadata",
+        "_strict_ingress",
+        "_unknown_symbol_warned",
+    )
+
     def __init__(self):
         self.books: Dict[str, BookState] = {}
+        self.feature_engine: Any = None
+        self._max_symbols: int = int(os.getenv("HFT_EXPOSURE_MAX_SYMBOLS", "10000"))
+        # Prometheus label cardinality guard (INFRA-05)
+        self._metrics_max_label_symbols: int = int(os.getenv("HFT_METRICS_MAX_LABEL_SYMBOLS", "200"))
+        self._metrics_known_symbols: set[str] = set()
         # Global lock removed!
         self.metrics = MetricsRegistry.get()
         self._metrics_enabled = _METRICS_ENABLED and self.metrics is not None
@@ -397,6 +473,22 @@ class LOBEngine:
         self._metrics_task: asyncio.Task | None = None
         self._last_symbol: str | None = None
         self._last_book: BookState | None = None
+        _evict_ttl_s = int(os.getenv("HFT_LOB_SYMBOL_TTL_S", "3600"))
+        self._eviction_ttl_ns: int = _evict_ttl_s * 1_000_000_000
+        self._eviction_last_run_ns: int = 0
+        # Ingress invariant (Hemorrhage #5, 2026-04-18). When a symbol enters
+        # the LOB that is not known in SymbolMetadata, we log once and bump
+        # unknown_symbol_ingress_total. Strict mode (env=1) additionally
+        # refuses to allocate a book — default is permissive.
+        self._symbol_metadata: Any = None
+        self._strict_ingress: bool = os.getenv("HFT_LOB_STRICT_INGRESS", "0") == "1"
+        self._unknown_symbol_warned: set[str] = set()
+
+    def set_symbol_metadata(self, symbol_metadata: Any) -> None:
+        """Inject SymbolMetadata so get_book can verify the incoming symbol
+        is known. No-op when called with ``None``; no-op on ingress when
+        SymbolMetadata has no entries (startup / test scenarios)."""
+        self._symbol_metadata = symbol_metadata
 
     def _is_metrics_enabled(self) -> bool:
         if self._metrics_enabled:
@@ -406,7 +498,7 @@ class LOBEngine:
         return not isinstance(self.metrics, MetricsRegistry)
 
     def start_metrics_worker(self, loop: asyncio.AbstractEventLoop, interval_ms: int = 5) -> None:
-        if not _METRICS_ASYNC or self._metrics_task is not None:
+        if not _METRICS_ASYNC or not _METRICS_ENABLED or self._metrics_task is not None:
             return
 
         async def _worker():
@@ -417,28 +509,99 @@ class LOBEngine:
                         continue
                     self._metrics_flush_requested = False
                     self._flush_metrics()
+                    self.evict_stale_symbols()
             except asyncio.CancelledError:
                 pass
 
         self._metrics_task = loop.create_task(_worker())
+
+    def stop(self) -> None:
+        """Cancel the background metrics worker task.
+
+        Must be called on shutdown (e.g., from MarketDataService.run() finally block)
+        to prevent resource leaks and post-shutdown state mutation.
+        """
+        task = self._metrics_task
+        if task is not None:
+            task.cancel()
 
     def _flush_metrics(self):
         if not self._is_metrics_enabled():
             return
 
         for (symbol, update_type), count in self._metrics_pending_updates.items():
-            self.metrics.lob_updates_total.labels(symbol=symbol, type=update_type).inc(count)
+            self.metrics.lob_updates_total.labels(symbol=self.metrics.cap_symbol(symbol), type=update_type).inc(count)
         self._metrics_pending_updates.clear()
 
         for symbol, count in self._metrics_pending_snapshots.items():
-            self.metrics.lob_snapshots_total.labels(symbol=symbol).inc(count)
+            self.metrics.lob_snapshots_total.labels(symbol=self.metrics.cap_symbol(symbol)).inc(count)
         self._metrics_pending_snapshots.clear()
 
         self._metrics_pending_total = 0
 
+    def get_mid_price(self, symbol: str) -> int | None:
+        """Return mid-price (scaled x10000) for *symbol*, or None if unavailable.
+
+        Used by MarkToMarketCalculator for unrealized PnL computation.
+        Returns ``mid_price_x2 // 2`` from the symbol's BookState.
+        """
+        book = self.books.get(symbol)
+        if book is None or book.mid_price_x2 == 0:
+            return None
+        return book.mid_price_x2 // 2
+
+    def reset_books(self) -> None:
+        """Clear all book state. Call on broker reconnect to prevent stale LOB data."""
+        self.books.clear()
+        self._last_symbol = None
+        self._last_book = None
+        logger.info("lob_books_reset", reason="reconnect")
+
+    def reset_books_for_symbols(self, symbols: set[str]) -> None:
+        for sym in symbols:
+            self.books.pop(sym, None)
+        if self._last_symbol in symbols:
+            self._last_symbol = None
+            self._last_book = None
+
+    def evict_stale_symbols(self) -> int:
+        """Remove symbols whose last exchange timestamp is older than TTL.
+
+        Returns the number of evicted symbols. Safe to call from the metrics
+        worker or any periodic maintenance loop.
+        """
+        if self._eviction_ttl_ns <= 0:
+            return 0
+        now_ns = timebase.now_ns()
+        # Rate-limit: run at most once per minute
+        if now_ns - self._eviction_last_run_ns < 60_000_000_000:
+            return 0
+        self._eviction_last_run_ns = now_ns
+        cutoff_ns = now_ns - self._eviction_ttl_ns
+        stale = [sym for sym, book in self.books.items() if book.exch_ts > 0 and book.exch_ts < cutoff_ns]
+        for sym in stale:
+            del self.books[sym]
+        if stale:
+            # Clear single-entry cache if evicted symbol was cached
+            if self._last_symbol in stale:
+                self._last_symbol = None
+                self._last_book = None
+            logger.info(
+                "lob_stale_symbols_evicted",
+                count=len(stale),
+                symbols=stale[:5],  # log at most 5 for brevity
+            )
+        return len(stale)
+
     def _record_lob_metrics(self, symbol: str, is_snapshot: bool):
         if not self._is_metrics_enabled():
             return
+        # Guard Prometheus label cardinality (INFRA-05)
+        if symbol not in self._metrics_known_symbols:
+            if len(self._metrics_known_symbols) >= self._metrics_max_label_symbols:
+                symbol = "_other"
+            else:
+                self._metrics_known_symbols.add(symbol)
         self._metrics_pending_updates[(symbol, "BidAsk")] = self._metrics_pending_updates.get((symbol, "BidAsk"), 0) + 1
         if is_snapshot:
             self._metrics_pending_snapshots[symbol] = self._metrics_pending_snapshots.get(symbol, 0) + 1
@@ -458,26 +621,74 @@ class LOBEngine:
             return book.get_stats_tuple()
         return book.get_stats()
 
-    def get_book(self, symbol: str) -> BookState:
+    def get_book(self, symbol: str) -> Optional[BookState]:
         if symbol == self._last_symbol and self._last_book is not None:
             return self._last_book
         if symbol not in self.books:
-            # First time might race if multithreaded init, but usually symbols known.
-            # Lazy init needing global lock?
-            # Or assume pre-warmed.
-            # Let's put a small lock for dict mutation only.
+            # Ingress invariant: detect symbols not declared in SymbolMetadata.
+            # Permissive by default so strange symbols still flow; strict mode
+            # (HFT_LOB_STRICT_INGRESS=1) refuses to allocate a book so downstream
+            # planes fail fast instead of silently using the default price scale.
+            if not self._is_symbol_known(symbol):
+                if symbol not in self._unknown_symbol_warned:
+                    self._unknown_symbol_warned.add(symbol)
+                    logger.warning(
+                        "lob_unknown_symbol_ingress",
+                        symbol=symbol,
+                        strict=self._strict_ingress,
+                    )
+                    self._bump_unknown_symbol_metric()
+                if self._strict_ingress:
+                    return None
+            if len(self.books) >= self._max_symbols:
+                logger.warning(
+                    "lob_symbol_cardinality_exceeded",
+                    current=len(self.books),
+                    limit=self._max_symbols,
+                    symbol=symbol,
+                )
+                return None
             self.books[symbol] = BookState(symbol)
         book = self.books[symbol]
         self._last_symbol = symbol
         self._last_book = book
         return book
 
+    def _is_symbol_known(self, symbol: str) -> bool:
+        """True when SymbolMetadata reports an entry for ``symbol``.
+
+        Returns True when no metadata is wired (backward-compat) or when
+        metadata is empty (startup).
+        """
+        sm = self._symbol_metadata
+        if sm is None:
+            return True
+        meta = getattr(sm, "meta", None)
+        if not meta:
+            return True
+        return symbol in meta
+
+    def _bump_unknown_symbol_metric(self) -> None:
+        if self.metrics is None:
+            return
+        counter = getattr(self.metrics, "unknown_symbol_ingress_total", None)
+        if counter is None:
+            return
+        try:
+            counter.labels(plane="lob").inc()
+        except Exception:  # noqa: BLE001 — metrics must never crash hot path
+            pass
+
     def process_event(self, event: Union[BidAskEvent, TickEvent, tuple]) -> Optional[LOBStatsEvent | tuple]:
         metrics_enabled = self._is_metrics_enabled()
+        # Dispatch by exact type (avoid isinstance MRO walk). Event dataclasses
+        # are frozen+slots with no subclasses — `type(x) is C` is correct.
+        et = type(event)
         # Tuple fast-path (avoid event object creation)
-        if isinstance(event, tuple) and event:
-            if event[0] == "bidask":
-                if len(event) >= 13:
+        if et is tuple and event:
+            tuple_event = cast(tuple[Any, ...], event)
+            if tuple_event[0] == "bidask":
+                if len(tuple_event) >= 13:
                     (
                         _,
                         symbol,
@@ -492,8 +703,10 @@ class LOBEngine:
                         mid_price,
                         spread,
                         imbalance,
-                    ) = event[:13]
+                    ) = tuple_event[:13]
                     book = self.get_book(symbol)
+                    if book is None:
+                        return None
                     book.apply_update_with_stats_fields(
                         bids,
                         asks,
@@ -507,51 +720,75 @@ class LOBEngine:
                         float(imbalance),
                     )
                 else:
-                    _, symbol, bids, asks, exch_ts, is_snapshot = event
+                    _, symbol, bids, asks, exch_ts, is_snapshot = tuple_event
                     book = self.get_book(symbol)
+                    if book is None:
+                        return None
                     book.apply_update(bids, asks, exch_ts)
                 if metrics_enabled:
                     self._record_lob_metrics(symbol, bool(is_snapshot))
                 return self._emit_stats(book)
-            if event[0] == "tick":
-                _, symbol, price, volume, _total_volume, _is_simtrade, _is_odd_lot, exch_ts = event
+            if tuple_event[0] == "tick":
+                _, symbol, price, volume, _total_volume, _is_simtrade, _is_odd_lot, exch_ts, *_rest = tuple_event
                 book = self.get_book(symbol)
+                if book is None:
+                    return None
                 book.update_tick(price, volume, exch_ts)
                 return None
 
-        # Typed dispatch
-        if isinstance(event, BidAskEvent):
-            book = self.get_book(event.symbol)
+        # Typed dispatch (exact-type; subclasses never created for these)
+        if et is BidAskEvent:
+            bidask_event = cast(BidAskEvent, event)
+            book = self.get_book(bidask_event.symbol)
+            if book is None:
+                return None
+            # Propagate normalizer seq for downstream ordering (Bug #10 fix)
+            book.normalizer_seq = bidask_event.meta.seq
             # Fused bypass: normalizer already computed stats in a single Rust call;
             # skip redundant apply_update + _recompute and directly set book fields.
-            if _FUSED_BYPASS and event.fused_stats is not None:
-                fs = event.fused_stats
-                exch_ts = event.meta.source_ts
+            if _FUSED_BYPASS and bidask_event.fused_stats is not None:
+                fs = bidask_event.fused_stats
+                exch_ts = bidask_event.meta.source_ts
                 with book.lock:
                     if exch_ts >= book.exch_ts:
                         book.exch_ts = exch_ts
-                        book.bids = event.bids
-                        book.asks = event.asks
-                        book.bid_depth_total = int(fs[2])
-                        book.ask_depth_total = int(fs[3])
-                        book.mid_price_x2 = int(fs[4])
-                        book.spread = int(fs[5])
-                        book.imbalance = float(fs[6])
+                        book.bids = bidask_event.bids
+                        book.asks = bidask_event.asks
+                        book.bid_depth_total = int(fs.bid_depth)
+                        book.ask_depth_total = int(fs.ask_depth)
+                        _fs_mid = int(fs.mid_price_x2)
+                        _fs_sp = int(fs.spread_scaled)
+                        if _fs_sp >= 0 and _fs_mid > 0:
+                            book.mid_price_x2 = _fs_mid
+                            book.spread = _fs_sp
+                            book.imbalance = float(fs.imbalance)
+                        else:
+                            book.mid_price_x2 = 0
+                            book.spread = 0
+                            book.imbalance = 0.0
                         book.version += 1
                 if metrics_enabled:
-                    self._record_lob_metrics(event.symbol, event.is_snapshot)
+                    self._record_lob_metrics(bidask_event.symbol, bidask_event.is_snapshot)
                 return self._emit_stats(book)
-            if event.stats is not None:
-                book.apply_update_with_stats(event.bids, event.asks, event.meta.source_ts, event.stats)
+            if bidask_event.stats is not None:
+                book.apply_update_with_stats(
+                    bidask_event.bids,
+                    bidask_event.asks,
+                    bidask_event.meta.source_ts,
+                    bidask_event.stats,
+                )
             else:
-                book.apply_update(event.bids, event.asks, event.meta.source_ts)
+                book.apply_update(bidask_event.bids, bidask_event.asks, bidask_event.meta.source_ts)
             if metrics_enabled:
-                self._record_lob_metrics(event.symbol, event.is_snapshot)
+                self._record_lob_metrics(bidask_event.symbol, bidask_event.is_snapshot)
             return self._emit_stats(book)
 
-        elif isinstance(event, TickEvent):
-            book = self.get_book(event.symbol)
-            book.update_tick(event.price, event.volume, event.meta.source_ts)
+        elif et is TickEvent:
+            tick_event = cast(TickEvent, event)
+            book = self.get_book(tick_event.symbol)
+            if book is None:
+                return None
+            book.update_tick(tick_event.price, tick_event.volume, tick_event.meta.source_ts)
             # return book.get_stats() # Optional: emit stats on tick?
             return None
 

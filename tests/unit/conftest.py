@@ -16,6 +16,18 @@ from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _disable_live_monitor_publisher(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep unit tests from starting real Redis-backed monitor publisher threads by default."""
+    monkeypatch.setenv("HFT_MONITOR_LIVE_ENABLED", "0")
+
+
+@pytest.fixture(autouse=True)
+def _disable_clickhouse_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep unit tests from attempting real ClickHouse connections unless they opt in explicitly."""
+    monkeypatch.setenv("HFT_CLICKHOUSE_ENABLED", "0")
+
+
 @pytest.fixture()
 def symbols_yaml(tmp_path):
     """Write a minimal symbols.yaml and return its path."""

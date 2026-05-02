@@ -2,10 +2,11 @@ broker: shioaji  # shioaji | fubon — selects BrokerFacade implementation
 
 mode: sim
 symbols:
-  - "TMFD6"
+  - "TMFR1"    # R1 = Shioaji continuous front-month (no monthly update)
+  - "TXFR1"    # R1 = Shioaji continuous front-month
 
 strategy:
-  id: CBS_TMFD6
+  id: CBS_TMF
   module: hft_platform.strategies.cascade_bounce
   class: CascadeBounceStrategy
   params:

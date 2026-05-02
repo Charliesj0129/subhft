@@ -6,7 +6,6 @@ import numpy as np
 import pytest
 
 from hft_platform.backtest import adapter as hbt_adapter
-from hft_platform.backtest._equity_core import compute_equity_from_positions
 from hft_platform.strategy.base import BaseStrategy
 
 
@@ -14,8 +13,9 @@ from hft_platform.strategy.base import BaseStrategy
 # Shared mocks
 # ---------------------------------------------------------------------------
 class _Depth:
-    best_bid = 10000
-    best_ask = 10010
+    # hftbacktest returns float prices (descaled by x10000 from platform convention).
+    best_bid = 1.0
+    best_ask = 1.001
     best_bid_qty = 100
     best_ask_qty = 200
     bid_qty = 100
@@ -101,7 +101,7 @@ def _patch(monkeypatch):
 # ---------------------------------------------------------------------------
 def test_fill_log_is_numpy_soa(monkeypatch):
     _patch(monkeypatch)
-    a = hbt_adapter.HftBacktestAdapter(strategy=_BuyStrategy("t"), asset_symbol="X", data_path="d")
+    a = hbt_adapter.HftBacktestAdapter(strategy=_BuyStrategy("t"), asset_symbol="X", data="d")
     assert isinstance(a._fill_ts_ns, np.ndarray)
     assert a._fill_ts_ns.dtype == np.int64
     assert isinstance(a._fill_delta, np.ndarray)
@@ -113,7 +113,7 @@ def test_fill_log_is_numpy_soa(monkeypatch):
 # ---------------------------------------------------------------------------
 def test_fill_log_capacity_overflow_handled(monkeypatch):
     _patch(monkeypatch)
-    a = hbt_adapter.HftBacktestAdapter(strategy=_BuyStrategy("t"), asset_symbol="X", data_path="d")
+    a = hbt_adapter.HftBacktestAdapter(strategy=_BuyStrategy("t"), asset_symbol="X", data="d")
     a._fill_ts_ns = np.zeros(2, dtype=np.int64)
     a._fill_delta = np.zeros(2, dtype=np.int32)
     a._fill_position_after = np.zeros(2, dtype=np.int32)
@@ -132,7 +132,7 @@ def test_equity_preallocated_no_append(monkeypatch):
     a = hbt_adapter.HftBacktestAdapter(
         strategy=_NoopStrategy("t"),
         asset_symbol="X",
-        data_path="d",
+        data="d",
         equity_sample_ns=1,
     )
     assert isinstance(a._equity_ts_buf, np.ndarray)
@@ -150,7 +150,7 @@ def test_equity_timestamps_monotonic(monkeypatch):
     a = hbt_adapter.HftBacktestAdapter(
         strategy=_NoopStrategy("t"),
         asset_symbol="X",
-        data_path="d",
+        data="d",
         equity_sample_ns=1,
     )
     a._reset_equity_buffers()
@@ -167,7 +167,7 @@ def test_lob_event_construction_feed(monkeypatch):
     from hft_platform.events import LOBStatsEvent
 
     _patch(monkeypatch)
-    a = hbt_adapter.HftBacktestAdapter(strategy=_NoopStrategy("t"), asset_symbol="X", data_path="d")
+    a = hbt_adapter.HftBacktestAdapter(strategy=_NoopStrategy("t"), asset_symbol="X", data="d")
     event, feat = build_lob_event(a, _Depth(), 1000, 10000, 10010)
     assert isinstance(event, LOBStatsEvent)
     assert event.best_bid == 10000
@@ -186,7 +186,7 @@ def test_lob_event_construction_elapse(monkeypatch):
     a = hbt_adapter.HftBacktestAdapter(
         strategy=_NoopStrategy("t"),
         asset_symbol="X",
-        data_path="d",
+        data="d",
         tick_mode="elapse",
     )
     event, feat = build_lob_event(a, _Depth(), 2000, 10000, 10010)
@@ -199,7 +199,7 @@ def test_lob_event_construction_elapse(monkeypatch):
 # ---------------------------------------------------------------------------
 def test_mid_price_x2_is_integer(monkeypatch):
     _patch(monkeypatch)
-    a = hbt_adapter.HftBacktestAdapter(strategy=_NoopStrategy("t"), asset_symbol="X", data_path="d")
+    a = hbt_adapter.HftBacktestAdapter(strategy=_NoopStrategy("t"), asset_symbol="X", data="d")
     x2 = a.get_mid_price_x2()
     assert isinstance(x2, int)
     assert x2 == 20010
@@ -309,29 +309,6 @@ def test_apply_latency_deterministic():
 
 
 # ---------------------------------------------------------------------------
-# 12. Equity curve fee deduction
-# ---------------------------------------------------------------------------
-def test_equity_curve_fee_deduction():
-    prices = np.array([100.0, 100.0, 100.0])
-    positions = np.array([0.0, 1.0, 0.0])
-    eq = compute_equity_from_positions(prices, positions, fee_rate=0.01, initial_equity=1000.0)
-    assert eq[-1] < 1000.0  # fees reduced equity
-
-
-# ---------------------------------------------------------------------------
-# 13. Adapter/runner equity parity (same function)
-# ---------------------------------------------------------------------------
-def test_adapter_runner_equity_parity():
-    """Both adapter and runner use same compute_equity_from_positions."""
-    prices = np.array([100.0, 101.0, 102.0, 101.0, 100.0])
-    positions = np.array([1.0, 1.0, -1.0, -1.0, 0.0])
-    eq1 = compute_equity_from_positions(prices, positions, fee_rate=0.001)
-    eq2 = compute_equity_from_positions(prices, positions, fee_rate=0.001)
-    np.testing.assert_array_equal(eq1, eq2)
-    assert len(eq1) == len(prices)
-
-
-# ---------------------------------------------------------------------------
 # 14. Walk-forward fold isolation (via frozen dataclass)
 # ---------------------------------------------------------------------------
 def test_walk_forward_fold_isolation():
@@ -359,13 +336,13 @@ def test_feed_elapse_event_parity(monkeypatch):
     feed_adapter = hbt_adapter.HftBacktestAdapter(
         strategy=_NoopStrategy("t"),
         asset_symbol="X",
-        data_path="d",
+        data="d",
         tick_mode="feed",
     )
     elapse_adapter = hbt_adapter.HftBacktestAdapter(
         strategy=_NoopStrategy("t"),
         asset_symbol="X",
-        data_path="d",
+        data="d",
         tick_mode="elapse",
     )
     e1, _ = build_lob_event(feed_adapter, _Depth(), 1000, 10000, 10010)
@@ -386,7 +363,7 @@ def test_tick_overhead_under_100us(monkeypatch):
     a = hbt_adapter.HftBacktestAdapter(
         strategy=_NoopStrategy("t"),
         asset_symbol="X",
-        data_path="d",
+        data="d",
         equity_sample_ns=1,
     )
     a._reset_equity_buffers()

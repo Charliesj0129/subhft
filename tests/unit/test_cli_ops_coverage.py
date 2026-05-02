@@ -5,12 +5,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import tempfile
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -222,9 +219,7 @@ class TestCmdContractsStatus:
         status_file = tmp_path / "status.json"
         status_file.write_text(json.dumps({"running": True}), encoding="utf-8")
 
-        cmd_contracts_status(
-            _ns(contracts=str(f), stale_after_s=3600, status_file=str(status_file))
-        )
+        cmd_contracts_status(_ns(contracts=str(f), stale_after_s=3600, status_file=str(status_file)))
         out = capsys.readouterr().out
         data = json.loads(out)
         assert data["runtime_status"]["running"] is True
@@ -489,16 +484,20 @@ from hft_platform.cli._ops import cmd_strat_test  # noqa: E402
 class TestCmdStratTest:
     def test_import_failure_exits_1(self, capsys):
         """If strategy module can't be imported, exit code 1."""
-        with patch("hft_platform.cli._ops.load_settings") as mock_settings, \
-             patch("hft_platform.cli._ops.import_module", side_effect=ImportError("no such module")):
+        with (
+            patch("hft_platform.cli._ops.load_settings") as mock_settings,
+            patch("hft_platform.cli._ops.import_module", side_effect=ImportError("no such module")),
+        ):
             mock_settings.return_value = ({}, None)
             with pytest.raises(SystemExit) as exc_info:
-                cmd_strat_test(_ns(
-                    module="hft_platform.strategies.nonexistent",
-                    cls="FakeClass",
-                    strategy_id="demo",
-                    symbol="2330",
-                ))
+                cmd_strat_test(
+                    _ns(
+                        module="hft_platform.strategies.nonexistent",
+                        cls="FakeClass",
+                        strategy_id="demo",
+                        symbol="2330",
+                    )
+                )
         assert exc_info.value.code == 1
 
 
@@ -534,80 +533,92 @@ class TestCmdBacktest:
     def test_run_import_failure_exits_1(self, capsys):
         with patch.dict("sys.modules", {"hft_platform.backtest.adapter": None}):
             with pytest.raises(SystemExit) as exc_info:
-                cmd_backtest(_ns(
-                    backtest_cmd="run",
-                    strategy_module=None,
-                    data=["data.npz"],
-                    symbols=["2330"],
-                    tick_sizes=None,
-                    tick_size=1,
-                    lot_sizes=None,
-                    lot_size=1000,
-                    latency_entry=36,
-                    latency_resp=36,
-                    fee_maker=0.0,
-                    fee_taker=0.0,
-                    no_partial_fill=False,
-                    strict_equity=False,
-                    record_out=None,
-                    report=False,
-                    seed=42,
-                ))
+                cmd_backtest(
+                    _ns(
+                        backtest_cmd="run",
+                        strategy_module=None,
+                        data=["data.npz"],
+                        symbols=["2330"],
+                        tick_sizes=None,
+                        tick_size=1,
+                        lot_sizes=None,
+                        lot_size=1000,
+                        latency_entry=36,
+                        latency_resp=36,
+                        fee_maker=0.0,
+                        fee_taker=0.0,
+                        no_partial_fill=False,
+                        strict_equity=False,
+                        record_out=None,
+                        report=False,
+                        seed=42,
+                    )
+                )
         assert exc_info.value.code == 1
 
     def test_run_multiple_data_files_with_strategy_exits_1(self, capsys):
         fake_adapter_mod = MagicMock()
         fake_runner_mod = MagicMock()
-        with patch.dict("sys.modules", {
-            "hft_platform.backtest.adapter": fake_adapter_mod,
-            "hft_platform.backtest.runner": fake_runner_mod,
-        }):
+        with patch.dict(
+            "sys.modules",
+            {
+                "hft_platform.backtest.adapter": fake_adapter_mod,
+                "hft_platform.backtest.runner": fake_runner_mod,
+            },
+        ):
             with pytest.raises(SystemExit) as exc_info:
-                cmd_backtest(_ns(
-                    backtest_cmd="run",
-                    strategy_module="some.module",
-                    strategy_class="Strat",
-                    strategy_id="demo",
-                    symbol="2330",
-                    data=["a.npz", "b.npz"],  # multiple files with strategy
-                    tick_size=1,
-                    lot_size=1000,
-                    fee_maker=0.0,
-                    fee_taker=0.0,
-                    no_partial_fill=False,
-                    price_scale=10000,
-                    timeout=60,
-                    seed=42,
-                ))
+                cmd_backtest(
+                    _ns(
+                        backtest_cmd="run",
+                        strategy_module="some.module",
+                        strategy_class="Strat",
+                        strategy_id="demo",
+                        symbol="2330",
+                        data=["a.npz", "b.npz"],  # multiple files with strategy
+                        tick_size=1,
+                        lot_size=1000,
+                        fee_maker=0.0,
+                        fee_taker=0.0,
+                        no_partial_fill=False,
+                        price_scale=10000,
+                        timeout=60,
+                        seed=42,
+                    )
+                )
         assert exc_info.value.code == 1
 
     def test_run_no_strategy_multiple_data_exits_1(self, capsys):
         fake_adapter_mod = MagicMock()
         fake_runner_mod = MagicMock()
-        with patch.dict("sys.modules", {
-            "hft_platform.backtest.adapter": fake_adapter_mod,
-            "hft_platform.backtest.runner": fake_runner_mod,
-        }):
+        with patch.dict(
+            "sys.modules",
+            {
+                "hft_platform.backtest.adapter": fake_adapter_mod,
+                "hft_platform.backtest.runner": fake_runner_mod,
+            },
+        ):
             with pytest.raises(SystemExit) as exc_info:
-                cmd_backtest(_ns(
-                    backtest_cmd="run",
-                    strategy_module=None,
-                    data=["a.npz", "b.npz"],
-                    symbols=["2330"],
-                    tick_sizes=None,
-                    tick_size=1,
-                    lot_sizes=None,
-                    lot_size=1000,
-                    latency_entry=36,
-                    latency_resp=36,
-                    fee_maker=0.0,
-                    fee_taker=0.0,
-                    no_partial_fill=False,
-                    strict_equity=False,
-                    record_out=None,
-                    report=False,
-                    seed=42,
-                ))
+                cmd_backtest(
+                    _ns(
+                        backtest_cmd="run",
+                        strategy_module=None,
+                        data=["a.npz", "b.npz"],
+                        symbols=["2330"],
+                        tick_sizes=None,
+                        tick_size=1,
+                        lot_sizes=None,
+                        lot_size=1000,
+                        latency_entry=36,
+                        latency_resp=36,
+                        fee_maker=0.0,
+                        fee_taker=0.0,
+                        no_partial_fill=False,
+                        strict_equity=False,
+                        record_out=None,
+                        report=False,
+                        seed=42,
+                    )
+                )
         assert exc_info.value.code == 1
 
     def test_run_no_strategy_runner_returns_none_exits_1(self, capsys):
@@ -617,12 +628,57 @@ class TestCmdBacktest:
         runner_instance.run.return_value = None
         fake_runner_cls.HftBacktestRunner.return_value = runner_instance
         fake_runner_cls.HftBacktestConfig = MagicMock()
-        with patch.dict("sys.modules", {
-            "hft_platform.backtest.adapter": fake_adapter_mod,
-            "hft_platform.backtest.runner": fake_runner_cls,
-        }):
+        with patch.dict(
+            "sys.modules",
+            {
+                "hft_platform.backtest.adapter": fake_adapter_mod,
+                "hft_platform.backtest.runner": fake_runner_cls,
+            },
+        ):
             with pytest.raises(SystemExit) as exc_info:
-                cmd_backtest(_ns(
+                cmd_backtest(
+                    _ns(
+                        backtest_cmd="run",
+                        strategy_module=None,
+                        data=["a.npz"],
+                        symbols=["2330"],
+                        tick_sizes=None,
+                        tick_size=1,
+                        lot_sizes=None,
+                        lot_size=1000,
+                        latency_entry=36,
+                        latency_resp=36,
+                        fee_maker=0.0,
+                        fee_taker=0.0,
+                        no_partial_fill=False,
+                        strict_equity=False,
+                        record_out=None,
+                        report=False,
+                        seed=42,
+                    )
+                )
+        assert exc_info.value.code == 1
+
+    def test_run_no_strategy_success(self, capsys):
+        fake_adapter_mod = MagicMock()
+        fake_runner_mod = MagicMock()
+        result = MagicMock()
+        result.run_id = "r001"
+        result.config_hash = "abc123"
+        result.pnl = 1500.0
+        result.used_synthetic_equity = False
+        result.equity_points = [0.0, 1.0, 2.0]
+        fake_runner_mod.HftBacktestRunner.return_value.run.return_value = result
+        fake_runner_mod.HftBacktestConfig = MagicMock()
+        with patch.dict(
+            "sys.modules",
+            {
+                "hft_platform.backtest.adapter": fake_adapter_mod,
+                "hft_platform.backtest.runner": fake_runner_mod,
+            },
+        ):
+            cmd_backtest(
+                _ns(
                     backtest_cmd="run",
                     strategy_module=None,
                     data=["a.npz"],
@@ -640,43 +696,8 @@ class TestCmdBacktest:
                     record_out=None,
                     report=False,
                     seed=42,
-                ))
-        assert exc_info.value.code == 1
-
-    def test_run_no_strategy_success(self, capsys):
-        fake_adapter_mod = MagicMock()
-        fake_runner_mod = MagicMock()
-        result = MagicMock()
-        result.run_id = "r001"
-        result.config_hash = "abc123"
-        result.pnl = 1500.0
-        result.used_synthetic_equity = False
-        result.equity_points = [0.0, 1.0, 2.0]
-        fake_runner_mod.HftBacktestRunner.return_value.run.return_value = result
-        fake_runner_mod.HftBacktestConfig = MagicMock()
-        with patch.dict("sys.modules", {
-            "hft_platform.backtest.adapter": fake_adapter_mod,
-            "hft_platform.backtest.runner": fake_runner_mod,
-        }):
-            cmd_backtest(_ns(
-                backtest_cmd="run",
-                strategy_module=None,
-                data=["a.npz"],
-                symbols=["2330"],
-                tick_sizes=None,
-                tick_size=1,
-                lot_sizes=None,
-                lot_size=1000,
-                latency_entry=36,
-                latency_resp=36,
-                fee_maker=0.0,
-                fee_taker=0.0,
-                no_partial_fill=False,
-                strict_equity=False,
-                record_out=None,
-                report=False,
-                seed=42,
-            ))
+                )
+            )
         out = capsys.readouterr().out
         assert "Backtest completed" in out
         assert "r001" in out

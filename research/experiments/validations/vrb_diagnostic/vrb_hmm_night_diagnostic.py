@@ -8,6 +8,7 @@ Reports day / night / combined results separately.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -35,7 +36,10 @@ SessionType = Literal["day", "night"]
 
 def get_client() -> clickhouse_connect.driver.Client:
     return clickhouse_connect.get_client(
-        host="localhost", port=8123, username="default", password="changeme",
+        host=os.getenv("HFT_CLICKHOUSE_HOST", "localhost"),
+        port=int(os.getenv("HFT_CLICKHOUSE_PORT", "8123")),
+        username=os.getenv("HFT_CLICKHOUSE_USER", "default"),
+        password=os.getenv("HFT_CLICKHOUSE_PASSWORD", ""),
     )
 
 

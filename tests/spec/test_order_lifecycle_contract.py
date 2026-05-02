@@ -203,12 +203,18 @@ class TestCmdIdMonotonicity:
 
 class TestDeadlineFuture:
     def test_deadline_greater_than_created(self, tmp_path):
+        import time
+
         engine = _make_risk_engine(tmp_path)
         intent = _make_intent()
         decision = engine.evaluate(intent)
         assert decision.approved
+        mono_before = time.monotonic_ns()
         cmd = engine.create_command(decision.intent)
-        assert cmd.deadline_ns > cmd.created_ns
+        # deadline_ns is monotonic-based; created_ns is wall-clock-based.
+        # Verify deadline is in the future relative to its own timebase.
+        assert cmd.deadline_ns > mono_before
+        assert cmd.created_ns > 0
 
 
 # ---------------------------------------------------------------------------
@@ -356,6 +362,7 @@ except ImportError:
     st = _St()  # type: ignore[assignment]
 
 
+@pytest.mark.timeout(120)
 @pytest.mark.skipif(not HYPOTHESIS_AVAILABLE, reason="hypothesis not installed")
 @settings(max_examples=50, deadline=None)
 @given(
@@ -374,6 +381,7 @@ def test_hypothesis_valid_intent_never_raises(price, qty):
         assert isinstance(decision, RiskDecision)
 
 
+@pytest.mark.timeout(120)
 @pytest.mark.skipif(not HYPOTHESIS_AVAILABLE, reason="hypothesis not installed")
 @settings(max_examples=50, deadline=None)
 @given(n=st.integers(min_value=1, max_value=100))

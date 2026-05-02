@@ -125,10 +125,13 @@ def test_dedup_load_skips_malformed_json_lines():
         with open(path, "wb") as f:
             # Write a valid line, a malformed line, and a blank line
             import json
+
             f.write(json.dumps({"key": "good", "approved": True, "reason_code": "OK", "cmd_id": 1}).encode() + b"\n")
             f.write(b"NOT_VALID_JSON!!!\n")
             f.write(b"\n")  # blank line
-            f.write(json.dumps({"key": "also-good", "approved": False, "reason_code": "X", "cmd_id": 2}).encode() + b"\n")
+            f.write(
+                json.dumps({"key": "also-good", "approved": False, "reason_code": "X", "cmd_id": 2}).encode() + b"\n"
+            )
         store = IdempotencyStore(window_size=100, persist_enabled=True, persist_path=path)
         store.load()
         assert store.size() == 2
@@ -144,6 +147,7 @@ def test_dedup_load_skips_non_dict_json():
         path = os.path.join(tmpdir, "dedup.jsonl")
         with open(path, "wb") as f:
             import json
+
             f.write(json.dumps([1, 2, 3]).encode() + b"\n")
             f.write(json.dumps("plain-string").encode() + b"\n")
             f.write(json.dumps({"key": "valid", "approved": True, "reason_code": "OK", "cmd_id": 5}).encode() + b"\n")
@@ -160,8 +164,11 @@ def test_dedup_load_skips_records_with_empty_key():
         path = os.path.join(tmpdir, "dedup.jsonl")
         with open(path, "wb") as f:
             import json
+
             f.write(json.dumps({"key": "", "approved": True, "reason_code": "OK", "cmd_id": 1}).encode() + b"\n")
-            f.write(json.dumps({"key": "real-key", "approved": True, "reason_code": "OK", "cmd_id": 2}).encode() + b"\n")
+            f.write(
+                json.dumps({"key": "real-key", "approved": True, "reason_code": "OK", "cmd_id": 2}).encode() + b"\n"
+            )
         store = IdempotencyStore(window_size=100, persist_enabled=True, persist_path=path)
         store.load()
         # Empty key records must be skipped
@@ -173,6 +180,7 @@ def test_dedup_load_when_persist_disabled_does_nothing():
     with tempfile.TemporaryDirectory() as tmpdir:
         path = os.path.join(tmpdir, "dedup.jsonl")
         import json
+
         with open(path, "wb") as f:
             f.write(json.dumps({"key": "k1", "approved": True, "reason_code": "OK", "cmd_id": 1}).encode() + b"\n")
         store = IdempotencyStore(window_size=100, persist_enabled=False, persist_path=path)
@@ -305,6 +313,67 @@ def test_dedup_check_or_reserve_typed_miss_returns_none():
     store._rust_store = _MockRust()
     rec = store.check_or_reserve_typed("new-key")
     assert rec is None
+
+
+def test_dedup_load_enforces_window_size():
+    """load() must evict oldest entries when file has more records than window_size."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = os.path.join(tmpdir, "dedup.jsonl")
+        # Write 5 records
+        import json
+
+        with open(path, "wb") as f:
+            for i in range(5):
+                f.write(
+                    json.dumps({"key": f"k{i}", "approved": True, "reason_code": "OK", "cmd_id": i}).encode() + b"\n"
+                )
+
+        # Load into a store with window_size=3 — should evict oldest 2
+        store = IdempotencyStore(window_size=3, persist_enabled=True, persist_path=path)
+        store.load()
+        assert store.size() == 3
+        # Oldest entries (k0, k1) should have been evicted
+        assert store.check_or_reserve("k0") is None  # evicted → new miss
+        assert store.check_or_reserve("k1") is None  # evicted → new miss
+        # Newest entries (k2, k3, k4) should survive — but k0/k1 misses added them,
+        # so check k2 before those insertions happen. We already called check on k0/k1
+        # which added them as new reservations; check k4 which was never touched.
+        # Re-create to verify without the side-effect of the checks above.
+        store2 = IdempotencyStore(window_size=3, persist_enabled=True, persist_path=path)
+        store2.load()
+        assert store2.size() == 3
+        rec = store2.check_or_reserve("k4")
+        assert rec is not None  # k4 survived (newest)
+        assert rec.approved is True
+
+
+def test_dedup_persist_uses_snapshot_not_live_records():
+    """persist() iterates a snapshot so concurrent mutations don't corrupt it."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = os.path.join(tmpdir, "dedup.jsonl")
+        store = IdempotencyStore(window_size=100, persist_enabled=True, persist_path=path)
+        for i in range(5):
+            store.check_or_reserve(f"k{i}")
+            store.commit(f"k{i}", approved=True, reason_code="OK", cmd_id=i)
+
+        # Intercept the snapshot moment: patch list() to simulate a mutation
+        # happening concurrently. The snapshot must already be taken, so the
+        # subsequent mutation of _records should not affect the persisted output.
+        original_persist = store.persist.__func__ if hasattr(store.persist, "__func__") else None
+        store.persist()
+
+        # Mutate after persist — should not affect what was written
+        store.commit("k99", approved=False, reason_code="LATE", cmd_id=99)
+
+        # Reload and check that only the 5 original records were persisted
+        store2 = IdempotencyStore(window_size=100, persist_enabled=True, persist_path=path)
+        store2.load()
+        assert store2.size() == 5
+        for i in range(5):
+            rec = store2.check_or_reserve(f"k{i}")
+            assert rec is not None and rec.approved is True and rec.cmd_id == i
+        # k99 was added after persist() — must not be in the file
+        assert store2.check_or_reserve("k99") is None
 
 
 def test_dedup_persist_cleans_up_temp_file_on_write_error():

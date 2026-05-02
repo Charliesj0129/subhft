@@ -101,33 +101,39 @@ class BiasReasoner:
 
         # 1. flow.session_ud (weight 0.20)
         ud = fr.flow.session_ud
-        evidences.append(Evidence(
-            source="flow.session_ud",
-            fact_value=f"{ud:.2f}",
-            direction=_threshold_dir(ud, bull_above=1.15, bear_below=0.85),
-            weight=0.20,
-        ))
+        evidences.append(
+            Evidence(
+                source="flow.session_ud",
+                fact_value=f"{ud:.2f}",
+                direction=_threshold_dir(ud, bull_above=1.15, bear_below=0.85),
+                weight=0.20,
+            )
+        )
 
         # 2. flow.eod_drift (weight 0.15)
         drift = fr.flow.eod_drift
-        evidences.append(Evidence(
-            source="flow.eod_drift",
-            fact_value=f"{drift:+.2f}",
-            direction=_threshold_dir(drift, bull_above=0.20, bear_below=-0.20),
-            weight=0.15,
-        ))
+        evidences.append(
+            Evidence(
+                source="flow.eod_drift",
+                fact_value=f"{drift:+.2f}",
+                direction=_threshold_dir(drift, bull_above=0.20, bear_below=-0.20),
+                weight=0.15,
+            )
+        )
 
         # 3. flow.sustained_runs (weight 0.15)
         evidences.append(self._eval_sustained_runs(fr))
 
         # 4. chips.net_ratio (weight 0.20)
         nr = fr.chips.net_ratio
-        evidences.append(Evidence(
-            source="chips.net_ratio",
-            fact_value=f"{nr:.2f}",
-            direction=_threshold_dir(nr, bull_above=0.57, bear_below=0.43),
-            weight=0.20,
-        ))
+        evidences.append(
+            Evidence(
+                source="chips.net_ratio",
+                fact_value=f"{nr:.2f}",
+                direction=_threshold_dir(nr, bull_above=0.57, bear_below=0.43),
+                weight=0.20,
+            )
+        )
 
         # 5. segments.closing (weight 0.10)
         evidences.append(self._eval_closing_segment(fr))
@@ -135,12 +141,14 @@ class BiasReasoner:
         # 6. cross_day.trend (weight 0.10)
         trend = fr.cross_day.trend_direction
         direction = {"up": "bull", "down": "bear"}.get(trend, "neutral")
-        evidences.append(Evidence(
-            source="cross_day.trend",
-            fact_value=trend,
-            direction=direction,
-            weight=0.10,
-        ))
+        evidences.append(
+            Evidence(
+                source="cross_day.trend",
+                fact_value=trend,
+                direction=direction,
+                weight=0.10,
+            )
+        )
 
         # 7. cross_day.flow_reversal (weight 0.05)
         evidences.append(self._eval_flow_reversal(fr))
@@ -215,7 +223,7 @@ class BiasReasoner:
         if drift > 0.20:
             parts.append("尾盤加壓")
         elif drift < -0.20:
-            parts.append("尾盤加壓")
+            parts.append("尾盤轉弱")
 
         if fr.cross_day.trend_direction == "up":
             parts.append("連續上漲趨勢")
@@ -252,11 +260,13 @@ class LevelReasoner:
         # Chip sources: clusters → PriceLevel
         for cluster in fr.chips.clusters:
             strength = min(1.0, cluster.trade_count / 10.0)
-            raw_levels.append(PriceLevel(
-                price=cluster.price_center,
-                strength=strength,
-                reason=f"大單群聚 {cluster.dominant_side}",
-            ))
+            raw_levels.append(
+                PriceLevel(
+                    price=cluster.price_center,
+                    strength=strength,
+                    reason=f"大單群聚 {cluster.dominant_side}",
+                )
+            )
 
         # Group by proximity
         groups = self._group_by_proximity(raw_levels, _LEVEL_PROXIMITY)
@@ -283,18 +293,19 @@ class LevelReasoner:
             else:
                 side = "pivot"
 
-            enriched.append(EnrichedLevel(
-                price=price,
-                side=side,
-                strength=strength,
-                sources=sources,
-                confluence_count=confluence,
-            ))
+            enriched.append(
+                EnrichedLevel(
+                    price=price,
+                    side=side,
+                    strength=strength,
+                    sources=sources,
+                    confluence_count=confluence,
+                )
+            )
 
         # Filter: confluence >= 2 OR (confluence == 1 AND strength >= 0.7)
         filtered = [
-            lv for lv in enriched
-            if lv.confluence_count >= 2 or (lv.confluence_count == 1 and lv.strength >= 0.7)
+            lv for lv in enriched if lv.confluence_count >= 2 or (lv.confluence_count == 1 and lv.strength >= 0.7)
         ]
 
         # Sort by strength descending within each side
@@ -364,15 +375,16 @@ class ScenarioReasoner:
             target = min(prev_low, s1 - atr) if s1 is not None else prev_low
             stop = s1 + atr // 2 if s1 is not None else close + atr // 2
             prob = self._probability(bias, "bearish")
-            scenarios.append(Scenario(
-                id="break_below",
-                label="破底加速",
-                probability=prob,
-                condition=f"跌破支撐 {s1}",
-                target=target,
-                description=f"若跌破 S1 支撐，目標 {target}，停損 {stop}。"
-                f"偏空信心 {int(bias.confidence * 100)}%。",
-            ))
+            scenarios.append(
+                Scenario(
+                    id="break_below",
+                    label="破底加速",
+                    probability=prob,
+                    condition=f"跌破支撐 {s1}",
+                    target=target,
+                    description=f"若跌破 S1 支撐，目標 {target}，停損 {stop}。偏空信心 {int(bias.confidence * 100)}%。",
+                )
+            )
 
         # 2. hold_bounce: support exists + any bull evidence
         has_bull_ev = any(ev.direction == "bull" for ev in bias.evidences)
@@ -380,22 +392,21 @@ class ScenarioReasoner:
             target = r1 if r1 is not None else prev_high
             stop = s1 - atr // 2 if s1 is not None else close - atr // 2
             prob = self._probability(bias, "bullish")
-            scenarios.append(Scenario(
-                id="hold_bounce",
-                label="守支撐反彈",
-                probability=prob,
-                condition=f"守住支撐 {s1}，多方反彈",
-                target=target,
-                description=f"支撐守住後反彈，目標 {target}，停損 {stop}。",
-            ))
+            scenarios.append(
+                Scenario(
+                    id="hold_bounce",
+                    label="守支撐反彈",
+                    probability=prob,
+                    condition=f"守住支撐 {s1}，多方反彈",
+                    target=target,
+                    description=f"支撐守住後反彈，目標 {target}，停損 {stop}。",
+                )
+            )
 
         # 3. trend_continue: cross_day trend >= 2 days same + bias concordant
         trend = fr.cross_day.trend_direction
         trend_days = len(fr.cross_day.prev_days)
-        bias_concordant = (
-            (trend == "up" and bias.bias == "bullish")
-            or (trend == "down" and bias.bias == "bearish")
-        )
+        bias_concordant = (trend == "up" and bias.bias == "bullish") or (trend == "down" and bias.bias == "bearish")
         if trend in ("up", "down") and trend_days >= 2 and bias_concordant:
             if trend == "up":
                 target = close + int(1.5 * atr)
@@ -404,14 +415,16 @@ class ScenarioReasoner:
                 target = close - int(1.5 * atr)
                 stop = close + atr // 2
             prob = self._probability(bias, bias.bias)
-            scenarios.append(Scenario(
-                id="trend_continue",
-                label="趨勢延續",
-                probability=prob,
-                condition=f"連續 {trend_days} 日{_trend_label(trend)}",
-                target=target,
-                description=f"趨勢延續，目標 {target}，停損 {stop}。",
-            ))
+            scenarios.append(
+                Scenario(
+                    id="trend_continue",
+                    label="趨勢延續",
+                    probability=prob,
+                    condition=f"連續 {trend_days} 日{_trend_label(trend)}",
+                    target=target,
+                    description=f"趨勢延續，目標 {target}，停損 {stop}。",
+                )
+            )
 
         # 4. gap_fill: |open - prev_close| / prev_close >= 0.003
         open_price = fr.session_data.open
@@ -426,29 +439,32 @@ class ScenarioReasoner:
             else:
                 stop = open_price - atr // 2
             prob = "中"
-            scenarios.append(Scenario(
-                id="gap_fill",
-                label="跳空回補",
-                probability=prob,
-                condition=f"跳空 {gap_ratio:.1%}",
-                target=prev_close,
-                description=f"跳空{'上' if gap_side == 'up' else '下'}回補至前收 {prev_close}，"
-                f"停損 {stop}。",
-            ))
+            scenarios.append(
+                Scenario(
+                    id="gap_fill",
+                    label="跳空回補",
+                    probability=prob,
+                    condition=f"跳空 {gap_ratio:.1%}",
+                    target=prev_close,
+                    description=f"跳空{'上' if gap_side == 'up' else '下'}回補至前收 {prev_close}，停損 {stop}。",
+                )
+            )
 
         # 5. range_bound: range_atr_ratio < 0.7 + bias neutral
         if fr.volatility.range_atr_ratio < 0.7 and bias.bias == "neutral":
             high = fr.session_data.high
             low = fr.session_data.low
             stop_buf = int(0.3 * atr) if atr > 0 else 0
-            scenarios.append(Scenario(
-                id="range_bound",
-                label="區間震盪",
-                probability="中",
-                condition=f"區間/ATR={fr.volatility.range_atr_ratio:.2f} < 0.7",
-                target=high,
-                description=f"區間震盪 {low}-{high}，突破停損 ±{stop_buf}。",
-            ))
+            scenarios.append(
+                Scenario(
+                    id="range_bound",
+                    label="區間震盪",
+                    probability="中",
+                    condition=f"區間/ATR={fr.volatility.range_atr_ratio:.2f} < 0.7",
+                    target=high,
+                    description=f"區間震盪 {low}-{high}，突破停損 ±{stop_buf}。",
+                )
+            )
 
         return scenarios
 
@@ -486,14 +502,15 @@ class NarrativeReasoner:
 
             # Detect turning points
             if prev_side is not None and prev_side != seg.dominant_side:
-                if (
-                    (prev_side == "bull" and seg.dominant_side == "bear")
-                    or (prev_side == "bear" and seg.dominant_side == "bull")
+                if (prev_side == "bull" and seg.dominant_side == "bear") or (
+                    prev_side == "bear" and seg.dominant_side == "bull"
                 ):
-                    turning_points.append((
-                        seg.name,
-                        f"{_side_chinese(prev_side)}→{_side_chinese(seg.dominant_side)}",
-                    ))
+                    turning_points.append(
+                        (
+                            seg.name,
+                            f"{_side_chinese(prev_side)}→{_side_chinese(seg.dominant_side)}",
+                        )
+                    )
             prev_side = seg.dominant_side
 
         conclusion = self._build_conclusion(fr)

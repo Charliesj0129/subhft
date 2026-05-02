@@ -6,6 +6,8 @@ import time
 
 from structlog import get_logger
 
+from hft_platform.observability.metrics import MetricsRegistry
+
 logger = get_logger("order.circuit_breaker")
 
 
@@ -71,6 +73,7 @@ class StrategyCircuitBreakerManager:
         "_strategy_limits",
         "_max_strategies",
         "_lock",
+        "_metrics",
     )
 
     def __init__(
@@ -86,6 +89,7 @@ class StrategyCircuitBreakerManager:
         self._breakers: dict[str, CircuitBreaker] = {}
         self._max_strategies = max_strategies
         self._lock = threading.Lock()
+        self._metrics = MetricsRegistry.get()
 
     def get_breaker(self, strategy_id: str) -> CircuitBreaker:
         """Get or create a circuit breaker for a strategy."""
@@ -121,10 +125,20 @@ class StrategyCircuitBreakerManager:
     def record_success(self, strategy_id: str) -> None:
         """Record a successful order for a strategy."""
         self.get_breaker(strategy_id).record_success()
+        try:
+            self._metrics.circuit_breaker_state.labels(component=f"strategy:{strategy_id}").set(0)
+        except Exception:
+            pass
 
     def record_failure(self, strategy_id: str) -> bool:
         """Record a failed order. Returns True if breaker tripped."""
-        return self.get_breaker(strategy_id).record_failure()
+        tripped = self.get_breaker(strategy_id).record_failure()
+        if tripped:
+            try:
+                self._metrics.circuit_breaker_state.labels(component=f"strategy:{strategy_id}").set(1)
+            except Exception:
+                pass
+        return tripped
 
     def _evict_idle(self) -> None:
         """Evict healthy breakers with zero failures."""

@@ -5,7 +5,7 @@
 ## 0. 前置需求
 
 必要：
-- Python 3.10+
+- Python 3.12+
 - `uv`
 
 選用：
@@ -162,6 +162,6 @@ uv run python scripts/latency/e2e_clickhouse_report.py --window-min 10
 ```
 
 ## 10. 問題排查入口
-- [`docs/runbooks.md`](runbooks.md)
-- [`docs/troubleshooting.md`](troubleshooting.md)
-- [`docs/observability_minimal.md`](observability_minimal.md)
+- [Runbooks](../runbooks/README.md)
+- [Troubleshooting](../operations/troubleshooting.md)
+- [Observability](../operations/observability.md)

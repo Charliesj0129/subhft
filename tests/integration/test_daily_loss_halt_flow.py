@@ -214,3 +214,20 @@ class TestDailyLossSendsTelegramNotification:
         await asyncio.sleep(0)
 
         assert mock_dispatcher.notify_daily_loss.call_count == call_count_after_first
+
+
+class TestUnrealizedPnlTriggersHaltWithoutEvaluate:
+    """Verify update_unrealized_pnl triggers HALT without waiting for evaluate()."""
+
+    def test_unrealized_loss_triggers_halt_via_update(self, engine):
+        """Unrealized loss exceeding limit triggers HALT without evaluate()."""
+        assert engine.storm_guard.state == StormGuardState.NORMAL
+
+        # Record some realized loss near threshold
+        engine.notify_fill_pnl("s1", -80_000_000)
+
+        # Unrealized loss pushes total over the limit — should trigger HALT
+        # without needing a new intent/evaluate() call.
+        engine.update_unrealized_pnl(-30_000_000)
+
+        assert engine.storm_guard.state == StormGuardState.HALT

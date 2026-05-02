@@ -29,11 +29,19 @@ def _guard(
     cooldown_s: float = 0.0,
     halt_cooldown_s: float = 0.0,
     de_escalate_n: int = 1,
+    warm_cooldown_s: float = 0.0,
 ) -> StormGuard:
-    """Create a StormGuard with env-driven hysteresis overridden for testing."""
+    """Create a StormGuard with env-driven hysteresis overridden for testing.
+
+    P4 (2026-04-28): ``warm_cooldown_s`` (default 0.0) added so existing
+    tests that rely on instant WARM->NORMAL de-escalation continue to work.
+    The dedicated WARM cooldown enforcement is covered by
+    ``test_stormguard_warm_cooldown.py``.
+    """
     sg = StormGuard(thresholds=thresholds, on_halt_callback=on_halt_callback)
     sg._storm_cooldown_s = cooldown_s
     sg._halt_cooldown_s = halt_cooldown_s
+    sg._warm_cooldown_s = warm_cooldown_s
     sg._de_escalate_threshold = de_escalate_n
     return sg
 
@@ -198,8 +206,16 @@ class TestDeEscalation:
         assert sg.state == StormGuardState.NORMAL
 
     def test_warm_de_escalation_no_cooldown_needed(self) -> None:
-        """WARM->NORMAL de-escalation doesn't require storm cooldown."""
-        sg = _guard(cooldown_s=0, de_escalate_n=1)
+        """WARM->NORMAL de-escalation respects the WARM cooldown (default 30s).
+
+        Pre-P4 (2026-04-28) behaviour: WARM was the only elevated state
+        without a cooldown, so NORMAL<->WARM could oscillate freely. The
+        production bug (EXFE6 flap, three cycles in <1hr) was rooted in
+        that gap. Post-P4 the cooldown applies; this test sets it to 0
+        explicitly to preserve the original "instant de-escalation" intent
+        while documenting the new gate.
+        """
+        sg = _guard(cooldown_s=0, de_escalate_n=1, warm_cooldown_s=0.0)
         sg.update(drawdown_bps=-50)
         assert sg.state == StormGuardState.WARM
         sg.update(drawdown_bps=0)

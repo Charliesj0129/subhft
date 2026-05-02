@@ -3,12 +3,16 @@ from __future__ import annotations
 import json
 import os
 import threading
-import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
+from hft_platform.core import timebase
 from hft_platform.utils.serialization import serialize
+
+_TZ_TAIPEI = ZoneInfo("Asia/Taipei")
 
 
 @dataclass(slots=True)
@@ -45,7 +49,7 @@ class DecisionTraceSampler:
         if self._counter != 0:
             return
         record = {
-            "ts_ns": time.time_ns(),
+            "ts_ns": timebase.now_ns(),
             "stage": str(stage),
             "trace_id": str(trace_id or ""),
             "payload": serialize(payload),
@@ -67,7 +71,7 @@ class DecisionTraceSampler:
             return
 
     def _current_path(self) -> Path:
-        day = time.strftime("%Y%m%d", time.gmtime())
+        day = datetime.now(tz=_TZ_TAIPEI).strftime("%Y%m%d")
         return Path(self.out_dir) / f"{day}.jsonl"
 
     def _rollover_path(self, base: Path) -> Path:

@@ -1,0 +1,25 @@
+# config/research/gate_thresholds.yaml
+# Gate C (backtest validation) thresholds, split by strategy type.
+# Maker has lower Sharpe thresholds because passive strategies
+# have naturally lower Sharpe but higher capacity.
+
+taker:
+  sharpe_is_min: 1.0
+  sharpe_oos_min: 0.5
+  is_oos_gap_max_pct: 50
+  winning_day_pct_min: 55
+  max_drawdown_pct: 30
+
+maker:
+  sharpe_is_min: 0.5
+  sharpe_oos_min: 0.3
+  is_oos_gap_max_pct: 50
+  winning_day_pct_min: 55
+  max_drawdown_pct: 30
+  pnl_per_fill_min_pts: 0
+  adverse_fill_pct_max: 50
+  # Added by Plan C Task C9:
+  fill_rate_deviation_max: 0.5
+  walk_forward_positive_fold_pct: 60
+  stress_max_drawdown_multiplier: 2.0
+  param_robustness_pnl_cv_max: 0.8

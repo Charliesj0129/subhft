@@ -76,24 +76,68 @@ Fubon 券商：設定 `HFT_BROKER=fubon` + `HFT_FUBON_*` 環境變數。
 <!-- AUTO-GENERATED: commands-table -->
 ## 常用命令
 
+### 開發
+
 | 命令 | 說明 |
 |------|------|
 | `make dev` | 安裝開發依賴 |
 | `make build-rust` | 編譯 Rust 擴展 (maturin) |
+| `make help` | 顯示全部 139 個 Makefile 目標 |
+
+### 測試與品質
+
+| 命令 | 說明 |
+|------|------|
 | `make test` | 跑 unit tests |
 | `make test-all` | Unit + integration tests |
+| `make test-file FILE=...` | 跑單一測試檔 (無 coverage gate) |
 | `make coverage` | 測試覆蓋率 (最低 70%) |
 | `make lint` | Ruff linter |
 | `make typecheck` | mypy 型別檢查 |
 | `make discipline` | AST 紀律檢查 (9 rules) |
-| `make check` | 全部品質閘門 |
+| `make check` | lint + typecheck + discipline + dependency-boundary + test-hygiene |
+| `make ci` | 完整 CI pipeline (format-check + lint + typecheck + coverage) |
+| `make security-audit` | 依賴安全掃描 |
+
+### 部署與運維
+
+| 命令 | 說明 |
+|------|------|
 | `make start` | Docker Compose 啟動 |
+| `make start-engine` | 啟動 HFT engine + 核心基礎設施 |
 | `make stop` | Docker Compose 停止 |
+| `make logs` | 顯示 hft-engine 日誌 |
+| `make pre-market-check` | 盤前健康檢查 (Docker, CK, Redis, WAL) |
+| `make post-market-check` | 盤後健康檢查 (WAL, recorder, PnL) |
+| `make recorder-status` | 顯示 WAL backlog 與 ClickHouse 狀態 |
+| `make canary-auto` | One-shot canary gate (snapshot + wait + evaluate) |
+
+### 效能
+
+| 命令 | 說明 |
+|------|------|
 | `make benchmark` | 效能基準測試 |
-| `make hotpath-profile` | Hot path 延遲分析 |
+| `make hotpath-profile` | Hot path 延遲分析 (normalizer→LOB→feature→strategy→risk) |
+| `make benchmark-baseline` | 產生 baseline for Darwin Gate |
+| `make latency-gate-ci` | CI 延遲回歸檢查 |
+
+### 研究與 Alpha
+
+| 命令 | 說明 |
+|------|------|
 | `make research ALPHA=<id> OWNER=<owner> DATA='<path>'` | Alpha 研究 pipeline (Gate A-E) |
 | `make research-scaffold ALPHA=<id>` | 建立新 alpha 骨架 |
-| `make help` | 顯示所有 Makefile 目標 |
+| `make research-report ALPHA=<id>` | 渲染 promotion 報告 |
+| `make research-fetch-paper ARXIV=<id>` | 抓取 arXiv 論文 |
+
+### 演練 (Drills)
+
+| 命令 | 說明 |
+|------|------|
+| `make drill-ck-down` | ClickHouse 停機 30s 演練 (WAL fallback) |
+| `make drill-wal-pressure` | 磁碟壓力演練 |
+| `make drill-recon-mismatch` | 對帳不符演練 |
+| `make rollback-drill` | Rollback 程序演練 |
 <!-- END AUTO-GENERATED: commands-table -->
 
 ## 測試與品質
@@ -144,59 +188,97 @@ make ci                # 完整 CI pipeline (format-check + lint + typecheck + c
 <!-- AUTO-GENERATED: env-table -->
 ## 關鍵環境變數
 
+### 核心
+
 | 變數 | 預設 | 說明 |
 |------|------|------|
 | `HFT_MODE` | `sim` | 執行模式: `sim` / `live` / `replay` |
+| `HFT_ORDER_MODE` | `sim` | 訂單模式: `sim` / `live` (**live = 真錢**) |
 | `HFT_BROKER` | `shioaji` | 券商: `shioaji` / `fubon` |
 | `HFT_SYMBOLS` | — | 逗號分隔 symbol 清單 |
-| `HFT_GATEWAY_ENABLED` | `0` | `1` = 啟用 order/risk gateway |
-| `HFT_RECORDER_MODE` | `direct` | `wal_first` = WAL 優先寫入 |
-| `HFT_FEATURE_ENGINE_ENABLED` | `1` | `0` = 停用 FeatureEngine |
-| `HFT_FUSED_NORMALIZER` | `0` | `1` = Rust fused normalizer+LOB |
-| `HFT_STORMGUARD_FEED_GAP_HALT_S` | `30` | Feed gap 觸發 HALT 秒數 |
 | `SHIOAJI_API_KEY` | — | Shioaji API Key |
 | `SHIOAJI_SECRET_KEY` | — | Shioaji Secret Key |
 
-完整清單: [docs/operations/env-vars-reference.md](docs/operations/env-vars-reference.md)
+### 架構開關
+
+| 變數 | 預設 | 說明 |
+|------|------|------|
+| `HFT_GATEWAY_ENABLED` | `0` | `1` = 啟用 CE-M2 order/risk gateway |
+| `HFT_RECORDER_MODE` | `direct` | `wal_first` = WAL 優先寫入 (CE-M3) |
+| `HFT_FEATURE_ENGINE_ENABLED` | `1` | `0` = 停用 FeatureEngine (27 features v3) |
+| `HFT_FUSED_NORMALIZER` | `0` | `1` = Rust fused normalizer+LOB (20-30x) |
+| `HFT_FEATURE_ENGINE_BACKEND` | `python` | `rust` = Rust feature kernel |
+
+### 安全與監控
+
+| 變數 | 預設 | 說明 |
+|------|------|------|
+| `HFT_STORMGUARD_FEED_GAP_HALT_S` | `30` | Feed gap 觸發 HALT 秒數 |
+| `HFT_RECONNECT_HOURS` | `08:30-13:35` | 自動重連交易時段 |
+| `HFT_MONITOR_LIVE_ENABLED` | `0` | `1` = 啟用 Redis live publisher |
+| `HFT_TELEGRAM_ENABLED` | `0` | `1` = 啟用 Telegram 通知 |
+| `HFT_STARTUP_RECON_ENABLED` | `1` | 啟動部位恢復 |
+| `HFT_CHECKPOINT_ENABLED` | `1` | 定期部位 checkpoint |
+
+完整清單 (60+ 變數): [docs/operations/env-vars-reference.md](docs/operations/env-vars-reference.md)
 <!-- END AUTO-GENERATED: env-table -->
 
 ## 專案結構
 
 ```
-src/hft_platform/     Runtime 核心 (29 packages, ~55k LOC)
-├── feed_adapter/     多券商市場資料 (Shioaji + Fubon)
-├── feature/          FeatureEngine (16 LOB 衍生特徵)
-├── strategy/         策略執行器 + circuit breaker
-├── risk/             風險引擎 + StormGuard FSM
-├── order/            訂單轉譯 + rate limiting
-├── execution/        成交路由 + 部位追蹤
-├── recorder/         ClickHouse + WAL 持久化
-├── alpha/            Alpha 治理 pipeline (Gate A-F)
-├── monitor/          Signal Monitor TUI
-├── gateway/          Order/Risk gateway
-├── observability/    Prometheus metrics
-└── services/         Bootstrap + 服務編排
+src/hft_platform/        Runtime 核心 (37 packages, ~210 files, ~44k LOC)
+├── feed_adapter/        多券商市場資料 (Shioaji 20 files + Fubon 14 files)
+│   ├── shioaji/         Shioaji 完整子包 (session/quote/order/account/contracts)
+│   ├── fubon/           Fubon 完整子包
+│   └── _base/           共用基類 (session_runtime, quote_watchdog, cooldown)
+├── feature/             FeatureEngine v3 (27 LOB 衍生特徵, Python/Rust dual)
+├── engine/              RingBufferBus (3 modes: python/rust_pyobj/rust_typed)
+├── strategy/            策略 SDK + StrategyRunner + circuit breaker
+├── strategies/          7 core + 5 alpha 策略實作
+├── risk/                風險引擎 (10 files) + StormGuard FSM + validators
+├── order/               訂單 dispatch + rate limiting + shadow mode
+├── execution/           成交路由 + 部位追蹤 + 對帳 + execution optimizer (15 files)
+├── gateway/             CE-M2 Order/Risk gateway (optional)
+├── recorder/            ClickHouse + WAL 持久化 (22 files, dual mode)
+├── services/            Bootstrap + 服務編排 (11 files, 18+ services)
+├── config/              5 層 config merge + symbol DSL + hot reload
+├── core/                timebase, pricing, order_ids, market_calendar
+├── alpha/               Alpha 治理 pipeline Gate A-F (18+ files)
+├── ops/                 運維 (14 files: session governor, autonomy, flattener)
+├── monitor/             Signal Monitor TUI (19 files, CK+Redis dual source)
+├── observability/       Prometheus 100+ metrics + health server
+├── notifications/       Telegram + Webhook + AlertManager
+├── reports/             每日市場報告 pipeline (collector→reasoner→composer)
+├── tca/                 Transaction Cost Analysis
+├── options/             選擇權定價 + Greeks + IV surface
+├── bot/                 Telegram Bot
+├── backtest/            HftBacktest 整合
+└── ...                  analytics, data_quality, diagnostics, ipc, testing, utils
 
-rust_core/            Rust 擴展 (PyO3, ~6k LOC)
-config/               YAML 設定 + 環境覆蓋
-research/             研究工廠 (102+ alpha, SOP pipeline)
-tests/                Unit / Integration / Benchmark (485 files)
-docs/                 架構 / 運維 / Runbooks
-.agent/               AI 規則 / Skills / Memory
+rust_core/               Rust 擴展 (PyO3, 36 pyclass + 22 pyfunction)
+config/                  YAML 設定 + 環境覆蓋
+research/                研究工廠 (8 surviving alpha, SOP pipeline)
+tests/                   Unit / Integration / Benchmark (322 files)
+docs/                    架構 / 運維 / Runbooks (306 files)
+.agent/                  AI 規則 / Skills / Memory
 ```
 
 ## 文件入口
 
 | 類別 | 文件 |
 |------|------|
-| 速查表 | [docs/AI_DEVELOPER_CHEAT_SHEET.md](docs/AI_DEVELOPER_CHEAT_SHEET.md) |
-| 新手入門 | [docs/getting_started.md](docs/getting_started.md) |
-| CLI 參考 | [docs/cli_reference.md](docs/cli_reference.md) |
-| 設定參考 | [docs/config_reference.md](docs/config_reference.md) |
-| 部署指南 | [docs/deployment_guide.md](docs/deployment_guide.md) |
+| 速查表 | [docs/guides/ai-developer-cheat-sheet.md](docs/guides/ai-developer-cheat-sheet.md) |
+| 新手入門 | [docs/guides/getting-started.md](docs/guides/getting-started.md) |
+| CLI 參考 | [docs/guides/cli-reference.md](docs/guides/cli-reference.md) |
+| 設定參考 | [docs/guides/config-reference.md](docs/guides/config-reference.md) |
+| 策略開發 | [docs/guides/strategy-guide.md](docs/guides/strategy-guide.md) |
+| Feature 指南 | [docs/guides/feature-guide.md](docs/guides/feature-guide.md) |
 | 架構基線 | [docs/architecture/current-architecture.md](docs/architecture/current-architecture.md) |
-| 運維手冊 | [docs/runbooks.md](docs/runbooks.md) |
-| 策略開發 | [docs/strategy-guide.md](docs/strategy-guide.md) |
+| 模組參考 | [docs/MODULES_REFERENCE.md](docs/MODULES_REFERENCE.md) |
+| 環境變數 | [docs/operations/env-vars-reference.md](docs/operations/env-vars-reference.md) |
+| 部署指南 | [docs/operations/deployment.md](docs/operations/deployment.md) |
+| Runbooks | [docs/runbooks/README.md](docs/runbooks/README.md) |
+| 排錯指南 | [docs/operations/troubleshooting.md](docs/operations/troubleshooting.md) |
 | Agent Teams | [docs/agent-teams/README.md](docs/agent-teams/README.md) |
 | 研究 SOP | [research/SOP.md](research/SOP.md) |
 | 路線圖 | [ROADMAP.md](ROADMAP.md) |

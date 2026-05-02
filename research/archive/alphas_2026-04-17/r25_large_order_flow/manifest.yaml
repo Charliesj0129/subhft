@@ -1,0 +1,76 @@
+alpha_id: r25_large_order_flow
+hypothesis: >
+  Large institutional orders on TAIFEX futures manifest as multi-level price
+  sweeps (>= 2 ticks in consecutive same-direction moves). These are the
+  visible start of metaorders that continue over seconds to minutes (square-root
+  law). After detecting a sweep, if the FeatureEngine ofi_l1_ema5s [22] remains
+  same-sign as sweep direction for the confirmation window, the metaorder is
+  still executing and price continuation is likely. Enter in sweep direction
+  with trailing stop exit. Targets rare discrete events, not continuous signals.
+
+formula: >
+  Phase A (simple single-condition):
+    sweep = price moved >= sweep_min_ticks in same direction over recent ticks;
+    direction = sign(cumulative price delta);
+    confirm = ofi_l1_ema5s same-sign as direction AND |ofi_l1_ema5s| > threshold;
+    signal = direction when sweep AND confirm.
+  Exit: fixed stop-loss + trailing stop + time kill.
+
+paper_refs:
+  - "arXiv:2503.18199"  # Maitrier et al. 2025 — metaorder detection from public data
+  - "arXiv:1412.4503"   # Donier & Bonart 2014 — million metaorder analysis, square-root law
+  - "arXiv:1609.00599"  # Strehle 2016 — order anticipation model
+  - "arXiv:1701.03960"  # Leung & Zhang 2017 — optimal trailing stop
+
+data_fields:
+  - mid_price_x2       # FE slot [2], scaled int
+  - spread_scaled      # FE slot [3], scaled int
+  - ofi_l1_ema5s       # FE slot [22], int
+  - ofi_l1_ema30s      # FE slot [23], int
+
+complexity: "O(1) per tick (threshold checks on pre-computed FE features)"
+
+status: DRAFT
+tier: null
+
+latency_profile: sim_p95_v2026-02-26
+
+cost_model:
+  instrument: TMFD6
+  rt_cost_pts: 4
+  rt_cost_bps: 1.33
+  point_value_ntd: 10
+  contract_value_ntd: 300000
+  min_edge_pts: 7  # 4 RT cost + 3 trailing stop width
+
+sweep_parameters:
+  sweep_min_ticks: 2           # minimum price levels moved in same direction
+  sweep_max_events: 5          # max ticks to accumulate sweep over
+
+confirmation_parameters:
+  ofi_ema5s_threshold: 50      # minimum |ofi_l1_ema5s| to confirm (tunable)
+
+exit_parameters:
+  trailing_stop_pts: 3        # trailing stop distance
+  trailing_activation_pts: 2  # profit before trail activates
+  max_hold_time_s: 120        # time-based kill
+  stop_loss_pts: 3            # hard stop-loss
+  entry_delay_ms: 36          # EC-1: Shioaji order RTT
+  exit_delay_ms: 47           # EC-1: Shioaji cancel RTT
+
+phase_b_candidates:
+  - deep_depth_momentum_x1000 [20]  # depth depletion on swept side
+  - toxicity_ema50_x1000 [21]       # informed flow confirmation
+  - same_side_trade_ratio            # directional trade consistency
+  - ofi_l1_ema30s [23]              # longer-window OFI persistence
+
+prior_round_context:
+  r1_r24_finding: >
+    L1 microstructure alpha on TMFD6/TXFD6 is EXHAUSTED at retail cost (4 pts RT).
+    Continuous signals have IC too weak to overcome costs.
+  key_difference: >
+    R25 targets RARE DISCRETE EVENTS (large order sweeps) not continuous signals.
+    Confirmation via FE ofi_l1_ema5s makes it latency-insensitive at 36ms RTT.
+  design_principle: >
+    MR-4: Start with ONE confirmation condition. Add complexity only if the
+    simple version shows edge on historical data.

@@ -12,7 +12,7 @@ import numpy as np
 
 from hft_platform.contracts.execution import FillEvent, Side
 from hft_platform.core import timebase
-from hft_platform.events import BidAskEvent, LOBStatsEvent, MetaData, TickEvent
+from hft_platform.events import BidAskEvent, BookStats, FusedBookStats, LOBStatsEvent, MetaData, TickEvent
 
 
 def _meta(
@@ -69,8 +69,8 @@ def make_bidask_event(
     symbol: str = "2330",
     bids: Union[np.ndarray, list, None] = None,
     asks: Union[np.ndarray, list, None] = None,
-    stats: tuple[int, int, int, int, float, float, float] | None = None,
-    fused_stats: tuple[int, int, int, int, int, int, float] | None = None,
+    stats: BookStats | None = None,
+    fused_stats: FusedBookStats | None = None,
     is_snapshot: bool = False,
     seq: int = 1,
     source_ts: int = 0,

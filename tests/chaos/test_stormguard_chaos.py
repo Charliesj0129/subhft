@@ -35,10 +35,9 @@ def _patch_externals():
     with (
         patch("hft_platform.risk.storm_guard.MetricsRegistry.get", return_value=mock_metrics),
         patch("hft_platform.recorder.audit.get_audit_writer", return_value=mock_audit),
-        patch("hft_platform.risk.storm_guard.timebase") as mock_tb,
+        patch("hft_platform.risk.storm_guard.time") as mock_time,
     ):
-        mock_tb.now_s = _now_s
-        mock_tb.now_ns = lambda: int(time_val[0] * 1e9)
+        mock_time.monotonic = _now_s
         # Expose helpers via the fixture indirectly through closure
         _patch_externals.advance = _advance  # type: ignore[attr-defined]
         _patch_externals.time_val = time_val  # type: ignore[attr-defined]
@@ -125,7 +124,7 @@ class TestStormGuardChaos:
         for _ in range(1000):
             guard.update(drawdown_bps=-60)  # -> WARM
             # WARM -> NORMAL requires de-escalation threshold; force via transition
-            guard.transition(StormGuardState.NORMAL, "reset")
+            guard._transition(StormGuardState.NORMAL, "reset")
         # Should be NORMAL after last manual transition
         assert guard.state == StormGuardState.NORMAL
 
@@ -182,9 +181,9 @@ class TestStormGuardChaos:
                 if i % 3 == 0:
                     guard.trigger_halt(f"w-{i}")
                 elif i % 3 == 1:
-                    guard.transition(StormGuardState.WARM, f"w-{i}")
+                    guard._transition(StormGuardState.WARM, f"w-{i}")
                 else:
-                    guard.transition(StormGuardState.NORMAL, f"w-{i}")
+                    guard._transition(StormGuardState.NORMAL, f"w-{i}")
 
         readers = [threading.Thread(target=_reader) for _ in range(10)]
         writer = threading.Thread(target=_writer)
@@ -212,7 +211,7 @@ class TestStormGuardChaos:
         guard = StormGuard(on_halt_callback=_cb)
         for _ in range(5):
             guard.trigger_halt("cycle")
-            guard.transition(StormGuardState.NORMAL, "reset")
+            guard._transition(StormGuardState.NORMAL, "reset")
 
         assert call_count >= 5
 
@@ -352,7 +351,7 @@ class TestStormGuardChaos:
         guard.trigger_halt("metric-test")
         mock_metrics.stormguard_mode.labels.return_value.set.assert_called_with(int(StormGuardState.HALT))
 
-        guard.transition(StormGuardState.NORMAL, "reset")
+        guard._transition(StormGuardState.NORMAL, "reset")
         mock_metrics.stormguard_mode.labels.return_value.set.assert_called_with(int(StormGuardState.NORMAL))
 
     # 15. HALT -> NORMAL recovery cycle --------------------------------------

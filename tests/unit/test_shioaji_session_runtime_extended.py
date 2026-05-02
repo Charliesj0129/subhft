@@ -174,3 +174,118 @@ class TestReconnect:
         result = rt.reconnect(reason="manual", force=False)
         assert result is True
         client.reconnect.assert_called_once_with(reason="manual", force=False)
+
+
+class TestFallbackLoginPreservesFetchContract:
+    """Regression: fallback login must NOT permanently set c.fetch_contract=False.
+
+    Bug: session_runtime used to write c.fetch_contract = False when the
+    no-contract fallback succeeded.  This killed the post-login
+    _ensure_contracts() call (guarded by `if not login_fetch_contract and
+    c.fetch_contract`) so contracts_ready stayed False and every order was
+    blocked.
+    """
+
+    def test_fetch_contract_not_mutated_on_fallback(self, monkeypatch):
+        monkeypatch.setenv("SHIOAJI_API_KEY", "k")
+        monkeypatch.setenv("SHIOAJI_SECRET_KEY", "s")
+        monkeypatch.delenv("SHIOAJI_CA_PASSWORD", raising=False)
+        monkeypatch.setenv("HFT_LOGIN_FETCH_CONTRACT_FALLBACK", "1")
+
+        client = make_mock_client(fetch_contract=True)
+        # First attempt (with contracts) fails; fallback (without contracts) succeeds.
+        client._safe_call_with_timeout.side_effect = [
+            (False, None, "timeout", True),  # initial login timed out
+            (True, None, None, False),  # fallback without contracts succeeds
+        ]
+        client.contracts_ready = True
+
+        rt = SessionRuntime(client)
+        result = rt.login_with_retry()
+
+        assert result is True, "login_with_retry should succeed via fallback"
+        # c.fetch_contract must remain True — do NOT mutate it during fallback.
+        assert client.fetch_contract is True, (
+            "c.fetch_contract was permanently set to False by the fallback path — "
+            "_ensure_contracts() will never run and orders will be blocked"
+        )
+
+    def test_ensure_contracts_called_after_fallback(self, monkeypatch):
+        monkeypatch.setenv("SHIOAJI_API_KEY", "k")
+        monkeypatch.setenv("SHIOAJI_SECRET_KEY", "s")
+        monkeypatch.delenv("SHIOAJI_CA_PASSWORD", raising=False)
+        monkeypatch.setenv("HFT_LOGIN_FETCH_CONTRACT_FALLBACK", "1")
+
+        client = make_mock_client(fetch_contract=True)
+        client._safe_call_with_timeout.side_effect = [
+            (False, None, "connect error", False),
+            (True, None, None, False),
+        ]
+        client.contracts_ready = True
+
+        rt = SessionRuntime(client)
+        rt.login_with_retry()
+
+        # After fallback, _ensure_contracts() must have been called to recover
+        # the contracts that were skipped during the fallback login.
+        client._ensure_contracts.assert_called_once()
+
+
+class TestQuoteOnlyConnectionSuppressesBlockedLog:
+    """Regression: quote-only connections (fetch_contract=False) must NOT emit
+    the 'order placement will be blocked' ERROR log when contracts_ready=False.
+
+    Bug: session_runtime used the same ERROR path for ALL connections regardless
+    of their role.  QuoteConnectionPool secondary connections (group_id > 0) are
+    intentionally configured with fetch_contract=False to save ~27 MB each; they
+    never have contracts and that is by design.  Emitting the order-blocking error
+    for them is a misleading false alarm that masks real failures.
+
+    Fix: gate the ERROR on c.fetch_contract.  If the connection was never
+    supposed to fetch contracts, demote to DEBUG.
+    """
+
+    def test_quote_only_connection_does_not_log_blocked_error(self, monkeypatch):
+        """fetch_contract=False → contracts_ready=False is expected; must not ERROR."""
+        from unittest.mock import patch as _patch
+
+        monkeypatch.setenv("SHIOAJI_API_KEY", "k")
+        monkeypatch.setenv("SHIOAJI_SECRET_KEY", "s")
+        monkeypatch.delenv("SHIOAJI_CA_PASSWORD", raising=False)
+
+        client = make_mock_client(fetch_contract=False)
+        client._safe_call_with_timeout.return_value = (True, None, None, False)
+        client.contracts_ready = False  # expected for quote-only connection
+
+        rt = SessionRuntime(client)
+        with _patch("hft_platform.feed_adapter.shioaji.session_runtime.logger") as mock_log:
+            rt.login_with_retry()
+
+        for call in mock_log.error.call_args_list:
+            event = call.args[0] if call.args else ""
+            assert "order placement will be blocked" not in event, (
+                "Quote-only connection (fetch_contract=False) must not fire the "
+                "'order placement will be blocked' ERROR log — contracts_ready=False "
+                "is expected for this role (QuoteConnectionPool secondary connections)"
+            )
+
+    def test_order_connection_still_logs_blocked_error(self, monkeypatch):
+        """fetch_contract=True → contracts_ready=False is a real error; must ERROR."""
+        from unittest.mock import patch as _patch
+
+        monkeypatch.setenv("SHIOAJI_API_KEY", "k")
+        monkeypatch.setenv("SHIOAJI_SECRET_KEY", "s")
+        monkeypatch.delenv("SHIOAJI_CA_PASSWORD", raising=False)
+
+        client = make_mock_client(fetch_contract=True)
+        client._safe_call_with_timeout.return_value = (True, None, None, False)
+        client.contracts_ready = False  # unexpected — should warn
+
+        rt = SessionRuntime(client)
+        with _patch("hft_platform.feed_adapter.shioaji.session_runtime.logger") as mock_log:
+            rt.login_with_retry()
+
+        error_events = [(call.args[0] if call.args else "") for call in mock_log.error.call_args_list]
+        assert any("order placement will be blocked" in e for e in error_events), (
+            "Order-capable connection (fetch_contract=True) with contracts_ready=False must still emit the ERROR log"
+        )

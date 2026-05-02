@@ -1993,20 +1993,20 @@ git push origin main
 
 ```bash
 git bundle create /tmp/hft-report-opt.bundle main~12..main
-scp /tmp/hft-report-opt.bundle charl@100.91.176.126:~/subhft/
-ssh charl@100.91.176.126 "cd ~/subhft && git fetch /tmp/hft-report-opt.bundle main:main && git checkout main"
+scp /tmp/hft-report-opt.bundle ${REMOTE_USER}@${REMOTE_HOST}:~/subhft/
+ssh ${REMOTE_USER}@${REMOTE_HOST} "cd ~/subhft && git fetch /tmp/hft-report-opt.bundle main:main && git checkout main"
 ```
 
 - [ ] **Step 5: Rebuild and restart bot container**
 
 ```bash
-ssh charl@100.91.176.126 "cd ~/subhft && docker compose build hft-bot && docker compose up -d hft-bot"
+ssh ${REMOTE_USER}@${REMOTE_HOST} "cd ~/subhft && docker compose build hft-bot && docker compose up -d hft-bot"
 ```
 
 - [ ] **Step 6: Verify bot is running**
 
 ```bash
-ssh charl@100.91.176.126 "cd ~/subhft && docker compose logs hft-bot --tail 20"
+ssh ${REMOTE_USER}@${REMOTE_HOST} "cd ~/subhft && docker compose logs hft-bot --tail 20"
 ```
 Expected: `bot.started`, no errors
 

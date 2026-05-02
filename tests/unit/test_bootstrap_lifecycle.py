@@ -249,33 +249,6 @@ def test_teardown_engine_role_connection_failure():
 
 
 # ---------------------------------------------------------------------------
-# _build_feature_engine
-# ---------------------------------------------------------------------------
-
-
-def test_build_feature_engine_disabled(monkeypatch):
-    monkeypatch.setenv("HFT_FEATURE_ENGINE_ENABLED", "0")
-    b = _make_bootstrapper()
-    result = b._build_feature_engine()
-    fe, _, _, _, _ = result
-    assert fe is None
-
-
-def test_build_feature_engine_enabled(monkeypatch):
-    monkeypatch.setenv("HFT_FEATURE_ENGINE_ENABLED", "1")
-    b = _make_bootstrapper()
-    with patch("hft_platform.services.bootstrap.FeatureEngine") as MockFE:
-        mock_fe = MagicMock()
-        mock_fe.feature_set_id.return_value = "v1"
-        MockFE.return_value = mock_fe
-        with patch("hft_platform.services.bootstrap.load_feature_profile_registry", return_value=None):
-            with patch("hft_platform.services.bootstrap.load_feature_rollout_controller", return_value=None):
-                result = b._build_feature_engine()
-    fe = result[0]
-    assert fe is not None
-
-
-# ---------------------------------------------------------------------------
 # _build_broker_clients
 # ---------------------------------------------------------------------------
 

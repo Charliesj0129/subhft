@@ -24,7 +24,7 @@ class TestAutonomyFlattenPoll:
         gate.submit(scope="all", deadline_s=60)
 
         flattener = AsyncMock()
-        flattener.flatten_all = AsyncMock(return_value=FlattenResult(fully_closed=3, partially_closed=0, failed=0))
+        flattener.flatten_all = AsyncMock(return_value=FlattenResult(submitted=3, partially_closed=0, failed=0))
 
         await _handle_flatten_request(gate, flattener)
 

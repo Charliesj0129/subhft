@@ -37,10 +37,11 @@ class ReconnectOrchestrator:
     ShioajiClient — this is a pure code-movement extraction.
     """
 
-    __slots__ = ("_client",)
+    __slots__ = ("_client", "_consecutive_failures")
 
     def __init__(self, client: "ShioajiClient") -> None:
         self._client = client
+        self._consecutive_failures: int = 0
 
     # ------------------------------------------------------------------ #
     # Reconnect sequence (RESILIENCE-CRITICAL)
@@ -52,7 +53,9 @@ class ReconnectOrchestrator:
         Respects backoff, cooldown, and lock guards. Returns True only when
         the full sequence (login + subscribe) succeeds.
 
-        Extracted verbatim from ShioajiClient.reconnect().
+        After HARD_RECONNECT_THRESHOLD consecutive failures, recreates the
+        sj.Shioaji() instance to recover from stale SDK state (e.g., weekend
+        session expiry).
         """
         c = self._client
         if not c.api:
@@ -66,27 +69,44 @@ class ReconnectOrchestrator:
         try:
             c._last_reconnect_ts = now
             c._last_reconnect_error = None
-            logger.warning("Reconnecting Shioaji", reason=reason, force=force)
-            ok_logout, _, err_logout, _ = c._safe_call_with_timeout(
-                "logout",
-                lambda: c.api.logout(),
-                c._reconnect_timeout_s,
-            )
-            if not ok_logout:
-                logger.warning("Logout failed during reconnect", error=str(err_logout))
 
-            c.logged_in = False
-            c._callbacks_registered = False
-            c._clear_quote_pending()
-            c.subscribed_codes = set()
-            c.subscribed_count = 0
-            c._refresh_quote_routes()
+            # Hard reconnect: recreate API object after repeated failures
+            hard_threshold = int(os.getenv("HFT_HARD_RECONNECT_THRESHOLD", "3"))
+            if self._consecutive_failures >= hard_threshold:
+                logger.warning(
+                    "hard_reconnect_triggered",
+                    reason=reason,
+                    consecutive_failures=self._consecutive_failures,
+                )
+                if c.recreate_api():
+                    self._consecutive_failures = 0
+                else:
+                    c._last_reconnect_error = "recreate_api_failed"
+                    return False
+            else:
+                logger.warning("Reconnecting Shioaji", reason=reason, force=force)
+                ok_logout, _, err_logout, _ = c._safe_call_with_timeout(
+                    "logout",
+                    lambda: c.api.logout(),
+                    c._reconnect_timeout_s,
+                )
+                if not ok_logout:
+                    logger.warning("Logout failed during reconnect", error=str(err_logout))
+
+                c.logged_in = False
+                c._callbacks_registered = False
+                c._clear_quote_pending()
+                # D2: in-place clear (don't rebind — preserves identity).
+                c.subscribed_codes.clear()
+                c.subscribed_count = 0
+                c._refresh_quote_routes()
 
             login_ok = bool(c.login())
             if not login_ok or not c.logged_in:
                 c._last_reconnect_error = c._last_login_error or "login_failed"
                 if c.metrics:
                     c.metrics.feed_reconnect_total.labels(result="fail").inc()
+                self._consecutive_failures += 1
                 c._reconnect_backoff_s = min(c._reconnect_backoff_s * 2.0, c._reconnect_backoff_max_s)
                 return False
 
@@ -128,19 +148,24 @@ class ReconnectOrchestrator:
                 c.metrics.feed_reconnect_total.labels(result="ok" if ok else "fail").inc()
             if ok:
                 c._reconnect_backoff_s = float(os.getenv("HFT_RECONNECT_BACKOFF_S", "30"))
+                self._consecutive_failures = 0
                 return True
 
+            self._consecutive_failures += 1
             c._reconnect_backoff_s = min(c._reconnect_backoff_s * 2.0, c._reconnect_backoff_max_s)
             return False
         except Exception as exc:
+            self._consecutive_failures += 1
             c._last_reconnect_error = str(exc)
             logger.error("Reconnect failed unexpectedly", reason=reason, error=str(exc))
             if c.metrics:
                 c.metrics.feed_reconnect_total.labels(result="exception").inc()
                 try:
+                    from hft_platform.observability.metrics import cap_exception_type  # noqa: PLC0415
+
                     c.metrics.feed_reconnect_exception_total.labels(
                         reason=reason or "unknown",
-                        exception_type=type(exc).__name__,
+                        exception_type=cap_exception_type(exc),
                     ).inc()
                 except Exception as exc:
                     logger.debug("operation_fallback", error=str(exc))
@@ -222,21 +247,27 @@ class ReconnectOrchestrator:
     # ------------------------------------------------------------------ #
 
     def is_trading_hours(self) -> bool:
-        """Return True if currently within TWSE trading hours."""
+        """Return True if currently within TAIFEX futures/options trading hours.
+
+        Covers day session (08:45-13:45) and night session (15:00-05:00).
+        """
         try:
             from hft_platform.core.market_calendar import get_calendar
 
             calendar = get_calendar()
             now_dt = dt.datetime.fromtimestamp(timebase.now_s(), tz=calendar._tz)
-            return calendar.is_trading_hours(now_dt)
+            return calendar.is_trading_hours(now_dt, product_type="future")
         except Exception as exc:
             logger.debug("operation_fallback", error=str(exc))
-            # Conservative fallback: weekdays 09:00-13:30 Asia/Taipei.
+            # Conservative fallback: weekdays TAIFEX hours Asia/Taipei.
             now_dt = dt.datetime.fromtimestamp(timebase.now_s(), tz=dt.timezone(dt.timedelta(hours=8)))
             if now_dt.weekday() >= 5:
                 return False
             minute = now_dt.hour * 60 + now_dt.minute
-            return (9 * 60) <= minute <= (13 * 60 + 30)
+            # Day: 08:45-13:45, Night: 15:00-05:00 (next day)
+            day_session = (8 * 60 + 45) <= minute <= (13 * 60 + 45)
+            night_session = minute >= (15 * 60) or minute <= (5 * 60)
+            return day_session or night_session
 
     # ------------------------------------------------------------------ #
     # Quote version helpers
@@ -252,11 +283,19 @@ class ReconnectOrchestrator:
         if not sj or not hasattr(sj.constant, "QuoteVersion"):
             return None
         c = self._client
-        if c._quote_version == "v0" and not c._supports_quote_v0():
+        # H13: snapshot under the dedicated lock so the watchdog thread
+        # cannot flip _quote_version between the two comparisons below.
+        lock = getattr(c, "_quote_version_lock", None)
+        if lock is not None:
+            with lock:
+                current = c._quote_version
+        else:
+            current = c._quote_version
+        if current == "v0" and not c._supports_quote_v0():
             if c._supports_quote_v1():
                 return sj.constant.QuoteVersion.v1
             return None
-        return sj.constant.QuoteVersion.v0 if c._quote_version == "v0" else sj.constant.QuoteVersion.v1
+        return sj.constant.QuoteVersion.v0 if current == "v0" else sj.constant.QuoteVersion.v1
 
     def handle_quote_schema_mismatch(self, reason: str, *args: Any, **kwargs: Any) -> None:
         """Record and log quote schema mismatches."""

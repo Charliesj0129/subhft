@@ -1,6 +1,8 @@
 """Tests for extended config schema validation (C-03)."""
+
 import pytest
-from hft_platform.config.schema import validate_config, ConfigValidationError
+
+from hft_platform.config.schema import ConfigValidationError, validate_config
 
 
 def test_valid_config_with_intraday_pnl():

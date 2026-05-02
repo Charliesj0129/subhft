@@ -69,6 +69,18 @@ class ShioajiClientFacade:
         self._client.logged_in = bool(value)
 
     @property
+    def subscribed_count(self) -> int:
+        return int(getattr(self._client, "subscribed_count", 0))
+
+    @property
+    def alias_to_actual(self) -> dict[str, str]:
+        return self._client.alias_to_actual
+
+    @property
+    def subscribed_codes(self) -> set[str]:
+        return getattr(self._client, "subscribed_codes", set())
+
+    @property
     def tick_callback(self) -> Any:
         return self._client.tick_callback
 
@@ -121,7 +133,7 @@ class ShioajiClientFacade:
     ) -> Any:
         return self.order_gateway.update_order(trade, price=price, qty=qty, timeout=timeout, cb=cb)
 
-    def get_positions(self) -> list[Any]:
+    def get_positions(self) -> list[Any] | None:
         return self.account_gateway.get_positions()
 
     def get_account_balance(self, account: Any = None) -> Any:
@@ -149,6 +161,10 @@ class ShioajiClientFacade:
 
     def list_profit_loss_detail(self, account: Any = None, detail_id: int = 0, unit: str | None = None) -> Any:
         return self.account_gateway.list_profit_loss_detail(account=account, detail_id=detail_id, unit=unit)
+
+    def is_connected(self) -> bool:
+        """Return True if the underlying Shioaji API session is alive."""
+        return bool(self._client.logged_in) and self._client.api is not None
 
     def validate_symbols(self) -> list[str]:
         return self.contracts_runtime.validate_symbols()
@@ -211,6 +227,23 @@ class ShioajiClientFacade:
 
     def get_notice_stocks(self, timeout: int = 5000) -> Any:
         return self.market_info_gateway.get_notice_stocks(timeout=timeout)
+
+    def get_default_account_id(self) -> str:
+        """Return the canonical account ID used in execution fills.
+
+        Prefers futopt_account (futures trading is the primary use-case).
+        Falls back to stock_account, then empty string if not logged in.
+        """
+        api = self._client.api
+        if api is None:
+            return ""
+        for attr in ("futopt_account", "stock_account"):
+            acct = getattr(api, attr, None)
+            if acct is not None:
+                acct_id = getattr(acct, "account_id", None) or str(acct)
+                if acct_id:
+                    return str(acct_id)
+        return ""
 
     def close(self, logout: bool = False) -> None:
         self._client.close(logout=logout)

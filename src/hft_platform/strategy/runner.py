@@ -4,13 +4,37 @@ import os
 import re
 import time
 from decimal import Decimal
-from typing import Any, List
+from types import MappingProxyType
+from typing import Any, List, Mapping
 
 from structlog import get_logger
 
-from hft_platform.contracts.strategy import IntentType, OrderIntent
+from hft_platform.contracts.execution import PositionDelta
+from hft_platform.contracts.strategy import (
+    TIF,
+    IntentType,
+    OrderIntent,
+    RiskFeedback,
+    Side,
+)
+from hft_platform.contracts.strategy import (
+    typed_intent_identity as _typed_intent_identity,
+)
+from hft_platform.contracts.strategy import (
+    typed_intent_side as _typed_intent_side,
+)
+from hft_platform.contracts.strategy import (
+    typed_intent_symbol as _typed_intent_symbol,
+)
+from hft_platform.contracts.strategy import (
+    typed_intent_tif as _typed_intent_tif,
+)
+from hft_platform.contracts.strategy import (
+    typed_intent_type as _typed_intent_type,
+)
 from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceCodec, SymbolMetadataPriceScaleProvider
+from hft_platform.events import GapEvent
 from hft_platform.feed_adapter.normalizer import SymbolMetadata
 from hft_platform.observability.latency import LatencyRecorder
 from hft_platform.observability.metrics import MetricsRegistry
@@ -21,12 +45,30 @@ from hft_platform.strategy.registry import StrategyRegistry
 
 logger = get_logger("strategy_runner")
 
+_KNOWN_TUPLE_TAGS: frozenset[str] = frozenset({"tick", "bidask", "lobstats", "typed_intent_v1"})
+
 _RUST_CIRCUIT_ENABLED = os.getenv("HFT_STRATEGY_CIRCUIT_RUST", "1").lower() not in {
     "0",
     "false",
     "no",
     "off",
 }
+
+_MAX_INTENTS_PER_EVENT: int = int(os.getenv("HFT_MAX_INTENTS_PER_EVENT", "20"))
+
+
+def _feedback_side(value: int | None) -> Side | None:
+    if value is None:
+        return None
+    try:
+        return Side(value)
+    except ValueError:
+        return None
+
+
+# Shared read-only empty view for strategies without positions. Hand the same
+# singleton to every strategy — MappingProxyType is immutable so this is safe.
+_EMPTY_POSITION_VIEW: Mapping[str, int] = MappingProxyType({})
 
 try:
     try:
@@ -54,6 +96,48 @@ def _obs_policy() -> str:
     return ""
 
 
+def _get_symbol_net_qty(position_store: Any, symbol: str, strategy_id: str | None = None) -> int:
+    """Return net_qty for *symbol*, optionally filtered to *strategy_id*.
+
+    When *strategy_id* is provided, only that strategy's exposure is counted.
+    This prevents CLOSE_ONLY from allowing a flat strategy to open positions
+    based on another strategy's offsetting exposure.
+
+    O(n) over the position map, but only called during CLOSE_ONLY phase
+    (not on every tick). Returns 0 if position_store is None or empty.
+
+    Wave 3 (2026-04-25): snapshot positions under _fill_lock (or via
+    snapshot_positions when available) so concurrent on_fill_async
+    writers cannot raise "dictionary changed size during iteration".
+    """
+    if position_store is None:
+        return 0
+    snapshot_fn = getattr(position_store, "snapshot_positions", None)
+    if callable(snapshot_fn):
+        positions = snapshot_fn()
+    else:
+        raw = getattr(position_store, "positions", None)
+        if not raw:
+            return 0
+        _fill_lock = getattr(position_store, "_fill_lock", None)
+        if _fill_lock is not None:
+            with _fill_lock:
+                positions = dict(raw)
+        else:
+            positions = dict(raw)
+    if not positions:
+        return 0
+    _total = 0
+    for _key, _pos in positions.items():
+        # Key format: "account:strategy:symbol"
+        if not _key.endswith(f":{symbol}"):
+            continue
+        if strategy_id is not None and f":{strategy_id}:" not in _key:
+            continue
+        _total += _pos.net_qty
+    return _total
+
+
 class StrategyRunner:
     __slots__ = (
         "bus",
@@ -64,6 +148,7 @@ class StrategyRunner:
         "registry",
         "strategies",
         "_strat_executors",
+        "_start_cursor",
         "_risk_submit",
         "_risk_submit_typed",
         "_typed_intent_fastpath",
@@ -74,6 +159,9 @@ class StrategyRunner:
         "_feature_set_source",
         "_feature_profile_source",
         "_feature_tuple_source",
+        "_feature_staleness_source",
+        "_staleness_counter",
+        "_consumer_seq",
         "metrics",
         "latency",
         "_trace_sampler",
@@ -83,6 +171,7 @@ class StrategyRunner:
         "price_codec",
         "_intent_seq",
         "_positions_cache",
+        "_positions_views",
         "_positions_dirty",
         "_current_source_ts_ns",
         "_current_trace_id",
@@ -92,6 +181,7 @@ class StrategyRunner:
         "_strategy_pending_intents",
         "_strategy_pending_alpha_intent",
         "_strategy_pending_alpha_flat",
+        "_pending_intent_locks",
         "_circuit_threshold",
         "_circuit_recovery_threshold",
         "_circuit_cooldown_ns",
@@ -104,6 +194,22 @@ class StrategyRunner:
         "_strat_index",
         "_feature_compat_fail_fast",
         "track_gate",
+        "_strategies_version",
+        "_executors_version",
+        # Timeout circuit breaker (wall-clock)
+        "_timeout_ns",
+        "_timeout_strikes_limit",
+        "_timeout_recover_ns",
+        "_timeout_consecutive",
+        "_timeout_broken",
+        "_timeout_broken_at_ns",
+        "_default_intent_ttl_ns",
+        "_rejection_sink",
+        "_rejection_queue",
+        "_storm_guard",
+        "_stale_event_threshold_ns",
+        "_stale_event_skip_total",
+        "_stale_event_metric",
         "__dict__",  # needed for test monkey-patching
     )
 
@@ -140,8 +246,11 @@ class StrategyRunner:
         self._feature_set_source = getattr(fe, "feature_set_id", None) if fe else None
         self._feature_profile_source = getattr(fe, "active_profile_id", None) if fe else None
         self._feature_tuple_source = getattr(fe, "get_feature_tuple", None) if fe else None
-
+        self._feature_staleness_source = getattr(fe, "last_update_ns", None) if fe else None
+        self._consumer_seq: int = -1  # tracks last-processed bus sequence for drain
+        self._start_cursor: int | None = None  # set externally to replay events published before runner started
         self.metrics = MetricsRegistry.get()
+        self._staleness_counter = getattr(self.metrics, "feature_staleness_detected_total", None)
         self.latency = LatencyRecorder.get()
         self.strategy_governor = StrategyHealthGovernor(metrics=self.metrics)
         self._trace_sampler = _get_trace_sampler()
@@ -151,9 +260,18 @@ class StrategyRunner:
         self.price_codec = PriceCodec(SymbolMetadataPriceScaleProvider(self.symbol_metadata))
         self._intent_seq = 0
         self._positions_cache: dict = {}
+        self._positions_views: dict[str, Mapping[str, int]] = {}
         self._positions_dirty = True
         self._current_source_ts_ns = 0
         self._current_trace_id = ""
+        # Option-3 Gate 3 slice: propagated from the currently-processed
+        # event (see ``process_event``). Read by ``_intent_factory`` for the
+        # object-form intent path.
+        self._current_contract: Any = None
+        _stale_ms = int(os.getenv("HFT_STALE_EVENT_THRESHOLD_MS", "500"))
+        self._stale_event_threshold_ns: int = _stale_ms * 1_000_000
+        self._stale_event_skip_total: int = 0
+        self._stale_event_metric = getattr(self.metrics, "stale_event_skip_total", None)
         try:
             default_sample = "1"
             if self._obs_policy == "balanced":
@@ -178,6 +296,12 @@ class StrategyRunner:
         self._strategy_pending_intents: dict[str, int] = {}
         self._strategy_pending_alpha_intent: dict[str, int] = {}
         self._strategy_pending_alpha_flat: dict[str, int] = {}
+        # P1-9: per-strategy asyncio.Lock guards the read-modify-write pattern
+        # on ``_strategy_pending_intents`` so two concurrent ``process_event``
+        # tasks for the same ``sid`` cannot interleave their increment and
+        # the periodic ``int_m.inc(pending) + reset to 0`` decrement step,
+        # which would otherwise drop intent counts on the floor.
+        self._pending_intent_locks: dict[str, asyncio.Lock] = {}
 
         # Circuit breaker: 3-state FSM (normal → degraded → halted) per strategy
         _threshold_env = os.getenv("HFT_STRATEGY_CIRCUIT_THRESHOLD", "10")
@@ -203,10 +327,30 @@ class StrategyRunner:
         # TrackGate: per-event session phase filtering (set externally by SessionGovernor)
         self.track_gate: Any = None  # TrackGate | None
 
+        # Default intent TTL: intents older than this are rejected by RiskEngine TTL check
+        self._default_intent_ttl_ns: int = int(os.getenv("HFT_DEFAULT_INTENT_TTL_MS", "5000")) * 1_000_000
+
+        # Timeout circuit breaker: wall-clock protection per strategy
+        _timeout_ms = float(os.getenv("HFT_STRATEGY_TIMEOUT_MS", "50"))
+        self._timeout_ns: int = int(_timeout_ms * 1_000_000)
+        _strikes = os.getenv("HFT_STRATEGY_TIMEOUT_STRIKES", "3")
+        self._timeout_strikes_limit: int = int(_strikes) if _strikes.isdigit() else 3
+        _recover_s = float(os.getenv("HFT_STRATEGY_TIMEOUT_RECOVER_S", "60"))
+        self._timeout_recover_ns: int = int(_recover_s * 1_000_000_000)
+        self._timeout_consecutive: dict[str, int] = {}
+        self._timeout_broken: dict[str, bool] = {}
+        self._timeout_broken_at_ns: dict[str, int] = {}
+
+        # Per-strategy intent flood cap: limits intents submitted per event
+        self._max_intents_per_event: int = int(os.getenv("HFT_MAX_INTENTS_PER_EVENT", "20"))
+
         # Cache for parsed position keys: "pos:strat_id:symbol" → (strat_id, symbol)
         self._position_key_cache: dict[str, tuple[str, str]] = {}
         # Unit 10: Strategy-by-id index for O(1) targeted dispatch
         self._strat_index: dict[str, list[int]] = {}
+        # M-2: Version counters for O(1) executor staleness check (replaces O(n) list scan)
+        self._strategies_version: int = 0
+        self._executors_version: int = 0
         self._feature_compat_fail_fast = os.getenv("HFT_STRATEGY_FEATURE_COMPAT_FAIL_FAST", "1").lower() not in {
             "0",
             "false",
@@ -214,28 +358,240 @@ class StrategyRunner:
             "off",
         }
 
+        # Rejection sink: receives RiskFeedback when risk_queue is full (set by bootstrap)
+        self._rejection_sink: asyncio.Queue | None = None
+
+        # Rejection queue: shared queue for consuming RiskFeedback dispatched to strategies (set by bootstrap)
+        self._rejection_queue: asyncio.Queue | None = None
+
+        # StormGuard reference: set by bootstrap to trigger HALT on persistent risk_queue_full
+        self._storm_guard: Any = None
+
+        # Gradual queue-full degradation: STORM first, HALT after N consecutive failures
+        self._queue_full_consecutive: int = 0
+        self._queue_full_halt_threshold: int = int(os.getenv("HFT_QUEUE_FULL_HALT_THRESHOLD", "3"))
+
+        # Option-3 Gate 1 prod: ContractFamily-based subscriptions. Set via
+        # :meth:`set_family_resolver` after construction. A strategy that
+        # declares ``contract_families`` gets ``strategy.symbols`` populated
+        # from the resolver at register + auto-updated on snapshot swap.
+        self._family_resolver: Any = None
+
         # Load initial
         for strat in self.registry.instantiate():
             self.register(strat)
 
         self.running = False
 
+    def set_start_cursor(self, cursor: int) -> None:
+        """Set the bus cursor to replay from, capturing events published before runner started."""
+        self._start_cursor = cursor
+
+    def set_rejection_sink(self, sink: asyncio.Queue) -> None:
+        """Set the queue where StrategyRunner writes RiskFeedback on risk_queue overflow."""
+        self._rejection_sink = sink
+
+    def set_rejection_queue(self, queue: asyncio.Queue) -> None:
+        """Set the shared queue for consuming RiskFeedback dispatched to strategies."""
+        self._rejection_queue = queue
+
+    def reset_stale_counter(self) -> None:
+        """Reset stale event skip counter (called after reconnect)."""
+        prev = self._stale_event_skip_total
+        self._stale_event_skip_total = 0
+        if prev > 0:
+            logger.info("stale_event_counter_reset", previous_total=prev)
+
+    def set_storm_guard(self, storm_guard: Any) -> None:
+        """Set StormGuard reference for triggering HALT on persistent queue-full."""
+        self._storm_guard = storm_guard
+
+    def resolve_symbol_aliases(self) -> None:
+        """Re-resolve strategy symbols using the current alias map.
+
+        Called after broker login+subscription when alias_to_actual is populated.
+        Must be called before the first event is processed.
+        """
+        if not self.symbol_metadata or not self.symbol_metadata.alias_to_actual:
+            return
+        for strategy in self.strategies:
+            self._resolve_strategy_symbols(strategy)
+            self._resolve_strategy_symbol_params(strategy)
+
+    # ------------------------------------------------------------------ #
+    # Option-3 Gate 1 prod: ContractFamily-based subscriptions
+    # ------------------------------------------------------------------ #
+
+    def set_family_resolver(self, resolver: Any | None) -> None:
+        """Attach a :class:`ContractFamilyResolver`.
+
+        Strategies declaring ``contract_families`` get their ``symbols`` set
+        populated from the resolver's current snapshot, and the runner
+        registers a hook so subsequent snapshot swaps rebind
+        ``strategy.symbols`` atomically (no alias-propagation race).
+
+        Calling this after construction re-applies bindings to every
+        already-registered strategy.
+        """
+        self._family_resolver = resolver
+        if resolver is None:
+            return
+        try:
+            resolver.add_hook(self._on_family_rebind)
+        except AttributeError:
+            logger.warning("strategy_runner_family_resolver_missing_add_hook")
+            return
+        for strat in self.strategies:
+            self._apply_family_bindings(strat)
+
+    def _apply_family_bindings(self, strategy: Any) -> None:
+        """Add the current concrete display for each declared family into
+        ``strategy.symbols``. No-op when the strategy has no
+        ``contract_families`` or the resolver is not attached.
+        """
+        resolver = getattr(self, "_family_resolver", None)
+        if resolver is None:
+            return
+        families = getattr(strategy, "contract_families", None) or ()
+        if not families:
+            return
+        syms = set(getattr(strategy, "symbols", None) or set())
+        for family in families:
+            ref = resolver.resolve_family(family)
+            if ref is not None:
+                syms.add(ref.display())
+        strategy.symbols = syms
+
+    def _on_family_rebind(self, change: Any) -> None:
+        """Hook fired by the family resolver on binding change. Updates
+        ``strategy.symbols`` for every registered strategy that subscribes
+        to the changed family.
+        """
+        for strat in self.strategies:
+            families = getattr(strat, "contract_families", None) or ()
+            if change.family not in families:
+                continue
+            syms = set(getattr(strat, "symbols", None) or set())
+            if change.old_ref is not None:
+                syms.discard(change.old_ref.display())
+            if change.new_ref is not None:
+                syms.add(change.new_ref.display())
+            strat.symbols = syms
+            logger.info(
+                "strategy_family_rebind",
+                strategy_id=getattr(strat, "strategy_id", "?"),
+                family=str(change.family),
+                new_ref=(change.new_ref.display() if change.new_ref is not None else None),
+            )
+
     async def run(self):
         self.running = True
-        logger.info("StrategyRunner started")
+        start_cursor = self._start_cursor
+        # Seed _consumer_seq from start_cursor so increment-based tracking
+        # correctly reflects the actual bus position (not the global write cursor).
+        if start_cursor is not None:
+            self._consumer_seq = start_cursor
+        else:
+            self._consumer_seq = self.bus.cursor
+        logger.info("StrategyRunner started", start_cursor=start_cursor, consumer_seq=self._consumer_seq)
         try:
             batch_size = int(os.getenv("HFT_BUS_BATCH_SIZE", "0") or "0")
             if batch_size > 1:
-                async for batch in self.bus.consume_batch(batch_size):
+                async for batch in self.bus.consume_batch(
+                    batch_size, start_cursor=start_cursor, consumer_name="strategy_runner"
+                ):
                     for event in batch:
                         await self.process_event(event)
+                        self._consumer_seq += 1
             else:
-                async for event in self.bus.consume():
+                async for event in self.bus.consume(start_cursor=start_cursor, consumer_name="strategy_runner"):
                     await self.process_event(event)
+                    self._consumer_seq += 1
         except asyncio.CancelledError:
             pass
         finally:
             self._flush_pending_strategy_metrics()
+
+    async def _run_rejection_consumer(self) -> None:
+        """Consume RiskFeedback from rejection queue and dispatch to strategies."""
+        if self._rejection_queue is None:
+            return
+        while True:
+            try:
+                feedback = await self._rejection_queue.get()
+            except asyncio.CancelledError:
+                break
+            try:
+                indices = self._strat_index.get(feedback.strategy_id)
+                if indices:
+                    for idx in indices:
+                        executor = self._strat_executors[idx]
+                        executor[0].on_risk_feedback(feedback)
+                else:
+                    logger.warning("rejection_feedback_unknown_strategy", strategy_id=feedback.strategy_id)
+            except Exception:
+                logger.exception("rejection_feedback_dispatch_error", strategy_id=getattr(feedback, "strategy_id", "?"))
+            finally:
+                self._rejection_queue.task_done()
+
+    async def drain_to_cursor(self, target_cursor: int, timeout_s: float) -> tuple[int, int]:
+        """Drain bus events up to *target_cursor* within *timeout_s* seconds.
+
+        Reads events from the bus starting at the current consumer position and
+        processes them until either the target cursor is reached or the timeout
+        expires.  The bus cursor is sampled once by the caller before calling
+        this method; no new publishes after that snapshot are processed.
+
+        Returns:
+            (drained, skipped) where *drained* is the number of events processed
+            and *skipped* is the number left unprocessed (> 0 only on timeout).
+        """
+        # Start from the last sequence the consumer processed (tracked during run()).
+        # If _consumer_seq is -1 (never consumed), nothing to drain.
+        local_seq = self._consumer_seq
+        if local_seq >= target_cursor:
+            return 0, 0
+
+        deadline = asyncio.get_event_loop().time() + timeout_s
+        drained = 0
+        size = self.bus.size
+
+        while local_seq < target_cursor:
+            if asyncio.get_event_loop().time() >= deadline:
+                skipped = target_cursor - local_seq
+                return drained, skipped
+
+            local_seq += 1
+            # Read the event directly from the bus buffer (same logic as consume())
+            kind = self.bus._kind_ring[local_seq % size] if self.bus._kind_ring is not None else 0
+            if kind == 1 and self.bus._tick_ring is not None:
+                event = self.bus._tick_ring.get(local_seq)
+            elif kind == 2 and self.bus._bidask_ring is not None:
+                event = self.bus._bidask_ring.get(local_seq)
+            elif kind == 3 and self.bus._lobstats_ring is not None:
+                event = self.bus._lobstats_ring.get(local_seq)
+            elif self.bus._use_rust and self.bus._ring is not None:
+                event = self.bus._ring.get(local_seq)
+            else:
+                buf = self.bus.buffer
+                event = buf[local_seq % size] if buf is not None else None
+
+            if event is not None:
+                try:
+                    await self.process_event(event)
+                    drained += 1
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "drain_to_cursor: process_event error",
+                        seq=local_seq,
+                        error=str(exc),
+                    )
+
+            # Yield control periodically to avoid starving the event loop
+            if drained % 64 == 0:
+                await asyncio.sleep(0)
+
+        return drained, 0
 
     def register(self, strategy: BaseStrategy):
         compat_issues = check_strategy_feature_compat(strategy, self.feature_engine)
@@ -266,8 +622,14 @@ class StrategyRunner:
                 + "; ".join(i.code for i in compat_issues if i.level == "error")
             )
         self.strategies.append(strategy)
+        self._strategies_version += 1
         self._resolve_strategy_symbols(strategy)
+        # Option-3 Gate 1 prod: seed ContractFamily-declared strategies from
+        # the current resolver snapshot. No-op when the strategy is purely
+        # str-based (legacy) or the resolver is not yet attached.
+        self._apply_family_bindings(strategy)
         self._strat_executors.append(self._build_executor_entry(strategy))
+        self._executors_version = self._strategies_version
         idx = len(self._strat_executors) - 1
         sid = strategy.strategy_id
         self._strat_index.setdefault(sid, []).append(idx)
@@ -303,7 +665,43 @@ class StrategyRunner:
             resolved.update(self.symbol_metadata.symbols_for_tags(raw_tags))
 
         if resolved or used_tag:
+            # Resolve C0/C1/R1/R2 aliases to actual month codes so
+            # strategy.symbols matches event.symbol from broker callbacks.
+            if self.symbol_metadata and self.symbol_metadata.alias_to_actual:
+                before = set(resolved)
+                resolved = self.symbol_metadata.resolve_symbols(resolved)
+                alias_keys = before & set(self.symbol_metadata.alias_to_actual)
+                if alias_keys:
+                    logger.info(
+                        "strategy_symbols_alias_resolved",
+                        strategy_id=strategy.strategy_id,
+                        aliases={a: self.symbol_metadata.resolve_symbol(a) for a in alias_keys},
+                    )
             strategy.symbols = set(resolved)
+        # Also resolve symbol aliases in strategy params (e.g. signal_symbol, trade_symbol)
+        self._resolve_strategy_symbol_params(strategy)
+
+    def _resolve_strategy_symbol_params(self, strategy: BaseStrategy) -> None:
+        """Resolve C0/C1/R1/R2 aliases in strategy's symbol-valued attributes."""
+        if not self.symbol_metadata or not self.symbol_metadata.alias_to_actual:
+            return
+        # Known symbol-valued attributes (private convention: _<name>_symbol)
+        for attr_name in dir(strategy):
+            if not attr_name.endswith("_symbol"):
+                continue
+            val = getattr(strategy, attr_name, None)
+            if not isinstance(val, str):
+                continue
+            resolved = self.symbol_metadata.resolve_symbol(val)
+            if resolved != val:
+                setattr(strategy, attr_name, resolved)
+                logger.info(
+                    "strategy_param_alias_resolved",
+                    strategy_id=strategy.strategy_id,
+                    param=attr_name,
+                    alias=val,
+                    actual=resolved,
+                )
 
     def _rebuild_executors(self):
         """Rebuild executor cache when strategies are replaced externally."""
@@ -311,6 +709,9 @@ class StrategyRunner:
         self._strat_index = {}
         for idx, strategy in enumerate(self.strategies):
             self._strat_index.setdefault(strategy.strategy_id, []).append(idx)
+        # M-2: Sync executor version to current strategy version after rebuild
+        self._strategies_version += 1
+        self._executors_version = self._strategies_version
 
     def _flush_pending_strategy_metrics(self) -> None:
         if not self.metrics:
@@ -335,6 +736,20 @@ class StrategyRunner:
                 alpha_flat_m.inc(pending_alpha_flat)
             self._strategy_pending_alpha_flat[sid] = 0
 
+    def _get_pending_lock(self, sid: str) -> asyncio.Lock:
+        """P1-9: per-strategy lock for ``_strategy_pending_intents`` mutations.
+
+        Lazily creates the lock on first use via ``setdefault``. CPython's
+        ``setdefault`` assignment is GIL-atomic, so concurrent calls for the
+        same ``sid`` may construct two ``asyncio.Lock`` objects but only one
+        ends up in the dict — the loser is GC'd unused. This is acceptable
+        because no coroutine has been allowed to acquire the loser yet.
+        """
+        lock = self._pending_intent_locks.get(sid)
+        if lock is None:
+            lock = self._pending_intent_locks.setdefault(sid, asyncio.Lock())
+        return lock
+
     def _resolve_risk_submit(self, risk_queue: Any):
         if hasattr(risk_queue, "submit_nowait"):
             return risk_queue.submit_nowait
@@ -346,6 +761,19 @@ class StrategyRunner:
         # Cache metrics and a reusable StrategyContext per strategy to reduce per-event allocations.
         lat_m = self.metrics.strategy_latency_ns.labels(strategy=strategy.strategy_id) if self.metrics else None
         int_m = self.metrics.strategy_intents_total.labels(strategy=strategy.strategy_id) if self.metrics else None
+        # Observability gap closure: per-strategy event dispatch counter (Bug 12).
+        # Cached in self._events_received_metrics keyed by strategy_id.
+        try:
+            if not hasattr(self, "_events_received_metrics"):
+                self._events_received_metrics = {}
+            if self.metrics is not None:
+                events_m = getattr(self.metrics, "strategy_events_received_total", None)
+                if events_m is not None:
+                    self._events_received_metrics[strategy.strategy_id] = events_m.labels(
+                        strategy_id=strategy.strategy_id
+                    )
+        except Exception:
+            pass
 
         alpha_intent_m = None
         alpha_flat_m = None
@@ -377,6 +805,8 @@ class StrategyRunner:
             feature_set_source=self._feature_set_source,
             feature_profile_source=self._feature_profile_source,
             feature_tuple_source=self._feature_tuple_source,
+            feature_staleness_source=self._feature_staleness_source,
+            staleness_counter=self._staleness_counter,
         )
         return (strategy, ctx, lat_m, int_m, alpha_intent_m, alpha_flat_m, alpha_last_ts_g)
 
@@ -407,6 +837,24 @@ class StrategyRunner:
             source_ts_ns = self._current_source_ts_ns
         if trace_id is None:
             trace_id = self._current_trace_id
+        # Scale guard: reject under-scaled prices on NEW/AMEND orders. Catches
+        # operator errors like `place_order(price=505)` when the symbol uses
+        # price_scale=10000 and expects 5_050_000. CANCEL/FORCE_FLAT carry
+        # price=0 legitimately and skip the guard.
+        if int(intent_type) in (int(IntentType.NEW), int(IntentType.AMEND)):
+            tick_scaled = 0
+            tick_source = getattr(self.symbol_metadata, "tick_size_scaled", None)
+            if callable(tick_source):
+                try:
+                    tick_scaled = int(tick_source(symbol))
+                except (TypeError, ValueError):
+                    tick_scaled = 0
+            if tick_scaled > 0 and int(price) < tick_scaled:
+                raise ValueError(
+                    f"under-scaled price rejected: symbol={symbol!r} price={price} < "
+                    f"tick_size_scaled={tick_scaled}. Platform uses scaled int "
+                    f"(price * price_scale); pass Decimal for auto-scaling."
+                )
         if self._typed_intent_fastpath:
             return (
                 "typed_intent_v1",
@@ -424,7 +872,9 @@ class StrategyRunner:
                 "",
                 str(trace_id or ""),
                 "",
-                0,
+                self._default_intent_ttl_ns,  # ttl_ns
+                0,  # decision_price — populated by StrategyRunner from LOB mid
+                str(price_type or "LMT"),  # price_type (LMT/MKT) — index 17
             )
         return OrderIntent(
             intent_id=self._intent_seq,
@@ -440,6 +890,8 @@ class StrategyRunner:
             source_ts_ns=int(source_ts_ns or 0),
             trace_id=str(trace_id or ""),
             price_type=price_type,
+            ttl_ns=self._default_intent_ttl_ns,
+            contract=getattr(self, "_current_contract", None),
         )
 
     def _scale_price(self, symbol: str, price: int | Decimal) -> int:
@@ -448,44 +900,94 @@ class StrategyRunner:
     def _build_positions_by_strategy(self):
         if not self.position_store:
             return {}
+        positions_by_strategy: dict = {}
+        fallback: dict = {}
+        rust_fast_path = False
         # Unit 9: Use Rust fast-path if available
         rust_tracker = getattr(self.position_store, "_rust_tracker", None)
         if rust_tracker is not None and hasattr(rust_tracker, "get_positions_by_strategy"):
             try:
-                return rust_tracker.get_positions_by_strategy()
+                positions_by_strategy = rust_tracker.get_positions_by_strategy()
+                rust_fast_path = True
             except Exception:
                 pass  # Fallback to Python path
-        if hasattr(self.position_store, "snapshot_positions"):
-            raw = self.position_store.snapshot_positions()
-        else:
-            raw = getattr(self.position_store, "positions", None)
-            if not isinstance(raw, dict):
-                return {}
-            raw = dict(raw)
 
-        positions_by_strategy: dict = {}
-        fallback: dict = {}
+        recovery_snap: dict | None = None
+        if not rust_fast_path:
+            # R3-3 hole (2026-04-25): prefer the atomic API that snapshots
+            # positions AND recovery under one _fill_lock acquisition.
+            # Two separate snapshots race with _seed_from_recovery (writer
+            # pops recovery into positions atomically) and can lose entries
+            # from both views.
+            atomic_snap = getattr(self.position_store, "snapshot_positions_with_recovery", None)
+            if atomic_snap is not None:
+                raw, recovery_snap = atomic_snap()
+            elif hasattr(self.position_store, "snapshot_positions"):
+                raw = self.position_store.snapshot_positions()
+            else:
+                raw = getattr(self.position_store, "positions", None)
+                if not isinstance(raw, dict):
+                    return {}
+                _fill_lock = getattr(self.position_store, "_fill_lock", None)
+                if _fill_lock is not None:
+                    with _fill_lock:
+                        raw = dict(raw)
+                else:
+                    raw = dict(raw)
 
-        for key, value in raw.items():
-            if hasattr(value, "strategy_id") and hasattr(value, "symbol") and hasattr(value, "net_qty"):
-                positions_by_strategy.setdefault(value.strategy_id, {})[value.symbol] = value.net_qty
-                continue
-
-            # S6: Cache parsed key tuples to avoid split() on every rebuild
-            if isinstance(key, str) and ":" in key:
-                parsed = self._position_key_cache.get(key)
-                if parsed is None:
-                    parts = key.split(":")
-                    if len(parts) >= 3:
-                        parsed = (parts[1], parts[2])
-                        self._position_key_cache[key] = parsed
-                if parsed is not None:
-                    strat_id, symbol = parsed
-                    net_qty = value.net_qty if hasattr(value, "net_qty") else value
-                    positions_by_strategy.setdefault(strat_id, {})[symbol] = net_qty
+            for key, value in raw.items():
+                if hasattr(value, "strategy_id") and hasattr(value, "symbol") and hasattr(value, "net_qty"):
+                    positions_by_strategy.setdefault(value.strategy_id, {})[value.symbol] = value.net_qty
                     continue
 
-            fallback[key] = value.net_qty if hasattr(value, "net_qty") else value
+                # S6: Cache parsed key tuples to avoid split() on every rebuild
+                if isinstance(key, str) and ":" in key:
+                    parsed = self._position_key_cache.get(key)
+                    if parsed is None:
+                        parts = key.split(":")
+                        if len(parts) >= 3:
+                            parsed = (parts[1], parts[2])
+                            self._position_key_cache[key] = parsed
+                    if parsed is not None:
+                        strat_id, symbol = parsed
+                        net_qty = value.net_qty if hasattr(value, "net_qty") else value
+                        positions_by_strategy.setdefault(strat_id, {})[symbol] = net_qty
+                        continue
+
+                fallback[key] = value.net_qty if hasattr(value, "net_qty") else value
+
+        # Merge pending recovery positions (loaded at startup but not yet merged
+        # into positions via first fill).  Recovery keys use format
+        # "account:strategy:symbol" or "account:symbol".  Route entries with
+        # strategy_id to the correct bucket; others go to "*" wildcard.
+        # recovery_snap was set above by snapshot_positions_with_recovery
+        # for atomic consistency; fallback for stores without that API.
+        if recovery_snap is not None:
+            recovery: dict | None = recovery_snap if recovery_snap else None
+        else:
+            recovery_raw = getattr(self.position_store, "_recovery_positions", None)
+            if recovery_raw:
+                _fill_lock = getattr(self.position_store, "_fill_lock", None)
+                if _fill_lock is not None:
+                    with _fill_lock:
+                        recovery = dict(recovery_raw)
+                else:
+                    recovery = dict(recovery_raw)
+            else:
+                recovery = None
+        if recovery:
+            for rkey, rdata in recovery.items():
+                net_qty = rdata.get("net_qty", 0) if isinstance(rdata, dict) else 0
+                if net_qty == 0:
+                    continue
+                parts = rkey.split(":")
+                if len(parts) >= 3:
+                    strat_id, sym = parts[1], parts[2]
+                    bucket = positions_by_strategy.setdefault(strat_id, {})
+                    bucket[sym] = bucket.get(sym, 0) + net_qty
+                else:
+                    sym = parts[-1] if len(parts) >= 2 else rkey
+                    fallback[sym] = fallback.get(sym, 0) + net_qty
 
         if fallback:
             positions_by_strategy["*"] = fallback
@@ -496,23 +998,52 @@ class StrategyRunner:
         self._positions_dirty = True
 
     async def process_event(self, event: Any):
+        # Dispatch by exact type (avoid isinstance MRO walk on hot path).
+        et = type(event)
+        # Defensive guard: skip unexpected tuple events (allow known typed ring tags)
+        if et is tuple and (not event or event[0] not in _KNOWN_TUPLE_TAGS):
+            logger.warning("Unexpected tuple event skipped", length=len(event), head=repr(event[0] if event else None))
+            return
         source_ts_ns, trace_id = self._extract_event_trace(event)
         self._current_source_ts_ns = source_ts_ns
         self._current_trace_id = trace_id
-        # Invalidate on position delta events
-        if hasattr(event, "delta_source"):
+        # Option-3 Gate 3 slice: track the event's ContractRef (Gate 2b fills
+        # it in the normalizer). Intents produced by this event copy the ref
+        # so downstream Risk/Order consumers can prefer it over parsing
+        # ``symbol`` strings. None for events that predate the dual-write.
+        self._current_contract = getattr(event, "contract", None)
+        # Staleness guard: skip events older than threshold to prevent
+        # strategies from acting on stale market data during event loop lag.
+        if source_ts_ns > 0:
+            event_age_ns = timebase.now_ns() - source_ts_ns
+            if event_age_ns > self._stale_event_threshold_ns:
+                self._stale_event_skip_total += 1
+                if self._stale_event_metric is not None:
+                    self._stale_event_metric.inc()
+                if self._stale_event_skip_total % 100 == 1:
+                    logger.warning(
+                        "stale_event_skipped",
+                        age_ms=event_age_ns / 1_000_000,
+                        threshold_ms=self._stale_event_threshold_ns / 1_000_000,
+                        total_skipped=self._stale_event_skip_total,
+                    )
+                return
+        # Invalidate on position delta events (exact-type check avoids hasattr
+        # descriptor lookup on every tick).
+        if et is PositionDelta:
             self._positions_dirty = True
 
         if self._positions_dirty:
             self._positions_cache = self._build_positions_by_strategy()
+            self._positions_views = {sid: MappingProxyType(inner) for sid, inner in self._positions_cache.items()}
             self._positions_dirty = False
-        positions_by_strategy = self._positions_cache
 
         target_strat_id = getattr(event, "strategy_id", None)
         event_symbol = getattr(event, "symbol", "")
 
-        # Keep executors in sync with strategy list (tests may replace list)
-        if not self._executors_match_strategy_list():
+        # M-2: O(1) version-counter check replaces O(n) element-wise scan.
+        # Length guard handles external monkey-patching (e.g. tests replacing .strategies list).
+        if self._executors_version != self._strategies_version or len(self._strat_executors) != len(self.strategies):
             self._rebuild_executors()
 
         # Unit 10: Use index for O(1) targeted dispatch when target_strat_id is set
@@ -522,6 +1053,7 @@ class StrategyRunner:
             executors_iter = self._strat_executors
 
         # Use cached executors
+        _event_had_drops = False
         for strategy, ctx, lat_m, int_m, alpha_intent_m, alpha_flat_m, alpha_last_ts_g in executors_iter:
             if not strategy.enabled:
                 # S4: Check if halted strategy is eligible for cooldown recovery
@@ -551,7 +1083,7 @@ class StrategyRunner:
             if target_strat_id and strategy.strategy_id != target_strat_id:
                 continue
 
-            _governor = getattr(self, "strategy_governor", None)
+            _governor = self.strategy_governor
             if _governor is not None and _governor.is_quarantined(strategy.strategy_id):
                 self._emit_trace(
                     "strategy_quarantine_skip",
@@ -562,29 +1094,38 @@ class StrategyRunner:
                         "symbol": getattr(event, "symbol", ""),
                     },
                 )
-                # Still update circuit breaker state when quarantine-skipping
-                _qsid = strategy.strategy_id
-                _rc = getattr(self, "_rust_circuit", None)
-                if _rc is not None:
-                    _new_state, _should_disable = _rc.record_failure(_qsid, timebase.now_ns())
-                    if _should_disable:
-                        strategy.enabled = False
-                else:
-                    _q_failures = self._failure_counts.get(_qsid, 0) + 1
-                    self._failure_counts[_qsid] = _q_failures
-                    _q_state = self._circuit_states.get(_qsid, "normal")
-                    _q_half = max(1, self._circuit_threshold // 2)
-                    if _q_state == "normal" and _q_failures >= _q_half:
-                        self._circuit_states[_qsid] = "degraded"
-                    if _q_failures >= self._circuit_threshold and _q_state != "halted":
-                        self._circuit_states[_qsid] = "halted"
-                        strategy.enabled = False
-                    elif _qsid not in self._circuit_states:
-                        self._circuit_states[_qsid] = "normal"
+                # DECISION-08: Do NOT record circuit breaker failures during
+                # quarantine. Quarantine is the containment mechanism; recording
+                # failures for skipped events causes the circuit breaker to
+                # permanently disable the strategy before quarantine expires.
                 continue
 
-            positions = positions_by_strategy.get(strategy.strategy_id) or positions_by_strategy.get("*", {})
-            ctx.positions = positions
+            # Timeout circuit breaker: skip strategies that are broken, with auto-recovery
+            sid_for_timeout = strategy.strategy_id
+            if self._timeout_broken.get(sid_for_timeout, False):
+                broken_at = self._timeout_broken_at_ns.get(sid_for_timeout, 0)
+                if broken_at and (time.monotonic_ns() - broken_at) >= self._timeout_recover_ns:
+                    self._timeout_broken[sid_for_timeout] = False
+                    self._timeout_consecutive[sid_for_timeout] = 0
+                    if self.metrics:
+                        try:
+                            self.metrics.circuit_breaker_state.labels(component=f"runner:{sid_for_timeout}").set(
+                                0
+                            )  # normal
+                        except Exception:  # noqa: BLE001
+                            pass
+                    logger.info("Strategy timeout circuit breaker recovered", id=sid_for_timeout)
+                else:
+                    continue
+
+            # Hand strategy a read-only view over the cached per-strategy dict.
+            # MappingProxyType is zero-copy and raises TypeError on mutation attempts,
+            # protecting `_positions_cache` without per-event dict() allocation.
+            ctx.positions = (
+                self._positions_views.get(strategy.strategy_id)
+                or self._positions_views.get("*")
+                or _EMPTY_POSITION_VIEW
+            )
 
             start = time.perf_counter_ns()
             if getattr(self, "_trace_sampler", None) is not None:
@@ -597,6 +1138,16 @@ class StrategyRunner:
                         "symbol": getattr(event, "symbol", ""),
                     },
                 )
+            # Observability gap closure (Bug 12): per-strategy event dispatch counter.
+            # MUST fire before handle_event so a silent strategy is still visible.
+            try:
+                _events_cache = getattr(self, "_events_received_metrics", None)
+                if _events_cache is not None:
+                    _events_m = _events_cache.get(strategy.strategy_id)
+                    if _events_m is not None:
+                        _events_m.inc()
+            except Exception:
+                pass
             try:
                 intents = strategy.handle_event(ctx, event)
             except Exception as e:  # noqa: BLE001 — wraps user strategy code
@@ -611,7 +1162,7 @@ class StrategyRunner:
                     },
                 )
                 intents = []
-                _gov = getattr(self, "strategy_governor", None)
+                _gov = self.strategy_governor
                 if _gov is not None:
                     transition = _gov.quarantine(strategy.strategy_id, reason="strategy_exception")
                     self._emit_trace(
@@ -643,8 +1194,16 @@ class StrategyRunner:
                             id=sid,
                             threshold=self._circuit_threshold,
                         )
+                        try:
+                            self.metrics.circuit_breaker_state.labels(component=f"runner:{sid}").set(2)
+                        except Exception:  # noqa: BLE001
+                            pass
                     elif new_state == 1:  # DEGRADED
                         logger.warning("Strategy circuit degraded", id=sid)
+                        try:
+                            self.metrics.circuit_breaker_state.labels(component=f"runner:{sid}").set(1)
+                        except Exception:  # noqa: BLE001
+                            pass
                 else:
                     self._circuit_success_counts[sid] = 0
                     failures = self._failure_counts.get(sid, 0) + 1
@@ -654,6 +1213,10 @@ class StrategyRunner:
                     if state == "normal" and failures >= half_threshold:
                         self._circuit_states[sid] = "degraded"
                         logger.warning("Strategy circuit degraded", id=sid, failures=failures)
+                        try:
+                            self.metrics.circuit_breaker_state.labels(component=f"runner:{sid}").set(1)
+                        except Exception:  # noqa: BLE001
+                            pass
                     if failures >= self._circuit_threshold and state != "halted":
                         self._circuit_states[sid] = "halted"
                         strategy.enabled = False
@@ -664,6 +1227,10 @@ class StrategyRunner:
                             failures=failures,
                             threshold=self._circuit_threshold,
                         )
+                        try:
+                            self.metrics.circuit_breaker_state.labels(component=f"runner:{sid}").set(2)
+                        except Exception:  # noqa: BLE001
+                            pass
             else:
                 # S4: Gradual recovery: in degraded state, require N consecutive successes
                 sid = strategy.strategy_id
@@ -672,6 +1239,10 @@ class StrategyRunner:
                     _new_state, recovered = rc.record_success(sid)
                     if recovered:
                         logger.info("Strategy circuit recovered to normal", id=sid)
+                        try:
+                            self.metrics.circuit_breaker_state.labels(component=f"runner:{sid}").set(0)
+                        except Exception:  # noqa: BLE001
+                            pass
                 else:
                     state = self._circuit_states.get(sid, "normal")
                     if state == "degraded":
@@ -682,23 +1253,89 @@ class StrategyRunner:
                             self._failure_counts[sid] = 0
                             self._circuit_success_counts[sid] = 0
                             logger.info("Strategy circuit recovered to normal", id=sid)
+                            try:
+                                self.metrics.circuit_breaker_state.labels(component=f"runner:{sid}").set(0)
+                            except Exception:  # noqa: BLE001
+                                pass
 
             # TrackGate per-intent filtering (session phase enforcement)
             if getattr(self, "track_gate", None) is not None and intents:
-                from hft_platform.ops.session_governor import SessionPhase  # noqa: PLC0415
-
-                _CLOSE_ONLY_TYPES = (IntentType.CANCEL, IntentType.FORCE_FLAT)
-                _filtered: list = []
-                for _intent in intents:
-                    _phase = self.track_gate.get_phase(_intent.symbol)
-                    if _phase == SessionPhase.OPEN:
-                        _filtered.append(_intent)
-                    elif _phase == SessionPhase.CLOSE_ONLY:
-                        if _intent.intent_type in _CLOSE_ONLY_TYPES:
-                            _filtered.append(_intent)
-                intents = _filtered
+                pre_filter_intents = list(intents)
+                intents = StrategyRunner.filter_intents_by_phase(
+                    intents,
+                    self.track_gate,
+                    self.position_store,
+                    strategy_id=strategy.strategy_id,
+                )
+                # Send RiskFeedback for each filtered intent so strategy
+                # can decrement pending counters (prevents permanent freeze).
+                filtered_set = set(id(i) for i in intents)
+                dropped = [i for i in pre_filter_intents if id(i) not in filtered_set]
+                if dropped:
+                    now_ns = timebase.now_ns()
+                    for intent in dropped:
+                        iid, sid, sym, side = _typed_intent_identity(intent)
+                        fb = RiskFeedback(
+                            intent_id=iid,
+                            strategy_id=sid,
+                            symbol=sym,
+                            reason_code="TRACK_GATE_SESSION_FILTERED",
+                            timestamp_ns=now_ns,
+                            side=_feedback_side(side),
+                            was_approved=False,
+                        )
+                        try:
+                            strategy.on_risk_feedback(fb)
+                        except Exception:  # noqa: BLE001
+                            logger.warning(
+                                "track_gate_feedback_error",
+                                strategy_id=strategy.strategy_id,
+                                intent_id=iid,
+                            )
 
             duration = time.perf_counter_ns() - start
+
+            # Timeout circuit breaker: check wall-clock duration
+            # GapEvent handlers do recovery work (reset state, re-request snapshots)
+            # and should not count toward timeout strikes.
+            _timeout_sid = strategy.strategy_id
+            _is_gap = isinstance(event, GapEvent)
+            if not _is_gap and duration > self._timeout_ns:
+                consec = self._timeout_consecutive.get(_timeout_sid, 0) + 1
+                self._timeout_consecutive[_timeout_sid] = consec
+                if self.metrics:
+                    _timeout_m = getattr(self.metrics, "strategy_timeout_total", None)
+                    if _timeout_m is not None:
+                        _timeout_m.labels(strategy_name=_timeout_sid).inc()
+                logger.warning(
+                    "Strategy handle_event exceeded timeout",
+                    id=_timeout_sid,
+                    duration_ns=duration,
+                    timeout_ns=self._timeout_ns,
+                    consecutive=consec,
+                )
+                if consec >= self._timeout_strikes_limit:
+                    self._timeout_broken[_timeout_sid] = True
+                    self._timeout_broken_at_ns[_timeout_sid] = time.monotonic_ns()
+                    if self.metrics:
+                        _cb_m = getattr(self.metrics, "strategy_circuit_break_total", None)
+                        if _cb_m is not None:
+                            _cb_m.labels(strategy_name=_timeout_sid).inc()
+                        try:
+                            self.metrics.circuit_breaker_state.labels(component=f"runner:{_timeout_sid}").set(
+                                2
+                            )  # halted
+                        except Exception:  # noqa: BLE001
+                            pass
+                    logger.warning(
+                        "Strategy timeout circuit breaker activated",
+                        id=_timeout_sid,
+                        strikes=consec,
+                        recover_s=self._timeout_recover_ns / 1_000_000_000,
+                    )
+            elif not _is_gap:
+                self._timeout_consecutive[_timeout_sid] = 0
+
             if getattr(self, "_trace_sampler", None) is not None:
                 self._emit_trace(
                     "strategy_dispatch_done",
@@ -722,7 +1359,14 @@ class StrategyRunner:
                 if self._strategy_metrics_batch <= 1:
                     int_m.inc(len(intents))
                 else:
-                    self._strategy_pending_intents[sid] = self._strategy_pending_intents.get(sid, 0) + len(intents)
+                    # P1-9: serialise the read-modify-write so two concurrent
+                    # ``process_event`` tasks for the same ``sid`` cannot
+                    # lose increments. Without the lock, A reads 0, awaits
+                    # in a peer call (the bus consumer is single-task today
+                    # but tests/back-pressure paths can interleave), B reads
+                    # 0, both write — A's increment is dropped on the floor.
+                    async with self._get_pending_lock(sid):
+                        self._strategy_pending_intents[sid] = self._strategy_pending_intents.get(sid, 0) + len(intents)
             # Alpha liveness: track signal outcome and last active timestamp
             if self.metrics and self._diagnostic_metrics_enabled:
                 if intents:
@@ -734,7 +1378,7 @@ class StrategyRunner:
                                 self._strategy_pending_alpha_intent.get(sid, 0) + 1
                             )
                     if alpha_last_ts_g:
-                        alpha_last_ts_g.set(time.monotonic())
+                        alpha_last_ts_g.set(timebase.now_s())
                 else:
                     if alpha_flat_m:
                         if self._strategy_metrics_batch <= 1:
@@ -742,10 +1386,16 @@ class StrategyRunner:
                         else:
                             self._strategy_pending_alpha_flat[sid] = self._strategy_pending_alpha_flat.get(sid, 0) + 1
             if self._strategy_metrics_batch > 1 and (seq % self._strategy_metrics_batch == 0):
-                pending_intents = self._strategy_pending_intents.get(sid, 0)
-                if pending_intents and int_m:
-                    int_m.inc(pending_intents)
-                    self._strategy_pending_intents[sid] = 0
+                # P1-9: read+emit+reset of ``_strategy_pending_intents[sid]``
+                # must be atomic relative to the increment block above.
+                # Without the lock, the increment between read and reset
+                # would be wiped (A reads N, B increments to N+k, A writes
+                # 0 → k intents lost from metrics).
+                async with self._get_pending_lock(sid):
+                    pending_intents = self._strategy_pending_intents.get(sid, 0)
+                    if pending_intents and int_m:
+                        int_m.inc(pending_intents)
+                        self._strategy_pending_intents[sid] = 0
                 pending_alpha_intent = self._strategy_pending_alpha_intent.get(sid, 0)
                 if pending_alpha_intent and alpha_intent_m:
                     alpha_intent_m.inc(pending_alpha_intent)
@@ -764,13 +1414,39 @@ class StrategyRunner:
                 )
 
             if intents:
+                if len(intents) > self._max_intents_per_event:
+                    logger.warning(
+                        "strategy_intent_flood",
+                        strategy_id=strategy.strategy_id,
+                        intent_count=len(intents),
+                        cap=self._max_intents_per_event,
+                    )
+                    intents = intents[: self._max_intents_per_event]
                 _d7_submitted = 0
                 _d7_dropped = 0
                 for intent in intents:
-                    # Populate decision_mid from LOB engine's last stats
-                    if hasattr(self.lob_engine, "last_stats") and self.lob_engine.last_stats is not None:
-                        if isinstance(intent, OrderIntent):
-                            intent.decision_mid = self.lob_engine.last_stats.mid_price_x2 // 2
+                    # Populate decision prices from LOB L1 data
+                    if self._lob_l1_source is not None:
+                        _event_symbol = (
+                            getattr(intent, "symbol", None)
+                            if isinstance(intent, OrderIntent)
+                            else (intent[3] if isinstance(intent, tuple) and len(intent) > 3 else None)
+                        )
+                        if _event_symbol:
+                            _l1 = self._lob_l1_source(_event_symbol)
+                            if _l1 is not None:
+                                _mid = _l1[3] // 2  # mid_price_x2 // 2
+                                if _mid > 0:
+                                    if isinstance(intent, OrderIntent):
+                                        intent.decision_mid = _mid  # deprecated: use decision_price
+                                        intent.decision_price = _mid
+                                    elif (
+                                        isinstance(intent, tuple)
+                                        and len(intent) >= 17
+                                        and intent[0] == "typed_intent_v1"
+                                    ):
+                                        # Typed intent tuple: position 16 is decision_price
+                                        intent = (*intent[:16], _mid)
 
                     self._emit_trace(
                         "strategy_intent_submit",
@@ -797,30 +1473,120 @@ class StrategyRunner:
                     except asyncio.QueueFull:
                         _d7_dropped += 1
                         self.metrics.intent_queue_full_total.inc()
+                        _fb_iid, _fb_sid, _fb_sym, _fb_side = _typed_intent_identity(intent)
                         logger.error(
                             "intent_submit_queue_full",
-                            strategy_id=getattr(intent, "strategy_id", "?"),
+                            strategy_id=_fb_sid or "?",
+                            symbol=_fb_sym,
                             submitted=_d7_submitted,
                             dropped=_d7_dropped,
                             batch_size=len(intents),
                         )
+                        if self._rejection_sink is not None:
+                            try:
+                                self._rejection_sink.put_nowait(
+                                    RiskFeedback(
+                                        intent_id=_fb_iid,
+                                        strategy_id=_fb_sid,
+                                        symbol=_fb_sym,
+                                        reason_code="risk_queue_full",
+                                        timestamp_ns=timebase.now_ns(),
+                                        side=Side(_fb_side) if _fb_side is not None else None,
+                                    )
+                                )
+                            except asyncio.QueueFull:
+                                self.metrics.rejection_sink_overflow_total.inc()
+                                # DEC2-006: Direct callback fallback when sink is full.
+                                # Without this, the strategy permanently leaks pending slots.
+                                try:
+                                    _inline_fb = RiskFeedback(
+                                        intent_id=_fb_iid,
+                                        strategy_id=_fb_sid,
+                                        symbol=_fb_sym,
+                                        reason_code="risk_queue_full_sink_overflow",
+                                        timestamp_ns=timebase.now_ns(),
+                                        side=Side(_fb_side) if _fb_side is not None else None,
+                                    )
+                                    if hasattr(strategy, "on_risk_feedback"):
+                                        strategy.on_risk_feedback(_inline_fb)
+                                except Exception as _fb_exc:
+                                    logger.error(
+                                        "inline_risk_feedback_failed",
+                                        strategy_id=_fb_sid,
+                                        error=str(_fb_exc),
+                                    )
                 if _d7_dropped > 0:
-                    _sid = strategy.strategy_id
-                    if self._rust_circuit is not None:
-                        self._rust_circuit.record_failure(_sid, time.monotonic_ns())
+                    # QueueFull is an infrastructure backpressure issue, not a
+                    # strategy fault. Do NOT advance the circuit breaker here —
+                    # that would penalise healthy strategies for a full risk
+                    # queue. The intent_queue_full_total metric (incremented
+                    # per drop above) already provides observability.
+                    logger.warning(
+                        "intent_submit_queue_full_batch",
+                        strategy_id=strategy.strategy_id,
+                        submitted=_d7_submitted,
+                        dropped=_d7_dropped,
+                    )
+                    _event_had_drops = True
+
+        # Gradual degradation: track per-event (not per-strategy) to avoid
+        # non-dropping strategies resetting the counter mid-event.
+        if _event_had_drops:
+            self._queue_full_consecutive += 1
+            if self._storm_guard is not None:
+                if self._queue_full_consecutive >= self._queue_full_halt_threshold:
+                    self._storm_guard.trigger_halt("risk_queue_full_persistent")
+                else:
+                    self._storm_guard.trigger_storm("risk_queue_full")
+        else:
+            self._queue_full_consecutive = 0
+
+    @staticmethod
+    def filter_intents_by_phase(
+        intents: list, track_gate: Any, position_store: Any = None, strategy_id: str | None = None
+    ) -> list:
+        """Filter intents based on session phase from TrackGate.
+
+        During CLOSE_ONLY: allow CANCEL, FORCE_FLAT, and position-reducing IOC orders.
+        During FORCE_FLAT: allow only CANCEL and FORCE_FLAT (position flattener handles exits).
+
+        IOC NEW orders in CLOSE_ONLY are only permitted if they reduce existing exposure:
+        - BUY is allowed only if net_qty < 0 (closing a short)
+        - SELL is allowed only if net_qty > 0 (closing a long)
+        If position_store is None, IOC NEW orders are conservatively blocked.
+        """
+        from hft_platform.ops.session_governor import SessionPhase  # noqa: PLC0415
+
+        _CLOSE_ONLY_TYPES = (IntentType.CANCEL, IntentType.FORCE_FLAT)
+        _BUY = int(Side.BUY)
+        _SELL = int(Side.SELL)
+        _filtered: list = []
+        for _intent in intents:
+            _intent_symbol = _typed_intent_symbol(_intent)
+            _intent_type = _typed_intent_type(_intent)
+            _phase = track_gate.get_phase(_intent_symbol)
+            if _phase == SessionPhase.OPEN:
+                _filtered.append(_intent)
+            elif _phase == SessionPhase.CLOSE_ONLY:
+                if _intent_type in _CLOSE_ONLY_TYPES:
+                    _filtered.append(_intent)
+                elif _intent_type == int(IntentType.NEW) and _typed_intent_tif(_intent) == int(TIF.IOC):
+                    # Position-aware check: only allow IOC if it reduces exposure
+                    _side = _typed_intent_side(_intent)
+                    _net_qty = _get_symbol_net_qty(position_store, _intent_symbol, strategy_id)
+                    if (_side == _BUY and _net_qty < 0) or (_side == _SELL and _net_qty > 0):
+                        _filtered.append(_intent)
                     else:
-                        _failures = self._failure_counts.get(_sid, 0) + 1
-                        self._failure_counts[_sid] = _failures
-                        _state = self._circuit_states.get(_sid, "normal")
-                        _half = max(1, self._circuit_threshold // 2)
-                        if _state == "normal" and _failures >= _half:
-                            self._circuit_states[_sid] = "degraded"
-                            logger.warning("strategy_circuit_degraded", id=_sid, reason="queue_full_partial_batch")
-                        if _failures >= self._circuit_threshold and _state != "halted":
-                            self._circuit_states[_sid] = "halted"
-                            strategy.enabled = False
-                            self._circuit_halted_at_ns[_sid] = time.monotonic_ns()
-                            logger.error("strategy_circuit_halted", id=_sid, reason="queue_full_partial_batch")
+                        logger.debug(
+                            "close_only_ioc_blocked_no_exposure",
+                            symbol=_intent_symbol,
+                            side=_side,
+                            net_qty=_net_qty,
+                        )
+            elif _phase == SessionPhase.FORCE_FLAT:
+                if _intent_type in _CLOSE_ONLY_TYPES:
+                    _filtered.append(_intent)
+        return _filtered
 
     def _emit_trace(self, stage: str, trace_id: str, payload: dict[str, Any]) -> None:
         sampler = getattr(self, "_trace_sampler", None)
@@ -832,6 +1598,9 @@ class StrategyRunner:
             logger.debug("trace_emit_failed", error=str(exc))
             return
 
+    # Tuple timestamp index by tag for _extract_event_trace
+    _TUPLE_TS_INDEX: dict[str, int] = {"tick": 7, "bidask": 4, "lobstats": 2}
+
     def _extract_event_trace(self, event: Any) -> tuple[int, str]:
         source_ts_ns = 0
         trace_id = ""
@@ -842,6 +1611,18 @@ class StrategyRunner:
             topic = getattr(meta, "topic", "event")
             if seq is not None:
                 trace_id = f"{topic}:{seq}"
+        elif isinstance(event, tuple) and len(event) > 2 and isinstance(event[0], str):
+            ts_idx = self._TUPLE_TS_INDEX.get(event[0])
+            if ts_idx is not None and len(event) > ts_idx:
+                try:
+                    source_ts_ns = int(event[ts_idx] or 0)
+                except (TypeError, ValueError):
+                    source_ts_ns = 0
+        elif hasattr(event, "local_ts"):
+            try:
+                source_ts_ns = int(getattr(event, "local_ts") or 0)
+            except (TypeError, ValueError):
+                source_ts_ns = 0
         elif hasattr(event, "ts"):
             try:
                 source_ts_ns = int(getattr(event, "ts") or 0)

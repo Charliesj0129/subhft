@@ -2,6 +2,10 @@
 .github
 .agent
 .state
+.env
+.env.*
+!.env.example
+certs/
 
 __pycache__/
 .pytest_cache/
