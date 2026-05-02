@@ -341,10 +341,7 @@ class TestHFTSystemManualRearmRequest:
     def test_system_consumes_platform_rearm_request_once(self, tmp_path):
         state_path = tmp_path / "runtime_state.json"
         state_path.write_text(
-            (
-                '{"platform":{"manual_rearm_required":false,'
-                '"reason":null,"rearm_requested_at":123},"strategies":{}}'
-            ),
+            ('{"platform":{"manual_rearm_required":false,"reason":null,"rearm_requested_at":123},"strategies":{}}'),
             encoding="utf-8",
         )
         system = object.__new__(HFTSystem)
