@@ -329,6 +329,15 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="Path to hft_platform project root (default: auto-detect from this file's location)",
     )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help=(
+            "Exit non-zero (1) if any scorecard is missing a latency profile, "
+            "has values outside Gate D 80%% tolerance, or lacks a passing stress test. "
+            "Use in CI to block promotions that omit latency realism evidence."
+        ),
+    )
     return parser
 
 
@@ -336,6 +345,14 @@ def _detect_project_root() -> Path:
     """Auto-detect project root as three levels up from this file."""
     # src/hft_platform/alpha/latency_audit.py → project root
     return Path(__file__).resolve().parent.parent.parent.parent
+
+
+def _strict_exit_code(results: list[LatencyAuditResult]) -> int:
+    """Return 1 if any audit result indicates non-compliance, else 0."""
+    for r in results:
+        if not r.has_profile or not r.profile_valid or not r.stress_tested:
+            return 1
+    return 0
 
 
 if __name__ == "__main__":
@@ -346,3 +363,6 @@ if __name__ == "__main__":
     audit_results = audit_alphas(project_root)
     report = format_audit_report(audit_results)
     print(report)
+
+    if args.strict:
+        raise SystemExit(_strict_exit_code(audit_results))
