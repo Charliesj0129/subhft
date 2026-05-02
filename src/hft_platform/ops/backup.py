@@ -346,8 +346,11 @@ class BackupManager:
                 if not _IDENTIFIER_RE.match(table):
                     logger.warning("Skipping table with invalid identifier", table=table)
                     continue
-                orig = client.query(f"SELECT count() FROM hft.{table}").result_rows[0][0]
-                restored = client.query(f"SELECT count() FROM {temp_db}.{table}").result_rows[0][0]
+                # table validated via _IDENTIFIER_RE.match above; temp_db
+                # validated by ValueError guard; ClickHouse rejects unknown
+                # identifiers with a hard error.
+                orig = client.query(f"SELECT count() FROM hft.{table}").result_rows[0][0]  # nosec B608
+                restored = client.query(f"SELECT count() FROM {temp_db}.{table}").result_rows[0][0]  # nosec B608
                 results[table] = (orig, restored)
                 if orig != restored:
                     mismatches.append(f"{table}: orig={orig} restored={restored}")
