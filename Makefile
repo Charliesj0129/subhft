@@ -103,6 +103,9 @@ discipline: ## Run AST-based discipline enforcement (9 rules)
 discipline-strict: ## Run discipline enforcement in strict mode (warnings block too)
 	uv run python scripts/check_discipline.py --ci --strict
 
+discipline-hft: ## HFT hard-fail discipline gate (incl. HFT-P004 no-float-money)
+	uv run python scripts/check_discipline.py --ci
+
 git-precheck: ## Run git precondition checks (AWG-01/03) before merge/rebase
 	bash scripts/check_git_preconditions.sh --pre-merge
 

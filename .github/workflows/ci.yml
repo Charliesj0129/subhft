@@ -66,6 +66,13 @@ jobs:
         # Passes silently when no scorecards exist.
         run: make latency-audit
 
+      - name: HFT discipline (HFT-P004 no-float-money)
+        # AST-based check that complements the legacy grep-based float
+        # detector below. HFT-P004 hard-blocks `: float` annotations on
+        # money-related fields (price/balance/fee/pnl/notional/...) inside
+        # contracts/, order/, execution/, risk/. See scripts/check_discipline.py.
+        run: make discipline-hft
+
       - name: Detect float in financial paths
         run: |
           FOUND=$(grep -rnE ':\s*float\b|float\(' \
