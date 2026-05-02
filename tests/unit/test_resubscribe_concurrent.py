@@ -138,9 +138,7 @@ class TestResubscribeLock:
 
         # t2 took the lock-skip path. t1 ran the body and made >=1 broker
         # subscribe call (slow_subscribe was invoked at least once).
-        assert c._quote_api.return_value.subscribe.call_count >= 1, (
-            "t1 did not invoke broker subscribe at all"
-        )
+        assert c._quote_api.return_value.subscribe.call_count >= 1, "t1 did not invoke broker subscribe at all"
 
     def test_subscribed_codes_clear_in_place(self) -> None:
         """Object identity of ``subscribed_codes`` is preserved across a
@@ -216,10 +214,7 @@ class TestResubscribeLock:
         metrics = MetricsRegistry.get()
         # The counter must exist.
         counter = getattr(metrics, "feed_resubscribe_skipped_concurrent_total", None)
-        assert counter is not None, (
-            "expected MetricsRegistry to expose "
-            "feed_resubscribe_skipped_concurrent_total"
-        )
+        assert counter is not None, "expected MetricsRegistry to expose feed_resubscribe_skipped_concurrent_total"
 
         # Snapshot current value (the registry is process-singleton so we
         # need to diff rather than assume zero).
@@ -256,9 +251,7 @@ class TestResubscribeLock:
         # Second caller must skip and bump metric.
         mgr._resubscribe_all()
         after_skip = _value()
-        assert after_skip >= before + 1, (
-            f"metric did not increment on skip: before={before} after={after_skip}"
-        )
+        assert after_skip >= before + 1, f"metric did not increment on skip: before={before} after={after_skip}"
 
         proceed.set()
         t1.join(timeout=2.0)
@@ -320,9 +313,7 @@ class TestSubscribedCodesIdentityAcrossResetPaths:
         rebind_pattern = re.compile(r"_failed_sub_symbols\s*=\s*[^d]")
         # Allow only ``self._failed_sub_symbols: deque[...] = deque()`` and
         # ``self._failed_sub_symbols = deque(...)`` initial allocation.
-        annot_or_deque_pattern = re.compile(
-            r"_failed_sub_symbols\s*(?::\s*deque[^=]*)?\s*=\s*deque\b"
-        )
+        annot_or_deque_pattern = re.compile(r"_failed_sub_symbols\s*(?::\s*deque[^=]*)?\s*=\s*deque\b")
         for py in root.rglob("*.py"):
             for lineno, line in enumerate(py.read_text().splitlines(), start=1):
                 stripped = line.strip()
@@ -333,7 +324,4 @@ class TestSubscribedCodesIdentityAcrossResetPaths:
                     continue
                 if rebind_pattern.search(stripped) and not annot_or_deque_pattern.search(stripped):
                     offenders.append((str(py), lineno, stripped))
-        assert not offenders, (
-            "_failed_sub_symbols is rebound (regression of the L2 fix). "
-            f"Offenders: {offenders}"
-        )
+        assert not offenders, f"_failed_sub_symbols is rebound (regression of the L2 fix). Offenders: {offenders}"

@@ -58,7 +58,9 @@ class TestSymbolMetadataContractRef:
         assert metadata.contract_ref("GARBAGE-SYMBOL-??") is None
         assert metadata.contract_ref("!!!") is None
 
-    def test_missing_contract_module_returns_none(self, metadata: SymbolMetadata, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_missing_contract_module_returns_none(
+        self, metadata: SymbolMetadata, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         real_import = builtins.__import__
 
         def fake_import(name: str, *args, **kwargs):

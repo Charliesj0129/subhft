@@ -360,8 +360,8 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         )
         self._feature_update_metric_children: dict[tuple[str, str], Any] = {}
         self._feature_quality_flag_metric_children: dict[str, Any] = {}
-        self._feature_latency_metric_child = None
-        self._lob_only_latency_metric_child = None
+        self._feature_latency_metric_child: Any = None
+        self._lob_only_latency_metric_child: Any = None
         self._feature_shadow_checks_metric_children: dict[tuple[str, str], Any] = {}
         self._feature_shadow_mismatch_metric_children: dict[tuple[str, str], Any] = {}
         self._feature_set_id_cached = (
@@ -1291,11 +1291,7 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                                 getattr(self.client, "MAX_SUBSCRIPTIONS_PER_CLIENT", 0)
                                 or getattr(self.client, "MAX_SUBSCRIPTIONS", 0)
                             )
-                            reason = (
-                                "exceeds_limit"
-                                if "exceeds limit" in str(exc).lower()
-                                else "other"
-                            )
+                            reason = "exceeds_limit" if "exceeds limit" in str(exc).lower() else "other"
                             await dispatcher.notify_symbol_reload_failed(
                                 reason=reason,
                                 count=len(symbols),
@@ -2232,9 +2228,7 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                 if latched_silent_counter is not None:
                     try:
                         capped = self.metrics_registry.cap_symbol(symbol)
-                        latched_silent_counter.labels(
-                            symbol=capped, action="unsubscribed"
-                        ).inc()
+                        latched_silent_counter.labels(symbol=capped, action="unsubscribed").inc()
                     except Exception:
                         pass
                 continue

@@ -20,9 +20,7 @@ import structlog
 
 logger = structlog.get_logger(__name__)
 
-DEFAULT_HEARTBEAT_PATH: str = os.environ.get(
-    "HFT_HEARTBEAT_PATH", "/var/run/hft/heartbeat"
-)
+DEFAULT_HEARTBEAT_PATH: str = os.environ.get("HFT_HEARTBEAT_PATH", "/var/run/hft/heartbeat")
 
 
 def write_heartbeat(path: str = DEFAULT_HEARTBEAT_PATH) -> None:

@@ -133,9 +133,7 @@ class TelegramSender:
             try:
                 from hft_platform.observability.metrics import MetricsRegistry
 
-                MetricsRegistry.get().bot_rate_limited_total.labels(
-                    critical=str(critical).lower()
-                ).inc()
+                MetricsRegistry.get().bot_rate_limited_total.labels(critical=str(critical).lower()).inc()
             except Exception:  # noqa: BLE001
                 pass
             return False

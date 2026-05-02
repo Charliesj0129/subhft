@@ -119,8 +119,11 @@ def test_default_parameters_match_canonical_mp_2() -> None:
 # ----------------------------------------------------------------------------
 
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
 def _load_strategies_yaml() -> dict:
-    path = Path("/home/charlie/hft_platform/config/base/strategies.yaml")
+    path = _REPO_ROOT / "config/base/strategies.yaml"
     with open(path) as f:
         return yaml.safe_load(f)
 
@@ -184,7 +187,7 @@ def test_strategies_yaml_c60_params_match_canonical() -> None:
 
 
 def _load_strategy_limits() -> dict:
-    path = Path("/home/charlie/hft_platform/config/base/strategy_limits.yaml")
+    path = _REPO_ROOT / "config/base/strategy_limits.yaml"
     with open(path) as f:
         return yaml.safe_load(f)
 

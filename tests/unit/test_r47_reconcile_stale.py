@@ -120,11 +120,11 @@ class TestReconcileStaleQuotesUnderGateBlock:
         intents = strategy.handle_event(ctx, ev)
 
         from hft_platform.contracts.strategy import IntentType
+
         cancels = [i for i in intents if getattr(i, "intent_type", None) == IntentType.CANCEL]
         # Expect at least one CANCEL intent targeting v004N.
         assert len(cancels) >= 1, (
-            f"D1: stale BUY cancel must fire when spread gate blocks; "
-            f"got {len(intents)} intents, none were CANCEL"
+            f"D1: stale BUY cancel must fire when spread gate blocks; got {len(intents)} intents, none were CANCEL"
         )
 
     def test_stale_sell_cancelled_when_spread_gate_blocks(self, strategy):
@@ -144,6 +144,7 @@ class TestReconcileStaleQuotesUnderGateBlock:
         intents = strategy.handle_event(ctx, ev)
 
         from hft_platform.contracts.strategy import IntentType
+
         cancels = [i for i in intents if getattr(i, "intent_type", None) == IntentType.CANCEL]
         assert len(cancels) >= 1, "D1: stale SELL cancel must fire when spread gate blocks"
 
@@ -164,10 +165,10 @@ class TestReconcileStaleQuotesUnderGateBlock:
         intents = strategy.handle_event(ctx, ev)
 
         from hft_platform.contracts.strategy import IntentType
+
         cancels = [i for i in intents if getattr(i, "intent_type", None) == IntentType.CANCEL]
         assert len(cancels) == 0, (
-            "D1: close quote must not be cancelled; got spurious CANCEL. "
-            "Reconcile is over-aggressive."
+            "D1: close quote must not be cancelled; got spurious CANCEL. Reconcile is over-aggressive."
         )
 
     def test_active_oid_cleared_after_cancel_dispatch(self, strategy):
@@ -211,11 +212,12 @@ class TestReconcileStaleQuotesUnderGateBlock:
         intents = strategy.handle_event(ctx, ev)
 
         from hft_platform.contracts.strategy import IntentType
+
         cancels = [i for i in intents if getattr(i, "intent_type", None) == IntentType.CANCEL]
         # Both sides should have cancel dispatched.
         assert len(cancels) == 2, (
             f"D1: expected 2 cancels (both sides stale), got {len(cancels)}. "
-            f"All intents: {[str(getattr(i,'intent_type','?')) for i in intents]}"
+            f"All intents: {[str(getattr(i, 'intent_type', '?')) for i in intents]}"
         )
 
 

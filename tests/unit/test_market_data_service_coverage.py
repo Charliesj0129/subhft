@@ -574,9 +574,9 @@ def test_get_active_feed_gap_s_excludes_chronically_inactive_symbol():
     svc, *_ = _make_service()
     now = time.monotonic()
     svc._symbol_last_tick = {
-        "TMFD6": now - 0.5,    # active front-month
-        "TXFD6": now - 1.0,    # active front-month
-        "TMFI6": now - 2148.0, # chronically stale far-month (real-world example)
+        "TMFD6": now - 0.5,  # active front-month
+        "TXFD6": now - 1.0,  # active front-month
+        "TMFI6": now - 2148.0,  # chronically stale far-month (real-world example)
     }
     # Only the actively-trading front-month contracts crossed the baseline.
     svc._ever_active_symbols = {"TMFD6", "TXFD6"}
@@ -644,7 +644,7 @@ def test_partial_feed_failure_still_triggers_unhealthy():
     now_mono = time.monotonic()
     svc._symbol_last_tick = {
         "TMFE6": now_mono - 2000.0,  # was actively trading, now silent
-        "TXFE6": now_mono - 0.5,     # still healthy front-month
+        "TXFE6": now_mono - 0.5,  # still healthy front-month
     }
     # Both symbols crossed the activity baseline before the partial outage.
     svc._ever_active_symbols = {"TMFE6", "TXFE6"}
@@ -662,7 +662,7 @@ def test_chronically_idle_symbol_does_not_trigger_unhealthy():
     now_mono = time.monotonic()
     svc._symbol_last_tick = {
         "TMFI6": now_mono - 2148.0,  # chronically idle, 1 lifetime event
-        "TMFE6": now_mono - 0.5,     # actively trading front-month
+        "TMFE6": now_mono - 0.5,  # actively trading front-month
     }
     # Only TMFE6 ever crossed the baseline.  TMFI6 had a single handshake
     # print and never qualified as active.
@@ -2456,9 +2456,9 @@ def test_feed_gap_excludes_silent_latched_symbol():
     client.subscribed_codes = {"TMFD6", "TXFD6"}
     now = time.monotonic()
     svc._symbol_last_tick = {
-        "TMFD6": now - 0.5,        # active front-month, still subscribed
-        "TXFD6": now - 1.0,        # active front-month, still subscribed
-        "TMFI6": now - 1200.0,     # latched but already unsubscribed
+        "TMFD6": now - 0.5,  # active front-month, still subscribed
+        "TXFD6": now - 1.0,  # active front-month, still subscribed
+        "TMFI6": now - 1200.0,  # latched but already unsubscribed
     }
     svc._ever_active_symbols = {"TMFD6", "TXFD6", "TMFI6"}
     gap = svc.get_active_feed_gap_s()
@@ -2498,7 +2498,7 @@ def test_feed_gap_real_outage_still_surfaces():
     client.subscribed_codes = {"TXFD6", "TMFD6"}  # both still subscribed
     now = time.monotonic()
     svc._symbol_last_tick = {
-        "TXFD6": now - 0.5,    # healthy
+        "TXFD6": now - 0.5,  # healthy
         "TMFD6": now - 250.0,  # silent 250s — partial outage
     }
     svc._ever_active_symbols = {"TXFD6", "TMFD6"}
@@ -2558,7 +2558,7 @@ def test_feed_gap_alias_resolved_symbol_not_delatched():
     now = time.monotonic()
     svc._symbol_last_tick = {
         "TMFE6": now - 2000.0,  # alias-resolved symbol, real outage
-        "TXFE6": now - 0.5,     # healthy non-alias front-month
+        "TXFE6": now - 0.5,  # healthy non-alias front-month
     }
     svc._ever_active_symbols = {"TMFE6", "TXFE6"}
     gap = svc.get_active_feed_gap_s()
@@ -2625,8 +2625,7 @@ def test_feed_gap_falls_back_when_subscriptions_unavailable():
     svc._ever_active_symbols = {"TMFE6", "TXFE6"}
     gap = svc.get_active_feed_gap_s()
     assert gap >= 1900.0, (
-        "fallback path must surface long silence on every latched symbol "
-        f"when membership cannot be determined: {gap=}"
+        f"fallback path must surface long silence on every latched symbol when membership cannot be determined: {gap=}"
     )
 
 
@@ -2748,7 +2747,4 @@ def test_feed_gap_falls_back_only_when_subscription_unknown():
 
     # Membership unknown + nothing latched → fall back to legacy
     # max-gap so cold-start dead feeds still surface.
-    assert gap >= 2400.0, (
-        "fallback must fire when membership is unknown and nothing is "
-        f"latched: {gap=}"
-    )
+    assert gap >= 2400.0, f"fallback must fire when membership is unknown and nothing is latched: {gap=}"

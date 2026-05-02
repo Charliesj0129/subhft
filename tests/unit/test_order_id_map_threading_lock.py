@@ -97,9 +97,7 @@ def test_concurrent_resolver_read_and_adapter_register_is_safe(tmp_path):
             # Loop a generous number of times to maximise interleave.
             while not stop.is_set():
                 # Use a prefix that exists — hits the iteration branch.
-                resolver.resolve_strategy_id_from_candidates(
-                    ["ord_100_fill_suffix", "ord_50_suffix"]
-                )
+                resolver.resolve_strategy_id_from_candidates(["ord_100_fill_suffix", "ord_50_suffix"])
         except BaseException as exc:  # noqa: BLE001 — want to see everything
             errors.append(exc)
 
@@ -196,8 +194,7 @@ async def test_register_pending_fill_writes_under_order_id_lock(tmp_path):
     await adapter._register_pending_fill("S1:i1", "TMFD6", Side.BUY, "ABCDEF")
 
     assert "order_id_map_lock" in acquire_calls, (
-        "P0-E1 regression: _register_pending_fill did not acquire "
-        "_order_id_map_lock before writing order_id_map."
+        "P0-E1 regression: _register_pending_fill did not acquire _order_id_map_lock before writing order_id_map."
     )
     # Restore for cleanup.
     adapter._order_id_map_lock = real_lock

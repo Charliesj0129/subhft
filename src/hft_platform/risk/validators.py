@@ -496,10 +496,7 @@ class DailyLossLimitValidator(RiskValidator):
         # Recovery: loss must be below recovery threshold AND cooldown must
         # have elapsed.
         recovery_loss = -total_pnl  # positive = loss, negative = gain
-        if (
-            recovery_loss < self._soft_recovery_threshold_scaled
-            and now_ns >= self._soft_limit_cooldown_until_ns
-        ):
+        if recovery_loss < self._soft_recovery_threshold_scaled and now_ns >= self._soft_limit_cooldown_until_ns:
             logger.info(
                 "DailyLossLimitValidator: soft limit recovered",
                 total_pnl=total_pnl,
@@ -527,9 +524,7 @@ class DailyLossLimitValidator(RiskValidator):
                 total_pnl=total_pnl,
             )
             return True, "SOFT_LIMIT_FLAT_COOLDOWN_BYPASS"
-        return False, (
-            f"SOFT_LIMIT: loss={-total_pnl} >= threshold={self._soft_limit_threshold_scaled}"
-        )
+        return False, (f"SOFT_LIMIT: loss={-total_pnl} >= threshold={self._soft_limit_threshold_scaled}")
 
     def _evaluate_peak_drawdown(self, total_pnl: int) -> Tuple[bool, str] | None:
         """Peak-drawdown rejection branch (P3-c2 extraction).

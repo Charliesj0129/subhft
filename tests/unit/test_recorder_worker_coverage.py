@@ -171,8 +171,10 @@ class TestExtractOrder:
         row = {"order_id": "O2", "action": "SELL", "quantity": 5}
         values = _extract_order_values(row)
         assert values is not None
-        assert values[3] == "SELL"
-        assert values[5] == 5
+        # ORDER_COLUMNS layout: 0=order_id, 1=client_order_id, 2=strategy_id,
+        # 3=symbol, 4=side, 5=price_scaled, 6=qty, 7=status, ...
+        assert values[4] == "SELL"
+        assert values[6] == 5
 
     def test_extract_from_object(self) -> None:
         obj = SimpleNamespace(

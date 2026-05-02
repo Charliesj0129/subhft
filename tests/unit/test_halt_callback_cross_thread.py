@@ -67,9 +67,7 @@ def test_callback_from_daemon_thread_reaches_dispatcher(storm_guard_with_metrics
 
     disp, status = asyncio.run(_run())
     assert status == "ok"
-    assert disp.calls == ["StormGuard HALT triggered"], (
-        f"Expected exactly one notify_halt call, got: {disp.calls}"
-    )
+    assert disp.calls == ["StormGuard HALT triggered"], f"Expected exactly one notify_halt call, got: {disp.calls}"
 
 
 def test_callback_before_loop_bound_returns_gracefully_and_records_metric() -> None:
@@ -107,9 +105,7 @@ def test_callback_before_loop_bound_returns_gracefully_and_records_metric() -> N
         metrics_mod.MetricsRegistry.get = original_get  # type: ignore[method-assign]
 
     assert disp.calls == [], "Dispatcher must NOT be called when no loop is bound"
-    assert captured["no_loop"] == 1, (
-        f"halt_callback_no_loop_total must increment exactly once, got: {captured}"
-    )
+    assert captured["no_loop"] == 1, f"halt_callback_no_loop_total must increment exactly once, got: {captured}"
 
 
 def test_callback_from_loop_thread_uses_direct_path(storm_guard_with_metrics) -> None:

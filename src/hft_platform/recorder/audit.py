@@ -120,8 +120,7 @@ def _normalize_row(table: str, row: dict[str, Any]) -> dict[str, Any]:
 # other reserved kwargs it injects. Splatting a row dict containing any of these
 # keys raises TypeError. Rename to `row_*` prefix in fallback path.
 _RESERVED_STRUCTLOG_KEYS: frozenset[str] = frozenset(
-    {"event", "exc_info", "stack_info", "level", "logger", "timestamp",
-     "_record", "_from_structlog"}
+    {"event", "exc_info", "stack_info", "level", "logger", "timestamp", "_record", "_from_structlog"}
 )
 
 # Singleton instance
@@ -186,8 +185,7 @@ class AuditWriter:
         # Per-table overflow sizes — guardrail gets a larger allocation so
         # root-cause transitions survive bursty cascades.
         self._overflow_size: dict[str, int] = {
-            name: (guardrail_overflow_size if name == _GUARDRAIL_TABLE else overflow_size)
-            for name in self._TABLE_NAMES
+            name: (guardrail_overflow_size if name == _GUARDRAIL_TABLE else overflow_size) for name in self._TABLE_NAMES
         }
 
         # P0-I3: DO NOT create asyncio.Queue instances here. The engine loop is
@@ -205,8 +203,7 @@ class AuditWriter:
         # the post-start queue + overflow combination would have.
         self._pre_start_lock = threading.Lock()
         self._pre_start_buffer: dict[str, collections.deque[dict[str, Any]]] = {
-            name: collections.deque(maxlen=self._queue_size + self._overflow_size[name])
-            for name in self._TABLE_NAMES
+            name: collections.deque(maxlen=self._queue_size + self._overflow_size[name]) for name in self._TABLE_NAMES
         }
         # Post-start overflow deque (per-table sized).
         self._overflow: dict[str, collections.deque[dict[str, Any]]] = {
@@ -501,9 +498,7 @@ class AuditWriter:
                         try:
                             from hft_platform.observability.metrics import MetricsRegistry
 
-                            MetricsRegistry.get().audit_dropped_total.labels(
-                                table=table_name
-                            ).inc(len(overflow))
+                            MetricsRegistry.get().audit_dropped_total.labels(table=table_name).inc(len(overflow))
                         except Exception:  # noqa: BLE001
                             pass
                         break
@@ -598,10 +593,7 @@ class AuditWriter:
         # above already fired; per-row rows here still help forensic recovery.
         row_level = logger.debug if self._writer is None else logger.info
         for row in batch:
-            safe_row = {
-                (f"row_{k}" if k in _RESERVED_STRUCTLOG_KEYS else k): v
-                for k, v in row.items()
-            }
+            safe_row = {(f"row_{k}" if k in _RESERVED_STRUCTLOG_KEYS else k): v for k, v in row.items()}
             row_level("audit_fallback", table=table_name, **safe_row)
 
     @property

@@ -38,9 +38,7 @@ def _extract_up_statements(content: str) -> list[str]:
         stripped = raw.strip()
         if not stripped:
             continue
-        has_executable = any(
-            line.strip() and not line.strip().startswith("--") for line in stripped.splitlines()
-        )
+        has_executable = any(line.strip() and not line.strip().startswith("--") for line in stripped.splitlines())
         if has_executable:
             out.append(stripped)
     return out

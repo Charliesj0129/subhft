@@ -32,13 +32,10 @@ def test_logger_renders_traceback_when_exc_info_true():
             logger.error("synthetic_failure", exc_info=True)
     out = buf.getvalue()
     assert "Traceback" in out, (
-        "structlog did not render traceback (format_exc_info processor missing). "
-        f"Captured output: {out!r}"
+        f"structlog did not render traceback (format_exc_info processor missing). Captured output: {out!r}"
     )
     assert sentinel in out, "exception message not present in rendered output"
-    assert '"exc_info": true' not in out, (
-        "raw `exc_info: true` token leaked — format_exc_info should consume it"
-    )
+    assert '"exc_info": true' not in out, "raw `exc_info: true` token leaked — format_exc_info should consume it"
 
 
 # Bug #31 — JWT/Bearer scrubber regression tests

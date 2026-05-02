@@ -133,6 +133,7 @@ class TestDrawdown:
     @pytest.fixture()
     def store(self, monkeypatch):
         monkeypatch.setenv("HFT_RUST_POSITIONS", "0")
+        monkeypatch.setenv("HFT_DRAWDOWN_MIN_PEAK_SCALED", "2000000")
         # Reimport to pick up env change
         import importlib
 

@@ -18,7 +18,7 @@ def test_core_futures_symbol_filter_excludes_stocks_and_options() -> None:
 
 def test_filtered_feed_gap_uses_core_futures_by_default() -> None:
     metrics = _parse_metrics(
-        '\n'.join(
+        "\n".join(
             [
                 'feed_gap_by_symbol_seconds{symbol="2330"} 120',
                 'feed_gap_by_symbol_seconds{symbol="TXO35500Q6"} 90',
@@ -35,7 +35,7 @@ def test_filtered_feed_gap_uses_core_futures_by_default() -> None:
 
 def test_filtered_feed_gap_allowlist_overrides_default_filter() -> None:
     metrics = _parse_metrics(
-        '\n'.join(
+        "\n".join(
             [
                 'feed_gap_by_symbol_seconds{symbol="2330"} 120',
                 'feed_gap_by_symbol_seconds{symbol="TXFR1"} 4',

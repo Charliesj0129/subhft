@@ -122,7 +122,7 @@ def test_drain_no_runtime_error_on_concurrent_clear(engine) -> None:
         # Append on every callback to maximise chance of triggering the bug.
         try:
             engine._order_dlq.append((extra, time.monotonic_ns()))
-        except Exception:
+        except (RuntimeError, AttributeError):
             pass
         original_send(cmd, reason)
 

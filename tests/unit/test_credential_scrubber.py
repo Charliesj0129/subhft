@@ -10,35 +10,35 @@ class TestCredentialScrubber:
         event = {"api_key": "ABC123", "event": "login"}
         result = credential_scrubber(None, "info", event)
 
-        assert result["api_key"] == "***"
+        assert result["api_key"] == "***REDACTED***"
         assert result["event"] == "login"
 
     def test_masks_secret_key(self):
         event = {"secret_key": "super_secret_value", "symbol": "2330"}
         result = credential_scrubber(None, "info", event)
 
-        assert result["secret_key"] == "***"
+        assert result["secret_key"] == "***REDACTED***"
         assert result["symbol"] == "2330"
 
     def test_masks_password(self):
         event = {"password": "p@ssw0rd!", "user": "admin"}
         result = credential_scrubber(None, "info", event)
 
-        assert result["password"] == "***"
+        assert result["password"] == "***REDACTED***"
         assert result["user"] == "admin"
 
     def test_masks_token(self):
         event = {"auth_token": "eyJhbGciOiJIUzI1NiJ9", "status": "ok"}
         result = credential_scrubber(None, "info", event)
 
-        assert result["auth_token"] == "***"
+        assert result["auth_token"] == "***REDACTED***"
         assert result["status"] == "ok"
 
     def test_masks_cert_path(self):
         event = {"cert_path": "/etc/ssl/cert.pem"}
         result = credential_scrubber(None, "info", event)
 
-        assert result["cert_path"] == "***"
+        assert result["cert_path"] == "***REDACTED***"
 
     def test_non_sensitive_unchanged(self):
         event = {"symbol": "2330", "price": 100, "qty": 10}
@@ -52,14 +52,14 @@ class TestCredentialScrubber:
         event = {"API_KEY": "key123", "Secret_Key": "secret123"}
         result = credential_scrubber(None, "info", event)
 
-        assert result["API_KEY"] == "***"
-        assert result["Secret_Key"] == "***"
+        assert result["API_KEY"] == "***REDACTED***"
+        assert result["Secret_Key"] == "***REDACTED***"
 
     def test_partial_match_in_key_name(self):
         event = {"shioaji_api_key_prefix": "ABC"}
         result = credential_scrubber(None, "info", event)
 
-        assert result["shioaji_api_key_prefix"] == "***"
+        assert result["shioaji_api_key_prefix"] == "***REDACTED***"
 
     def test_empty_event_dict(self):
         event: dict = {}

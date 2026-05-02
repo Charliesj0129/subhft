@@ -76,14 +76,10 @@ def _broker_account_query(
 async def test_inserts_missing_fills_from_broker() -> None:
     """Broker reports 5 fills, CH has 3 → reconciler inserts the 2 missing."""
     metrics = _stub_metrics()
-    broker_fills = [
-        _StubBrokerFill(id=f"F{i}", order_id=f"O{i}", quantity=1) for i in range(5)
-    ]
+    broker_fills = [_StubBrokerFill(id=f"F{i}", order_id=f"O{i}", quantity=1) for i in range(5)]
     api = _broker_account_query(closed_details=broker_fills)
     ch = AsyncMock()
-    ch.fetch_existing_fill_keys = AsyncMock(
-        return_value={("O0", "F0"), ("O1", "F1"), ("O2", "F2")}
-    )
+    ch.fetch_existing_fill_keys = AsyncMock(return_value={("O0", "F0"), ("O1", "F1"), ("O2", "F2")})
     ch.insert_fill = AsyncMock()
 
     reconciler = StartupReconciler(
@@ -99,8 +95,7 @@ async def test_inserts_missing_fills_from_broker() -> None:
     assert result.inserted == 2
     assert ch.insert_fill.await_count == 2
     inserted_keys = {
-        (call.args[0]["broker_order_id"], call.args[0]["fill_id"])
-        for call in ch.insert_fill.await_args_list
+        (call.args[0]["broker_order_id"], call.args[0]["fill_id"]) for call in ch.insert_fill.await_args_list
     }
     assert inserted_keys == {("O3", "F3"), ("O4", "F4")}
     for call in ch.insert_fill.await_args_list:
@@ -115,9 +110,7 @@ async def test_no_op_when_already_synced() -> None:
     broker_fills = [_StubBrokerFill(id=f"F{i}", order_id=f"O{i}") for i in range(3)]
     api = _broker_account_query(closed_details=broker_fills)
     ch = AsyncMock()
-    ch.fetch_existing_fill_keys = AsyncMock(
-        return_value={("O0", "F0"), ("O1", "F1"), ("O2", "F2")}
-    )
+    ch.fetch_existing_fill_keys = AsyncMock(return_value={("O0", "F0"), ("O1", "F1"), ("O2", "F2")})
     ch.insert_fill = AsyncMock()
 
     reconciler = StartupReconciler(
@@ -175,9 +168,7 @@ async def test_broker_api_failure_is_fail_soft() -> None:
 
     assert result.inserted == 0
     assert result.broker_query_error is True
-    metrics.startup_reconciler_missing_fills_total.labels.assert_any_call(
-        result="error"
-    )
+    metrics.startup_reconciler_missing_fills_total.labels.assert_any_call(result="error")
     ch.insert_fill.assert_not_awaited()
 
 
@@ -206,7 +197,6 @@ async def test_handles_both_closed_and_open_positions() -> None:
 
     assert result.inserted == 2
     inserted_keys = {
-        (call.args[0]["broker_order_id"], call.args[0]["fill_id"])
-        for call in ch.insert_fill.await_args_list
+        (call.args[0]["broker_order_id"], call.args[0]["fill_id"]) for call in ch.insert_fill.await_args_list
     }
     assert inserted_keys == {("O1", "F1"), ("O2", "F2")}

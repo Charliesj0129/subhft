@@ -156,9 +156,7 @@ def _check_wal_accumulation(self: WALLoaderService) -> None:
         # rglob would also find anything under archive/<subdir>/*.jsonl but
         # in practice neither directory is nested.
         active_size, active_count, active_oldest = _scan_dir_jsonl(self.wal_dir, now)
-        archive_size, archive_count, archive_oldest = _scan_dir_jsonl(
-            self.archive_dir, now
-        )
+        archive_size, archive_count, archive_oldest = _scan_dir_jsonl(self.archive_dir, now)
         dlq_size, dlq_count, dlq_oldest = _scan_dir_jsonl(self.dlq_dir, now)
 
         # Emit metrics

@@ -46,6 +46,16 @@ def _make_fill(
     )
 
 
+@pytest.fixture(autouse=True)
+def _lower_drawdown_threshold(monkeypatch):
+    """Lower _MIN_PEAK_SCALED so legacy small-PnL fixtures still exercise
+    drawdown semantics. Production default 100M is calibrated for live HFT
+    scale and masks unit-test fixture values."""
+    import hft_platform.execution.positions as _positions
+
+    monkeypatch.setattr(_positions, "_MIN_PEAK_SCALED", 2_000_000)
+
+
 @pytest.fixture()
 def store():
     """PositionStore with metrics disabled for unit testing."""

@@ -99,9 +99,7 @@ class TestPhantomIntentReuseABA:
         assert strategy2 == "S1"
         assert "S1:42" not in adapter._phantom_records
 
-    def test_release_stale_processes_each_occurrence_independently(
-        self, tmp_config
-    ):
+    def test_release_stale_processes_each_occurrence_independently(self, tmp_config):
         """release_stale_phantom_pendings emits one feedback per expired
         occurrence — both siblings under the same key are released."""
         adapter = _make_adapter(tmp_config)
@@ -115,21 +113,15 @@ class TestPhantomIntentReuseABA:
         i2 = _intent(intent_id=42)
         with adapter._phantom_lock:
             adapter._phantom_records["S1:42"] = [
-                _PhantomEntry(
-                    monotonic_ts=aged_ts, symbol="TMFD6", created_ns=0, intent=i1
-                ),
-                _PhantomEntry(
-                    monotonic_ts=aged_ts, symbol="TMFD6", created_ns=0, intent=i2
-                ),
+                _PhantomEntry(monotonic_ts=aged_ts, symbol="TMFD6", created_ns=0, intent=i1),
+                _PhantomEntry(monotonic_ts=aged_ts, symbol="TMFD6", created_ns=0, intent=i2),
             ]
             adapter._phantom_order_keys["S1:42"] = (aged_ts, "TMFD6")
             adapter._phantom_intents["S1:42"] = i2
 
         loop = asyncio.new_event_loop()
         try:
-            released = loop.run_until_complete(
-                adapter.release_stale_phantom_pendings(ttl_s=30.0)
-            )
+            released = loop.run_until_complete(adapter.release_stale_phantom_pendings(ttl_s=30.0))
         finally:
             loop.close()
 
@@ -185,12 +177,8 @@ class TestPhantomIntentReuseABA:
                 intent_one = _intent(intent_id=1, strategy_id=sid)
                 intent_two = _intent(intent_id=1, strategy_id=sid)
                 adapter._phantom_records[key] = [
-                    _PhantomEntry(
-                        monotonic_ts=old_ts, symbol="TMFD6", created_ns=0, intent=intent_one
-                    ),
-                    _PhantomEntry(
-                        monotonic_ts=old_ts, symbol="TMFD6", created_ns=0, intent=intent_two
-                    ),
+                    _PhantomEntry(monotonic_ts=old_ts, symbol="TMFD6", created_ns=0, intent=intent_one),
+                    _PhantomEntry(monotonic_ts=old_ts, symbol="TMFD6", created_ns=0, intent=intent_two),
                 ]
             assert adapter._phantom_record_count() == 6
             removed = adapter._evict_stale_phantom_records(max_age_s=3600.0)

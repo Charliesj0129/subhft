@@ -293,12 +293,8 @@ def test_get_phantom_candidates_returns_frozenset(tmp_config):
     now = time.monotonic()
     intent_a = _make_intent(intent_id=1)
     intent_b = _make_intent(intent_id=2, strategy_id="s2")
-    adapter._phantom_records["s1:1"] = [
-        _PhantomEntry(monotonic_ts=now, symbol="TXFD6", created_ns=0, intent=intent_a)
-    ]
-    adapter._phantom_records["s2:2"] = [
-        _PhantomEntry(monotonic_ts=now, symbol="TXFD6", created_ns=0, intent=intent_b)
-    ]
+    adapter._phantom_records["s1:1"] = [_PhantomEntry(monotonic_ts=now, symbol="TXFD6", created_ns=0, intent=intent_a)]
+    adapter._phantom_records["s2:2"] = [_PhantomEntry(monotonic_ts=now, symbol="TXFD6", created_ns=0, intent=intent_b)]
 
     result = adapter.get_phantom_candidates()
 

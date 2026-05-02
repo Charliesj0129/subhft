@@ -177,7 +177,7 @@ class TestPositionLimitValidator(unittest.TestCase):
     def test_intraday_pnl_rollout_scope_is_global(self) -> None:
         cfg = yaml.safe_load(Path("config/base/strategy_limits.yaml").read_text(encoding="utf-8"))
         self.assertEqual(cfg["intraday_pnl"]["scope"], "global")
-        self.assertEqual(cfg["intraday_pnl"]["hard_limit_ntd"], 8000)
+        self.assertEqual(cfg["intraday_pnl"]["hard_limit_ntd"], 5000)
 
 
 # ---------------------------------------------------------------------------

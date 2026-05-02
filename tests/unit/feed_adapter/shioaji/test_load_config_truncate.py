@@ -85,9 +85,7 @@ def test_load_config_truncate_with_warn_when_exceeding_per_client_ceiling(tmp_pa
     # Truncated to per-client ceiling (default 600).
     assert len(client.symbols) == client.MAX_SUBSCRIPTIONS_PER_CLIENT == 600
     after_exceeds = _counter_value(counter, result="exceeds_limit")
-    assert after_exceeds - before_exceeds == 1.0, (
-        "exceeds_limit branch must bump the metric exactly once"
-    )
+    assert after_exceeds - before_exceeds == 1.0, "exceeds_limit branch must bump the metric exactly once"
 
 
 def test_load_config_strict_mode_still_raises(tmp_path, monkeypatch):
@@ -108,9 +106,7 @@ def test_load_config_strict_mode_still_raises(tmp_path, monkeypatch):
         ShioajiClient(config_path=str(config_path))
 
     after_exceeds = _counter_value(counter, result="exceeds_limit")
-    assert after_exceeds - before_exceeds == 1.0, (
-        "strict-mode raise must still bump the exceeds_limit Counter"
-    )
+    assert after_exceeds - before_exceeds == 1.0, "strict-mode raise must still bump the exceeds_limit Counter"
 
 
 def test_load_config_per_client_ceiling_env_override(tmp_path, monkeypatch):

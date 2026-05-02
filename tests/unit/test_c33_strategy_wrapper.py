@@ -114,10 +114,11 @@ def test_default_parameters_match_exception_live_cap() -> None:
 # ----------------------------------------------------------------------------
 
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
 def _load_strategies_yaml() -> dict:
-    path = Path("config/base/strategies.yaml")
-    if not path.is_absolute():
-        path = Path("/home/charlie/hft_platform") / path
+    path = _REPO_ROOT / "config/base/strategies.yaml"
     with open(path) as f:
         return yaml.safe_load(f)
 
@@ -178,7 +179,7 @@ def test_strategies_yaml_c33_params_match_exception_live_cap() -> None:
 
 
 def _load_strategy_limits() -> dict:
-    path = Path("/home/charlie/hft_platform/config/base/strategy_limits.yaml")
+    path = _REPO_ROOT / "config/base/strategy_limits.yaml"
     with open(path) as f:
         return yaml.safe_load(f)
 
@@ -197,7 +198,7 @@ def test_strategy_limits_c33_max_pos_matches_strategy() -> None:
 
 def test_strategy_limits_global_max_position_lots_exception_rollout() -> None:
     cfg = _load_strategy_limits()
-    assert cfg["global_defaults"]["max_position_lots"] == 2
+    assert cfg["global_defaults"]["max_position_lots"] == 1
 
 
 def test_strategy_limits_c33_daily_loss_hard_stop() -> None:

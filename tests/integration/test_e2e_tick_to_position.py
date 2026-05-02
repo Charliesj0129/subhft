@@ -192,7 +192,17 @@ class TestMultipleFillsWeightedAverage:
 class TestPortfolioDrawdown:
     """Verify portfolio-level PnL aggregation and drawdown calculation."""
 
-    def test_drawdown_after_loss(self):
+    def test_drawdown_after_loss(self, monkeypatch):
+        # Bug B (2026-04-20) raised _MIN_PEAK_SCALED from 2_000_000 (200 NTD)
+        # to 100_000_000 (10,000 NTD) in positions.py. Peak in this scenario
+        # is 200_000 (20 NTD), well below the new cold-start guard, so
+        # get_drawdown_pct() returns 0.0 unconditionally and never reaches
+        # the math under test. Lower the guard to 0 to exercise the actual
+        # peak-vs-current calculation. Same monkeypatch pattern as
+        # tests/unit/test_position_store_unit.py:54.
+        import hft_platform.execution.positions as _positions
+
+        monkeypatch.setattr(_positions, "_MIN_PEAK_SCALED", 0)
         store = PositionStore()
 
         # Profitable round-trip on symbol A
