@@ -75,9 +75,7 @@ async def test_increment_and_drain_serialised():
 
     async def _bump() -> None:
         async with runner._get_pending_lock(sid):
-            runner._strategy_pending_intents[sid] = (
-                runner._strategy_pending_intents.get(sid, 0) + 1
-            )
+            runner._strategy_pending_intents[sid] = runner._strategy_pending_intents.get(sid, 0) + 1
 
     async def _drain_once() -> None:
         # Yield first so some increments race ahead.

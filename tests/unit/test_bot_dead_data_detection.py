@@ -37,9 +37,7 @@ _TZ = ZoneInfo("Asia/Taipei")
 def _make_composed(msgs: list[str] | None = None) -> ComposedReport:
     if msgs is None:
         msgs = ["msg1"]
-    return ComposedReport(
-        messages=[MessagePart(kind="text", content=m, min_tier="paid") for m in msgs]
-    )
+    return ComposedReport(messages=[MessagePart(kind="text", content=m, min_tier="paid") for m in msgs])
 
 
 @pytest.fixture(autouse=True)
@@ -58,9 +56,7 @@ def _reset_state(monkeypatch: pytest.MonkeyPatch) -> None:
 
 class TestAttemptTracking:
     @pytest.mark.asyncio
-    async def test_attempt_recorded_even_when_all_symbols_empty(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_attempt_recorded_even_when_all_symbols_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Core P1-c claim: last_day_attempt updates even when no symbol
         returned data, so the heartbeat can prove the scheduler ran."""
         monkeypatch.setenv("HFT_REPORT_SYMBOLS", "NOSYM1,NOSYM2")
@@ -72,11 +68,7 @@ class TestAttemptTracking:
 
         with patch(
             "hft_platform.reports.pipeline.build_hybrid_report_async",
-            new=AsyncMock(
-                return_value=SimpleNamespace(
-                    composed=None, dossier=None, decision=None, llm_error=None
-                )
-            ),
+            new=AsyncMock(return_value=SimpleNamespace(composed=None, dossier=None, decision=None, llm_error=None)),
         ):
             await _push_report(ctx, "day")
 
@@ -85,9 +77,7 @@ class TestAttemptTracking:
         assert isinstance(bot_app.last_day_attempt, datetime)
 
     @pytest.mark.asyncio
-    async def test_attempt_recorded_for_night_session(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_attempt_recorded_for_night_session(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HFT_REPORT_SYMBOLS", "NOSYM1")
         import hft_platform.bot.app as bot_app
         from hft_platform.bot.scheduler import _push_report
@@ -96,11 +86,7 @@ class TestAttemptTracking:
         ctx.bot.send_message = AsyncMock()
         with patch(
             "hft_platform.reports.pipeline.build_hybrid_report_async",
-            new=AsyncMock(
-                return_value=SimpleNamespace(
-                    composed=None, dossier=None, decision=None, llm_error=None
-                )
-            ),
+            new=AsyncMock(return_value=SimpleNamespace(composed=None, dossier=None, decision=None, llm_error=None)),
         ):
             await _push_report(ctx, "night")
 
@@ -121,11 +107,7 @@ class TestDeadDataAlert:
         threshold = bot_app.DEAD_DATA_ALERT_THRESHOLD
         with patch(
             "hft_platform.reports.pipeline.build_hybrid_report_async",
-            new=AsyncMock(
-                return_value=SimpleNamespace(
-                    composed=None, dossier=None, decision=None, llm_error=None
-                )
-            ),
+            new=AsyncMock(return_value=SimpleNamespace(composed=None, dossier=None, decision=None, llm_error=None)),
         ):
             for _ in range(threshold):
                 await _push_report(ctx, "day")
@@ -133,9 +115,7 @@ class TestDeadDataAlert:
         assert bot_app.consecutive_empty_attempts >= threshold
 
     @pytest.mark.asyncio
-    async def test_streak_resets_on_successful_symbol(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_streak_resets_on_successful_symbol(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HFT_REPORT_SYMBOLS", "NOSYM1,GOODSYM")
         import hft_platform.bot.app as bot_app
         from hft_platform.bot.scheduler import _push_report
@@ -148,9 +128,7 @@ class TestDeadDataAlert:
 
         async def side_effect(session: str, date: object, symbol: str) -> SimpleNamespace:
             if symbol == "NOSYM1":
-                return SimpleNamespace(
-                    composed=None, dossier=None, decision=None, llm_error=None
-                )
+                return SimpleNamespace(composed=None, dossier=None, decision=None, llm_error=None)
             return SimpleNamespace(
                 composed=_make_composed(["msg"]),
                 dossier=MagicMock(),
@@ -158,10 +136,13 @@ class TestDeadDataAlert:
                 llm_error=None,
             )
 
-        with patch(
-            "hft_platform.reports.pipeline.build_hybrid_report_async",
-            new=AsyncMock(side_effect=side_effect),
-        ), patch("hft_platform.bot.scheduler.asyncio") as mock_asyncio:
+        with (
+            patch(
+                "hft_platform.reports.pipeline.build_hybrid_report_async",
+                new=AsyncMock(side_effect=side_effect),
+            ),
+            patch("hft_platform.bot.scheduler.asyncio") as mock_asyncio,
+        ):
             mock_asyncio.sleep = AsyncMock()
             await _push_report(ctx, "day")
 
@@ -174,9 +155,7 @@ class TestErrorHandler:
         from hft_platform.bot.app import _telegram_error_handler
         from hft_platform.observability.metrics import MetricsRegistry
 
-        metric = MetricsRegistry.get().bot_handler_errors_total.labels(
-            exception="ConnectError"
-        )
+        metric = MetricsRegistry.get().bot_handler_errors_total.labels(exception="ConnectError")
         before = metric._value.get()
 
         # Simulate an httpx.ConnectError-like update + context
@@ -191,17 +170,13 @@ class TestErrorHandler:
         ctx2 = SimpleNamespace(error=ConnectError("boom"))
         await _telegram_error_handler(None, ctx2)
 
-        after = MetricsRegistry.get().bot_handler_errors_total.labels(
-            exception="ConnectError"
-        )._value.get()
+        after = MetricsRegistry.get().bot_handler_errors_total.labels(exception="ConnectError")._value.get()
         assert after > before
 
 
 class TestHeartbeatExposesNewFields:
     @pytest.mark.asyncio
-    async def test_heartbeat_logs_attempt_fields(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_heartbeat_logs_attempt_fields(self, caplog: pytest.LogCaptureFixture) -> None:
         import hft_platform.bot.app as bot_app
         from hft_platform.bot.scheduler import _heartbeat
 

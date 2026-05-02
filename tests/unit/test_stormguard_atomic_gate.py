@@ -26,10 +26,7 @@ never duplicated.
 from __future__ import annotations
 
 import threading
-import time
 from unittest.mock import MagicMock
-
-import pytest
 
 from hft_platform.contracts.strategy import IntentType, OrderIntent, Side, StormGuardState
 from hft_platform.risk.storm_guard import StormGuard

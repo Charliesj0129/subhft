@@ -255,10 +255,12 @@ class TestSubRetryCapacityAwareness:
         # Must be False initially so start_sub_retry_thread doesn't early-return
         client._sub_retry_running = False
         # L2: production type is collections.deque (in-place mutation only).
-        client._failed_sub_symbols = deque([
-            {"code": "TXO35050D6", "exchange": "OPT"},
-            {"code": "TXO35100D6", "exchange": "OPT"},
-        ])
+        client._failed_sub_symbols = deque(
+            [
+                {"code": "TXO35050D6", "exchange": "OPT"},
+                {"code": "TXO35100D6", "exchange": "OPT"},
+            ]
+        )
         client._contract_retry_s = 0.01
         client.logged_in = True
         client._callbacks_registered = True
@@ -287,9 +289,11 @@ class TestSubRetryCapacityAwareness:
         client.subscribed_count = 100
         client._sub_retry_running = False
         # L2: production type is collections.deque (in-place mutation only).
-        client._failed_sub_symbols = deque([
-            {"code": "TXO35050D6", "exchange": "OPT"},
-        ])
+        client._failed_sub_symbols = deque(
+            [
+                {"code": "TXO35050D6", "exchange": "OPT"},
+            ]
+        )
         client._contract_retry_s = 0.01
         client.logged_in = True
         client._callbacks_registered = True

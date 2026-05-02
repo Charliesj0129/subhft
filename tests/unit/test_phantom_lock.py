@@ -113,11 +113,7 @@ def test_phantom_insert_and_capacity_evict_under_concurrent_clear(tmp_path):
                     adapter._phantom_intents[phantom_key] = intent
                     if len(adapter._phantom_order_keys) > adapter._phantom_order_max:
                         cutoff = _time.monotonic() - 3600.0
-                        _stale = [
-                            k
-                            for k, v in adapter._phantom_order_keys.items()
-                            if v[0] <= cutoff
-                        ]
+                        _stale = [k for k, v in adapter._phantom_order_keys.items() if v[0] <= cutoff]
                         for _sk in _stale:
                             adapter._phantom_order_keys.pop(_sk, None)
                             adapter._phantom_intents.pop(_sk, None)
@@ -184,9 +180,7 @@ async def test_release_stale_phantoms_is_reentry_safe(tmp_path):
 
     # At most one of the two concurrent invocations should report the release.
     # The other must see an empty phantom dict (entry already popped under lock).
-    assert (r1, r2) in {(1, 0), (0, 1)}, (
-        f"expected single release, got r1={r1} r2={r2}"
-    )
+    assert (r1, r2) in {(1, 0), (0, 1)}, f"expected single release, got r1={r1} r2={r2}"
     assert "SX:1" not in adapter._phantom_order_keys
     assert "SX:1" not in adapter._phantom_intents
 

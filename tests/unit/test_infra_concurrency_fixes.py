@@ -20,7 +20,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # P0-I1: bootstrap deferred tasks
 # ---------------------------------------------------------------------------
@@ -70,8 +69,9 @@ class TestBootstrapDeferredTasks:
             warnings.simplefilter("always")
             with (
                 patch("asyncio.get_event_loop", side_effect=_spy_get_event_loop),
-                patch("hft_platform.services.bootstrap.SystemBootstrapper._check_session_ownership",
-                      return_value=False),
+                patch(
+                    "hft_platform.services.bootstrap.SystemBootstrapper._check_session_ownership", return_value=False
+                ),
                 patch("hft_platform.feed_adapter.shioaji.facade.ShioajiClientFacade"),
                 patch("hft_platform.services.bootstrap.MarketDataService"),
                 patch("hft_platform.services.bootstrap.OrderAdapter"),
@@ -98,8 +98,7 @@ class TestBootstrapDeferredTasks:
         # (may still call from inside create_task fallbacks for the `bool` helper,
         # so we check that *no DeprecationWarning about no running loop* fired).
         assert not any(
-            "no running event loop" in str(w.message).lower()
-            or "get_event_loop" in str(w.message).lower()
+            "no running event loop" in str(w.message).lower() or "get_event_loop" in str(w.message).lower()
             for w in caught
         ), f"build() must not emit get_event_loop DeprecationWarning; got: {[str(w.message) for w in caught]}"
 
@@ -143,8 +142,7 @@ class TestAuditWriterDeferredQueueCreation:
         # (because there is no engine loop yet).
         for _tbl, q in writer._queues.items():
             assert not isinstance(q, asyncio.Queue), (
-                "AuditWriter.__init__ must not create asyncio.Queue — "
-                "defer to start() which runs on the engine loop."
+                "AuditWriter.__init__ must not create asyncio.Queue — defer to start() which runs on the engine loop."
             )
 
     def test_log_from_thread_before_start_does_not_raise(self) -> None:
@@ -283,6 +281,7 @@ class TestWALBatchWriterMutualExclusion:
         with patch.object(WALBatchWriter, "_write_batch_sync", _tracking_write):
             writer = WALBatchWriter(str(tmp_path))
             try:
+
                 async def _run() -> None:
                     # Prime buffer with rows.
                     for _ in range(10):

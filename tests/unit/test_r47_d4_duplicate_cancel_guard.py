@@ -45,6 +45,7 @@ def _ctx():
 @pytest.fixture()
 def strategy():
     from hft_platform.strategies.r47_maker import R47MakerStrategy
+
     s = R47MakerStrategy(
         strategy_id="r47_test",
         pe_danger_threshold=0.0,
@@ -73,10 +74,7 @@ class TestDuplicateCancelGuard:
         for _ in range(5):
             ev = _lob_stats(mid_pts=37760, spread_pts=3)
             intents = strategy.handle_event(ctx, ev)
-            total_cancels += sum(
-                1 for i in intents
-                if getattr(i, "intent_type", None) == IntentType.CANCEL
-            )
+            total_cancels += sum(1 for i in intents if getattr(i, "intent_type", None) == IntentType.CANCEL)
 
         assert total_cancels == 1, (
             f"D4: duplicate-cancel guard violated — expected 1 cancel across "
@@ -102,10 +100,7 @@ class TestDuplicateCancelGuard:
         for _ in range(5):
             ev = _lob_stats(mid_pts=37761, spread_pts=8)
             intents = strategy.handle_event(ctx, ev)
-            total_cancels += sum(
-                1 for i in intents
-                if getattr(i, "intent_type", None) == IntentType.CANCEL
-            )
+            total_cancels += sum(1 for i in intents if getattr(i, "intent_type", None) == IntentType.CANCEL)
 
         assert total_cancels == 1, (
             f"D4: price-moved cancel path must also clear oid state; "

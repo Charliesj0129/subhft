@@ -13,9 +13,7 @@ from pathlib import Path
 
 import yaml
 
-RULES_PATH = (
-    Path(__file__).resolve().parents[2] / "config" / "monitoring" / "alerts" / "rules.yaml"
-)
+RULES_PATH = Path(__file__).resolve().parents[2] / "config" / "monitoring" / "alerts" / "rules.yaml"
 
 
 def _load_alerts_by_name() -> dict[str, dict]:
@@ -64,9 +62,7 @@ def test_feature_plane_latency_threshold_above_measured_p99():
         "50us threshold is below the measured P50 (77us) on the current deploy "
         "target. Use 5e5 (500us) or tune against a fresh measurement."
     )
-    assert "> 5e5" in expr or "> 500000" in expr, (
-        f"Expected threshold >= 500us. Current expression: {expr!r}"
-    )
+    assert "> 5e5" in expr or "> 500000" in expr, f"Expected threshold >= 500us. Current expression: {expr!r}"
 
 
 def test_backup_stale_gates_on_nonzero_timestamp():
@@ -84,8 +80,7 @@ def test_backup_stale_gates_on_nonzero_timestamp():
     assert "BackupStale" in alerts
     expr = alerts["BackupStale"]["expr"]
     assert "hft_backup_last_success_ts > 0" in expr, (
-        "BackupStale must gate on a non-zero gauge. Current expression: "
-        f"{expr!r}"
+        f"BackupStale must gate on a non-zero gauge. Current expression: {expr!r}"
     )
 
 

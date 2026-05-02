@@ -57,8 +57,7 @@ def test_write_checkpoint_does_not_double_close_fd(tmp_path):
     # ``with os.fdopen(fd, "wb") as f`` context manager. If the legacy
     # double-close pattern returns, the same integer would appear twice.
     assert len(closed_fds) == len(set(closed_fds)), (
-        f"Double-close detected via hft_platform.execution.checkpoint.os.close: "
-        f"{closed_fds}"
+        f"Double-close detected via hft_platform.execution.checkpoint.os.close: {closed_fds}"
     )
 
 
@@ -78,13 +77,13 @@ def test_write_checkpoint_does_not_double_close_fd_on_rename_failure(tmp_path):
     def failing_rename(src, dst):
         raise OSError("rename failed")
 
-    with patch("hft_platform.execution.checkpoint.os.close", side_effect=counting_close), \
-         patch("os.rename", side_effect=failing_rename):
+    with (
+        patch("hft_platform.execution.checkpoint.os.close", side_effect=counting_close),
+        patch("os.rename", side_effect=failing_rename),
+    ):
         try:
             writer.write_checkpoint()
         except OSError:
             pass
 
-    assert len(closed_fds) == len(set(closed_fds)), (
-        f"Double-close detected on rename-failure path: {closed_fds}"
-    )
+    assert len(closed_fds) == len(set(closed_fds)), f"Double-close detected on rename-failure path: {closed_fds}"

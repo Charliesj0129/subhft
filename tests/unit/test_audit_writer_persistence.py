@@ -203,9 +203,7 @@ class TestPersistFailureMetric:
 
         metrics = MetricsRegistry.get()
         # Snapshot before
-        before_metric = metrics.audit_persist_failures_total.labels(
-            table="audit.risk_log", reason="ConnectionError"
-        )
+        before_metric = metrics.audit_persist_failures_total.labels(table="audit.risk_log", reason="ConnectionError")
         before_val = before_metric._value.get()
 
         mock_writer = AsyncMock()
@@ -229,6 +227,5 @@ class TestPersistFailureMetric:
 
         after_val = before_metric._value.get()
         assert after_val > before_val, (
-            f"audit_persist_failures_total did not increment "
-            f"(before={before_val}, after={after_val})"
+            f"audit_persist_failures_total did not increment (before={before_val}, after={after_val})"
         )

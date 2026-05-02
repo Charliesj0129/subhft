@@ -360,9 +360,7 @@ def _sweep_wal_orphan_tmpfiles(wal_dir: str, max_age_s: float = 300.0) -> int:
 
                 m = MetricsRegistry.get()
                 if m is not None:
-                    m.wal_orphan_tmp_cleaned_total.labels(
-                        location="bootstrap_sweep"
-                    ).inc()
+                    m.wal_orphan_tmp_cleaned_total.labels(location="bootstrap_sweep").inc()
             except Exception as _exc:  # noqa: BLE001
                 pass
         except OSError as exc:

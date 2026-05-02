@@ -3,8 +3,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from hft_platform.execution.positions import PositionStore
-from hft_platform.execution.positions import Position
+from hft_platform.execution.positions import Position, PositionStore
 from hft_platform.execution.reconciliation import ReconciliationService
 from hft_platform.risk.storm_guard import StormGuard
 

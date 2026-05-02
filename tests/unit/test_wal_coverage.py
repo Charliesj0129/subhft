@@ -437,6 +437,11 @@ class TestBatchWriterStop:
     async def test_stop_with_empty_buffer_no_write(self, batch_writer: WALBatchWriter, tmp_path: Path) -> None:
         """stop() with empty buffer does not create any files."""
         batch_writer.stop()
+        # Prevent fixture-teardown stop() from re-joining the same timer thread:
+        # autouse fixture sets HFT_WAL_BATCH_INTERVAL_MS=60000, so each join(timeout=5)
+        # waits the full 5s while the timer is mid-uninterruptible-sleep. Two joins
+        # (test + teardown) = 10s = pytest-timeout boundary.
+        batch_writer._timer_thread = None
         jsonl_files = list(tmp_path.glob("*.jsonl"))
         assert len(jsonl_files) == 0
 

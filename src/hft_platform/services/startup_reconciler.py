@@ -39,9 +39,7 @@ class BrokerAccountQuery(Protocol):
         self, account: Any = None, begin_date: str | None = None, end_date: str | None = None
     ) -> Any: ...
 
-    def list_profit_loss_detail(
-        self, account: Any = None, detail_id: int = 0, unit: str | None = None
-    ) -> Any: ...
+    def list_profit_loss_detail(self, account: Any = None, detail_id: int = 0, unit: str | None = None) -> Any: ...
 
     def list_position_detail(self, account: Any = None) -> Any: ...
 
@@ -130,11 +128,7 @@ def _normalize_action(raw: Any) -> str:
 def _normalize_one(row: Any) -> _NormalizedFill | None:
     """Best-effort extraction from a Shioaji P&L detail or position detail row."""
     fill_id = getattr(row, "id", None) or getattr(row, "fill_id", None)
-    broker_order_id = (
-        getattr(row, "order_id", None)
-        or getattr(row, "seqno", None)
-        or getattr(row, "ordno", None)
-    )
+    broker_order_id = getattr(row, "order_id", None) or getattr(row, "seqno", None) or getattr(row, "ordno", None)
     if not fill_id or not broker_order_id:
         return None
 
@@ -219,9 +213,7 @@ class StartupReconciler:
                 await self._ch.insert_fill(row)
                 result.inserted += 1
                 existing_keys.add(key)  # local dedup against intra-batch dup
-                self._metrics.startup_reconciler_missing_fills_total.labels(
-                    result="inserted"
-                ).inc()
+                self._metrics.startup_reconciler_missing_fills_total.labels(result="inserted").inc()
             except Exception as exc:  # noqa: BLE001
                 logger.error(
                     "startup_reconciler.insert_failed",
@@ -231,9 +223,7 @@ class StartupReconciler:
                     fill_id=fill.fill_id,
                 )
                 result.errors.append(f"insert:{type(exc).__name__}: {exc}")
-                self._metrics.startup_reconciler_missing_fills_total.labels(
-                    result="error"
-                ).inc()
+                self._metrics.startup_reconciler_missing_fills_total.labels(result="error").inc()
 
         result.elapsed_seconds = time.perf_counter() - start
         self._metrics.startup_reconciler_run_seconds.observe(result.elapsed_seconds)
@@ -257,17 +247,17 @@ class StartupReconciler:
         out: list[_NormalizedFill] = []
 
         # Closed round-trips: list_profit_loss → list_profit_loss_detail per pnl_id
-        pnl_summaries = self._broker.list_profit_loss(
-            account=self._broker_account, begin_date=today_iso, end_date=today_iso
-        ) or []
+        pnl_summaries = (
+            self._broker.list_profit_loss(account=self._broker_account, begin_date=today_iso, end_date=today_iso) or []
+        )
         for summary in pnl_summaries:
             pnl_id = getattr(summary, "id", None)
             if pnl_id is None:
                 continue
             try:
-                detail_rows = self._broker.list_profit_loss_detail(
-                    account=self._broker_account, detail_id=int(pnl_id)
-                ) or []
+                detail_rows = (
+                    self._broker.list_profit_loss_detail(account=self._broker_account, detail_id=int(pnl_id)) or []
+                )
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "startup_reconciler.pnl_detail_failed",

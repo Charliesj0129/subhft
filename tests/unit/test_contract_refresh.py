@@ -36,6 +36,7 @@ def _bare_client() -> mod.ShioajiClient:
     # L2: production type is ``collections.deque``; use the same here so
     # ``.append`` / ``.popleft`` behave the same.
     from collections import deque
+
     client._failed_sub_symbols: deque = deque()
     client._sub_retry_running = False
     client._sub_retry_thread = None
@@ -98,8 +99,13 @@ def test_failed_sub_tracked():
     assert sym in client._failed_sub_symbols
 
 
-def test_retry_thread_resolves_symbols():
+def test_retry_thread_resolves_symbols(monkeypatch):
     """_start_sub_retry_thread: succeeds on second attempt → _failed_sub_symbols cleared."""
+    # D1 per-symbol backoff schedule starts at 60s; shrink for test wall-clock budget.
+    from hft_platform.feed_adapter.shioaji import quote_runtime as _qr
+
+    monkeypatch.setattr(_qr.QuoteRuntime, "_RETRY_BACKOFF_SCHEDULE_S", (0.05, 0.05, 0.05))
+
     client = _bare_client()
 
     sym = {"code": "TXO_RETRY", "exchange": "TAIFEX"}

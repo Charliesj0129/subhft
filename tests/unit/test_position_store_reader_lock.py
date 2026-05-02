@@ -21,6 +21,8 @@ from hft_platform.contracts.execution import FillEvent, Side
 from hft_platform.execution.mtm import MarkToMarketCalculator
 from hft_platform.execution.positions import Position, PositionStore
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
 # ---------------------------------------------------------------------------
 # Fixtures (mirror tests/unit/test_position_store_unit.py)
 # ---------------------------------------------------------------------------
@@ -128,14 +130,10 @@ def _writer_loop(
                 new_key = f"acct1:strat1:{new_sym}"
                 with store._fill_lock:
                     store.positions.pop(old_key, None)
-                    store.positions[new_key] = Position(
-                        "acct1", "strat1", new_sym, net_qty=1
-                    )
+                    store.positions[new_key] = Position("acct1", "strat1", new_sym, net_qty=1)
                 with store._fill_lock:
                     store.positions.pop(new_key, None)
-                    store.positions[old_key] = Position(
-                        "acct1", "strat1", f"WS{counter % 50}", net_qty=1
-                    )
+                    store.positions[old_key] = Position("acct1", "strat1", f"WS{counter % 50}", net_qty=1)
                 counter += 1
             except Exception as exc:  # noqa: BLE001
                 errors.append(exc)
@@ -201,9 +199,7 @@ class TestR3_1_MtMCalculator:
 
 class TestR3_2_BuildPositionsByStrategyFallback:
     def _runner_source(self) -> str:
-        return Path(
-            "/home/charlie/hft_platform/src/hft_platform/strategy/runner.py"
-        ).read_text()
+        return (_REPO_ROOT / "src/hft_platform/strategy/runner.py").read_text()
 
     def test_fallback_dict_copy_is_lock_guarded(self) -> None:
         """Source-level audit: `dict(raw)` fallback in
@@ -231,14 +227,9 @@ class TestR3_2_BuildPositionsByStrategyFallback:
         block = m.group(0)
         # The dict-copy site MUST be inside a `with ... _fill_lock` block.
         # Look for the pattern in the fallback branch.
-        assert "_fill_lock" in block, (
-            "fallback `raw = dict(raw)` block is not guarded by "
-            f"_fill_lock: {block!r}"
-        )
+        assert "_fill_lock" in block, f"fallback `raw = dict(raw)` block is not guarded by _fill_lock: {block!r}"
 
-    def test_fallback_dict_copy_runs_without_error(
-        self, store: PositionStore
-    ) -> None:
+    def test_fallback_dict_copy_runs_without_error(self, store: PositionStore) -> None:
         """Behavioural smoke-check that the fallback path still works
         after the lock guard is added (no deadlock, no AttributeError on
         mocks without _fill_lock)."""
@@ -264,9 +255,7 @@ class TestR3_2_BuildPositionsByStrategyFallback:
         result = runner._build_positions_by_strategy()
         assert isinstance(result, dict)
 
-    def test_fallback_works_without_fill_lock_attr(
-        self, store: PositionStore
-    ) -> None:
+    def test_fallback_works_without_fill_lock_attr(self, store: PositionStore) -> None:
         """Backward-compat: a position_store mock without _fill_lock must
         still work (hasattr guard)."""
 
@@ -414,9 +403,7 @@ class TestR3_5_RouterPreRealizedSnapshot:
     """
 
     def _router_source(self) -> str:
-        return Path(
-            "/home/charlie/hft_platform/src/hft_platform/execution/router.py"
-        ).read_text()
+        return (_REPO_ROOT / "src/hft_platform/execution/router.py").read_text()
 
     def test_pre_realized_reads_are_lock_guarded(self) -> None:
         src = self._router_source()
@@ -427,27 +414,15 @@ class TestR3_5_RouterPreRealizedSnapshot:
         # calls (one inside the `with _fill_lock:` block, one in the else
         # fallback for mocks). Both occurrences must reside in a method
         # body that references _fill_lock within ~400 chars before the call.
-        get_calls = [
-            (m.start(), m.end())
-            for m in re.finditer(
-                r"self\.position_store\.positions\.get\(_pos_key", src
-            )
-        ]
-        pre_pos_sites = [
-            (s, e)
-            for (s, e) in get_calls
-            if "_pre_pos" in src[max(0, s - 80) : s]
-        ]
+        get_calls = [(m.start(), m.end()) for m in re.finditer(r"self\.position_store\.positions\.get\(_pos_key", src)]
+        pre_pos_sites = [(s, e) for (s, e) in get_calls if "_pre_pos" in src[max(0, s - 80) : s]]
         # Pre-fix: 3 sites. Post-fix: 6 sites (each expands to lock + else).
-        assert len(pre_pos_sites) >= 3, (
-            f"expected >= 3 _pre_pos snapshot sites, found {len(pre_pos_sites)}"
-        )
+        assert len(pre_pos_sites) >= 3, f"expected >= 3 _pre_pos snapshot sites, found {len(pre_pos_sites)}"
 
         for s, _e in pre_pos_sites:
             window = src[max(0, s - 400) : s]
             assert "_fill_lock" in window, (
-                f"_pre_pos snapshot at offset {s} not guarded by "
-                f"_fill_lock; window={window!r}"
+                f"_pre_pos snapshot at offset {s} not guarded by _fill_lock; window={window!r}"
             )
 
 
@@ -458,9 +433,7 @@ class TestR3_5_RouterPreRealizedSnapshot:
 
 class TestR3_6_GetDrawdownPct:
     def _positions_source(self) -> str:
-        return Path(
-            "/home/charlie/hft_platform/src/hft_platform/execution/positions.py"
-        ).read_text()
+        return (_REPO_ROOT / "src/hft_platform/execution/positions.py").read_text()
 
     def test_drawdown_read_pair_is_lock_guarded(self) -> None:
         """Source-level audit: get_drawdown_pct's read of
@@ -476,9 +449,7 @@ class TestR3_6_GetDrawdownPct:
         )
         assert m is not None, "get_drawdown_pct not found"
         body = m.group(0)
-        assert "_fill_lock" in body, (
-            "get_drawdown_pct does not acquire _fill_lock; body=" + body
-        )
+        assert "_fill_lock" in body, "get_drawdown_pct does not acquire _fill_lock; body=" + body
 
     def test_drawdown_returns_consistent_pair(self, store: PositionStore) -> None:
         """Behavioural check: every observed dd value MUST correspond to a
@@ -530,14 +501,9 @@ class TestR3_6_GetDrawdownPct:
 
         # Every observation must be a valid regime dd, OR exactly 0.0
         # (cold-start guard at start) — not some intermediate torn value.
-        invalid = [
-            dd
-            for dd in observations
-            if not any(abs(dd - v) < 1e-9 for v in valid_dds)
-        ]
+        invalid = [dd for dd in observations if not any(abs(dd - v) < 1e-9 for v in valid_dds)]
         assert not invalid, (
-            f"observed {len(invalid)} torn dd values not in regime set "
-            f"{valid_dds}: first 5={invalid[:5]!r}"
+            f"observed {len(invalid)} torn dd values not in regime set {valid_dds}: first 5={invalid[:5]!r}"
         )
         assert not writer_errors, f"writer crashed: {writer_errors!r}"
 
@@ -557,9 +523,7 @@ class TestR3_6_GetDrawdownPct:
 
 
 class TestSnapshotPositionsWithRecoveryAtomic:
-    def test_recovery_does_not_disappear_during_concurrent_seed(
-        self, store: PositionStore
-    ) -> None:
+    def test_recovery_does_not_disappear_during_concurrent_seed(self, store: PositionStore) -> None:
         """The merged (positions + recovery) view must NEVER lose an entry.
 
         Race scenario (interleaved by hand via gates):
@@ -600,9 +564,7 @@ class TestSnapshotPositionsWithRecoveryAtomic:
         assert "acct1:strat1:RECOV" in positions_snap2
         assert "acct1:strat1:RECOV" not in recovery_snap2
 
-    def test_recovery_snapshot_isolates_inner_dict(
-        self, store: PositionStore
-    ) -> None:
+    def test_recovery_snapshot_isolates_inner_dict(self, store: PositionStore) -> None:
         """Mutating the snapshot's recovery values must NOT affect the store."""
         store._recovery_positions["acct1:strat1:ISO"] = {
             "account_id": "acct1",

@@ -296,3 +296,69 @@ Phase 4         965K   1,000K      330K       400K     2,695K
 | WS-F 硬體與生命週期 | Phase 2 軌道 C — 容量規劃 |
 | WS-G 熱路徑 Rust 化 | Phase 4 軌道 B — 全 Rust 熱路徑 |
 | WS-H 研究工廠擴大 | Phase 1-2 軌道 A — Alpha 工廠 v1/v2 |
+
+---
+
+## 工作流交付區（roadmap-delivery 治理）
+
+> 以下 WS 區塊由 `make roadmap-delivery-check` 解析。每個 WS 對應 docs/TODO.md 的同義條目，欄位格式須維持 `- 名稱：值`，
+> 子項以 `  - ` 縮排兩格，否則 guard 會視為缺欄。
+
+### WS-G：熱路徑 Rust 化擴編
+- 對應 TODO：`docs/TODO.md#1.4`
+- 技能：`hft-strategy-dev`、`rust_feature_engineering`、`performance-profiling`
+- RACI：R=Rust Lead、A=Tech Lead、C=Strategy Owner、I=Ops Oncall
+- Agent 角色：`explorer`（profiling/baseline，輸出 `hotpath_matrix`）→ `worker`（Rust cutover/CI，輸出 `cutover_patch+ci_report`）→ `default`（整合驗收，輸出 `gate_summary`）
+- KPI：
+  - end-to-end `p95 latency` 較 2026-03 基線下降 >= 20%。
+  - `FFI copy ratio` <= 5%，`alloc/tick` 較基線下降 >= 30%。
+  - `parity pass rate = 100%`（核心契約：`int x10000`）。
+  - 連續 30 天 soak 期間 `parity_critical=0`。
+- 風險與緩解：
+  - 風險：Python↔Rust 邊界產生隱性拷貝，導致尾延遲惡化。
+  - 緩解：先完成 typed frame/zero-copy contract 掃描，再允許 cutover 進 CI gate。
+  - 風險：價格精度或事件語義回歸。
+  - 緩解：強制 parity test + replay regression，違反即 block promote。
+  - 風險：Rust kernel 佔用 GIL 或引發 CPU 競爭。
+  - 緩解：在 profiling 報告中納入 GIL 與 core contention 指標，未達標不進 soak。
+- 依賴：
+  - 流程依賴：`profiling matrix -> kernel cutover -> CI parity/perf gate -> soak`。
+  - 工作流依賴：依賴 WS-A 的 burn-in 量測輸出與 WS-B 的 recorder 吞吐基線。
+- Gate 證據：
+  - `outputs/roadmap_execution/ws_g/latest_hotpath_matrix.json`
+  - `outputs/roadmap_execution/ws_g/latest_cutover_backlog.md`
+  - before/after latency 報表、FFI/alloc 指標、parity 測試報告、30 天 soak 摘要、RACI owner 簽核紀錄。
+
+### WS-H：研究與分析工廠擴容
+- 對應 TODO：`docs/TODO.md#2.4`
+- 技能：`hft-alpha-research`、`validation-gate`、`clickhouse-io`
+- RACI：R=Research Lead、A=Head of Research、C=Data Steward、I=Trading Runtime Owner
+- Agent 角色：`explorer`（source inventory，輸出 `source_catalog`）→ `worker`（pipeline/quality gate，輸出 `factory_pipeline+quality_report`）→ `default`（報告與 promotion 整合，輸出 `promotion_readiness`）
+- KPI：
+  - 每週候選研究處理量 >= 50 篇，引用完整率 >= 98%。
+  - 去重命中率 >= 95%，research->alpha scaffold 中位 lead time <= 2 天。
+  - promotion 前 quality gate 通過率（月）>= 90%。
+- 風險與緩解：
+  - 風險：來源 metadata 品質不穩，導致引用與去重失真。
+  - 緩解：建立來源分級與抽樣稽核，未達門檻來源先隔離。
+  - 風險：批次分析失敗堆積，產能下降。
+  - 緩解：建立 batch retry 上限與 backlog 告警，超閾值切入人工 triage。
+  - 風險：hypothesis queue 品質波動造成 promotion 噪音。
+  - 緩解：在 promotion 前增加 quality gate（可重現性/時效性）與 RACI A 角色簽核。
+- 依賴：
+  - 流程依賴：`source inventory -> metadata/dedup -> batch analysis -> hypothesis queue -> promotion pre-check`。
+  - 工作流依賴：依賴 WS-C 的資料品質稽核輸出與 Gate A-E 驗證管線。
+- Gate 證據：
+  - `outputs/roadmap_execution/ws_h/latest_source_catalog.json`
+  - `outputs/roadmap_execution/ws_h/latest_quality_report.json`
+  - `outputs/roadmap_execution/ws_h/latest_factory_pipeline.md`
+  - `outputs/roadmap_execution/ws_h/latest_promotion_readiness.json`
+  - 每週 throughput/quality 報表、dedup/citation audit、lead time 趨勢、RACI owner 簽核紀錄。
+
+## 6. 30 天交付任務（roadmap-delivery）
+
+> 每條任務以 `<n>. <說明含 WS-X>（Owner: …；截止: YYYY-MM-DD；輸出: …；驗收: …）` 格式書寫；
+> guard 會比對 owner 與該 WS 區塊 RACI R 是否一致（warn-only）。
+
+1. WS-G：完成熱路徑 profiling matrix v1，輸出 hotpath_matrix 與 cutover backlog 排序（Owner: Rust Lead；截止: 2026-05-31；輸出: outputs/roadmap_execution/ws_g/latest_hotpath_matrix.json；驗收: hotpath_matrix 涵蓋 tick→intent→order→fill 全鏈路且 cutover backlog 已排序入 CI gate）。
+2. WS-H：完成研究來源盤點與品質 baseline，輸出 source_catalog 與 quality_report，並接上 promotion 前置檢核（Owner: Research Lead；截止: 2026-05-31；輸出: outputs/roadmap_execution/ws_h/latest_source_catalog.json；驗收: source_catalog 已含分級欄位，quality_report 通過率 >= 90% 且 promotion_readiness 報告納入 Gate A-E 結果）。

@@ -614,11 +614,7 @@ class ContractsRuntime:
                         getattr(self._client, "MAX_SUBSCRIPTIONS_PER_CLIENT", 0)
                         or getattr(self._client, "MAX_SUBSCRIPTIONS", 0)
                     )
-                    reason = (
-                        "exceeds_limit"
-                        if "exceeds limit" in str(exc).lower()
-                        else "other"
-                    )
+                    reason = "exceeds_limit" if "exceeds limit" in str(exc).lower() else "other"
                     coro = dispatcher.notify_symbol_reload_failed(
                         reason=reason,
                         count=len(symbols),
@@ -689,8 +685,7 @@ class ContractsRuntime:
         # per-client ceiling (default 600). The per-conn cap (120) is enforced
         # by QuoteConnectionPool sharding, not at preflight.
         preflight_ceiling = int(
-            getattr(self._client, "MAX_SUBSCRIPTIONS_PER_CLIENT", 0)
-            or self._client.MAX_SUBSCRIPTIONS
+            getattr(self._client, "MAX_SUBSCRIPTIONS_PER_CLIENT", 0) or self._client.MAX_SUBSCRIPTIONS
         )
         if len(self._client.symbols) > preflight_ceiling:
             logger.warning(

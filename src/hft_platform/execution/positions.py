@@ -599,10 +599,7 @@ class PositionStore:
         # both views (positions snap before pop, recovery snap after).
         with self._fill_lock:
             positions = {k: dataclasses.replace(v) for k, v in self.positions.items()}
-            recovery = {
-                k: dict(v) if isinstance(v, dict) else v
-                for k, v in self._recovery_positions.items()
-            }
+            recovery = {k: dict(v) if isinstance(v, dict) else v for k, v in self._recovery_positions.items()}
         return positions, recovery
 
     def snapshot_positions(self) -> dict:

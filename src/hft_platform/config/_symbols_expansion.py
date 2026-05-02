@@ -56,6 +56,7 @@ def _filter_active_contracts(
         )
     return active
 
+
 logger = get_logger("config.symbols.expansion")
 
 
