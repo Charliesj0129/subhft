@@ -34,6 +34,26 @@ class MarkToMarketCalculator:
     mid_price_fn:
         Callback ``(symbol) -> int | None`` returning the current mid-price
         as a scaled integer, or *None* when no quote is available.
+
+    Thread safety (Wave 1 documentation, 2026-04-24)
+    ------------------------------------------------
+    ``self._lock`` is a ``threading.Lock`` reserved for **future** cross-thread
+    use. The current production caller is ``HFTSystem._supervise`` running on
+    the asyncio event-loop thread (confirmed by the Infra investigator in the
+    Wave 1 concurrency audit), so MtM.calculate() is effectively
+    single-threaded today. The lock is retained because:
+
+    1. ``_position_store.positions`` is mutated from the ``asyncio.to_thread``
+       worker inside ``PositionStore.on_fill_async`` — that race is addressed
+       in Wave 3 (expanding ``_fill_lock`` acquisition to PositionStore readers).
+       Until Wave 3 lands, this lock does NOT protect the iteration at
+       ``calculate()`` from concurrent fill writes.
+    2. Future observability callers (Prometheus push gateway, periodic PnL
+       reporter) may be added on separate threads; the lock is ready for them.
+
+    Do not remove this lock during Wave 1 — its presence is load-bearing for
+    the Wave 3 fix which will coordinate ``_fill_lock`` acquisition with
+    MtM iteration to eliminate torn-read PnL.
     """
 
     __slots__ = ("_position_store", "_mid_price_fn", "_multiplier_fn", "_lock")
@@ -47,6 +67,7 @@ class MarkToMarketCalculator:
         self._position_store = position_store
         self._mid_price_fn = mid_price_fn
         self._multiplier_fn: Callable[[str], int] = multiplier_fn if multiplier_fn is not None else lambda _: 1
+        # See class docstring. Reserved for Wave 3 cross-thread coordination.
         self._lock = threading.Lock()
 
     # ------------------------------------------------------------------
@@ -60,10 +81,18 @@ class MarkToMarketCalculator:
         Positions with ``net_qty == 0`` yield ``0``.
         Positions whose mid-price is unavailable are **skipped** (logged
         at warning level).
+
+        Wave 3 (2026-04-25): iterate a snapshot from
+        ``PositionStore.snapshot_positions()`` (acquires
+        ``_fill_lock`` and ``dataclasses.replace()``-copies every
+        Position) instead of ``self._position_store.positions`` directly.
+        This removes the cross-thread torn-read race documented in the
+        class docstring.
         """
         result: dict[str, int] = {}
+        snapshot = self._position_store.snapshot_positions()
         with self._lock:
-            for key, pos in self._position_store.positions.items():
+            for key, pos in snapshot.items():
                 if pos.net_qty == 0:
                     result[key] = 0
                     continue

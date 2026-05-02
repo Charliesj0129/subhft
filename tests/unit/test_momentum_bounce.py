@@ -279,3 +279,48 @@ def test_round_trip_resets_peak_pnl():
 
     assert strat._state["TMFD6"] == "idle"
     assert strat._peak_pnl_scaled["TMFD6"] == 0
+
+
+# ---------------------------------------------------------------------------
+# P1-e regression: bad-type kwarg must surface at construction (not silently
+# splat into super().__init__)
+# ---------------------------------------------------------------------------
+
+
+def test_bad_type_kwarg_raises_at_construction():
+    """Passing wrong-type kwarg must raise TypeError at __init__ rather than
+    silently splatting into CBS and crashing inside handle_event."""
+    import pytest
+
+    # `trigger_sigma` is typed `float` and CBS does float(trigger_sigma).
+    # Passing an unparseable string must surface as TypeError/ValueError at
+    # construction, not later inside handle_event.
+    with pytest.raises((TypeError, ValueError)):
+        MomentumBounceStrategy(
+            strategy_id="momentum_bounce",
+            trigger_sigma="not-a-number",  # type: ignore[arg-type]
+        )
+
+
+def test_explicit_kwargs_propagate_to_cbs():
+    """Construction with all CBS-typed kwargs must succeed and propagate."""
+    strat = MomentumBounceStrategy(
+        strategy_id="momentum_bounce",
+        trailing_stop_pts=7,
+        stop_loss_pts=12,
+        max_hold_ns=600 * _ONE_SEC_NS,
+        lookback_ns=120 * _ONE_SEC_NS,
+        trigger_sigma=2.5,
+        take_profit_pts=4,
+        min_vol_samples=10,
+        max_spread_pts=2,
+        session_start_sec=0,
+        session_end_sec=86400,
+    )
+    assert strat._trailing_stop_pts == 7
+    assert strat._stop_loss_pts == 12
+    assert strat._max_hold_ns == 600 * _ONE_SEC_NS
+    assert strat._lookback_ns == 120 * _ONE_SEC_NS
+    assert strat._trigger_sigma == 2.5
+    assert strat._take_profit_pts == 4
+    assert strat._min_vol_samples == 10

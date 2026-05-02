@@ -63,6 +63,21 @@ class BacktestResult:
     config_hash: str
     latency_profile: dict[str, Any]
     mid_prices: np.ndarray | None = None
+    # --- Provenance metadata (added 2026-04-15) ---
+    engine_type: str = "taker"
+    fill_model: str = ""
+    cost_model: str = ""
+    instrument: str = ""
+    data_period: str = ""
+    data_source: str = ""
+    pipeline_mode: str = ""
+    created_at: str = ""
+    # --- Maker-specific (None for taker) ---
+    maker_scorecard: dict | None = None
+    per_spread_breakdown: dict | None = None
+    queue_fraction: float | None = None
+    # --- Daily detail ---
+    daily_pnl: list[dict] | None = None
 
 
 @dataclass(frozen=True)

@@ -41,12 +41,18 @@ wasting weeks on strategies that will inevitably fail.
 
 ## Kill Checklist
 
+### Tier 0: Scope (ANY FAIL = immediate REJECT, skip T3 revision)
+
+| ID | Check | Kill Criteria |
+|----|-------|---------------|
+| S0 | **Scope compliance** | Candidate's type is NOT in shared-context `scope.allowed_types`, OR matches any rule in `scope.forbidden` (including `any_match_in_killed_directions`). An out-of-scope candidate returns to the Researcher as a hard REJECT — no revision loop. |
+
 ### Tier 1: Hard Kill (ANY single FAIL = immediate REJECT)
 
 | ID | Check | Kill Criteria |
 |----|-------|---------------|
-| H1 | **Cost arithmetic** | `expected_edge_bps < 2 × RT_cost_bps`. Verify the math yourself — do NOT trust the proposer's arithmetic. |
-| H2 | **Spread vs edge** | `expected_edge_pts < median_spread_pts + RT_cost_pts`. Edge must exceed BOTH spread AND cost. |
+| H1 | **Cost arithmetic** | `expected_edge_bps < 2 × RT_cost_bps`. Verify the math yourself — do NOT trust the proposer's arithmetic. **MANDATORY (added 2026-04-18 after R6 C14 invalidation)**: independently verify the RT base against `memory/feedback_taifex_fee_structure.md`. If proposer's RT differs from memory, KILL on H1 unless proposer explicitly cites user-confirmed broker contract. Confirmed retail RT: **TXF ~3 pt**, **TMF ~4 pt**. Inferring RT from research configs / manifests is FORBIDDEN — they have historically been wrong. |
+| H2 | **Spread vs edge** | `expected_edge_pts < median_spread_pts + RT_cost_pts`. Edge must exceed BOTH spread AND cost. **Cost-drag reporting**: also compute and report `cost_drag = RT / median_spread`; if drag > 50%, escalate to bright-line WARN in your verdict (this does not auto-FAIL but flags the candidate for Lead attention regardless of edge claim). |
 | H3 | **Killed direction overlap** | Core mechanism matches ANY entry in `killed_directions` blacklist. Repackaging a killed idea under a new name = FAIL. |
 | H4 | **Data sufficiency** | `available_days < 20` OR `available_rows < 500,000` for the target instrument. |
 | H5 | **Latency feasibility** | `signal_half_life_seconds < 2 × broker_RTT_P95_seconds`. Signal must live long enough to trade. |
@@ -78,6 +84,9 @@ You MUST fill out EVERY line. Missing lines = incomplete review.
 ```
 ## Kill Checklist Result — [Candidate Name]
 
+### Tier 0: Scope
+- [S0] Scope compliance: PASS/FAIL — {candidate type} in allowed_types? forbidden rules tripped? {specific rule if FAIL}
+
 ### Tier 1: Hard Kill
 - [H1] Cost arithmetic: PASS/FAIL — expected {X} bps vs threshold {2 × RT_cost} bps
 - [H2] Spread vs edge: PASS/FAIL — expected {X} pts vs {spread + cost} pts
@@ -108,3 +117,13 @@ Tier 2 FAIL count: {N}
 ## Round Context
 
 {SHARED_CONTEXT}
+
+## Regen Sanity Pass (T8-REGEN-3, quick triage)
+
+When the Team Lead invokes the regen sub-flow, you run a **3-check sanity pass** on each candidate proposed by the Researcher — this is **not** the full Kill Checklist.
+
+1. **Killed-directions check**: does the candidate hit any entry in `shared-context.killed_directions`? If yes → REJECT this candidate.
+2. **Scope check**: is the candidate's type in `scope.allowed_types`, and does it clear all `scope.forbidden` rules? If no → REJECT this candidate.
+3. **Quantitative-edge check**: does the candidate include a numeric edge estimate (bps / pts / IC)? If no → REJECT this candidate.
+
+Individual rejection does not abort the regen; only surviving candidates are appended to `candidate_pool.json`. The full Kill Checklist (Tier 0 + H1–H6 + S1–S6) still runs at T2 when each candidate is picked for a real round.

@@ -2,13 +2,14 @@
 
 Atomic write (temp file + os.rename) with SHA-256 integrity hash.
 Env vars:
-    HFT_POSITION_CHECKPOINT_PATH  — default: .runtime/position_checkpoint.json
+    HFT_POSITION_CHECKPOINT_PATH  — default: .state/position_checkpoint.json
     HFT_CHECKPOINT_INTERVAL_S     — default: 60
 """
 
 from __future__ import annotations
 
 import asyncio
+import glob as glob_mod
 import hashlib
 import os
 import tempfile
@@ -46,6 +47,7 @@ except ImportError:
 logger = get_logger("execution.checkpoint")
 
 _TZ_TPE = ZoneInfo("Asia/Taipei")
+DEFAULT_POSITION_CHECKPOINT_PATH = ".state/position_checkpoint.json"
 
 
 def _taifex_trading_date() -> str:
@@ -81,7 +83,7 @@ class PositionCheckpointWriter:
         self._store = store
         self._path = path or os.getenv(
             "HFT_POSITION_CHECKPOINT_PATH",
-            ".runtime/position_checkpoint.json",
+            DEFAULT_POSITION_CHECKPOINT_PATH,
         )
         self._interval_s = float(interval_s if interval_s is not None else os.getenv("HFT_CHECKPOINT_INTERVAL_S", "60"))  # type: ignore[arg-type]
         self._trading_date_provider: Callable[[], str] = trading_date_provider or _taifex_trading_date
@@ -99,13 +101,14 @@ class PositionCheckpointWriter:
             path=self._path,
             interval_s=self._interval_s,
         )
+        loop = asyncio.get_running_loop()
         try:
             while self.running:
                 await asyncio.sleep(self._interval_s)
                 if not self.running:
                     break
                 try:
-                    self.write_checkpoint()
+                    await loop.run_in_executor(None, self.write_checkpoint)
                 except Exception:
                     logger.exception("checkpoint_write_failed")
         finally:
@@ -125,13 +128,16 @@ class PositionCheckpointWriter:
 
         positions_payload: Dict[str, Any] = {}
         for key, pos in snapshot.items():
-            positions_payload[key] = {
+            entry: Dict[str, Any] = {
                 "symbol": pos.symbol,
                 "net_qty": pos.net_qty,
                 "avg_price_scaled": pos.avg_price_scaled,
                 "realized_pnl_scaled": pos.realized_pnl_scaled,
                 "fees_scaled": pos.fees_scaled,  # M1: include accumulated fees
             }
+            if pos.avg_price_scaled < 0:
+                entry["unknown_basis"] = True
+            positions_payload[key] = entry
 
         # M4: Also persist pending recovery positions that haven't been merged
         # into live positions yet (no fills received since restart). Without this,
@@ -139,12 +145,14 @@ class PositionCheckpointWriter:
         recovery = getattr(self._store, "_recovery_positions", {})
         for rkey, rdata in recovery.items():
             if rkey not in positions_payload:
+                avg_price = rdata.get("avg_price_scaled", 0)
                 positions_payload[rkey] = {
                     "symbol": rdata.get("symbol", rkey.split(":")[-1]),
                     "net_qty": rdata["net_qty"],
-                    "avg_price_scaled": rdata.get("avg_price_scaled", 0),
+                    "avg_price_scaled": avg_price,
                     "realized_pnl_scaled": rdata.get("realized_pnl_scaled", 0),
                     "fees_scaled": rdata.get("fees_scaled", 0),
+                    "unknown_basis": avg_price < 0,  # flag sentinel for downstream awareness
                 }
 
         body_obj = {
@@ -167,21 +175,41 @@ class PositionCheckpointWriter:
         if parent:
             os.makedirs(parent, exist_ok=True)
 
-        # Atomic write: write to temp then rename
+        # Atomic write: write to temp then rename.
+        #
+        # Bug e1967c0c (2026-04-25) regressed this path by introducing a
+        # raw ``os.close(fd)`` followed by a ``finally``-block ``_is_closed``
+        # probe + second ``os.close(fd)``. Between the two ``close`` calls
+        # the kernel reused the freed fd integer for the WAL batch-timer
+        # daemon thread's brand-new ``tempfile.mkstemp`` fd, and the
+        # second ``os.close`` ripped that fd out from under the WAL
+        # writer — surfacing as ``[Errno 9] Bad file descriptor`` on its
+        # next ``write/flush/fsync``. Switching to ``with os.fdopen(fd, "wb")``
+        # mirrors the 7 sibling sites (``fill_dlq``, ``gateway/dedup``,
+        # ``router``, ``canary``, ``recorder/_loader_*``) and guarantees fd
+        # ownership transfers cleanly to the file object: it is closed
+        # exactly once, on both the success and exception paths.
         fd, tmp_path = tempfile.mkstemp(
             dir=parent or ".",
             prefix=".ckpt_",
             suffix=".tmp",
         )
         try:
-            os.write(fd, final_bytes)
-            os.fsync(fd)
-            os.close(fd)
+            with os.fdopen(fd, "wb") as f:
+                f.write(final_bytes)
+                f.flush()
+                # Durability: fsync MUST happen before close+rename so the
+                # data is on stable storage prior to the atomic rename.
+                os.fsync(f.fileno())
             os.rename(tmp_path, self._path)  # type: ignore[arg-type]
         except BaseException:
-            os.close(fd) if not _is_closed(fd) else None
+            # ``with`` already closed the fd. Only the temp path may still
+            # be on disk if rename failed or the write/fsync raised.
             if os.path.exists(tmp_path):
-                os.unlink(tmp_path)
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
             raise
 
         logger.info(
@@ -200,8 +228,20 @@ class PositionCheckpointWriter:
     def load_checkpoint(path: str) -> Optional[Dict[str, Any]]:
         """Load and verify a checkpoint file.
 
+        Also cleans up stale ``.ckpt_*.tmp`` files left by hard crashes
+        (SIGKILL / power loss between fsync and rename).
+
         Returns the parsed dict if valid, or ``None`` on missing / corrupt file.
         """
+        # Clean stale tmp files from previous crashed writes
+        parent = os.path.dirname(path) or "."
+        for tmp in glob_mod.glob(os.path.join(parent, ".ckpt_*.tmp")):
+            try:
+                os.unlink(tmp)
+                logger.info("checkpoint_stale_tmp_cleaned", path=tmp)
+            except OSError:
+                pass
+
         if not os.path.exists(path):
             return None
 
@@ -232,11 +272,29 @@ class PositionCheckpointWriter:
         data["sha256"] = stored_sha
         return data
 
+    @staticmethod
+    def clear_checkpoint(path: str | None = None) -> bool:
+        """Remove checkpoint file for graceful position reset.
 
-def _is_closed(fd: int) -> bool:
-    """Check if a file descriptor is already closed."""
-    try:
-        os.fstat(fd)
+        Returns True if file was deleted, False if it didn't exist.
+        Logs the operation for audit trail.
+        """
+        resolved_path = (
+            path
+            if path
+            else os.getenv(
+                "HFT_POSITION_CHECKPOINT_PATH",
+                DEFAULT_POSITION_CHECKPOINT_PATH,
+            )
+        )
+        assert resolved_path is not None  # always has a default
+        if os.path.exists(resolved_path):
+            os.unlink(resolved_path)
+            logger.warning(
+                "checkpoint_cleared",
+                path=resolved_path,
+                msg="Position checkpoint deleted via programmatic reset",
+            )
+            return True
+        logger.info("checkpoint_clear_no_file", path=resolved_path)
         return False
-    except OSError:
-        return True

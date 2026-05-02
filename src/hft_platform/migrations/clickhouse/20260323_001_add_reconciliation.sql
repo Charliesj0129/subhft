@@ -1,4 +1,5 @@
--- Up: post-market 3-way reconciliation results table
+-- Up
+-- post-market 3-way reconciliation results table
 CREATE TABLE IF NOT EXISTS hft.reconciliation
 (
     event_date    Date,

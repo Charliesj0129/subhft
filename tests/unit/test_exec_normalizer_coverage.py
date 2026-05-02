@@ -363,6 +363,15 @@ class TestStrategyIdResolution:
         assert fill is not None
         assert fill.strategy_id == "R47_MAKER_TMFD6"
 
+    def test_order_id_map_resolves_custom_field_token(self) -> None:
+        norm = ExecutionNormalizer(order_id_map={"00A1B2": "R47_MAKER_TMFD6:42"})
+        data = _fill_data(ordno="")
+        data["custom_field"] = "00A1B2"
+        raw = _make_raw("deal", data)
+        fill = norm.normalize_fill(raw)
+        assert fill is not None
+        assert fill.strategy_id == "R47_MAKER_TMFD6"
+
     def test_unknown_strategy_fallback(self) -> None:
         norm = ExecutionNormalizer(default_account_id="test-acct")
         data = {"price": 100.0, "quantity": 1, "action": "Buy", "code": "2330"}

@@ -155,6 +155,32 @@ class TestBuildServiceGraph:
         assert registry.intent_channel is None
 
     @pytest.mark.usefixtures("_sim_env", "_mock_services")
+    def test_build_wires_startup_verifier_to_durable_checkpoint_default(self) -> None:
+        with (
+            patch("hft_platform.execution.checkpoint.PositionCheckpointWriter") as writer_cls,
+            patch("hft_platform.execution.startup_recon.StartupPositionVerifier") as verifier_cls,
+        ):
+            _build_with_mocks()
+
+        writer_cls.assert_called_once()
+        verifier_cls.assert_called_once()
+        assert verifier_cls.call_args.kwargs["checkpoint_path"] == ".state/position_checkpoint.json"
+
+    @pytest.mark.usefixtures("_sim_env", "_mock_services")
+    def test_build_wires_startup_fill_reconciler(self) -> None:
+        with (
+            patch("hft_platform.execution.checkpoint.PositionCheckpointWriter"),
+            patch("hft_platform.execution.startup_recon.StartupPositionVerifier"),
+            patch("hft_platform.services.startup_reconciler.ClickHouseFillsQueryClient") as ch_query_cls,
+            patch("hft_platform.services.startup_reconciler.StartupReconciler") as reconciler_cls,
+        ):
+            registry = _build_with_mocks()
+
+        ch_query_cls.assert_called_once()
+        reconciler_cls.assert_called_once()
+        assert registry.startup_fill_reconciler is reconciler_cls.return_value
+
+    @pytest.mark.usefixtures("_sim_env", "_mock_services")
     def test_build_sets_runtime_role_in_settings(self) -> None:
         settings: dict = {}
         registry = _build_with_mocks(settings=settings)
@@ -430,3 +456,40 @@ class TestQueueDefaults:
 
     def test_default_raw_exec_queue_size(self) -> None:
         assert SystemBootstrapper.DEFAULT_RAW_EXEC_QUEUE_SIZE == 8192
+
+
+# ---------------------------------------------------------------------------
+# Lease refresh HALT fencing (Issue #3)
+# ---------------------------------------------------------------------------
+
+
+class TestLeaseRefreshHaltFencing:
+    """When lease is lost, the callback triggers HALT."""
+
+    def test_on_lease_lost_callback_is_wired(self) -> None:
+        bootstrapper = SystemBootstrapper({})
+        assert bootstrapper._on_lease_lost is None
+        assert bootstrapper._lease_refresh_lost is False
+
+    def test_lost_owner_sets_flag_and_invokes_callback(self) -> None:
+        bootstrapper = SystemBootstrapper({})
+        halt_reasons: list[str] = []
+        bootstrapper._on_lease_lost = lambda reason: halt_reasons.append(reason)
+
+        # Simulate what the refresh loop does when it detects lost ownership
+        bootstrapper._lease_refresh_lost = True
+        cb = bootstrapper._on_lease_lost
+        cb("SESSION_LEASE_LOST(owner=other)")
+
+        assert bootstrapper._lease_refresh_lost is True
+        assert len(halt_reasons) == 1
+        assert "SESSION_LEASE_LOST" in halt_reasons[0]
+
+    @pytest.mark.usefixtures("_sim_env", "_mock_services")
+    def test_build_wires_storm_guard_to_on_lease_lost(self) -> None:
+        bootstrapper = SystemBootstrapper({})
+        with patch.object(bootstrapper, "_check_session_ownership", return_value=False):
+            registry = bootstrapper.build()
+
+        assert bootstrapper._on_lease_lost is not None
+        assert bootstrapper._on_lease_lost == registry.storm_guard.trigger_halt

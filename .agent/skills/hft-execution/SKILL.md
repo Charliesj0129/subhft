@@ -1,3 +1,4 @@
+<!-- REVIEW-2026-04-17: unreferenced by rules/workflows/teams/agents. Confirm or delete. -->
 ---
 name: hft-execution
 description: Use when working on the execution plane — fill processing, position tracking, reconciliation, execution optimization, slippage, TCA, or any code in order/, execution/, or gateway/.

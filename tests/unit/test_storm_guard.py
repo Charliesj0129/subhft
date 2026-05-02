@@ -315,7 +315,7 @@ def test_halt_callback_exception_does_not_propagate(guard):
     assert guard.state == StormGuardState.HALT
 
 
-def test_halt_callback_coroutine_no_running_loop(guard):
+def test_halt_callback_coroutine_no_running_loop(guard, recwarn):
     """Coroutine callback when no event loop is running logs warning, does not crash."""
 
     async def async_cb():
@@ -323,6 +323,8 @@ def test_halt_callback_coroutine_no_running_loop(guard):
 
     guard._on_halt_callback = async_cb
     guard.trigger_halt("async no loop")
+    runtime_warnings = [w for w in recwarn if issubclass(w.category, RuntimeWarning)]
+    assert runtime_warnings == []
     assert guard.state == StormGuardState.HALT
 
 
@@ -679,3 +681,113 @@ def test_feature_failure_does_not_override_halt(guard):
     halt_drawdown = guard.thresholds.halt_drawdown_bps - 1
     state, _ = guard._evaluate_target_state(halt_drawdown, 0, 0.0)
     assert state == StormGuardState.HALT
+
+
+# ── Feed gap re-escalation cooldown ──────────────────────────────────────────
+
+
+def test_feed_gap_reescalation_suppressed_after_deescalation(guard):
+    """After de-escalating from a feed-gap STORM, re-escalation via feed gap
+    should be suppressed for a cooldown period to prevent flapping.
+
+    Production observation: 75 STORM transitions in 6 hours from feed_gap
+    oscillating around the threshold.
+    """
+    guard._storm_cooldown_s = 0.0
+    guard._de_escalate_threshold = 1
+    guard._feed_gap_reescalation_cooldown_s = 120.0
+
+    # Enter STORM via feed gap
+    state = guard.update(feed_gap_s=2.0)
+    assert state == StormGuardState.STORM
+
+    # De-escalate
+    state = guard.update(feed_gap_s=0.0)
+    assert state == StormGuardState.NORMAL
+
+    # Immediately re-trigger feed gap — should be suppressed
+    state = guard.update(feed_gap_s=2.0)
+    assert state == StormGuardState.NORMAL  # suppressed, NOT STORM
+
+
+def test_feed_gap_reescalation_allowed_after_cooldown(guard):
+    """Feed gap re-escalation is allowed once the cooldown period expires."""
+    guard._storm_cooldown_s = 0.0
+    guard._de_escalate_threshold = 1
+    guard._feed_gap_reescalation_cooldown_s = 0.0  # no cooldown
+
+    # Enter STORM, de-escalate, re-trigger
+    guard.update(feed_gap_s=2.0)
+    guard.update(feed_gap_s=0.0)
+    assert guard.state == StormGuardState.NORMAL
+
+    state = guard.update(feed_gap_s=2.0)
+    assert state == StormGuardState.STORM  # allowed, cooldown is 0
+
+
+def test_non_feed_gap_escalation_not_suppressed(guard):
+    """Latency STORM is suppressed by its own cooldown, not feed gap's."""
+    guard._storm_cooldown_s = 0.0
+    guard._de_escalate_threshold = 1
+    guard._feed_gap_reescalation_cooldown_s = 9999.0
+    guard._latency_reescalation_cooldown_s = 0.0  # disable latency cooldown
+
+    # Enter STORM via feed gap, de-escalate
+    guard.update(feed_gap_s=2.0)
+    guard.update(feed_gap_s=0.0)
+    assert guard.state == StormGuardState.NORMAL
+
+    # Latency-triggered STORM should NOT be suppressed (latency cooldown is 0)
+    state = guard.update(latency_us=25000)
+    assert state == StormGuardState.STORM
+
+
+def test_latency_reescalation_suppressed_by_own_cooldown(guard):
+    """After de-escalation from latency STORM, re-escalation is suppressed."""
+    guard._storm_cooldown_s = 0.0
+    guard._de_escalate_threshold = 1
+    guard._latency_reescalation_cooldown_s = 9999.0  # long cooldown
+
+    # Enter STORM via latency, de-escalate
+    guard.update(latency_us=25000)
+    assert guard.state == StormGuardState.STORM
+    guard.update(latency_us=0)
+    assert guard.state == StormGuardState.NORMAL
+
+    # Re-escalation should be suppressed during cooldown
+    state = guard.update(latency_us=25000)
+    assert state == StormGuardState.NORMAL  # suppressed
+
+
+def test_latency_reescalation_allowed_after_cooldown_expires(guard):
+    """After latency cooldown expires, re-escalation is allowed."""
+    guard._storm_cooldown_s = 0.0
+    guard._de_escalate_threshold = 1
+    guard._latency_reescalation_cooldown_s = 0.0  # instant expiry
+
+    # Enter STORM via latency, de-escalate
+    guard.update(latency_us=25000)
+    assert guard.state == StormGuardState.STORM
+    guard.update(latency_us=0)
+    assert guard.state == StormGuardState.NORMAL
+
+    # Re-escalation should proceed (cooldown = 0)
+    state = guard.update(latency_us=25000)
+    assert state == StormGuardState.STORM
+
+
+def test_drawdown_escalation_not_suppressed_by_latency_cooldown(guard):
+    """Drawdown STORM is never suppressed by latency cooldown."""
+    guard._storm_cooldown_s = 0.0
+    guard._de_escalate_threshold = 1
+    guard._latency_reescalation_cooldown_s = 9999.0
+    guard._feed_gap_reescalation_cooldown_s = 9999.0
+
+    # Enter STORM via latency, de-escalate
+    guard.update(latency_us=25000)
+    guard.update(latency_us=0)
+    assert guard.state == StormGuardState.NORMAL
+
+    # Drawdown-triggered STORM should NOT be suppressed
+    state = guard.update(drawdown_bps=-150)
+    assert state == StormGuardState.STORM

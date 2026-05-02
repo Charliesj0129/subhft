@@ -1,3 +1,4 @@
+<!-- REVIEW-2026-04-17: unreferenced by rules/workflows/teams/agents. Confirm or delete. -->
 ---
 name: hft-ops
 description: Use when working on platform operations — session lifecycle, autonomy degradation, position flattening, margin monitoring, pre/post market checks, backup, or any code in ops/.

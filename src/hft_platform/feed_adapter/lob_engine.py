@@ -2,7 +2,7 @@ import asyncio
 import importlib
 import os
 from threading import Lock
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Optional, Union, cast
 
 import numpy as np
 from structlog import get_logger
@@ -14,7 +14,7 @@ from hft_platform.observability.metrics import MetricsRegistry
 logger = get_logger("feed_adapter.lob")
 
 _RUST_ENABLED = os.getenv("HFT_RUST_ACCEL", "1").lower() not in {"0", "false", "no", "off"}
-_LOCKS_ENABLED = os.getenv("HFT_LOB_LOCKS", "0").lower() not in {"0", "false", "no", "off"}
+_LOCKS_ENABLED = os.getenv("HFT_LOB_LOCKS", "1").lower() not in {"0", "false", "no", "off"}
 _READ_LOCKS_ENABLED = os.getenv("HFT_LOB_READ_LOCKS", "1").lower() not in {
     "0",
     "false",
@@ -325,6 +325,7 @@ class BookState:
                 bid_depth=int(self.bid_depth_total),
                 ask_depth=int(self.ask_depth_total),
                 normalizer_seq=self.normalizer_seq,
+                local_ts=self.local_ts,
             )
 
     def get_stats_tuple(self) -> tuple:
@@ -449,6 +450,9 @@ class LOBEngine:
         "_metrics_known_symbols",
         "_eviction_ttl_ns",
         "_eviction_last_run_ns",
+        "_symbol_metadata",
+        "_strict_ingress",
+        "_unknown_symbol_warned",
     )
 
     def __init__(self):
@@ -472,6 +476,19 @@ class LOBEngine:
         _evict_ttl_s = int(os.getenv("HFT_LOB_SYMBOL_TTL_S", "3600"))
         self._eviction_ttl_ns: int = _evict_ttl_s * 1_000_000_000
         self._eviction_last_run_ns: int = 0
+        # Ingress invariant (Hemorrhage #5, 2026-04-18). When a symbol enters
+        # the LOB that is not known in SymbolMetadata, we log once and bump
+        # unknown_symbol_ingress_total. Strict mode (env=1) additionally
+        # refuses to allocate a book — default is permissive.
+        self._symbol_metadata: Any = None
+        self._strict_ingress: bool = os.getenv("HFT_LOB_STRICT_INGRESS", "0") == "1"
+        self._unknown_symbol_warned: set[str] = set()
+
+    def set_symbol_metadata(self, symbol_metadata: Any) -> None:
+        """Inject SymbolMetadata so get_book can verify the incoming symbol
+        is known. No-op when called with ``None``; no-op on ingress when
+        SymbolMetadata has no entries (startup / test scenarios)."""
+        self._symbol_metadata = symbol_metadata
 
     def _is_metrics_enabled(self) -> bool:
         if self._metrics_enabled:
@@ -608,6 +625,21 @@ class LOBEngine:
         if symbol == self._last_symbol and self._last_book is not None:
             return self._last_book
         if symbol not in self.books:
+            # Ingress invariant: detect symbols not declared in SymbolMetadata.
+            # Permissive by default so strange symbols still flow; strict mode
+            # (HFT_LOB_STRICT_INGRESS=1) refuses to allocate a book so downstream
+            # planes fail fast instead of silently using the default price scale.
+            if not self._is_symbol_known(symbol):
+                if symbol not in self._unknown_symbol_warned:
+                    self._unknown_symbol_warned.add(symbol)
+                    logger.warning(
+                        "lob_unknown_symbol_ingress",
+                        symbol=symbol,
+                        strict=self._strict_ingress,
+                    )
+                    self._bump_unknown_symbol_metric()
+                if self._strict_ingress:
+                    return None
             if len(self.books) >= self._max_symbols:
                 logger.warning(
                     "lob_symbol_cardinality_exceeded",
@@ -622,12 +654,41 @@ class LOBEngine:
         self._last_book = book
         return book
 
+    def _is_symbol_known(self, symbol: str) -> bool:
+        """True when SymbolMetadata reports an entry for ``symbol``.
+
+        Returns True when no metadata is wired (backward-compat) or when
+        metadata is empty (startup).
+        """
+        sm = self._symbol_metadata
+        if sm is None:
+            return True
+        meta = getattr(sm, "meta", None)
+        if not meta:
+            return True
+        return symbol in meta
+
+    def _bump_unknown_symbol_metric(self) -> None:
+        if self.metrics is None:
+            return
+        counter = getattr(self.metrics, "unknown_symbol_ingress_total", None)
+        if counter is None:
+            return
+        try:
+            counter.labels(plane="lob").inc()
+        except Exception:  # noqa: BLE001 — metrics must never crash hot path
+            pass
+
     def process_event(self, event: Union[BidAskEvent, TickEvent, tuple]) -> Optional[LOBStatsEvent | tuple]:
         metrics_enabled = self._is_metrics_enabled()
+        # Dispatch by exact type (avoid isinstance MRO walk). Event dataclasses
+        # are frozen+slots with no subclasses — `type(x) is C` is correct.
+        et = type(event)
         # Tuple fast-path (avoid event object creation)
-        if isinstance(event, tuple) and event:
-            if event[0] == "bidask":
-                if len(event) >= 13:
+        if et is tuple and event:
+            tuple_event = cast(tuple[Any, ...], event)
+            if tuple_event[0] == "bidask":
+                if len(tuple_event) >= 13:
                     (
                         _,
                         symbol,
@@ -642,7 +703,7 @@ class LOBEngine:
                         mid_price,
                         spread,
                         imbalance,
-                    ) = event[:13]
+                    ) = tuple_event[:13]
                     book = self.get_book(symbol)
                     if book is None:
                         return None
@@ -659,7 +720,7 @@ class LOBEngine:
                         float(imbalance),
                     )
                 else:
-                    _, symbol, bids, asks, exch_ts, is_snapshot = event
+                    _, symbol, bids, asks, exch_ts, is_snapshot = tuple_event
                     book = self.get_book(symbol)
                     if book is None:
                         return None
@@ -667,31 +728,32 @@ class LOBEngine:
                 if metrics_enabled:
                     self._record_lob_metrics(symbol, bool(is_snapshot))
                 return self._emit_stats(book)
-            if event[0] == "tick":
-                _, symbol, price, volume, _total_volume, _is_simtrade, _is_odd_lot, exch_ts, *_rest = event
+            if tuple_event[0] == "tick":
+                _, symbol, price, volume, _total_volume, _is_simtrade, _is_odd_lot, exch_ts, *_rest = tuple_event
                 book = self.get_book(symbol)
                 if book is None:
                     return None
                 book.update_tick(price, volume, exch_ts)
                 return None
 
-        # Typed dispatch
-        if isinstance(event, BidAskEvent):
-            book = self.get_book(event.symbol)
+        # Typed dispatch (exact-type; subclasses never created for these)
+        if et is BidAskEvent:
+            bidask_event = cast(BidAskEvent, event)
+            book = self.get_book(bidask_event.symbol)
             if book is None:
                 return None
             # Propagate normalizer seq for downstream ordering (Bug #10 fix)
-            book.normalizer_seq = event.meta.seq
+            book.normalizer_seq = bidask_event.meta.seq
             # Fused bypass: normalizer already computed stats in a single Rust call;
             # skip redundant apply_update + _recompute and directly set book fields.
-            if _FUSED_BYPASS and event.fused_stats is not None:
-                fs = event.fused_stats
-                exch_ts = event.meta.source_ts
+            if _FUSED_BYPASS and bidask_event.fused_stats is not None:
+                fs = bidask_event.fused_stats
+                exch_ts = bidask_event.meta.source_ts
                 with book.lock:
                     if exch_ts >= book.exch_ts:
                         book.exch_ts = exch_ts
-                        book.bids = event.bids
-                        book.asks = event.asks
+                        book.bids = bidask_event.bids
+                        book.asks = bidask_event.asks
                         book.bid_depth_total = int(fs.bid_depth)
                         book.ask_depth_total = int(fs.ask_depth)
                         _fs_mid = int(fs.mid_price_x2)
@@ -706,21 +768,27 @@ class LOBEngine:
                             book.imbalance = 0.0
                         book.version += 1
                 if metrics_enabled:
-                    self._record_lob_metrics(event.symbol, event.is_snapshot)
+                    self._record_lob_metrics(bidask_event.symbol, bidask_event.is_snapshot)
                 return self._emit_stats(book)
-            if event.stats is not None:
-                book.apply_update_with_stats(event.bids, event.asks, event.meta.source_ts, event.stats)
+            if bidask_event.stats is not None:
+                book.apply_update_with_stats(
+                    bidask_event.bids,
+                    bidask_event.asks,
+                    bidask_event.meta.source_ts,
+                    bidask_event.stats,
+                )
             else:
-                book.apply_update(event.bids, event.asks, event.meta.source_ts)
+                book.apply_update(bidask_event.bids, bidask_event.asks, bidask_event.meta.source_ts)
             if metrics_enabled:
-                self._record_lob_metrics(event.symbol, event.is_snapshot)
+                self._record_lob_metrics(bidask_event.symbol, bidask_event.is_snapshot)
             return self._emit_stats(book)
 
-        elif isinstance(event, TickEvent):
-            book = self.get_book(event.symbol)
+        elif et is TickEvent:
+            tick_event = cast(TickEvent, event)
+            book = self.get_book(tick_event.symbol)
             if book is None:
                 return None
-            book.update_tick(event.price, event.volume, event.meta.source_ts)
+            book.update_tick(tick_event.price, tick_event.volume, tick_event.meta.source_ts)
             # return book.get_stats() # Optional: emit stats on tick?
             return None
 

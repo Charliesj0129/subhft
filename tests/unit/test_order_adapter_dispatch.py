@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -148,6 +149,49 @@ async def test_dispatch_new_stores_in_live_orders(tmp_config):
 
 
 @pytest.mark.asyncio
+async def test_dispatch_new_preregisters_pending_fill_before_place_order_returns(tmp_config):
+    """Early-fill correlation must exist before the blocking broker call returns."""
+    client = _make_client()
+    adapter = _make_adapter(tmp_config, client)
+
+    def _place_order(**kwargs):
+        token = kwargs["custom_field"]
+        assert adapter._pending_fill_index["2330:BUY"] == ["strat1:1"]
+        assert adapter.order_id_map[token] == "strat1:1"
+        trade = MagicMock()
+        trade.seq_no = None
+        trade.seqno = None
+        trade.ord_no = None
+        trade.ordno = None
+        trade.order_id = None
+        trade.id = None
+        trade.order = None
+        trade.status = None
+        return trade
+
+    client.place_order.side_effect = _place_order
+    cmd = _make_cmd(intent_type=IntentType.NEW)
+
+    ok = await adapter._dispatch_to_api(cmd)
+
+    assert ok is True
+    assert adapter._pending_fill_index["2330:BUY"] == ["strat1:1"]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_new_api_failure_cleans_pending_fill_index(tmp_config):
+    """Hard API failure must not leave stale symbol/side fallback entries behind."""
+    client = _make_client()
+    client.place_order.return_value = None
+    adapter = _make_adapter(tmp_config, client)
+
+    ok = await adapter._dispatch_to_api(_make_cmd(intent_type=IntentType.NEW))
+
+    assert ok is False
+    assert adapter._pending_fill_index == {}
+
+
+@pytest.mark.asyncio
 async def test_dispatch_cancel_calls_cancel_order(tmp_config):
     """_dispatch_to_api CANCEL calls client.cancel_order with the target trade."""
     client = _make_client()
@@ -185,6 +229,38 @@ async def test_dispatch_amend_calls_update_order(tmp_config):
     client.update_order.assert_called_once()
     call_kwargs = client.update_order.call_args
     assert call_kwargs.kwargs["price"] == 500.0
+
+
+@pytest.mark.asyncio
+async def test_force_flat_preregisters_pending_fill_and_custom_field_token(tmp_config):
+    """FORCE_FLAT must have the same early-fill protection as normal orders."""
+    client = _make_client()
+    adapter = _make_adapter(tmp_config, client)
+    adapter.position_store = SimpleNamespace(
+        positions={"p1": SimpleNamespace(symbol="2330", net_qty=2, avg_price_scaled=100_0000)}
+    )
+
+    def _place_order(**kwargs):
+        token = kwargs["custom_field"]
+        assert adapter._pending_fill_index["2330:SELL"] == ["strat1:1"]
+        assert adapter.order_id_map[token] == "strat1:1"
+        trade = MagicMock()
+        trade.seq_no = None
+        trade.seqno = None
+        trade.ord_no = None
+        trade.ordno = None
+        trade.order_id = None
+        trade.id = None
+        trade.order = None
+        trade.status = None
+        return trade
+
+    client.place_order.side_effect = _place_order
+
+    ok = await adapter._dispatch_to_api(_make_cmd(intent_type=IntentType.FORCE_FLAT))
+
+    assert ok is True
+    assert adapter._pending_fill_index["2330:SELL"] == ["strat1:1"]
 
 
 @pytest.mark.asyncio
@@ -514,9 +590,8 @@ async def test_api_worker_halt_skip_sends_dlq_and_metric(tmp_config):
     except asyncio.CancelledError:
         pass
 
-    # Dedicated metric incremented
-    metrics_mock.order_halt_skip_total.labels.assert_called_once_with(strategy_id="strat_halt")
-    metrics_mock.order_halt_skip_total.labels.return_value.inc.assert_called_once()
+    # Dedicated metric incremented (no labels — strategy_id removed to avoid cardinality bomb)
+    metrics_mock.order_halt_skip_total.inc.assert_called_once()
     # Backward-compat reject metric also incremented
     metrics_mock.order_reject_total.inc.assert_called_once()
     # DLQ received the entry

@@ -46,7 +46,7 @@ class PlatformDegradeInputs:
     redis_client: Any | None = None
     redis_healthcheck: Callable[[], bool] | None = None
     metrics: Any | None = None
-    feed_gap_threshold_s: float = 120.0
+    feed_gap_threshold_s: float = 600.0
     reconnect_pending_threshold_s: float = 60.0
     reconnect_flap_budget: int = 5
     queue_depth_threshold: int = 5000
@@ -89,7 +89,12 @@ class PlatformDegradeInputs:
 
         pending_since = getattr(self.md_service, "_pending_reconnect_since", None)
         if pending_since is not None and timebase.now_s() - float(pending_since) >= self.reconnect_pending_threshold_s:
-            reasons.append("feed_reconnect_pending")
+            # Suppress during expected session gaps (e.g. 13:35-14:55 day→night
+            # transition).  The reconnect is "pending" precisely because we are
+            # outside the reconnect window — that is normal, not anomalous.
+            within_fn = getattr(self.md_service, "within_reconnect_window", None)
+            if within_fn is None or within_fn():
+                reasons.append("feed_reconnect_pending")
 
         if self.reconnect_flap_budget > 0 and self._quote_flap_budget_exceeded():
             reasons.append("feed_reconnect_flapping")
@@ -133,7 +138,14 @@ class PlatformDegradeInputs:
         return list(dict.fromkeys(reasons))
 
     def _feed_gap_s(self) -> float:
-        fn = getattr(self.md_service, "get_max_feed_gap_s", None)
+        # Prefer active-symbol-aware gap when md_service exposes it; falls back
+        # to the legacy global-max gap for backwards compatibility.  The active
+        # variant excludes chronically-inactive subscriptions (e.g. illiquid
+        # OTM options or far-month futures) whose stale gaps would otherwise
+        # latch platform_reduce_only when liquid feeds are flowing normally.
+        active_fn = getattr(self.md_service, "get_active_feed_gap_s", None)
+        max_fn = getattr(self.md_service, "get_max_feed_gap_s", None)
+        fn = active_fn if callable(active_fn) else max_fn
         if fn is None:
             return 0.0
         gap = fn()

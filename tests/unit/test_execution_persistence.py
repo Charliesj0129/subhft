@@ -107,6 +107,51 @@ class TestFillDedupPersistence:
         assert "dup_1" in router2._seen_fill_ids
         assert "dup_2" in router2._seen_fill_ids
 
+    @pytest.mark.asyncio
+    async def test_new_fill_persists_dedup_window_without_graceful_shutdown(self, tmp_path):
+        from hft_platform.contracts.execution import FillEvent
+        from hft_platform.contracts.strategy import Side
+        from hft_platform.core import timebase
+        from hft_platform.execution.normalizer import RawExecEvent
+
+        persist_path = str(tmp_path / "fill_dedup.jsonl")
+        with patch.dict(
+            os.environ,
+            {
+                "HFT_FILL_DEDUP_PERSIST_PATH": persist_path,
+                "HFT_FILL_DEDUP_PERSIST_INTERVAL_S": "0",
+            },
+        ):
+            router, _ = self._make_router(tmp_path)
+
+        fill = FillEvent(
+            fill_id="F_RESTART",
+            order_id="ORD_RESTART",
+            account_id="ACC1",
+            strategy_id="s1",
+            symbol="TXFD6",
+            side=Side.BUY,
+            qty=1,
+            price=200000000,
+            fee=0,
+            tax=0,
+            ingest_ts_ns=timebase.now_ns(),
+            match_ts_ns=timebase.now_ns(),
+        )
+        router.position_store.on_fill.return_value = MagicMock(realized_pnl=0)
+        router.normalizer = MagicMock()
+        router.normalizer.normalize_fill.return_value = fill
+        router.raw_queue.put_nowait(RawExecEvent(topic="deal", data={}, ingest_ts_ns=timebase.now_ns()))
+
+        await router.stop(drain_timeout_s=1.0)
+
+        assert os.path.exists(persist_path)
+
+        with patch.dict(os.environ, {"HFT_FILL_DEDUP_PERSIST_PATH": persist_path}):
+            restarted, _ = self._make_router(tmp_path)
+
+        assert "F_RESTART" in restarted._seen_fill_ids
+
 
 # ---------------------------------------------------------------------------
 # Issue #2: Fill DLQ persist/load + overflow metric
@@ -195,6 +240,7 @@ class TestOrderIdMapPersistence:
     """Verify order_id_map survives process restart."""
 
     def _make_adapter(self, tmp_path, pre_seed=None):
+        from hft_platform.core import timebase
         from hft_platform.order.adapter import OrderAdapter
 
         persist_path = str(tmp_path / "oid_map.jsonl")
@@ -203,9 +249,12 @@ class TestOrderIdMapPersistence:
             import orjson
 
             os.makedirs(os.path.dirname(persist_path), exist_ok=True)
+            now_ns = timebase.now_ns()
             with open(persist_path, "wb") as f:
+                # H3: pre-seed with the new schema (k, v, t_ns, s) so the
+                # loader does not drop entries as legacy/stale.
                 for k, v in pre_seed.items():
-                    f.write(orjson.dumps({"k": k, "v": v}) + b"\n")
+                    f.write(orjson.dumps({"k": k, "v": v, "t_ns": now_ns, "s": "live"}) + b"\n")
 
         with patch.dict(os.environ, {"HFT_ORDER_ID_MAP_PERSIST_PATH": persist_path}):
             adapter = OrderAdapter(
@@ -228,7 +277,14 @@ class TestOrderIdMapPersistence:
         with open(path, "rb") as f:
             rows = [orjson.loads(line.strip()) for line in f if line.strip()]
         assert len(rows) == 2
-        assert rows[0] == {"k": "broker_123", "v": "strat_a:intent_1"}
+        # H3: every persisted row carries t_ns + state. The defensive branch
+        # in persist_order_id_map() stamps an unmetered entry as live with
+        # the current timestamp so downstream load can apply TTL filtering.
+        first = rows[0]
+        assert first["k"] == "broker_123"
+        assert first["v"] == "strat_a:intent_1"
+        assert first["s"] == "live"
+        assert isinstance(first["t_ns"], int) and first["t_ns"] > 0
 
     def test_load_restores_mappings(self, tmp_path):
         pre_seed = {"bid_1": "s1:i1", "bid_2": "s2:i2"}
@@ -250,6 +306,31 @@ class TestOrderIdMapPersistence:
         adapter2._order_id_map_persist_path = path
         adapter2._load_order_id_map()
         assert adapter2.order_id_map["x"] == "y"
+
+    @pytest.mark.asyncio
+    async def test_register_broker_ids_persists_without_graceful_shutdown(self, tmp_path):
+        persist_path = str(tmp_path / "oid_map.jsonl")
+        with patch.dict(
+            os.environ,
+            {
+                "HFT_ORDER_ID_MAP_PERSIST_PATH": persist_path,
+                "HFT_ORDER_ID_MAP_PERSIST_INTERVAL_S": "0",
+            },
+        ):
+            adapter, _ = self._make_adapter(tmp_path)
+
+        await adapter._register_broker_ids("R47:101", {"ordno": "ORD_RESTART", "seqno": "SEQ_RESTART"})
+
+        # _maybe_persist_order_id_map uses run_in_executor (fire-and-forget).
+        # Give the executor a chance to flush before asserting file existence.
+        await asyncio.sleep(0.05)
+        assert os.path.exists(persist_path)
+
+        with patch.dict(os.environ, {"HFT_ORDER_ID_MAP_PERSIST_PATH": persist_path}):
+            restarted, _ = self._make_adapter(tmp_path)
+
+        assert restarted.order_id_map["ORD_RESTART"] == "R47:101"
+        assert restarted.order_id_map["SEQ_RESTART"] == "R47:101"
 
 
 # ---------------------------------------------------------------------------
@@ -306,23 +387,36 @@ class TestAuditDropMetric:
     """Verify audit drops are exposed as Prometheus metric."""
 
     def test_drop_on_full_increments_metric(self):
+        """P0-I3 refactor: start() the writer so queue-full path (not pre-start
+        buffer) exercises the drop-metric code path.
+        """
+        import asyncio as _asyncio
+
         from hft_platform.recorder.audit import AuditWriter, reset_audit_writer
 
         reset_audit_writer()
-        writer = AuditWriter(queue_size=1)  # Tiny queue
-        # Set overflow buffer size to 0 so drops happen immediately after queue full
-        for name in writer._overflow:
-            writer._overflow[name] = collections.deque(maxlen=0)
 
-        metrics_mock = MagicMock()
-        with patch("hft_platform.observability.metrics.MetricsRegistry") as mock_reg:
-            mock_reg.get.return_value = metrics_mock
+        async def _inner() -> None:
+            writer = AuditWriter(queue_size=1)
+            await writer.start()
+            try:
+                # Force overflow to zero-capacity so drops happen immediately after queue full.
+                for name in writer._overflow:
+                    writer._overflow[name] = collections.deque(maxlen=0)
 
-            writer.log_order({"cmd_id": 1})  # fills queue
-            writer.log_order({"cmd_id": 2})  # should trigger drop + metric
+                metrics_mock = MagicMock()
+                with patch("hft_platform.observability.metrics.MetricsRegistry") as mock_reg:
+                    mock_reg.get.return_value = metrics_mock
 
-        assert writer._dropped["audit.orders_log"] >= 1
-        metrics_mock.audit_dropped_total.labels.assert_called_with(table="audit.orders_log")
+                    writer.log_order({"cmd_id": 1})  # fills queue
+                    writer.log_order({"cmd_id": 2})  # should trigger drop + metric
+
+                assert writer._dropped["audit.orders_log"] >= 1
+                metrics_mock.audit_dropped_total.labels.assert_called_with(table="audit.orders_log")
+            finally:
+                await writer.stop()
+
+        _asyncio.run(_inner())
         reset_audit_writer()
 
 

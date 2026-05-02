@@ -16,27 +16,47 @@ _DEFAULT_PERSIST_PATH = ".state/fill_dlq.jsonl"
 
 
 class OrphanedFillDLQ:
-    __slots__ = ("_queue", "_max_size", "_persist_path")
+    __slots__ = ("_queue", "_max_size", "_persist_path", "_overflow_evicted")
 
     def __init__(self, max_size: int = 1000, persist_path: str | None = None) -> None:
         self._queue: deque[Any] = deque(maxlen=max_size)
         self._max_size = max_size
         self._persist_path: str = persist_path or os.getenv("HFT_FILL_DLQ_PERSIST_PATH") or _DEFAULT_PERSIST_PATH
+        self._overflow_evicted: list[Any] = []
 
     def add(self, fill_event: Any) -> None:
         if len(self._queue) == self._max_size:
             MetricsRegistry.get().fill_dlq_overflow_total.inc()
+            # Retain evicted fill in memory so persist() includes it.
+            evicted = self._queue[0]
+            self._overflow_evicted.append(evicted)
+            # Also append to disk as immediate safety net in case of crash.
+            self._persist_single(evicted)
             logger.error(
-                "fill_dlq_overflow",
-                symbol=getattr(fill_event, "symbol", ""),
-                order_id=getattr(fill_event, "order_id", ""),
+                "fill_dlq_overflow — evicted fill retained for persist",
+                evicted_symbol=getattr(evicted, "symbol", ""),
+                evicted_order_id=getattr(evicted, "order_id", ""),
+                new_symbol=getattr(fill_event, "symbol", ""),
                 dlq_size=len(self._queue),
-                msg="Oldest orphaned fill silently evicted — position drift risk",
+                overflow_evicted=len(self._overflow_evicted),
             )
         self._queue.append(fill_event)
         logger.warning(
             "Orphaned fill added to DLQ", symbol=getattr(fill_event, "symbol", ""), dlq_size=len(self._queue)
         )
+
+    def _persist_single(self, fill_event: Any) -> None:
+        """Append a single fill to the DLQ file (best-effort, no fsync)."""
+        try:
+            import orjson
+
+            row = asdict(fill_event)
+            path = self._persist_path
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            with open(path, "ab") as f:
+                f.write(orjson.dumps(row) + b"\n")
+        except Exception as exc:
+            logger.error("fill_dlq_persist_single_failed", error=str(exc))
 
     @property
     def count(self) -> int:
@@ -75,9 +95,10 @@ class OrphanedFillDLQ:
         """Persist DLQ to disk atomically (temp+fsync+rename).
 
         Called during graceful shutdown so orphaned fills survive restart.
+        Includes overflow-evicted fills that were too old for the in-memory deque.
         """
         path = self._persist_path
-        snapshot = list(self._queue)
+        snapshot = list(self._overflow_evicted) + list(self._queue)
         if not snapshot:
             # Remove stale file if queue is empty
             if os.path.exists(path):
@@ -89,6 +110,8 @@ class OrphanedFillDLQ:
             persist_dir = os.path.dirname(path) or "."
             os.makedirs(persist_dir, exist_ok=True)
             fd, tmp_path = tempfile.mkstemp(suffix=".tmp", dir=persist_dir)
+            # M2 (2026-04-25): finally-cleanup so orphan tmpfiles don't
+            # accumulate when the worker dies between fsync and rename.
             try:
                 with os.fdopen(fd, "wb") as f:
                     for fill in snapshot:
@@ -101,10 +124,12 @@ class OrphanedFillDLQ:
                     f.flush()
                     os.fsync(f.fileno())
                 os.rename(tmp_path, path)
-            except Exception:
+            finally:
                 if os.path.exists(tmp_path):
-                    os.unlink(tmp_path)
-                raise
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
             logger.info("fill_dlq_persisted", count=len(snapshot), path=path)
         except Exception as exc:
             logger.warning("fill_dlq_persist_failed", error=str(exc), path=path)

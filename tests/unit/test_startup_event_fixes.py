@@ -169,6 +169,7 @@ class TestExecCallbackBuffersWhenNotRunning:
         sys_obj._exec_overflow_evicted = 0
         sys_obj._exec_startup_overflow_lost = False
         sys_obj.storm_guard = MagicMock()
+        sys_obj._persist_lost_exec_event = lambda event: None
         return sys_obj
 
     def test_exec_callback_buffers_when_not_running(self):
@@ -221,7 +222,106 @@ class TestExecCallbackBuffersWhenNotRunning:
 
 
 # ---------------------------------------------------------------------------
-# Fix 3: audit log_order called in OrderAdapter dispatch
+# Fix 3: startup fill backfill runs before recon/strategy
+# ---------------------------------------------------------------------------
+
+
+class _AsyncRunner:
+    def __init__(self) -> None:
+        self.running = True
+
+    async def run(self) -> None:
+        await asyncio.sleep(0)
+
+
+class _AsyncExecutionGateway(_AsyncRunner):
+    def stop(self) -> None:
+        return None
+
+
+class TestStartupFillBackfill:
+    @pytest.mark.asyncio
+    async def test_system_run_executes_startup_fill_backfill_before_recon(self, monkeypatch):
+        from hft_platform.services.system import HFTSystem
+
+        monkeypatch.setenv("HFT_CHECKPOINT_ENABLED", "0")
+        monkeypatch.setenv("HFT_PNL_EXPORTER_ENABLED", "0")
+        events: list[str] = []
+
+        async def _run_backfill():
+            events.append("startup_fill_backfill")
+            return SimpleNamespace(
+                inserted=2,
+                broker_fills=5,
+                platform_fills=3,
+                broker_query_error=False,
+                errors=[],
+            )
+
+        def _start_service(name: str, coro):
+            events.append(name)
+            coro.close()
+
+        sys_obj = SimpleNamespace(
+            running=False,
+            loop=None,
+            _exec_startup_overflow_lost=False,
+            _md_record_direct=True,
+            _fill_record_direct=True,
+            _order_record_direct=True,
+            _on_sighup=lambda: None,
+            _on_exec=lambda *_args, **_kwargs: None,
+            _start_service=_start_service,
+            _supervise=MagicMock(return_value=asyncio.sleep(0)),
+            stop_async=MagicMock(return_value=asyncio.sleep(0)),
+            evidence_writer=MagicMock(record_transition=MagicMock()),
+            order_client=MagicMock(login=MagicMock(), set_execution_callbacks=MagicMock()),
+            session_governor=None,
+            autonomy_monitor=None,
+            position_stuck_monitor=None,
+            recorder=_AsyncRunner(),
+            bus=SimpleNamespace(cursor=17),
+            md_service=_AsyncRunner(),
+            exec_service=_AsyncRunner(),
+            gateway_service=None,
+            risk_engine=_AsyncRunner(),
+            order_adapter=_AsyncRunner(),
+            execution_gateway=_AsyncExecutionGateway(),
+            startup_verifier=MagicMock(
+                recover=MagicMock(
+                    return_value=asyncio.sleep(
+                        0,
+                        result=SimpleNamespace(
+                            halted=False,
+                            source="broker_only",
+                            positions_loaded=1,
+                            auto_corrected=0,
+                        ),
+                    )
+                )
+            ),
+            startup_fill_reconciler=SimpleNamespace(run=_run_backfill),
+            registry=SimpleNamespace(account_id="acct-1", broker_id="shioaji"),
+            checkpoint_writer=None,
+            recon_service=_AsyncRunner(),
+            strategy_runner=SimpleNamespace(
+                run=_AsyncRunner().run,
+                set_start_cursor=MagicMock(),
+                _rejection_queue=None,
+            ),
+            session_hook_manager=SimpleNamespace(enabled=False),
+            health_server=_AsyncRunner(),
+        )
+
+        await HFTSystem.run(sys_obj)
+
+        assert "startup_fill_backfill" in events
+        assert "recon" in events
+        assert events.index("startup_fill_backfill") < events.index("recon")
+
+
+# ---------------------------------------------------------------------------
+# Fix 4: audit log_order called in OrderAdapter dispatch
 # ---------------------------------------------------------------------------
 
 
@@ -252,7 +352,7 @@ class TestOrderDispatchAudit:
         # Should not raise
         adapter._audit_log_order({"event": "dispatched"})
 
-    def test_audit_log_order_swallows_exception(self):
+    def test_audit_log_order_swallows_exception(self):  # noqa: no-assert
         """If audit writer raises, _audit_log_order swallows the exception."""
 
         adapter = self._make_adapter()

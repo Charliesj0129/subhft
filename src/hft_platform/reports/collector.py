@@ -44,14 +44,30 @@ __all__ = [
     "DataCollector",
 ]
 
-# Large-trade volume thresholds per symbol family
+# Large-trade volume thresholds per symbol root (month-code agnostic).
+# Lookup: try exact match first, then strip trailing 2-char month code.
 _LARGE_TRADE_THRESHOLDS: dict[str, int] = {
-    "TXFD6": 10,
-    "TMFD6": 30,
-    "MXFD6": 30,
+    "TXF": 10,
+    "TMF": 30,
+    "MXF": 30,
     "2330": 100,
 }
 _DEFAULT_LARGE_TRADE_THRESHOLD = 10
+
+
+def _get_large_trade_threshold(symbol: str) -> int:
+    """Resolve large-trade threshold with root-prefix fallback."""
+    threshold = _LARGE_TRADE_THRESHOLDS.get(symbol)
+    if threshold is not None:
+        return threshold
+    # Root-prefix fallback: strip month code (e.g. TMFE6 → TMF)
+    if len(symbol) >= 5:
+        root = symbol[:-2]
+        threshold = _LARGE_TRADE_THRESHOLDS.get(root)
+        if threshold is not None:
+            return threshold
+    return _DEFAULT_LARGE_TRADE_THRESHOLD
+
 
 # Input validation patterns
 _SYMBOL_RE = re.compile(r"^[A-Za-z0-9]{1,20}$")
@@ -60,6 +76,19 @@ _DANGEROUS_SQL_RE = re.compile(
     r"(;|--|\b(DROP|DELETE|INSERT|UPDATE|ALTER|GRANT|UNION|EXEC|CREATE|TRUNCATE)\b)",
     re.IGNORECASE,
 )
+
+# Continuous-contract alias suffixes (R1/R2/C0/C1) — see contracts/ref.py.
+# Aliases like "TXFR1" never appear in hft.market_data (which stores the
+# resolved month code, e.g. "TXFE6"). We must resolve at query time or every
+# WHERE symbol = 'TXFR1' returns 0 rows. The live-broker resolver
+# (ContractsRuntime.resolve_symbol_aliases) is unavailable here because the
+# report pipeline runs out-of-band; we instead derive the active month code
+# from CH itself by picking the highest-volume root match in recent data.
+_ALIAS_SUFFIX_RE = re.compile(r"^([A-Z]{2,4})(R[12]|C[01])$")
+# Lookback window for resolving an alias to its active month code. Long enough
+# to cover the longest gap a reporter cares about (single-week run) but bounded
+# so that a recently-rolled-over front month wins over the prior expiring one.
+_ALIAS_RESOLUTION_LOOKBACK_DAYS = 14
 
 # Memory cap for every CH query
 _SETTINGS = "SETTINGS max_memory_usage = 2000000000"
@@ -240,7 +269,76 @@ class DataCollector:
     def __init__(self, ch_host: str = "") -> None:
         host = ch_host or os.environ.get("HFT_CLICKHOUSE_HOST", "localhost")
         self._execute = _make_execute(host)
+        # Cache resolved alias→month-code for the lifetime of this collector
+        # so each report run pays at most one extra CH query per family.
+        self._alias_cache: dict[str, str] = {}
         log.info("DataCollector initialised", ch_host=host)
+
+    # ------------------------------------------------------------------
+    # Alias resolution
+    # ------------------------------------------------------------------
+
+    def _resolve_alias(self, symbol: str) -> str:
+        """Resolve continuous-contract aliases (TXFR1) to month codes (TXFE6).
+
+        The platform stores resolved month codes in ``hft.market_data``;
+        passing a raw alias yields zero rows. We derive the active month code
+        by inspecting recent volume in CH for the alias's root prefix and
+        pick the heaviest. Non-aliases (stocks, options, already-resolved
+        month codes) are returned unchanged. Cached per-collector.
+
+        Idempotent: ``_resolve_alias("TXFE6")`` returns ``"TXFE6"`` unchanged
+        because the regex does not match resolved month codes.
+        """
+        if not symbol:
+            return symbol
+        cached = self._alias_cache.get(symbol)
+        if cached is not None:
+            return cached
+        match = _ALIAS_SUFFIX_RE.match(symbol)
+        if not match:
+            # Not an alias form — pass through. Cache to skip repeat regex.
+            self._alias_cache[symbol] = symbol
+            return symbol
+        root = match.group(1)
+        # Pick the highest-volume month code matching ``<root>[A-L][0-9]`` over
+        # the recent window. The match() regex is anchored so injection via
+        # the symbol parameter cannot escape; root has already been validated
+        # by ``_validate_symbol`` upstream.
+        sql = f"""
+            SELECT symbol, sum(volume) AS vol
+            FROM hft.market_data
+            WHERE match(symbol, '^{root}[A-L][0-9]$')
+              AND exch_ts >= toUnixTimestamp64Nano(now64(3) - INTERVAL {_ALIAS_RESOLUTION_LOOKBACK_DAYS} DAY)
+            GROUP BY symbol
+            ORDER BY vol DESC
+            LIMIT 1
+            {_SETTINGS}
+        """  # nosec B608
+        try:
+            rows = self._execute(sql, None)
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "alias_resolution_failed",
+                symbol=symbol,
+                root=root,
+                error=str(exc),
+            )
+            self._alias_cache[symbol] = symbol
+            return symbol
+        if not rows or not rows[0] or not rows[0][0]:
+            log.warning("alias_resolution_no_match", symbol=symbol, root=root)
+            self._alias_cache[symbol] = symbol
+            return symbol
+        resolved = str(rows[0][0])
+        log.debug(
+            "alias_resolved",
+            alias=symbol,
+            resolved=resolved,
+            volume=int(rows[0][1]) if rows[0][1] is not None else 0,
+        )
+        self._alias_cache[symbol] = resolved
+        return resolved
 
     # ------------------------------------------------------------------
     # Public API
@@ -364,6 +462,7 @@ class DataCollector:
 
     def _query_ohlcv(self, symbol: str, time_filter: str) -> dict:
         """Q1: Session OHLCV."""
+        symbol = self._resolve_alias(symbol)
         sql = f"""
             SELECT
                 argMin(open_scaled, bucket)   AS open_ch,
@@ -376,7 +475,7 @@ class DataCollector:
             WHERE symbol = %(symbol)s
               AND {time_filter}
             {_SETTINGS}
-        """
+        """  # nosec B608
         sql = sql.replace(
             "FROM hft.ohlcv_1m",
             """FROM (
@@ -410,6 +509,7 @@ class DataCollector:
 
     def _query_5m_bars(self, symbol: str, time_filter: str) -> list[Bar5m]:
         """Q2: 5-minute OHLCV bars."""
+        symbol = self._resolve_alias(symbol)
         sql = f"""
             SELECT
                 toString(toStartOfFiveMinutes(
@@ -427,7 +527,7 @@ class DataCollector:
             GROUP BY ts
             ORDER BY ts
             {_SETTINGS}
-        """
+        """  # nosec B608
         sql = sql.replace(
             "FROM hft.ohlcv_1m",
             """FROM (
@@ -461,6 +561,7 @@ class DataCollector:
 
     def _query_flow(self, symbol: str, time_filter: str) -> list[FlowBar]:
         """Q3: Uptick / downtick flow per 5-minute bucket using lagInFrame."""
+        symbol = self._resolve_alias(symbol)
         sql = f"""
             WITH tick_data AS (
                 SELECT
@@ -489,7 +590,7 @@ class DataCollector:
             GROUP BY bucket
             ORDER BY bucket
             {_SETTINGS}
-        """
+        """  # nosec B608
         params = {"symbol": symbol}
         rows = self._execute(sql, params)
         result: list[FlowBar] = []
@@ -515,7 +616,8 @@ class DataCollector:
 
     def _query_large_trades(self, symbol: str, time_filter: str) -> list[LargeTrade]:
         """Q4: Trades at or above the large-trade volume threshold."""
-        threshold = _LARGE_TRADE_THRESHOLDS.get(symbol, _DEFAULT_LARGE_TRADE_THRESHOLD)
+        symbol = self._resolve_alias(symbol)
+        threshold = _get_large_trade_threshold(symbol)
         sql = f"""
             WITH ordered AS (
                 SELECT
@@ -534,7 +636,7 @@ class DataCollector:
             FROM ordered
             ORDER BY ts
             {_SETTINGS}
-        """
+        """  # nosec B608
         params = {"symbol": symbol}
         rows = self._execute(sql, params)
         result: list[LargeTrade] = []
@@ -563,6 +665,7 @@ class DataCollector:
         Spread = asks_price[1] - bids_price[1] (both in CH units x1,000,000).
         Divide by 10,000 to convert to integer platform ticks (1 point).
         """
+        symbol = self._resolve_alias(symbol)
         sql = f"""
             SELECT
                 toInt32((asks_price[1] - bids_price[1]) / 1000000) AS spread_pts,
@@ -577,13 +680,14 @@ class DataCollector:
             GROUP BY spread_pts
             ORDER BY spread_pts
             SETTINGS max_memory_usage = 3000000000
-        """
+        """  # nosec B608
         params = {"symbol": symbol}
         rows = self._execute(sql, params)
         return {int(row[0]): int(row[1]) for row in rows}
 
     def _query_depth_imbalance(self, symbol: str, time_filter: str) -> list[DepthBar]:
         """Q6: Hourly average bid/ask depth at L1 and bid ratio."""
+        symbol = self._resolve_alias(symbol)
         sql = f"""
             SELECT
                 toHour(toDateTime64(exch_ts / 1e9, 3, 'Asia/Taipei')) AS hour,
@@ -598,7 +702,7 @@ class DataCollector:
             GROUP BY hour
             ORDER BY hour
             {_SETTINGS}
-        """
+        """  # nosec B608
         params = {"symbol": symbol}
         rows = self._execute(sql, params)
         result: list[DepthBar] = []
@@ -646,6 +750,7 @@ class DataCollector:
         """
         _validate_symbol(symbol)
         _validate_date(date)
+        symbol = self._resolve_alias(symbol)
 
         from datetime import date as _date
         from datetime import timedelta
@@ -688,7 +793,7 @@ class DataCollector:
                 WHERE symbol = %(symbol)s
                   AND type = 'Tick'
                   AND {tf}
-            """
+            """  # nosec B608
             parts.append(part)
 
         sql = " UNION ALL ".join(parts) + f" ORDER BY day DESC {_SETTINGS}"

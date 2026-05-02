@@ -1,3 +1,4 @@
+<!-- REVIEW-2026-04-17: unreferenced by rules/workflows/teams/agents. Confirm or delete. -->
 ---
 name: hft-strategy-dev
 description: Use when implementing or modifying live strategy code, handling runtime market events, emitting OrderIntent values, or integrating shared feature-plane signals into strategy logic.

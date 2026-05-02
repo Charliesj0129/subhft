@@ -3,7 +3,7 @@
 Covers:
 - test_returns_composed_report_on_success: all 4 stages mocked, returns ComposedReport
 - test_returns_none_when_no_data: collector returns tick_count=0, returns None
-- test_default_symbol_is_txfd6: collector.collect called with "TXFD6"
+- test_default_symbol_is_txfc0: collector.collect called with "TXFR1"
 """
 
 from __future__ import annotations
@@ -106,8 +106,8 @@ class TestBuildReport:
         mock_reason.assert_not_called()
         mock_composer.assert_not_called()
 
-    def test_default_symbol_is_txfd6(self, mock_session_data, mock_fact_report, mock_reasoning_report):
-        """build_report passes 'TXFD6' as the default symbol to collector.collect."""
+    def test_default_symbol_is_txfc0(self, mock_session_data, mock_fact_report, mock_reasoning_report):
+        """build_report passes 'TXFR1' as the default symbol to collector.collect."""
         mock_collector = MagicMock()
         mock_collector.collect.return_value = mock_session_data
         mock_collector.collect_cross_day.return_value = []
@@ -125,7 +125,7 @@ class TestBuildReport:
 
             build_report("day", "2026-03-28")
 
-        mock_collector.collect.assert_called_once_with("day", "2026-03-28", "TXFD6")
+        mock_collector.collect.assert_called_once_with("day", "2026-03-28", "TXFR1")
 
     def test_custom_symbol_is_forwarded(self, mock_session_data, mock_fact_report, mock_reasoning_report):
         """build_report forwards a custom symbol to collector.collect."""

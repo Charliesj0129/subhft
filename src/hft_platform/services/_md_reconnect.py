@@ -20,6 +20,10 @@ from ._md_ingestion import FeedState
 
 logger = get_logger("service.market_data")
 
+# Option symbol prefixes excluded from the per-symbol gap watchdog.
+# Must stay in sync with MarketDataService._FEED_GAP_EXCLUDE_PREFIXES.
+_WATCHDOG_EXCLUDE_PREFIXES: tuple[str, ...] = ("TXO", "MXO", "TEO", "TFO")
+
 
 class MarketDataReconnectMixin:
     """Reconnection / rollover / watchdog methods for ``MarketDataService``."""
@@ -263,6 +267,31 @@ class MarketDataReconnectMixin:
         except Exception:
             return False
 
+    # -- watchdog helpers ------------------------------------------------------
+
+    def _find_stale_symbols(self: Any, active_snapshot: dict[str, float], now: float) -> list[tuple[str, float]]:
+        """Return (symbol, gap) pairs exceeding the per-symbol gap threshold.
+
+        Bug #36: previously a single global threshold flagged illiquid stocks
+        (2207, 2201) and far-month futures (TXFG6) as stale even though
+        sparse trading is normal for them. The per-symbol override map
+        (``_symbol_gap_threshold_overrides``) lets ops set higher floors
+        for known-low-liquidity symbols without weakening front-month gates.
+        """
+        global_threshold = getattr(self, "_symbol_gap_threshold_s", 6.0)
+        if self._is_market_open_grace_period():
+            global_threshold = max(global_threshold, getattr(self, "_market_open_grace_gap_threshold_s", 30.0))
+        overrides: dict[str, float] = getattr(self, "_symbol_gap_threshold_overrides", {}) or {}
+        stale: list[tuple[str, float]] = []
+        for symbol, last_ts in active_snapshot.items():
+            if any(symbol.startswith(p) for p in _WATCHDOG_EXCLUDE_PREFIXES):
+                continue
+            threshold = overrides.get(symbol, global_threshold)
+            gap = now - last_ts
+            if gap > threshold:
+                stale.append((symbol, gap))
+        return stale
+
     # -- watchdog loop -------------------------------------------------------
 
     async def _watchdog_loop(self: Any) -> None:
@@ -303,16 +332,7 @@ class MarketDataReconnectMixin:
             if len(active_snapshot) < min_active:
                 self._symbol_gap_consecutive_hits = 0
                 continue
-            stale_symbols: list[tuple[str, float]] = []
-
-            threshold = getattr(self, "_symbol_gap_threshold_s", 6.0)
-            if self._is_market_open_grace_period():
-                threshold = max(threshold, getattr(self, "_market_open_grace_gap_threshold_s", 30.0))
-
-            for symbol, last_ts in active_snapshot.items():
-                gap = now - last_ts
-                if gap > threshold:
-                    stale_symbols.append((symbol, gap))
+            stale_symbols = self._find_stale_symbols(active_snapshot, now)
 
             if stale_symbols:
                 self._symbol_gap_consecutive_hits += 1
@@ -340,7 +360,7 @@ class MarketDataReconnectMixin:
                 if (
                     len(stale_symbols) >= min_stale
                     and stale_ratio >= ratio_threshold
-                    and max_stale_gap >= max(severe_gap, threshold)
+                    and max_stale_gap >= max(severe_gap, getattr(self, "_symbol_gap_threshold_s", 6.0))
                     and hits >= consec_cycles
                     and (timebase.now_s() - getattr(self, "_last_symbol_gap_resubscribe_ts", 0.0)) >= cooldown
                 ):
@@ -373,7 +393,19 @@ class MarketDataReconnectMixin:
         if state == FeedState.CONNECTED:
             heartbeat_threshold_s = getattr(self, "heartbeat_threshold_s", 5.0)
             if gap > heartbeat_threshold_s:
-                logger.warning("Heartbeat missing", gap=gap)
+                now_s = timebase.now_s()
+                skip_off_hours = getattr(self, "_heartbeat_skip_off_hours", True)
+                in_trading_hours = self._is_trading_hours() if skip_off_hours else True
+                log_cooldown_s = getattr(self, "_heartbeat_log_cooldown_s", 60.0)
+                last_log_ts = getattr(self, "_last_heartbeat_missing_log_ts", 0.0)
+                if not in_trading_hours:
+                    off_hours_interval = getattr(self, "_heartbeat_off_hours_log_interval_s", 300.0)
+                    if now_s - getattr(self, "_last_heartbeat_off_hours_log_ts", 0.0) >= off_hours_interval:
+                        logger.info("Skipping heartbeat warning outside trading hours", gap=gap)
+                        self._last_heartbeat_off_hours_log_ts = now_s
+                elif now_s - last_log_ts >= log_cooldown_s:
+                    logger.warning("Heartbeat missing", gap=gap)
+                    self._last_heartbeat_missing_log_ts = now_s
             resubscribe_gap_s = getattr(self, "resubscribe_gap_s", 15.0)
             if gap > resubscribe_gap_s:
                 await self._attempt_resubscribe(gap, reason="heartbeat_gap")

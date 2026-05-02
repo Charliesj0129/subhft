@@ -1,0 +1,44 @@
+# config/research/cost_profiles.yaml
+# Per-instrument cost model for standardized backtest engine.
+# Values in POINTS per side (not NTD).
+# Source: TAIFEX fee schedule + broker commission (retail, no rebates).
+
+TMFD6:
+  commission_pts_per_side: 1.3
+  tax_pts_per_side: 0.7
+  point_value_nwd: 10
+  scale: 1000000
+
+# TXF retail cost CORRECTED 2026-04-18 per user confirmation.
+# Total RT ~3 pt (~600 NTD): ~120 NTD commission RT (0.3 pt/side x 2)
+# + ~480 NTD tax sell-side only (modeled symmetric as 1.2 pt/side average → 2.4 pt RT).
+# Source: memory/feedback_taifex_fee_structure.md
+TXFD6:
+  commission_pts_per_side: 0.3
+  tax_pts_per_side: 1.2
+  point_value_nwd: 200
+  scale: 1000000
+
+TXFB6:
+  commission_pts_per_side: 0.3
+  tax_pts_per_side: 1.2
+  point_value_nwd: 200
+  scale: 1000000
+
+TXFC6:
+  commission_pts_per_side: 0.3
+  tax_pts_per_side: 1.2
+  point_value_nwd: 200
+  scale: 1000000
+
+TMFB6:
+  commission_pts_per_side: 1.3
+  tax_pts_per_side: 0.7
+  point_value_nwd: 10
+  scale: 1000000
+
+TMFC6:
+  commission_pts_per_side: 1.3
+  tax_pts_per_side: 0.7
+  point_value_nwd: 10
+  scale: 1000000

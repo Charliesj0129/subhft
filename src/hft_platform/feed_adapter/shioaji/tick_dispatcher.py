@@ -75,6 +75,7 @@ class TickDispatcher:
         "_enqueued",
         "_processed",
         "_use_deque",
+        "_on_drop_callback",
     )
 
     def __init__(
@@ -105,6 +106,10 @@ class TickDispatcher:
         self._enqueued: int = 0
         self._processed: int = 0
         self._use_deque: bool = use_deque if use_deque is not None else _USE_RING_BUFFER
+        # H12: fires once per drop so downstream can propagate a gap
+        # (e.g., FeatureEngine.mark_gap_all). Invoked on broker callback
+        # thread, so callback MUST be cheap and non-blocking.
+        self._on_drop_callback: Callable[[], None] | None = None
 
     # ------------------------------------------------------------------
     # Public read-only counters (for diagnostics / backward compat)
@@ -221,12 +226,28 @@ class TickDispatcher:
             except Exception as exc:
                 logger.debug("operation_fallback", error=str(exc))
                 pass
+        cb = self._on_drop_callback
+        if cb is not None:
+            try:
+                cb()
+            except Exception as exc:  # noqa: BLE001 — never break hot path on gap-signal failure
+                logger.debug("on_drop_callback_failed", error=str(exc))
         if self._dropped % 100 == 1:
             logger.warning(
                 "Quote callback queue full; dropping quote callback payload",
                 dropped_total=self._dropped,
                 maxsize=self._queue_size,
             )
+
+    def set_on_drop_callback(self, cb: Callable[[], None] | None) -> None:
+        """Register a callback invoked on every dropped tick.
+
+        Intended wiring: MarketDataService registers a callback that calls
+        FeatureEngine.mark_gap_all so strategies observe QUALITY_FLAG_GAP
+        on their next feature update. Must be cheap and non-blocking —
+        runs on the broker callback thread.
+        """
+        self._on_drop_callback = cb
 
     # ------------------------------------------------------------------
     # Worker lifecycle

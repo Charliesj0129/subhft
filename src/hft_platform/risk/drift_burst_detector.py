@@ -98,6 +98,8 @@ class DriftBurstDetector:
         "_head",
         "_count",
         "_last_mid_x2",
+        "_last_update_ns",
+        "_stale_reset_ns",
         "_ticks_since_burst",
         "_last_burst_ts",
         "_in_cooldown",
@@ -115,6 +117,7 @@ class DriftBurstDetector:
         cooldown_ns: int = _DEFAULT_COOLDOWN_NS,
         min_bpv: float = _DEFAULT_MIN_BPV,
         skip_zero_returns: bool = True,
+        stale_reset_ns: int = 300_000_000_000,  # 5 min gap → reset (session boundary, Bug 20)
     ) -> None:
         if window_size < 10:
             raise ValueError(f"window_size must be >= 10, got {window_size}")
@@ -137,6 +140,8 @@ class DriftBurstDetector:
         self._count: int = 0
 
         self._last_mid_x2: int = 0
+        self._last_update_ns: int = 0
+        self._stale_reset_ns: int = max(0, int(stale_reset_ns))
         self._ticks_since_burst: int = self._cooldown_ticks + 1  # start not in cooldown
         self._last_burst_ts: int = 0
         self._in_cooldown: bool = False
@@ -167,6 +172,22 @@ class DriftBurstDetector:
             toxicity_score is in [0, 1], suitable for StormGuard threshold comparison.
         """
         burst_event: BurstEvent | None = None
+
+        # Bug 20 (2026-04-17): Session-boundary stale-state guard. A long gap
+        # (e.g. 13:45 day close → 15:00 night open = 75 min) leaves _last_mid_x2
+        # stale. First post-gap tick produces a log-return that dwarfs the
+        # intraday diffusion returns still in the ring buffer, driving |T| to
+        # saturation and toxicity → 1.0 (false HALT). If ts indicates a gap
+        # larger than _stale_reset_ns since the last update, reset the detector.
+        if (
+            self._stale_reset_ns > 0
+            and ts > 0
+            and self._last_update_ns > 0
+            and (ts - self._last_update_ns) >= self._stale_reset_ns
+        ):
+            self.reset()
+        if ts > 0:
+            self._last_update_ns = ts
 
         # Track cooldown: timestamp-based if cooldown_ns > 0, else tick-based
         self._ticks_since_burst += 1
@@ -380,6 +401,7 @@ class DriftBurstDetector:
         self._head = 0
         self._count = 0
         self._last_mid_x2 = 0
+        self._last_update_ns = 0
         self._ticks_since_burst = self._cooldown_ticks + 1
         self._last_burst_ts = 0
         self._in_cooldown = False

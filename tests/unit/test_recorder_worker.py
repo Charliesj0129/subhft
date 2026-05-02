@@ -65,7 +65,7 @@ class TestRecorderService(unittest.IsolatedAsyncioTestCase):
     async def test_recover_wal_skips_when_disabled(self):
         queue = asyncio.Queue()
 
-        with patch.dict(os.environ, {"HFT_DISABLE_CLICKHOUSE": "1"}, clear=False):
+        with patch.dict(os.environ, {"HFT_CLICKHOUSE_ENABLED": "0"}, clear=False):
             with patch("hft_platform.recorder.worker.DataWriter"):
                 worker = RecorderService(queue)
                 with patch("hft_platform.recorder.worker.logger.info") as log_info:
@@ -324,27 +324,28 @@ class TestExtractOrderValues(unittest.TestCase):
         assert result is not None
         assert len(result) == len(ORDER_COLUMNS)
         assert result[0] == "ORD1"
-        assert result[3] == "buy"
-        assert result[8] == 42  # latency_us
-        assert result[9] == "stock"  # instrument_type
-        assert result[10] == ""  # oc_type
+        assert result[1] == ""  # client_order_id default
+        assert result[4] == "buy"
+        assert result[9] == 42  # latency_us
+        assert result[10] == "stock"  # instrument_type
+        assert result[11] == ""  # oc_type
 
     def test_extract_dict_fallback_keys(self):
         row = {"order_id": "X", "action": "sell", "quantity": 3, "recv_ts": 51}
         result = _extract_order_values(row)
         assert result is not None
-        assert result[3] == "sell"  # side fallback to action
-        assert result[5] == 3  # qty fallback to quantity
-        assert result[7] == 51  # ingest_ts fallback to recv_ts
-        assert result[8] == 0  # latency_us default
+        assert result[4] == "sell"  # side fallback to action
+        assert result[6] == 3  # qty fallback to quantity
+        assert result[8] == 51  # ingest_ts fallback to recv_ts
+        assert result[9] == 0  # latency_us default
 
     def test_extract_dict_instrument_type_defaults_to_empty(self):
         """instrument_type and oc_type default to empty string when absent."""
         row = {"order_id": "X", "symbol": "2330"}
         result = _extract_order_values(row)
         assert result is not None
-        assert result[9] == ""  # instrument_type default
-        assert result[10] == ""  # oc_type default
+        assert result[10] == ""  # instrument_type default
+        assert result[11] == ""  # oc_type default
 
     def test_extract_object_path(self):
         row = SimpleNamespace(
@@ -364,17 +365,17 @@ class TestExtractOrderValues(unittest.TestCase):
         assert result is not None
         assert len(result) == len(ORDER_COLUMNS)
         assert result[0] == "ORD2"
-        assert result[8] == 100  # latency_us
-        assert result[9] == "futures"  # instrument_type
-        assert result[10] == ""  # oc_type
+        assert result[9] == 100  # latency_us
+        assert result[10] == "futures"  # instrument_type
+        assert result[11] == ""  # oc_type
 
     def test_extract_object_instrument_type_defaults_to_empty(self):
         """Object without instrument_type defaults to empty string."""
         row = SimpleNamespace(order_id="X", symbol="2330")
         result = _extract_order_values(row)
         assert result is not None
-        assert result[9] == ""  # instrument_type default
-        assert result[10] == ""  # oc_type default
+        assert result[10] == ""  # instrument_type default
+        assert result[11] == ""  # oc_type default
 
     def test_compat_wrapper_returns_dict(self):
         row = {"order_id": "X", "symbol": "2330"}

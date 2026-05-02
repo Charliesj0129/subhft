@@ -40,6 +40,22 @@ groups:
         summary: "Feed reconnect exception detected"
         description: "Reconnect raised exception at least once in the last 5m."
 
+  - alert: SymbolConfigReloadFailed
+    expr: increase(feed_symbol_config_reload_total{result!="ok"}[5m]) > 0
+    for: 1m
+    labels:
+        severity: critical
+    annotations:
+        summary: "Symbol reload preflight failed"
+        description: |
+          ShioajiClient._load_config() exited with result="{{ $labels.result }}"
+          at least once in the last 5m. Symbol subscriptions are stale until
+          the next successful reload (~25min cadence). RC-1 root cause:
+          universe size > HFT_MAX_SUBSCRIPTIONS preflight ceiling. Check
+          recent config/symbols.yaml diffs and ensure HFT_MAX_SUBSCRIPTIONS
+          >= len(symbols).
+        runbook_url: "docs/runbooks/SymbolConfigReloadFailed.md"
+
   - alert: FeedReconnectFailureRatioHigh
     expr: |
       (
@@ -300,14 +316,19 @@ groups:
         summary: "Feature shadow parity mismatch detected"
         description: "Feature shadow parity mismatches occurred in the last 10m."
 
+  # Threshold calibrated 2026-04-25 against measured baseline on the WSL+Docker
+  # deploy target: P50=77us, P95=154us, P99=191us. The original 50us threshold
+  # was below P50 and fired continuously. 500us is ~2.5x current P99 — tight
+  # enough to catch a real regression, loose enough to ride normal variance.
+  # Revisit if the deploy hardware changes (bare metal would cut these by ~3x).
   - alert: FeaturePlaneLatencyP99High
-    expr: histogram_quantile(0.99, sum(rate(feature_plane_latency_ns_bucket[5m])) by (le)) > 5e4
+    expr: histogram_quantile(0.99, sum(rate(feature_plane_latency_ns_bucket[5m])) by (le)) > 5e5
     for: 5m
     labels:
         severity: warning
     annotations:
         summary: "Feature plane latency p99 high"
-        description: "feature_plane_latency_ns p99 exceeded 50us for 5m."
+        description: "feature_plane_latency_ns p99 exceeded 500us for 5m."
 
   - alert: FeatureQualityFlagsSpike
     expr: sum(increase(feature_quality_flags_total{flag=~"gap|out_of_order|partial"}[10m])) > 0
@@ -541,15 +562,11 @@ groups:
         summary: "Portfolio drawdown > 10%"
         description: "Portfolio drawdown exceeded 10%. StormGuard should be in HALT."
 
-  # Redis health
-  - alert: RedisConnectionDown
-    expr: redis_connection_health == 0
-    for: 2m
-    labels:
-        severity: warning
-    annotations:
-        summary: "Redis connection down"
-        description: "Redis connectivity lost. Monitor live cache and session lease unavailable."
+  # Redis health monitoring removed 2026-04-24 — engine does not probe Redis
+  # (no `redis` Python module in engine container; only the separate monitor
+  # container uses Redis). The `redis_connection_health` gauge had no setter,
+  # so this alert fired continuously on a default-0 gauge. Re-introduce at the
+  # component that actually probes Redis (monitor) when needed.
 
   - alert: OrphanedFillDetected
     expr: increase(orphaned_fill_total[5m]) > 0
@@ -585,8 +602,18 @@ groups:
         description: "Loki has been unreachable for >2 minutes. Log search unavailable."
 
   # ── Backup Health ─────────────────────────────────────────────
+  # `hft_backup_last_success_ts > 0` gate (2026-04-25): the cron-driven backup
+  # runs as a one-shot `docker compose exec hft-engine python -c ...` subprocess.
+  # Its MetricsRegistry.get() returns a fresh registry in that subprocess and
+  # is not the engine's scrape target, so the gauge never leaves 0 even though
+  # backups have succeeded daily (see /tmp/hft_backup.log on prod). Without the
+  # gate, `0 < time() - 172800` is always true and BackupStale fires forever.
+  # TODO(ops): structural fix — either Pushgateway, node_exporter textfile
+  # collector, or have the engine stat $BACKUP_DIR mtime periodically and
+  # update the gauge. Until then this gate disables the alert; monitor backup
+  # health via /tmp/hft_backup.log tailing.
   - alert: BackupStale
-    expr: hft_backup_last_success_ts < (time() - 172800)
+    expr: hft_backup_last_success_ts < (time() - 172800) and hft_backup_last_success_ts > 0
     for: 1h
     labels:
         severity: critical
@@ -605,8 +632,12 @@ groups:
       description: "exec_overflow_evicted_total is increasing. Fill events are being silently dropped."
 
   # ── Alpha Signal Silence (M-09) ──────────────────────────────
+  # `alpha_last_signal_ts > 0` gate prevents false positives for strategies that
+  # are registered (executor entry built by StrategyRunner) but have never
+  # emitted an intent — e.g. config-disabled strategies. Without the gate,
+  # `time() - 0` always exceeds 300 and the alert fires forever at startup.
   - alert: AlphaSignalSilent
-    expr: (time() - alpha_last_signal_ts) > 300
+    expr: (time() - alpha_last_signal_ts) > 300 and alpha_last_signal_ts > 0
     for: 1m
     labels:
       severity: warning

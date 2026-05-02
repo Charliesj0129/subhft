@@ -75,6 +75,7 @@ def _make_adapter(tmp_path, client=None) -> OrderAdapter:
         client.get_exchange = MagicMock(return_value="TSE")
     queue = asyncio.Queue()
     adapter = OrderAdapter(str(config_file), queue, client)
+    adapter.shadow_sink.enabled = False
     return adapter
 
 
@@ -488,7 +489,10 @@ async def test_api_worker_skips_new_orders_during_halt(tmp_path):
     await asyncio.sleep(0.1)
     adapter.running = False
     task.cancel()
-    await asyncio.wait_for(task, timeout=1.0)
+    # P1-4 follow-up: ``_api_worker`` now re-raises ``CancelledError`` after
+    # cleanup so cooperative cancellation propagates upward.
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=1.0)
 
     assert len(dispatched) == 0, "NEW orders must be skipped during HALT in _api_worker"
 
@@ -519,7 +523,10 @@ async def test_api_worker_allows_cancel_during_halt(tmp_path):
     await asyncio.sleep(0.1)
     adapter.running = False
     task.cancel()
-    await asyncio.wait_for(task, timeout=1.0)
+    # P1-4 follow-up: ``_api_worker`` now re-raises ``CancelledError`` after
+    # cleanup so cooperative cancellation propagates upward.
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=1.0)
 
     assert len(dispatched) == 1, "CANCEL orders must be dispatched even during HALT"
 
@@ -550,6 +557,9 @@ async def test_api_worker_allows_force_flat_during_halt(tmp_path):
     await asyncio.sleep(0.1)
     adapter.running = False
     task.cancel()
-    await asyncio.wait_for(task, timeout=1.0)
+    # P1-4 follow-up: ``_api_worker`` now re-raises ``CancelledError`` after
+    # cleanup so cooperative cancellation propagates upward.
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=1.0)
 
     assert len(dispatched) == 1, "FORCE_FLAT orders must be dispatched even during HALT"

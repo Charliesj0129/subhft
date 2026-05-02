@@ -275,6 +275,7 @@ def test_build_positions_rust_tracker_fallback(runner_factory):
     rust_tracker = MagicMock()
     rust_tracker.get_positions_by_strategy.side_effect = RuntimeError("fail")
     pos_store._rust_tracker = rust_tracker
+    del pos_store.snapshot_positions_with_recovery  # force older snapshot path
     pos_store.positions = {}
     runner, _, _ = runner_factory(position_store=pos_store)
     result = runner._build_positions_by_strategy()
@@ -284,6 +285,7 @@ def test_build_positions_rust_tracker_fallback(runner_factory):
 def test_build_positions_from_dict_key(runner_factory):
     pos_store = MagicMock()
     del pos_store._rust_tracker
+    del pos_store.snapshot_positions_with_recovery  # force snapshot_positions / dict path
     del pos_store.snapshot_positions  # force Python fallback path
 
     class _Pos:
@@ -299,6 +301,7 @@ def test_build_positions_from_dict_key(runner_factory):
 def test_build_positions_from_dict_object_value(runner_factory):
     pos_store = MagicMock()
     del pos_store._rust_tracker
+    del pos_store.snapshot_positions_with_recovery  # force snapshot_positions / dict path
     del pos_store.snapshot_positions  # force Python fallback path
     pos = MagicMock()
     pos.strategy_id = "strat_b"
@@ -314,6 +317,7 @@ def test_build_positions_from_dict_object_value(runner_factory):
 def test_build_positions_fallback_wildcard(runner_factory):
     pos_store = MagicMock()
     del pos_store._rust_tracker
+    del pos_store.snapshot_positions_with_recovery  # force snapshot_positions / dict path
     del pos_store.snapshot_positions  # force Python fallback path
     pos_store.positions = {"unknown_key": 99}
     runner, _, _ = runner_factory(position_store=pos_store)

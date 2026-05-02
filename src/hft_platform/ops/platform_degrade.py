@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 from threading import Lock
 from typing import Any
 
@@ -20,7 +21,10 @@ _AUTONOMY_MODE_VALUES = {
 _AUTO_RECOVERABLE_REASONS: frozenset[str] = frozenset(
     {
         "feed_reconnect_unhealthy",
+        "feed_reconnect_pending",
         "feed_gap_exceeded",
+        "feed_reconnect_flapping",
+        "reconciliation_drift",
         "rss_unhealthy",
     }
 )
@@ -52,6 +56,11 @@ class PlatformDegradeController:
         self._reference_positions: dict[str, int] = {}
         self._reference_close_reservations: dict[str, int] = {}
         self._active_reasons: set[str] = set()
+        # Rate-limit repeated "reason_added" log (break RSS→log feedback loop)
+        self._reason_last_log_ns: dict[str, int] = {}
+        self._reason_log_interval_ns: int = int(
+            float(os.getenv("HFT_REDUCE_ONLY_LOG_INTERVAL_S", "60")) * 1_000_000_000
+        )
         self._sync_metrics()
 
     @staticmethod
@@ -66,7 +75,16 @@ class PlatformDegradeController:
     def enter_reduce_only(self, *, reason: str) -> AutonomyTransition:
         self._active_reasons.add(reason)
         if self.reduce_only_active and self.last_transition is not None:
-            logger.info("platform_reduce_only_reason_added", reason=reason, active_reasons=sorted(self._active_reasons))
+            # Rate-limit repeated log to break RSS→log→heap feedback loop
+            now_ns = time.monotonic_ns()
+            last_ns = self._reason_last_log_ns.get(reason, 0)
+            if now_ns - last_ns >= self._reason_log_interval_ns:
+                self._reason_last_log_ns[reason] = now_ns
+                logger.info(
+                    "platform_reduce_only_reason_active",
+                    reason=reason,
+                    active_reasons=sorted(self._active_reasons),
+                )
             return self.last_transition
 
         transition = AutonomyTransition.enter_platform_reduce_only(
@@ -111,6 +129,7 @@ class PlatformDegradeController:
         self._reference_positions = {}
         self._reference_close_reservations = {}
         self._active_reasons.clear()
+        self._reason_last_log_ns.clear()
         self._sync_metrics()
         logger.info(
             "platform_reduce_only_exited",
@@ -128,6 +147,38 @@ class PlatformDegradeController:
         if self.metrics is not None:
             transition.record_transition(self.metrics)
         return transition
+
+    def force_clear(self, *, reason: str = "manual_rearm") -> AutonomyTransition | None:
+        """Operator escape hatch: clear all reasons and exit reduce_only.
+
+        Used by :meth:`hft_platform.ops.manual_rearm.ManualRearmGate.rearm_platform`
+        to bridge the previously broken interface — until this method
+        existed, manual rearm wrote a JSON flag that the controller
+        never consulted, so reduce_only could remain latched
+        indefinitely even after the operator confirmed.
+
+        This bypasses the auto-recovery cooldown and the
+        "all reasons must be empty" gate: the operator has explicitly
+        attested that conditions are safe.  Use sparingly; the auto
+        path is preferred when reasons clear naturally.
+
+        Returns the resulting :class:`AutonomyTransition`, or ``None``
+        if reduce_only was already inactive.
+        """
+        if not self.reduce_only_active:
+            return None
+        # Drop reasons before exit so observability reflects the manual
+        # override path rather than a phantom remaining condition.
+        cleared_reasons = sorted(self._active_reasons)
+        self._active_reasons.clear()
+        self._reason_last_log_ns.clear()
+        self._recovery_started_ns = 0
+        logger.warning(
+            "platform_reduce_only_force_cleared",
+            reason=reason,
+            cleared_reasons=cleared_reasons,
+        )
+        return self.exit_reduce_only(reason=f"manual_force_clear:{reason}")
 
     def check_auto_recovery(self, *, current_reasons: list[str], now_ns: int) -> bool:
         """Check if auto-recovery should trigger. Called from supervisor loop.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -258,6 +259,23 @@ def test_clamp_future_ts_exceeds_limit():
 
         result = _clamp_future_ts(exch, now, "tick", "TSMC")
         assert result == now
+
+
+def test_clamp_future_ts_corrects_local_timezone_shift():
+    import hft_platform.feed_adapter.normalizer as mod
+
+    now = 1_700_000_000_000_000_000
+    offset_ns = 8 * 60 * 60 * 1_000_000_000
+    exch = now + offset_ns + 1_000_000_000
+
+    with (
+        patch.object(mod, "_TS_MAX_FUTURE_NS", int(5e9)),
+        patch.object(mod.timebase, "TZINFO", dt.timezone(dt.timedelta(hours=8))),
+    ):
+        from hft_platform.feed_adapter.normalizer import _clamp_future_ts
+
+        result = _clamp_future_ts(exch, now, "snapshot", "TMFE6")
+        assert result == now + 1_000_000_000
 
 
 def test_clamp_future_ts_zero_exch():

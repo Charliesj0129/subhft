@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -133,7 +134,8 @@ class TestStrategyDispatchIndex:
         event.strategy_id = "strat_b"
         event.symbol = "SYM1"
         event.meta = None
-        event.ts = 0
+        event.local_ts = time.time_ns()
+        event.ts = time.time_ns()
 
         await runner.process_event(event)
 
@@ -151,7 +153,8 @@ class TestStrategyDispatchIndex:
         event.strategy_id = None  # broadcast
         event.symbol = "SYM1"
         event.meta = None
-        event.ts = 0
+        event.local_ts = time.time_ns()
+        event.ts = time.time_ns()
 
         await runner.process_event(event)
 

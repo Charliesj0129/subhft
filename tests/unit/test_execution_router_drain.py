@@ -1,6 +1,7 @@
 """Tests for ExecutionRouter.stop() graceful shutdown drain."""
 
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -42,8 +43,9 @@ def _make_fill(fill_id: str = "F001", symbol: str = "2330") -> FillEvent:
 
 
 @pytest.fixture
-def router_parts():
+def router_parts(tmp_path, monkeypatch):
     """Create ExecutionRouter with mocked dependencies."""
+    monkeypatch.setenv("HFT_FILL_DEDUP_PERSIST_PATH", str(tmp_path / "fill_dedup.jsonl"))
     with patch("hft_platform.execution.router.MetricsRegistry") as mm:
         metrics_mock = MagicMock()
         mm.get.return_value = metrics_mock
@@ -73,6 +75,8 @@ async def test_stop_drains_remaining_fills(router_parts):
     router, raw_queue, normalizer, position_store = router_parts
 
     fill = _make_fill("F001")
+    delta = MagicMock()
+    position_store.on_fill.return_value = delta
     normalizer.normalize_fill.return_value = fill
     raw_queue.put_nowait(_make_deal_raw("F001"))
 
@@ -81,6 +85,7 @@ async def test_stop_drains_remaining_fills(router_parts):
 
     assert drained == 1
     position_store.on_fill.assert_called_once_with(fill)
+    router.bus.publish_many_nowait.assert_called_once_with([delta, fill])
 
 
 @pytest.mark.asyncio
@@ -217,3 +222,23 @@ async def test_stop_drain_mixed_order_and_fill_events(router_parts):
     # Both events count as drained
     assert drained == 2
     position_store.on_fill.assert_called_once_with(fill_event)
+
+
+@pytest.mark.asyncio
+async def test_stop_drains_fill_with_publish_fallback_when_bus_has_no_batch_api(router_parts):
+    """stop() publishes delta + fill individually when bus lacks publish_many_nowait."""
+    router, raw_queue, normalizer, position_store = router_parts
+
+    publish_nowait = MagicMock()
+    publish = MagicMock()
+    router.bus = SimpleNamespace(publish_nowait=publish_nowait, publish=publish)
+    delta = MagicMock()
+    position_store.on_fill.return_value = delta
+    fill_event = _make_fill("F005")
+    normalizer.normalize_fill.return_value = fill_event
+    raw_queue.put_nowait(_make_deal_raw("F005"))
+
+    drained = await router.stop(drain_timeout_s=1.0)
+
+    assert drained == 1
+    assert publish_nowait.call_args_list == [((delta,),), ((fill_event,),)]

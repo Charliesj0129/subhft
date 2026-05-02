@@ -211,6 +211,19 @@ class HealthServer:
         if any_pressure:
             degraded_reasons.append("queue_pressure_high")
 
+        # 8b. Execution dict pressure (pending fill index, api_pending)
+        _oa = getattr(self._system, "order_adapter", None)
+        if _oa is not None:
+            _pfi_size = len(getattr(_oa, "_pending_fill_index", {}))
+            _api_pend_size = len(getattr(_oa, "_api_pending", {}))
+            _max_exec_dict = int(os.getenv("HFT_HEALTH_EXEC_DICT_MAX", "500"))
+            checks["exec_dicts"] = {
+                "pending_fill_index": _pfi_size,
+                "api_pending": _api_pend_size,
+            }
+            if _pfi_size > _max_exec_dict or _api_pend_size > _max_exec_dict:
+                degraded_reasons.append("exec_dict_pressure_high")
+
         # 9. Order path: task alive AND broker connected
         order_task = tasks.get("order")
         order_alive = order_task is not None and not order_task.done()

@@ -15,6 +15,8 @@ from typing import Any
 
 from structlog import get_logger
 
+from hft_platform.feed_adapter.shioaji.limits import DEFAULT_MAX_SUBSCRIPTIONS_PER_CONN
+
 logger = get_logger("feed_adapter.config")
 
 
@@ -50,7 +52,10 @@ class ShioajiClientConfig:
     """Immutable configuration for ShioajiClient, parsed from env + dict."""
 
     # --- Subscription ---
-    max_subscriptions: int = 200
+    # Per-connection cap is in *codes* (each code = 2 broker topics, see
+    # ``feed_adapter/shioaji/limits.py``). Default sourced from the shared
+    # constant so any future cap revisit only touches one file.
+    max_subscriptions: int = DEFAULT_MAX_SUBSCRIPTIONS_PER_CONN
     contracts_timeout: int = 10000
     fetch_contract: bool = True
     subscribe_trade: bool = True
@@ -135,7 +140,7 @@ class ShioajiClientConfig:
     contract_retry_s: float = 60.0
     contract_refresh_s: float = 86400.0
     contract_cache_path: str = "config/contracts.json"
-    contract_refresh_resubscribe_policy: str = "none"
+    contract_refresh_resubscribe_policy: str = "diff"
     contract_refresh_status_path: str = "outputs/contract_refresh_status.json"
 
     # --- Session lock ---
@@ -189,12 +194,9 @@ def load_shioaji_config(
     # --- Config path ---
     resolved_config_path = config_path
     if resolved_config_path is None:
-        resolved_config_path = os.getenv("SYMBOLS_CONFIG")
-        if not resolved_config_path:
-            if os.path.exists("config/symbols.yaml"):
-                resolved_config_path = "config/symbols.yaml"
-            else:
-                resolved_config_path = "config/base/symbols.yaml"
+        from hft_platform.config.symbols_path import resolve_symbols_config_path
+
+        resolved_config_path = resolve_symbols_config_path()
 
     # --- Quote version ---
     quote_version_mode = os.getenv("HFT_QUOTE_VERSION", "auto").strip().lower()
@@ -213,11 +215,11 @@ def load_shioaji_config(
     # --- Contract refresh status ---
     contract_refresh_status_path = os.getenv("HFT_CONTRACT_REFRESH_STATUS_PATH", "outputs/contract_refresh_status.json")
     contract_refresh_resubscribe_policy = (
-        os.getenv("HFT_CONTRACT_REFRESH_RESUBSCRIBE_POLICY", "none").strip().lower() or "none"
+        os.getenv("HFT_CONTRACT_REFRESH_RESUBSCRIBE_POLICY", "diff").strip().lower() or "diff"
     )
 
     cfg = ShioajiClientConfig(
-        max_subscriptions=200,
+        max_subscriptions=int(settings.get("max_subscriptions", DEFAULT_MAX_SUBSCRIPTIONS_PER_CONN)),
         contracts_timeout=_env_int("SHIOAJI_CONTRACTS_TIMEOUT", 10000),
         fetch_contract=os.getenv("SHIOAJI_FETCH_CONTRACT", "1") != "0",
         subscribe_trade=os.getenv("SHIOAJI_SUBSCRIBE_TRADE", "1") != "0",

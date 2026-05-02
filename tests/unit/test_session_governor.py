@@ -87,7 +87,37 @@ class TestTrackGate:
         gate = TrackGate()
         gate.register_symbol("2330", "stock")
         snap = gate.symbol_to_track
-        assert snap["2330"] == "stock"
+        assert snap["2330"] == ["stock"]
+
+    def test_multi_track_most_permissive_phase(self) -> None:
+        """TMFD6 in both futures_day and futures_night returns OPEN during day.
+
+        Regression test for TrackGate multi-track fix (2026-04-15).
+        When a symbol belongs to multiple tracks, get_phase must return
+        the most permissive phase (OPEN > CLOSE_ONLY > FORCE_FLAT > CLOSED).
+        """
+        gate = TrackGate()
+        gate.register_symbol("TMFD6", "futures_day")
+        gate.register_symbol("TMFD6", "futures_night")
+        # Day session: futures_day=OPEN, futures_night=CLOSED
+        gate.set_track_phase("futures_day", SessionPhase.OPEN)
+        gate.set_track_phase("futures_night", SessionPhase.CLOSED)
+        assert gate.get_phase("TMFD6") == SessionPhase.OPEN
+
+        # Night session: futures_day=CLOSED, futures_night=OPEN
+        gate.set_track_phase("futures_day", SessionPhase.CLOSED)
+        gate.set_track_phase("futures_night", SessionPhase.OPEN)
+        assert gate.get_phase("TMFD6") == SessionPhase.OPEN
+
+        # Both CLOSED
+        gate.set_track_phase("futures_day", SessionPhase.CLOSED)
+        gate.set_track_phase("futures_night", SessionPhase.CLOSED)
+        assert gate.get_phase("TMFD6") == SessionPhase.CLOSED
+
+        # CLOSE_ONLY vs CLOSED → CLOSE_ONLY (more permissive)
+        gate.set_track_phase("futures_day", SessionPhase.CLOSE_ONLY)
+        gate.set_track_phase("futures_night", SessionPhase.CLOSED)
+        assert gate.get_phase("TMFD6") == SessionPhase.CLOSE_ONLY
 
 
 class TestSessionGovernorConfigLoading:
@@ -167,14 +197,14 @@ class TestSessionGovernorConfigLoading:
         assert gov._task is None
         assert gov._running is False
 
-    def test_tmfd6_is_consistent_across_strategy_and_session_config(self) -> None:
+    def test_tmf_is_consistent_across_strategy_and_session_config(self) -> None:
         strategies = yaml.safe_load(Path("config/base/strategies.yaml").read_text(encoding="utf-8"))
         sessions = yaml.safe_load(Path("config/base/session_governor.yaml").read_text(encoding="utf-8"))
 
-        cbs = next(item for item in strategies["strategies"] if item["id"] == "CBS_TMFD6")
-        assert cbs["symbols"] == ["TMFD6"]
-        assert sessions["tracks"]["futures_day"]["symbols"] == ["TMFD6"]
-        assert sessions["tracks"]["futures_night"]["symbols"] == ["TMFD6"]
+        cbs = next(item for item in strategies["strategies"] if item["id"] == "CBS_TMF")
+        assert cbs["symbols"] == ["TMFR1"]
+        assert "TMFR1" in sessions["tracks"]["futures_day"]["symbols"]
+        assert "TMFR1" in sessions["tracks"]["futures_night"]["symbols"]
 
 
 class TestFlattenTaskDoneCallback:

@@ -6,6 +6,7 @@ the QuoteConnectionPool per-connection failure isolation refactoring.
 
 from __future__ import annotations
 
+import threading
 import time
 from unittest.mock import MagicMock
 
@@ -193,3 +194,68 @@ class TestFacadeSlotSlots:
     def test_no_dict_attribute(self) -> None:
         slot = FacadeSlot(conn_id="c0", facade=MagicMock())
         assert not hasattr(slot, "__dict__")
+
+
+class TestFacadeSlotThreadSafety:
+    """P1 (2026-04-24): compound state transitions under per-slot lock."""
+
+    def test_begin_reconnect_returns_true_first_call(self) -> None:
+        slot = FacadeSlot(conn_id="c0", facade=MagicMock())
+        slot.state = FacadeState.DEGRADED
+        assert slot.begin_reconnect() is True
+        assert slot.state is FacadeState.RECOVERING
+
+    def test_begin_reconnect_returns_false_when_already_recovering(self) -> None:
+        slot = FacadeSlot(conn_id="c0", facade=MagicMock())
+        slot.state = FacadeState.RECOVERING
+        assert slot.begin_reconnect() is False
+
+    def test_record_reconnect_success_sets_connected(self) -> None:
+        slot = FacadeSlot(conn_id="c0", facade=MagicMock())
+        slot.state = FacadeState.RECOVERING
+        slot.reconnect_failures = 3
+        slot.degraded_since_mono = 123.0
+        slot.record_reconnect_success()
+        assert slot.state is FacadeState.CONNECTED
+        assert slot.reconnect_failures == 0
+        assert slot.degraded_since_mono is None
+        assert slot._pending_warmup_reset is True
+
+    def test_record_reconnect_failure_increments_and_disconnects(self) -> None:
+        slot = FacadeSlot(conn_id="c0", facade=MagicMock())
+        slot.state = FacadeState.RECOVERING
+        slot.reconnect_failures = 2
+        slot.record_reconnect_failure()
+        assert slot.state is FacadeState.DISCONNECTED
+        assert slot.reconnect_failures == 3
+
+    def test_snapshot_returns_consistent_triple(self) -> None:
+        slot = FacadeSlot(conn_id="c0", facade=MagicMock())
+        slot.state = FacadeState.DEGRADED
+        slot.reconnect_failures = 7
+        slot.degraded_since_mono = 42.0
+        state, failures, since = slot.snapshot()
+        assert state is FacadeState.DEGRADED
+        assert failures == 7
+        assert since == 42.0
+
+    def test_concurrent_record_reconnect_failure_no_lost_updates(self) -> None:
+        """Daemon reconnect threads may race — reconnect_failures must not lose
+        increments (P1 regression test)."""
+        slot = FacadeSlot(conn_id="c0", facade=MagicMock())
+        threads_count = 8
+        per_thread = 500
+        expected = threads_count * per_thread
+
+        def bump() -> None:
+            for _ in range(per_thread):
+                slot.record_reconnect_failure()
+
+        threads = [threading.Thread(target=bump, daemon=True) for _ in range(threads_count)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=5.0)
+        assert slot.reconnect_failures == expected, (
+            f"lost increments: got {slot.reconnect_failures}, expected {expected}"
+        )

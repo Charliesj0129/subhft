@@ -353,8 +353,7 @@ class TestMain:
         with self._patch_all_pass():
             with patch("pre_market_check.get_calendar") as mock_cal:
                 mock_cal.return_value.is_trading_day.return_value = True
-                with patch("asyncio.run"):  # skip async notifications
-                    rc = pmc.main(["--dry-run"])
+                rc = pmc.main(["--dry-run"])
         assert rc == 0
 
     def test_main_one_fail_exits_1(self) -> None:
@@ -370,8 +369,7 @@ class TestMain:
         ):
             with patch("pre_market_check.get_calendar") as mock_cal:
                 mock_cal.return_value.is_trading_day.return_value = True
-                with patch("asyncio.run"):
-                    rc = pmc.main(["--dry-run"])
+                rc = pmc.main(["--dry-run"])
         assert rc == 1
 
     def test_main_non_trading_day_exits_0(self) -> None:

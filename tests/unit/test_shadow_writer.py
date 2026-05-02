@@ -40,7 +40,7 @@ class TestShadowOrderWriterBatching:
             writer.add(_SAMPLE_RECORD)
             writer.add(_SAMPLE_RECORD)  # triggers flush
 
-        mock_client.execute.assert_called_once()
+        mock_client.insert.assert_called_once()
         assert writer.pending_count == 0
 
     def test_writer_flush_on_demand(self):
@@ -52,7 +52,7 @@ class TestShadowOrderWriterBatching:
             writer.add(_SAMPLE_RECORD)
             writer.flush()
 
-        mock_client.execute.assert_called_once()
+        mock_client.insert.assert_called_once()
         assert writer.pending_count == 0
 
     def test_writer_flush_empty_is_noop(self):
@@ -63,12 +63,12 @@ class TestShadowOrderWriterBatching:
         with patch("hft_platform.order.shadow_writer._get_ch_client", return_value=mock_client):
             writer.flush()
 
-        mock_client.execute.assert_not_called()
+        mock_client.insert.assert_not_called()
 
     def test_writer_flush_failure_does_not_raise(self):
         """If client.execute raises, flush() catches the error and clears pending."""
         mock_client = MagicMock()
-        mock_client.execute.side_effect = RuntimeError("CH unavailable")
+        mock_client.insert.side_effect = RuntimeError("CH unavailable")
         writer = _make_writer(batch_size=10, enabled=True)
 
         with patch("hft_platform.order.shadow_writer._get_ch_client", return_value=mock_client):
@@ -86,56 +86,20 @@ class TestShadowOrderWriterBatching:
             writer.add(_SAMPLE_RECORD)
             writer.flush()
 
-        mock_client.execute.assert_not_called()
+        mock_client.insert.assert_not_called()
         assert writer.pending_count == 0
 
 
 class TestGetChClient:
-    def test_get_ch_client_raises_when_clickhouse_driver_missing(self):
-        """_get_ch_client raises RuntimeError when clickhouse_driver is not importable."""
-        import sys
-
+    def test_get_ch_client_uses_shared_factory(self):
+        """_get_ch_client delegates to the project-wide clickhouse_connect factory."""
         from hft_platform.order.shadow_writer import _get_ch_client
 
-        with patch.dict(sys.modules, {"clickhouse_driver": None}):
-            try:
-                _get_ch_client()
-            except RuntimeError as exc:
-                assert "clickhouse_driver" in str(exc)
-            except (ImportError, AttributeError):
-                pass  # Also acceptable
+        mock_client = MagicMock()
+        with patch("hft_platform.order.shadow_writer.get_ch_client", return_value=mock_client) as factory:
+            assert _get_ch_client() is mock_client
 
-    def test_get_ch_client_uses_env_vars(self, monkeypatch):
-        """_get_ch_client passes host/port/user/password from env to clickhouse_driver.Client."""
-        import sys
-
-        from hft_platform.order.shadow_writer import _get_ch_client
-
-        monkeypatch.setenv("HFT_CLICKHOUSE_HOST", "ch-host")
-        monkeypatch.setenv("HFT_CLICKHOUSE_NATIVE_PORT", "9001")
-        monkeypatch.setenv("HFT_CLICKHOUSE_USER", "hft_user")
-        monkeypatch.setenv("HFT_CLICKHOUSE_PASSWORD", "s3cret")
-
-        mock_client_cls = MagicMock(return_value=MagicMock())
-        mock_module = MagicMock()
-        mock_module.Client = mock_client_cls
-
-        original = sys.modules.get("clickhouse_driver")
-        sys.modules["clickhouse_driver"] = mock_module
-        try:
-            _get_ch_client()
-        finally:
-            if original is None:
-                sys.modules.pop("clickhouse_driver", None)
-            else:
-                sys.modules["clickhouse_driver"] = original
-
-        mock_client_cls.assert_called_once()
-        call_kwargs = mock_client_cls.call_args[1]
-        assert call_kwargs["host"] == "ch-host"
-        assert call_kwargs["port"] == 9001
-        assert call_kwargs["user"] == "hft_user"
-        assert call_kwargs["password"] == "s3cret"
+        factory.assert_called_once_with()
 
 
 class TestShadowOrderWriterEnabledFromEnv:

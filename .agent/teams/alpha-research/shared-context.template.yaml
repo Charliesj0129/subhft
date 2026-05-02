@@ -27,6 +27,23 @@ skills:
     - .agent/skills/hft-release-gate/SKILL.md              # 7-gate deployment readiness
     - .agent/skills/hft-production-audit/SKILL.md          # Post-deploy 7-plane sweep
 
+# --- Scope (Autonomous Loop — maker/taker research) ---
+# Referenced by Researcher T1 (proposal filtering) and Devil's Advocate T2 Kill Checklist item 0.
+scope:
+  mode: "execution_broad"           # Scope C from design spec Q4
+  allowed_types:
+    - pure_maker                    # R47 variants, spread-gate, depth-skew, queue-position-aware
+    - pure_taker                    # impact-aware, latency-budget, burst-triggered, news-window
+    - hybrid                        # maker-then-taker conversion, taker-cover-maker
+    - exec_support_signal           # fill-rate predictor, adverse-selection filter, queue-decay forecaster
+    - options_mm                    # TXO MM variants (ElectronicEye-class)
+    - cross_instrument_mm           # TXF/TMF pair MM, cross-instrument MM
+  forbidden:
+    - pure_directional_alpha        # tick-to-hour TAIFEX exhausted (see taifex-alpha-kill-criteria)
+    - daily_horizon_directional     # long hold not in loop scope
+    - twse_stock_arbitrage          # R31 structural kill (58.5 bps RT cost)
+    - any_match_in_killed_directions  # blacklist enforced via overlap check
+
 # --- Cost Model (update if fee structure changes) ---
 cost_model:
   rt_cost_ntd: 40                   # Round-trip cost in NTD

@@ -6,7 +6,7 @@ expiry_key, contract_dte_days, ContractIndex.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from hft_platform.config._symbols_types import (
     ContractIndex,
@@ -216,7 +216,7 @@ def test_expiry_key_due_date_field():
 
 
 def test_contract_dte_days_valid_future_date():
-    future_date = (datetime.utcnow() + timedelta(days=30)).strftime("%Y%m%d")
+    future_date = (datetime.now(UTC) + timedelta(days=30)).strftime("%Y%m%d")
     contract = {"delivery_date": int(future_date)}
     result = contract_dte_days(contract)
     assert result is not None
@@ -224,7 +224,7 @@ def test_contract_dte_days_valid_future_date():
 
 
 def test_contract_dte_days_past_date_negative():
-    past_date = (datetime.utcnow() - timedelta(days=10)).strftime("%Y%m%d")
+    past_date = (datetime.now(UTC) - timedelta(days=10)).strftime("%Y%m%d")
     contract = {"delivery_date": int(past_date)}
     result = contract_dte_days(contract)
     assert result is not None

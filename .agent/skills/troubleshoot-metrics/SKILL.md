@@ -1,3 +1,4 @@
+<!-- REVIEW-2026-04-17: unreferenced by rules/workflows/teams/agents. Confirm or delete. -->
 ---
 name: troubleshoot-metrics
 description: Use when diagnosing runtime health, Prometheus anomalies, Docker service state, StormGuard transitions, WAL pressure, Redis connectivity, ClickHouse operational issues, multi-broker health, monitor TUI, reconnect diagnostics in the HFT platform.

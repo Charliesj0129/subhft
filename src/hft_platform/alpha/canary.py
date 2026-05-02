@@ -220,15 +220,17 @@ class CanaryMonitor:
         # Exclude internal path key from the persisted YAML
         updated_for_write = {k: v for k, v in updated.items() if k != "_path"}
 
-        # Atomic write: write to temp file then rename (POSIX-atomic)
+        # Atomic write: write to temp file then rename (POSIX-atomic).
+        # M2 (2026-04-25): switch to ``finally`` so orphan tmpfiles are removed
+        # on SIGKILL / interpreter-shutdown paths that bypass exception
+        # handlers.
         tmp_fd, tmp_path = tempfile.mkstemp(dir=yaml_path.parent, suffix=".tmp")
         try:
             with os.fdopen(tmp_fd, "w") as f:
                 f.write(yaml.safe_dump(updated_for_write, sort_keys=False))
             Path(tmp_path).replace(yaml_path)
-        except BaseException:
+        finally:
             Path(tmp_path).unlink(missing_ok=True)
-            raise
 
         logger.info(
             "canary.apply",

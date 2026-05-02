@@ -87,13 +87,13 @@ class FubonAccountGateway:
     # BrokerProtocol-aligned methods
     # ------------------------------------------------------------------ #
 
-    def get_positions(self) -> list[Any]:
+    def get_positions(self) -> list[Any] | None:
         """Get positions (BrokerProtocol-aligned).
 
         Delegates to :meth:`get_inventories`.
 
         Returns:
-            List of position/inventory items.
+            List of position/inventory items, or None if broker unreachable.
         """
         try:
             return self.get_inventories()

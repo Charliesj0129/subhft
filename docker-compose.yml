@@ -1,6 +1,14 @@
 x-hft-common: &hft-common
   env_file: .env
-  build: .
+  # P2-d (2026-04-27): pass GIT_SHA + BUILD_TS as build args so the runtime
+  # image can render them in the startup banner / Prometheus build_info gauge.
+  # `make start` exports these via the Makefile's `start` target; manual
+  # `docker compose up --build` callers should pass them too (see deploy.sh).
+  build:
+    context: .
+    args:
+      GIT_SHA: "${HFT_GIT_SHA:-unknown}"
+      BUILD_TS: "${HFT_BUILD_TS:-unknown}"
   image: ${HFT_IMAGE:-hft-platform:latest}
   restart: always
   # Common Environment for all HFT services
@@ -55,8 +63,8 @@ x-hft-common: &hft-common
     - HFT_MONITOR_REDIS_PASSWORD=${HFT_MONITOR_REDIS_PASSWORD:-${REDIS_PASSWORD}}
     # --- StormGuard ---
     - HFT_STORMGUARD_FEED_GAP_STORM_S=${HFT_STORMGUARD_FEED_GAP_STORM_S:-30}
-    - HFT_STORMGUARD_LATENCY_STORM_US=${HFT_STORMGUARD_LATENCY_STORM_US:-500000}
-    - HFT_STORMGUARD_LATENCY_WARM_US=${HFT_STORMGUARD_LATENCY_WARM_US:-200000}
+    - HFT_STORMGUARD_LATENCY_STORM_US=${HFT_STORMGUARD_LATENCY_STORM_US:-10000000}
+    - HFT_STORMGUARD_LATENCY_WARM_US=${HFT_STORMGUARD_LATENCY_WARM_US:-5000000}
     - HFT_STORMGUARD_STORM_COOLDOWN_S=${HFT_STORMGUARD_STORM_COOLDOWN_S:-30}
     - HFT_STORMGUARD_DE_ESCALATE_N=${HFT_STORMGUARD_DE_ESCALATE_N:-5}
     - HFT_STORMGUARD_DRIFT_BURST_ENABLED=${HFT_STORMGUARD_DRIFT_BURST_ENABLED:-0}
@@ -106,6 +114,7 @@ x-hft-common: &hft-common
     - PYTHONDONTWRITEBYTECODE=1
   volumes:
     - ./.wal:/app/.wal
+    - ./.state:/app/.state
     - ./data:/app/data
     - ./config:/app/config
     - ./scripts:/app/scripts
@@ -138,6 +147,7 @@ services:
       - "127.0.0.1:${HFT_HEALTH_PORT:-8080}:8080"
     volumes:
       - ./.wal:/app/.wal
+      - ./.state:/app/.state
       - ./data:/app/data
       - ./config:/app/config
       - ./scripts:/app/scripts
@@ -314,11 +324,21 @@ services:
       - "127.0.0.1:9091:9090"
     volumes:
       - ./config/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ./config/monitoring/alerts/rules.yaml:/etc/prometheus/alerts/rules.yaml:ro
+      # Directory mount (not file mount) — 2026-04-25. File bind-mounts pin to
+      # the host file's inode at container start; `git pull` replaces the file
+      # via rename(), the container keeps pointing at the (defunct) old inode,
+      # and SIGHUP reloads read stale content. Directory mounts are re-resolved
+      # on every read, so `curl -X POST .../-/reload` picks up the new rules.yaml.
+      # Prometheus only loads `rules.yaml` via `rule_files:` in prometheus.yml;
+      # the other files in this directory (alertmanager.yml*) are ignored.
+      - ./config/monitoring/alerts:/etc/prometheus/alerts:ro
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.retention.time=30d"
       - "--storage.tsdb.path=/prometheus"
+      # Enables `curl -X POST http://localhost:9091/-/reload` so rules.yaml can
+      # be applied without bouncing the container (2026-04-25).
+      - "--web.enable-lifecycle"
     depends_on:
       - hft-engine
       - alertmanager
@@ -413,7 +433,7 @@ services:
     environment:
       - HFT_TELEGRAM_BOT_TOKEN=${HFT_TELEGRAM_BOT_TOKEN:?HFT_TELEGRAM_BOT_TOKEN must be set}
       - HFT_TELEGRAM_CHAT_ID=${HFT_TELEGRAM_CHAT_ID:?HFT_TELEGRAM_CHAT_ID must be set}
-      - HFT_REPORT_SYMBOLS=${HFT_REPORT_SYMBOLS:-TXFD6}
+      - HFT_REPORT_SYMBOLS=${HFT_REPORT_SYMBOLS:-TXFR1}
       - HFT_CLICKHOUSE_HOST=clickhouse
       - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set in .env}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}

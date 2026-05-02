@@ -54,7 +54,10 @@ from hft_platform.feed_adapter.shioaji._infra import (
 from hft_platform.feed_adapter.shioaji._infra import (
     update_quote_pending_metrics as _update_quote_pending_metrics_impl,
 )
-from hft_platform.feed_adapter.shioaji.limits import DEFAULT_MAX_SUBSCRIPTIONS_PER_CONN
+from hft_platform.feed_adapter.shioaji.limits import (
+    DEFAULT_MAX_SUBSCRIPTIONS_PER_CLIENT,
+    DEFAULT_MAX_SUBSCRIPTIONS_PER_CONN,
+)
 from hft_platform.feed_adapter.shioaji.tick_dispatcher import TickDispatcher
 from hft_platform.observability.metrics import MetricsRegistry
 
@@ -136,8 +139,20 @@ def dispatch_tick_cb(*args, **kwargs):
 
 class ShioajiClient:
     def __init__(self, config_path: str | None = None, shioaji_config: dict[str, Any] | None = None):
+        # Per-quote-connection cap (broker Solace topic budget). Preserved as
+        # ``MAX_SUBSCRIPTIONS`` for backward compatibility with quote_runtime
+        # and subscription_manager which gate per-conn subscribe loops.
         self.MAX_SUBSCRIPTIONS = int(
             (shioaji_config or {}).get("max_subscriptions", DEFAULT_MAX_SUBSCRIPTIONS_PER_CONN)
+        )
+        # Per-client preflight ceiling for the universe. RC-1 (2026-04-27):
+        # the rollover-resolved universe grew to 588 contracts; the old
+        # 120-cap raised in ``_load_config`` and silently broke reload-cycle.
+        # Default 600 (env-overridable via ``HFT_MAX_SUBSCRIPTIONS``) covers
+        # the post-2026-04-27 universe with headroom; sharding into per-conn
+        # buckets is enforced separately by QuoteConnectionPool.
+        self.MAX_SUBSCRIPTIONS_PER_CLIENT = int(
+            (shioaji_config or {}).get("max_subscriptions_per_client", DEFAULT_MAX_SUBSCRIPTIONS_PER_CLIENT)
         )
         self.contracts_timeout = int(os.getenv("SHIOAJI_CONTRACTS_TIMEOUT", "10000"))
         _cfg_fetch = (shioaji_config or {}).get("fetch_contract")
@@ -173,12 +188,9 @@ class ShioajiClient:
         self.ca_password = ca_password
 
         if config_path is None:
-            config_path = os.getenv("SYMBOLS_CONFIG")
-            if not config_path:
-                if os.path.exists("config/symbols.yaml"):
-                    config_path = "config/symbols.yaml"
-                else:
-                    config_path = "config/base/symbols.yaml"
+            from hft_platform.config.symbols_path import resolve_symbols_config_path
+
+            config_path = resolve_symbols_config_path()
 
         sim_override = self.shioaji_config.get("simulation") if "simulation" in self.shioaji_config else None
         if sim_override is None:
@@ -192,17 +204,46 @@ class ShioajiClient:
             self.api = None
         self.config_path = config_path
         self.symbols: List[Dict[str, Any]] = []
+        # Q3 (2026-04-27): metrics must exist BEFORE ``_load_config`` runs so
+        # the ``feed_symbol_config_reload_total`` Counter can be bumped at
+        # every exit branch. Moved up from after subscribed_codes init.
+        self.metrics = MetricsRegistry.get()
         self._load_config()
         self.subscribed_count = 0
         self.subscribed_codes: set[str] = set()
+        # D2: serializes _resubscribe_all (4 callers across 3 threads:
+        # watchdog, schedule_resubscribe daemon, SDK event_13/event_4 thread,
+        # MarketDataService._attempt_resubscribe via to_thread).
+        # try_acquire(blocking=False) so concurrent callers no-op.
+        self._resubscribe_lock: threading.Lock = threading.Lock()
+        self.alias_to_actual: dict[str, str] = {}  # config code → callback code (e.g. TXFR1 → TXFE6)
         self.tick_callback: Callable[..., Any] | None = None
-        self.metrics = MetricsRegistry.get()
         _dispatch_async = os.getenv("HFT_SHIOAJI_QUOTE_DISPATCH_THREAD", "1").strip().lower() in {
             "1",
             "true",
             "yes",
             "on",
         }
+        if not _dispatch_async:
+            # P1 (2026-04-24): when the async dispatch worker is disabled
+            # Shioaji delivers quote callbacks inline from (potentially
+            # multiple) SDK threads directly into _process_tick. This exposes
+            # concurrent read-modify-write on _first_quote_seen,
+            # _last_quote_data_ts, and the (_pending_quote_resubscribe,
+            # _pending_quote_reason, _pending_quote_ts) triple. The
+            # QuoteEventHandler._pending_lock (P0-D2) covers the triple, but
+            # the simple-flag RMW on _first_quote_seen remains unguarded.
+            # Shout loudly so operators know they have opted out of the safe
+            # default single-consumer dispatch path.
+            logger.warning(
+                "shioaji_quote_dispatch_async_disabled",
+                note=(
+                    "HFT_SHIOAJI_QUOTE_DISPATCH_THREAD=0 — inline callback "
+                    "dispatch exposes _process_tick to concurrent SDK threads. "
+                    "Only use in single-threaded testing; production should "
+                    "keep the default (async worker)."
+                ),
+            )
         try:
             _dispatch_queue_size = max(1, int(os.getenv("HFT_SHIOAJI_QUOTE_CB_QUEUE_SIZE", "8192")))
         except ValueError:
@@ -244,6 +285,10 @@ class ShioajiClient:
         self.ca_active = False
         self._reconnect_lock = threading.Lock()
         self._callback_register_lock = threading.Lock()
+        # H13: guards writes to _quote_version so watchdog thread cannot
+        # flip the value mid-decision in readers (e.g., subscribe path,
+        # get_quote_version snapshot).
+        self._quote_version_lock = threading.Lock()
         self._last_reconnect_ts = 0.0
         self._reconnect_backoff_s = float(os.getenv("HFT_RECONNECT_BACKOFF_S", "30"))
         self._reconnect_backoff_max_s = float(os.getenv("HFT_RECONNECT_BACKOFF_MAX_S", "120"))
@@ -367,8 +412,15 @@ class ShioajiClient:
         self._market_open_grace_s = float(os.getenv("HFT_MARKET_OPEN_GRACE_S", "60"))  # 60 seconds
         self._market_open_grace_active = False
 
-        # C2: Failed subscription tracking + retry thread
-        self._failed_sub_symbols: list[Dict[str, Any]] = []
+        # C2: Failed subscription tracking + retry thread.
+        # L2: backed by ``collections.deque`` — individual ``append`` /
+        # ``popleft`` ops are GIL-atomic in CPython, so the event loop
+        # (``subscription_manager.py:112`` append) and the retry daemon
+        # (``quote_runtime.py:_retry_loop`` drain) can mutate it without
+        # an explicit lock as long as nobody REBINDS the attribute.
+        # All call sites mutate in place via append / popleft / extend /
+        # clear; do NOT reassign ``_failed_sub_symbols = something``.
+        self._failed_sub_symbols: deque[Dict[str, Any]] = deque()
         self._sub_retry_running = False
         self._sub_retry_thread: threading.Thread | None = None
         self._contract_retry_s = float(os.getenv("HFT_CONTRACT_RETRY_S", "60"))
@@ -386,7 +438,7 @@ class ShioajiClient:
             "HFT_CONTRACT_REFRESH_STATUS_PATH", "outputs/contract_refresh_status.json"
         )
         self._contract_refresh_resubscribe_policy = (
-            os.getenv("HFT_CONTRACT_REFRESH_RESUBSCRIBE_POLICY", "none").strip().lower() or "none"
+            os.getenv("HFT_CONTRACT_REFRESH_RESUBSCRIBE_POLICY", "diff").strip().lower() or "diff"
         )
         self._session_lock_enabled = _as_bool(os.getenv("HFT_SHIOAJI_SESSION_LOCK_ENABLED", "1"))
         lock_id_raw = (
@@ -658,26 +710,146 @@ class ShioajiClient:
 
     def _refresh_quote_routes(self) -> None:
         """Delegates to TickDispatcher.refresh_quote_routes()."""
+        # Include both config codes AND actual codes from alias resolution
+        # so the router recognises callbacks arriving with resolved month codes
+        # (e.g. TMFE6) even when config specifies R1/R2 aliases (e.g. TMFR1).
+        sub_codes = getattr(self, "subscribed_codes", None)
+        alias_map = getattr(self, "alias_to_actual", None)
+        if alias_map and sub_codes is not None:
+            sub_codes = set(sub_codes) | set(alias_map.values())
         TickDispatcher.refresh_quote_routes(
             self.symbols,
-            getattr(self, "subscribed_codes", None),
+            sub_codes,
             self,
         )
 
+    def _bump_symbol_reload_metric(self, result: str) -> None:
+        """Bump ``feed_symbol_config_reload_total{result=...}`` defensively.
+
+        Q3-fix (2026-04-27): make every ``_load_config`` exit branch
+        observable so symbol-reload failures (RC-1: 588 > 120) surface in
+        Prometheus instead of silently logging into the void.
+        """
+        try:
+            metric = getattr(self.metrics, "feed_symbol_config_reload_total", None)
+            if metric is not None:
+                metric.labels(result=result).inc()
+        except Exception:  # noqa: BLE001
+            # Never let metric bookkeeping crash the reload path.
+            pass
+
     def _load_config(self):
-        with open(self.config_path, "r") as f:
-            data = yaml.safe_load(f) or {}
-            self.symbols = data.get("symbols", [])
-            if len(self.symbols) > self.MAX_SUBSCRIPTIONS:
-                if os.getenv("HFT_ALLOW_TRUNCATE_SUBSCRIPTIONS") == "1":
-                    logger.warning(
-                        "Symbol list exceeds limit",
-                        limit=self.MAX_SUBSCRIPTIONS,
-                        count=len(self.symbols),
-                    )
-                    self.symbols = self.symbols[: self.MAX_SUBSCRIPTIONS]
-                else:
-                    raise ValueError(f"Symbol list exceeds limit ({len(self.symbols)} > {self.MAX_SUBSCRIPTIONS}).")
+        try:
+            with open(self.config_path, "r") as f:
+                data = yaml.safe_load(f) or {}
+        except (OSError, yaml.YAMLError) as exc:
+            self._bump_symbol_reload_metric("parse_error")
+            logger.error(
+                "symbol_config_parse_error",
+                path=self.config_path,
+                error=str(exc),
+                severity="critical",
+            )
+            raise
+        except Exception as exc:  # noqa: BLE001
+            self._bump_symbol_reload_metric("other")
+            logger.error(
+                "symbol_config_load_other_error",
+                path=self.config_path,
+                error=str(exc),
+                severity="critical",
+            )
+            raise
+
+        self.symbols = data.get("symbols", [])
+        symbols_filter = {code.strip() for code in os.getenv("HFT_SYMBOLS", "").split(",") if code.strip()}
+        if symbols_filter:
+            before_count = len(self.symbols)
+            configured_codes = {str(s.get("code")) for s in self.symbols if s.get("code")}
+            expanded_filter = set(symbols_filter)
+            for code in symbols_filter:
+                if len(code) >= 4 and code.endswith(("R1", "R2")):
+                    root = code[:-2].lower()
+                    month_tag = "front_month" if code.endswith("R1") else "far_month"
+                    for sym in self.symbols:
+                        tags = {str(tag).lower() for tag in sym.get("tags", [])}
+                        product_type = str(sym.get("product_type") or sym.get("type") or "").lower()
+                        if product_type == "future" and root in tags and month_tag in tags and sym.get("code"):
+                            expanded_filter.add(str(sym["code"]))
+            filtered = [s for s in self.symbols if str(s.get("code", "")) in expanded_filter]
+            if filtered:
+                self.symbols = filtered
+            missing = sorted(symbols_filter - configured_codes)
+            logger.info(
+                "HFT_SYMBOLS filter applied",
+                requested=sorted(symbols_filter),
+                expanded=sorted(expanded_filter),
+                before=before_count,
+                after=len(self.symbols),
+                missing=missing,
+            )
+        # RC-1 (2026-04-27): preflight ceiling is the per-client universe
+        # bound (default 600), NOT the per-conn cap (120). The per-conn cap
+        # is enforced by QuoteConnectionPool sharding. ``_load_config`` used
+        # to compare against ``self.MAX_SUBSCRIPTIONS`` (per-conn 120) AND
+        # raised when ``HFT_ALLOW_TRUNCATE_SUBSCRIPTIONS`` was unset, which
+        # silently broke the 25-min reload cycle for the 588-symbol universe.
+        # New default: truncate-with-warn. Strict mode preserved via
+        # ``HFT_STRICT_SUBSCRIPTION_LIMIT=1``.
+        ceiling = int(self.MAX_SUBSCRIPTIONS_PER_CLIENT)
+        if len(self.symbols) > ceiling:
+            strict_mode = os.getenv("HFT_STRICT_SUBSCRIPTION_LIMIT", "0") == "1"
+            # Back-compat: ``HFT_ALLOW_TRUNCATE_SUBSCRIPTIONS`` defaults to "1"
+            # (truncate-with-warn). Setting it to "0" forces strict-raise even
+            # when ``HFT_STRICT_SUBSCRIPTION_LIMIT`` is unset.
+            allow_truncate = os.getenv("HFT_ALLOW_TRUNCATE_SUBSCRIPTIONS", "1") == "1"
+            if strict_mode or not allow_truncate:
+                self._bump_symbol_reload_metric("exceeds_limit")
+                logger.error(
+                    "symbol_list_exceeds_limit",
+                    limit=ceiling,
+                    count=len(self.symbols),
+                    strict_mode=strict_mode,
+                    severity="critical",
+                )
+                raise ValueError(f"Symbol list exceeds limit ({len(self.symbols)} > {ceiling}).")
+            self._bump_symbol_reload_metric("exceeds_limit")
+            logger.warning(
+                "symbol_list_exceeds_limit_truncated",
+                limit=ceiling,
+                count=len(self.symbols),
+                truncated_to=ceiling,
+                severity="warning",
+            )
+            self.symbols = self.symbols[:ceiling]
+        else:
+            # P2 #8 (2026-04-27): preflight pool-capacity advisory. RC-1
+            # made 121–600 symbols pass as ``result="ok"`` against the
+            # per-client ceiling, but ``SubscriptionManager`` still gates
+            # per-conn at ``DEFAULT_MAX_SUBSCRIPTIONS_PER_CONN`` (120).
+            # When ``HFT_QUOTE_CONNECTIONS`` is unset (single-conn deploy),
+            # the silently-truncated universe is the post-RC-1 silent miss.
+            # We advise here so ops sees the issue at config-load time
+            # instead of waiting for the next subscribe cycle. Subscribe-time
+            # truncation is still authoritatively recorded by
+            # ``feed_subscription_truncate_total`` in subscription_manager.
+            try:
+                num_conns = max(1, int(os.getenv("HFT_QUOTE_CONNECTIONS", "1")))
+            except (TypeError, ValueError):
+                num_conns = 1
+            pool_capacity = DEFAULT_MAX_SUBSCRIPTIONS_PER_CONN * num_conns
+            if len(self.symbols) > pool_capacity:
+                self._bump_symbol_reload_metric("exceeds_pool_capacity")
+                logger.error(
+                    "symbol_list_exceeds_pool_capacity",
+                    universe=len(self.symbols),
+                    per_conn_limit=DEFAULT_MAX_SUBSCRIPTIONS_PER_CONN,
+                    num_conns=num_conns,
+                    pool_capacity=pool_capacity,
+                    severity="critical",
+                )
+            else:
+                self._bump_symbol_reload_metric("ok")
 
         # Build map
         self.code_exchange_map = {s["code"]: s["exchange"] for s in self.symbols if s.get("code") and s.get("exchange")}
@@ -706,7 +878,9 @@ class ShioajiClient:
             self._callbacks_registered = False
             self._contracts_ready = False
             self.ca_active = False
-            self.subscribed_codes = set()
+            # D2: in-place clear preserves object identity for concurrent
+            # readers (e.g. _resubscribe_all may be holding a snapshot).
+            self.subscribed_codes.clear()
             self.subscribed_count = 0
             self._clear_quote_pending()
             self._reconnect_backoff_s = float(os.getenv("HFT_RECONNECT_BACKOFF_S", "30"))

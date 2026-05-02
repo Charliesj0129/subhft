@@ -6,7 +6,7 @@ from typing import Any, Callable, Dict, List, Optional, Union
 from structlog import get_logger
 
 # Fill/Order Events might be imported from contracts or events
-from hft_platform.contracts.execution import FillEvent, OrderEvent
+from hft_platform.contracts.execution import FillEvent, OrderEvent, OrderStatus
 from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, RiskFeedback, Side
 from hft_platform.core.timebase import now_ns as _now_ns
 from hft_platform.events import BidAskEvent, FeatureUpdateEvent, GapEvent, LOBStatsEvent, TickEvent
@@ -211,6 +211,7 @@ class BaseStrategy(ABC):
 
         self.ctx: Optional[StrategyContext] = None
         self._generated_intents: List[OrderIntent] = []
+        self._cancel_inflight_targets: set[str] = set()
 
     # --- Event Handlers ---
 
@@ -280,6 +281,12 @@ class BaseStrategy(ABC):
                 if not isinstance(event, (FillEvent, OrderEvent)):
                     return []
 
+        if isinstance(event, FillEvent) or (
+            isinstance(event, OrderEvent)
+            and event.status in (OrderStatus.FILLED, OrderStatus.CANCELLED, OrderStatus.FAILED)
+        ):
+            self._clear_cancel_inflight_target(getattr(event, "order_id", ""))
+
         if isinstance(event, TickEvent):
             self.on_tick(event)
         elif isinstance(event, BidAskEvent):
@@ -310,10 +317,25 @@ class BaseStrategy(ABC):
     def cancel(self, symbol: str, order_id: str):
         if not self.ctx:
             return
+        target_order_id = str(order_id)
+        if target_order_id in self._cancel_inflight_targets:
+            return
+        self._cancel_inflight_targets.add(target_order_id)
         intent = self.ctx.place_order(
-            symbol=symbol, side=Side.BUY, price=0, qty=0, intent_type=IntentType.CANCEL, target_order_id=order_id
+            symbol=symbol, side=Side.BUY, price=0, qty=0, intent_type=IntentType.CANCEL, target_order_id=target_order_id
         )
         self._generated_intents.append(intent)
+
+    def _clear_cancel_inflight_target(self, order_id: str) -> None:
+        if not order_id:
+            return
+        oid = str(order_id)
+        if oid in self._cancel_inflight_targets:
+            self._cancel_inflight_targets.discard(oid)
+            return
+        for target in tuple(self._cancel_inflight_targets):
+            if oid.startswith(target) or target.startswith(oid):
+                self._cancel_inflight_targets.discard(target)
 
     def position(self, symbol: str) -> int:
         if not self.ctx or not self.ctx.positions:

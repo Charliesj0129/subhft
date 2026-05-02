@@ -3,7 +3,7 @@
 #   CODE [key=value ...]
 #   CODE,EXCHANGE[,TICK_SIZE[,PRICE_SCALE[,TAGS]]]
 #
-# Rules (expanded via contract cache from make sync-symbols):
+# Rules (expanded via contract cache from `python -m hft_platform config build`):
 #   TXF@front
 #   MXF@next
 #   OPT@TXO@near@ATM+/-10
@@ -17,14 +17,23 @@
 # @include config/symbols.examples/futures_options_demo.list
 # @include config/symbols.examples/stress.list
 
+# 50 TWSE stocks
 @include symbols.examples/tw50.list
 
+# Main hot futures: TXF (front+next+far), MXF (front+next), TMF (front+next), EXF (front)
 TXF@front exchange=FUT tags=futures|front_month|txf
+TXF@next exchange=FUT tags=futures|next_month|txf
 TXF@far exchange=FUT tags=futures|far_month|txf
 MXF@front exchange=FUT tags=futures|front_month|mxf
-MXF@far exchange=FUT tags=futures|far_month|mxf
-# Micro Taiwan Index Futures (TMF) may not be available on all brokers.
+MXF@next exchange=FUT tags=futures|next_month|mxf
 TMF@front exchange=FUT tags=futures|front_month|tmf
-TMF@far exchange=FUT tags=futures|far_month|tmf
+TMF@next exchange=FUT tags=futures|next_month|tmf
+EXF@front exchange=FUT tags=futures|front_month|exf
 
-OPT@TXO@near@ATM+/-10 exchange=OPT tags=options|near_month|atm
+# TXO option chain: 5 expiries (covers nearest weekly + monthly), ATM ± 26 strikes, both C+P
+# Each expiry expands to (2*26+1) strikes * 2 rights = 106 codes → 5 expiries = 530 codes
+OPT@TXO@near@ATM+/-26 exchange=OPT tags=options|near_month|atm
+OPT@TXO@next@ATM+/-26 exchange=OPT tags=options|next_month|atm
+OPT@TXO@far@ATM+/-26 exchange=OPT tags=options|far_month|atm
+OPT@TXO@far_plus_1@ATM+/-26 exchange=OPT tags=options|far_plus_1|atm
+OPT@TXO@far_plus_2@ATM+/-26 exchange=OPT tags=options|far_plus_2|atm

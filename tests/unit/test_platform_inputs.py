@@ -52,6 +52,11 @@ def _make_inputs(
 ) -> PlatformDegradeInputs:
     md_service = MagicMock()
     md_service.get_max_feed_gap_s.return_value = feed_gap
+    # _feed_gap_s prefers get_active_feed_gap_s when present; mirror feed_gap
+    # by default so legacy tests configured via the `feed_gap` kwarg still
+    # observe their value.  Tests that need divergence (active vs max) override
+    # md_service.get_active_feed_gap_s.return_value explicitly.
+    md_service.get_active_feed_gap_s.return_value = feed_gap
     md_service.within_reconnect_window.return_value = within_window
     md_service._pending_reconnect_since = pending_since
     md_service._quote_flap_events = quote_flap_events
@@ -100,7 +105,7 @@ def _make_inputs(
 class TestConstruction:
     def test_default_threshold_values(self) -> None:
         inp = _make_inputs()
-        assert inp.feed_gap_threshold_s == 120.0
+        assert inp.feed_gap_threshold_s == 600.0
         assert inp.reconnect_pending_threshold_s == 60.0
         assert inp.reconnect_flap_budget == 5
         assert inp.queue_depth_threshold == 5000
@@ -187,6 +192,9 @@ class TestFeedGapS:
         inp = _make_inputs()
         del inp.md_service.get_max_feed_gap_s  # remove attr
         inp.md_service.get_max_feed_gap_s = None  # type: ignore[assignment]
+        # Also disable the new active-aware accessor so we exercise the
+        # legacy "no gap source available" branch.
+        inp.md_service.get_active_feed_gap_s = None  # type: ignore[assignment]
         assert inp._feed_gap_s() == 0.0
 
     def test_returns_zero_outside_reconnect_window(self) -> None:
@@ -201,6 +209,86 @@ class TestFeedGapS:
         inp = _make_inputs(feed_gap=50.0)
         inp.md_service.within_reconnect_window = None  # type: ignore[assignment]
         assert inp._feed_gap_s() == 50.0
+
+    def test_prefers_active_feed_gap_when_available(self) -> None:
+        """When md_service exposes get_active_feed_gap_s, _feed_gap_s must use it.
+
+        Scenario: illiquid options/futures (e.g. TXO29000R6, TMFI6) push the raw
+        max gap to 2000s, but liquid front-month feeds (TMFE6, TXFE6) flow at
+        sub-second cadence. The active-aware gap reflects only the actively
+        flowing symbols and must not trip reduce_only on chronic stragglers.
+        """
+        inp = _make_inputs(feed_gap=2000.0, within_window=True)
+        inp.md_service.get_active_feed_gap_s.return_value = 0.5
+        assert inp._feed_gap_s() == 0.5
+
+    def test_active_feed_gap_does_not_trigger_reduce_only_when_max_is_high(self) -> None:
+        """Universe of 800 symbols with illiquid stragglers must not latch reduce_only.
+
+        Mocks an md_service whose chronically-stale options keep get_max_feed_gap_s()
+        at 2000s, while get_active_feed_gap_s() reports 0.5s for the actually
+        flowing front-month futures. With the 120s default threshold,
+        reduce_only_reasons() must NOT include feed_reconnect_unhealthy.
+        """
+        import time as _time
+
+        now = _time.time()
+        inp = _make_inputs(feed_gap=2000.0, within_window=True)
+        inp.md_service.get_active_feed_gap_s.return_value = 0.5
+        with patch("hft_platform.ops.platform_inputs.timebase") as tb:
+            tb.now_s.return_value = now
+            reasons = inp.reduce_only_reasons()
+        assert "feed_reconnect_unhealthy" not in reasons
+
+    def test_active_feed_gap_triggers_when_active_symbols_truly_stale(self) -> None:
+        """If even the active symbols are stale, must still trigger reduce_only."""
+        import time as _time
+
+        now = _time.time()
+        inp = _make_inputs(feed_gap=2000.0, within_window=True)
+        # Active gap above the 600s default threshold → still must trigger.
+        inp.md_service.get_active_feed_gap_s.return_value = 800.0
+        with patch("hft_platform.ops.platform_inputs.timebase") as tb:
+            tb.now_s.return_value = now
+            reasons = inp.reduce_only_reasons()
+        assert "feed_reconnect_unhealthy" in reasons
+
+    def test_falls_back_to_max_feed_gap_when_active_method_missing(self) -> None:
+        """Backwards-compat: if md_service lacks get_active_feed_gap_s, use the max."""
+        inp = _make_inputs(feed_gap=150.0, within_window=True)
+        # Remove the new method to simulate older md_service
+        inp.md_service.get_active_feed_gap_s = None  # type: ignore[assignment]
+        assert inp._feed_gap_s() == 150.0
+
+    def test_partial_feed_failure_still_triggers_unhealthy(self) -> None:
+        """Partial feed failure on a previously-active symbol must trigger
+        feed_reconnect_unhealthy.
+
+        Regression for the masking bug introduced by commit b80b950c
+        ('fix(ops): exclude inactive subscriptions from feed-gap reduce_only
+        trigger').  In that fix, ``get_active_feed_gap_s`` silently drops any
+        symbol whose gap exceeds an upper-bound threshold (default 300s) —
+        which means a formerly-active front-month future (e.g. TMFE6) that
+        suddenly stops getting events is removed from the calculation after
+        300s of silence, masking a real partial feed failure.
+
+        With the latched ever-active set design, the gap on the silent TMFE6
+        must surface and cross the 600s ``feed_gap_threshold_s`` so that
+        ``reduce_only_reasons()`` returns ``feed_reconnect_unhealthy``.
+        """
+        import time as _time
+
+        now = _time.time()
+        inp = _make_inputs(feed_gap=0.5, within_window=True)
+        # Simulate the latched-set md_service: max gap remains 0.5 because
+        # TXFE6 / MXFE6 still flow normally, but the active-aware accessor
+        # returns 2000s reflecting TMFE6's silent failure (still in the
+        # ever-active set).
+        inp.md_service.get_active_feed_gap_s.return_value = 2000.0
+        with patch("hft_platform.ops.platform_inputs.timebase") as tb:
+            tb.now_s.return_value = now
+            reasons = inp.reduce_only_reasons()
+        assert "feed_reconnect_unhealthy" in reasons
 
 
 # ---------------------------------------------------------------------------
@@ -394,6 +482,30 @@ class TestReduceOnlyReasons:
             tb.now_s.return_value = now
             reasons = inp.reduce_only_reasons()
         assert "feed_reconnect_pending" not in reasons
+
+    def test_pending_reconnect_suppressed_outside_reconnect_window(self) -> None:
+        """Session gap (e.g. 13:35-14:55) is expected; must not trigger reduce-only."""
+        now = self._now()
+        inp = _make_inputs(
+            pending_since=now - 120.0,  # 120s > 60s threshold
+            within_window=False,  # outside reconnect window
+        )
+        with patch("hft_platform.ops.platform_inputs.timebase") as tb:
+            tb.now_s.return_value = now
+            reasons = inp.reduce_only_reasons()
+        assert "feed_reconnect_pending" not in reasons
+
+    def test_pending_reconnect_fires_inside_reconnect_window(self) -> None:
+        """When inside reconnect window and pending > threshold, must fire."""
+        now = self._now()
+        inp = _make_inputs(
+            pending_since=now - 120.0,  # 120s > 60s threshold
+            within_window=True,  # inside reconnect window
+        )
+        with patch("hft_platform.ops.platform_inputs.timebase") as tb:
+            tb.now_s.return_value = now
+            reasons = inp.reduce_only_reasons()
+        assert "feed_reconnect_pending" in reasons
 
     def test_flap_triggers_reason(self) -> None:
         inp = _make_inputs(

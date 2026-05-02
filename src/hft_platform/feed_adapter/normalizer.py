@@ -1,3 +1,4 @@
+import datetime as dt
 import importlib
 import os
 import re
@@ -19,6 +20,9 @@ from hft_platform.trade_classifier import TradeClassifier
 # Use existing implementation of SymbolMetadata.
 
 logger = get_logger("feed_adapter.normalizer")
+
+_TICK_EVENT_SUPPORTS_CONTRACT = "contract" in getattr(TickEvent, "__dataclass_fields__", {})
+_BIDASK_EVENT_SUPPORTS_CONTRACT = "contract" in getattr(BidAskEvent, "__dataclass_fields__", {})
 
 _RUST_ENABLED = os.getenv("HFT_RUST_ACCEL", "1").lower() not in {"0", "false", "no", "off"}
 _RUST_MIN_LEVELS = int(os.getenv("HFT_RUST_MIN_LEVELS", "0"))
@@ -118,22 +122,9 @@ class SymbolMetadata:
     def __init__(self, config_path: str | None = None):
         # simplified for this context, assuming existing logic was ok, just need it here
         if config_path is None:
-            config_path = os.getenv("SYMBOLS_CONFIG")
-            if not config_path:
-                # Resolve config path relative to the project root (not cwd)
-                # so tests that change cwd don't break metadata loading.
-                _pkg_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-                _project_root = os.path.dirname(os.path.dirname(_pkg_dir))
-                _abs_symbols = os.path.join(_project_root, "config", "symbols.yaml")
-                _abs_base = os.path.join(_project_root, "config", "base", "symbols.yaml")
-                if os.path.exists(_abs_symbols):
-                    config_path = _abs_symbols
-                elif os.path.exists(_abs_base):
-                    config_path = _abs_base
-                elif os.path.exists("config/symbols.yaml"):
-                    config_path = "config/symbols.yaml"
-                else:
-                    config_path = "config/base/symbols.yaml"
+            from hft_platform.config.symbols_path import resolve_symbols_config_path
+
+            config_path = resolve_symbols_config_path()
 
         self.config_path = config_path
         self.meta: dict[str, dict[str, Any]] = {}
@@ -143,6 +134,7 @@ class SymbolMetadata:
         self._exchange_cache: dict[str, str] = {}
         self._product_type_cache: dict[str, str] = {}
         self._mtime: float | None = None
+        self.alias_to_actual: dict[str, str] = {}  # config alias → callback code (e.g. TXFR1 → TXFE6)
         from hft_platform.core.instrument_registry import InstrumentRegistry
 
         self.registry = InstrumentRegistry()
@@ -208,6 +200,54 @@ class SymbolMetadata:
             resolved.update(self.symbols_by_tag.get(key, set()))
         return resolved
 
+    def contract_ref(self, symbol: str) -> Any:
+        """Return a cached ``ContractRef`` for *symbol*, or ``None`` if the
+        symbol cannot be parsed.
+
+        Gate 2b of the Option-3 migration. Lazy-populated: events passing
+        through the hot path incur a single dict lookup after the first parse
+        per symbol. Failures are cached as ``None`` so we do not re-parse a
+        malformed symbol on every tick.
+        """
+        cache = getattr(self, "_contract_ref_cache", None)
+        if cache is None:
+            cache = {}
+            self._contract_ref_cache = cache
+        if symbol in cache:
+            return cache[symbol]
+
+        import datetime as dt
+
+        try:
+            from hft_platform.contracts.ref import (
+                ContractFamily,
+                FutureRef,
+                parse_display,
+            )
+        except ModuleNotFoundError:
+            cache[symbol] = None
+            return None
+
+        base_year = dt.datetime.fromtimestamp(timebase.now_s(), dt.UTC).year
+        parsed: Any
+        try:
+            parsed = parse_display(symbol, base_year=base_year)
+        except ValueError:
+            parsed = None
+        # A family string (e.g. "TMFR1") is not a concrete contract; events
+        # carry a concrete expiry. We keep the ``contract`` field as None for
+        # family-form symbols and rely on the resolver to fill it at dispatch.
+        if isinstance(parsed, ContractFamily):
+            parsed = None
+        # Defensive: future single-digit year parser may not uniquely
+        # identify the exact expiry day. Downstream (ContractResolver) is the
+        # authority for concrete expiry dates; parse_display is a best-effort
+        # fallback for dual-write convenience.
+        if isinstance(parsed, FutureRef):
+            parsed = parsed  # type intentionally narrowed; keep as parsed.
+        cache[symbol] = parsed
+        return parsed
+
     def price_scale(self, symbol: str) -> int:
         cached = self._price_scale_cache.get(symbol)
         if cached is not None:
@@ -230,6 +270,18 @@ class SymbolMetadata:
                     pass
         self._price_scale_cache[symbol] = self.DEFAULT_SCALE
         return self.DEFAULT_SCALE
+
+    def tick_size_scaled(self, symbol: str) -> int:
+        """Return tick_size * price_scale for *symbol*, or 0 if unknown.
+
+        Used by strategy intent validation to reject under-scaled prices (e.g.
+        a strategy passing raw 505 instead of 5_050_000 for a x10000-scaled
+        symbol). A zero return disables the guard for symbols without metadata.
+        """
+        entry = self.meta.get(symbol)
+        if not entry:
+            return 0
+        return self._safe_tick_size_scaled(entry, symbol)
 
     def contract_multiplier(self, symbol: str) -> int:
         """Return contract point-value multiplier for PnL calculation.
@@ -293,6 +345,35 @@ class SymbolMetadata:
             if key in entry and entry[key] is not None:
                 params[key] = entry[key]
         return params
+
+    def set_alias_map(self, alias_map: dict[str, str]) -> None:
+        """Set alias→actual mapping from broker contract resolution.
+
+        Called by bootstrap after broker login to propagate alias mappings
+        (e.g. TXFR1 → TXFE6) resolved by ContractsRuntime.
+
+        Also copies config metadata entries from alias codes to actual codes
+        so that price_scale(), exchange(), product_type() etc. resolve correctly
+        for the actual callback codes used at runtime.
+        """
+        self.alias_to_actual.update(alias_map)
+        for config_code, actual_code in alias_map.items():
+            if actual_code != config_code and actual_code not in self.meta:
+                config_entry = self.meta.get(config_code)
+                if config_entry is not None:
+                    self.meta[actual_code] = config_entry
+
+    def resolve_symbol(self, code: str) -> str:
+        """Resolve a config symbol code to the actual callback code.
+
+        Returns the actual month code if an alias mapping exists,
+        otherwise returns the input code unchanged.
+        """
+        return self.alias_to_actual.get(code, code)
+
+    def resolve_symbols(self, codes: set[str] | list[str]) -> set[str]:
+        """Resolve a set of config symbol codes to actual callback codes."""
+        return {self.alias_to_actual.get(c, c) for c in codes}
 
     def _safe_tick_size_scaled(self, entry: dict[str, Any], code: str) -> int:
         """Compute tick_size_scaled with fallback for invalid tick_size values."""
@@ -385,11 +466,56 @@ def _extract_ts_ns(ts_val: Any) -> int:
     return timebase.coerce_ns(ts_val)
 
 
+def _event_contract_kw(event_cls: type, metadata: "SymbolMetadata | None", symbol: str) -> dict[str, Any]:
+    if event_cls is TickEvent:
+        supports_contract = _TICK_EVENT_SUPPORTS_CONTRACT
+    elif event_cls is BidAskEvent:
+        supports_contract = _BIDASK_EVENT_SUPPORTS_CONTRACT
+    else:
+        supports_contract = False
+    if not supports_contract:
+        return {}
+    return {"contract": metadata.contract_ref(symbol) if metadata is not None else None}
+
+
+def _local_tz_offset_ns(now_ns: int) -> int:
+    try:
+        now_dt = dt.datetime.fromtimestamp(now_ns / 1e9, tz=timebase.TZINFO)
+        offset = timebase.TZINFO.utcoffset(now_dt)
+    except Exception:
+        return 0
+    if offset is None:
+        return 0
+    return int(offset.total_seconds() * 1e9)
+
+
+def _correct_local_tz_future_ts(exch_ts: int, now_ns: int) -> int | None:
+    offset_ns = _local_tz_offset_ns(now_ns)
+    if not offset_ns:
+        return None
+    corrected = exch_ts - offset_ns
+    if abs(corrected - now_ns) >= abs(exch_ts - now_ns):
+        return None
+    if corrected - now_ns > _TS_MAX_FUTURE_NS:
+        return None
+    return corrected
+
+
 def _clamp_future_ts(exch_ts: int, now_ns: int, topic: str, symbol: str) -> int:
     if not exch_ts or not _TS_MAX_FUTURE_NS:
         return exch_ts
     delta_ns = exch_ts - now_ns
     if delta_ns > _TS_MAX_FUTURE_NS:
+        corrected = _correct_local_tz_future_ts(exch_ts, now_ns)
+        if corrected is not None:
+            logger.debug(
+                "Exchange timestamp timezone shift corrected",
+                topic=topic,
+                symbol=symbol,
+                delta_ns=delta_ns,
+                corrected_delta_ns=corrected - now_ns,
+            )
+            return corrected
         logger.warning(
             "Exchange timestamp in future",
             topic=topic,
@@ -486,26 +612,64 @@ class MarketDataNormalizer:
         """Clamp future exchange timestamps and sync/cap local_ts against exch_ts.
 
         Returns ``(exch_ts, local_ts)`` after all adjustments.
+
+        P2-b: The gauge ``feed_time_skew_ns`` previously only updated inside
+        the over-threshold branch, so it stuck at the worst raw delta ever
+        seen (a 7,997s value from a stale ts_epoch was observed in the
+        live signal). It now reflects the *current* delta on every event
+        (post-clamp), and a separate counter
+        ``feed_time_skew_over_threshold_total{topic, severity}`` records
+        how often we actually exceeded 1s / 10s / 60s — that is the
+        durable observability handle, not the gauge.
         """
+        raw_delta: int = 0
         if exch_ts:
             exch_ts = _clamp_future_ts(exch_ts, local_ts, topic, symbol)
             if local_ts < exch_ts:
                 local_ts = exch_ts
             else:
-                delta = local_ts - exch_ts
-                if _TS_MAX_LAG_NS and delta > _TS_MAX_LAG_NS:
+                raw_delta = local_ts - exch_ts
+                if _TS_MAX_LAG_NS and raw_delta > _TS_MAX_LAG_NS:
                     if _TS_SKEW_LOG_COOLDOWN_NS and (local_ts - self._last_skew_log_ns > _TS_SKEW_LOG_COOLDOWN_NS):
+                        # Live signal showed 3 distinct mis-epoched
+                        # contracts (EXFF6 ~3.95 days, TXFG6 ~33 min,
+                        # MXFF6 ~7.5s) all collapsing to the clamp ceiling
+                        # in the gauge, with no way to tell them apart.
+                        # Always include the broker code + raw / clamped
+                        # delta so the warning carries enough context to
+                        # triage the underlying ts_epoch problem.
                         logger.warning(
-                            "Feed time skew",
+                            "feed_time_skew",
                             topic=topic,
                             symbol=symbol,
-                            delta_ns=delta,
+                            raw_delta_ns=raw_delta,
+                            clamped_delta_ns=_TS_MAX_LAG_NS,
                             max_ns=_TS_MAX_LAG_NS,
                         )
                         self._last_skew_log_ns = local_ts
                     if self.metrics:
-                        self.metrics.feed_time_skew_ns.labels(topic=topic).set(delta)
+                        # Sample over-threshold events at three severities
+                        # so dashboards can alert on "any skew >1s" without
+                        # being drowned by routine sub-second jitter.
+                        if raw_delta > 60_000_000_000:
+                            self.metrics.feed_time_skew_over_threshold_total.labels(
+                                topic=topic, severity="critical_60s"
+                            ).inc()
+                        elif raw_delta > 10_000_000_000:
+                            self.metrics.feed_time_skew_over_threshold_total.labels(
+                                topic=topic, severity="high_10s"
+                            ).inc()
+                        else:
+                            self.metrics.feed_time_skew_over_threshold_total.labels(
+                                topic=topic, severity="warn_1s"
+                            ).inc()
                     local_ts = exch_ts + _TS_MAX_LAG_NS
+            # P2-b: gauge always reflects the current (post-clamp) delta
+            # so "feed_time_skew_ns" answers "right now, how skewed is this
+            # topic?" instead of "what is the worst delta ever seen?".
+            if self.metrics:
+                current_delta = local_ts - exch_ts
+                self.metrics.feed_time_skew_ns.labels(topic=topic).set(current_delta)
         return exch_ts, local_ts
 
     def _record_latency_metrics(self, exch_ts: int, local_ts: int, last_ts_attr: str) -> None:
@@ -678,6 +842,7 @@ class MarketDataNormalizer:
                                 is_odd_lot=bool(is_odd_lot),
                                 trade_direction=_td,
                                 trade_confidence=_tc,
+                                **_event_contract_kw(TickEvent, self.metadata, _sym),
                             )
                     except Exception as exc:
                         logger.debug("rust_tick_fallback", error=str(exc))
@@ -731,6 +896,7 @@ class MarketDataNormalizer:
                 is_odd_lot=is_odd_lot,
                 trade_direction=_td,
                 trade_confidence=_tc,
+                **_event_contract_kw(TickEvent, self.metadata, symbol),
             )
         except Exception as e:
             logger.error("Normalize Tick Error", error=str(e), payload_type=str(type(payload)))
@@ -835,6 +1001,7 @@ class MarketDataNormalizer:
                             asks=asks_np,
                             stats=compat_stats,
                             fused_stats=fused_stats,
+                            **_event_contract_kw(BidAskEvent, self.metadata, symbol),
                         )
                 except Exception as exc:
                     # Fall through to standard path
@@ -1157,7 +1324,14 @@ class MarketDataNormalizer:
             self._record_latency_metrics(exch_ts, local_ts, "_last_local_ts_bidask")
             meta = MetaData(seq=self._next_seq(), topic="bidask", source_ts=exch_ts, local_ts=local_ts)
             event_stats = stats if stats is not None and not synthesized else None
-            return BidAskEvent(meta=meta, symbol=symbol, bids=bids_final, asks=asks_final, stats=event_stats)
+            return BidAskEvent(
+                meta=meta,
+                symbol=symbol,
+                bids=bids_final,
+                asks=asks_final,
+                stats=event_stats,
+                **_event_contract_kw(BidAskEvent, self.metadata, symbol),
+            )
         except Exception as e:
             logger.error("Normalize BidAsk Error", error=str(e), payload_type=str(type(payload)))
             if self.metrics:
@@ -1215,7 +1389,14 @@ class MarketDataNormalizer:
             exch_ts, local_ts = self._validate_and_sync_timestamp(exch_ts, local_ts, "snapshot", symbol)
             self._record_latency_metrics(exch_ts, local_ts, "_last_local_ts_snapshot")
             meta = MetaData(seq=self._next_seq(), topic="snapshot", source_ts=exch_ts, local_ts=local_ts)
-            return BidAskEvent(meta=meta, symbol=symbol, bids=bids, asks=asks, is_snapshot=True)
+            return BidAskEvent(
+                meta=meta,
+                symbol=symbol,
+                bids=bids,
+                asks=asks,
+                is_snapshot=True,
+                **_event_contract_kw(BidAskEvent, self.metadata, symbol),
+            )
 
         event = self.normalize_bidask(payload)
         if isinstance(event, tuple):

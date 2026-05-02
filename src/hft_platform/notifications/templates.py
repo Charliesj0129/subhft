@@ -107,6 +107,55 @@ def render_pre_market_pass() -> str:
     return "🟢 08:15 健檢 PASS. 策略將於 08:45 啟動."
 
 
+def render_symbol_reload_failed(reason: str, count: int, limit: int) -> str:
+    """Symbol config reload failed (RC-1 / Q3 fix).
+
+    Args:
+        reason: Result label (e.g. ``exceeds_limit``, ``parse_error``,
+            ``other``).
+        count: Number of symbols loaded from the config file (or 0 if
+            the file could not be parsed).
+        limit: Effective preflight ceiling at the moment of failure.
+
+    Returns:
+        Formatted symbol-reload failure notification string.
+    """
+    return (
+        "🔴 Symbol reload FAIL\n"
+        f"reason: {reason}\n"
+        f"count: {count}\n"
+        f"limit: {limit}\n"
+        "Subscriptions are stale until reload succeeds — check "
+        "config/symbols.yaml and HFT_MAX_SUBSCRIPTIONS."
+    )
+
+
+def render_subscription_truncated(reason: str, requested: int, subscribed: int, limit: int) -> str:
+    """Subscription truncated below configured universe (P2 #8 fix).
+
+    Args:
+        reason: Truncation reason label (currently ``conn_limit``).
+        requested: Number of symbols loaded into the client.
+        subscribed: Number of symbols actually subscribed before truncation.
+        limit: Per-conn cap (``MAX_SUBSCRIPTIONS_PER_CONN``) that triggered
+            truncation.
+
+    Returns:
+        Formatted subscription-truncation notification string.
+    """
+    missed = max(0, requested - subscribed)
+    return (
+        "🔴 Quote subscription TRUNCATED\n"
+        f"reason: {reason}\n"
+        f"requested: {requested}\n"
+        f"subscribed: {subscribed}\n"
+        f"missed: {missed}\n"
+        f"per_conn_limit: {limit}\n"
+        "Symbols loaded but NEVER subscribed — increase HFT_QUOTE_CONNECTIONS "
+        "or reduce config/symbols.yaml universe."
+    )
+
+
 def render_pre_market_fail(failed_checks: list[str]) -> str:
     """Pre-market health check failed; strategy will NOT start.
 
@@ -440,6 +489,38 @@ def render_margin_critical(ratio: float, used: int, available: int) -> str:
         Formatted margin critical alert string.
     """
     return f"🚨 保證金危急 — 已進入 reduce-only\n使用率: {ratio:.1%}\n已用: {used:,} NTD\n可用: {available:,} NTD"
+
+
+def render_position_stuck(
+    *,
+    strategy_id: str,
+    symbol: str,
+    net_qty: int,
+    age_s: int,
+    unrealized_ntd: int | None = None,
+) -> str:
+    """Bug 27: position held too long without any new fills — possible deadlock.
+
+    Args:
+        strategy_id: Strategy that owns the stuck position.
+        symbol: Instrument symbol.
+        net_qty: Signed quantity (positive=long, negative=short).
+        age_s: Seconds since last fill on this position.
+        unrealized_ntd: Current unrealized PnL in NTD (optional).
+
+    Returns:
+        Formatted Telegram alert string.
+    """
+    side = "LONG" if net_qty > 0 else "SHORT"
+    upnl_line = f"\n未實現損益: {unrealized_ntd:+d} NTD" if unrealized_ntd is not None else ""
+    return (
+        f"⚠️ 部位卡住\n"
+        f"策略: {escape(strategy_id)}\n"
+        f"合約: {escape(symbol)}  方向: {side}  口數: {abs(net_qty)}\n"
+        f"持有時間: {age_s // 60} 分 {age_s % 60} 秒 (無新成交)"
+        f"{upnl_line}\n"
+        f"請檢查策略是否 deadlock。"
+    )
 
 
 def render_backup_failed(

@@ -1,0 +1,144 @@
+playbooks:
+  feed_gap_short:
+    match:
+      category: feed
+      description_contains: "feed_gap"
+    actions:
+      - name: unsubscribe_symbol
+        risk: auto
+        timeout_s: 5
+      - name: wait
+        risk: auto
+        timeout_s: 5
+        params: { duration_s: 3 }
+      - name: resubscribe_symbol
+        risk: auto
+        timeout_s: 10
+    cooldown_s: 60
+    max_retries: 3
+
+  feed_gap_long:
+    match:
+      category: feed
+      description_contains: "feed_gap"
+      min_severity: impaired
+    actions:
+      - name: logout_broker
+        risk: auto
+        timeout_s: 10
+      - name: wait
+        risk: auto
+        timeout_s: 10
+        params: { duration_s: 5 }
+      - name: relogin_broker
+        risk: auto
+        timeout_s: 30
+      - name: resubscribe_all
+        risk: auto
+        timeout_s: 30
+    cooldown_s: 300
+    max_retries: 2
+
+  broker_disconnect_short:
+    match:
+      category: broker
+      description_contains: "disconnect"
+    actions:
+      - name: relogin_broker
+        risk: auto
+        timeout_s: 30
+      - name: reconcile_positions
+        risk: auto
+        timeout_s: 60
+    cooldown_s: 120
+    max_retries: 3
+
+  broker_disconnect_long:
+    match:
+      category: broker
+      description_contains: "disconnect"
+      min_severity: impaired
+    actions:
+      - name: enter_reduce_only
+        risk: auto
+        timeout_s: 5
+      - name: alert_and_wait_approval
+        risk: confirm
+        timeout_s: 900
+    cooldown_s: 300
+    max_retries: 1
+
+  clickhouse_unavailable:
+    match:
+      category: infra
+      description_contains: "clickhouse"
+    actions:
+      - name: switch_to_wal_only
+        risk: auto
+        timeout_s: 5
+    cooldown_s: 300
+    max_retries: 3
+
+  redis_unavailable:
+    match:
+      category: infra
+      description_contains: "redis"
+    actions:
+      - name: disable_live_monitor
+        risk: auto
+        timeout_s: 5
+    cooldown_s: 120
+    max_retries: 5
+
+  disk_space_low:
+    match:
+      category: infra
+      description_contains: "disk_space"
+    actions:
+      - name: archive_old_wal
+        risk: auto
+        timeout_s: 60
+      - name: compress_logs
+        risk: auto
+        timeout_s: 120
+    cooldown_s: 3600
+    max_retries: 1
+
+  position_drift_small:
+    match:
+      category: position
+      description_contains: "position_drift"
+    actions:
+      - name: requery_broker_positions
+        risk: auto
+        timeout_s: 30
+      - name: auto_correct_positions
+        risk: auto
+        timeout_s: 10
+    cooldown_s: 120
+    max_retries: 2
+
+  contract_alias_stale:
+    match:
+      category: contract
+      description_contains: "alias_stale"
+    actions:
+      - name: refresh_contract_cache
+        risk: auto
+        timeout_s: 30
+      - name: resolve_aliases
+        risk: auto
+        timeout_s: 10
+    cooldown_s: 3600
+    max_retries: 1
+
+  order_timeout:
+    match:
+      category: execution
+      description_contains: "order_timeout"
+    actions:
+      - name: log_warn
+        risk: auto
+        timeout_s: 1
+    cooldown_s: 60
+    max_retries: 5

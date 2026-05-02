@@ -117,3 +117,44 @@ def test_policy_gate_typed_matches_object_path():
             obj = policy.gate(_make_intent(it), sg_state)
             typed = policy.gate_typed(int(it), sg_state)
             assert typed == obj
+
+
+def test_policy_startup_holdoff_blocks_new(monkeypatch):
+    """NEW/AMEND intents are blocked during startup holdoff period.
+
+    Defense-in-depth for 2026-04-15 startup burst incident: after engine
+    restart, STORM→NORMAL transient allowed 76 orders in <3 seconds.
+    """
+    monkeypatch.setenv("HFT_GATEWAY_STARTUP_HOLDOFF_S", "300")
+    policy = GatewayPolicy()
+    # During holdoff: NEW blocked
+    ok, reason = policy.gate(_make_intent(IntentType.NEW), StormGuardState.NORMAL)
+    assert ok is False
+    assert reason == "STARTUP_HOLDOFF"
+    # During holdoff: CANCEL still allowed
+    ok, _ = policy.gate(_make_intent(IntentType.CANCEL), StormGuardState.NORMAL)
+    assert ok is True
+    # During holdoff: FORCE_FLAT still allowed
+    ok, _ = policy.gate(_make_intent(IntentType.FORCE_FLAT), StormGuardState.NORMAL)
+    assert ok is True
+
+
+def test_policy_startup_holdoff_expires(monkeypatch):
+    """After holdoff expires, NEW intents are allowed again."""
+    monkeypatch.setenv("HFT_GATEWAY_STARTUP_HOLDOFF_S", "0.001")
+    policy = GatewayPolicy()
+    import time
+
+    time.sleep(0.01)  # 10ms — well past 1ms holdoff
+    ok, reason = policy.gate(_make_intent(IntentType.NEW), StormGuardState.NORMAL)
+    assert ok is True
+    assert reason == "OK"
+
+
+def test_policy_startup_holdoff_enabled_by_default(monkeypatch):
+    """Holdoff is 60s by default — blocks NEW on fresh GatewayPolicy."""
+    monkeypatch.delenv("HFT_GATEWAY_STARTUP_HOLDOFF_S", raising=False)
+    policy = GatewayPolicy()
+    ok, reason = policy.gate(_make_intent(IntentType.NEW), StormGuardState.NORMAL)
+    assert ok is False
+    assert reason == "STARTUP_HOLDOFF"

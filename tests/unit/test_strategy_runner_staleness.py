@@ -7,6 +7,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from hft_platform.events import LOBStatsEvent
+
 # ---------------------------------------------------------------------------
 # Helpers / stubs
 # ---------------------------------------------------------------------------
@@ -209,3 +211,29 @@ async def test_prometheus_metric_incremented_on_skip(make_runner):
         await runner.process_event(_make_event(ts_ns=old_event_ns))
 
     mock_metrics_obj.stale_event_skip_total.inc.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_lobstats_event_uses_local_ts_for_staleness(make_runner):
+    """LOBStatsEvent should use local ingest time, not exchange time, for staleness."""
+    runner, _ = make_runner(threshold_ms="500")
+    strat = _FakeStrategy()
+    runner.register(strat)
+
+    now_ns = 1_000_000_000_000
+    event = LOBStatsEvent(
+        symbol="TSMC",
+        ts=now_ns - 2_000_000_000,
+        local_ts=now_ns - 100_000,
+        imbalance=0.0,
+        best_bid=1_000_000,
+        best_ask=1_001_000,
+        bid_depth=10,
+        ask_depth=10,
+    )
+
+    with patch("hft_platform.strategy.runner.timebase") as tb:
+        tb.now_ns.return_value = now_ns
+        await runner.process_event(event)
+
+    assert len(strat._calls) == 1, "LOBStatsEvent with fresh local_ts should not be skipped"

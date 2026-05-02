@@ -1,3 +1,4 @@
+<!-- REVIEW-2026-04-17: unreferenced by rules/workflows/teams/agents. Confirm or delete. -->
 ---
 name: hft-helper
 description: Use when starting an HFT platform task and unsure which project-specific skill fits, or when routing work across the research, strategy, broker, architecture, and operations workflows.

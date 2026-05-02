@@ -1,0 +1,121 @@
+alpha_id: c72_tmfd6_queue_position_aware
+name: "TMFD6 queue-position-aware maker (C60 overlay)"
+version: "0.1.0"
+status: prototype
+owner: alpha-research-20260419-inst-options
+strategy_type: maker
+instrument: "TMFD6"
+instruments:
+  - TMFD6
+
+run_label: "alpha-research-20260419-inst-options"
+round_id: R5
+gate_position: "T4 implementation (post T1 CONDITIONAL PROCEED, pre T2 APPROVE)"
+
+hypothesis: >
+  Overlay on C60 (PROMOTED TMFD6 R47-minimal, R1): quote only when
+  near-side L1 queue depth is below threshold (CK-observable proxy for
+  self-queue-position near top). Non-|pos|-gated — gate is on L1 depth,
+  not |pos|. Researcher T1 flagged dominance risk: C60 baseline per-trip
+  edge must improve by >=2x to offset 30-44% fill-retention loss from
+  the gate. T5 is the arbiter.
+
+mechanism_class: pure_maker
+
+distinction_from_killed_classes:
+  - name: "R47 D2 Queue-Cancel layer (hft-mm-design SKILL)"
+    distinction: >
+      R47 D2 Queue layer was DISABLED because PowerProb fill-prob model
+      was 14x pessimistic. C72 uses CK-observable L1 depth gate (bid_qty,
+      ask_qty) as proxy, NOT a simulated queue-rank. Researcher T1 concern
+      #3: this sidesteps the PowerProb trap, but is a DIFFERENT mechanism
+      (thin-near-side-queue gate vs fill-probability model).
+  - name: "C22-class |pos|-gated skew meta-kill"
+    distinction: >
+      C72 gate is on OBSERVABLE L1 queue depth (bid_qty, ask_qty), NOT on
+      |pos|. Inventory skew is LINEAR in pos (same as C60). No |pos|-threshold.
+  - name: "spread-conditional-maker (R16, stay_killed)"
+    distinction: >
+      C72 uses fixed queue-depth thresholds, not spread-conditional.
+      Threshold is static per param; T5 sweeps {2,5,10,20} as parameter
+      variants only.
+
+paper_refs:
+  - r47_maker_strategy
+  - r47_structural_properties
+  - c60_tmfd6_r47_minimal_inst_rt
+  - shared-context_2026-04-19_cost_model
+  - memory/backtest_method_reliability
+  - "1312.0514v1 Lipton-PSS (2013) Trade arrival / quote imbalance"
+  - "1903.07222v4 Law-Viens (2019) MM weakly consistent LOB"
+  - "1806.05101v1 Lu-Abergel (2018) Order-book modelling MM"
+  - "2510.27334v1 Jafree et al. (2025) RL MM adverse meta-order"
+
+signals:
+  reuse: >
+    C60 baseline preserved (R47-minimal + D4 QI retained). NEW layer:
+    per-side L1 queue-depth gate. Does NOT introduce PowerProb-style
+    fill-probability model — gate is on CK-observable L1 depth only.
+
+parameters:
+  # C60 inherited
+  spread_threshold_pts: 5
+  max_pos: 2
+  inventory_skew_tenths: 2
+  qi_skew_threshold: 0.10
+  qi_skew_widen_ticks: 1
+  enable_qi_layer: true
+  enable_pe_layer: false
+  enable_queue_layer: false
+  enable_mfg_layer: false
+  # C72 NEW
+  enable_queue_depth_gate: true
+  queue_depth_max_bid: 5               # Default canonical; T5 sweeps {2,5,10,20}
+  queue_depth_max_ask: 5
+
+latency_profile: "shioaji_sim_p95_v2026-03-04"
+
+cost_model:
+  source: "outputs/team_artifacts/alpha-research/shared-context.yaml#cost_model"
+  tier: "institutional_estimate"
+  confirmed: false
+  confirmation_source: "user-authorized rough estimate, 2026-04-19"
+  TMF:
+    rt_cost_ntd: 15
+    rt_cost_pts: 1.5
+    point_value_ntd: 10
+  retail_reference:
+    source: "memory/feedback_taifex_fee_structure.md"
+    TMF_retail_rt_cost_pts: 4.0
+  maker_rebate_ntd_per_side: 10
+  tax_mm_discount_pct: 50
+
+h2_framework:
+  adjudication: "MAKER FULL-CYCLE, queue-depth-overlay on C60"
+  conditional_on: >
+    T5 must demonstrate (a) per-trip gross on gated trips exceeds C60
+    ungated baseline per-trip by 30%+ (dominance-risk test), OR
+    (b) the gate strictly reduces adverse selection by >20% without
+    reducing fill count below 50% of C60 baseline. If neither: T6 REJECT.
+    Lipton-PSS 2013 caution: thin-near-side queue may be adverse-selection
+    signal; T5 must report per-trip edge conditioned on gate.
+
+promote_prerequisites:
+  requires_broker_confirmation_before_live: true
+  dominance_check_vs_c60_required: true
+  reason: >
+    cost_model.confirmed=false; overlay must beat C60 baseline under
+    same cost assumptions AND be robust to Lipton-PSS 2013 asymmetric
+    queue-imbalance adverse-selection finding.
+
+t1_carry_forward_flags:
+  dominance_risk: true                  # T5 must vs-C60 comparison
+  observability_resolved_as_l1_depth_proxy: true  # not self-queue-rank
+  lipton_pss_asymmetric_risk: true      # thin queue -> potential adverse flow
+
+notes:
+  - "Research-module float exception (Rule 11)."
+  - "TMFD6 price scale: x10_000 (live), x1_000_000 (CK)."
+  - "Observability resolved: uses CK L1 depth (bid_qty, ask_qty) — NOT simulation-internal self-queue-rank (which risks PowerProb 14x pessimism)."
+  - "Independent per-side gates — do NOT gang both sides at once."
+  - "Do NOT re-introduce |pos|-based skew variants (C22-class meta-kill)."

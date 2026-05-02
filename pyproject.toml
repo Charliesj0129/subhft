@@ -9,20 +9,16 @@ dependencies = [
     "clickhouse-connect>=0.10,<1",
     "structlog>=25.1,<26",
     "msgspec>=0.20,<1",
-    "uvloop>=0.22,<1",
     "hftbacktest>=2.4,<3",
     "shioaji[speed]==1.2.9",  # PINNED: bump manually after SDK regression test
     "prometheus_client>=0.23,<0.25",  # PINNED: 0.25.0 causes MutexValue._lock corruption (TypeError on /metrics)
     "psutil>=7.1,<8",
     "PyYAML>=6.0,<7",
-    "make>=0.1.6.post2",
-    "joblib>=1.5.3,<2",
     "numba>=0.61,<1",
-    "python-dotenv>=1.2.1,<2",
     "scipy>=1.15.3,<2",
     "exchange-calendars>=4.13.1,<5",
     "orjson>=3.10,<4",
-    "optuna>=4.7.0,<5",
+    "aiohttp>=3.11,<4",
 ]
 
 [project.scripts]
@@ -40,6 +36,8 @@ dev = [
     "mypy>=1.10.0",
     "hypothesis>=6.151.13",
     "bandit[toml]>=1.7.5",
+    "pip-audit>=2.7.0",
+    "pip-licenses>=5.0.0",
     "pre-commit>=3.7.0",
     "pytest-benchmark>=4.0.0",
     "pyarrow>=23.0.1",
@@ -72,15 +70,18 @@ build-backend = "hatchling.build"
 packages = ["src/hft_platform"]
 
 [tool.pytest.ini_options]
-addopts = "--cov=src/hft_platform --cov-branch --cov-report=term-missing --timeout=30"
+addopts = "--cov=src/hft_platform --cov-branch --cov-report=term-missing --cov-fail-under=70 --timeout=30 --ignore=tests/research"
+pythonpath = ["."]
 norecursedirs = [
     "research",
     ".venv",
+    ".hypothesis",
     "data",
     "examples",
     "scripts",
 ]
 markers = [
+    "unit: unit-level tests",
     "blackbox: black-box CLI/system interface tests",
     "regression: regression tests for fixed defects",
     "stress: stress and load tests",
@@ -109,8 +110,9 @@ omit = [
 ]
 
 [tool.coverage.report]
+# fail_under is enforced via --cov-fail-under=70 in addopts so that --no-cov
+# and -p no:cov invocations (e.g. tests/research explicit runs) skip the gate.
 # Roadmap: 70 (Phase 2, current) → 80 (Phase 3). See .agent/rules/50-testing.md
-fail_under = 70
 exclude_lines = [
     "pragma: no cover",
     "if TYPE_CHECKING:",

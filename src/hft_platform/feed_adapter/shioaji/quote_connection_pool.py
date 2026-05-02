@@ -27,7 +27,7 @@ from hft_platform.feed_adapter.shioaji.pool_health import (
 try:
     from prometheus_client import Gauge
 except ImportError:
-    Gauge = None
+    Gauge = None  # type: ignore[assignment, misc]
 
 try:
     from hft_platform.feed_adapter.shioaji.facade import ShioajiClientFacade
@@ -40,10 +40,19 @@ _METRIC_SUBSCRIBED = None
 _METRIC_LOGGED_IN = None
 _METRIC_LAST_DATA_AGE = None
 _METRIC_CONN_STATE = None
+# P1-d (2026-04-27): pool-level health rollup. Live signal showed 3 of 4
+# conns at state=2 with last_data_age 14,875s while only conn 3 carried
+# the entire 119-symbol load — if conn 3 dies the feed is silent. The
+# per-conn metrics above told us about each conn but no single signal
+# said "the pool itself is degraded" so dashboards / alerts had to roll
+# up themselves. This gauge does the rollup at source.
+_METRIC_POOL_DEGRADED = None
+_METRIC_POOL_DEGRADED_FRACTION = None
 
 
 def _ensure_metrics() -> None:
     global _METRIC_SUBSCRIBED, _METRIC_LOGGED_IN, _METRIC_LAST_DATA_AGE, _METRIC_CONN_STATE
+    global _METRIC_POOL_DEGRADED, _METRIC_POOL_DEGRADED_FRACTION
     if Gauge is None or _METRIC_SUBSCRIBED is not None:
         return
     _METRIC_SUBSCRIBED = Gauge(
@@ -66,11 +75,131 @@ def _ensure_metrics() -> None:
         "Connection state per quote connection (0=connected, 1=degraded, 2=recovering, 3=disconnected)",
         ["conn_id"],
     )
+    _METRIC_POOL_DEGRADED = Gauge(
+        "hft_quote_pool_degraded",
+        "Quote connection pool is in degraded state (1 = >50%% of slots non-CONNECTED for >threshold)",
+    )
+    _METRIC_POOL_DEGRADED_FRACTION = Gauge(
+        "hft_quote_pool_degraded_fraction",
+        "Fraction of quote connection slots currently NOT in CONNECTED state (0.0 - 1.0)",
+    )
 
 
 _SHIOAJI_MAX_CONNECTIONS = 5
 _MAX_QUOTE_CONNECTIONS = _SHIOAJI_MAX_CONNECTIONS - 1
 _MAX_SUBSCRIPTIONS_PER_CONN = DEFAULT_MAX_SUBSCRIPTIONS_PER_CONN
+
+# Default path for runtime-refreshed snapshot (TXO chain auto-rotation output).
+# This MUST never collide with the canonical INPUT file pointed to by
+# ``SYMBOLS_CONFIG`` — overwriting the canonical file destroys hand-curated
+# metadata (product_type/tick_size/price_scale/point_value) and was the
+# 2026-04-27 root cause of B2 metadata gap (``config/symbols.yaml`` truncated
+# from 1868 → 370 lines, see commit log near this comment).
+_DEFAULT_RUNTIME_SNAPSHOT_PATH = "data/live_with_options.yaml"
+
+
+def _paths_collide(a: str, b: str) -> bool:
+    """Return True iff ``a`` and ``b`` resolve to the same on-disk file.
+
+    Uses ``realpath`` so symlinks / ``..`` segments / different but
+    equivalent relative paths all collapse to the canonical form before
+    comparison. Returns False if either path cannot be resolved (treated
+    as non-colliding so the caller can proceed; the surrounding writer
+    still validates the path before writing).
+    """
+    try:
+        return os.path.realpath(a) == os.path.realpath(b)
+    except OSError:
+        return False
+
+
+def _derive_sidecar_path(input_path: str) -> str:
+    """Build a sidecar snapshot path from ``input_path``.
+
+    Convention: ``<input_dir>/<input_stem>.runtime.yaml``. Lives next to
+    the canonical file so operators can find it, and the ``.runtime``
+    infix makes its transient nature obvious.
+    """
+    head, tail = os.path.split(input_path)
+    stem, ext = os.path.splitext(tail)
+    if not ext:
+        ext = ".yaml"
+    sidecar_name = f"{stem}.runtime{ext}"
+    return os.path.join(head, sidecar_name) if head else sidecar_name
+
+
+def _resolve_runtime_snapshot_path(symbols_input_path: str | None = None) -> str:
+    """Return the output path for QuoteConnectionPool's auto-refreshed snapshot.
+
+    Precedence:
+      1. ``HFT_SYMBOLS_RUNTIME_SNAPSHOT`` env var (explicit operator override)
+      2. ``_DEFAULT_RUNTIME_SNAPSHOT_PATH`` (``data/live_with_options.yaml``)
+
+    NEVER falls back to ``SYMBOLS_CONFIG`` — that variable points to the
+    INPUT file (canonical, hand-curated). Conflating input + output paths
+    caused B2 in 2026-04-27 (canonical ``config/symbols.yaml`` overwritten
+    with a 370-line transient snapshot lacking ``product_type`` etc.).
+
+    Self-clobber protection (codex round-4 P2 #9):
+
+    If ``symbols_input_path`` is provided and the resolved output path
+    points at the same file, the function tries — in order — to find a
+    path that is **guaranteed distinct** from the input:
+
+      1. Default ``_DEFAULT_RUNTIME_SNAPSHOT_PATH``.
+      2. Sidecar derived from the input path itself
+         (``<input_dir>/<input_stem>.runtime.yaml``).
+      3. ``RuntimeError`` — operator must set
+         ``HFT_SYMBOLS_RUNTIME_SNAPSHOT`` to a different path.
+
+    The previous implementation always returned the default on collision,
+    which silently re-clobbered the input when the operator pointed
+    ``SYMBOLS_CONFIG`` at ``data/live_with_options.yaml`` (i.e. used the
+    generated snapshot AS the canonical input).
+    """
+    snapshot = os.getenv("HFT_SYMBOLS_RUNTIME_SNAPSHOT", "").strip()
+    if not snapshot:
+        snapshot = _DEFAULT_RUNTIME_SNAPSHOT_PATH
+
+    if not symbols_input_path or not _paths_collide(symbols_input_path, snapshot):
+        return snapshot
+
+    # Stage 1: try the default sidecar.
+    if snapshot != _DEFAULT_RUNTIME_SNAPSHOT_PATH and not _paths_collide(
+        symbols_input_path, _DEFAULT_RUNTIME_SNAPSHOT_PATH
+    ):
+        logger.error(
+            "runtime_snapshot_path_collision",
+            requested=snapshot,
+            canonical_input=symbols_input_path,
+            fallback=_DEFAULT_RUNTIME_SNAPSHOT_PATH,
+            stage="env_override_to_default",
+        )
+        return _DEFAULT_RUNTIME_SNAPSHOT_PATH
+
+    # Stage 2: derive a sidecar adjacent to the input itself.
+    sidecar = _derive_sidecar_path(symbols_input_path)
+    if not _paths_collide(symbols_input_path, sidecar):
+        logger.error(
+            "runtime_snapshot_path_collision",
+            requested=snapshot,
+            canonical_input=symbols_input_path,
+            fallback=sidecar,
+            stage="default_to_sidecar",
+        )
+        return sidecar
+
+    # Stage 3: refuse — every candidate collides with the input. This is
+    # only reachable if the operator's canonical file is literally named
+    # ``<x>.runtime.yaml`` AND ``HFT_SYMBOLS_RUNTIME_SNAPSHOT`` points at
+    # the same file. Demand explicit operator action rather than
+    # silently overwriting hand-curated metadata.
+    raise RuntimeError(
+        "Symbols input path collides with every snapshot output candidate "
+        f"(input={symbols_input_path!r}, requested={snapshot!r}, "
+        f"sidecar={sidecar!r}). Set HFT_SYMBOLS_RUNTIME_SNAPSHOT to a "
+        "path that does not equal the canonical symbols file."
+    )
 
 
 def _clamp_max_subscriptions(config: dict[str, Any]) -> int:
@@ -107,6 +236,11 @@ class QuoteConnectionPool:
         "_reconnect_trigger_s",
         "_per_facade_timeout_s",
         "_user_callback",
+        "_symbols_input_path",
+        # P1-d: pool-degraded alert state
+        "_pool_degraded_since_mono",
+        "_pool_degraded_alerted",
+        "_pool_degraded_alert_after_s",
     )
 
     def __init__(self, symbols_path: str, shioaji_cfg: dict[str, Any], num_conns: int) -> None:
@@ -129,24 +263,50 @@ class QuoteConnectionPool:
         self._slots: list[FacadeSlot] = []
         self._lob: Any = None
         self._feature_engine: Any = None
-        self._degraded_threshold_s = float(os.getenv("HFT_FACADE_DEGRADED_THRESHOLD_S", "3"))
+        self._degraded_threshold_s = float(os.getenv("HFT_FACADE_DEGRADED_THRESHOLD_S", "10"))
         self._reconnect_trigger_s = float(os.getenv("HFT_FACADE_RECONNECT_TRIGGER_S", "10"))
         self._user_callback: Callable[..., Any] | None = None
         self._per_facade_timeout_s = float(os.getenv("HFT_PER_FACADE_TIMEOUT_S", "15"))
+        # P1-d: alert when >50%% of conns have been non-CONNECTED for >Ns.
+        # Default 5min so a brief reconnect storm does not trigger;
+        # configurable via HFT_QUOTE_POOL_DEGRADED_ALERT_AFTER_S.
+        self._pool_degraded_since_mono: float = 0.0
+        self._pool_degraded_alerted: bool = False
+        self._pool_degraded_alert_after_s = float(os.getenv("HFT_QUOTE_POOL_DEGRADED_ALERT_AFTER_S", "300"))
+        # Remember the canonical input path so the auto-refresh writer can
+        # detect (and refuse) self-clobber when an operator misconfigures
+        # ``HFT_SYMBOLS_RUNTIME_SNAPSHOT`` (or legacy callers still expect
+        # the writer to honour ``SYMBOLS_CONFIG``).
+        self._symbols_input_path: str = str(symbols_path)
 
         with open(symbols_path, "r") as f:
             data = yaml.safe_load(f) or {}
         self._all_symbols: list[dict[str, Any]] = data.get("symbols", [])
 
         groups: dict[int, list[dict[str, Any]]] = {i: [] for i in range(num_conns)}
+        unassigned: list[dict[str, Any]] = []
         for sym in self._all_symbols:
-            g = sym.get("group", 0)
+            g = sym.get("group")
+            if g is None:
+                unassigned.append(sym)
+                continue
             if not isinstance(g, int) or g < 0 or g >= num_conns:
                 raise ValueError(
                     f"Symbol {sym.get('code', '?')} has group={g} "
                     f"but only {num_conns} connections configured (valid: 0..{num_conns - 1})"
                 )
             groups[g].append(sym)
+
+        if unassigned:
+            unassigned.sort(key=lambda s: (str(s.get("product_type") or ""), str(s.get("code") or "")))
+            for i, sym in enumerate(unassigned):
+                groups[i % num_conns].append(sym)
+            logger.info(
+                "auto_assigned_symbols_round_robin",
+                count=len(unassigned),
+                num_conns=num_conns,
+                per_group={g: len(s) for g, s in groups.items()},
+            )
 
         for g, syms in groups.items():
             if len(syms) > _MAX_SUBSCRIPTIONS_PER_CONN:
@@ -382,6 +542,12 @@ class QuoteConnectionPool:
         Spawns a daemon thread that performs the actual reconnect for this
         single facade. On success, marks the slot for pending warmup reset
         (applied on the event loop by ``_apply_pending_resets``).
+
+        Thread safety (P1, 2026-04-24): the slot's ``begin_reconnect`` /
+        ``record_reconnect_success`` / ``record_reconnect_failure`` helpers
+        guard compound state transitions under the slot's per-instance lock
+        so the daemon thread and the event-loop supervisor never race on
+        ``state`` + ``reconnect_failures``.
         """
         slot: FacadeSlot | None = None
         for s in self._slots:
@@ -391,10 +557,9 @@ class QuoteConnectionPool:
         if slot is None:
             logger.warning("schedule_reconnect_unknown_conn_id", conn_id=conn_id)
             return
-        if slot.state == FacadeState.RECOVERING:
+        if not slot.begin_reconnect():
+            # Another thread already owns the reconnect slot.
             return
-        slot.state = FacadeState.RECOVERING
-        slot.last_reconnect_mono = time.monotonic()
         logger.warning("facade_reconnect_scheduled", conn_id=conn_id)
 
         def _do_reconnect() -> None:
@@ -402,18 +567,13 @@ class QuoteConnectionPool:
             try:
                 ok = slot.facade.reconnect(reason="health_check", force=False)
                 if ok:
-                    slot.state = FacadeState.CONNECTED
-                    slot.reconnect_failures = 0
-                    slot.last_data_mono = time.monotonic()
-                    slot._pending_warmup_reset = True
+                    slot.record_reconnect_success()
                     log.info("facade_reconnected_via_health_check")
                 else:
-                    slot.reconnect_failures += 1
-                    slot.state = FacadeState.DISCONNECTED
+                    slot.record_reconnect_failure()
                     log.warning("facade_health_reconnect_failed")
             except Exception as exc:
-                slot.reconnect_failures += 1
-                slot.state = FacadeState.DISCONNECTED
+                slot.record_reconnect_failure()
                 log.error("facade_health_reconnect_exception", error=str(exc))
 
         t = threading.Thread(
@@ -550,6 +710,69 @@ class QuoteConnectionPool:
                 result.extend(c._client.symbols)
             return result
 
+    @property
+    def subscribed_codes(self) -> set[str]:
+        """Aggregate subscribed-codes set across all underlying clients.
+
+        ``MarketDataService.get_active_feed_gap_s`` reads
+        ``client.subscribed_codes`` to separate "expired contract" (latched
+        but unsubscribed → safe to de-latch) from "partial outage" (still
+        subscribed but silent → must surface).  When ``HFT_QUOTE_CONNECTIONS
+        > 1`` the platform's ``client`` handle is this pool rather than a
+        single facade; without this aggregation the de-latch path silently
+        falls back to ``subscription_set=None`` and never engages.
+
+        Snapshot semantics: each underlying client may mutate its own set
+        concurrently (rollover refresh, contracts_runtime updates).  We
+        materialise into a fresh ``set`` so callers (which iterate or
+        membership-test) cannot tear with a concurrent writer.
+        """
+        result: set[str] = set()
+        # Snapshot the client list once: the pool's reconnect path can
+        # rebuild ``self._clients`` mid-iteration.
+        clients_snapshot = list(self._clients)
+        for client in clients_snapshot:
+            codes = getattr(client, "subscribed_codes", None)
+            if isinstance(codes, (set, frozenset)):
+                # Snapshot each per-client set too, so a concurrent writer
+                # on the underlying facade cannot mutate while we copy.
+                try:
+                    result.update(set(codes))
+                except RuntimeError:
+                    # set changed size during iteration on the underlying
+                    # facade — skip this slice; the partial union still
+                    # over-approximates "subscribed" which is the safer
+                    # direction (false-positive subscription preserves the
+                    # outage signal; false-negative would mask it).
+                    continue
+        return result
+
+    @property
+    def alias_to_actual(self) -> dict[str, str]:
+        """Aggregate alias→resolved-code map across all underlying clients.
+
+        Mirrors :pyattr:`subscribed_codes` for the rollover-alias bridge
+        consumed by ``MarketDataService.get_active_feed_gap_s``.  Per-client
+        maps are populated by ``ContractsRuntime.resolve_symbol_aliases``;
+        when distinct clients carry the same alias key, the later client
+        in the snapshot wins (deterministic, last-writer-wins; the resolved
+        code is identical across clients in normal operation because the
+        rollover machinery is single-source).
+        """
+        result: dict[str, str] = {}
+        clients_snapshot = list(self._clients)
+        for client in clients_snapshot:
+            mapping = getattr(client, "alias_to_actual", None)
+            if isinstance(mapping, dict):
+                try:
+                    result.update(dict(mapping))
+                except RuntimeError:
+                    # dict changed size during iteration on the underlying
+                    # facade — skip this slice; the partial union is safe
+                    # because every present mapping is itself authoritative.
+                    continue
+        return result
+
     def health(self) -> dict[int, dict[str, Any]]:
         return {
             i: {
@@ -561,9 +784,18 @@ class QuoteConnectionPool:
         }
 
     def update_metrics(self) -> None:
-        """Push per-connection metrics to Prometheus gauges."""
+        """Push per-connection metrics to Prometheus gauges.
+
+        Also computes the P1-d pool-degraded rollup: if >50% of slots are
+        NOT in CONNECTED state for ``_pool_degraded_alert_after_s``
+        seconds, set ``hft_quote_pool_degraded`` and emit a CRITICAL log
+        once. The alert clears as soon as the pool returns to majority-
+        healthy so dashboards can correlate alert windows with recovery.
+        """
         _ensure_metrics()
         now = time.monotonic()
+        n_slots = len(self._slots)
+        n_unhealthy = 0
         for slot in self._slots:
             cid = str(slot.conn_id)
             if _METRIC_SUBSCRIBED is not None:
@@ -574,6 +806,48 @@ class QuoteConnectionPool:
                 _METRIC_LAST_DATA_AGE.labels(conn_id=cid).set(now - slot.last_data_mono)
             if _METRIC_CONN_STATE is not None:
                 _METRIC_CONN_STATE.labels(conn_id=cid).set(int(slot.state))
+            if slot.state != FacadeState.CONNECTED:
+                n_unhealthy += 1
+        # P1-d: pool-level rollup
+        fraction = (n_unhealthy / n_slots) if n_slots > 0 else 0.0
+        if _METRIC_POOL_DEGRADED_FRACTION is not None:
+            _METRIC_POOL_DEGRADED_FRACTION.set(fraction)
+        majority_unhealthy = n_slots > 0 and (2 * n_unhealthy) > n_slots
+        if majority_unhealthy:
+            if self._pool_degraded_since_mono == 0.0:
+                # First tick of the degradation window — start the timer.
+                self._pool_degraded_since_mono = now
+            elif (
+                not self._pool_degraded_alerted
+                and (now - self._pool_degraded_since_mono) >= self._pool_degraded_alert_after_s
+            ):
+                # We have been majority-degraded for long enough — fire
+                # the CRITICAL log exactly once until we recover. Keep the
+                # gauge raised for the entire window.
+                self._pool_degraded_alerted = True
+                logger.critical(
+                    "quote_pool_degraded",
+                    n_slots=n_slots,
+                    n_unhealthy=n_unhealthy,
+                    fraction=fraction,
+                    duration_s=now - self._pool_degraded_since_mono,
+                    threshold_s=self._pool_degraded_alert_after_s,
+                    hint="Quote pool has lost majority connectivity; check Shioaji broker session / reconnect logs",
+                )
+            if _METRIC_POOL_DEGRADED is not None:
+                _METRIC_POOL_DEGRADED.set(1.0 if self._pool_degraded_alerted else 0.0)
+        else:
+            # Recovery: clear timer + alert state, drop the gauge.
+            if self._pool_degraded_alerted:
+                logger.warning(
+                    "quote_pool_degraded_cleared",
+                    n_slots=n_slots,
+                    n_unhealthy=n_unhealthy,
+                )
+            self._pool_degraded_since_mono = 0.0
+            self._pool_degraded_alerted = False
+            if _METRIC_POOL_DEGRADED is not None:
+                _METRIC_POOL_DEGRADED.set(0.0)
 
     # ── Options auto-refresh ─────────────────────────────────────────────
 
@@ -687,10 +961,33 @@ class QuoteConnectionPool:
                 logger.warning("options_refresh_no_contracts")
                 return False
 
-            # Find nearest expiry
-            dates = sorted(set(str(c.get("delivery_date", "")) for c in opts if c.get("delivery_date")))
-            if not dates:
+            # Find nearest non-expired expiry. Drop dates < today so a stale
+            # broker contract cache (containing already-expired chains) cannot
+            # bait the auto-refresh into mass-subscribing dead options.
+            # Cache uses 'YYYY/MM/DD' or 'YYYY-MM-DD'; parse before comparing.
+            from datetime import date as _date
+
+            today = _date.today()
+
+            def _parse_delivery(value: str) -> _date | None:
+                value = value.strip().replace("/", "-")
+                if len(value) != 10:
+                    return None
+                try:
+                    return _date.fromisoformat(value)
+                except ValueError:
+                    return None
+
+            active: dict[str, _date] = {}
+            for c in opts:
+                raw = str(c.get("delivery_date", ""))
+                parsed = _parse_delivery(raw)
+                if parsed is not None and parsed >= today:
+                    active[raw] = parsed
+            if not active:
+                logger.warning("options_refresh_no_active_expiry", cache_dates_seen=len(opts))
                 return False
+            dates = sorted(active.keys(), key=lambda k: active[k])
             nearest_date = dates[0]
 
             if self._options_expiry == nearest_date:
@@ -758,10 +1055,23 @@ class QuoteConnectionPool:
                     )
                     return False
 
-            out_path = os.getenv("SYMBOLS_CONFIG", "data/live_with_options.yaml")
+            # Write the auto-refreshed snapshot to a sidecar path — never to
+            # the canonical input file. ``_resolve_runtime_snapshot_path`` honours
+            # ``HFT_SYMBOLS_RUNTIME_SNAPSHOT`` and refuses to clobber the
+            # canonical INPUT (``self._symbols_input_path``) even if an operator
+            # accidentally points it there. See module-level docstring on
+            # ``_DEFAULT_RUNTIME_SNAPSHOT_PATH`` for the 2026-04-27 incident
+            # context (B2 metadata gap).
+            out_path = _resolve_runtime_snapshot_path(self._symbols_input_path)
             try:
+                # Ensure parent dir exists (default sidecar lives under
+                # gitignored ``data/`` which may not exist on a fresh clone).
+                parent = os.path.dirname(out_path)
+                if parent:
+                    os.makedirs(parent, exist_ok=True)
                 with open(out_path, "w") as f:
                     f.write("# Auto-refreshed by QuoteConnectionPool\n")
+                    f.write(f"# Source canonical: {self._symbols_input_path}\n")
                     f.write(f"# TXO nearest expiry: {nearest_date}\n")
                     f.write(f"# Group 0: Base ({len(base_symbols)})\n")
                     option_groups = self._option_target_groups()
@@ -769,7 +1079,7 @@ class QuoteConnectionPool:
                     f.write(f"# Trimmed options: {trimmed}\n\n")
                     yaml.dump({"symbols": symbols}, f, default_flow_style=False, allow_unicode=True)
             except Exception as exc:
-                logger.error("options_refresh_write_failed", error=str(exc))
+                logger.error("options_refresh_write_failed", error=str(exc), out_path=out_path)
                 return False
 
             self._options_expiry = nearest_date
@@ -815,7 +1125,8 @@ class QuoteConnectionPool:
                     # Reset local subscription counters so subscribe_basket() doesn't
                     # immediately hit the MAX_SUBSCRIPTIONS guard on the second call.
                     # Mirrors what _resubscribe_all() does in subscription_manager.py.
-                    facade._client.subscribed_codes = set()
+                    # D2: in-place clear preserves object identity for peer readers.
+                    facade._client.subscribed_codes.clear()
                     facade._client.subscribed_count = 0
                     if facade.logged_in and active_cb is not None:
                         slot = self._slots[i] if i < len(self._slots) else None
@@ -851,6 +1162,10 @@ class QuoteConnectionPool:
             return
         if interval_s is None:
             interval_s = float(os.getenv("HFT_OPTIONS_REFRESH_S", "3600"))
+
+        if interval_s <= 0:
+            logger.info("options_refresh_thread_disabled", interval_s=interval_s)
+            return
 
         self._options_refresh_running = True
         self._refresh_stop_event.clear()

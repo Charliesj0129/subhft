@@ -3,46 +3,50 @@
 #
 # IMPORTANT: All spread thresholds use POINTS (not bps).
 # Points are stable across price levels; bps shifts with index value.
-# Breakeven = RT_cost_NTD / point_value_NTD (e.g. TMFD6: 40/10 = 4 pts)
+# Breakeven = RT_cost_NTD / point_value_NTD (e.g. TMF: 40/10 = 4 pts)
+#
+# SYMBOL CONVENTION: Use R1/R2 continuous codes (e.g. TMFR1 = front month).
+# Aliases are resolved to actual month codes at runtime after broker login.
+# This eliminates monthly manual updates.
 
 strategies:
-  # --- OpportunisticMM on TMFD6 (微台指) — SHADOW MODE ---
+  # --- OpportunisticMM on TMF (微台指) — SHADOW MODE ---
   # Point-based threshold: RT cost = 40 NTD = 4 pts, threshold = 5 pts (1 pt edge)
   # Economics: 1 pt = 10 NTD, median spread 4 pts, avg profitable spread 19.7 pts
   # Research: Round 16, docs/alpha-research/
-  - id: "OPPORTUNISTIC_MM_TMFD6"
+  - id: "OPPORTUNISTIC_MM_TMF"
     module: "hft_platform.strategies.opportunistic_mm"
     class: "OpportunisticMM"
     enabled: false
     product_type: "FUT"
-    symbols: ["TMFD6"]
+    symbols: ["TMFR1"]
     params:
       spread_threshold_pts: 5    # 5 pts > 4 pts breakeven (RT 40 NTD / 10 NTD per pt)
       tick_size_ratio_pct: 50
 
-  # --- OpportunisticMM on TXFD6 (大台) — DISABLED ---
+  # --- OpportunisticMM on TXF (大台) — DISABLED ---
   # Point-based threshold: RT cost ≈ 60 NTD ≈ 0.3 pts (1 pt = 200 NTD), threshold = 3 pts
-  # Disabled: switching shadow focus to TMFD6
-  - id: "OPPORTUNISTIC_MM_TXFD6"
+  # Disabled: switching shadow focus to TMF
+  - id: "OPPORTUNISTIC_MM_TXF"
     module: "hft_platform.strategies.opportunistic_mm"
     class: "OpportunisticMM"
     enabled: false
     product_type: "FUT"
-    symbols: ["TXFD6"]
+    symbols: ["TXFR1"]
     params:
       spread_threshold_pts: 3    # 3 pts (conservative for 大台)
       tick_size_ratio_pct: 50
 
-  # --- Cascade Bounce Strategy (TMFD6 rollout) ---
+  # --- Cascade Bounce Strategy (TMF rollout) ---
   # Vol-normalized contrarian entry with IOC-at-touch entry and passive limit exit.
-  # During rollout this is the only enabled TMFD6 live strategy because intraday_pnl
+  # During rollout this is the only enabled TMF live strategy because intraday_pnl
   # remains global in strategy_limits.yaml.
-  - id: "CBS_TMFD6"
+  - id: "CBS_TMF"
     module: "hft_platform.strategies.cascade_bounce"
     class: "CascadeBounceStrategy"
     enabled: false  # Disabled: 0/84 contrarian, 0/6 momentum configs profitable
     product_type: "FUT"
-    symbols: ["TMFD6"]
+    symbols: ["TMFR1"]
     params:
       lookback_ns: 60000000000         # 60s vol window
       trigger_sigma: 3.0
@@ -54,17 +58,17 @@ strategies:
       session_start_sec: 0            # 00:00 TWN — full-day fallback; SessionGovernor is authoritative in prod
       session_end_sec: 86400          # 24:00 TWN — keeps day/night sessions eligible when governor is enabled
 
-  # --- Momentum Bounce (CBS-Flipped) TMFD6 — SHADOW MODE ---
+  # --- Momentum Bounce (CBS-Flipped) TMF — SHADOW MODE ---
   # Trades WITH sigma-normalized large moves (momentum, not contrarian).
   # Trailing stop + hard SL + time exit. Deploy with HFT_ORDER_MODE=sim.
   # March regime: 51% win, median ~breakeven. Jan-Feb: anti-momentum.
   # Shadow mode accumulates OOS evidence; switch to live after 5+ positive days.
-  - id: "MOMENTUM_BOUNCE_TMFD6"
+  - id: "MOMENTUM_BOUNCE_TMF"
     module: "hft_platform.strategies.momentum_bounce"
     class: "MomentumBounceStrategy"
     enabled: false  # Disabled: research incomplete, not ready for live
     product_type: "FUT"
-    symbols: ["TMFD6"]
+    symbols: ["TMFR1"]
     params:
       lookback_ns: 60000000000         # 60s vol window (same as CBS)
       trigger_sigma: 3.0               # 3-sigma normalized move threshold
@@ -80,16 +84,16 @@ strategies:
   # Cross-symbol momentum: TX large-volume ticks predict TMF 10-30min moves.
   # Research: R28, E[net]=+30.6 pts/trade (SL100 + 15min horizon).
   # Enable for shadow: set enabled=true, run with HFT_ORDER_MODE=sim
-  # Subscribes to BOTH TXFD6 (signal) and TMFD6 (trade).
+  # Subscribes to BOTH TXF (signal) and TMF (trade).
   - id: "TX_TMF_LEADLAG"
     module: "hft_platform.strategies.tx_tmf_leadlag"
     class: "TxTmfLeadLagStrategy"
     enabled: false
     product_type: "FUT"
-    symbols: ["TXFD6", "TMFD6"]
+    symbols: ["TXFR1", "TMFR1"]
     params:
-      signal_symbol: "TXFD6"
-      trade_symbol: "TMFD6"
+      signal_symbol: "TXFR1"
+      trade_symbol: "TMFR1"
       dvol_threshold: 20
       sl_pts: 100
       max_hold_ns: 900000000000      # 15min
@@ -98,18 +102,27 @@ strategies:
       session_start_sec: 2700         # 00:45 UTC = 08:45 TWN
       session_end_sec: 20700          # 05:45 UTC = 13:45 TWN
 
-  # --- R47 Maker (TMFD6) — Spread-Filtered MM ---
+  # --- R47 Maker (TMF) — Spread-Filtered MM ---
   # Compromise backtest (25 days, CK-direct with queue model):
   #   spr5_back (most conservative): +10,856 pts, 36,217 fills, 69.3% WR
   #   spr5_mid: +34,051 pts, 55,639 fills, 73.6% WR, +13.6K NTD/day
-  # TMFD6 economics: 1pt=10NTD, RT cost=4.0pts. spread>=5 profitable with QI skew.
-  # 2026-04-10: Optimized for TMFD6 fee structure. QI skew reduces AS by ~20%.
-  - id: "R47_MAKER_TMFD6"
+  # TMF economics: 1pt=10NTD, RT cost=4.0pts. spread>=5 profitable with QI skew.
+  # 2026-04-10: Optimized for TMF fee structure. QI skew reduces AS by ~20%.
+  - id: "R47_MAKER_TMF"
     module: "hft_platform.strategies.r47_maker"
     class: "R47MakerStrategy"
     enabled: true
     product_type: "FUT"
-    symbols: ["TMFD6"]              # 微台: 本金門檻低, 1pt=10NTD
+    symbols: ["TMFE6"]              # Concrete May-2026 expiry; still listed for MD subscription via symbols.yaml. After Option-3 Gate 1 verification this hardcode becomes removable — contract_families below keeps strategy.symbols current across rollovers.
+    # Option-3 Gate 1 prod (2026-04-19): opt-in family binding. On broker
+    # login the ContractFamilyResolver (Shioaji populator) reads delivery_month
+    # per TAIFEX contract and swaps an atomic snapshot. The StrategyRunner
+    # rebind hook keeps strategy.symbols aligned with the current nearest
+    # expiry, eliminating the Bug-12 class of silent-drop failures.
+    contract_families:
+      - product: FUTURE
+        root: TMF
+        family: R1
     params:
       pe_danger_threshold: 0.0     # Disabled
       pe_window: 100
@@ -121,7 +134,9 @@ strategies:
       toxicity_max: 9999           # Disabled (negligible on TMFD6)
       qi_skew_threshold: 0.10     # D4: QI |imbalance| > 0.10 → widen adverse side
       qi_widen_ticks: 1           # Widen by 1 tick (w=1 optimal for total PnL + Sharpe)
-      max_pos: 1                   # Manually set: max 1 lot (2026-04-11)
+      stale_quote_max_ticks: 3    # D1 (2026-04-21 fix): cancel active quote when |mid - last_quote| > 3 pts regardless of placement-gate state. Today's incident: spread gate blocked 96.3% of ticks, abandoned orders sat up to 41 s.
+      quote_cooldown_ms: 1000     # D2 (2026-04-21 fix): re-quote cooldown must exceed Shioaji P95 RTT (~800 ms) so _active_*_oid is populated before the next placement; else earlier in-flight orders get orphaned.
+      max_pos: 1                   # Emergency rollback to 1 lot after 2026-04-20 HALT episode
 
   # --- Electronic Eye (TXO Options MM + Delta Hedge) — DISABLED ---
   # Phase 3: Automated options market-making with delta-neutral hedging.
@@ -156,3 +171,161 @@ strategies:
       publish:
         channel: "monitor:portfolio:greeks"
         interval_ms: 1000
+
+  # --- C14 TXF Front-Month Maker — KILLED 2026-04-18 (DO NOT ENABLE) ---
+  # ORIGINAL: Promoted 2026-04-17 R6 with claimed OOS Sharpe 18.89, +313K NTD/day.
+  # CORRECTION 2026-04-18: PROMOTE REVOKED. Cost model assumed TXF RT = 0.48 pt;
+  # actual user retail RT ≈ 3 pt (6× under-estimate). Re-computed:
+  #   - OOS net edge/fill: -1.69 pt (claimed +0.829)
+  #   - OOS NTD/day:       -638,000 (claimed +312,900)
+  #   - Edge/RT ratio:     0.44× (under 1× floor)
+  # See: memory/r6_cost_model_correction.md, round-6/summary.md Correction section,
+  # research/alphas/c14_txf_frontmonth_native_maker/manifest.yaml correction_note.
+  # Entry RETAINED for traceability + to prevent accidental re-creation. enabled MUST stay false.
+  # Economics (CORRECTED): 1 pt = 200 NTD, RT cost ≈ 3 pt, front-month median spread 4-5 pt
+  # → cost drag ≈ 60-75% (close to TMFD6 80-133%, NOT the 10-16% originally claimed).
+  - id: "C14_TXF_FRONTMONTH_MAKER"
+    module: "hft_platform.strategies.c14_txf_frontmonth_maker"
+    class: "C14TxfFrontMonthMakerStrategy"
+    enabled: false                   # SHADOW ONLY — do not enable without user approval
+    product_type: "FUT"
+    symbols: ["TXFB6", "TXFC6", "TXFD6"]
+    params:
+      max_pos: 3                     # R47 structural minimum (max_pos=1 turns +4,504 → -1,407)
+      spread_threshold_pts: 3        # TXF breakeven ~0.5 pts; 3 pts = comfortable margin
+      inventory_skew_tenths: 2       # 0.2 ticks/contract fixed skew (R47 structural best)
+      shadow_mode: true              # Paired with HFT_ORDER_SHADOW_MODE=1 at launch
+      p_front_shadow_flag: 0.2       # pessimistic sensitivity — informational echo in metrics
+      rollover_rule: "volume_crossover"  # see research/alphas/c14_txf_frontmonth_native_maker/frontmonth.py
+
+  # --- C17 TMF Front-Month Maker — SHADOW ONLY ---
+  # R47 maker strategy on TMF rolling front-month (TMFB6 → TMFC6 → TMFD6).
+  # Approved T2 2026-04-17 (R10 round). Research: research/alphas/c17_tmf_frontmonth_native_maker/
+  # TMF analog of C14 (1 pt = 10 NTD, RT cost 4.0 pt vs TXF 0.48 pt).
+  # SWITCH semantics: REPLACES the deployed R47_MAKER_TMF max_pos=1.
+  # MUST NOT run simultaneously — doing so replicates R51-C1b kill (net -109K NTD).
+  # Economics: 1 pt = 10 NTD, RT cost 4.0 pt, front-month median spread 2-3 pt.
+  # The live-runtime wrapper class is added at T8 post-PROMOTE; leaving the
+  # module/class strings here keeps the entry registry-valid when wired.
+  - id: "C17_TMF_FRONTMONTH_MAKER"
+    module: "hft_platform.strategies.c17_tmf_frontmonth_maker"
+    class: "C17TmfFrontMonthMakerStrategy"
+    enabled: false                   # SHADOW ONLY — do not enable without user approval
+    product_type: "FUT"
+    symbols: ["TMFB6", "TMFC6", "TMFD6"]
+    params:
+      max_pos: 3                     # R47 structural minimum
+      spread_threshold_pts: 5        # TMF RT 4.0 pt requires >=5 pt spread for positive edge
+      inventory_skew_tenths: 2       # 0.2 ticks/contract fixed skew
+      shadow_mode: true
+      p_front_shadow_flag: 0.2       # pessimistic queue-position shadow flag
+      rollover_rule: "volume_crossover"
+      switch_from_strategy: "R47_MAKER_TMF"  # disable before enabling C17
+
+  # --- C27 Vol-Percentile Amplification on C14 — RE-EVALUATION 2026-04-18 ---
+  # HISTORY: C14 base PROMOTE was REVOKED 2026-04-18 on cost-model error
+  # (TXF RT 0.48 → 3 pt). Initial R14 cascade-KILL was lifted by user override
+  # 2026-04-18; C27 is being re-evaluated standalone with corrected RT and
+  # flipped OOS (Jan-Feb volatile = OOS, Mar-Apr stable = TRAIN).
+  # Driver: outputs/.../round-14/artifacts/backtest/run_c27_backtest_corrected.py.
+  # enabled MUST stay false until corrected T5/T6/T7 complete.
+  - id: "C27_VOL_AMPLIFIED_C14"
+    module: "hft_platform.strategies.c27_vol_amplified_c14"
+    class: "C27VolAmplifiedStrategy"
+    enabled: false                   # SHADOW ONLY
+    product_type: "FUT"
+    symbols: ["TXFB6", "TXFC6", "TXFD6"]
+    params:
+      spread_threshold_pts: 3        # inherits C14
+      max_pos_baseline: 3            # baseline state (R47 structural optimum)
+      max_pos_amplified: 4           # amplified state during high-vol minutes
+      inventory_skew_tenths: 2       # inherits C14
+      vol_percentile_threshold: 0.90 # trigger amplified above P90
+      vol_percentile_release: 0.70   # release below P70 (hysteresis)
+      vol_window_seconds: 60         # informational; gate uses minute buckets
+      warmup_minutes: 10             # minutes of history before gate can fire
+      shadow_mode: true
+      p_front_shadow_flag: 0.2       # inherits C14 shadow-default
+      rollover_rule: "volume_crossover"
+      switch_from_strategy: "C14_TXF_FRONTMONTH_MAKER"  # C27 REPLACES C14 (not co-deploy)
+
+  # --- C33 TXFD6 Solo Passive Maker — EXCEPTION LIVE ROLLOUT ---
+  # R47-minimal on TXFD6 native (spread-gate only; PE/Queue/MFG/QI signal layers
+  # DISABLED — R7 T1 counterfactual: TMFD6-calibrated thresholds underperform 4:1).
+  # Approved T2, PROMOTED at R7/T6 (2026-04-18) on 6/6 DA criteria PASS:
+  # close_maker_rate 97.7% OOS (threshold 80%), mean daily OOS +76,920 NTD,
+  # 80% days positive, loss-tail 0.20×. See research/alphas/c33_txfd6_solo_passive_maker/
+  # RELEASE_GATE.md for the original shadow→live checklist.
+  # 2026-04-18: explicit user-approved exception rollout on THESHOW.
+  # Conservative live caps are enforced here as max_pos=1 and in strategy_limits.yaml.
+  # Economics: TXF 1 pt = 200 NTD, RT = 3 pt retail (memo), current-regime spread 4-5 pt,
+  # cost drag ~75%; realized OOS cycle net +5.77 pt (10× T1 estimate).
+  - id: "C33_TXFD6_SOLO_MAKER"
+    module: "hft_platform.strategies.c33_txfd6_solo_maker"
+    class: "C33TxfD6SoloMaker"
+    enabled: false                   # User reverted to R47-only deployment on 2026-04-19
+    product_type: "FUT"
+    symbols: ["TXFD6"]
+    params:
+      max_pos: 1                     # Conservative exception-live cap: 1 lot only
+      spread_threshold_pts: 5        # R47 convention; cost-margin 2 pt over RT 3 pt
+      inventory_skew_tenths: 2       # 0.2 ticks/contract fixed skew (R47 structural best)
+      shadow_mode: false             # Live rollout on shared engine; no global shadow
+      queue_share: 0.05              # informational: live broker decides fills, not sim
+      variant: "R47-minimal"         # signal layers DISABLED; TMFD6 thresholds do not transfer
+
+  # --- C60 TMFD6 R47-minimal Maker under Institutional RT ---
+  # SHADOW_SCAFFOLDED_2026-04-19 (R1 T8); enabled=false pending user confirmation.
+  # R47-minimal on TMFD6 at inst RT 1.5 pt (shared-context.yaml#cost_model.TMF,
+  # confirmed=false). Deployed D4 QI skew layer ACTIVE (top-of-book imbalance,
+  # NOT |pos|-gated); D1 PE / D2 Queue / D3 MFG DISABLED. Canonical max_pos=2
+  # per DA T6 verdict (fresh CK-direct T5: mp=2 yields +4,557 NTD/day vs mp=1
+  # +2,766 NTD/day; mp=3 +3,990 NTD/day). Shadow floor 30% = +1,367 NTD/day.
+  # PROMOTE_CONDITIONAL: requires_broker_confirmation_before_live=true because
+  # the TMF RT 1.5 pt + maker rebate 10 NTD/side are institutional ESTIMATES,
+  # NOT broker-confirmed. See research/alphas/c60_tmfd6_r47_minimal_inst_rt/
+  # RELEASE_GATE.md and SHADOW_DEPLOY.md.
+  # Economics: TMF 1 pt = 10 NTD, inst RT = 1.5 pt (retail ref 4 pt), median
+  # spread 2 pt, inst cost drag ~75%; realized OOS cycle net +5.18 pt.
+  - id: "C60_TMFD6_SOLO_MAKER"
+    module: "hft_platform.strategies.c60_tmfd6_solo_maker"
+    class: "C60TmfD6SoloMakerMinimal"
+    enabled: false                   # Shadow-only; user-gated per feedback_no_auto_deploy
+    product_type: "FUT"
+    symbols: ["TMFD6"]
+    params:
+      max_pos: 2                     # Canonical per DA T6 (best of fresh-sim {1,2,3})
+      spread_threshold_pts: 5        # R47 convention; cost-margin on inst RT 1.5 pt
+      inventory_skew_tenths: 2       # 0.2 ticks/contract fixed skew
+      qi_skew_threshold: 0.10        # D4 QI deployed threshold
+      qi_skew_widen_ticks: 1         # widen 1 tick on QI trigger
+      enable_qi_layer: true          # D4 QI retained (deployed TMFD6 config)
+      shadow_mode: true              # Shadow-run under HFT_ORDER_SHADOW_MODE=1
+      queue_share: 0.05              # informational: live broker decides fills, not sim
+      variant: "R47-minimal"         # D1/D2/D3 DISABLED; D4 QI active
+
+  # --- C63 TXFD6 R47-minimal Tight Spread (sp=3) — REPLACES C33 ---
+  # SHADOW_SCAFFOLDED_2026-04-19 (R2-SUPP T8); enabled=false pending user confirmation.
+  # CRITICAL: C63 REPLACES C33_TXFD6_SOLO_MAKER. Both target TXFD6 with identical
+  # R47-minimal mechanism; only spread_threshold_pts differs (C33=5, C63=3). Under
+  # inst RT 1.5 pt, the 3-pt spread band is profitable; at retail 3 pt RT, C63 flips
+  # NEGATIVE (-14,447 NTD/day) while C33 survives (+37 NTD/day). This is the HARD
+  # COST GATE: if broker confirms TXF RT > 2.5 pt retail, DO NOT deploy C63.
+  # C33 and C63 MUST NEVER both be enabled=true — mutually exclusive on TXFD6.
+  # Fresh CK-direct (20 days 2026-02-23..04-14, qf=1.0, inst RT 1.5pt):
+  #   sp=3 mp=3 canonical yields +114,680 NTD/day (2.33x C33 baseline same data).
+  # Shadow target 30% haircut: +34,404 NTD/day.
+  # See research/alphas/c63_txfd6_r47_tight_spread/{RELEASE_GATE,SHADOW_DEPLOY}.md
+  - id: "C63_TXFD6_TIGHT_SPREAD_MAKER"
+    module: "hft_platform.strategies.c63_txfd6_tight_spread_maker"
+    class: "C63TxfD6TightSpreadMaker"
+    enabled: false                   # HARD RULE: mutually exclusive with C33_TXFD6_SOLO_MAKER
+    product_type: "FUT"
+    symbols: ["TXFD6"]
+    params:
+      max_pos: 3                     # Canonical (fresh-sim best of {1,2,3})
+      spread_threshold_pts: 3        # SIGNATURE LEVER (C33 is 5)
+      inventory_skew_tenths: 2       # 0.2 ticks/contract fixed skew (LINEAR in pos)
+      shadow_mode: true              # Shadow-run under HFT_ORDER_SHADOW_MODE=1
+      queue_share: 0.05              # informational; same as C33
+      variant: "R47-minimal-tight-spread"  # all four signal layers DISABLED (C33 precedent)

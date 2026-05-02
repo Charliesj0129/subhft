@@ -349,7 +349,7 @@ async def test_register_broker_ids_from_dict(tmp_config):
     trade = {"seq_no": "S1", "ord_no": "O1"}
     await adapter._register_broker_ids("s1:1", trade)
 
-    async with adapter._order_id_map_lock:
+    with adapter._order_id_map_lock:
         assert adapter.order_id_map.get("S1") == "s1:1"
         assert adapter.order_id_map.get("O1") == "s1:1"
 
@@ -365,7 +365,7 @@ async def test_register_broker_ids_from_object(tmp_config):
     trade.order = None
     await adapter._register_broker_ids("s1:2", trade)
 
-    async with adapter._order_id_map_lock:
+    with adapter._order_id_map_lock:
         assert adapter.order_id_map.get("SQ1") == "s1:2"
 
 
@@ -381,7 +381,7 @@ async def test_register_broker_ids_eviction(tmp_config):
     trade = {"seq_no": "NEW_ID"}
     await adapter._register_broker_ids("s1:99", trade)
 
-    async with adapter._order_id_map_lock:
+    with adapter._order_id_map_lock:
         assert adapter.order_id_map.get("NEW_ID") == "s1:99"
         assert len(adapter.order_id_map) <= 5
 
@@ -393,7 +393,7 @@ async def test_register_broker_ids_nested_order(tmp_config):
     trade = {"order": {"seq_no": "NESTED_SEQ"}}
     await adapter._register_broker_ids("s1:3", trade)
 
-    async with adapter._order_id_map_lock:
+    with adapter._order_id_map_lock:
         assert adapter.order_id_map.get("NESTED_SEQ") == "s1:3"
 
 
@@ -775,9 +775,13 @@ async def test_api_worker_continues_after_unexpected_exception(tmp_config):
 
     # Worker processed both items (continued after first exception)
     assert call_count == 2
-    # Metrics and circuit breaker were updated on the failure
-    adapter.metrics.order_reject_total.inc.assert_called()
-    adapter.circuit_breaker.record_failure.assert_called()
+    # Bug D' hygiene: NEW intents are phantom candidates → _handle_dispatch_exception
+    # does NOT inflate order_reject_total or trip circuit_breaker (the order may
+    # have reached the broker; counting it as a real reject corrupts dashboards).
+    # Phantom-candidate counter IS incremented instead.
+    adapter.metrics.order_reject_total.inc.assert_not_called()
+    adapter.circuit_breaker.record_failure.assert_not_called()
+    adapter.metrics.phantom_order_candidates_total.inc.assert_called()
 
 
 @pytest.mark.asyncio

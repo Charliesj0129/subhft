@@ -33,7 +33,6 @@
 ### Performance
 | Package | Version | Purpose |
 |---------|---------|---------|
-| uvloop | >=0.22 | Fast async event loop |
 | numba | >=0.61 | JIT kernels (IPC, ShmRingBuffer) |
 | maturin | (dev) | Rust extension build |
 

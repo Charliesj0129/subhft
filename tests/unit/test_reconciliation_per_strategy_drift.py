@@ -33,7 +33,11 @@ def _make_store_with_positions(entries: list[tuple[str, str, str, int]]) -> Posi
 
 
 def _make_service(client, store) -> ReconciliationService:
-    return ReconciliationService(client, store, {}, storm_guard=StormGuard())
+    # broker_zero_debounce_observations=1 so broker-empty snapshots aren't silently
+    # swallowed on first observation (default=2 would hide the discrepancy).
+    return ReconciliationService(
+        client, store, {"reconciliation": {"broker_zero_debounce_observations": 1}}, storm_guard=StormGuard()
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -42,8 +46,12 @@ def _make_service(client, store) -> ReconciliationService:
 
 
 @pytest.mark.asyncio
-async def test_per_strategy_breakdown_logged_at_debug_no_discrepancy():
-    """Per-strategy breakdown is logged at DEBUG even when broker matches."""
+async def test_per_strategy_breakdown_logged_no_discrepancy():
+    """Per-strategy breakdown is logged at DEBUG when broker matches.
+
+    Downgraded from INFO (was 5 s cadence → 17 k lines/day). When discrepancies
+    exist the drift attribution still fires at WARNING (see below).
+    """
     client = MagicMock()
     # Broker reports 10 of 2330
     client.get_positions.return_value = [SimpleNamespace(code="2330", quantity=10, direction="Action.Buy")]

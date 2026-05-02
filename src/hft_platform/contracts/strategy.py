@@ -1,6 +1,9 @@
 from dataclasses import dataclass
 from enum import IntEnum
-from typing import Optional
+from typing import TYPE_CHECKING, Any, Optional
+
+if TYPE_CHECKING:
+    from hft_platform.contracts.ref import ContractRef
 
 
 class Side(IntEnum):
@@ -65,6 +68,13 @@ class OrderIntent:
     # Order type: "LMT" (default limit order) or "MKT" (market order)
     price_type: str = "LMT"
 
+    # Option-3 Gate 3 slice: optional structured contract identity that
+    # propagates from ``event.contract`` (Gate 2b) through the
+    # strategy → risk → order path. Legacy consumers that key on
+    # ``symbol`` are unaffected; consumers that understand ContractRef
+    # can prefer this over parsing ``symbol`` strings.
+    contract: Optional["ContractRef"] = None
+
 
 @dataclass(slots=True)
 class RiskDecision:
@@ -104,3 +114,116 @@ class OrderCommand:
     created_ns: int = 0
     decision_price: int = 0  # Passthrough from OrderIntent
     arrival_price: int = 0  # Stamped by OrderAdapter at submit time
+
+
+# ---------------------------------------------------------------------------
+# Typed intent tuple helpers
+#
+# The fast path across the strategy→risk→order boundary carries intents as
+# tuples ("typed_intent_v1", intent_id, strategy_id, symbol, intent_type,
+# side, price, qty, tif, ...). Attribute access (`intent.side`, etc.) does
+# not work on tuples, so consumers that need these fields MUST use these
+# helpers rather than bare ``getattr`` — Bug 9/13 showed silent ``side=None``
+# propagation freezing R47's pending counters permanently.
+# ---------------------------------------------------------------------------
+
+
+def typed_intent_side(intent: Any) -> int | None:
+    """Extract side (as int) from typed-intent tuple index 5 or OrderIntent.side."""
+    if isinstance(intent, tuple) and len(intent) >= 6 and intent[0] == "typed_intent_v1":
+        try:
+            return int(intent[5])
+        except (TypeError, ValueError):
+            return None
+    value = getattr(intent, "side", None)
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def typed_intent_symbol(intent: Any) -> str:
+    """Extract symbol from typed-intent tuple index 3 or OrderIntent.symbol."""
+    if isinstance(intent, tuple) and len(intent) >= 4 and intent[0] == "typed_intent_v1":
+        return str(intent[3])
+    return str(getattr(intent, "symbol", ""))
+
+
+def typed_intent_strategy_id(intent: Any) -> str:
+    """Extract strategy_id from typed-intent tuple index 2 or OrderIntent.strategy_id."""
+    if isinstance(intent, tuple) and len(intent) >= 3 and intent[0] == "typed_intent_v1":
+        return str(intent[2])
+    return str(getattr(intent, "strategy_id", ""))
+
+
+def typed_intent_id(intent: Any) -> int:
+    """Extract intent_id from typed-intent tuple index 1 or OrderIntent.intent_id."""
+    if isinstance(intent, tuple) and len(intent) >= 2 and intent[0] == "typed_intent_v1":
+        try:
+            return int(intent[1])
+        except (TypeError, ValueError):
+            return 0
+    try:
+        return int(getattr(intent, "intent_id", 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def typed_intent_type(intent: Any) -> int | None:
+    """Extract intent_type from typed-intent tuple index 4 or OrderIntent.intent_type."""
+    if isinstance(intent, tuple) and len(intent) >= 5 and intent[0] == "typed_intent_v1":
+        try:
+            return int(intent[4])
+        except (TypeError, ValueError):
+            return None
+    value = getattr(intent, "intent_type", None)
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def typed_intent_tif(intent: Any) -> int | None:
+    """Extract TIF from typed-intent tuple index 8 or OrderIntent.tif."""
+    if isinstance(intent, tuple) and len(intent) >= 9 and intent[0] == "typed_intent_v1":
+        try:
+            return int(intent[8])
+        except (TypeError, ValueError):
+            return None
+    value = getattr(intent, "tif", None)
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def typed_intent_price_type(intent: Any) -> str:
+    """Extract price_type (LMT/MKT) from typed-intent tuple index 17 or OrderIntent.price_type.
+
+    Returns "LMT" when the field is missing (legacy 17-tuple frames) or invalid.
+    """
+    if isinstance(intent, tuple) and len(intent) >= 18 and intent[0] == "typed_intent_v1":
+        value = intent[17]
+        return str(value) if value else "LMT"
+    value = getattr(intent, "price_type", None)
+    return str(value) if value else "LMT"
+
+
+def typed_intent_identity(intent: Any) -> tuple[int, str, str, int | None]:
+    """Extract (intent_id, strategy_id, symbol, side) from typed tuple or OrderIntent."""
+    if isinstance(intent, tuple) and len(intent) >= 4 and intent[0] == "typed_intent_v1":
+        iid = int(intent[1]) if len(intent) > 1 else 0
+        sid = str(intent[2]) if len(intent) > 2 else ""
+        sym = str(intent[3]) if len(intent) > 3 else ""
+        side_val: int | None
+        try:
+            side_val = int(intent[5]) if len(intent) > 5 else None
+        except (TypeError, ValueError):
+            side_val = None
+        return (iid, sid, sym, side_val)
+    return (
+        getattr(intent, "intent_id", 0),
+        getattr(intent, "strategy_id", ""),
+        getattr(intent, "symbol", ""),
+        getattr(intent, "side", None),
+    )

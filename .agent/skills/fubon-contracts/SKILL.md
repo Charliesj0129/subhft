@@ -1,3 +1,4 @@
+<!-- REVIEW-2026-04-17: unreferenced by rules/workflows/teams/agents. Confirm or delete. -->
 ---
 name: fubon-contracts
 description: Use when working with Fubon (富邦) broker integration — session lifecycle, market data WebSocket, order placement, account queries via the fubon-neo SDK.

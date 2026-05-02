@@ -307,3 +307,122 @@ class TestCheckFacadeHealthMultipleSlots:
         schedule_fn.assert_any_call("conn-0")
         schedule_fn.assert_any_call("conn-1")
         schedule_fn.assert_any_call("conn-2")
+
+
+# ---------------------------------------------------------------------------
+# check_facade_health — suppress_reconnect flag (defense-in-depth)
+# ---------------------------------------------------------------------------
+
+
+class TestCheckFacadeHealthSuppressReconnect:
+    """When suppress_reconnect=True, state transitions still occur but
+    schedule_fn is never called — prevents futile reconnect attempts
+    outside trading hours."""
+
+    def test_degraded_state_transition_still_occurs(self) -> None:
+        """CONNECTED→DEGRADED transition should happen even when suppressed."""
+        slot = _make_slot("conn-0", FacadeState.CONNECTED, last_data_offset_s=5.0)
+        schedule_fn = MagicMock()
+        check_facade_health(
+            [slot],
+            degraded_threshold_s=3.0,
+            reconnect_trigger_s=10.0,
+            schedule_fn=schedule_fn,
+            suppress_reconnect=True,
+        )
+        assert slot.state == FacadeState.DEGRADED
+        schedule_fn.assert_not_called()
+
+    def test_degraded_recovery_still_occurs(self) -> None:
+        """DEGRADED→CONNECTED recovery should happen even when suppressed."""
+        slot = _make_slot(
+            "conn-0",
+            FacadeState.DEGRADED,
+            last_data_offset_s=0.5,
+            degraded_since_offset_s=2.0,
+        )
+        schedule_fn = MagicMock()
+        check_facade_health(
+            [slot],
+            degraded_threshold_s=3.0,
+            reconnect_trigger_s=10.0,
+            schedule_fn=schedule_fn,
+            suppress_reconnect=True,
+        )
+        assert slot.state == FacadeState.CONNECTED
+        schedule_fn.assert_not_called()
+
+    def test_degraded_reconnect_trigger_suppressed(self) -> None:
+        """schedule_fn must NOT be called when degraded long enough but suppressed."""
+        slot = _make_slot(
+            conn_id="conn-0",
+            state=FacadeState.DEGRADED,
+            last_data_offset_s=5.0,
+            degraded_since_offset_s=15.0,
+        )
+        schedule_fn = MagicMock()
+        check_facade_health(
+            [slot],
+            degraded_threshold_s=3.0,
+            reconnect_trigger_s=10.0,
+            schedule_fn=schedule_fn,
+            suppress_reconnect=True,
+        )
+        # State stays DEGRADED, but no reconnect scheduled
+        assert slot.state == FacadeState.DEGRADED
+        schedule_fn.assert_not_called()
+
+    def test_disconnected_reconnect_suppressed(self) -> None:
+        """DISCONNECTED slots must not trigger reconnect when suppressed."""
+        slot = _make_slot(
+            conn_id="conn-0",
+            state=FacadeState.DISCONNECTED,
+            reconnect_failures=0,
+        )
+        slot.last_reconnect_mono = time.monotonic() - 10.0  # backoff elapsed
+        schedule_fn = MagicMock()
+        check_facade_health(
+            [slot],
+            degraded_threshold_s=3.0,
+            reconnect_trigger_s=10.0,
+            schedule_fn=schedule_fn,
+            suppress_reconnect=True,
+        )
+        assert slot.state == FacadeState.DISCONNECTED
+        schedule_fn.assert_not_called()
+
+    def test_disconnected_initial_reconnect_suppressed(self) -> None:
+        """Even first-ever reconnect for DISCONNECTED must be suppressed."""
+        slot = _make_slot(
+            conn_id="conn-0",
+            state=FacadeState.DISCONNECTED,
+            reconnect_failures=0,
+        )
+        slot.last_reconnect_mono = 0.0  # never reconnected
+        schedule_fn = MagicMock()
+        check_facade_health(
+            [slot],
+            degraded_threshold_s=3.0,
+            reconnect_trigger_s=10.0,
+            schedule_fn=schedule_fn,
+            suppress_reconnect=True,
+        )
+        schedule_fn.assert_not_called()
+
+    def test_mixed_slots_all_suppressed(self) -> None:
+        """Multiple slots in different states — none should trigger reconnect."""
+        schedule_fn = MagicMock()
+        degraded_trigger = _make_slot(
+            "conn-0", FacadeState.DEGRADED, last_data_offset_s=5.0, degraded_since_offset_s=15.0
+        )
+        disconnected = _make_slot("conn-1", FacadeState.DISCONNECTED, reconnect_failures=0)
+        disconnected.last_reconnect_mono = time.monotonic() - 10.0
+
+        check_facade_health(
+            [degraded_trigger, disconnected],
+            degraded_threshold_s=3.0,
+            reconnect_trigger_s=10.0,
+            schedule_fn=schedule_fn,
+            suppress_reconnect=True,
+        )
+        schedule_fn.assert_not_called()

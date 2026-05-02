@@ -5,6 +5,14 @@ from prometheus_client import REGISTRY, Counter, Gauge, Histogram
 
 _METRICS_PREFIX = os.getenv("HFT_METRICS_PREFIX", "")
 
+# P1 fix: guards the unregister+reregister cycle in ``MetricsRegistry.__init__``
+# against the Prometheus scraper thread iterating ``REGISTRY._names_to_collectors``
+# concurrently. The resilient metrics server acquires this lock while baking the
+# scrape response so a partial-registry snapshot is never returned to a scrape.
+# Uses RLock so `__init__` can nest helper functions that would otherwise
+# deadlock on self-acquisition.
+registry_rw_lock: threading.RLock = threading.RLock()
+
 _KNOWN_EXCEPTION_TYPES: frozenset[str] = frozenset(
     {
         "ConnectionError",
@@ -73,6 +81,18 @@ class MetricsRegistry:
 
     def __init__(self):
         self._seen_symbols: set[str] = set()
+        # P1 fix: serialise full unregister+reregister cycle against the
+        # Prometheus scraper thread so scrapes never observe a partially
+        # rebuilt REGISTRY. The scraper side is wrapped in
+        # metrics_server.py's resilient bake path.
+        self._registry_rw_lock = registry_rw_lock
+        self._registry_rw_lock.__enter__()
+        try:
+            self._init_collectors()
+        finally:
+            self._registry_rw_lock.__exit__(None, None, None)
+
+    def _init_collectors(self) -> None:
         _unregister_all_custom_metrics()
         _unregister_metric_prefixes(
             [
@@ -87,6 +107,7 @@ class MetricsRegistry:
                 _pn("lob_snapshots_total"),
                 _pn("feed_last_event_ts"),
                 _pn("feed_time_skew_ns"),
+                _pn("feed_time_skew_over_threshold_total"),
                 _pn("strategy_latency_ns"),
                 _pn("strategy_intents_total"),
                 _pn("risk_reject_total"),
@@ -94,11 +115,19 @@ class MetricsRegistry:
                 _pn("stormguard_transitions_total"),
                 _pn("stormguard_halt_exempt_bypass_total"),
                 _pn("halt_drain_safety_intent_lost_total"),
+                # H2: HALT notification-callback dispatch observability
+                _pn("halt_callback_no_loop_total"),
+                _pn("halt_callback_schedule_failed_total"),
+                _pn("halt_callback_dispatched_total"),
                 _pn("order_actions_total"),
                 _pn("order_reject_total"),
+                _pn("order_contract_code_resolution_total"),
                 _pn("order_halt_skip_total"),
+                _pn("order_halt_post_dispatch_cancel_total"),
+                _pn("api_queue_priority_eviction_total"),
                 _pn("order_deadline_expired_total"),
                 _pn("phantom_order_candidates_total"),
+                _pn("phantom_recovery_releases_total"),
                 _pn("api_guard_timeout_total"),
                 _pn("shadow_orders_total"),
                 _pn("shadow_mode_active"),
@@ -147,6 +176,7 @@ class MetricsRegistry:
                 _pn("reconciliation_discrepancy_count"),
                 _pn("recorder_insert_retry_total"),
                 _pn("feed_gap_by_symbol_seconds"),
+                _pn("feed_gap_latched_silent_symbols_total"),
                 # Phase 12 metrics
                 _pn("shioaji_keepalive_failures_total"),
                 _pn("quote_version_switch_total"),
@@ -154,8 +184,9 @@ class MetricsRegistry:
                 _pn("shioaji_contract_lookup_errors_total"),
                 _pn("latency_spans_dropped_total"),
                 _pn("clickhouse_connection_health"),
-                _pn("redis_connection_health"),
                 _pn("wal_corrupt_files_total"),
+                # M2 (2026-04-25): orphan tmp file cleanup observability
+                _pn("wal_orphan_tmp_cleaned_total"),
                 # Phase 12 P2 metrics
                 _pn("wal_batch_flush_total"),
                 _pn("wal_batch_flush_retry_total"),
@@ -227,6 +258,7 @@ class MetricsRegistry:
                 _pn("reconciliation_discrepancy_total"),
                 _pn("reconciliation_consecutive_failures"),
                 _pn("reconciliation_last_success_ts"),
+                _pn("reconciliation_auto_corrected_total"),
                 _pn("position_drift_qty"),
                 _pn("portfolio_drawdown_pct"),
                 _pn("portfolio_trade_count"),
@@ -298,6 +330,15 @@ class MetricsRegistry:
                 # Recorder degraded mode
                 _pn("recorder_degraded_mode"),
                 _pn("recorder_degraded_total"),
+                # Observability gap closures
+                _pn("strategy_events_received_total"),
+                _pn("alias_resolution_coverage_ratio"),
+                _pn("reconciliation_drift_streak"),
+                # Q3 (2026-04-27): symbol config reload result observability.
+                _pn("feed_symbol_config_reload_total"),
+                # P2 #8 (2026-04-27): per-conn subscription truncation —
+                # universe loaded but per-conn cap silently capped subscribe.
+                _pn("feed_subscription_truncate_total"),
             ]
         )
         # Market Data
@@ -322,6 +363,11 @@ class MetricsRegistry:
         )
         self.lob_updates_total = Counter(_pn("lob_updates_total"), "LOB updates applied", ["symbol", "type"])
         self.lob_snapshots_total = Counter(_pn("lob_snapshots_total"), "LOB snapshots applied", ["symbol"])
+        self.unknown_symbol_ingress_total = Counter(
+            _pn("unknown_symbol_ingress_total"),
+            "Events with symbols not declared in SymbolMetadata that reached an ingress boundary",
+            ["plane"],
+        )
         self.feed_reconnect_total = Counter(_pn("feed_reconnect_total"), "Feed reconnect attempts", ["result"])
         self.feed_reconnect_timeout_total = Counter(
             _pn("feed_reconnect_timeout_total"),
@@ -334,13 +380,76 @@ class MetricsRegistry:
             ["reason", "exception_type"],
         )
         self.feed_resubscribe_total = Counter(_pn("feed_resubscribe_total"), "Feed resubscribe attempts", ["result"])
+        self.feed_resubscribe_skipped_concurrent_total = Counter(
+            _pn("feed_resubscribe_skipped_concurrent_total"),
+            "D2: Feed resubscribe attempts skipped because another caller held _resubscribe_lock",
+        )
+        # D1 (2026-04-25): per-symbol subscribe retry telemetry.
+        self.feed_subscription_retry_total = Counter(
+            _pn("feed_subscription_retry_total"),
+            "D1: subscribe retry decisions per symbol (ok|skip_backoff|skip_permanent)",
+            ["symbol", "result"],
+        )
+        self.feed_subscription_permanent_failures_total = Counter(
+            _pn("feed_subscription_permanent_failures_total"),
+            "D1: symbols that crossed HFT_SUB_RETRY_MAX_ATTEMPTS and stopped retrying",
+            ["symbol"],
+        )
+        self.feed_subscription_retry_attempts = Gauge(
+            _pn("feed_subscription_retry_attempts"),
+            "D1: current attempt counter per symbol (resets to 0 on success)",
+            ["symbol"],
+        )
+        # Q3 (2026-04-27): symbol config reload preflight result observability.
+        # Bumped at every ``ShioajiClient._load_config`` exit branch so symbol
+        # reload failures (RC-1: 588 > 120) surface in Prometheus instead of
+        # silently logging into the void. Result label values:
+        #   ok            — config loaded and within preflight ceiling
+        #   exceeds_limit — universe size > MAX_SUBSCRIPTIONS_PER_CLIENT
+        #   parse_error   — yaml.YAMLError or OSError reading config
+        #   other         — unexpected exception during load
+        self.feed_symbol_config_reload_total = Counter(
+            _pn("feed_symbol_config_reload_total"),
+            "Q3: symbol config reload result (ok|exceeds_limit|exceeds_pool_capacity|parse_error|other)",
+            ["result"],
+        )
+        # P2 #8 (2026-04-27): silent-miss guard for the gap RC-1 left open.
+        # ``_load_config`` now passes 121–600 symbols as ok against the
+        # per-client ceiling (default 600), but ``subscribe_basket`` /
+        # ``_resubscribe_all`` still gate at the per-conn cap
+        # (``MAX_SUBSCRIPTIONS_PER_CONN`` = 120). When a deployment forgets
+        # to size ``HFT_QUOTE_CONNECTIONS``, half the universe gets loaded
+        # but never subscribed — and there was no Counter / alert path for
+        # that condition. This Counter is bumped at the actual truncation
+        # site in ``SubscriptionManager.subscribe_basket`` /
+        # ``_resubscribe_all`` so the silent-miss surfaces in Prometheus
+        # within seconds of the next subscribe cycle. Reason label values:
+        #   conn_limit             — per-conn cap reached during subscribe
+        #                            (universe > effective pool capacity)
+        self.feed_subscription_truncate_total = Counter(
+            _pn("feed_subscription_truncate_total"),
+            "P2 #8: subscription truncated below configured universe (reason=conn_limit)",
+            ["reason"],
+        )
         self.feed_last_event_ts = Gauge(
             _pn("feed_last_event_ts"), "Last feed event timestamp (unix seconds)", ["source"]
         )
         self.feed_time_skew_ns = Gauge(
             _pn("feed_time_skew_ns"),
-            "Feed time skew (local_ts - exch_ts) in ns",
+            "Feed time skew (local_ts - exch_ts) in ns — current observed delta after clamp",
             ["topic"],
+        )
+        # P2-b (2026-04-27): the gauge above used to stick at the worst-ever
+        # raw delta because it was only `set()` inside the over-threshold
+        # branch and was never reset. We now also `set()` it on every
+        # validated timestamp (current delta, post-clamp) so the gauge
+        # reflects "now", not "worst seen". The `_over_threshold` counter
+        # below is the durable record of how often we actually saw skews
+        # above the configured ceilings (1s / 10s / 60s).
+        self.feed_time_skew_over_threshold_total = Counter(
+            _pn("feed_time_skew_over_threshold_total"),
+            "Feed events with local_ts - exch_ts above a severity threshold",
+            ["topic", "severity"],  # severity: warn_1s | high_10s | critical_60s
         )
         self.shioaji_api_latency_ms = Histogram(
             _pn("shioaji_api_latency_ms"),
@@ -386,6 +495,19 @@ class MetricsRegistry:
             buckets=[5000, 20000, 50000, 100000, 200000],
         )  # 5us to 200us
         self.strategy_intents_total = Counter(_pn("strategy_intents_total"), "Intents generated", ["strategy"])
+        # D6 (2026-04-21 incident fix): divergence metrics for MM strategies.
+        # Catch future backtest-live drift via: stale-quote cancel rate,
+        # in-flight oid multiplicity (RTT-spike indicator).
+        self.strategy_stale_cancels_total = Counter(
+            _pn("strategy_stale_cancels_total"),
+            "Cancels fired by distance-from-mid reconciler (D1)",
+            ["strategy", "side"],
+        )
+        self.strategy_inflight_oids = Gauge(
+            _pn("strategy_inflight_oids"),
+            "In-flight order count per strategy/side (D3 tracking)",
+            ["strategy", "side"],
+        )
         self.risk_reject_total = Counter(_pn("risk_reject_total"), "Risk rejections", ["reason", "strategy"])
         self.stormguard_mode = Gauge(
             _pn("stormguard_mode"), "StormGuard State (0=NORMAL, 1=WARM, 2=STORM, 3=HALT)", ["strategy"]
@@ -402,6 +524,23 @@ class MetricsRegistry:
         self.halt_drain_safety_intent_lost_total = Counter(
             _pn("halt_drain_safety_intent_lost_total"),
             "Safety intents (CANCEL/FORCE_FLAT) lost during HALT drain re-queue",
+        )
+        # H2 (2026-04-25): observability for cross-thread HALT notification dispatch.
+        # Production evidence: 8 days of HALT events with no Telegram delivery because
+        # ``asyncio.get_event_loop()`` raised RuntimeError in non-loop threads on Py3.12+
+        # and the bare ``except: pass`` swallowed the failure silently.
+        self.halt_callback_no_loop_total = Counter(
+            _pn("halt_callback_no_loop_total"),
+            "HALT notification callbacks dropped because no event loop was bound",
+        )
+        self.halt_callback_schedule_failed_total = Counter(
+            _pn("halt_callback_schedule_failed_total"),
+            "HALT notification callbacks that failed to schedule on the engine loop",
+        )
+        self.halt_callback_dispatched_total = Counter(
+            _pn("halt_callback_dispatched_total"),
+            "HALT notification callbacks successfully dispatched to the engine loop",
+            ["path"],  # "threadsafe" (cross-thread) or "direct" (same-loop)
         )
         self.autonomy_mode = Gauge(
             _pn("autonomy_mode"),
@@ -431,10 +570,44 @@ class MetricsRegistry:
         # Order
         self.order_actions_total = Counter(_pn("order_actions_total"), "Order actions sent", ["type"])
         self.order_reject_total = Counter(_pn("order_reject_total"), "Broker rejects")
+        # Bug #29: cancel intents that targeted an order already in terminal
+        # state (race-loser, semantic success). Distinct from order_reject_total
+        # (which counts true failures) and from phantom counters.
+        self.order_cancel_already_terminal_total = Counter(
+            _pn("order_cancel_already_terminal_total"),
+            "CANCEL intents whose target was already terminal (success, not failure)",
+            ["reason"],
+        )
+        # Gate 3: track which source OrderAdapter used to derive the
+        # broker-side contract_code. Label values:
+        #   - "resolver_hit": ``intent.contract`` resolved via
+        #     ``ContractFamilyResolver.snapshot.native_hint`` (new structured path)
+        #   - "alias_fallback": ``_actual_to_config`` reverse-alias dict hit
+        #     (legacy path — depends on post-connect alias propagation)
+        #   - "symbol_raw": neither was available; ``intent.symbol`` used verbatim
+        # When resolver_hit dominates we can safely retire ``_actual_to_config``.
+        self.order_contract_code_resolution_total = Counter(
+            _pn("order_contract_code_resolution_total"),
+            "OrderAdapter contract_code resolution path (Gate 3 migration telemetry)",
+            ["source"],
+        )
         self.order_halt_skip_total = Counter(
             _pn("order_halt_skip_total"),
             "Orders skipped in _api_worker because StormGuard transitioned to HALT",
-            ["strategy_id"],
+        )
+        self.order_halt_post_dispatch_cancel_total = Counter(
+            _pn("order_halt_post_dispatch_cancel_total"),
+            "H1: defensive cancels issued after StormGuard transitioned to HALT "
+            "during a broker dispatch await window (TOCTOU recovery)",
+        )
+        # M3 (2026-04-25): generalised api_queue priority eviction. Replaces
+        # the H7 ``api_queue_cancel_priority_eviction_total`` (CANCEL evicts
+        # NEW only) with a labelled counter keyed by both evictor and
+        # evicted intent types. CANCEL > FORCE_FLAT > AMEND > NEW.
+        self.api_queue_priority_eviction_total = Counter(
+            _pn("api_queue_priority_eviction_total"),
+            "OrderAdapter._api_queue priority-based evictions when full",
+            ["evicted_intent_type", "evictor_intent_type"],
         )
         self.order_deadline_expired_total = Counter(
             _pn("order_deadline_expired_total"),
@@ -443,6 +616,10 @@ class MetricsRegistry:
         self.phantom_order_candidates_total = Counter(
             _pn("phantom_order_candidates_total"),
             "Timed-out mutating API calls that may have succeeded at broker",
+        )
+        self.phantom_recovery_releases_total = Counter(
+            _pn("phantom_recovery_releases_total"),
+            "Phantom orders released after TTL expiry to unfreeze strategy pending counters (Bug D, 2026-04-20)",
         )
         self.api_guard_timeout_total = Counter(
             _pn("api_guard_timeout_total"),
@@ -464,11 +641,29 @@ class MetricsRegistry:
         self.execution_router_errors_total = Counter(_pn("execution_router_errors_total"), "Execution router errors")
         self.execution_gateway_errors_total = Counter(_pn("execution_gateway_errors_total"), "Execution gateway errors")
         self.orphaned_fill_total = Counter(_pn("orphaned_fill_total"), "Orphaned fills routed to DLQ")
+        self.phantom_fill_reconciled_total = Counter(
+            _pn("phantom_fill_reconciled_total"),
+            "Orphaned fills auto-reconciled via phantom order matching",
+        )
         self.fills_total = Counter(_pn("fills_total"), "Total successful fills processed")
         self.duplicate_fill_total = Counter(_pn("duplicate_fill_total"), "Duplicate fills skipped by dedup check")
+        self.fill_normalization_failed_total = Counter(
+            _pn("fill_normalization_failed_total"),
+            "Fill events that failed normalization (missing account, parse error)",
+        )
         self.synthetic_fill_id_total = Counter(
             _pn("synthetic_fill_id_total"),
             "Fills with synthesized fill_id (broker omitted seqno)",
+        )
+        self.startup_reconciler_missing_fills_total = Counter(
+            _pn("startup_reconciler_missing_fills_total"),
+            "Bug #32 backfill: fills found at broker but missing from CH at startup",
+            ["result"],
+        )
+        self.startup_reconciler_run_seconds = Histogram(
+            _pn("startup_reconciler_run_seconds"),
+            "Bug #32 backfill: end-to-end runtime of one startup reconcile pass",
+            buckets=(0.05, 0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0),
         )
         self.execution_router_lag_ns = Histogram(
             _pn("execution_router_lag_ns"),
@@ -642,6 +837,11 @@ class MetricsRegistry:
             _pn("reconciliation_last_success_ts"),
             "Unix epoch seconds of last successful reconciliation",
         )
+        self.reconciliation_auto_corrected_total = Counter(
+            _pn("reconciliation_auto_corrected_total"),
+            "Positions auto-corrected by adopting broker state",
+            ["symbol"],
+        )
         # Recorder batch insert retry count
         self.recorder_insert_retry_total = Counter(
             _pn("recorder_insert_retry_total"),
@@ -658,6 +858,21 @@ class MetricsRegistry:
             _pn("feed_gap_by_symbol_seconds"),
             "Feed gap per symbol (seconds since last tick)",
             ["symbol"],
+        )
+        # RC-2 fix (subscription-membership variant): count latched symbols
+        # de-latched from ``_ever_active_symbols`` by ``get_active_feed_gap_s``
+        # because they are no longer in ``client.subscribed_codes`` (typical
+        # case: contract expired and was discarded by ``contracts_runtime``
+        # rollover).  Cardinality is bounded by ``cap_symbol`` (caps unique
+        # symbols at HFT_METRICS_MAX_LABEL_SYMBOLS, default 200; overflow →
+        # "_other").  ``action`` is currently ``{"unsubscribed"}``; the
+        # label is retained as a dimension for future de-latch reasons
+        # (e.g. ``"manual_rearm"``) without breaking dashboards.
+        self.feed_gap_latched_silent_symbols_total = Counter(
+            _pn("feed_gap_latched_silent_symbols_total"),
+            "Latched symbols de-latched by get_active_feed_gap_s "
+            "(reason captured in 'action' label, e.g. 'unsubscribed')",
+            ["symbol", "action"],
         )
 
         # Phase 12: Market Data Robustness & Database Writing Upgrades
@@ -693,15 +908,21 @@ class MetricsRegistry:
             _pn("clickhouse_connection_health"),
             "ClickHouse connection health (1=healthy, 0=unhealthy)",
         )
-        # Redis connection health gauge
-        self.redis_connection_health = Gauge(
-            _pn("redis_connection_health"),
-            "Redis connection health (1=healthy, 0=unhealthy)",
-        )
         # Corrupt WAL files counter (B5)
         self.wal_corrupt_files_total = Counter(
             _pn("wal_corrupt_files_total"),
             "Corrupt WAL files quarantined",
+        )
+        # M2 (2026-04-25): orphan tempfile cleanup. Production evidence found 8
+        # tmp*.tmp files in /app/.wal/ aged 5–13 days, indicating a writer
+        # crashed between ``mkstemp`` and ``os.rename`` (the existing
+        # ``except: unlink`` pattern only fires on exception, not SIGKILL or
+        # thread death). Counter is incremented by both the per-call
+        # ``finally:`` cleanup and the bootstrap-time orphan sweep.
+        self.wal_orphan_tmp_cleaned_total = Counter(
+            _pn("wal_orphan_tmp_cleaned_total"),
+            "Orphan WAL tempfiles cleaned up after writer crash / SIGKILL",
+            ["location"],  # "wal_writer", "wal_batch", "loader_manifest", "bootstrap_sweep"
         )
 
         # Phase 12 P2: Holiday Resilience & Scheduled WAL Import
@@ -728,17 +949,34 @@ class MetricsRegistry:
             "Whether market open grace period is active (1=active, 0=inactive)",
         )
         # WAL directory monitoring (C5)
+        # NB: pre-P2-a these gauges only counted top-level *.jsonl files,
+        # ignoring archive/ (34k+ files, 3 GB) and dlq/. The legacy unlabeled
+        # gauges below are now set to the ACTIVE-tier subset for backward
+        # compatibility; new code should consume the tiered variants.
         self.wal_directory_size_bytes = Gauge(
             _pn("wal_directory_size_bytes"),
-            "Total size of WAL directory in bytes",
+            "Active-tier WAL directory size in bytes (legacy; use wal_directory_bytes for tiered)",
         )
         self.wal_file_count = Gauge(
             _pn("wal_file_count"),
-            "Number of pending WAL files",
+            "Active-tier WAL file count (legacy; use wal_file_count_tiered for tiered)",
         )
         self.wal_oldest_file_age_seconds = Gauge(
             _pn("wal_oldest_file_age_seconds"),
-            "Age of oldest WAL file in seconds",
+            "Age of oldest active-tier WAL file in seconds",
+        )
+        # P2-a (2026-04-27): tiered WAL gauges. Labels: tier=active|archive|dlq.
+        # Required because archive/ & dlq/ accumulated 3 GB unseen by the
+        # legacy non-recursive scan in _check_wal_accumulation.
+        self.wal_directory_bytes = Gauge(
+            _pn("wal_directory_bytes"),
+            "WAL directory size in bytes by tier (active=top-level *.jsonl, archive=archive/, dlq=dlq/)",
+            ["tier"],
+        )
+        self.wal_file_count_tiered = Gauge(
+            _pn("wal_file_count_tiered"),
+            "WAL file count by tier (active=top-level, archive=archive/, dlq=dlq/)",
+            ["tier"],
         )
 
         # Phase 12 P2.2: Database & Market Data Optimizations
@@ -864,6 +1102,21 @@ class MetricsRegistry:
             _pn("alpha_last_signal_ts"),
             "Unix timestamp of last non-flat alpha signal",
             ["strategy"],
+        )
+
+        # Bug 27 (2026-04-17): position stuck observability.
+        # Gauge: per (strategy, symbol) age in seconds since last_update_ts while
+        # net_qty != 0. Resets (or is deleted) when position goes flat. Alerts at
+        # > HFT_POSITION_STUCK_ALERT_S (default 300s) via PositionStuckMonitor.
+        self.position_age_seconds = Gauge(
+            _pn("position_age_seconds"),
+            "Seconds since last fill for a non-zero position (per strategy,symbol)",
+            ["strategy", "symbol"],
+        )
+        self.position_stuck_alerts_total = Counter(
+            _pn("position_stuck_alerts_total"),
+            "Position-stuck telegram alerts emitted",
+            ["strategy", "symbol"],
         )
         # Alpha governance pipeline metrics
         self.alpha_gate_results_total = Counter(
@@ -1151,6 +1404,66 @@ class MetricsRegistry:
             "Audit events dropped due to queue full",
             ["table"],
         )
+        self.audit_put_cross_thread_total = Counter(
+            _pn("audit_put_cross_thread_total"),
+            "I-M2: AuditWriter._put invocations from a non-loop thread "
+            "(routed via call_soon_threadsafe instead of direct put_nowait)",
+            ["table"],
+        )
+        # P1-a (2026-04-27): observability for audit ClickHouse persistence.
+        # Previously the audit_overflow_total metric was incremented inside
+        # AuditWriter under a try/except that silently swallowed AttributeError
+        # because no such metric was declared. Now declared here for real, plus
+        # a new audit_persist_failures_total to surface CH-write exceptions.
+        self.audit_overflow_total = Counter(
+            _pn("audit_overflow_total"),
+            "Audit events spilled into the secondary overflow deque "
+            "(primary asyncio.Queue was full at put_nowait time)",
+            ["table"],
+        )
+        self.audit_persist_failures_total = Counter(
+            _pn("audit_persist_failures_total"),
+            "Audit batch writes that raised an exception against ClickHouse "
+            "(payloads then fall through to the structlog audit_fallback path)",
+            ["table", "reason"],
+        )
+        # P1-c (2026-04-27): hft-bot was dead 8.7 days because a `httpx.ConnectError`
+        # (or similar) escaped a handler with no error handler registered.
+        # Counter is labeled by exception class so dashboards can distinguish
+        # transient network errors from logic bugs.
+        self.bot_handler_errors_total = Counter(
+            _pn("bot_handler_errors_total"),
+            "Telegram bot handler exceptions caught by the error handler "
+            "(would have crashed the polling loop pre-P1-c)",
+            ["exception"],
+        )
+        self.bot_dead_data_alerts_total = Counter(
+            _pn("bot_dead_data_alerts_total"),
+            "Consecutive-empty-attempt threshold breaches in the bot scheduler "
+            "(N pushes in a row returned no_data for every configured symbol)",
+            ["session"],
+        )
+        self.bot_rate_limited_total = Counter(
+            _pn("bot_rate_limited_total"),
+            "TelegramSender messages skipped due to client-side rate limit "
+            "(non-critical sends within the rate-limit window)",
+            ["critical"],
+        )
+        # P2-d (2026-04-27): build_info gauge — labeled with git_sha and
+        # build_ts read from env (baked at image build time). Always set to 1
+        # so dashboards can detect drift across services / instances by
+        # `count by (git_sha) (hft_build_info) > 1`.
+        self.hft_build_info = Gauge(
+            _pn("build_info"),
+            "Build identity for this process (constant 1) — labels expose git_sha and build_ts",
+            ["git_sha", "build_ts"],
+        )
+        try:
+            _git_sha = os.environ.get("HFT_GIT_SHA", "unknown") or "unknown"
+            _build_ts = os.environ.get("HFT_BUILD_TS", "unknown") or "unknown"
+            self.hft_build_info.labels(git_sha=_git_sha, build_ts=_build_ts).set(1)
+        except Exception:  # noqa: BLE001
+            pass
         self.intent_queue_full_total = Counter(
             _pn("intent_queue_full_total"),
             "Intents dropped due to QueueFull in StrategyRunner submit loop",
@@ -1170,6 +1483,28 @@ class MetricsRegistry:
             _pn("recorder_reinject_circuit_breaker_drops_total"),
             "Rows dropped by reinject circuit breaker after consecutive double-faults",
             ["table"],
+        )
+
+        # ── Observability gap closures ──────────────────────────────
+        # Bug 12 (13hr R47 silent): per-strategy event dispatch rate.
+        # A strategy that stops receiving events for hours should be alertable.
+        self.strategy_events_received_total = Counter(
+            _pn("strategy_events_received_total"),
+            "Events dispatched to a strategy's handle_event (pre-call)",
+            ["strategy_id"],
+        )
+        # Bug 12: alias resolution coverage — if configured aliases (e.g. TXFR1/C0)
+        # fail to land in SymbolMetadata, strategies silently see 0 events.
+        self.alias_resolution_coverage_ratio = Gauge(
+            _pn("alias_resolution_coverage_ratio"),
+            "Fraction of configured broker aliases propagated into SymbolMetadata (0.0-1.0)",
+        )
+        # MANUAL drift persistence: mirror consecutive_observations counter
+        # per-symbol so operators can alert on streaks that never clear.
+        self.reconciliation_drift_streak = Gauge(
+            _pn("reconciliation_drift_streak"),
+            "Consecutive reconciliation observations of the same drift (resets to 0 on resolve)",
+            ["symbol"],
         )
 
         # System (v2)

@@ -511,13 +511,107 @@ class TestQuoteConnectionPoolThreadSafety:
         assert pool._options_refresh_running is False
 
 
+class TestOptionsRefreshGuards:
+    """Defensive guards for the options auto-refresh background thread."""
+
+    def _make_pool(self, tmp_path, num_conns=1):
+        from hft_platform.feed_adapter.shioaji.quote_connection_pool import QuoteConnectionPool
+
+        sym_path = tmp_path / "symbols.yaml"
+        sym_path.write_text(yaml.safe_dump({"symbols": [{"code": "TXFC0", "exchange": "TAIFEX", "group": 0}]}))
+        return QuoteConnectionPool(str(sym_path), {}, num_conns=num_conns)
+
+    def test_thread_skipped_when_interval_zero(self, tmp_path):
+        """interval_s=0 must disable the refresh thread (do not start)."""
+        pool = self._make_pool(tmp_path)
+        pool.start_options_refresh_thread(interval_s=0)
+        assert pool._options_refresh_running is False
+        assert pool._refresh_thread is None
+
+    def test_thread_skipped_when_interval_negative(self, tmp_path):
+        """Negative interval_s must also be treated as disabled."""
+        pool = self._make_pool(tmp_path)
+        pool.start_options_refresh_thread(interval_s=-1)
+        assert pool._options_refresh_running is False
+
+    def test_refresh_skips_when_all_expiries_in_past(self, tmp_path, monkeypatch):
+        """Stale broker cache (all expiries < today) must not trigger subscribe storm."""
+        pool = self._make_pool(tmp_path)
+        pool._clients = [mock.MagicMock()]
+        pool._clients[0].logged_in = False
+        out_path = str(tmp_path / "live_with_options.yaml")
+        monkeypatch.setenv("HFT_SYMBOLS_RUNTIME_SNAPSHOT", out_path)  # fix-rc4: writer uses runtime-snapshot env
+
+        expired_opts = [
+            {
+                "code": "TXO20000A0",
+                "right": "C",
+                "strike": "20000",
+                "delivery_date": "2020/01/15",
+                "reference": "20000",
+            },
+            {
+                "code": "TXO20000M0",
+                "right": "P",
+                "strike": "20000",
+                "delivery_date": "2020/01/15",
+                "reference": "20000",
+            },
+        ]
+        with mock.patch.object(type(pool), "_load_options_from_cache", return_value=expired_opts):
+            assert pool.refresh_options_symbols() is False
+
+    def test_refresh_picks_nearest_active_skipping_expired(self, tmp_path, monkeypatch):
+        """When cache mixes expired + active dates, picks earliest *active* one."""
+        pool = self._make_pool(tmp_path, num_conns=2)
+        pool._all_symbols = [{"code": "TXFC0", "exchange": "TAIFEX", "group": 0}]
+        pool._clients = [mock.MagicMock() for _ in range(2)]
+        for c in pool._clients:
+            c.logged_in = False
+        out_path = str(tmp_path / "live_with_options.yaml")
+        # 2026-04-27 fix-rc4: writer no longer honours SYMBOLS_CONFIG; use the
+        # dedicated runtime-snapshot env var instead.
+        monkeypatch.setenv("HFT_SYMBOLS_RUNTIME_SNAPSHOT", out_path)
+
+        opts = []
+        for date in ("2020/01/15", "2030/04/17", "2031/04/16"):  # one expired, two active
+            for s in (20000, 21000):
+                opts.append(
+                    {
+                        "code": f"TXO{s}_{date[:4]}C",
+                        "right": "C",
+                        "strike": str(s),
+                        "delivery_date": date,
+                        "reference": "20500",
+                    }
+                )
+                opts.append(
+                    {
+                        "code": f"TXO{s}_{date[:4]}P",
+                        "right": "P",
+                        "strike": str(s),
+                        "delivery_date": date,
+                        "reference": "20500",
+                    }
+                )
+
+        with mock.patch.object(type(pool), "_load_options_from_cache", return_value=opts):
+            assert pool.refresh_options_symbols() is True
+        assert pool._options_expiry == "2030/04/17"
+
+
 class TestSubscriptionLimitConstant:
     """Verify _MAX_SUBSCRIPTIONS_PER_CONN reflects real Shioaji SDK topic limit."""
 
     def test_limit_is_120(self):
         from hft_platform.feed_adapter.shioaji.quote_connection_pool import _MAX_SUBSCRIPTIONS_PER_CONN
 
-        # 128 real broker limit (256 topics / 2 topics per symbol), minus safety margin
+        # Cap is in *codes*. Each code subscribes to 2 broker topics
+        # (Tick + BidAsk — see subscription_manager._subscribe_symbol).
+        # SinoPac Solace per-session topic budget is ~250 (empirically
+        # confirmed 2026-04-26 when conn 0 with 163 codes / 326 topics
+        # got rejected after ~127 codes / 254 topics). 120 × 2 = 240
+        # keeps a small headroom under that ceiling.
         assert _MAX_SUBSCRIPTIONS_PER_CONN == 120
 
     def test_client_default_matches_pool_limit(self, tmp_path, monkeypatch):
@@ -564,7 +658,7 @@ class TestOptionsRoundRobinSharding:
                     "code": f"TXO{s}D6",
                     "right": "C",
                     "strike": str(s),
-                    "delivery_date": "2026/04/16",
+                    "delivery_date": "2030/04/17",
                     "reference": "20500",
                 }
             )
@@ -573,13 +667,13 @@ class TestOptionsRoundRobinSharding:
                     "code": f"TXO{s}P6",
                     "right": "P",
                     "strike": str(s),
-                    "delivery_date": "2026/04/16",
+                    "delivery_date": "2030/04/17",
                     "reference": "20500",
                 }
             )
 
         out_path = str(tmp_path / "live_with_options.yaml")
-        monkeypatch.setenv("SYMBOLS_CONFIG", out_path)
+        monkeypatch.setenv("HFT_SYMBOLS_RUNTIME_SNAPSHOT", out_path)  # fix-rc4: writer uses runtime-snapshot env
 
         with mock.patch.object(type(pool), "_load_options_from_cache", return_value=opts):
             result = pool.refresh_options_symbols()
@@ -620,7 +714,7 @@ class TestOptionsRoundRobinSharding:
                     "code": f"TXO{s}D6",
                     "right": "C",
                     "strike": str(s),
-                    "delivery_date": "2026/04/16",
+                    "delivery_date": "2030/04/17",
                     "reference": "20500",
                 }
             )
@@ -629,13 +723,13 @@ class TestOptionsRoundRobinSharding:
                     "code": f"TXO{s}P6",
                     "right": "P",
                     "strike": str(s),
-                    "delivery_date": "2026/04/16",
+                    "delivery_date": "2030/04/17",
                     "reference": "20500",
                 }
             )
 
         out_path = str(tmp_path / "live_with_options.yaml")
-        monkeypatch.setenv("SYMBOLS_CONFIG", out_path)
+        monkeypatch.setenv("HFT_SYMBOLS_RUNTIME_SNAPSHOT", out_path)  # fix-rc4: writer uses runtime-snapshot env
 
         with mock.patch.object(type(pool), "_load_options_from_cache", return_value=opts):
             result = pool.refresh_options_symbols()
@@ -673,7 +767,7 @@ class TestOptionsRoundRobinSharding:
                     "code": f"TXO{s}D6",
                     "right": "C",
                     "strike": str(s),
-                    "delivery_date": "2026/04/16",
+                    "delivery_date": "2030/04/17",
                     "reference": "20500",
                 }
             )
@@ -682,13 +776,13 @@ class TestOptionsRoundRobinSharding:
                     "code": f"TXO{s}P6",
                     "right": "P",
                     "strike": str(s),
-                    "delivery_date": "2026/04/16",
+                    "delivery_date": "2030/04/17",
                     "reference": "20500",
                 }
             )
 
         out_path = str(tmp_path / "live_with_options.yaml")
-        monkeypatch.setenv("SYMBOLS_CONFIG", out_path)
+        monkeypatch.setenv("HFT_SYMBOLS_RUNTIME_SNAPSHOT", out_path)  # fix-rc4: writer uses runtime-snapshot env
 
         with mock.patch.object(type(pool), "_load_options_from_cache", return_value=opts):
             result = pool.refresh_options_symbols()
@@ -709,8 +803,12 @@ class TestOptionsRoundRobinSharding:
                 mixed_count += 1
         assert mixed_count >= 2, "At least 2 of 3 option groups should have both calls and puts"
 
-    def test_production_scenario_3_conns_194_per_side(self, tmp_path, monkeypatch):
-        """Regression test: 3 conns, 194 calls + 194 puts must auto-trim, not reject."""
+    def test_production_scenario_3_conns_oversized_chain_trims(self, tmp_path, monkeypatch):
+        """Regression test: 3 conns, oversized option chain must auto-trim, not reject.
+
+        With cap=120 per conn and 2 option groups (group 0 holds the base future),
+        chain capacity is 240; 250 strikes × 2 sides = 500 options must trim to ≤ 240.
+        """
         from hft_platform.feed_adapter.shioaji.quote_connection_pool import _MAX_SUBSCRIPTIONS_PER_CONN
 
         pool = self._make_pool(tmp_path, num_conns=3)  # group 0=base, 1/2=options
@@ -719,8 +817,8 @@ class TestOptionsRoundRobinSharding:
         for c in pool._clients:
             c.logged_in = False
 
-        # Reproduce exact production config: 194 calls + 194 puts
-        strikes = list(range(26500, 26500 + 194 * 50, 50))
+        # 250 strikes × (call + put) = 500 options, exceeds 2 × 120 = 240 capacity → trim
+        strikes = list(range(26500, 26500 + 250 * 50, 50))
         opts = []
         for s in strikes:
             opts.append(
@@ -728,7 +826,7 @@ class TestOptionsRoundRobinSharding:
                     "code": f"TXO{s}D6",
                     "right": "C",
                     "strike": str(s),
-                    "delivery_date": "2026/04/16",
+                    "delivery_date": "2030/04/17",
                     "reference": "33000",
                 }
             )
@@ -737,13 +835,13 @@ class TestOptionsRoundRobinSharding:
                     "code": f"TXO{s}P6",
                     "right": "P",
                     "strike": str(s),
-                    "delivery_date": "2026/04/16",
+                    "delivery_date": "2030/04/17",
                     "reference": "33000",
                 }
             )
 
         out_path = str(tmp_path / "live_with_options.yaml")
-        monkeypatch.setenv("SYMBOLS_CONFIG", out_path)
+        monkeypatch.setenv("HFT_SYMBOLS_RUNTIME_SNAPSHOT", out_path)  # fix-rc4: writer uses runtime-snapshot env
 
         with mock.patch.object(type(pool), "_load_options_from_cache", return_value=opts):
             result = pool.refresh_options_symbols()
@@ -761,6 +859,95 @@ class TestOptionsRoundRobinSharding:
                 f"Group {g} has {count} symbols, exceeds {_MAX_SUBSCRIPTIONS_PER_CONN}"
             )
 
-        # Options should be trimmed but non-empty
+        # Options should be trimmed but non-empty (≤ 2 conns × cap = 240)
         opt_count = sum(1 for s in data["symbols"] if s.get("exchange") == "OPT")
         assert 200 <= opt_count <= 240, f"Expected 200-240 options after trim, got {opt_count}"
+
+
+# ─────────────────────────────────────────────────────────────────────
+# P1-d (commit e6edea37): pool degraded gauge + debounced CRITICAL log
+# ─────────────────────────────────────────────────────────────────────
+
+
+class TestQuoteConnectionPoolDegradedRollup:
+    """Verify pool-level degraded gauge + debounced CRITICAL log (P1-d)."""
+
+    def _make_pool_with_4_slots(self, tmp_path):
+        """Build a pool with 4 connection slots and 4 mock facades — bypasses
+        ``create_facades`` so the test does not need a real Shioaji session.
+        """
+        from hft_platform.feed_adapter.shioaji.facade_slot import FacadeSlot, FacadeState
+        from hft_platform.feed_adapter.shioaji.quote_connection_pool import QuoteConnectionPool
+
+        symbols = [{"code": f"SYM{g}", "exchange": "TSE", "group": g} for g in range(4)]
+        sym_path = tmp_path / "symbols.yaml"
+        sym_path.write_text(yaml.safe_dump({"symbols": symbols}))
+        pool = QuoteConnectionPool(str(sym_path), {}, num_conns=4)
+
+        # Fabricate 4 slots with mock facades; default state = RECOVERING.
+        pool._slots = []
+        pool._clients = []
+        for i in range(4):
+            facade = mock.MagicMock()
+            facade.logged_in = True
+            facade.subscribed_count = 0
+            slot = FacadeSlot(conn_id=str(i), facade=facade)
+            slot.state = FacadeState.CONNECTED  # start healthy
+            pool._slots.append(slot)
+            pool._clients.append(facade)
+        return pool
+
+    def test_pool_degraded_gauge_raises_after_threshold_and_logs_once(self, tmp_path, monkeypatch):
+        """Three of four conns non-CONNECTED for >= alert window must raise the
+        ``hft_quote_pool_degraded`` gauge to 1, fraction to 0.75, and emit
+        the CRITICAL log exactly once even if the check runs again with
+        unchanged state.
+        """
+        import hft_platform.feed_adapter.shioaji.quote_connection_pool as qcp
+        from hft_platform.feed_adapter.shioaji.facade_slot import FacadeState
+
+        pool = self._make_pool_with_4_slots(tmp_path)
+        pool._pool_degraded_alert_after_s = 1.0  # tight threshold for the test
+
+        # Mark 3 of 4 conns DOWN.
+        pool._slots[0].state = FacadeState.RECOVERING
+        pool._slots[1].state = FacadeState.RECOVERING
+        pool._slots[2].state = FacadeState.DISCONNECTED
+        pool._slots[3].state = FacadeState.CONNECTED
+
+        # Drive time.monotonic via monkeypatch so we can step past the window
+        # deterministically (no real sleep).
+        clock = {"now": 1000.0}
+        monkeypatch.setattr(qcp.time, "monotonic", lambda: clock["now"])
+
+        # Patch the module-level logger to capture .critical/.warning calls.
+        mock_logger = mock.MagicMock()
+        monkeypatch.setattr(qcp, "logger", mock_logger)
+
+        # First tick: starts the degradation timer; gauge stays 0 (alert not raised yet).
+        pool.update_metrics()
+        assert pool._pool_degraded_since_mono == 1000.0
+        assert pool._pool_degraded_alerted is False
+        assert mock_logger.critical.call_count == 0
+
+        # Advance past the alert window — second tick should fire the CRITICAL log.
+        clock["now"] = 1002.0
+        pool.update_metrics()
+        assert pool._pool_degraded_alerted is True
+        assert mock_logger.critical.call_count == 1
+        crit_args = mock_logger.critical.call_args
+        assert crit_args[0][0] == "quote_pool_degraded"
+        # n_unhealthy=3 / n_slots=4 == 0.75
+        assert crit_args[1].get("n_slots") == 4
+        assert crit_args[1].get("n_unhealthy") == 3
+        assert abs(crit_args[1].get("fraction") - 0.75) < 1e-9
+
+        # Verify the pool-level gauges directly.
+        assert qcp._METRIC_POOL_DEGRADED_FRACTION._value.get() == 0.75
+        assert qcp._METRIC_POOL_DEGRADED._value.get() == 1.0
+
+        # Third tick with state unchanged: must NOT re-emit the CRITICAL log
+        # (debounced — alerted flag stays True until recovery).
+        clock["now"] = 1003.0
+        pool.update_metrics()
+        assert mock_logger.critical.call_count == 1, "CRITICAL log must be emitted exactly once until recovery"

@@ -46,6 +46,16 @@ def _make_fill(
     )
 
 
+@pytest.fixture(autouse=True)
+def _lower_drawdown_threshold(monkeypatch):
+    """Lower _MIN_PEAK_SCALED so legacy small-PnL fixtures still exercise
+    drawdown semantics. Production default 100M is calibrated for live HFT
+    scale and masks unit-test fixture values."""
+    import hft_platform.execution.positions as _positions
+
+    monkeypatch.setattr(_positions, "_MIN_PEAK_SCALED", 2_000_000)
+
+
 @pytest.fixture()
 def store():
     """PositionStore with metrics disabled for unit testing."""
@@ -88,37 +98,38 @@ def test_get_drawdown_pct_at_peak(store):
 
 def test_get_drawdown_pct_after_profit_then_loss(store):
     """After profit then loss, drawdown fraction must be positive and <= 1.0."""
-    # Round 1: Buy 10 @ 1_000_000, sell 10 @ 1_010_000 -> PnL = 100_000 (peak)
+    # Round 1: Buy 10 @ 1_000_000, sell 10 @ 1_300_000 -> PnL = 3_000_000 (peak)
+    # Peak must exceed cold-start threshold (2_000_000) for drawdown to be reported.
     store.on_fill(_make_fill(Side.BUY, 10, 1_000_000, symbol="SYM_A"))
-    store.on_fill(_make_fill(Side.SELL, 10, 1_010_000, symbol="SYM_A"))
-    assert store.total_pnl == 100_000
+    store.on_fill(_make_fill(Side.SELL, 10, 1_300_000, symbol="SYM_A"))
+    assert store.total_pnl == 3_000_000
     assert store.get_drawdown_pct() == 0.0  # still at peak
 
-    # Round 2: Buy 10 @ 1_010_000, sell 10 @ 1_000_000 -> PnL = -100_000
-    # Total PnL becomes 100_000 + (-100_000) = 0, peak stays at 100_000
-    store.on_fill(_make_fill(Side.BUY, 10, 1_010_000, symbol="SYM_A"))
+    # Round 2: Buy 10 @ 1_300_000, sell 10 @ 1_000_000 -> PnL = -3_000_000
+    # Total PnL becomes 3_000_000 + (-3_000_000) = 0, peak stays at 3_000_000
+    store.on_fill(_make_fill(Side.BUY, 10, 1_300_000, symbol="SYM_A"))
     store.on_fill(_make_fill(Side.SELL, 10, 1_000_000, symbol="SYM_A"))
     assert store.total_pnl == 0
 
     dd = store.get_drawdown_pct()
-    # Drawdown = (100_000 - 0) / 100_000 = 1.0
+    # Drawdown = (3_000_000 - 0) / 3_000_000 = 1.0
     assert dd == pytest.approx(1.0, rel=1e-6)
 
 
 def test_get_drawdown_pct_partial_drawdown(store):
     """Partial drawdown: lose half the peak equity."""
-    # Build peak: PnL = 200_000
+    # Build peak: PnL = 3_000_000 (above cold-start threshold of 2_000_000)
     store.on_fill(_make_fill(Side.BUY, 10, 1_000_000))
-    store.on_fill(_make_fill(Side.SELL, 10, 1_020_000))
-    assert store.total_pnl == 200_000
+    store.on_fill(_make_fill(Side.SELL, 10, 1_300_000))
+    assert store.total_pnl == 3_000_000
 
-    # Lose half: open and close at a 100_000 loss
-    store.on_fill(_make_fill(Side.BUY, 10, 1_020_000))
-    store.on_fill(_make_fill(Side.SELL, 10, 1_010_000))
-    assert store.total_pnl == 100_000
+    # Lose half: open and close at a 1_500_000 loss
+    store.on_fill(_make_fill(Side.BUY, 10, 1_300_000))
+    store.on_fill(_make_fill(Side.SELL, 10, 1_150_000))
+    assert store.total_pnl == 1_500_000
 
     dd = store.get_drawdown_pct()
-    # (200_000 - 100_000) / 200_000 = 0.5
+    # (3_000_000 - 1_500_000) / 3_000_000 = 0.5
     assert dd == pytest.approx(0.5, rel=1e-6)
 
 
@@ -184,9 +195,8 @@ def test_peak_equity_never_negative_start(store):
     assert store.total_pnl == -100_000
     # No positive peak was ever established
     assert store._peak_equity_scaled == 0
-    # R8: get_drawdown_pct now returns loss-based drawdown (abs(loss)/base, capped at 1.0)
-    # With no _base_capital_scaled set, fallback base=1 → min(1.0, 100000/1) = 1.0
-    assert store.get_drawdown_pct() == 1.0
+    # Cold-start guard: peak=0 is below 2_000_000 threshold, so drawdown returns 0.0
+    assert store.get_drawdown_pct() == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -196,20 +206,20 @@ def test_peak_equity_never_negative_start(store):
 
 def test_drawdown_resets_on_new_peak(store):
     """Drawdown should return to 0.0 when equity recovers to a new peak."""
-    # Build peak: 100_000
+    # Build peak: 3_000_000 (above cold-start threshold of 2_000_000)
     store.on_fill(_make_fill(Side.BUY, 10, 1_000_000))
-    store.on_fill(_make_fill(Side.SELL, 10, 1_010_000))
+    store.on_fill(_make_fill(Side.SELL, 10, 1_300_000))
     assert store.get_drawdown_pct() == 0.0
 
-    # Drawdown: lose 50_000
-    store.on_fill(_make_fill(Side.BUY, 10, 1_010_000))
-    store.on_fill(_make_fill(Side.SELL, 10, 1_005_000))
+    # Drawdown: lose 1_500_000
+    store.on_fill(_make_fill(Side.BUY, 10, 1_300_000))
+    store.on_fill(_make_fill(Side.SELL, 10, 1_150_000))
     assert store.get_drawdown_pct() > 0.0
 
-    # Recover and exceed old peak: gain 100_000 more
-    store.on_fill(_make_fill(Side.BUY, 10, 1_005_000))
-    store.on_fill(_make_fill(Side.SELL, 10, 1_015_000))
-    # New total PnL = 100_000 - 50_000 + 100_000 = 150_000 > old peak 100_000
+    # Recover and exceed old peak: gain 3_000_000 more
+    store.on_fill(_make_fill(Side.BUY, 10, 1_150_000))
+    store.on_fill(_make_fill(Side.SELL, 10, 1_450_000))
+    # New total PnL = 3_000_000 - 1_500_000 + 3_000_000 = 4_500_000 > old peak 3_000_000
     assert store.get_drawdown_pct() == 0.0
 
 

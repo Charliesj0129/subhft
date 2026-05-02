@@ -36,13 +36,24 @@ def _build_aiohttp_stub() -> types.ModuleType:
 
 if "aiohttp" not in sys.modules:
     sys.modules["aiohttp"] = _build_aiohttp_stub()
-elif not hasattr(sys.modules["aiohttp"], "ClientTimeout"):
-    # Another test's stub may lack ClientTimeout — patch it in
+else:
+    # Another test's stub (e.g. test_telegram_retry) may register a
+    # ClientTimeout that lacks the .total attribute we assert on.
+    # Always overwrite with our version that stores kwargs.
+    _existing = sys.modules["aiohttp"]
+
     class _FakeClientTimeout:
-        def __init__(self, *args, **kwargs):
+        def __init__(self, *args, **kwargs):  # type: ignore[no-untyped-def]
             self.total = kwargs.get("total")
 
-    sys.modules["aiohttp"].ClientTimeout = _FakeClientTimeout  # type: ignore[attr-defined]
+    _existing.ClientTimeout = _FakeClientTimeout  # type: ignore[attr-defined]
+
+# Ensure the telegram module's own aiohttp binding is set (may be None if
+# an earlier test imported telegram before the stub was installed).
+import hft_platform.notifications.telegram as _tg_mod_fixes  # noqa: E402
+
+if _tg_mod_fixes.aiohttp is None:
+    _tg_mod_fixes.aiohttp = sys.modules["aiohttp"]
 
 
 # ---------------------------------------------------------------------------

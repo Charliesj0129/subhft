@@ -3,9 +3,11 @@ name: "Three-Layer Maker Strategy (PE + Queue + MFG)"
 version: "0.1.0"
 status: prototype
 owner: charlie
+strategy_type: maker
+instrument: TMFD6
 
 instruments:
-  - TXFD6
+  - TMFD6
 
 paper_refs:
   - "1105.3115"   # Gueant-Lehalle-Tapia Inventory Risk

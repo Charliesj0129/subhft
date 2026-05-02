@@ -54,6 +54,7 @@ MARKET_DATA_COLUMNS = [
 
 ORDER_COLUMNS = [
     "order_id",
+    "client_order_id",
     "strategy_id",
     "symbol",
     "side",
@@ -160,6 +161,7 @@ def _extract_order_values(row) -> list | None:
             get = row.get
             return [
                 get("order_id"),
+                get("client_order_id", ""),
                 get("strategy_id"),
                 get("symbol"),
                 get("side", get("action", "")),
@@ -173,6 +175,7 @@ def _extract_order_values(row) -> list | None:
             ]
         return [
             getattr(row, "order_id", None),
+            getattr(row, "client_order_id", ""),
             getattr(row, "strategy_id", None),
             getattr(row, "symbol", None),
             getattr(row, "side", None) or getattr(row, "action", None) or "",
@@ -312,10 +315,69 @@ _EXTRACTOR_COLUMNS = {
 }
 
 
+def _sweep_wal_orphan_tmpfiles(wal_dir: str, max_age_s: float = 300.0) -> int:
+    """M2 (2026-04-25): one-shot bootstrap-time orphan tmpfile cleanup.
+
+    Scans ``wal_dir`` for files matching ``tmp*.tmp`` (the
+    ``tempfile.mkstemp(suffix='.tmp')`` default pattern) older than
+    ``max_age_s`` seconds and unlinks them. Returns the number of files
+    removed. Bumps ``wal_orphan_tmp_cleaned_total{location="bootstrap_sweep"}``
+    once per file so operators can correlate disk-pressure alerts with
+    historical orphan accumulation.
+
+    The age guard exists because a peer process (e.g. the WAL loader) may
+    legitimately have an in-flight tmp file at this moment — we only touch
+    files that were definitely orphaned by a prior crash.
+    """
+    import glob
+    import time
+
+    if not os.path.isdir(wal_dir):
+        return 0
+
+    pattern = os.path.join(wal_dir, "tmp*.tmp")
+    now = time.time()
+    cleaned = 0
+    for path in glob.glob(pattern):
+        try:
+            st = os.stat(path)
+        except OSError:
+            continue
+        age_s = now - st.st_mtime
+        if age_s < max_age_s:
+            continue
+        try:
+            os.unlink(path)
+            cleaned += 1
+            logger.warning(
+                "wal_orphan_tmp_cleaned",
+                path=path,
+                age_s=round(age_s, 1),
+                size_bytes=st.st_size,
+            )
+            try:
+                from hft_platform.observability.metrics import MetricsRegistry
+
+                m = MetricsRegistry.get()
+                if m is not None:
+                    m.wal_orphan_tmp_cleaned_total.labels(location="bootstrap_sweep").inc()
+            except Exception as _exc:  # noqa: BLE001
+                pass
+        except OSError as exc:
+            logger.warning("wal_orphan_tmp_unlink_failed", path=path, error=str(exc))
+    if cleaned:
+        logger.info("wal_orphan_tmp_sweep_complete", cleaned_count=cleaned, wal_dir=wal_dir)
+    return cleaned
+
+
 class RecorderService:
     def __init__(self, queue: asyncio.Queue, _clickhouse_client=None):
         self.queue = queue
         self.running = False
+        # H10: single-path shutdown guard. Set once run()'s finally has
+        # drained+flushed so the synchronous fallback (_sync_drain_recorder)
+        # does not race on the same writer/batchers.
+        self._shutdown_drained = False
         # Health attributes for health endpoint probes
         self.healthy: bool = True
         self.last_write_ok: int = 0  # nanosecond timestamp of last successful write
@@ -443,11 +505,34 @@ class RecorderService:
         self.running = True
         logger.info("Recorder started", mode=self._mode.value)
 
+        # M2 (2026-04-25): one-shot orphan tmpfile sweep at recorder bootstrap.
+        # Production evidence: 8 ``tmp*.tmp`` files aged 5–13 days in
+        # ``/app/.wal/``, indicating prior runs crashed between mkstemp and
+        # rename. The per-call ``finally:`` cleanup added in this commit
+        # prevents NEW orphans, but legacy orphans persist on disk. This
+        # sweep removes any tmp*.tmp older than 5 minutes (so we don't
+        # disturb in-flight writes from any peer process).
+        try:
+            _sweep_wal_orphan_tmpfiles(os.getenv("HFT_WAL_DIR", ".wal"))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("wal_orphan_tmp_sweep_failed", error=str(exc))
+
         # CE3-01: set wal_mode metric
         try:
             from hft_platform.observability.metrics import MetricsRegistry
 
-            MetricsRegistry.get().wal_mode.set(1 if self._mode == RecorderMode.WAL_FIRST else 0)
+            _reg = MetricsRegistry.get()
+            _reg.wal_mode.set(1 if self._mode == RecorderMode.WAL_FIRST else 0)
+            # R2 (2026-04-24): in wal_first mode the engine does NOT open a
+            # direct ClickHouse connection — DataWriter.connect_async() is
+            # gated below by `self._mode != RecorderMode.WAL_FIRST`, so the
+            # gauge that DataWriter normally owns stays at its default 0 and
+            # permanently triggers ClickHouseConnectionDown. Mark healthy here
+            # since WAL-loader is the component responsible for CH ingestion
+            # in this mode. In direct-CH mode we leave the gauge alone and
+            # let DataWriter.connect_async() report actual connect health.
+            if self._mode == RecorderMode.WAL_FIRST:
+                _reg.clickhouse_connection_health.set(1)
         except Exception as exc:
             logger.debug("operation_failed", error=str(exc))
 
@@ -562,6 +647,9 @@ class RecorderService:
                 )
             except asyncio.CancelledError:
                 logger.warning("recorder_shutdown_flush_cancelled")
+            # H10: mark single-path shutdown complete so the sync fallback
+            # (_sync_drain_recorder) skips re-entry on the same writer.
+            self._shutdown_drained = True
             logger.info("Recorder stopped")
 
     async def _drain_queue_into_batchers(self) -> int:
@@ -601,38 +689,66 @@ class RecorderService:
         return drained
 
     async def _shutdown_flush(self) -> None:
-        """Flush all batchers and shut down writer. Called during graceful shutdown."""
+        """Flush all batchers and shut down writer. Called during graceful shutdown.
+
+        P1 fix: each batcher gets its own bounded timeout
+        (``HFT_RECORDER_BATCHER_FLUSH_TIMEOUT_S``, default 10s) instead of
+        relying solely on the caller's 60s outer wait_for. A stuck batcher
+        lock / slow CH insert now only delays ITS topic, not the whole
+        shutdown. Timed-out batchers are logged as ``skipped`` and the loop
+        continues so remaining batchers (esp. ``fills`` / ``orders``, the
+        financial-integrity tables) still flush.
+        """
         flushed: list[str] = []
         skipped: list[str] = []
+        timed_out: list[str] = []
         all_topics = list(self.batchers.keys())
+        per_batcher_timeout_s = float(os.getenv("HFT_RECORDER_BATCHER_FLUSH_TIMEOUT_S", "10"))
 
         try:
             for topic, batcher in self.batchers.items():
                 try:
-                    await batcher.force_flush()
+                    await asyncio.wait_for(batcher.force_flush(), timeout=per_batcher_timeout_s)
                     flushed.append(topic)
+                except asyncio.TimeoutError:
+                    timed_out.append(topic)
+                    logger.error(
+                        "recorder_batcher_flush_timeout",
+                        topic=topic,
+                        timeout_s=per_batcher_timeout_s,
+                        msg="Individual batcher flush timed out; continuing with remaining batchers",
+                    )
                 except asyncio.CancelledError:
-                    skipped.extend(t for t in all_topics if t not in flushed and t != topic)
+                    skipped.extend(t for t in all_topics if t not in flushed and t not in timed_out and t != topic)
                     skipped.append(topic)
                     raise  # Re-raise to exit the loop
                 except Exception as exc:
                     logger.warning("recorder_batcher_flush_error", topic=topic, error=str(exc))
                     flushed.append(topic)  # Attempted, move on
+            if timed_out:
+                logger.error(
+                    "recorder_shutdown_batchers_timed_out",
+                    flushed=flushed,
+                    timed_out=timed_out,
+                    per_batcher_timeout_s=per_batcher_timeout_s,
+                )
         except asyncio.CancelledError:
             if skipped:
                 logger.error(
                     "recorder_shutdown_batchers_skipped",
                     flushed=flushed,
                     skipped=skipped,
+                    timed_out=timed_out,
                     msg="Shutdown timeout — some batchers were not flushed",
                 )
             raise  # Must re-raise for wait_for to handle
 
         # Flush WAL-first writer before shutting down the main writer,
         # otherwise buffered WAL data is silently lost (INFRA-005).
-        if getattr(self, "_wal_first_writer", None) is not None:
+        _wfw = getattr(self, "_wal_first_writer", None)
+        if _wfw is not None:
             try:
-                await self._wal_first_writer.flush()
+                await _wfw.flush()
                 logger.info("WAL-first writer flushed during shutdown")
             except Exception as exc:
                 logger.warning("wal_first_writer_flush_error_shutdown", error=str(exc))

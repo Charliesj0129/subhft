@@ -85,6 +85,15 @@ def _ensure_project_root_on_path() -> None:
 
 def main(argv: list[str] | None = None) -> int:
     _ensure_project_root_on_path()
+    # Reduce default thread stack from 8 MB to 2 MB.
+    # Most platform threads are I/O waiters; 2 MB is sufficient.
+    # Does NOT affect Shioaji SDK C++ threads (they set their own stack size).
+    import os
+    import threading
+
+    _stack_mb = int(os.getenv("HFT_THREAD_STACK_SIZE_MB", "2"))
+    if _stack_mb > 0:
+        threading.stack_size(_stack_mb * 1024 * 1024)
     configure_logging()
     parser = build_parser()
     args = parser.parse_args(argv)

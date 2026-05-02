@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import threading
 
 import pytest
 
@@ -154,6 +155,74 @@ class TestQuoteEventHandler:
         assert snap.reason == "event_12"
         assert snap.ts == 77.7
 
+    def test_pending_lock_is_rlock(self) -> None:
+        """P0-D2: lock must be reentrant because QuoteRuntime.mark_pending
+        acquires pending_lock and then calls handler.mark_pending which
+        re-acquires the same lock from the same thread."""
+        handler = QuoteEventHandler()
+        lock = handler.pending_lock
+        # threading.RLock() exposes acquire/release and is reentrant — test by
+        # double-acquiring on the same thread.
+        assert lock.acquire(blocking=False)
+        try:
+            assert lock.acquire(blocking=False), (
+                "pending_lock must be reentrant so QuoteRuntime wrappers can "
+                "nest with handler.mark_pending without deadlock"
+            )
+            lock.release()
+        finally:
+            lock.release()
+
+    def test_concurrent_mark_clear_never_torn(self) -> None:
+        """P0-D2 regression: (_pending_reason, _pending_ts) must never be
+        observable as ``reason is None and ts > 0`` or ``reason is not None
+        and ts == 0``. Drive mark + clear from multiple threads and sample
+        the state mid-flight via ``snapshot()``."""
+        handler = QuoteEventHandler()
+        stop = threading.Event()
+        torn: list[tuple[str | None, float]] = []
+
+        def marker() -> None:
+            tick = 0
+            while not stop.is_set() and tick < 5_000:
+                tick += 1
+                handler.mark_pending(f"reason_{tick % 7}", current_ts=float(tick))
+
+        def clearer() -> None:
+            tick = 0
+            while not stop.is_set() and tick < 5_000:
+                tick += 1
+                handler.clear_pending()
+
+        def sampler() -> None:
+            sampled = 0
+            while not stop.is_set() and sampled < 5_000:
+                sampled += 1
+                snap = handler.snapshot()
+                # Invariant: pending=True iff reason is not None and ts > 0.
+                # pending=False iff reason is None and ts == 0.
+                if snap.pending:
+                    if snap.reason is None or snap.ts == 0.0:
+                        torn.append((snap.reason, snap.ts))
+                        return
+                else:
+                    if snap.reason is not None or snap.ts != 0.0:
+                        torn.append((snap.reason, snap.ts))
+                        return
+
+        threads = [
+            threading.Thread(target=marker, daemon=True),
+            threading.Thread(target=clearer, daemon=True),
+            threading.Thread(target=sampler, daemon=True),
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=5.0)
+        stop.set()
+
+        assert not torn, f"found torn snapshots: first={torn[0]}"
+
     def test_full_lifecycle(self) -> None:
         handler = QuoteEventHandler()
         assert handler.is_pending is False
@@ -176,6 +245,7 @@ class TestSubRetryCapacityAwareness:
     def test_retry_stops_at_capacity(self) -> None:
         """Retry loop should break immediately when subscribed_count >= MAX_SUBSCRIPTIONS."""
         import unittest.mock as mock
+        from collections import deque
 
         from hft_platform.feed_adapter.shioaji.quote_runtime import QuoteRuntime
 
@@ -184,10 +254,13 @@ class TestSubRetryCapacityAwareness:
         client.subscribed_count = 120
         # Must be False initially so start_sub_retry_thread doesn't early-return
         client._sub_retry_running = False
-        client._failed_sub_symbols = [
-            {"code": "TXO35050D6", "exchange": "OPT"},
-            {"code": "TXO35100D6", "exchange": "OPT"},
-        ]
+        # L2: production type is collections.deque (in-place mutation only).
+        client._failed_sub_symbols = deque(
+            [
+                {"code": "TXO35050D6", "exchange": "OPT"},
+                {"code": "TXO35100D6", "exchange": "OPT"},
+            ]
+        )
         client._contract_retry_s = 0.01
         client.logged_in = True
         client._callbacks_registered = True
@@ -207,6 +280,7 @@ class TestSubRetryCapacityAwareness:
     def test_retry_proceeds_when_under_capacity(self) -> None:
         """Retry loop should attempt resubscription when under capacity."""
         import unittest.mock as mock
+        from collections import deque
 
         from hft_platform.feed_adapter.shioaji.quote_runtime import QuoteRuntime
 
@@ -214,9 +288,12 @@ class TestSubRetryCapacityAwareness:
         client.MAX_SUBSCRIPTIONS = 120
         client.subscribed_count = 100
         client._sub_retry_running = False
-        client._failed_sub_symbols = [
-            {"code": "TXO35050D6", "exchange": "OPT"},
-        ]
+        # L2: production type is collections.deque (in-place mutation only).
+        client._failed_sub_symbols = deque(
+            [
+                {"code": "TXO35050D6", "exchange": "OPT"},
+            ]
+        )
         client._contract_retry_s = 0.01
         client.logged_in = True
         client._callbacks_registered = True

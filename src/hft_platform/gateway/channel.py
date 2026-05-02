@@ -24,23 +24,24 @@ logger = get_logger("gateway.channel")
 
 
 TypedIntentFrame: TypeAlias = tuple[
-    str,  # marker = "typed_intent_v1"
-    int,  # intent_id
-    str,  # strategy_id
-    str,  # symbol
-    int,  # intent_type (enum int)
-    int,  # side (enum int)
-    int,  # price
-    int,  # qty
-    int,  # tif (enum int)
-    str,  # target_order_id
-    int,  # timestamp_ns
-    int,  # source_ts_ns
-    str,  # reason
-    str,  # trace_id
-    str,  # idempotency_key
-    int,  # ttl_ns
-    int,  # decision_price (LOB mid at signal time, scaled x10000)
+    str,  # 0  marker = "typed_intent_v1"
+    int,  # 1  intent_id
+    str,  # 2  strategy_id
+    str,  # 3  symbol
+    int,  # 4  intent_type (enum int)
+    int,  # 5  side (enum int)
+    int,  # 6  price
+    int,  # 7  qty
+    int,  # 8  tif (enum int)
+    str,  # 9  target_order_id
+    int,  # 10 timestamp_ns
+    int,  # 11 source_ts_ns
+    str,  # 12 reason
+    str,  # 13 trace_id
+    str,  # 14 idempotency_key
+    int,  # 15 ttl_ns
+    int,  # 16 decision_price (LOB mid at signal time, scaled x10000)
+    str,  # 17 price_type ("LMT"/"MKT")
 ]
 
 
@@ -82,6 +83,7 @@ class TypedIntentView:
     idempotency_key: str
     ttl_ns: int
     decision_price: int = 0
+    price_type: str = "LMT"
 
 
 class IntentChannelProtocol(Protocol):
@@ -265,6 +267,7 @@ def typed_frame_to_view(frame: TypedIntentFrame) -> TypedIntentView:
         idempotency_key=str(frame[14]),
         ttl_ns=int(frame[15]),
         decision_price=int(frame[16]) if len(frame) > 16 else 0,
+        price_type=str(frame[17]) if len(frame) > 17 else "LMT",
     )
 
 
@@ -286,6 +289,7 @@ def typed_view_to_intent(view: TypedIntentView) -> OrderIntent:
         idempotency_key=str(view.idempotency_key),
         ttl_ns=int(view.ttl_ns),
         decision_price=int(view.decision_price),
+        price_type=str(view.price_type or "LMT"),
     )
 
 

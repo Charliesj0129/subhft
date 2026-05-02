@@ -1,0 +1,148 @@
+alpha_id: c33_txfd6_solo_passive_maker
+name: "TXFD6 solo passive maker (R47-minimal variant)"
+version: "0.1.0"
+status: prototype
+owner: alpha-research-20260418-reboot
+strategy_type: maker
+instrument: "TXFD6"
+instruments:
+  - TXFD6
+
+# ============================================================================
+# SHADOW-DEPLOY BANNER (R7 T8, 2026-04-18)
+# ============================================================================
+production_status: "SHADOW_SCAFFOLDED_2026-04-18; enabled=false pending user confirmation"
+user_confirmation_required: true
+release_gate: research/alphas/c33_txfd6_solo_passive_maker/RELEASE_GATE.md
+shadow_deploy_runbook: research/alphas/c33_txfd6_solo_passive_maker/SHADOW_DEPLOY.md
+live_wrapper: src/hft_platform/strategies/c33_txfd6_solo_maker.py
+# ============================================================================
+
+hypothesis: >
+  R47-minimal (spread-gate + inventory-skew; signal layers PE/Queue/MFG/QI
+  DISABLED) applied to TXFD6 day session captures +0.21 pt/fill under
+  MAKER FULL-CYCLE framework. Per-cycle gross = 2 × half_spread = 3.42 pt
+  > RT 3 pt → +0.42 pt/cycle margin. R47-full-QI (calibrated on TMFD6)
+  underperforms R47-minimal 4:1 on TXFD6 per R7 T1 counterfactual; layer
+  transfer is rejected. H2 framework validity is CONDITIONAL on T5
+  demonstrating close-side fills are MAKER for >=80% of cycles.
+
+mechanism_class: pure_maker
+
+distinction_from_killed_classes:
+  - name: "C14 TXF front-month retail (prior-run PROMOTE-REVOKED)"
+    distinction: >
+      C14 was revoked on cost arithmetic error (manifest RT=0.48 pt; actual
+      retail 3 pt). C33 applies 3 pt RT from start per
+      memory/feedback_taifex_fee_structure.md. R7 T1 counterfactual is run
+      under correct cost. Mechanism family shared but verdict is a
+      re-evaluation under fixed physics, not a repackaging.
+  - name: "C30 TXF-maker + TMF-hedge (R5 hedge-qty kill)"
+    distinction: >
+      C33 has NO cross-instrument hedge leg. Hedge-qty physics inapplicable.
+      Single-instrument maker only. R5 C30 kill reason does not recur.
+  - name: "R47 deployed on TMFD6"
+    distinction: >
+      Different instrument (TXF vs TMF), different cost structure (RT 3 vs
+      4 pt), different current-regime spread (4 vs 2 pt). Same R47
+      framework, distinct deploy parameters.
+  - name: "C32 / C32b refresh-timing modulator"
+    distinction: >
+      C33 is a standalone maker, not a modulator. Independent candidate.
+
+paper_refs:
+  - r47_maker_strategy
+  - r47_structural_properties
+  - feedback_taifex_fee_structure
+  - memory/backtest_method_reliability
+  - "2008 Avellaneda-Stoikov HFT in LOB"
+  - "2015 Cartea-Jaimungal-Penalva MM economics"
+  - "2010 Cont-Stoikov-Talreja queue fill probability"
+
+signals:
+  reuse: >
+    R47 framework reused (spread-gate, inventory-skew). Signal layers
+    (PE, Queue-survival, MFG, QI) DISABLED by design: R7 T1 counterfactual
+    empirically showed TMFD6-calibrated layers underperform 4:1 on TXFD6.
+    Do NOT transfer; add TXFD6-calibrated layers only after measured benefit.
+
+parameters:
+  spread_threshold_pts: 5               # R47 convention; 2×half_spread margin over RT
+  max_pos: 1                             # T5 sweeps {1, 3, 5}
+  inventory_skew_tenths: 2               # 0.2 ticks/contract fixed skew
+  enable_pe_layer: false                 # R47-minimal
+  enable_queue_layer: false              # R47-minimal
+  enable_mfg_layer: false                # R47-minimal
+  enable_qi_layer: false                 # R47-minimal
+
+latency_profile: "shioaji_sim_p95_v2026-03-04"
+
+# Cost model cited from memory/feedback_taifex_fee_structure.md
+# (user-confirmed 2026-04-18). C33 is single-instrument; no hedge leg to scale.
+# R5+R6 physics discipline: verified via T4 tests (no place_order/cancel_order
+# methods on strategy beyond PostQuote actions returned to the engine; engine
+# owns actual execution).
+cost_model:
+  source_memo: "memory/feedback_taifex_fee_structure.md"
+  confirmed_by_user: "2026-04-18"
+  TXFD6:
+    commission_pts_per_side: 0.3
+    tax_pts_per_side: 1.2
+    rt_cost_pts: 3.0
+    point_value_ntd: 200
+    median_spread_pts: 4.3
+    cost_drag_pct: 75                    # bright-line WARN (>50%); best of TAIFEX futures retail
+
+h2_framework:
+  adjudication: "MAKER FULL-CYCLE (standard MM theory)"
+  per_cycle_gross_pts: 3.42              # 2 × half_spread OOS
+  per_cycle_cost_pts: 3.0                # RT
+  margin_pts: 0.42                       # narrow but positive
+  conditional_on: >
+    T5 must demonstrate close-side fills are MAKER for >=80% of cycles.
+    If <80%, framework collapses to strict single-fill (1.71 < 3 FAIL)
+    and T6 retroactively REJECTs.
+
+expected_edge:
+  counterfactual_oos_pt_per_fill: 0.21
+  counterfactual_oos_w_net_per_day_pts: 334
+  counterfactual_oos_days_positive: "4/5"
+  queue_share_scaling:
+    "2%": "+1,340 NTD/day (~6.7 pt/day)"
+    "5%": "+3,350 NTD/day (~16.8 pt/day)"
+  source_artifact: "outputs/team_artifacts/alpha-research/round-7/artifacts/researcher_t1_counterfactual_result.md"
+
+da_t5_conditions:
+  close_maker_rate_required_pct: 80     # CRITICAL
+  execution_model: "bid/ask"            # MANDATORY (mid = automatic T6 REJECT)
+  queue_share_bracket: [1, 2, 5, 10]
+  max_pos_bracket: [1, 3, 5]
+  oos_days_positive_required_pct: 60
+  loss_tail_ratio_max: 5                # worst-day loss < 5× daily mean
+
+shadow_kill_criterion: >
+  TXFD6 sp_med < 3 pt for 3 consecutive sessions -> auto-disable
+  (matches TMFD6 Mar->Apr regime-shift trajectory). Structural cost-drag
+  becomes >100% at sp_med < 3 and mechanism fails.
+
+governance:
+  t1_proposal: outputs/team_artifacts/alpha-research/round-7/artifacts/researcher_t1_proposal.md
+  t1_counterfactual: outputs/team_artifacts/alpha-research/round-7/artifacts/researcher_t1_counterfactual_result.md
+  t1_spread_regime: outputs/team_artifacts/alpha-research/round-7/artifacts/researcher_t1_spread_regime.md
+  t2_review: outputs/team_artifacts/alpha-research/round-7/artifacts/da_t2_kill_checklist.md
+  t2_verdict: APPROVE
+  t2_tier1_fails: 0
+  t2_tier2_fails: 0
+  t2_warns:
+    - "WARN #1: H2 margin narrow (0.42 pt/cycle); T5 realized spread must match IS."
+    - "WARN #2: H2 framework validity conditional on close-side maker >=80%."
+    - "WARN #3: Cost-drag 75% (bright-line); structural if TXFD6 tightens."
+    - "WARN #4: H4 marginal on literal 20-day rule (14 days tested)."
+    - "WARN #5: IS aggressor fidelity mixed (7/14 days low-fid fallback)."
+    - "WARN #6: IS day-level variance (3 negative days in 9; worst -2,426 pt/day)."
+    - "WARN #7: Regime persistence risk (TXFD6 may follow TMFD6 trajectory)."
+
+notes:
+  - "Research-module float exception (Rule 11 of 25-architecture-governance). Strategy operates on integer prices; scale supplied by TickData (x1_000_000 from CK, x10_000 in platform)."
+  - "TXFD6 price scale: x10_000 (live platform), x1_000_000 (CK storage, golden parquet)."
+  - "R47 signal layers NOT imported and NOT delegated: R47-minimal enforced by attribute absence (test test_no_signal_layer_methods_exposed)."

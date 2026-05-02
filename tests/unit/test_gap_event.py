@@ -2,6 +2,8 @@
 
 import asyncio
 
+from hft_platform.contracts.execution import FillEvent, OrderEvent, OrderStatus
+from hft_platform.contracts.strategy import Side
 from hft_platform.engine.event_bus import RingBufferBus
 from hft_platform.events import GapEvent
 from hft_platform.strategies.r47_maker import R47MakerStrategy
@@ -59,11 +61,15 @@ def test_consume_overflow_yields_gap_event() -> None:
     assert ge.ts > 0
 
 
-def test_r47_on_gap_clears_pending_counters() -> None:
-    """R47 on_gap must clear _pending_buy/_pending_sell to prevent deadlock.
+def test_r47_on_gap_preserves_pending_counters() -> None:
+    """R47 on_gap must NOT clear _pending_buy/_pending_sell.
 
-    If gap swallows fill/cancel callbacks, pending counters would never
-    decrement, blocking all future order placement.
+    Clearing pending counters after a gap resets the max_pos protection,
+    allowing the strategy to send unbounded orders. If gap swallows
+    fill/cancel callbacks, keeping pending non-zero is the safe failure
+    mode — strategy stops quoting until restart (liveness issue, not
+    safety issue). Clearing pending is the UNSAFE failure mode that
+    caused the 76-order burst incident (2026-04-15 RC-1).
     """
     strat = R47MakerStrategy(strategy_id="test-r47", symbols=["TXFD6"])
     # Simulate pending orders
@@ -75,11 +81,43 @@ def test_r47_on_gap_clears_pending_counters() -> None:
     gap = GapEvent(missed_count=50, first_missed_seq=10, last_missed_seq=59, ts=123)
     strat.on_gap(gap)
 
-    assert strat._pending_buy.get("TXFD6", 0) == 0, "pending_buy not cleared"
-    assert strat._pending_sell.get("TXFD6", 0) == 0, "pending_sell not cleared"
+    # Pending counters must be PRESERVED — not cleared
+    assert strat._pending_buy["TXFD6"] == 2, "pending_buy must not be cleared by on_gap"
+    assert strat._pending_sell["TXFD6"] == 1, "pending_sell must not be cleared by on_gap"
+    # Stale streaming state (prices, features) should still be cleared
     assert len(strat._last_bid) == 0, "_last_bid not cleared"
     assert len(strat._last_ask) == 0, "_last_ask not cleared"
     assert len(strat._feature_cache) == 0, "feature_cache not cleared"
+
+
+def test_r47_max_pos_not_bypassed_after_gap() -> None:
+    """After on_gap, max_pos gate must still block orders when pending is non-zero.
+
+    Regression test for 2026-04-15 incident: GapEvent cleared pending
+    counters, causing pos(0) + pending(0) < max_pos(1) to pass on every
+    tick, sending 76 orders to the broker.
+    """
+    strat = R47MakerStrategy(
+        strategy_id="test-r47",
+        symbols=["TMFD6"],
+        max_pos=1,
+    )
+    # Simulate: 1 pending buy already sent to broker
+    strat._pending_buy["TMFD6"] = 1
+    strat._local_pos["TMFD6"] = 0
+
+    # GapEvent fires (bus overflow)
+    gap = GapEvent(missed_count=10, first_missed_seq=0, last_missed_seq=9, ts=123)
+    strat.on_gap(gap)
+
+    # After gap, pending must still be 1 — preventing the buy gate from
+    # passing (0 + 1 < 1 → False). If pending was cleared, the gate
+    # would pass (0 + 0 < 1 → True), sending a duplicate order.
+    pos = strat._local_pos.get("TMFD6", 0)
+    pending = strat._pending_buy.get("TMFD6", 0)
+    assert pos + pending >= strat._max_pos, (
+        f"max_pos bypass: pos({pos}) + pending({pending}) < max_pos({strat._max_pos})"
+    )
 
 
 def test_consume_overflow_gap_event_metric() -> None:
@@ -121,6 +159,105 @@ def test_consume_batch_overflow_yields_gap_event() -> None:
 
     gap_events = [e for e in collected if isinstance(e, GapEvent)]
     assert len(gap_events) >= 1, "Expected at least one GapEvent in batch on overflow"
+
+
+def test_r47_local_pos_hard_cap_blocks_order_after_gap() -> None:
+    """F1: _local_pos hard cap prevents orders even when pending is zero.
+
+    Regression test for 76-order burst (2026-04-15). Even if on_gap
+    somehow cleared pending counters (old behavior) or pending drifted to 0,
+    _local_pos at max_pos must block further orders.
+    """
+    strat = R47MakerStrategy(
+        strategy_id="test-r47",
+        symbols=["TMFD6"],
+        max_pos=1,
+    )
+    # Simulate: position is already at max
+    strat._local_pos["TMFD6"] = 1
+    strat._pending_buy["TMFD6"] = 0  # pending reset (e.g. by bug)
+
+    # pos=1, max_pos=1 → pos < max_pos is False → can_buy must be False
+    pos = strat._local_pos["TMFD6"]
+    assert pos >= strat._max_pos, "hard cap must block when pos >= max_pos"
+
+
+def test_r47_risk_feedback_preserves_last_price() -> None:
+    """F3: on_risk_feedback must NOT clear _last_bid/_last_ask.
+
+    Clearing price gate on rejection creates a reject→resend amplification
+    loop (76-order burst incident 2026-04-15 RC-2).
+    """
+    strat = R47MakerStrategy(
+        strategy_id="test-r47",
+        symbols=["TMFD6"],
+        max_pos=1,
+    )
+    strat._pending_buy["TMFD6"] = 1
+    strat._last_bid["TMFD6"] = 367250000
+    strat._last_ask["TMFD6"] = 367280000
+
+    class _MockFeedback:
+        symbol = "TMFD6"
+        side = Side.BUY
+        reason_code = "DEGRADE"
+        was_approved = False
+
+    strat.on_risk_feedback(_MockFeedback())
+
+    # Pending should be decremented
+    assert strat._pending_buy["TMFD6"] == 0
+    # But last_bid must NOT be cleared — price gate must stay armed
+    assert strat._last_bid.get("TMFD6") == 367250000, "_last_bid must not be cleared by risk rejection"
+    # last_ask untouched (rejection was BUY side)
+    assert strat._last_ask.get("TMFD6") == 367280000
+
+
+def test_r47_cancel_before_requote_on_order_tracking() -> None:
+    """F2: on_order(SUBMITTED) captures order_id for cancel-before-requote.
+
+    When R47 receives a SUBMITTED OrderEvent, it stores the broker order_id
+    so that stale ROD orders can be canceled when the quote price moves.
+    """
+    strat = R47MakerStrategy(
+        strategy_id="test-r47",
+        symbols=["TMFD6"],
+        max_pos=1,
+    )
+    # Simulate SUBMITTED event with broker order_id
+    submitted = OrderEvent(
+        order_id="BROKER-001",
+        strategy_id="test-r47",
+        symbol="TMFD6",
+        status=OrderStatus.SUBMITTED,
+        submitted_qty=1,
+        filled_qty=0,
+        remaining_qty=1,
+        price=367250000,
+        side=Side.BUY,
+        ingest_ts_ns=0,
+        broker_ts_ns=0,
+    )
+    strat.on_order(submitted)
+    assert strat._active_buy_oid.get("TMFD6") == "BROKER-001"
+
+    # Fill clears active tracking
+    fill = FillEvent(
+        fill_id="F001",
+        account_id="A001",
+        order_id="BROKER-001",
+        strategy_id="test-r47",
+        symbol="TMFD6",
+        side=Side.BUY,
+        qty=1,
+        price=367250000,
+        fee=0,
+        tax=0,
+        ingest_ts_ns=0,
+        match_ts_ns=0,
+    )
+    strat.on_fill(fill)
+    assert "TMFD6" not in strat._active_buy_oid
 
 
 def test_consume_no_gap_event_without_overflow() -> None:

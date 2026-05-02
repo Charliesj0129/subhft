@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import math
 import os
+import threading
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -84,7 +85,7 @@ class _StatsTupleProxy:
         return self._t[9]
 
 
-def _top_qty(side: object) -> int | None:
+def _top_qty(side: Any) -> int | None:
     """Extract top-of-book quantity from a bid/ask side array.
 
     Module-level function (lifted from ``_extract_l1_qty`` closure) to avoid
@@ -243,6 +244,12 @@ class FeatureEngine:
         "_warmup_ready_symbols",
         "_ooo_drop_count",
         "_rust_fused_fallback_count",
+        "_compute_values_none_count",
+        "_kernel_reset_failures_count",
+        "_l5_clear_error_count",
+        "_eviction_ttl_ns",
+        "_eviction_last_run_ns",
+        "_state_lock",
     )
 
     def __init__(
@@ -254,6 +261,17 @@ class FeatureEngine:
         kernel_backend: str | None = None,
         feature_profile: FeatureProfile | None = None,
     ) -> None:
+        # M1: cross-thread lock for state dicts.
+        # `mark_gap_all` is invoked from the broker callback thread (via
+        # ``services/market_data.py`` setting it as a tick-dispatcher drop
+        # callback), while ``process_lob_update`` / ``reset_*`` /
+        # ``evict_stale_symbols`` run on the event loop. All mutations of
+        # ``_states``, ``_quality_flags_next``, ``_event_cache``,
+        # ``_last_update_ns``, ``_lob_kernel_states``, ``_warmup_ready_symbols``,
+        # ``_rust_kernels``, ``_rust_pipelines`` MUST be guarded by this lock.
+        # Critical sections must be SHORT — never hold the lock across an
+        # ``await``, kernel ``.update()`` call, or any I/O.
+        self._state_lock = threading.Lock()
         self._registry = registry or default_feature_registry()
         self._feature_set = self._registry.get(feature_set_id) if feature_set_id else self._registry.get_default()
         self._feature_ids = self._feature_set.feature_ids
@@ -300,6 +318,12 @@ class FeatureEngine:
         self._warmup_ready_symbols: set[str] = set()
         self._ooo_drop_count: int = 0
         self._rust_fused_fallback_count: int = 0
+        self._compute_values_none_count: int = 0
+        self._kernel_reset_failures_count: int = 0
+        self._l5_clear_error_count: int = 0
+        # Stale symbol eviction (mirrors LOBEngine.evict_stale_symbols)
+        self._eviction_ttl_ns: int = int(float(os.getenv("HFT_FEATURE_EVICTION_TTL_S", "3600")) * 1_000_000_000)
+        self._eviction_last_run_ns: int = 0
         if feature_profile is not None:
             self.apply_profile(feature_profile)
 
@@ -327,6 +351,11 @@ class FeatureEngine:
         return dict(prof.params or {}) if prof is not None else {}
 
     def runtime_status(self) -> dict[str, Any]:
+        # M1: ``len(self._states)`` is GIL-atomic in CPython, but may be
+        # called from a non-event-loop thread (HTTP / monitor). Read under
+        # the lock for correctness against concurrent ``reset_all``.
+        with self._state_lock:
+            tracked = len(self._states)
         return {
             "feature_set_id": self.feature_set_id(),
             "schema_version": self.schema_version(),
@@ -335,7 +364,7 @@ class FeatureEngine:
             "emit_events": bool(self._emit_events),
             "active_profile_id": self.active_profile_id(),
             "profile_params": self.profile_params(),
-            "tracked_symbols": len(self._states),
+            "tracked_symbols": tracked,
         }
 
     def apply_profile(self, profile: FeatureProfile) -> None:
@@ -368,28 +397,54 @@ class FeatureEngine:
 
     def reset_symbol(self, symbol: str) -> None:
         symbol = str(symbol)
-        self._states.pop(symbol, None)
-        self._lob_kernel_states.pop(symbol, None)
-        self._last_update_ns.pop(symbol, None)
-        self._warmup_ready_symbols.discard(symbol)
-        kernel = self._rust_kernels.pop(symbol, None)
+        # M1: snapshot kernel/pipeline references inside the lock, then run
+        # ``.reset()`` outside (kernel.reset() can take arbitrary time / is a
+        # Rust call we should not block other threads on).
+        with self._state_lock:
+            self._states.pop(symbol, None)
+            self._lob_kernel_states.pop(symbol, None)
+            self._last_update_ns.pop(symbol, None)
+            self._warmup_ready_symbols.discard(symbol)
+            kernel = self._rust_kernels.pop(symbol, None)
+            pipeline = self._rust_pipelines.pop(symbol, None)
+            self._event_cache.pop(symbol, None)
+            self._quality_flags_next[symbol] = self._quality_flags_next.get(symbol, 0) | QUALITY_FLAG_STATE_RESET
         if kernel is not None:
             try:
                 reset = getattr(kernel, "reset", None)
                 if callable(reset):
                     reset()
             except Exception as _exc:  # noqa: BLE001
-                pass
-        pipeline = self._rust_pipelines.pop(symbol, None)
+                # P3-? (B110): A failed kernel reset would otherwise be silent
+                # and the next ``_compute_values_rust`` call could surface
+                # poisoned state. Surface via counter + log so operators can
+                # see kernel health degrading. Do not re-raise — the reset
+                # path runs on the hot path and crashing is worse than
+                # tolerating a stale kernel for one tick.
+                self._kernel_reset_failures_count += 1
+                if self._kernel_reset_failures_count <= 3 or self._kernel_reset_failures_count % 100 == 0:
+                    logger.warning(
+                        "feature_kernel_reset_failed",
+                        symbol=symbol,
+                        kernel="lob_feature_kernel_v1",
+                        error=str(_exc),
+                        total_failures=self._kernel_reset_failures_count,
+                    )
         if pipeline is not None:
             try:
                 reset = getattr(pipeline, "reset", None)
                 if callable(reset):
                     reset()
             except Exception as _exc:  # noqa: BLE001
-                pass
-        self._event_cache.pop(symbol, None)
-        self._quality_flags_next[symbol] = self._quality_flags_next.get(symbol, 0) | QUALITY_FLAG_STATE_RESET
+                self._kernel_reset_failures_count += 1
+                if self._kernel_reset_failures_count <= 3 or self._kernel_reset_failures_count % 100 == 0:
+                    logger.warning(
+                        "feature_kernel_reset_failed",
+                        symbol=symbol,
+                        kernel="rust_feature_pipeline_v1",
+                        error=str(_exc),
+                        total_failures=self._kernel_reset_failures_count,
+                    )
 
     def mark_gap(self, symbol: str) -> None:
         """Mark the next feature update for *symbol* with QUALITY_FLAG_GAP.
@@ -397,27 +452,88 @@ class FeatureEngine:
         Call when upstream data gaps are detected (e.g., raw_queue drops)
         so strategies can distinguish missing data from normal silence.
         """
-        self._quality_flags_next[symbol] = self._quality_flags_next.get(symbol, 0) | QUALITY_FLAG_GAP
-
-    def mark_gap_all(self) -> None:
-        """Mark all tracked symbols with QUALITY_FLAG_GAP."""
-        for symbol in self._states:
+        with self._state_lock:
             self._quality_flags_next[symbol] = self._quality_flags_next.get(symbol, 0) | QUALITY_FLAG_GAP
 
+    def _log_l5_clear_error(self, side: str, exc: BaseException) -> None:
+        """Emit a sampled warning when L5 access raises in ``_compute_mldm``.
+
+        Caller (``_compute_mldm``) is hot-path (per-tick); log is throttled
+        to the first 3 events plus every 100th. Counter
+        ``_l5_clear_error_count`` is incremented by the caller before
+        invocation. We deliberately do not OR a quality flag here:
+        ``_compute_mldm`` has no symbol context and the surrounding
+        BBO-shift / thin-book guard already zeros ``deep_net``, so the
+        downstream signal is safe — the goal is observability only.
+        """
+        if self._l5_clear_error_count <= 3 or self._l5_clear_error_count % 100 == 0:
+            logger.warning(
+                "feature_l5_clear_error",
+                side=side,
+                error=str(exc),
+                total_errors=self._l5_clear_error_count,
+            )
+
+    def mark_gap_all(self) -> None:
+        """Mark all tracked symbols with QUALITY_FLAG_GAP.
+
+        M1: This method is invoked from the broker callback thread when the
+        tick dispatcher drops events. It iterates ``_states`` while the event
+        loop may be mutating it via ``process_lob_update``. We hold the lock
+        for the whole snapshot+OR loop because each operation is O(symbols)
+        and bounded; releasing between snapshot and OR would let
+        ``mark_gap_all`` lose GAP bits for symbols newly added in between.
+        Do NOT add I/O / logging / await inside this critical section.
+        """
+        with self._state_lock:
+            for symbol in self._states:
+                self._quality_flags_next[symbol] = self._quality_flags_next.get(symbol, 0) | QUALITY_FLAG_GAP
+
     def reset_all(self) -> None:
-        for symbol in list(self._states):
-            self._quality_flags_next[symbol] = self._quality_flags_next.get(symbol, 0) | QUALITY_FLAG_STATE_RESET
-        self._states.clear()
-        self._lob_kernel_states.clear()
-        self._rust_kernels.clear()
-        self._rust_pipelines.clear()
-        self._last_update_ns.clear()
-        self._warmup_ready_symbols.clear()
-        self._event_cache.clear()
+        with self._state_lock:
+            for symbol in list(self._states):
+                self._quality_flags_next[symbol] = self._quality_flags_next.get(symbol, 0) | QUALITY_FLAG_STATE_RESET
+            self._states.clear()
+            self._lob_kernel_states.clear()
+            self._rust_kernels.clear()
+            self._rust_pipelines.clear()
+            self._last_update_ns.clear()
+            self._warmup_ready_symbols.clear()
+            self._event_cache.clear()
 
     def reset_symbols(self, symbols: set[str]) -> None:
         for sym in symbols:
             self.reset_symbol(sym)
+
+    def evict_stale_symbols(self) -> int:
+        """Remove symbols whose last update is older than TTL.
+
+        Returns the number of evicted symbols.  Safe to call from any
+        periodic maintenance loop (e.g. the supervisor 1 Hz tick).
+        """
+        if self._eviction_ttl_ns <= 0:
+            return 0
+        now_ns = _now_ns()
+        # Rate-limit: run at most once per minute
+        if now_ns - self._eviction_last_run_ns < 60_000_000_000:
+            return 0
+        self._eviction_last_run_ns = now_ns
+        cutoff_ns = now_ns - self._eviction_ttl_ns
+        # M1: snapshot under the lock, then call ``reset_symbol`` outside
+        # the lock — ``reset_symbol`` re-acquires the same threading.Lock
+        # (re-entrant only via the *same* thread is fine because Python's
+        # ``threading.Lock`` is non-reentrant; releasing here avoids deadlock).
+        with self._state_lock:
+            stale = [sym for sym, ts in self._last_update_ns.items() if 0 < ts < cutoff_ns]
+        for sym in stale:
+            self.reset_symbol(sym)
+        if stale:
+            logger.info(
+                "feature_stale_symbols_evicted",
+                count=len(stale),
+                symbols=stale[:5],
+            )
+        return len(stale)
 
     def get_feature(self, symbol: str, feature_id: str) -> int | float | None:
         state = self._states.get(str(symbol))
@@ -487,9 +603,14 @@ class FeatureEngine:
         # EMA updates to prevent contamination.
         mid_price_x2 = getattr(stats_resolved, "mid_price_x2", None)
         if mid_price_x2 is not None and mid_price_x2 == 0:
-            prev = self._states.get(symbol)
+            # M1: snapshot prev + drain pending quality flags atomically.
+            with self._state_lock:
+                prev = self._states.get(symbol)
+                if prev is not None:
+                    qflags = int(self._quality_flags_next.pop(symbol, 0))
+                else:
+                    qflags = 0
             if prev is not None:
-                qflags = int(self._quality_flags_next.pop(symbol, 0))
                 qflags |= QUALITY_FLAG_PARTIAL
                 normalizer_seq = int(getattr(stats_resolved, "normalizer_seq", 0) or 0)
                 prev.seq = seq
@@ -499,7 +620,8 @@ class FeatureEngine:
                 if normalizer_seq > 0:
                     prev.normalizer_seq = normalizer_seq
                 # Keep prev.values and prev.warm_count unchanged (stale re-emit)
-                self._last_update_ns[symbol] = _now_ns()
+                with self._state_lock:
+                    self._last_update_ns[symbol] = _now_ns()
                 if not self._emit_events:
                     return None
                 evt = FeatureUpdateEvent(
@@ -515,15 +637,25 @@ class FeatureEngine:
                     feature_ids=self._feature_ids,
                     values=prev.values,
                 )
-                self._event_cache[symbol] = evt
+                with self._state_lock:
+                    self._event_cache[symbol] = evt
                 return evt
             return None  # No prev state yet — genuinely skip
 
-        prev = self._states.get(symbol)
-        if prev is None and len(self._states) >= self._max_symbols:
+        # M1: snapshot prev under the lock — broker thread mutates _states
+        # via reset_symbol(); without the lock, get() can race with pop().
+        with self._state_lock:
+            prev = self._states.get(symbol)
+            if prev is None and len(self._states) >= self._max_symbols:
+                cardinality_exceeded = True
+                current_count = len(self._states)
+            else:
+                cardinality_exceeded = False
+                current_count = 0
+        if cardinality_exceeded:
             logger.warning(
                 "feature_symbol_cardinality_exceeded",
-                current=len(self._states),
+                current=current_count,
                 limit=self._max_symbols,
                 symbol=symbol,
             )
@@ -543,7 +675,10 @@ class FeatureEngine:
             # DATA2-006: Do NOT pop quality flags on OOO — let them carry
             # forward to the next valid event. Popping here discards pending
             # GAP/RESET flags that strategies need to see.
-            qflags = int(self._quality_flags_next.get(symbol, 0))
+            # M1: read under lock; broker thread can be ORing GAP into the
+            # same key concurrently.
+            with self._state_lock:
+                qflags = int(self._quality_flags_next.get(symbol, 0))
             qflags |= QUALITY_FLAG_OUT_OF_ORDER
             # DATA-016: Track OOO drops for observability.
             self._ooo_drop_count += 1
@@ -571,7 +706,24 @@ class FeatureEngine:
                 self.reset_symbol(symbol)
                 return None
         else:
-            values = self._compute_values(symbol, event, stats_resolved)
+            values_opt = self._compute_values(symbol, event, stats_resolved)
+            # P1-b: ``_compute_values`` returns ``None`` when a new symbol cannot
+            # be admitted (max-symbol cardinality, line ~762). Without this guard
+            # downstream code would feed ``None`` into ``math.isfinite`` and
+            # ``FeatureUpdateEvent``, raising ``TypeError`` on the hot path.
+            if values_opt is None:
+                self._compute_values_none_count += 1
+                if self._compute_values_none_count <= 3 or self._compute_values_none_count % 100 == 0:
+                    logger.warning(
+                        "feature_compute_values_none",
+                        symbol=symbol,
+                        kernel_backend=self._kernel_backend,
+                        max_symbols=self._max_symbols,
+                        kernel_states=len(self._lob_kernel_states),
+                        total_none=self._compute_values_none_count,
+                    )
+                return None
+            values = values_opt
             # NaN/Inf contamination guard — reset kernel state if detected
             ks = self._lob_kernel_states.get(symbol)
             if ks is not None and ks.has_nan():
@@ -580,29 +732,35 @@ class FeatureEngine:
                 return None
             changed_mask = self._compute_changed_mask(prev.values if prev else None, values)
             warmup_ready_mask = self._compute_warmup_ready_mask(warm_count, symbol)
-        qflags = int(self._quality_flags_next.pop(symbol, 0))
 
-        # Hot-path exception: in-place mutation to avoid per-tick allocation
-        if prev is not None:
-            prev.seq = seq
-            prev.source_ts_ns = source_ts_ns
-            prev.local_ts_ns = local_ts_ns
-            prev.values = values
-            prev.warm_count = warm_count
-            prev.quality_flags = qflags
-            prev.normalizer_seq = normalizer_seq
-        else:
-            self._states[symbol] = _FeatureState(
-                seq=seq,
-                source_ts_ns=source_ts_ns,
-                local_ts_ns=local_ts_ns,
-                values=values,
-                warm_count=warm_count,
-                quality_flags=qflags,
-                normalizer_seq=normalizer_seq,
-            )
+        # M1: drain pending quality flags + commit state under the lock.
+        # The broker thread may have ORed GAP into ``_quality_flags_next``
+        # between snapshot above and now; we MUST consume it here so the
+        # GAP bit reaches the strategy on this tick.
+        with self._state_lock:
+            qflags = int(self._quality_flags_next.pop(symbol, 0))
 
-        self._last_update_ns[symbol] = _now_ns()
+            # Hot-path exception: in-place mutation to avoid per-tick allocation
+            if prev is not None:
+                prev.seq = seq
+                prev.source_ts_ns = source_ts_ns
+                prev.local_ts_ns = local_ts_ns
+                prev.values = values
+                prev.warm_count = warm_count
+                prev.quality_flags = qflags
+                prev.normalizer_seq = normalizer_seq
+            else:
+                self._states[symbol] = _FeatureState(
+                    seq=seq,
+                    source_ts_ns=source_ts_ns,
+                    local_ts_ns=local_ts_ns,
+                    values=values,
+                    warm_count=warm_count,
+                    quality_flags=qflags,
+                    normalizer_seq=normalizer_seq,
+                )
+
+            self._last_update_ns[symbol] = _now_ns()
 
         if not self._emit_events:
             return None
@@ -625,12 +783,13 @@ class FeatureEngine:
             feature_ids=self._feature_ids,
             values=values,
         )
-        self._event_cache[symbol] = evt
+        with self._state_lock:
+            self._event_cache[symbol] = evt
         return evt
 
     def _compute_values(
         self, symbol: str, event: object | None, stats: LOBStatsEvent | _StatsTupleProxy
-    ) -> tuple[int, ...]:
+    ) -> tuple[int, ...] | None:
         if self._kernel_backend == "rust":
             return self._compute_values_rust(symbol, event, stats)
 
@@ -659,6 +818,8 @@ class FeatureEngine:
 
         ks = self._lob_kernel_states.get(symbol)
         if ks is None:
+            if len(self._lob_kernel_states) >= self._max_symbols:
+                return None
             ks = _LobKernelState()
             self._lob_kernel_states[symbol] = ks
 
@@ -750,14 +911,14 @@ class FeatureEngine:
             return v1_tuple
 
         if n_features <= 19:
-            return (*v1_tuple, *v2_base)  # type: ignore[possibly-undefined]
+            return (*v1_tuple, *v2_base)
 
         iss_val = self._compute_iss(ks, int(ofi_l1_raw), mid_price_x2, bid_depth, ask_depth)
-        mldm_val = self._compute_mldm(ks, event, best_bid, best_ask, _prev_bb_for_mldm, _prev_ba_for_mldm)  # type: ignore[possibly-undefined]
+        mldm_val = self._compute_mldm(ks, event, best_bid, best_ask, _prev_bb_for_mldm, _prev_ba_for_mldm)
         tox_val = self._compute_toxicity(ks)
 
         if n_features <= 22:
-            return (*v1_tuple, *v2_base, iss_val, mldm_val, tox_val)  # type: ignore[possibly-undefined]
+            return (*v1_tuple, *v2_base, iss_val, mldm_val, tox_val)
 
         # --- v3 EMA aggregation features ---
         a5 = self._alpha_5s
@@ -772,7 +933,7 @@ class FeatureEngine:
 
         return (
             *v1_tuple,
-            *v2_base,  # type: ignore[possibly-undefined]
+            *v2_base,
             iss_val,
             mldm_val,
             tox_val,
@@ -924,8 +1085,12 @@ class FeatureEngine:
                         cb4 = float(bids[3][1]) if len(bids[3]) > 1 else 0.0
                     if n_bid_levels > 4:
                         cb5 = float(bids[4][1]) if len(bids[4]) > 1 else 0.0
-                except Exception:
-                    pass
+                except Exception as _exc:  # noqa: BLE001
+                    # P3-? (L5 swallow): bad L5 records previously emitted
+                    # zero-depth silently. Surface via counter + log so
+                    # corrupted depth shows up in metrics.
+                    self._l5_clear_error_count += 1
+                    self._log_l5_clear_error("bid", _exc)
             if asks is not None:
                 try:
                     n_ask_levels = min(len(asks), 5)
@@ -937,8 +1102,9 @@ class FeatureEngine:
                         ca4 = float(asks[3][1]) if len(asks[3]) > 1 else 0.0
                     if n_ask_levels > 4:
                         ca5 = float(asks[4][1]) if len(asks[4]) > 1 else 0.0
-                except Exception:
-                    pass
+                except Exception as _exc:  # noqa: BLE001
+                    self._l5_clear_error_count += 1
+                    self._log_l5_clear_error("ask", _exc)
 
         # BBO-shift guard: zero deep_net when best price changes
         bbo_shifted = ks.initialized and (best_bid != prev_best_bid or best_ask != prev_best_ask)
@@ -1011,20 +1177,34 @@ class FeatureEngine:
 
         ks = self._lob_kernel_states.get(symbol)
         if ks is None:
+            if len(self._lob_kernel_states) >= self._max_symbols:
+                return
             ks = _LobKernelState()
             self._lob_kernel_states[symbol] = ks
 
         # EMA alpha for ~50 tick window
         alpha = 0.04  # 2/(50+1) ≈ 0.039
 
-        signed_vol = float(trade_direction * volume)
+        # P3-b1: weight signed-volume by classifier confidence so a tick-rule
+        # classification (CONF_TICK_RULE=500) contributes half as much to the
+        # toxicity EMA as an at-quote classification (CONF_AT_QUOTE=1000).
+        # Confidence is scaled x1000 (see ``trade_classifier.py``); divide
+        # to get a 0..1 weight, clamped so an out-of-range value cannot
+        # amplify the signal beyond the at-quote ceiling.
+        weight = max(0.0, min(1.0, float(trade_confidence) / 1000.0))
+        signed_vol = float(trade_direction * volume) * weight
+        weighted_total = float(volume) * weight
         ks.tox_signed_vol_ema += alpha * (signed_vol - ks.tox_signed_vol_ema)
-        ks.tox_total_vol_ema += alpha * (float(volume) - ks.tox_total_vol_ema)
+        ks.tox_total_vol_ema += alpha * (weighted_total - ks.tox_total_vol_ema)
         ks.tox_tick_count += 1
 
     def _compute_values_rust(
         self, symbol: str, event: object | None, stats: LOBStatsEvent | _StatsTupleProxy
-    ) -> tuple[int, ...]:
+    ) -> tuple[int, ...] | None:
+        # P1-b: Return type widened to ``| None`` so the rust→python fallback
+        # below correctly forwards a cardinality-rejected ``None`` instead of
+        # claiming a non-None tuple. Caller (``_compute_values``) already
+        # handles None.
         if _RUST_LOB_FEATURE_KERNEL_V1 is None:
             # Safety fallback in case runtime extension is unavailable.
             self._kernel_backend = "python"

@@ -133,14 +133,14 @@ class TestCBSInitialization:
         assert cbs._session_start_sec == 33300
         assert cbs._session_end_sec == 48900
 
-    def test_strategy_registry_uses_normalized_tmfd6_params(self) -> None:
+    def test_strategy_registry_uses_normalized_tmf_params(self) -> None:
         cfg = yaml.safe_load(Path("config/base/strategies.yaml").read_text(encoding="utf-8"))
         enabled = {item["id"]: item["enabled"] for item in cfg["strategies"]}
-        cbs = next(item for item in cfg["strategies"] if item["id"] == "CBS_TMFD6")
+        cbs = next(item for item in cfg["strategies"] if item["id"] == "CBS_TMF")
         params = cbs["params"]
 
-        assert enabled["OPPORTUNISTIC_MM_TMFD6"] is False
-        assert enabled["CBS_TMFD6"] is False  # Disabled: 0/84 contrarian, 0/6 momentum configs profitable
+        assert enabled["OPPORTUNISTIC_MM_TMF"] is False
+        assert enabled["CBS_TMF"] is False  # Disabled: 0/84 contrarian, 0/6 momentum configs profitable
         assert params["lookback_ns"] > 0
         assert params["trigger_sigma"] > 0
         assert params["take_profit_pts"] > 0

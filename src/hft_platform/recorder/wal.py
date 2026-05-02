@@ -190,6 +190,12 @@ class WALWriter:
         """
         Atomic write: write to temp file, then rename.
         This prevents partial reads by the loader.
+
+        M2 (2026-04-25): cleanup uses ``finally:`` instead of ``except:`` so
+        orphan tmpfiles are removed even when the worker thread is killed by
+        SIGKILL or interpreter shutdown between fsync and rename. After a
+        successful rename the tmp_path no longer exists so the cleanup is a
+        no-op; on failure it removes the partial file and bumps a metric.
         """
         # Write to temp file in same directory (for atomic rename)
         dir_path = os.path.dirname(filename)
@@ -209,12 +215,19 @@ class WALWriter:
             os.rename(tmp_path, filename)
             # fsync directory to ensure rename is durable on disk (coalesced when configured)
             self._maybe_fsync_dir(dir_path, writer="wal")
-        except Exception as exc:
-            logger.debug("operation_fallback", error=str(exc))
-            # Clean up temp file on failure
+        finally:
+            # If rename succeeded tmp_path no longer exists; if it failed (or
+            # this thread is dying) we remove the orphan partial file.
             if os.path.exists(tmp_path):
-                os.unlink(tmp_path)
-            raise
+                try:
+                    os.unlink(tmp_path)
+                    if self._metrics:
+                        try:
+                            self._metrics.wal_orphan_tmp_cleaned_total.labels(location="wal_writer").inc()
+                        except Exception as exc:  # noqa: BLE001
+                            logger.debug("operation_fallback", error=str(exc))
+                except OSError as exc:
+                    logger.warning("wal_orphan_tmp_unlink_failed", path=tmp_path, error=str(exc))
 
     def _write_sync(self, filename: str, data: list):
         """Legacy blocking write (kept for compatibility)."""
@@ -249,6 +262,13 @@ class WALBatchWriter:
         self._buffer_rows = 0
         self._buffer_bytes = 0  # Approximate
         self._lock = threading.Lock()
+        # P0-I2 (2026-04-24): serialises the physical write phase
+        # (``_write_batch_sync``) so the background timer thread and async
+        # ``flush()`` (which offloads via run_in_executor) never enter the
+        # critical section simultaneously. Without this, two threads can race
+        # on the shared ``_file_seq`` counter and the parent directory fsync,
+        # producing duplicate/racing WAL files.
+        self._write_lock = threading.Lock()
         self._last_flush_ts = time.monotonic()
 
         # Disk space check (reuse WALWriter's approach)
@@ -494,7 +514,23 @@ class WALBatchWriter:
         _approx_bytes: int,
         columnar_data: dict[str, list[tuple[list[str], list[list[Any]], int]]] | None = None,
     ) -> None:
-        """Write multi-table WAL file(s) atomically. EC-3: splits on size limit."""
+        """Write multi-table WAL file(s) atomically. EC-3: splits on size limit.
+
+        P0-I2: ``_write_lock`` serialises all physical writes so the background
+        timer thread and the async ``flush()`` path (executor-scheduled) cannot
+        enter this section concurrently. Lock is held for the entire write
+        phase including tempfile create → fsync → rename.
+        """
+        with self._write_lock:
+            self._write_batch_sync_locked(data, _approx_bytes, columnar_data)
+
+    def _write_batch_sync_locked(
+        self,
+        data: dict[str, list[dict[str, Any]]],
+        _approx_bytes: int,
+        columnar_data: dict[str, list[tuple[list[str], list[list[Any]], int]]] | None = None,
+    ) -> None:
+        """Actual write implementation. MUST be called with ``_write_lock`` held."""
         dir_path = self._wal_dir
         current_bytes = 0
         current_lines: list[bytes] = []
@@ -509,6 +545,9 @@ class WALBatchWriter:
             seq = next(_file_seq)
             filename = f"{dir_path}/batch_{ts}_{seq}.jsonl"
             fd, tmp_path = tempfile.mkstemp(suffix=".tmp", dir=dir_path)
+            # M2: ``finally`` cleanup so SIGKILL between fsync and rename does
+            # not leave orphan tmp*.tmp files (production evidence: 8 such
+            # files aged 5–13 days in /app/.wal/).
             try:
                 with os.fdopen(fd, "wb") as f:
                     fcntl.flock(f.fileno(), fcntl.LOCK_EX)
@@ -521,11 +560,17 @@ class WALBatchWriter:
                         fcntl.flock(f.fileno(), fcntl.LOCK_UN)
                 os.rename(tmp_path, filename)
                 self._maybe_fsync_dir(dir_path)
-            except Exception as exc:
-                logger.debug("operation_fallback", error=str(exc))
+            finally:
                 if os.path.exists(tmp_path):
-                    os.unlink(tmp_path)
-                raise
+                    try:
+                        os.unlink(tmp_path)
+                        if self._metrics:
+                            try:
+                                self._metrics.wal_orphan_tmp_cleaned_total.labels(location="wal_batch").inc()
+                            except Exception as exc:  # noqa: BLE001
+                                logger.debug("operation_fallback", error=str(exc))
+                    except OSError as exc:
+                        logger.warning("wal_orphan_tmp_unlink_failed", path=tmp_path, error=str(exc))
             file_count += 1
             current_lines = []
             current_bytes = 0
@@ -630,16 +675,26 @@ class WALBatchWriter:
                 except Exception as e:
                     self._merge_back_consecutive_failures += 1
                     if self._merge_back_consecutive_failures >= self._merge_back_max_failures:
+                        # P1 fix: compute the ACTUAL dropped-row count including
+                        # anything that may have re-accumulated in flush_data /
+                        # flush_columnar (the snapshot taken under lock is the
+                        # authoritative drop size).
+                        _dropped_rows = sum(len(v) for v in flush_data.values()) + sum(
+                            seg[2] for segs in flush_columnar.values() for seg in segs
+                        )
                         logger.warning(
                             "WAL merge-back circuit breaker tripped — dropping data",
-                            rows=flush_rows,
+                            rows=_dropped_rows,
+                            flush_rows=flush_rows,
                             consecutive_failures=self._merge_back_consecutive_failures,
                             error=str(e),
                         )
                         self._merge_back_consecutive_failures = 0
                         if self._metrics:
                             try:
-                                self._metrics.wal_batch_flush_total.labels(result="dropped").inc()
+                                # Count per-row so disk-pressure alerts fire on the
+                                # true data-loss volume, not once per circuit-breaker trip.
+                                self._metrics.wal_batch_flush_total.labels(result="dropped").inc(max(1, _dropped_rows))
                             except Exception as exc:
                                 logger.debug("operation_fallback", error=str(exc))
                     else:

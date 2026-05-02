@@ -1,7 +1,8 @@
 # Skills Index
 
-> **160+ skills** from HFT Platform + [everything-claude-code](https://github.com/affaan-m/everything-claude-code) and other community repos
+> **~160 skills** from HFT Platform + [everything-claude-code](https://github.com/affaan-m/everything-claude-code) and other community repos
 > Each skill has a `SKILL.md`. Read it with `view_file` before using.
+> 13 legacy / unreferenced skills archived 2026-04-19 to `_archive-2026-04-19/` (XML-format + zero external refs).
 
 ## HFT Core
 
@@ -20,7 +21,6 @@
 | `validation-gate` | Alpha validation: Gate A-E interpretation, promotion blockers, UL6 thresholds |
 | `troubleshoot-metrics` | Runtime diagnostics: Prometheus, Docker, StormGuard, WAL, execution, ops health |
 | `clickhouse-io` | ClickHouse schema (15 migrations, 13+ tables), queries, TTL, recorder IO, WAL replay |
-| `shioaji-contracts` | Shioaji API contract handling |
 | `fubon-tradeapi` | Fubon TradeAPI reference: auth, SDK, endpoints, order types, env vars |
 | `multi-broker-ops` | Multi-broker operations: broker switching, failover, credentials, latency profiles |
 | `symbols-sync` | Symbol universe sync: symbols.list -> symbols.yaml |
@@ -83,8 +83,6 @@
 | Skill | Description |
 | --- | --- |
 | `cc-skill-clickhouse-io` | ClickHouse database patterns, query optimization, analytics, and data engineering best practices for high-performance analytical workloads. |
-| `clickhouse-optimized` | No description |
-| `clickhouse-queries` | Deep Analyzer. Performs statistical analysis on ClickHouse data. Returns P50/P99 latency and throughput metrics in JSON. Use for Performance Verification and Darwin Gate checks. |
 | `content-hash-cache-pattern` | SHA-256 content hash caching _(ECC)_ |
 | `database-migrations` | Zero-downtime migrations (Postgres, MySQL, ORMs) _(ECC)_ |
 | `database-schema-designer` | Design robust, scalable database schemas for SQL and NoSQL databases. Provides normalization guidelines, indexing strategies, migration patterns, constraint design, and performance optimization. Ensures data integrity, query performance, and maintainable data models. |
@@ -100,7 +98,6 @@
 | `qa-test-planner` | Generate comprehensive test plans, manual test cases, regression test suites, and bug reports for QA engineers. Includes Figma MCP integration for design validation. |
 | `security-review` | Security checklist and patterns _(ECC)_ |
 | `security-scan` | AgentShield config scanning _(ECC)_ |
-| `skill-stocktake` | Audit skills quality _(ECC)_ |
 | `tdd-workflow` | Test-driven development workflow _(ECC)_ |
 | `verification-loop` | Comprehensive verification system _(ECC)_ |
 
@@ -112,7 +109,6 @@
 | `codex` | Use when the user asks to run Codex CLI (codex exec, codex resume) or references OpenAI Codex for code analysis, refactoring, or automated editing. Uses GPT-5.2 by default for state-of-the-art software engineering. |
 | `coding-agent` | Delegate coding tasks to Codex, Claude Code, or Pi agents via background process. Use when: (1) building/creating new features or apps, (2) reviewing PRs (spawn in temp dir), (3) refactoring large codebases, (4) iterative coding that needs file exploration. NOT for: simple one-liner fixes (just edit), reading code (use read tool), or any work in ~/clawd workspace (never spawn agents here). Requires a bash tool that supports pty:true. |
 | `configure-ecc` | Interactive ECC installer _(ECC)_ |
-| `context-loader` | No description |
 | `continuous-learning` | Extract patterns from sessions _(ECC)_ |
 | `continuous-learning-v2` | Instinct-based learning system _(ECC)_ |
 | `cost-aware-llm-pipeline` | LLM cost optimization, model routing _(ECC)_ |
@@ -171,26 +167,21 @@
 
 | Skill | Description |
 | --- | --- |
-| `auto-fix` | No description |
-| `background-manager` | No description |
 | `command-creator` | This skill should be used when creating a Claude Code slash command. Use when users ask to "create a command", "make a slash command", "add a command", or want to document a workflow as a reusable command. Essential for creating optimized, agent-executable slash commands with proper structure and best practices. |
 | `commit-work` | Create high-quality git commits: review/stage intended changes, split into logical commits, and write clear commit messages (including Conventional Commits). Use when the user asks to commit, craft a commit message, stage changes, or split work into multiple commits. |
 | `config-env` | No description |
 | `crafting-effective-readmes` | Use when writing or improving README files. Not all READMEs are the same — provides templates and guidance matched to your audience and project type. |
 | `dependency-updater` | Smart dependency management for any language. Auto-detects project type, applies safe updates automatically, prompts for major versions, diagnoses and fixes dependency issues. |
-| `doc-updater` | Documentation updating |
-| `fix` | Lint/format error fixing |
+| `doc-updater` | Auto-generate codemaps and reconcile architectural docs with the current source tree. Use when docs drift from code, when regenerating `docs/CODEMAPS/structure.md`, or when verifying `docs/ARCHITECTURE.md` still matches `src/`. |
 | `flags` | Feature flag management |
 | `healthcheck` | Host security hardening |
 | `performance-profiling` | Profiling and optimization |
-| `planner` | Planning assistance |
+| `planner` | Generate a phased implementation plan (requirements, architecture, step-by-step phases, risk) before coding. Use when the user asks for a new feature, a large refactor, or "how should we build X?". |
 | `plugin-forge` | Create and manage Claude Code plugins with proper structure, manifests, and marketplace integration. Use when creating plugins for a marketplace, adding plugin components (commands, agents, hooks), bumping plugin versions, or working with plugin.json/marketplace.json manifests. |
-| `pr-status-triage` | PR status triage |
 | `reducing-entropy` | Manual-only skill for minimizing total codebase size. Only activate when explicitly requested by user. Measures success by final code amount, not effort. Bias toward deletion. |
 | `requirements-clarity` | Clarify ambiguous requirements through focused dialogue before implementation. Use when requirements are unclear, features are complex (>2 days), or involve cross-team coordination. Ask two core questions - Why? (YAGNI check) and Simpler? (KISS check) - to ensure clarity before coding. |
 | `runtime-debug` | Runtime debugging |
-| `scaffold-project` | Project scaffolding |
-| `sequential-thinking` | Step-by-step reasoning |
+| `sequential-thinking` | Force step-by-step reasoning (hypothesis → evidence → elimination → conclusion) to reduce hallucination on complex logic. Use when debugging race conditions, designing distributed system flows, or answering "why did this happen?". |
 | `session-manager` | Session management |
 | `skill-lookup` | Skill discovery |
 | `writing-skills` | Skill creation and editing |
@@ -201,16 +192,14 @@
 | --- | --- |
 | `bear-notes` | Create, search, and manage Bear notes via grizzly CLI. |
 | `datadog-cli` | Datadog CLI for searching logs, querying metrics, tracing requests, and managing dashboards. Use this when debugging production issues or working with Datadog observability. |
-| `delegate` | Task delegation |
 | `deploy-docker` | Docker deploy |
 | `discord` | Discord operations |
 | `draw-io` | draw.io diagram creation, editing, and review. Use for .drawio XML editing, PNG conversion, layout adjustment, and AWS icon usage. |
-| `eightctl` | Eight Sleep pod control |
 | `feishu-perm` | Feishu permissions |
 | `feishu-wiki` | Feishu wiki |
 | `gemini` | Gemini CLI integration |
 | `gh-issues` | GitHub issues → PRs pipeline |
-| `git-parallel` | Git parallel workflows |
+| `git-parallel` | Manage git worktrees for parallel development — context-switch without stashing. Use when the user says "work on X while keeping Y open", starts a parallel task, or wants a long-running backtest workspace isolated from active coding. |
 | `github` | GitHub CLI operations |
 | `gog` | Google Workspace CLI |
 | `himalaya` | Email via IMAP/SMTP |

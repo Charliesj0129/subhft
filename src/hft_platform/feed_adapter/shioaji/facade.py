@@ -73,6 +73,14 @@ class ShioajiClientFacade:
         return int(getattr(self._client, "subscribed_count", 0))
 
     @property
+    def alias_to_actual(self) -> dict[str, str]:
+        return self._client.alias_to_actual
+
+    @property
+    def subscribed_codes(self) -> set[str]:
+        return getattr(self._client, "subscribed_codes", set())
+
+    @property
     def tick_callback(self) -> Any:
         return self._client.tick_callback
 

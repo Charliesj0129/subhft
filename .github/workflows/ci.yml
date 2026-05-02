@@ -60,6 +60,19 @@ jobs:
       - name: HFT discipline enforcement
         run: make discipline
 
+      - name: Alpha latency profile audit (Gate D)
+        # Block PRs that add a promotion/validation scorecard without a
+        # latency profile reference or that fall outside Gate D 80% tolerance.
+        # Passes silently when no scorecards exist.
+        run: make latency-audit
+
+      - name: HFT discipline (HFT-P004 no-float-money)
+        # AST-based check that complements the legacy grep-based float
+        # detector below. HFT-P004 hard-blocks `: float` annotations on
+        # money-related fields (price/balance/fee/pnl/notional/...) inside
+        # contracts/, order/, execution/, risk/. See scripts/check_discipline.py.
+        run: make discipline-hft
+
       - name: Detect float in financial paths
         run: |
           FOUND=$(grep -rnE ':\s*float\b|float\(' \
@@ -95,6 +108,14 @@ jobs:
             | grep -v 'dlq_ttl' \
             | grep -v 'mid_price_max_age' \
             | grep -v 'recovery_hold' \
+            | grep -v '_ts:' \
+            | grep -v 'monotonic_ts' \
+            | grep -v 'ttl_s' \
+            | grep -v 'ttl_ns' \
+            | grep -v 'TTL_S' \
+            | grep -v 'max_age_s' \
+            | grep -v 'cooldown' \
+            | grep -v 'toxicity' \
             | grep -v 'sigma' \
             | grep -v 'vol_shift' \
             | grep -v 'pnl_ntd' \
@@ -305,6 +326,12 @@ jobs:
 
       - name: Check branch coverage
         run: make coverage-branch-gate
+
+      - name: Check domain coverage floors
+        # Per-package floors above the global 70% baseline for
+        # money-touching domains (risk/order/execution/gateway/recorder/alpha).
+        # Source: scripts/check_coverage_domains.py
+        run: make coverage-domain
 
       - name: Upload coverage to GitHub Summary
         if: always()
@@ -705,24 +732,25 @@ jobs:
     needs: lint
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          fetch-depth: 0  # gitleaks scans <PR-base>^..<PR-head>; needs full history
       - uses: ./.github/actions/setup-python-uv
 
       - name: Run pip-audit
         run: make security-audit
 
       - name: Code security scan (bandit)
-        continue-on-error: true  # pre-existing findings (104 High)
+        # Fail-closed at -ll (medium+). B608 SQL-string findings carry
+        # `# nosec B608` annotations after upstream input validation.
         run: uv run bandit -r src/hft_platform/ -c pyproject.toml -ll -q
 
       - name: Secret scanning (gitleaks)
-        continue-on-error: true  # pre-existing findings in history
         uses: gitleaks/gitleaks-action@dcedce43c6f43de0b836d1fe38946645c9c638dc  # v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: License compliance check
-        run: uv run pip-licenses --format=markdown --fail-on-licenses="GPL-2.0-only;GPL-2.0-or-later;GPL-3.0-only;GPL-3.0-or-later" || true
-        continue-on-error: true
+        run: uv run pip-licenses --format=markdown --fail-on="GPL-2.0-only;GPL-2.0-or-later;GPL-3.0-only;GPL-3.0-or-later"
 
       - name: Security Summary
         if: always()

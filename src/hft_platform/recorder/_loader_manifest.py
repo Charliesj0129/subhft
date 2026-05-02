@@ -71,6 +71,8 @@ def _save_manifest(self: WALLoaderService) -> None:
         import tempfile
 
         fd, tmp_path = tempfile.mkstemp(suffix=".tmp", dir=manifest_dir)
+        # M2 (2026-04-25): finally-cleanup so SIGKILL between fsync and rename
+        # does not leave orphan tmp*.tmp files in the manifest dir.
         try:
             with os.fdopen(fd, "w") as f:
                 for fname in sorted(self._manifest):
@@ -78,11 +80,12 @@ def _save_manifest(self: WALLoaderService) -> None:
                 f.flush()
                 os.fsync(f.fileno())
             os.rename(tmp_path, self._manifest_path)
-        except Exception as exc:
-            logger.debug("operation_fallback", error=str(exc))
+        finally:
             if os.path.exists(tmp_path):
-                os.unlink(tmp_path)
-            raise
+                try:
+                    os.unlink(tmp_path)
+                except OSError as exc:
+                    logger.debug("operation_fallback", error=str(exc))
     except Exception as e:
         logger.warning("Failed to save manifest", error=str(e))
 

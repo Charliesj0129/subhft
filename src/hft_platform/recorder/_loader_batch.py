@@ -144,7 +144,7 @@ def format_market_data(
         has_bids = bool(bids_price)
         has_asks = bool(asks_price)
         if row_type != "tick" and has_bids != has_asks:
-            logger.warning(
+            logger.debug(
                 "Missing orderbook side in WAL row",
                 symbol=r.get("symbol"),
                 has_bids=has_bids,
@@ -183,6 +183,7 @@ def format_market_data(
 
 _ORDERS_COLS: list[str] = [
     "order_id",
+    "client_order_id",
     "strategy_id",
     "symbol",
     "side",
@@ -211,6 +212,7 @@ def format_orders(
 
         row_data = [
             str(r.get("order_id", "")),
+            str(r.get("client_order_id", "")),
             str(r.get("strategy_id", "")),
             str(r.get("symbol", "")),
             str(r.get("side", r.get("action", ""))),

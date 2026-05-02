@@ -1,3 +1,4 @@
+import dataclasses
 import importlib
 import os
 import threading
@@ -34,6 +35,9 @@ if _RUST_POSITIONS:
             _rust_mod = None
     if _rust_mod is not None:
         _RustPositionTracker = getattr(_rust_mod, "RustPositionTracker", None)
+
+
+_MIN_PEAK_SCALED: int = int(os.getenv("HFT_DRAWDOWN_MIN_PEAK_SCALED", "100000000"))
 
 
 @dataclass(slots=True)
@@ -205,30 +209,42 @@ class PositionStore:
     def get_drawdown_pct(self) -> float:
         """Portfolio drawdown from peak equity as a fraction (0.0 to 1.0).
 
-        Returns 0.0 when no drawdown (at or above peak).
-        Only meaningful after at least one profitable fill has been processed
-        (i.e., _peak_equity_scaled > 0).
+        Returns 0.0 when peak equity has not reached the minimum threshold
+        (cold-start guard) — without this, even tiny fee-induced losses
+        produce 100% drawdown vs the just-crossed-zero peak.
+
+        Threshold is read once at module import from
+        ``HFT_DRAWDOWN_MIN_PEAK_SCALED`` (default 100_000_000 = 10,000 NTD =
+        1000 pts on TMFD6). Bug 10 (2026-04-16) used 2_000_000 (200 NTD)
+        which was too tight for HFT-scale low-volume strategies; Bug B
+        incident 2026-04-20T01:42 UTC: R47 morning +24 pts → afternoon
+        -22 pts pullback computed 92.9% drawdown vs intraday peak,
+        triggering false HALT. Operators tune via the env var.
         """
-        if self._peak_equity_scaled <= 0:
-            # No positive peak yet — report loss-based drawdown from zero baseline
-            current = self._total_realized_pnl_scaled
-            if current >= 0:
-                return 0.0
-            # Use absolute loss as fraction of base capital (fallback to 1 to avoid div-by-zero)
-            base = getattr(self, "_base_capital_scaled", 0) or 1
-            return min(1.0, abs(current) / base)
+        with self._fill_lock:
+            return self._get_drawdown_pct_locked()
+
+    def _get_drawdown_pct_locked(self) -> float:
+        # Caller MUST hold self._fill_lock. Splitting the locked snapshot
+        # from the public entry-point avoids re-acquiring a non-reentrant
+        # Lock when writers (e.g. _on_fill_python:525) emit drawdown
+        # metrics from inside their own critical section.
+        peak = self._peak_equity_scaled
         current = self._total_realized_pnl_scaled
-        if current >= self._peak_equity_scaled:
+        if peak < _MIN_PEAK_SCALED:
             return 0.0
-        return (self._peak_equity_scaled - current) / self._peak_equity_scaled
+        if current >= peak:
+            return 0.0
+        return (peak - current) / peak
 
     def net_qty_for_symbol(self, symbol: str, strategy_id: str | None = None) -> int:
-        """Return aggregate net_qty for *symbol*, including pending recovery positions.
+        """Return aggregate net_qty for *symbol*, optionally filtered by strategy.
 
-        When *strategy_id* is provided, only that strategy's entries in
-        ``self.positions`` are summed.  Recovery entries (which lack a
-        strategy_id) are always included because they represent a broker-
-        confirmed position that has not yet received its first fill.
+        When *strategy_id* is ``None``, all strategies AND recovery positions
+        are included (aggregate view).  When *strategy_id* is provided, only
+        positions belonging to that strategy are summed — recovery positions
+        are included only if their ``strategy_id`` matches the filter (or if
+        they have no ``strategy_id`` and no filter is applied).
         """
         total = 0
         for _key, pos in self.positions.items():
@@ -237,11 +253,19 @@ class PositionStore:
             if strategy_id is not None and getattr(pos, "strategy_id", None) != strategy_id:
                 continue
             total += int(getattr(pos, "net_qty", 0) or 0)
-        # Include pending recovery (keyed by account:symbol, no strategy_id)
         for rkey, rdata in self._recovery_positions.items():
-            rsym = rdata.get("symbol", rkey.rsplit(":", 1)[-1]) if isinstance(rdata, dict) else ""
-            if rsym == symbol:
-                total += int(rdata.get("net_qty", 0))
+            if not isinstance(rdata, dict):
+                continue
+            rsym = rdata.get("symbol", rkey.rsplit(":", 1)[-1])
+            if rsym != symbol:
+                continue
+            rstrat = rdata.get("strategy_id", "")
+            if strategy_id is not None and rstrat and rstrat != strategy_id:
+                continue
+            if strategy_id is not None and not rstrat:
+                # Legacy recovery with no strategy_id: exclude from filtered queries
+                continue
+            total += int(rdata.get("net_qty", 0))
         return total
 
     def _update_portfolio_aggregates(self, pnl_delta: int = 0) -> None:
@@ -340,6 +364,18 @@ class PositionStore:
             fees_scaled=fees,
         )
         self.positions[key] = pos
+        # Warn if recovery had no strategy (broker-only) and qty suggests multi-strategy risk
+        recovery_strategy = recovery.get("strategy_id", "")
+        if not recovery_strategy and abs(net_qty) > abs(fill.qty):
+            logger.warning(
+                "recovery_multi_strategy_risk",
+                key=key,
+                recovery_qty=net_qty,
+                fill_qty=fill.qty,
+                fill_strategy=fill.strategy_id,
+                msg="Broker-only recovery assigned all qty to first fill's strategy. "
+                "If multiple strategies trade this symbol, other strategies won't see recovered qty.",
+            )
         logger.info("recovery_position_merged", key=key, net_qty=net_qty, avg_price=avg_price)
 
     def on_fill(self, fill: FillEvent) -> PositionDelta:
@@ -448,7 +484,7 @@ class PositionStore:
             if hasattr(self.metrics, "portfolio_total_pnl"):
                 self.metrics.portfolio_total_pnl.set(self._total_realized_pnl_scaled)
             if hasattr(self.metrics, "portfolio_drawdown_pct"):
-                self.metrics.portfolio_drawdown_pct.set(self.get_drawdown_pct())
+                self.metrics.portfolio_drawdown_pct.set(self._get_drawdown_pct_locked())
 
         return PositionDelta(
             account_id=fill.account_id,
@@ -488,7 +524,7 @@ class PositionStore:
             if hasattr(self.metrics, "portfolio_total_pnl"):
                 self.metrics.portfolio_total_pnl.set(self._total_realized_pnl_scaled)
             if hasattr(self.metrics, "portfolio_drawdown_pct"):
-                self.metrics.portfolio_drawdown_pct.set(self.get_drawdown_pct())
+                self.metrics.portfolio_drawdown_pct.set(self._get_drawdown_pct_locked())
 
         # Emit delta (all values are already in scaled fixed-point form)
         return PositionDelta(
@@ -526,6 +562,9 @@ class PositionStore:
             mid = mid_prices.get(symbol)
             if mid is None:
                 continue
+            # Skip positions with unknown cost basis sentinel (-1)
+            if pos.avg_price_scaled < 0:
+                continue
             multiplier = self.metadata.contract_multiplier(symbol)
             total += (mid - pos.avg_price_scaled) * pos.net_qty * multiplier
 
@@ -537,18 +576,114 @@ class PositionStore:
             net_qty = rec["net_qty"]
             if net_qty == 0:
                 continue
+            avg_price = rec["avg_price_scaled"]
+            # Sentinel -1 means unknown cost basis (broker-only recovery).
+            # Skip MtM for this position to avoid astronomical fake PnL.
+            if avg_price < 0:
+                continue
             symbol = rec["symbol"]
             mid = mid_prices.get(symbol)
             if mid is None:
                 continue
             multiplier = self.metadata.contract_multiplier(symbol)
-            total += (mid - rec["avg_price_scaled"]) * net_qty * multiplier
+            total += (mid - avg_price) * net_qty * multiplier
         return total
 
-    def snapshot_positions(self) -> dict:
-        """Return a consistent shallow copy of positions under fill lock."""
+    def snapshot_positions_with_recovery(self) -> tuple[dict, dict]:
+        # Atomically snapshot both `positions` and `_recovery_positions`
+        # under one acquisition. Callers that merge both views (e.g.
+        # StrategyRunner._build_positions_by_strategy) MUST use this
+        # instead of two separate snapshots — _seed_from_recovery pops
+        # a recovery entry into positions inside its own critical
+        # section, so two separate snapshots can lose the entry from
+        # both views (positions snap before pop, recovery snap after).
         with self._fill_lock:
-            return dict(self.positions)
+            positions = {k: dataclasses.replace(v) for k, v in self.positions.items()}
+            recovery = {k: dict(v) if isinstance(v, dict) else v for k, v in self._recovery_positions.items()}
+        return positions, recovery
+
+    def snapshot_positions(self) -> dict:
+        """Return a consistent deep copy of positions under fill lock.
+
+        Position objects are mutable dataclasses mutated in-place by on_fill().
+        A shallow copy would share Position references, allowing a concurrent
+        fill (from broker thread) to mutate fields while the caller (e.g.
+        checkpoint writer) reads them — producing torn/inconsistent state.
+        dataclasses.replace() copies all fields (all ints/strings, no nested
+        mutables) so the snapshot is fully isolated.
+        """
+        with self._fill_lock:
+            return {k: dataclasses.replace(v) for k, v in self.positions.items()}
+
+    def reset(self) -> int:
+        """Clear all positions, recovery state, and portfolio aggregates.
+
+        Returns the number of positions cleared. For operational reset scenarios
+        where checkpoint + positions need to be zeroed without manual file deletion.
+        """
+        with self._fill_lock:
+            count = len(self.positions)
+            self.positions.clear()
+            self._recovery_positions.clear()
+            self._recovery_rpnl_offsets.clear()
+            self._recovery_fees_offsets.clear()
+            self._peak_equity_scaled = 0
+            self._total_realized_pnl_scaled = 0
+            self._evicted_realized_pnl_scaled = 0
+        logger.warning("position_store_reset", cleared_positions=count)
+        return count
+
+    def clear_symbol_positions(
+        self,
+        symbol: str,
+        strategy_id: str | None = None,
+    ) -> int:
+        """Remove position entries for *symbol* from store and recovery.
+
+        Used by reconciliation auto-correct when broker reports 0 for a
+        symbol that still has a phantom local position (e.g. expired option,
+        manual broker-side close).
+
+        When *strategy_id* is provided, only entries matching that
+        ``strategy_id`` are removed. This is important for MANUAL drift
+        auto-correct (Bug 14): clearing *all* entries for a symbol would
+        also wipe active strategy positions that happen to share the
+        symbol, which would silently create a new drift.
+
+        Returns the number of position entries removed.
+        """
+        with self._fill_lock:
+
+            def _pos_matches(pos: Position) -> bool:
+                if pos.symbol != symbol:
+                    return False
+                if strategy_id is not None and pos.strategy_id != strategy_id:
+                    return False
+                return True
+
+            def _recovery_matches(rd: Dict[str, Any]) -> bool:
+                if rd.get("symbol") != symbol:
+                    return False
+                if strategy_id is not None and rd.get("strategy_id", "") != strategy_id:
+                    return False
+                return True
+
+            keys_to_remove = [k for k, pos in self.positions.items() if _pos_matches(pos)]
+            for k in keys_to_remove:
+                self._evicted_realized_pnl_scaled += self.positions[k].realized_pnl_scaled
+                del self.positions[k]
+            rkeys_to_remove = [rk for rk, rd in self._recovery_positions.items() if _recovery_matches(rd)]
+            for rk in rkeys_to_remove:
+                del self._recovery_positions[rk]
+        if keys_to_remove or rkeys_to_remove:
+            logger.info(
+                "symbol_positions_cleared",
+                symbol=symbol,
+                strategy_id=strategy_id,
+                positions_removed=len(keys_to_remove),
+                recovery_removed=len(rkeys_to_remove),
+            )
+        return len(keys_to_remove)
 
     def _evict_flat_positions(self) -> None:
         """Evict positions with net_qty=0 to free memory."""

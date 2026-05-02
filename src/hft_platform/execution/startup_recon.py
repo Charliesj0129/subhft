@@ -7,7 +7,6 @@ at startup, before the trading loop begins.
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
@@ -15,7 +14,9 @@ from typing import Any, Dict, List
 from prometheus_client import Gauge
 from structlog import get_logger
 
+from hft_platform.contracts.constants import MANUAL_STRATEGY_ID
 from hft_platform.core import timebase
+from hft_platform.core.symbol_classifier import is_futures_symbol
 from hft_platform.execution.positions import PositionStore
 from hft_platform.execution.reconciliation import (
     PositionDiscrepancy,
@@ -41,6 +42,7 @@ startup_recon_auto_corrected = Gauge(
 
 _BLOCK_ENV = "HFT_STARTUP_RECON_BLOCK"
 _CHECKPOINT_PATH_ENV = "HFT_POSITION_CHECKPOINT_PATH"
+_DEFAULT_CHECKPOINT_PATH = ".state/position_checkpoint.json"
 
 
 @dataclass(slots=True)
@@ -52,27 +54,6 @@ class RecoveryResult:
     auto_corrected: int = 0
     halted: bool = False
     mismatches: list[dict] = field(default_factory=list)
-
-
-def _load_checkpoint(path: str) -> Dict[str, int]:
-    """Load position checkpoint from a JSON file.
-
-    Expected format: ``{"SYMBOL": qty, ...}`` where qty is an integer.
-    Returns an empty dict on any failure.
-    """
-    try:
-        with open(path, "r") as fh:
-            data = json.loads(fh.read())
-        if not isinstance(data, dict):
-            logger.warning("startup_recon: checkpoint is not a dict", path=path)
-            return {}
-        return {str(k): int(v) for k, v in data.items()}
-    except FileNotFoundError:
-        logger.warning("startup_recon: checkpoint file not found", path=path)
-        return {}
-    except Exception as exc:
-        logger.error("startup_recon: failed to load checkpoint", path=path, error=str(exc))
-        return {}
 
 
 class StartupPositionVerifier:
@@ -96,7 +77,7 @@ class StartupPositionVerifier:
         else:
             self.blocking = os.environ.get(_BLOCK_ENV, "0") == "1"
 
-        self.checkpoint_path = checkpoint_path or os.environ.get(_CHECKPOINT_PATH_ENV)
+        self.checkpoint_path = checkpoint_path or os.environ.get(_CHECKPOINT_PATH_ENV, _DEFAULT_CHECKPOINT_PATH)
 
         self._qty_threshold = (
             qty_threshold if qty_threshold is not None else int(os.environ.get("HFT_STARTUP_RECON_QTY_THRESHOLD", "10"))
@@ -135,15 +116,24 @@ class StartupPositionVerifier:
 
             # 3. Optionally merge checkpoint data (for symbols not in local store)
             if self.checkpoint_path:
-                checkpoint_map = _load_checkpoint(self.checkpoint_path)
-                if checkpoint_map:
-                    logger.info(
-                        "startup_recon: loaded checkpoint",
-                        symbols=len(checkpoint_map),
-                    )
-                    for sym, qty in checkpoint_map.items():
-                        if sym not in local_map:
-                            local_map[sym] = qty
+                from hft_platform.execution.checkpoint import PositionCheckpointWriter  # noqa: PLC0415
+
+                ckpt_data = PositionCheckpointWriter.load_checkpoint(self.checkpoint_path)
+                if ckpt_data is not None:
+                    ckpt_positions = ckpt_data.get("positions", {})
+                    # Aggregate symbol-level qty from per-strategy checkpoint entries
+                    checkpoint_map: Dict[str, int] = {}
+                    for _key, pos_data in ckpt_positions.items():
+                        sym = pos_data.get("symbol", _key.split(":")[-1])
+                        checkpoint_map[sym] = checkpoint_map.get(sym, 0) + pos_data.get("net_qty", 0)
+                    if checkpoint_map:
+                        logger.info(
+                            "startup_recon: loaded checkpoint",
+                            symbols=len(checkpoint_map),
+                        )
+                        for sym, qty in checkpoint_map.items():
+                            if sym not in local_map:
+                                local_map[sym] = qty
 
             # 4. Compute discrepancies via the same logic as ReconciliationService
             self.discrepancies = ReconciliationService._compute_discrepancies(
@@ -206,20 +196,7 @@ class StartupPositionVerifier:
     async def _fetch_broker_positions(self) -> Dict[str, int]:
         """Fetch positions from broker and return {symbol: qty} map."""
         raw_positions = await asyncio.to_thread(self.client.get_positions)
-        broker_map: Dict[str, int] = {}
-        for pos in raw_positions:
-            code = getattr(pos, "code", None) or (pos.get("code") if isinstance(pos, dict) else None)
-            qty = getattr(pos, "quantity", None) or (pos.get("quantity", 0) if isinstance(pos, dict) else 0)
-            direction = getattr(pos, "direction", "")
-            # Align with runtime reconciliation: both Action.Sell (stocks)
-            # and Short (futures) map to negative qty.
-            if str(direction) in ("Action.Sell", "Short"):
-                qty = -qty
-            if code:
-                # Accumulate (not overwrite) to handle multiple account types
-                # (stock + futopt) returning the same symbol code.
-                broker_map[code] = broker_map.get(code, 0) + int(qty)
-        return broker_map
+        return ReconciliationService._build_broker_map(raw_positions)
 
     def _build_local_map(self) -> Dict[str, int]:
         """Build {symbol: qty} map from PositionStore."""
@@ -239,14 +216,22 @@ class StartupPositionVerifier:
         trading_date: str | None = None,
         account_id: str = "default",
     ) -> RecoveryResult:
-        """Dual-source position recovery with graduated response."""
-        from datetime import datetime
-        from zoneinfo import ZoneInfo
+        """Dual-source position recovery with graduated response.
 
-        from hft_platform.execution.checkpoint import PositionCheckpointWriter
+        Bug 15 fix: uses the TAIFEX-aware trading-date helper (not plain
+        calendar date) so checkpoints written during the 00:00-05:00
+        overnight session window align with recovery. A ±1 calendar-day
+        tolerance is also applied so that checkpoints written just before
+        the 05:00 session close are still accepted if restart occurs
+        minutes later (see ``_ckpt_date_within_tolerance``).
+        """
+        from hft_platform.execution.checkpoint import (
+            PositionCheckpointWriter,
+            _taifex_trading_date,
+        )
 
         if trading_date is None:
-            trading_date = datetime.fromtimestamp(timebase.now_s(), tz=ZoneInfo("Asia/Taipei")).strftime("%Y%m%d")
+            trading_date = _taifex_trading_date()
 
         logger.info("position_recovery: starting", trading_date=trading_date)
 
@@ -259,7 +244,7 @@ class StartupPositionVerifier:
             ckpt_data = PositionCheckpointWriter.load_checkpoint(self.checkpoint_path)
             if ckpt_data is not None:
                 ckpt_td = ckpt_data.get("trading_date")
-                if ckpt_td == trading_date:
+                if self._ckpt_date_within_tolerance(ckpt_td, trading_date):
                     ckpt_valid = True
                     ckpt_positions = ckpt_data.get("positions", {})
                     # M2: Restore portfolio-level aggregates so StormGuard drawdown
@@ -304,6 +289,46 @@ class StartupPositionVerifier:
         else:
             startup_recon_status.set(3)
             return RecoveryResult(source="empty", halted=True)
+
+    @staticmethod
+    def _ckpt_date_within_tolerance(
+        ckpt_td: str | None,
+        current_td: str,
+        tolerance_days: int = 1,
+    ) -> bool:
+        """Bug 15: accept checkpoint if ``ckpt_td`` is within ±tolerance_days
+        of ``current_td``.
+
+        This guards the 00:00-05:00 TAIFEX night-session rollover window
+        where a checkpoint written at 04:59 (trading_date=D-1) should still
+        be recognised by a recovery run at 05:01 (trading_date=D).
+
+        Returns False on missing or malformed dates; caller then logs
+        ``checkpoint stale`` at warning level.
+        """
+        from datetime import datetime as _dt
+        from zoneinfo import ZoneInfo
+
+        if not ckpt_td or len(ckpt_td) != 8 or not ckpt_td.isdigit():
+            return False
+        if ckpt_td == current_td:
+            return True
+        try:
+            a = _dt.strptime(ckpt_td, "%Y%m%d")
+            b = _dt.strptime(current_td, "%Y%m%d")
+        except ValueError:
+            return False
+        delta_days = abs((a - b).days)
+        if delta_days == 0:
+            return True
+        if delta_days > tolerance_days:
+            return False
+
+        # Only treat adjacent trading dates as equivalent during the brief
+        # 05:00 handover window where a just-written night-session checkpoint
+        # can legitimately straddle the TAIFEX trading-date rollover.
+        now_tpe = _dt.fromtimestamp(timebase.now_s(), tz=ZoneInfo("Asia/Taipei"))
+        return now_tpe.hour == 5 and now_tpe.minute <= 5
 
     @staticmethod
     def _parse_composite_key(key: str) -> tuple[str, str, str]:
@@ -379,10 +404,10 @@ class StartupPositionVerifier:
                 # Distribute broker correction across per-strategy entries.
                 # For single-strategy symbols, use broker qty directly.
                 # For multi-strategy, scale proportionally (preserving sum = broker_qty).
-                self._distribute_correction(entries, broker_qty, account_id, merged)
+                self._distribute_correction(entries, broker_qty, account_id, merged, symbol=symbol)
             else:
                 if broker_qty != 0:
-                    self._distribute_correction(entries, broker_qty, account_id, merged)
+                    self._distribute_correction(entries, broker_qty, account_id, merged, symbol=symbol)
 
         if has_critical:
             startup_recon_status.set(3)
@@ -406,6 +431,7 @@ class StartupPositionVerifier:
         target_qty: int,
         account_id: str,
         merged: Dict[str, Dict[str, Any]],
+        symbol: str = "",
     ) -> None:
         """Write checkpoint entries into *merged*, adjusting to match broker qty.
 
@@ -415,6 +441,22 @@ class StartupPositionVerifier:
         cannot confirm).
         """
         if not entries:
+            if target_qty != 0 and symbol:
+                key = f"{account_id}:{MANUAL_STRATEGY_ID}:{symbol}"
+                merged[key] = {
+                    "symbol": symbol,
+                    "net_qty": target_qty,
+                    "avg_price_scaled": 0,
+                    "realized_pnl_scaled": 0,
+                    "fees_scaled": 0,
+                    "account_id": account_id,
+                    "strategy_id": MANUAL_STRATEGY_ID,
+                }
+                logger.info(
+                    "position_recovery: created entry from broker",
+                    symbol=symbol,
+                    qty=target_qty,
+                )
             return
         if len(entries) == 1:
             key, data = entries[0]
@@ -460,19 +502,28 @@ class StartupPositionVerifier:
             }
 
     def _recover_broker_only(self, broker_map: Dict[str, int], account_id: str) -> RecoveryResult:
-        """Use broker positions only (no valid checkpoint)."""
+        """Use broker positions only (no valid checkpoint).
+
+        Broker APIs report symbol-level totals without per-strategy attribution.
+        Uses ``MANUAL_STRATEGY_ID`` to explicitly mark manual/orphan ownership.
+        StrategyRunner dispatches ``MANUAL`` positions to matching strategies on first
+        fill via the lookup in ``positions_by_strategy.get(MANUAL_STRATEGY_ID)``.
+        """
         merged: Dict[str, Dict[str, Any]] = {}
         for symbol, qty in broker_map.items():
             if qty != 0:
                 # avg_price_scaled=0 causes massive fake PnL on first close.
                 # Use a sentinel -1 so downstream can detect "unknown cost basis"
                 # and avoid treating first close as profit from zero.
-                merged[symbol] = {
+                key = f"{account_id}:{MANUAL_STRATEGY_ID}:{symbol}"
+                merged[key] = {
                     "symbol": symbol,
                     "net_qty": qty,
                     "avg_price_scaled": -1,
                     "realized_pnl_scaled": 0,
                     "fees_scaled": 0,
+                    "account_id": account_id,
+                    "strategy_id": MANUAL_STRATEGY_ID,
                 }
         loaded = self._write_to_store(merged, account_id)
         startup_recon_status.set(1)
@@ -520,8 +571,12 @@ class StartupPositionVerifier:
 
     @staticmethod
     def _is_futures(symbol: str) -> bool:
-        """Heuristic: futures symbols contain common TAIFEX prefixes."""
-        return any(c in symbol.upper() for c in ("FD", "FX", "TX", "MX", "TE", "TF"))
+        """Heuristic: futures symbols contain common TAIFEX prefixes.
+
+        Delegates to :func:`hft_platform.core.symbol_classifier.is_futures_symbol`
+        to keep a single source of truth shared with ``ReconciliationService``.
+        """
+        return is_futures_symbol(symbol)
 
     def _write_to_store(self, positions: Dict[str, Dict[str, Any]], account_id: str) -> int:
         """Write recovered positions into PositionStore via load_recovery.

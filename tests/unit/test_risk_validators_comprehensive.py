@@ -262,6 +262,11 @@ class TestStormGuardFSM:
     def test_de_escalation_requires_consecutive_clears(self):
         fsm = self._make_fsm()
         fsm._guard._de_escalate_threshold = 3
+        # P4 (2026-04-28): WARM now has its own cooldown (default 30s).
+        # This test verifies the consecutive-clears threshold logic in
+        # isolation, so disable the WARM cooldown here. Cooldown enforcement
+        # is exercised by tests/unit/test_stormguard_warm_cooldown.py.
+        fsm._guard._warm_cooldown_s = 0.0
         fsm.update_pnl(-200_000)
         assert fsm.state == StormGuardState.WARM
         fsm.update_pnl(0)

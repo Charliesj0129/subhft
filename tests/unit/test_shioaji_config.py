@@ -53,8 +53,10 @@ class TestShioajiClientConfig:
         assert hasattr(ShioajiClientConfig, "__slots__")
 
     def test_defaults(self) -> None:
+        from hft_platform.feed_adapter.shioaji.limits import DEFAULT_MAX_SUBSCRIPTIONS_PER_CONN
+
         cfg = ShioajiClientConfig()
-        assert cfg.max_subscriptions == 200
+        assert cfg.max_subscriptions == DEFAULT_MAX_SUBSCRIPTIONS_PER_CONN
         assert cfg.simulation is False
         assert cfg.quote_version == "v1"
         assert cfg.quote_version_mode == "auto"

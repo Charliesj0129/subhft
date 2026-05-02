@@ -84,8 +84,10 @@ def test_wal_loader_non_market_tables(tmp_path):
     wal_dir.mkdir()
     archive_dir.mkdir()
 
+    # Use the same embedded timestamp for both files so this test remains
+    # order-insensitive under strict-order replay.
     orders = wal_dir / "orders_1.jsonl"
-    fills = wal_dir / "fills_2.jsonl"
+    fills = wal_dir / "fills_1.jsonl"
     orders.write_text(json.dumps({"order_id": "O1", "symbol": "2330", "side": "Buy"}) + "\n")
     fills.write_text(json.dumps({"fill_id": "F1", "symbol": "2330", "price": 100.5}) + "\n")
 

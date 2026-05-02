@@ -1,3 +1,4 @@
+<!-- REVIEW-2026-04-17: unreferenced by rules/workflows/teams/agents. Confirm or delete. -->
 ---
 name: session-manager
 description: Manages conversation context — saves session state, triggers lesson extraction, and restores context on session resume. Use on "Pause", "Wrap up", "Save", or at session boundaries.

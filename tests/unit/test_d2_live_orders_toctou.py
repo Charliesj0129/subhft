@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import collections
+import threading
 import time
 from unittest.mock import MagicMock
 
@@ -30,6 +31,19 @@ class TestDeferredTerminal:
         a._deferred_terminals = collections.deque(maxlen=256)
         a._cmd_created_ns_map = {}
         a._cmd_tca_map = {}
+        a._pending_fill_index = {}
+        a._pending_fill_registered_at = {}
+        a._pending_fill_lock = threading.Lock()
+        # P1-3 follow-up: terminal trackers must be seeded so that
+        # ``on_terminal_state`` -> ``_record_recent_terminal`` ->
+        # ``_clear_cancel_inflight`` does not AttributeError. Defaults mirror
+        # ``OrderAdapter.__init__`` (env-driven; matched here as constants).
+        a._recently_terminal_orders = collections.OrderedDict()
+        a._recently_terminal_max = 2048
+        a._recently_terminal_ttl_s = 60.0
+        a._cancel_inflight_targets = collections.OrderedDict()
+        a._cancel_inflight_max = 2048
+        a._cancel_inflight_ttl_s = 30.0
         a.order_id_resolver = MagicMock()
         a.metrics = MagicMock()
         return a

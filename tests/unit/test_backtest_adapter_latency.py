@@ -104,7 +104,7 @@ def _build_adapter(monkeypatch, *, latency_us=100, modify_latency_us=0, cancel_l
     hbt_adapter.HftBacktestAdapter(
         strategy=strategy,
         asset_symbol="SYM",
-        data_path="dummy",
+        data="dummy",
         latency_us=latency_us,
         modify_latency_us=modify_latency_us,
         cancel_latency_us=cancel_latency_us,
@@ -175,7 +175,7 @@ class TestWarningEmitted:
             hbt_adapter.HftBacktestAdapter(
                 strategy=strategy,
                 asset_symbol="SYM",
-                data_path="dummy",
+                data="dummy",
                 latency_us=100,
                 modify_latency_us=300,
                 cancel_latency_us=0,
@@ -196,7 +196,7 @@ class TestWarningEmitted:
             hbt_adapter.HftBacktestAdapter(
                 strategy=strategy,
                 asset_symbol="SYM",
-                data_path="dummy",
+                data="dummy",
                 latency_us=100,
                 modify_latency_us=0,
                 cancel_latency_us=200,
@@ -215,7 +215,7 @@ class TestWarningEmitted:
             hbt_adapter.HftBacktestAdapter(
                 strategy=strategy,
                 asset_symbol="SYM",
-                data_path="dummy",
+                data="dummy",
                 latency_us=500,
                 modify_latency_us=200,
                 cancel_latency_us=150,
@@ -232,7 +232,7 @@ class TestWarningEmitted:
             hbt_adapter.HftBacktestAdapter(
                 strategy=strategy,
                 asset_symbol="SYM",
-                data_path="dummy",
+                data="dummy",
                 latency_us=100,
                 modify_latency_us=0,
                 cancel_latency_us=0,
@@ -249,7 +249,7 @@ class TestWarningEmitted:
             hbt_adapter.HftBacktestAdapter(
                 strategy=strategy,
                 asset_symbol="SYM",
-                data_path="dummy",
+                data="dummy",
                 latency_us=100,
                 modify_latency_us=100,
                 cancel_latency_us=100,

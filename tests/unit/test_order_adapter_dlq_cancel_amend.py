@@ -139,7 +139,7 @@ def _make_adapter(tmp_config: str, client=None) -> OrderAdapter:
 
 @pytest.mark.asyncio
 async def test_cancel_target_not_found_routes_to_dlq(tmp_config):
-    """CANCEL with missing target order routes to DLQ with VALIDATION_ERROR."""
+    """CANCEL with missing target order routes to DLQ with CANCEL_TARGET_NOT_FOUND (Bug #37)."""
     adapter = _make_adapter(tmp_config)
     adapter._dlq = AsyncMock()
     intent = _make_intent(IntentType.CANCEL, target_order_id="nonexistent")
@@ -149,13 +149,13 @@ async def test_cancel_target_not_found_routes_to_dlq(tmp_config):
 
     adapter._dlq.add.assert_called_once()
     call_kwargs = adapter._dlq.add.call_args.kwargs
-    assert call_kwargs["reason"] == RejectionReason.VALIDATION_ERROR
+    assert call_kwargs["reason"] == RejectionReason.CANCEL_TARGET_NOT_FOUND
     assert "not found" in call_kwargs["error_message"].lower()
 
 
 @pytest.mark.asyncio
 async def test_cancel_pending_sentinel_routes_to_dlq(tmp_config):
-    """CANCEL against a _PENDING_SENTINEL entry routes to DLQ."""
+    """CANCEL against a _PENDING_SENTINEL entry routes to DLQ with CANCEL_TARGET_PENDING (Bug #37)."""
     adapter = _make_adapter(tmp_config)
     adapter._dlq = AsyncMock()
     adapter.live_orders["strat1:99"] = _PENDING_SENTINEL
@@ -166,13 +166,13 @@ async def test_cancel_pending_sentinel_routes_to_dlq(tmp_config):
 
     adapter._dlq.add.assert_called_once()
     call_kwargs = adapter._dlq.add.call_args.kwargs
-    assert call_kwargs["reason"] == RejectionReason.VALIDATION_ERROR
+    assert call_kwargs["reason"] == RejectionReason.CANCEL_TARGET_PENDING
     assert "pending" in call_kwargs["error_message"].lower()
 
 
 @pytest.mark.asyncio
 async def test_cancel_terminal_before_registered_routes_to_dlq(tmp_config):
-    """CANCEL against _TERMINAL_BEFORE_REGISTERED entry routes to DLQ."""
+    """CANCEL against _TERMINAL_BEFORE_REGISTERED entry routes to DLQ with CANCEL_TARGET_TERMINAL (Bug #37)."""
     adapter = _make_adapter(tmp_config)
     adapter._dlq = AsyncMock()
     adapter.live_orders["strat1:99"] = _TERMINAL_BEFORE_REGISTERED
@@ -183,7 +183,7 @@ async def test_cancel_terminal_before_registered_routes_to_dlq(tmp_config):
 
     adapter._dlq.add.assert_called_once()
     call_kwargs = adapter._dlq.add.call_args.kwargs
-    assert call_kwargs["reason"] == RejectionReason.VALIDATION_ERROR
+    assert call_kwargs["reason"] == RejectionReason.CANCEL_TARGET_TERMINAL
     assert "terminated" in call_kwargs["error_message"].lower()
 
 
@@ -194,7 +194,7 @@ async def test_cancel_terminal_before_registered_routes_to_dlq(tmp_config):
 
 @pytest.mark.asyncio
 async def test_amend_target_not_found_routes_to_dlq(tmp_config):
-    """AMEND with missing target order routes to DLQ with VALIDATION_ERROR."""
+    """AMEND with missing target order routes to DLQ with AMEND_TARGET_NOT_FOUND (Bug #37)."""
     adapter = _make_adapter(tmp_config)
     adapter._dlq = AsyncMock()
     intent = _make_intent(IntentType.AMEND, target_order_id="nonexistent")
@@ -204,13 +204,13 @@ async def test_amend_target_not_found_routes_to_dlq(tmp_config):
 
     adapter._dlq.add.assert_called_once()
     call_kwargs = adapter._dlq.add.call_args.kwargs
-    assert call_kwargs["reason"] == RejectionReason.VALIDATION_ERROR
+    assert call_kwargs["reason"] == RejectionReason.AMEND_TARGET_NOT_FOUND
     assert "not found" in call_kwargs["error_message"].lower()
 
 
 @pytest.mark.asyncio
 async def test_amend_pending_sentinel_routes_to_dlq(tmp_config):
-    """AMEND against a _PENDING_SENTINEL entry routes to DLQ."""
+    """AMEND against a _PENDING_SENTINEL entry routes to DLQ with AMEND_TARGET_PENDING (Bug #37)."""
     adapter = _make_adapter(tmp_config)
     adapter._dlq = AsyncMock()
     adapter.live_orders["strat1:99"] = _PENDING_SENTINEL
@@ -221,13 +221,13 @@ async def test_amend_pending_sentinel_routes_to_dlq(tmp_config):
 
     adapter._dlq.add.assert_called_once()
     call_kwargs = adapter._dlq.add.call_args.kwargs
-    assert call_kwargs["reason"] == RejectionReason.VALIDATION_ERROR
+    assert call_kwargs["reason"] == RejectionReason.AMEND_TARGET_PENDING
     assert "pending" in call_kwargs["error_message"].lower()
 
 
 @pytest.mark.asyncio
 async def test_amend_terminal_before_registered_routes_to_dlq(tmp_config):
-    """AMEND against _TERMINAL_BEFORE_REGISTERED entry routes to DLQ."""
+    """AMEND against _TERMINAL_BEFORE_REGISTERED entry routes to DLQ with AMEND_TARGET_TERMINAL (Bug #37)."""
     adapter = _make_adapter(tmp_config)
     adapter._dlq = AsyncMock()
     adapter.live_orders["strat1:99"] = _TERMINAL_BEFORE_REGISTERED
@@ -238,7 +238,7 @@ async def test_amend_terminal_before_registered_routes_to_dlq(tmp_config):
 
     adapter._dlq.add.assert_called_once()
     call_kwargs = adapter._dlq.add.call_args.kwargs
-    assert call_kwargs["reason"] == RejectionReason.VALIDATION_ERROR
+    assert call_kwargs["reason"] == RejectionReason.AMEND_TARGET_TERMINAL
     assert "terminated" in call_kwargs["error_message"].lower()
 
 

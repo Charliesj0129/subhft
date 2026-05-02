@@ -145,6 +145,53 @@ def test_normalize_fill_fallback_to_seq_no_map(tmp_path, monkeypatch):
     assert event.strategy_id == "strat"
 
 
+def test_normalize_fill_object_payload_uses_order_id_map(tmp_path, monkeypatch):
+    monkeypatch.setenv("SYMBOLS_CONFIG", str(_symbols_cfg(tmp_path)))
+    norm = ExecutionNormalizer(order_id_map={"O1": "R47_MAKER_TMFD6:42"}, default_account_id="test-acct")
+
+    raw = RawExecEvent(
+        "deal",
+        SimpleNamespace(
+            seqno="F1",
+            ordno="O1",
+            code="AAA",
+            action="Buy",
+            quantity=1,
+            price=1.23,
+            ts=1,
+            account_id="test-acct",
+        ),
+        time.time_ns(),
+    )
+
+    event = norm.normalize_fill(raw)
+    assert event.strategy_id == "R47_MAKER_TMFD6"
+
+
+def test_normalize_fill_object_payload_uses_custom_field(tmp_path, monkeypatch):
+    monkeypatch.setenv("SYMBOLS_CONFIG", str(_symbols_cfg(tmp_path)))
+    norm = ExecutionNormalizer(default_account_id="test-acct")
+
+    raw = RawExecEvent(
+        "deal",
+        SimpleNamespace(
+            seqno="F1",
+            ordno="O1",
+            code="AAA",
+            action="Buy",
+            quantity=1,
+            price=1.23,
+            ts=1,
+            account_id="test-acct",
+            custom_field="R47_MAKER_TMFD6",
+        ),
+        time.time_ns(),
+    )
+
+    event = norm.normalize_fill(raw)
+    assert event.strategy_id == "R47_MAKER_TMFD6"
+
+
 def test_normalize_order_uses_exchange_ts_for_broker_ts(tmp_path, monkeypatch):
     monkeypatch.setenv("SYMBOLS_CONFIG", str(_symbols_cfg(tmp_path)))
     norm = ExecutionNormalizer()

@@ -111,6 +111,8 @@ class TestRiskEngineDeadlineMonotonic:
 
         mock_intent = MagicMock()
         mock_intent.trace_id = "t1"
+        mock_intent.ttl_ns = 500_000_000
+        mock_intent.timestamp_ns = 0
 
         with patch("time.monotonic_ns", return_value=5_000_000_000):
             cmd = engine.create_command(mock_intent)

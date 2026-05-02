@@ -1,5 +1,6 @@
 import asyncio
 import collections
+import dataclasses
 import inspect
 import os
 import tempfile
@@ -8,6 +9,7 @@ from typing import Any, Callable, Dict, Optional, Union
 
 from structlog import get_logger
 
+from hft_platform.contracts.constants import MANUAL_STRATEGY_ID
 from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceCodec
 from hft_platform.engine.event_bus import RingBufferBus
@@ -93,13 +95,15 @@ class ExecutionRouter:
         self._cmd_tca_map: Dict[str, tuple[int, int]] = cmd_tca_map if cmd_tca_map is not None else {}
         self.running = False
         self.metrics = MetricsRegistry.get()
-        self._dlq_retry_interval = 100  # Retry DLQ every 100 events processed
+        self._dlq_retry_interval = int(os.getenv("HFT_DLQ_RETRY_INTERVAL", "100"))  # Retry DLQ every N events processed
         # Fill deduplication: prevent double-counting on broker reconnect (bounded FIFO dict)
         self._fill_dedup_max_size: int = int(os.environ.get("HFT_FILL_DEDUP_MAX_SIZE", "10000"))
         self._seen_fill_ids: collections.OrderedDict[str, None] = collections.OrderedDict()
         self._fill_dedup_persist_path: str = os.environ.get(
             "HFT_FILL_DEDUP_PERSIST_PATH", ".state/fill_dedup_window.jsonl"
         )
+        self._fill_dedup_persist_interval_s: float = float(os.environ.get("HFT_FILL_DEDUP_PERSIST_INTERVAL_S", "1.0"))
+        self._fill_dedup_last_persist_s: float = 0.0  # noqa: monotonic timestamp
         self._load_fill_dedup()
         self._events_since_dlq_retry = 0
         self._recorder_queue: Optional[asyncio.Queue] = recorder_queue
@@ -108,10 +112,22 @@ class ExecutionRouter:
             PriceCodec(price_scale_provider) if price_scale_provider is not None else None
         )
         self._wal_writer: Optional[WALWriter] = wal_writer
+        # Phantom order resolver: injected from OrderAdapter post-init.
+        # Returns strategy_id for fills matching phantom order candidates.
+        self._phantom_resolver: Optional[Callable[[Any], Optional[str]]] = None
 
     def set_risk_engine(self, risk_engine: object) -> None:
         """Set or replace the risk engine reference (late-bind from bootstrap)."""
         self._risk_engine = risk_engine
+
+    def set_phantom_resolver(self, resolver: Callable[[Any], Optional[str]]) -> None:
+        """Inject phantom order resolver for orphaned fill auto-reconciliation.
+
+        The resolver takes a FillEvent and returns a strategy_id if the fill
+        matches a known phantom order candidate (dispatch failed but order may
+        have reached broker). Returns None if no match.
+        """
+        self._phantom_resolver = resolver
 
     def set_overflow_buf(self, buf: collections.deque) -> None:
         """Set or replace the overflow buffer (late-bind from system supervisor)."""
@@ -159,6 +175,8 @@ class ExecutionRouter:
             persist_dir = os.path.dirname(path) or "."
             os.makedirs(persist_dir, exist_ok=True)
             fd, tmp_path = tempfile.mkstemp(suffix=".tmp", dir=persist_dir)
+            # M2 (2026-04-25): finally-cleanup so orphan tmpfiles don't
+            # accumulate when the worker dies between fsync and rename.
             try:
                 with os.fdopen(fd, "wb") as f:
                     for key in keys_snapshot:
@@ -166,13 +184,102 @@ class ExecutionRouter:
                     f.flush()
                     os.fsync(f.fileno())
                 os.rename(tmp_path, path)
-            except Exception:
+            finally:
                 if os.path.exists(tmp_path):
-                    os.unlink(tmp_path)
-                raise
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
             logger.info("fill_dedup_persisted", count=len(keys_snapshot), path=path)
         except Exception as exc:
             logger.warning("fill_dedup_persist_failed", error=str(exc), path=path)
+
+    def _maybe_persist_fill_dedup(self, *, force: bool = False) -> None:
+        """Throttle fill dedup checkpointing to bound crash-recovery loss."""
+        now_s = timebase.now_ns() / 1_000_000_000
+        if not force and self._fill_dedup_persist_interval_s > 0:
+            if (now_s - self._fill_dedup_last_persist_s) < self._fill_dedup_persist_interval_s:
+                return
+        self.persist_fill_dedup()
+        self._fill_dedup_last_persist_s = now_s
+
+    def _register_fill_dedup_key(self, dedup_key: str) -> None:
+        self._seen_fill_ids[dedup_key] = None
+        if len(self._seen_fill_ids) > self._fill_dedup_max_size:
+            self._seen_fill_ids.popitem(last=False)  # evict oldest
+        self._maybe_persist_fill_dedup()
+
+    def _backfill_order_id_map(self, raw: RawExecEvent) -> None:
+        """Extract broker IDs from order callback and backfill order_id_map.
+
+        Shioaji's place_order() returns a Trade object with empty ordno/seqno.
+        These fields are only populated in the subsequent order callback.
+        This method extracts ALL broker IDs from the order callback payload,
+        finds the order_key via any already-registered ID (e.g. ``order.id``),
+        and registers the remaining IDs so deal callbacks can resolve strategy_id.
+        """
+        d = raw.data
+        if isinstance(d, dict) and "payload" in d:
+            d = d.get("payload", d)
+        if not isinstance(d, dict):
+            return
+        order_section = d.get("order", {}) if isinstance(d.get("order"), dict) else {}
+        status_section = d.get("status", {}) if isinstance(d.get("status"), dict) else {}
+        # Gather every candidate broker ID from the payload
+        _id_fields = ("id", "seqno", "seq_no", "ordno", "ord_no", "order_id")
+        ids: set[str] = set()
+        for src in (d, order_section, status_section):
+            for key in _id_fields:
+                val = src.get(key) if isinstance(src, dict) else getattr(src, key, None)
+                if val:
+                    ids.add(str(val))
+        ids.discard("")
+        if not ids:
+            return
+        # Find order_key from any already-registered ID
+        order_key = None
+        resolver = self.normalizer.order_id_resolver
+        for candidate in ids:
+            mapped = resolver.order_id_map.get(candidate)
+            if mapped:
+                order_key = resolver.normalize_order_key(mapped)
+                break
+        if not order_key:
+            return
+        # Register all extracted IDs under the same order_key.
+        # P0-E1: acquire the resolver's lock (injected by bootstrap, shared
+        # with OrderAdapter._order_id_map_lock) so this backfill writer is
+        # mutually exclusive with broker-thread readers in ``_on_exec``.
+        # P1-8: emit a per-write debug log mirroring OrderAdapter's
+        # ``_set_order_id_mapping`` so every writer site is greppable under
+        # the ``order_id_map_set`` event with a stable ``source=`` tag.
+        changed = False
+        with resolver.lock:
+            for broker_id in ids:
+                if broker_id not in resolver.order_id_map:
+                    resolver.order_id_map[broker_id] = order_key
+                    logger.debug(
+                        "order_id_map_set",
+                        token=broker_id,
+                        order_key=order_key,
+                        source="execution_router_backfill",
+                    )
+                    changed = True
+        if changed:
+            logger.debug(
+                "order_id_map_backfilled",
+                order_key=order_key,
+                new_ids=[i for i in ids if i not in resolver.order_id_map or resolver.order_id_map.get(i) == order_key],
+            )
+
+    def _resolve_order_key_for_fill(self, fill: Any) -> str | None:
+        client_order_id = str(getattr(fill, "client_order_id", "") or "")
+        if client_order_id:
+            return client_order_id
+        order_id = str(getattr(fill, "order_id", "") or "")
+        if not order_id:
+            return None
+        return self.normalizer.order_id_resolver.resolve_order_key_candidate(order_id)
 
     async def run(self) -> None:
         self.running = True
@@ -196,6 +303,7 @@ class ExecutionRouter:
                 self.metrics.execution_router_heartbeat_ts.set(timebase.now_s())
 
                 if raw.topic == "order":
+                    self._backfill_order_id_map(raw)
                     order_event = self.normalizer.normalize_order(raw)
                     if order_event:
                         self._publish_nowait(order_event)
@@ -237,6 +345,12 @@ class ExecutionRouter:
 
                 elif raw.topic == "deal":
                     fill_event = self.normalizer.normalize_fill(raw)
+                    if fill_event is None:
+                        # M3/M4: normalization failed (missing account, parse error, etc.)
+                        # Persist raw event data to exec overflow DLQ for later recovery.
+                        self.metrics.fill_normalization_failed_total.inc()
+                        self._wal_fallback_write("deal_normalization_failed", raw.data)
+                        continue
                     if fill_event:
                         # Fill deduplication: prevent double-counting on broker reconnect.
                         # When fill_id is empty (broker omitted seqno), synthesize a key
@@ -251,25 +365,69 @@ class ExecutionRouter:
                                 symbol=fill_event.symbol,
                             )
                             continue
-                        self._seen_fill_ids[_dedup_key] = None
-                        if len(self._seen_fill_ids) > self._fill_dedup_max_size:
-                            self._seen_fill_ids.popitem(last=False)  # evict oldest
+                        self._register_fill_dedup_key(_dedup_key)
                         self.metrics.fills_total.inc()
                         if fill_event.strategy_id == "UNKNOWN":
-                            from hft_platform.execution.fill_dlq import get_orphaned_fill_dlq
+                            # Attempt phantom order reconciliation before DLQ.
+                            # Phantom orders are dispatch-failed orders that may have
+                            # actually reached the broker (e.g., timeout after send).
+                            _phantom_resolved = False
+                            if self._phantom_resolver is not None:
+                                try:
+                                    _phantom_strat = self._phantom_resolver(fill_event)
+                                    if _phantom_strat and _phantom_strat != "UNKNOWN":
+                                        fill_event = dataclasses.replace(fill_event, strategy_id=_phantom_strat)
+                                        _phantom_resolved = True
+                                        self.metrics.orphaned_fill_total.inc()
+                                        _phantom_metric = getattr(self.metrics, "phantom_fill_reconciled_total", None)
+                                        if _phantom_metric is not None:
+                                            _phantom_metric.inc()
+                                        logger.warning(
+                                            "orphaned_fill_phantom_reconciled",
+                                            symbol=fill_event.symbol,
+                                            order_id=fill_event.order_id,
+                                            resolved_strategy=_phantom_strat,
+                                        )
+                                except Exception as _phantom_exc:  # noqa: BLE001
+                                    logger.warning(
+                                        "phantom_resolver_error",
+                                        error=str(_phantom_exc),
+                                        symbol=fill_event.symbol,
+                                    )
+                            if not _phantom_resolved:
+                                from hft_platform.execution.fill_dlq import get_orphaned_fill_dlq
 
-                            dlq = get_orphaned_fill_dlq()
-                            dlq.add(fill_event)
-                            self.metrics.orphaned_fill_total.inc()
-                            logger.warning(
-                                "Orphaned fill routed to DLQ",
-                                symbol=fill_event.symbol,
-                                order_id=fill_event.order_id,
-                            )
-                            continue
+                                dlq = get_orphaned_fill_dlq()
+                                dlq.add(fill_event)
+                                self.metrics.orphaned_fill_total.inc()
+                                logger.warning(
+                                    "Orphaned fill routed to DLQ",
+                                    symbol=fill_event.symbol,
+                                    order_id=fill_event.order_id,
+                                )
+                                # Bug #32-B: even orphaned fills must be persisted to
+                                # ClickHouse so forensic queries on hft.fills can see
+                                # the complete trade record. strategy_id stays "UNKNOWN"
+                                # — downstream tools filter on it. Without this write,
+                                # the platform's hft.fills row count diverges from the
+                                # broker's actual fill count (today: 70 vs 106).
+                                if self._recorder_queue is not None and self._symbol_metadata is not None:
+                                    from hft_platform.recorder.mapper import map_event_to_record  # noqa: PLC0415
+
+                                    _orphan_mapped = map_event_to_record(
+                                        fill_event, self._symbol_metadata, self._price_codec
+                                    )
+                                    if _orphan_mapped:
+                                        _o_topic, _o_payload = _orphan_mapped
+                                        try:
+                                            self._recorder_queue.put_nowait({"topic": _o_topic, "data": _o_payload})
+                                        except asyncio.QueueFull:
+                                            self.metrics.recorder_exec_drops_total.labels(topic="fills").inc()
+                                            self._wal_fallback_write(_o_topic, _o_payload)
+                                continue
 
                         # Observe e2e order-to-fill latency (SLO-2)
-                        _order_key = self._order_id_map.get(fill_event.order_id)
+                        _order_key = self._resolve_order_key_for_fill(fill_event)
                         if _order_key is not None:
                             _cmd_created_ns = self._cmd_created_ns_map.get(_order_key, 0)
                             if _cmd_created_ns > 0:
@@ -279,6 +437,7 @@ class ExecutionRouter:
 
                         # TCA: enrich FillEvent with decision/arrival prices
                         if _order_key is not None:
+                            fill_event.client_order_id = _order_key
                             _tca = self._cmd_tca_map.get(_order_key)
                             if _tca is not None:
                                 fill_event.decision_price = _tca[0]
@@ -287,9 +446,21 @@ class ExecutionRouter:
                         _pre_realized = 0
                         if self._risk_engine is not None:
                             _pos_key = f"{fill_event.account_id}:{fill_event.strategy_id}:{fill_event.symbol}"
-                            _pre_pos = self.position_store.positions.get(_pos_key)
-                            if _pre_pos is not None:
-                                _pre_realized = _pre_pos.realized_pnl_scaled
+                            # Wave 3 (2026-04-25): snapshot the int under
+                            # _fill_lock so a concurrent on_fill_async
+                            # writer cannot clobber realized_pnl_scaled
+                            # between read and use. hasattr guard for
+                            # mocks lacking the lock.
+                            _fill_lock = getattr(self.position_store, "_fill_lock", None)
+                            if _fill_lock is not None:
+                                with _fill_lock:
+                                    _pre_pos = self.position_store.positions.get(_pos_key)
+                                    if _pre_pos is not None:
+                                        _pre_realized = _pre_pos.realized_pnl_scaled
+                            else:
+                                _pre_pos = self.position_store.positions.get(_pos_key)
+                                if _pre_pos is not None:
+                                    _pre_realized = _pre_pos.realized_pnl_scaled
 
                         if hasattr(self.position_store, "on_fill_async"):
                             delta = await self.position_store.on_fill_async(fill_event)
@@ -361,6 +532,7 @@ class ExecutionRouter:
                 break
             try:
                 if raw.topic == "order":
+                    self._backfill_order_id_map(raw)
                     order_event = self.normalizer.normalize_order(raw)
                     if order_event:
                         self._publish_nowait(order_event)
@@ -384,9 +556,53 @@ class ExecutionRouter:
                 elif raw.topic == "deal":
                     fill_event = self.normalizer.normalize_fill(raw)
                     if fill_event:
+                        # Same UNKNOWN check as main loop — route to DLQ instead of
+                        # creating ghost positions with strategy_id="UNKNOWN".
+                        if fill_event.strategy_id == "UNKNOWN":
+                            # Attempt phantom resolution before DLQ (same as main loop)
+                            _sd_phantom_resolved = False
+                            if self._phantom_resolver is not None:
+                                try:
+                                    _sd_strat = self._phantom_resolver(fill_event)
+                                    if _sd_strat and _sd_strat != "UNKNOWN":
+                                        fill_event = dataclasses.replace(fill_event, strategy_id=_sd_strat)
+                                        _sd_phantom_resolved = True
+                                        logger.warning(
+                                            "shutdown_drain_phantom_reconciled",
+                                            symbol=fill_event.symbol,
+                                            order_id=fill_event.order_id,
+                                            resolved_strategy=_sd_strat,
+                                        )
+                                except Exception:  # noqa: BLE001
+                                    pass
+                            if not _sd_phantom_resolved:
+                                from hft_platform.execution.fill_dlq import get_orphaned_fill_dlq  # noqa: PLC0415
+
+                                dlq = get_orphaned_fill_dlq()
+                                dlq.add(fill_event)
+                                self.metrics.orphaned_fill_total.inc()
+                                logger.warning(
+                                    "shutdown_drain_orphaned_fill_to_dlq",
+                                    symbol=fill_event.symbol,
+                                    order_id=fill_event.order_id,
+                                )
+                                # Bug #32-B: persist to CH before continuing (same as main loop).
+                                if self._recorder_queue is not None and self._symbol_metadata is not None:
+                                    from hft_platform.recorder.mapper import map_event_to_record  # noqa: PLC0415
+
+                                    _sd_mapped = map_event_to_record(
+                                        fill_event, self._symbol_metadata, self._price_codec
+                                    )
+                                    if _sd_mapped:
+                                        _sd_topic, _sd_payload = _sd_mapped
+                                        try:
+                                            self._recorder_queue.put_nowait({"topic": _sd_topic, "data": _sd_payload})
+                                        except asyncio.QueueFull:
+                                            self._wal_fallback_write(_sd_topic, _sd_payload)
+                                continue
                         _dedup_key = fill_event.fill_id or _synthesize_dedup_key(fill_event)
                         if _dedup_key not in self._seen_fill_ids:
-                            self._seen_fill_ids[_dedup_key] = None
+                            self._register_fill_dedup_key(_dedup_key)
                             # TCA enrichment for shutdown drain fills
                             _drain_order_key = self._order_id_map.get(fill_event.order_id)
                             if _drain_order_key is not None:
@@ -400,9 +616,17 @@ class ExecutionRouter:
                                     _pos_key_sd = (
                                         f"{fill_event.account_id}:{fill_event.strategy_id}:{fill_event.symbol}"
                                     )
-                                    _pre_pos_sd = self.position_store.positions.get(_pos_key_sd)
-                                    if _pre_pos_sd is not None:
-                                        _pre_realized_sd = _pre_pos_sd.realized_pnl_scaled
+                                    # Wave 3 (2026-04-25): _fill_lock-guarded snapshot.
+                                    _fill_lock_sd = getattr(self.position_store, "_fill_lock", None)
+                                    if _fill_lock_sd is not None:
+                                        with _fill_lock_sd:
+                                            _pre_pos_sd = self.position_store.positions.get(_pos_key_sd)
+                                            if _pre_pos_sd is not None:
+                                                _pre_realized_sd = _pre_pos_sd.realized_pnl_scaled
+                                    else:
+                                        _pre_pos_sd = self.position_store.positions.get(_pos_key_sd)
+                                        if _pre_pos_sd is not None:
+                                            _pre_realized_sd = _pre_pos_sd.realized_pnl_scaled
                                 delta = self.position_store.on_fill(fill_event)
                                 drained += 1
                                 # Persist fill via recorder queue (mapped) or WAL fallback
@@ -427,6 +651,12 @@ class ExecutionRouter:
                                         notify = getattr(self._risk_engine, "notify_fill_pnl", None)
                                         if callable(notify):
                                             notify(fill_event.strategy_id, pnl_delta_sd)
+                                publish_many_nowait = getattr(self.bus, "publish_many_nowait", None)
+                                if publish_many_nowait:
+                                    publish_many_nowait([delta, fill_event])
+                                else:
+                                    self._publish_nowait(delta)
+                                    self._publish_nowait(fill_event)
                                 logger.info("shutdown_drain_fill", fill_id=fill_event.fill_id, dedup_key=_dedup_key)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("shutdown_drain_error", error=str(exc))
@@ -439,6 +669,95 @@ class ExecutionRouter:
             logger.info("shutdown_drain_complete", drained=drained)
         return drained
 
+    async def recover_fill_gaps(
+        self,
+        checkpoint_path: str = ".state/position_checkpoint.json",
+    ) -> dict[str, int]:
+        """Cold-path fill gap recovery at startup.
+
+        Loads persisted DLQ and retries orphaned fills using an enhanced
+        resolver that falls back to checkpoint symbol→strategy mapping when
+        order_id_map is empty (typical after crash).
+
+        Returns ``{resolved, unresolved, skipped_dedup}`` counts.
+        """
+        from hft_platform.execution.checkpoint import PositionCheckpointWriter  # noqa: PLC0415
+        from hft_platform.execution.fill_dlq import get_orphaned_fill_dlq  # noqa: PLC0415
+
+        dlq = get_orphaned_fill_dlq()
+        if dlq.count == 0:
+            logger.info("recover_fill_gaps: DLQ empty, nothing to recover")
+            return {"resolved": 0, "unresolved": 0, "skipped_dedup": 0}
+
+        # Build checkpoint-based symbol→strategy fallback map
+        ckpt_symbol_strategy: dict[str, str] = {}
+        ckpt_data = PositionCheckpointWriter.load_checkpoint(checkpoint_path)
+        if ckpt_data is not None:
+            for key, pos_data in ckpt_data.get("positions", {}).items():
+                parts = key.split(":")
+                if len(parts) >= 3:
+                    strategy_id = parts[1]
+                    symbol = pos_data.get("symbol", parts[-1])
+                    if strategy_id and strategy_id != MANUAL_STRATEGY_ID:
+                        ckpt_symbol_strategy[symbol] = strategy_id
+
+        logger.info(
+            "recover_fill_gaps: starting",
+            dlq_count=dlq.count,
+            checkpoint_strategies=len(ckpt_symbol_strategy),
+        )
+
+        def _enhanced_resolve(fill: Any) -> str:
+            # Primary: use normalizer resolver chain (order_id_map + custom_field)
+            from hft_platform.execution.normalizer import RawExecEvent  # noqa: PLC0415
+
+            raw = RawExecEvent(
+                topic="deal",
+                data={"ordno": fill.order_id, "code": fill.symbol, "action": fill.side.name},
+                ingest_ts_ns=fill.ingest_ts_ns,
+            )
+            resolved_id = self.normalizer._resolve_strategy_id(raw)
+            if resolved_id and resolved_id != "UNKNOWN":
+                return resolved_id
+            # Fallback: checkpoint symbol→strategy mapping
+            ckpt_strat = ckpt_symbol_strategy.get(fill.symbol)
+            if ckpt_strat:
+                logger.info(
+                    "recover_fill_gaps: checkpoint fallback",
+                    symbol=fill.symbol,
+                    strategy_id=ckpt_strat,
+                    fill_id=fill.fill_id,
+                )
+                return ckpt_strat
+            return "UNKNOWN"
+
+        resolved, still_orphaned = dlq.retry(_enhanced_resolve)
+
+        skipped_dedup = 0
+        applied = 0
+        for fill in resolved:
+            _dedup_key = fill.fill_id or _synthesize_dedup_key(fill)
+            if _dedup_key in self._seen_fill_ids:
+                skipped_dedup += 1
+                continue
+            self._register_fill_dedup_key(_dedup_key)
+            if hasattr(self.position_store, "on_fill"):
+                self.position_store.on_fill(fill)
+            applied += 1
+
+        logger.info(
+            "recover_fill_gaps: complete",
+            resolved=len(resolved),
+            applied=applied,
+            skipped_dedup=skipped_dedup,
+            unresolved=len(still_orphaned),
+        )
+        return {
+            "resolved": applied,
+            "unresolved": len(still_orphaned),
+            "skipped_dedup": skipped_dedup,
+        }
+
     async def _retry_orphaned_fills(self) -> None:
         from hft_platform.execution.fill_dlq import get_orphaned_fill_dlq
 
@@ -447,7 +766,17 @@ class ExecutionRouter:
             return
 
         def _resolve(fill: Any) -> str:
-            return self.normalizer.order_id_resolver.resolve_strategy_id(fill.order_id)
+            # Use full resolver chain (order_id_map + custom_field + pending fill index)
+            # instead of just order_id_resolver which only checks order_id_map.
+            from hft_platform.execution.normalizer import RawExecEvent  # noqa: PLC0415
+
+            raw = RawExecEvent(
+                topic="deal",
+                data={"ordno": fill.order_id, "code": fill.symbol, "action": fill.side.name},
+                ingest_ts_ns=fill.ingest_ts_ns,
+            )
+            resolved_id = self.normalizer._resolve_strategy_id(raw)
+            return resolved_id
 
         resolved, still_orphaned = dlq.retry(_resolve)
         if resolved:
@@ -468,12 +797,11 @@ class ExecutionRouter:
                         symbol=fill.symbol,
                     )
                     continue
-                self._seen_fill_ids[_dedup_key] = None
-                if len(self._seen_fill_ids) > self._fill_dedup_max_size:
-                    self._seen_fill_ids.popitem(last=False)  # evict oldest
+                self._register_fill_dedup_key(_dedup_key)
                 # TCA enrichment for DLQ-resolved fills (M4)
-                _order_key = self._order_id_map.get(fill.order_id)
+                _order_key = self._resolve_order_key_for_fill(fill)
                 if _order_key is not None:
+                    fill.client_order_id = _order_key
                     _tca = self._cmd_tca_map.get(_order_key)
                     if _tca is not None:
                         fill.decision_price = _tca[0]
@@ -483,9 +811,17 @@ class ExecutionRouter:
                 _pre_realized_dlq = 0
                 if self._risk_engine is not None:
                     _pos_key = f"{fill.account_id}:{fill.strategy_id}:{fill.symbol}"
-                    _pre_pos = self.position_store.positions.get(_pos_key)
-                    if _pre_pos is not None:
-                        _pre_realized_dlq = _pre_pos.realized_pnl_scaled
+                    # Wave 3 (2026-04-25): _fill_lock-guarded snapshot.
+                    _fill_lock_dlq = getattr(self.position_store, "_fill_lock", None)
+                    if _fill_lock_dlq is not None:
+                        with _fill_lock_dlq:
+                            _pre_pos = self.position_store.positions.get(_pos_key)
+                            if _pre_pos is not None:
+                                _pre_realized_dlq = _pre_pos.realized_pnl_scaled
+                    else:
+                        _pre_pos = self.position_store.positions.get(_pos_key)
+                        if _pre_pos is not None:
+                            _pre_realized_dlq = _pre_pos.realized_pnl_scaled
 
                 if hasattr(self.position_store, "on_fill_async"):
                     delta = await self.position_store.on_fill_async(fill)

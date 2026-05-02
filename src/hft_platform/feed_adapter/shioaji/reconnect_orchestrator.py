@@ -96,7 +96,8 @@ class ReconnectOrchestrator:
                 c.logged_in = False
                 c._callbacks_registered = False
                 c._clear_quote_pending()
-                c.subscribed_codes = set()
+                # D2: in-place clear (don't rebind — preserves identity).
+                c.subscribed_codes.clear()
                 c.subscribed_count = 0
                 c._refresh_quote_routes()
 
@@ -246,21 +247,27 @@ class ReconnectOrchestrator:
     # ------------------------------------------------------------------ #
 
     def is_trading_hours(self) -> bool:
-        """Return True if currently within TWSE trading hours."""
+        """Return True if currently within TAIFEX futures/options trading hours.
+
+        Covers day session (08:45-13:45) and night session (15:00-05:00).
+        """
         try:
             from hft_platform.core.market_calendar import get_calendar
 
             calendar = get_calendar()
             now_dt = dt.datetime.fromtimestamp(timebase.now_s(), tz=calendar._tz)
-            return calendar.is_trading_hours(now_dt)
+            return calendar.is_trading_hours(now_dt, product_type="future")
         except Exception as exc:
             logger.debug("operation_fallback", error=str(exc))
-            # Conservative fallback: weekdays 09:00-13:30 Asia/Taipei.
+            # Conservative fallback: weekdays TAIFEX hours Asia/Taipei.
             now_dt = dt.datetime.fromtimestamp(timebase.now_s(), tz=dt.timezone(dt.timedelta(hours=8)))
             if now_dt.weekday() >= 5:
                 return False
             minute = now_dt.hour * 60 + now_dt.minute
-            return (9 * 60) <= minute <= (13 * 60 + 30)
+            # Day: 08:45-13:45, Night: 15:00-05:00 (next day)
+            day_session = (8 * 60 + 45) <= minute <= (13 * 60 + 45)
+            night_session = minute >= (15 * 60) or minute <= (5 * 60)
+            return day_session or night_session
 
     # ------------------------------------------------------------------ #
     # Quote version helpers
@@ -276,11 +283,19 @@ class ReconnectOrchestrator:
         if not sj or not hasattr(sj.constant, "QuoteVersion"):
             return None
         c = self._client
-        if c._quote_version == "v0" and not c._supports_quote_v0():
+        # H13: snapshot under the dedicated lock so the watchdog thread
+        # cannot flip _quote_version between the two comparisons below.
+        lock = getattr(c, "_quote_version_lock", None)
+        if lock is not None:
+            with lock:
+                current = c._quote_version
+        else:
+            current = c._quote_version
+        if current == "v0" and not c._supports_quote_v0():
             if c._supports_quote_v1():
                 return sj.constant.QuoteVersion.v1
             return None
-        return sj.constant.QuoteVersion.v0 if c._quote_version == "v0" else sj.constant.QuoteVersion.v1
+        return sj.constant.QuoteVersion.v0 if current == "v0" else sj.constant.QuoteVersion.v1
 
     def handle_quote_schema_mismatch(self, reason: str, *args: Any, **kwargs: Any) -> None:
         """Record and log quote schema mismatches."""
