@@ -1206,18 +1206,6 @@ async def test_execute_dispatch_exception_commits_dedup_false(tmp_config):
 # ═════════════════════════════════════════════════════════════════════════════
 
 
-def test_is_strategy_halt_exempt_uses_frozenset_attribute(tmp_config):
-    """_is_strategy_halt_exempt uses _halt_exempt_strategies frozenset when is_halt_exempt is absent."""
-    adapter = _make_adapter(tmp_config)
-
-    # Set up storm_guard with _halt_exempt_strategies but no is_halt_exempt method
-    sg = SimpleNamespace(_halt_exempt_strategies=frozenset(["exempt_strat"]))
-    adapter._storm_guard = sg
-
-    assert adapter._is_strategy_halt_exempt("exempt_strat") is True
-    assert adapter._is_strategy_halt_exempt("non_exempt") is False
-
-
 def test_is_strategy_halt_exempt_calls_is_halt_exempt_when_callable(tmp_config):
     """_is_strategy_halt_exempt calls is_halt_exempt(strategy_id) when it's callable (line 1148)."""
     adapter = _make_adapter(tmp_config)

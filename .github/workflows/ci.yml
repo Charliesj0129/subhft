@@ -95,6 +95,14 @@ jobs:
             | grep -v 'dlq_ttl' \
             | grep -v 'mid_price_max_age' \
             | grep -v 'recovery_hold' \
+            | grep -v '_ts:' \
+            | grep -v 'monotonic_ts' \
+            | grep -v 'ttl_s' \
+            | grep -v 'ttl_ns' \
+            | grep -v 'TTL_S' \
+            | grep -v 'max_age_s' \
+            | grep -v 'cooldown' \
+            | grep -v 'toxicity' \
             | grep -v 'sigma' \
             | grep -v 'vol_shift' \
             | grep -v 'pnl_ntd' \

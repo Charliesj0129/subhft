@@ -92,6 +92,7 @@ async def test_api_worker_cancellation_clears_api_pending(tmp_path):
     class _BlockingClient(_MockBrokerClient):
         def place_order(self, *a, **kw):  # pragma: no cover
             import time
+
             time.sleep(10)
 
     adapter.client = _BlockingClient()

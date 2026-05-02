@@ -919,9 +919,7 @@ class StrategyRunner:
             # Two separate snapshots race with _seed_from_recovery (writer
             # pops recovery into positions atomically) and can lose entries
             # from both views.
-            atomic_snap = getattr(
-                self.position_store, "snapshot_positions_with_recovery", None
-            )
+            atomic_snap = getattr(self.position_store, "snapshot_positions_with_recovery", None)
             if atomic_snap is not None:
                 raw, recovery_snap = atomic_snap()
             elif hasattr(self.position_store, "snapshot_positions"):
@@ -1368,9 +1366,7 @@ class StrategyRunner:
                     # but tests/back-pressure paths can interleave), B reads
                     # 0, both write — A's increment is dropped on the floor.
                     async with self._get_pending_lock(sid):
-                        self._strategy_pending_intents[sid] = (
-                            self._strategy_pending_intents.get(sid, 0) + len(intents)
-                        )
+                        self._strategy_pending_intents[sid] = self._strategy_pending_intents.get(sid, 0) + len(intents)
             # Alpha liveness: track signal outcome and last active timestamp
             if self.metrics and self._diagnostic_metrics_enabled:
                 if intents:

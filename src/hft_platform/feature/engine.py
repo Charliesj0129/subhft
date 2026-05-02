@@ -422,10 +422,7 @@ class FeatureEngine:
                 # path runs on the hot path and crashing is worse than
                 # tolerating a stale kernel for one tick.
                 self._kernel_reset_failures_count += 1
-                if (
-                    self._kernel_reset_failures_count <= 3
-                    or self._kernel_reset_failures_count % 100 == 0
-                ):
+                if self._kernel_reset_failures_count <= 3 or self._kernel_reset_failures_count % 100 == 0:
                     logger.warning(
                         "feature_kernel_reset_failed",
                         symbol=symbol,
@@ -440,10 +437,7 @@ class FeatureEngine:
                     reset()
             except Exception as _exc:  # noqa: BLE001
                 self._kernel_reset_failures_count += 1
-                if (
-                    self._kernel_reset_failures_count <= 3
-                    or self._kernel_reset_failures_count % 100 == 0
-                ):
+                if self._kernel_reset_failures_count <= 3 or self._kernel_reset_failures_count % 100 == 0:
                     logger.warning(
                         "feature_kernel_reset_failed",
                         symbol=symbol,
@@ -493,16 +487,12 @@ class FeatureEngine:
         """
         with self._state_lock:
             for symbol in self._states:
-                self._quality_flags_next[symbol] = (
-                    self._quality_flags_next.get(symbol, 0) | QUALITY_FLAG_GAP
-                )
+                self._quality_flags_next[symbol] = self._quality_flags_next.get(symbol, 0) | QUALITY_FLAG_GAP
 
     def reset_all(self) -> None:
         with self._state_lock:
             for symbol in list(self._states):
-                self._quality_flags_next[symbol] = (
-                    self._quality_flags_next.get(symbol, 0) | QUALITY_FLAG_STATE_RESET
-                )
+                self._quality_flags_next[symbol] = self._quality_flags_next.get(symbol, 0) | QUALITY_FLAG_STATE_RESET
             self._states.clear()
             self._lob_kernel_states.clear()
             self._rust_kernels.clear()

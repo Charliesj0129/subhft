@@ -1137,9 +1137,7 @@ def test_on_tick_clamps_out_of_range_confidence():
     ks = eng._lob_kernel_states["2330"]
 
     expected = 0.04 * 100.0  # alpha * weighted_signed_vol with weight=1.0
-    assert abs(ks.tox_signed_vol_ema - expected) < 1e-9, (
-        f"Expected clamped EMA {expected}, got {ks.tox_signed_vol_ema}"
-    )
+    assert abs(ks.tox_signed_vol_ema - expected) < 1e-9, f"Expected clamped EMA {expected}, got {ks.tox_signed_vol_ema}"
 
 
 # ─────────────────────────────────────────────────────────────────────

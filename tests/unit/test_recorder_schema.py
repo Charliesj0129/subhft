@@ -133,12 +133,7 @@ def test_extract_up_statements_no_markers() -> None:
 
 def test_extract_up_statements_strips_down_section() -> None:
     """Statements inside `-- Down` must never be returned."""
-    content = (
-        "-- Up\n"
-        "CREATE TABLE foo (x Int64) ENGINE=MergeTree ORDER BY x;\n"
-        "-- Down\n"
-        "DROP TABLE foo;\n"
-    )
+    content = "-- Up\nCREATE TABLE foo (x Int64) ENGINE=MergeTree ORDER BY x;\n-- Down\nDROP TABLE foo;\n"
     statements = schema._extract_up_statements(content)
     assert len(statements) == 1
     assert "DROP" not in statements[0]
@@ -146,12 +141,7 @@ def test_extract_up_statements_strips_down_section() -> None:
 
 def test_extract_up_statements_marker_must_be_at_line_start() -> None:
     """A `-- Up` substring inside a SQL comment mid-statement is NOT a marker."""
-    content = (
-        "-- Up\n"
-        "CREATE TABLE foo (\n"
-        "    x Int64  -- Updated to wider int\n"
-        ") ENGINE=MergeTree ORDER BY x;\n"
-    )
+    content = "-- Up\nCREATE TABLE foo (\n    x Int64  -- Updated to wider int\n) ENGINE=MergeTree ORDER BY x;\n"
     statements = schema._extract_up_statements(content)
     assert len(statements) == 1
     assert "CREATE TABLE foo" in statements[0]

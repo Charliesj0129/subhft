@@ -101,9 +101,7 @@ async def _push_report(context: Any, session: str) -> None:
             try:
                 from hft_platform.observability.metrics import MetricsRegistry
 
-                MetricsRegistry.get().bot_dead_data_alerts_total.labels(
-                    session=session
-                ).inc()
+                MetricsRegistry.get().bot_dead_data_alerts_total.labels(session=session).inc()
             except Exception:  # noqa: BLE001 — observability is best-effort
                 pass
 

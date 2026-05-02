@@ -79,9 +79,7 @@ class TestAuditWriterCrossThread:
         await writer.start()
         try:
             loop = asyncio.get_running_loop()
-            with patch.object(
-                loop, "call_soon_threadsafe", wraps=loop.call_soon_threadsafe
-            ) as spy:
+            with patch.object(loop, "call_soon_threadsafe", wraps=loop.call_soon_threadsafe) as spy:
                 writer.log_order({"cmd_id": 1})
             spy.assert_not_called()
             # Loop-thread fast path — no cross-thread bump.
@@ -112,15 +110,11 @@ class TestAuditWriterCrossThread:
             loop = asyncio.get_running_loop()
             cross_thread_before = writer._cross_thread_count
 
-            with patch.object(
-                loop, "call_soon_threadsafe", wraps=loop.call_soon_threadsafe
-            ) as spy:
+            with patch.object(loop, "call_soon_threadsafe", wraps=loop.call_soon_threadsafe) as spy:
                 done = threading.Event()
 
                 def worker() -> None:
-                    writer.log_guardrail_transition(
-                        {"old_state": "NORMAL", "new_state": "HALT"}
-                    )
+                    writer.log_guardrail_transition({"old_state": "NORMAL", "new_state": "HALT"})
                     done.set()
 
                 t = threading.Thread(target=worker)
@@ -181,9 +175,7 @@ class TestAuditWriterCrossThread:
                 await asyncio.sleep(0.01)
 
             rows = _all_rows(writer, "audit.orders_log", sink)
-            assert len(rows) == 2 * N, (
-                f"expected {2 * N} rows enqueued, got {len(rows)}"
-            )
+            assert len(rows) == 2 * N, f"expected {2 * N} rows enqueued, got {len(rows)}"
 
             # P1-a (2026-04-27): _flush_batch now normalizes rows to canonical
             # DDL schema before handing to the writer. Pre-flush rows (still in

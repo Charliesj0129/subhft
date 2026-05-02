@@ -116,10 +116,7 @@ class TestEvictionPolicy:
         ok = await adapter._enqueue_api(cancel)
         assert ok is True
 
-        remaining = [
-            adapter._api_queue.get_nowait()
-            for _ in range(adapter._api_queue.qsize())
-        ]
+        remaining = [adapter._api_queue.get_nowait() for _ in range(adapter._api_queue.qsize())]
         types = [c.intent.intent_type for c in remaining]
         assert IntentType.CANCEL in types
         assert types.count(IntentType.AMEND) == 1
@@ -137,10 +134,7 @@ class TestEvictionPolicy:
         ok = await adapter._enqueue_api(cancel)
         assert ok is True
 
-        remaining = [
-            adapter._api_queue.get_nowait()
-            for _ in range(adapter._api_queue.qsize())
-        ]
+        remaining = [adapter._api_queue.get_nowait() for _ in range(adapter._api_queue.qsize())]
         types = [c.intent.intent_type for c in remaining]
         assert IntentType.CANCEL in types
         assert IntentType.AMEND in types  # AMEND survives (higher priority than NEW)
@@ -178,10 +172,7 @@ class TestEvictionPolicy:
         ok = await adapter._enqueue_api(ff)
         assert ok is True
 
-        remaining = [
-            adapter._api_queue.get_nowait()
-            for _ in range(adapter._api_queue.qsize())
-        ]
+        remaining = [adapter._api_queue.get_nowait() for _ in range(adapter._api_queue.qsize())]
         assert [c.intent.intent_type for c in remaining] == [IntentType.FORCE_FLAT]
 
 
@@ -202,7 +193,4 @@ class TestHelperBackwardsCompat:
     @pytest.mark.asyncio
     async def test_evict_returns_none_on_empty_queue(self, tmp_config: str):
         adapter = _make_adapter(tmp_config, queue_size=2)
-        assert (
-            adapter._evict_lower_priority_for_safety_intent(IntentType.CANCEL)
-            is None
-        )
+        assert adapter._evict_lower_priority_for_safety_intent(IntentType.CANCEL) is None

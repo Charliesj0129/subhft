@@ -41,9 +41,7 @@ def test_scrubber_redacts_telegram_token_when_key_is_telegram_token() -> None:
 
 
 def test_scrubber_redacts_telegram_token_when_key_uppercase() -> None:
-    out = credential_scrubber(
-        None, "info", {"HFT_TELEGRAM_BOT_TOKEN": _FAKE_TELEGRAM_TOKEN}
-    )
+    out = credential_scrubber(None, "info", {"HFT_TELEGRAM_BOT_TOKEN": _FAKE_TELEGRAM_TOKEN})
     assert out["HFT_TELEGRAM_BOT_TOKEN"] == _MASK
 
 
@@ -91,7 +89,7 @@ def test_full_pipeline_does_not_leak_telegram_token_in_field() -> None:
     out = buf.getvalue()
     assert _FAKE_TELEGRAM_TOKEN not in out, f"telegram token leaked in JSON: {out!r}"
     # Token mask OR generic mask is fine — both indicate redaction succeeded.
-    assert ("***" in out)
+    assert "***" in out
 
 
 def test_full_pipeline_does_not_leak_telegram_token_in_message() -> None:
@@ -101,9 +99,7 @@ def test_full_pipeline_does_not_leak_telegram_token_in_message() -> None:
     logger = get_logger("telegram-leak-msg-test")
     buf = io.StringIO()
     with redirect_stdout(buf):
-        logger.error(
-            "investigator_probe", note=f"telegram_token={_FAKE_TELEGRAM_TOKEN}"
-        )
+        logger.error("investigator_probe", note=f"telegram_token={_FAKE_TELEGRAM_TOKEN}")
     out = buf.getvalue()
     assert _FAKE_TELEGRAM_TOKEN not in out, f"telegram token leaked in JSON: {out!r}"
 

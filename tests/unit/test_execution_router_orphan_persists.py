@@ -34,13 +34,20 @@ def _isolate_fill_dedup(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
 def _stub_metrics() -> MagicMock:
     m = MagicMock()
     for name in (
-        "execution_router_alive", "execution_router_heartbeat_ts",
-        "execution_router_lag_ns", "execution_router_errors_total",
-        "execution_events_total", "orphaned_fill_total",
-        "position_pnl_realized", "e2e_order_latency_ns",
-        "fills_total", "exec_overflow_drained_total",
-        "recorder_exec_drops_total", "duplicate_fill_total",
-        "dlq_retry_resolved_total", "fill_normalization_failed_total",
+        "execution_router_alive",
+        "execution_router_heartbeat_ts",
+        "execution_router_lag_ns",
+        "execution_router_errors_total",
+        "execution_events_total",
+        "orphaned_fill_total",
+        "position_pnl_realized",
+        "e2e_order_latency_ns",
+        "fills_total",
+        "exec_overflow_drained_total",
+        "recorder_exec_drops_total",
+        "duplicate_fill_total",
+        "dlq_retry_resolved_total",
+        "fill_normalization_failed_total",
     ):
         setattr(m, name, MagicMock())
     return m
@@ -102,15 +109,19 @@ async def test_orphaned_fill_is_recorded_to_clickhouse_queue() -> None:
     with (
         patch.object(router.normalizer, "normalize_fill", return_value=fill),
         patch("hft_platform.execution.fill_dlq.get_orphaned_fill_dlq") as mock_dlq,
-        patch("hft_platform.recorder.mapper.map_event_to_record",
-              return_value=("hft.fills", {"strategy_id": "UNKNOWN", "fill_id": fill.fill_id})),
+        patch(
+            "hft_platform.recorder.mapper.map_event_to_record",
+            return_value=("hft.fills", {"strategy_id": "UNKNOWN", "fill_id": fill.fill_id}),
+        ),
     ):
         mock_dlq.return_value = MagicMock(add=MagicMock())
         await router.raw_queue.put(raw)
 
         async def _run_briefly():
             router.running = True
-            await asyncio.wait_for(router._run_loop_iteration() if hasattr(router, "_run_loop_iteration") else router.run(), timeout=0.5)
+            await asyncio.wait_for(
+                router._run_loop_iteration() if hasattr(router, "_run_loop_iteration") else router.run(), timeout=0.5
+            )
 
         # Cleaner: drive one loop iteration manually
         try:
@@ -123,7 +134,7 @@ async def test_orphaned_fill_is_recorded_to_clickhouse_queue() -> None:
                 await task
             except (asyncio.CancelledError, Exception):
                 pass
-        except Exception:
+        except (RuntimeError, asyncio.CancelledError):
             pass
 
     # The orphan fill MUST have been queued to recorder

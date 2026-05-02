@@ -50,18 +50,14 @@ class TestResolveRuntimeSnapshotPath:
         monkeypatch.setenv("HFT_SYMBOLS_RUNTIME_SNAPSHOT", target)
         assert _resolve_runtime_snapshot_path() == target
 
-    def test_symbols_config_env_is_ignored(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_symbols_config_env_is_ignored(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """SYMBOLS_CONFIG MUST NOT influence the output path — that conflation
         was the 2026-04-27 root cause."""
         monkeypatch.setenv("SYMBOLS_CONFIG", "config/symbols.yaml")
         monkeypatch.delenv("HFT_SYMBOLS_RUNTIME_SNAPSHOT", raising=False)
         assert _resolve_runtime_snapshot_path() == _DEFAULT_RUNTIME_SNAPSHOT_PATH
 
-    def test_self_clobber_falls_back_to_default(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
+    def test_self_clobber_falls_back_to_default(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         """If operator points HFT_SYMBOLS_RUNTIME_SNAPSHOT at the canonical
         input file, the resolver must refuse and use the safe default."""
         canonical = tmp_path / "symbols.yaml"
@@ -70,9 +66,7 @@ class TestResolveRuntimeSnapshotPath:
         resolved = _resolve_runtime_snapshot_path(str(canonical))
         assert resolved == _DEFAULT_RUNTIME_SNAPSHOT_PATH
 
-    def test_distinct_paths_pass_through(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
+    def test_distinct_paths_pass_through(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         canonical = tmp_path / "symbols.yaml"
         canonical.write_text("symbols: []\n", encoding="utf-8")
         snapshot = tmp_path / "snapshot.yaml"
@@ -197,9 +191,7 @@ class TestRefreshDoesNotOverwriteCanonical:
         assert "Auto-refreshed by QuoteConnectionPool" in snapshot_text
         assert "Source canonical:" in snapshot_text
 
-    def test_self_clobber_via_env_is_blocked(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_self_clobber_via_env_is_blocked(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """If an operator sets HFT_SYMBOLS_RUNTIME_SNAPSHOT to the canonical
         path (mistake), the writer must refuse to overwrite it."""
         pool = self._make_pool(tmp_path)
@@ -229,9 +221,7 @@ class TestRefreshDoesNotOverwriteCanonical:
             pool.refresh_options_symbols()
 
         # Canonical input untouched even though env tried to clobber it.
-        assert canonical_path.read_bytes() == canonical_before, (
-            "self-clobber guard failed — canonical was overwritten"
-        )
+        assert canonical_path.read_bytes() == canonical_before, "self-clobber guard failed — canonical was overwritten"
 
     def test_legacy_symbols_config_env_does_not_overwrite_canonical(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -569,6 +569,7 @@ class TestMiscSetters:
         runner.set_storm_guard(sg)
         assert runner._storm_guard is sg
 
+
 # P2 (2026-04-25): ``set_publish_sink`` removed — the runner never propagated
 # the sink to per-strategy ``StrategyContext`` instances, so the wired sink
 # was never invoked in production. Bootstrap no longer wires it. The test
@@ -769,6 +770,7 @@ class TestBuildPositionsRecovery:
         pos_store = MagicMock()
         del pos_store._rust_tracker
         del pos_store.snapshot_positions
+        del pos_store.snapshot_positions_with_recovery
         pos_store.positions = {}
         pos_store._recovery_positions = {
             "acct:strat_r:TSMC": {"net_qty": 3},
@@ -785,6 +787,7 @@ class TestBuildPositionsRecovery:
         pos_store = MagicMock()
         del pos_store._rust_tracker
         del pos_store.snapshot_positions
+        del pos_store.snapshot_positions_with_recovery
         pos_store.positions = {}
         pos_store._recovery_positions = {
             "acct:strat_r:TSMC": {"net_qty": 0},

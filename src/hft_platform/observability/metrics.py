@@ -619,8 +619,7 @@ class MetricsRegistry:
         )
         self.phantom_recovery_releases_total = Counter(
             _pn("phantom_recovery_releases_total"),
-            "Phantom orders released after TTL expiry to unfreeze strategy "
-            "pending counters (Bug D, 2026-04-20)",
+            "Phantom orders released after TTL expiry to unfreeze strategy pending counters (Bug D, 2026-04-20)",
         )
         self.api_guard_timeout_total = Counter(
             _pn("api_guard_timeout_total"),
@@ -971,8 +970,7 @@ class MetricsRegistry:
         # legacy non-recursive scan in _check_wal_accumulation.
         self.wal_directory_bytes = Gauge(
             _pn("wal_directory_bytes"),
-            "WAL directory size in bytes by tier (active=top-level *.jsonl, "
-            "archive=archive/, dlq=dlq/)",
+            "WAL directory size in bytes by tier (active=top-level *.jsonl, archive=archive/, dlq=dlq/)",
             ["tier"],
         )
         self.wal_file_count_tiered = Gauge(

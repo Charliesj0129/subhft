@@ -100,9 +100,7 @@ def save_manifest(svc: Any) -> None:
 
                         m = MetricsRegistry.get()
                         if m is not None:
-                            m.wal_orphan_tmp_cleaned_total.labels(
-                                location="loader_manifest"
-                            ).inc()
+                            m.wal_orphan_tmp_cleaned_total.labels(location="loader_manifest").inc()
                     except Exception as _exc:  # noqa: BLE001
                         pass
                 except OSError:

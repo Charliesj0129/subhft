@@ -29,9 +29,7 @@ def test_migration_file_exists():
 
 def test_migration_uses_replacing_merge_tree():
     src = MIGRATION.read_text()
-    assert "ReplacingMergeTree()" in src, (
-        "ReplacingMergeTree engine must be specified for hft.fills_new"
-    )
+    assert "ReplacingMergeTree()" in src, "ReplacingMergeTree engine must be specified for hft.fills_new"
 
 
 def test_migration_order_by_includes_fill_id():
