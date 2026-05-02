@@ -8,6 +8,7 @@ import os
 import sys
 import threading
 import time
+from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock, patch
@@ -707,12 +708,12 @@ def bench_feature_engine_lob_stats(iters: int = 80_000) -> float:
     eng = FeatureEngine(emit_events=True)
     _evt, stats = _feature_bench_event_stats(1, 1_000_000, 10, 1_001_000, 12)
     for i in range(2000):
-        stats.ts = i + 1
-        eng.process_lob_stats(stats, local_ts_ns=i + 1)
+        s = replace(stats, ts=i + 1)
+        eng.process_lob_stats(s, local_ts_ns=i + 1)
     t0 = time.perf_counter()
     for i in range(iters):
-        stats.ts = i + 10_000
-        eng.process_lob_stats(stats, local_ts_ns=i + 10_000)
+        s = replace(stats, ts=i + 10_000)
+        eng.process_lob_stats(s, local_ts_ns=i + 10_000)
     t1 = time.perf_counter()
     return (t1 - t0) / iters * 1e6
 
@@ -734,20 +735,17 @@ def bench_feature_engine_lob_update(iters: int = 80_000) -> float:
         events.append(_feature_bench_event_stats(i + 1, bid, bid_qty, ask, ask_qty))
     for i in range(2000):
         evt, stats = events[i % len(events)]
-        stats.ts = i + 1
-        evt.meta.seq = i + 1
-        evt.meta.source_ts = i + 1
-        evt.meta.local_ts = i + 1
-        eng.process_lob_update(evt, stats, local_ts_ns=i + 1)
+        ts = i + 1
+        s = replace(stats, ts=ts)
+        e = replace(evt, meta=replace(evt.meta, seq=ts, source_ts=ts, local_ts=ts))
+        eng.process_lob_update(e, s, local_ts_ns=ts)
     t0 = time.perf_counter()
     for i in range(iters):
         evt, stats = events[i % len(events)]
         ts = i + 10_000
-        stats.ts = ts
-        evt.meta.seq = ts
-        evt.meta.source_ts = ts
-        evt.meta.local_ts = ts
-        eng.process_lob_update(evt, stats, local_ts_ns=ts)
+        s = replace(stats, ts=ts)
+        e = replace(evt, meta=replace(evt.meta, seq=ts, source_ts=ts, local_ts=ts))
+        eng.process_lob_update(e, s, local_ts_ns=ts)
     t1 = time.perf_counter()
     return (t1 - t0) / iters * 1e6
 
@@ -906,20 +904,16 @@ def bench_feature_engine_lob_update_rust(iters: int = 80_000) -> float:
     for i in range(2000):
         evt, stats = events[i % len(events)]
         ts = i + 1
-        stats.ts = ts
-        evt.meta.seq = ts
-        evt.meta.source_ts = ts
-        evt.meta.local_ts = ts
-        eng.process_lob_update(evt, stats, local_ts_ns=ts)
+        s = replace(stats, ts=ts)
+        e = replace(evt, meta=replace(evt.meta, seq=ts, source_ts=ts, local_ts=ts))
+        eng.process_lob_update(e, s, local_ts_ns=ts)
     t0 = time.perf_counter()
     for i in range(iters):
         evt, stats = events[i % len(events)]
         ts = i + 10_000
-        stats.ts = ts
-        evt.meta.seq = ts
-        evt.meta.source_ts = ts
-        evt.meta.local_ts = ts
-        eng.process_lob_update(evt, stats, local_ts_ns=ts)
+        s = replace(stats, ts=ts)
+        e = replace(evt, meta=replace(evt.meta, seq=ts, source_ts=ts, local_ts=ts))
+        eng.process_lob_update(e, s, local_ts_ns=ts)
     t1 = time.perf_counter()
     return (t1 - t0) / iters * 1e6
 

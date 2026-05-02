@@ -29,9 +29,10 @@ class HftBacktestConfig:
     record_out: str | None = None
     report: bool = False
     seed: int = 42
+    risk_config: Any = None  # BacktestRiskConfig or None
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class HftBacktestRunResult:
     run_id: str
     config_hash: str
@@ -42,6 +43,44 @@ class HftBacktestRunResult:
     equity_points: int
     used_synthetic_equity: bool
     report_path: str | None
+    risk_rejection_count: int = 0
+    risk_rejection_breakdown: dict[str, int] = field(default_factory=dict)
+
+    def __init__(
+        self,
+        *,
+        run_id: str,
+        config_hash: str,
+        symbol: str,
+        strategy_name: str,
+        data: str | None = None,
+        data_path: str | None = None,
+        pnl: float,
+        equity_points: int,
+        used_synthetic_equity: bool,
+        report_path: str | None,
+        risk_rejection_count: int = 0,
+        risk_rejection_breakdown: dict[str, int] | None = None,
+    ) -> None:
+        resolved_data_path = data_path if data_path is not None else data
+        if resolved_data_path is None:
+            raise TypeError("HftBacktestRunResult requires 'data' or 'data_path'")
+
+        object.__setattr__(self, "run_id", run_id)
+        object.__setattr__(self, "config_hash", config_hash)
+        object.__setattr__(self, "symbol", symbol)
+        object.__setattr__(self, "strategy_name", strategy_name)
+        object.__setattr__(self, "data_path", resolved_data_path)
+        object.__setattr__(self, "pnl", pnl)
+        object.__setattr__(self, "equity_points", equity_points)
+        object.__setattr__(self, "used_synthetic_equity", used_synthetic_equity)
+        object.__setattr__(self, "report_path", report_path)
+        object.__setattr__(self, "risk_rejection_count", risk_rejection_count)
+        object.__setattr__(self, "risk_rejection_breakdown", dict(risk_rejection_breakdown or {}))
+
+    @property
+    def data(self) -> str:
+        return self.data_path
 
 
 class HftBacktestRunner:
@@ -100,12 +139,13 @@ class HftBacktestRunner:
             adapter = HftBacktestAdapter(
                 strategy=self.strategy_instance,
                 asset_symbol=self.symbol,
-                data_path=data_path,
+                data=data_path,
                 latency_us=self._resolve_latency_us(),
                 seed=self.cfg.seed,
                 maker_fee=self.cfg.fee_maker,
                 taker_fee=self.cfg.fee_taker,
                 partial_fill=self.cfg.partial_fill,
+                risk_config=self.cfg.risk_config,
             )
 
             # Run
@@ -117,7 +157,7 @@ class HftBacktestRunner:
 
             # Inspect internal stats if available in wrapper
             equity_series = extract_equity_series(adapter)
-            pnl = 1234.5
+            pnl = 0.0
             if equity_series is not None and equity_series.is_valid():
                 pnl = float(equity_series.equity[-1] - equity_series.equity[0])
             equity_points = int(equity_series.equity.size) if equity_series is not None else 0
@@ -142,6 +182,12 @@ class HftBacktestRunner:
                 else:
                     report_path, used_synthetic_equity = self._generate_report(pnl)
 
+            risk_rejection_count = 0
+            risk_rejection_breakdown: dict[str, int] = {}
+            if hasattr(adapter, "_risk_evaluator") and adapter._risk_evaluator is not None:
+                risk_rejection_count = adapter._risk_evaluator.rejection_count
+                risk_rejection_breakdown = adapter._risk_evaluator.rejection_breakdown
+
             run_result = HftBacktestRunResult(
                 run_id=run_id,
                 config_hash=config_hash,
@@ -152,6 +198,8 @@ class HftBacktestRunner:
                 equity_points=equity_points,
                 used_synthetic_equity=bool(used_synthetic_equity),
                 report_path=report_path,
+                risk_rejection_count=risk_rejection_count,
+                risk_rejection_breakdown=risk_rejection_breakdown,
             )
             self._write_run_summary(run_result)
             return run_result

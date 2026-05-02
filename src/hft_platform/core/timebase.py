@@ -81,6 +81,7 @@ def coerce_ns(ts_val: Any) -> int:
     - Uses Rust fast-path for int/float when available (HFT_TIMEBASE_RUST_COERCE=1).
     """
     if ts_val is None:
+        logger.warning("coerce_ns_none_input")
         return 0
     try:
         if hasattr(ts_val, "timestamp"):
@@ -112,6 +113,6 @@ def coerce_ns(ts_val: Any) -> int:
                 return int(ts_val * 1e3)
             return int(ts_val)
     except Exception as exc:
-        logger.debug("operation_fallback", error=str(exc))
+        logger.warning("coerce_ns_fallback_to_zero", error=str(exc), input_type=type(ts_val).__name__)
         return 0
     return 0

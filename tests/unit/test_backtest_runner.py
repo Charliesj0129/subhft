@@ -60,6 +60,7 @@ def test_backtest_runner_run_uses_cfg_data_and_writes_summary(tmp_path, monkeypa
             with patch("hft_platform.backtest.adapter.HftBacktestAdapter") as MockAdapter:
                 mock_inst = MockAdapter.return_value
                 mock_inst.run.return_value = True
+                mock_inst._risk_evaluator = None
                 mock_inst.equity_timestamps_ns = np.array([1, 2, 3], dtype=np.int64)
                 mock_inst.equity_values = np.array([1_000_000.0, 1_000_100.0, 1_000_050.0], dtype=np.float64)
 

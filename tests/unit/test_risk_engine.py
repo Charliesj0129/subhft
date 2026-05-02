@@ -1,10 +1,11 @@
 import asyncio
+import dataclasses
 from unittest.mock import MagicMock
 
 import pytest
 
 from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, Side
-from hft_platform.risk.engine import RiskEngine
+from hft_platform.risk.engine import RiskEngine, _cap_error_type
 
 
 @pytest.fixture
@@ -87,3 +88,98 @@ def test_rust_validator_fail_closed(engine):
     decision = engine.evaluate(intent)
     # Rust error falls through to Python validators which pass for a valid intent
     assert decision.approved is True
+
+
+@pytest.mark.asyncio
+async def test_rejection_feedback_sent_on_unexpected_exception(engine):
+    """RiskEngine must emit RiskFeedback to rejection_sink when evaluate raises unexpectedly."""
+    from unittest.mock import patch
+
+    rejection_sink = asyncio.Queue()
+    engine._rejection_sink = rejection_sink
+
+    intent = OrderIntent(99, "s1", "2330", IntentType.NEW, Side.BUY, 100, 1, TIF.ROD, None, 0)
+    engine.intent_queue.put_nowait(intent)
+
+    with patch.object(engine, "evaluate", side_effect=RuntimeError("unexpected boom")):
+        task = asyncio.create_task(engine.run())
+        await asyncio.sleep(0.05)
+
+    engine.running = False
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    assert not rejection_sink.empty(), "RiskFeedback should have been sent to rejection_sink"
+    feedback = rejection_sink.get_nowait()
+    assert feedback.intent_id == 99
+    assert feedback.strategy_id == "s1"
+    assert feedback.symbol == "2330"
+    assert feedback.reason_code == "risk_engine_error"
+
+
+@pytest.mark.asyncio
+async def test_rejection_sink_overflow_increments_metric(engine):
+    """When rejection_sink is full, rejection_sink_overflow_total must be incremented."""
+
+    # Assign a maxsize=1 rejection_sink so the second write overflows
+    rejection_sink = asyncio.Queue(maxsize=1)
+    engine._rejection_sink = rejection_sink
+
+    # Two intents that will both be rejected (price=0 triggers PRICE_ZERO_OR_NEG)
+    intent1 = OrderIntent(10, "s1", "2330", IntentType.NEW, Side.BUY, 0, 1, TIF.ROD, None, 0)
+    intent2 = OrderIntent(11, "s1", "2330", IntentType.NEW, Side.BUY, 0, 1, TIF.ROD, None, 0)
+    engine.intent_queue.put_nowait(intent1)
+    engine.intent_queue.put_nowait(intent2)
+
+    task = asyncio.create_task(engine.run())
+    await asyncio.sleep(0.1)
+
+    engine.running = False
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    # The sink holds 1 feedback; the second triggered an overflow
+    overflow_count = engine.metrics.rejection_sink_overflow_total._value.get()
+    assert overflow_count >= 1, f"Expected rejection_sink_overflow_total >= 1, got {overflow_count}"
+
+
+def test_cap_error_type_known_exceptions_pass_through():
+    """Known exception type names are returned unchanged."""
+    assert _cap_error_type(ValueError("bad")) == "ValueError"
+    assert _cap_error_type(TypeError("t")) == "TypeError"
+    assert _cap_error_type(KeyError("k")) == "KeyError"
+    assert _cap_error_type(RuntimeError("r")) == "RuntimeError"
+    assert _cap_error_type(TimeoutError("t")) == "TimeoutError"
+    assert _cap_error_type(OSError("o")) == "OSError"
+    assert _cap_error_type(ConnectionError("c")) == "ConnectionError"
+
+
+def test_cap_error_type_unknown_exception_maps_to_other():
+    """Unknown/dynamic exception type names are mapped to 'other' to bound label cardinality."""
+
+    class _DynamicFoo(Exception):
+        pass
+
+    class _AnotherCustom(Exception):
+        pass
+
+    assert _cap_error_type(_DynamicFoo()) == "other"
+    assert _cap_error_type(_AnotherCustom()) == "other"
+
+
+def test_create_command_propagates_decision_price(engine):
+    """create_command must pass decision_price from intent to OrderCommand for TCA."""
+    decision_price = 1_234_560_000  # 123456.0 scaled x10000
+    base_intent = OrderIntent(6, "s1", "2330", IntentType.NEW, Side.BUY, 100, 1, TIF.ROD, None, 0)
+    intent = dataclasses.replace(base_intent, decision_price=decision_price)
+    cmd = engine.create_command(intent)
+    assert cmd.decision_price == decision_price, (
+        f"Expected decision_price={decision_price}, got {cmd.decision_price}; "
+        "TCA will be silently zeroed without this passthrough"
+    )

@@ -246,7 +246,7 @@ async def test_strategy_runner_flow():
             ask_side_total_vol=500,
             is_simtrade=False,
             is_odd_lot=False,
-            meta=MagicMock(),
+            meta=None,  # None → _extract_event_trace falls back to now_ns() → always fresh
         )
     ]
 
@@ -321,7 +321,7 @@ def test_runner_register_and_run():
         ask_side_total_vol=500,
         is_simtrade=False,
         is_odd_lot=False,
-        meta=MagicMock(),
+        meta=None,  # None → _extract_event_trace falls back to now_ns() → always fresh
     )
 
     async def fast_gen():
@@ -408,7 +408,7 @@ def test_strategy_runner_positions_view():
         ask_side_total_vol=0,
         is_simtrade=False,
         is_odd_lot=False,
-        meta=MagicMock(),
+        meta=None,  # None → _extract_event_trace falls back to now_ns() → always fresh
     )
 
     asyncio.run(runner.process_event(event))

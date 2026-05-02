@@ -53,8 +53,12 @@ class BrokerClientProtocol(Protocol):
         """Modify price and/or quantity of an outstanding order."""
         ...
 
-    def get_positions(self) -> list[Any]:
-        """Return current position snapshot from the broker."""
+    def get_positions(self) -> list[Any] | None:
+        """Return current position snapshot, or None if the query fails.
+
+        Callers must treat None as "broker state unknown" — not as "no positions".
+        An empty list [] means the broker confirmed zero open positions.
+        """
         ...
 
     def subscribe_basket(self, cb: Any) -> None:
@@ -74,6 +78,16 @@ class BrokerClientProtocol(Protocol):
 
     def is_connected(self) -> bool:
         """Return ``True`` if the broker session is alive and usable."""
+        ...
+
+    def get_default_account_id(self) -> str:
+        """Return the canonical account ID string used in execution fills.
+
+        Must match the ``account_id`` value that ``ExecutionNormalizer``
+        resolves from fill callbacks, so that recovery keys align with
+        live fill keys in ``PositionStore``.  Returns ``""`` if the
+        broker session is not yet authenticated.
+        """
         ...
 
     def close(self, logout: bool = False) -> None:

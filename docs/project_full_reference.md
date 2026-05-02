@@ -117,7 +117,7 @@ Feed -> Normalize -> LOB -> EventBus -> Strategy -> Risk -> Order -> Broker
 
 ## 6) Docker / 部署
 
-- 主文件：`docker-compose.yml`, `docker-stack.yml`
+- 主文件：`docker-compose.yml`, `docker-compose.production.yml`
 - 服務：`hft-engine`, `clickhouse`, `redis`, `wal-loader`, `prometheus`, `grafana`, `alertmanager`, `hft-monitor`
 
 建議啟動順序：

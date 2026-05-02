@@ -39,12 +39,11 @@ def test_normalize_tick_success(normalizer):
 
 
 def test_normalize_tick_missing_fields(normalizer):
-    # Minimum payload
+    # Minimum payload without close field — treated as zero/missing price, returns None (H4 fix)
     payload = {"code": "2330"}
     event = normalizer.normalize_tick(payload)
 
-    assert event.symbol == "2330"
-    assert event.price == 0
+    assert event is None
 
 
 def test_normalize_tick_invalid_symbol(normalizer):
@@ -59,6 +58,27 @@ def test_normalize_tick_string_values(normalizer):
 
     assert event.price == 1005000
     assert event.volume == 10
+
+
+@pytest.mark.parametrize(
+    "price_float,expected_scaled",
+    [
+        (100.15, 1001500),  # IEEE 754: float(100.15)*10000 = 1001499.999...
+        (100.05, 1000500),  # float(100.05)*10000 = 1000499.999...
+        (99.95, 999500),  # float(99.95)*10000  = 999499.999...
+        (0.1, 1000),  # float(0.1)*10000 = 999.999...
+        (100.0, 1000000),  # exact
+        (500.5, 5005000),  # exact
+    ],
+)
+def test_normalize_tick_ieee754_precision(normalizer, price_float, expected_scaled):
+    """Verify round() prevents IEEE 754 truncation in Python fallback path."""
+    payload = {"code": "2330", "close": price_float, "volume": 1}
+    event = normalizer.normalize_tick(payload)
+    assert event.price == expected_scaled, (
+        f"float({price_float})*10000 = {float(price_float) * 10000}, "
+        f"expected scaled {expected_scaled}, got {event.price}"
+    )
 
 
 def test_normalize_bidask_success(normalizer):
@@ -279,3 +299,119 @@ def test_fused_path_not_used_when_disabled(normalizer):
     event = normalizer.normalize_bidask(payload)
     assert isinstance(event, BidAskEvent)
     assert event.fused_stats is None
+
+
+# --- normalization_skip_total counter tests ---
+
+
+class TestNormalizationSkipCounter:
+    """Verify normalization_skip_total increments for silent None returns."""
+
+    def test_tick_missing_symbol_increments_counter(self, normalizer):
+        child = normalizer._skip_tick_missing_symbol
+        assert child is not None, "metrics should be available in test"
+        before = child._value.get()
+        result = normalizer.normalize_tick({})
+        assert result is None
+        after = child._value.get()
+        assert after == before + 1
+
+    def test_tick_zero_price_increments_counter(self, normalizer):
+        child = normalizer._skip_tick_negative_price
+        before = child._value.get()
+        result = normalizer.normalize_tick({"code": "2330", "close": 0})
+        assert result is None
+        after = child._value.get()
+        assert after == before + 1
+
+    def test_tick_negative_price_increments_counter(self, normalizer):
+        child = normalizer._skip_tick_negative_price
+        before = child._value.get()
+        result = normalizer.normalize_tick({"code": "2330", "close": -5.0})
+        assert result is None
+        after = child._value.get()
+        assert after == before + 1
+
+    def test_tick_negative_price_rust_path_increments_counter(self, normalizer, monkeypatch):
+        """Rust fast path returns price=0 for a valid symbol -> skip counter increments."""
+        import hft_platform.feed_adapter.normalizer as norm_mod
+
+        child = normalizer._skip_tick_negative_price
+        assert child is not None
+
+        # Enable Rust path
+        monkeypatch.setattr(norm_mod, "_RUST_ENABLED", True)
+        # Mock Rust normalize to return tuple with negative price
+        rust_result = ("tick", "2330", -1, 100, 100, False, False, 1_000_000)
+        monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_TICK", lambda payload, sym, scale: rust_result)
+
+        before = child._value.get()
+        result = normalizer.normalize_tick({"code": "2330", "close": -5.0})
+        assert result is None
+        after = child._value.get()
+        assert after == before + 1
+
+    def test_bidask_missing_symbol_increments_counter(self, normalizer):
+        child = normalizer._skip_bidask_missing_symbol
+        before = child._value.get()
+        result = normalizer.normalize_bidask({})
+        assert result is None
+        after = child._value.get()
+        assert after == before + 1
+
+    def test_snapshot_missing_symbol_increments_counter(self, normalizer):
+        child = normalizer._skip_snapshot_missing_symbol
+        before = child._value.get()
+        result = normalizer.normalize_snapshot({})
+        assert result is None
+        after = child._value.get()
+        assert after == before + 1
+
+
+# ─────────────────────────────────────────────────────────────────────
+# P2-b (commit 26b4a68b): feed_time_skew gauge + 3 severity counters
+# ─────────────────────────────────────────────────────────────────────
+
+
+def test_validate_and_sync_timestamp_emits_severity_counters_and_current_gauge(monkeypatch, normalizer):
+    """Three skews above the lag ceiling must each fire their severity bucket
+    exactly once (warn_1s / high_10s / critical_60s), and the gauge must
+    reflect the *current* clamped delta (not the historical max).
+    """
+    import hft_platform.feed_adapter.normalizer as norm
+
+    # Lower the lag ceiling to 1s so the warn_1s severity bucket is reachable
+    # via small positive deltas; cooldown 0 to bypass log throttling.
+    monkeypatch.setattr(norm, "_TS_MAX_LAG_NS", 1_000_000_000)
+    monkeypatch.setattr(norm, "_TS_SKEW_LOG_COOLDOWN_NS", 0)
+
+    metrics = normalizer.metrics
+    assert metrics is not None, "MetricsRegistry must be available for this test"
+
+    counter = metrics.feed_time_skew_over_threshold_total
+    warn_child = counter.labels(topic="tick", severity="warn_1s")
+    high_child = counter.labels(topic="tick", severity="high_10s")
+    crit_child = counter.labels(topic="tick", severity="critical_60s")
+    warn_before = warn_child._value.get()
+    high_before = high_child._value.get()
+    crit_before = crit_child._value.get()
+
+    exch_ts = 100_000_000_000  # 100s in ns
+
+    # warn_1s bucket: raw_delta = 2s > 1s ceiling, but <= 10s.
+    normalizer._last_skew_log_ns = 0  # cooldown is 0 anyway
+    normalizer._validate_and_sync_timestamp(exch_ts, exch_ts + 2_000_000_000, "tick", "2330")
+    # high_10s bucket: raw_delta = 15s > 10s but <= 60s.
+    normalizer._validate_and_sync_timestamp(exch_ts, exch_ts + 15_000_000_000, "tick", "2330")
+    # critical_60s bucket: raw_delta = 75s > 60s.
+    normalizer._validate_and_sync_timestamp(exch_ts, exch_ts + 75_000_000_000, "tick", "2330")
+
+    assert warn_child._value.get() == warn_before + 1
+    assert high_child._value.get() == high_before + 1
+    assert crit_child._value.get() == crit_before + 1
+
+    # Gauge must reflect the *current* (post-clamp) delta from the last call.
+    # After clamp, local_ts = exch_ts + _TS_MAX_LAG_NS (1s), so post-clamp
+    # delta is exactly 1_000_000_000 ns.
+    gauge_child = metrics.feed_time_skew_ns.labels(topic="tick")
+    assert gauge_child._value.get() == 1_000_000_000

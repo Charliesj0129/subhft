@@ -61,6 +61,10 @@ class AutonomyMonitor:
         "_broker_disconnect_since_ns",
         "_broker_was_connected",
         "_halt_reacted",
+        "_halt_reacted_ns",
+        "_halt_flatten_attempts",
+        "_halt_max_retries",
+        "_halt_next_retry_ns",
         "_last_heartbeat_ns",
     )
 
@@ -112,6 +116,10 @@ class AutonomyMonitor:
 
         # HALT reaction tracking (only react once per HALT episode)
         self._halt_reacted: bool = False
+        self._halt_reacted_ns: int = 0
+        self._halt_flatten_attempts: int = 0
+        self._halt_max_retries: int = 3
+        self._halt_next_retry_ns: int = 0
 
         # Heartbeat tracking
         self._last_heartbeat_ns: int = 0
@@ -120,8 +128,14 @@ class AutonomyMonitor:
     # Lifecycle
     # ------------------------------------------------------------------
 
+    async def run(self) -> None:
+        """Run the monitor loop directly (used by the supervisor task manager)."""
+        self._running = True
+        logger.info("autonomy_monitor_started", interval_s=self._interval_s)
+        await self._monitor_loop()
+
     async def start(self) -> None:
-        """Start the async monitor loop."""
+        """Start the async monitor loop (legacy: creates its own internal task)."""
         self._running = True
         self._task = asyncio.create_task(self._monitor_loop())
         logger.info("autonomy_monitor_started", interval_s=self._interval_s)
@@ -233,7 +247,12 @@ class AutonomyMonitor:
         now_ns = timebase.now_ns()
 
         # 1. HALT reaction (highest priority)
-        if self._storm_guard.state == StormGuardState.HALT and not self._halt_reacted:
+        if (
+            self._storm_guard.state == StormGuardState.HALT
+            and not self._halt_reacted
+            and self._halt_flatten_attempts < self._halt_max_retries
+            and now_ns >= self._halt_next_retry_ns
+        ):
             decisions.append(
                 MonitorDecision(
                     rule_name="halt_reaction",
@@ -245,12 +264,18 @@ class AutonomyMonitor:
             )
             return decisions  # HALT is exclusive -- don't stack other decisions
 
-        # Reset halt_reacted when StormGuard leaves HALT
+        # Reset halt_reacted when StormGuard leaves HALT (with cooldown)
         if self._storm_guard.state != StormGuardState.HALT:
-            self._halt_reacted = False
+            # Only reset after cooldown to prevent double-flatten on oscillation
+            if self._halt_reacted and (now_ns - self._halt_reacted_ns) >= 60_000_000_000:
+                self._halt_reacted = False
+                self._halt_flatten_attempts = 0
+                self._halt_next_retry_ns = 0
 
-        # Skip platform-level checks if already in reduce-only
+        # When already in reduce-only, skip enter_reduce_only decisions
+        # but still check broker connectivity for escalation/diagnostic
         if self._platform_degrade.reduce_only_active:
+            self._check_broker_disconnect(decisions, now_ns)
             return decisions
 
         # 2. Broker disconnect > 5 min
@@ -262,14 +287,34 @@ class AutonomyMonitor:
         except Exception:
             reasons = []
 
+        # DATA_LOSS (CH + WAL both failed) → HALT, not just reduce-only
+        if "recorder_data_loss" in reasons:
+            if not self._is_on_cooldown("recorder_data_loss", now_ns):
+                self._storm_guard.trigger_halt("recorder_data_loss")
+                decisions.append(
+                    MonitorDecision(
+                        rule_name="recorder_data_loss",
+                        action="trigger_halt",
+                        reason="recorder_data_loss",
+                        scope="platform",
+                        rearm="manual",
+                    )
+                )
+                return decisions
+
+        _INFRA_REASON_MAP: dict[str, str] = {
+            "rss_unhealthy": "rss_unhealthy",
+            "wal_backlog_unhealthy": "persistence_failure",
+            "clickhouse_unhealthy": "clickhouse_unhealthy",
+            "redis_unhealthy": "redis_unhealthy",
+            "feed_reconnect_unhealthy": "feed_gap_majority",
+            "feed_reconnect_pending": "feed_gap_majority",
+            "feed_reconnect_flapping": "feed_gap_majority",
+            "queue_depth_exceeded": "queue_depth_exceeded",
+        }
         for reason in reasons:
-            if reason in (
-                "rss_unhealthy",
-                "wal_backlog_unhealthy",
-                "clickhouse_unhealthy",
-                "redis_unhealthy",
-            ):
-                rule_name = reason if reason != "wal_backlog_unhealthy" else "persistence_failure"
+            rule_name = _INFRA_REASON_MAP.get(reason)
+            if rule_name is not None:
                 if not self._is_on_cooldown(rule_name, now_ns):
                     decisions.append(
                         MonitorDecision(
@@ -315,9 +360,12 @@ class AutonomyMonitor:
             )
 
             if decision.action == "flatten_all" and self._position_flattener:
+                self._halt_flatten_attempts += 1
                 try:
                     result = await self._position_flattener.flatten_all()
                     self._halt_reacted = True
+                    self._halt_reacted_ns = timebase.now_ns()
+                    self._halt_next_retry_ns = 0
                     if self._notification_dispatcher:
                         await self._notification_dispatcher.notify_flatten_result(
                             scope="all",
@@ -327,7 +375,32 @@ class AutonomyMonitor:
                             failed_symbols=result.failed_symbols,
                         )
                 except Exception as exc:
-                    logger.error("flatten_all_failed", error=str(exc))
+                    backoff_ns = int(self._interval_s * 1_000_000_000 * (2 ** (self._halt_flatten_attempts - 1)))
+                    self._halt_next_retry_ns = timebase.now_ns() + backoff_ns
+                    logger.error(
+                        "flatten_all_failed",
+                        error=str(exc),
+                        attempt=self._halt_flatten_attempts,
+                        max_retries=self._halt_max_retries,
+                    )
+                    if self._halt_flatten_attempts >= self._halt_max_retries:
+                        logger.critical(
+                            "flatten_all_max_retries_exhausted",
+                            attempts=self._halt_flatten_attempts,
+                        )
+                        self._halt_reacted = True  # stop retrying
+                        self._halt_reacted_ns = timebase.now_ns()
+                        if self._notification_dispatcher:
+                            try:
+                                await self._notification_dispatcher.notify_flatten_result(
+                                    scope="all",
+                                    fully_closed=0,
+                                    partially_closed=0,
+                                    failed=-1,
+                                    failed_symbols=["FLATTEN_EXHAUSTED"],
+                                )
+                            except Exception:  # noqa: BLE001
+                                logger.debug("notify_flatten_exhausted_failed")
 
             elif decision.action == "enter_reduce_only":
                 try:
@@ -344,8 +417,8 @@ class AutonomyMonitor:
                         reason=decision.reason,
                         manual_rearm_required=(decision.rearm == "manual"),
                     )
-                except Exception:
-                    pass
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("evidence_write_failed", error=str(exc))
 
     # ------------------------------------------------------------------
     # Cooldown helpers
@@ -384,8 +457,8 @@ class AutonomyMonitor:
                 strategies_active=0,  # placeholder
                 feed_status="ok" if self._broker_was_connected else "disconnected",
             )
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("heartbeat_notification_failed", error=str(exc))
 
 
 async def _handle_flatten_request(gate: FlattenGate, flattener: Any) -> None:

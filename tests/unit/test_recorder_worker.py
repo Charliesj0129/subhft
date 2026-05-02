@@ -5,6 +5,10 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from hft_platform.recorder.worker import (
+    FILL_COLUMNS,
+    MARKET_DATA_COLUMNS,
+    ORDER_COLUMNS,
+    PNL_SNAPSHOT_COLUMNS,
     RecorderService,
     _extract_fill,
     _extract_fill_values,
@@ -14,10 +18,6 @@ from hft_platform.recorder.worker import (
     _extract_order_values,
     _extract_pnl_snapshot_values,
     _values_to_dict,
-    MARKET_DATA_COLUMNS,
-    ORDER_COLUMNS,
-    FILL_COLUMNS,
-    PNL_SNAPSHOT_COLUMNS,
 )
 
 
@@ -65,7 +65,7 @@ class TestRecorderService(unittest.IsolatedAsyncioTestCase):
     async def test_recover_wal_skips_when_disabled(self):
         queue = asyncio.Queue()
 
-        with patch.dict(os.environ, {"HFT_DISABLE_CLICKHOUSE": "1"}, clear=False):
+        with patch.dict(os.environ, {"HFT_CLICKHOUSE_ENABLED": "0"}, clear=False):
             with patch("hft_platform.recorder.worker.DataWriter"):
                 worker = RecorderService(queue)
                 with patch("hft_platform.recorder.worker.logger.info") as log_info:
@@ -135,6 +135,7 @@ class TestRecorderService(unittest.IsolatedAsyncioTestCase):
 # Pure-function extractor tests (no async, high coverage gain)
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class TestExtractMarketDataValues(unittest.TestCase):
     def test_extract_dict_returns_correct_length(self):
         row = {
@@ -166,9 +167,9 @@ class TestExtractMarketDataValues(unittest.TestCase):
         row = {"symbol": "2330", "exch": "OTC", "ts": 999, "recv_ts": 1000, "seq": 7}
         result = _extract_market_data_values(row)
         assert result is not None
-        assert result[1] == "OTC"   # exchange fallback to exch
-        assert result[3] == 999     # exch_ts fallback to ts
-        assert result[11] == 7      # seq_no fallback to seq
+        assert result[1] == "OTC"  # exchange fallback to exch
+        assert result[3] == 999  # exch_ts fallback to ts
+        assert result[11] == 7  # seq_no fallback to seq
 
     def test_extract_dict_defaults_exchange_to_tse(self):
         row = {"symbol": "2330"}
@@ -227,6 +228,82 @@ class TestExtractMarketDataValues(unittest.TestCase):
         for i, col in enumerate(MARKET_DATA_COLUMNS):
             assert result[col] == i
 
+    def test_trade_direction_in_market_data_columns(self):
+        """trade_direction must be present in MARKET_DATA_COLUMNS."""
+        assert "trade_direction" in MARKET_DATA_COLUMNS
+
+    def test_extract_dict_trade_direction_present(self):
+        """trade_direction is extracted from a tick dict with trade_direction set."""
+        row = {
+            "symbol": "2330",
+            "exchange": "TSE",
+            "type": "tick",
+            "exch_ts": 1000,
+            "ingest_ts": 1001,
+            "price_scaled": 5950000,
+            "volume": 100,
+            "bids_price": [594],
+            "bids_vol": [10],
+            "asks_price": [595],
+            "asks_vol": [5],
+            "seq_no": 42,
+            "trade_direction": 1,
+            "instrument_type": "stock",
+            "underlying": "",
+            "strike_scaled": 0,
+            "option_right": "",
+            "expiry": "2026-06-20",
+        }
+        result = _extract_market_data_values(row)
+        assert result is not None
+        assert len(result) == len(MARKET_DATA_COLUMNS)
+        td_idx = MARKET_DATA_COLUMNS.index("trade_direction")
+        assert result[td_idx] == 1
+
+    def test_extract_dict_trade_direction_defaults_to_zero_when_absent(self):
+        """BidAsk dicts without trade_direction default to 0."""
+        row = {"symbol": "TXFD6", "exchange": "TAIFEX", "type": "bidask"}
+        result = _extract_market_data_values(row)
+        assert result is not None
+        td_idx = MARKET_DATA_COLUMNS.index("trade_direction")
+        assert result[td_idx] == 0
+
+    def test_extract_object_trade_direction_present(self):
+        """trade_direction is extracted from an object with trade_direction attribute."""
+        row = SimpleNamespace(
+            symbol="TXFD6",
+            exchange="TAIFEX",
+            type="tick",
+            exch_ts=2000,
+            ingest_ts=2001,
+            price_scaled=200000000,
+            volume=5,
+            bids_price=[19999],
+            bids_vol=[2],
+            asks_price=[20001],
+            asks_vol=[3],
+            seq_no=1,
+            trade_direction=-1,
+            instrument_type="futures",
+            underlying="TX",
+            strike_scaled=0,
+            option_right="",
+            expiry="2026-06-20",
+        )
+        result = _extract_market_data_values(row)
+        assert result is not None
+        assert len(result) == len(MARKET_DATA_COLUMNS)
+        td_idx = MARKET_DATA_COLUMNS.index("trade_direction")
+        assert result[td_idx] == -1
+
+    def test_extract_object_trade_direction_defaults_to_zero_when_absent(self):
+        """Object without trade_direction attribute defaults to 0."""
+        row = SimpleNamespace(symbol="2330", exch="TSE")
+        result = _extract_market_data_values(row)
+        assert result is not None
+        td_idx = MARKET_DATA_COLUMNS.index("trade_direction")
+        assert result[td_idx] == 0
+
 
 class TestExtractOrderValues(unittest.TestCase):
     def test_extract_dict_path(self):
@@ -234,48 +311,71 @@ class TestExtractOrderValues(unittest.TestCase):
             "order_id": "ORD1",
             "strategy_id": "S1",
             "symbol": "2330",
-            "exchange": "TSE",
             "side": "buy",
             "price_scaled": 5950000,
             "qty": 1,
-            "order_type": "limit",
             "status": "open",
-            "exch_ts": 1000,
             "ingest_ts": 1001,
+            "latency_us": 42,
+            "instrument_type": "stock",
+            "oc_type": "",
         }
         result = _extract_order_values(row)
         assert result is not None
         assert len(result) == len(ORDER_COLUMNS)
         assert result[0] == "ORD1"
+        assert result[1] == ""  # client_order_id default
         assert result[4] == "buy"
+        assert result[9] == 42  # latency_us
+        assert result[10] == "stock"  # instrument_type
+        assert result[11] == ""  # oc_type
 
     def test_extract_dict_fallback_keys(self):
-        row = {"order_id": "X", "exch": "OTC", "action": "sell", "quantity": 3, "ts": 50, "recv_ts": 51}
+        row = {"order_id": "X", "action": "sell", "quantity": 3, "recv_ts": 51}
         result = _extract_order_values(row)
         assert result is not None
-        assert result[3] == "OTC"   # exchange fallback
         assert result[4] == "sell"  # side fallback to action
-        assert result[6] == 3       # qty fallback to quantity
-        assert result[9] == 50      # exch_ts fallback to ts
+        assert result[6] == 3  # qty fallback to quantity
+        assert result[8] == 51  # ingest_ts fallback to recv_ts
+        assert result[9] == 0  # latency_us default
+
+    def test_extract_dict_instrument_type_defaults_to_empty(self):
+        """instrument_type and oc_type default to empty string when absent."""
+        row = {"order_id": "X", "symbol": "2330"}
+        result = _extract_order_values(row)
+        assert result is not None
+        assert result[10] == ""  # instrument_type default
+        assert result[11] == ""  # oc_type default
 
     def test_extract_object_path(self):
         row = SimpleNamespace(
             order_id="ORD2",
             strategy_id="S2",
             symbol="TXFD6",
-            exchange="TAIFEX",
             side="sell",
             price_scaled=200000000,
             qty=2,
-            order_type="market",
             status="filled",
-            exch_ts=3000,
             ingest_ts=3001,
+            latency_us=100,
+            instrument_type="futures",
+            oc_type="",
         )
         result = _extract_order_values(row)
         assert result is not None
         assert len(result) == len(ORDER_COLUMNS)
         assert result[0] == "ORD2"
+        assert result[9] == 100  # latency_us
+        assert result[10] == "futures"  # instrument_type
+        assert result[11] == ""  # oc_type
+
+    def test_extract_object_instrument_type_defaults_to_empty(self):
+        """Object without instrument_type defaults to empty string."""
+        row = SimpleNamespace(order_id="X", symbol="2330")
+        result = _extract_order_values(row)
+        assert result is not None
+        assert result[10] == ""  # instrument_type default
+        assert result[11] == ""  # oc_type default
 
     def test_compat_wrapper_returns_dict(self):
         row = {"order_id": "X", "symbol": "2330"}
@@ -285,57 +385,197 @@ class TestExtractOrderValues(unittest.TestCase):
 
 
 class TestExtractFillValues(unittest.TestCase):
-    def test_extract_dict_path(self):
+    """Tests for fill extractor aligned with hft.fills schema."""
+
+    def test_extract_dict_new_schema(self):
+        """Dict with new hft.fills field names extracts correctly."""
         row = {
-            "trade_id": "T1",
-            "order_id": "ORD1",
+            "ts_exchange": 1000,
+            "ts_local": 1001,
+            "client_order_id": "",
+            "broker_order_id": "ORD1",
+            "fill_id": "F1",
+            "strategy_id": "S1",
             "symbol": "2330",
-            "exchange": "TSE",
-            "side": "buy",
-            "price_scaled": 5950000,
+            "side": "BUY",
             "qty": 1,
-            "exch_ts": 1000,
-            "ingest_ts": 1001,
+            "price_scaled": 5950000,
+            "fee_scaled": 200,
+            "tax_scaled": 50,
+            "source": "shioaji",
+            "instrument_type": "stock",
+            "oc_type": "",
         }
         result = _extract_fill_values(row)
         assert result is not None
         assert len(result) == len(FILL_COLUMNS)
-        assert result[0] == "T1"
+        assert result[0] == 1000  # ts_exchange
+        assert result[1] == 1001  # ts_local
+        assert result[2] == ""  # client_order_id
+        assert result[3] == "ORD1"  # broker_order_id
+        assert result[4] == "F1"  # fill_id
+        assert result[5] == "S1"  # strategy_id
+        assert result[6] == "2330"  # symbol
+        assert result[7] == "BUY"  # side
+        assert result[8] == 1  # qty
+        assert result[9] == 5950000  # price_scaled
+        assert result[10] == 200  # fee_scaled
+        assert result[11] == 50  # tax_scaled
+        assert result[12] == 0  # decision_price (default)
+        assert result[13] == 0  # arrival_price (default)
+        assert result[14] == "shioaji"  # source
+        assert result[15] == "stock"  # instrument_type
+        assert result[16] == ""  # oc_type
 
-    def test_extract_dict_fill_id_fallback(self):
-        row = {"fill_id": "F999", "order_id": "ORD1", "symbol": "2330"}
+    def test_extract_dict_backward_compat_old_field_names(self):
+        """Dict with old field names (match_ts, order_id) still works via fallbacks."""
+        row = {
+            "fill_id": "F1",
+            "order_id": "ORD1",
+            "strategy_id": "S1",
+            "symbol": "2330",
+            "side": "buy",
+            "price_scaled": 5950000,
+            "qty": 1,
+            "fee_scaled": 200,
+            "match_ts": 1000,
+        }
         result = _extract_fill_values(row)
         assert result is not None
-        assert result[0] == "F999"  # trade_id fallback to fill_id
+        assert len(result) == len(FILL_COLUMNS)
+        assert result[0] == 1000  # ts_exchange from match_ts fallback
+        assert result[3] == "ORD1"  # broker_order_id from order_id fallback
+        assert result[4] == "F1"  # fill_id
 
-    def test_extract_object_path(self):
+    def test_extract_dict_trade_id_fallback(self):
+        """fill_id falls back to trade_id for backward compatibility."""
+        row = {"trade_id": "T999", "order_id": "ORD1", "symbol": "2330"}
+        result = _extract_fill_values(row)
+        assert result is not None
+        assert result[4] == "T999"  # fill_id index 4 falls back to trade_id
+
+    def test_extract_dict_fill_id_preferred(self):
+        row = {"fill_id": "F999", "trade_id": "T999", "order_id": "ORD1", "symbol": "2330"}
+        result = _extract_fill_values(row)
+        assert result is not None
+        assert result[4] == "F999"  # fill_id preferred over trade_id
+
+    def test_extract_dict_exch_ts_fallback(self):
+        """ts_exchange falls back to exch_ts then ts."""
+        row = {"fill_id": "F1", "symbol": "2330", "exch_ts": 5000}
+        result = _extract_fill_values(row)
+        assert result is not None
+        assert result[0] == 5000  # ts_exchange from exch_ts fallback
+
+    def test_extract_dict_instrument_type_defaults_to_empty(self):
+        """instrument_type and oc_type default to empty string when absent."""
+        row = {"fill_id": "F1", "symbol": "2330"}
+        result = _extract_fill_values(row)
+        assert result is not None
+        assert result[15] == ""  # instrument_type default
+        assert result[16] == ""  # oc_type default
+
+    def test_extract_object_new_schema(self):
         row = SimpleNamespace(
-            trade_id="T2",
-            order_id="ORD2",
+            ts_exchange=4000,
+            ts_local=4001,
+            client_order_id="",
+            broker_order_id="ORD2",
+            fill_id="F2",
+            strategy_id="S2",
             symbol="TMFD6",
-            exchange="TAIFEX",
             side="sell",
-            price_scaled=20000000,
             qty=1,
-            exch_ts=4000,
-            ingest_ts=4001,
+            price_scaled=20000000,
+            fee_scaled=150,
+            tax_scaled=30,
+            source="shioaji",
+            instrument_type="futures",
+            oc_type="",
         )
         result = _extract_fill_values(row)
         assert result is not None
         assert len(result) == len(FILL_COLUMNS)
-        assert result[0] == "T2"
+        assert result[0] == 4000  # ts_exchange
+        assert result[4] == "F2"  # fill_id
+        assert result[10] == 150  # fee_scaled
+        assert result[11] == 30  # tax_scaled
+        assert result[12] == 0  # decision_price (default)
+        assert result[13] == 0  # arrival_price (default)
+        assert result[14] == "shioaji"  # source
+        assert result[15] == "futures"  # instrument_type
+        assert result[16] == ""  # oc_type
 
-    def test_extract_object_fill_id_fallback(self):
-        row = SimpleNamespace(fill_id="F888", order_id="X", symbol="2330")
+    def test_extract_object_instrument_type_defaults_to_empty(self):
+        """Object without instrument_type defaults to empty string."""
+        row = SimpleNamespace(fill_id="F1", order_id="X", symbol="2330")
         result = _extract_fill_values(row)
         assert result is not None
-        assert result[0] == "F888"
+        assert result[15] == ""  # instrument_type default
+        assert result[16] == ""  # oc_type default
+
+    def test_extract_object_old_field_fallback(self):
+        """Object with old field names (match_ts, order_id) uses fallbacks."""
+        row = SimpleNamespace(
+            match_ts=5000,
+            ingest_ts=5001,
+            fill_id="F3",
+            order_id="ORD3",
+            strategy_id="S3",
+            symbol="2330",
+            side="BUY",
+            qty=2,
+            price_scaled=6000000,
+            fee_scaled=100,
+            tax_scaled=0,
+        )
+        result = _extract_fill_values(row)
+        assert result is not None
+        assert result[0] == 5000  # ts_exchange from match_ts
+        assert result[1] == 5001  # ts_local from ingest_ts
+        assert result[3] == "ORD3"  # broker_order_id from order_id
+
+    def test_extract_object_trade_id_fallback(self):
+        row = SimpleNamespace(trade_id="T888", order_id="X", symbol="2330")
+        result = _extract_fill_values(row)
+        assert result is not None
+        assert result[4] == "T888"  # fill_id at index 4
 
     def test_compat_wrapper_returns_dict(self):
-        row = {"trade_id": "T1", "symbol": "2330"}
+        row = {"fill_id": "F1", "symbol": "2330"}
         result = _extract_fill(row)
         assert isinstance(result, dict)
-        assert "trade_id" in result
+        assert "fill_id" in result
+
+    def test_fill_columns_match_hft_fills_schema(self):
+        """FILL_COLUMNS must contain all required hft.fills columns."""
+        required = {
+            "ts_exchange",
+            "ts_local",
+            "client_order_id",
+            "broker_order_id",
+            "fill_id",
+            "strategy_id",
+            "symbol",
+            "side",
+            "qty",
+            "price_scaled",
+            "fee_scaled",
+            "tax_scaled",
+            "decision_price",
+            "arrival_price",
+            "source",
+            "instrument_type",
+            "oc_type",
+        }
+        assert set(FILL_COLUMNS) == required
+
+    def test_extractor_output_length_matches_columns(self):
+        """Extractor output length must match FILL_COLUMNS for columnar buffer."""
+        row = {"fill_id": "F1", "symbol": "2330", "price_scaled": 100}
+        result = _extract_fill_values(row)
+        assert result is not None
+        assert len(result) == len(FILL_COLUMNS)
 
 
 class TestExtractPnlSnapshotValues(unittest.TestCase):
@@ -368,6 +608,7 @@ class TestExtractPnlSnapshotValues(unittest.TestCase):
 # ─────────────────────────────────────────────────────────────────────────────
 # RecorderService additional coverage
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class TestRecorderServiceExtra(unittest.IsolatedAsyncioTestCase):
     def _make_worker(self, env_override=None):
@@ -409,8 +650,6 @@ class TestRecorderServiceExtra(unittest.IsolatedAsyncioTestCase):
 
     async def test_run_wal_first_mode_routes_to_wal_writer(self):
         """WAL_FIRST write path (lines 414-429) — patch inline imports via sys.modules."""
-        import sys
-        from hft_platform.recorder.mode import RecorderMode
 
         queue = asyncio.Queue()
 
@@ -538,7 +777,6 @@ class TestRecorderServiceExtra(unittest.IsolatedAsyncioTestCase):
 
     async def test_run_wal_first_mode_list_data_routes_to_wal_writer(self):
         """List data in WAL_FIRST mode is passed through directly."""
-        import sys
 
         queue = asyncio.Queue()
 

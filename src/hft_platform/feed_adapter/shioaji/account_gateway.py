@@ -37,7 +37,12 @@ class AccountGateway:
                 logger.warning("Failed to fetch usage", error=str(exc))
         return {"subscribed": self._client.subscribed_count, "bytes_used": 0}
 
-    def get_positions(self) -> list[Any]:
+    def get_positions(self) -> list[Any] | None:
+        """Return broker positions, or None if the query fails (caller must treat None as unhealthy).
+
+        Returns [] only when the broker confirms an empty portfolio.
+        Returns None when the query itself fails — callers MUST NOT treat this as "no positions".
+        """
         if self._client.mode == "simulation":
             return []
         cached = self._client._cache_get("positions")
@@ -46,7 +51,8 @@ class AccountGateway:
         start_ns = time.perf_counter_ns()
         try:
             if not self._client._rate_limit_api("positions"):
-                return cached or []
+                # Rate-limited: return stale cache if available, else None (unknown state)
+                return cached
             positions: list[Any] = []
             if hasattr(self._client.api, "stock_account") and self._client.api.stock_account is not None:
                 positions.extend(self._client.api.list_positions(self._client.api.stock_account))
@@ -56,10 +62,12 @@ class AccountGateway:
             self._client._cache_set("positions", self._client._positions_cache_ttl_s, positions)
             return positions
         except Exception as exc:
-            logger.debug("operation_fallback", error=str(exc))
             self._client._record_api_latency("positions", start_ns, ok=False)
-            logger.warning("Failed to fetch positions")
-            return cached or []
+            logger.error("Failed to fetch positions — returning None (unknown broker state)", error=str(exc))
+            # Do NOT return cached or [] here: stale data is better than silent empty,
+            # but returning None forces the caller to skip the sync cycle rather than
+            # treating a query failure as "broker has no positions".
+            return None
 
     def fetch_snapshots(self) -> list[Any]:
         if not self._client.api or not self._client.logged_in:

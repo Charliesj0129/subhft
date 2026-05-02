@@ -71,6 +71,10 @@ def save_manifest(svc: Any) -> None:
             except OSError:
                 pass
         fd, tmp_path = tempfile.mkstemp(suffix=".tmp", dir=manifest_dir)
+        # M2 (2026-04-25): finally-cleanup. Manifest writer is the most likely
+        # source of the 8 orphan tmp*.tmp files seen in production /app/.wal/
+        # because it runs on the loader thread which can be killed on
+        # SIGTERM during the rare-window between fsync and rename.
         try:
             with os.fdopen(fd, "w") as f:
                 for fname in sorted(svc._manifest):
@@ -78,10 +82,29 @@ def save_manifest(svc: Any) -> None:
                 f.flush()
                 os.fsync(f.fileno())
             os.rename(tmp_path, svc._manifest_path)
-        except Exception as _exc:  # noqa: BLE001
+            # Directory fsync to ensure rename is durable on crash
+            try:
+                dir_fd = os.open(manifest_dir, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
+            except OSError:
+                pass  # Best-effort; rename itself is atomic
+        finally:
             if os.path.exists(tmp_path):
-                os.unlink(tmp_path)
-            raise
+                try:
+                    os.unlink(tmp_path)
+                    try:
+                        from hft_platform.observability.metrics import MetricsRegistry
+
+                        m = MetricsRegistry.get()
+                        if m is not None:
+                            m.wal_orphan_tmp_cleaned_total.labels(location="loader_manifest").inc()
+                    except Exception as _exc:  # noqa: BLE001
+                        pass
+                except OSError:
+                    pass
     except Exception as e:
         logger.warning("Failed to save manifest", error=str(e))
 
@@ -94,11 +117,18 @@ def save_manifest(svc: Any) -> None:
 def extract_file_ts(fname: str) -> int:
     """Extract nanosecond timestamp from WAL filename (EC-2).
 
-    Filename format: ``{table}_{nanosecond_ts}.jsonl``
+    Filename formats:
+    - ``{table}_{nanosecond_ts}.jsonl``
+    - ``batch_{nanosecond_ts}_{sequence}.jsonl``
+
     Returns 0 if parsing fails.
     """
     try:
         base = fname.rsplit(".", 1)[0]
+        if base.startswith("batch_"):
+            parts = base.split("_")
+            if len(parts) >= 3:
+                return int(parts[1])
         ts_str = base.rsplit("_", 1)[-1]
         return int(ts_str)
     except (ValueError, IndexError):
@@ -141,6 +171,10 @@ def mark_processed(svc: Any, filename: str) -> None:
 def parse_table_from_filename(fname: str) -> str:
     """Extract target table name from WAL filename."""
     base = fname
+    # Emergency dump files use batch format with __wal_table__ header;
+    # filename-based parsing is not needed and would produce wrong results.
+    if base.startswith("emergency"):
+        return "unknown"
     if "_" in fname:
         base = "_".join(fname.split("_")[:-1])
     if base.startswith("hft."):
@@ -150,13 +184,15 @@ def parse_table_from_filename(fname: str) -> str:
     if base.startswith("orders"):
         return "orders"
     if base.startswith("fills"):
-        return "trades"
+        return "fills"
     if base.startswith("risk_log"):
         return "risk_log"
     if base.startswith("backtest_runs"):
         return "backtest_runs"
     if base.startswith("latency_spans"):
         return "latency_spans"
+    if base.startswith("pnl_snapshots"):
+        return "pnl_snapshots"
     return base or "unknown"
 
 
@@ -168,11 +204,12 @@ def parse_batch_table_name(table_name: str) -> str:
         "market_data": "market_data",
         "orders": "orders",
         "trades": "trades",
-        "fills": "trades",
+        "fills": "fills",
         "risk_log": "risk_log",
         "logs": "risk_log",
         "backtest_runs": "backtest_runs",
         "latency_spans": "latency_spans",
+        "pnl_snapshots": "pnl_snapshots",
     }
     result = mapping.get(table_name)
     if result is None:
@@ -199,6 +236,9 @@ def process_single_file(svc: Any, fpath: str, force: bool = False) -> bool:
 
     try:
         return _process_single_file_inner(svc, fpath, fname, force)
+    except ConnectionError:
+        logger.error("WAL file processing failed due to ClickHouse connection error", file=fname)
+        return False
     finally:
         svc._claim_registry.release_claim(fname)
 
@@ -217,12 +257,19 @@ def _process_single_file_inner(svc: Any, fpath: str, fname: str, force: bool) ->
     # EC-2: Strict ordering check
     if svc._strict_order:
         file_ts = extract_file_ts(fname)
-        if file_ts and file_ts < svc._last_processed_ts:
+        with svc._loader_stats_lock:
+            last_ts_snapshot = svc._last_processed_ts
+        if file_ts and file_ts < last_ts_snapshot:
             logger.warning(
-                "WAL file timestamp out of order, skipping (strict mode)",
+                "WAL file timestamp out of order, quarantining (strict mode)",
                 file=fname,
                 file_ts=file_ts,
-                last_ts=svc._last_processed_ts,
+                last_ts=last_ts_snapshot,
+            )
+            svc._quarantine_corrupt_file(
+                fpath,
+                fname,
+                f"out_of_order: file_ts={file_ts} < last_processed_ts={last_ts_snapshot}",
             )
             return False
 
@@ -319,9 +366,10 @@ def _process_single_file_inner(svc: Any, fpath: str, fname: str, force: bool) ->
         mark_processed(svc, fpath)
 
         file_ts = extract_file_ts(fname)
-        if file_ts > svc._last_processed_ts:
-            svc._last_processed_ts = file_ts
-        svc._processed_files_total += 1
+        with svc._loader_stats_lock:
+            if file_ts > svc._last_processed_ts:
+                svc._last_processed_ts = file_ts
+            svc._processed_files_total += 1
         return True
     except FileNotFoundError:
         return False

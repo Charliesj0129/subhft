@@ -23,6 +23,7 @@ _DEFAULT_STOP_LOSS_PTS = 6
 _DEFAULT_MIN_VOL_SAMPLES = 8
 _DEFAULT_SESSION_START_SEC = 9 * 3600 + 15 * 60
 _DEFAULT_SESSION_END_SEC = 13 * 3600 + 35 * 60
+_DEFAULT_MAX_SPREAD_PTS = 3
 _UTC_OFFSET_SEC = 8 * 3600
 _PTS_SCALE = 10_000
 _MID_X2_POINT_SCALE = 20_000
@@ -60,6 +61,7 @@ class CascadeBounceStrategy(BaseStrategy):
         "_exit_order_id",
         "_pending_force_close",
         "_aggressive_exit_inflight",
+        "_max_spread_scaled",
     )
 
     def __init__(
@@ -74,6 +76,7 @@ class CascadeBounceStrategy(BaseStrategy):
         session_start_sec: int = _DEFAULT_SESSION_START_SEC,
         session_end_sec: int = _DEFAULT_SESSION_END_SEC,
         utc_offset_sec: int = _UTC_OFFSET_SEC,
+        max_spread_pts: int = _DEFAULT_MAX_SPREAD_PTS,
         detect_window_ns: int | None = None,
         hold_ns: int | None = None,
         move_threshold_bps: int | None = None,
@@ -91,6 +94,7 @@ class CascadeBounceStrategy(BaseStrategy):
         self._session_start_sec = int(session_start_sec)
         self._session_end_sec = int(session_end_sec)
         self._utc_offset_sec = int(utc_offset_sec)
+        self._max_spread_scaled = int(max_spread_pts) * _PTS_SCALE
 
         self._price_buf: dict[str, deque[_PriceEntry]] = {}
         self._state: dict[str, str] = {}
@@ -119,7 +123,11 @@ class CascadeBounceStrategy(BaseStrategy):
 
     def _in_session(self, now_ns: int) -> bool:
         sec_of_day = ((now_ns // 1_000_000_000) + self._utc_offset_sec) % 86400
-        return self._session_start_sec <= sec_of_day <= self._session_end_sec
+        start = self._session_start_sec
+        end = self._session_end_sec
+        if start <= end:
+            return start <= sec_of_day <= end
+        return sec_of_day >= start or sec_of_day <= end
 
     def _entry_side(self, symbol: str) -> Side:
         return Side.BUY if self._direction[symbol] > 0 else Side.SELL
@@ -172,6 +180,9 @@ class CascadeBounceStrategy(BaseStrategy):
         if not self._in_session(now_ns):
             return
         if self.position(symbol) != 0:
+            return
+        spread = int(event.spread_scaled or 0)
+        if spread <= 0 or spread > self._max_spread_scaled:
             return
 
         buf = self._price_buf[symbol]

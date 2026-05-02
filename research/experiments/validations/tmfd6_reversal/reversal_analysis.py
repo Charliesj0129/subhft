@@ -10,6 +10,7 @@ Queries ClickHouse in daily batches to avoid memory issues.
 """
 from __future__ import annotations
 
+import os
 import sys
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -307,7 +308,10 @@ def check_tick_rule_feasibility(client, days: list[str]) -> dict:
 
 def main():
     client = clickhouse_connect.get_client(
-        host="localhost", port=8123, username="default", password="changeme"
+        host=os.getenv("HFT_CLICKHOUSE_HOST", "localhost"),
+        port=int(os.getenv("HFT_CLICKHOUSE_PORT", "8123")),
+        username=os.getenv("HFT_CLICKHOUSE_USER", "default"),
+        password=os.getenv("HFT_CLICKHOUSE_PASSWORD", ""),
     )
     days = get_trading_days(client)
     print(f"Trading days with >10k BidAsk events: {len(days)}")

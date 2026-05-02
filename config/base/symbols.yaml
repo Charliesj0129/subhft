@@ -251,42 +251,79 @@ symbols:
     tags:
       - stocks
       - tw50
-  - code: "TXFC0"
+  - code: "TXFR1"
     exchange: FUT
+    point_value: 200
     tags:
       - futures
       - front_month
       - txf
-  - code: "TXFC1"
+  - code: "TXFR2"
     exchange: FUT
+    point_value: 200
     tags:
       - futures
       - far_month
       - txf
-  - code: "MXFC0"
+  - code: "MXFR1"
     exchange: FUT
+    point_value: 50
     tags:
       - futures
       - front_month
       - mxf
-  - code: "MXFC1"
+  - code: "MXFR2"
     exchange: FUT
+    point_value: 50
     tags:
       - futures
       - far_month
       - mxf
-  - code: "TMFC0"
+  - code: "TMFR1"
     exchange: FUT
+    point_value: 10
     tags:
       - futures
       - front_month
       - tmf
-  - code: "TMFC1"
+  - code: "TMFR2"
     exchange: FUT
+    point_value: 10
     tags:
       - futures
       - far_month
       - tmf
+  # --- Rollover-resolved month codes (2026-04-27 incident defence) ---
+  # TAIFEX continuous aliases (TXFR1/TMFR1/MXFR1) are normally copied to
+  # their resolved month codes (e.g. TXFR1 -> TXFE6) via
+  # SymbolMetadata.set_alias_map() at broker login. These explicit entries
+  # ensure product_type() returns "future" even if alias propagation fails
+  # (preventing PRICE_EXCEEDS_CAP rejects via wrong-cap fallback).
+  # Letter codes: D=Apr, E=May, F=Jun; trailing 6 = year 2026.
+  - code: "TXFD6"
+    product_type: future
+    exchange: FUT
+    point_value: 200
+  - code: "TXFE6"
+    product_type: future
+    exchange: FUT
+    point_value: 200
+  - code: "MXFD6"
+    product_type: future
+    exchange: FUT
+    point_value: 50
+  - code: "MXFE6"
+    product_type: future
+    exchange: FUT
+    point_value: 50
+  - code: "TMFD6"
+    product_type: future
+    exchange: FUT
+    point_value: 10
+  - code: "TMFE6"
+    product_type: future
+    exchange: FUT
+    point_value: 10
   # --- TXO Options: ATM +/- 5 strikes (front-month, April 2026) ---
   # Strike selection: TAIEX ~23000 as of 2026-03-30.
   # Dynamic strike selection is NOT yet automated — update these manually

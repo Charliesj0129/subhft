@@ -12,6 +12,11 @@ from pathlib import Path
 import pytest
 
 from hft_platform.core import timebase
+from hft_platform.core.rate_limiter import (
+    PerSymbolRateLimiter,
+    PerSymbolRateResult,
+    RateLimiter,
+)
 from hft_platform.order.circuit_breaker import (
     CircuitBreaker,
     StrategyCircuitBreakerManager,
@@ -20,11 +25,6 @@ from hft_platform.order.deadletter import (
     DeadLetterEntry,
     DeadLetterQueue,
     RejectionReason,
-)
-from hft_platform.core.rate_limiter import (
-    PerSymbolRateLimiter,
-    PerSymbolRateResult,
-    RateLimiter,
 )
 
 # ---------------------------------------------------------------------------

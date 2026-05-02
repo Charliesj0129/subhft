@@ -171,4 +171,5 @@ async def test_api_worker_coalesces_new(mock_load):
     adapter.running = False
     worker.cancel()
 
-    assert client.place_order.call_count == 1
+    # X-C2 fix: distinct intent_ids no longer coalesce, so both orders execute
+    assert client.place_order.call_count == 2

@@ -15,7 +15,10 @@ futures:
 
   XMT:
     commission_per_contract: 13
-    tax_per_contract: 7
+    # 2026-04-20: bumped from 7 to 8 NTD/contract. Broker reality (today's
+    # TMFE6 trading): tax 798 NTD / 106 fills = 7.53 NTD/fill. Round up to be
+    # conservative; under-estimating tax inflates platform's drawdown view.
+    tax_per_contract: 8
     tax_side: both
     tick_size: 1
     point_value: 10
@@ -31,14 +34,14 @@ futures:
     "2330F":
       commission_per_contract: 25
 
+# Symbol map: maps broker symbol → product fee schedule.
+# Root symbols (TXF, MXF, TMF) are always matched.
+# Specific month codes kept for backward compatibility; new months are resolved
+# via root-prefix fallback in fee_calculator._resolve_product().
 symbol_map:
   TXF: TX
-  TXFD6: TX
-  TXFL5: TX
   TXFR1: TX
   MXF: MTX
-  MXFD6: MTX
   MXFR1: MTX
   XMT: XMT
   TMF: XMT
-  TMFD6: XMT

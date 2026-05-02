@@ -11,6 +11,7 @@ from typing import Any
 from structlog import get_logger
 
 from hft_platform.core import timebase
+from hft_platform.infra.ch_client import get_ch_config
 from hft_platform.recorder.schema import apply_schema, ensure_price_scaled_views
 from hft_platform.recorder.wal import WALWriter
 
@@ -21,6 +22,12 @@ except ImportError:
     clickhouse_connect = None  # type: ignore[assignment]
 
 logger = get_logger("recorder.writer")
+
+
+class WriterDoubleFaultError(Exception):
+    """Both ClickHouse and WAL failed — raised to signal batcher of data loss risk."""
+
+    pass
 
 
 class DataWriter:
@@ -48,34 +55,12 @@ class DataWriter:
         self._ch_heartbeat_lock = threading.Lock()
         # Determine protocol based on port (9000=native, 8123=HTTP)
         use_native = ch_port == self.DEFAULT_NATIVE_PORT
-        ch_username = os.getenv("HFT_CLICKHOUSE_USER")
-        if not ch_username and os.getenv("HFT_CLICKHOUSE_USERNAME"):
-            ch_username = os.getenv("HFT_CLICKHOUSE_USERNAME")
-            warnings.warn(
-                "HFT_CLICKHOUSE_USERNAME is deprecated, use HFT_CLICKHOUSE_USER instead",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            logger.warning("Deprecated env var HFT_CLICKHOUSE_USERNAME used; migrate to HFT_CLICKHOUSE_USER")
-        if not ch_username and os.getenv("CLICKHOUSE_USER"):
-            ch_username = os.getenv("CLICKHOUSE_USER")
-        # TODO(2026-Q3): remove CLICKHOUSE_USERNAME fallback — deprecated since 2026-03
-        if not ch_username and os.getenv("CLICKHOUSE_USERNAME"):
-            ch_username = os.getenv("CLICKHOUSE_USERNAME")
-            warnings.warn(
-                "CLICKHOUSE_USERNAME is deprecated, use HFT_CLICKHOUSE_USER instead",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            logger.warning("Deprecated env var CLICKHOUSE_USERNAME used; migrate to HFT_CLICKHOUSE_USER")
-        if not ch_username:
-            ch_username = "default"
-        ch_password = os.getenv("HFT_CLICKHOUSE_PASSWORD") or os.getenv("CLICKHOUSE_PASSWORD") or ""
+        _cfg = get_ch_config()
         self.ch_params = {
             "host": ch_host,
             "port": ch_port,
-            "username": ch_username,
-            "password": ch_password,
+            "username": _cfg["username"],
+            "password": _cfg["password"],
             "compress": True,  # Enable compression for native protocol
         }
         # Native protocol uses 'interface' parameter
@@ -127,17 +112,36 @@ class DataWriter:
         # Apply send_receive_timeout to CH params
         self.ch_params["send_receive_timeout"] = int(self._insert_timeout_s)
 
-        # CC-3: Bounded thread pool for CH inserts
-        self._pool_size = int(os.getenv("HFT_CH_INSERT_POOL_SIZE", "8"))
+        # CC-3: Bounded thread pool for CH inserts.
+        # P2 fix: align pool size with semaphore ceiling so we don't pay for
+        # idle worker threads. The semaphore is the authoritative concurrency
+        # gate; any extra executor slots above it are never used.
         self._max_concurrent_inserts = int(os.getenv("HFT_CH_MAX_CONCURRENT_INSERTS", "6"))
+        self._pool_size = max(1, int(os.getenv("HFT_CH_INSERT_POOL_SIZE", str(self._max_concurrent_inserts))))
+        if self._pool_size > self._max_concurrent_inserts:
+            logger.debug(
+                "ch_pool_size_exceeds_semaphore_ceiling_reducing",
+                pool_size=self._pool_size,
+                semaphore_ceiling=self._max_concurrent_inserts,
+            )
+            self._pool_size = self._max_concurrent_inserts
         self._executor = ThreadPoolExecutor(
             max_workers=self._pool_size,
             thread_name_prefix="ch-insert",
         )
         self._insert_semaphore = asyncio.Semaphore(self._max_concurrent_inserts)
 
-        # CC-4: WAL batch writer (lazy init)
+        # CC-4: WAL batch writer (lazy init).
+        # M2 (2026-04-25): protect lazy init with a dedicated lock so multiple
+        # batchers calling ``_get_wal_batch_writer`` concurrently from the
+        # ClickHouse insert thread pool cannot create racing WALBatchWriter
+        # instances (each spawning its own ``wal-batch-timer`` thread).
+        # Production evidence shows only 1 timer thread alive today, but the
+        # race is real — first concurrent invocations would have been observed
+        # only by chance ordering. Double-checked locking is correct here
+        # because ``_wal_batch_writer`` is a single-assignment slot.
         self._wal_batch_writer: Any = None
+        self._wal_batch_writer_init_lock = threading.Lock()
         self._wal_batch_enabled = os.getenv("HFT_WAL_BATCH_ENABLED", "1").lower() not in {
             "0",
             "false",
@@ -243,15 +247,34 @@ class DataWriter:
         self._health_tracker = tracker
 
     def _get_wal_batch_writer(self) -> Any:
-        """Lazy-init WAL batch writer (CC-4)."""
-        if self._wal_batch_writer is None and self._wal_batch_enabled:
-            try:
-                from hft_platform.recorder.wal import WALBatchWriter
+        """Lazy-init WAL batch writer (CC-4).
 
-                self._wal_batch_writer = WALBatchWriter(self.wal.wal_dir)
-            except Exception as _exc:  # noqa: BLE001
-                self._wal_batch_writer = None
-        return self._wal_batch_writer
+        M2 (2026-04-25): double-checked locking prevents two threads from
+        creating racing WALBatchWriter instances. Each WALBatchWriter spawns
+        its own ``wal-batch-timer`` daemon thread; without the lock a race
+        could leak background timers (memory + duplicate flush traffic).
+        Hot path is the un-locked first-read; the lock is only entered on
+        the very first call from the first batcher in a process lifetime.
+        """
+        if not self._wal_batch_enabled:
+            return None
+        # First check (lock-free fast path)
+        writer = self._wal_batch_writer
+        if writer is not None:
+            return writer
+        # Slow path: serialise initialisation
+        with self._wal_batch_writer_init_lock:
+            # Re-check after acquiring lock — another thread may have
+            # initialised the writer between our first read and the lock.
+            if self._wal_batch_writer is None:
+                try:
+                    from hft_platform.recorder.wal import WALBatchWriter
+
+                    self._wal_batch_writer = WALBatchWriter(self.wal.wal_dir)
+                except Exception as _exc:  # noqa: BLE001
+                    # Leave as None; subsequent calls will retry under the lock.
+                    self._wal_batch_writer = None
+            return self._wal_batch_writer
 
     def _get_table_lock(self, table: str) -> threading.Lock:
         """Get or create a per-table lock for ClickHouse inserts."""
@@ -354,6 +377,11 @@ class DataWriter:
         try:
             apply_schema(self.ch_client)
             self._schema_initialized = True
+            if self.metrics:
+                try:
+                    self.metrics.recorder_schema_init_failed.set(0)
+                except Exception:
+                    pass
         except Exception as se:
             logger.critical(
                 "Schema initialization failed - falling back to WAL-only mode",
@@ -362,6 +390,11 @@ class DataWriter:
             )
             self._schema_initialized = False
             self.connected = False
+            if self.metrics:
+                try:
+                    self.metrics.recorder_schema_init_failed.set(1)
+                except Exception:
+                    pass
             return
 
         try:
@@ -385,7 +418,7 @@ class DataWriter:
 
         def _heartbeat_loop() -> None:
             try:
-                while self._heartbeat_running and self.connected and self.ch_client:
+                while self._heartbeat_running and self.connected:
                     time.sleep(self._heartbeat_interval_s)
                     if not self._heartbeat_running:
                         break
@@ -394,8 +427,9 @@ class DataWriter:
                     self._last_heartbeat_ok = ok
                     if not ok:
                         logger.error("ClickHouse heartbeat failed, marking connection as stale")
-                        self.connected = False
-                        self.ch_client = None
+                        with self._ch_heartbeat_lock:
+                            self.connected = False
+                            self.ch_client = None
                         if self.metrics:
                             self.metrics.clickhouse_connection_health.set(0)
                         self._schedule_reconnect("heartbeat_failed")
@@ -412,10 +446,10 @@ class DataWriter:
 
     def _do_heartbeat_check(self) -> bool:
         """Execute SELECT 1 to verify connection health."""
-        if not self.ch_client:
-            return False
         try:
             with self._ch_heartbeat_lock:
+                if not self.ch_client:
+                    return False
                 self.ch_client.command("SELECT 1")
             return True
         except Exception as e:
@@ -541,6 +575,7 @@ class DataWriter:
                 )
                 if self._health_tracker:
                     self._health_tracker.record_event("data_loss", table=table, count=row_count)
+                raise WriterDoubleFaultError(f"Both CH and WAL failed for table={table}, rows={row_count}")
 
     def _ch_insert_columnar(
         self,
@@ -571,6 +606,8 @@ class DataWriter:
             logger.info("ClickHouse columnar insert start", table=table, rows=row_count)
         start_ms = time.monotonic() * 1000
         with self._ch_heartbeat_lock:
+            if self.ch_client is None:
+                raise ConnectionError("ClickHouse client disconnected during insert")
             with self._get_table_lock(table):
                 if self._ch_column_oriented:
                     try:
@@ -580,13 +617,30 @@ class DataWriter:
                             column_names=column_names,
                             column_oriented=True,
                         )
-                    except TypeError:
+                    except TypeError as te:
+                        # Distinguish "client doesn't support column_oriented" from
+                        # actual data-type errors in the payload.  The column_oriented
+                        # kwarg is passed *only* in the try-block above; a TypeError
+                        # from malformed column_data would also occur in the fallback
+                        # row-oriented path.  Retry once without column_oriented — if
+                        # the same TypeError recurs, it is a real data error.
+                        self._ch_column_oriented = False
+                        logger.debug(
+                            "column_oriented_fallback",
+                            table=table,
+                            error=str(te),
+                        )
                         values = self._transpose_columnar_rows(column_data, row_count)
                         self.ch_client.insert(table, values, column_names=column_names)
                 else:
                     values = self._transpose_columnar_rows(column_data, row_count)
                     self.ch_client.insert(table, values, column_names=column_names)
         elapsed_ms = time.monotonic() * 1000 - start_ms
+        try:
+            if self.metrics:
+                self.metrics.recorder_ch_insert_latency_ms.labels(table=table).observe(elapsed_ms)
+        except Exception:  # noqa: BLE001
+            pass
         if elapsed_ms > self._insert_warn_ms:
             logger.warning(
                 "Slow ClickHouse insert",
@@ -677,6 +731,7 @@ class DataWriter:
                 )
                 if self._health_tracker:
                     self._health_tracker.record_event("data_loss", table=table, count=len(data))
+                raise WriterDoubleFaultError(f"Both CH and WAL failed for table={table}, rows={len(data)}")
 
     def _ch_insert(self, table, data):
         # Infer columns from first row assuming consistent dicts
@@ -696,10 +751,17 @@ class DataWriter:
         # clickhouse_connect client session is not thread-safe across command/insert.
         # Serialize heartbeat and inserts to avoid concurrent query errors.
         with self._ch_heartbeat_lock:
+            if self.ch_client is None:
+                raise ConnectionError("ClickHouse client disconnected during insert")
             with self._get_table_lock(table):
                 self.ch_client.insert(table, values, column_names=keys)
 
         elapsed_ms = time.monotonic() * 1000 - start_ms
+        try:
+            if self.metrics:
+                self.metrics.recorder_ch_insert_latency_ms.labels(table=table).observe(elapsed_ms)
+        except Exception:  # noqa: BLE001
+            pass
         if elapsed_ms > self._insert_warn_ms:
             logger.warning(
                 "Slow ClickHouse insert",
@@ -717,16 +779,19 @@ class DataWriter:
             return data
         if not self._ts_max_future_ns:
             # Still enforce ingest_ts >= exch_ts when both present
+            result: list[dict] = []
             for row in data:
                 try:
                     exch_ts = row.get("exch_ts")
                     ingest_ts = row.get("ingest_ts")
                     if exch_ts and ingest_ts and int(ingest_ts) < int(exch_ts):
+                        row = dict(row)  # I-H1: shallow copy to avoid mutating shared references
                         row["ingest_ts"] = int(exch_ts)
                 except Exception as exc:
                     logger.debug("operation_fallback", error=str(exc))
-                    continue
-            return data
+                finally:
+                    result.append(row)
+            return result
 
         now_ns = timebase.now_ns()
         kept: list[dict] = []
@@ -744,6 +809,7 @@ class DataWriter:
                     dropped += 1
                     continue
                 if exch_ts_i and ingest_ts_i and ingest_ts_i < exch_ts_i:
+                    row = dict(row)  # I-H1: shallow copy to avoid mutating shared references
                     row["ingest_ts"] = exch_ts_i
                 kept.append(row)
             except Exception as exc:
@@ -780,6 +846,10 @@ class DataWriter:
 
         if exch_idx is None and ingest_idx is None:
             return column_data, row_count
+
+        # Copy mutable columns to avoid mutating shared references (I-H1)
+        if ingest_idx is not None:
+            column_data[ingest_idx] = list(column_data[ingest_idx])
 
         now_ns = timebase.now_ns()
         max_future = self._ts_max_future_ns
@@ -824,6 +894,11 @@ class DataWriter:
 
     async def shutdown(self) -> None:
         """Graceful shutdown: flush WAL batch writer and shutdown thread pool."""
+        shutdown_timeout = int(os.getenv("HFT_CH_SHUTDOWN_TIMEOUT_S", "30"))
+
+        # Stop heartbeat FIRST to prevent client invalidation during drain
+        self._heartbeat_running = False
+
         # Flush WAL batch writer if active
         if self._wal_batch_writer is not None:
             try:
@@ -835,8 +910,23 @@ class DataWriter:
             except Exception as e:
                 logger.error("WAL batch writer stop failed on shutdown", error=str(e))
 
-        # Shutdown thread pool
-        self._executor.shutdown(wait=False)
+        # Wait for in-flight inserts to complete (semaphore drain)
+        deadline = time.monotonic() + shutdown_timeout
+        drained = True
+        while self._insert_semaphore._value < self._max_concurrent_inserts:
+            if time.monotonic() > deadline:
+                remaining = self._max_concurrent_inserts - self._insert_semaphore._value
+                logger.warning(
+                    "Shutdown timeout — in-flight inserts may be lost",
+                    remaining_inserts=remaining,
+                    timeout_s=shutdown_timeout,
+                )
+                drained = False
+                break
+            await asyncio.sleep(0.1)
 
-        # Stop heartbeat
-        self._heartbeat_running = False
+        if drained:
+            logger.info("All in-flight inserts drained before shutdown")
+
+        # Shutdown thread pool — wait=True only if we successfully drained
+        self._executor.shutdown(wait=drained)

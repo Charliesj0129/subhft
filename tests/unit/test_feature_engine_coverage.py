@@ -231,7 +231,7 @@ class TestResetAll:
 
 class TestStatsTupleProxy:
     def test_all_properties(self) -> None:
-        t = ("TXFD6", 123456, 400000000, 10000, 0.5, 200000000, 200010000, 50, 30)
+        t = ("lobstats", "TXFD6", 123456, 400000000, 10000, 0.5, 200000000, 200010000, 50, 30)
         proxy = _StatsTupleProxy(t)
         assert proxy.symbol == "TXFD6"
         assert proxy.ts == 123456

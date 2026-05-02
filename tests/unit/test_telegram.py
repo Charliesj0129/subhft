@@ -31,6 +31,13 @@ def _build_aiohttp_stub() -> types.ModuleType:
 if "aiohttp" not in sys.modules:
     sys.modules["aiohttp"] = _build_aiohttp_stub()
 
+# Ensure the telegram module's own aiohttp binding is set (may be None if
+# an earlier test imported telegram before the stub was installed).
+import hft_platform.notifications.telegram as _tg_mod  # noqa: E402
+
+if _tg_mod.aiohttp is None:
+    _tg_mod.aiohttp = sys.modules["aiohttp"]
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -57,6 +64,7 @@ def _make_update(
         "update_id": update_id,
         "message": {
             "from": {"id": from_id},
+            "chat": {"id": from_id},
             "text": text,
         },
     }
@@ -214,7 +222,7 @@ class TestTelegramCommandPoller:
     @pytest.mark.asyncio
     async def test_command_poller_stop_sets_redis_key(self):
         """/stop command from whitelisted chat_id should set emergency halt key."""
-        redis_mock = MagicMock()
+        redis_mock = AsyncMock()
         poller = self._make_poller(redis_client=redis_mock)
 
         update_data = {"result": [_make_update(update_id=1, from_id=123456, text="/stop")]}
@@ -222,15 +230,16 @@ class TestTelegramCommandPoller:
 
         with patch("hft_platform.notifications.telegram.aiohttp") as mock_aiohttp:
             mock_aiohttp.ClientSession.return_value = mock_session
+            mock_aiohttp.ClientTimeout = MagicMock()
             await poller.poll_once()
 
-        redis_mock.set.assert_called_once_with("hft:emergency_halt", "1")
+        redis_mock.set.assert_awaited_once_with("hft:emergency_halt", "1")
         assert poller._offset == 2
 
     @pytest.mark.asyncio
     async def test_command_poller_ignores_wrong_chat_id(self):
         """Messages from a different chat_id should be silently ignored."""
-        redis_mock = MagicMock()
+        redis_mock = AsyncMock()
         poller = self._make_poller(redis_client=redis_mock)
 
         # from_id differs from whitelisted 123456
@@ -239,8 +248,9 @@ class TestTelegramCommandPoller:
 
         with patch("hft_platform.notifications.telegram.aiohttp") as mock_aiohttp:
             mock_aiohttp.ClientSession.return_value = mock_session
+            mock_aiohttp.ClientTimeout = MagicMock()
             await poller.poll_once()
 
-        redis_mock.set.assert_not_called()
+        redis_mock.set.assert_not_awaited()
         # Offset still advances so we don't re-process the update
         assert poller._offset == 6

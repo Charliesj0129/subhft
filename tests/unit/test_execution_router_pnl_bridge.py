@@ -9,6 +9,12 @@ import pytest
 from hft_platform.execution.router import ExecutionRouter
 
 
+@pytest.fixture(autouse=True)
+def _isolate_dedup(monkeypatch, tmp_path):
+    """Prevent cross-test dedup state pollution from persisted fill_dedup_window."""
+    monkeypatch.setenv("HFT_FILL_DEDUP_PERSIST_PATH", str(tmp_path / "dedup.jsonl"))
+
+
 def _make_router(*, risk_engine=None):
     bus = MagicMock()
     bus.publish_many_nowait = MagicMock()

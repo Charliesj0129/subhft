@@ -3,6 +3,7 @@
 Called by strategy.handle_event() on each tick. NOT mounted in MarketDataService.
 All prices are scaled integers (x10000) per the Precision Law.
 """
+
 from __future__ import annotations
 
 import uuid
@@ -87,9 +88,7 @@ class TriggerExecutor:
             ValueError: If max_triggers capacity is reached.
         """
         if len(self._triggers) >= self._max_triggers:
-            raise ValueError(
-                f"TriggerExecutor reached max triggers ({self._max_triggers})"
-            )
+            raise ValueError(f"TriggerExecutor reached max triggers ({self._max_triggers})")
         trigger_id = uuid.uuid4().hex[:12]
         self._triggers[trigger_id] = (symbol, condition, intent)
         return trigger_id

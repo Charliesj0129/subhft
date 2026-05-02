@@ -29,8 +29,8 @@ futures:
 
   XMT:
     commission_per_contract: 13
-    tax_rate_bps: 2.0
-    tax_side: sell
+    tax_per_contract: 7
+    tax_side: both
     tick_size: 1
     point_value: 10
 
@@ -133,3 +133,42 @@ def test_from_yaml(yaml_path: Path) -> None:
     # Verify TX schedule loaded
     result = calc.compute("TXF", "BUY", 1, 20000 * 10000)
     assert result.commission == 60 * 10000
+
+
+def test_xmt_buy_has_tax_both_sides(calc: FeeCalculator) -> None:
+    """XMT BUY should have tax because tax_side=both."""
+    result = calc.compute("XMT", "BUY", 1, 100 * 10000)
+    assert result.tax > 0
+    assert result.commission == 13 * 10000
+
+
+def test_xmt_sell_has_tax_both_sides(calc: FeeCalculator) -> None:
+    """XMT SELL should have tax because tax_side=both."""
+    result = calc.compute("XMT", "SELL", 1, 100 * 10000)
+    assert result.tax > 0
+    assert result.commission == 13 * 10000
+
+
+def test_xmt_flat_tax_per_contract(calc: FeeCalculator) -> None:
+    """XMT tax = 7 * qty * 10000 (flat per-contract, not percentage-based)."""
+    qty = 3
+    result = calc.compute("XMT", "BUY", qty, 100 * 10000)
+    expected_tax = 7 * qty * 10000
+    assert result.tax == expected_tax
+    expected_commission = 13 * qty * 10000
+    assert result.commission == expected_commission
+    assert result.total == expected_commission + expected_tax
+
+
+def test_unknown_symbol_logs_warning(calc: FeeCalculator) -> None:
+    """Unknown symbol should return zero fees and log a warning."""
+    import unittest.mock as mock
+
+    with mock.patch("hft_platform.tca.fee_calculator.logger") as mock_logger:
+        result = calc.compute("NOSUCHSYM", "BUY", 1, 10000 * 10000)
+    assert result.commission == 0
+    assert result.tax == 0
+    assert result.total == 0
+    mock_logger.warning.assert_called_once()
+    call_kwargs = mock_logger.warning.call_args
+    assert "unknown_symbol" in call_kwargs[0][0]

@@ -1,9 +1,36 @@
 import os
+import threading
 from collections import deque
 from typing import Any
 
+import structlog
+
 from hft_platform.core import timebase
 from hft_platform.observability.metrics import MetricsRegistry
+
+logger = structlog.get_logger("observability.latency")
+
+_VALID_STAGES: frozenset[str] = frozenset(
+    {
+        "normalize",
+        "lob",
+        "lob_only",
+        "lob_process",
+        "feature",
+        "strategy",
+        "risk",
+        "order",
+        "order_queue",
+        "execution",
+        "gateway",
+        "record",
+        "bus_publish",
+        "api_place_order",
+        "api_cancel_order",
+        "api_update_order",
+        "e2e_order",
+    }
+)
 
 
 def _bool_env(value: Any, default: bool = False) -> bool:
@@ -68,10 +95,14 @@ class LatencyRecorder:
         self._retry_buffer: deque[dict] = deque(maxlen=self._retry_buffer_size)
         self._dropped_total = 0
 
+    _instance_lock: threading.Lock = threading.Lock()
+
     @classmethod
     def get(cls) -> "LatencyRecorder":
         if cls._instance is None:
-            cls._instance = cls()
+            with cls._instance_lock:
+                if cls._instance is None:
+                    cls._instance = cls()
         return cls._instance
 
     @classmethod
@@ -101,6 +132,8 @@ class LatencyRecorder:
     ) -> None:
         if latency_ns < 0:
             return
+        if stage not in _VALID_STAGES:
+            return
         if self.metrics_enabled and self.metrics:
             try:
                 self._metrics_counter = (self._metrics_counter + 1) % self._metrics_sample_every
@@ -115,7 +148,7 @@ class LatencyRecorder:
                         self._stage_metric_cache[stage] = stage_metric
                     stage_metric.observe(latency_ns)
             except Exception as _exc:  # noqa: BLE001
-                pass
+                logger.warning("latency_metric_observe_failed", error=str(_exc), stage=stage)
 
         if not self._should_sample():
             return
@@ -129,7 +162,7 @@ class LatencyRecorder:
         payload = {
             "ingest_ts": int(ts_ns),
             "stage": stage,
-            "latency_us": int(latency_ns / 1000),
+            "latency_us": latency_ns // 1000,
             "trace_id": trace_id,
             "symbol": symbol or "",
             "strategy_id": strategy_id or "",
@@ -150,7 +183,7 @@ class LatencyRecorder:
                         if hasattr(self.metrics, "latency_spans_dropped_total"):
                             self.metrics.latency_spans_dropped_total.inc(100)
                     except Exception as _exc:  # noqa: BLE001
-                        pass
+                        logger.warning("latency_drop_counter_failed", error=str(_exc))
             else:
                 self._retry_buffer.append({"topic": "latency_spans", "data": payload})
 
@@ -164,5 +197,6 @@ class LatencyRecorder:
                 self._queue.put_nowait(item)
                 self._retry_buffer.popleft()
             except Exception as _exc:  # noqa: BLE001
+                logger.debug("latency_retry_drain_queue_full")
                 # Queue still full, stop draining
                 break

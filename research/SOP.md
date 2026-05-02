@@ -77,6 +77,16 @@ requires dataset provenance metadata keys (`source/generator/seed/...`) in stric
 - **Role**: `architect`
 - **Skill**: `hft-backtester`, `validation-gate`
 - **Checklist**: Read `.agent/skills/hft-backtester/SKILL.md`, `.agent/skills/validation-gate/SKILL.md`
+- **Engine Selection** (automatic, via `manifest.yaml`):
+  - `strategy_type: taker` → `TakerEngine` (wraps HftNativeRunner, PowerProbQueueModel)
+  - `strategy_type: maker` → `MakerEngine` (CK-direct, QueueDepletion fill model)
+- **Required manifest fields**: `strategy_type: maker|taker`, `instrument: TMFD6|TXFD6`
+- **Cost model**: loaded from `config/research/cost_profiles.yaml` per instrument
+- **Fill model (maker)**: `QueueDepletionFill(qf=0.5)` — configurable via `queue_fraction`
+- **Gate C thresholds**: `config/research/gate_thresholds.yaml` (taker/maker split)
+- **Result persistence**: all results auto-saved to `research/experiments/runs/<run_id>/backtest_report.json` via `ResultStore`
+- **ClickHouse required**: MakerEngine needs local CK. Start with `docker compose up -d clickhouse`
+- **Ad-hoc scripts**: scripts in `research/tools/legacy/` are archived. Do NOT use for official results.
 
 ### Stage 5: 因子有效 Statistical Validation
 

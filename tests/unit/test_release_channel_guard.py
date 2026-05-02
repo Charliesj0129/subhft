@@ -74,11 +74,16 @@ def _prepare_artifacts(
     )
 
     # Rollback drill artifact (looked up via output_dir.parent / "reliability" / "drills")
+    # Use a recent date (within 30 days of test run) so drill freshness check passes
+    from datetime import datetime, timedelta, timezone
+
+    recent_ts = (datetime.now(timezone.utc) - timedelta(days=5)).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+    recent_file_ts = (datetime.now(timezone.utc) - timedelta(days=5)).strftime("%Y%m%dT%H%M%SZ")
     reliability_dir = root / "outputs" / "reliability" / "drills"
     _write_json(
-        reliability_dir / "rollback_20260304T010000Z.json",
+        reliability_dir / f"rollback_{recent_file_ts}.json",
         {
-            "timestamp": "2026-03-04T01:00:00+00:00",
+            "timestamp": recent_ts,
             "result": "pass",
         },
     )

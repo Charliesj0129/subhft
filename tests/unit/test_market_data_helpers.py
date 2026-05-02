@@ -9,9 +9,42 @@ from hft_platform.services.market_data import (
     _env_int,
     _looks_like_md,
     _obs_policy,
+    _parse_symbol_gap_overrides,
     _try_fast_extract_callback_payload,
     _unwrap_md,
 )
+
+# ---------------------------------------------------------------------------
+# _parse_symbol_gap_overrides (Bug #36)
+# ---------------------------------------------------------------------------
+
+
+class TestParseSymbolGapOverrides:
+    def test_empty_string_returns_empty(self) -> None:
+        assert _parse_symbol_gap_overrides("") == {}
+
+    def test_single_pair(self) -> None:
+        assert _parse_symbol_gap_overrides("TXFG6=60") == {"TXFG6": 60.0}
+
+    def test_multiple_pairs(self) -> None:
+        result = _parse_symbol_gap_overrides("TXFG6=60,2207=120,TMFE6=10")
+        assert result == {"TXFG6": 60.0, "2207": 120.0, "TMFE6": 10.0}
+
+    def test_skips_malformed_pair_keeps_others(self) -> None:
+        # "BAD" has no '=' → skipped; "TXFG6=abc" has invalid float → skipped
+        result = _parse_symbol_gap_overrides("TXFG6=60,BAD,2207=abc,TMFE6=10")
+        assert result == {"TXFG6": 60.0, "TMFE6": 10.0}
+
+    def test_skips_non_positive_seconds(self) -> None:
+        # negative and zero values are rejected (a 0s threshold would always-fire)
+        assert _parse_symbol_gap_overrides("X=-5,Y=0,Z=1") == {"Z": 1.0}
+
+    def test_strips_whitespace(self) -> None:
+        assert _parse_symbol_gap_overrides(" TXFG6 = 60 , 2207 = 120 ") == {
+            "TXFG6": 60.0,
+            "2207": 120.0,
+        }
+
 
 # ---------------------------------------------------------------------------
 # _looks_like_md

@@ -63,11 +63,9 @@ class TestSimpleMarketMaker:
     def test_on_stats_skips_none_values(self):
         strat = SimpleMarketMaker("test_smm")
         strat._positions = {}
-        stats = _make_stats()
-        stats.mid_price_x2 = None  # type: ignore
+        # R8: LOBStatsEvent is now frozen=True, so construct with mid_price_x2=None directly
+        stats = _make_stats(mid_price_x2=None)  # type: ignore[arg-type]
         strat.on_stats(stats)  # Should not raise — early return on None
-        # No intents generated when mid_price_x2 is None (early return)
-        assert len(strat._generated_intents) == 0
         # No intents generated when mid_price_x2 is None (early return)
         assert len(strat._generated_intents) == 0
 

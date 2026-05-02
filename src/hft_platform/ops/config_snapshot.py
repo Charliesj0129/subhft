@@ -60,6 +60,13 @@ def _compute_yaml_hash(yaml_paths: list[str]) -> str:
 
 
 def _get_git_sha() -> str:
+    # P2-d (2026-04-27): prefer the build-time env var baked by Dockerfile
+    # via --build-arg GIT_SHA. The container runtime has no .git directory,
+    # so the subprocess fallback below would always return "unknown".
+    env_sha = os.environ.get("HFT_GIT_SHA", "").strip()
+    if env_sha and env_sha != "unknown":
+        # Match the abbreviated form returned by `git rev-parse --short`.
+        return env_sha[:7]
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
@@ -92,17 +99,18 @@ async def write_snapshot_to_clickhouse(
     snapshot: dict[str, Any],
 ) -> bool:
     try:
-        ch_client.execute(
-            "INSERT INTO hft.config_snapshots (boot_ts, config_hash, git_sha, env_json, yaml_json) VALUES",
+        ch_client.insert(
+            "hft.config_snapshots",
             [
-                (
+                [
                     snapshot["boot_ts"],
                     snapshot["config_hash"],
                     snapshot["git_sha"],
                     snapshot["env_json"],
                     snapshot["yaml_json"],
-                )
+                ]
             ],
+            column_names=["boot_ts", "config_hash", "git_sha", "env_json", "yaml_json"],
         )
         logger.info("config_snapshot_written", config_hash=snapshot["config_hash"])
         return True

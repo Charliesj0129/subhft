@@ -1,10 +1,36 @@
 from dataclasses import dataclass
-from typing import Union
+from typing import NamedTuple, Union
 
 import numpy as np
 
+from hft_platform.contracts.ref import ContractRef
 
-@dataclass(slots=True)
+
+class BookStats(NamedTuple):
+    """Named stats tuple for BidAskEvent.stats (backward-compat: floats for mid_price/spread)."""
+
+    best_bid: int
+    best_ask: int
+    bid_depth: int
+    ask_depth: int
+    mid_price: float  # mid_price_x2 / 2.0 — backward compat float
+    spread: float  # spread as float
+    imbalance: float
+
+
+class FusedBookStats(NamedTuple):
+    """Named stats tuple for BidAskEvent.fused_stats (integers for LOBEngine bypass)."""
+
+    best_bid: int
+    best_ask: int
+    bid_depth: int
+    ask_depth: int
+    mid_price_x2: int  # integer: best_bid + best_ask
+    spread_scaled: int  # integer: best_ask - best_bid
+    imbalance: float
+
+
+@dataclass(slots=True, frozen=True)
 class MetaData:
     """Common metadata headers."""
 
@@ -18,7 +44,7 @@ class MetaData:
 TickMeta = MetaData
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, frozen=True)
 class TickEvent:
     """
     Standardized Tick Data.
@@ -42,8 +68,14 @@ class TickEvent:
     # Classification confidence (scaled x1000): 1000=at-quote, 800=inside, 500=tick-rule, 0=unknown
     trade_confidence: int = 0
 
+    # Option-3 migration (Gate 2a): optional structured contract identity.
+    # ``None`` while normalizer / broker adapters haven't filled it (dual-write
+    # phase). Consumers that understand ContractRef read this; legacy code
+    # keeps reading ``symbol``.
+    contract: ContractRef | None = None
 
-@dataclass(slots=True)
+
+@dataclass(slots=True, frozen=True)
 class BidAskEvent:
     """
     L1/L5 Update.
@@ -56,19 +88,21 @@ class BidAskEvent:
     # Dtype: np.int64 (to support large volumes/prices safely)
     bids: Union[np.ndarray, list]
     asks: Union[np.ndarray, list]
-    stats: tuple[int, int, int, int, float, float, float] | None = None
-    fused_stats: tuple[int, int, int, int, int, int, float] | None = None
+    stats: BookStats | None = None
+    fused_stats: FusedBookStats | None = None
     is_snapshot: bool = False
+    # Option-3 migration (Gate 2a): optional structured contract identity.
+    contract: ContractRef | None = None
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, frozen=True)
 class LOBStatsEvent:
     """
     Derived LOB metrics emitted by LOBEngine.
 
     Precision Law: All price values stored as scaled integers (x10000 default).
-    For backward compatibility, mid_price/spread are still exposed as floats
-    in scaled units. Prefer mid_price_x2/spread_scaled for strict integer math.
+    mid_price and spread are lazy properties (backward-compat, display/logging only).
+    Prefer mid_price_x2/spread_scaled for strict integer math on the hot path.
     """
 
     symbol: str
@@ -78,45 +112,38 @@ class LOBStatsEvent:
     best_ask: int
     bid_depth: int
     ask_depth: int
-    # Backward-compatible fields (scaled floats)
-    mid_price: float | None = None
-    spread: float | None = None
     # Strict integer fields (preferred)
     mid_price_x2: int | None = None  # best_bid + best_ask (divide by 2 for mid price)
     spread_scaled: int | None = None  # best_ask - best_bid (scaled integer)
+    # Normalizer sequence number (preserved from MetaData.seq for downstream ordering)
+    normalizer_seq: int = 0
+    # Backtest-only: trades that occurred during elapse interval (None in live)
+    last_trades: object = None
+    # Ingestion timestamp at the local process boundary.
+    local_ts: int = 0
 
     def __post_init__(self) -> None:
-        # Fast path: when both integer fields are provided, skip backward-compat logic
-        if self.mid_price_x2 is not None and self.spread_scaled is not None:
-            if self.mid_price is None:
-                self.mid_price = self.mid_price_x2 / 2.0
-            if self.spread is None:
-                self.spread = float(self.spread_scaled)
-            return
-
+        # Compute integer fields if not provided (object.__setattr__ for frozen dataclass)
         if self.mid_price_x2 is None:
             if self.best_bid is not None and self.best_ask is not None:
-                self.mid_price_x2 = int(self.best_bid) + int(self.best_ask)
-            elif self.mid_price is not None:
-                self.mid_price_x2 = int(round(self.mid_price * 2))
+                object.__setattr__(self, "mid_price_x2", int(self.best_bid) + int(self.best_ask))
             else:
-                self.mid_price_x2 = 0
-        if self.mid_price is None:
-            self.mid_price = self.mid_price_x2 / 2.0
-        else:
-            self.mid_price = float(self.mid_price)
-
+                object.__setattr__(self, "mid_price_x2", 0)
         if self.spread_scaled is None:
             if self.best_bid is not None and self.best_ask is not None:
-                self.spread_scaled = int(self.best_ask) - int(self.best_bid)
-            elif self.spread is not None:
-                self.spread_scaled = int(round(self.spread))
+                object.__setattr__(self, "spread_scaled", int(self.best_ask) - int(self.best_bid))
             else:
-                self.spread_scaled = 0
-        if self.spread is None:
-            self.spread = float(self.spread_scaled)
-        else:
-            self.spread = float(self.spread)
+                object.__setattr__(self, "spread_scaled", 0)
+
+    @property
+    def mid_price(self) -> float:
+        """Backward-compat float mid price (for display/logging only)."""
+        return (self.mid_price_x2 or 0) / 2.0
+
+    @property
+    def spread(self) -> float:
+        """Backward-compat float spread (for display/logging only)."""
+        return float(self.spread_scaled or 0)
 
     @property
     def mid_price_scaled(self) -> int:
@@ -158,3 +185,18 @@ class FeatureUpdateEvent:
         from hft_platform.feature.boundary import event_to_typed_frame
 
         return event_to_typed_frame(self)
+
+
+@dataclass(slots=True)
+class GapEvent:
+    """Injected when RingBufferBus consumer detects overflow (skip-forward).
+
+    Strategies receiving this event should assume that ``missed_count`` events
+    were silently dropped and react accordingly (e.g. reset stale state,
+    re-request LOB snapshot).
+    """
+
+    missed_count: int
+    first_missed_seq: int
+    last_missed_seq: int
+    ts: int  # nanoseconds from timebase

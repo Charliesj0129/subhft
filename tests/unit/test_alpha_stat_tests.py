@@ -4,6 +4,7 @@ Covers: _compute_oos_returns, _evaluate_oos_statistical_tests,
 _run_bds_independence_test, _bds_correlation_delta, _bh_correction,
 _extract_stat_test_pvalues, _extract_bds_pvalue.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -18,7 +19,6 @@ from hft_platform.alpha._stat_tests import (
     _extract_stat_test_pvalues,
     _run_bds_independence_test,
 )
-
 
 # ---------------------------------------------------------------------------
 # _compute_oos_returns
@@ -173,7 +173,7 @@ def test_evaluate_oos_statistical_tests_bootstrap_ci_keys():
     assert "pass" in boot
 
 
-def test_evaluate_oos_statistical_tests_filters_nonfinite():
+def test_evaluate_oos_statistical_tests_filters_nonfinite(recwarn):
     # Include some NaN/inf in the array — they should be stripped.
     arr = np.array([0.02] * 25 + [np.nan, np.inf, -np.inf, float("nan")])
     result = _evaluate_oos_statistical_tests(
@@ -184,6 +184,7 @@ def test_evaluate_oos_statistical_tests_filters_nonfinite():
     )
     # Finite sample count should be 25
     assert result["sample_count"] == 25
+    assert not [w for w in recwarn if issubclass(w.category, RuntimeWarning)]
 
 
 # ---------------------------------------------------------------------------

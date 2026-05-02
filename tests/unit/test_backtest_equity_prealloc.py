@@ -85,7 +85,7 @@ def test_equity_buffers_are_numpy(monkeypatch):
     adapter = hbt_adapter.HftBacktestAdapter(
         strategy=_NoopStrategy("t"),
         asset_symbol="X",
-        data_path="d",
+        data="d",
     )
     assert isinstance(adapter._equity_ts_buf, np.ndarray)
     assert isinstance(adapter._equity_val_buf, np.ndarray)
@@ -99,7 +99,7 @@ def test_equity_no_list_append(monkeypatch):
     adapter = hbt_adapter.HftBacktestAdapter(
         strategy=_NoopStrategy("t"),
         asset_symbol="X",
-        data_path="d",
+        data="d",
         equity_sample_ns=1,
     )
     adapter._reset_equity_buffers()
@@ -114,7 +114,7 @@ def test_equity_timestamps_monotonic(monkeypatch):
     adapter = hbt_adapter.HftBacktestAdapter(
         strategy=_NoopStrategy("t"),
         asset_symbol="X",
-        data_path="d",
+        data="d",
         equity_sample_ns=1,
     )
     adapter._reset_equity_buffers()
@@ -132,7 +132,7 @@ def test_equity_slice_properties_zero_copy(monkeypatch):
     adapter = hbt_adapter.HftBacktestAdapter(
         strategy=_NoopStrategy("t"),
         asset_symbol="X",
-        data_path="d",
+        data="d",
         equity_sample_ns=1,
     )
     adapter._reset_equity_buffers()
@@ -155,7 +155,7 @@ def test_equity_capacity_overflow_handled(monkeypatch):
     adapter = hbt_adapter.HftBacktestAdapter(
         strategy=_NoopStrategy("t"),
         asset_symbol="X",
-        data_path="d",
+        data="d",
         equity_sample_ns=1,
     )
     # Force tiny capacity
@@ -176,7 +176,7 @@ def test_equity_reset_clears_count(monkeypatch):
     adapter = hbt_adapter.HftBacktestAdapter(
         strategy=_NoopStrategy("t"),
         asset_symbol="X",
-        data_path="d",
+        data="d",
         equity_sample_ns=1,
     )
     adapter._maybe_record_equity_point(100, 10000, 10010)

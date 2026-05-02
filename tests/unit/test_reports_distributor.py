@@ -8,11 +8,8 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
 from hft_platform.reports.distributor import Distributor, ReportSender, load_channels
 from hft_platform.reports.models import ChannelConfig, ComposedReport, MessagePart
-
 
 # ---------------------------------------------------------------------------
 # load_channels
@@ -107,6 +104,7 @@ class TestReportSenderSend:
         with patch.dict("os.environ", {}, clear=True):
             # No token in env either
             import os
+
             os.environ.pop("HFT_TELEGRAM_BOT_TOKEN", None)
             result = _run(sender.send("-100", "hello"))
         assert result is False
@@ -142,9 +140,7 @@ class TestReportSenderSend:
 
     def test_rate_limit_exhaust_all_retries_returns_false(self):
         sender = ReportSender(bot_token="testtoken")
-        sender._do_post = AsyncMock(
-            side_effect=[(429, '{"parameters":{"retry_after":0}}')] * 3
-        )
+        sender._do_post = AsyncMock(side_effect=[(429, '{"parameters":{"retry_after":0}}')] * 3)
         with patch("asyncio.sleep", new=AsyncMock()):
             result = _run(sender.send("-100", "msg"))
         assert result is False
@@ -196,6 +192,7 @@ class TestReportSenderSendPhoto:
         sender = ReportSender(bot_token="")
         with patch.dict("os.environ", {}, clear=True):
             import os
+
             os.environ.pop("HFT_TELEGRAM_BOT_TOKEN", None)
             result = _run(sender.send_photo("-100", b"imgdata", caption="chart"))
         assert result is False

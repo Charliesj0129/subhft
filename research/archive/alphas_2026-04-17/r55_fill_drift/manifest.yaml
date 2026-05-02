@@ -1,0 +1,45 @@
+alpha_id: r55_fill_drift
+name: "Negative-Drift Fill Scoring — Post-Fill Price Path Analysis"
+version: "0.1.0"
+status: exploration
+owner: charlie
+
+instruments:
+  - TMFD6
+
+description: |
+  Measures post-fill price paths for R47 maker fills to identify conditioning
+  features (spread, signed flow, book imbalance) that predict whether a fill
+  will experience adverse drift (trend-through) or favorable mean-reversion
+  (V-shape recovery). T4 exploration only — no classifier, no full backtest.
+
+signals:
+  spread_at_fill:
+    input: L1 bid/ask at fill time
+    method: ask - bid in points
+    output: spread in points
+
+  signed_flow_10tick:
+    input: 10 most recent ticks before fill
+    method: sum of trade directions (+1 buyer, -1 seller via tick rule)
+    output: signed integer [-10, +10]
+
+  book_imbalance_l1:
+    input: L1 bid_qty, ask_qty at fill time
+    method: bid_qty / (bid_qty + ask_qty)
+    output: float [0, 1]
+
+metrics:
+  - post_fill_drift_t5
+  - post_fill_drift_t10
+  - post_fill_drift_t20
+  - post_fill_drift_t30
+  - post_fill_drift_t50
+  - post_fill_drift_t100
+  - max_adverse_excursion_30tick
+
+parameters:
+  spread_threshold_pts: 5
+  max_pos: 3
+  queue_frac: 0.5
+  latency_ns: 36000000

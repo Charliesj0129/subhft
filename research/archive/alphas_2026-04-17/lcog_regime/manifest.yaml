@@ -1,0 +1,70 @@
+alpha_id: lcog_regime
+name: "L-COG Regime-Conditioned KDJ"
+hypothesis: >
+  The L1-L5 volume-weighted center of gravity (COG) captures resting order
+  imbalance that is genuinely independent of L1 queue imbalance (QI_1)
+  (empirical corr = 0.027). When COG deviates above mid-price, resting demand
+  dominates and KDJ-buy signals carry higher conviction; when below, resting
+  supply dominates and KDJ-sell signals are reinforced. This regime filter
+  should improve the per-trade IC of the R32b KDJ(QI_1) signal without adding
+  redundant information.
+
+formula: >
+  cog_bid = sum(bid_price_i * bid_vol_i, i=1..5) / sum(bid_vol_i);
+  cog_ask = sum(ask_price_i * ask_vol_i, i=1..5) / sum(ask_vol_i);
+  cog_mid = (cog_bid + cog_ask) / 2;
+  cog_dev = cog_mid - mid_price;
+  regime = sign(EMA(cog_dev, bar_window));
+  raw_signal = KDJ(QI_1, K=9, D=3).K;
+  signal = raw_signal * (1 + 0.5 * regime * sign(raw_signal - 50))
+           when regime aligns with KDJ direction, else attenuate
+
+paper_refs:
+  - "2411.13594v1"  # L-COG depth weighting for regime detection
+  - "1907.06230v2"  # LOB shape and price prediction
+  - "2112.13213v4"  # Microstructure features from multi-level book
+
+data_fields:
+  - bids_price    # L1-L5 bid prices (x1e6 golden / x1e4 platform)
+  - bids_vol      # L1-L5 bid volumes
+  - asks_price    # L1-L5 ask prices (x1e6 golden / x1e4 platform)
+  - asks_vol      # L1-L5 ask volumes
+  - mid_price     # derived from L1
+  - exch_ts       # exchange timestamp (ns)
+
+target_instruments:
+  - TXFD6
+
+horizon: "5-30 min"
+signal_type: "momentum (regime-conditioned)"
+
+complexity: "O(1)"  # per-bar: COG = 5-level dot product, KDJ = EMA update
+
+status: DRAFT
+tier: null
+
+latency_profile: null
+
+cost_model:
+  instrument: TXFD6
+  rt_pts: 5
+  point_value_ntd: 200
+  min_edge_pts: 10  # 2x RT cost
+
+prior_round_context:
+  r32b_finding: >
+    KDJ(QI_1) IC = +0.092 at fwd_3 (~2.8 min) on TXFD6, 6/6 March days
+    consistent. Event bars (N=500, ~1 min) are the key denoising step.
+    Per-trade noise is high (Sharpe ~0.19) — needs regime filter.
+  r34_stage2_finding: >
+    COG-QI_1 rank correlation = 0.027 (genuinely independent).
+    LEV killed (corr with OFI = 0.967). COG standalone killed (CBS overlap).
+    COG as regime classifier for KDJ is the surviving concept.
+
+roles_used:
+  - planner
+  - code-reviewer
+
+skills_used:
+  - iterative-retrieval
+  - validation-gate

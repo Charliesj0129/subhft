@@ -3,7 +3,7 @@
 定義基礎變更管控流程，避免線上風險。
 
 ## Scope
-- `docker-compose.yml` / `docker-stack.yml`
+- `docker-compose.yml` / `docker-compose.production.yml`
 - `config/` 下會影響 live 行為的變更
 - `ops.sh` 與 `scripts/` 中運維腳本
 - 監控告警規則變更（Prometheus/Grafana/Alertmanager）

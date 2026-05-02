@@ -80,7 +80,12 @@ def build_parser() -> argparse.ArgumentParser:
     build.add_argument("--contracts", default="config/contracts.json", help="Contract cache path")
     build.add_argument("--metrics", default=None, help="Metrics cache path (optional)")
     build.add_argument("--no-contracts", action="store_true", help="Skip contract cache lookup")
-    build.add_argument("--max-subscriptions", type=int, default=200, help="Subscription limit")
+    build.add_argument(
+        "--max-subscriptions",
+        type=int,
+        default=480,
+        help="Subscription limit (4 conn × 120 codes; each code = 2 broker topics)",
+    )
     build.add_argument("--preview", action="store_true", help="Show preview summary")
     build.add_argument("--sample", type=int, default=10, help="Preview sample size")
     build.set_defaults(func=cmd_symbols_build)
@@ -90,7 +95,12 @@ def build_parser() -> argparse.ArgumentParser:
     preview.add_argument("--contracts", default="config/contracts.json", help="Contract cache path")
     preview.add_argument("--metrics", default=None, help="Metrics cache path (optional)")
     preview.add_argument("--no-contracts", action="store_true", help="Skip contract cache lookup")
-    preview.add_argument("--max-subscriptions", type=int, default=200, help="Subscription limit")
+    preview.add_argument(
+        "--max-subscriptions",
+        type=int,
+        default=480,
+        help="Subscription limit (4 conn × 120 codes; each code = 2 broker topics)",
+    )
     preview.add_argument("--sample", type=int, default=10, help="Preview sample size")
     preview.set_defaults(func=cmd_symbols_preview)
 
@@ -101,7 +111,12 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--metrics", default=None, help="Metrics cache path (optional)")
     validate.add_argument("--no-contracts", action="store_true", help="Skip contract cache lookup")
     validate.add_argument("--online", action="store_true", help="Validate against broker contracts")
-    validate.add_argument("--max-subscriptions", type=int, default=200, help="Subscription limit")
+    validate.add_argument(
+        "--max-subscriptions",
+        type=int,
+        default=480,
+        help="Subscription limit (4 conn × 120 codes; each code = 2 broker topics)",
+    )
     validate.set_defaults(func=cmd_symbols_validate)
 
     sync = config_sub.add_parser("sync", help="Sync broker contracts and build symbols.yaml")
@@ -109,7 +124,12 @@ def build_parser() -> argparse.ArgumentParser:
     sync.add_argument("--output", default="config/symbols.yaml", help="Output symbols YAML")
     sync.add_argument("--contracts", default="config/contracts.json", help="Contract cache path")
     sync.add_argument("--metrics", default=None, help="Metrics cache path (optional)")
-    sync.add_argument("--max-subscriptions", type=int, default=200, help="Subscription limit")
+    sync.add_argument(
+        "--max-subscriptions",
+        type=int,
+        default=480,
+        help="Subscription limit (4 conn × 120 codes; each code = 2 broker topics)",
+    )
     sync.add_argument("--preview", action="store_true", help="Show preview summary")
     sync.add_argument("--sample", type=int, default=10, help="Preview sample size")
     sync.set_defaults(func=cmd_symbols_sync)

@@ -11,7 +11,7 @@ pub fn to_ch_price_scaled(price: i64, price_scale: i64) -> i64 {
     }
     // price is already in x(price_scale) format; convert to x1e6
     let factor = CLICKHOUSE_PRICE_SCALE / price_scale as f64;
-    (price as f64 * factor) as i64
+    (price as f64 * factor).round_ties_even() as i64
 }
 
 /// Map a tick event to a ClickHouse record dict.
@@ -96,7 +96,8 @@ pub fn map_fill_record(
     dict.set_item("symbol", symbol)?;
     dict.set_item("price_scaled", to_ch_price_scaled(price, price_scale))?;
     dict.set_item("qty", qty)?;
-    dict.set_item("fee_scaled", to_ch_price_scaled(fee, price_scale))?;
+    // fee is already NTD x10000 (flat amount), not instrument-price-scaled
+    dict.set_item("fee_scaled", fee)?;
     dict.set_item("ts_ns", ts_ns)?;
     Ok(dict.into())
 }

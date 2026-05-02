@@ -23,6 +23,21 @@ class RiskPositionSyncer:
 
     Updated by the reconciliation layer; read by risk validators to
     cross-check internal position state against the broker's view.
+
+    .. note:: **Dead code — not wired into production (M4).**
+
+        As of 2026-04, this class is defined and unit-tested in isolation but is
+        never instantiated by any production code path.  ``ReconciliationService``
+        does **not** call ``syncer.update()``, and no risk validator reads from it.
+
+        When wiring is needed, the recommended integration is:
+        1. Accept a ``RiskPositionSyncer`` instance in ``ReconciliationService.__init__``.
+        2. Call ``syncer.update(discrepancies, broker_map)`` at the end of
+           ``sync_portfolio()`` after discrepancies are computed.
+        3. Inject the same instance into the relevant ``RustRiskValidator`` or
+           Python risk guard so it can call ``get_broker_qty()`` during evaluation.
+
+        Until that integration is implemented, this class serves as scaffolding only.
     """
 
     __slots__ = ("_lock", "_broker_positions", "_discrepancies", "last_sync_ts")

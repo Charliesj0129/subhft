@@ -21,6 +21,7 @@ class TestGetMaxFeedGapS:
 
     def test_within_reconnect_window_returns_gap(self) -> None:
         md_service = MagicMock()
+        md_service.client = None  # No client attr so fallback path is used
         md_service.get_max_feed_gap_s.return_value = 5.5
         md_service.within_reconnect_window.return_value = True
         assert HFTSystem._get_max_feed_gap_s(md_service) == 5.5

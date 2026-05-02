@@ -1,9 +1,12 @@
 import json
+import threading
+import time
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
-from hft_platform.recorder.wal import WALBatchWriter, WALReplayer, WALWriter
+from hft_platform.recorder.wal import WALBatchWriter, WALWriter
 
 
 def test_wal_write_sync_atomic_creates_file(tmp_path: Path):
@@ -17,83 +20,6 @@ def test_wal_write_sync_atomic_creates_file(tmp_path: Path):
     lines = fname.read_text().splitlines()
     assert len(lines) == 1
     assert json.loads(lines[0]) == payload[0]
-
-
-@pytest.mark.asyncio
-async def test_wal_replayer_replays_and_deletes(tmp_path: Path):
-    writer = WALWriter(str(tmp_path))
-    fname = tmp_path / "hft.market_data_123.jsonl"
-    payload = [{"symbol": "TEST", "price": 123, "volume": 1}]
-    writer._write_sync(str(fname), payload)
-
-    seen = []
-
-    async def sender(table, data):
-        seen.append((table, data))
-        return True
-
-    replayer = WALReplayer(str(tmp_path), sender)
-    await replayer.replay()
-
-    assert seen == [("hft.market_data", payload)]
-    assert not fname.exists()
-
-
-@pytest.mark.asyncio
-async def test_wal_replayer_stops_on_failure(tmp_path: Path):
-    writer = WALWriter(str(tmp_path))
-    first = tmp_path / "hft.market_data_1.jsonl"
-    second = tmp_path / "hft.market_data_2.jsonl"
-    writer._write_sync(str(first), [{"symbol": "A"}])
-    writer._write_sync(str(second), [{"symbol": "B"}])
-
-    calls = []
-
-    async def sender(table, data):
-        calls.append((table, data))
-        return False
-
-    replayer = WALReplayer(str(tmp_path), sender)
-    await replayer.replay()
-
-    assert calls == [("hft.market_data", [{"symbol": "A"}])]
-    assert first.exists()
-    assert second.exists()
-
-
-@pytest.mark.asyncio
-async def test_wal_batch_writer_add_columnar_replays_as_rows(tmp_path: Path):
-    writer = WALBatchWriter(str(tmp_path))
-    try:
-        ok = await writer.add_columnar(
-            "hft.market_data",
-            ["symbol", "price", "volume"],
-            [["TEST", "TEST2"], [123, 124], [1, 2]],
-            2,
-        )
-        assert ok is True
-        await writer.flush()
-    finally:
-        writer.stop()
-
-    seen = []
-
-    async def sender(table, data):
-        seen.append((table, data))
-        return True
-
-    replayer = WALReplayer(str(tmp_path), sender)
-    await replayer.replay()
-
-    assert seen
-    table, rows = seen[0]
-    assert table == "batch"
-    # Batch WAL replayer exposes batch file names; verify rows contain reconstructed records.
-    flat_rows = []
-    for _tbl, payload in seen:
-        flat_rows.extend(payload)
-    assert any(row.get("symbol") == "TEST" for row in flat_rows)
-    assert any(row.get("symbol") == "TEST2" for row in flat_rows)
 
 
 # ---------------------------------------------------------------------------
@@ -221,32 +147,107 @@ async def test_wal_batch_writer_ec3_file_splitting(tmp_path: Path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# WALReplayer: corrupt file is skipped without aborting replay
+# WALBatchWriter: data retained on flush failure (RC-2)
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_wal_replayer_skips_corrupt_file(tmp_path: Path):
-    """A corrupt WAL file should not crash replay; subsequent files may still replay."""
-    # Write a valid WAL file
-    writer = WALWriter(str(tmp_path))
-    valid_fname = tmp_path / "hft.market_data_200.jsonl"
-    writer._write_sync(str(valid_fname), [{"symbol": "GOOD"}])
+def test_wal_batch_writer_timer_flush_retains_data_on_failure(tmp_path: Path, monkeypatch):
+    """When _write_batch_sync fails in timer loop, production code merges data back."""
+    # Use very short interval so the timer fires quickly
+    monkeypatch.setenv("HFT_WAL_BATCH_INTERVAL_MS", "10")
+    writer = WALBatchWriter(str(tmp_path))
+    try:
+        # Stop the auto-started timer first to prevent races
+        writer._timer_running = False
+        writer._timer_thread.join(timeout=1.0)
 
-    # Write a corrupt WAL file that sorts before the valid one
-    corrupt_fname = tmp_path / "hft.market_data_100.jsonl"
-    corrupt_fname.write_text("not valid json!!!\x00\x01\x02\n")
+        # Make _write_batch_sync always fail; raise circuit breaker limit
+        # so data is always merged back (not dropped)
+        writer._merge_back_max_failures = 999
+        flush_event = threading.Event()
 
-    seen = []
+        def _always_fail(*args, **kwargs):
+            flush_event.set()
+            raise OSError("disk fail")
 
-    async def sender(table, data):
-        seen.append((table, data))
-        return True
+        writer._write_batch_sync = MagicMock(side_effect=_always_fail)
 
-    replayer = WALReplayer(str(tmp_path), sender)
-    # Must not raise
-    await replayer.replay()
+        # Populate buffer
+        with writer._lock:
+            writer._buffer = {"hft.ticks": [{"sym": "A", "price": 100}]}
+            writer._buffer_rows = 1
+            writer._buffer_bytes = 50
+            # Force the timer to think enough time has elapsed
+            writer._last_flush_ts = 0
 
-    # At minimum the valid file should have been replayed (corrupt is skipped)
-    symbols_seen = [row.get("symbol") for _, rows in seen for row in rows]
-    assert "GOOD" in symbols_seen
+        # Start a new timer thread (production code path)
+        writer._timer_running = True
+        timer_thread = threading.Thread(target=writer._flush_timer_loop, daemon=True)
+        timer_thread.start()
+
+        # Wait for at least one flush attempt
+        flush_event.wait(timeout=1.0)
+        # Brief additional wait for merge-back to complete
+        time.sleep(0.05)
+
+        # Stop the timer
+        writer._timer_running = False
+        timer_thread.join(timeout=1.0)
+
+        # Verify: _write_batch_sync was called (flush attempted)
+        assert writer._write_batch_sync.call_count >= 1
+
+        # Verify: data was merged back into the buffer by production code
+        with writer._lock:
+            assert writer._buffer_rows >= 1
+            assert "hft.ticks" in writer._buffer
+            assert writer._buffer["hft.ticks"] == [{"sym": "A", "price": 100}]
+    finally:
+        writer._timer_running = False
+
+
+def test_wal_batch_writer_stop_retains_data_on_failure(tmp_path: Path, monkeypatch):
+    """When _write_batch_sync fails in stop(), data is merged back into buffer."""
+    monkeypatch.setenv("HFT_WAL_BATCH_INTERVAL_MS", "999999")
+    writer = WALBatchWriter(str(tmp_path))
+    try:
+        # Populate buffer
+        with writer._lock:
+            writer._buffer = {
+                "hft.orders": [{"id": "O1"}, {"id": "O2"}],
+            }
+            writer._buffer_rows = 2
+            writer._buffer_bytes = 100
+
+        # Make write fail
+        writer._write_batch_sync = lambda *a, **kw: (_ for _ in ()).throw(IOError("write fail"))
+
+        writer.stop()
+
+        # Data should be merged back into buffer for potential recovery
+        with writer._lock:
+            assert writer._buffer_rows == 2
+            assert writer._buffer["hft.orders"] == [{"id": "O1"}, {"id": "O2"}]
+    finally:
+        writer._timer_running = False
+
+
+def test_wal_batch_writer_stop_clears_on_success(tmp_path: Path, monkeypatch):
+    """When stop() write succeeds, buffer is properly cleared."""
+    monkeypatch.setenv("HFT_WAL_BATCH_INTERVAL_MS", "999999")
+    writer = WALBatchWriter(str(tmp_path))
+    try:
+        # Populate buffer
+        with writer._lock:
+            writer._buffer = {"hft.ticks": [{"sym": "X"}]}
+            writer._buffer_rows = 1
+            writer._buffer_bytes = 30
+
+        writer.stop()
+
+        # Data should be gone (written to WAL successfully)
+        with writer._lock:
+            assert writer._buffer_rows == 0
+            assert writer._buffer == {}
+    finally:
+        writer._timer_running = False

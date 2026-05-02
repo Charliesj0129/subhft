@@ -2,6 +2,7 @@ import os
 import sys
 
 os.environ.setdefault("HFT_EVENT_MODE", "event")
+os.environ.setdefault("HFT_GATEWAY_STARTUP_HOLDOFF_S", "0")
 
 from pathlib import Path
 

@@ -36,6 +36,7 @@ from hft_platform.backtest._hbt_utils import (
     infer_tick_size_from_data,
     resolve_qty,
 )
+from hft_platform.backtest.risk_evaluator import BacktestRiskConfig, BacktestRiskEvaluator
 from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, Side
 from hft_platform.core.pricing import FixedPriceScaleProvider, PriceCodec
 from hft_platform.events import BidAskEvent, MetaData
@@ -62,7 +63,7 @@ class HftBacktestAdapter:
         self,
         strategy: BaseStrategy,
         asset_symbol: str,
-        data_path: str,
+        data: str | np.ndarray,
         latency_us: int = 100,
         seed: int = 42,
         price_scale: int = 10_000,
@@ -85,6 +86,9 @@ class HftBacktestAdapter:
         tick_mode: str = "feed",
         elapse_ns: int = 100_000_000,
         feature_array_source: tuple[np.ndarray, np.ndarray] | None = None,
+        risk_config: BacktestRiskConfig | None = None,
+        instrument: str | None = None,
+        calibration_profile_path: str | None = None,
     ):
         if not HFTBACKTEST_AVAILABLE:
             raise ImportError("hftbacktest not installed")
@@ -96,7 +100,12 @@ class HftBacktestAdapter:
 
         self.strategy = strategy
         self.symbol = asset_symbol
-        self.data_path = data_path
+        if isinstance(data, np.ndarray):
+            self._data_ndarray: np.ndarray | None = data
+            self.data_path: str | None = None
+        else:
+            self._data_ndarray = None
+            self.data_path = data
         self.modify_latency_us = int(modify_latency_us)
         self.cancel_latency_us = int(cancel_latency_us)
         self.timeout = int(timeout)
@@ -125,6 +134,20 @@ class HftBacktestAdapter:
         self._equity_val_buf = np.zeros(_EQUITY_CAPACITY, dtype=np.float64)
         self._equity_count: int = 0
 
+        # Risk evaluator (opt-in)
+        _REJECT_CAPACITY = 256
+        self._reject_ts_ns = np.zeros(_REJECT_CAPACITY, dtype=np.int64)
+        self._reject_reasons: list[str] = []
+        self._reject_count: int = 0
+        if risk_config is not None and risk_config.enabled:
+            self._risk_evaluator: BacktestRiskEvaluator | None = BacktestRiskEvaluator(
+                risk_config,
+                position_provider=lambda sym, sid: self.positions.get(sym, 0),
+                price_scale_provider=None,
+            )
+        else:
+            self._risk_evaluator = None
+
         self._wait_status_mode = detect_wait_status_mode()
         self.feature_mode = str(feature_mode or "stats_only").strip().lower()
         self.dispatch_feature_events = bool(dispatch_feature_events)
@@ -145,18 +168,82 @@ class HftBacktestAdapter:
                 logger.debug("operation_fallback", error=str(exc))
                 pass
 
-        resolved_tick_size = float(tick_size) if tick_size is not None else infer_tick_size_from_data(data_path)
+        _data_for_infer: str | np.ndarray = (
+            self._data_ndarray if self._data_ndarray is not None else self.data_path  # type: ignore[assignment]
+        )
+        resolved_tick_size = float(tick_size) if tick_size is not None else infer_tick_size_from_data(_data_for_infer)
         resolved_lot_size = float(lot_size) if lot_size is not None else 1.0
 
-        asset_builder = BacktestAsset().data([data_path]).linear_asset(1.0)
+        _data_arg: list = [self._data_ndarray] if self._data_ndarray is not None else [self.data_path]
+        asset_builder = BacktestAsset().data(_data_arg).linear_asset(1.0)
         latency_model_lower = str(latency_model).strip().lower()
         if latency_model_lower == "intporderlatency" and latency_data_path:
             asset_builder = call_if_exists(asset_builder, "intp_order_latency", latency_data_path)
         else:
-            lat_ns = latency_us * 1000
+            # hftbacktest's constant_order_latency does not support per-action-type
+            # latencies (place vs modify vs cancel). When modify_latency_us or
+            # cancel_latency_us are provided, we use the maximum of all three as a
+            # conservative approximation so that no action type underestimates its
+            # real round-trip time.  A warning is emitted so researchers are aware
+            # of this approximation and can account for it in their analysis.
+            _mod = self.modify_latency_us
+            _can = self.cancel_latency_us
+            if _mod > 0 or _can > 0:
+                effective_latency_us = max(latency_us, _mod, _can)
+                if effective_latency_us != latency_us:
+                    logger.warning(
+                        "backtest_latency_approximation",
+                        place_latency_us=latency_us,
+                        modify_latency_us=_mod,
+                        cancel_latency_us=_can,
+                        effective_latency_us=effective_latency_us,
+                        reason=(
+                            "hftbacktest constant_order_latency does not support "
+                            "per-action-type latencies; using max(place, modify, cancel) "
+                            "as a conservative approximation for all order actions"
+                        ),
+                    )
+            else:
+                effective_latency_us = latency_us
+            lat_ns = effective_latency_us * 1000
             asset_builder = call_if_exists(asset_builder, "constant_order_latency", lat_ns, lat_ns)
 
-        queue_model_lower = str(queue_model).strip().lower()
+        # Resolve queue_model if auto
+        if queue_model == "auto":
+            if instrument is None:
+                raise ValueError(
+                    "instrument required when queue_model='auto'. "
+                    "Pass instrument=<name> or set queue_model to an explicit "
+                    "spec like 'PowerProbQueueModel(n)' / 'LogProbQueueModel'."
+                )
+            from pathlib import Path as _Path
+
+            from research.calibration.config import (
+                DEFAULT_PROFILES_PATH,
+                load_calibration_profile,
+            )
+
+            _prof_path = _Path(calibration_profile_path) if calibration_profile_path else DEFAULT_PROFILES_PATH
+            profile = load_calibration_profile(instrument, _prof_path)
+            _qm_name_map = {
+                "power_prob": "PowerProbQueueModel",
+                "power_prob2": "PowerProbQueueModel2",
+                "power_prob3": "PowerProbQueueModel3",
+                "log_prob": "LogProbQueueModel",
+            }
+            _qm_name = _qm_name_map.get(profile.queue_model, profile.queue_model)
+            if profile.exponent is not None:
+                resolved_queue_model = f"{_qm_name}({profile.exponent})"
+            else:
+                resolved_queue_model = _qm_name
+            self.calibration_profile_id: str = f"{instrument}_{profile.calibration_date}"
+        else:
+            resolved_queue_model = queue_model
+            self.calibration_profile_id = "uncalibrated"
+
+        self.queue_model: str = resolved_queue_model
+
+        queue_model_lower = str(resolved_queue_model).strip().lower()
         if "riskadverse" in queue_model_lower or "risk_adverse" in queue_model_lower:
             asset_builder = call_if_exists(asset_builder, "risk_adverse_queue_model")
         elif "logprob" in queue_model_lower:
@@ -166,7 +253,7 @@ class HftBacktestAdapter:
         else:
             import re
 
-            m = re.search(r"[\d.]+", str(queue_model))
+            m = re.search(r"[\d.]+", str(resolved_queue_model))
             exponent = float(m.group()) if m else 3.0
             asset_builder = call_if_exists(asset_builder, "power_prob_queue_model", exponent)
 
@@ -226,6 +313,19 @@ class HftBacktestAdapter:
         self._fill_position_after[idx] = position_after
         self._fill_mid_price_x2[idx] = mid_price_x2
         self._fill_count = idx + 1
+
+    def _record_rejection(self, intent: OrderIntent, reason: str) -> None:
+        """Record a risk rejection in SoA buffers."""
+        from hft_platform.core import timebase
+
+        if self._reject_count >= len(self._reject_ts_ns):
+            new_cap = len(self._reject_ts_ns) * 2
+            new_buf = np.zeros(new_cap, dtype=np.int64)
+            new_buf[: len(self._reject_ts_ns)] = self._reject_ts_ns
+            self._reject_ts_ns = new_buf
+        self._reject_ts_ns[self._reject_count] = timebase.now_ns()
+        self._reject_reasons.append(reason)
+        self._reject_count += 1
 
     def _reset_equity_buffers(self) -> None:
         self._equity_count = 0
@@ -296,7 +396,9 @@ class HftBacktestAdapter:
 
     def get_mid_price_x2(self) -> int:
         dp = self.hbt.depth(0)
-        return int(dp.best_bid) + int(dp.best_ask)
+        bid_scaled = int(round(float(dp.best_bid) * self.price_scale))
+        ask_scaled = int(round(float(dp.best_ask) * self.price_scale))
+        return bid_scaled + ask_scaled
 
     def get_spread(self) -> float:
         dp = self.hbt.depth(0)
@@ -333,8 +435,10 @@ class HftBacktestAdapter:
 
     def _build_l1_bidask_event(self, depth_obj: object, ts_ns: int) -> BidAskEvent:
         self._hbt_seq += 1
-        best_bid = int(getattr(depth_obj, "best_bid", 0) or 0)
-        best_ask = int(getattr(depth_obj, "best_ask", 0) or 0)
+        raw_bid = float(getattr(depth_obj, "best_bid", 0) or 0)
+        raw_ask = float(getattr(depth_obj, "best_ask", 0) or 0)
+        best_bid = int(round(raw_bid * self.price_scale))
+        best_ask = int(round(raw_ask * self.price_scale))
         bid_qty = resolve_qty(depth_obj, "best_bid_qty", "bid_qty", "bid_volume")
         ask_qty = resolve_qty(depth_obj, "best_ask_qty", "ask_qty", "ask_volume")
         bids = np.asarray([[best_bid, bid_qty]], dtype=np.int64)
@@ -359,7 +463,7 @@ class HftBacktestAdapter:
             if intent.target_order_id is not None:
                 self.hbt.cancel(0, int(intent.target_order_id), False)
 
-    def _intent_factory(self, strategy_id, symbol, side, price, qty, tif, intent_type, target_order_id=None):
+    def _intent_factory(self, strategy_id, symbol, side, price, qty, tif, intent_type, target_order_id=None, **_kw):
         self._intent_seq += 1
         return OrderIntent(
             intent_id=self._intent_seq,
@@ -431,7 +535,7 @@ class StrategyHbtAdapter:
 
     def __init__(
         self,
-        data_path: str,
+        data: str,
         strategy_module: str,
         strategy_class: str,
         strategy_id: str,
@@ -458,7 +562,7 @@ class StrategyHbtAdapter:
         self.adapter = HftBacktestAdapter(
             strategy=self.strategy,
             asset_symbol=symbol,
-            data_path=data_path,
+            data=data,
             tick_size=tick_size,
             lot_size=lot_size,
             maker_fee=maker_fee,

@@ -7,21 +7,57 @@ volume bars, large-trade markers, and a price overlay for a single session.
 from __future__ import annotations
 
 import io
-import logging
 from datetime import datetime, timedelta
+from functools import lru_cache
 from typing import TYPE_CHECKING
+
+import structlog
+
+from hft_platform.contracts.types import PLATFORM_SCALE
 
 if TYPE_CHECKING:
     from hft_platform.reports.models import SessionData
 
-logger = logging.getLogger(__name__)
-
-PLATFORM_SCALE = 10_000
+logger = structlog.get_logger(__name__)
 
 _SESSION_LABEL: dict[str, str] = {
     "day": "日",
     "night": "夜",
 }
+_CJK_FONT_CANDIDATES: tuple[str, ...] = (
+    "Noto Sans CJK TC",
+    "Noto Sans CJK SC",
+    "Noto Sans TC",
+    "Noto Sans SC",
+    "Source Han Sans TW",
+    "Source Han Sans CN",
+    "Microsoft JhengHei",
+    "PingFang TC",
+    "Heiti TC",
+    "SimHei",
+    "WenQuanYi Zen Hei",
+)
+
+
+@lru_cache(maxsize=1)
+def _resolve_title_style() -> tuple[dict[str, str], str | None, str]:
+    """Return localized session labels and an optional CJK-capable title font.
+
+    Many CI environments only ship DejaVu Sans, which cannot render the
+    Chinese title text used in reports. When no known CJK font is present,
+    fall back to an ASCII title to avoid repeated glyph-missing warnings.
+    """
+    try:
+        from matplotlib import font_manager
+    except ImportError:
+        return {"day": "Day", "night": "Night"}, None, "Flow Heatmap"
+
+    available_fonts = {font.name for font in font_manager.fontManager.ttflist}
+    for candidate in _CJK_FONT_CANDIDATES:
+        if candidate in available_fonts:
+            return _SESSION_LABEL, candidate, "流向熱力圖"
+
+    return {"day": "Day", "night": "Night"}, None, "Flow Heatmap"
 
 
 def generate_heatmap(sd: SessionData) -> bytes | None:
@@ -35,6 +71,7 @@ def generate_heatmap(sd: SessionData) -> bytes | None:
 
     try:
         import matplotlib
+
         matplotlib.use("Agg")
         import matplotlib.dates as mdates  # noqa: E402
         import matplotlib.pyplot as plt  # noqa: E402
@@ -98,8 +135,15 @@ def generate_heatmap(sd: SessionData) -> bytes | None:
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
     ax.set_xlabel("Time")
 
-    session_label = _SESSION_LABEL.get(sd.session, sd.session)
-    ax.set_title(f"{sd.symbol} {session_label}\u76E4 {sd.date} \u6D41\u5411\u71B1\u529B\u5716")
+    session_labels, title_font, title_suffix = _resolve_title_style()
+    session_label = session_labels.get(sd.session, sd.session)
+    if title_font is None:
+        ax.set_title(f"{sd.symbol} {session_label} {sd.date} {title_suffix}")
+    else:
+        ax.set_title(
+            f"{sd.symbol} {session_label}\u76e4 {sd.date} {title_suffix}",
+            fontname=title_font,
+        )
 
     fig.tight_layout()
 

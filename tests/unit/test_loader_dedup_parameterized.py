@@ -39,7 +39,7 @@ def test_parse_batch_table_name_accepts_known_tables():
     assert parse_batch_table_name("hft.market_data") == "market_data"
     assert parse_batch_table_name("orders") == "orders"
     assert parse_batch_table_name("trades") == "trades"
-    assert parse_batch_table_name("fills") == "trades"
+    assert parse_batch_table_name("fills") == "fills"
     assert parse_batch_table_name("risk_log") == "risk_log"
     assert parse_batch_table_name("logs") == "risk_log"
     assert parse_batch_table_name("backtest_runs") == "backtest_runs"

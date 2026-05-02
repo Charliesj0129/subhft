@@ -1,14 +1,26 @@
 import os
 from abc import ABC
 from decimal import Decimal
-from typing import Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
 from structlog import get_logger
 
 # Fill/Order Events might be imported from contracts or events
-from hft_platform.contracts.execution import FillEvent, OrderEvent
+from hft_platform.contracts.execution import FillEvent, OrderEvent, OrderStatus
 from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, RiskFeedback, Side
-from hft_platform.events import BidAskEvent, FeatureUpdateEvent, LOBStatsEvent, TickEvent
+from hft_platform.core.timebase import now_ns as _now_ns
+from hft_platform.events import BidAskEvent, FeatureUpdateEvent, GapEvent, LOBStatsEvent, TickEvent
+from hft_platform.feature.engine import (
+    QUALITY_FLAG_GAP,
+    QUALITY_FLAG_OUT_OF_ORDER,
+    QUALITY_FLAG_STATE_RESET,
+    _StatsTupleProxy,
+)
+
+# Mask of quality flags that indicate corrupted/unreliable feature data.
+# PARTIAL (warmup incomplete) is acceptable — strategies may use partial data.
+# STALE_INPUT is acceptable — features computed from slightly old input.
+QUALITY_FLAGS_CORRUPT = QUALITY_FLAG_GAP | QUALITY_FLAG_STATE_RESET | QUALITY_FLAG_OUT_OF_ORDER
 
 logger = get_logger("strategy")
 
@@ -32,6 +44,8 @@ class StrategyContext:
         "_feature_set_source",
         "_feature_profile_source",
         "_feature_tuple_get",
+        "_feature_staleness_source",
+        "_staleness_counter",
         "_publish_sink",
     )
 
@@ -48,6 +62,8 @@ class StrategyContext:
         feature_set_source: Callable[[], str] | None = None,
         feature_profile_source: Callable[[], str | None] | None = None,
         feature_tuple_source: Callable[[str], Optional[tuple]] | None = None,
+        feature_staleness_source: Callable[[str], Optional[int]] | None = None,
+        staleness_counter: Any = None,
         publish_sink: Callable[[str, dict], None] | None = None,
     ):
         self.positions = positions
@@ -61,6 +77,8 @@ class StrategyContext:
         self._feature_set_source = feature_set_source
         self._feature_profile_source = feature_profile_source
         self._feature_tuple_get = feature_tuple_source
+        self._feature_staleness_source = feature_staleness_source
+        self._staleness_counter = staleness_counter
         self._publish_sink = publish_sink
 
     def place_order(
@@ -125,6 +143,22 @@ class StrategyContext:
             return None
         return self._feature_source(symbol, feature_id)
 
+    def is_feature_stale(self, symbol: str, max_age_ns: int) -> bool:
+        """Return True if feature data for *symbol* is older than *max_age_ns* or was never updated."""
+        if self._feature_staleness_source is None:
+            return True
+        ts = self._feature_staleness_source(symbol)
+        if ts is None:
+            stale = True
+        else:
+            stale = (_now_ns() - ts) > max_age_ns
+        if stale and self._staleness_counter is not None:
+            try:
+                self._staleness_counter.inc()
+            except Exception:  # noqa: BLE001
+                pass
+        return stale
+
     def get_feature_view(self, symbol: str) -> Optional[Dict]:
         if self._feature_view_source is None:
             return None
@@ -177,6 +211,7 @@ class BaseStrategy(ABC):
 
         self.ctx: Optional[StrategyContext] = None
         self._generated_intents: List[OrderIntent] = []
+        self._cancel_inflight_targets: set[str] = set()
 
     # --- Event Handlers ---
 
@@ -196,12 +231,30 @@ class BaseStrategy(ABC):
         """Handle shared feature-plane updates (optional)."""
         pass
 
+    @staticmethod
+    def _should_use_features(event: FeatureUpdateEvent) -> bool:
+        """Return True if feature quality_flags indicate usable data.
+
+        Rejects GAP, STATE_RESET, and OUT_OF_ORDER flags.
+        Accepts PARTIAL and STALE_INPUT (safe for conservative use).
+        """
+        return (event.quality_flags & QUALITY_FLAGS_CORRUPT) == 0
+
     def on_fill(self, event: FillEvent) -> None:
         """Handle Fill Reports."""
         pass
 
     def on_order(self, event: OrderEvent) -> None:
         """Handle Order Status Updates."""
+        pass
+
+    def on_gap(self, event: "GapEvent") -> None:
+        """Called when RingBufferBus overflow caused missed events.
+
+        Strategies should override this to reset stale internal state
+        (e.g. re-request LOB snapshot, clear rolling accumulators).
+        Default implementation is a no-op.
+        """
         pass
 
     def on_risk_feedback(self, feedback: "RiskFeedback") -> None:
@@ -213,7 +266,7 @@ class BaseStrategy(ABC):
     def handle_event(
         self,
         ctx: StrategyContext,
-        event: Union[TickEvent, BidAskEvent, LOBStatsEvent, FeatureUpdateEvent, FillEvent, OrderEvent],
+        event: Union[TickEvent, BidAskEvent, LOBStatsEvent, FeatureUpdateEvent, FillEvent, OrderEvent, "GapEvent"],
     ) -> List[OrderIntent]:
         self.ctx = ctx
         self._generated_intents.clear()
@@ -228,20 +281,30 @@ class BaseStrategy(ABC):
                 if not isinstance(event, (FillEvent, OrderEvent)):
                     return []
 
+        if isinstance(event, FillEvent) or (
+            isinstance(event, OrderEvent)
+            and event.status in (OrderStatus.FILLED, OrderStatus.CANCELLED, OrderStatus.FAILED)
+        ):
+            self._clear_cancel_inflight_target(getattr(event, "order_id", ""))
+
         if isinstance(event, TickEvent):
             self.on_tick(event)
         elif isinstance(event, BidAskEvent):
             self.on_book_update(event)
         elif isinstance(event, LOBStatsEvent):
             self.on_stats(event)
+        elif isinstance(event, tuple) and event and event[0] == "lobstats":
+            self.on_stats(_StatsTupleProxy(event))
         elif isinstance(event, FeatureUpdateEvent):
             self.on_features(event)
+        elif isinstance(event, GapEvent):
+            self.on_gap(event)
         elif isinstance(event, FillEvent):
             self.on_fill(event)
         elif isinstance(event, OrderEvent):
             self.on_order(event)
 
-        return self._generated_intents
+        return list(self._generated_intents)
 
     # --- Actions ---
 
@@ -254,10 +317,25 @@ class BaseStrategy(ABC):
     def cancel(self, symbol: str, order_id: str):
         if not self.ctx:
             return
+        target_order_id = str(order_id)
+        if target_order_id in self._cancel_inflight_targets:
+            return
+        self._cancel_inflight_targets.add(target_order_id)
         intent = self.ctx.place_order(
-            symbol=symbol, side=Side.BUY, price=0, qty=0, intent_type=IntentType.CANCEL, target_order_id=order_id
+            symbol=symbol, side=Side.BUY, price=0, qty=0, intent_type=IntentType.CANCEL, target_order_id=target_order_id
         )
         self._generated_intents.append(intent)
+
+    def _clear_cancel_inflight_target(self, order_id: str) -> None:
+        if not order_id:
+            return
+        oid = str(order_id)
+        if oid in self._cancel_inflight_targets:
+            self._cancel_inflight_targets.discard(oid)
+            return
+        for target in tuple(self._cancel_inflight_targets):
+            if oid.startswith(target) or target.startswith(oid):
+                self._cancel_inflight_targets.discard(target)
 
     def position(self, symbol: str) -> int:
         if not self.ctx or not self.ctx.positions:

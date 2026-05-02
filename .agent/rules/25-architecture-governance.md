@@ -1,137 +1,88 @@
 # Architecture Governance Rules
 
-This rule defines architecture guardrails for changes across the HFT Platform.
+Architecture guardrails for changes across the HFT Platform.
 
 ## 1. Dependency Direction
 
-Allowed direction (high level):
-
+Allowed:
 1. `feed_adapter` -> `events`
-2. `strategy` -> `contracts.strategy`
-3. `risk` -> `contracts.strategy`
-4. `order` -> `contracts.strategy`
-5. `execution` -> `contracts.execution`
-6. `recorder` -> mapped records only (no strategy/risk logic)
-7. `services` orchestrates modules but does not own domain logic
+2. `strategy` / `risk` / `order` -> `contracts.strategy`
+3. `execution` -> `contracts.execution`
+4. `recorder` -> mapped records only (no strategy/risk logic)
+5. `services` orchestrates; does not own domain logic
 
-Disallowed direction:
-
+Disallowed:
 1. `contracts` importing runtime services
 2. `events` importing strategy or execution modules
 3. recorder writing directly into strategy/risk internals
 
 ## 2. Canonical Runtime Dataflow
 
-Required order for live runtime:
+Required ordering: market callback -> `raw_queue` -> normalize + LOB -> bus events -> strategy (`OrderIntent`) -> risk (`OrderCommand`) -> order adapter -> broker API -> execution callback -> normalized execution events -> positions/reconciliation -> recorder (ClickHouse/WAL).
 
-1. market callback -> `raw_queue`
-2. normalize + LOB -> bus events
-3. strategy -> `OrderIntent`
-4. risk -> `OrderCommand`
-5. order adapter -> broker API
-6. execution callback -> normalized execution events
-7. positions/reconciliation updates
-8. recorder persistence (ClickHouse/WAL)
-
-Any new feature must explicitly choose where it enters this flow.
+Any new feature MUST explicitly choose where it enters this flow. (See `20-data-flow.md` for the full chain.)
 
 ## 3. Queue and Bus Contracts
 
-1. New hot-path stage must use bounded queues.
-2. `QueueFull` behavior must be explicit: drop, degrade, or block.
-3. Event bus overflow handling must remain safety-aware and HALT-capable.
-4. Do not add unbounded buffers in event-loop paths.
+1. New hot-path stages MUST use bounded queues.
+2. `QueueFull` behavior MUST be explicit: drop, degrade, or block.
+3. Event bus overflow MUST remain safety-aware and HALT-capable.
+4. No unbounded buffers in event-loop paths.
 
-## 4. Precision and Time Rules
+## 4. Precision and Time
 
-1. Monetary values in risk/order/execution/position paths use scaled int or Decimal.
-2. Timestamp semantics:
+1. Monetary values in risk/order/execution/position use scaled int or Decimal (see `01-core-laws.md` Law 4).
+2. Exchange/source timestamp preserved; local ingest timestamp captured at each stage boundary.
+3. Fallback float usage MUST be marked non-accounting only.
 
-- exchange/source timestamp is preserved
-- local ingest timestamp is captured at stage boundary
+## 5. Recorder Durability
 
-3. Any fallback float usage must be marked as non-accounting only.
-
-## 5. Recorder Durability Rules
-
-1. ClickHouse failure must not drop data silently.
-2. WAL fallback is mandatory for recorder write failures.
-3. WAL replay must remain idempotent-safe or dedup-aware.
-4. Schema changes must preserve replay compatibility for existing WAL files.
-5. Runtime schema source of truth is managed sequentially in `src/hft_platform/migrations/clickhouse/`.
-6. Legacy SQL files are non-bootstrap references unless explicitly migrated.
+1. ClickHouse failure MUST NOT drop data silently; WAL fallback is mandatory.
+2. WAL replay MUST be idempotent-safe or dedup-aware.
+3. Schema changes MUST preserve replay compatibility.
+4. Runtime schema source of truth: `src/hft_platform/migrations/clickhouse/` (sequential). Legacy SQL files are non-bootstrap references.
 
 ## 6. StormGuard and Safety
 
-1. HALT state must block new order progression.
-2. Cancel actions remain allowed in HALT.
-3. Any component crash in execution path must be surfaced to supervisor and metrics.
+1. HALT MUST block new order progression. Cancel remains allowed in HALT.
+2. Any execution-path crash MUST surface to supervisor and metrics.
 
-## 7. Change Protocol (for all architecture-affecting PRs)
+## 7. Change Protocol (architecture-affecting PRs)
 
-Required updates when changing flow, contracts, or persistence:
-
-1. update `docs/modules/<module>.md`
-2. update `.agent/library/current-architecture.md` if boundaries or responsibilities changed
-3. add/adjust tests for behavior at the affected boundary
-4. validate metrics and recorder ingestion after change
-5. for any new component that touches the hot path: create a 5-gate design review entry in `.agent/library/design-review-artifacts.md`
+When flow, contracts, or persistence change:
+1. Update `docs/modules/<module>.md`.
+2. Update `.agent/library/current-architecture.md` if boundaries changed.
+3. Add/adjust tests at the affected boundary.
+4. Validate metrics and recorder ingestion post-change.
+5. New hot-path components: add a 5-gate design review entry in `.agent/library/design-review-artifacts.md`.
 
 ## 8. Rust/Python Boundary
 
 1. Prefer Rust for CPU-heavy deterministic transforms in hot path.
-2. Python<->Rust interfaces should avoid unnecessary copies.
-3. Fallback behavior (when Rust module unavailable) must be explicit and observable.
+2. Avoid unnecessary copies across the boundary (see `01-core-laws.md` Law 5).
+3. Fallback when Rust module unavailable MUST be explicit and observable.
 
-## 9. Broker Adapter Decomposition (Multi-Broker)
+## 9. Broker Adapter Decomposition
 
-1. **Registry pattern**: All brokers register via `register_broker(name, factory)` in `feed_adapter/broker_registry.py`. `HFT_BROKER` env var selects the active broker (default: `"shioaji"`).
+Registry in `feed_adapter/broker_registry.py`; `HFT_BROKER` selects active broker (default `shioaji`). Each broker is self-contained under `feed_adapter/<broker>/` with: `facade.py`, `session_runtime.py`, `quote_runtime.py`, `order_gateway.py`, `account_gateway.py`, `contracts_runtime.py`. Quote path failures must not impair order path.
 
-2. **Package isolation**: Each broker is a self-contained package under `feed_adapter/<broker>/` containing:
-   - `facade.py` — Composes sub-runtimes into unified interface
-   - `session_runtime.py` — Login, reconnect, session lifecycle
-   - `quote_runtime.py` — Market data subscription and callbacks
-   - `order_gateway.py` — Order placement, cancellation, amendment
-   - `account_gateway.py` — Position, margin, and balance queries
-   - `contracts_runtime.py` — Contract and symbol resolution
-
-3. **Protocol conformance**: All broker packages MUST implement all 4 protocols from `feed_adapter/protocols.py`: `MarketDataProvider`, `OrderExecutor`, `AccountProvider`, `BrokerSession` (all `@runtime_checkable`).
-
-4. **Concern separation**: Quote path failures must not directly impair order path availability.
-
-5. **No broker leakage**: No broker-specific imports or logic outside `feed_adapter/<broker>/`. Platform code uses protocol interfaces only. Crash detection, field maps, and config are injected via the factory.
-
-6. **Import guarding**: Broker SDK imports MUST be guarded with `try: import <sdk> except ImportError: <sdk> = None` to allow the platform to run without all broker SDKs installed.
-
-7. **Smallest subcomponent**: New broker SDK changes should land in the smallest affected subcomponent.
-
-8. **Auto-registration**: Each broker's `__init__.py` auto-registers the factory on import. Bootstrap triggers import based on `HFT_BROKER` value.
+Detailed rules (MB-01..MB-10): see `26-multi-broker-governance.md`.
 
 ## 10. Alpha Contribution Governance
 
-1. Production alpha changes must flow through contribution gates:
-
-- feasibility
-- correctness
-- backtest
-- portfolio integration
-- production readiness
-
-2. Promotion must be config-driven and reversible (canary + rollback).
+1. Production alpha changes flow through gates: feasibility → correctness → backtest → portfolio integration → production readiness.
+2. Promotion MUST be config-driven and reversible (canary + rollback).
 3. No direct production enable from research-only artifacts.
 
 ## 11. Alpha Module Float Exception
 
-1. `float` is permitted in `src/hft_platform/alpha/` and `research/` modules.
-2. These modules are offline-only (CLI-invoked research pipeline) and not financial accounting code.
-3. Sharpe ratio, drawdown, IC, and other scorecard metrics may use `float`.
-4. The Precision Law (Rule 4) applies exclusively to live trading paths: `risk/`, `order/`, `execution/`, `position`, and any hot-path accounting arithmetic.
-5. Mixed-use modules that touch both offline and live paths must use scaled int or Decimal for all accounting values.
+1. `float` is permitted in `src/hft_platform/alpha/` and `research/` (offline-only CLI pipeline); Sharpe/drawdown/IC metrics may use `float`.
+2. Precision Law applies exclusively to live paths: `risk/`, `order/`, `execution/`, `position`, and any hot-path accounting arithmetic.
+3. Mixed-use modules touching both paths MUST use scaled int or Decimal for all accounting values.
 
-## 12. ExposureStore Cardinality Bound
+## 12. ExposureStore Cardinality Bound (CE2-12)
 
-1. Any exposure tracking dict keyed by (account, strategy, symbol) or any similar triple MUST declare a maximum cardinality and an eviction policy.
-2. Default maximum is 10,000 entries (env `HFT_EXPOSURE_MAX_SYMBOLS`).
-3. Eviction policy: zero-balance entries are evicted first on overflow; if still over limit, new symbol registration MUST be rejected with an explicit error (`ExposureLimitError`).
-4. The eviction must be logged at `WARNING` level with the account, strategy, and symbol context.
-5. Unbounded exposure maps are a critical OOM risk in production; this rule applies to all future exposure-tracking components (tracked as CE2-12).
+1. Any exposure map keyed by (account, strategy, symbol) or similar MUST declare max cardinality and eviction policy.
+2. Default max: 10,000 entries (env `HFT_EXPOSURE_MAX_SYMBOLS`).
+3. Eviction: zero-balance first; if still over, reject with `ExposureLimitError`.
+4. Eviction MUST log at `WARNING` with account/strategy/symbol context.

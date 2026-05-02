@@ -2,52 +2,35 @@
 
 ## Layout
 
-- `src/`: Source code (Python).
-- `rust_core/`: Performance critical extensions (Rust).
-- `config/`: Configuration files (YAML/JSON).
-- `.agent/`: AI Brain (Rules, Skills, Memory).
+- `src/` — Python source.
+- `rust_core/` — PyO3 Rust extensions (hot-path kernels).
+- `config/` — YAML/JSON config.
+- `.agent/` — AI brain (rules, skills, memory).
 
 ## Lifecycle Hooks (MUST EXECUTE)
 
-### 1. On Session Start
+### On Session Start
 
-**Trigger**: When the user starts a new conversation or says "Hello".
-**Action**:
+Trigger: new conversation or "Hello".
+1. Read `.agent/memory/codebase_map.md`, `.agent/memory/module_gotchas.md`.
+2. Read `.agent/memory/current_session.md` (if exists) and last 20 lines of `.agent/memory/lessons_learned.md`.
+3. Report: "Restored session from [Date]. Last goal was: [Goal]."
+4. Check if any prior `blockers` are still relevant.
 
-1. Read `.agent/memory/codebase_map.md` (directory layout, data flow, env vars).
-2. Read `.agent/memory/module_gotchas.md` (non-obvious module behaviors).
-3. Read `.agent/memory/current_session.md` (if exists).
-4. Read `.agent/memory/lessons_learned.md` (last 20 lines).
-5. Report status: "Restored session from [Date]. Last goal was: [Goal]."
-6. Check if any `blockers` from last session are still relevant.
+### On Session End
 
-### 2. On Session End
-
-**Trigger**: When the user says "Pause", "Stop", "Wrap up", or "Save".
-**Action**:
-
-1. **MANDATORY**: Update `.agent/memory/current_session.md` with:
-   - Date, goal summary, status (completed/in-progress/blocked), next steps.
-2. **ALWAYS** review the session for new lessons:
-   - Were any bugs fixed? Any surprising behavior discovered?
-   - Any performance insights or architectural decisions made?
-   - If yes, append to `.agent/memory/lessons_learned.md` using the format:
-     `## [TYPE] Title (YYYY-MM)` where TYPE is `[BUG]`, `[PERF]`, `[ARCH]`, or `[GOTCHA]`.
+Trigger: "Pause", "Stop", "Wrap up", or "Save".
+1. Update `.agent/memory/current_session.md` with date, goal, status, next steps.
+2. If any bugs fixed, perf insight, or arch decision this session → append to `.agent/memory/lessons_learned.md` using `## [TYPE] Title (YYYY-MM)` where TYPE ∈ `[BUG]`, `[PERF]`, `[ARCH]`, `[GOTCHA]`.
 3. Call `session-manager` skill to save state.
 
-### 3. On Significant Fix
+### On Significant Fix
 
-**Trigger**: After any `fix:` or `perf:` commit is created.
-**Action**:
+Trigger: after any `fix:` or `perf:` commit.
+1. If the fix reveals a systemic issue or reusable insight, append entry to `.agent/memory/lessons_learned.md` with Context, Fix, Rule, and commit hashes.
 
-1. Evaluate whether the fix reveals a systemic issue or reusable insight.
-2. If yes, append a new entry to `.agent/memory/lessons_learned.md`.
-3. Include: Context, Fix, Rule, and relevant Commit hashes.
+### On Pre-Commit
 
-### 4. On Pre-Commit
-
-**Trigger**: When asked to "commit" or "PR".
-**Action**:
-
-1. Run `ruff check .`
-2. Run `pytest` (relevant files only).
+Trigger: "commit" or "PR".
+1. `ruff check .`
+2. `pytest` (relevant files only).

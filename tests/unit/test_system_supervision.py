@@ -151,13 +151,16 @@ class TestSupervisionCrashDetection:
         assert system._start_service.call_count == 1
 
     def test_restart_backoff_resets_when_task_healthy(self):
-        """If the task is alive, backoff state is cleared."""
+        """If the task is alive AND has been up >= healthy_uptime_s, backoff is cleared."""
+        from hft_platform.core import timebase
+
         system = _make_system()
-        # Simulate a live task
+        # Simulate a live task with sufficient uptime
         mock_task = MagicMock()
         mock_task.done.return_value = False
         system._task_restart_attempts["md"] = 3
         system._task_restart_until_s["md"] = 999999.0
+        system._task_started_at["md"] = timebase.now_s() - 120  # 120s uptime > 60s threshold
 
         system._reset_restart_backoff_if_healthy("md", mock_task)
 
@@ -192,11 +195,21 @@ class TestSupervisionCrashDetection:
 
         system._start_service = MagicMock(side_effect=_close_coro)
 
-        # _try_restart_service calls now_s() once per invocation.
-        # Call 1: now=0.0, allowed=0.0 → proceeds, sets until=0.0+base
-        # Call 2: now=base+0.1, allowed=base → proceeds, sets until=(base+0.1)+base*2
-        # Call 3: now=base*3+0.2, allowed=base*3+0.1 → proceeds
-        times = iter([0.0, base + 0.1, base * 3 + 0.2])
+        # _try_restart_service calls now_s() twice per invocation:
+        # once for backoff check, once for _task_started_at.
+        # Call 1: now=0.0 (check), 0.0 (started_at) → proceeds, sets until=0.0+base
+        # Call 2: now=base+0.1 (check), base+0.1 (started_at) → proceeds
+        # Call 3: now=base*3+0.2 (check), base*3+0.2 (started_at) → proceeds
+        times = iter(
+            [
+                0.0,
+                0.0,
+                base + 0.1,
+                base + 0.1,
+                base * 3 + 0.2,
+                base * 3 + 0.2,
+            ]
+        )
         with patch("hft_platform.services.system.timebase.now_s", side_effect=times):
             system._try_restart_service("md", "MarketDataService", system.md_service.run)
             system._try_restart_service("md", "MarketDataService", system.md_service.run)
@@ -302,6 +315,73 @@ class TestHALTEnforcement:
                 break
 
         assert drained == 1
+        assert system.order_queue.empty()
+
+    @pytest.mark.asyncio
+    async def test_halt_drains_risk_queue(self):
+        """When StormGuard is HALT, risk_queue is drained during HALT enforcement."""
+        system = _make_system()
+        system.running = True
+
+        # Populate risk_queue with pending intents (not yet evaluated by RiskEngine)
+        for _ in range(4):
+            await system.risk_queue.put(_make_order_intent())
+        assert system.risk_queue.qsize() == 4
+
+        # Trigger HALT
+        system.storm_guard.trigger_halt("test_risk_queue_drain")
+        assert system.storm_guard.state == StormGuardState.HALT
+
+        # Simulate the risk_queue drain from _supervise (added alongside order_queue drain)
+        risk_drained = 0
+        while not system.risk_queue.empty():
+            try:
+                system.risk_queue.get_nowait()
+                system.risk_queue.task_done()
+                risk_drained += 1
+            except asyncio.QueueEmpty:
+                break
+
+        assert risk_drained == 4
+        assert system.risk_queue.empty()
+
+    @pytest.mark.asyncio
+    async def test_halt_drains_risk_queue_before_order_queue(self):
+        """risk_queue is drained before order_queue on HALT to block new commands first."""
+        system = _make_system()
+        system.running = True
+
+        # Both queues have items
+        for _ in range(2):
+            await system.risk_queue.put(_make_order_intent())
+        for _ in range(3):
+            await system.order_queue.put(_make_order_intent())
+
+        system.storm_guard.trigger_halt("test_ordering")
+
+        drain_order: list[str] = []
+
+        # Drain risk_queue first
+        while not system.risk_queue.empty():
+            try:
+                system.risk_queue.get_nowait()
+                system.risk_queue.task_done()
+                drain_order.append("risk")
+            except asyncio.QueueEmpty:
+                break
+
+        # Then drain order_queue
+        while not system.order_queue.empty():
+            try:
+                system.order_queue.get_nowait()
+                system.order_queue.task_done()
+                drain_order.append("order")
+            except asyncio.QueueEmpty:
+                break
+
+        # All risk items come before all order items
+        assert drain_order == ["risk", "risk", "order", "order", "order"]
+        assert system.risk_queue.empty()
         assert system.order_queue.empty()
 
 
@@ -497,3 +577,37 @@ class TestSetServiceRunning:
 
 async def _run_failing_task(loop):
     raise RuntimeError("boom")
+
+
+# ---------------------------------------------------------------------------
+# AutonomyMonitor in supervised services
+# ---------------------------------------------------------------------------
+
+
+class TestAutonomyMonitorSupervised:
+    """AutonomyMonitor appears in _iter_supervised_services when configured."""
+
+    def test_autonomy_monitor_absent_when_not_configured(self):
+        """When autonomy_monitor is None, it must not appear in supervised list."""
+        system = _make_system()
+        assert system.autonomy_monitor is None
+        names = [name for name, _, _ in system._iter_supervised_services()]
+        assert "autonomy_monitor" not in names
+
+    def test_autonomy_monitor_present_when_configured(self):
+        """When autonomy_monitor is set, it appears in supervised list with run factory."""
+        system = _make_system()
+        mock_monitor = MagicMock()
+        mock_monitor.run = MagicMock(return_value=None)
+        system.autonomy_monitor = mock_monitor
+
+        supervised = system._iter_supervised_services()
+        names = [name for name, _, _ in supervised]
+        assert "autonomy_monitor" in names
+
+        # Confirm the coro_factory is the run method
+        entry = next((t for t in supervised if t[0] == "autonomy_monitor"), None)
+        assert entry is not None
+        name, component, coro_factory = entry
+        assert component == "AutonomyMonitor"
+        assert coro_factory is mock_monitor.run

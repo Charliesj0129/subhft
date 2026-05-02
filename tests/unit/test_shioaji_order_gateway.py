@@ -15,8 +15,16 @@ from hft_platform.feed_adapter.shioaji.order_gateway import OrderGateway
 
 @pytest.fixture()
 def _mock_env():
-    """Suppress session refresh thread during tests."""
-    with patch.dict(os.environ, {"HFT_SESSION_REFRESH_S": "0"}):
+    """Suppress session refresh thread and pin blocking default for tests.
+
+    ``HFT_SHIOAJI_NONBLOCKING`` is removed from the environment so the
+    "blocking default" tests below are robust to the caller exporting the
+    flag. The dedicated non-blocking tests set ``timeout=0`` explicitly and
+    so are unaffected by env.
+    """
+    env = {"HFT_SESSION_REFRESH_S": "0"}
+    with patch.dict(os.environ, env):
+        os.environ.pop("HFT_SHIOAJI_NONBLOCKING", None)
         yield
 
 

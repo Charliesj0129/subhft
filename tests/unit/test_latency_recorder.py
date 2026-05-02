@@ -12,11 +12,11 @@ def test_latency_recorder_enqueues(monkeypatch):
     queue: asyncio.Queue = asyncio.Queue()
     rec.configure(queue)
 
-    rec.record("stage", 1000, trace_id="trace", symbol="SYM", strategy_id="alpha", ts_ns=123)
+    rec.record("normalize", 1000, trace_id="trace", symbol="SYM", strategy_id="alpha", ts_ns=123)
 
     item = queue.get_nowait()
     assert item["topic"] == "latency_spans"
-    assert item["data"]["stage"] == "stage"
+    assert item["data"]["stage"] == "normalize"
     assert item["data"]["trace_id"] == "trace"
 
 
@@ -37,13 +37,13 @@ def test_latency_recorder_sampling_and_guards(monkeypatch):
     queue: asyncio.Queue = asyncio.Queue()
     rec.configure(queue)
 
-    rec.record("stage", -1)
+    rec.record("normalize", -1)
     assert queue.empty()
 
-    rec.record("stage", 1000)
+    rec.record("normalize", 1000)
     assert queue.empty()
 
-    rec.record("stage", 2000, ts_ns=456)
+    rec.record("normalize", 2000, ts_ns=456)
     item = queue.get_nowait()
     assert item["data"]["latency_us"] == 2
 
@@ -54,14 +54,14 @@ def test_latency_recorder_no_queue_and_put_fail(monkeypatch):
     LatencyRecorder.reset_for_tests()
     rec = LatencyRecorder.get()
     rec.configure(None)
-    rec.record("stage", 1000)
+    rec.record("normalize", 1000)
 
     class BadQueue:
         def put_nowait(self, _item):
             raise RuntimeError("boom")
 
     rec.configure(BadQueue())
-    rec.record("stage", 1000, ts_ns=789)
+    rec.record("normalize", 1000, ts_ns=789)
     assert rec._queue.__class__.__name__ == "BadQueue"
 
 
@@ -96,8 +96,8 @@ def test_latency_recorder_retry_buffer_and_drop(monkeypatch):
     rec.configure(AlwaysFullQueue())
     rec._dropped_total = 99
 
-    rec.record("stage", 1000)
-    rec.record("stage", 2000)
+    rec.record("normalize", 1000)
+    rec.record("normalize", 2000)
 
     assert rec._dropped_total >= 100
     rec.metrics.latency_spans_dropped_total.inc.assert_called()

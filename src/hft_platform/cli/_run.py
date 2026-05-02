@@ -62,12 +62,14 @@ def cmd_run(args: argparse.Namespace) -> None:
         return
 
     # Live/Sim share the same runtime pipeline; sim runs with Shioaji stub.
-    from prometheus_client import start_http_server
-
     from hft_platform.main import HFTSystem
+    from hft_platform.observability.metrics import MetricsRegistry
+    from hft_platform.observability.metrics_server import start_resilient_metrics_server
 
-    start_http_server(settings.get("prometheus_port", 9090))
-    print(f"Prometheus metrics started on :{settings.get('prometheus_port', 9090)}")
+    MetricsRegistry.get()  # fully populate REGISTRY before scrape thread starts
+    _prom_port = settings.get("prometheus_port", 9090)
+    start_resilient_metrics_server(_prom_port)
+    print(f"Prometheus metrics started on :{_prom_port}")
 
     system = HFTSystem(settings)
     try:

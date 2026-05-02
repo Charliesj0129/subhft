@@ -1,6 +1,7 @@
 """Tests for OrderAdapter.execute() rejection cascade and dispatch logic."""
 
 import asyncio
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -108,6 +109,68 @@ def adapter(tmp_config):
     return oa
 
 
+def test_order_adapter_wires_shadow_writer(tmp_config):
+    """OrderAdapter should persist shadow orders, not only log/metric them."""
+    from hft_platform.order.adapter import OrderAdapter
+    from hft_platform.order.shadow_writer import ShadowOrderWriter
+
+    q = asyncio.Queue()
+    client = MagicMock()
+    oa = OrderAdapter(
+        config_path=tmp_config,
+        order_queue=q,
+        broker_client=client,
+    )
+
+    assert isinstance(oa.shadow_sink._writer, ShadowOrderWriter)
+
+
+@pytest.mark.asyncio
+async def test_order_adapter_flushes_shadow_sink_on_stop(adapter):
+    """Pending shadow order rows should be flushed during adapter shutdown."""
+    task = asyncio.create_task(adapter.run())
+    await asyncio.sleep(0)
+
+    adapter.running = False
+    await task
+
+    adapter.shadow_sink.flush.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_pre_dispatch_deadline_expired_sends_feedback_and_dlq(adapter):
+    """Expired commands in run() must release strategy pending via deadline feedback."""
+    from hft_platform.contracts.strategy import RiskFeedback
+
+    rejection_sink = asyncio.Queue()
+    adapter.set_rejection_sink(rejection_sink)
+    cmd = make_cmd()
+    cmd.deadline_ns = time.monotonic_ns() - 1_000_000
+    adapter.order_queue.put_nowait(cmd)
+
+    task = asyncio.create_task(adapter.run())
+    await asyncio.sleep(0.05)
+    adapter.running = False
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    adapter.metrics.order_deadline_expired_total.inc.assert_called_once()
+    adapter._dlq.add.assert_awaited_once()
+    call_kwargs = adapter._dlq.add.call_args[1]
+    assert call_kwargs["reason"].value == "deadline_exceeded"
+    assert call_kwargs["error_message"] == "DEADLINE_EXPIRED"
+    assert rejection_sink.qsize() == 1
+    feedback = rejection_sink.get_nowait()
+    assert isinstance(feedback, RiskFeedback)
+    assert feedback.intent_id == cmd.intent.intent_id
+    assert feedback.side == cmd.intent.side
+    assert feedback.reason_code == "dispatch_deadline_expired"
+    assert feedback.was_approved is False
+
+
 # --- 1. Per-symbol rate limit HARD -> DLQ ---
 
 
@@ -188,6 +251,31 @@ async def test_shadow_mode_intercepts_without_dlq(adapter):
 
     adapter.shadow_sink.intercept.assert_called_once_with(cmd.intent)
     adapter._dlq.add.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_shadow_mode_sends_terminal_feedback_to_release_strategy_pending(adapter):
+    """Shadow orders are terminal at the adapter and must release strategy pending state."""
+    from hft_platform.contracts.strategy import RiskFeedback
+
+    adapter.shadow_sink.enabled = True
+    rejection_sink = asyncio.Queue()
+    adapter.set_rejection_sink(rejection_sink)
+    cmd = make_cmd()
+
+    await adapter.execute(cmd)
+
+    adapter.shadow_sink.intercept.assert_called_once_with(cmd.intent)
+    adapter.client.place_order.assert_not_called()
+    assert rejection_sink.qsize() == 1
+    feedback = rejection_sink.get_nowait()
+    assert isinstance(feedback, RiskFeedback)
+    assert feedback.intent_id == cmd.intent.intent_id
+    assert feedback.strategy_id == cmd.intent.strategy_id
+    assert feedback.symbol == cmd.intent.symbol
+    assert feedback.side == cmd.intent.side
+    assert feedback.reason_code == "shadow_intercepted"
+    assert feedback.was_approved is False
 
 
 # --- 6. Client validation failure -> DLQ ---
@@ -403,7 +491,7 @@ async def test_storm_guard_halt_rejects_to_dlq(adapter):
 
     adapter._dlq.add.assert_awaited_once()
     call_kwargs = adapter._dlq.add.call_args[1]
-    assert call_kwargs["reason"].value == "validation_error"
+    assert call_kwargs["reason"].value == "stormguard_halt"
     assert "StormGuard HALT" in call_kwargs["error_message"]
     # Confirm no other checks ran (per-symbol rate limiter never called)
     adapter.per_symbol_rate_limiter.check.assert_not_called()
@@ -413,8 +501,41 @@ async def test_storm_guard_halt_rejects_to_dlq(adapter):
 
 
 @pytest.mark.asyncio
-async def test_storm_guard_halt_allows_halt_flatten_order(adapter):
-    """halt_flatten orders bypass the StormGuard HALT check and proceed normally."""
+async def test_storm_guard_halt_allows_halt_flatten_force_flat_order(adapter):
+    """FORCE_FLAT halt_flatten orders bypass the StormGuard HALT check (legitimate HaltFlattener path)."""
+    from hft_platform.contracts.strategy import OrderIntent
+
+    intent = OrderIntent(
+        intent_id=2,
+        strategy_id="s1",
+        symbol="2330",
+        intent_type=IntentType.FORCE_FLAT,
+        side=Side.SELL,
+        price=5_000_000,
+        qty=10,
+        reason="halt_flatten",
+    )
+    now = timebase.now_ns()
+    cmd = OrderCommand(
+        cmd_id=2,
+        intent=intent,
+        deadline_ns=now + 10_000_000_000,
+        storm_guard_state=StormGuardState.HALT,
+        created_ns=now,
+    )
+    adapter.running = False
+    adapter._dispatch_to_api = AsyncMock()
+
+    await adapter.execute(cmd)
+
+    # Should NOT be DLQ'd — should be dispatched (FORCE_FLAT bypasses HALT)
+    adapter._dlq.add.assert_not_awaited()
+    adapter._dispatch_to_api.assert_awaited_once_with(cmd)
+
+
+@pytest.mark.asyncio
+async def test_storm_guard_halt_blocks_new_with_halt_flatten_reason(adapter):
+    """NEW orders with reason='halt_flatten' should be blocked (spoof prevention)."""
     from hft_platform.contracts.strategy import OrderIntent
 
     intent = OrderIntent(
@@ -440,6 +561,147 @@ async def test_storm_guard_halt_allows_halt_flatten_order(adapter):
 
     await adapter.execute(cmd)
 
-    # Should NOT be DLQ'd — should be dispatched
+    # Should be DLQ'd — NEW with reason=halt_flatten is no longer a bypass
+    adapter._dlq.add.assert_awaited_once()
+
+
+# --- 19. StormGuard HALT allows CANCEL orders ---
+
+
+@pytest.mark.asyncio
+async def test_storm_guard_halt_allows_cancel_order(adapter):
+    """CANCEL orders bypass StormGuard HALT (Constitution: HALT blocks new, allows cancels)."""
+    cmd = make_cmd(intent_type=IntentType.CANCEL)
+    cmd.intent.target_order_id = "s1:1"
+    cmd.storm_guard_state = StormGuardState.HALT
+    adapter.running = False
+    adapter._dispatch_to_api = AsyncMock()
+
+    await adapter.execute(cmd)
+
     adapter._dlq.add.assert_not_awaited()
     adapter._dispatch_to_api.assert_awaited_once_with(cmd)
+
+
+# --- 20. StormGuard HALT allows FORCE_FLAT orders ---
+
+
+@pytest.mark.asyncio
+async def test_storm_guard_halt_allows_force_flat_order(adapter):
+    """FORCE_FLAT orders bypass StormGuard HALT (Constitution: safety orders always allowed)."""
+    cmd = make_cmd(intent_type=IntentType.FORCE_FLAT)
+    cmd.storm_guard_state = StormGuardState.HALT
+    adapter.running = False
+    adapter._dispatch_to_api = AsyncMock()
+
+    await adapter.execute(cmd)
+
+    adapter._dlq.add.assert_not_awaited()
+    adapter._dispatch_to_api.assert_awaited_once_with(cmd)
+
+
+# --- 21. StormGuard HALT still blocks NEW orders ---
+
+
+@pytest.mark.asyncio
+async def test_storm_guard_halt_blocks_new_order(adapter):
+    """NEW orders are still blocked during HALT (not exempt)."""
+    cmd = make_cmd(intent_type=IntentType.NEW)
+    cmd.storm_guard_state = StormGuardState.HALT
+
+    await adapter.execute(cmd)
+
+    adapter._dlq.add.assert_awaited_once()
+    call_kwargs = adapter._dlq.add.call_args[1]
+    assert "StormGuard HALT" in call_kwargs["error_message"]
+
+
+# --- 22. StormGuard HALT still blocks AMEND orders ---
+
+
+@pytest.mark.asyncio
+async def test_storm_guard_halt_blocks_amend_order(adapter):
+    """AMEND orders are blocked during HALT (not safety-critical)."""
+    cmd = make_cmd(intent_type=IntentType.AMEND)
+    cmd.intent.target_order_id = "s1:1"
+    cmd.storm_guard_state = StormGuardState.HALT
+
+    await adapter.execute(cmd)
+
+    adapter._dlq.add.assert_awaited_once()
+    call_kwargs = adapter._dlq.add.call_args[1]
+    assert "StormGuard HALT" in call_kwargs["error_message"]
+
+
+# --- 23. API queue full routes to DLQ + metric ---
+
+
+@pytest.mark.asyncio
+async def test_api_queue_full_routes_to_dlq(adapter):
+    """When API queue is full, order is routed to DLQ with reject metric."""
+    cmd = make_cmd()
+    # Make the API queue full
+    adapter._api_queue = asyncio.Queue(maxsize=1)
+    adapter._api_queue.put_nowait(make_cmd())  # fill it
+
+    adapter.running = False
+    await adapter._enqueue_api(cmd)
+
+    adapter._dlq.add.assert_awaited_once()
+    call_kwargs = adapter._dlq.add.call_args[1]
+    assert "API queue full" in call_kwargs["error_message"]
+    adapter.metrics.order_reject_total.inc.assert_called()
+
+
+# --- CANCEL target not found -> order_reject_total incremented ---
+
+
+@pytest.mark.asyncio
+async def test_cancel_target_not_found_increments_reject_metric(adapter):
+    """When CANCEL target is absent from live_orders, order_reject_total must be incremented."""
+    from unittest.mock import MagicMock
+
+    # Empty live_orders so target lookup always misses
+    adapter.live_orders = {}
+    # order_id_resolver returns a key that won't exist in live_orders
+    adapter.order_id_resolver = MagicMock()
+    adapter.order_id_resolver.resolve_order_key.return_value = "missing_key"
+
+    cmd = make_cmd(intent_type=IntentType.CANCEL)
+
+    reject_count_before = adapter.metrics.order_reject_total.inc.call_count
+    await adapter._dispatch_to_api(cmd)
+    reject_count_after = adapter.metrics.order_reject_total.inc.call_count
+
+    assert reject_count_after == reject_count_before + 1, (
+        "order_reject_total.inc() must be called once when CANCEL target is not found"
+    )
+    # Broker cancel_order must NOT be called
+    adapter.client.cancel_order.assert_not_called()
+
+
+# --- AMEND target not found -> order_reject_total incremented ---
+
+
+@pytest.mark.asyncio
+async def test_amend_target_not_found_increments_reject_metric(adapter):
+    """When AMEND target is absent from live_orders, order_reject_total must be incremented."""
+    from unittest.mock import MagicMock
+
+    # Empty live_orders so target lookup always misses
+    adapter.live_orders = {}
+    # order_id_resolver returns a key that won't exist in live_orders
+    adapter.order_id_resolver = MagicMock()
+    adapter.order_id_resolver.resolve_order_key.return_value = "missing_key"
+
+    cmd = make_cmd(intent_type=IntentType.AMEND)
+
+    reject_count_before = adapter.metrics.order_reject_total.inc.call_count
+    await adapter._dispatch_to_api(cmd)
+    reject_count_after = adapter.metrics.order_reject_total.inc.call_count
+
+    assert reject_count_after == reject_count_before + 1, (
+        "order_reject_total.inc() must be called once when AMEND target is not found"
+    )
+    # Broker update_order must NOT be called
+    adapter.client.update_order.assert_not_called()

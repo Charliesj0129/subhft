@@ -39,8 +39,6 @@ async def test_recon_discrepancy_logging():
 
         await service.sync_portfolio()
 
-        # Check that logger.info was called with specific content
-        # implementation: logger.info("Portfolio Sync: Broker State", positions=broker_map)
-        # We verify one of the info calls contains this message
-        calls = [c[0][0] for c in mock_logger.info.call_args_list]
+        # Broker state logged at DEBUG (downgraded from INFO to reduce 5 s-cadence spam).
+        calls = [c[0][0] for c in mock_logger.debug.call_args_list]
         assert "Portfolio Sync: Broker State" in calls

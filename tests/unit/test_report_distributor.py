@@ -109,10 +109,12 @@ class TestDistributor:
 
         distributor = Distributor(sender=sender, channels=[owner_channel, free_channel])
 
-        composed = ComposedReport(messages=[
-            MessagePart(kind="text", content="free summary", min_tier="free"),
-            MessagePart(kind="text", content="paid detail", min_tier="paid"),
-        ])
+        composed = ComposedReport(
+            messages=[
+                MessagePart(kind="text", content="free summary", min_tier="free"),
+                MessagePart(kind="text", content="paid detail", min_tier="paid"),
+            ]
+        )
         await distributor.send(composed)
 
         owner_calls = [c for c in sender.send.call_args_list if c[0][0] == "owner_id"]
@@ -131,9 +133,11 @@ class TestDistributor:
 
         distributor = Distributor(sender=sender, channels=[disabled_channel])
 
-        composed = ComposedReport(messages=[
-            MessagePart(kind="text", content="msg 1", min_tier="free"),
-        ])
+        composed = ComposedReport(
+            messages=[
+                MessagePart(kind="text", content="msg 1", min_tier="free"),
+            ]
+        )
         await distributor.send(composed)
 
         sender.send.assert_not_called()

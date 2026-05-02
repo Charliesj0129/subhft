@@ -19,6 +19,55 @@ def test_config_loading(client):
     assert len(client.symbols) == 1
 
 
+def test_hft_symbols_filters_loaded_symbols(tmp_path, monkeypatch):
+    cfg = tmp_path / "test_symbols.yaml"
+    cfg.write_text(
+        "symbols:\n"
+        "  - code: '2330'\n"
+        "    exchange: 'TSE'\n"
+        "  - code: 'TMFR1'\n"
+        "    exchange: 'TAIFEX'\n"
+        "  - code: 'TXO35500Q6'\n"
+        "    exchange: 'OPT'\n"
+    )
+    monkeypatch.setenv("HFT_SYMBOLS", "TMFR1")
+
+    c = ShioajiClient(str(cfg))
+
+    try:
+        assert [s["code"] for s in c.symbols] == ["TMFR1"]
+        assert c.code_exchange_map == {"TMFR1": "TAIFEX"}
+    finally:
+        c.close()
+
+
+def test_hft_symbols_expands_front_month_alias(tmp_path, monkeypatch):
+    cfg = tmp_path / "test_symbols.yaml"
+    cfg.write_text(
+        "symbols:\n"
+        "  - code: '2330'\n"
+        "    exchange: 'TSE'\n"
+        "    type: stock\n"
+        "  - code: 'TMFE6'\n"
+        "    exchange: 'FUT'\n"
+        "    type: future\n"
+        "    tags: [futures, front_month, tmf]\n"
+        "  - code: 'TMFG6'\n"
+        "    exchange: 'FUT'\n"
+        "    type: future\n"
+        "    tags: [futures, far_month, tmf]\n"
+    )
+    monkeypatch.setenv("HFT_SYMBOLS", "TMFR1")
+
+    c = ShioajiClient(str(cfg))
+
+    try:
+        assert [s["code"] for s in c.symbols] == ["TMFE6"]
+        assert c.code_exchange_map == {"TMFE6": "FUT"}
+    finally:
+        c.close()
+
+
 def test_login_args(client):
     client.login(api_key="K", secret_key="S")
     client.api.login.assert_called()

@@ -4,7 +4,15 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from hft_platform.reports.collector import DataCollector
+import pytest
+
+from hft_platform.reports.collector import (
+    DataCollector,
+    _day_filter,
+    _is_transient,
+    _validate_time_filter,
+    _with_retry,
+)
 from hft_platform.reports.models import SessionData
 
 # ---------------------------------------------------------------------------
@@ -153,6 +161,28 @@ class TestCollectCore:
         assert result.volume == 0
         assert result.tick_count == 0
 
+    def test_query_ohlcv_uses_ohlcv_1m_view(self) -> None:
+        """Q1 should read from the pre-aggregated 1-minute OHLCV view."""
+        collector, mock_execute = _make_collector()
+        mock_execute.return_value = _make_ohlcv_row()
+
+        collector._query_ohlcv("TXFD6", "bucket >= 0")
+
+        sql = mock_execute.call_args.args[0]
+        assert "FROM hft.ohlcv_1m" in sql
+        assert "argMin(price_scaled, exch_ts)" not in sql
+
+    def test_query_5m_bars_uses_ohlcv_1m_view(self) -> None:
+        """Q2 should roll 5-minute bars from the 1-minute OHLCV view."""
+        collector, mock_execute = _make_collector()
+        mock_execute.return_value = _make_bar_row()
+
+        collector._query_5m_bars("TXFD6", "bucket >= 0")
+
+        sql = mock_execute.call_args.args[0]
+        assert "FROM hft.ohlcv_1m" in sql
+        assert "FROM hft.market_data" not in sql
+
 
 # ---------------------------------------------------------------------------
 # collect() — delegation tests
@@ -221,7 +251,7 @@ class TestCollectDelegation:
         """collect() sets spread_dist={} when Q5 raises."""
         collector, mock_execute = _make_collector()
 
-        def _side_effect(sql: str) -> list:
+        def _side_effect(sql: str, params: dict | None = None) -> list:
             if "asks_price" in sql:
                 raise MemoryError("OOM")
             if "bids_vol" in sql:
@@ -242,7 +272,7 @@ class TestCollectDelegation:
         """collect() sets depth_imbalance=[] when Q6 raises."""
         collector, mock_execute = _make_collector()
 
-        def _side_effect(sql: str) -> list:
+        def _side_effect(sql: str, params: dict | None = None) -> list:
             if "bids_vol" in sql:
                 raise MemoryError("OOM")
             if "asks_price" in sql:
@@ -287,3 +317,149 @@ class TestCollectDelegation:
         assert len(core.bars_5m) == len(full.bars_5m)
         assert len(core.flow_5m) == len(full.flow_5m)
         assert len(core.large_trades) == len(full.large_trades)
+
+
+# ---------------------------------------------------------------------------
+# _validate_time_filter() — unit tests
+# ---------------------------------------------------------------------------
+
+
+class TestValidateTimeFilter:
+    def test_valid_day_filter_accepted(self) -> None:
+        """A realistic day-session filter produced by _day_filter() is accepted."""
+        tf = _day_filter("2026-03-28")
+        result = _validate_time_filter(tf)
+        assert result == tf
+
+    def test_simple_valid_filter_accepted(self) -> None:
+        """A minimal valid time_filter string passes validation."""
+        result = _validate_time_filter("exch_ts > 0")
+        assert result == "exch_ts > 0"
+
+    def test_sql_injection_semicolon_rejected(self) -> None:
+        """time_filter containing a semicolon raises ValueError."""
+        with pytest.raises(ValueError, match="Unsafe time_filter"):
+            _validate_time_filter("exch_ts > 0; DROP TABLE hft.market_data")
+
+    def test_sql_injection_comment_rejected(self) -> None:
+        """time_filter containing SQL comment marker raises ValueError."""
+        with pytest.raises(ValueError, match="Unsafe time_filter"):
+            _validate_time_filter("exch_ts > 0 -- ignore the rest")
+
+    def test_sql_injection_drop_keyword_rejected(self) -> None:
+        """time_filter containing DROP keyword raises ValueError."""
+        with pytest.raises(ValueError, match="Unsafe time_filter"):
+            _validate_time_filter("exch_ts > 0 AND DROP TABLE hft.market_data")
+
+    def test_collect_core_rejects_injected_time_filter(self) -> None:
+        """collect_core() raises ValueError when time_filter contains injection."""
+        collector, _mock_execute = _make_collector()
+        with pytest.raises(ValueError, match="Unsafe time_filter"):
+            collector.collect_core("TXFD6", "exch_ts > 0; DELETE FROM hft.market_data")
+
+
+# ---------------------------------------------------------------------------
+# _is_transient() — unit tests
+# ---------------------------------------------------------------------------
+
+
+class TestIsTransient:
+    def test_connection_error_is_transient(self) -> None:
+        """ConnectionError is treated as transient."""
+        assert _is_transient(ConnectionError("connection refused"))
+
+    def test_timeout_error_is_transient(self) -> None:
+        """TimeoutError is treated as transient."""
+        assert _is_transient(TimeoutError("timed out"))
+
+    def test_eof_in_message_is_transient(self) -> None:
+        """Exception with 'eof' in message is treated as transient."""
+        assert _is_transient(OSError("unexpected EOF"))
+
+    def test_reset_in_message_is_transient(self) -> None:
+        """Exception with 'reset' in message is treated as transient."""
+        assert _is_transient(OSError("connection reset by peer"))
+
+    def test_broken_pipe_is_transient(self) -> None:
+        """BrokenPipeError is treated as transient."""
+        assert _is_transient(BrokenPipeError("broken pipe"))
+
+    def test_value_error_is_not_transient(self) -> None:
+        """ValueError (bad SQL) is NOT transient and should not be retried."""
+        assert not _is_transient(ValueError("bad SQL syntax"))
+
+    def test_memory_error_is_not_transient(self) -> None:
+        """MemoryError (OOM) is NOT transient."""
+        assert not _is_transient(MemoryError("OOM"))
+
+
+# ---------------------------------------------------------------------------
+# _with_retry() — unit tests
+# ---------------------------------------------------------------------------
+
+
+class TestWithRetry:
+    def test_success_on_first_attempt(self) -> None:
+        """_with_retry() returns the result when the first call succeeds."""
+        calls: list[int] = []
+
+        def _fn() -> str:
+            calls.append(1)
+            return "ok"
+
+        result = _with_retry(_fn)
+        assert result == "ok"
+        assert len(calls) == 1
+
+    def test_retries_transient_error(self) -> None:
+        """_with_retry() retries once on a transient (connection) error."""
+        calls: list[int] = []
+
+        def _fn() -> str:
+            calls.append(1)
+            if len(calls) == 1:
+                raise ConnectionError("refused")
+            return "ok"
+
+        result = _with_retry(_fn)
+        assert result == "ok"
+        assert len(calls) == 2
+
+    def test_does_not_retry_non_transient_error(self) -> None:
+        """_with_retry() propagates non-transient errors immediately."""
+        calls: list[int] = []
+
+        def _fn() -> str:
+            calls.append(1)
+            raise ValueError("bad sql")
+
+        with pytest.raises(ValueError, match="bad sql"):
+            _with_retry(_fn)
+        assert len(calls) == 1
+
+    def test_raises_after_two_transient_failures(self) -> None:
+        """_with_retry() re-raises the transient error after the single retry fails."""
+
+        def _fn() -> str:
+            raise ConnectionError("always fails")
+
+        with pytest.raises(ConnectionError, match="always fails"):
+            _with_retry(_fn)
+
+    def test_sleep_called_on_retry(self) -> None:
+        """_with_retry() sleeps before the retry attempt."""
+        from unittest.mock import patch
+
+        calls: list[int] = []
+
+        def _fn() -> str:
+            calls.append(1)
+            if len(calls) == 1:
+                raise ConnectionError("refused")
+            return "ok"
+
+        with patch("hft_platform.reports.collector.time.sleep") as mock_sleep:
+            _with_retry(_fn)
+
+        mock_sleep.assert_called_once()
+        assert mock_sleep.call_args[0][0] > 0

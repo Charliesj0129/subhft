@@ -1,0 +1,48 @@
+alpha_id: aplr_macd
+name: "Active-Passive Liquidity Resonance MACD"
+version: "0.1.0"
+round: R33
+feature_set_version: "lob_shared_v3"
+status: research
+owner: charlie
+
+hypothesis: >
+  Dual-channel MACD applied to CVD (active flow) and OBI (passive depth)
+  extracts complementary momentum signals whose resonance (same-sign agreement)
+  filters false positives and improves directional IC beyond single-channel baselines.
+
+data_fields:
+  - price_scaled
+  - volume
+  - bids_price
+  - bids_vol
+  - asks_price
+  - asks_vol
+  - seq_no
+  - exch_ts
+
+instruments:
+  - TXFC6
+  - TXFD6
+
+bar_size_seconds: 30
+macd_fast: 12
+macd_slow: 26
+macd_signal: 9
+
+complexity: O1
+paper_refs:
+  - "2509.21326v1"  # Operator Analysis of MACD (Li, 2025)
+  - "2505.17388v1"  # Stochastic Price Dynamics in Response to OFI
+  - "2006.08682v1"  # Importance of Low Latency to OBI Trading
+
+cost_model:
+  instrument: TX_futures
+  rt_cost_pts: 2.0
+  point_value_ntd: 200
+  commission_per_rt_ntd: 0
+
+kill_criteria:
+  pooled_detrended_ic_min: 0.02
+  ic_detrended_to_raw_ratio_min: 0.50
+  min_tradeable_days: 10

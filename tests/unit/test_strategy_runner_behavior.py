@@ -9,6 +9,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from hft_platform.ops.session_governor import SessionPhase, TrackGate
+
 # ---------------------------------------------------------------------------
 # Helpers / stubs
 # ---------------------------------------------------------------------------
@@ -52,7 +54,8 @@ def _make_strategy(sid="strat_a", symbols=None, enabled=True):
     return _FakeStrategy(sid=sid, symbols=symbols, enabled=enabled)
 
 
-def _make_event(symbol="TSMC", ts=123_000_000_000):
+def _make_event(symbol="TSMC", ts=0):
+    # ts=0 triggers fallback to now_ns() in _extract_event_trace so events are always fresh
     return SimpleNamespace(symbol=symbol, ts=ts)
 
 
@@ -272,6 +275,7 @@ def test_build_positions_rust_tracker_fallback(runner_factory):
     rust_tracker = MagicMock()
     rust_tracker.get_positions_by_strategy.side_effect = RuntimeError("fail")
     pos_store._rust_tracker = rust_tracker
+    del pos_store.snapshot_positions_with_recovery  # force older snapshot path
     pos_store.positions = {}
     runner, _, _ = runner_factory(position_store=pos_store)
     result = runner._build_positions_by_strategy()
@@ -281,6 +285,7 @@ def test_build_positions_rust_tracker_fallback(runner_factory):
 def test_build_positions_from_dict_key(runner_factory):
     pos_store = MagicMock()
     del pos_store._rust_tracker
+    del pos_store.snapshot_positions_with_recovery  # force snapshot_positions / dict path
     del pos_store.snapshot_positions  # force Python fallback path
 
     class _Pos:
@@ -296,6 +301,7 @@ def test_build_positions_from_dict_key(runner_factory):
 def test_build_positions_from_dict_object_value(runner_factory):
     pos_store = MagicMock()
     del pos_store._rust_tracker
+    del pos_store.snapshot_positions_with_recovery  # force snapshot_positions / dict path
     del pos_store.snapshot_positions  # force Python fallback path
     pos = MagicMock()
     pos.strategy_id = "strat_b"
@@ -311,6 +317,7 @@ def test_build_positions_from_dict_object_value(runner_factory):
 def test_build_positions_fallback_wildcard(runner_factory):
     pos_store = MagicMock()
     del pos_store._rust_tracker
+    del pos_store.snapshot_positions_with_recovery  # force snapshot_positions / dict path
     del pos_store.snapshot_positions  # force Python fallback path
     pos_store.positions = {"unknown_key": 99}
     runner, _, _ = runner_factory(position_store=pos_store)
@@ -358,6 +365,46 @@ async def test_process_event_typed_intent_fastpath(runner_factory):
     event = _make_event()
     await runner.process_event(event)
     runner._risk_submit_typed.assert_called_once_with(typed_intent)
+
+
+@pytest.mark.asyncio
+async def test_process_event_typed_intent_fastpath_survives_track_gate_open(runner_factory):
+    runner, _, _ = runner_factory()
+    strat = _make_strategy()
+    typed_intent = ("typed_intent_v1", 1, "s1", "TSMC", 1, 1, 1000000, 1, 0, "", 0, 0, "", "", "", 0)
+    strat._return_value = [typed_intent]
+    runner.register(strat)
+    runner._typed_intent_fastpath = True
+    runner._risk_submit_typed = MagicMock()
+    gate = TrackGate()
+    gate.register_symbol("TSMC", "stock")
+    gate.set_track_phase("stock", SessionPhase.OPEN)
+    runner.track_gate = gate
+
+    event = _make_event()
+    await runner.process_event(event)
+
+    runner._risk_submit_typed.assert_called_once_with(typed_intent)
+
+
+@pytest.mark.asyncio
+async def test_process_event_typed_new_intent_blocked_in_close_only_without_crashing(runner_factory):
+    runner, _, _ = runner_factory()
+    strat = _make_strategy()
+    typed_intent = ("typed_intent_v1", 1, "s1", "TSMC", 1, 1, 1000000, 1, 0, "", 0, 0, "", "", "", 0)
+    strat._return_value = [typed_intent]
+    runner.register(strat)
+    runner._typed_intent_fastpath = True
+    runner._risk_submit_typed = MagicMock()
+    gate = TrackGate()
+    gate.register_symbol("TSMC", "stock")
+    gate.set_track_phase("stock", SessionPhase.CLOSE_ONLY)
+    runner.track_gate = gate
+
+    event = _make_event()
+    await runner.process_event(event)
+
+    runner._risk_submit_typed.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -432,16 +479,21 @@ async def test_process_event_circuit_degraded_transition(runner_factory):
     runner.register(strat)
     runner._rust_circuit = None  # Force Python fallback path
     runner._circuit_threshold = 4
+    # After quarantine governor (DECISION-08), the first exception quarantines the
+    # strategy and subsequent events are skipped (no circuit-breaker recording).
+    # So only 1 failure is registered — not enough for degraded (half_threshold=2).
+    # Disable quarantine to exercise the pure circuit-breaker path.
+    runner.strategy_governor = None
     for _ in range(2):
         await runner.process_event(_make_event())
-    assert runner._circuit_states.get("strat_a") in ("degraded", "normal", "halted")
+    assert runner._circuit_states.get("strat_a") == "degraded"
 
 
 @pytest.mark.asyncio
 async def test_process_event_delta_source_invalidates_positions(runner_factory):
     runner, _, _ = runner_factory()
     runner._positions_dirty = False
-    event = SimpleNamespace(delta_source="fill", symbol="TSMC", ts=1)
+    event = SimpleNamespace(delta_source="fill", symbol="TSMC", ts=0)
     await runner.process_event(event)
     assert runner._positions_dirty is False  # was rebuilt
 
@@ -453,7 +505,7 @@ async def test_process_event_targeted_dispatch(runner_factory):
     strat_b = _make_strategy("strat_b")
     runner.register(strat_a)
     runner.register(strat_b)
-    event = SimpleNamespace(symbol="TSMC", ts=1, strategy_id="strat_a")
+    event = SimpleNamespace(symbol="TSMC", ts=0, strategy_id="strat_a")
     await runner.process_event(event)
     assert len(strat_a._calls) == 1
     assert len(strat_b._calls) == 0
@@ -590,3 +642,444 @@ def test_flush_pending_no_metrics(runner_factory):
     runner._strategy_pending_intents["s"] = 5
     runner._flush_pending_strategy_metrics()
     assert runner._strategy_pending_intents.get("s", 0) == 0
+
+
+# ---------------------------------------------------------------------------
+# Tests: tuple guard allows known typed ring events
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_tuple_guard_allows_known_tags(runner_factory):
+    """Tuples starting with known typed ring tags should NOT be rejected."""
+    runner, _, _ = runner_factory()
+    runner.running = True
+
+    for tag in ("tick", "bidask", "lobstats", "typed_intent_v1"):
+        event = (tag, "TSMC", 100)
+        with patch.object(runner, "_extract_event_trace", return_value=(0, "")) as mock_ext:
+            await runner.process_event(event)
+            assert mock_ext.call_count == 1, f"tag={tag!r} was rejected by guard"
+
+
+@pytest.mark.asyncio
+async def test_tuple_guard_rejects_unknown_tags(runner_factory):
+    """Tuples with unknown first elements should be silently dropped."""
+    runner, _, _ = runner_factory()
+    runner.running = True
+
+    event = ("unknown_tag", "TSMC", 100)
+    with patch.object(runner, "_extract_event_trace", return_value=(0, "")) as mock_ext:
+        await runner.process_event(event)
+        assert mock_ext.call_count == 0, "unknown tag should be rejected by guard"
+
+
+@pytest.mark.asyncio
+async def test_tuple_guard_rejects_empty_tuple(runner_factory):
+    """Empty tuples should be silently dropped."""
+    runner, _, _ = runner_factory()
+    runner.running = True
+
+    with patch.object(runner, "_extract_event_trace", return_value=(0, "")) as mock_ext:
+        await runner.process_event(())
+        assert mock_ext.call_count == 0, "empty tuple should be rejected by guard"
+
+
+# ---------------------------------------------------------------------------
+# Tests: rejection feedback on risk_queue full
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_rejection_sink_receives_feedback_on_queue_full(runner_factory):
+    """When risk_queue is full, a RiskFeedback with reason_code='risk_queue_full' is sent."""
+    from hft_platform.contracts.strategy import IntentType, OrderIntent, RiskFeedback, Side
+
+    # Build a risk queue that always raises QueueFull
+    rq = MagicMock(spec=["put_nowait"])
+    rq.put_nowait = MagicMock(side_effect=asyncio.QueueFull())
+
+    runner, bus, _ = runner_factory(rq=rq)
+    runner._rejection_sink = asyncio.Queue(maxsize=10)
+    runner._typed_intent_fastpath = False
+
+    # Create a minimal OrderIntent
+    intent = OrderIntent(
+        intent_id=42,
+        strategy_id="strat_x",
+        symbol="TSMC",
+        side=Side.BUY,
+        price=500_0000,
+        qty=1,
+        intent_type=IntentType.NEW,
+    )
+
+    # Directly invoke the submit path so QueueFull fires
+    strat = _make_strategy("strat_x", symbols=["TSMC"])
+    runner.register(strat)
+
+    # Patch the strategy's handle_event to return the intent
+    strat._return_value = [intent]
+
+    event = _make_event(symbol="TSMC")
+    runner.running = True
+    with patch.object(runner, "_extract_event_trace", return_value=(0, "")):
+        await runner.process_event(event)
+
+    assert not runner._rejection_sink.empty(), "rejection sink should have received feedback"
+    feedback = runner._rejection_sink.get_nowait()
+    assert isinstance(feedback, RiskFeedback)
+    assert feedback.reason_code == "risk_queue_full"
+    assert feedback.strategy_id == "strat_x"
+    assert feedback.symbol == "TSMC"
+
+
+@pytest.mark.asyncio
+async def test_rejection_sink_none_does_not_raise_on_queue_full(runner_factory):
+    """When _rejection_sink is None, a full risk_queue should not raise."""
+    from hft_platform.contracts.strategy import IntentType, OrderIntent, Side
+
+    rq = MagicMock(spec=["put_nowait"])
+    rq.put_nowait = MagicMock(side_effect=asyncio.QueueFull())
+
+    runner, bus, _ = runner_factory(rq=rq)
+    # _rejection_sink stays None (default)
+    runner._typed_intent_fastpath = False
+
+    intent = OrderIntent(
+        intent_id=43,
+        strategy_id="strat_y",
+        symbol="TSMC",
+        side=Side.BUY,
+        price=500_0000,
+        qty=1,
+        intent_type=IntentType.NEW,
+    )
+
+    strat = _make_strategy("strat_y", symbols=["TSMC"])
+    runner.register(strat)
+    strat._return_value = [intent]
+
+    event = _make_event(symbol="TSMC")
+    runner.running = True
+    # Should not raise
+    with patch.object(runner, "_extract_event_trace", return_value=(0, "")):
+        await runner.process_event(event)
+
+    assert runner._rejection_sink is None
+
+
+@pytest.mark.asyncio
+async def test_rejection_sink_overflow_increments_metric(runner_factory, _patch_metrics):
+    """When rejection_sink is full (maxsize=1), the second overflow must increment rejection_sink_overflow_total."""
+    from hft_platform.contracts.strategy import IntentType, OrderIntent, Side
+
+    # risk_queue always full → triggers the rejection_sink path
+    rq = MagicMock(spec=["put_nowait"])
+    rq.put_nowait = MagicMock(side_effect=asyncio.QueueFull())
+
+    runner, bus, _ = runner_factory(rq=rq)
+    # rejection_sink with maxsize=1: first write succeeds, second overflows
+    runner._rejection_sink = asyncio.Queue(maxsize=1)
+    runner._typed_intent_fastpath = False
+
+    strat = _make_strategy("strat_z", symbols=["TSMC"])
+    runner.register(strat)
+
+    intent = OrderIntent(
+        intent_id=77,
+        strategy_id="strat_z",
+        symbol="TSMC",
+        side=Side.BUY,
+        price=500_0000,
+        qty=1,
+        intent_type=IntentType.NEW,
+    )
+    strat._return_value = [intent]
+
+    event = _make_event(symbol="TSMC")
+    runner.running = True
+
+    # First call fills rejection_sink (no overflow)
+    with patch.object(runner, "_extract_event_trace", return_value=(0, "")):
+        await runner.process_event(event)
+
+    # Second call overflows rejection_sink
+    with patch.object(runner, "_extract_event_trace", return_value=(0, "")):
+        await runner.process_event(event)
+
+    _patch_metrics.rejection_sink_overflow_total.inc.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_storm_guard_halt_triggered_on_risk_queue_full(runner_factory):
+    """StormGuard.trigger_halt('risk_queue_full') is called once per batch when risk_queue is full."""
+    from hft_platform.contracts.strategy import IntentType, OrderIntent, Side
+
+    rq = MagicMock(spec=["put_nowait"])
+    rq.put_nowait = MagicMock(side_effect=asyncio.QueueFull())
+
+    runner, bus, _ = runner_factory(rq=rq)
+    runner._typed_intent_fastpath = False
+
+    mock_storm_guard = MagicMock()
+    runner._storm_guard = mock_storm_guard
+
+    intent = OrderIntent(
+        intent_id=50,
+        strategy_id="strat_sg",
+        symbol="TSMC",
+        side=Side.BUY,
+        price=500_0000,
+        qty=1,
+        intent_type=IntentType.NEW,
+    )
+
+    strat = _make_strategy("strat_sg", symbols=["TSMC"])
+    runner.register(strat)
+    strat._return_value = [intent]
+
+    event = _make_event(symbol="TSMC")
+    runner.running = True
+    with patch.object(runner, "_extract_event_trace", return_value=(0, "")):
+        await runner.process_event(event)
+
+    # Gradual degradation: first queue-full triggers STORM, not HALT
+    mock_storm_guard.trigger_storm.assert_called_once_with("risk_queue_full")
+    mock_storm_guard.trigger_halt.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_storm_guard_not_triggered_when_none(runner_factory):
+    """When _storm_guard is None, a full risk_queue must not raise."""
+    from hft_platform.contracts.strategy import IntentType, OrderIntent, Side
+
+    rq = MagicMock(spec=["put_nowait"])
+    rq.put_nowait = MagicMock(side_effect=asyncio.QueueFull())
+
+    runner, bus, _ = runner_factory(rq=rq)
+    runner._typed_intent_fastpath = False
+    # _storm_guard stays None (default)
+
+    intent = OrderIntent(
+        intent_id=51,
+        strategy_id="strat_nosg",
+        symbol="TSMC",
+        side=Side.BUY,
+        price=500_0000,
+        qty=1,
+        intent_type=IntentType.NEW,
+    )
+
+    strat = _make_strategy("strat_nosg", symbols=["TSMC"])
+    runner.register(strat)
+    strat._return_value = [intent]
+
+    event = _make_event(symbol="TSMC")
+    runner.running = True
+    # Should not raise and _storm_guard stays None
+    with patch.object(runner, "_extract_event_trace", return_value=(0, "")):
+        await runner.process_event(event)
+
+    assert runner._storm_guard is None
+
+
+# ---------------------------------------------------------------------------
+# Tests: circuit breaker Prometheus metric emission
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_emits_degraded_metric(runner_factory, _patch_metrics):
+    """normal → degraded transition emits circuit_breaker_state=1."""
+
+    class _ErrStrat(_FakeStrategy):
+        def handle_event(self, ctx, event):
+            raise RuntimeError("err")
+
+    runner, _, _ = runner_factory()
+    strat = _ErrStrat("strat_a")
+    runner.register(strat)
+    runner._rust_circuit = None
+    runner._circuit_threshold = 4  # half_threshold = 2 → degraded after 2 failures
+    runner.strategy_governor = None  # disable quarantine
+
+    gauge_mock = _patch_metrics.circuit_breaker_state.labels.return_value
+
+    for _ in range(2):
+        await runner.process_event(_make_event())
+
+    assert runner._circuit_states.get("strat_a") == "degraded"
+    _patch_metrics.circuit_breaker_state.labels.assert_any_call(component="runner:strat_a")
+    gauge_mock.set.assert_any_call(1)
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_emits_halted_metric(runner_factory, _patch_metrics):
+    """degraded → halted transition emits circuit_breaker_state=2."""
+
+    class _ErrStrat(_FakeStrategy):
+        def handle_event(self, ctx, event):
+            raise RuntimeError("err")
+
+    runner, _, _ = runner_factory()
+    strat = _ErrStrat("strat_a")
+    runner.register(strat)
+    runner._rust_circuit = None
+    runner._circuit_threshold = 2  # half_threshold=1, halted after 2
+    runner.strategy_governor = None
+
+    gauge_mock = _patch_metrics.circuit_breaker_state.labels.return_value
+
+    for _ in range(2):
+        await runner.process_event(_make_event())
+
+    assert runner._circuit_states.get("strat_a") == "halted"
+    _patch_metrics.circuit_breaker_state.labels.assert_any_call(component="runner:strat_a")
+    gauge_mock.set.assert_any_call(2)
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_emits_recovery_metric(runner_factory, _patch_metrics):
+    """degraded → normal recovery emits circuit_breaker_state=0."""
+    runner, _, _ = runner_factory()
+    strat = _make_strategy("strat_a")
+    runner.register(strat)
+    runner._rust_circuit = None
+    runner._circuit_states["strat_a"] = "degraded"
+    runner._circuit_recovery_threshold = 1
+
+    gauge_mock = _patch_metrics.circuit_breaker_state.labels.return_value
+
+    await runner.process_event(_make_event())
+
+    assert runner._circuit_states.get("strat_a") == "normal"
+    _patch_metrics.circuit_breaker_state.labels.assert_any_call(component="runner:strat_a")
+    gauge_mock.set.assert_any_call(0)
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_metric_suppresses_exceptions(runner_factory, _patch_metrics):
+    """Metric emission errors must not propagate to the trading path."""
+
+    class _ErrStrat(_FakeStrategy):
+        def handle_event(self, ctx, event):
+            raise RuntimeError("err")
+
+    runner, _, _ = runner_factory()
+    strat = _ErrStrat("strat_a")
+    runner.register(strat)
+    runner._rust_circuit = None
+    runner._circuit_threshold = 2
+    runner.strategy_governor = None
+
+    # Make the metric gauge raise
+    _patch_metrics.circuit_breaker_state.labels.side_effect = RuntimeError("metric_boom")
+
+    # Should not raise — exception swallowed
+    for _ in range(2):
+        await runner.process_event(_make_event())
+
+
+# ---------------------------------------------------------------------------
+# Tests: _run_rejection_consumer()
+# ---------------------------------------------------------------------------
+
+
+def _make_risk_feedback(strategy_id: str = "strat_a") -> "RiskFeedback":  # noqa: F821
+    from hft_platform.contracts.strategy import RiskFeedback
+
+    return RiskFeedback(
+        intent_id=1,
+        strategy_id=strategy_id,
+        symbol="TSMC",
+        reason_code="QUEUE_FULL",
+        timestamp_ns=0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_rejection_consumer_routes_feedback_to_strategy(runner_factory):
+    """Consumer reads RiskFeedback from queue and calls on_risk_feedback on matching strategy."""
+    runner, _, _ = runner_factory()
+    strat = _make_strategy("strat_a")
+    strat.on_risk_feedback = MagicMock()
+    runner.register(strat)
+
+    q: asyncio.Queue = asyncio.Queue()
+    runner._rejection_queue = q
+
+    feedback = _make_risk_feedback("strat_a")
+    await q.put(feedback)
+
+    # Run the consumer briefly; it will process the one item then block waiting for more.
+    consumer_task = asyncio.create_task(runner._run_rejection_consumer())
+    await q.join()  # wait until the single item is processed
+    consumer_task.cancel()
+    try:
+        await consumer_task
+    except asyncio.CancelledError:
+        pass
+
+    strat.on_risk_feedback.assert_called_once_with(feedback)
+
+
+@pytest.mark.asyncio
+async def test_rejection_consumer_unknown_strategy_continues(runner_factory):
+    """Consumer logs a warning for unknown strategy_id and does not crash."""
+    runner, _, _ = runner_factory()
+
+    q: asyncio.Queue = asyncio.Queue()
+    runner._rejection_queue = q
+
+    feedback = _make_risk_feedback("nonexistent_strategy")
+    await q.put(feedback)
+
+    consumer_task = asyncio.create_task(runner._run_rejection_consumer())
+    await q.join()
+    consumer_task.cancel()
+    try:
+        await consumer_task
+    except asyncio.CancelledError:
+        pass
+
+    # No exception raised; queue drained cleanly.
+    assert q.empty()
+
+
+@pytest.mark.asyncio
+async def test_rejection_consumer_strategy_exception_continues(runner_factory):
+    """Consumer continues processing after on_risk_feedback raises."""
+    runner, _, _ = runner_factory()
+    strat = _make_strategy("strat_a")
+    strat.on_risk_feedback = MagicMock(side_effect=RuntimeError("boom"))
+    runner.register(strat)
+
+    q: asyncio.Queue = asyncio.Queue()
+    runner._rejection_queue = q
+
+    # Put two feedbacks; second should still be processed after the first raises.
+    feedback1 = _make_risk_feedback("strat_a")
+    feedback2 = _make_risk_feedback("strat_a")
+    await q.put(feedback1)
+    await q.put(feedback2)
+
+    consumer_task = asyncio.create_task(runner._run_rejection_consumer())
+    await q.join()
+    consumer_task.cancel()
+    try:
+        await consumer_task
+    except asyncio.CancelledError:
+        pass
+
+    assert strat.on_risk_feedback.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_rejection_consumer_none_queue_returns_immediately(runner_factory):
+    """Consumer returns immediately when _rejection_queue is None."""
+    runner, _, _ = runner_factory()
+    assert runner._rejection_queue is None
+
+    # Should complete without blocking or raising.
+    await runner._run_rejection_consumer()

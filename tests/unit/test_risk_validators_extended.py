@@ -123,6 +123,7 @@ class TestPriceBandValidator:
     # LOB-relative band tests
     def test_lob_band_within(self) -> None:
         lob = MagicMock()
+        lob.get_book.return_value = None
         lob.get_l1_scaled.return_value = None
         lob.get_book_snapshot.return_value = {"mid_price": 100 * SCALE}
         v = PriceBandValidator(_cfg(), price_scale_provider=_provider(), lob=lob)
@@ -132,6 +133,7 @@ class TestPriceBandValidator:
     def test_lob_band_outside_high(self) -> None:
         mid = 100 * SCALE
         lob = MagicMock()
+        lob.get_book.return_value = None
         lob.get_l1_scaled.return_value = None
         lob.get_book_snapshot.return_value = {"mid_price": mid}
         # band_ticks=20, tick_size=0.01 => band_width = 20 * 100 = 2000
@@ -143,6 +145,7 @@ class TestPriceBandValidator:
     def test_lob_band_outside_low(self) -> None:
         mid = 100 * SCALE
         lob = MagicMock()
+        lob.get_book.return_value = None
         lob.get_l1_scaled.return_value = None
         lob.get_book_snapshot.return_value = {"mid_price": mid}
         v = PriceBandValidator(_cfg(), price_scale_provider=_provider(), lob=lob)
@@ -153,6 +156,7 @@ class TestPriceBandValidator:
     def test_lob_band_exactly_at_boundary(self) -> None:
         mid = 100 * SCALE
         lob = MagicMock()
+        lob.get_book.return_value = None
         lob.get_l1_scaled.return_value = None
         lob.get_book_snapshot.return_value = {"mid_price": mid}
         v = PriceBandValidator(_cfg(), price_scale_provider=_provider(), lob=lob)
@@ -168,6 +172,7 @@ class TestPriceBandValidator:
 
     def test_lob_zero_mid_price_skips_band(self) -> None:
         lob = MagicMock()
+        lob.get_book.return_value = None
         lob.get_l1_scaled.return_value = None
         lob.get_book_snapshot.return_value = {"mid_price": 0}
         v = PriceBandValidator(_cfg(), price_scale_provider=_provider(), lob=lob)
@@ -176,6 +181,7 @@ class TestPriceBandValidator:
 
     def test_lob_exception_skips_band(self) -> None:
         lob = MagicMock()
+        lob.get_book.return_value = None
         lob.get_l1_scaled.side_effect = RuntimeError("boom")
         v = PriceBandValidator(_cfg(), price_scale_provider=_provider(), lob=lob)
         ok, _ = v.check(_intent(price=100 * SCALE))
@@ -185,6 +191,7 @@ class TestPriceBandValidator:
         """When get_l1_scaled returns valid data, use that instead of book snapshot."""
         mid = 200 * SCALE
         lob = MagicMock()
+        lob.get_book.return_value = None
         lob.get_l1_scaled.return_value = (0, 0, 0, mid * 2)  # mid_price_x2
         v = PriceBandValidator(_cfg(), price_scale_provider=_provider(), lob=lob)
         ok, _ = v.check(_intent(price=mid))
@@ -193,6 +200,7 @@ class TestPriceBandValidator:
     def test_strategy_specific_band_ticks(self) -> None:
         mid = 100 * SCALE
         lob = MagicMock()
+        lob.get_book.return_value = None
         lob.get_l1_scaled.return_value = None
         lob.get_book_snapshot.return_value = {"mid_price": mid}
         cfg = _cfg(strategies={"strat_a": {"price_band_ticks": 5}})
@@ -377,13 +385,14 @@ class TestStormGuardFSM:
         fsm.update_pnl(-500_000)
         ok, reason = fsm.validate(_intent())
         assert ok is False
-        assert "STORMGUARD_STORM_NEW_BLOCKED" in reason
+        assert "STORMGUARD_STORM_BLOCKED" in reason
 
-    def test_validate_storm_allows_amend(self) -> None:
+    def test_validate_storm_blocks_amend(self) -> None:
         fsm = self._fsm()
         fsm.update_pnl(-500_000)
-        ok, _ = fsm.validate(_intent(intent_type=IntentType.AMEND))
-        assert ok is True
+        ok, reason = fsm.validate(_intent(intent_type=IntentType.AMEND))
+        assert ok is False
+        assert "STORMGUARD_STORM_BLOCKED" in reason
 
     def test_validate_warm_allows_new(self) -> None:
         fsm = self._fsm()

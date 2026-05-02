@@ -114,7 +114,7 @@ class TestWriteSnapshotToClickhouse:
         }
         result = asyncio.run(write_snapshot_to_clickhouse(ch_client, snapshot))
         assert result is True
-        ch_client.execute.assert_called_once()
+        ch_client.insert.assert_called_once()
 
     def test_returns_false_on_ch_error(self) -> None:
         import asyncio
@@ -122,7 +122,7 @@ class TestWriteSnapshotToClickhouse:
         from hft_platform.ops.config_snapshot import write_snapshot_to_clickhouse
 
         ch_client = MagicMock()
-        ch_client.execute.side_effect = RuntimeError("ClickHouse down")
+        ch_client.insert.side_effect = RuntimeError("ClickHouse down")
         snapshot = {
             "boot_ts": 1700000000000,
             "config_hash": "abcdef123456",
