@@ -10,7 +10,7 @@ Event-driven HFT platform. Python 3.12 + Rust (PyO3) + ClickHouse + Prometheus.
 ```
 Exchange
   → BrokerFacade (Shioaji|Fubon)     [feed_adapter/<broker>/quote_runtime.py]
-    → raw_queue (bounded 8192)
+    → raw_queue (bounded 65536)
       → Normalizer                    [feed_adapter/normalizer.py, Rust optional]
         → LOBEngine                   [feed_adapter/lob_engine.py]
           → FeatureEngine (27 feat)   [feature/engine.py]

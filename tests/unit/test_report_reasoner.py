@@ -356,10 +356,7 @@ class TestLevelReasoner:
     def test_no_hard_limit(self) -> None:
         """No artificial 3-level limit per side."""
         # Create many levels far from close
-        many_levels = [
-            PriceLevel(price=(210 + i * 10) * SCALE, strength=0.8, reason=f"level_{i}")
-            for i in range(5)
-        ]
+        many_levels = [PriceLevel(price=(210 + i * 10) * SCALE, strength=0.8, reason=f"level_{i}") for i in range(5)]
         fr = _fact_report(
             session_data=_session_data(close=200),
             structure=_structure_facts(double_tops=many_levels),
@@ -389,10 +386,7 @@ class TestLevelReasoner:
         # Both are at same price, so they merge with confluence=2 → kept
         # But if all at same price, confluence >= 2 → kept regardless of strength
         # This tests the filter logic works
-        assert all(
-            lv.confluence_count >= 2 or lv.strength >= 0.7
-            for lv in levels
-        )
+        assert all(lv.confluence_count >= 2 or lv.strength >= 0.7 for lv in levels)
 
     def test_chip_clusters_converted(self) -> None:
         """Chip clusters are converted to PriceLevels and included."""
@@ -413,10 +407,7 @@ class TestLevelReasoner:
         )
         levels = LevelReasoner().analyze(fr)
 
-        cluster_sources = [
-            lv for lv in levels
-            if any("大單群聚" in s for s in lv.sources)
-        ]
+        cluster_sources = [lv for lv in levels if any("大單群聚" in s for s in lv.sources)]
         assert len(cluster_sources) >= 1
 
 
@@ -470,11 +461,19 @@ class TestScenarioReasoner:
         fr = _fact_report(
             session_data=_session_data(close=201, open_=201),
             cross_day=_cross_day(
-                prev_days=[DaySnapshot(
-                    date="2026-03-28", session="day",
-                    open=199 * SCALE, high=201 * SCALE, low=198 * SCALE,
-                    close=prev_close, volume=5000, ud_ratio=1.0, net_flow=0,
-                )],
+                prev_days=[
+                    DaySnapshot(
+                        date="2026-03-28",
+                        session="day",
+                        open=199 * SCALE,
+                        high=201 * SCALE,
+                        low=198 * SCALE,
+                        close=prev_close,
+                        volume=5000,
+                        ud_ratio=1.0,
+                        net_flow=0,
+                    )
+                ],
             ),
         )
         bias = self._bias("neutral")
@@ -511,9 +510,15 @@ class TestScenarioReasoner:
                 trend_direction="up",
                 prev_days=[
                     DaySnapshot(
-                        date=f"2026-03-2{8 - i}", session="day",
-                        open=198 * SCALE, high=201 * SCALE, low=197 * SCALE,
-                        close=(199 + i) * SCALE, volume=5000, ud_ratio=1.1, net_flow=100,
+                        date=f"2026-03-2{8 - i}",
+                        session="day",
+                        open=198 * SCALE,
+                        high=201 * SCALE,
+                        low=197 * SCALE,
+                        close=(199 + i) * SCALE,
+                        volume=5000,
+                        ud_ratio=1.1,
+                        net_flow=100,
                     )
                     for i in range(3)
                 ],
@@ -612,11 +617,19 @@ class TestNarrativeReasoner:
             segments=[_segment("closing", dominant_side="bear")],
             cross_day=_cross_day(
                 trend_direction="down",
-                prev_days=[DaySnapshot(
-                    date="2026-03-28", session="day",
-                    open=200 * SCALE, high=201 * SCALE, low=198 * SCALE,
-                    close=199 * SCALE, volume=5000, ud_ratio=0.9, net_flow=-100,
-                )],
+                prev_days=[
+                    DaySnapshot(
+                        date="2026-03-28",
+                        session="day",
+                        open=200 * SCALE,
+                        high=201 * SCALE,
+                        low=198 * SCALE,
+                        close=199 * SCALE,
+                        volume=5000,
+                        ud_ratio=0.9,
+                        net_flow=-100,
+                    )
+                ],
             ),
         )
         result = NarrativeReasoner().narrate(fr)

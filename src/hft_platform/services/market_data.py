@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import math
 import os
 import time
+from collections.abc import Callable
 from typing import Any, cast
 from zoneinfo import ZoneInfo
 
@@ -52,6 +54,34 @@ logger = get_logger("service.market_data")
 
 # Re-export so ``from hft_platform.services.market_data import FeedState`` keeps working.
 __all__ = ["FeedState", "MarketDataService"]
+
+
+def _parse_symbol_gap_overrides(raw: str) -> dict[str, float]:
+    """Bug #36: parse 'SYM=secs,SYM=secs' into a per-symbol threshold map.
+
+    Silently skips malformed entries with a debug log so a typo in one
+    pair never disables overrides for the other (well-formed) pairs.
+    """
+    overrides: dict[str, float] = {}
+    if not raw:
+        return overrides
+    for token in raw.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        if "=" not in token:
+            logger.debug("symbol_gap_override_skipped_malformed", token=token)
+            continue
+        sym, _, val = token.partition("=")
+        sym = sym.strip()
+        try:
+            secs = float(val.strip())
+            if secs <= 0:
+                raise ValueError("must be positive")
+            overrides[sym] = secs
+        except (TypeError, ValueError) as exc:
+            logger.debug("symbol_gap_override_skipped_invalid_seconds", token=token, error=str(exc))
+    return overrides
 
 
 def _get_trace_sampler():
@@ -202,12 +232,21 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         symbol_metadata: SymbolMetadata | None = None,
         recorder_queue: asyncio.Queue | None = None,
         feature_engine: FeatureEngine | None = None,
+        storm_guard: Any | None = None,
+        wal_writer: Any | None = None,
     ):
         self.bus = bus
+        # Cache bus method refs to avoid per-tick getattr (DEC-10)
+        self._bus_publish_nowait = getattr(bus, "publish_nowait", None)
+        self._bus_publish_many_nowait = getattr(bus, "publish_many_nowait", None)
         self.raw_queue = raw_queue
         self.client = client
         self.publish_full_events = publish_full_events
         self.recorder_queue = recorder_queue
+        self._storm_guard = storm_guard
+        self._wal_writer = wal_writer
+        self._wal_fallback_count: int = 0
+        self._wal_fallback_sample_rate: int = max(1, int(os.getenv("HFT_MD_WAL_FALLBACK_SAMPLE_RATE", "10")))
 
         self.lob = LOBEngine()
         feature_enabled = os.getenv("HFT_FEATURE_ENGINE_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
@@ -227,14 +266,38 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         except Exception as exc:
             logger.debug("operation_fallback", error=str(exc))
             pass
+        # Cache feature engine method ref to avoid per-tick getattr (DATA-09)
+        self._fe_process_lob_update = (
+            getattr(self.feature_engine, "process_lob_update", None) if self.feature_engine else None
+        )
+        # H12: propagate tick-dispatcher drops to FeatureEngine so downstream
+        # quality_flags carry QUALITY_FLAG_GAP; strategies can distinguish
+        # 'no new info' from 'lost N ticks'.
+        if self.feature_engine is not None:
+            dispatcher = getattr(self.client, "_tick_dispatcher", None)
+            if dispatcher is not None and hasattr(dispatcher, "set_on_drop_callback"):
+                try:
+                    dispatcher.set_on_drop_callback(self.feature_engine.mark_gap_all)
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("tick_drop_gap_wiring_failed", error=str(exc))
         self._feature_shadow_engine: FeatureEngine | None = None
         self._shm_publisher: ShmSnapshotWriter | None = None
         self._shm_symbol_index: dict[str, int] = {}
         self._shm_symbol_hashes: dict[str, int] = {}
         self._redis_publisher: Any | None = None
+        self._redis_pub_error_count: int = 0
+        self._redis_payload_cache: dict[str, dict] = {}
+        self._shm_lob_cache: dict[str, list[int]] = {}
+        self._shm_feat_cache: dict[str, list[int]] = {}
         self.symbol_metadata = symbol_metadata or SymbolMetadata()
         self.normalizer = MarketDataNormalizer(metadata=self.symbol_metadata)
+        # Wire metadata into LOBEngine for the ingress invariant (Hemorrhage #5)
+        try:
+            self.lob.set_symbol_metadata(self.symbol_metadata)
+        except AttributeError:
+            pass
 
+        self._post_connect_hooks: list[Callable[[], None]] = []  # called after subscribe_basket + alias resolution
         self.state = FeedState.INIT
         self.running = False
         self.last_event_ts = timebase.now_s()
@@ -271,10 +334,34 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         self._trace_sampler = get_trace_sampler()
         self._feed_last_event_metric_child = None
         self._feed_reconnect_gap_metric_child = None
+        self._feed_events_tick_child = (
+            self.metrics_registry.feed_events_total.labels(type="tick") if self.metrics_registry else None
+        )
+        self._feed_events_bidask_child = (
+            self.metrics_registry.feed_events_total.labels(type="bidask") if self.metrics_registry else None
+        )
         self._md_callback_parse_metric_children: dict[str, Any] = {}
+        # Pre-resolve broker-thread drop counter children (thread-safe .inc())
+        _mr = self.metrics_registry
+        self._cb_drop_parse_miss = (
+            _mr.md_callback_drop_total.labels(reason="parse_miss")
+            if _mr and hasattr(_mr, "md_callback_drop_total")
+            else None
+        )
+        self._cb_drop_loop_missing = (
+            _mr.md_callback_drop_total.labels(reason="loop_missing")
+            if _mr and hasattr(_mr, "md_callback_drop_total")
+            else None
+        )
+        self._cb_drop_callback_error = (
+            _mr.md_callback_drop_total.labels(reason="callback_error")
+            if _mr and hasattr(_mr, "md_callback_drop_total")
+            else None
+        )
         self._feature_update_metric_children: dict[tuple[str, str], Any] = {}
         self._feature_quality_flag_metric_children: dict[str, Any] = {}
-        self._feature_latency_metric_child = None
+        self._feature_latency_metric_child: Any = None
+        self._lob_only_latency_metric_child: Any = None
         self._feature_shadow_checks_metric_children: dict[tuple[str, str], Any] = {}
         self._feature_shadow_mismatch_metric_children: dict[tuple[str, str], Any] = {}
         self._feature_set_id_cached = (
@@ -295,6 +382,15 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         self._record_direct = self.recorder_queue is not None and os.getenv(
             "HFT_MD_RECORD_DIRECT", "1"
         ).lower() not in {"0", "false", "no", "off"}
+        # Eagerly resolve recorder mapper to avoid per-tick import (INFRA-01)
+        self._map_event_to_record = None
+        if self._record_direct:
+            try:
+                from hft_platform.recorder.mapper import map_event_to_record
+
+                self._map_event_to_record = map_event_to_record
+            except Exception:
+                pass
         drop_default = os.getenv("HFT_RECORDER_DROP_ON_FULL", "1")
         self._record_drop_on_full = os.getenv("HFT_MD_RECORD_DROP_ON_FULL", drop_default).lower() not in {
             "0",
@@ -310,10 +406,32 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         self._record_degraded_drops = 0
         self._record_degrade_check_s = 10.0
         self._record_degrade_last_check: float = 0.0
+        self._recorder_degraded_gauge = self.metrics_registry.recorder_degraded_mode if self.metrics_registry else None
+        self._recorder_degraded_counter = (
+            self.metrics_registry.recorder_degraded_total if self.metrics_registry else None
+        )
 
-        # Per-symbol feed gap monitoring
+        # Per-symbol feed gap monitoring (bounded by subscribed symbol count)
         self._symbol_last_tick: dict[str, float] = {}
+        # Per-symbol lifetime event count, used to gate entry into the
+        # ``_ever_active_symbols`` latched set.  The 5-event baseline
+        # (``_ACTIVE_BASELINE_EVENT_COUNT``) distinguishes a single
+        # subscription-handshake print from a symbol that is genuinely
+        # trading.  Once a symbol crosses the baseline it joins the
+        # latched set and stays there for the lifetime of the session,
+        # so subsequent silence on that symbol is treated as a real
+        # feed signal (not a structural illiquid quirk).
+        self._event_counts: dict[str, int] = {}
+        self._ever_active_symbols: set[str] = set()
         self._symbol_gap_threshold_s = float(os.getenv("HFT_SYMBOL_GAP_THRESHOLD_S", "6.0"))
+        # Bug #36: per-symbol overrides for the watchdog gap threshold.
+        # Format: HFT_SYMBOL_GAP_THRESHOLD_OVERRIDES="TXFG6=60,2207=120,..."
+        # Far-month futures and illiquid stocks naturally trade slowly; using
+        # the global 6s threshold for them produces noisy false-positive
+        # warnings that mask real STORM-eligible gaps on front-month contracts.
+        self._symbol_gap_threshold_overrides: dict[str, float] = _parse_symbol_gap_overrides(
+            os.getenv("HFT_SYMBOL_GAP_THRESHOLD_OVERRIDES", "")
+        )
         self._watchdog_interval_s = float(os.getenv("HFT_WATCHDOG_INTERVAL_S", "1.0"))
         self._symbol_gap_min_stale_count = max(1, int(os.getenv("HFT_SYMBOL_GAP_MIN_STALE_COUNT", "5")))
         self._symbol_gap_min_active_symbols = max(1, int(os.getenv("HFT_SYMBOL_GAP_MIN_ACTIVE_SYMBOLS", "24")))
@@ -344,13 +462,32 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
             "off",
         }
 
+        # Per-message error counter for post-normalization processing
+        self._process_raw_error_count = 0
+
+        # Normalization failure escalation circuit breaker
+        self._norm_consecutive_failures = 0
+        self._NORM_FAILURE_ESCALATE = int(os.getenv("HFT_NORM_FAILURE_ESCALATE", "50"))
+
         # P0-1: raw_queue backpressure tracking
         raw_queue_maxsize = getattr(self.raw_queue, "maxsize", 0) or 0
         self._raw_queue_size = (
             raw_queue_maxsize if raw_queue_maxsize > 0 else int(os.getenv("HFT_RAW_QUEUE_SIZE", "10000"))
         )
         self._raw_queue_high_watermark = float(os.getenv("HFT_RAW_QUEUE_HIGH_WATERMARK", "0.8"))
-        self._dropped_count = 0
+        self._raw_dropped_count = 0
+        self._raw_consecutive_drops: int = 0
+        self._raw_drop_degrade_threshold: int = int(os.getenv("HFT_RAW_DROP_DEGRADE_THRESHOLD", "50"))
+        self._raw_drop_halt_threshold: int = int(os.getenv("HFT_RAW_DROP_HALT_THRESHOLD", "200"))
+        # Sliding window drop rate: exponentially-decaying counter (leaky bucket).
+        # Catches intermittent bursts that reset _raw_consecutive_drops.
+        self._raw_drop_window_count: float = 0.0
+        self._raw_drop_window_last_ns: int = 0
+        self._raw_drop_window_threshold: int = int(os.getenv("HFT_RAW_DROP_WINDOW_THRESHOLD", "60"))
+        self._raw_drop_window_s: float = float(os.getenv("HFT_RAW_DROP_WINDOW_S", "5.0"))
+        self._recorder_dropped_count = 0
+        self._record_pending_puts = 0
+        self._record_pending_puts_max = int(os.getenv("HFT_RECORD_PENDING_PUTS_MAX", "100"))
         self._high_watermark_warned = False
 
         # Market open grace period (C4)
@@ -379,10 +516,22 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         self._feature_latency_counter = 0
         self._feature_shadow_counter = 0
         self._feature_shadow_mismatch_counter = 0
+        self._feature_consecutive_failures = 0
+        self._FEATURE_FAILURE_ESCALATE = int(os.getenv("HFT_FEATURE_FAILURE_ESCALATE", "10"))
 
         self._init_feature_shadow_engine()
         self._init_shm_publisher()
         self._init_redis_publisher()
+
+        # Prevent GC of fire-and-forget asyncio tasks
+        self._background_tasks: set[asyncio.Task] = set()
+
+    def _anchor_task(self, coro: Any) -> asyncio.Task:
+        """Create an asyncio task and anchor it to prevent GC before completion."""
+        task = asyncio.create_task(coro)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+        return task
 
     def _init_shm_publisher(self) -> None:
         """Initialise optional SHM publisher for monitor snapshots."""
@@ -438,16 +587,46 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
             ingest_ts = getattr(meta, "local_ts", 0) if meta else 0
             if not ingest_ts:
                 ingest_ts = getattr(event, "local_ts", 0) or int(time.time_ns())
-            payload: dict = {"symbol": symbol, "ingest_ts": ingest_ts}
-            # BidAsk data
+
+            # Get or create cached payload dict for this symbol (DATA-03)
+            payload = self._redis_payload_cache.get(symbol)
+            if payload is None:
+                payload = {
+                    "symbol": symbol,
+                    "ingest_ts": 0,
+                    "bids_price": [0] * 5,
+                    "bids_vol": [0] * 5,
+                    "asks_price": [0] * 5,
+                    "asks_vol": [0] * 5,
+                    "price_scaled": 0,
+                    "volume": 0,
+                }
+                self._redis_payload_cache[symbol] = payload
+            payload["ingest_ts"] = ingest_ts
+
+            # BidAsk data — mutate cached lists in-place
             bids = getattr(event, "bids", None)
             asks = getattr(event, "asks", None)
             if bids is not None and len(bids) > 0:
-                payload["bids_price"] = [int(b[0]) for b in bids[:5]]
-                payload["bids_vol"] = [int(b[1]) for b in bids[:5]]
+                bp = payload["bids_price"]
+                bv = payload["bids_vol"]
+                n = min(len(bids), 5)
+                for i in range(n):
+                    bp[i] = int(bids[i][0])
+                    bv[i] = int(bids[i][1])
+                for i in range(n, 5):
+                    bp[i] = 0
+                    bv[i] = 0
             if asks is not None and len(asks) > 0:
-                payload["asks_price"] = [int(a[0]) for a in asks[:5]]
-                payload["asks_vol"] = [int(a[1]) for a in asks[:5]]
+                ap = payload["asks_price"]
+                av = payload["asks_vol"]
+                n = min(len(asks), 5)
+                for i in range(n):
+                    ap[i] = int(asks[i][0])
+                    av[i] = int(asks[i][1])
+                for i in range(n, 5):
+                    ap[i] = 0
+                    av[i] = 0
             # Tick data
             price = getattr(event, "price", None)
             if price is not None:
@@ -455,7 +634,13 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                 payload["volume"] = int(getattr(event, "volume", 0) or 0)
             pub.publish_market_data(payload)
         except Exception:
-            pass  # fire-and-forget — never block hot path
+            # fire-and-forget — never block hot path, but track errors
+            self._redis_pub_error_count += 1
+            if self._redis_pub_error_count % 1000 == 1:
+                logger.warning(
+                    "redis_publish_error",
+                    total_errors=self._redis_pub_error_count,
+                )
 
     # -- main loop -----------------------------------------------------------
 
@@ -479,24 +664,34 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         sym_hash = self._shm_symbol_hashes[symbol]
         ts_ns = int(getattr(stats, "local_ts", 0) or 0) or time.time_ns()
 
-        # Extract 9 LOB fields from stats
-        lob_fields = [
-            int(getattr(stats, "best_bid", 0) or 0),
-            int(getattr(stats, "best_ask", 0) or 0),
-            int(getattr(stats, "mid_price_x2", 0) or 0),
-            int(getattr(stats, "spread_scaled", 0) or 0),
-            int(getattr(stats, "bid_depth", 0) or 0),
-            int(getattr(stats, "ask_depth", 0) or 0),
-            int(getattr(stats, "l1_bid_qty", 0) or 0),
-            int(getattr(stats, "l1_ask_qty", 0) or 0),
-            int(getattr(stats, "microprice_x2", 0) or 0),
-        ]
-
-        # Extract 16 features (pad with 0 if unavailable)
-        if feature_tuple is not None and len(feature_tuple) >= 16:
-            features = [int(v) for v in feature_tuple[:16]]
-        else:
+        # Get or create cached LOB + feature buffers for this symbol (DATA-04)
+        lob_fields = self._shm_lob_cache.get(symbol)
+        if lob_fields is None:
+            lob_fields = [0] * 9
+            self._shm_lob_cache[symbol] = lob_fields
+        features = self._shm_feat_cache.get(symbol)
+        if features is None:
             features = [0] * 16
+            self._shm_feat_cache[symbol] = features
+
+        # Mutate 9 LOB fields in-place
+        lob_fields[0] = int(getattr(stats, "best_bid", 0) or 0)
+        lob_fields[1] = int(getattr(stats, "best_ask", 0) or 0)
+        lob_fields[2] = int(getattr(stats, "mid_price_x2", 0) or 0)
+        lob_fields[3] = int(getattr(stats, "spread_scaled", 0) or 0)
+        lob_fields[4] = int(getattr(stats, "bid_depth", 0) or 0)
+        lob_fields[5] = int(getattr(stats, "ask_depth", 0) or 0)
+        lob_fields[6] = int(getattr(stats, "l1_bid_qty", 0) or 0)
+        lob_fields[7] = int(getattr(stats, "l1_ask_qty", 0) or 0)
+        lob_fields[8] = int(getattr(stats, "microprice_x2", 0) or 0)
+
+        # Mutate 16 features in-place
+        if feature_tuple is not None and len(feature_tuple) >= 16:
+            for i in range(16):
+                features[i] = int(feature_tuple[i])
+        else:
+            for i in range(16):
+                features[i] = 0
 
         try:
             publisher.publish(idx, ts_ns, sym_hash, lob_fields, features)
@@ -608,6 +803,9 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         finally:
             monitor_task.cancel()
             watchdog_task.cancel()
+            # LF-1: Cancel LOBEngine metrics worker to prevent resource leak
+            if hasattr(self.lob, "stop"):
+                self.lob.stop()
 
     def _process_raw(self, raw: Any) -> None:
         """Normalize, update LOB/features, publish, and record a single raw message."""
@@ -628,11 +826,30 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                 normalized = self.normalizer.normalize_tick(raw)
             if isinstance(normalized, (TickEvent, BidAskEvent)):
                 event = normalized
+                if self._norm_consecutive_failures >= self._NORM_FAILURE_ESCALATE and self._storm_guard is not None:
+                    try:
+                        self._storm_guard.report_norm_recovery()
+                    except Exception as sg_exc:  # noqa: BLE001
+                        logger.debug("storm_guard_norm_recovery_failed", error=str(sg_exc))
+                self._norm_consecutive_failures = 0
+                if isinstance(event, TickEvent):
+                    if self._feed_events_tick_child is not None:
+                        self._feed_events_tick_child.inc()
+                elif self._feed_events_bidask_child is not None:
+                    self._feed_events_bidask_child.inc()
             norm_duration = time.perf_counter_ns() - norm_start_ns
         except Exception as ne:
             logger.error("Normalization check failed", error=str(ne), raw_type=str(type(raw)))
             self._emit_trace("md_normalize_error", "", {"raw_type": str(type(raw)), "error": str(ne)})
             norm_duration = 0
+            self._norm_consecutive_failures += 1
+            if self.metrics_registry:
+                self.metrics_registry.normalize_error_total.inc()
+            if self._norm_consecutive_failures >= self._NORM_FAILURE_ESCALATE and self._storm_guard is not None:
+                try:
+                    self._storm_guard.report_norm_failure(self._norm_consecutive_failures)
+                except Exception as sg_exc:  # noqa: BLE001
+                    logger.debug("storm_guard_norm_escalation_failed", error=str(sg_exc))
 
         if not event:
             return
@@ -654,46 +871,76 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
             if self._normalized_log_counter % self.log_normalized_every == 0:
                 logger.info("MD Normalized", type=str(type(event)), symbol=event.symbol)
 
-        lob_start_ns = time.perf_counter_ns()
-        stats = self.lob.process_event(event)
-        feature_update = self._maybe_update_features(event, stats)
-        lob_duration = time.perf_counter_ns() - lob_start_ns
-        if self.latency and self._md_latency_counter % self._md_latency_sample_every == 0:
-            self.latency.record(
-                "lob_process",
-                lob_duration,
-                trace_id=trace_id,
-                symbol=getattr(event, "symbol", ""),
-            )
-        if getattr(self, "_trace_sampler", None) is not None:
-            self._emit_trace(
-                "md_event",
-                trace_id,
-                {
-                    "symbol": getattr(event, "symbol", ""),
-                    "event_type": type(event).__name__,
-                    "norm_ns": int(norm_duration or 0),
-                    "lob_ns": int(lob_duration or 0),
-                    "has_stats": bool(stats is not None),
-                    "has_feature_update": bool(feature_update is not None),
-                },
-            )
-            if feature_update is not None:
+        try:
+            lob_start_ns = time.perf_counter_ns()
+            stats = self.lob.process_event(event)
+            lob_only_duration = time.perf_counter_ns() - lob_start_ns
+            feature_update = self._maybe_update_features(event, stats)
+            lob_duration = time.perf_counter_ns() - lob_start_ns
+            if self.latency and self._md_latency_counter % self._md_latency_sample_every == 0:
+                self.latency.record(
+                    "lob_process",
+                    lob_duration,
+                    trace_id=trace_id,
+                    symbol=getattr(event, "symbol", ""),
+                )
+                self.latency.record(
+                    "lob_only",
+                    lob_only_duration,
+                    trace_id=trace_id,
+                    symbol=getattr(event, "symbol", ""),
+                )
+            if self.metrics_registry and self._md_latency_counter % self._md_latency_sample_every == 0:
+                try:
+                    if self._lob_only_latency_metric_child is None and hasattr(
+                        self.metrics_registry, "lob_only_latency_ns"
+                    ):
+                        self._lob_only_latency_metric_child = self.metrics_registry.lob_only_latency_ns
+                    if self._lob_only_latency_metric_child is not None:
+                        self._lob_only_latency_metric_child.observe(lob_only_duration)
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("lob_only_latency_observe_failed", error=str(exc))
+            if getattr(self, "_trace_sampler", None) is not None:
                 self._emit_trace(
-                    "feature_update",
+                    "md_event",
                     trace_id,
                     {
-                        "symbol": getattr(feature_update, "symbol", getattr(event, "symbol", "")),
-                        "feature_set_id": getattr(feature_update, "feature_set_id", self._feature_set_id_cached),
-                        "quality_flags": int(getattr(feature_update, "quality_flags", 0) or 0),
-                        "changed_mask": int(getattr(feature_update, "changed_mask", 0) or 0),
+                        "symbol": getattr(event, "symbol", ""),
+                        "event_type": type(event).__name__,
+                        "norm_ns": int(norm_duration or 0),
+                        "lob_ns": int(lob_duration or 0),
+                        "has_stats": bool(stats is not None),
+                        "has_feature_update": bool(feature_update is not None),
                     },
                 )
-        if self._record_direct and isinstance(event, (TickEvent, BidAskEvent)):
-            self._record_direct_event(event)
+                if feature_update is not None:
+                    self._emit_trace(
+                        "feature_update",
+                        trace_id,
+                        {
+                            "symbol": getattr(feature_update, "symbol", getattr(event, "symbol", "")),
+                            "feature_set_id": getattr(feature_update, "feature_set_id", self._feature_set_id_cached),
+                            "quality_flags": int(getattr(feature_update, "quality_flags", 0) or 0),
+                            "changed_mask": int(getattr(feature_update, "changed_mask", 0) or 0),
+                        },
+                    )
+            if self._record_direct and isinstance(event, (TickEvent, BidAskEvent)):
+                self._record_direct_event(event)
 
-        self._publish_events(event, stats, feature_update)
-        self._publish_to_redis(event, stats)
+            self._publish_events(event, stats, feature_update)
+            self._publish_to_redis(event, stats)
+        except Exception as exc:
+            self._process_raw_error_count += 1
+            if self.metrics_registry:
+                self.metrics_registry.process_raw_error_total.inc()
+            logger.error(
+                "process_raw_post_norm_error",
+                symbol=event.symbol,
+                error=str(exc),
+                event_type=type(event).__name__,
+                exc_info=True,
+            )
+            return
 
     # -- helpers for _process_raw -------------------------------------------
 
@@ -713,14 +960,39 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                 asks_len=asks_len,
             )
 
+    # Number of lifetime events a symbol must accumulate before it qualifies
+    # as "ever active" and joins the latched ``_ever_active_symbols`` set.
+    # 5 is chosen as a small but meaningful threshold:
+    #   * Distinguishes a one-shot subscription-handshake print (which often
+    #     fires once on subscribe and never again for chronically idle
+    #     options/far-month futures) from a symbol that is genuinely
+    #     trading.
+    #   * Small enough that any liquid front-month future or ETF crosses it
+    #     within milliseconds of the open, so the latched set populates
+    #     quickly after startup and feed-gap monitoring becomes accurate.
+    _ACTIVE_BASELINE_EVENT_COUNT: int = 5
+
     def _update_symbol_tick_inline(self, event: TickEvent | BidAskEvent) -> None:
         symbol = getattr(event, "symbol", None)
         if not symbol:
             return
+        # Track lifetime event count only until the symbol joins the
+        # latched ``_ever_active_symbols`` set.  After latch the counter
+        # is reclaimed and subsequent events skip the counter ops
+        # entirely — this keeps the hot path Allocator-Law-compliant
+        # (no fresh ``int`` object allocated per event for symbols that
+        # have already qualified).
+        if symbol not in self._ever_active_symbols:
+            count = self._event_counts.get(symbol, 0) + 1
+            if count >= self._ACTIVE_BASELINE_EVENT_COUNT:
+                self._ever_active_symbols.add(symbol)
+                self._event_counts.pop(symbol, None)
+            else:
+                self._event_counts[symbol] = count
         if self._symbol_tick_inline:
             self._symbol_last_tick[symbol] = time.monotonic()
         else:
-            asyncio.create_task(self._update_symbol_tick(symbol))
+            self._anchor_task(self._update_symbol_tick(symbol))
 
     @staticmethod
     def _build_trace_id(event: TickEvent | BidAskEvent) -> str:
@@ -756,6 +1028,84 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
 
     # -- connect sequence ----------------------------------------------------
 
+    def _propagate_alias_map(self, *, trigger: str = "connect") -> int:
+        """Propagate alias_to_actual from broker client to SymbolMetadata and
+        fire post-connect hooks (strategy/risk re-resolution).
+
+        Idempotent: safe to call repeatedly. Each call picks up any new entries
+        added to ``client.alias_to_actual`` since the last propagation so that
+        late subscriptions (Bug 12: background retry thread) refresh strategy
+        symbols instead of being orphaned.
+
+        Returns the size of the alias map after propagation.
+        """
+        alias_map = getattr(self.client, "alias_to_actual", None) or {}
+        prev_size = 0
+        if self.symbol_metadata is not None:
+            prev_size = len(getattr(self.symbol_metadata, "alias_to_actual", {}) or {})
+            if alias_map:
+                self.symbol_metadata.set_alias_map(alias_map)
+        new_size = len(getattr(self.symbol_metadata, "alias_to_actual", {}) or {}) if self.symbol_metadata else 0
+        if alias_map and new_size != prev_size:
+            logger.info(
+                "symbol_aliases_propagated",
+                count=len(alias_map),
+                aliases=dict(alias_map),
+                trigger=trigger,
+            )
+        if new_size != prev_size:
+            # Hooks (e.g. StrategyRunner.resolve_symbol_aliases) must re-run
+            # whenever new aliases appear so strategy.symbols is re-resolved.
+            for hook in self._post_connect_hooks:
+                try:
+                    hook()
+                except Exception as exc:
+                    logger.warning("post_connect_hook_failed", hook=str(hook), error=str(exc))
+        # Observability gap closure (Bug 12): alias resolution coverage ratio.
+        # configured = broker client's resolved alias map size (source of truth)
+        # resolved   = entries actually landed in SymbolMetadata after propagation
+        try:
+            from hft_platform.observability.metrics import get_metrics
+
+            _m = get_metrics()
+            if _m is not None:
+                _gauge = getattr(_m, "alias_resolution_coverage_ratio", None)
+                if _gauge is not None:
+                    configured = len(alias_map)
+                    if configured <= 0:
+                        # No aliases configured → trivially fully covered.
+                        _gauge.set(1.0)
+                    else:
+                        _gauge.set(min(1.0, new_size / configured))
+        except Exception:
+            pass
+        return new_size
+
+    def _resolve_aliases_eager(self) -> None:
+        """Eagerly populate client.alias_to_actual via ContractsRuntime, before
+        subscribe_basket races.
+
+        Bug 12: on `docker compose restart` the subscribe loop can be
+        short-circuited by callback-not-ready guards, pushing work to the
+        background retry thread. Without pre-resolution the alias map stays
+        empty until that retry, and no downstream propagation fires. Calling
+        ContractsRuntime.resolve_symbol_aliases() here derives the mapping
+        directly from contract.delivery_month, independent of subscribe timing.
+        """
+        runtime = getattr(self.client, "contracts_runtime", None) or getattr(self.client, "_contracts_runtime", None)
+        if runtime is None:
+            return
+        try:
+            resolved = runtime.resolve_symbol_aliases()
+            if resolved:
+                logger.info(
+                    "alias_eager_resolve",
+                    count=len(resolved),
+                    aliases=dict(resolved),
+                )
+        except Exception as exc:
+            logger.warning("alias_eager_resolve_failed", error=str(exc))
+
     async def _connect_sequence(self) -> None:
         try:
             self._set_state(FeedState.CONNECTING)
@@ -784,7 +1134,25 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                 except Exception as exc:
                     logger.warning("Snapshot normalize failed; skipping", error=str(exc))
 
+            # Bug 12 root-cause fix: eagerly resolve aliases BEFORE subscribe so
+            # ``alias_to_actual`` is populated even when subscribe defers work
+            # to the background retry thread.
+            self._resolve_aliases_eager()
+            self._propagate_alias_map(trigger="pre_subscribe")
+
+            # Register a callback so late subscriptions (retry thread) re-fire
+            # propagation and strategy re-resolution.
+            try:
+                self.client.on_alias_map_updated = lambda: self._propagate_alias_map(trigger="retry")
+            except Exception:
+                pass
+
             await self._call_client(self.client.subscribe_basket, self._on_shioaji_event)
+
+            # Post-subscribe propagation picks up any aliases learned during the
+            # inline subscribe loop; also idempotent if eager path already fired.
+            self._propagate_alias_map(trigger="post_subscribe")
+
             self._set_state(FeedState.CONNECTED)
 
         except Exception as e:
@@ -858,17 +1226,23 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                 if msg is not None:
                     self.loop.call_soon_threadsafe(self._enqueue_raw, exchange, msg)
                 else:
+                    if self._cb_drop_parse_miss:
+                        self._cb_drop_parse_miss.inc()
                     if self.log_raw:
                         logger.warning(
                             "Could not parse msg from callback args",
                             args_types=[type(a).__name__ for a in args],
                         )
             else:
+                if self._cb_drop_loop_missing:
+                    self._cb_drop_loop_missing.inc()
                 logger.error("Callback loop missing")
 
         except Exception as e:
+            if self._cb_drop_callback_error:
+                self._cb_drop_callback_error.inc()
             self._record_shioaji_crash_signature(str(e), context="md_callback")
-            logger.error(f"Error in Shioaji callback: {e}")
+            logger.error("shioaji_callback_error", error=str(e))
 
     # -- monitor loop -------------------------------------------------------
 
@@ -895,7 +1269,39 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                 try:
                     await asyncio.to_thread(self.client.reload_symbols)
                 except Exception as exc:
-                    logger.error("Symbol reload failed", error=str(exc))
+                    # Q3-fix (2026-04-27): symbol-reload failure used to be
+                    # invisible (logger.error only, no metric, no alert).
+                    # ``ShioajiClient._load_config`` now bumps the
+                    # ``feed_symbol_config_reload_total{result}`` Counter at
+                    # every exit branch, and AlertManager rule
+                    # ``SymbolConfigReloadFailed`` pages on it. The optional
+                    # ``_notification_dispatcher`` attribute (wired by
+                    # ``services/bootstrap.py``) lets us also fan out a
+                    # Telegram alert.
+                    logger.error(
+                        "Symbol reload failed",
+                        error=str(exc),
+                        severity="critical",
+                    )
+                    dispatcher = getattr(self, "_notification_dispatcher", None)
+                    if dispatcher is not None and hasattr(dispatcher, "notify_symbol_reload_failed"):
+                        try:
+                            symbols = getattr(self.client, "symbols", None) or []
+                            limit = int(
+                                getattr(self.client, "MAX_SUBSCRIPTIONS_PER_CLIENT", 0)
+                                or getattr(self.client, "MAX_SUBSCRIPTIONS", 0)
+                            )
+                            reason = "exceeds_limit" if "exceeds limit" in str(exc).lower() else "other"
+                            await dispatcher.notify_symbol_reload_failed(
+                                reason=reason,
+                                count=len(symbols),
+                                limit=limit,
+                            )
+                        except Exception as notify_exc:  # noqa: BLE001
+                            logger.warning(
+                                "symbol_reload_alert_dispatch_failed",
+                                error=str(notify_exc),
+                            )
 
     # -- symbol tick (legacy async path) ------------------------------------
 
@@ -913,16 +1319,16 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
             await result
 
     def _publish_nowait(self, event: Any) -> None:
-        publish_nowait = getattr(self.bus, "publish_nowait", None)
-        if publish_nowait:
-            publish_nowait(event)
+        fn = self._bus_publish_nowait
+        if fn is not None:
+            fn(event)
             return
-        asyncio.create_task(self._publish(event))
+        self._anchor_task(self._publish(event))
 
     def _publish_many_nowait(self, events: list[Any] | tuple[Any, ...]) -> None:
-        publish_many_nowait = getattr(self.bus, "publish_many_nowait", None)
-        if publish_many_nowait:
-            publish_many_nowait(events)
+        fn = self._bus_publish_many_nowait
+        if fn is not None:
+            fn(events)
             return
         for event in events:
             self._publish_nowait(event)
@@ -954,9 +1360,9 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         event: TickEvent | BidAskEvent,
         stats: object | None,
     ) -> FeatureUpdateEvent | None:
-        if self.feature_engine is None or stats is None:
+        if self.feature_engine is None:
             return None
-        # Forward classified tick data to FeatureEngine for toxicity tracking
+        # D2-C1: Forward classified tick data BEFORE stats check (stats=None for ticks)
         if isinstance(event, TickEvent) and event.trade_direction != 0:
             self.feature_engine.on_tick(
                 event.symbol,
@@ -965,15 +1371,15 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                 event.trade_direction,
                 event.trade_confidence,
             )
-        if not hasattr(stats, "best_bid") or not hasattr(stats, "best_ask"):
+        if stats is None or not isinstance(stats, (LOBStatsEvent, tuple)):
             return None
-        meta = getattr(event, "meta", None)
+        meta = event.meta
         local_ts_ns = int(getattr(meta, "local_ts", 0) or 0) if meta is not None else 0
         start_ns = time.perf_counter_ns()
         try:
-            process_lob_update = getattr(self.feature_engine, "process_lob_update", None)
-            if callable(process_lob_update):
-                feature_update = process_lob_update(event, stats, local_ts_ns=local_ts_ns)
+            process_fn = self._fe_process_lob_update
+            if process_fn is not None:
+                feature_update = process_fn(event, stats, local_ts_ns=local_ts_ns)
             else:
                 feature_update = self.feature_engine.process_lob_stats(
                     cast(LOBStatsEvent, stats), local_ts_ns=local_ts_ns
@@ -982,7 +1388,7 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
             self._feature_latency_counter += 1
             self._feature_metrics_counter += 1
             if self.metrics_registry:
-                if self._feature_latency_counter % self._feature_latency_sample_every == 0:
+                if self._md_latency_counter % self._md_latency_sample_every == 0:
                     try:
                         if self._feature_latency_metric_child is None and hasattr(
                             self.metrics_registry, "feature_plane_latency_ns"
@@ -1034,6 +1440,13 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                     except Exception as exc:
                         logger.debug("operation_fallback", error=str(exc))
                         pass
+            if self._feature_consecutive_failures > 0:
+                self._feature_consecutive_failures = 0
+                if self._storm_guard is not None:
+                    try:
+                        self._storm_guard.report_feature_recovery()
+                    except Exception as sg_exc:
+                        logger.debug("storm_guard_feature_recovery_failed", error=str(sg_exc))
             return feature_update
         except Exception as exc:
             self._emit_trace(
@@ -1042,7 +1455,10 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                 {"symbol": getattr(event, "symbol", ""), "reason": str(exc)},
             )
             self._feature_metrics_counter += 1
-            if self.metrics_registry and self._feature_metrics_counter % self._feature_metrics_sample_every == 0:
+            # Error counter is always incremented — errors are rare and must never
+            # be under-counted due to sampling.  Success metrics stay sampled for
+            # performance (high-frequency, cheap to lose occasional sample).
+            if self.metrics_registry:
                 try:
                     if hasattr(self.metrics_registry, "feature_plane_updates_total"):
                         key = ("error", self._feature_set_id_cached)
@@ -1057,7 +1473,20 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                 except Exception as metric_exc:
                     logger.debug("operation_fallback", error=str(metric_exc))
                     pass
-            logger.warning("feature_engine_update_failed", reason=str(exc))
+            self._feature_consecutive_failures += 1
+            if self._feature_consecutive_failures >= self._FEATURE_FAILURE_ESCALATE:
+                logger.error(
+                    "feature_engine_update_failed",
+                    reason=str(exc),
+                    consecutive_failures=self._feature_consecutive_failures,
+                )
+                if self._storm_guard is not None:
+                    try:
+                        self._storm_guard.report_feature_failure(self._feature_consecutive_failures)
+                    except Exception as sg_exc:
+                        logger.debug("storm_guard_feature_escalation_failed", error=str(sg_exc))
+            else:
+                logger.warning("feature_engine_update_failed", reason=str(exc))
             return None
 
     def _maybe_run_feature_shadow_parity(
@@ -1193,6 +1622,35 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
             logger.debug("operation_fallback", error=str(exc))
             pass
 
+    def _md_wal_fallback_write(self, topic: str, payload: Any) -> None:
+        """Rate-limited WAL fallback when recorder queue is full.
+
+        Writes 1-in-N events to WAL to preserve time-series continuity without
+        overwhelming WAL disk during sustained queue pressure.
+        """
+        if self._wal_writer is None:
+            return
+        self._wal_fallback_count += 1
+        if self._wal_fallback_count % self._wal_fallback_sample_rate != 0:
+            return
+        try:
+            fut = asyncio.ensure_future(self._wal_writer.write(topic, [payload]))
+            # CF-5: Track the future so disk errors are logged, not silently swallowed.
+            fut.add_done_callback(self._on_wal_fallback_done)
+            if self.metrics_registry:
+                _metric = getattr(self.metrics_registry, "recorder_md_wal_fallback_total", None)
+                if _metric is not None:
+                    _metric.inc()
+        except Exception as exc:
+            logger.warning("md_wal_fallback_failed", error=str(exc), topic=topic)
+
+    @staticmethod
+    def _on_wal_fallback_done(fut: "asyncio.Future[None]") -> None:
+        """CF-5: Log WAL fallback write errors instead of silently swallowing."""
+        exc = fut.exception()
+        if exc is not None:
+            logger.warning("md_wal_fallback_write_error", error=str(exc), exc_type=type(exc).__name__)
+
     def _record_direct_event(self, event: TickEvent | BidAskEvent) -> None:
         if self.recorder_queue is None:
             return
@@ -1212,6 +1670,9 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                     )
                     self._record_degraded = False
                     self._record_degraded_drops = 0
+                    self._recorder_dropped_count = 0
+                    if self._recorder_degraded_gauge:
+                        self._recorder_degraded_gauge.set(0)
                 else:
                     self._record_degraded_drops += 1
                     return
@@ -1220,9 +1681,13 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                 return
 
         try:
-            from hft_platform.recorder.mapper import map_event_to_record
+            map_fn = self._map_event_to_record
+            if map_fn is None:
+                from hft_platform.recorder.mapper import map_event_to_record
 
-            mapped = map_event_to_record(event, self.symbol_metadata, self.normalizer.price_codec)
+                self._map_event_to_record = map_event_to_record
+                map_fn = map_event_to_record
+            mapped = map_fn(event, self.symbol_metadata, self.normalizer.price_codec)
         except Exception as exc:
             logger.warning("Direct record mapping failed", error=str(exc), event_type=type(event).__name__)
             return
@@ -1233,34 +1698,102 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
             try:
                 self.recorder_queue.put_nowait({"topic": topic, "data": payload})
             except asyncio.QueueFull:
-                self._dropped_count += 1
-                if self._dropped_count >= self._record_degrade_threshold and not self._record_degraded:
+                self._recorder_dropped_count += 1
+                if self.metrics_registry:
+                    self.metrics_registry.recorder_direct_drops_total.inc()
+                self._md_wal_fallback_write(topic, payload)
+                if self._recorder_dropped_count >= self._record_degrade_threshold and not self._record_degraded:
                     self._record_degraded = True
                     self._record_degraded_since = time.monotonic()
                     self._record_degrade_last_check = self._record_degraded_since
                     self._record_degraded_drops = 0
+                    if self._recorder_degraded_gauge:
+                        self._recorder_degraded_gauge.set(1)
+                    if self._recorder_degraded_counter:
+                        self._recorder_degraded_counter.inc()
                     logger.warning(
                         "Recorder queue overflow: entering degraded mode",
-                        consecutive_drops=self._dropped_count,
+                        consecutive_drops=self._recorder_dropped_count,
                         threshold=self._record_degrade_threshold,
                     )
         else:
-            asyncio.create_task(self.recorder_queue.put({"topic": topic, "data": payload}))
+            if self._record_pending_puts >= self._record_pending_puts_max:
+                self._recorder_dropped_count += 1
+                if self.metrics_registry:
+                    self.metrics_registry.recorder_direct_drops_total.inc()
+                return
+            self._record_pending_puts += 1
+            self._anchor_task(self._record_put_with_tracking(topic, payload))
+
+    async def _record_put_with_tracking(self, topic: str, payload: Any) -> None:
+        """Await recorder queue put with pending counter tracking."""
+        queue = self.recorder_queue
+        if queue is None:
+            self._record_pending_puts -= 1
+            return
+        try:
+            await queue.put({"topic": topic, "data": payload})
+        finally:
+            self._record_pending_puts -= 1
 
     def _enqueue_raw(self, exchange: Any, msg: Any) -> None:
         """Enqueue raw quote messages with backpressure handling."""
         try:
             self.raw_queue.put_nowait((exchange, msg))
+            self._raw_consecutive_drops = 0
         except asyncio.QueueFull:
-            self._dropped_count += 1
+            self._raw_dropped_count += 1
+            self._raw_consecutive_drops += 1
             if self.metrics_registry:
                 self.metrics_registry.raw_queue_dropped_total.inc()
-            if self._dropped_count % 100 == 1:
+            if self._raw_dropped_count % 100 == 1:
                 logger.warning(
                     "raw_queue full, dropping tick",
-                    dropped=self._dropped_count,
+                    dropped=self._raw_dropped_count,
+                    consecutive_drops=self._raw_consecutive_drops,
                     queue_size=self._raw_queue_size,
                 )
+            # Sliding window drop rate (leaky bucket): catches intermittent bursts
+            # that reset _raw_consecutive_drops.  O(1) time/memory, no allocations.
+            now_ns = timebase.now_ns()
+            if self._raw_drop_window_last_ns > 0:
+                dt_s = (now_ns - self._raw_drop_window_last_ns) / 1_000_000_000.0
+                decay = math.exp(-dt_s / self._raw_drop_window_s) if dt_s < self._raw_drop_window_s * 5 else 0.0
+                self._raw_drop_window_count = self._raw_drop_window_count * decay + 1.0
+            else:
+                self._raw_drop_window_count = 1.0
+            self._raw_drop_window_last_ns = now_ns
+
+            # Escalate to StormGuard on sustained drops
+            sg = self._storm_guard
+            if sg is not None:
+                if self._raw_consecutive_drops >= self._raw_drop_halt_threshold:
+                    try:
+                        sg.trigger_halt(f"raw_queue_sustained_drops: {self._raw_consecutive_drops} consecutive")
+                    except Exception:  # noqa: BLE001
+                        pass
+                elif self._raw_consecutive_drops >= self._raw_drop_degrade_threshold:
+                    try:
+                        sg.trigger_storm(f"raw_queue_drops: {self._raw_consecutive_drops} consecutive")
+                    except Exception:  # noqa: BLE001
+                        pass
+                elif self._raw_drop_window_count >= self._raw_drop_window_threshold:
+                    try:
+                        msg = (
+                            f"raw_queue_drop_window: {self._raw_drop_window_count:.0f}"
+                            f" drops in {self._raw_drop_window_s}s window"
+                        )
+                        sg.trigger_storm(msg)
+                    except Exception:  # noqa: BLE001
+                        pass
+            # Signal FeatureEngine that data gaps occurred so downstream
+            # quality_flags include GAP (strategies can detect missing data).
+            fe = self.feature_engine
+            if fe is not None and self._raw_consecutive_drops >= self._raw_drop_degrade_threshold:
+                try:
+                    fe.mark_gap_all()
+                except Exception:  # noqa: BLE001
+                    pass
 
     def _set_state(self, new_state: FeedState) -> None:
         if self.state != new_state:
@@ -1323,23 +1856,64 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         except Exception as exc:
             logger.error("Reconnect raised exception", reason=reason_label, error=str(exc))
             if self.metrics_registry and hasattr(self.metrics_registry, "feed_reconnect_exception_total"):
+                from hft_platform.observability.metrics import cap_exception_type  # noqa: PLC0415
+
                 self.metrics_registry.feed_reconnect_exception_total.labels(
                     reason=reason_label,
-                    exception_type=type(exc).__name__,
+                    exception_type=cap_exception_type(exc),
                 ).inc()
             self._set_state(FeedState.DISCONNECTED)
             return False
+        # Per-facade LOB/Feature reset via deferred _pending_warmup_reset.
+        if hasattr(self.client, "_apply_pending_resets"):
+            self.client._apply_pending_resets()
+        else:
+            # Single-client mode: global reset on event loop (thread-safe).
+            if self.lob is not None and hasattr(self.lob, "reset_books"):
+                self.lob.reset_books()
+            fe = getattr(self, "feature_engine", None)
+            if fe is not None and hasattr(fe, "reset_all"):
+                fe.reset_all()
         if ok:
+            # Drain stale pre-reconnect messages from raw_queue to prevent
+            # contaminating the freshly reset LOB/Feature state (DATA-010).
+            _drained_stale = 0
+            while not self.raw_queue.empty():
+                try:
+                    self.raw_queue.get_nowait()
+                    self.raw_queue.task_done()
+                    _drained_stale += 1
+                except asyncio.QueueEmpty:
+                    break
+            if _drained_stale > 0:
+                logger.info("Drained stale raw_queue after reconnect", count=_drained_stale)
+
             self._set_state(FeedState.CONNECTED)
             self.last_event_ts = timebase.now_s()
             self.last_event_mono = time.monotonic()
             self._resubscribe_attempts = 0
+            # Clear stale per-symbol timestamps so symbols that fail to
+            # re-subscribe don't permanently inflate feed gap metrics.
+            # Also reset the lifetime event counters and the latched
+            # ever-active set so a fresh post-reconnect cold-start window
+            # is observed before treating silence as a real feed signal.
+            self._symbol_last_tick = {}
+            self._event_counts = {}
+            self._ever_active_symbols = set()
+            # Fire post-reconnect callbacks (e.g. invalidate stale live orders)
+            for cb in getattr(self, "_on_reconnect_callbacks", []):
+                try:
+                    result = cb(reason_label)
+                    if asyncio.iscoroutine(result):
+                        await result
+                except Exception as cb_exc:
+                    logger.warning("on_reconnect_callback_error", error=str(cb_exc))
         else:
             self._set_state(FeedState.DISCONNECTED)
         return ok
 
     def _should_rollover_reconnect(self) -> bool:
-        now_dt = dt.datetime.now(tz=self._reconnect_tzinfo)
+        now_dt = dt.datetime.fromtimestamp(timebase.now_s(), tz=self._reconnect_tzinfo)
         last_event_dt = dt.datetime.fromtimestamp(self.last_event_ts, tz=self._reconnect_tzinfo)
         if last_event_dt.date() == now_dt.date():
             return False
@@ -1351,7 +1925,7 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
     def _within_reconnect_window(self) -> bool:
         if not self.reconnect_days and not self.reconnect_hours and not self.reconnect_hours_2:
             return True
-        now = dt.datetime.now(tz=self._reconnect_tzinfo)
+        now = dt.datetime.fromtimestamp(timebase.now_s(), tz=self._reconnect_tzinfo)
         if os.getenv("HFT_RECONNECT_USE_CALENDAR", "1").lower() not in {"0", "false", "no", "off"}:
             try:
                 from hft_platform.core.market_calendar import get_calendar
@@ -1359,7 +1933,7 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                 calendar = get_calendar()
                 if calendar.available and calendar.days_until_trading(now.date()) > 1:
                     return False
-            except ImportError:
+            except Exception:
                 pass
         weekday = now.strftime("%a").lower()
         if self.reconnect_days and weekday not in self.reconnect_days:
@@ -1396,9 +1970,16 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
 
     async def _call_client(self, func, *args):
         if os.getenv("HFT_MD_SYNC_CONNECT") == "1":
-            return func(*args)
+            result = func(*args)
+            # LF-3: If func returns a coroutine (e.g., AsyncMock), await it.
+            if asyncio.iscoroutine(result):
+                return await result
+            return result
         if hasattr(func, "assert_called") or getattr(func, "_mock_name", None):
-            return func(*args)
+            result = func(*args)
+            if asyncio.iscoroutine(result):
+                return await result
+            return result
         return await asyncio.to_thread(func, *args)
 
     # -- public API ----------------------------------------------------------
@@ -1409,12 +1990,45 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
     # would falsely trigger StormGuard STORM if included.
     _FEED_GAP_EXCLUDE_PREFIXES: tuple[str, ...] = ("TXO", "MXO", "TEO", "TFO")
 
-    def get_max_feed_gap_s(self) -> float:
-        """Return the maximum feed gap across *core* (non-option) symbols.
+    # Futures symbol prefixes considered for feed-gap calculation.
+    # During night sessions, only futures trade — stock symbols (numeric codes
+    # like 2330, 2615) have no quotes and would falsely inflate the max gap.
+    # When set, only symbols matching these prefixes are included; everything
+    # else (stocks, options already excluded above) is ignored.
+    _FEED_GAP_FUTURES_PREFIXES: tuple[str, ...] = (
+        "TMF",
+        "TXF",
+        "MXF",
+        "TGF",
+        "XIF",
+        "T5F",
+        "UDF",
+        "GTF",
+        "BTF",
+        "RHF",
+        "SPF",
+        "UNF",
+        "E4F",
+        "NYF",
+        "EXF",
+        "ZEF",
+    )
 
-        Option symbols (prefixed with TXO, MXO, etc.) are excluded because
-        far-OTM contracts may not trade for minutes during night sessions,
-        producing large gaps that would falsely trigger StormGuard STORM.
+    @staticmethod
+    def _is_futures_symbol(symbol: str) -> bool:
+        """Return True if the symbol looks like a TAIFEX futures contract.
+
+        TAIFEX futures codes start with alphabetic prefixes (TMF, TXF, MXF …).
+        TWSE/OTC stock codes are purely numeric (e.g. 2330, 00878).
+        """
+        return len(symbol) > 0 and symbol[0].isalpha()
+
+    def get_max_feed_gap_s(self) -> float:
+        """Return the maximum feed gap across *futures* symbols only.
+
+        Options (TXO, MXO, etc.) and equities (numeric codes) are excluded
+        because they may not trade during night sessions, producing large
+        gaps that would falsely trigger StormGuard or platform reduce-only.
 
         The raw per-symbol gaps are available via :meth:`get_feed_gaps_by_symbol`.
         """
@@ -1432,15 +2046,229 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         for symbol, last_ts in snapshot.items():
             if any(symbol.startswith(p) for p in self._FEED_GAP_EXCLUDE_PREFIXES):
                 continue
+            # Exclude non-futures (stocks): they don't trade during night sessions
+            if not self._is_futures_symbol(symbol):
+                continue
             core_count += 1
             gap = now - last_ts
             if gap > max_gap:
                 max_gap = gap
 
         if core_count == 0:
-            # All symbols are options — fall back to global max
+            # No futures symbols seen — fall back to global max
             return max(now - ts for ts in snapshot.values())
         return max_gap
+
+    # Deprecated kwarg sentinel — the previous lookback-based design is
+    # retained as a deprecated parameter for callers that still pass it,
+    # but the value is ignored under the latched ever-active design.
+    _ACTIVE_FEED_GAP_LOOKBACK_S_DEFAULT: float = 300.0
+
+    def get_active_feed_gap_s(self, active_threshold_s: float | None = None) -> float:
+        """Return the max feed gap across *latched ever-active* futures symbols.
+
+        Latched-set semantics with **subscription-membership de-latch**
+        (revises commit ``b80b950c`` and the RC-2 v1 recency-window patch):
+
+        * A symbol enters ``_ever_active_symbols`` once it has accumulated
+          ``_ACTIVE_BASELINE_EVENT_COUNT`` (default 5) lifetime events.
+        * Once latched, the symbol is monitored for the rest of the
+          session — silence on a latched symbol is a candidate feed-gap
+          signal, NOT structural illiquidity.
+        * **Subscription-membership de-latch**: ``client.subscribed_codes``
+          (a ``set[str]`` updated by ``contracts_runtime`` whenever the
+          symbols.yaml manifest changes) is the canonical "should be
+          active right now" set.  A latched symbol that is no longer
+          present in ``subscribed_codes`` (typical case: contract
+          expired and was discarded by the rollover routine in
+          ``contracts_runtime.py``) is removed from
+          ``_ever_active_symbols`` and no longer contributes to
+          ``max_gap``.  The
+          ``feed_gap_latched_silent_symbols_total{action="unsubscribed"}``
+          counter is bumped per de-latch so operators can see *which*
+          symbol structurally exited.
+
+        Why this design (vs. RC-2 v1 recency-window):
+
+        * RC-2 v1 (``HFT_FEED_GAP_LATCH_RECENCY_S=300``) silently dropped
+          any latched symbol whose silence exceeded the recency window
+          from ``max_gap``.  When other latched symbols were fresh, a
+          single symbol going dark for 2000s never surfaced — exactly
+          the partial-outage masking bug that ``b80b950c`` originally
+          tried (and failed) to address.
+        * Subscription membership cleanly separates the two cases:
+          - **Expired contract** (TMFI6 dropped from
+            ``subscribed_codes`` by contract-rollover machinery) →
+            de-latch, do not contribute to ``max_gap``.
+          - **Partial outage** (TMFE6 still in ``subscribed_codes`` but
+            silent for 2000s) → contributes its full silence age to
+            ``max_gap``, which trips ``feed_gap_threshold_s`` (default
+            600s) and surfaces the outage to PlatformDegrade.
+
+        * When ``client.subscribed_codes`` is unavailable (test fixtures
+          using ``MagicMock``, brokers without a subscription set, or
+          pre-registry cold-start), every latched symbol contributes —
+          equivalent to the legacy "all latched" behaviour.  This
+          preserves the partial-outage signal in any environment that
+          cannot answer the membership question authoritatively.
+
+        Falls back to :meth:`get_max_feed_gap_s` when the latched set is
+        empty after de-latching (legitimate cold start before any
+        symbol has crossed the 5-event baseline, or every latched
+        symbol just got de-subscribed).
+
+        Args:
+            active_threshold_s: deprecated; ignored.  Retained for
+                backwards compatibility with callers from the
+                lookback-based design.  The latched ever-active set
+                replaces the upper-bound filter.
+        """
+        del active_threshold_s  # deprecated, intentionally unused
+        try:
+            snapshot = dict(self._symbol_last_tick)
+            ever_active = frozenset(self._ever_active_symbols)
+        except RuntimeError:
+            return 0.0
+
+        if not snapshot:
+            return float(os.getenv("HFT_FEED_GAP_NO_DATA_S", "0.0"))
+
+        # Resolve the authoritative subscription set.  We accept any
+        # ``set``/``frozenset`` exposed via ``client.subscribed_codes``
+        # (Shioaji + Fubon both expose this).  When the attribute is
+        # missing or is not a real set (e.g. ``MagicMock`` test
+        # fixtures), ``subscription_set`` stays ``None`` and we fall
+        # back to "every latched symbol contributes" — which preserves
+        # the partial-outage signal even when membership is unknown.
+        #
+        # Alias-resolved membership: ``subscribed_codes`` records
+        # config-time codes, which for rollover aliases (e.g. "TMFR1",
+        # "TXFR1") differ from the resolved month code that the broker
+        # callback actually delivers (e.g. "TMFE6").  Quote callbacks
+        # populate ``_ever_active_symbols`` with the resolved code, so
+        # comparing the latched set directly against ``subscribed_codes``
+        # would treat every alias-resolved future as "unsubscribed" and
+        # de-latch it — silently masking partial outages on the very
+        # contracts the platform is actively trading.  We therefore
+        # union the alias map (``client.alias_to_actual`` →
+        # config_code → resolved_code, populated by
+        # ``ContractsRuntime.resolve_symbol_aliases()``) into the set
+        # so resolved codes count as subscribed.  If the alias-map
+        # read raises, we drop back to ``subscription_set = None`` and
+        # let every latched symbol contribute (defense-in-depth: a
+        # broken resolver must never silently de-latch every resolved
+        # future and mask a partial outage).
+        subscription_set: frozenset[str] | None = None
+        client = getattr(self, "client", None)
+        if client is not None:
+            raw = getattr(client, "subscribed_codes", None)
+            if isinstance(raw, (set, frozenset)):
+                # Snapshot to a frozenset so concurrent rollover writes
+                # cannot mutate the membership view mid-iteration.
+                alias_codes = frozenset(raw)
+                resolved: set[str] = set(alias_codes)
+                try:
+                    raw_alias_map = getattr(client, "alias_to_actual", None)
+                    if isinstance(raw_alias_map, dict):
+                        # Snapshot to avoid concurrent-mutation tearing
+                        # while the rollover thread updates the map.
+                        alias_snapshot = dict(raw_alias_map)
+                        for cfg_code, actual_code in alias_snapshot.items():
+                            # Only union when both sides are non-empty
+                            # strings AND the alias is one we actually
+                            # subscribed to, so we don't claim
+                            # subscription to symbols we never asked for.
+                            if (
+                                isinstance(cfg_code, str)
+                                and isinstance(actual_code, str)
+                                and actual_code
+                                and cfg_code in alias_codes
+                            ):
+                                resolved.add(actual_code)
+                    subscription_set = frozenset(resolved)
+                except Exception:
+                    # Alias-resolver failure: leaving ``subscription_set``
+                    # at ``None`` reuses the existing fix-rc2-v2 fallback
+                    # (every latched symbol contributes to ``max_gap``).
+                    # That is strictly safer than acting on an alias-only
+                    # set, which would de-latch every alias-resolved
+                    # future the moment the alias map is unreadable.
+                    subscription_set = None
+
+        latched_silent_counter = None
+        if self.metrics_registry is not None:
+            latched_silent_counter = getattr(
+                self.metrics_registry,
+                "feed_gap_latched_silent_symbols_total",
+                None,
+            )
+
+        now = time.monotonic()
+        max_active_gap = 0.0
+        active_count = 0
+
+        for symbol in ever_active:
+            last_ts = snapshot.get(symbol)
+            if last_ts is None:
+                continue
+            if any(symbol.startswith(p) for p in self._FEED_GAP_EXCLUDE_PREFIXES):
+                continue
+            if not self._is_futures_symbol(symbol):
+                continue
+            # Subscription-membership de-latch.  Only enforced when we
+            # have a real subscription set to compare against; otherwise
+            # we cannot tell "expired" from "outage" and must err on the
+            # side of surfacing the outage (Defense-in-Depth: missing
+            # signal must not silently mask a partial failure).
+            if subscription_set is not None and symbol not in subscription_set:
+                # Set discard is GIL-atomic in CPython, safe alongside
+                # _update_symbol_tick_inline's add() on the producer
+                # thread (we never tear the set).
+                self._ever_active_symbols.discard(symbol)
+                if latched_silent_counter is not None:
+                    try:
+                        capped = self.metrics_registry.cap_symbol(symbol)
+                        latched_silent_counter.labels(symbol=capped, action="unsubscribed").inc()
+                    except Exception:
+                        pass
+                continue
+            age_s = now - last_ts
+            active_count += 1
+            if age_s > max_active_gap:
+                max_active_gap = age_s
+
+        if active_count == 0:
+            # Two distinct cases collapse here; we MUST distinguish them
+            # to avoid resurrecting stale gaps that the de-latch path
+            # just discarded.
+            #
+            # Case A — ``subscription_set is None`` (membership unknown:
+            # MagicMock test fixtures, brokers without a subscription
+            # set, pre-registry cold-start).  No symbol was de-latched
+            # in the loop above (the membership check short-circuits),
+            # so ``active_count == 0`` means there is genuinely no
+            # latched futures symbol.  Falling back to
+            # :meth:`get_max_feed_gap_s` surfaces cold-start dead feeds
+            # in any environment that cannot answer membership.
+            #
+            # Case B — ``subscription_set is not None`` and every
+            # latched symbol was de-latched (rollover window: new
+            # front-month subscribed but no tick has crossed the
+            # 5-event baseline yet; old contract was just unsubscribed
+            # by ``contracts_runtime`` and pruned from the latched set
+            # in the loop above).  Falling back to
+            # :meth:`get_max_feed_gap_s` would re-scan
+            # ``_symbol_last_tick`` — which still contains the
+            # just-de-latched expired contract's stale gap — and
+            # falsely report it as the active feed gap, recreating
+            # exactly the rollover-window false-reduce-only that the
+            # subscription-membership de-latch was added to fix.
+            # Return ``0.0`` so the rollover window honestly reports
+            # "no active latched contract right now" instead.
+            if subscription_set is None:
+                return self.get_max_feed_gap_s()
+            return 0.0
+        return max_active_gap
 
     def get_feed_gaps_by_symbol(self) -> dict[str, float]:
         """Return feed gap for each symbol in seconds."""

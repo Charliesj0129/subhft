@@ -75,9 +75,9 @@ _MATRIX: list[tuple[StormGuardState, IntentType, bool]] = [
     (StormGuardState.WARM, IntentType.NEW, True),
     (StormGuardState.WARM, IntentType.AMEND, True),
     (StormGuardState.WARM, IntentType.CANCEL, True),
-    # STORM — NEW blocked, AMEND + CANCEL allowed
+    # STORM — NEW + AMEND blocked, CANCEL allowed
     (StormGuardState.STORM, IntentType.NEW, False),
-    (StormGuardState.STORM, IntentType.AMEND, True),
+    (StormGuardState.STORM, IntentType.AMEND, False),
     (StormGuardState.STORM, IntentType.CANCEL, True),
     # HALT — only CANCEL allowed
     (StormGuardState.HALT, IntentType.NEW, False),
@@ -136,7 +136,7 @@ class TestStormGuardReasonCodes:
         fsm = _make_fsm(StormGuardState.STORM)
         ok, reason = fsm.validate(_make_intent(IntentType.NEW))
         assert not ok
-        assert reason == "STORMGUARD_STORM_NEW_BLOCKED"
+        assert reason == "STORMGUARD_STORM_BLOCKED"
 
     def test_halt_cancel_allowed(self) -> None:
         fsm = _make_fsm(StormGuardState.HALT)

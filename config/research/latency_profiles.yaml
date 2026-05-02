@@ -39,6 +39,82 @@ profiles:
     local_decision_pipeline_latency_us: 250
     measurement_date: "2026-03-01"
 
+  r47_maker_shioaji_p95_v2026-04-09:
+    description: "R47 Maker — Shioaji sim API P95 profile for cross-instrument MM"
+    source: "docs/architecture/latency-baseline-shioaji-sim-vs-system.md"
+    submit_ack_latency_ms: 36.0
+    modify_ack_latency_ms: 43.0
+    cancel_ack_latency_ms: 47.0
+    local_decision_pipeline_latency_us: 250
+    measurement_date: "2026-04-09"
+    strategy: "R47_MAKER_TXFD6"
+    notes: "Latency sensitivity validated: 47us→36ms = -8% PnL degradation (acceptable). Maker strategy is less latency-sensitive than taker. DEPRECATED for live — sim-mode RTT only; measured live RTT is ~5x higher (see v2026-04-24)."
+
+  r47_maker_shioaji_p95_v2026-04-24:
+    description: "R47 Maker — Shioaji LIVE broker P95 profile (SUPERSEDED — derived, use v2026-04-24_measured)"
+    source: "docs/incidents/2026-04-24-r47-backtest-credibility-audit.md"
+    submit_ack_latency_ms: 210.0
+    modify_ack_latency_ms: 210.0
+    cancel_ack_latency_ms: 210.0
+    local_decision_pipeline_latency_us: 250
+    measurement_date: "2026-04-24"
+    strategy: "R47_MAKER_TXFD6"
+    notes: |
+      SUPERSEDED 2026-04-24 by v2026-04-24_measured (direct probe n=300 at night
+      session, TMFE6, 2s sleep, offset 300 pt). This profile was derived from
+      hft.orders status-transition pairing (176 fast-cancel pairs ÷ 2) and is
+      retained only for historical comparison. The direct-probe values diverge
+      from this derivation (place P95=395ms vs 210ms; cancel P95=59ms vs 210ms),
+      confirming the derivation was mixing place + cancel RTT and over-attributing
+      to cancel.
+
+  r47_maker_shioaji_p95_v2026-04-24_measured:
+    description: "R47 Maker — Shioaji LIVE broker P95 profile (DIRECT probe, n=300)"
+    source: "outputs/shioaji_rtt_tmfe6_n300_20260424_1628.json"
+    submit_ack_latency_ms: 395.0
+    modify_ack_latency_ms: 395.0
+    cancel_ack_latency_ms: 59.0
+    local_decision_pipeline_latency_us: 250
+    measurement_date: "2026-04-24"
+    strategy: "R47_MAKER_TXFD6"
+    notes: |
+      DIRECT LIVE probe measurement — 2026-04-24 16:28 CST, TAIFEX night session,
+      TMFE6 (small-mini TAIEX), 1-lot ROD limit at best ±300 pt offset (no fill risk),
+      2s between cycles, n=300, zero errors, zero residuals.
+
+      Per-cycle decomposition:
+        place_order wall-time: P50=27.4 P95=92.7 P99=185.4 ms
+        submitted_ack (ordno propagation via callback):
+                              P50=166.0 P95=341.8 P99=665.1 ms
+        cancel_order wall-time: P50=20.3 P95=58.7 P99=83.8 ms
+
+      Quote-activation (place_order + submitted_ack per sample):
+        P50=201.8 P95=394.5 P99=694.3 max=1156.8 ms
+
+      Mapping to LatencyProfile:
+        - submit_ack_latency_ms = 395  (P95 of quote-activation per sample;
+          time from strategy emits PostQuote until Trade.order.ordno valid
+          — proxy for "quote live at exchange")
+        - modify_ack_latency_ms = 395  (not directly measured; same bucket)
+        - cancel_ack_latency_ms = 59   (P95 of cancel_order wall-time —
+          time until broker ACKs cancel. Exchange-cancel-ACK callback not
+          measured; likely adds ≤ submitted_ack; conservative research use
+          should multiply by 2)
+
+      Bootstrap 95% CIs:
+        place_order P95: [77.6, 110.2] ms
+        submitted_ack P95: [322.9, 409.3] ms
+        cancel_order P95: [51.3, 65.6] ms
+
+      Broker RTT floor (place_order P50 27.4 ms) is consistent with sim mode
+      (36 ms from v2026-03-04); the 10x P50 uplift to live (201.8 ms
+      quote-activation) comes entirely from the submitted_ack callback path,
+      which sim mode does not traverse.
+
+      Use this as the canonical live baseline for R47-family backtests going
+      forward. Re-measure after any broker SDK / network path / subaccount
+      change.
+
   fubon_estimated_p95_v2026-03-12:
     description: "Fubon TradeAPI conservative P95 estimates — 2026-03-12"
     source: "estimated_conservative"

@@ -104,6 +104,8 @@ class TestRunnerRustPositionIntegration:
         mock_rust = MagicMock()
         mock_rust.get_positions_by_strategy.side_effect = RuntimeError("boom")
         runner.position_store._rust_tracker = mock_rust
+        del runner.position_store.snapshot_positions_with_recovery
+        del runner.position_store.snapshot_positions
         runner.position_store.positions = {"acc:strat_a:SYM1": MagicMock(net_qty=5)}
         runner._position_key_cache = {}
 
@@ -118,6 +120,8 @@ class TestRunnerRustPositionIntegration:
         runner = StrategyRunner.__new__(StrategyRunner)
         runner.position_store = MagicMock()
         runner.position_store._rust_tracker = None
+        del runner.position_store.snapshot_positions_with_recovery
+        del runner.position_store.snapshot_positions
         runner.position_store.positions = {}
         runner._position_key_cache = {}
 

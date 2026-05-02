@@ -1,0 +1,197 @@
+alpha_id: c63_txfd6_r47_tight_spread
+name: "TXFD6 R47-minimal with tightened spread threshold (inst RT)"
+version: "0.2.0"
+status: shadow_scaffolded
+owner: alpha-research-20260419-inst-options
+strategy_type: maker
+instrument: "TXFD6"
+instruments:
+  - TXFD6
+
+# ============================================================================
+# SHADOW-DEPLOY BANNER (R2-SUPP T8, 2026-04-19) — VERBATIM PER TEAM-LEAD
+# ============================================================================
+# ⚠️ SHADOW DEPLOY — MANUAL USER APPROVAL REQUIRED BEFORE LIVE
+# - Cost model: ESTIMATED (inst tier); cost-fragile: break-even RT = 2.83pt
+# - HARD COST GATE: If broker confirms RT > 2.5pt, DO NOT deploy
+# - C63 REPLACES C33 on TXFD6 — never co-deploy
+# - Shadow target: +34,404 NTD/day at 30% scale (from +114,680 raw at sp=3/mp=3)
+# - 7 auto-disable rules in SHADOW_DEPLOY.md
+# ============================================================================
+shadow_deploy_banner:
+  status: "SHADOW DEPLOY — MANUAL USER APPROVAL REQUIRED BEFORE LIVE"
+  cost_model_note: "ESTIMATED (inst tier); cost-fragile: break-even RT = 2.83pt"
+  hard_cost_gate_pt: 2.5
+  replaces_c33_on_txfd6: true
+  mutually_exclusive_with: "C33_TXFD6_SOLO_MAKER"
+  shadow_target_ntd_per_day: 34404
+  shadow_target_scale_pct: 30
+  raw_projection_ntd_per_day: 114680
+  raw_projection_config: "sp=3 mp=3"
+  auto_disable_rule_count: 7
+  auto_disable_rules_doc: research/alphas/c63_txfd6_r47_tight_spread/SHADOW_DEPLOY.md
+production_status: "SHADOW_SCAFFOLDED_2026-04-19; enabled=false pending user confirmation"
+user_confirmation_required: true
+requires_broker_confirmation_before_live: true
+hard_cost_gate_retail_rt_max_pt: 2.5
+replaces_c33: true
+release_gate: research/alphas/c63_txfd6_r47_tight_spread/RELEASE_GATE.md
+shadow_deploy_runbook: research/alphas/c63_txfd6_r47_tight_spread/SHADOW_DEPLOY.md
+live_wrapper: src/hft_platform/strategies/c63_txfd6_tight_spread_maker.py
+# ============================================================================
+
+run_label: "alpha-research-20260419-inst-options"
+round_id: R2
+round_supplemental_id: R2-SUPP
+gate_position: "T8 shadow-scaffold (post R2-SUPP T6 PROMOTE_CONDITIONAL at sp=3/mp=3)"
+promoted_verdict: "PROMOTE_CONDITIONAL (R2-SUPP)"
+t1_initial_verdict: "SELF_KILL_T1 (wrong-instrument analogy; reversed at R2-SUPP)"
+
+# T5 realized (FRESH CK-direct, inst RT 1.5 pt, qf=1.0, 20 days 2026-02-23..04-14)
+t5_realized:
+  source_artifact: "outputs/team_artifacts/alpha-research/round-2/artifacts/executor_t5_scorecard.md"
+  date_range: ["2026-02-23", "2026-04-14"]
+  n_days: 20
+  by_config:
+    sp3_mp1:
+      ntd_per_day_inst: 30032
+      days_positive: 8
+    sp3_mp2:
+      ntd_per_day_inst: 59872
+      days_positive: 12
+    sp3_mp3:   # CANONICAL
+      ntd_per_day_inst: 114680
+      days_positive: 12
+      close_maker_rate_pct: 100.0
+      ratio_vs_c33_sp5_mp3: 2.328
+  cost_sensitivity_sign_flip_rt_pt: 2.83
+  retail_rt_3pt_ntd_per_day: -14447
+  retail_rt_4pt_ntd_per_day: -100532
+
+# Shadow-mode operating config
+shadow_config:
+  target_ntd_per_day_30pct_haircut: 34404
+  min_sessions: 5
+  min_txfd6_median_spread_pts: 3
+  max_txfd6_median_spread_pts: 6
+  spread_regime_drift_pct_max: 20
+
+hypothesis: >
+  R47-minimal on TXFD6 with spread_threshold_pts=3 (lowered from C33's 5)
+  under institutional-tier TXF RT 1.5 pt. At inst RT 1.5 pt (half of retail
+  3 pt), the 3 pt spread band becomes profitable half-spread (gross 3 pt -
+  RT 1.5 pt = +1.5 pt margin per full cycle). Captures more cycles in
+  compressed-regime TXFD6 sessions while preserving non-|pos|-gated
+  discipline. Mechanism transfer from C33 PROMOTE (R7-prior) with a
+  single-lever change — fixed threshold, NOT session-adaptive (R14-prior
+  structural-break guard).
+
+mechanism_class: pure_maker
+
+distinction_from_killed_classes:
+  - name: "C33 TXFD6 solo passive maker (R7-prior PROMOTE)"
+    distinction: >
+      C63 is a parameter variant of C33 with a single lever changed:
+      `spread_threshold_pts` lowered from 5 to 3. Everything else matches
+      C33 research operating point (mp=3, queue_share=0.05, R47-minimal
+      signal layers OFF). R13-prior parameter-variant-of-PROMOTED rule
+      applied: no new mp/q sweep proposed — only the threshold lever.
+  - name: "spread-conditional-maker (R16, stay_killed)"
+    distinction: >
+      R16 was killed for adverse-selection trap via dynamic/adaptive
+      spread-triggered quoting. C63 uses a FIXED threshold (3 pt), not
+      conditional/dynamic/session-adaptive. R14-prior structural-break
+      guard: lever change is structural (cost regime change), not
+      session-variant.
+  - name: "txfd6_dynamic_spread_threshold_structural_break_not_session_variant (R14-prior C41)"
+    distinction: >
+      C41-prior was killed for session-variant dynamic threshold without
+      structural-break justification. C63's threshold is FIXED, and the
+      justification is explicit: inst RT 1.5 pt halves retail 3 pt RT,
+      which structurally re-prices the 3 pt spread band from break-even to
+      +1.5 pt margin. This IS a structural-break justification, not a
+      session-variant.
+  - name: "c22_class_meta_killed_pnl_concentrates_at_max_pos"
+    distinction: >
+      C63 uses only inventory skew LINEAR in pos (0.2 ticks/contract);
+      no |pos|-gate, no skew-at-max-pos modulation. C22-class meta-kill
+      does not recur.
+
+paper_refs:
+  - r47_maker_strategy
+  - r47_structural_properties
+  - r47_tmfd6_economics
+  - c33_txfd6_solo_passive_maker
+  - shared-context_2026-04-19_cost_model
+  - memory/backtest_method_reliability
+  - "2008 Avellaneda-Stoikov HFT in LOB"
+  - "2015 Cartea-Jaimungal-Penalva MM economics"
+  - "2010 Cont-Stoikov-Talreja queue fill probability"
+
+signals:
+  reuse: >
+    R47 framework (spread gate + inventory skew + max_pos cap) inherited
+    verbatim from C33. All four R47 signal layers (D1 PE, D2 Queue,
+    D3 MFG, D4 QI) DISABLED per C33 precedent — TXFD6 does not carry D4
+    QI (unlike TMFD6/C60) because TMFD6-calibrated thresholds do not
+    transfer per R7 T1 counterfactual.
+
+parameters:
+  spread_threshold_pts: 3               # LOWERED from C33's 5
+  max_pos: 3                             # Canonical; same as C33 research operating point
+  queue_share: 0.05                      # informational; same as C33
+  inventory_skew_tenths: 2               # 0.2 ticks/contract fixed skew
+  enable_pe_layer: false                 # R47-minimal
+  enable_queue_layer: false              # R47-minimal
+  enable_mfg_layer: false                # R47-minimal
+  enable_qi_layer: false                 # R47-minimal (C33 precedent on TXFD6)
+
+latency_profile: "shioaji_sim_p95_v2026-03-04"
+
+# Cost model MUST cite shared-context.yaml#cost_model (inst estimate).
+# NOT from feedback_taifex_fee_structure.md (which is retail 3 pt for TXF).
+cost_model:
+  source: "outputs/team_artifacts/alpha-research/shared-context.yaml#cost_model"
+  tier: "institutional_estimate"
+  confirmed: false
+  confirmation_source: "user-authorized rough estimate, 2026-04-19"
+  TXF:
+    rt_cost_ntd: 300
+    rt_cost_pts: 1.5
+    point_value_ntd: 200
+    median_spread_pts: 4                 # TXFD6 current regime
+    p75_spread_pts: 5
+    cost_drag_pct_at_sp3: 50             # 1.5 / 3 = 50% drag at tightened threshold
+  retail_reference:
+    source: "memory/feedback_taifex_fee_structure.md"
+    TXF_retail_rt_cost_pts: 3.0
+  maker_rebate_ntd_per_side: 10          # ESTIMATED (MM-designation assumption)
+  tax_mm_discount_pct: 50                # baked into inst 1.5 pt; do not double-apply
+
+h2_framework:
+  adjudication: "MAKER FULL-CYCLE (standard MM theory, C33 precedent)"
+  per_cycle_gross_pts_at_sp3_min: 3.0    # 2 x half_spread = 2 * 1.5 = 3 pt
+  per_cycle_cost_pts_inst: 1.5           # RT inst
+  margin_pts_inst_at_sp3: 1.5            # 3.0 - 1.5 -> viable
+  conditional_on: >
+    T5 must demonstrate close-side fills are MAKER for >=80% of cycles
+    (C33 precedent 97.7%). If <80%, framework collapses and T6 REJECTs.
+    Additionally: T5 must show lower threshold does not degrade edge-per-fill
+    below the inst RT; if average fill edge at spread=3 is < 1.5 pt,
+    framework inverts and T6 REJECTs.
+
+# MANDATORY PROMOTE flag (per shared-context cost_model.notes)
+promote_prerequisites:
+  requires_broker_confirmation_before_live: true
+  reason: "cost_model.confirmed=false, inst RT 1.5 pt + rebate 10 NTD/side are ESTIMATES"
+
+shadow_kill_criterion: >
+  TXFD6 sp_med < 2 pt for 3 consecutive sessions -> auto-disable.
+  At sp_med < 2 pt with spread_threshold=3, the strategy cannot quote at
+  all (gate blocks); mechanism dormant.
+
+notes:
+  - "Research-module float exception (Rule 11 of 25-architecture-governance). Strategy operates on integer prices; scale supplied by TickData (x1_000_000 from CK)."
+  - "TXFD6 price scale: x10_000 (live platform), x1_000_000 (CK storage, golden parquet)."
+  - "All four R47 signal layers disabled; attribute absence enforced by test_no_signal_layer_methods_exposed."
+  - "Do NOT propose C63 sub-variants that add dynamic/session-variant thresholds — C41-prior killed that class."

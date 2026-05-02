@@ -25,6 +25,20 @@ def test_facade_exposes_runtimes_and_gateways(tmp_path):
         assert facade._client._quote_event_handler is facade.quote_runtime._event_handler
 
 
+def test_facade_exposes_subscribed_count(tmp_path):
+    cfg = tmp_path / "symbols.yaml"
+    cfg.write_text("symbols:\n  - code: '2330'\n    exchange: 'TSE'\n")
+
+    with patch("hft_platform.feed_adapter.shioaji_client.sj") as mock_sj:
+        mock_api = MagicMock()
+        mock_sj.Shioaji.return_value = mock_api
+
+        facade = ShioajiClientFacade(str(cfg), {})
+        facade._client.subscribed_count = 7
+
+        assert facade.subscribed_count == 7
+
+
 def test_session_runtime_login_calls_login_with_retry(tmp_path):
     """session_runtime.login() now calls login_with_retry() directly (Phase-2)."""
     from hft_platform.feed_adapter.shioaji.session_runtime import SessionRuntime

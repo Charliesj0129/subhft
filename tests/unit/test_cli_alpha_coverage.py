@@ -4,12 +4,9 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
-from types import ModuleType
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -589,9 +586,7 @@ class TestCmdAlphaPaperTradeBatch:
         fake_mod.batch_record_sessions.return_value = []
         with patch.dict("sys.modules", {"hft_platform.alpha.paper_trade_batch": fake_mod}):
             with pytest.raises(SystemExit) as exc_info:
-                cmd_alpha_paper_trade_batch(
-                    _ns(paper_trade_action="record", experiments_dir="e", alpha_ids=[])
-                )
+                cmd_alpha_paper_trade_batch(_ns(paper_trade_action="record", experiments_dir="e", alpha_ids=[]))
         assert exc_info.value.code == 2
 
     def test_record_action_with_ids(self, capsys):
@@ -914,7 +909,9 @@ from hft_platform.cli._alpha import cmd_alpha_canary_auto_evaluate  # noqa: E402
 
 class TestCmdAlphaCanaryAutoEvaluate:
     def test_import_failure_exits(self):
-        with patch.dict("sys.modules", {"hft_platform.alpha.canary": None, "hft_platform.alpha.canary_scheduler": None}):
+        with patch.dict(
+            "sys.modules", {"hft_platform.alpha.canary": None, "hft_platform.alpha.canary_scheduler": None}
+        ):
             with pytest.raises(SystemExit) as exc_info:
                 cmd_alpha_canary_auto_evaluate(_ns(promotions_dir="p", dry_run=True))
         assert exc_info.value.code == 1

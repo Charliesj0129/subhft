@@ -8,9 +8,10 @@ from hft_platform.risk.storm_guard import StormGuard
 
 
 class MockPosition:
-    def __init__(self, symbol: str, net_qty: int) -> None:
+    def __init__(self, symbol: str, net_qty: int, strategy_id: str = "default") -> None:
         self.symbol = symbol
         self.net_qty = net_qty
+        self.strategy_id = strategy_id
 
 
 @pytest.mark.asyncio
@@ -44,6 +45,7 @@ async def test_reconciliation_metric_zero_when_no_discrepancies() -> None:
     local_pos = MockPosition(symbol="2330", net_qty=5)
     mock_store = MagicMock()
     mock_store.positions = {"acct:strat:2330": local_pos}
+    mock_store.snapshot_positions = MagicMock(return_value={"acct:strat:2330": local_pos})
 
     mock_metrics = MagicMock()
 

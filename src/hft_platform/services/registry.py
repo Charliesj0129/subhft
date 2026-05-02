@@ -37,6 +37,7 @@ class ServiceRegistry:
     symbol_metadata: SymbolMetadata
     price_scale_provider: PriceScaleProvider
     broker_id: str
+    account_id: str
     md_client: BrokerClient
     order_client: BrokerClient
     client: BrokerClient
@@ -64,5 +65,11 @@ class ServiceRegistry:
     session_governor: Optional[Any] = field(default=None)
     autonomy_monitor: Optional[Any] = field(default=None)
     daily_report_service: Optional[Any] = field(default=None)
+    position_stuck_monitor: Optional[Any] = field(default=None)
     checkpoint_writer: Optional[Any] = field(default=None)
     startup_verifier: Optional[Any] = field(default=None)
+    startup_fill_reconciler: Optional[Any] = field(default=None)
+    # Coroutines scheduled by HFTSystem.run() once the engine loop is running.
+    # build() must NOT call asyncio.get_event_loop() (deprecated in Python 3.12+);
+    # collect coroutines here and let the system create tasks post-loop-bind.
+    deferred_tasks: list[Any] = field(default_factory=list)

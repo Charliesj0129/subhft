@@ -21,6 +21,63 @@ except Exception:  # pragma: no cover
 if TYPE_CHECKING:
     from hft_platform.feed_adapter.shioaji.client import ShioajiClient
 
+# Month number → TAIFEX month letter (A=Jan .. L=Dec)
+_MONTH_LETTERS = "ABCDEFGHIJKL"
+
+
+def derive_callback_code(contract: Any, config_code: str) -> str:
+    """Derive the actual callback code from a Shioaji contract object.
+
+    For R1/R2/C0/C1 continuous contracts, contract.code equals the alias
+    (e.g. "TMFR1") but quote callbacks arrive with the resolved month code
+    (e.g. "TMFE6"). This function reconstructs the month code from the
+    contract's delivery_month or delivery_date attribute.
+
+    Returns config_code unchanged if derivation fails or isn't needed.
+    """
+    # Only attempt derivation for alias-style codes
+    suffix = config_code[-2:] if len(config_code) >= 4 else ""
+    is_alias = suffix in ("R1", "R2", "C0", "C1")
+    if not is_alias:
+        # Regular month code — check contract.code directly
+        actual = getattr(contract, "code", None)
+        return actual if actual and actual != config_code else config_code
+
+    # Extract root symbol (e.g. "TMF" from "TMFR1")
+    root = config_code[:-2]
+
+    # Try delivery_month first (format: "YYYY/MM" or "YYYYMM")
+    dm = getattr(contract, "delivery_month", None)
+    if dm:
+        dm_str = str(dm).replace("/", "")
+        if len(dm_str) >= 6:
+            try:
+                month = int(dm_str[4:6])
+                year_digit = int(dm_str[3])  # last digit of year
+                if 1 <= month <= 12:
+                    letter = _MONTH_LETTERS[month - 1]
+                    return f"{root}{letter}{year_digit}"
+            except (ValueError, IndexError):
+                pass
+
+    # Fallback: try delivery_date (format: "YYYY/MM/DD" or "YYYYMMDD")
+    dd = getattr(contract, "delivery_date", None)
+    if dd:
+        dd_str = str(dd).replace("/", "").replace("-", "")
+        if len(dd_str) >= 8:
+            try:
+                month = int(dd_str[4:6])
+                year_digit = int(dd_str[3])
+                if 1 <= month <= 12:
+                    letter = _MONTH_LETTERS[month - 1]
+                    return f"{root}{letter}{year_digit}"
+            except (ValueError, IndexError):
+                pass
+
+    # Could not derive — fall back to contract.code
+    actual = getattr(contract, "code", None)
+    return actual if actual else config_code
+
 
 class ContractsRuntime:
     """Contracts cache/preflight/refresh runtime."""
@@ -38,6 +95,12 @@ class ContractsRuntime:
         allow_synthetic: bool = False,
     ) -> Any | None:
         if not self._client.api:
+            return None
+        if not hasattr(self._client.api, "Contracts"):
+            ensure_contracts = getattr(self._client, "_ensure_contracts", None)
+            if callable(ensure_contracts):
+                ensure_contracts()
+        if not hasattr(self._client.api, "Contracts"):
             return None
 
         exch = str(exchange or "").upper()
@@ -112,6 +175,17 @@ class ContractsRuntime:
                     r_contract = getattr(root_group, raw_code, None)
                     if r_contract is not None:
                         return r_contract
+
+            # Direct product-group lookup for month codes (e.g. TMFE6 → Futures.TMF.TMFE6)
+            # Shioaji organises contracts under product groups; top-level iteration
+            # may miss them if the container isn't dict-like at the root.
+            if len(raw_code) >= 5 and raw_code[-1].isdigit() and raw_code[-2].isalpha():
+                root = raw_code[:-2]
+                root_group = getattr(self._client.api.Contracts.Futures, root, None)
+                if root_group is not None:
+                    direct = getattr(root_group, raw_code, None)
+                    if direct is not None:
+                        return direct
 
             for candidate in self._expand_future_codes(raw_code):
                 contract = self._lookup_contract(
@@ -285,7 +359,9 @@ class ContractsRuntime:
         added = set(new_map) - set(old_map)
 
         if not self._client.api or not self._client.logged_in or not self._client.tick_callback:
-            self._client.subscribed_codes = set(new_map)
+            # D2: in-place reset preserves object identity for peer readers.
+            self._client.subscribed_codes.clear()
+            self._client.subscribed_codes.update(new_map.keys())
             self._client.subscribed_count = len(self._client.subscribed_codes)
             self._client._refresh_quote_routes()
             return
@@ -301,6 +377,9 @@ class ContractsRuntime:
                 self._client.subscribed_codes.add(code)
         self._client.subscribed_count = len(self._client.subscribed_codes)
         self._client._refresh_quote_routes()
+        # Rebuild alias map after symbol reload
+        self._client.alias_to_actual.clear()
+        self.resolve_symbol_aliases()
 
     def is_contract_cache_stale(self) -> bool:
         import datetime
@@ -515,7 +594,51 @@ class ContractsRuntime:
             self._client._load_config()
             logger.info("Symbol config reloaded after contract refresh", symbol_count=len(self._client.symbols))
         except Exception as exc:
-            logger.warning("Symbol config reload failed after contract refresh", error=str(exc))
+            # Q3-fix (2026-04-27): contract-refresh reload-failure used to be
+            # invisible. ``_load_config`` itself now bumps the metric Counter;
+            # we additionally raise this from WARNING to ERROR with a
+            # ``severity="critical"`` tag and best-effort fan out to the
+            # optional dispatcher attached to the client.
+            logger.error(
+                "Symbol config reload failed after contract refresh",
+                error=str(exc),
+                severity="critical",
+            )
+            dispatcher = getattr(self._client, "_notification_dispatcher", None)
+            if dispatcher is not None and hasattr(dispatcher, "notify_symbol_reload_failed"):
+                try:
+                    import asyncio as _asyncio  # local import — non hot-path
+
+                    symbols = getattr(self._client, "symbols", None) or []
+                    limit = int(
+                        getattr(self._client, "MAX_SUBSCRIPTIONS_PER_CLIENT", 0)
+                        or getattr(self._client, "MAX_SUBSCRIPTIONS", 0)
+                    )
+                    reason = "exceeds_limit" if "exceeds limit" in str(exc).lower() else "other"
+                    coro = dispatcher.notify_symbol_reload_failed(
+                        reason=reason,
+                        count=len(symbols),
+                        limit=limit,
+                    )
+                    # contracts_runtime can be called from a worker thread
+                    # (contract_refresh_worker); schedule onto the running
+                    # loop if available, otherwise drop after logging.
+                    try:
+                        loop = _asyncio.get_running_loop()
+                        loop.create_task(coro)
+                    except RuntimeError:
+                        try:
+                            _asyncio.run(coro)
+                        except Exception as run_exc:  # noqa: BLE001
+                            logger.warning(
+                                "symbol_reload_alert_run_failed",
+                                error=str(run_exc),
+                            )
+                except Exception as notify_exc:  # noqa: BLE001
+                    logger.warning(
+                        "symbol_reload_alert_dispatch_failed",
+                        error=str(notify_exc),
+                    )
         finally:
             try:
                 if self._client.metrics and hasattr(self._client.metrics, "contract_refresh_total"):
@@ -558,14 +681,65 @@ class ContractsRuntime:
                 missing_sample=missing_codes[:10],
             )
             errors.append(f"missing_contracts:{len(missing_codes)}")
-        if len(self._client.symbols) > self._client.MAX_SUBSCRIPTIONS:
+        # RC-1 (2026-04-27): preflight bounds the universe against the
+        # per-client ceiling (default 600). The per-conn cap (120) is enforced
+        # by QuoteConnectionPool sharding, not at preflight.
+        preflight_ceiling = int(
+            getattr(self._client, "MAX_SUBSCRIPTIONS_PER_CLIENT", 0) or self._client.MAX_SUBSCRIPTIONS
+        )
+        if len(self._client.symbols) > preflight_ceiling:
             logger.warning(
                 "preflight_subscription_count_exceeded",
                 symbol_count=len(self._client.symbols),
-                limit=self._client.MAX_SUBSCRIPTIONS,
+                limit=preflight_ceiling,
             )
             errors.append("subscription_count_exceeded")
         logger.info("preflight_complete", passed_all=(len(errors) == 0), errors=errors)
+
+    def resolve_symbol_aliases(self, codes: list[str] | None = None) -> dict[str, str]:
+        """Resolve C0/C1/R1/R2 aliases to actual month codes via broker contracts.
+
+        Args:
+            codes: List of symbol codes to resolve. If None, resolves all
+                   symbols from client.symbols config.
+
+        Returns:
+            Mapping of config_code → actual_code for aliases that differ.
+            Identity mappings (code == actual) are omitted.
+        """
+        if codes is None:
+            codes = [str(sym.get("code", "")) for sym in self._client.symbols if sym.get("code")]
+
+        alias_map: dict[str, str] = {}
+        for code in codes:
+            code = str(code).strip()
+            if not code:
+                continue
+            # Find matching symbol config for exchange/product_type
+            sym_cfg = next(
+                (s for s in self._client.symbols if s.get("code") == code),
+                None,
+            )
+            exchange = (sym_cfg or {}).get("exchange", "FUT")
+            product_type = (sym_cfg or {}).get("product_type") or (sym_cfg or {}).get("security_type")
+            contract = self._client._get_contract(
+                exchange,
+                code,
+                product_type=product_type,
+                allow_synthetic=False,
+            )
+            if contract:
+                actual = derive_callback_code(contract, code)
+                if actual != code:
+                    alias_map[code] = actual
+                    logger.info(
+                        "alias_resolved",
+                        config_code=code,
+                        actual_code=actual,
+                    )
+        # Merge into client-level map
+        self._client.alias_to_actual.update(alias_map)
+        return alias_map
 
     def start_contract_refresh_thread(self) -> None:
         if self._client._contract_refresh_running:

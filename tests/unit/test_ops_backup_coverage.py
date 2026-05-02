@@ -12,17 +12,16 @@ Targets:
 - verify_restore: success, mismatch, temp-DB cleanup
 - list_backups: empty dir, mixed entries
 """
+
 from __future__ import annotations
 
-import asyncio
 from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from hft_platform.ops.backup import BackupError, BackupManager, _BACKUP_NAME_RE
-
+from hft_platform.ops.backup import _BACKUP_NAME_RE, BackupError, BackupManager
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -41,8 +40,19 @@ def _make_manager(backup_dir: str = "/tmp/test_backup") -> BackupManager:
 
 
 def _mock_client() -> MagicMock:
-    """Return a mock ClickHouse client."""
-    return MagicMock()
+    """Return a mock clickhouse-connect Client.
+
+    clickhouse-connect uses:
+    - client.query(sql, ...) -> result with .result_rows
+    - client.command(sql) for DDL/DML
+    - client.insert(...) for inserts
+    """
+    client = MagicMock()
+    # Default: query returns an object whose .result_rows is an empty list
+    query_result = MagicMock()
+    query_result.result_rows = []
+    client.query.return_value = query_result
+    return client
 
 
 @contextmanager
@@ -165,7 +175,10 @@ def test_run_daily_failure_on_check_disk(monkeypatch: pytest.MonkeyPatch, tmp_pa
 def test_check_disk_registered_raises_when_missing() -> None:
     mgr = _make_manager()
     client = _mock_client()
-    client.execute.return_value = []  # no rows → disk not found
+    # query().result_rows returns [] → disk not found
+    query_result = MagicMock()
+    query_result.result_rows = []
+    client.query.return_value = query_result
 
     with _patch_client(mgr, client):
         with pytest.raises(BackupError, match="backup_local disk not found"):
@@ -175,11 +188,13 @@ def test_check_disk_registered_raises_when_missing() -> None:
 def test_check_disk_registered_passes_when_found() -> None:
     mgr = _make_manager()
     client = _mock_client()
-    client.execute.return_value = [("backup_local",)]
+    query_result = MagicMock()
+    query_result.result_rows = [("backup_local",)]
+    client.query.return_value = query_result
 
     with _patch_client(mgr, client):
         mgr._check_disk_registered()  # should not raise
-    client.execute.assert_called_once()
+    client.query.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -190,7 +205,9 @@ def test_check_disk_registered_passes_when_found() -> None:
 def test_abort_stale_backups_raises_when_in_progress() -> None:
     mgr = _make_manager()
     client = _mock_client()
-    client.execute.return_value = [("abc123", "daily_20260101", "CREATING_BACKUP")]
+    query_result = MagicMock()
+    query_result.result_rows = [("abc123", "daily_20260101", "CREATING_BACKUP")]
+    client.query.return_value = query_result
 
     with _patch_client(mgr, client):
         with pytest.raises(BackupError, match="in-progress backup"):
@@ -200,11 +217,13 @@ def test_abort_stale_backups_raises_when_in_progress() -> None:
 def test_abort_stale_backups_passes_when_clean() -> None:
     mgr = _make_manager()
     client = _mock_client()
-    client.execute.return_value = []
+    query_result = MagicMock()
+    query_result.result_rows = []
+    client.query.return_value = query_result
 
     with _patch_client(mgr, client):
         mgr._abort_stale_backups()  # should not raise
-    client.execute.assert_called_once()
+    client.query.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -215,7 +234,9 @@ def test_abort_stale_backups_passes_when_clean() -> None:
 def test_verify_backup_raises_when_no_rows() -> None:
     mgr = _make_manager()
     client = _mock_client()
-    client.execute.return_value = []
+    query_result = MagicMock()
+    query_result.result_rows = []
+    client.query.return_value = query_result
 
     with _patch_client(mgr, client):
         with pytest.raises(BackupError, match="No backup entry"):
@@ -225,27 +246,34 @@ def test_verify_backup_raises_when_no_rows() -> None:
 def test_verify_backup_raises_when_status_not_created() -> None:
     mgr = _make_manager()
     client = _mock_client()
-    client.execute.return_value = [("BACKUP_FAILED", "disk full")]
+    query_result = MagicMock()
+    query_result.result_rows = [("BACKUP_FAILED", "disk full")]
+    client.query.return_value = query_result
 
     with _patch_client(mgr, client):
         with pytest.raises(BackupError, match="BACKUP_FAILED"):
             mgr._verify_backup("daily_20260329")
 
 
-def test_verify_backup_raises_when_path_missing(tmp_path: Path) -> None:
+def test_verify_backup_passes_when_path_missing(tmp_path: Path) -> None:
+    """When backup dir doesn't exist locally, verify via system.backups only (no raise)."""
     mgr = BackupManager(backup_dir=str(tmp_path), retain_days=7, ch_host="localhost")
     client = _mock_client()
-    client.execute.return_value = [("BACKUP_CREATED", "")]
+    query_result = MagicMock()
+    query_result.result_rows = [("BACKUP_CREATED", "")]
+    client.query.return_value = query_result
 
     with _patch_client(mgr, client):
-        with pytest.raises(BackupError, match="does not exist"):
-            mgr._verify_backup("daily_20260329")
+        mgr._verify_backup("daily_20260329")  # should not raise
+        assert client.query.called
 
 
 def test_verify_backup_raises_when_empty(tmp_path: Path) -> None:
     mgr = BackupManager(backup_dir=str(tmp_path), retain_days=7, ch_host="localhost")
     client = _mock_client()
-    client.execute.return_value = [("BACKUP_CREATED", "")]
+    query_result = MagicMock()
+    query_result.result_rows = [("BACKUP_CREATED", "")]
+    client.query.return_value = query_result
 
     # Create the directory but leave it empty
     (tmp_path / "daily_20260329").mkdir()
@@ -258,7 +286,9 @@ def test_verify_backup_raises_when_empty(tmp_path: Path) -> None:
 def test_verify_backup_success(tmp_path: Path) -> None:
     mgr = BackupManager(backup_dir=str(tmp_path), retain_days=7, ch_host="localhost")
     client = _mock_client()
-    client.execute.return_value = [("BACKUP_CREATED", "")]
+    query_result = MagicMock()
+    query_result.result_rows = [("BACKUP_CREATED", "")]
+    client.query.return_value = query_result
 
     # Create dir with a real file
     backup_dir = tmp_path / "daily_20260329"
@@ -359,13 +389,9 @@ def test_report_success_with_notifier(tmp_path: Path, monkeypatch: pytest.Monkey
     mock_notifier.notify_backup_success = AsyncMock(return_value=None)
     mgr._notifier = mock_notifier
 
-    # Patch asyncio.run to avoid nested event loop issues
-    asyncio_run_calls: list = []
-    monkeypatch.setattr("asyncio.run", lambda coro: asyncio_run_calls.append(coro))
-
     mgr._report_success("daily_20260329", duration_s=1.0)
 
-    assert len(asyncio_run_calls) == 1
+    mock_notifier.notify_backup_success.assert_awaited_once()
 
 
 def test_report_failure_no_notifier_no_crash(tmp_path: Path) -> None:
@@ -405,12 +431,9 @@ def test_report_failure_with_notifier(tmp_path: Path, monkeypatch: pytest.Monkey
     mock_notifier.notify_backup_failed = AsyncMock(return_value=None)
     mgr._notifier = mock_notifier
 
-    asyncio_run_calls: list = []
-    monkeypatch.setattr("asyncio.run", lambda coro: asyncio_run_calls.append(coro))
-
     mgr._report_failure("daily_20260329", BackupError("err"), duration_s=0.5)
 
-    assert len(asyncio_run_calls) == 1
+    mock_notifier.notify_backup_failed.assert_awaited_once()
 
 
 def test_report_failure_with_metrics(tmp_path: Path) -> None:
@@ -448,7 +471,7 @@ def test_restore_default_target_db() -> None:
     with _patch_client(mgr, client):
         mgr.restore("daily_20260329")
 
-    sql_call = client.execute.call_args[0][0]
+    sql_call = client.command.call_args[0][0]
     assert "RESTORE DATABASE hft FROM" in sql_call
     assert " AS " not in sql_call
 
@@ -461,7 +484,7 @@ def test_restore_alternate_target_db() -> None:
     with _patch_client(mgr, client):
         mgr.restore("daily_20260329", target_db="hft_test")
 
-    sql_call = client.execute.call_args[0][0]
+    sql_call = client.command.call_args[0][0]
     assert "AS hft_test" in sql_call
 
 
@@ -495,7 +518,7 @@ def test_restore_table_default_db() -> None:
     with _patch_client(mgr, client):
         mgr.restore_table("daily_20260329", table="market_data")
 
-    sql_call = client.execute.call_args[0][0]
+    sql_call = client.command.call_args[0][0]
     assert "RESTORE TABLE hft.market_data FROM" in sql_call
     assert " AS " not in sql_call
 
@@ -507,7 +530,7 @@ def test_restore_table_alternate_db() -> None:
     with _patch_client(mgr, client):
         mgr.restore_table("daily_20260329", table="market_data", target_db="hft_test")
 
-    sql_call = client.execute.call_args[0][0]
+    sql_call = client.command.call_args[0][0]
     assert "AS hft_test.market_data" in sql_call
 
 
@@ -520,15 +543,24 @@ def test_verify_restore_success(monkeypatch: pytest.MonkeyPatch) -> None:
     mgr = _make_manager()
     client = _mock_client()
 
-    table_list = [("market_data",), ("orders",)]
-    # Per-table count queries
-    client.execute.side_effect = [
-        table_list,  # SELECT name FROM system.tables
-        [(1000,)],   # orig count market_data
-        [(1000,)],   # restored count market_data
-        [(500,)],    # orig count orders
-        [(500,)],    # restored count orders
-        None,        # DROP DATABASE
+    # query() returns objects with .result_rows
+    table_result = MagicMock()
+    table_result.result_rows = [("market_data",), ("orders",)]
+    orig_md = MagicMock()
+    orig_md.result_rows = [(1000,)]
+    rest_md = MagicMock()
+    rest_md.result_rows = [(1000,)]
+    orig_ord = MagicMock()
+    orig_ord.result_rows = [(500,)]
+    rest_ord = MagicMock()
+    rest_ord.result_rows = [(500,)]
+
+    client.query.side_effect = [
+        table_result,  # SELECT name FROM system.tables
+        orig_md,  # orig count market_data
+        rest_md,  # restored count market_data
+        orig_ord,  # orig count orders
+        rest_ord,  # restored count orders
     ]
 
     monkeypatch.setattr(BackupManager, "restore", lambda self, name, target_db: None)
@@ -538,18 +570,25 @@ def test_verify_restore_success(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert results["market_data"] == (1000, 1000)
     assert results["orders"] == (500, 500)
+    # DROP DATABASE called via command() in finally block
+    client.command.assert_called_once()
 
 
 def test_verify_restore_mismatch_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     mgr = _make_manager()
     client = _mock_client()
 
-    table_list = [("market_data",)]
-    client.execute.side_effect = [
-        table_list,   # SELECT name FROM system.tables
-        [(1000,)],    # orig count
-        [(900,)],     # restored count — mismatch!
-        None,         # DROP DATABASE
+    table_result = MagicMock()
+    table_result.result_rows = [("market_data",)]
+    orig_count = MagicMock()
+    orig_count.result_rows = [(1000,)]
+    rest_count = MagicMock()
+    rest_count.result_rows = [(900,)]  # mismatch!
+
+    client.query.side_effect = [
+        table_result,
+        orig_count,
+        rest_count,
     ]
 
     monkeypatch.setattr(BackupManager, "restore", lambda self, name, target_db: None)
@@ -566,15 +605,13 @@ def test_verify_restore_drops_temp_db_on_failure(monkeypatch: pytest.MonkeyPatch
 
     drop_calls: list[str] = []
 
-    def _execute(sql, *args, **kwargs):
+    def _command(sql, *args, **kwargs):
         if "DROP" in sql:
             drop_calls.append(sql)
             return None
-        if "system.tables" in sql:
-            return [("market_data",)]
-        return [(100,)]
+        return None
 
-    client.execute.side_effect = _execute
+    client.command.side_effect = _command
 
     # restore itself raises an error
     monkeypatch.setattr(
@@ -587,7 +624,7 @@ def test_verify_restore_drops_temp_db_on_failure(monkeypatch: pytest.MonkeyPatch
         with pytest.raises(BackupError):
             mgr.verify_restore("daily_20260329")
 
-    # DROP should have been called in finally block
+    # DROP should have been called in finally block via command()
     assert any("DROP DATABASE" in c for c in drop_calls)
 
 
@@ -713,7 +750,7 @@ def test_execute_backup_sends_correct_sql() -> None:
     with _patch_client(mgr, client):
         mgr._execute_backup("daily_20260329")
 
-    sql_call = client.execute.call_args[0][0]
+    sql_call = client.command.call_args[0][0]
     assert "BACKUP DATABASE hft" in sql_call
     assert "daily_20260329/" in sql_call
     assert "backup_local" in sql_call

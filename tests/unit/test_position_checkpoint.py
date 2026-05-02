@@ -23,12 +23,17 @@ def _make_position(symbol: str, net_qty: int, avg_price: int, pnl: int) -> Magic
     pos.net_qty = net_qty
     pos.avg_price_scaled = avg_price
     pos.realized_pnl_scaled = pnl
+    pos.fees_scaled = 0
     return pos
 
 
 def _make_store(positions: dict | None = None) -> MagicMock:
     store = MagicMock()
-    store.positions = positions or {}
+    snapshot = positions or {}
+    store.positions = snapshot
+    store.snapshot_positions.return_value = snapshot
+    store._peak_equity_scaled = 0
+    store._total_realized_pnl_scaled = sum(pos.realized_pnl_scaled for pos in snapshot.values())
     return store
 
 
@@ -158,6 +163,12 @@ class TestLoadCheckpoint:
 
 
 class TestConfiguration:
+    def test_default_path_uses_state_dir(self, monkeypatch):
+        monkeypatch.delenv("HFT_POSITION_CHECKPOINT_PATH", raising=False)
+        store = _make_store()
+        writer = PositionCheckpointWriter(store)
+        assert writer._path == ".state/position_checkpoint.json"
+
     def test_configurable_path(self, tmp_path):
         custom = str(tmp_path / "custom" / "pos.json")
         store = _make_store()

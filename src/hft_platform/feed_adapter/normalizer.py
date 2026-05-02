@@ -1,15 +1,17 @@
+import datetime as dt
 import importlib
 import os
 import re
 import sys
 from collections.abc import Iterable
+from dataclasses import replace
 from typing import Any, cast
 
 from structlog import get_logger
 
 from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceCodec, SymbolMetadataPriceScaleProvider
-from hft_platform.events import BidAskEvent, MetaData, TickEvent
+from hft_platform.events import BidAskEvent, BookStats, FusedBookStats, MetaData, TickEvent
 from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.trade_classifier import TradeClassifier
 
@@ -19,9 +21,12 @@ from hft_platform.trade_classifier import TradeClassifier
 
 logger = get_logger("feed_adapter.normalizer")
 
+_TICK_EVENT_SUPPORTS_CONTRACT = "contract" in getattr(TickEvent, "__dataclass_fields__", {})
+_BIDASK_EVENT_SUPPORTS_CONTRACT = "contract" in getattr(BidAskEvent, "__dataclass_fields__", {})
+
 _RUST_ENABLED = os.getenv("HFT_RUST_ACCEL", "1").lower() not in {"0", "false", "no", "off"}
 _RUST_MIN_LEVELS = int(os.getenv("HFT_RUST_MIN_LEVELS", "0"))
-_EVENT_MODE = os.getenv("HFT_EVENT_MODE", "tuple").lower()
+_EVENT_MODE = os.getenv("HFT_EVENT_MODE", "event").lower()
 if "pytest" in sys.modules:
     _EVENT_MODE = "event"
 _RETURN_TUPLE = _EVENT_MODE in {"tuple", "raw"}
@@ -117,22 +122,9 @@ class SymbolMetadata:
     def __init__(self, config_path: str | None = None):
         # simplified for this context, assuming existing logic was ok, just need it here
         if config_path is None:
-            config_path = os.getenv("SYMBOLS_CONFIG")
-            if not config_path:
-                # Resolve config path relative to the project root (not cwd)
-                # so tests that change cwd don't break metadata loading.
-                _pkg_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-                _project_root = os.path.dirname(os.path.dirname(_pkg_dir))
-                _abs_symbols = os.path.join(_project_root, "config", "symbols.yaml")
-                _abs_base = os.path.join(_project_root, "config", "base", "symbols.yaml")
-                if os.path.exists(_abs_symbols):
-                    config_path = _abs_symbols
-                elif os.path.exists(_abs_base):
-                    config_path = _abs_base
-                elif os.path.exists("config/symbols.yaml"):
-                    config_path = "config/symbols.yaml"
-                else:
-                    config_path = "config/base/symbols.yaml"
+            from hft_platform.config.symbols_path import resolve_symbols_config_path
+
+            config_path = resolve_symbols_config_path()
 
         self.config_path = config_path
         self.meta: dict[str, dict[str, Any]] = {}
@@ -142,6 +134,7 @@ class SymbolMetadata:
         self._exchange_cache: dict[str, str] = {}
         self._product_type_cache: dict[str, str] = {}
         self._mtime: float | None = None
+        self.alias_to_actual: dict[str, str] = {}  # config alias → callback code (e.g. TXFR1 → TXFE6)
         from hft_platform.core.instrument_registry import InstrumentRegistry
 
         self.registry = InstrumentRegistry()
@@ -207,6 +200,54 @@ class SymbolMetadata:
             resolved.update(self.symbols_by_tag.get(key, set()))
         return resolved
 
+    def contract_ref(self, symbol: str) -> Any:
+        """Return a cached ``ContractRef`` for *symbol*, or ``None`` if the
+        symbol cannot be parsed.
+
+        Gate 2b of the Option-3 migration. Lazy-populated: events passing
+        through the hot path incur a single dict lookup after the first parse
+        per symbol. Failures are cached as ``None`` so we do not re-parse a
+        malformed symbol on every tick.
+        """
+        cache = getattr(self, "_contract_ref_cache", None)
+        if cache is None:
+            cache = {}
+            self._contract_ref_cache = cache
+        if symbol in cache:
+            return cache[symbol]
+
+        import datetime as dt
+
+        try:
+            from hft_platform.contracts.ref import (
+                ContractFamily,
+                FutureRef,
+                parse_display,
+            )
+        except ModuleNotFoundError:
+            cache[symbol] = None
+            return None
+
+        base_year = dt.datetime.fromtimestamp(timebase.now_s(), dt.UTC).year
+        parsed: Any
+        try:
+            parsed = parse_display(symbol, base_year=base_year)
+        except ValueError:
+            parsed = None
+        # A family string (e.g. "TMFR1") is not a concrete contract; events
+        # carry a concrete expiry. We keep the ``contract`` field as None for
+        # family-form symbols and rely on the resolver to fill it at dispatch.
+        if isinstance(parsed, ContractFamily):
+            parsed = None
+        # Defensive: future single-digit year parser may not uniquely
+        # identify the exact expiry day. Downstream (ContractResolver) is the
+        # authority for concrete expiry dates; parse_display is a best-effort
+        # fallback for dual-write convenience.
+        if isinstance(parsed, FutureRef):
+            parsed = parsed  # type intentionally narrowed; keep as parsed.
+        cache[symbol] = parsed
+        return parsed
+
     def price_scale(self, symbol: str) -> int:
         cached = self._price_scale_cache.get(symbol)
         if cached is not None:
@@ -229,6 +270,18 @@ class SymbolMetadata:
                     pass
         self._price_scale_cache[symbol] = self.DEFAULT_SCALE
         return self.DEFAULT_SCALE
+
+    def tick_size_scaled(self, symbol: str) -> int:
+        """Return tick_size * price_scale for *symbol*, or 0 if unknown.
+
+        Used by strategy intent validation to reject under-scaled prices (e.g.
+        a strategy passing raw 505 instead of 5_050_000 for a x10000-scaled
+        symbol). A zero return disables the guard for symbols without metadata.
+        """
+        entry = self.meta.get(symbol)
+        if not entry:
+            return 0
+        return self._safe_tick_size_scaled(entry, symbol)
 
     def contract_multiplier(self, symbol: str) -> int:
         """Return contract point-value multiplier for PnL calculation.
@@ -293,6 +346,46 @@ class SymbolMetadata:
                 params[key] = entry[key]
         return params
 
+    def set_alias_map(self, alias_map: dict[str, str]) -> None:
+        """Set alias→actual mapping from broker contract resolution.
+
+        Called by bootstrap after broker login to propagate alias mappings
+        (e.g. TXFR1 → TXFE6) resolved by ContractsRuntime.
+
+        Also copies config metadata entries from alias codes to actual codes
+        so that price_scale(), exchange(), product_type() etc. resolve correctly
+        for the actual callback codes used at runtime.
+        """
+        self.alias_to_actual.update(alias_map)
+        for config_code, actual_code in alias_map.items():
+            if actual_code != config_code and actual_code not in self.meta:
+                config_entry = self.meta.get(config_code)
+                if config_entry is not None:
+                    self.meta[actual_code] = config_entry
+
+    def resolve_symbol(self, code: str) -> str:
+        """Resolve a config symbol code to the actual callback code.
+
+        Returns the actual month code if an alias mapping exists,
+        otherwise returns the input code unchanged.
+        """
+        return self.alias_to_actual.get(code, code)
+
+    def resolve_symbols(self, codes: set[str] | list[str]) -> set[str]:
+        """Resolve a set of config symbol codes to actual callback codes."""
+        return {self.alias_to_actual.get(c, c) for c in codes}
+
+    def _safe_tick_size_scaled(self, entry: dict[str, Any], code: str) -> int:
+        """Compute tick_size_scaled with fallback for invalid tick_size values."""
+        raw = entry.get("tick_size", 1.0)
+        try:
+            val = float(raw)
+            if val <= 0:
+                val = 1.0
+        except (TypeError, ValueError):
+            val = 1.0
+        return int(round(val * self.price_scale(code)))
+
     def _populate_registry(self) -> None:
         """Build InstrumentProfile entries from symbols.yaml metadata."""
         from hft_platform.core.instrument_registry import (
@@ -331,7 +424,7 @@ class SymbolMetadata:
             if itype == InstrumentType.OPTION:
                 raw_strike = entry.get("strike") or entry.get("strike_price")
                 if raw_strike is not None:
-                    strike_scaled = int(float(raw_strike) * self.price_scale(code))
+                    strike_scaled = int(round(float(raw_strike) * self.price_scale(code)))
                 raw_right = str(entry.get("right") or entry.get("option_right", ""))
                 if raw_right.upper() in ("C", "CALL"):
                     option_right = OptionRight.CALL
@@ -355,7 +448,7 @@ class SymbolMetadata:
                 underlying=str(entry.get("underlying", "")),
                 exchange=self.exchange(code),
                 multiplier=self.contract_multiplier(code),
-                tick_size_scaled=int(float(entry.get("tick_size", 1.0)) * self.price_scale(code)),
+                tick_size_scaled=self._safe_tick_size_scaled(entry, code),
                 price_scale=self.price_scale(code),
                 fee_structure=fee,
                 trading_hours=hours,
@@ -373,11 +466,56 @@ def _extract_ts_ns(ts_val: Any) -> int:
     return timebase.coerce_ns(ts_val)
 
 
+def _event_contract_kw(event_cls: type, metadata: "SymbolMetadata | None", symbol: str) -> dict[str, Any]:
+    if event_cls is TickEvent:
+        supports_contract = _TICK_EVENT_SUPPORTS_CONTRACT
+    elif event_cls is BidAskEvent:
+        supports_contract = _BIDASK_EVENT_SUPPORTS_CONTRACT
+    else:
+        supports_contract = False
+    if not supports_contract:
+        return {}
+    return {"contract": metadata.contract_ref(symbol) if metadata is not None else None}
+
+
+def _local_tz_offset_ns(now_ns: int) -> int:
+    try:
+        now_dt = dt.datetime.fromtimestamp(now_ns / 1e9, tz=timebase.TZINFO)
+        offset = timebase.TZINFO.utcoffset(now_dt)
+    except Exception:
+        return 0
+    if offset is None:
+        return 0
+    return int(offset.total_seconds() * 1e9)
+
+
+def _correct_local_tz_future_ts(exch_ts: int, now_ns: int) -> int | None:
+    offset_ns = _local_tz_offset_ns(now_ns)
+    if not offset_ns:
+        return None
+    corrected = exch_ts - offset_ns
+    if abs(corrected - now_ns) >= abs(exch_ts - now_ns):
+        return None
+    if corrected - now_ns > _TS_MAX_FUTURE_NS:
+        return None
+    return corrected
+
+
 def _clamp_future_ts(exch_ts: int, now_ns: int, topic: str, symbol: str) -> int:
     if not exch_ts or not _TS_MAX_FUTURE_NS:
         return exch_ts
     delta_ns = exch_ts - now_ns
     if delta_ns > _TS_MAX_FUTURE_NS:
+        corrected = _correct_local_tz_future_ts(exch_ts, now_ns)
+        if corrected is not None:
+            logger.debug(
+                "Exchange timestamp timezone shift corrected",
+                topic=topic,
+                symbol=symbol,
+                delta_ns=delta_ns,
+                corrected_delta_ns=corrected - now_ns,
+            )
+            return corrected
         logger.warning(
             "Exchange timestamp in future",
             topic=topic,
@@ -408,6 +546,14 @@ class MarketDataNormalizer:
         "_fixed5_ask_vols_np",
         "_fused",
         "_trade_classifier",
+        "_latency_metrics_counter",
+        "_latency_metrics_sample_every",
+        "_rust_fallback_tick",
+        "_rust_fallback_bidask",
+        "_skip_tick_missing_symbol",
+        "_skip_tick_negative_price",
+        "_skip_bidask_missing_symbol",
+        "_skip_snapshot_missing_symbol",
     )
 
     def __init__(self, config_path: str | None = None, metadata: SymbolMetadata | None = None):
@@ -418,11 +564,20 @@ class MarketDataNormalizer:
         self.metadata = metadata or SymbolMetadata(config_path)
         self.price_codec = PriceCodec(SymbolMetadataPriceScaleProvider(self.metadata))
         self.metrics = MetricsRegistry.get()
+        self._rust_fallback_tick = self.metrics.rust_fallback_total.labels(type="tick") if self.metrics else None
+        self._rust_fallback_bidask = self.metrics.rust_fallback_total.labels(type="bidask") if self.metrics else None
+        _skip = self.metrics.normalization_skip_total if self.metrics else None
+        self._skip_tick_missing_symbol = _skip.labels(type="tick", reason="missing_symbol") if _skip else None
+        self._skip_tick_negative_price = _skip.labels(type="tick", reason="negative_price") if _skip else None
+        self._skip_bidask_missing_symbol = _skip.labels(type="bidask", reason="missing_symbol") if _skip else None
+        self._skip_snapshot_missing_symbol = _skip.labels(type="snapshot", reason="missing_symbol") if _skip else None
         self._last_symbol: str | None = None
         self._last_scale: int = SymbolMetadata.DEFAULT_SCALE
         self._last_local_ts_tick: int = 0
         self._last_local_ts_bidask: int = 0
         self._last_local_ts_snapshot: int = 0
+        self._latency_metrics_counter: int = 0
+        self._latency_metrics_sample_every: int = max(1, int(os.getenv("HFT_NORMALIZER_METRICS_SAMPLE_EVERY", "4")))
         self._last_skew_log_ns = 0
         self._trade_classifier = TradeClassifier()
         self._fused: Any = None
@@ -457,38 +612,83 @@ class MarketDataNormalizer:
         """Clamp future exchange timestamps and sync/cap local_ts against exch_ts.
 
         Returns ``(exch_ts, local_ts)`` after all adjustments.
+
+        P2-b: The gauge ``feed_time_skew_ns`` previously only updated inside
+        the over-threshold branch, so it stuck at the worst raw delta ever
+        seen (a 7,997s value from a stale ts_epoch was observed in the
+        live signal). It now reflects the *current* delta on every event
+        (post-clamp), and a separate counter
+        ``feed_time_skew_over_threshold_total{topic, severity}`` records
+        how often we actually exceeded 1s / 10s / 60s — that is the
+        durable observability handle, not the gauge.
         """
+        raw_delta: int = 0
         if exch_ts:
             exch_ts = _clamp_future_ts(exch_ts, local_ts, topic, symbol)
             if local_ts < exch_ts:
                 local_ts = exch_ts
             else:
-                delta = local_ts - exch_ts
-                if _TS_MAX_LAG_NS and delta > _TS_MAX_LAG_NS:
+                raw_delta = local_ts - exch_ts
+                if _TS_MAX_LAG_NS and raw_delta > _TS_MAX_LAG_NS:
                     if _TS_SKEW_LOG_COOLDOWN_NS and (local_ts - self._last_skew_log_ns > _TS_SKEW_LOG_COOLDOWN_NS):
+                        # Live signal showed 3 distinct mis-epoched
+                        # contracts (EXFF6 ~3.95 days, TXFG6 ~33 min,
+                        # MXFF6 ~7.5s) all collapsing to the clamp ceiling
+                        # in the gauge, with no way to tell them apart.
+                        # Always include the broker code + raw / clamped
+                        # delta so the warning carries enough context to
+                        # triage the underlying ts_epoch problem.
                         logger.warning(
-                            "Feed time skew",
+                            "feed_time_skew",
                             topic=topic,
                             symbol=symbol,
-                            delta_ns=delta,
+                            raw_delta_ns=raw_delta,
+                            clamped_delta_ns=_TS_MAX_LAG_NS,
                             max_ns=_TS_MAX_LAG_NS,
                         )
                         self._last_skew_log_ns = local_ts
                     if self.metrics:
-                        self.metrics.feed_time_skew_ns.labels(topic=topic).set(delta)
+                        # Sample over-threshold events at three severities
+                        # so dashboards can alert on "any skew >1s" without
+                        # being drowned by routine sub-second jitter.
+                        if raw_delta > 60_000_000_000:
+                            self.metrics.feed_time_skew_over_threshold_total.labels(
+                                topic=topic, severity="critical_60s"
+                            ).inc()
+                        elif raw_delta > 10_000_000_000:
+                            self.metrics.feed_time_skew_over_threshold_total.labels(
+                                topic=topic, severity="high_10s"
+                            ).inc()
+                        else:
+                            self.metrics.feed_time_skew_over_threshold_total.labels(
+                                topic=topic, severity="warn_1s"
+                            ).inc()
                     local_ts = exch_ts + _TS_MAX_LAG_NS
+            # P2-b: gauge always reflects the current (post-clamp) delta
+            # so "feed_time_skew_ns" answers "right now, how skewed is this
+            # topic?" instead of "what is the worst delta ever seen?".
+            if self.metrics:
+                current_delta = local_ts - exch_ts
+                self.metrics.feed_time_skew_ns.labels(topic=topic).set(current_delta)
         return exch_ts, local_ts
 
     def _record_latency_metrics(self, exch_ts: int, local_ts: int, last_ts_attr: str) -> None:
         """Record feed_latency_ns and feed_interarrival_ns metrics and update the
-        named ``_last_local_ts_*`` attribute."""
+        named ``_last_local_ts_*`` attribute.
+
+        Metrics are sampled every ``_latency_metrics_sample_every`` calls to reduce
+        per-tick Prometheus overhead.  The ``last_ts_attr`` timestamp is always
+        updated so that interarrival deltas remain accurate on sampled events.
+        """
         if self.metrics:
-            if exch_ts:
+            self._latency_metrics_counter += 1
+            sample = self._latency_metrics_counter % self._latency_metrics_sample_every == 0
+            if exch_ts and sample:
                 lag_ns = local_ts - exch_ts
                 if lag_ns >= 0:
                     self.metrics.feed_latency_ns.observe(lag_ns)
             last = getattr(self, last_ts_attr)
-            if last:
+            if last and sample:
                 delta = local_ts - last
                 if delta >= 0:
                     self.metrics.feed_interarrival_ns.observe(delta)
@@ -566,22 +766,27 @@ class MarketDataNormalizer:
         try:
             if isinstance(payload, dict):
                 symbol = payload.get("code") or payload.get("Code")
-                ts_val = payload.get("ts") or payload.get("datetime")
-                close_val = payload.get("close") or payload.get("Close")
-                vol_val = payload.get("volume") or payload.get("Volume")
+                ts_val = payload.get("ts") if payload.get("ts") is not None else payload.get("datetime")
+                close_val = payload.get("close") if payload.get("close") is not None else payload.get("Close")
+                vol_val = payload.get("volume") if payload.get("volume") is not None else payload.get("Volume")
                 total_volume = int(payload.get("total_volume") or 0)
                 is_simtrade = bool(payload.get("simtrade") or 0)
                 is_odd_lot = bool(payload.get("intraday_odd") or 0)
             else:
                 symbol = getattr(payload, "code", None) or getattr(payload, "Code", None)
-                ts_val = getattr(payload, "ts", None) or getattr(payload, "datetime", None)
-                close_val = getattr(payload, "close", None) or getattr(payload, "Close", None)
-                vol_val = getattr(payload, "volume", None) or getattr(payload, "Volume", None)
+                _ts = getattr(payload, "ts", None)
+                ts_val = _ts if _ts is not None else getattr(payload, "datetime", None)
+                _close = getattr(payload, "close", None)
+                close_val = _close if _close is not None else getattr(payload, "Close", None)
+                _vol = getattr(payload, "volume", None)
+                vol_val = _vol if _vol is not None else getattr(payload, "Volume", None)
                 total_volume = int(getattr(payload, "total_volume", None) or 0)
                 is_simtrade = bool(getattr(payload, "simtrade", None) or 0)
                 is_odd_lot = bool(getattr(payload, "intraday_odd", None) or 0)
 
             if not symbol:
+                if self._skip_tick_missing_symbol:
+                    self._skip_tick_missing_symbol.inc()
                 return None
 
             exch_ts = _extract_ts_ns(ts_val)
@@ -606,6 +811,10 @@ class MarketDataNormalizer:
                             # Rust extract::<f64> fails on str values; fall through to Python
                             if price == 0 and close_val:
                                 raise ValueError("rust returned zero price for non-zero close")
+                            if price <= 0:
+                                if self._skip_tick_negative_price:
+                                    self._skip_tick_negative_price.inc()
+                                return None
                             if exch_ts_py:
                                 exch_ts = exch_ts_py
                             if _RETURN_TUPLE:
@@ -633,12 +842,24 @@ class MarketDataNormalizer:
                                 is_odd_lot=bool(is_odd_lot),
                                 trade_direction=_td,
                                 trade_confidence=_tc,
+                                **_event_contract_kw(TickEvent, self.metadata, _sym),
                             )
                     except Exception as exc:
                         logger.debug("rust_tick_fallback", error=str(exc))
-                price = int(float(close_val) * scale)
+                        if self._rust_fallback_tick:
+                            self._rust_fallback_tick.inc()
+                price = int(round(float(close_val) * scale))
+                if price <= 0:
+                    if self._skip_tick_negative_price:
+                        self._skip_tick_negative_price.inc()
+                    return None
             else:
                 price = 0
+
+            if price <= 0:
+                if self._skip_tick_negative_price:
+                    self._skip_tick_negative_price.inc()
+                return None
 
             volume = int(vol_val) if vol_val is not None else 0
 
@@ -675,6 +896,7 @@ class MarketDataNormalizer:
                 is_odd_lot=is_odd_lot,
                 trade_direction=_td,
                 trade_confidence=_tc,
+                **_event_contract_kw(TickEvent, self.metadata, symbol),
             )
         except Exception as e:
             logger.error("Normalize Tick Error", error=str(e), payload_type=str(type(payload)))
@@ -686,19 +908,22 @@ class MarketDataNormalizer:
         try:
             if isinstance(payload, dict):
                 symbol = payload.get("code") or payload.get("Code")
-                ts_val = payload.get("ts") or payload.get("datetime")
+                ts_val = payload.get("ts") if payload.get("ts") is not None else payload.get("datetime")
                 bp = payload.get("bid_price") or []
                 bv = payload.get("bid_volume") or []
                 ap = payload.get("ask_price") or []
                 av = payload.get("ask_volume") or []
             else:
                 symbol = getattr(payload, "code", None) or getattr(payload, "Code", None)
-                ts_val = getattr(payload, "ts", None) or getattr(payload, "datetime", None)
+                _ba_ts = getattr(payload, "ts", None)
+                ts_val = _ba_ts if _ba_ts is not None else getattr(payload, "datetime", None)
                 bp = getattr(payload, "bid_price", None) or []
                 bv = getattr(payload, "bid_volume", None) or []
                 ap = getattr(payload, "ask_price", None) or []
                 av = getattr(payload, "ask_volume", None) or []
             if not symbol:
+                if self._skip_bidask_missing_symbol:
+                    self._skip_bidask_missing_symbol.inc()
                 return None
 
             exch_ts = _extract_ts_ns(ts_val)
@@ -741,10 +966,10 @@ class MarketDataNormalizer:
                         mx2 = int(mid_x2)
                         ss = int(spread_scaled)
                         timb = float(top_imbalance)
-                        # Standard stats tuple (backward-compat: mid_price as float, spread as float)
-                        compat_stats = (bb, ba, bd, ad, mx2 / 2.0, float(ss), timb)
+                        # Standard stats (backward-compat: mid_price as float, spread as float)
+                        compat_stats = BookStats(bb, ba, bd, ad, mx2 / 2.0, float(ss), timb)
                         # Fused stats: integer mid_x2 + spread_scaled for LOBEngine bypass
-                        fused_stats = (bb, ba, bd, ad, mx2, ss, timb)
+                        fused_stats = FusedBookStats(bb, ba, bd, ad, mx2, ss, timb)
 
                         self._trade_classifier.update_quotes(symbol, bb, ba)
 
@@ -776,10 +1001,13 @@ class MarketDataNormalizer:
                             asks=asks_np,
                             stats=compat_stats,
                             fused_stats=fused_stats,
+                            **_event_contract_kw(BidAskEvent, self.metadata, symbol),
                         )
                 except Exception as exc:
                     # Fall through to standard path
                     logger.debug("rust_bidask_fallback", stage="fused_path", error=str(exc))
+                    if self._rust_fallback_bidask:
+                        self._rust_fallback_bidask.inc()
 
             # Convert to numpy
             # We need to scale prices. Using numpy vectorization for scaling is faster.
@@ -859,7 +1087,7 @@ class MarketDataNormalizer:
                             imbalance,
                             synthesized,
                         ) = rust_tuple
-                        stats = (
+                        stats = BookStats(
                             int(best_bid),
                             int(best_ask),
                             int(bid_depth),
@@ -870,6 +1098,8 @@ class MarketDataNormalizer:
                         )
                 except Exception as exc:
                     logger.debug("rust_bidask_fallback", stage="synth_bidask", error=str(exc))
+                    if self._rust_fallback_bidask:
+                        self._rust_fallback_bidask.inc()
                     bids_final = None
                     asks_final = None
                     stats = None
@@ -885,9 +1115,12 @@ class MarketDataNormalizer:
                 and _RUST_STATS_TUPLE
             ):
                 try:
-                    bids_final, asks_final, stats = _RUST_SCALE_BOOK_PAIR_STATS(bp, bv, ap, av, scale)
+                    bids_final, asks_final, _raw_stats = _RUST_SCALE_BOOK_PAIR_STATS(bp, bv, ap, av, scale)
+                    stats = BookStats(*_raw_stats) if _raw_stats is not None else None
                 except Exception as exc:
                     logger.debug("rust_bidask_fallback", stage="scale_book_pair_stats", error=str(exc))
+                    if self._rust_fallback_bidask:
+                        self._rust_fallback_bidask.inc()
                     bids_final = None
                     asks_final = None
                     stats = None
@@ -952,7 +1185,7 @@ class MarketDataNormalizer:
                             spread,
                             imbalance,
                         ) = rust_tuple
-                        stats = (
+                        stats = BookStats(
                             int(best_bid),
                             int(best_ask),
                             int(bid_depth),
@@ -963,6 +1196,8 @@ class MarketDataNormalizer:
                         )
                 except Exception as exc:
                     logger.debug("rust_bidask_fallback", stage="normalize_bidask_np", error=str(exc))
+                    if self._rust_fallback_bidask:
+                        self._rust_fallback_bidask.inc()
                     bids_final = None
                     asks_final = None
                     stats = None
@@ -989,7 +1224,7 @@ class MarketDataNormalizer:
                         exch_ts_py = _extract_ts_ns(ts_val)
                         if exch_ts_py:
                             exch_ts = exch_ts_py
-                        stats = (
+                        stats = BookStats(
                             int(best_bid),
                             int(best_ask),
                             int(bid_depth),
@@ -1000,6 +1235,8 @@ class MarketDataNormalizer:
                         )
                 except Exception as exc:
                     logger.debug("rust_bidask_fallback", stage="normalize_bidask", error=str(exc))
+                    if self._rust_fallback_bidask:
+                        self._rust_fallback_bidask.inc()
                     bids_final = None
                     asks_final = None
                     stats = None
@@ -1008,9 +1245,12 @@ class MarketDataNormalizer:
             # the same work again via scale_book_pair_stats.
             if stats is None and use_rust and _RUST_SCALE_BOOK_PAIR_STATS and _RUST_STATS_TUPLE:
                 try:
-                    bids_final, asks_final, stats = _RUST_SCALE_BOOK_PAIR_STATS(bp, bv, ap, av, scale)
+                    bids_final, asks_final, _raw_stats2 = _RUST_SCALE_BOOK_PAIR_STATS(bp, bv, ap, av, scale)
+                    stats = BookStats(*_raw_stats2) if _raw_stats2 is not None else None
                 except Exception as exc:
                     logger.debug("rust_bidask_fallback", stage="scale_book_pair_stats_retry", error=str(exc))
+                    if self._rust_fallback_bidask:
+                        self._rust_fallback_bidask.inc()
                     bids_final = None
                     asks_final = None
                     stats = None
@@ -1019,6 +1259,8 @@ class MarketDataNormalizer:
                     bids_final, asks_final = _RUST_SCALE_BOOK_PAIR(bp, bv, ap, av, scale)
                 except Exception as exc:
                     logger.debug("rust_bidask_fallback", stage="scale_book_pair", error=str(exc))
+                    if self._rust_fallback_bidask:
+                        self._rust_fallback_bidask.inc()
                     bids_final = None
                     asks_final = None
 
@@ -1028,11 +1270,11 @@ class MarketDataNormalizer:
                         bids_final = _RUST_SCALE_BOOK_SEQ(bp, bv, scale)
                     except Exception as exc:
                         logger.debug("rust_bidask_fallback", stage="scale_book_seq_bid", error=str(exc))
+                        if self._rust_fallback_bidask:
+                            self._rust_fallback_bidask.inc()
                         bids_final = None
                 if bids_final is None:
-                    bids_final = [
-                        [int(float(price) * scale), int(volume)] for price, volume in zip(bp, bv) if price and volume
-                    ]
+                    bids_final = [[int(round(float(price) * scale)), int(volume)] for price, volume in zip(bp, bv)]
 
             if asks_final is None:
                 if use_rust and _RUST_SCALE_BOOK_SEQ:
@@ -1040,11 +1282,11 @@ class MarketDataNormalizer:
                         asks_final = _RUST_SCALE_BOOK_SEQ(ap, av, scale)
                     except Exception as exc:
                         logger.debug("rust_bidask_fallback", stage="scale_book_seq_ask", error=str(exc))
+                        if self._rust_fallback_bidask:
+                            self._rust_fallback_bidask.inc()
                         asks_final = None
                 if asks_final is None:
-                    asks_final = [
-                        [int(float(price) * scale), int(volume)] for price, volume in zip(ap, av) if price and volume
-                    ]
+                    asks_final = [[int(round(float(price) * scale)), int(volume)] for price, volume in zip(ap, av)]
 
             if not synthesized:
                 bids_final, asks_final, synthesized = self._maybe_synthesize_side(symbol, bids_final, asks_final, scale)
@@ -1082,7 +1324,14 @@ class MarketDataNormalizer:
             self._record_latency_metrics(exch_ts, local_ts, "_last_local_ts_bidask")
             meta = MetaData(seq=self._next_seq(), topic="bidask", source_ts=exch_ts, local_ts=local_ts)
             event_stats = stats if stats is not None and not synthesized else None
-            return BidAskEvent(meta=meta, symbol=symbol, bids=bids_final, asks=asks_final, stats=event_stats)
+            return BidAskEvent(
+                meta=meta,
+                symbol=symbol,
+                bids=bids_final,
+                asks=asks_final,
+                stats=event_stats,
+                **_event_contract_kw(BidAskEvent, self.metadata, symbol),
+            )
         except Exception as e:
             logger.error("Normalize BidAsk Error", error=str(e), payload_type=str(type(payload)))
             if self.metrics:
@@ -1106,7 +1355,19 @@ class MarketDataNormalizer:
             sell_volume = getattr(payload, "sell_volume", None)
 
         if not symbol:
+            if self._skip_snapshot_missing_symbol:
+                self._skip_snapshot_missing_symbol.inc()
             return None
+
+        # Guard: broker SDK may return list-typed fields for multi-level snapshots
+        if isinstance(buy_price, (list, tuple)):
+            buy_price = buy_price[0] if buy_price else 0
+        if isinstance(sell_price, (list, tuple)):
+            sell_price = sell_price[0] if sell_price else 0
+        if isinstance(buy_volume, (list, tuple)):
+            buy_volume = buy_volume[0] if buy_volume else 0
+        if isinstance(sell_volume, (list, tuple)):
+            sell_volume = sell_volume[0] if sell_volume else 0
 
         exch_ts = _extract_ts_ns(ts_val)
 
@@ -1116,9 +1377,9 @@ class MarketDataNormalizer:
             bids = []
             asks = []
             if buy_price:
-                bids.append([int(float(buy_price) * scale), int(buy_volume or 0)])
+                bids.append([int(round(float(buy_price) * scale)), int(buy_volume or 0)])
             if sell_price:
-                asks.append([int(float(sell_price) * scale), int(sell_volume or 0)])
+                asks.append([int(round(float(sell_price) * scale)), int(sell_volume or 0)])
             bids, asks, _ = self._maybe_synthesize_side(symbol, bids, asks, scale)
 
             if _RETURN_TUPLE:
@@ -1128,7 +1389,14 @@ class MarketDataNormalizer:
             exch_ts, local_ts = self._validate_and_sync_timestamp(exch_ts, local_ts, "snapshot", symbol)
             self._record_latency_metrics(exch_ts, local_ts, "_last_local_ts_snapshot")
             meta = MetaData(seq=self._next_seq(), topic="snapshot", source_ts=exch_ts, local_ts=local_ts)
-            return BidAskEvent(meta=meta, symbol=symbol, bids=bids, asks=asks, is_snapshot=True)
+            return BidAskEvent(
+                meta=meta,
+                symbol=symbol,
+                bids=bids,
+                asks=asks,
+                is_snapshot=True,
+                **_event_contract_kw(BidAskEvent, self.metadata, symbol),
+            )
 
         event = self.normalize_bidask(payload)
         if isinstance(event, tuple):
@@ -1136,5 +1404,5 @@ class MarketDataNormalizer:
                 return (event[0], event[1], event[2], event[3], event[4], True, *event[6:])
             return (event[0], event[1], event[2], event[3], event[4], True)
         if event:
-            event.is_snapshot = True
+            event = replace(event, is_snapshot=True)
         return event

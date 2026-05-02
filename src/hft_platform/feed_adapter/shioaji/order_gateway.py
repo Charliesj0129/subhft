@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -13,6 +14,21 @@ if TYPE_CHECKING:
 logger = get_logger("feed_adapter.order_gateway")
 
 
+def _default_order_timeout_ms() -> int:
+    """Default ACK timeout for place / update / cancel.
+
+    ``HFT_SHIOAJI_NONBLOCKING=1`` → return 0 (fire-and-callback).
+    Unset / other value → return 5000 (preserve blocking behaviour).
+
+    Env-gated so the non-blocking code path is reachable by default without
+    forcing every live deployment onto it. Adapter already handles the
+    "Trade without broker_ids yet" case via ``_register_broker_ids`` +
+    ``DECISION-007`` deferred terminal logic.
+    """
+    raw = os.environ.get("HFT_SHIOAJI_NONBLOCKING", "").strip()
+    return 0 if raw in {"1", "true", "True", "yes", "on"} else 5000
+
+
 class OrderGateway:
     """Dedicated order entry/cancel gateway."""
 
@@ -22,14 +38,19 @@ class OrderGateway:
         self._client = client
 
     @staticmethod
-    def _async_kwargs(timeout: int, cb: Any | None) -> dict[str, Any]:
+    def _async_kwargs(timeout: int | None, cb: Any | None) -> dict[str, Any]:
         """Build kwargs for non-blocking API calls.
 
-        When *timeout* is 0 the caller wants async confirmation; pass
-        ``timeout=0`` (and optionally ``cb``) through to the Shioaji SDK.
-        For the default blocking path (timeout > 0) an empty dict is
-        returned so existing behaviour is preserved.
+        ``timeout=None`` → defer to :func:`_default_order_timeout_ms`
+        (controlled by ``HFT_SHIOAJI_NONBLOCKING`` env var).
+        ``timeout=0`` → pass ``timeout=0`` (and optional ``cb``) to Shioaji
+        SDK for fire-and-callback mode (12x faster caller return per
+        Shioaji ADVANCED.md).
+        Any other value → empty dict so the SDK's own blocking default is
+        preserved (current production behaviour).
         """
+        if timeout is None:
+            timeout = _default_order_timeout_ms()
         if timeout != 0:
             return {}
         kw: dict[str, Any] = {"timeout": 0}
@@ -65,7 +86,7 @@ class OrderGateway:
         oc_type: str | None = None,
         account: Any | None = None,
         price_type: str | None = None,
-        timeout: int = 5000,
+        timeout: int | None = None,
         cb: Any | None = None,
     ) -> Any:
         sdk = self._sdk()
@@ -74,6 +95,8 @@ class OrderGateway:
             return {"seq_no": f"sim-{int(timebase.now_s() * 1000)}"}
         if sdk is None:
             raise RuntimeError("Shioaji SDK unavailable")
+        if not self._client.contracts_ready:
+            raise RuntimeError("Contracts not loaded — cannot place order")
 
         contract = self._client._get_contract(exchange, contract_code, product_type=product_type, allow_synthetic=False)
         if not contract:
@@ -141,7 +164,7 @@ class OrderGateway:
         oc_type: str | None,
         account: Any | None,
         custom_field: str | None,
-        timeout: int = 5000,
+        timeout: int | None = None,
         cb: Any | None = None,
     ) -> Any:
         sdk = self._sdk()
@@ -316,7 +339,7 @@ class OrderGateway:
     def cancel_order(
         self,
         trade: Any,
-        timeout: int = 5000,
+        timeout: int | None = None,
         cb: Any | None = None,
     ) -> Any:
         if not self._client.api:
@@ -339,7 +362,7 @@ class OrderGateway:
         trade: Any,
         price: float | None = None,
         qty: int | None = None,
-        timeout: int = 5000,
+        timeout: int | None = None,
         cb: Any | None = None,
     ) -> Any:
         if not self._client.api:

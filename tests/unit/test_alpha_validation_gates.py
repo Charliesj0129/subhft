@@ -160,7 +160,7 @@ def test_gate_c_walk_forward_fail(monkeypatch, tmp_path: Path):
     monkeypatch.setattr("research.backtest.hft_native_runner.ensure_hftbt_npz", lambda p: p)
     monkeypatch.setattr("hft_platform.alpha.experiments.ExperimentTracker", _FakeTracker)
     monkeypatch.setattr(
-        "hft_platform.alpha.validation._evaluate_oos_statistical_tests",
+        "hft_platform.alpha._gate_c._evaluate_oos_statistical_tests",
         lambda *a, **k: {
             "passed": True,
             "tests_passed": 4,
@@ -173,11 +173,11 @@ def test_gate_c_walk_forward_fail(monkeypatch, tmp_path: Path):
         },
     )
     monkeypatch.setattr(
-        "hft_platform.alpha.validation._evaluate_stress_backtest",
+        "hft_platform.alpha._gate_c._evaluate_stress_backtest",
         lambda **kwargs: {"passed": True},
     )
     monkeypatch.setattr(
-        "hft_platform.alpha.validation._evaluate_parameter_robustness",
+        "hft_platform.alpha._gate_c._evaluate_parameter_robustness",
         lambda **kwargs: {"passed": True},
     )
 
@@ -234,7 +234,7 @@ def test_gate_c_skip_walk_forward(monkeypatch, tmp_path: Path):
     monkeypatch.setattr("research.backtest.hft_native_runner.ensure_hftbt_npz", lambda p: p)
     monkeypatch.setattr("hft_platform.alpha.experiments.ExperimentTracker", _FakeTracker)
     monkeypatch.setattr(
-        "hft_platform.alpha.validation._evaluate_oos_statistical_tests",
+        "hft_platform.alpha._gate_c._evaluate_oos_statistical_tests",
         lambda *a, **k: {
             "passed": True,
             "tests_passed": 2,
@@ -247,11 +247,11 @@ def test_gate_c_skip_walk_forward(monkeypatch, tmp_path: Path):
         },
     )
     monkeypatch.setattr(
-        "hft_platform.alpha.validation._evaluate_stress_backtest",
+        "hft_platform.alpha._gate_c._evaluate_stress_backtest",
         lambda **kwargs: {"passed": True},
     )
     monkeypatch.setattr(
-        "hft_platform.alpha.validation._evaluate_parameter_robustness",
+        "hft_platform.alpha._gate_c._evaluate_parameter_robustness",
         lambda **kwargs: {"passed": True},
     )
 

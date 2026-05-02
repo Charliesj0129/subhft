@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import math
 
 import pytest
@@ -338,10 +339,7 @@ class TestExtractFlowFacts:
 
     def test_sustained_run_detection(self) -> None:
         # 5 consecutive bullish bars (ud_ratio > 1.3)
-        bars = [
-            _flow(f"2026-03-29 09:{i * 5:02d}:00", up=80, down=20)
-            for i in range(6)
-        ]
+        bars = [_flow(f"2026-03-29 09:{i * 5:02d}:00", up=80, down=20) for i in range(6)]
         sd = _session_data(flow=bars)
         ff = extract_flow_facts(sd)
 
@@ -381,17 +379,14 @@ class TestExtractFlowFacts:
 
     def test_eod_drift(self) -> None:
         # Session is neutral (ud≈1), but last 6 bars are bullish
-        neutral_bars = [
-            _flow(f"2026-03-29 09:{i * 5:02d}:00", up=50, down=50)
-            for i in range(10)
+        neutral_bars = [_flow(f"2026-03-29 09:{i * 5:02d}:00", up=50, down=50) for i in range(10)]
+        # Make last 6 bullish (frozen=True: use dataclasses.replace)
+        bullish_bars = [
+            dataclasses.replace(bar, uptick_vol=80, downtick_vol=20, ud_ratio=4.0) for bar in neutral_bars[-6:]
         ]
-        # Make last 6 bullish
-        for bar in neutral_bars[-6:]:
-            bar.uptick_vol = 80  # type: ignore[misc]
-            bar.downtick_vol = 20  # type: ignore[misc]
-            bar.ud_ratio = 4.0  # type: ignore[misc]
+        bars = neutral_bars[:-6] + bullish_bars
 
-        sd = _session_data(flow=neutral_bars)
+        sd = _session_data(flow=bars)
         ff = extract_flow_facts(sd)
 
         assert ff.eod_ud > ff.session_ud

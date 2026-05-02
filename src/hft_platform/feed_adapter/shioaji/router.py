@@ -201,16 +201,23 @@ def _extract_code_from_topic(topic: str) -> str | None:
                         code = parts[-1]
                         break
 
-    if _CACHE_WARMED:
-        # Post-warmup: dict writes are GIL-atomic in CPython; skip lock.
-        if len(TOPIC_CODE_CACHE) < _TOPIC_CODE_CACHE_MAX:
-            TOPIC_CODE_CACHE[topic] = code
-    else:
-        with CLIENT_REGISTRY_LOCK:
-            if len(TOPIC_CODE_CACHE) >= _TOPIC_CODE_CACHE_MAX:
-                # Simple coarse reset keeps O(1) behavior on hot path.
-                TOPIC_CODE_CACHE.clear()
-            TOPIC_CODE_CACHE[topic] = code
+    # L1: Always write under CLIENT_REGISTRY_LOCK. The previous
+    # ``_CACHE_WARMED`` fast-path dropped the lock on the assumption that
+    # CPython dict writes are GIL-atomic; that is true for a single op,
+    # but ``len(); assign`` is two ops and races with concurrent
+    # ``_clear_topic_code_cache_locked()`` from
+    # ``_registry_rebind_codes`` / ``_registry_unregister``. A reader
+    # iterating the cache during such a clear could observe
+    # ``RuntimeError: dictionary changed size during iteration``, and a
+    # write between len-check and assign could overflow the cap. The cache
+    # is only written on a TOPIC_CODE_CACHE miss, which is rare after the
+    # bound codes are pre-warmed via ``_warmup_topic_code_cache_locked``,
+    # so the lock cost is negligible on the hot path.
+    with CLIENT_REGISTRY_LOCK:
+        if len(TOPIC_CODE_CACHE) >= _TOPIC_CODE_CACHE_MAX:
+            # Simple coarse reset keeps O(1) behavior on hot path.
+            TOPIC_CODE_CACHE.clear()
+        TOPIC_CODE_CACHE[topic] = code
     return code
 
 

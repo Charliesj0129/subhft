@@ -1,0 +1,28 @@
+TMFD6:
+  queue_model: power_prob
+  exponent: 1.5
+  calibration_date: '2026-04-17'
+  data_days_used: 0
+  held_out_days: 0
+  composite_score: 0.0
+  validation_scores:
+    fill_rate_score: 0.0
+    adverse_fill_score: 0.0
+    pnl_direction_score: 0.0
+    pnl_magnitude_score: 0.0
+  confidence: low
+  expected_fill_rate_per_day: 0.0
+TXFD6:
+  queue_model: power_prob
+  exponent: 1.5
+  calibration_date: '2026-04-17'
+  data_days_used: 0
+  held_out_days: 0
+  composite_score: 0.0
+  validation_scores:
+    fill_rate_score: 0.0
+    adverse_fill_score: 0.0
+    pnl_direction_score: 0.0
+    pnl_magnitude_score: 0.0
+  confidence: low
+  expected_fill_rate_per_day: 0.0

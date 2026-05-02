@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -127,7 +127,7 @@ def write_contract_cache(contracts: list[dict[str, Any]], path: str = DEFAULT_CO
 
     payload = {
         "cache_version": cache_version,
-        "updated_at": datetime.utcnow().isoformat() + "Z",
+        "updated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "contracts": contracts,
     }
     tmp = dest.with_suffix(".json.tmp")
@@ -174,9 +174,16 @@ def fetch_contracts_from_broker() -> list[dict[str, Any]]:
 def validate_symbols(
     symbols: list[dict[str, Any]],
     contract_index: ContractIndex | None = None,
-    max_subscriptions: int = 200,
+    max_subscriptions: int = 480,
 ) -> SymbolBuildResult:
-    """Validate a list of symbol entries for correctness and subscription limits."""
+    """Validate a list of symbol entries for correctness and subscription limits.
+
+    Default cap is the platform-wide total (4 quote connections × 120 codes per
+    conn). The per-conn cap is in *codes* — each code subscribes to 2 broker
+    topics (Tick + BidAsk), and the Solace per-session topic budget for SinoPac
+    retail accounts is ~250 (so 120 codes × 2 topics = 240, leaves headroom).
+    See ``feed_adapter/shioaji/limits.py``.
+    """
     from hft_platform.config._symbols_types import VALID_EXCHANGES
 
     result = SymbolBuildResult(symbols=symbols)

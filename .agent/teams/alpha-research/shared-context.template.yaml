@@ -1,0 +1,180 @@
+# =============================================================================
+# Alpha Research Shared Context Template
+# Copy this file, fill in the blanks, and paste into teammate spawn prompts.
+# =============================================================================
+
+round_id: R__                       # e.g., R32
+target_instrument: ___              # e.g., TMFD6
+research_goal: "___"                # e.g., "Explore TXO IV signals for TMF futures prediction"
+
+# --- Skill References (teammates MUST read their assigned skills) ---
+skills:
+  researcher:
+    - .agent/skills/taifex-alpha-kill-criteria/SKILL.md    # Pre-research kill gate
+    - .agent/skills/taifex-market-structure/SKILL.md       # TAIFEX domain knowledge
+  devils_advocate:
+    - .agent/skills/taifex-alpha-kill-criteria/SKILL.md    # Kill registry + mandatory gates
+    - .agent/skills/hft-backtest-calibration/SKILL.md      # Backtest fidelity + statistical traps
+  executor:
+    - .agent/skills/hft-strategy-sdk/SKILL.md              # BaseStrategy contract + hooks
+    - .agent/skills/hft-backtest-calibration/SKILL.md      # CK vs hftbacktest calibration
+    - .agent/skills/hft-test-hft/SKILL.md                  # HFT-specific test patterns
+    - .agent/skills/taifex-market-structure/SKILL.md       # Cost/data conventions
+  executor_mm_only:
+    - .agent/skills/hft-mm-design/SKILL.md                 # R47 three-layer MM design
+  lead_post_promote:
+    - .agent/skills/hft-strategy-lifecycle/SKILL.md        # Scaffold → shadow → live
+    - .agent/skills/hft-release-gate/SKILL.md              # 7-gate deployment readiness
+    - .agent/skills/hft-production-audit/SKILL.md          # Post-deploy 7-plane sweep
+
+# --- Scope (Autonomous Loop — maker/taker research) ---
+# Referenced by Researcher T1 (proposal filtering) and Devil's Advocate T2 Kill Checklist item 0.
+scope:
+  mode: "execution_broad"           # Scope C from design spec Q4
+  allowed_types:
+    - pure_maker                    # R47 variants, spread-gate, depth-skew, queue-position-aware
+    - pure_taker                    # impact-aware, latency-budget, burst-triggered, news-window
+    - hybrid                        # maker-then-taker conversion, taker-cover-maker
+    - exec_support_signal           # fill-rate predictor, adverse-selection filter, queue-decay forecaster
+    - options_mm                    # TXO MM variants (ElectronicEye-class)
+    - cross_instrument_mm           # TXF/TMF pair MM, cross-instrument MM
+  forbidden:
+    - pure_directional_alpha        # tick-to-hour TAIFEX exhausted (see taifex-alpha-kill-criteria)
+    - daily_horizon_directional     # long hold not in loop scope
+    - twse_stock_arbitrage          # R31 structural kill (58.5 bps RT cost)
+    - any_match_in_killed_directions  # blacklist enforced via overlap check
+
+# --- Cost Model (update if fee structure changes) ---
+cost_model:
+  rt_cost_ntd: 40                   # Round-trip cost in NTD
+  rt_cost_pts: 4                    # Round-trip cost in points
+  rt_cost_bps: 1.33                 # Round-trip cost in bps
+  point_value_ntd: 10               # 1 point = 10 NTD for TMFD6
+  tax_per_side_ntd: 7               # Fixed tax per side
+  commission_per_side_ntd: 13       # Commission per side
+  # Note: Retail trader — NO maker rebates, NO tax exemptions
+
+# --- Latency Profile (from config/research/latency_profiles.yaml) ---
+latency_profile:
+  submit_p95_ms: 36
+  modify_p95_ms: 43
+  cancel_p95_ms: 47
+  internal_pipeline_us: 250
+
+# --- Data Inventory (update per round with latest CK counts) ---
+data_inventory:
+  TMFD6:
+    rows: "9.16M"
+    days: 58
+    range: "2026-01-27 ~ 2026-03-26"
+    levels: "L1-L5"
+  TXO:
+    rows: "33M"
+    days: 58
+    levels: "L1"
+    note: "UNTAPPED — never researched"
+  TMFC6:
+    rows: "14.1M"
+  TMFB6:
+    rows: "10.8M"
+  # Add new instruments here per round
+
+# --- Market Microstructure (TMFD6 baseline) ---
+market_microstructure:
+  median_spread_pts: 4
+  p75_spread_pts: 19
+  profitable_spread_pct: 45.5       # % of time spread >= 5 pts
+  avg_spread_when_profitable_pts: 19.7
+  tick_rate_per_sec: 1.8
+  l1_queue_depth_lots: 4.1
+
+# --- Killed Directions Blacklist (append new kills, never remove) ---
+killed_directions:
+  - id: "L1-micro-short"
+    rounds: "R14-R17"
+    reason: "Signal-horizon mismatch: IC dead at 60s+ where cost is viable"
+  - id: "bidirectional-MM"
+    rounds: "R12-R13"
+    reason: "Queue-back adverse selection, structurally unprofitable at 36ms RTT"
+  - id: "OFI-variants"
+    rounds: "R9-R11,R16,R26-R27"
+    reason: "All killed by cost or regime dependency"
+  - id: "spread-conditional-maker"
+    rounds: "R16"
+    reason: "Adverse selection trap, -8 pts/fill median"
+  - id: "LOB-KE-gravity"
+    rounds: "R15"
+    reason: "IC too weak"
+  - id: "VPIN-regime"
+    rounds: "R12"
+    reason: "DD -30.6% as MM overlay"
+  - id: "TX-TMF-leadlag"
+    rounds: "R26,R28"
+    reason: "2.47 pts edge vs 7.4 pts cost; D6-only artifact"
+  - id: "CBS-mean-reversion"
+    rounds: "R14-R17"
+    reason: "Mid-price artifact, no mean-reversion on TMFD6"
+  - id: "1min-strategies"
+    rounds: "R18"
+    reason: "Data sparsity at 1min horizon"
+  - id: "TWSE-stocks"
+    rounds: "R31"
+    reason: "58.5 bps RT cost (10x error in initial sim)"
+  - id: "MLOFI-Hawkes"
+    rounds: "R27"
+    reason: "Predictive R²=0.000001, TXF→TMF lead-lag inverted"
+  - id: "Omori-aftershock"
+    rounds: "R30"
+    reason: "4.7 pts RT cost consumes 92% of edge"
+  - id: "institutional-flow"
+    rounds: "R29"
+    reason: "No meta-orders detectable on retail TMFD6"
+  - id: "event-momentum-spike-fader"
+    rounds: "R29b"
+    reason: "StormGuard 60s cooldown blocks entry at T+0; T+90s residual marginal"
+  - id: "SG-LP"
+    rounds: "R18"
+    reason: "March spread < cost"
+  - id: "MLOFI-microprice"
+    rounds: "R18"
+    reason: "Trend contamination"
+  - id: "MF-extension"
+    rounds: "R19"
+    reason: "HF→MF transfer impossible"
+  - id: "VRR"
+    rounds: "R22"
+    reason: "vrr never registered, CBS filter killed"
+  - id: "L2-bar-TA"
+    rounds: "R32b"
+    reason: "IC inflated 7x by subsampling bug. True IC=+0.013, not 0.092"
+  - id: "L2-cross-instrument"
+    rounds: "R32a"
+    reason: "MLOFI IC=0.011 < 0.015. CVD 95.7% validated but not tradeable"
+  - id: "LEV-LCOG"
+    rounds: "R34"
+    reason: "LEV=OFI (corr=0.967). R32b IC inflated 7x by subsampling bug"
+  - id: "filtered-bar-TA"
+    rounds: "R35"
+    reason: "Vol-weight useless (73% qty=1). Aggressor IC = bar-boundary artifact"
+  - id: "entropy-GEX-OI"
+    rounds: "R35b"
+    reason: "Entropy inverted; GEX always negative; OI Flow trend-contaminated"
+  - id: "long-horizon-all"
+    rounds: "R35-R46"
+    reason: "12 directions. R44 Night VWAP MR strongest (IC=-0.26) but spread kills execution"
+  - id: "math-decomposition"
+    rounds: "R36"
+    reason: "16 scripts ALL KILLED. PCA/DMD/Kalman/DWT/TDA/bracket/maker/options/tensor"
+  - id: "TXO-skew-IC-statarb"
+    rounds: "R47"
+    reason: "RT cost 4.68 pts > edge. Retail spreads structural blocker"
+  - id: "tensor-oracle"
+    rounds: "R50"
+    reason: "22pt signal < 80pt TXO cost. Infrastructure reusable"
+  - id: "TMFD6-multi-instrument"
+    rounds: "R51-C1b"
+    reason: "Already proven -109K NTD. Multiple instruments does not help"
+  - id: "stale-quote-suppression"
+    rounds: "R51-C3b"
+    reason: "PnL-per-fill WORSE, not better. 0/12 days improved in CK test"
+  # Append new kills here each round

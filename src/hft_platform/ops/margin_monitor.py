@@ -93,6 +93,11 @@ class MarginMonitor:
             available = int(getattr(margin_data, "margin_available", 1))
 
         if available <= 0:
+            logger.warning(
+                "margin_monitor.zero_or_negative_available",
+                raw_available=available,
+                used=used,
+            )
             available = 1  # Prevent division by zero
 
         ratio = used / available  # float OK -- monitoring, not accounting

@@ -139,6 +139,7 @@ def test_run_gate_a_requires_paper_index_link(tmp_path: Path):
         data_paths=[str(path)],
         require_paper_refs=True,
         require_paper_index_link=True,
+        enforce_latency_profile=False,
     )
     report = run_gate_a(manifest, [str(path)], config=cfg, root=tmp_path)
     assert report.passed
@@ -198,6 +199,7 @@ def test_run_gate_a_data_meta_pass(tmp_path: Path):
         enforce_data_governance=True,
         require_data_meta=True,
         allowed_data_roots=(str(data_root),),
+        enforce_latency_profile=False,
     )
     report = run_gate_a(manifest, [str(path)], config=cfg, root=tmp_path)
     assert report.passed
@@ -276,6 +278,7 @@ def test_run_gate_a_data_meta_with_provenance_keys_passes(tmp_path: Path):
         allowed_data_roots=(str(data_root),),
         required_data_provenance_fields=("source", "generator", "seed"),
         data_ul=1,
+        enforce_latency_profile=False,
     )
     report = run_gate_a(manifest, [str(path)], config=cfg, root=tmp_path)
     assert report.passed
@@ -311,6 +314,7 @@ def test_run_gate_a_data_ul_reports_achieved_and_missing_fields_warn_only(tmp_pa
         require_data_meta=True,
         allowed_data_roots=(str(data_root),),
         data_ul=3,
+        enforce_latency_profile=False,
     )
     report = run_gate_a(manifest, [str(path)], config=cfg, root=tmp_path)
     assert report.passed
@@ -570,9 +574,7 @@ class TestEvaluateOosStatisticalTests:
         from hft_platform.alpha.validation import _evaluate_oos_statistical_tests
 
         few = np.array([0.01] * 10, dtype=np.float64)
-        result = _evaluate_oos_statistical_tests(
-            few, pvalue_threshold=0.05, min_tests_pass=2, bootstrap_samples=100
-        )
+        result = _evaluate_oos_statistical_tests(few, pvalue_threshold=0.05, min_tests_pass=2, bootstrap_samples=100)
         assert result["passed"] is False
         assert result["reason"] == "insufficient_oos_returns"
         assert result["sample_count"] == 10
@@ -595,9 +597,7 @@ class TestEvaluateOosStatisticalTests:
 
         rng = np.random.default_rng(99)
         arr = rng.normal(0.0, 0.05, size=60)
-        result = _evaluate_oos_statistical_tests(
-            arr, pvalue_threshold=0.05, min_tests_pass=2, bootstrap_samples=100
-        )
+        result = _evaluate_oos_statistical_tests(arr, pvalue_threshold=0.05, min_tests_pass=2, bootstrap_samples=100)
         tests = result["tests"]
         for key in ("ttest_mean_gt_zero", "wilcoxon_gt_zero", "sign_test_gt_half", "bootstrap_ci_mean"):
             assert key in tests, f"Missing test key: {key}"
@@ -769,9 +769,7 @@ class TestUpdateManifestStatus:
         impl_dir = tmp_path / "research" / "alphas" / alpha_id
         impl_dir.mkdir(parents=True)
         impl_file = impl_dir / "impl.py"
-        impl_file.write_text(
-            "manifest = AlphaManifest(status=AlphaStatus.RESEARCH)\n"
-        )
+        impl_file.write_text("manifest = AlphaManifest(status=AlphaStatus.RESEARCH)\n")
 
         result = _update_manifest_status(alpha_id, "GATE_A", tmp_path)
         assert result is True
@@ -785,9 +783,7 @@ class TestUpdateManifestStatus:
         impl_dir = tmp_path / "research" / "alphas" / alpha_id
         impl_dir.mkdir(parents=True)
         impl_file = impl_dir / "impl.py"
-        impl_file.write_text(
-            "manifest = AlphaManifest(status=AlphaStatus.GATE_A)\n"
-        )
+        impl_file.write_text("manifest = AlphaManifest(status=AlphaStatus.GATE_A)\n")
 
         result = _update_manifest_status(alpha_id, "GATE_A", tmp_path)
         assert result is False

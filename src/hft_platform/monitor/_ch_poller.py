@@ -215,7 +215,8 @@ class CHPoller:
                 )
                 replay_limit = next_limit
 
-        assert last_exc is not None  # noqa: S101
+        if last_exc is None:
+            last_exc = ConnectionError("CH replay failed: no cursors executed")
         self._register_disconnect(str(last_exc))
         raise ConnectionError(f"CH replay failed: {last_exc}") from last_exc
 

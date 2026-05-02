@@ -190,9 +190,9 @@ class TestReconnectWindow:
         svc.reconnect_hours = ""
         svc.reconnect_hours_2 = ""
         monkeypatch.setenv("HFT_RECONNECT_USE_CALENDAR", "0")
-        with patch("hft_platform.services.market_data.dt.datetime") as mock_dt:
-            mock_dt.now.return_value = frozen_now
-            mock_dt.fromtimestamp = dt.datetime.fromtimestamp
+        frozen_ts = frozen_now.timestamp()
+        with patch("hft_platform.services.market_data.timebase") as mock_tb:
+            mock_tb.now_s.return_value = frozen_ts
             assert svc._within_reconnect_window() is True
 
     def test_hour_window_match(self, _symbols_config, monkeypatch):
@@ -206,9 +206,9 @@ class TestReconnectWindow:
         end = (frozen_now + dt.timedelta(minutes=5)).strftime("%H:%M")
         svc.reconnect_hours = f"{start}-{end}"
         monkeypatch.setenv("HFT_RECONNECT_USE_CALENDAR", "0")
-        with patch("hft_platform.services.market_data.dt.datetime") as mock_dt:
-            mock_dt.now.return_value = frozen_now
-            mock_dt.fromtimestamp = dt.datetime.fromtimestamp
+        frozen_ts = frozen_now.timestamp()
+        with patch("hft_platform.services.market_data.timebase") as mock_tb:
+            mock_tb.now_s.return_value = frozen_ts
             assert svc._within_reconnect_window() is True
 
     def test_hour_window_miss(self, _symbols_config):

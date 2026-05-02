@@ -51,12 +51,12 @@ def _make_mock_system(
     system.md_service = MagicMock()
     system.md_service.running = md_running
 
-    # Mock recorder_service
+    # Mock recorder
     recorder = MagicMock()
     recorder.healthy = recorder_healthy
     # Remove last_write_ok to avoid MagicMock auto-creating it
     del recorder.last_write_ok
-    system.recorder_service = recorder
+    system.recorder = recorder
 
     # Mock queues with maxsize
     for qname in ("raw_queue", "raw_exec_queue", "risk_queue", "order_queue", "recorder_queue"):
@@ -157,11 +157,16 @@ class TestHealthServerReadiness:
     def test_gateway_checked_when_enabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HFT_GATEWAY_ENABLED", "1")
         system = _make_mock_system()
-        # Gateway task not present → unavailable
+        # Gateway-mode should not require standalone risk task.
+        gateway_task = MagicMock()
+        gateway_task.done.return_value = False
+        system.tasks["gateway"] = gateway_task
+        del system.tasks["risk"]
         server = HealthServer(system=system)
         status, checks = server._check_readiness()
-        assert status == "unavailable"
-        assert checks["tasks"].get("gateway") is False
+        assert status == "ready"
+        assert checks["tasks"].get("gateway") is True
+        assert "risk" not in checks["tasks"]
 
     def test_gateway_not_checked_when_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HFT_GATEWAY_ENABLED", "0")

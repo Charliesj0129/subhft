@@ -114,7 +114,7 @@ def main() -> None:
     )
     parser.add_argument("--order-ca", action="store_true", help="Enable CA for order client in real mode")
     parser.add_argument("--symbol", default=os.getenv("HFT_SHIOAJI_PROBE_SYMBOL", "2330"))
-    parser.add_argument("--futures", default=os.getenv("HFT_SHIOAJI_PROBE_FUT", "TXFC0"))
+    parser.add_argument("--futures", default=os.getenv("HFT_SHIOAJI_PROBE_FUT", "TXFR1"))
     parser.add_argument("--option", default=os.getenv("HFT_SHIOAJI_PROBE_OPT", "TXO22400B6"))
     parser.add_argument("--out-prefix", default="reports/shioaji_api_latency")
     parser.add_argument("--no-orders", action="store_true")

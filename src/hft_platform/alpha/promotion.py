@@ -70,6 +70,7 @@ class PromotionConfig:
     max_live_drawdown_contribution: float = 0.02
     max_execution_error_rate: float = 0.01
     force: bool = False
+    force_reason: str = ""
     write_promotion_config: bool = True
     config_version: str = "v1"
     parent_config_version: str | None = None
@@ -132,6 +133,10 @@ def promote_alpha(config: PromotionConfig) -> PromotionResult:
         raise FileNotFoundError(f"scorecard not found: {scorecard_path}")
 
     scorecard = json.loads(scorecard_path.read_text())
+
+    # Verify Gate C passed before evaluating promotion gates
+    _verify_gate_c_passed(scorecard_path)
+
     data_ul_value = _to_float(scorecard.get("data_ul"))
     data_ul = int(data_ul_value) if data_ul_value is not None else None
     data_ul_advisory = {
@@ -158,9 +163,16 @@ def promote_alpha(config: PromotionConfig) -> PromotionResult:
     if not approved:
         reasons.append("One or more promotion gates failed")
         if config.force:
+            if not config.force_reason.strip():
+                raise ValueError("force=True requires a non-empty force_reason")
             approved = True
             forced = True
-            reasons.append("force=true override")
+            _log.warning(
+                "promotion_force_override",
+                alpha_id=config.alpha_id,
+                force_reason=config.force_reason,
+            )
+            reasons.append(f"force=true override: {config.force_reason}")
 
     weight = _suggest_canary_weight(scorecard, override=config.canary_weight) if approved else 0.0
     now = datetime.fromtimestamp(timebase.now_s(), tz=_dt.timezone.utc)
@@ -247,7 +259,7 @@ def promote_alpha(config: PromotionConfig) -> PromotionResult:
             log_gate_result(config.alpha_id, None, gate_report, cfg_hash)
         log_promotion_result(result, cfg_hash, scorecard)
     except Exception as _exc:  # noqa: BLE001
-        pass  # audit must never break the research pipeline
+        _log.debug("audit_log_failed", alpha_id=config.alpha_id, exc_info=True)
 
     return result
 
@@ -340,6 +352,32 @@ def _resolve_scorecard_path(root: Path, config: PromotionConfig, alpha_dir: Path
 
     # Backward-compatible fallback for legacy/manual runs.
     return alpha_dir / "scorecard.json"
+
+
+def _verify_gate_c_passed(scorecard_path: Path) -> None:
+    """Verify Gate C has passed before allowing promotion to proceed.
+
+    Reads meta.json from the same directory as the scorecard.  If the file
+    exists and indicates gate_c=False (or the field is missing), raises
+    ValueError to prevent promoting an alpha that has not been properly
+    validated.  If meta.json is absent (legacy / manual scorecard) a WARNING
+    is emitted and execution continues for backward compatibility.
+    """
+    meta_path = scorecard_path.parent / "meta.json"
+    if not meta_path.exists():
+        _log.warning(
+            "gate_c_verification_skipped_no_meta",
+            scorecard_path=str(scorecard_path),
+            reason="meta.json not found; assuming legacy/manual scorecard — proceeding without Gate C verification",
+        )
+        return
+
+    meta = json.loads(meta_path.read_text())
+    gate_status = meta.get("gate_status")
+    if gate_status is None:
+        raise ValueError(f"Gate C has not passed for this scorecard: {scorecard_path}. Run validate_alpha() first.")
+    if not gate_status.get("gate_c", False):
+        raise ValueError(f"Gate C has not passed for this scorecard: {scorecard_path}. Run validate_alpha() first.")
 
 
 def _latest_scorecard_from_runs(root: Path, alpha_id: str) -> Path | None:

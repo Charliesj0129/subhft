@@ -1,13 +1,17 @@
+# Session tracks: symbols use R1 continuous codes (resolved to actual month codes at runtime).
+# Actual month codes (TMFE6/TXFE6) are also listed as belt-and-suspenders so TrackGate
+# works even if alias resolution hook does not propagate to SessionGovernor
+# (Bug 19, 2026-04-17: session_governor_alias_resolved never fired after restart).
 tracks:
   futures_day:
-    symbols: ["TMFD6"]
+    symbols: ["TMFR1", "TMFE6", "TXFR1", "TXFE6"]
     schedule:
       - {phase: "open", time: "08:45"}
       - {phase: "close_only", time: "13:40"}
       - {phase: "force_flat", time: "13:44"}
       - {phase: "closed", time: "13:45"}
   futures_night:
-    symbols: ["TMFD6"]
+    symbols: ["TMFR1", "TMFE6", "TXFR1", "TXFE6"]
     schedule:
       - {phase: "open", time: "15:00"}
       - {phase: "close_only", time: "04:55"}

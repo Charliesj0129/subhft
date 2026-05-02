@@ -13,6 +13,8 @@ from zoneinfo import ZoneInfo
 
 from structlog import get_logger
 
+from hft_platform.infra.ch_client import get_ch_config
+
 if TYPE_CHECKING:
     from hft_platform.notifications.dispatcher import NotificationDispatcher
 
@@ -33,12 +35,10 @@ def _get_ch_client(
     user: str,
     password: str,
 ) -> Any:
-    """Return a clickhouse_driver Client."""
-    try:
-        from clickhouse_driver import Client
-    except ImportError as exc:
-        raise RuntimeError("clickhouse_driver is not installed") from exc
-    return Client(host=host, port=port, user=user, password=password)
+    """Return a clickhouse_connect Client (HTTP interface)."""
+    from hft_platform.infra.ch_client import get_ch_client
+
+    return get_ch_client(host=host, port=port, username=user, password=password)
 
 
 class BackupManager:
@@ -69,10 +69,12 @@ class BackupManager:
         ch_user: str | None = None,
         ch_password: str | None = None,
     ) -> None:
-        self._ch_host = ch_host or os.getenv("HFT_CLICKHOUSE_HOST", "localhost")
-        self._ch_port = ch_port or int(os.getenv("HFT_CLICKHOUSE_PORT", "9000"))
-        self._ch_user = ch_user or os.getenv("HFT_CLICKHOUSE_USER", "default")
-        self._ch_password = ch_password if ch_password is not None else os.getenv("HFT_CLICKHOUSE_PASSWORD", "")
+        _cfg = get_ch_config()
+        self._ch_host = ch_host or _cfg["host"]
+        # Uses HTTP port (clickhouse-connect); env default matches platform convention
+        self._ch_port = ch_port or int(os.getenv("HFT_CLICKHOUSE_PORT", "8123"))
+        self._ch_user = ch_user or _cfg["username"]
+        self._ch_password = ch_password if ch_password is not None else _cfg["password"]
         self._retain_days = retain_days if retain_days is not None else int(os.getenv("HFT_BACKUP_RETAIN_DAYS", "30"))
         self._backup_dir = backup_dir
         self._notifier = notifier
@@ -123,7 +125,7 @@ class BackupManager:
     def _check_disk_registered(self) -> None:
         """Verify backup_local disk is registered in ClickHouse."""
         client = self._client()
-        rows = client.execute("SELECT name FROM system.disks WHERE name = 'backup_local'")
+        rows = client.query("SELECT name FROM system.disks WHERE name = 'backup_local'").result_rows
         if not rows:
             raise BackupError(
                 "backup_local disk not found in system.disks. "
@@ -133,7 +135,7 @@ class BackupManager:
     def _abort_stale_backups(self) -> None:
         """Check for in-progress backups and wait/abort."""
         client = self._client()
-        rows = client.execute("SELECT id, name, status FROM system.backups WHERE status = 'CREATING_BACKUP'")
+        rows = client.query("SELECT id, name, status FROM system.backups WHERE status = 'CREATING_BACKUP'").result_rows
         if rows:
             logger.warning("Stale backup in progress, aborting", stale_backups=rows)
             raise BackupError(f"Found {len(rows)} in-progress backup(s): {rows}")
@@ -142,32 +144,38 @@ class BackupManager:
 
     def _execute_backup(self, backup_name: str) -> None:
         """Execute BACKUP DATABASE hft TO Disk('backup_local', ...)."""
+        if not _BACKUP_NAME_RE.match(backup_name):
+            raise ValueError(f"Invalid backup_name: {backup_name!r}")
         client = self._client()
         sql = f"BACKUP DATABASE hft TO Disk('backup_local', '{backup_name}/')"
         logger.info("Executing backup", backup_name=backup_name, sql=sql)
-        client.execute(sql)
+        client.command(sql)
 
     def _verify_backup(self, backup_name: str) -> None:
         """Verify backup completed successfully."""
         client = self._client()
-        rows = client.execute(
-            "SELECT status, error FROM system.backups WHERE name = %(name)s ORDER BY start_time DESC LIMIT 1",
-            {"name": backup_name},
-        )
+        # system.backups.name is the full Disk(...) expression, not just the backup name
+        disk_name = f"Disk('backup_local', '{backup_name}/')"
+        rows = client.query(
+            "SELECT status, error FROM system.backups WHERE name = {name:String} ORDER BY start_time DESC LIMIT 1",
+            parameters={"name": disk_name},
+        ).result_rows
         if not rows:
             raise BackupError(f"No backup entry found in system.backups for '{backup_name}'")
         status, error = rows[0]
         if status != "BACKUP_CREATED":
             raise BackupError(f"Backup '{backup_name}' status is '{status}': {error}")
 
+        # Filesystem verification — only if backup dir is accessible from this process
+        # (skipped when running in hft-engine container; CK stores backups in its own volume)
         backup_path = Path(self._backup_dir) / backup_name
-        if not backup_path.exists():
-            raise BackupError(f"Backup directory does not exist: {backup_path}")
-
-        size = sum(f.stat().st_size for f in backup_path.rglob("*") if f.is_file())
-        if size == 0:
-            raise BackupError(f"Backup directory is empty: {backup_path}")
-        logger.info("Backup verified", backup_name=backup_name, size_bytes=size)
+        if backup_path.exists():
+            size = sum(f.stat().st_size for f in backup_path.rglob("*") if f.is_file())
+            if size == 0:
+                raise BackupError(f"Backup directory is empty: {backup_path}")
+            logger.info("Backup verified", backup_name=backup_name, size_bytes=size)
+        else:
+            logger.info("Backup verified via system.backups (filesystem not accessible)", backup_name=backup_name)
 
     def _cleanup_old_backups(self) -> None:
         """Remove backups older than retain_days based on directory name parsing."""
@@ -295,7 +303,7 @@ class BackupManager:
         else:
             sql = f"RESTORE DATABASE hft AS {target_db} FROM Disk('backup_local', '{backup_name}/')"
         logger.info("Executing restore", backup_name=backup_name, target_db=target_db)
-        client.execute(sql)
+        client.command(sql)
 
     def restore_table(self, backup_name: str, table: str, target_db: str = "hft") -> None:
         """Restore a single table from backup."""
@@ -311,7 +319,7 @@ class BackupManager:
         else:
             sql = f"RESTORE TABLE hft.{table} AS {target_db}.{table} FROM Disk('backup_local', '{backup_name}/')"
         logger.info("Executing table restore", backup_name=backup_name, table=table, target_db=target_db)
-        client.execute(sql)
+        client.command(sql)
 
     def verify_restore(self, backup_name: str) -> dict[str, tuple[int, int]]:
         """Restore to temp DB, compare row counts, drop temp DB.
@@ -325,14 +333,24 @@ class BackupManager:
         try:
             self.restore(backup_name, target_db=temp_db)
 
-            tables = [row[0] for row in client.execute("SELECT name FROM system.tables WHERE database = 'hft'")]
+            result = client.query("SELECT name FROM system.tables WHERE database = 'hft'")
+            tables = [row[0] for row in result.result_rows]
+
+            if not _IDENTIFIER_RE.match(temp_db):
+                raise ValueError(f"Invalid temp_db: {temp_db!r}")
 
             results: dict[str, tuple[int, int]] = {}
             mismatches: list[str] = []
 
             for table in tables:
-                orig = client.execute(f"SELECT count() FROM hft.{table}")[0][0]
-                restored = client.execute(f"SELECT count() FROM {temp_db}.{table}")[0][0]
+                if not _IDENTIFIER_RE.match(table):
+                    logger.warning("Skipping table with invalid identifier", table=table)
+                    continue
+                # table validated via _IDENTIFIER_RE.match above; temp_db
+                # validated by ValueError guard; ClickHouse rejects unknown
+                # identifiers with a hard error.
+                orig = client.query(f"SELECT count() FROM hft.{table}").result_rows[0][0]  # nosec B608
+                restored = client.query(f"SELECT count() FROM {temp_db}.{table}").result_rows[0][0]  # nosec B608
                 results[table] = (orig, restored)
                 if orig != restored:
                     mismatches.append(f"{table}: orig={orig} restored={restored}")
@@ -343,7 +361,7 @@ class BackupManager:
             return results
         finally:
             try:
-                client.execute(f"DROP DATABASE IF EXISTS {temp_db}")
+                client.command(f"DROP DATABASE IF EXISTS {temp_db}")
             except Exception:  # noqa: BLE001
                 logger.warning("Failed to drop temp DB", temp_db=temp_db)
 

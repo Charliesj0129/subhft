@@ -1,6 +1,6 @@
 # HFT Platform Current Architecture Baseline
 
-Date: 2026-03-29
+Date: 2026-04-12
 Scope: As-built implementation under `src/hft_platform`, `research`, `rust_core`, `rust`, `config`, and `docker-compose.yml`.
 Companion target document: `.agent/library/target-architecture.md`.
 Companion C4 diagrams: `.agent/library/c4-model-current.md`.
@@ -40,26 +40,35 @@ Companion cluster backlog: `.agent/library/cluster-evolution-backlog.md`.
 2. Market data plane
 
 - `src/hft_platform/feed_adapter/shioaji_client.py`: login, contracts, quote callbacks, watchdog, reconnect, API caches.
-- `src/hft_platform/services/market_data.py`: normalize payloads, update LOB, publish to bus, direct recorder mapping.
+- `src/hft_platform/services/market_data.py`: normalize payloads, update LOB, publish to bus, direct recorder mapping. Includes sliding window drop rate detector for `raw_queue` burst backpressure (added 2026-04-12).
 - `src/hft_platform/feed_adapter/normalizer.py`: raw payload -> normalized events (Python/Rust paths).
 - `src/hft_platform/feed_adapter/lob_engine.py`: per-symbol LOB + stats.
+- `src/hft_platform/feed_adapter/subscription_state.py`: feed subscription state management, round-robin slot assignment, subscription limit enforcement.
 - ✅ Implemented: `FeatureEngine` (Phase 18→v3) with 27 features across 3 schema versions (`lob_shared_v1`:16, `lob_shared_v2`:22, `lob_shared_v3`:27). Default set: `lob_shared_v3`. Enabled by default (`HFT_FEATURE_ENGINE_ENABLED=1`). See `docs/architecture/feature-engine-lob-research-unification-spec.md`.
 - `BurstDetector` (`feature/burst_detector.py`): intensity-based tick arrival rate surge detection (Christensen 2024). Pre-allocated ring buffer, zero heap allocation on hot path.
 
 3. Decision plane
 
-- `src/hft_platform/strategy/runner.py`: consumes bus events, executes strategies, emits `OrderIntent`.
-- `src/hft_platform/risk/engine.py`: validators + StormGuard FSM, emits `OrderCommand`.
+- `src/hft_platform/strategy/runner.py`: consumes bus events, executes strategies, emits `OrderIntent`. Recovery positions visible to strategy before first fill (added 2026-04-12).
+- `src/hft_platform/risk/engine.py`: validators + StormGuard FSM, emits `OrderCommand`. `RiskFeedback` now carries `side` field to prevent pending counter leak after HALT (added 2026-04-12). Includes pending exposure tracking, ROD throttle, unrealized PnL gate, futures threshold fixes.
 
 4. Execution plane
 
-- `src/hft_platform/order/adapter.py`: API queue/coalescing, rate limits, circuit breaker, DLQ.
+- `src/hft_platform/order/adapter.py`: API queue/coalescing, rate limits, circuit breaker, DLQ. Typed-intent identity and adapter rejection feedback added (2026-04-12).
 - `src/hft_platform/execution/gateway.py`: execution wrapper and liveness/error metrics.
 - `src/hft_platform/execution/router.py`: normalizes order/deal callbacks, updates position store, republishes events.
 - `src/hft_platform/execution/positions.py`: position accounting (Python + optional Rust tracker).
+- `src/hft_platform/execution/normalizer.py`: execution event field normalization (broker-agnostic).
 - `src/hft_platform/execution/reconciliation.py`: broker/local reconciliation, can trigger HALT.
-- `src/hft_platform/execution/execution_optimizer.py`: limit vs market order decision based on LOB state (Albers et al. 2025 — fill probability from queue depth). Integrated in CascadeBounceStrategy.
-- `src/hft_platform/execution/imbalance_timer.py`: delays order execution until LOB imbalance is favorable (IC=+0.116 at 1s on TXFD6). Configurable threshold/timeout with urgent bypass.
+- `src/hft_platform/execution/startup_recon.py`: startup position recovery and cross-source reconciliation.
+- `src/hft_platform/execution/eod_recon.py`: end-of-day reconciliation checks.
+- `src/hft_platform/execution/checkpoint.py`: periodic position checkpoint serialization.
+- `src/hft_platform/execution/execution_optimizer.py`: limit vs market order decision based on LOB state (Albers et al. 2025 — fill probability from queue depth).
+- `src/hft_platform/execution/regime_classifier.py`: market regime detection for execution adaptation.
+- `src/hft_platform/execution/fill_dlq.py`: dead-letter queue for failed fill processing.
+- `src/hft_platform/execution/slippage_tracker.py`: slippage monitoring and metrics.
+- `src/hft_platform/execution/mtm.py`: mark-to-market calculation.
+- `src/hft_platform/execution/trigger_executor.py`: conditional/triggered order execution.
 
 5. Persistence plane
 
@@ -71,9 +80,11 @@ Companion cluster backlog: `.agent/library/cluster-evolution-backlog.md`.
 
 6. Observability and safety plane
 
-- `src/hft_platform/observability/metrics.py` and `src/hft_platform/observability/latency.py`.
+- `src/hft_platform/observability/metrics.py` and `src/hft_platform/observability/latency.py`: production-grade audit (2026-04-12) added 13 metric fixes across 7 runtime planes.
+- `src/hft_platform/observability/health.py`: health endpoint and readiness checks.
+- `src/hft_platform/observability/_system_poller.py`: system-level resource polling.
 - `src/hft_platform/risk/storm_guard.py`: safety state machine.
-- `src/hft_platform/services/system.py::_supervise()`: task supervision, loop lag, HALT enforcement.
+- `src/hft_platform/services/system.py::_supervise()`: task supervision, loop lag, queue depth monitoring, HALT enforcement. 12 P0/P1 blind-spot fixes applied (2026-04-12).
 
 ## 3. Runtime Canonical Flow
 
@@ -82,7 +93,8 @@ Companion cluster backlog: `.agent/library/cluster-evolution-backlog.md`.
 
 - `RingBufferBus`
 - bounded queues: `raw_queue`, `raw_exec_queue`, `risk_queue`, `order_queue`, `recorder_queue`
-- services: `MarketDataService`, `StrategyRunner`, `RiskEngine`, `OrderAdapter`, `ExecutionGateway`, `ExecutionRouter`, `ReconciliationService`, `RecorderService`
+- services: `MarketDataService`, `StrategyRunner`, `RiskEngine`, `OrderAdapter`, `ExecutionGateway`, `ExecutionRouter`, `ReconciliationService`, `RecorderService`, `CheckpointWriter`, `StartupVerifier`, `SessionGovernor`, `AutonomyMonitor`, `DailyReportService`
+- optional (gateway mode): `GatewayService`, `LocalIntentChannel`, `PlatformDegradeController`
 
 3. Market data:
 
@@ -180,7 +192,7 @@ Status:
 | `strategy`/`strategies`  | strategy SDK and implementations                                                                                | `src/hft_platform/strategy/*.py`, `src/hft_platform/strategies/*.py`                                                   |
 | `risk`                   | risk checks, fast gate, StormGuard                                                                              | `src/hft_platform/risk/*.py`                                                                                           |
 | `order`                  | broker dispatch and order-path guardrails                                                                       | `src/hft_platform/order/*.py`                                                                                          |
-| `execution`              | execution normalization, routing, reconciliation, position store, execution optimizer, imbalance timer           | `src/hft_platform/execution/*.py` (incl. `execution_optimizer.py`, `imbalance_timer.py`)                               |
+| `execution`              | execution normalization, routing, reconciliation, position store, checkpoint, MTM, startup/EOD recon, regime classifier, slippage tracker, fill DLQ, trigger executor | `src/hft_platform/execution/*.py` (14 modules)                                                                         |
 | `recorder`               | recorder batching, writer, WAL, replay; WAL-first mode (CE-M3)                                                  | `src/hft_platform/recorder/*.py`; `wal_first.py`, `disk_monitor.py`, `mode.py`, `shard_claim.py`, `replay_contract.py` |
 | `gateway`                | order/risk gateway; ExposureStore, IdempotencyStore, GatewayPolicy (CE-M2, enabled via `HFT_GATEWAY_ENABLED=1`) | `src/hft_platform/gateway/` (channel, dedup, exposure, policy, service)                                                |
 | `observability`          | Prometheus and latency spans                                                                                    | `src/hft_platform/observability/*.py`                                                                                  |
@@ -190,6 +202,11 @@ Status:
 | `research.combinatorial` | expression language + alpha search engine                                                                       | `research/combinatorial/*.py`                                                                                          |
 | `research.rl`            | RL alpha adapter and lifecycle integration                                                                      | `research/rl/*.py`                                                                                                     |
 | `feature`                | Feature Engine v3 (27 features), registry, rollout, profile, compat, burst detection                            | `src/hft_platform/feature/engine.py`, `registry.py`, `rollout.py`, `profile.py`, `boundary.py`, `compat.py`, `burst_detector.py` |
+| `monitor`                | Signal Monitor TUI: multi-source data (ClickHouse historical + Redis live), panels (health, PnL, detail, greeks), enrichment, alpha dispatch | `src/hft_platform/monitor/` (20 modules)                                                                               |
+| `bot`                    | Telegram notification bot for trading alerts                                                                    | `src/hft_platform/bot/`                                                                                                |
+| `ipc`                    | shared memory IPC and cross-process data exchange                                                               | `src/hft_platform/ipc/`                                                                                                |
+| `diagnostics`            | runtime diagnostics and troubleshooting                                                                         | `src/hft_platform/diagnostics/`                                                                                        |
+| `tca`                    | transaction cost analysis                                                                                       | `src/hft_platform/tca/`                                                                                                |
 | `backtest`               | runtime backtest runner/adapter/reporting with real-equity-first extraction                                     | `src/hft_platform/backtest/*.py`                                                                                       |
 
 ## 6. Rust Boundary (Current)
@@ -279,6 +296,22 @@ Status:
 
 - Current architecture allows equivalent features to be implemented separately in research and strategy/runtime code.
 - Planned mitigation: Feature Plane + shared feature ABI/kernels (see `docs/architecture/feature-engine-lob-research-unification-spec.md`).
+
+6. Production-grade audit (2026-04-12, ae243a08)
+
+- 13 fixes across 7 runtime planes: loop lag/queue depth monitoring, sliding window drop detector, risk feedback side field, gateway rejection/degrade/HALT drain, pending exposure, ROD throttle, unrealized PnL gate, futures threshold, recovery position visibility, DLQ logging.
+- Key semantic changes: `RiskFeedback` gained `side` field (risk/strategy boundary change); `MarketDataService` gained sliding window drop rate detector for burst backpressure.
+
+7. Shioaji quote connection pool instability (2026-04-10)
+
+- Subscription limit + round-robin logic emergency fix and re-commit (647c1468). Oscillation between emergency and steady-state modes during high-load contract refresh operations.
+- Root cause: subscription slot accounting mismatch during auto-trim after contract refresh.
+
+8. R47 TMFD6 maker strategy deployed (2026-04-09/10)
+
+- New spread-filtered market-making strategy for TXFD6 shadow trading (8113ba50, ecb773bd).
+- Config: `R47_MAKER_TMFD6`, `max_pos=1` (lowered from 3 post-deployment).
+- Shadow mode enabled via `HFT_ORDER_SHADOW_MODE=1`.
 
 ## 10. Cluster Evolution (Vector 2 and 3)
 

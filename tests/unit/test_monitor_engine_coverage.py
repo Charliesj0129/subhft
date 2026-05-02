@@ -14,6 +14,7 @@ Targets uncovered branches in:
 - clear_warnings
 - _handle_reconnect no-data-source path
 """
+
 from __future__ import annotations
 
 import datetime as dt
@@ -29,10 +30,8 @@ from hft_platform.monitor._types import (
     MonitorState,
     RowView,
     Severity,
-    SymbolState,
     WatchlistSymbol,
 )
-
 
 # ---------------------------------------------------------------------------
 # Shared helpers (mirror pattern from test_monitor_engine.py)
@@ -172,7 +171,6 @@ def test_create_data_source_ch_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     """data_source='ch' returns a CHDataSource backed by CHPoller."""
     from dataclasses import replace
 
-    from hft_platform.monitor import _engine as engine_mod
     from hft_platform.monitor._ch_poller import CHPoller
     from hft_platform.monitor._data_source import CHDataSource
 
@@ -888,9 +886,7 @@ def test_initialize_fails_with_no_alpha_ids(monkeypatch: pytest.MonkeyPatch) -> 
     from hft_platform.monitor import _engine as engine_mod
 
     cfg = MonitorConfig(
-        symbols=(
-            WatchlistSymbol(code="TMFC6", name="TMF", product_type="future", alpha_ids=()),
-        ),
+        symbols=(WatchlistSymbol(code="TMFC6", name="TMF", product_type="future", alpha_ids=()),),
     )
     fake_ds = _FakeDataSource()
     monkeypatch.setattr(MonitorEngine, "_create_data_source", lambda self, symbols: fake_ds)

@@ -1,25 +1,41 @@
 # Skills Index
 
-> **150 skills** from HFT Platform + [everything-claude-code](https://github.com/affaan-m/everything-claude-code) and other community repos
+> **~160 skills** from HFT Platform + [everything-claude-code](https://github.com/affaan-m/everything-claude-code) and other community repos
 > Each skill has a `SKILL.md`. Read it with `view_file` before using.
+> 13 legacy / unreferenced skills archived 2026-04-19 to `_archive-2026-04-19/` (XML-format + zero external refs).
 
 ## HFT Core
 
 | Skill | Description |
 | --- | --- |
-| `clickhouse-io` | ClickHouse patterns and query optimization _(ECC)_ |
-| `hft-alpha-research` | Use when creating, validating, or promoting alpha factors; navigating Gate A→E governance; scaffolding research artifacts; or working with the research factory CLI, VM-UL data tiers, latency profiles, or synthetic LOB generation. |
-| `hft-architect` | Use when designing new platform features, reviewing architecture decisions, or understanding the 6-plane runtime, Rust/PyO3 boundary, or Shioaji client decomposition (SessionRuntime/QuoteRuntime/ContractsRuntime). |
-| `hft-backtest` | Use when writing, debugging, or running backtests and strategies based on the hftbacktest framework. |
-| `hft-backtester` | Use when writing or debugging hftbacktest-based backtests via HftBacktestAdapter; modeling Shioaji broker latency (P95 ~36ms, submit_steps=28 base/61 stress); or validating alpha signals under realistic TWSE execution conditions. |
-| `hft-helper` | HFT Platform task assistance |
-| `hft-strategy-dev` | Use when implementing or modifying trading strategies, handling market data events, emitting orders, integrating the FeatureEngine for LOB-derived signals (HFT_FEATURE_ENGINE_ENABLED=1), or navigating the alpha lifecycle from research to production canary. |
-| `shioaji-contracts` | Shioaji API contract handling |
-| `symbols-sync` | Symbol universe sync |
-| `troubleshoot-metrics` | Active diagnostics for HFT platform |
-| `validation-gate` | Alpha validation gates |
-| `fubon-tradeapi` | Fubon TradeAPI reference: auth, SDK, endpoints, order types, env vars, failure modes |
-| `multi-broker-ops` | Multi-broker operational procedures: broker switching, failover, dual-broker routing |
+| `hft-helper` | Router skill: directs to the right HFT skill based on task domain |
+| `hft-market-data` | **NEW** Market data plane: normalizer (51KB), LOB (27KB), Shioaji/Fubon adapters, Rust accel, FeatureEngine v3 (47+8 files) |
+| `hft-architect` | Architecture design: 7 runtime planes, module boundaries, Python-Rust split, design review checklist |
+| `hft-strategy-dev` | Strategy implementation: BaseStrategy, FeatureEngine v3 (27 features), 12 strategies, hot-path rules |
+| `hft-execution` | Execution plane: fills, positions, reconciliation, optimizer, imbalance timer, TCA (27 files) |
+| `hft-recorder` | **NEW** Persistence pipeline: batcher, CH writer, WAL, WAL-first (CE-M3), loader, disk monitor (22 files) |
+| `hft-ops` | Operations: session governor, autonomy degradation, position flattener, pre/post market (14 files) |
+| `hft-alpha-research` | Alpha research: scaffold, governed datasets, factory workflow, Gate A-E governance |
+| `hft-backtest` | Raw hftbacktest V2 engine semantics: status codes, event arrays, model selection |
+| `hft-backtester` | HftBacktestAdapter: latency modeling (P95 ~36ms), parity, Gate C lane |
+| `validation-gate` | Alpha validation: Gate A-E interpretation, promotion blockers, UL6 thresholds |
+| `troubleshoot-metrics` | Runtime diagnostics: Prometheus, Docker, StormGuard, WAL, execution, ops health |
+| `clickhouse-io` | ClickHouse schema (15 migrations, 13+ tables), queries, TTL, recorder IO, WAL replay |
+| `fubon-tradeapi` | Fubon TradeAPI reference: auth, SDK, endpoints, order types, env vars |
+| `multi-broker-ops` | Multi-broker operations: broker switching, failover, credentials, latency profiles |
+| `symbols-sync` | Symbol universe sync: symbols.list -> symbols.yaml |
+| `research-factory` | End-to-end alpha pipeline: paper -> prototype -> backtest -> promote -> live (8 stages) |
+| `research-data-governance` | Dataset governance: metadata sidecars, synthetic LOB, UL6 provenance |
+| `hft-production-audit` | **NEW** Multi-plane runtime safety audit: 7-plane sweep protocol derived from ae243a08 pattern |
+| `hft-hot-path-dev` | **NEW** Constitution-compliant hot-path development: 5 Laws checklist, discipline gates, latency guard |
+| `hft-strategy-lifecycle` | **NEW** Strategy scaffold→shadow→live lifecycle: R47-pattern config-driven enablement, all gates |
+| `hft-test-hft` | **NEW** HFT-specific test patterns: scaled int, monotonic time, fail-closed Rust, state matrices |
+| `hft-release-gate` | **NEW** Release readiness: 7-gate unified checklist (code quality, coverage, architecture, security, pre-market, latency) |
+| `taifex-alpha-kill-criteria` | **NEW** Pre-research feasibility: 50+ killed alpha lessons, structural exhaustion zones, mandatory IC/execution gates |
+| `taifex-market-structure` | **NEW** TAIFEX domain: TMFD6/TXFD6/TXO economics, fee schedule, spread regimes, liquidity patterns, data conventions |
+| `hft-backtest-calibration` | **NEW** Backtest fidelity: CK vs hftbacktest 14x bias, fill models, latency profiles, walk-forward, statistical traps |
+| `hft-strategy-sdk` | **NEW** BaseStrategy full reference: 8 hooks, order API, position tracking, gap resilience, config, tick grid snapping |
+| `hft-mm-design` | **NEW** Market-making design: R47 three-layer pattern, structural properties, V-shape recovery, improvements that KILL |
 
 ## Python & Rust
 
@@ -67,8 +83,6 @@
 | Skill | Description |
 | --- | --- |
 | `cc-skill-clickhouse-io` | ClickHouse database patterns, query optimization, analytics, and data engineering best practices for high-performance analytical workloads. |
-| `clickhouse-optimized` | No description |
-| `clickhouse-queries` | Deep Analyzer. Performs statistical analysis on ClickHouse data. Returns P50/P99 latency and throughput metrics in JSON. Use for Performance Verification and Darwin Gate checks. |
 | `content-hash-cache-pattern` | SHA-256 content hash caching _(ECC)_ |
 | `database-migrations` | Zero-downtime migrations (Postgres, MySQL, ORMs) _(ECC)_ |
 | `database-schema-designer` | Design robust, scalable database schemas for SQL and NoSQL databases. Provides normalization guidelines, indexing strategies, migration patterns, constraint design, and performance optimization. Ensures data integrity, query performance, and maintainable data models. |
@@ -84,7 +98,6 @@
 | `qa-test-planner` | Generate comprehensive test plans, manual test cases, regression test suites, and bug reports for QA engineers. Includes Figma MCP integration for design validation. |
 | `security-review` | Security checklist and patterns _(ECC)_ |
 | `security-scan` | AgentShield config scanning _(ECC)_ |
-| `skill-stocktake` | Audit skills quality _(ECC)_ |
 | `tdd-workflow` | Test-driven development workflow _(ECC)_ |
 | `verification-loop` | Comprehensive verification system _(ECC)_ |
 
@@ -96,7 +109,6 @@
 | `codex` | Use when the user asks to run Codex CLI (codex exec, codex resume) or references OpenAI Codex for code analysis, refactoring, or automated editing. Uses GPT-5.2 by default for state-of-the-art software engineering. |
 | `coding-agent` | Delegate coding tasks to Codex, Claude Code, or Pi agents via background process. Use when: (1) building/creating new features or apps, (2) reviewing PRs (spawn in temp dir), (3) refactoring large codebases, (4) iterative coding that needs file exploration. NOT for: simple one-liner fixes (just edit), reading code (use read tool), or any work in ~/clawd workspace (never spawn agents here). Requires a bash tool that supports pty:true. |
 | `configure-ecc` | Interactive ECC installer _(ECC)_ |
-| `context-loader` | No description |
 | `continuous-learning` | Extract patterns from sessions _(ECC)_ |
 | `continuous-learning-v2` | Instinct-based learning system _(ECC)_ |
 | `cost-aware-llm-pipeline` | LLM cost optimization, model routing _(ECC)_ |
@@ -155,26 +167,21 @@
 
 | Skill | Description |
 | --- | --- |
-| `auto-fix` | No description |
-| `background-manager` | No description |
 | `command-creator` | This skill should be used when creating a Claude Code slash command. Use when users ask to "create a command", "make a slash command", "add a command", or want to document a workflow as a reusable command. Essential for creating optimized, agent-executable slash commands with proper structure and best practices. |
 | `commit-work` | Create high-quality git commits: review/stage intended changes, split into logical commits, and write clear commit messages (including Conventional Commits). Use when the user asks to commit, craft a commit message, stage changes, or split work into multiple commits. |
 | `config-env` | No description |
 | `crafting-effective-readmes` | Use when writing or improving README files. Not all READMEs are the same — provides templates and guidance matched to your audience and project type. |
 | `dependency-updater` | Smart dependency management for any language. Auto-detects project type, applies safe updates automatically, prompts for major versions, diagnoses and fixes dependency issues. |
-| `doc-updater` | Documentation updating |
-| `fix` | Lint/format error fixing |
+| `doc-updater` | Auto-generate codemaps and reconcile architectural docs with the current source tree. Use when docs drift from code, when regenerating `docs/CODEMAPS/structure.md`, or when verifying `docs/ARCHITECTURE.md` still matches `src/`. |
 | `flags` | Feature flag management |
 | `healthcheck` | Host security hardening |
 | `performance-profiling` | Profiling and optimization |
-| `planner` | Planning assistance |
+| `planner` | Generate a phased implementation plan (requirements, architecture, step-by-step phases, risk) before coding. Use when the user asks for a new feature, a large refactor, or "how should we build X?". |
 | `plugin-forge` | Create and manage Claude Code plugins with proper structure, manifests, and marketplace integration. Use when creating plugins for a marketplace, adding plugin components (commands, agents, hooks), bumping plugin versions, or working with plugin.json/marketplace.json manifests. |
-| `pr-status-triage` | PR status triage |
 | `reducing-entropy` | Manual-only skill for minimizing total codebase size. Only activate when explicitly requested by user. Measures success by final code amount, not effort. Bias toward deletion. |
 | `requirements-clarity` | Clarify ambiguous requirements through focused dialogue before implementation. Use when requirements are unclear, features are complex (>2 days), or involve cross-team coordination. Ask two core questions - Why? (YAGNI check) and Simpler? (KISS check) - to ensure clarity before coding. |
 | `runtime-debug` | Runtime debugging |
-| `scaffold-project` | Project scaffolding |
-| `sequential-thinking` | Step-by-step reasoning |
+| `sequential-thinking` | Force step-by-step reasoning (hypothesis → evidence → elimination → conclusion) to reduce hallucination on complex logic. Use when debugging race conditions, designing distributed system flows, or answering "why did this happen?". |
 | `session-manager` | Session management |
 | `skill-lookup` | Skill discovery |
 | `writing-skills` | Skill creation and editing |
@@ -185,16 +192,14 @@
 | --- | --- |
 | `bear-notes` | Create, search, and manage Bear notes via grizzly CLI. |
 | `datadog-cli` | Datadog CLI for searching logs, querying metrics, tracing requests, and managing dashboards. Use this when debugging production issues or working with Datadog observability. |
-| `delegate` | Task delegation |
 | `deploy-docker` | Docker deploy |
 | `discord` | Discord operations |
 | `draw-io` | draw.io diagram creation, editing, and review. Use for .drawio XML editing, PNG conversion, layout adjustment, and AWS icon usage. |
-| `eightctl` | Eight Sleep pod control |
 | `feishu-perm` | Feishu permissions |
 | `feishu-wiki` | Feishu wiki |
 | `gemini` | Gemini CLI integration |
 | `gh-issues` | GitHub issues → PRs pipeline |
-| `git-parallel` | Git parallel workflows |
+| `git-parallel` | Manage git worktrees for parallel development — context-switch without stashing. Use when the user says "work on X while keeping Y open", starts a parallel task, or wants a long-running backtest workspace isolated from active coding. |
 | `github` | GitHub CLI operations |
 | `gog` | Google Workspace CLI |
 | `himalaya` | Email via IMAP/SMTP |

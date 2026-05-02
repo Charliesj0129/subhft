@@ -1,3 +1,4 @@
+<!-- REVIEW-2026-04-17: unreferenced by rules/workflows/teams/agents. Confirm or delete. -->
 ---
 name: broker-abstraction
 description: Use when working with the multi-broker abstraction layer — protocols, broker registry, factory pattern, normalizer field maps, or adding a new broker to the platform.

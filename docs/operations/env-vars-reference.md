@@ -91,8 +91,9 @@ Base YAML (config/base/main.yaml)
 
 | 變數 | 預設值 | 用途 |
 |---|---|---|
+| `HFT_CLICKHOUSE_ENABLED` | `1` | `0` = 停用 ClickHouse 寫入（僅 WAL）；`1` = 啟用 |
 | `HFT_CLICKHOUSE_HOST` | `clickhouse` | ClickHouse 主機（亦接受 `CLICKHOUSE_HOST`） |
-| `HFT_CLICKHOUSE_PORT` | `9000` | ClickHouse native protocol 埠（亦接受 `CLICKHOUSE_PORT`） |
+| `HFT_CLICKHOUSE_PORT` | `8123` | ClickHouse HTTP 埠（`clickhouse-connect` 預設）；native protocol 走 `9000`（亦接受 `CLICKHOUSE_PORT`） |
 | `HFT_CLICKHOUSE_USER` | `default` | 用戶名（亦接受 `CLICKHOUSE_USERNAME`, `CLICKHOUSE_USER`） |
 | `HFT_CLICKHOUSE_PASSWORD` | — | 密碼（亦接受 `CLICKHOUSE_PASSWORD`） |
 
@@ -166,7 +167,7 @@ Base YAML (config/base/main.yaml)
 | `HFT_QUOTE_VERSION_STRICT` | `0` | 禁止 watchdog 自動降版（同 Section 2） | — |
 | `HFT_API_MAX_INFLIGHT` | `16` | 下單 API 同時 in-flight 上限 | API 延遲升高時下調 |
 | `HFT_API_QUEUE_MAX` | `1024` | 下單 API 佇列上限 | 佇列爆滿時排查風控/下單耗時 |
-| `HFT_CONTRACT_REFRESH_RESUBSCRIBE_POLICY` | `none` | contract refresh 後重訂閱策略：`none`/`diff`/`all` | 生產穩定期建議 `none` |
+| `HFT_CONTRACT_REFRESH_RESUBSCRIBE_POLICY` | `diff` | contract refresh 後重訂閱策略：`none`/`diff`/`all` | 預設 `diff` 確保 rollover 日自動轉訂新月合約；遇 broker 回傳異常合約清單（runbook Mode 2）時臨時改 `none` |
 
 **Runbook 參考**: [Section 1 — Feed Gap](../runbooks.md#1-feed-gap--無行情), [Section 2 — Shioaji API latency](../runbooks.md#2-shioaji-api-latency-激增), [Section 14 — Quote Schema 不符](../runbooks.md#14-quote-schema-不符version-mismatch), [shioaji-contract-refresh-operations](../runbooks/shioaji-contract-refresh-operations.md)
 
@@ -180,8 +181,9 @@ Base YAML (config/base/main.yaml)
 | `HFT_GATEWAY_HA_ENABLED` | `0` | `1` = 啟用 active/standby leader lease gating | 單節點維持 `0` |
 | `HFT_GATEWAY_LEADER_LEASE_PATH` | `.state/gateway_leader.lock` | Gateway leader lease 檔案路徑 | 主備需共享同一路徑 |
 | `HFT_GATEWAY_LEADER_LEASE_REFRESH_S` | `0.5` | Leader lease heartbeat 週期（秒） | 小於 0.5 可加速切換但增加 I/O |
-| `HFT_FEATURE_ENGINE_ENABLED` | `1` | `1` = 啟用 Feature Engine（16 個 LOB 特徵）；`0` = 停用 | 預設 on；停用請設 `HFT_FEATURE_ENGINE_ENABLED=0` |
+| `HFT_FEATURE_ENGINE_ENABLED` | `1` | `1` = 啟用 Feature Engine（v3 預設 27 個 LOB 特徵）；`0` = 停用 | 預設 on；停用請設 `HFT_FEATURE_ENGINE_ENABLED=0` |
 | `HFT_FEATURE_ENGINE_BACKEND` | `python` | FeatureEngine 核心後端：`python`/`rust` | 先 shadow 驗證後再切 `rust` |
+| `HFT_FUSED_NORMALIZER` | `0` | `1` = 啟用 Rust fused normalizer + LOB pipeline（單次 FFI 跨界） | rollout 前 shadow parity 驗證 |
 | `HFT_FEATURE_ENGINE_EMIT_EVENTS` | `1` | `0` = 停用 FeatureUpdateEvent 發送 | 僅在診斷性能時暫停 |
 | `HFT_FEATURE_PROFILE_ID` | — | 指定 Feature Profile ID | — |
 | `HFT_FEATURE_SHADOW_PARITY` | `0` | `1` = 啟用 primary/shadow parity 比對 | rollout 必開 |
@@ -227,6 +229,7 @@ Shadow deployment note:
 |---|---|---|---|
 | `HFT_PLATFORM_AUTO_RECOVERY_ENABLED` | `1` | `1` = feed 相關 reduce-only 觸發清除後自動恢復 | 保守環境可設 `0` 維持純手動 |
 | `HFT_PLATFORM_AUTO_RECOVERY_COOLDOWN_S` | `60` | 所有觸發條件清除後等待秒數，確認穩定才恢復 | 過短可能造成 flapping |
+| `HFT_PLATFORM_REDUCE_ONLY_FEED_GAP_S` | `600` | Active-symbol-aware feed-gap 觸發 `feed_reconnect_unhealthy` 的秒數門檻；2026-04 由 120s 提升為 600s，配合 800 標的訂閱宇宙與 illiquid 期權容忍度 | 視訂閱集流動性調整；過低易在 night session 誤觸發 |
 
 重點：
 - `platform_reduce_only_active=1` 時，shadow 策略即使仍在產生 intents，也可能沒有任何 new order 能往下游流動。
@@ -244,6 +247,7 @@ Shadow deployment note:
 | `HFT_RECORDER_MODE` | `direct` | `wal_first` = WAL-only 寫入路徑（CE-M3） | 生產環境建議 `wal_first` |
 | `HFT_TS_TZ` | `Asia/Taipei` | 時區假設（無時區時間戳解析） | 跨區部署務必顯式設定 |
 | `HFT_RECONNECT_TZ` | `Asia/Taipei` | reconnect 時段判斷時區 | 與 `HFT_TS_TZ` 保持一致 |
+| `HFT_RECONNECT_DAYS` | `mon,tue,wed,thu,fri` | 自動重連啟用日（逗號分隔星期縮寫） | 週末 / 假日設空字串停用 |
 | `HFT_RECONNECT_HOURS` | `08:30-13:35` | 交易時段自動重連窗口 | 開盤前/收盤後不觸發 |
 | `HFT_RECONNECT_HOURS_2` | — | 第二交易時段窗口（期貨夜盤等） | 無需時可留空 |
 | `HFT_RECONNECT_COOLDOWN` | `60` | 重連冷卻秒數 | 避免頻繁重連 |
@@ -252,6 +256,8 @@ Shadow deployment note:
 | `HFT_QUOTE_FLAP_THRESHOLD` | `5` | 報價閃爍偵測：窗口內最大閃爍次數 | 超過則暫停訂閱 |
 | `HFT_QUOTE_FLAP_WINDOW_S` | `60` | 報價閃爍偵測窗口（秒） | 配合 threshold |
 | `HFT_QUOTE_FLAP_COOLDOWN_S` | `300` | 報價閃爍冷卻（秒） | 冷卻後自動重新訂閱 |
+
+> `HFT_QUOTE_FLAP_*` 系列變數共同控制報價閃爍偵測行為。
 | `HFT_STORMGUARD_FEED_GAP_HALT_S` | `30` | 行情斷流觸發 HALT 門檻（秒） | 超過此值進入 HALT |
 | `HFT_DIAG_TRACE_ENABLED` | `0` | `1` = 啟用事件決策 trace 採樣 | 僅事故期間啟用 |
 | `HFT_DIAG_TRACE_SAMPLE_EVERY` | `100` | 每 N 事件採樣一筆決策 trace | 流量大時可提高 |
@@ -291,6 +297,73 @@ Shadow deployment note:
 |---|---|---|---|
 | `HFT_ENGINE_IMAGE` | `hft-engine:latest` | Docker image for hft-engine（含 tag/SHA） | 部署時指定已知穩定版本 |
 | `HFT_AUTO_FLATTEN_DISABLED` | `0` | `1` = 禁用 HALT 自動平倉（手動介入模式） | 事故排查時暫時設為 `1` |
+| `HFT_LIVE_CONFIRM` | `0` | `1` = 確認 live 模式啟動（防止誤操作） | 生產環境設 `1` |
+| `HFT_SESSION_GOVERNOR_ENABLED` | `0` | `1` = 啟用 session governor 自動管理 | 多帳號場景使用 |
+
+---
+
+## 13. Position Checkpoint & Startup Recovery
+
+### 13.1 Checkpoint 檔案
+
+| 變數 | 預設值 | 用途 | 調整建議 |
+|---|---|---|---|
+| `HFT_CHECKPOINT_ENABLED` | `1` | `1` = 啟用週期性 position checkpoint 持久化 | 維持 `1`；崩潰恢復必要 |
+| `HFT_CHECKPOINT_PATH` | `.runtime/position_checkpoint.json` | Position checkpoint 檔案路徑 | Docker volume mount |
+| `HFT_POSITION_CHECKPOINT_PATH` | — | 備用 checkpoint 路徑（優先於 `HFT_CHECKPOINT_PATH`） | 向後相容 |
+
+### 13.2 啟動 Reconciliation
+
+| 變數 | 預設值 | 用途 | 調整建議 |
+|---|---|---|---|
+| `HFT_STARTUP_RECON_ENABLED` | `1` | `1` = 啟動時與 broker 對帳，差異超過閾值則拒啟 | 維持 `1`；停用僅限 sim |
+| `HFT_STARTUP_RECON_QTY_THRESHOLD` | `10` | 股票部位差異容忍上限（股） | 高頻策略可調低 |
+| `HFT_STARTUP_RECON_FUTURES_QTY_THRESHOLD` | `2` | 期貨部位差異容忍上限（口） | 1 口策略可調至 `1` |
+
+---
+
+## 14. ClickHouse Data & Backup
+
+### 14.1 資料根目錄
+
+| 變數 | 預設值 | 用途 | 調整建議 |
+|---|---|---|---|
+| `HFT_CH_DATA_ROOT` | `/var/lib/clickhouse` | ClickHouse 資料根目錄 | Docker volume mount 路徑 |
+
+### 14.2 自動備份
+
+| 變數 | 預設值 | 用途 | 調整建議 |
+|---|---|---|---|
+| `HFT_BACKUP_ENABLED` | `0` | `1` = 啟用每日自動備份（`backup` service） | 生產環境設 `1` |
+| `HFT_BACKUP_RETAIN_DAYS` | `30` | 每日備份保留天數 | 磁碟不足時縮短至 7-14 |
+| `CH_BACKUP_PATH` | `./backups/clickhouse` | 備份 host volume 路徑 | 跨磁碟備份請指向獨立磁區 |
+
+---
+
+## 15. Telegram 通知
+
+| 變數 | 預設值 | 用途 | 調整建議 |
+|---|---|---|---|
+| `HFT_TELEGRAM_ENABLED` | `0` | `1` = 啟用 Telegram bot 推播（事故 / 平倉 / HALT） | 生產環境設 `1` |
+| `HFT_TELEGRAM_BOT_TOKEN` | — | BotFather 取得的 token | 使用 secret manager；勿硬編 |
+| `HFT_TELEGRAM_CHAT_ID` | — | 接收訊息的 chat id（可由 `getUpdates` 查得） | 群組 chat id 為負數 |
+
+---
+
+## 16. 認證 & Broker 帳密（敏感）
+
+> ⚠️ 以下為敏感憑證，務必透過 secret manager 注入；切勿提交到 git。
+
+| 變數 | 預設值 | 用途 |
+|---|---|---|
+| `SHIOAJI_API_KEY` | — | Shioaji REST API key |
+| `SHIOAJI_SECRET_KEY` | — | Shioaji REST secret key |
+| `SHIOAJI_PERSON_ID` | — | 證券身份證字號（部分 API 必填） |
+| `SHIOAJI_ACTIVATE_CA` | `0` | `1` = 啟動 CA 憑證（live 期貨/選擇權必須） |
+| `CA_CERT_PATH` | — | CA 憑證檔路徑（如 `./certs/Sinopac.pfx`） |
+| `CA_PASSWORD` | — | CA 憑證密碼 |
+
+**Runbook 參考**: [live-trading-activation-sop](../runbooks/live-trading-activation-sop.md)
 
 ---
 

@@ -1,5 +1,7 @@
 """Tests for DailyLossLimitValidator intraday watermark extensions."""
 
+from types import SimpleNamespace
+
 from hft_platform.contracts.strategy import IntentType, OrderIntent, Side
 from hft_platform.risk.validators import DailyLossLimitValidator
 
@@ -108,6 +110,48 @@ class TestSoftLimit:
         assert v.soft_limit_active is True
         assert v._soft_limit_cooldown_until_ns > 0
 
+    def test_soft_limit_allows_flat_strategy_after_cooldown_without_pnl_recovery(self):
+        """Bug #39: flat strategies must not deadlock forever under SOFT_LIMIT."""
+        position_state = SimpleNamespace(net=0)
+
+        def _provider(symbol, strategy_id):
+            return position_state.net
+
+        v = DailyLossLimitValidator(_make_validator().config, None, position_provider=_provider)
+        v.record_pnl("TEST", -550_000)
+
+        ok, reason = v.check(_make_intent())
+        assert ok is False
+        assert "SOFT_LIMIT" in reason
+        assert v.soft_limit_active is True
+
+        v._soft_limit_cooldown_until_ns = 0
+        ok, reason = v.check(_make_intent())
+        assert ok is True
+        assert reason == "SOFT_LIMIT_FLAT_COOLDOWN_BYPASS"
+        assert v.soft_limit_active is True
+
+    def test_soft_limit_flat_cooldown_bypass_does_not_allow_readding_after_fill(self):
+        """Cooldown escape is only for flat state; once exposed, SOFT_LIMIT still binds."""
+        position_state = SimpleNamespace(net=0)
+
+        def _provider(symbol, strategy_id):
+            return position_state.net
+
+        v = DailyLossLimitValidator(_make_validator().config, None, position_provider=_provider)
+        v.record_pnl("TEST", -550_000)
+        v.check(_make_intent())  # trigger soft limit
+
+        v._soft_limit_cooldown_until_ns = 0
+        ok, reason = v.check(_make_intent())
+        assert ok is True
+        assert reason == "SOFT_LIMIT_FLAT_COOLDOWN_BYPASS"
+
+        position_state.net = 1
+        ok, reason = v.check(_make_intent(side=Side.BUY))
+        assert ok is False
+        assert "SOFT_LIMIT" in reason
+
 
 class TestPeakDrawdown:
     def test_peak_drawdown_ignored_when_peak_below_minimum(self):
@@ -134,6 +178,20 @@ class TestPeakDrawdown:
         v.record_pnl("TEST", -50_000)  # drawdown = 50_000 < 120_000
         ok, _ = v.check(_make_intent())
         assert ok is True
+
+    def test_peak_drawdown_sets_halt_triggered_for_force_flatten(self):
+        """PEAK_DRAWDOWN MUST set halt_triggered so risk/engine.py escalates
+        StormGuard to HALT, which triggers autonomy_monitor.flatten_all() —
+        closes all positions at market per user 'lock-in profits when peak
+        retracement breached' policy (2026-04-20)."""
+        v = _make_validator()
+        v.record_pnl("TEST", 300_000)  # peak = +300 NTD
+        v.check(_make_intent())
+        v.record_pnl("TEST", -150_000)  # drawdown = 150 > 120 (40% of 300)
+        ok, reason = v.check(_make_intent())
+        assert ok is False
+        assert "PEAK_DRAWDOWN" in reason
+        assert v.halt_triggered is True
 
 
 class TestHardLimit:

@@ -2,17 +2,25 @@
 
 from __future__ import annotations
 
+import uuid
 from typing import TYPE_CHECKING
 
 import structlog
 
+from hft_platform.core import timebase
 from hft_platform.notifications import templates
+from hft_platform.notifications.alert import Alert, AlertSeverity
 
 if TYPE_CHECKING:
+    from hft_platform.notifications.alert_router import AlertRouter
     from hft_platform.notifications.telegram import TelegramSender
     from hft_platform.notifications.webhook import WebhookSender
 
 logger = structlog.get_logger(__name__)
+
+
+def _make_alert_id() -> str:
+    return str(uuid.uuid4())[:8]
 
 
 class NotificationDispatcher:
@@ -23,9 +31,13 @@ class NotificationDispatcher:
 
     * **critical=True**: HALT and daily-loss-limit events (bypass rate limit).
     * **critical=False**: All other informational/warning events.
+
+    When an ``AlertRouter`` is attached via ``_alert_router``, each method
+    constructs an ``Alert`` and routes through the router.  When no router is
+    present the legacy ``TelegramSender`` path is used unchanged.
     """
 
-    __slots__ = ("_sender", "_fallback_sender")
+    __slots__ = ("_sender", "_fallback_sender", "_alert_router")
 
     def __init__(
         self,
@@ -34,16 +46,33 @@ class NotificationDispatcher:
     ) -> None:
         self._sender = sender
         self._fallback_sender: WebhookSender | None = fallback_sender
+        self._alert_router: AlertRouter | None = None
 
     # ------------------------------------------------------------------
-    # Critical events (critical=True)
+    # Internal helpers
     # ------------------------------------------------------------------
 
     async def _send_critical(self, msg: str) -> None:
         """Send to primary (telegram) and fallback (webhook) channels."""
-        await self._sender.send(msg, critical=True)
+        import asyncio  # noqa: PLC0415
+
+        coros = [self._sender.send(msg, critical=True)]
         if self._fallback_sender is not None:
-            await self._fallback_sender.send(msg)
+            coros.append(self._fallback_sender.send(msg))
+        await asyncio.gather(*coros, return_exceptions=True)
+
+    async def _emit_or_legacy(self, alert: Alert, legacy_msg: str, critical: bool) -> None:
+        """Route via AlertRouter if available; otherwise fall back to legacy sender."""
+        if self._alert_router is not None:
+            await self._alert_router.emit(alert)
+        elif critical:
+            await self._send_critical(legacy_msg)
+        else:
+            await self._sender.send(legacy_msg, critical=False)
+
+    # ------------------------------------------------------------------
+    # Critical events
+    # ------------------------------------------------------------------
 
     async def notify_halt(self, reason: str) -> None:
         """Notify operator that trading has been halted.
@@ -53,7 +82,18 @@ class NotificationDispatcher:
         """
         msg = templates.render_halt(reason=reason)
         logger.warning("dispatcher.notify_halt", reason=reason)
-        await self._send_critical(msg)
+        alert = Alert(
+            alert_id=_make_alert_id(),
+            severity=AlertSeverity.FATAL,
+            category="risk",
+            source="risk_engine",
+            title=f"HALT: {reason}",
+            detail=msg,
+            ts_ns=timebase.now_ns(),
+            dedup_key="halt",
+            metadata={"reason": reason},
+        )
+        await self._emit_or_legacy(alert, msg, critical=True)
 
     async def notify_daily_loss(self, pnl_ntd: int, limit_ntd: int) -> None:
         """Notify operator that the daily loss limit has been breached.
@@ -64,11 +104,91 @@ class NotificationDispatcher:
         """
         msg = templates.render_daily_loss(pnl_ntd=pnl_ntd, limit_ntd=limit_ntd)
         logger.warning("dispatcher.notify_daily_loss", pnl_ntd=pnl_ntd, limit_ntd=limit_ntd)
-        await self._send_critical(msg)
+        alert = Alert(
+            alert_id=_make_alert_id(),
+            severity=AlertSeverity.FATAL,
+            category="risk",
+            source="risk_engine",
+            title="Daily loss limit breached",
+            detail=msg,
+            ts_ns=timebase.now_ns(),
+            dedup_key="daily_loss",
+            metadata={"pnl_ntd": pnl_ntd, "limit_ntd": limit_ntd},
+        )
+        await self._emit_or_legacy(alert, msg, critical=True)
+
+    async def notify_margin_critical(self, *, ratio: float, used: int, available: int) -> None:
+        """Notify operator that margin utilization is critical; reduce-only activated.
+
+        Args:
+            ratio: Margin utilization ratio (0.0-1.0+).
+            used: Margin used in NTD.
+            available: Margin available in NTD.
+        """
+        msg = templates.render_margin_critical(ratio=ratio, used=used, available=available)
+        logger.warning("dispatcher.notify_margin_critical", ratio=f"{ratio:.2%}", used=used, available=available)
+        alert = Alert(
+            alert_id=_make_alert_id(),
+            severity=AlertSeverity.CRITICAL,
+            category="risk",
+            source="risk_engine",
+            title=f"Margin critical: {ratio:.1%}",
+            detail=msg,
+            ts_ns=timebase.now_ns(),
+            dedup_key=None,
+            metadata={"ratio": ratio, "used": used, "available": available},
+        )
+        await self._emit_or_legacy(alert, msg, critical=True)
 
     # ------------------------------------------------------------------
-    # Non-critical events (critical=False)
+    # Non-critical events
     # ------------------------------------------------------------------
+
+    async def notify_position_stuck(
+        self,
+        *,
+        strategy_id: str,
+        symbol: str,
+        net_qty: int,
+        age_s: int,
+        unrealized_ntd: int | None = None,
+    ) -> None:
+        """Bug 27: alert operator that a non-zero position has had no fills for age_s.
+
+        Dedup key includes strategy+symbol so repeat alerts while the condition
+        persists collapse into a single active alert (re-arm after clearing).
+        """
+        msg = templates.render_position_stuck(
+            strategy_id=strategy_id,
+            symbol=symbol,
+            net_qty=net_qty,
+            age_s=age_s,
+            unrealized_ntd=unrealized_ntd,
+        )
+        logger.warning(
+            "dispatcher.notify_position_stuck",
+            strategy_id=strategy_id,
+            symbol=symbol,
+            net_qty=net_qty,
+            age_s=age_s,
+        )
+        alert = Alert(
+            alert_id=_make_alert_id(),
+            severity=AlertSeverity.CRITICAL,
+            category="risk",
+            source="position_stuck_monitor",
+            title=f"Position stuck: {strategy_id}/{symbol} {age_s}s",
+            detail=msg,
+            ts_ns=timebase.now_ns(),
+            dedup_key=f"position_stuck:{strategy_id}:{symbol}",
+            metadata={
+                "strategy_id": strategy_id,
+                "symbol": symbol,
+                "net_qty": net_qty,
+                "age_s": age_s,
+            },
+        )
+        await self._emit_or_legacy(alert, msg, critical=True)
 
     async def notify_stormguard_change(self, old: str, new: str, reason: str) -> None:
         """Notify operator of a StormGuard FSM state transition.
@@ -80,49 +200,105 @@ class NotificationDispatcher:
         """
         msg = templates.render_stormguard_change(old=old, new=new, reason=reason)
         logger.info("dispatcher.notify_stormguard_change", old=old, new=new, reason=reason)
-        await self._sender.send(msg, critical=False)
+        severity = AlertSeverity.CRITICAL if new in ("HALT", "STORM") else AlertSeverity.WARN
+        is_critical = new in ("HALT", "STORM")
+        alert = Alert(
+            alert_id=_make_alert_id(),
+            severity=severity,
+            category="risk",
+            source="storm_guard",
+            title=f"StormGuard: {old} → {new}",
+            detail=msg,
+            ts_ns=timebase.now_ns(),
+            dedup_key=f"stormguard:{new}",
+            metadata={"old": old, "new": new, "reason": reason},
+        )
+        await self._emit_or_legacy(alert, msg, critical=is_critical)
 
-    async def notify_pre_market_pass(self) -> None:
-        """Notify operator that the pre-market health check passed."""
-        msg = templates.render_pre_market_pass()
-        logger.info("dispatcher.notify_pre_market_pass")
-        await self._sender.send(msg, critical=False)
-
-    async def notify_pre_market_fail(self, failed_checks: list[str]) -> None:
-        """Notify operator that the pre-market health check failed.
-
-        Args:
-            failed_checks: List of check descriptions that failed.
-        """
-        msg = templates.render_pre_market_fail(failed_checks=failed_checks)
-        logger.warning("dispatcher.notify_pre_market_fail", failed_checks=failed_checks)
-        await self._sender.send(msg, critical=False)
-
-    async def notify_reconciliation_mismatch(
+    async def notify_autonomy_transition(
         self,
-        platform_pnl: int,
-        broker_pnl: int,
-        ch_pnl: int,
+        *,
+        scope: str,
+        from_mode: str,
+        to_mode: str,
+        reason: str,
     ) -> None:
-        """Notify operator of a PnL reconciliation mismatch.
+        """Notify operator of an autonomy state transition.
 
         Args:
-            platform_pnl: PnL as reported by platform position tracker (NTD).
-            broker_pnl: PnL as reported by broker account gateway (NTD).
-            ch_pnl: PnL as stored in ClickHouse fills (NTD).
+            scope: "platform" or "strategy".
+            from_mode: Previous autonomy mode name.
+            to_mode: New autonomy mode name.
+            reason: Human-readable reason for the transition.
         """
-        msg = templates.render_reconciliation_mismatch(
-            platform_pnl=platform_pnl,
-            broker_pnl=broker_pnl,
-            ch_pnl=ch_pnl,
+        msg = templates.render_autonomy_transition(scope=scope, from_mode=from_mode, to_mode=to_mode, reason=reason)
+        logger.warning(
+            "dispatcher.notify_autonomy_transition",
+            scope=scope,
+            from_mode=from_mode,
+            to_mode=to_mode,
+            reason=reason,
+        )
+        is_halt = to_mode == "HALT"
+        severity = AlertSeverity.CRITICAL if is_halt else AlertSeverity.WARN
+        alert = Alert(
+            alert_id=_make_alert_id(),
+            severity=severity,
+            category="ops",
+            source="autonomy_monitor",
+            title=f"Autonomy [{scope}]: {from_mode} → {to_mode}",
+            detail=msg,
+            ts_ns=timebase.now_ns(),
+            dedup_key=None,
+            metadata={"scope": scope, "from_mode": from_mode, "to_mode": to_mode, "reason": reason},
+        )
+        await self._emit_or_legacy(alert, msg, critical=is_halt)
+
+    async def notify_flatten_result(
+        self,
+        *,
+        scope: str,
+        fully_closed: int,
+        partially_closed: int,
+        failed: int,
+        failed_symbols: list[str],
+    ) -> None:
+        """Notify operator of position flattening results.
+
+        Args:
+            scope: "all", "track", or strategy id.
+            fully_closed: Number of positions fully closed.
+            partially_closed: Number of positions partially closed.
+            failed: Number of positions that failed to close.
+            failed_symbols: Symbols that failed to flatten.
+        """
+        msg = templates.render_flatten_result(
+            scope=scope,
+            fully_closed=fully_closed,
+            partially_closed=partially_closed,
+            failed=failed,
+            failed_symbols=failed_symbols,
         )
         logger.warning(
-            "dispatcher.notify_reconciliation_mismatch",
-            platform_pnl=platform_pnl,
-            broker_pnl=broker_pnl,
-            ch_pnl=ch_pnl,
+            "dispatcher.notify_flatten_result",
+            scope=scope,
+            fully_closed=fully_closed,
+            failed=failed,
         )
-        await self._sender.send(msg, critical=False)
+        has_failures = failed > 0
+        severity = AlertSeverity.CRITICAL if has_failures else AlertSeverity.INFO
+        alert = Alert(
+            alert_id=_make_alert_id(),
+            severity=severity,
+            category="execution",
+            source="position_flattener",
+            title=f"Flatten [{scope}]: {fully_closed} closed, {failed} failed",
+            detail=msg,
+            ts_ns=timebase.now_ns(),
+            dedup_key=None,
+            metadata={"scope": scope, "fully_closed": fully_closed, "failed": failed, "failed_symbols": failed_symbols},
+        )
+        await self._emit_or_legacy(alert, msg, critical=has_failures)
 
     async def notify_reconnect(self, count: int, flap_status: str) -> None:
         """Notify operator of a broker reconnect event.
@@ -133,22 +309,58 @@ class NotificationDispatcher:
         """
         msg = templates.render_reconnect_alert(count=count, flap_status=flap_status)
         logger.info("dispatcher.notify_reconnect", count=count, flap_status=flap_status)
-        await self._sender.send(msg, critical=False)
+        alert = Alert(
+            alert_id=_make_alert_id(),
+            severity=AlertSeverity.WARN,
+            category="broker",
+            source="feed_adapter",
+            title=f"Broker reconnect #{count} ({flap_status})",
+            detail=msg,
+            ts_ns=timebase.now_ns(),
+            dedup_key="reconnect",
+            metadata={"count": count, "flap_status": flap_status},
+        )
+        await self._emit_or_legacy(alert, msg, critical=False)
 
-    async def notify_process_restart(self, attempt: int, max_attempts: int) -> None:
-        """Notify operator that the supervisor is restarting a crashed subprocess.
+    async def notify_heartbeat(
+        self,
+        *,
+        autonomy_state: str,
+        pnl_scaled: int,
+        strategies_active: int,
+        feed_status: str,
+    ) -> None:
+        """Send a periodic heartbeat notification.
 
         Args:
-            attempt: Current restart attempt number (1-based).
-            max_attempts: Maximum allowed restart attempts before giving up.
+            autonomy_state: Current StormGuard state name.
+            pnl_scaled: Current PnL (scaled int).
+            strategies_active: Number of active strategies.
+            feed_status: "ok" or "disconnected".
         """
-        msg = templates.render_process_restart(attempt=attempt, max_attempts=max_attempts)
-        logger.warning(
-            "dispatcher.notify_process_restart",
-            attempt=attempt,
-            max_attempts=max_attempts,
+        msg = templates.render_heartbeat(
+            autonomy_state=autonomy_state,
+            pnl_scaled=pnl_scaled,
+            strategies_active=strategies_active,
+            feed_status=feed_status,
         )
-        await self._sender.send(msg, critical=False)
+        logger.info("dispatcher.notify_heartbeat", state=autonomy_state)
+        alert = Alert(
+            alert_id=_make_alert_id(),
+            severity=AlertSeverity.INFO,
+            category="ops",
+            source="session_governor",
+            title=f"Heartbeat: {autonomy_state}",
+            detail=msg,
+            ts_ns=timebase.now_ns(),
+            dedup_key="heartbeat",
+            metadata={
+                "autonomy_state": autonomy_state,
+                "strategies_active": strategies_active,
+                "feed_status": feed_status,
+            },
+        )
+        await self._emit_or_legacy(alert, msg, critical=False)
 
     async def notify_daily_report(
         self,
@@ -197,7 +409,18 @@ class NotificationDispatcher:
             memory_max_gb=memory_max_gb,
         )
         logger.info("dispatcher.notify_daily_report", date_str=date_str, pnl_ntd=pnl_ntd)
-        await self._sender.send(msg, critical=False)
+        alert = Alert(
+            alert_id=_make_alert_id(),
+            severity=AlertSeverity.INFO,
+            category="ops",
+            source="session_governor",
+            title=f"Daily report: {date_str}",
+            detail=msg,
+            ts_ns=timebase.now_ns(),
+            dedup_key=None,
+            metadata={"date_str": date_str, "pnl_ntd": pnl_ntd},
+        )
+        await self._emit_or_legacy(alert, msg, critical=False)
 
     async def notify_weekly_summary(
         self,
@@ -253,91 +476,213 @@ class NotificationDispatcher:
             week_label=week_label,
             total_pnl_ntd=total_pnl_ntd,
         )
-        await self._sender.send(msg, critical=False)
+        alert = Alert(
+            alert_id=_make_alert_id(),
+            severity=AlertSeverity.INFO,
+            category="ops",
+            source="session_governor",
+            title=f"Weekly summary: {week_label}",
+            detail=msg,
+            ts_ns=timebase.now_ns(),
+            dedup_key=None,
+            metadata={"week_label": week_label, "total_pnl_ntd": total_pnl_ntd},
+        )
+        await self._emit_or_legacy(alert, msg, critical=False)
 
-    async def notify_autonomy_transition(
+    async def notify_pre_market_pass(self) -> None:
+        """Notify operator that the pre-market health check passed."""
+        msg = templates.render_pre_market_pass()
+        logger.info("dispatcher.notify_pre_market_pass")
+        alert = Alert(
+            alert_id=_make_alert_id(),
+            severity=AlertSeverity.INFO,
+            category="ops",
+            source="preflight_checker",
+            title="Pre-market checks passed",
+            detail=msg,
+            ts_ns=timebase.now_ns(),
+            dedup_key=None,
+            metadata=None,
+        )
+        await self._emit_or_legacy(alert, msg, critical=False)
+
+    async def notify_symbol_reload_failed(
         self,
-        *,
-        scope: str,
-        from_mode: str,
-        to_mode: str,
         reason: str,
+        count: int,
+        limit: int,
     ) -> None:
-        """Notify operator of an autonomy state transition.
+        """Notify operator that ``ShioajiClient._load_config`` failed.
+
+        Q3-fix (2026-04-27): symbol-reload failures used to surface only as
+        a ``logger.error`` line. This dispatcher entrypoint plus the
+        ``feed_symbol_config_reload_total`` Counter and the
+        ``SymbolConfigReloadFailed`` Prometheus rule close the observation
+        gap so RC-1-style regressions page within minutes.
 
         Args:
-            scope: "platform" or "strategy".
-            from_mode: Previous autonomy mode name.
-            to_mode: New autonomy mode name.
-            reason: Human-readable reason for the transition.
+            reason: Result label (e.g. ``exceeds_limit``, ``parse_error``,
+                ``other``).
+            count: Number of symbols loaded from the config file (or 0 if
+                the file could not be parsed).
+            limit: Effective preflight ceiling at the moment of failure.
         """
-        msg = templates.render_autonomy_transition(scope=scope, from_mode=from_mode, to_mode=to_mode, reason=reason)
-        logger.warning(
-            "dispatcher.notify_autonomy_transition",
-            scope=scope,
-            from_mode=from_mode,
-            to_mode=to_mode,
+        msg = templates.render_symbol_reload_failed(reason=reason, count=count, limit=limit)
+        logger.error(
+            "dispatcher.notify_symbol_reload_failed",
             reason=reason,
+            count=count,
+            limit=limit,
         )
-        await self._sender.send(msg, critical=(to_mode == "HALT"))
+        alert = Alert(
+            alert_id=_make_alert_id(),
+            severity=AlertSeverity.CRITICAL,
+            category="infra",
+            source="symbol_reload",
+            title=f"Symbol reload FAILED ({reason})",
+            detail=msg,
+            ts_ns=timebase.now_ns(),
+            dedup_key=f"symbol_reload:{reason}",
+            metadata={"reason": reason, "count": count, "limit": limit},
+        )
+        await self._emit_or_legacy(alert, msg, critical=True)
 
-    async def notify_flatten_result(
+    async def notify_subscription_truncated(
         self,
-        *,
-        scope: str,
-        fully_closed: int,
-        partially_closed: int,
-        failed: int,
-        failed_symbols: list[str],
+        reason: str,
+        requested: int,
+        subscribed: int,
+        limit: int,
     ) -> None:
-        """Notify operator of position flattening results.
+        """Notify operator that quote subscription was truncated below the
+        configured universe.
+
+        P2 #8 fix (2026-04-27): closes the silent-miss gap RC-1 left open.
+        ``ShioajiClient._load_config`` accepts up to
+        ``MAX_SUBSCRIPTIONS_PER_CLIENT`` (default 600) symbols, but
+        ``SubscriptionManager`` still gates per-conn at
+        ``MAX_SUBSCRIPTIONS_PER_CONN`` (120). When a deployment forgets to
+        size ``HFT_QUOTE_CONNECTIONS``, half the universe gets loaded but
+        never subscribed — and previously there was no alert path. This
+        entrypoint pages within seconds of the truncation event.
 
         Args:
-            scope: "all", "track", or strategy id.
-            fully_closed: Number of positions fully closed.
-            partially_closed: Number of positions partially closed.
-            failed: Number of positions that failed to close.
-            failed_symbols: Symbols that failed to flatten.
+            reason: Truncation reason label (currently ``conn_limit``).
+            requested: Number of symbols loaded into the client.
+            subscribed: Number of symbols actually subscribed.
+            limit: Per-conn cap that triggered truncation.
         """
-        msg = templates.render_flatten_result(
-            scope=scope,
-            fully_closed=fully_closed,
-            partially_closed=partially_closed,
-            failed=failed,
-            failed_symbols=failed_symbols,
+        msg = templates.render_subscription_truncated(
+            reason=reason, requested=requested, subscribed=subscribed, limit=limit
+        )
+        logger.error(
+            "dispatcher.notify_subscription_truncated",
+            reason=reason,
+            requested=requested,
+            subscribed=subscribed,
+            limit=limit,
+        )
+        alert = Alert(
+            alert_id=_make_alert_id(),
+            severity=AlertSeverity.CRITICAL,
+            category="infra",
+            source="quote_subscription",
+            title=f"Quote subscription TRUNCATED ({reason})",
+            detail=msg,
+            ts_ns=timebase.now_ns(),
+            dedup_key=f"subscription_truncated:{reason}",
+            metadata={
+                "reason": reason,
+                "requested": requested,
+                "subscribed": subscribed,
+                "limit": limit,
+            },
+        )
+        await self._emit_or_legacy(alert, msg, critical=True)
+
+    async def notify_pre_market_fail(self, failed_checks: list[str]) -> None:
+        """Notify operator that the pre-market health check failed.
+
+        Args:
+            failed_checks: List of check descriptions that failed.
+        """
+        msg = templates.render_pre_market_fail(failed_checks=failed_checks)
+        logger.warning("dispatcher.notify_pre_market_fail", failed_checks=failed_checks)
+        alert = Alert(
+            alert_id=_make_alert_id(),
+            severity=AlertSeverity.CRITICAL,
+            category="ops",
+            source="preflight_checker",
+            title=f"Pre-market checks FAILED ({len(failed_checks)} checks)",
+            detail=msg,
+            ts_ns=timebase.now_ns(),
+            dedup_key=None,
+            metadata={"failed_checks": failed_checks},
+        )
+        await self._emit_or_legacy(alert, msg, critical=False)
+
+    async def notify_reconciliation_mismatch(
+        self,
+        platform_pnl: int,
+        broker_pnl: int,
+        ch_pnl: int,
+    ) -> None:
+        """Notify operator of a PnL reconciliation mismatch.
+
+        Args:
+            platform_pnl: PnL as reported by platform position tracker (NTD).
+            broker_pnl: PnL as reported by broker account gateway (NTD).
+            ch_pnl: PnL as stored in ClickHouse fills (NTD).
+        """
+        msg = templates.render_reconciliation_mismatch(
+            platform_pnl=platform_pnl,
+            broker_pnl=broker_pnl,
+            ch_pnl=ch_pnl,
         )
         logger.warning(
-            "dispatcher.notify_flatten_result",
-            scope=scope,
-            fully_closed=fully_closed,
-            failed=failed,
+            "dispatcher.notify_reconciliation_mismatch",
+            platform_pnl=platform_pnl,
+            broker_pnl=broker_pnl,
+            ch_pnl=ch_pnl,
         )
-        await self._sender.send(msg, critical=(failed > 0))
+        alert = Alert(
+            alert_id=_make_alert_id(),
+            severity=AlertSeverity.WARN,
+            category="position",
+            source="reconciliation",
+            title="PnL reconciliation mismatch",
+            detail=msg,
+            ts_ns=timebase.now_ns(),
+            dedup_key=None,
+            metadata={"platform_pnl": platform_pnl, "broker_pnl": broker_pnl, "ch_pnl": ch_pnl},
+        )
+        await self._emit_or_legacy(alert, msg, critical=False)
 
-    async def notify_heartbeat(
-        self,
-        *,
-        autonomy_state: str,
-        pnl_scaled: int,
-        strategies_active: int,
-        feed_status: str,
-    ) -> None:
-        """Send a periodic heartbeat notification.
+    async def notify_process_restart(self, attempt: int, max_attempts: int) -> None:
+        """Notify operator that the supervisor is restarting a crashed subprocess.
 
         Args:
-            autonomy_state: Current StormGuard state name.
-            pnl_scaled: Current PnL (scaled int).
-            strategies_active: Number of active strategies.
-            feed_status: "ok" or "disconnected".
+            attempt: Current restart attempt number (1-based).
+            max_attempts: Maximum allowed restart attempts before giving up.
         """
-        msg = templates.render_heartbeat(
-            autonomy_state=autonomy_state,
-            pnl_scaled=pnl_scaled,
-            strategies_active=strategies_active,
-            feed_status=feed_status,
+        msg = templates.render_process_restart(attempt=attempt, max_attempts=max_attempts)
+        logger.warning(
+            "dispatcher.notify_process_restart",
+            attempt=attempt,
+            max_attempts=max_attempts,
         )
-        logger.info("dispatcher.notify_heartbeat", state=autonomy_state)
-        await self._sender.send(msg, critical=False)
+        alert = Alert(
+            alert_id=_make_alert_id(),
+            severity=AlertSeverity.WARN,
+            category="infra",
+            source="supervisor",
+            title=f"Process restart attempt {attempt}/{max_attempts}",
+            detail=msg,
+            ts_ns=timebase.now_ns(),
+            dedup_key=None,
+            metadata={"attempt": attempt, "max_attempts": max_attempts},
+        )
+        await self._emit_or_legacy(alert, msg, critical=False)
 
     async def notify_session_phase(
         self,
@@ -360,7 +705,18 @@ class NotificationDispatcher:
             old_phase=old_phase,
             new_phase=new_phase,
         )
-        await self._sender.send(msg, critical=False)
+        alert = Alert(
+            alert_id=_make_alert_id(),
+            severity=AlertSeverity.INFO,
+            category="ops",
+            source="session_governor",
+            title=f"Session [{track}]: {old_phase} → {new_phase}",
+            detail=msg,
+            ts_ns=timebase.now_ns(),
+            dedup_key=None,
+            metadata={"track": track, "old_phase": old_phase, "new_phase": new_phase},
+        )
+        await self._emit_or_legacy(alert, msg, critical=False)
 
     async def notify_autonomy_daily_summary(
         self,
@@ -388,7 +744,18 @@ class NotificationDispatcher:
             manual_rearms=manual_rearms,
         )
         logger.info("dispatcher.notify_autonomy_daily_summary", date_str=date_str)
-        await self._sender.send(msg, critical=False)
+        alert = Alert(
+            alert_id=_make_alert_id(),
+            severity=AlertSeverity.INFO,
+            category="ops",
+            source="autonomy_monitor",
+            title=f"Autonomy daily summary: {date_str}",
+            detail=msg,
+            ts_ns=timebase.now_ns(),
+            dedup_key=None,
+            metadata={"date_str": date_str, "transitions": transitions, "halts": halts},
+        )
+        await self._emit_or_legacy(alert, msg, critical=False)
 
     async def notify_shadow_daily_report(self, **kwargs) -> None:
         """Send the shadow strategy daily report.
@@ -409,7 +776,19 @@ class NotificationDispatcher:
         """
         msg = templates.render_shadow_daily_report(**kwargs)
         logger.info("dispatcher.notify_shadow_daily_report", **kwargs)
-        await self._sender.send(msg, critical=False)
+        date_str = kwargs.get("date_str", "")
+        alert = Alert(
+            alert_id=_make_alert_id(),
+            severity=AlertSeverity.INFO,
+            category="ops",
+            source="shadow_mode",
+            title=f"Shadow daily report: {date_str}",
+            detail=msg,
+            ts_ns=timebase.now_ns(),
+            dedup_key=None,
+            metadata=kwargs,
+        )
+        await self._emit_or_legacy(alert, msg, critical=False)
 
     async def notify_margin_warning(self, *, ratio: float, used: int, available: int) -> None:
         """Notify operator that margin utilization has reached warning level.
@@ -421,19 +800,18 @@ class NotificationDispatcher:
         """
         msg = templates.render_margin_warning(ratio=ratio, used=used, available=available)
         logger.warning("dispatcher.notify_margin_warning", ratio=f"{ratio:.2%}", used=used, available=available)
-        await self._sender.send(msg, critical=False)
-
-    async def notify_margin_critical(self, *, ratio: float, used: int, available: int) -> None:
-        """Notify operator that margin utilization is critical; reduce-only activated.
-
-        Args:
-            ratio: Margin utilization ratio (0.0-1.0+).
-            used: Margin used in NTD.
-            available: Margin available in NTD.
-        """
-        msg = templates.render_margin_critical(ratio=ratio, used=used, available=available)
-        logger.warning("dispatcher.notify_margin_critical", ratio=f"{ratio:.2%}", used=used, available=available)
-        await self._send_critical(msg)
+        alert = Alert(
+            alert_id=_make_alert_id(),
+            severity=AlertSeverity.WARN,
+            category="risk",
+            source="risk_engine",
+            title=f"Margin warning: {ratio:.1%}",
+            detail=msg,
+            ts_ns=timebase.now_ns(),
+            dedup_key=None,
+            metadata={"ratio": ratio, "used": used, "available": available},
+        )
+        await self._emit_or_legacy(alert, msg, critical=False)
 
     async def notify_backup_success(
         self,
@@ -462,7 +840,23 @@ class NotificationDispatcher:
             date_str=date_str,
             size_mb=size_mb,
         )
-        await self._sender.send(msg, critical=False)
+        alert = Alert(
+            alert_id=_make_alert_id(),
+            severity=AlertSeverity.INFO,
+            category="infra",
+            source="backup_manager",
+            title=f"Backup success: {date_str} ({size_mb:.1f} MB)",
+            detail=msg,
+            ts_ns=timebase.now_ns(),
+            dedup_key=None,
+            metadata={
+                "date_str": date_str,
+                "size_mb": size_mb,
+                "duration_s": duration_s,
+                "retained_count": retained_count,
+            },
+        )
+        await self._emit_or_legacy(alert, msg, critical=False)
 
     async def notify_backup_failed(
         self,
@@ -488,7 +882,18 @@ class NotificationDispatcher:
             date_str=date_str,
             error=error,
         )
-        await self._sender.send(msg, critical=False)
+        alert = Alert(
+            alert_id=_make_alert_id(),
+            severity=AlertSeverity.WARN,
+            category="infra",
+            source="backup_manager",
+            title=f"Backup failed: {date_str}",
+            detail=msg,
+            ts_ns=timebase.now_ns(),
+            dedup_key=None,
+            metadata={"date_str": date_str, "error": error, "last_success_date": last_success_date},
+        )
+        await self._emit_or_legacy(alert, msg, critical=False)
 
     async def notify_position_recovery(
         self,
@@ -513,7 +918,18 @@ class NotificationDispatcher:
             mismatches=mismatches,
         )
         logger.info("dispatcher.notify_position_recovery", source=source, loaded=loaded)
-        await self._sender.send(msg, critical=False)
+        alert = Alert(
+            alert_id=_make_alert_id(),
+            severity=AlertSeverity.INFO,
+            category="position",
+            source="startup_recon",
+            title=f"Position recovery: {loaded} loaded, {corrected} corrected",
+            detail=msg,
+            ts_ns=timebase.now_ns(),
+            dedup_key=None,
+            metadata={"source": source, "loaded": loaded, "corrected": corrected},
+        )
+        await self._emit_or_legacy(alert, msg, critical=False)
 
     async def notify_position_recovery_failed(
         self,
@@ -535,4 +951,62 @@ class NotificationDispatcher:
             mismatches=mismatches,
         )
         logger.warning("dispatcher.notify_position_recovery_failed", source=source, reason=reason)
-        await self._sender.send(msg, critical=True)
+        alert = Alert(
+            alert_id=_make_alert_id(),
+            severity=AlertSeverity.FATAL,
+            category="position",
+            source="startup_recon",
+            title=f"Position recovery FAILED: {reason}",
+            detail=msg,
+            ts_ns=timebase.now_ns(),
+            dedup_key=None,
+            metadata={"source": source, "reason": reason},
+        )
+        await self._emit_or_legacy(alert, msg, critical=True)
+
+    async def notify_canary_action(self, *, alpha_id: str, action: str, reason: str) -> None:
+        """Notify operator of a canary rollback or graduation.
+
+        Args:
+            alpha_id: Alpha identifier.
+            action: "rolled_back" or "graduated".
+            reason: Human-readable reason for the action.
+        """
+        msg = templates.render_canary_action(alpha_id=alpha_id, action=action, reason=reason)
+        logger.warning("dispatcher.notify_canary_action", alpha_id=alpha_id, action=action)
+        is_rollback = action == "rolled_back"
+        severity = AlertSeverity.CRITICAL if is_rollback else AlertSeverity.INFO
+        alert = Alert(
+            alert_id=_make_alert_id(),
+            severity=severity,
+            category="ops",
+            source="canary",
+            title=f"Canary [{alpha_id}]: {action}",
+            detail=msg,
+            ts_ns=timebase.now_ns(),
+            dedup_key=None,
+            metadata={"alpha_id": alpha_id, "action": action, "reason": reason},
+        )
+        await self._emit_or_legacy(alert, msg, critical=is_rollback)
+
+    async def notify_tca_pnl_supplement(self, *, tca_section: str, pnl_section: str) -> None:
+        """Send the TCA and PnL supplement for the daily report.
+
+        Args:
+            tca_section: Formatted TCA (Transaction Cost Analysis) section text.
+            pnl_section: Formatted PnL breakdown section text.
+        """
+        msg = templates.render_tca_pnl_supplement(tca_section=tca_section, pnl_section=pnl_section)
+        logger.info("dispatcher.notify_tca_pnl_supplement")
+        alert = Alert(
+            alert_id=_make_alert_id(),
+            severity=AlertSeverity.INFO,
+            category="ops",
+            source="tca",
+            title="TCA PnL supplement",
+            detail=msg,
+            ts_ns=timebase.now_ns(),
+            dedup_key=None,
+            metadata=None,
+        )
+        await self._emit_or_legacy(alert, msg, critical=False)

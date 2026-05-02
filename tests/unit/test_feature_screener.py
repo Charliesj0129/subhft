@@ -33,7 +33,7 @@ def _make_feature_array(
 # ---------------------------------------------------------------------------
 
 
-def test_screen_features_returns_ranked_list(tmp_path: Path) -> None:
+def test_screen_features_returns_ranked_list(tmp_path: Path, recwarn) -> None:
     """screen_features should return a non-empty list of dicts with expected keys."""
     rng = np.random.default_rng(42)
     arr = _make_feature_array(300, 5, rng)
@@ -62,6 +62,7 @@ def test_screen_features_returns_ranked_list(tmp_path: Path) -> None:
     # Finite-score entries should be sorted by score descending.
     scores = [r["score"] for r in finite_entries]
     assert scores == sorted(scores, reverse=True), "Finite scores should be sorted descending"
+    assert not [w for w in recwarn if issubclass(w.category, RuntimeWarning)]
 
 
 def test_screen_features_latency_profile_propagated(tmp_path: Path) -> None:

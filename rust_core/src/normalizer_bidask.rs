@@ -12,11 +12,11 @@ pub fn normalize_bidask_v2(
     let dict = PyDict::new_bound(_py);
     let scaled_bids: Vec<(i64, i64)> = bids
         .iter()
-        .map(|(p, q)| ((p * price_scale as f64) as i64, *q as i64))
+        .map(|(p, q)| ((p * price_scale as f64).round_ties_even() as i64, *q as i64))
         .collect();
     let scaled_asks: Vec<(i64, i64)> = asks
         .iter()
-        .map(|(p, q)| ((p * price_scale as f64) as i64, *q as i64))
+        .map(|(p, q)| ((p * price_scale as f64).round_ties_even() as i64, *q as i64))
         .collect();
     dict.set_item("bids", scaled_bids)?;
     dict.set_item("asks", scaled_asks)?;

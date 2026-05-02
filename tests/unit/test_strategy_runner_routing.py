@@ -75,7 +75,7 @@ async def test_broadcast_event_hits_all_strategies():
     runner._strat_executors = []
 
     event = TickEvent(
-        meta=MetaData(seq=1, topic="tick", source_ts=1, local_ts=1),
+        meta=MetaData(seq=1, topic="tick", source_ts=0, local_ts=0),
         symbol="AAA",
         price=100,
         volume=1,
@@ -105,8 +105,9 @@ async def test_intent_carries_source_ts_and_trace_id():
     strat = OrderStrategy("alpha", symbols=["AAA"])
     runner.register(strat)
 
+    event_ts = 123456789
     event = TickEvent(
-        meta=MetaData(seq=7, topic="tick", source_ts=1, local_ts=123456789),
+        meta=MetaData(seq=7, topic="tick", source_ts=1, local_ts=event_ts),
         symbol="AAA",
         price=100,
         volume=1,
@@ -117,10 +118,13 @@ async def test_intent_carries_source_ts_and_trace_id():
         is_odd_lot=False,
     )
 
-    await runner.process_event(event)
+    # Patch timebase.now_ns so the event appears fresh (within staleness threshold)
+    with patch("hft_platform.strategy.runner.timebase") as tb:
+        tb.now_ns.return_value = event_ts + 100_000  # 100μs after event → fresh
+        await runner.process_event(event)
     intent = await risk_queue.get()
 
-    assert intent.source_ts_ns == 123456789
+    assert intent.source_ts_ns == event_ts
     assert intent.trace_id == "tick:7"
 
 
@@ -152,7 +156,7 @@ async def test_typed_intent_channel_fastpath():
     runner.register(strat)
 
     event = TickEvent(
-        meta=MetaData(seq=11, topic="tick", source_ts=1, local_ts=99),
+        meta=MetaData(seq=11, topic="tick", source_ts=0, local_ts=0),
         symbol="AAA",
         price=100,
         volume=1,

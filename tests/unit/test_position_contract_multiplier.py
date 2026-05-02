@@ -174,6 +174,7 @@ class TestPositionStoreMultiplier:
         store = PositionStore()
         # Force Python path for predictability
         store._rust_tracker = None
+        store.metadata.meta["TMFD6"] = {"point_value": 10}
 
         buy_fill = _make_fill("TMFD6", Side.BUY, 1, 333_450_000)
         sell_fill = _make_fill("TMFD6", Side.SELL, 1, 333_440_000)

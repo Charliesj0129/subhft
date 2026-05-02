@@ -1,0 +1,49 @@
+alpha_id: r44_tail_event
+name: "R44-Tail: Tail-Event VWAP Mean-Reversion"
+version: "0.1.0"
+status: draft
+tier: standalone
+
+hypothesis: >
+  VWAP mean-reversion signal (IC=-0.264) generates outsized PnL only on extreme
+  volatility nights (>3x normal rvol). By restricting trading to tail events,
+  we capture large mean-reversion moves while avoiding break-even normal nights.
+  Profile: big wins, small losses (大賺小賠).
+
+formula: >
+  Entry: trailing_30m_rvol > K * cross_session_median_rvol AND |price - VWAP| > threshold
+  Direction: fade VWAP deviation (sell above, buy below)
+  Exit: VWAP cross OR timeout OR stop_loss (deviation doubles)
+
+instruments:
+  - TXFD6  # TAIEX mini futures, night session
+
+data_fields:
+  - price (1-min OHLCV bars from tick data)
+  - cumulative VWAP
+  - trailing 30-min realized volatility
+  - best bid/ask
+
+paper_refs:
+  - "R44 VWAP MR: IC=-0.264 at 30min, 30+ nights"
+  - "Apr 2 2026: +27,415 pts on single extreme vol night"
+
+complexity: "O(n) per bar, O(1) signal computation"
+
+parameters:
+  vol_gate: 3.0        # rvol multiplier threshold
+  vwap_threshold: 50.0 # minimum VWAP deviation in pts
+  exit_timeout: 60     # max hold time in 1-min bars
+  stop_mult: 2.0       # stop if deviation grows to 2x entry
+  fill_timeout: 5      # cancel unfilled limit after 5 bars
+
+execution:
+  order_type: limit
+  cost_model: "fee only (0.15 pts RT)"
+  fill_model: "price trades through limit level"
+
+risks:
+  - "Extreme tail dependency: may only trigger 1-3 nights/month"
+  - "Sample size: 30 nights, possibly 3-5 extreme nights"
+  - "Momentum crash: high vol + no mean-reversion"
+  - "Single-night concentration risk"

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 # ---------------------------------------------------------------------------
@@ -153,7 +153,7 @@ def contract_dte_days(contract: dict[str, Any]) -> int | None:
         if parsed:
             try:
                 date_val = datetime.strptime(str(parsed), "%Y%m%d").date()
-                return (date_val - datetime.utcnow().date()).days
+                return (date_val - datetime.now(UTC).date()).days
             except ValueError:
                 continue
     return None

@@ -9,7 +9,16 @@ from typing import Any
 import yaml
 from structlog import get_logger
 
-from hft_platform.contracts.strategy import IntentType, OrderCommand, OrderIntent, RiskDecision, StormGuardState
+from hft_platform.contracts.strategy import (
+    IntentType,
+    OrderCommand,
+    OrderIntent,
+    RiskDecision,
+    RiskFeedback,
+    Side,
+    StormGuardState,
+    typed_intent_side,
+)
 from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceScaleProvider
 from hft_platform.observability.latency import LatencyRecorder
@@ -21,9 +30,44 @@ from hft_platform.risk.validators import (
     PerSymbolNotionalValidator,
     PositionLimitValidator,
     PriceBandValidator,
+    RiskValidator,
 )
 
 logger = get_logger("risk_engine")
+
+_KNOWN_ERROR_TYPES = frozenset(
+    {
+        "ValueError",
+        "TypeError",
+        "KeyError",
+        "AttributeError",
+        "IndexError",
+        "RuntimeError",
+        "TimeoutError",
+        "OSError",
+        "IOError",
+        "ConnectionError",
+        "asyncio.TimeoutError",
+        "Exception",
+    }
+)
+
+
+def _feedback_side(intent: Any) -> Side | None:
+    side = typed_intent_side(intent)
+    if side is None:
+        return None
+    try:
+        return Side(side)
+    except ValueError:
+        return None
+
+
+def _cap_error_type(e: Exception) -> str:
+    """Map exception type name to a known label value to cap Prometheus cardinality."""
+    name = type(e).__name__
+    return name if name in _KNOWN_ERROR_TYPES else "other"
+
 
 # Lazy import for Rust risk validator
 _RustRiskValidator = None
@@ -87,9 +131,15 @@ class RiskEngine:
         "_notification_dispatcher",
         "_order_dlq",
         "_ORDER_DLQ_MAX",
+        "_dlq_ttl_ns",
+        "_dlq_drain_interval",
+        "_dlq_drain_counter",
         "_position_provider",
         "_rejection_sink",
         "_greeks_validator",
+        "_validator0",
+        "_oq_full_consecutive",
+        "_oq_full_halt_threshold",
         "__dict__",
     )
 
@@ -123,28 +173,37 @@ class RiskEngine:
         )
         self._position_provider = position_provider
 
-        # Validators
-        self.validators = [
+        # Validators — Bug 21: share position_provider so each validator can bypass
+        # its gate when the order strictly reduces |net_position| (cover / exit).
+        _pos_provider = self._current_strategy_symbol_net_position
+        self.validators: list[RiskValidator] = [
             PriceBandValidator(self.config, price_scale_provider),
-            MaxNotionalValidator(self.config, price_scale_provider),
-            PerSymbolNotionalValidator(self.config, price_scale_provider),
+            MaxNotionalValidator(self.config, price_scale_provider, position_provider=_pos_provider),
+            PerSymbolNotionalValidator(self.config, price_scale_provider, position_provider=_pos_provider),
             PositionLimitValidator(
                 self.config,
                 price_scale_provider,
-                position_provider=self._current_strategy_symbol_net_position,
+                position_provider=_pos_provider,
             ),
-            DailyLossLimitValidator(self.config, price_scale_provider),
+            DailyLossLimitValidator(self.config, price_scale_provider, position_provider=_pos_provider),
         ]
         # Pre-compute validators that Rust doesn't cover (avoid per-call isinstance)
-        self._rust_uncovered_validators = [
-            v for v in self.validators
-            if isinstance(v, (PositionLimitValidator, DailyLossLimitValidator))
+        self._rust_uncovered_validators: list[RiskValidator] = [
+            v for v in self.validators if isinstance(v, (PositionLimitValidator, DailyLossLimitValidator))
         ]
         shared_scale_cache: dict[str, int] = {}
         for validator in self.validators:
             if hasattr(validator, "_shared_scale_cache"):
                 validator._shared_scale_cache = shared_scale_cache
+        # Cache validator[0] reference to avoid list index on hot path
+        self._validator0 = self.validators[0] if self.validators else None
         self.storm_guard = storm_guard if storm_guard is not None else StormGuard()
+        # Bug 21: share position_provider with StormGuard so reducing orders
+        # can bypass HALT/STORM rejection (prevents R47 deadlock).
+        try:
+            self.storm_guard.set_position_provider(self._current_strategy_symbol_net_position)
+        except Exception:  # noqa: BLE001 — defensive: never break engine init
+            logger.warning("stormguard_position_provider_wire_failed", exc_info=True)
         self._notification_dispatcher = notification_dispatcher
         self._rust_validator = self._init_rust_validator(price_scale_provider)
         self._rust_validator_reason_map = {
@@ -165,13 +224,20 @@ class RiskEngine:
             5: "FASTGATE_BAD_QTY_NEG",
         }
         self._trace_sampler = _get_trace_sampler()
-        self._order_dlq: collections.deque = collections.deque()
         self._ORDER_DLQ_MAX: int = 256
+        self._order_dlq: collections.deque = collections.deque(maxlen=self._ORDER_DLQ_MAX)
+        self._dlq_ttl_ns: int = int(float(os.getenv("HFT_RISK_DLQ_TTL_S", "30")) * 1_000_000_000)
+        self._dlq_drain_interval: int = int(os.getenv("HFT_RISK_DLQ_DRAIN_INTERVAL", "1"))
+        self._dlq_drain_counter: int = 0
         self._rejection_sink = rejection_sink
+        # Gradual queue-full degradation: STORM first, HALT after N consecutive failures
+        self._oq_full_consecutive: int = 0
+        self._oq_full_halt_threshold: int = int(os.getenv("HFT_ORDER_QUEUE_FULL_HALT_THRESHOLD", "3"))
         self._greeks_validator = None
         if greeks_provider is not None:
             try:
                 from hft_platform.risk.greeks_limit_validator import GreeksLimitValidator
+
                 self._greeks_validator = GreeksLimitValidator(self.config, greeks_provider)
             except ImportError:
                 logger.warning("greeks_limit_validator_unavailable")
@@ -347,6 +413,7 @@ class RiskEngine:
             v.config = new_config
             v.defaults = new_config.get("global_defaults", {})
             v.strat_configs = new_config.get("strategies", {})
+        self._validator0 = self.validators[0] if self.validators else None
         logger.info("RiskEngine config reloaded", strategies=list(new_config.get("strategies", {}).keys()))
 
     async def run(self) -> None:
@@ -354,8 +421,42 @@ class RiskEngine:
         logger.info("RiskEngine started")
 
         while self.running:
+            intent_dequeued = False
             try:
                 intent: OrderIntent = await self.intent_queue.get()
+                intent_dequeued = True
+
+                # TTL expiry check — reject stale intents before evaluation
+                if intent.ttl_ns > 0 and intent.timestamp_ns > 0:
+                    age_ns = timebase.now_ns() - intent.timestamp_ns
+                    if age_ns > intent.ttl_ns:
+                        logger.warning(
+                            "risk_intent_ttl_expired",
+                            intent_id=intent.intent_id,
+                            strategy_id=intent.strategy_id,
+                            symbol=intent.symbol,
+                            age_ms=age_ns / 1_000_000,
+                            ttl_ms=intent.ttl_ns / 1_000_000,
+                        )
+                        self._emit_reject_metric(intent.strategy_id, "TTL_EXPIRED")
+                        if self._rejection_sink is not None:
+                            try:
+                                self._rejection_sink.put_nowait(
+                                    RiskFeedback(
+                                        intent_id=intent.intent_id,
+                                        strategy_id=intent.strategy_id,
+                                        symbol=intent.symbol,
+                                        reason_code="TTL_EXPIRED",
+                                        timestamp_ns=timebase.now_ns(),
+                                        side=_feedback_side(intent),
+                                    )
+                                )
+                            except asyncio.QueueFull:
+                                self.metrics.rejection_sink_overflow_total.inc()
+                        self.intent_queue.task_done()
+                        intent_dequeued = False
+                        continue
+
                 start_ns = time.perf_counter_ns()
                 decision = self.evaluate(intent)
                 duration = time.perf_counter_ns() - start_ns
@@ -370,15 +471,40 @@ class RiskEngine:
 
                 if decision.approved:
                     cmd = self.create_command(decision.intent)
-                    if self.storm_guard.state == StormGuardState.HALT:
+                    _is_safety_order = cmd.intent.intent_type in (
+                        IntentType.CANCEL,
+                        IntentType.FORCE_FLAT,
+                    ) or self._is_halt_exempt(intent.strategy_id)
+                    if self.storm_guard.state == StormGuardState.HALT and not _is_safety_order:
                         logger.warning(
                             "risk_engine_blocked_by_halt",
                             cmd_id=cmd.cmd_id,
+                            strategy_id=intent.strategy_id,
+                            symbol=intent.symbol,
                         )
-                        self.metrics.risk_halt_blocked_total.inc()
+                        try:
+                            self.metrics.risk_halt_blocked_total.inc()
+                        except Exception:
+                            pass
+                        self._emit_reject_metric(intent.strategy_id, "HALT_BLOCKED_POST_APPROVE")
+                        if self._rejection_sink is not None:
+                            try:
+                                self._rejection_sink.put_nowait(
+                                    RiskFeedback(
+                                        intent_id=getattr(intent, "intent_id", 0),
+                                        strategy_id=getattr(intent, "strategy_id", ""),
+                                        symbol=getattr(intent, "symbol", ""),
+                                        reason_code="HALT_BLOCKED_POST_APPROVE",
+                                        timestamp_ns=timebase.now_ns(),
+                                        side=_feedback_side(intent),
+                                    )
+                                )
+                            except asyncio.QueueFull:
+                                self.metrics.rejection_sink_overflow_total.inc()
                     else:
                         try:
                             self.order_queue.put_nowait(cmd)
+                            self._oq_full_consecutive = 0
                         except asyncio.QueueFull:
                             logger.error(
                                 "order_queue_full_in_risk",
@@ -387,41 +513,281 @@ class RiskEngine:
                                 symbol=cmd.intent.symbol,
                             )
                             self.metrics.order_queue_full_total.inc()
+                            # Evict oldest BEFORE append so we can send rejection
+                            # (maxlen auto-evict is silent — we need the callback).
+                            if len(self._order_dlq) >= self._ORDER_DLQ_MAX:
+                                evicted_cmd, _ = self._order_dlq.popleft()
+                                self._send_dlq_rejection(evicted_cmd, "dlq_overflow_evicted")
+                                self.metrics.risk_dlq_overflow_total.inc()
                             self._order_dlq.append((cmd, time.monotonic_ns()))
-                            if len(self._order_dlq) > self._ORDER_DLQ_MAX:
-                                self._order_dlq.popleft()
-                            self.storm_guard.trigger_halt("order_queue_full")
+                            self._oq_full_consecutive += 1
+                            if self._oq_full_consecutive >= self._oq_full_halt_threshold:
+                                self.storm_guard.trigger_halt("order_queue_full_persistent")
+                            else:
+                                self.storm_guard.trigger_storm("order_queue_full")
                 else:
                     logger.warning("Order Rejected by Risk", sid=intent.strategy_id, reason=decision.reason_code)
                     self._emit_reject_metric(intent.strategy_id, decision.reason_code)
                     # In real system: Feedback to strategy via side channel
                     if self._rejection_sink is not None:
                         try:
-                            from hft_platform.contracts.strategy import RiskFeedback
-                            from hft_platform.utils import timebase
-                            self._rejection_sink.put_nowait(RiskFeedback(
-                                intent_id=getattr(intent, "intent_id", 0),
-                                strategy_id=getattr(intent, "strategy_id", ""),
-                                symbol=getattr(intent, "symbol", ""),
-                                reason_code=decision.reason_code,
-                                timestamp_ns=timebase.now_ns(),
-                            ))
+                            self._rejection_sink.put_nowait(
+                                RiskFeedback(
+                                    intent_id=getattr(intent, "intent_id", 0),
+                                    strategy_id=getattr(intent, "strategy_id", ""),
+                                    symbol=getattr(intent, "symbol", ""),
+                                    reason_code=decision.reason_code,
+                                    timestamp_ns=timebase.now_ns(),
+                                    side=_feedback_side(intent),
+                                )
+                            )
                         except asyncio.QueueFull:
-                            pass
+                            self.metrics.rejection_sink_overflow_total.inc()
 
                 self.intent_queue.task_done()
+                intent_dequeued = False
+
+                # Periodic DLQ drain
+                self._dlq_drain_counter += 1
+                if self._dlq_drain_counter >= self._dlq_drain_interval:
+                    self._dlq_drain_counter = 0
+                    self._drain_order_dlq()
             except asyncio.CancelledError:
+                if intent_dequeued:
+                    self.intent_queue.task_done()
                 logger.info("RiskEngine stopped")
                 break
             except Exception as e:  # noqa: BLE001 — wraps external risk validators
                 logger.exception("RiskEngine error", error=str(e), error_type=type(e).__name__)
-                self.intent_queue.task_done()
+                try:
+                    self.metrics.risk_engine_error_total.labels(error_type=_cap_error_type(e)).inc()
+                except Exception:  # noqa: BLE001 — metric failure must not mask original error
+                    pass
+                if self._rejection_sink is not None:
+                    try:
+                        self._rejection_sink.put_nowait(
+                            RiskFeedback(
+                                intent_id=getattr(intent, "intent_id", 0),
+                                strategy_id=getattr(intent, "strategy_id", ""),
+                                symbol=getattr(intent, "symbol", ""),
+                                reason_code="risk_engine_error",
+                                timestamp_ns=timebase.now_ns(),
+                                side=_feedback_side(intent),
+                            )
+                        )
+                    except asyncio.QueueFull:
+                        try:
+                            self.metrics.rejection_sink_overflow_total.inc()
+                        except Exception:
+                            pass
+                if intent_dequeued:
+                    self.intent_queue.task_done()
+
+    def _revalidate_for_dlq(self, cmd: OrderCommand) -> bool:
+        """Full risk re-validation for DLQ replay.
+
+        Returns True if the command is still safe to replay, False if it should
+        be dropped.  Runs ALL validators so that price moves, accumulated daily
+        loss, notional limits, etc. are all re-checked against current state.
+        StormGuard HALT/STORM handling is done in ``_drain_order_dlq`` at the
+        batch level (Bug 25 fix there) so this method does not re-consult it.
+        """
+        intent = cmd.intent
+        # Cancel / force-flat orders are always safe to replay.
+        if intent.intent_type in (IntentType.CANCEL, IntentType.FORCE_FLAT):
+            return True
+
+        for v in self.validators:
+            ok, reason = v.check(intent)
+            if not ok:
+                logger.warning(
+                    "risk_dlq_revalidation_rejected",
+                    cmd_id=cmd.cmd_id,
+                    strategy_id=intent.strategy_id,
+                    symbol=intent.symbol,
+                    reason=reason,
+                )
+                self.metrics.risk_dlq_revalidation_rejected_total.inc()
+                return False
+        return True
+
+    def _send_dlq_rejection(self, cmd: OrderCommand, reason: str) -> None:
+        """Send RiskFeedback for a DLQ entry that will not be retried.
+
+        Sets ``was_approved=True`` so the strategy can distinguish
+        "risk-approved but never dispatched" from "risk-rejected".
+        """
+        if self._rejection_sink is None:
+            logger.error(
+                "dlq_rejection_no_sink",
+                strategy_id=getattr(cmd.intent, "strategy_id", ""),
+                symbol=getattr(cmd.intent, "symbol", ""),
+                reason=reason,
+                cmd_id=cmd.cmd_id,
+            )
+            return
+        intent = cmd.intent
+        try:
+            self._rejection_sink.put_nowait(
+                RiskFeedback(
+                    intent_id=getattr(intent, "intent_id", 0),
+                    strategy_id=getattr(intent, "strategy_id", ""),
+                    symbol=getattr(intent, "symbol", ""),
+                    reason_code=reason,
+                    timestamp_ns=timebase.now_ns(),
+                    side=_feedback_side(intent),
+                    was_approved=True,
+                )
+            )
+        except asyncio.QueueFull:
+            self.metrics.rejection_sink_overflow_total.inc()
+            logger.error(
+                "dlq_rejection_feedback_lost",
+                strategy_id=getattr(intent, "strategy_id", ""),
+                symbol=getattr(intent, "symbol", ""),
+                reason=reason,
+                cmd_id=cmd.cmd_id,
+            )
+
+    def _cmd_reduces_position(self, cmd: OrderCommand) -> bool:
+        """Bug 25 helper: True iff replaying this DLQ command strictly reduces
+        ``|net_position|``. Used to preserve cover orders through HALT/STORM
+        clears so a stuck short/long can still unwind.
+
+        Mirrors StormGuard._intent_reduces_position; returns False conservatively
+        when no position_provider is available.
+        """
+        intent = cmd.intent
+        provider = self._position_provider
+        if provider is None:
+            return False
+        try:
+            current = int(provider(intent.symbol, intent.strategy_id) or 0)
+        except Exception:  # noqa: BLE001
+            return False
+        if current == 0:
+            return False
+        signed = int(intent.qty if intent.side == Side.BUY else -intent.qty)
+        return abs(current + signed) < abs(current)
+
+    def _drain_order_dlq(self) -> None:
+        """Drain stale-filtered DLQ entries back into order_queue.
+
+        Bug 25 (2026-04-17): during HALT/STORM, preserve reducing (cover) orders
+        so a stuck position can still unwind. Opening orders are still cleared.
+        Downstream OrderAdapter (Bug 24) allows reducing orders through HALT.
+        """
+        if not self._order_dlq:
+            return
+        # During HALT or STORM, clear OPENING orders but keep REDUCING covers —
+        # reducing intents are allowed through HALT by StormGuard/adapter (Bug 21/24).
+        if self.storm_guard.state >= StormGuardState.STORM:
+            sg_label = "halt" if self.storm_guard.state == StormGuardState.HALT else "storm"
+            kept: list[tuple[OrderCommand, int]] = []
+            cleared = 0
+            # P1-7: snapshot before iteration so any re-entrant mutation of
+            # ``self._order_dlq`` triggered by ``_send_dlq_rejection``
+            # (rejection sink callbacks may, in principle, re-enqueue) cannot
+            # raise "deque mutated during iteration" or skip entries.
+            snapshot = list(self._order_dlq)
+            for cmd, ts in snapshot:
+                if self._cmd_reduces_position(cmd):
+                    kept.append((cmd, ts))
+                else:
+                    self._send_dlq_rejection(cmd, f"dlq_{sg_label}_cleared")
+                    cleared += 1
+            self._order_dlq.clear()
+            for item in kept:
+                self._order_dlq.append(item)
+            if cleared > 0:
+                logger.warning(
+                    "risk_dlq_cleared_during_escalation",
+                    cleared=cleared,
+                    preserved_covers=len(kept),
+                    sg_state=sg_label,
+                )
+                self.metrics.risk_dlq_expired_total.inc(cleared)
+            if not kept:
+                return
+            # Fall through and drain the preserved covers normally.
+        now_ns = time.monotonic_ns()
+        ttl_ns = self._dlq_ttl_ns
+        drained = 0
+        expired = 0
+        while self._order_dlq:
+            cmd, enqueued_ns = self._order_dlq[0]
+            # Re-check escalated state during drain (TOCTOU defense-in-depth).
+            # Bug 25: preserve reducing covers; only clear opening orders.
+            # Covers that survive the check fall through to normal drain below.
+            if self.storm_guard.state >= StormGuardState.STORM and not self._cmd_reduces_position(cmd):
+                kept_mid: list[tuple[OrderCommand, int]] = []
+                cleared_mid = 0
+                # P1-7: snapshot the DLQ before the rebuild loop so any
+                # re-entrant append from ``_send_dlq_rejection`` (or a callback
+                # it triggers) cannot perturb iteration. Mid-loop appends
+                # remain invisible to this pass — they will be processed on
+                # the next ``_drain_order_dlq`` invocation.
+                snapshot_mid = list(self._order_dlq)
+                for c, ts in snapshot_mid:
+                    if self._cmd_reduces_position(c):
+                        kept_mid.append((c, ts))
+                    else:
+                        self._send_dlq_rejection(c, "dlq_storm_cleared")
+                        cleared_mid += 1
+                self._order_dlq.clear()
+                for item in kept_mid:
+                    self._order_dlq.append(item)
+                if cleared_mid > 0:
+                    logger.warning(
+                        "risk_dlq_cleared_during_escalation_mid_drain",
+                        cleared=cleared_mid,
+                        preserved_covers=len(kept_mid),
+                    )
+                    self.metrics.risk_dlq_expired_total.inc(cleared_mid)
+                if not kept_mid:
+                    break
+                # Reducing covers remain in queue; fall through to normal drain.
+                continue
+            # Expire stale entries (DLQ TTL)
+            if now_ns - enqueued_ns > ttl_ns:
+                self._order_dlq.popleft()
+                self._send_dlq_rejection(cmd, "dlq_ttl_expired")
+                expired += 1
+                continue
+            # Expire commands whose execution deadline has passed
+            if cmd.deadline_ns > 0 and now_ns > cmd.deadline_ns:
+                self._order_dlq.popleft()
+                self._send_dlq_rejection(cmd, "dlq_deadline_expired")
+                expired += 1
+                continue
+            # Re-validate position limit before replaying
+            if not self._revalidate_for_dlq(cmd):
+                self._order_dlq.popleft()
+                self._send_dlq_rejection(cmd, "dlq_revalidation_failed")
+                expired += 1
+                continue
+            # Try to push back to order_queue
+            try:
+                self.order_queue.put_nowait(cmd)
+                self._order_dlq.popleft()
+                drained += 1
+            except asyncio.QueueFull:
+                break  # Queue still full — stop draining
+        if expired > 0:
+            logger.warning(
+                "risk_dlq_entries_expired",
+                expired=expired,
+                remaining=len(self._order_dlq),
+            )
+            self.metrics.risk_dlq_expired_total.inc(expired)
+        if drained > 0:
+            self.metrics.risk_dlq_drained_total.inc(drained)
 
     def evaluate(self, intent: Any) -> RiskDecision:  # noqa: C901
         price = getattr(intent, "price", None)
-        if isinstance(price, float):
+        if price is not None and not isinstance(price, int):
             self._emit_trace("risk_reject", intent, {"stage": "type_check", "reason": "FLOAT_PRICE"})
-            return RiskDecision(False, intent, "FLOAT_PRICE")
+            return self._reject(intent, "FLOAT_PRICE")
 
         if self._fast_gate is not None:
             try:
@@ -430,28 +796,25 @@ class RiskEngine:
                     if not ok:
                         reason = self._fast_gate_reason_map.get(int(code), "FASTGATE_REJECT")
                         self._emit_trace("risk_reject", intent, {"stage": "fast_gate", "reason": reason})
-                        return RiskDecision(False, intent, reason)
+                        return self._reject(intent, reason)
             except (OSError, RuntimeError) as exc:
                 # FastGate failure must fail-closed: reject order when risk gate errors.
                 logger.error("FastGate check error — rejecting order (fail-closed)", error=str(exc))
                 self._emit_trace("risk_reject", intent, {"stage": "fast_gate", "reason": "FASTGATE_ERROR"})
-                return RiskDecision(False, intent, "FASTGATE_ERROR")
+                return self._reject(intent, "FASTGATE_ERROR")
         # 1. StormGuard Check
         ok, reason = self.storm_guard.validate(intent)
         if not ok:
             self._emit_trace("risk_reject", intent, {"stage": "storm_guard", "reason": reason})
-            return RiskDecision(False, intent, reason)
+            return self._reject(intent, reason)
 
         # 2. Hard Validators — Rust fast path or Python fallback
         rv = self._rust_validator
         if rv is not None:
             try:
-                mid_price = 0
-                lob = getattr(self.validators[0], "lob", None) if self.validators else None
-                if lob is not None:
-                    _get_mid = getattr(self.validators[0], "_get_mid_price", None)
-                    if callable(_get_mid):
-                        mid_price = int(_get_mid(getattr(intent, "symbol", "")) or 0)
+                v0 = self._validator0
+                _get_mid = getattr(v0, "_get_mid_price", None) if v0 is not None else None
+                mid_price = int(_get_mid(getattr(intent, "symbol", "")) or 0) if callable(_get_mid) else 0
                 ok, code = rv.check(
                     int(getattr(intent, "intent_type", 0)),
                     int(getattr(intent, "price", 0)),
@@ -463,7 +826,7 @@ class RiskEngine:
                 if not ok:
                     reason = self._rust_validator_reason_map.get(int(code), "RUST_VALIDATOR_REJECT")
                     self._emit_trace("risk_reject", intent, {"stage": "rust_validator", "reason": reason})
-                    return RiskDecision(False, intent, reason)
+                    return self._reject(intent, reason)
                 # Rust fast path passed — still run validators Rust doesn't cover
                 for v in self._rust_uncovered_validators:
                     ok, reason = v.check(intent)
@@ -474,7 +837,7 @@ class RiskEngine:
                             {"stage": "validator", "reason": reason, "validator": type(v).__name__},
                         )
                         self._check_daily_loss_halt()
-                        return RiskDecision(False, intent, reason)
+                        return self._reject(intent, reason)
             except (OSError, RuntimeError) as exc:
                 logger.error("RustRiskValidator error — falling through to Python", error=str(exc))
                 # Fall through to Python validators on error
@@ -487,7 +850,7 @@ class RiskEngine:
                             {"stage": "validator", "reason": reason, "validator": type(v).__name__},
                         )
                         self._check_daily_loss_halt()
-                        return RiskDecision(False, intent, reason)
+                        return self._reject(intent, reason)
         else:
             for v in self.validators:
                 ok, reason = v.check(intent)
@@ -498,7 +861,7 @@ class RiskEngine:
                         {"stage": "validator", "reason": reason, "validator": type(v).__name__},
                     )
                     self._check_daily_loss_halt()
-                    return RiskDecision(False, intent, reason)
+                    return self._reject(intent, reason)
 
         # Check if DailyLossLimitValidator triggered HALT after the validator loop
         self._check_daily_loss_halt()
@@ -507,7 +870,7 @@ class RiskEngine:
             ok, reason = self._greeks_validator.check(intent)
             if not ok:
                 self._emit_trace("risk_reject", intent, {"stage": "greeks_limit", "reason": reason})
-                return RiskDecision(False, intent, reason)
+                return self._reject(intent, reason)
 
         self._emit_trace("risk_approve", intent, {"stage": "evaluate"})
         decision = RiskDecision(True, intent)
@@ -579,8 +942,21 @@ class RiskEngine:
 
     def create_command(self, intent: OrderIntent) -> OrderCommand:
         cmd_id = self._next_cmd_id()
-        # Set 500ms deadline from now (relaxed for Python/Docker latency)
-        deadline = time.monotonic_ns() + 500_000_000
+        mono_now_ns = time.monotonic_ns()
+        default_ttl_ns = 5_000_000_000
+        raw_ttl_ns = getattr(intent, "ttl_ns", 0)
+        ttl_ns = int(raw_ttl_ns) if isinstance(raw_ttl_ns, int | float) else 0
+
+        if ttl_ns > 0:
+            remaining_ttl_ns = ttl_ns
+            raw_timestamp_ns = getattr(intent, "timestamp_ns", 0)
+            timestamp_ns = int(raw_timestamp_ns) if isinstance(raw_timestamp_ns, int | float) else 0
+            if timestamp_ns > 0:
+                age_ns = max(0, timebase.now_ns() - timestamp_ns)
+                remaining_ttl_ns = max(1, ttl_ns - age_ns)
+            deadline = mono_now_ns + remaining_ttl_ns
+        else:
+            deadline = mono_now_ns + default_ttl_ns
 
         cmd = OrderCommand(
             cmd_id=cmd_id,
@@ -588,9 +964,24 @@ class RiskEngine:
             deadline_ns=deadline,
             storm_guard_state=self.storm_guard.state,
             created_ns=timebase.now_ns(),
+            decision_price=intent.decision_price,
         )
         self._emit_trace("risk_command", intent, {"cmd_id": int(cmd_id), "deadline_ns": int(deadline)})
         return cmd
+
+    def _is_halt_exempt(self, strategy_id: str) -> bool:
+        """Check if a strategy is halt-exempt via StormGuard's public API.
+
+        ``StormGuard.is_halt_exempt`` is the canonical entry point; the prior
+        ``getattr(sg, "_halt_exempt_strategies", ...)`` fallback was a
+        compatibility relic from before the public method existed and reached
+        through the slot wall, defeating future refactors of the storage
+        format. Removed 2026-04-27 alongside RC-3.
+        """
+        sg = self.storm_guard
+        if sg is None:
+            return False
+        return bool(sg.is_halt_exempt(strategy_id))
 
     def _emit_reject_metric(self, strategy_id: str, reason: str) -> None:
         metrics = self.metrics
@@ -612,6 +1003,12 @@ class RiskEngine:
             child.inc()
         except Exception as exc:
             logger.debug("reject_metric_emit_failed", error=str(exc))
+
+    def _reject(self, intent: Any, reason: str) -> RiskDecision:
+        """Create a rejection decision and audit it."""
+        decision = RiskDecision(False, intent, reason)
+        self._audit_risk_decision(intent, decision)
+        return decision
 
     def _audit_risk_decision(self, intent: Any, decision: RiskDecision) -> None:
         """Non-blocking audit log of risk evaluation result."""
@@ -658,11 +1055,16 @@ class RiskEngine:
                 return
 
     def update_unrealized_pnl(self, unrealized_scaled: int) -> None:
-        """Forward unrealized PnL to the DailyLossLimitValidator."""
+        """Forward unrealized PnL to the DailyLossLimitValidator.
+
+        Also re-evaluates daily loss HALT so that the supervisor loop
+        can trigger HALT even when no new intents are arriving.
+        """
         for v in self.validators:
             if isinstance(v, DailyLossLimitValidator):
                 v.update_unrealized(unrealized_scaled)
-                return
+                break
+        self._check_daily_loss_halt()
 
     def _check_daily_loss_halt(self) -> None:
         """Check if DailyLossLimitValidator has triggered a HALT; if so, escalate StormGuard.
@@ -670,8 +1072,6 @@ class RiskEngine:
         Non-blocking: Telegram notification is scheduled via asyncio.create_task so it
         never delays the evaluate() hot path.
         """
-        from hft_platform.contracts.strategy import StormGuardState
-
         if self.storm_guard.state == StormGuardState.HALT:
             return  # Already in HALT — nothing to do
 
@@ -686,13 +1086,55 @@ class RiskEngine:
 
                 dispatcher = self._notification_dispatcher
                 if dispatcher is not None:
+                    # H2 / F-5 (2026-04-25): never call ``asyncio.get_event_loop()``
+                    # bare — Python 3.12+ raises ``RuntimeError`` from non-loop
+                    # threads, and ``_check_daily_loss_halt`` is invoked from
+                    # the validate() hot path which can run inside the risk
+                    # worker task (loop thread) AND from sync test contexts.
+                    # Prefer the loop bound on StormGuard (set by HFTSystem.run
+                    # via ``bind_loop``); fall back to ``get_running_loop()``
+                    # only when on the loop thread itself.
+                    sg_loop = None
                     try:
-                        loop = asyncio.get_event_loop()
-                        if loop.is_running():
-                            total_pnl = sum(v._accumulated_loss.values()) + v._unrealized_pnl
-                            limit = v._default_max_daily_loss
-                            asyncio.create_task(dispatcher.notify_daily_loss(total_pnl, limit))
-                            asyncio.create_task(dispatcher.notify_halt("DAILY_LOSS_LIMIT_EXCEEDED"))
+                        sg_loop = self.storm_guard.get_loop() if self.storm_guard else None
+                    except Exception:  # noqa: BLE001
+                        sg_loop = None
+                    try:
+                        running = asyncio.get_running_loop()
                     except RuntimeError:
-                        pass  # No event loop — skip notification (e.g. sync test context)
+                        running = None
+                    target_loop = sg_loop if sg_loop is not None and not sg_loop.is_closed() else running
+                    if target_loop is not None:
+                        total_pnl = sum(v._accumulated_loss.values()) + v._unrealized_pnl
+                        limit = v._default_max_daily_loss
+                        try:
+                            if running is target_loop:
+                                # Same-thread fast path
+                                asyncio.create_task(dispatcher.notify_daily_loss(total_pnl, limit))
+                                asyncio.create_task(dispatcher.notify_halt("DAILY_LOSS_LIMIT_EXCEEDED"))
+                            else:
+                                # Cross-thread (validate may be invoked from a
+                                # broker/recorder worker thread). Use the
+                                # threadsafe scheduler so the coroutine actually
+                                # runs instead of being silently closed.
+                                asyncio.run_coroutine_threadsafe(
+                                    dispatcher.notify_daily_loss(total_pnl, limit),
+                                    target_loop,
+                                )
+                                asyncio.run_coroutine_threadsafe(
+                                    dispatcher.notify_halt("DAILY_LOSS_LIMIT_EXCEEDED"),
+                                    target_loop,
+                                )
+                        except RuntimeError as exc:
+                            logger.warning(
+                                "daily_loss_notification_schedule_failed",
+                                error=str(exc),
+                            )
+                    else:
+                        # No loop available (sync test context or pre-startup);
+                        # degrade gracefully instead of silently dropping.
+                        logger.warning(
+                            "daily_loss_notification_skipped_no_loop",
+                            msg="No engine loop bound — Telegram daily-loss alert dropped",
+                        )
                 return

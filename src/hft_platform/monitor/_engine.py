@@ -782,7 +782,8 @@ class MonitorEngine:
 
     def _bootstrap_symbol(self, ss: SymbolState) -> None:
         """Reset, fetch recent history, and replay a single symbol."""
-        assert self._data_source is not None  # noqa: S101
+        if self._data_source is None:
+            raise RuntimeError("_bootstrap_symbol called before data source initialized")
         self._reset_symbol_runtime(ss)
         min_ingest_ts = self._session_min_ingest_ts(ss)
         try:

@@ -10,8 +10,8 @@ shioaji:
   activate_ca: false
 
 # Multi-strategy shadow: strategies loaded from config/base/strategies.yaml
-# OpportunisticMM on TXFD6 + CBS on TMFD6
+# OpportunisticMM on TXF + CBS on TMF
 
 symbols:
-  - "TXFD6"
-  - "TMFD6"
+  - "TXFR1"    # R1 = Shioaji continuous front-month (no monthly update)
+  - "TMFR1"

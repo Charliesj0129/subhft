@@ -7,9 +7,8 @@ from typing import Any
 from unittest.mock import MagicMock
 
 from hft_platform.feed_adapter.fubon.snapshot_fetcher import (
-    PRICE_SCALE,
     FubonSnapshotFetcher,
-    _scale_price,
+    _coerce_price,
 )
 
 # ------------------------------------------------------------------ #
@@ -36,6 +35,8 @@ def _make_quote_data(
     volume: int = 1234,
     bid_price: float = 100.0,
     ask_price: float = 101.0,
+    bid_volume: int = 50,
+    ask_volume: int = 30,
     open_: float = 99.0,
     high: float = 102.0,
     low: float = 98.0,
@@ -45,6 +46,8 @@ def _make_quote_data(
         "volume": volume,
         "bid_price": bid_price,
         "ask_price": ask_price,
+        "bid_volume": bid_volume,
+        "ask_volume": ask_volume,
         "open": open_,
         "high": high,
         "low": low,
@@ -52,31 +55,31 @@ def _make_quote_data(
 
 
 # ------------------------------------------------------------------ #
-# _scale_price tests
+# _coerce_price tests
 # ------------------------------------------------------------------ #
 
 
-class TestScalePrice:
+class TestCoercePrice:
     def test_float(self) -> None:
-        assert _scale_price(100.5) == 1_005_000
+        assert _coerce_price(100.5) == 100.5
 
     def test_int(self) -> None:
-        assert _scale_price(200) == 200 * PRICE_SCALE
+        assert _coerce_price(200) == 200.0
 
     def test_str_numeric(self) -> None:
-        assert _scale_price("50.25") == 502_500
+        assert _coerce_price("50.25") == 50.25
 
     def test_none_returns_zero(self) -> None:
-        assert _scale_price(None) == 0
+        assert _coerce_price(None) == 0.0
 
     def test_unparseable_str_returns_zero(self) -> None:
-        assert _scale_price("N/A") == 0
+        assert _coerce_price("N/A") == 0.0
 
     def test_zero(self) -> None:
-        assert _scale_price(0) == 0
+        assert _coerce_price(0) == 0.0
 
     def test_negative(self) -> None:
-        assert _scale_price(-10.0) == -100_000
+        assert _coerce_price(-10.0) == -10.0
 
 
 # ------------------------------------------------------------------ #
@@ -93,13 +96,15 @@ class TestFetchSnapshots:
         assert len(result) == 1
         snap = result[0]
         assert snap["code"] == "2330"
-        assert snap["close"] == 1_005_000
+        assert snap["close"] == 100.5  # raw float — normalizer handles scaling
         assert snap["volume"] == 1234
-        assert snap["bid_price"] == 1_000_000
-        assert snap["ask_price"] == 1_010_000
-        assert snap["open"] == 990_000
-        assert snap["high"] == 1_020_000
-        assert snap["low"] == 980_000
+        assert snap["buy_price"] == 100.0  # canonical field name for normalizer
+        assert snap["sell_price"] == 101.0
+        assert snap["buy_volume"] == 50
+        assert snap["sell_volume"] == 30
+        assert snap["open"] == 99.0
+        assert snap["high"] == 102.0
+        assert snap["low"] == 98.0
         assert isinstance(snap["ts"], int)
         assert snap["ts"] > 0
 
@@ -115,9 +120,9 @@ class TestFetchSnapshots:
 
         assert len(result) == 2
         assert result[0]["code"] == "2330"
-        assert result[0]["close"] == 1_000_000
+        assert result[0]["close"] == 100.0
         assert result[1]["code"] == "2317"
-        assert result[1]["close"] == 2_000_000
+        assert result[1]["close"] == 200.0
 
     def test_empty_symbols_returns_empty(self) -> None:
         sdk = _make_sdk({})
@@ -149,13 +154,13 @@ class TestFetchSnapshots:
         assert len(result) == 1
         snap = result[0]
         assert snap["code"] == "2330"
-        assert snap["close"] == 0
+        assert snap["close"] == 0.0
         assert snap["volume"] == 0
-        assert snap["bid_price"] == 0
-        assert snap["ask_price"] == 0
-        assert snap["open"] == 0
-        assert snap["high"] == 0
-        assert snap["low"] == 0
+        assert snap["buy_price"] == 0.0
+        assert snap["sell_price"] == 0.0
+        assert snap["open"] == 0.0
+        assert snap["high"] == 0.0
+        assert snap["low"] == 0.0
 
     def test_object_style_response(self) -> None:
         """SDK may return an object with attributes instead of a dict."""
@@ -164,6 +169,8 @@ class TestFetchSnapshots:
             volume=500,
             bid_price=149.5,
             ask_price=150.5,
+            bid_volume=40,
+            ask_volume=20,
             open=148.0,
             high=151.0,
             low=147.0,
@@ -174,9 +181,9 @@ class TestFetchSnapshots:
         result = fetcher.fetch_snapshots(["2330"])
 
         assert len(result) == 1
-        assert result[0]["close"] == 1_500_000
-        assert result[0]["bid_price"] == 1_495_000
-        assert result[0]["ask_price"] == 1_505_000
+        assert result[0]["close"] == 150.0  # raw float
+        assert result[0]["buy_price"] == 149.5
+        assert result[0]["sell_price"] == 150.5
 
     def test_none_price_fields(self) -> None:
         """SDK response with None values should default to 0."""
@@ -185,6 +192,8 @@ class TestFetchSnapshots:
             "volume": None,
             "bid_price": None,
             "ask_price": None,
+            "bid_volume": None,
+            "ask_volume": None,
             "open": None,
             "high": None,
             "low": None,
@@ -194,6 +203,6 @@ class TestFetchSnapshots:
         result = fetcher.fetch_snapshots(["2330"])
 
         snap = result[0]
-        assert snap["close"] == 0
+        assert snap["close"] == 0.0
         assert snap["volume"] == 0
-        assert snap["bid_price"] == 0
+        assert snap["buy_price"] == 0.0

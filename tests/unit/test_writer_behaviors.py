@@ -456,3 +456,45 @@ class TestTransposeHelpers:
         col_data = [[1, 2], [10, 20]]
         result = DataWriter._columnar_to_row_dicts(names, col_data, 2)
         assert result == [{"id": 1, "value": 10}, {"id": 2, "value": 20}]
+
+
+# ===================================================================
+# ClickHouse insert latency histogram
+# ===================================================================
+
+
+class TestCHInsertLatencyMetric:
+    """Verify recorder_ch_insert_latency_ms histogram is observed after inserts."""
+
+    def test_columnar_insert_observes_latency(self, monkeypatch):
+        """Columnar insert path observes CH insert latency histogram."""
+        from unittest.mock import MagicMock
+
+        writer = _make_writer(monkeypatch, HFT_CLICKHOUSE_ENABLED="1")
+        mock_metrics = MagicMock()
+        writer.metrics = mock_metrics
+        writer.ch_client = MagicMock()
+        writer._ch_column_oriented = True
+        writer._ch_heartbeat_lock = __import__("threading").Lock()
+        writer._table_locks = {}
+
+        writer._ch_insert_columnar("test_table", [["a", "b"], [1, 2]], ["col1", "col2"], 2)
+
+        mock_metrics.recorder_ch_insert_latency_ms.labels.assert_called_with(table="test_table")
+        mock_metrics.recorder_ch_insert_latency_ms.labels.return_value.observe.assert_called_once()
+
+    def test_row_insert_observes_latency(self, monkeypatch):
+        """Row insert path observes CH insert latency histogram."""
+        from unittest.mock import MagicMock
+
+        writer = _make_writer(monkeypatch, HFT_CLICKHOUSE_ENABLED="1")
+        mock_metrics = MagicMock()
+        writer.metrics = mock_metrics
+        writer.ch_client = MagicMock()
+        writer._ch_heartbeat_lock = __import__("threading").Lock()
+        writer._table_locks = {}
+
+        writer._ch_insert_once("test_table", [{"col1": "a", "col2": 1}])
+
+        mock_metrics.recorder_ch_insert_latency_ms.labels.assert_called_with(table="test_table")
+        mock_metrics.recorder_ch_insert_latency_ms.labels.return_value.observe.assert_called_once()

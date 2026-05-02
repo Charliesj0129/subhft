@@ -1,0 +1,20 @@
+alpha_id: omori_aftershock
+hypothesis: >
+  Event-driven strategy that detects large price moves (mainshocks) and trades
+  the post-event volatility relaxation phase using seismological Omori power-law
+  decay framework. Targets TMFD6/TXF futures on TAIFEX.
+formula: >
+  aftershock_rate(t) = K / (t + c)^p; trade reversal when rate decays below threshold
+paper_refs:
+  - "1006.1882"
+  - "cond-mat/0111257"
+  - "2012.03012"
+  - "0803.1769"
+data_fields:
+  - mid_price
+  - bid_qty
+  - ask_qty
+  - volume
+  - local_ts
+complexity: "O(1)"
+status: PROTOTYPE

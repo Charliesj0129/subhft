@@ -254,3 +254,40 @@ class TestLoadSettings:
             # skip_config_validation=True must not call validate_config_or_exit
             settings, defaults = load_settings({"skip_config_validation": True})
             assert settings["mode"] == "sim"
+
+    def test_missing_env_overlay_warns(self, tmp_path, monkeypatch) -> None:
+        """Bug #33: a typoed/unknown HFT_ENV must warn so operators notice
+        their prod overlay (e.g. risk limits) silently isn't loading."""
+        yaml_file = tmp_path / "main.yaml"
+        yaml_file.write_text("mode: sim\n")
+        monkeypatch.setenv("HFT_ENV", "this_env_does_not_exist")
+        monkeypatch.delenv("HFT_MODE", raising=False)
+        monkeypatch.delenv("HFT_SYMBOLS", raising=False)
+        monkeypatch.delenv("HFT_PROM_PORT", raising=False)
+
+        warned: list[dict] = []
+
+        def fake_warning(event: str, **kwargs) -> None:
+            warned.append({"event": event, **kwargs})
+
+        with (
+            patch("hft_platform.config.loader.DEFAULT_YAML_PATH", str(yaml_file)),
+            patch("hft_platform.config.loader._load_settings_py", return_value={}),
+            # Only the env-overlay path is missing; the base yaml exists in tmp_path.
+            patch(
+                "hft_platform.config.loader.os.path.exists",
+                side_effect=lambda p: not p.startswith("config/env/"),
+            ),
+            patch.object(
+                __import__("hft_platform.config.loader", fromlist=["logger"]).logger,
+                "warning",
+                side_effect=fake_warning,
+            ),
+        ):
+            settings, _ = load_settings({"skip_config_validation": True})
+
+        assert settings["env"] == "this_env_does_not_exist"
+        env_overlay_warnings = [w for w in warned if w["event"] == "env_overlay_not_found"]
+        assert len(env_overlay_warnings) == 1
+        assert env_overlay_warnings[0]["env"] == "this_env_does_not_exist"
+        assert "this_env_does_not_exist" in env_overlay_warnings[0]["expected_path"]

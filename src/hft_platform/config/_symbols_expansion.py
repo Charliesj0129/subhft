@@ -26,6 +26,37 @@ from hft_platform.config._symbols_types import (
     expiry_key,
 )
 
+
+def _filter_active_contracts(
+    contracts: list[dict[str, Any]],
+    result: SymbolBuildResult,
+    context: str,
+) -> list[dict[str, Any]]:
+    """Drop derivatives whose delivery_date is strictly in the past.
+
+    Contracts without a parseable expiry (e.g., perpetuals, malformed cache rows)
+    are kept so a broken cache doesn't silently delete the universe.
+    """
+    active: list[dict[str, Any]] = []
+    expired: list[str] = []
+    for c in contracts:
+        dte = contract_dte_days(c)
+        if dte is None:
+            active.append(c)
+            continue
+        if dte < 0:
+            code = str(c.get("code") or "?")
+            expired.append(code)
+            continue
+        active.append(c)
+    if expired:
+        result.warnings.append(
+            f"Dropped {len(expired)} expired contracts ({context}): "
+            f"{', '.join(expired[:5])}{'...' if len(expired) > 5 else ''}"
+        )
+    return active
+
+
 logger = get_logger("config.symbols.expansion")
 
 
@@ -96,6 +127,28 @@ _OPTION_POINT_VALUE: dict[str, int] = {
     "TXO": 50,
     "MXO": 10,
 }
+
+# Default trading metadata per futures root.
+# Platform invariant: all price fields use price_scale=10000 (see test_futures_symbol_config).
+# tick_size is in raw points; the scaled tick is tick_size * price_scale at the boundary.
+_FUTURES_METADATA: dict[str, dict[str, int]] = {
+    "TXF": {"point_value": 200, "tick_size": 1, "price_scale": 10000},
+    "MXF": {"point_value": 50, "tick_size": 1, "price_scale": 10000},
+    "TMF": {"point_value": 10, "tick_size": 1, "price_scale": 10000},
+    "EXF": {"point_value": 4000, "tick_size": 1, "price_scale": 10000},
+    "FXF": {"point_value": 1000, "tick_size": 1, "price_scale": 10000},
+    "GXF": {"point_value": 50, "tick_size": 1, "price_scale": 10000},
+}
+
+
+def _enrich_future_entry(entry: dict[str, Any], code: str) -> None:
+    """Populate futures trading metadata (point_value/tick_size/price_scale) by root prefix."""
+    root = code[:3].upper()
+    meta = _FUTURES_METADATA.get(root)
+    if not meta:
+        return
+    for key, value in meta.items():
+        entry.setdefault(key, value)
 
 
 def _enrich_option_entry(
@@ -215,8 +268,21 @@ def _expand_futures(
         result.errors.append(f"No futures contracts found for root {root} after filtering R1/R2")
         return
 
+    contracts = _filter_active_contracts(contracts, result, context=f"futures {root}")
+    if not contracts:
+        result.errors.append(f"No active (non-expired) futures contracts for root {root}")
+        return
+
     groups = _group_by_expiry(contracts)
-    idx_map = {"front": 0, "near": 0, "next": 1, "far": 2}
+    idx_map = {
+        "front": 0,
+        "near": 0,
+        "next": 1,
+        "far": 2,
+        "far_plus_1": 3,
+        "far_plus_2": 4,
+        "far_plus_3": 5,
+    }
     month_indices: list[int] = []
     month_labels: list[str] = []
 
@@ -240,7 +306,12 @@ def _expand_futures(
                 result.errors.append(f"Unknown futures month selector: {token} ({root})")
                 continue
             if idx_val >= len(groups):
-                result.errors.append(f"Futures month selector out of range: {root}@{token}")
+                # Broker doesn't currently list this expiry (e.g., far months not yet listed).
+                # Drop it from the universe with a warning instead of failing the build.
+                result.warnings.append(
+                    f"Futures month selector unavailable: {root}@{token} "
+                    f"(only {len(groups)} active expiry/expiries in cache)"
+                )
                 continue
             month_indices.append(idx_val)
             month_labels.append(month)
@@ -256,6 +327,7 @@ def _expand_futures(
         entry = build_entry(str(contract.get("code")), attrs, contract, result, extra_tags=tags)
         if entry:
             entry.setdefault("exchange", "FUT")
+            _enrich_future_entry(entry, str(contract.get("code") or ""))
             result.symbols.append(entry)
 
 
@@ -331,8 +403,21 @@ def _expand_options(
         result.errors.append(f"No option contracts found for root {root}")
         return
 
+    contracts = _filter_active_contracts(contracts, result, context=f"options {root}")
+    if not contracts:
+        result.errors.append(f"No active (non-expired) option contracts for root {root}")
+        return
+
     groups = _group_by_expiry(contracts)
-    idx_map = {"front": 0, "near": 0, "next": 1, "far": 2}
+    idx_map = {
+        "front": 0,
+        "near": 0,
+        "next": 1,
+        "far": 2,
+        "far_plus_1": 3,
+        "far_plus_2": 4,
+        "far_plus_3": 5,
+    }
     tokens = filters.months if filters.months is not None else [month_token]
 
     for token in tokens:
@@ -342,7 +427,11 @@ def _expand_options(
             result.errors.append(f"Unknown options month selector: {token} ({root})")
             continue
         if idx >= len(groups):
-            result.errors.append(f"Options month selector out of range: {root}@{token}")
+            # Broker doesn't currently list this expiry; skip with warning instead of erroring out.
+            result.warnings.append(
+                f"Options month selector unavailable: {root}@{token} "
+                f"(only {len(groups)} active expiry/expiries in cache)"
+            )
             continue
 
         group = groups[idx]

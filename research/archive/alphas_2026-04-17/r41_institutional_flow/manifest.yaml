@@ -1,0 +1,22 @@
+alpha_id: r41_institutional_flow
+name: "Institutional Flow Accumulation Detection"
+version: "0.1.0"
+status: KILLED
+instrument: TXFD6
+horizon: 15m
+signal: ofi_autocorr_30m
+gate_a: PASS
+gate_b: SKIP
+gate_c: FAIL
+gate_d: FAIL
+kill_reason: >
+  IC signal is real but not tradeable. ofi_autocorr_30m has IC=+0.105 (t=4.24,
+  9/10 days positive), which is genuinely novel vs cum_ofi (corr=0.06). However:
+  (1) Quintile spread is noisy and non-monotonic, (2) backtest PnL is negative
+  after costs at both threshold levels, (3) only ~3 trades/day at threshold=0.3,
+  ~1 trade/day at 0.5, (4) Q5-Q1 spread of 20 pts vs 9.4 pts RT cost = 2.1x,
+  barely above threshold and unreliable with n=163 observations.
+  The signal captures real microstructure (autocorrelated OFI predicts continuation),
+  but edge is too thin for standalone trading at TXFD6 cost structure.
+created: 2026-04-07
+researcher: claude-r41

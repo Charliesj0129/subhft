@@ -6,14 +6,11 @@ first argument so that the public API surface stays in ``loader.py``.
 
 from __future__ import annotations
 
-import os
 import random
 import time
-import warnings
 from typing import Any
 
-import clickhouse_connect
-
+from hft_platform.infra.ch_client import get_ch_client
 from hft_platform.recorder._loader_common import (
     logger,
     timebase,
@@ -28,34 +25,9 @@ from hft_platform.recorder.schema import apply_schema, ensure_price_scaled_views
 def connect(svc: Any) -> None:
     """Establish a ClickHouse connection and ensure schema exists."""
     try:
-        ch_username = os.getenv("HFT_CLICKHOUSE_USER")
-        if not ch_username and os.getenv("HFT_CLICKHOUSE_USERNAME"):
-            ch_username = os.getenv("HFT_CLICKHOUSE_USERNAME")
-            warnings.warn(
-                "HFT_CLICKHOUSE_USERNAME is deprecated, use HFT_CLICKHOUSE_USER instead",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            logger.warning("Deprecated env var HFT_CLICKHOUSE_USERNAME used; migrate to HFT_CLICKHOUSE_USER")
-        if not ch_username and os.getenv("CLICKHOUSE_USER"):
-            ch_username = os.getenv("CLICKHOUSE_USER")
-        # TODO(2026-Q3): remove CLICKHOUSE_USERNAME fallback — deprecated since 2026-03
-        if not ch_username and os.getenv("CLICKHOUSE_USERNAME"):
-            ch_username = os.getenv("CLICKHOUSE_USERNAME")
-            warnings.warn(
-                "CLICKHOUSE_USERNAME is deprecated, use HFT_CLICKHOUSE_USER instead",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            logger.warning("Deprecated env var CLICKHOUSE_USERNAME used; migrate to HFT_CLICKHOUSE_USER")
-        if not ch_username:
-            ch_username = "default"
-        ch_password = os.getenv("HFT_CLICKHOUSE_PASSWORD") or os.getenv("CLICKHOUSE_PASSWORD") or ""
-        svc.ch_client = clickhouse_connect.get_client(
+        svc.ch_client = get_ch_client(
             host=svc.ch_host,
             port=svc.ch_port,
-            username=ch_username,
-            password=ch_password,
         )
         try:
             apply_schema(svc.ch_client)
@@ -196,8 +168,8 @@ def is_duplicate(svc: Any, table: str, content_hash: str) -> bool:
     try:
         with svc._ch_lock:
             result = svc.ch_client.command(
-                "SELECT count() FROM hft._wal_dedup WHERE table = %(table)s AND hash = %(hash)s",
-                parameters={"table": table, "hash": content_hash},
+                "SELECT count() FROM hft._wal_dedup WHERE table_name = %(table_name)s AND hash = %(hash)s",
+                parameters={"table_name": table, "hash": content_hash},
             )
         return int(result) > 0
     except Exception as _exc:  # noqa: BLE001
@@ -211,7 +183,7 @@ def record_dedup(svc: Any, table: str, content_hash: str, row_count: int) -> Non
             svc.ch_client.insert(
                 "hft._wal_dedup",
                 [[table, content_hash, row_count, timebase.now_ns()]],
-                column_names=["table", "hash", "row_count", "ts"],
+                column_names=["table_name", "hash", "row_count", "ts"],
             )
     except Exception as e:
         logger.warning("Failed to record dedup hash", error=str(e))
@@ -228,8 +200,16 @@ def insert_with_dedup(svc: Any, target_table: str, rows: list, fname: str) -> bo
     if svc._dedup_enabled and svc.ch_client:
         import hashlib
 
-        raw = "".join(str(r) for r in rows)
-        content_hash = hashlib.sha256(raw.encode()).hexdigest()[:16]
+        try:
+            import orjson
+
+            raw = b"".join(orjson.dumps(r, option=orjson.OPT_SORT_KEYS) for r in rows)
+        except (ImportError, TypeError):
+            # Fallback: use json with sorted keys for determinism
+            import json
+
+            raw = "".join(json.dumps(r, sort_keys=True, default=str) for r in rows).encode()
+        content_hash = hashlib.sha256(raw).hexdigest()
         if svc._is_duplicate(target_table, content_hash):
             logger.info(
                 "Skipping duplicate WAL batch",

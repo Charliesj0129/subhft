@@ -1,0 +1,42 @@
+# R30 Zumbach Volatility Feedback Alpha Configuration (v2 — post-Challenger)
+# Paper: Dandapani, Jusselin, Rosenbaum (2019) arXiv:1907.06151
+
+alpha_id: r30_zumbach_vol_feedback
+target_symbol: TMFD6
+target_exchange: TAIFEX
+
+# Return ring buffer
+return_ring_size: 512
+min_returns: 64
+
+# Zumbach statistic multi-scale windows (B-3: hyperparameters for Gate C sweep)
+zumbach_windows: [30, 120, 360]   # ~30s, ~2min, ~6min
+window_weights: [0.5, 0.3, 0.2]   # not theoretically derived; sweep at Gate C
+
+# Zumbach EMA tracking (B-1 fix: signed Zumbach, no abs())
+zumbach_decay: 0.05               # EMA alpha for signed Zumbach statistic
+
+# Vol normalization
+vol_ema_alpha: 0.02
+vol_window: 60
+
+# Signal generation
+signal_ema_alpha: 0.1
+signal_scale: 5.0
+signal_clip: 1.0                  # Execution fix: explicit clip parameter
+warmup_ticks: 120
+
+# TRA diagnostic (B-4 fix: proper rolling covariance)
+tra_window: 120
+tra_decay: 0.02
+
+# Holding period
+target_holding_ticks: 300         # ~5 min target hold
+max_holding_ticks: 1800           # ~30 min max hold
+
+# Kill conditions (Gate C)
+kill_conditions:
+  tra_stat_positive: true         # B-4: TRA statistic must be positive (Zumbach present)
+  min_detrended_ic: 0.02          # detrended IC must exceed 0.02
+  min_expected_move_pts: 6.0      # Execution fix: tightened to 1.5x cost (was 4.0)
+  max_trades_per_day: 50          # cost control

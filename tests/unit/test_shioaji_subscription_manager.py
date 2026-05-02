@@ -224,3 +224,60 @@ class TestFacadeWiresSubscriptionManager:
                 facade.set_execution_callbacks(on_order, on_deal)
 
             mock_set.assert_called_once_with(on_order=on_order, on_deal=on_deal)
+
+
+class TestSubscribeBasketStateResetBeforeRefresh:
+    """Regression: subscription state (subscribed_count / subscribed_codes) must
+    be reset to zero before calling subscribe_basket() during options expiry
+    refresh.
+
+    Bug: QuoteConnectionPool.refresh_options_symbols() called subscribe_basket()
+    on connections that were already at MAX_SUBSCRIPTIONS without resetting the
+    local counters first.  subscribe_basket() immediately hit the limit guard
+    and logged "Subscription limit reached" without subscribing anything.
+    """
+
+    def test_subscribe_basket_hits_limit_when_count_at_max(self, tmp_path):
+        """Reproduces the bug scenario: subscribed_count already at MAX."""
+        client, mock_api, _ = _make_client(tmp_path)
+        client.logged_in = True
+        cb = MagicMock()
+
+        # Simulate state after first successful subscribe_basket() — now at max
+        client.subscribed_count = client.MAX_SUBSCRIPTIONS
+        client.subscribed_codes = {"FAKE_" + str(i) for i in range(client.MAX_SUBSCRIPTIONS)}
+
+        calls_before = mock_api.quote.subscribe.call_count
+        client.subscribe_basket(cb)
+
+        # Without a reset, no new subscriptions should be issued because the
+        # limit guard fires immediately in subscribe_basket().
+        assert mock_api.quote.subscribe.call_count == calls_before, (
+            "Expected subscribe_basket to be blocked by MAX_SUBSCRIPTIONS guard "
+            "when subscribed_count is already at max — this is the bug scenario"
+        )
+
+    def test_subscribe_basket_succeeds_after_subscribed_state_reset(self, tmp_path):
+        """The fix: resetting subscribed_count and subscribed_codes before
+        subscribe_basket() allows the second call to succeed.
+
+        This is what refresh_options_symbols() now does before resubscribing.
+        """
+        client, mock_api, _ = _make_client(tmp_path)
+        client.logged_in = True
+        cb = MagicMock()
+
+        # Simulate state after first subscribe_basket()
+        client.subscribed_count = client.MAX_SUBSCRIPTIONS
+        client.subscribed_codes = {"FAKE_" + str(i) for i in range(client.MAX_SUBSCRIPTIONS)}
+
+        # Apply the fix that refresh_options_symbols() now does before resubscribing
+        client.subscribed_codes = set()
+        client.subscribed_count = 0
+
+        client.subscribe_basket(cb)
+
+        # 2 symbols × 2 quote types (Tick + BidAsk) = 4 subscribe calls
+        assert mock_api.quote.subscribe.call_count == 4, (
+            "After resetting subscription state, subscribe_basket should subscribe all 2 symbols (4 API calls total)"
+        )

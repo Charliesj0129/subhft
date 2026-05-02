@@ -44,7 +44,7 @@ class TestRenderFlattenResult:
 class TestRenderHeartbeat:
     def test_contains_state_and_feed(self) -> None:
         result = templates.render_heartbeat(
-            autonomy_state="NORMAL", pnl_scaled=10000, strategies_active=3, feed_status="ok"
+            autonomy_state="NORMAL", pnl_scaled=100000000, strategies_active=3, feed_status="ok"
         )
         assert "NORMAL" in result
         assert "ok" in result

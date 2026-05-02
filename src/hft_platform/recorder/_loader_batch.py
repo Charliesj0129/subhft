@@ -9,6 +9,14 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
+from hft_platform.recorder._loader_common import (
+    _TS_MAX_FUTURE_NS,
+    _dumps,
+    _to_scaled,
+    logger,
+    timebase,
+)
+
 _EPOCH = date(1970, 1, 1)
 
 
@@ -23,13 +31,6 @@ def _to_date(value: object) -> date:
             pass
     return _EPOCH
 
-from hft_platform.recorder._loader_common import (
-    _TS_MAX_FUTURE_NS,
-    _dumps,
-    _to_scaled,
-    logger,
-    timebase,
-)
 
 # ---------------------------------------------------------------------------
 # market_data
@@ -48,6 +49,7 @@ _MARKET_DATA_COLS: list[str] = [
     "asks_price",
     "asks_vol",
     "seq_no",
+    "trade_direction",
     # Multi-instrument fields (added 2026-03-30)
     "instrument_type",
     "underlying",
@@ -142,7 +144,7 @@ def format_market_data(
         has_bids = bool(bids_price)
         has_asks = bool(asks_price)
         if row_type != "tick" and has_bids != has_asks:
-            logger.warning(
+            logger.debug(
                 "Missing orderbook side in WAL row",
                 symbol=r.get("symbol"),
                 has_bids=has_bids,
@@ -162,6 +164,7 @@ def format_market_data(
             asks_price or [],
             asks_vol or [],
             int(r.get("seq_no", r.get("seq") or 0)),
+            int(r.get("trade_direction", 0)),
             # Multi-instrument fields (added 2026-03-30)
             r.get("instrument_type", ""),
             r.get("underlying", ""),
@@ -180,16 +183,17 @@ def format_market_data(
 
 _ORDERS_COLS: list[str] = [
     "order_id",
+    "client_order_id",
     "strategy_id",
     "symbol",
-    "exchange",
     "side",
     "price_scaled",
     "qty",
-    "order_type",
     "status",
-    "exch_ts",
     "ingest_ts",
+    "latency_us",
+    "instrument_type",
+    "oc_type",
 ]
 
 
@@ -204,21 +208,21 @@ def format_orders(
             price_float = r.get("price")
             price = _to_scaled(price_float) if price_float is not None else 0
 
-        exch_ts = int(r.get("exch_ts") or r.get("ts") or r.get("timestamp") or 0)
         ingest_ts = int(r.get("ingest_ts") or r.get("recv_ts") or timebase.now_ns())
 
         row_data = [
             str(r.get("order_id", "")),
+            str(r.get("client_order_id", "")),
             str(r.get("strategy_id", "")),
             str(r.get("symbol", "")),
-            str(r.get("exchange", r.get("exch", ""))),
             str(r.get("side", r.get("action", ""))),
             int(price),
             int(r.get("qty", r.get("quantity", 0)) or 0),
-            str(r.get("order_type", r.get("type", ""))),
             str(r.get("status", "")),
-            exch_ts,
             ingest_ts,
+            int(r.get("latency_us", 0) or 0),
+            str(r.get("instrument_type", "")),
+            str(r.get("oc_type", "")),
         ]
         data.append(row_data)
 
@@ -245,7 +249,7 @@ _TRADES_COLS: list[str] = [
 def format_trades(
     rows: list[dict[str, Any]],
 ) -> tuple[list[str], list[list]]:
-    """Return ``(cols, data)`` for the ``hft.trades`` table."""
+    """Return ``(cols, data)`` for the ``hft.trades`` table (legacy)."""
     data: list[list] = []
     for r in rows:
         price = r.get("price_scaled")
@@ -270,6 +274,69 @@ def format_trades(
         data.append(row_data)
 
     return _TRADES_COLS, data
+
+
+# ---------------------------------------------------------------------------
+# fills (unified — targets hft.fills)
+# ---------------------------------------------------------------------------
+
+_FILLS_COLS: list[str] = [
+    "ts_exchange",
+    "ts_local",
+    "client_order_id",
+    "broker_order_id",
+    "fill_id",
+    "strategy_id",
+    "symbol",
+    "side",
+    "qty",
+    "price_scaled",
+    "fee_scaled",
+    "tax_scaled",
+    "decision_price",
+    "arrival_price",
+    "source",
+    "instrument_type",
+    "oc_type",
+]
+
+
+def format_fills(
+    rows: list[dict[str, Any]],
+) -> tuple[list[str], list[list]]:
+    """Return ``(cols, data)`` for the ``hft.fills`` table."""
+    data: list[list] = []
+    for r in rows:
+        price = r.get("price_scaled")
+        if price is None:
+            price_float = r.get("price")
+            price = _to_scaled(price_float) if price_float is not None else 0
+
+        ts_exchange = int(r.get("ts_exchange") or r.get("match_ts") or r.get("exch_ts") or r.get("ts") or 0)
+        ts_local = int(r.get("ts_local") or r.get("ingest_ts") or r.get("recv_ts") or timebase.now_ns())
+
+        row_data = [
+            ts_exchange,
+            ts_local,
+            str(r.get("client_order_id", "")),
+            str(r.get("broker_order_id", r.get("order_id", ""))),
+            str(r.get("fill_id", r.get("trade_id", ""))),
+            str(r.get("strategy_id", "")),
+            str(r.get("symbol", "")),
+            str(r.get("side", r.get("action", ""))),
+            int(r.get("qty", r.get("quantity", 0)) or 0),
+            int(price),
+            int(r.get("fee_scaled", 0) or 0),
+            int(r.get("tax_scaled", 0) or 0),
+            int(r.get("decision_price", 0) or 0),
+            int(r.get("arrival_price", 0) or 0),
+            str(r.get("source", "")),
+            str(r.get("instrument_type", "")),
+            str(r.get("oc_type", "")),
+        ]
+        data.append(row_data)
+
+    return _FILLS_COLS, data
 
 
 # ---------------------------------------------------------------------------
@@ -349,6 +416,86 @@ def format_backtest_runs(
 
 
 # ---------------------------------------------------------------------------
+# pnl_snapshots
+# ---------------------------------------------------------------------------
+
+_PNL_SNAPSHOTS_COLS: list[str] = [
+    "snapshot_ts",
+    "account_id",
+    "strategy_id",
+    "symbol",
+    "net_qty",
+    "avg_price_scaled",
+    "realized_pnl_scaled",
+    "fees_scaled",
+    "total_pnl_scaled",
+    "peak_equity_scaled",
+    "drawdown_pct",
+]
+
+
+def format_pnl_snapshots(
+    rows: list[dict[str, Any]],
+) -> tuple[list[str], list[list]]:
+    """Return ``(cols, data)`` for the ``hft.pnl_snapshots`` table."""
+    data: list[list] = []
+    for r in rows:
+        ts = int(r.get("snapshot_ts") or r.get("ts") or r.get("timestamp") or timebase.now_ns())
+
+        row_data = [
+            ts,
+            str(r.get("account_id", "")),
+            str(r.get("strategy_id", "")),
+            str(r.get("symbol", "")),
+            int(r.get("net_qty", 0) or 0),
+            int(r.get("avg_price_scaled", 0) or 0),
+            int(r.get("realized_pnl_scaled", 0) or 0),
+            int(r.get("fees_scaled", 0) or 0),
+            int(r.get("total_pnl_scaled", 0) or 0),
+            int(r.get("peak_equity_scaled", 0) or 0),
+            float(r.get("drawdown_pct", 0.0) or 0.0),
+        ]
+        data.append(row_data)
+
+    return _PNL_SNAPSHOTS_COLS, data
+
+
+# ---------------------------------------------------------------------------
+# latency_spans
+# ---------------------------------------------------------------------------
+
+_LATENCY_SPANS_COLS: list[str] = [
+    "ingest_ts",
+    "stage",
+    "latency_us",
+    "trace_id",
+    "symbol",
+    "strategy_id",
+]
+
+
+def format_latency_spans(
+    rows: list[dict[str, Any]],
+) -> tuple[list[str], list[list]]:
+    """Return ``(cols, data)`` for the ``hft.latency_spans`` table."""
+    data: list[list] = []
+    for r in rows:
+        ts = int(r.get("ingest_ts") or r.get("ts") or r.get("timestamp") or timebase.now_ns())
+
+        row_data = [
+            ts,
+            str(r.get("stage", "")),
+            int(r.get("latency_us", 0) or 0),
+            str(r.get("trace_id", "")),
+            str(r.get("symbol", "")),
+            str(r.get("strategy_id", "")),
+        ]
+        data.append(row_data)
+
+    return _LATENCY_SPANS_COLS, data
+
+
+# ---------------------------------------------------------------------------
 # Dispatcher
 # ---------------------------------------------------------------------------
 
@@ -356,8 +503,11 @@ _TABLE_FORMATTERS = {
     "market_data": ("hft.market_data", format_market_data),
     "orders": ("hft.orders", format_orders),
     "trades": ("hft.trades", format_trades),
+    "fills": ("hft.fills", format_fills),
     "risk_log": ("hft.risk_log", format_risk_log),
     "backtest_runs": ("hft.backtest_runs", format_backtest_runs),
+    "pnl_snapshots": ("hft.pnl_snapshots", format_pnl_snapshots),
+    "latency_spans": ("hft.latency_spans", format_latency_spans),
 }
 
 

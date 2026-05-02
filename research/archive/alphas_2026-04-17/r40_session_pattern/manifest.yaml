@@ -1,0 +1,62 @@
+alpha_id: r40_session_pattern
+name: "Morning->Afternoon Momentum/Reversal"
+instrument: TXFD6
+version: "0.1.0"
+status: exploratory
+author: claude-r40
+created: "2026-04-07"
+
+hypothesis: >
+  The first 2 hours of TXFD6 day session (08:45-10:45) establish a trend.
+  In the tight-spread regime (Mar-Apr 2026), the afternoon (10:45-13:30)
+  tends to CONTINUE in the same direction (momentum), not reverse.
+
+signals:
+  - morning_return: "price(10:45) - price(08:45)"
+  - morning_ofi: "cumulative signed volume 08:45-10:45"
+  - first_hour_return: "price(09:45) - price(08:45)"
+
+target: "afternoon_return = price(13:30) - price(10:45)"
+
+data_requirements:
+  - "TXFD6 day-session tick data (08:45-13:45 TWN)"
+  - "Minimum: golden parquet or L1 npy"
+
+findings:
+  sample_size: 17
+  tight_spread_days: 8
+  wide_spread_days: 6
+  overall_correlation: 0.136
+  overall_p_value: 0.604
+  tight_spread_correlation: 0.499
+  tight_spread_p_value: 0.208
+  tight_spread_sign_agreement: "7/8 (87.5%)"
+  tight_spread_binomial_p: 0.070
+  wide_spread_correlation: -0.470
+  wide_spread_note: "REVERSAL tendency in wide-spread regime"
+
+strategy_simulation:
+  tight_spread_momentum:
+    trades: 8
+    win_rate: 0.75
+    total_pnl_pts: 593
+    mean_pnl_pts: 74.1
+    sharpe_per_trade: 0.457
+  all_days_momentum:
+    trades: 17
+    total_pnl_pts: -2222
+    note: "Wide spreads in Jan/Feb destroy all edge"
+
+verdict: >
+  INCONCLUSIVE but INTERESTING.
+  In the tight-spread regime (Mar-Apr), 7/8 days show momentum (p=0.070).
+  The momentum strategy is profitable with +593 pts over 8 trades.
+  However: n=8 is far too small for confidence. The pattern reverses in the
+  wide-spread regime (Jan), suggesting it may be regime-dependent.
+  Need 20+ more tight-spread-regime days to validate.
+
+next_steps:
+  - "Accumulate more tight-spread-regime day-session data"
+  - "Backtest on 30+ days before considering shadow deployment"
+  - "Investigate WHY the regime change happened (TMFD6 spread collapse in Mar)"
+  - "Consider combining with morning OFI for better signal quality"

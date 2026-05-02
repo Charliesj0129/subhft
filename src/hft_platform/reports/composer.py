@@ -10,9 +10,11 @@ from typing import TYPE_CHECKING, Final
 
 import structlog
 
+from hft_platform.contracts.types import PLATFORM_SCALE
 from hft_platform.reports.models import ComposedReport, MessagePart
 
 if TYPE_CHECKING:
+    from hft_platform.reports.llm_models import LLMDecisionReport
     from hft_platform.reports.models import (
         FactReport,
         ReasoningReport,
@@ -21,8 +23,6 @@ if TYPE_CHECKING:
 __all__ = ["ReportComposer"]
 
 log = structlog.get_logger(__name__)
-
-PLATFORM_SCALE: Final[int] = 10_000
 TELEGRAM_MAX_LEN: Final[int] = 4096
 
 _SESSION_LABELS: Final[dict[str, str]] = {
@@ -138,11 +138,18 @@ def _split_message(content: str, min_tier: str) -> list[MessagePart]:
 class ReportComposer:
     """Build tier-aware MessageParts from FactReport + ReasoningReport."""
 
-    def compose(self, fr: FactReport, rr: ReasoningReport) -> ComposedReport:
+    def compose(
+        self,
+        fr: FactReport,
+        rr: ReasoningReport,
+        llm_decision: LLMDecisionReport | None = None,
+    ) -> ComposedReport:
         """Compose all message parts into a ComposedReport."""
         parts: list[MessagePart] = []
 
         parts.extend(_split_message(self._compose_summary(fr, rr), "free"))
+        if llm_decision is not None:
+            parts.extend(_split_message(self._compose_llm_decision(llm_decision), "paid"))
         parts.extend(_split_message(self._compose_narrative(rr), "paid"))
         parts.extend(_split_message(self._compose_flow(fr), "paid"))
         parts.extend(_split_message(self._compose_chips(fr), "paid"))
@@ -196,18 +203,14 @@ class ReportComposer:
 
         # Cross-day comparison
         if fr.cross_day.prev_days:
-            price_pos_desc = _PRICE_POSITION_DESC.get(
-                fr.cross_day.price_position, fr.cross_day.price_position
-            )
+            price_pos_desc = _PRICE_POSITION_DESC.get(fr.cross_day.price_position, fr.cross_day.price_position)
             cross_day_line = f"vs 前日：{price_pos_desc}"
             if fr.cross_day.flow_reversal:
                 cross_day_line += "，流向反轉"
             lines.append("")
             lines.append(cross_day_line)
 
-            trend_desc = _TREND_DESC.get(
-                fr.cross_day.trend_direction, fr.cross_day.trend_direction
-            )
+            trend_desc = _TREND_DESC.get(fr.cross_day.trend_direction, fr.cross_day.trend_direction)
             lines.append(f"vs 前 3 日：{trend_desc}")
 
         return "\n".join(lines)
@@ -232,6 +235,57 @@ class ReportComposer:
         return "\n".join(lines)
 
     # ------------------------------------------------------------------
+    # 2b. LLM decision layer (paid tier)
+    # ------------------------------------------------------------------
+
+    def _compose_llm_decision(self, decision: LLMDecisionReport) -> str:
+        intraday_stance = _BIAS_LABELS.get(decision.intraday_plan.stance, decision.intraday_plan.stance)
+        swing_stance = _BIAS_LABELS.get(decision.swing_plan.stance, decision.swing_plan.stance)
+        lines = [
+            "🧠 LLM 市場裁決",
+            "",
+            f"裁決：{decision.market_verdict}",
+            f"信心：{decision.confidence}%",
+            "",
+            "當日交易計畫",
+            f"  方向：{intraday_stance}",
+            f"  前提：{decision.intraday_plan.premise}",
+            f"  觸發：{decision.intraday_plan.trigger}",
+            f"  執行：{decision.intraday_plan.execution_style}",
+            f"  停損：{decision.intraday_plan.stop}",
+            f"  目標：{decision.intraday_plan.target_1} / {decision.intraday_plan.target_2}",
+            f"  風控：{decision.intraday_plan.risk_note}",
+            "",
+            "1-3 日波段觀點",
+            f"  方向：{swing_stance}",
+            f"  前提：{decision.swing_plan.premise}",
+            f"  觸發：{decision.swing_plan.trigger}",
+            f"  執行：{decision.swing_plan.execution_style}",
+            f"  停損：{decision.swing_plan.stop}",
+            f"  目標：{decision.swing_plan.target_1} / {decision.swing_plan.target_2}",
+            f"  風控：{decision.swing_plan.risk_note}",
+            "",
+            "關鍵價位",
+        ]
+        lines.extend(f"  - {level}" for level in decision.key_levels)
+        lines.extend(
+            [
+                "",
+                "失效條件",
+            ]
+        )
+        lines.extend(f"  - {item}" for item in decision.invalidations)
+        lines.extend(
+            [
+                "",
+                f"反方論點：{decision.counter_case}",
+                "執行備註",
+            ]
+        )
+        lines.extend(f"  - {item}" for item in decision.execution_notes)
+        return "\n".join(lines)
+
+    # ------------------------------------------------------------------
     # 3. Flow analysis (paid tier)
     # ------------------------------------------------------------------
 
@@ -251,10 +305,7 @@ class ReportComposer:
         # Segments
         for seg in fr.segments:
             vol_pct = int(seg.volume_pct * 100)
-            lines.append(
-                f"  {seg.name} {seg.time_range} "
-                f"{_ud_bar(seg.ud_ratio)} {vol_pct}%"
-            )
+            lines.append(f"  {seg.name} {seg.time_range} {_ud_bar(seg.ud_ratio)} {vol_pct}%")
 
         # Sustained runs
         if flow.sustained_runs:
@@ -264,10 +315,7 @@ class ReportComposer:
             lines.append("▎持續壓力: 無")
 
         # EOD drift
-        lines.append(
-            f"▎尾盤漂移: U/D {flow.session_ud:.2f} → {flow.eod_ud:.2f} "
-            f"(drift {flow.eod_drift:+.2f})"
-        )
+        lines.append(f"▎尾盤漂移: U/D {flow.session_ud:.2f} → {flow.eod_ud:.2f} (drift {flow.eod_drift:+.2f})")
 
         # Volume spikes
         if flow.volume_spikes:
@@ -294,14 +342,10 @@ class ReportComposer:
             ratio_desc = "均衡"
 
         buy_zone_str = (
-            f"{_p(chips.buy_zone[0])}-{_p(chips.buy_zone[1])}"
-            if chips.buy_zone is not None
-            else "無明顯集中"
+            f"{_p(chips.buy_zone[0])}-{_p(chips.buy_zone[1])}" if chips.buy_zone is not None else "無明顯集中"
         )
         sell_zone_str = (
-            f"{_p(chips.sell_zone[0])}-{_p(chips.sell_zone[1])}"
-            if chips.sell_zone is not None
-            else "無明顯集中"
+            f"{_p(chips.sell_zone[0])}-{_p(chips.sell_zone[1])}" if chips.sell_zone is not None else "無明顯集中"
         )
 
         lines = [
@@ -316,10 +360,7 @@ class ReportComposer:
             lines.append("")
             lines.append("▎群聚:")
             for cl in chips.clusters:
-                lines.append(
-                    f"  {_p(cl.price_center)} {cl.dominant_side} "
-                    f"{cl.trade_count}筆 {cl.time_range}"
-                )
+                lines.append(f"  {_p(cl.price_center)} {cl.dominant_side} {cl.trade_count}筆 {cl.time_range}")
 
         return "\n".join(lines)
 

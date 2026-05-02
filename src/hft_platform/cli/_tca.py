@@ -16,7 +16,7 @@ def cmd_tca_daily(args: argparse.Namespace) -> None:
         print("clickhouse-driver not installed. Run: pip install clickhouse-driver")
         sys.exit(1)
 
-    from hft_platform.tca.analyzer import TCAAnalyzer
+    from hft_platform.tca.analyzer import TCAAnalyzer, _default_fee_yaml_path, load_point_value_config
 
     date_str: str = getattr(args, "date", None) or _dt.date.today().isoformat()
 
@@ -29,7 +29,8 @@ def cmd_tca_daily(args: argparse.Namespace) -> None:
         print(f"Failed to connect to ClickHouse at {ch_host}:{ch_port}: {exc}")
         sys.exit(1)
 
-    analyzer = TCAAnalyzer(ch_client=ch_client)
+    pv_map, sym_map = load_point_value_config(_default_fee_yaml_path())
+    analyzer = TCAAnalyzer(ch_client=ch_client, point_value_map=pv_map, symbol_to_product=sym_map)
     reports = analyzer.daily_report(date_str)
 
     if not reports:

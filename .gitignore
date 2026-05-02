@@ -4,6 +4,9 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# Codex plugin marker
+.codex
+
 # Environments
 .env
 .env.*
@@ -60,11 +63,24 @@ deployment/.env.*
 .state/
 claude.json
 
+# Runtime & build artifacts (local only)
+.runtime/
+*.so
+.import_linter_cache/
+.dlq/
+.reports/
+.uv-cache/
+openblas_install/
+openblas_local/
+
 # Project Specific
 reports/
 !src/hft_platform/reports/
 !src/hft_platform/reports/**
+src/hft_platform/reports/**/__pycache__/
 artifacts/
+!research/calibration/artifacts/
+!research/calibration/artifacts/*.json
 outputs/
 !outputs/production_rollout/
 !outputs/production_rollout/phase2/
@@ -107,12 +123,15 @@ research/knowledge/summaries/**/*.pdf
 !research/knowledge/reports/**/*.md
 !research/registry/
 !research/registry/**/*.py
+!research/calibration/
+!research/calibration/**/*.py
 !research/data/
 research/data/*
 !research/data/raw/
 !research/data/raw/.gitkeep
 research/data/raw/**/*.npy
 research/data/raw/**/*.npz
+research/data/raw/**/*.meta.json
 !research/data/interim/
 !research/data/interim/.gitkeep
 !research/data/processed/
@@ -184,17 +203,32 @@ notebooks/.ipynb_checkpoints
 .gemini/
 .antigravity/
 
-# Agent prompts (local only)
-/.agent/
+# Agent prompts (local only) — but rules/ is tracked so auto-loaded rules work across machines
+/.agent/*
+!/.agent/rules/
 /agent_prompts/
 
 # Claude Code local state
 .claude/worktrees/
 .claude/agents/
-.claude/skills/
+.claude/*.lock
+# Note: .claude/skills/ IS tracked — project-specific on-demand reference skills
 
 # ArXiv paper storage (local only)
 arxiv_papers/
+${ARXIV_STORAGE_PATH}/
 
 gha-creds-*.json
 certs/
+*,cover
+
+# Research data (moved out of git tracking 2026-04-17)
+research/data/
+research/arxiv_paper/
+research/arxiv_papers/
+research/experiments/runs/
+research/logs/
+research/results/
+research/results_batch6/
+research/results_batch7/
+research/__pycache__/
