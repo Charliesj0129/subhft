@@ -519,8 +519,8 @@ class TestFindStaleSymbols:
             stale = md._find_stale_symbols(snapshot, now)
         symbols = [s for s, _ in stale]
         assert "TXFG6" not in symbols  # 20s < 60s override
-        assert "2207" not in symbols   # 60s < 120s override
-        assert "TXFD6" in symbols      # 20s > 6s global threshold
+        assert "2207" not in symbols  # 60s < 120s override
+        assert "TXFD6" in symbols  # 20s > 6s global threshold
 
     def test_override_does_not_lower_below_global(self, md: _FakeMD) -> None:
         """Per-symbol override is only consulted as a per-symbol threshold;

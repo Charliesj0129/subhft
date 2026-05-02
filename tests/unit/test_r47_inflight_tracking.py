@@ -34,17 +34,34 @@ def _lob_stats(mid_pts=37759, spread_pts=3):
 
 def _order(order_id, side, status=OrderStatus.SUBMITTED, price=3_7754_0000):
     return OrderEvent(
-        order_id=order_id, strategy_id="r47_test", symbol="TMFE6",
-        status=status, submitted_qty=1, filled_qty=0, remaining_qty=1,
-        price=price, side=side, ingest_ts_ns=0, broker_ts_ns=0,
+        order_id=order_id,
+        strategy_id="r47_test",
+        symbol="TMFE6",
+        status=status,
+        submitted_qty=1,
+        filled_qty=0,
+        remaining_qty=1,
+        price=price,
+        side=side,
+        ingest_ts_ns=0,
+        broker_ts_ns=0,
     )
 
 
 def _fill(order_id, side, price=3_7754_0000):
     return FillEvent(
-        fill_id=f"F-{order_id}", account_id="acct", order_id=order_id,
-        strategy_id="r47_test", symbol="TMFE6", side=side, qty=1,
-        price=price, fee=0, tax=0, ingest_ts_ns=0, match_ts_ns=0,
+        fill_id=f"F-{order_id}",
+        account_id="acct",
+        order_id=order_id,
+        strategy_id="r47_test",
+        symbol="TMFE6",
+        side=side,
+        qty=1,
+        price=price,
+        fee=0,
+        tax=0,
+        ingest_ts_ns=0,
+        match_ts_ns=0,
     )
 
 
@@ -59,6 +76,7 @@ def _ctx():
 @pytest.fixture()
 def strategy():
     from hft_platform.strategies.r47_maker import R47MakerStrategy
+
     s = R47MakerStrategy(
         strategy_id="r47_test",
         pe_danger_threshold=0.0,
@@ -91,18 +109,14 @@ class TestInflightOidSet:
         strategy.handle_event(ctx, _order("oA", Side.BUY))
         strategy.handle_event(ctx, _order("oB", Side.BUY))
         strategy.handle_event(ctx, _order("oA", Side.BUY, status=OrderStatus.CANCELLED))
-        assert strategy._inflight_buy_oids.get("TMFE6", set()) == {"oB"}, (
-            "D3: CANCELLED(oA) must leave oB tracked"
-        )
+        assert strategy._inflight_buy_oids.get("TMFE6", set()) == {"oB"}, "D3: CANCELLED(oA) must leave oB tracked"
 
     def test_fill_removes_only_that_oid(self, strategy):
         ctx = _ctx()
         strategy.handle_event(ctx, _order("oA", Side.BUY))
         strategy.handle_event(ctx, _order("oB", Side.BUY))
         strategy.handle_event(ctx, _fill("oA", Side.BUY))
-        assert strategy._inflight_buy_oids.get("TMFE6", set()) == {"oB"}, (
-            "D3: fill(oA) must leave oB tracked"
-        )
+        assert strategy._inflight_buy_oids.get("TMFE6", set()) == {"oB"}, "D3: fill(oA) must leave oB tracked"
 
     def test_fill_prefix_order_id_removes_registered_oid(self, strategy):
         """Shioaji fill ordno can extend the submitted order ordno.
@@ -141,9 +155,9 @@ class TestInflightOidSet:
         intents = strategy.handle_event(ctx, ev)
 
         from hft_platform.contracts.strategy import IntentType
+
         cancels = [i for i in intents if getattr(i, "intent_type", None) == IntentType.CANCEL]
         target_ids = {getattr(i, "target_order_id", None) for i in cancels}
         assert target_ids >= {"oA", "oB"}, (
-            f"D3: reconcile must cancel ALL stale in-flight oids; "
-            f"cancelled targets = {target_ids}"
+            f"D3: reconcile must cancel ALL stale in-flight oids; cancelled targets = {target_ids}"
         )

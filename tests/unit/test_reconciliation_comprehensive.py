@@ -209,6 +209,9 @@ class TestReconciliationService:
         with (
             patch.object(svc, "sync_portfolio", side_effect=sync_side_effect),
             patch.object(svc, "_update_failure_gauge"),
+            # Bug #38 added an off-session gate; force in-session so the failure
+            # counter actually increments regardless of when CI runs.
+            patch.object(svc, "_in_trading_hours", return_value=True),
             patch(
                 "hft_platform.execution.reconciliation._compute_backoff_delay",
                 return_value=0.001,
@@ -240,6 +243,8 @@ class TestReconciliationService:
         with (
             patch.object(svc, "sync_portfolio", side_effect=sync_side_effect),
             patch.object(svc, "_update_failure_gauge"),
+            # Bug #38 off-session gate: force in-session so HALT path is reachable.
+            patch.object(svc, "_in_trading_hours", return_value=True),
             patch(
                 "hft_platform.execution.reconciliation._compute_backoff_delay",
                 return_value=0.001,

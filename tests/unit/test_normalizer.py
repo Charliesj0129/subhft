@@ -373,9 +373,7 @@ class TestNormalizationSkipCounter:
 # ─────────────────────────────────────────────────────────────────────
 
 
-def test_validate_and_sync_timestamp_emits_severity_counters_and_current_gauge(
-    monkeypatch, normalizer
-):
+def test_validate_and_sync_timestamp_emits_severity_counters_and_current_gauge(monkeypatch, normalizer):
     """Three skews above the lag ceiling must each fire their severity bucket
     exactly once (warn_1s / high_10s / critical_60s), and the gauge must
     reflect the *current* clamped delta (not the historical max).

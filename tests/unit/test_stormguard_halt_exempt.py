@@ -336,9 +336,7 @@ class TestStormGuardHaltExemptPublicAPI:
         for strat in exempt | {"missing"}:
             public = sg.is_halt_exempt(strat)
             private = strat in sg._halt_exempt_strategies
-            assert public == private, (
-                f"Public API divergence for {strat!r}: public={public} private={private}"
-            )
+            assert public == private, f"Public API divergence for {strat!r}: public={public} private={private}"
 
     def test_grant_revoke_round_trip_via_public_api(self) -> None:
         """``grant_halt_exemption`` / ``revoke_halt_exemption`` must be

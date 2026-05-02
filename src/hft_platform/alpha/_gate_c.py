@@ -7,8 +7,6 @@ from typing import Any
 import numpy as np
 import structlog
 
-logger = structlog.get_logger("alpha.gate_c")
-
 from hft_platform.alpha._param_opt import (
     _evaluate_parameter_robustness,
     _evaluate_stress_backtest,
@@ -27,6 +25,8 @@ from hft_platform.alpha._validation_helpers import (
     _resolve_first_data_meta_path,
 )
 from hft_platform.alpha._validation_types import GateReport, ValidationConfig
+
+logger = structlog.get_logger("alpha.gate_c")
 
 
 def _daily_pnl_points(daily_pnl: list[Any] | None) -> float:
@@ -146,7 +146,7 @@ def _equity_to_daily_pnl(equity_curve: Any) -> list[float]:
     return []
 
 
-def run_gate_c(
+def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as follow-up
     alpha: Any,
     config: ValidationConfig,
     root: Path,
@@ -165,12 +165,11 @@ def run_gate_c(
 
     if strategy_type == "maker":
         # --- Maker path: CK-direct backtest ---
+        from hft_platform.alpha.latency_profiles import resolve_profile
         from research.backtest.cost_models import load_cost_profile
         from research.backtest.fill_models import QueueDepletionFill
         from research.backtest.maker_engine import ClickHouseSource, LatencyProfile, MakerEngine
         from research.backtest.result_store import ResultStore
-
-        from hft_platform.alpha.latency_profiles import resolve_profile
 
         ck_source = ClickHouseSource()
         ck_source.health_check()

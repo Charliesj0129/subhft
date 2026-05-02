@@ -113,7 +113,8 @@ async def test_heartbeat_warning_suppressed_outside_trading_hours(md):
             await md._run_monitor_reconnect_checks(gap=10.0)
             warn_calls = [c for c in log.warning.call_args_list if c.args and c.args[0] == "Heartbeat missing"]
             info_calls = [
-                c for c in log.info.call_args_list
+                c
+                for c in log.info.call_args_list
                 if c.args and c.args[0] == "Skipping heartbeat warning outside trading hours"
             ]
             assert len(warn_calls) == 0, "warning must not fire outside trading hours"

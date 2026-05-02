@@ -272,9 +272,7 @@ class QuoteConnectionPool:
         # configurable via HFT_QUOTE_POOL_DEGRADED_ALERT_AFTER_S.
         self._pool_degraded_since_mono: float = 0.0
         self._pool_degraded_alerted: bool = False
-        self._pool_degraded_alert_after_s = float(
-            os.getenv("HFT_QUOTE_POOL_DEGRADED_ALERT_AFTER_S", "300")
-        )
+        self._pool_degraded_alert_after_s = float(os.getenv("HFT_QUOTE_POOL_DEGRADED_ALERT_AFTER_S", "300"))
         # Remember the canonical input path so the auto-refresh writer can
         # detect (and refuse) self-clobber when an operator misconfigures
         # ``HFT_SYMBOLS_RUNTIME_SNAPSHOT`` (or legacy callers still expect
@@ -834,8 +832,7 @@ class QuoteConnectionPool:
                     fraction=fraction,
                     duration_s=now - self._pool_degraded_since_mono,
                     threshold_s=self._pool_degraded_alert_after_s,
-                    hint="Quote pool has lost majority connectivity; check "
-                    "Shioaji broker session / reconnect logs",
+                    hint="Quote pool has lost majority connectivity; check Shioaji broker session / reconnect logs",
                 )
             if _METRIC_POOL_DEGRADED is not None:
                 _METRIC_POOL_DEGRADED.set(1.0 if self._pool_degraded_alerted else 0.0)

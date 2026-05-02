@@ -74,6 +74,9 @@ def store():
 @pytest.fixture(autouse=True)
 def _isolate_fill_dedup(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HFT_FILL_DEDUP_PERSIST_PATH", str(tmp_path / "fill_dedup.jsonl"))
+    import hft_platform.execution.positions as _positions
+
+    monkeypatch.setattr(_positions, "_MIN_PEAK_SCALED", 2_000_000)
 
 
 # ===========================================================================

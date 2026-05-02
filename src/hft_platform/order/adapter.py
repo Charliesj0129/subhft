@@ -47,6 +47,7 @@ class _PhantomEntry(NamedTuple):
     created_ns: int
     intent: OrderIntent
 
+
 # Operations that mutate broker state and must not be retried if the
 # timed-out attempt might still succeed in the thread pool.
 _MUTATING_OPS: frozenset[str] = frozenset({"place_order", "update_order"})
@@ -212,9 +213,7 @@ class OrderAdapter:
         # H3: TTL for persisted entries. Default 24h (86400s) — anything older
         # is assumed terminal at the broker even if no terminal callback was
         # observed (callback loss, daemon-thread crash, etc.).
-        self._order_id_map_ttl_ns: int = int(
-            float(os.getenv("HFT_ORDER_ID_MAP_TTL_S", "86400")) * 1_000_000_000
-        )
+        self._order_id_map_ttl_ns: int = int(float(os.getenv("HFT_ORDER_ID_MAP_TTL_S", "86400")) * 1_000_000_000)
         self._load_order_id_map()
         self._cmd_map_max_size = int(os.getenv("HFT_CMD_MAP_MAX_SIZE", "10000"))
         self.running = False
@@ -316,9 +315,7 @@ class OrderAdapter:
         self._phantom_order_keys: dict[str, tuple[float, str]] = {}
         self._phantom_intents: dict[str, OrderIntent] = {}
         self._phantom_order_max: int = 1000
-        self._phantom_recovery_ttl_s: float = float(
-            os.getenv("HFT_PHANTOM_RECOVERY_TTL_S", "30")
-        )
+        self._phantom_recovery_ttl_s: float = float(os.getenv("HFT_PHANTOM_RECOVERY_TTL_S", "30"))
         # P0-E2 + M4: serialises access to ``_phantom_records``. Multiple
         # coroutine tasks (``_call_api``, ``_handle_dispatch_exception``,
         # ``release_stale_phantom_pendings``, ``resolve_phantom_fill``,
@@ -1520,10 +1517,7 @@ class OrderAdapter:
             try:
                 with os.fdopen(fd, "wb") as f:
                     for k, v, t_ns, state in snapshot:
-                        f.write(
-                            orjson.dumps({"k": k, "v": v, "t_ns": t_ns, "s": state})
-                            + b"\n"
-                        )
+                        f.write(orjson.dumps({"k": k, "v": v, "t_ns": t_ns, "s": state}) + b"\n")
                     f.flush()
                     os.fsync(f.fileno())
                 os.rename(tmp_path, path)
@@ -1597,9 +1591,7 @@ class OrderAdapter:
             # the same lock + audit-log discipline. Lock order is preserved
             # (``_pending_fill_lock`` already held → helper takes the
             # re-entrant ``_order_id_map_lock``).
-            self._set_order_id_mapping(
-                custom_field_token, order_key, source="register_pending_fill"
-            )
+            self._set_order_id_mapping(custom_field_token, order_key, source="register_pending_fill")
         self._maybe_persist_order_id_map()
 
     def _remove_pending_fill(self, order_key: str) -> None:
@@ -1708,8 +1700,7 @@ class OrderAdapter:
             return
         if tid != engine_tid:
             raise RuntimeError(
-                "OrderAdapter terminal-tracking accessed from non-engine thread "
-                f"(expected={engine_tid} got={tid})"
+                f"OrderAdapter terminal-tracking accessed from non-engine thread (expected={engine_tid} got={tid})"
             )
 
     def _record_recent_terminal(self, order_key: str, reason: str) -> None:
@@ -2804,9 +2795,7 @@ class OrderAdapter:
                             strategy_id=intent.strategy_id,
                             cmd_id=int(cmd.cmd_id),
                         )
-                        self.metrics.order_cancel_already_terminal_total.labels(
-                            reason="not_found_local"
-                        ).inc()
+                        self.metrics.order_cancel_already_terminal_total.labels(reason="not_found_local").inc()
                         self._audit_log_order(
                             {
                                 "event": "cancel_no_op_already_terminal",
@@ -2861,9 +2850,7 @@ class OrderAdapter:
                         # finally so broker exceptions don't leak tickets.
                         # target_trade is the AMEND target — defensive cancel
                         # cancels the underlying live order on HALT mid-await.
-                        await self._end_dispatch_ticket(
-                            amend_ticket_id, intent, target_trade, cmd.cmd_id
-                        )
+                        await self._end_dispatch_ticket(amend_ticket_id, intent, target_trade, cmd.cmd_id)
                     if amend_result is None or amend_result is _GUARD_TIMEOUT:
                         return False
                     self.metrics.order_actions_total.labels(type="amend").inc()
@@ -3020,9 +3007,7 @@ class OrderAdapter:
             await self._add_to_dlq(cmd.intent, RejectionReason.RATE_LIMIT, "API queue full")
             return False
 
-    def _evict_lower_priority_for_safety_intent(
-        self, evictor_intent_type: IntentType
-    ) -> OrderCommand | None:
+    def _evict_lower_priority_for_safety_intent(self, evictor_intent_type: IntentType) -> OrderCommand | None:
         """M3: remove and return the oldest queued command whose intent
         priority is strictly less than ``evictor_intent_type``.
 

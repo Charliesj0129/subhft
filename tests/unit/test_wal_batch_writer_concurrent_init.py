@@ -79,18 +79,14 @@ def test_concurrent_lazy_init_creates_single_writer(isolated_wal_dir, monkeypatc
     for r in results:
         assert r is first, "All threads must observe the same writer instance"
 
-    assert construct_count["n"] == 1, (
-        f"Expected exactly one WALBatchWriter construction; got {construct_count['n']}"
-    )
+    assert construct_count["n"] == 1, f"Expected exactly one WALBatchWriter construction; got {construct_count['n']}"
 
     # Stop the timer thread so we don't leak it past the test.
     if first is not None:
         first.stop()
 
     post_count = _count_batch_timer_threads()
-    assert post_count == pre_count, (
-        f"wal-batch-timer thread leaked: pre={pre_count}, post={post_count}"
-    )
+    assert post_count == pre_count, f"wal-batch-timer thread leaked: pre={pre_count}, post={post_count}"
 
 
 def test_init_lock_attribute_exists(isolated_wal_dir, monkeypatch) -> None:

@@ -199,18 +199,12 @@ def _make_metrics_stub() -> MagicMock:
     metrics = MagicMock()
     # Counters expose .labels(...).inc()
     metrics.feed_subscription_retry_total = MagicMock()
-    metrics.feed_subscription_retry_total.labels = MagicMock(
-        return_value=MagicMock(inc=MagicMock())
-    )
+    metrics.feed_subscription_retry_total.labels = MagicMock(return_value=MagicMock(inc=MagicMock()))
     metrics.feed_subscription_permanent_failures_total = MagicMock()
-    metrics.feed_subscription_permanent_failures_total.labels = MagicMock(
-        return_value=MagicMock(inc=MagicMock())
-    )
+    metrics.feed_subscription_permanent_failures_total.labels = MagicMock(return_value=MagicMock(inc=MagicMock()))
     # Gauge exposes .labels(...).set(...)
     metrics.feed_subscription_retry_attempts = MagicMock()
-    metrics.feed_subscription_retry_attempts.labels = MagicMock(
-        return_value=MagicMock(set=MagicMock())
-    )
+    metrics.feed_subscription_retry_attempts.labels = MagicMock(return_value=MagicMock(set=MagicMock()))
     # cap_symbol passes through.
     metrics.cap_symbol = MagicMock(side_effect=lambda s: s)
     return metrics
@@ -237,9 +231,7 @@ def test_metric_increments_on_each_retry_decision() -> None:
     # Decision #2 — within backoff window → skip_backoff.
     allowed, reason = rt._should_attempt_subscription(code, 30.0)
     assert allowed is False
-    metrics.feed_subscription_retry_total.labels.assert_any_call(
-        symbol=code, result="skip_backoff"
-    )
+    metrics.feed_subscription_retry_total.labels.assert_any_call(symbol=code, result="skip_backoff")
 
 
 def test_permanent_failure_emits_metric(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -256,9 +248,7 @@ def test_permanent_failure_emits_metric(monkeypatch: pytest.MonkeyPatch) -> None
 
     rt._record_subscription_failure(code, 1.0)
     # Now permanent — exactly one increment.
-    metrics.feed_subscription_permanent_failures_total.labels.assert_called_once_with(
-        symbol=code
-    )
+    metrics.feed_subscription_permanent_failures_total.labels.assert_called_once_with(symbol=code)
 
 
 # --------------------------------------------------------------------------- #

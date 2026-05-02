@@ -47,6 +47,7 @@ def test_failed_sub_symbols_is_deque() -> None:
     cls = ShioajiClient
     # Locate the line in __init__ source that assigns the deque.
     import inspect
+
     src = inspect.getsource(cls.__init__)
     assert "self._failed_sub_symbols: deque" in src or "self._failed_sub_symbols = deque" in src, (
         "ShioajiClient.__init__ must initialise ``_failed_sub_symbols`` as a "
@@ -123,8 +124,7 @@ def test_drain_in_place_does_not_lose_concurrent_append() -> None:
     contents = set(d)
     for v in range(1000, 1000 + PEER_APPENDS):
         assert v in contents, (
-            f"Lost peer append {v}. The retry loop is silently dropping "
-            f"event-loop-thread appends — L2 race is back."
+            f"Lost peer append {v}. The retry loop is silently dropping event-loop-thread appends — L2 race is back."
         )
     # Seed values must also still be there.
     for v in range(50):
@@ -227,6 +227,5 @@ def test_retry_loop_bounded_pass_does_not_livelock_under_appends() -> None:
     # AT MOST 10 items (it could be fewer if popleft saw an empty deque
     # mid-pass, though unlikely here).
     assert len(visited) <= 10, (
-        f"Drainer visited {len(visited)} items but was bounded to 10 "
-        f"at entry. Bounded-pass invariant broken."
+        f"Drainer visited {len(visited)} items but was bounded to 10 at entry. Bounded-pass invariant broken."
     )

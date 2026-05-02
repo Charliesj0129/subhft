@@ -15,10 +15,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import pytest
-
 from research.backtest.cost_models import CostModel
-from research.backtest.fill_models import FillModel, QueuePosition
+from research.backtest.fill_models import QueuePosition
 from research.backtest.maker_engine import (
     CancelQuote,
     Hold,
@@ -77,23 +75,35 @@ def _mk_events(ts_base_ns=1_000_000_000):
     return [
         TickData(
             exch_ts=ts_base_ns,
-            bid_price=100 * scale, ask_price=102 * scale,
-            bid_qty=10, ask_qty=10,
-            trade_price=0, trade_volume=0, is_trade=False,
+            bid_price=100 * scale,
+            ask_price=102 * scale,
+            bid_qty=10,
+            ask_qty=10,
+            trade_price=0,
+            trade_volume=0,
+            is_trade=False,
         ),
         # Trade at 99 (would fill a BUY@100) — 100 ms after placement
         TickData(
             exch_ts=ts_base_ns + 100_000_000,
-            bid_price=100 * scale, ask_price=102 * scale,
-            bid_qty=10, ask_qty=10,
-            trade_price=99 * scale, trade_volume=5, is_trade=True,
+            bid_price=100 * scale,
+            ask_price=102 * scale,
+            bid_qty=10,
+            ask_qty=10,
+            trade_price=99 * scale,
+            trade_volume=5,
+            is_trade=True,
         ),
         # Another trade at 99 — 1000 ms after placement
         TickData(
             exch_ts=ts_base_ns + 1_000_000_000,
-            bid_price=100 * scale, ask_price=102 * scale,
-            bid_qty=10, ask_qty=10,
-            trade_price=99 * scale, trade_volume=5, is_trade=True,
+            bid_price=100 * scale,
+            ask_price=102 * scale,
+            bid_qty=10,
+            ask_qty=10,
+            trade_price=99 * scale,
+            trade_volume=5,
+            is_trade=True,
         ),
     ]
 
@@ -151,15 +161,23 @@ class TestLatencyProfileInjection:
         events = [
             TickData(
                 exch_ts=0,
-                bid_price=100 * scale, ask_price=102 * scale,
-                bid_qty=10, ask_qty=10,
-                trade_price=0, trade_volume=0, is_trade=False,
+                bid_price=100 * scale,
+                ask_price=102 * scale,
+                bid_qty=10,
+                ask_qty=10,
+                trade_price=0,
+                trade_volume=0,
+                is_trade=False,
             ),
             TickData(
                 exch_ts=100_000_000,  # +100ms, still in-flight (place_ns=400ms)
-                bid_price=100 * scale, ask_price=102 * scale,
-                bid_qty=10, ask_qty=10,
-                trade_price=99 * scale, trade_volume=5, is_trade=True,
+                bid_price=100 * scale,
+                ask_price=102 * scale,
+                bid_qty=10,
+                ask_qty=10,
+                trade_price=99 * scale,
+                trade_volume=5,
+                is_trade=True,
             ),
         ]
         engine = MakerEngine(
@@ -168,9 +186,7 @@ class TestLatencyProfileInjection:
             latency_profile=LatencyProfile(place_ns=400_000_000, cancel_ns=0),
         )
         fills, _ = engine._run_day(_BuyStrat(), events)
-        assert len(fills) == 0, (
-            "D5: order in flight (place_ns=400ms, trade at +100ms) must NOT fill"
-        )
+        assert len(fills) == 0, "D5: order in flight (place_ns=400ms, trade at +100ms) must NOT fill"
 
     def test_cancel_latency_allows_intermediate_fill(self):
         """With cancel_ns=500ms, a trade arriving +200ms after CancelQuote
@@ -197,21 +213,35 @@ class TestLatencyProfileInjection:
         events = [
             TickData(
                 exch_ts=0,
-                bid_price=100 * scale, ask_price=102 * scale,
-                bid_qty=10, ask_qty=10, trade_price=0, trade_volume=0, is_trade=False,
+                bid_price=100 * scale,
+                ask_price=102 * scale,
+                bid_qty=10,
+                ask_qty=10,
+                trade_price=0,
+                trade_volume=0,
+                is_trade=False,
             ),
             # bidask tick 2 → strategy issues CancelQuote
             TickData(
                 exch_ts=100_000_000,
-                bid_price=100 * scale, ask_price=102 * scale,
-                bid_qty=10, ask_qty=10, trade_price=0, trade_volume=0, is_trade=False,
+                bid_price=100 * scale,
+                ask_price=102 * scale,
+                bid_qty=10,
+                ask_qty=10,
+                trade_price=0,
+                trade_volume=0,
+                is_trade=False,
             ),
             # Trade at +300ms, cancel_ns=500ms so cancel not yet effective
             TickData(
                 exch_ts=300_000_000,
-                bid_price=100 * scale, ask_price=102 * scale,
-                bid_qty=10, ask_qty=10,
-                trade_price=99 * scale, trade_volume=5, is_trade=True,
+                bid_price=100 * scale,
+                ask_price=102 * scale,
+                bid_qty=10,
+                ask_qty=10,
+                trade_price=99 * scale,
+                trade_volume=5,
+                is_trade=True,
             ),
         ]
         engine = MakerEngine(

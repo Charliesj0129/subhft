@@ -110,8 +110,11 @@ def test_default_parameters_match_canonical_sp3_mp3() -> None:
 # ----------------------------------------------------------------------------
 
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
 def _load_strategies_yaml() -> dict:
-    path = Path("/home/charlie/hft_platform/config/base/strategies.yaml")
+    path = _REPO_ROOT / "config/base/strategies.yaml"
     with open(path) as f:
         return yaml.safe_load(f)
 
@@ -191,7 +194,7 @@ def test_strategies_yaml_c33_c63_never_both_enabled() -> None:
 
 
 def _load_limits() -> dict:
-    path = Path("/home/charlie/hft_platform/config/base/strategy_limits.yaml")
+    path = _REPO_ROOT / "config/base/strategy_limits.yaml"
     with open(path) as f:
         return yaml.safe_load(f)
 

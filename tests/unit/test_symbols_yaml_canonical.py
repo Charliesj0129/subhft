@@ -83,8 +83,7 @@ def test_taifex_futures_have_complete_metadata(symbol_index: dict[str, dict]) ->
         entry = symbol_index[code]
         for field in required_fields:
             assert field in entry, (
-                f"futures {code} missing '{field}' in canonical — runtime snapshot "
-                "regression suspected"
+                f"futures {code} missing '{field}' in canonical — runtime snapshot regression suspected"
             )
         assert entry["product_type"] == "future"
         assert isinstance(entry["price_scale"], int)

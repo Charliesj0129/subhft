@@ -305,9 +305,7 @@ def test_concurrent_producer_and_consumer_no_torn_read() -> None:
             expected_bids = [t * 10 + i for i in range(5)]
             expected_asks = [t * 10 + i + 5 for i in range(5)]
             if body["bids_price"] != expected_bids or body["asks_price"] != expected_asks:
-                errors.append(
-                    f"torn read at tick={t}: bids={body['bids_price']} asks={body['asks_price']}"
-                )
+                errors.append(f"torn read at tick={t}: bids={body['bids_price']} asks={body['asks_price']}")
                 return
             drained += 1
 

@@ -29,10 +29,7 @@ import asyncio
 import os
 import tempfile
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 
 def _make_symbols_config() -> tuple[tempfile.TemporaryDirectory, Path]:
@@ -122,8 +119,7 @@ def test_mark_gap_all_not_fired_below_threshold():
     svc._enqueue_raw("TSE", {"code": "2330"})  # drop #2
 
     assert fe.mark_gap_all.call_count == 0, (
-        "mark_gap_all must not fire below threshold "
-        f"(threshold=3, drops=2); got {fe.mark_gap_all.call_count}"
+        f"mark_gap_all must not fire below threshold (threshold=3, drops=2); got {fe.mark_gap_all.call_count}"
     )
     assert svc._raw_consecutive_drops == 2
 

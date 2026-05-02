@@ -46,9 +46,7 @@ def metadata() -> SymbolMetadata:
 
 
 @pytest.mark.parametrize("symbol", ROLLOVER_FUTURES)
-def test_rollover_code_classifies_as_future(
-    metadata: SymbolMetadata, symbol: str
-) -> None:
+def test_rollover_code_classifies_as_future(metadata: SymbolMetadata, symbol: str) -> None:
     """Each rollover-resolved code MUST be classified as ``future``.
 
     Asserted directly against the on-disk config file rather than via a

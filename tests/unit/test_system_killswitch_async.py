@@ -54,6 +54,4 @@ def test_supervise_does_not_misleadingly_call_redis_failure_a_fallback() -> None
     from hft_platform.services.system import HFTSystem
 
     source = inspect.getsource(HFTSystem._supervise)
-    assert "fall back to file-based kill switch" not in source, (
-        "Misleading 'fallback' comment must be removed (P2-e)"
-    )
+    assert "fall back to file-based kill switch" not in source, "Misleading 'fallback' comment must be removed (P2-e)"

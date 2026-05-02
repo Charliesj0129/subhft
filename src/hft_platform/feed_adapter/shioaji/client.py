@@ -774,12 +774,7 @@ class ShioajiClient:
                     for sym in self.symbols:
                         tags = {str(tag).lower() for tag in sym.get("tags", [])}
                         product_type = str(sym.get("product_type") or sym.get("type") or "").lower()
-                        if (
-                            product_type == "future"
-                            and root in tags
-                            and month_tag in tags
-                            and sym.get("code")
-                        ):
+                        if product_type == "future" and root in tags and month_tag in tags and sym.get("code"):
                             expanded_filter.add(str(sym["code"]))
             filtered = [s for s in self.symbols if str(s.get("code", "")) in expanded_filter]
             if filtered:

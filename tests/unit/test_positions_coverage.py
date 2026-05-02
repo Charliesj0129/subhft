@@ -200,12 +200,11 @@ class TestPositionStore:
         # Ensure default threshold (no env override) for this test
         os.environ.pop("HFT_DRAWDOWN_MIN_PEAK_SCALED", None)
         store = PositionStore()
-        store._peak_equity_scaled = 2_395_000   # 240 NTD intraday peak
+        store._peak_equity_scaled = 2_395_000  # 240 NTD intraday peak
         store._total_realized_pnl_scaled = 170_000  # 17 NTD after pullback (loss = 22.3 NTD)
         drawdown = store.get_drawdown_pct()
         assert drawdown < 0.02, (
-            f"Drawdown {drawdown:.4f} would trigger HALT (>= 2%). "
-            f"22 NTD loss on HFT-scale strategy must stay safe."
+            f"Drawdown {drawdown:.4f} would trigger HALT (>= 2%). 22 NTD loss on HFT-scale strategy must stay safe."
         )
 
     def test_get_drawdown_pct_min_peak_scaled_env_override(self):

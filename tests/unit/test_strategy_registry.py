@@ -101,9 +101,7 @@ def test_disabled_strategies_are_skipped_at_instantiation(tmp_path, monkeypatch)
     assert strategies[0].strategy_id == "enabled_one"
     assert all(s.strategy_id != "disabled_one" for s in strategies)
     assert any(
-        level == "info"
-        and event == "strategy_disabled_in_config_skipped"
-        and kwargs.get("id") == "disabled_one"
+        level == "info" and event == "strategy_disabled_in_config_skipped" and kwargs.get("id") == "disabled_one"
         for level, event, kwargs in captured
     )
 
@@ -191,7 +189,5 @@ def test_enabled_scaffold_with_missing_module_logs_warning(tmp_path, monkeypatch
     strategies = reg.instantiate()
 
     assert strategies == []
-    assert any(
-        level == "warning" and event == "strategy_scaffold_missing_but_enabled" for level, event, _ in captured
-    )
+    assert any(level == "warning" and event == "strategy_scaffold_missing_but_enabled" for level, event, _ in captured)
     assert not any(level == "error" for level, _, _ in captured)

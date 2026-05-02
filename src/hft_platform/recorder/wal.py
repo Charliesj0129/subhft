@@ -223,9 +223,7 @@ class WALWriter:
                     os.unlink(tmp_path)
                     if self._metrics:
                         try:
-                            self._metrics.wal_orphan_tmp_cleaned_total.labels(
-                                location="wal_writer"
-                            ).inc()
+                            self._metrics.wal_orphan_tmp_cleaned_total.labels(location="wal_writer").inc()
                         except Exception as exc:  # noqa: BLE001
                             logger.debug("operation_fallback", error=str(exc))
                 except OSError as exc:
@@ -568,9 +566,7 @@ class WALBatchWriter:
                         os.unlink(tmp_path)
                         if self._metrics:
                             try:
-                                self._metrics.wal_orphan_tmp_cleaned_total.labels(
-                                    location="wal_batch"
-                                ).inc()
+                                self._metrics.wal_orphan_tmp_cleaned_total.labels(location="wal_batch").inc()
                             except Exception as exc:  # noqa: BLE001
                                 logger.debug("operation_fallback", error=str(exc))
                     except OSError as exc:
@@ -698,9 +694,7 @@ class WALBatchWriter:
                             try:
                                 # Count per-row so disk-pressure alerts fire on the
                                 # true data-loss volume, not once per circuit-breaker trip.
-                                self._metrics.wal_batch_flush_total.labels(result="dropped").inc(
-                                    max(1, _dropped_rows)
-                                )
+                                self._metrics.wal_batch_flush_total.labels(result="dropped").inc(max(1, _dropped_rows))
                             except Exception as exc:
                                 logger.debug("operation_fallback", error=str(exc))
                     else:
