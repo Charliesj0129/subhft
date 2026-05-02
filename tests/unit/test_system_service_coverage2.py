@@ -357,10 +357,14 @@ class TestStopAsyncExecServiceDrain:
         sys_obj = _make_stub()
         sys_obj.running = True
 
-        async def _slow_drain():
-            await asyncio.sleep(100)
+        async def _drain_raises_timeout():
+            # Raise TimeoutError directly to exercise the except branch without
+            # waiting; system.py:1404 hardcodes timeout=10.0 which equals the
+            # pytest-timeout ceiling, so a real asyncio.sleep(100) would deadlock
+            # against the test harness.
+            raise asyncio.TimeoutError()
 
-        sys_obj.order_adapter.drain_and_cancel = _slow_drain
+        sys_obj.order_adapter.drain_and_cancel = _drain_raises_timeout
         sys_obj.exec_service.stop = AsyncMock(return_value=0)
         sys_obj.exec_service.persist_fill_dedup = MagicMock()
         sys_obj.tasks = {}
