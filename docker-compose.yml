@@ -3,7 +3,8 @@ x-hft-common: &hft-common
   # P2-d (2026-04-27): pass GIT_SHA + BUILD_TS as build args so the runtime
   # image can render them in the startup banner / Prometheus build_info gauge.
   # `make start` exports these via the Makefile's `start` target; manual
-  # `docker compose up --build` callers should pass them too (see deploy.sh).
+  # `docker compose up --build` callers should export them too — see
+  # `docs/runbooks/deployment.md` for the manual SSH deploy procedure.
   build:
     context: .
     args:

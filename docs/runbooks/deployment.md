@@ -1,136 +1,251 @@
-# Deployment Runbook
+# Deployment Runbook (Manual SSH)
 
 ## Overview
 
-The HFT Platform uses a blue-green deployment model with Docker images tagged by git SHA. Deployments are triggered automatically on push to `main` after CI passes, or manually via the deploy script.
+The HFT Platform is deployed manually over SSH. There is no scripted deploy
+entrypoint — operators connect to the target host, build the Docker image
+in-place, and restart the engine via `docker compose`. This is intentional:
+remote configuration (`config/symbols.list`, `config/symbols.yaml`, etc.) is
+operator-canonical and must not be overwritten by an automated push.
 
-## Prerequisites
+> **Live trading**: any deploy that ends in `HFT_MODE=live` /
+> `HFT_ORDER_MODE=live` is a real-money change. Always verbalize the change
+> to the responsible operator before running step 7.
 
-- Docker installed on deploy host
-- SSH access to deploy host configured
-- GHCR (GitHub Container Registry) credentials
-- `docker-compose.yml` present at `/opt/hft-platform/` on deploy host
+## Target Host
 
-## Automated Deployment (GitHub Actions)
+| Field           | Value                          |
+|-----------------|--------------------------------|
+| SSH alias       | `THESHOW`                      |
+| SSH target      | `charl@100.91.176.126`         |
+| Project root    | `/home/charl/subhft`           |
+| Compose service | `hft-engine` (+ deps)          |
 
-### Trigger
-
-The CD pipeline (`.github/workflows/deploy.yml`) runs automatically when:
-1. CI workflow completes successfully on `main`
-2. Manual dispatch via GitHub Actions UI
-
-### Required Secrets
-
-| Secret | Purpose |
-|--------|---------|
-| `DEPLOY_HOST` | SSH hostname/IP of production server |
-| `DEPLOY_USER` | SSH username for deployment |
-| `DEPLOY_KEY` | SSH private key (base64 or raw) |
-| `GITHUB_TOKEN` | Auto-provided; used for GHCR push |
-
-### Flow
-
-1. Build Docker image from current commit
-2. Tag with git SHA and `latest`
-3. Push to GHCR
-4. SSH to deploy host, pull image, restart `hft-engine` service
-5. Health check: verify `/metrics` endpoint returns HFT metrics
-6. On failure: automatic rollback to previous container
-
-## Manual Deployment
-
-### Standard Deploy
+Connectivity smoke test:
 
 ```bash
-# Deploy current HEAD
-./scripts/deploy.sh
-
-# Required env vars
-export DEPLOY_HOST=prod.example.com
-export DEPLOY_USER=hft
-export DEPLOY_KEY=~/.ssh/hft_deploy_key
-export GHCR_TOKEN=ghp_xxxxx
+ssh -o BatchMode=yes -o ConnectTimeout=8 charl@100.91.176.126 \
+  'echo HOST=$(hostname); date -Iseconds; test -d /home/charl/subhft && echo PROJECT_OK'
 ```
-
-### Dry Run
-
-```bash
-# Build and verify without pushing or deploying
-./scripts/deploy.sh --dry-run
-```
-
-### Rollback
-
-```bash
-# Rollback to a specific git SHA
-./scripts/deploy.sh --rollback abc123def
-
-# The image for that SHA must exist in GHCR
-```
-
-## Verification Steps
-
-After deployment, verify:
-
-1. **Health endpoint**: `curl -sf http://<host>:9090/metrics | grep hft_`
-2. **Container status**: `docker compose ps` — `hft-engine` should show `Up (healthy)`
-3. **Logs**: `docker compose logs -f hft-engine` — no crash loops or startup errors
-4. **Metrics**: Check Grafana dashboards for:
-   - `hft_ticks_processed_total` — increasing
-   - `hft_risk_reject_total` — not spiking
-   - `hft_gateway_dispatch_latency_ns` — within normal range
-
-## Rollback Procedure
-
-### Automatic (during deploy)
-
-The deploy script automatically rolls back if health checks fail after 3 attempts.
-
-### Manual Rollback
-
-```bash
-# Option 1: Redeploy a known-good SHA
-./scripts/deploy.sh --rollback <known-good-sha>
-
-# Option 2: Direct Docker rollback on the host
-ssh hft@prod.example.com
-cd /opt/hft-platform
-docker compose up -d --no-deps hft-engine  # Uses previous image
-```
-
-### Emergency Rollback
-
-If the system is in a critical state:
-
-```bash
-# SSH to host and stop the engine immediately
-ssh hft@prod.example.com
-cd /opt/hft-platform
-docker compose stop hft-engine
-
-# Verify no active orders are in flight
-docker compose logs --tail=100 hft-engine | grep -i "order\|fill\|position"
-
-# Restart with known-good image
-docker pull ghcr.io/<repo>/hft-engine:<known-good-sha>
-HFT_ENGINE_IMAGE=ghcr.io/<repo>/hft-engine:<known-good-sha> docker compose up -d hft-engine
-```
-
-## Troubleshooting
-
-| Symptom | Likely Cause | Action |
-|---------|-------------|--------|
-| Health check fails | Service crash on startup | Check `docker compose logs hft-engine` |
-| Image not found | GHCR push failed | Re-run deploy or check GHCR manually |
-| SSH connection refused | Firewall or key issue | Verify SSH access independently |
-| Metrics missing | Prometheus port not exposed | Check `docker-compose.yml` port mapping |
-| High latency after deploy | Config regression | Compare `config/` with previous version |
 
 ## Pre-Deploy Checklist
 
-- [ ] CI passes on `main` (lint, typecheck, unit tests, benchmarks)
-- [ ] No open critical issues on the release
-- [ ] Backup current config: `ssh host 'cp -r /opt/hft-platform/config /opt/hft-platform/config.bak'`
-- [ ] Notify team of upcoming deployment
-- [ ] Verify deploy host disk space: `ssh host 'df -h /opt/hft-platform'`
-- [ ] Check market hours — prefer deploying outside trading hours (TSE: 09:00-13:30 UTC+8)
+- [ ] Push-trigger CI is **green** on the target SHA on `main`
+      (`gh run list --branch main --workflow CI --limit 5`).
+- [ ] Market is closed, or you are deploying outside TSE/TAIFEX session
+      hours (09:00–13:30 UTC+8). Sunday is the safest window.
+- [ ] Operator with broker access is reachable (Shioaji session may need
+      manual re-login after engine restart).
+- [ ] Disk on remote ≥ 20 % free
+      (`ssh charl@... 'df -h /home/charl/subhft'`).
+- [ ] You have a recent ClickHouse backup or know where the daily backup is
+      written (see `docs/runbooks/clickhouse-down.md`).
+
+## Deploy Steps
+
+All commands run **on the remote** unless explicitly noted. Substitute
+`<TARGET_SHA>` with the SHA you intend to ship (e.g. tip of `origin/main`).
+
+### 1. Connect and inspect current state
+
+```bash
+ssh charl@100.91.176.126
+cd /home/charl/subhft
+git rev-parse --short HEAD
+git status --short
+docker compose ps
+curl -fsS http://localhost:9090/metrics | \
+  grep -E '^(build_info|hft_strategy_position_current|feed_events_total)' | head -10
+```
+
+Note the running image SHA, the strategies loaded, and any open
+positions. **Save the previous image SHA — that's your rollback target.**
+
+```bash
+PREV_IMAGE_SHA=$(docker inspect hft-engine --format '{{.Image}}')
+echo "$PREV_IMAGE_SHA" > /tmp/hft-rollback-image.txt
+```
+
+### 2. Stash operator-canonical config drift
+
+The remote `config/` directory is the source of truth for runtime
+configuration. Stash it before pulling so a fast-forward merge can't
+clobber it.
+
+```bash
+git stash push -u -m "operator-config-drift-$(date -u +%Y%m%dT%H%M%SZ)" -- \
+  config/symbols.list config/symbols.yaml \
+  'config/symbols.list.bak.*' 'config/symbols.yaml.bak.*' \
+  'config/contracts.json.bak.*'
+```
+
+If `git status --short` is clean afterwards, proceed. If files remain
+modified, inspect them — they may not match the stash pathspec.
+
+### 3. Fetch and check out the target SHA
+
+```bash
+git fetch origin
+git checkout <TARGET_SHA>      # or `git reset --hard origin/main` for tip-of-main
+git rev-parse --short HEAD
+```
+
+### 4. Restore operator config drift on top
+
+```bash
+git stash pop
+git status --short
+```
+
+If `git stash pop` reports a conflict in `config/symbols.list` or
+`config/symbols.yaml`, resolve manually: the remote operator copy wins
+unless the upstream change is critical. Re-add and re-commit nothing —
+these stay out of git.
+
+### 5. Build the image with provenance metadata
+
+```bash
+GIT_SHA=$(git rev-parse HEAD)
+BUILD_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+docker build \
+  --build-arg "GIT_SHA=${GIT_SHA}" \
+  --build-arg "BUILD_TS=${BUILD_TS}" \
+  -t "hft-platform:${GIT_SHA:0:8}" \
+  -t hft-platform:latest \
+  .
+```
+
+Confirm both tags exist:
+
+```bash
+docker images hft-platform --format '{{.Tag}}\t{{.ID}}\t{{.CreatedSince}}' | head
+```
+
+### 6. Apply ClickHouse migrations
+
+Migrations are operator-driven. Take a quick row-count snapshot, then
+apply each new SQL file in order:
+
+```bash
+docker exec clickhouse clickhouse-client --query "
+  SELECT 'market_data' AS t, count() FROM hft.market_data
+  UNION ALL SELECT 'orders',  count() FROM hft.orders
+  UNION ALL SELECT 'fills',   count() FROM hft.fills"
+
+ls src/hft_platform/migrations/clickhouse/ | sort | tail -25
+
+# Apply only files newer than what's already on this host:
+for f in src/hft_platform/migrations/clickhouse/<NEW_DATE_PREFIX>*.sql; do
+  echo "==> applying $f"
+  docker exec -i clickhouse clickhouse-client --multiquery < "$f"
+done
+```
+
+> ⚠️ `20260425_001_fills_replacing_merge_tree.sql` swaps the engine on
+> `hft.fills`. Take a row-count + min/max-ts snapshot of that table
+> before/after, and confirm before continuing.
+
+### 7. Flip mode (operator decision)
+
+Skip this step if you want to keep the existing `.env`. Otherwise back up
+the file first and edit explicitly:
+
+```bash
+cp .env .env.bak.$(date -u +%Y%m%dT%H%M%SZ)
+
+# Sim / shadow:
+sed -i 's/^HFT_MODE=.*/HFT_MODE=sim/'                        .env
+sed -i 's/^HFT_ORDER_MODE=.*/HFT_ORDER_MODE=sim/'            .env
+sed -i 's/^HFT_ORDER_SHADOW_MODE=.*/HFT_ORDER_SHADOW_MODE=1/' .env
+sed -i '/^HFT_LIVE_CONFIRM=/d'                               .env
+
+# Live (real money):
+sed -i 's/^HFT_MODE=.*/HFT_MODE=live/'                       .env
+sed -i 's/^HFT_ORDER_MODE=.*/HFT_ORDER_MODE=live/'           .env
+sed -i 's/^HFT_ORDER_SHADOW_MODE=.*/HFT_ORDER_SHADOW_MODE=0/' .env
+grep -qE '^HFT_LIVE_CONFIRM=' .env \
+  && sed -i 's/^HFT_LIVE_CONFIRM=.*/HFT_LIVE_CONFIRM=yes-i-know/' .env \
+  || echo 'HFT_LIVE_CONFIRM=yes-i-know' >> .env
+```
+
+> **Live confirmation must be verbal.** Run the live branch only after
+> the responsible operator acknowledges the impact.
+
+### 8. Restart the engine with the new image
+
+```bash
+docker compose up -d --no-deps --force-recreate hft-engine
+sleep 8
+docker compose ps hft-engine
+```
+
+### 9. Health check
+
+```bash
+curl -fsS http://localhost:9090/metrics | \
+  grep -E '^(build_info|hft_strategy_position_current|feed_events_total|hft_recorder_writes_total|hft_order_)' | head -20
+docker logs --tail=120 hft-engine 2>&1 | tail -60
+```
+
+Pass criteria:
+
+- `build_info{git_sha="<TARGET_SHA short>",build_ts="<ISO>"} 1` —
+  confirms the new image is live (no more `unknown`).
+- `feed_events_total` increasing during market hours; static at 0 when
+  market is closed (Sunday) is expected.
+- `hft_strategy_position_current{strategy_id=...}` lines present for
+  every enabled strategy.
+- No `ERROR`-level log lines about ClickHouse connectivity, Rust kernel
+  ABI mismatch, or migration drift.
+
+If any check fails, jump to **Rollback**.
+
+### 10. Post-deploy observation (≥ 10 min during a session)
+
+- `hft_recorder_writes_total` non-zero and increasing.
+- ClickHouse: `SELECT max(toDateTime64(exch_ts/1e9,3)) FROM hft.market_data`
+  is fresh.
+- WAL directory not growing unexpectedly: `ls -lh .wal/ | head`.
+- Watch `docker compose logs -f hft-engine` for at least one full minute.
+
+## Rollback
+
+```bash
+ssh charl@100.91.176.126
+cd /home/charl/subhft
+
+PREV=$(cat /tmp/hft-rollback-image.txt)
+docker tag "$PREV" hft-platform:latest
+docker compose up -d --no-deps --force-recreate hft-engine
+docker compose ps hft-engine
+curl -fsS http://localhost:9090/metrics | grep build_info
+```
+
+If a migration must be undone, restore from the latest ClickHouse backup
+(`docs/runbooks/clickhouse-down.md`). Do not improvise reverse-migrations.
+
+## Troubleshooting
+
+| Symptom                                      | Likely cause                            | Action                                                                                       |
+|----------------------------------------------|-----------------------------------------|----------------------------------------------------------------------------------------------|
+| `build_info{git_sha="unknown"}`              | Image built without `--build-arg`       | Rebuild with both `GIT_SHA` and `BUILD_TS` (step 5).                                         |
+| Stash pop conflict in `config/`              | Upstream changed the same file          | Hand-merge; remote operator value wins unless explicitly overridden.                         |
+| `docker compose up` recreates the wrong tag  | Stale `HFT_IMAGE` env override          | `unset HFT_IMAGE` and re-run step 8.                                                         |
+| Strategies still empty after restart         | `config/strategies.yaml` not loaded     | Confirm working tree matches operator expectation; check `docker logs` for "loading strategy". |
+| Shioaji login fails on first restart         | Broker session expired                  | Operator re-runs the manual login flow; engine retries on next bootstrap.                    |
+| ClickHouse migration partially applied       | One SQL file failed mid-batch           | Inspect `system.query_log`; do not rerun blindly. Restore from backup if state is unclear.   |
+
+## Pre-Deploy Checklist (copy-paste)
+
+```text
+[ ] CI green on TARGET_SHA  : ____________________
+[ ] Market closed / off-hours
+[ ] Operator on standby
+[ ] Disk ≥ 20 % free
+[ ] CH backup recent
+[ ] PREV_IMAGE_SHA recorded : ____________________
+[ ] TARGET_SHA              : ____________________
+[ ] New CH migrations to apply count : ____
+[ ] Mode after deploy (sim / live)   : ____
+```
