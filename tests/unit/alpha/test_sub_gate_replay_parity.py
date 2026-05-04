@@ -1,0 +1,64 @@
+"""Tests for ReplayParityGate."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+
+from hft_platform.alpha._sub_gates.replay_parity import ReplayParityGate
+
+
+@dataclass
+class _FakeReport:
+    match_pct: float
+    first_divergence_idx: int | None = None
+
+
+@dataclass
+class _FakeResult:
+    replay_parity_report: Any = None
+
+
+class TestReplayParityGate:
+    def test_passes_when_match_pct_above_threshold(self) -> None:
+        gate = ReplayParityGate()
+        report = _FakeReport(match_pct=96.0)
+        result = _FakeResult(replay_parity_report=report)
+        thresholds = {"replay_parity_match_pct_min": 95.0}
+
+        out = gate.evaluate(result, config=None, thresholds=thresholds)
+
+        assert out.passed is True
+        assert out.metrics["match_pct"] == 96.0
+        assert out.metrics["threshold"] == 95.0
+
+    def test_fails_when_below_threshold(self) -> None:
+        gate = ReplayParityGate()
+        report = _FakeReport(match_pct=80.0, first_divergence_idx=12)
+        result = _FakeResult(replay_parity_report=report)
+        thresholds = {"replay_parity_match_pct_min": 95.0}
+
+        out = gate.evaluate(result, config=None, thresholds=thresholds)
+
+        assert out.passed is False
+        assert out.metrics["match_pct"] == 80.0
+        assert out.metrics["first_divergence_idx"] == 12.0
+
+    def test_missing_report_marks_gate_failed(self) -> None:
+        gate = ReplayParityGate()
+        result = _FakeResult(replay_parity_report=None)
+        thresholds = {"replay_parity_match_pct_min": 95.0}
+
+        out = gate.evaluate(result, config=None, thresholds=thresholds)
+
+        assert out.passed is False
+        assert "missing" in out.details.lower()
+
+    def test_applies_to_includes_maker_and_taker(self) -> None:
+        gate = ReplayParityGate()
+        assert "maker" in gate.applies_to
+        assert "taker" in gate.applies_to
+
+    def test_name_is_replay_parity(self) -> None:
+        gate = ReplayParityGate()
+        assert gate.name == "replay_parity"
