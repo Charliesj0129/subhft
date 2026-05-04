@@ -26,20 +26,44 @@ def ensure_builtin_sub_gates_registered() -> None:
         SharpeThresholdGate,
         WinningDayPctGate,
     )
+    from hft_platform.alpha._sub_gates.day_bootstrap_ci import DayLevelBootstrapCIGate
+    from hft_platform.alpha._sub_gates.deflated_sharpe_maker import (
+        DeflatedSharpeForMakerGate,
+    )
+    from hft_platform.alpha._sub_gates.loo_day_sensitivity import LOODaySensitivityGate
     from hft_platform.alpha._sub_gates.maker import (
         FillQualityGate,
         FillRateValidationGate,
+    )
+    from hft_platform.alpha._sub_gates.min_sample_size import MinSampleSizeGate
+    from hft_platform.alpha._sub_gates.outlier_trade_removal import (
+        OutlierTradeRemovalGate,
+    )
+    from hft_platform.alpha._sub_gates.single_day_dominance import (
+        SingleDayDominanceGate,
+    )
+    from hft_platform.alpha._sub_gates.stationary_block_bootstrap import (
+        StationaryBlockBootstrapGate,
     )
     from hft_platform.alpha._sub_gates.taker import ICEvaluationGate
 
     existing_names = {g.name for g in get_registered_sub_gates()}
     candidates: list[SubGate] = [
+        # Existing
         SharpeThresholdGate(),
         MaxDrawdownGate(),
         WinningDayPctGate(),
         FillQualityGate(),
         FillRateValidationGate(),
         ICEvaluationGate(),
+        # New (Slice A)
+        MinSampleSizeGate(),
+        SingleDayDominanceGate(),
+        LOODaySensitivityGate(),
+        OutlierTradeRemovalGate(),
+        DayLevelBootstrapCIGate(),
+        StationaryBlockBootstrapGate(),
+        DeflatedSharpeForMakerGate(),
     ]
     for gate in candidates:
         if gate.name not in existing_names:
