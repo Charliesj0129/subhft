@@ -76,3 +76,23 @@ class TestLoadProfile:
         merged = prof.thresholds_for(strategy_type="maker")
         assert merged["sharpe_oos_min"] == 1.0
         assert merged["min_fills"] == 300
+
+    def test_top_level_not_mapping_raises(self, tmp_path: Path) -> None:
+        p = tmp_path / "scalar.yaml"
+        p.write_text("42\n")
+        with pytest.raises(ProfileValidationError, match="top-level YAML must be a mapping"):
+            load_profile(p)
+
+    def test_blocking_sub_gates_as_string_raises(self, tmp_path: Path) -> None:
+        bad = dict(_VALID_BODY)
+        bad["blocking_sub_gates"] = "sharpe_threshold"
+        p = _write_yaml(tmp_path, bad)
+        with pytest.raises(ProfileValidationError, match="blocking_sub_gates must be a list"):
+            load_profile(p)
+
+    def test_thresholds_not_mapping_raises(self, tmp_path: Path) -> None:
+        bad = dict(_VALID_BODY)
+        bad["thresholds"] = "not a dict"
+        p = _write_yaml(tmp_path, bad)
+        with pytest.raises(ProfileValidationError, match="thresholds must be a mapping"):
+            load_profile(p)

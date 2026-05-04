@@ -52,10 +52,27 @@ def load_profile(path: str | Path) -> ValidationProfile:
         raise FileNotFoundError(f"profile not found: {p}")
 
     body = yaml.safe_load(p.read_text()) or {}
+    if not isinstance(body, dict):
+        raise ProfileValidationError(
+            f"profile {p}: top-level YAML must be a mapping, got {type(body).__name__}"
+        )
+
     name = str(body.get("name", p.stem))
     is_strict = bool(body.get("is_strict", False))
-    thresholds = dict(body.get("thresholds") or {})
-    blocking = tuple(body.get("blocking_sub_gates") or ())
+
+    raw_thresholds = body.get("thresholds") or {}
+    if not isinstance(raw_thresholds, dict):
+        raise ProfileValidationError(
+            f"profile {name!r}: thresholds must be a mapping, got {type(raw_thresholds).__name__}"
+        )
+    thresholds = raw_thresholds
+
+    raw_blocking = body.get("blocking_sub_gates") or ()
+    if not isinstance(raw_blocking, (list, tuple)):
+        raise ProfileValidationError(
+            f"profile {name!r}: blocking_sub_gates must be a list, got {type(raw_blocking).__name__}"
+        )
+    blocking = tuple(raw_blocking)
 
     from hft_platform.alpha._sub_gates import (
         ensure_builtin_sub_gates_registered,
