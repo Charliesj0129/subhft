@@ -5,7 +5,14 @@ from pathlib import Path
 
 import pytest
 
+from hft_platform.alpha._validation_profile import ValidationProfile
 from hft_platform.alpha.promotion import PromotionConfig, promote_alpha
+
+
+def _strict_profile() -> ValidationProfile:
+    return ValidationProfile(
+        name="test", is_strict=True, thresholds={}, blocking_sub_gates=("sharpe_threshold",)
+    )
 
 
 def _write_bad_scorecard(path: Path) -> None:
@@ -32,6 +39,7 @@ def _base_config(tmp_path: Path, **kwargs) -> PromotionConfig:
         owner="test",
         project_root=str(tmp_path),
         scorecard_path=str(scorecard),
+        validation_profile=_strict_profile(),
         **kwargs,
     )
 

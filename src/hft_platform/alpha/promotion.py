@@ -32,6 +32,10 @@ from hft_platform.core import timebase
 _log = structlog.get_logger(__name__)
 
 
+class PromotionError(RuntimeError):
+    """Raised when a promotion is rejected by a structural pre-check."""
+
+
 @dataclass(frozen=True)
 class PromotionConfig:
     alpha_id: str
@@ -77,6 +81,8 @@ class PromotionConfig:
     # Feature set version from the alpha manifest.  When set, Gate D warns
     # (warn-only, non-blocking) if it doesn't match the live engine version.
     manifest_feature_set_version: str | None = None
+    # Strict validation profile required for Gate D entry.
+    validation_profile: Any | None = None
 
 
 @dataclass(frozen=True)
@@ -124,6 +130,12 @@ class PromotionResult:
 
 
 def promote_alpha(config: PromotionConfig) -> PromotionResult:
+    profile = getattr(config, "validation_profile", None)
+    if profile is None or not getattr(profile, "is_strict", False):
+        raise PromotionError(
+            f"strict profile required for Gate D entry; "
+            f"got profile={getattr(profile, 'name', None)!r}"
+        )
     root = Path(config.project_root).resolve()
     alpha_dir = root / "research" / "alphas" / config.alpha_id
     alpha_dir.mkdir(parents=True, exist_ok=True)

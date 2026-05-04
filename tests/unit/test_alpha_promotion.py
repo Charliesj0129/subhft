@@ -11,6 +11,14 @@ from hft_platform.alpha.promotion import (
 )
 
 
+def _strict_profile():
+    from hft_platform.alpha._validation_profile import ValidationProfile
+
+    return ValidationProfile(
+        name="test", is_strict=True, thresholds={}, blocking_sub_gates=("sharpe_threshold",)
+    )
+
+
 def _write_scorecard(
     path: Path,
     sharpe: float,
@@ -42,6 +50,7 @@ def test_promote_alpha_rejects_missing_correlation_metric(tmp_path: Path):
             shadow_sessions=6,
             drift_alerts=0,
             execution_reject_rate=0.0,
+            validation_profile=_strict_profile(),
         )
     )
     assert not result.approved
@@ -60,6 +69,7 @@ def test_promote_alpha_approved_writes_config(tmp_path: Path):
             shadow_sessions=6,
             drift_alerts=0,
             execution_reject_rate=0.0,
+            validation_profile=_strict_profile(),
         )
     )
     assert result.approved
@@ -84,6 +94,7 @@ def test_promote_alpha_reject_without_force(tmp_path: Path):
             shadow_sessions=1,
             drift_alerts=2,
             execution_reject_rate=0.05,
+            validation_profile=_strict_profile(),
         )
     )
     assert not result.approved
@@ -104,6 +115,7 @@ def test_promote_alpha_force_override(tmp_path: Path):
             execution_reject_rate=0.2,
             force=True,
             force_reason="test: override for unit test",
+            validation_profile=_strict_profile(),
         )
     )
     assert result.approved
@@ -143,6 +155,7 @@ def test_write_promotion_config_includes_versions(tmp_path: Path):
             shadow_sessions=6,
             config_version="v2",
             parent_config_version="v1",
+            validation_profile=_strict_profile(),
         )
     )
     assert result.approved
@@ -204,6 +217,7 @@ def test_promote_alpha_result_has_checklist(tmp_path: Path):
             owner="charlie",
             project_root=str(tmp_path),
             shadow_sessions=6,
+            validation_profile=_strict_profile(),
         )
     )
     assert result.checklist is not None
@@ -221,6 +235,7 @@ def test_promote_alpha_to_dict_includes_checklist(tmp_path: Path):
             owner="charlie",
             project_root=str(tmp_path),
             shadow_sessions=6,
+            validation_profile=_strict_profile(),
         )
     )
     d = result.to_dict()
@@ -261,6 +276,7 @@ def test_promote_alpha_writes_paper_governance_artifact(tmp_path: Path):
             min_shadow_sessions=5,
             min_paper_trade_calendar_days=7,
             min_paper_trade_trading_days=5,
+            validation_profile=_strict_profile(),
         )
     )
     assert result.paper_governance_report_path is not None
@@ -287,6 +303,7 @@ def test_promote_alpha_writes_paper_governance_artifact_when_summary_missing(tmp
             owner="charlie",
             project_root=str(tmp_path),
             require_paper_trade_governance=True,
+            validation_profile=_strict_profile(),
         )
     )
     assert not result.approved
@@ -315,6 +332,7 @@ def test_promote_alpha_requires_paper_trade_summary_when_governed(tmp_path: Path
             project_root=str(tmp_path),
             shadow_sessions=6,
             require_paper_trade_governance=True,
+            validation_profile=_strict_profile(),
         )
     )
     assert not result.approved
@@ -350,6 +368,7 @@ def test_promote_alpha_paper_trade_summary_path_pass(tmp_path: Path):
             paper_trade_summary_path=str(summary_path),
             min_paper_trade_session_minutes=30,
             enable_rust_readiness_gate=False,
+            validation_profile=_strict_profile(),
         )
     )
     assert result.approved
@@ -385,6 +404,7 @@ def test_promote_alpha_paper_trade_summary_fails_on_short_session(tmp_path: Path
             paper_trade_summary_path=str(summary_path),
             min_paper_trade_session_minutes=30,
             enable_rust_readiness_gate=False,
+            validation_profile=_strict_profile(),
         )
     )
     assert not result.approved
@@ -402,6 +422,7 @@ def test_promote_alpha_rust_gate_fails_without_module(tmp_path: Path):
             project_root=str(tmp_path),
             shadow_sessions=6,
             enable_rust_readiness_gate=True,
+            validation_profile=_strict_profile(),
         )
     )
     assert not result.approved
@@ -449,6 +470,7 @@ def test_gate_e_rejects_sub_60_minute_sessions_by_default(tmp_path: Path):
             paper_trade_summary_path=str(summary_path),
             enable_rust_readiness_gate=False,
             # min_paper_trade_session_minutes NOT specified → uses default=60
+            validation_profile=_strict_profile(),
         )
     )
     assert not result.approved
@@ -474,6 +496,7 @@ def test_promote_alpha_rust_gate_passes_with_mocked_parity(monkeypatch, tmp_path
             shadow_sessions=6,
             enable_rust_readiness_gate=True,
             rust_module_name="hft_platform.rust_core",
+            validation_profile=_strict_profile(),
         )
     )
     assert result.approved
@@ -522,6 +545,7 @@ def test_gate_e_uses_p95_reject_rate_from_summary(tmp_path: Path):
             min_paper_trade_calendar_days=1,
             min_paper_trade_trading_days=1,
             max_execution_reject_rate=0.01,
+            validation_profile=_strict_profile(),
         )
     )
     # P95 reject rate (0.05) > max_execution_reject_rate (0.01) → Gate E fails
@@ -569,6 +593,7 @@ def test_gate_e_falls_back_to_mean_when_p95_absent(tmp_path: Path):
             min_paper_trade_calendar_days=1,
             min_paper_trade_trading_days=1,
             max_execution_reject_rate=0.01,
+            validation_profile=_strict_profile(),
         )
     )
     decision = json.loads(Path(result.promotion_decision_path).read_text())
@@ -594,6 +619,7 @@ def test_gate_d_feature_set_version_mismatch_blocks_gate_d(tmp_path: Path):
             project_root=str(tmp_path),
             shadow_sessions=6,
             manifest_feature_set_version="lob_shared_v0_old",  # mismatches live engine v1
+            validation_profile=_strict_profile(),
         )
     )
     # Gate D fails with mismatch (blocking since Q3 hardening)
@@ -623,6 +649,7 @@ def test_gate_d_feature_set_version_match_passes(tmp_path: Path):
             project_root=str(tmp_path),
             shadow_sessions=6,
             manifest_feature_set_version=FEATURE_SET_VERSION,
+            validation_profile=_strict_profile(),
         )
     )
     assert result.gate_d_passed
@@ -648,6 +675,7 @@ def test_promote_alpha_raises_file_not_found_for_missing_scorecard(tmp_path: Pat
                 owner="charlie",
                 project_root=str(tmp_path),
                 scorecard_path=missing,
+                validation_profile=_strict_profile(),
             )
         )
 
@@ -664,6 +692,7 @@ def test_promote_alpha_write_promotion_config_disabled_adds_reason(tmp_path: Pat
             project_root=str(tmp_path),
             shadow_sessions=6,
             write_promotion_config=False,
+            validation_profile=_strict_profile(),
         )
     )
     assert result.approved
@@ -686,6 +715,7 @@ def test_promote_alpha_explicit_relative_scorecard_path(tmp_path: Path):
             project_root=str(tmp_path),
             scorecard_path="custom/sc/scorecard.json",
             shadow_sessions=6,
+            validation_profile=_strict_profile(),
         )
     )
     assert result.gate_d_passed
@@ -712,6 +742,7 @@ def test_promote_alpha_rust_benchmark_gate_passes(monkeypatch, tmp_path: Path):
             enable_rust_readiness_gate=True,
             rust_module_name="hft_platform.rust_core",
             enforce_rust_benchmark_gate=True,
+            validation_profile=_strict_profile(),
         )
     )
     assert result.gate_f_passed
@@ -740,6 +771,7 @@ def test_promote_alpha_rust_parity_timeout(monkeypatch, tmp_path: Path):
             shadow_sessions=6,
             enable_rust_readiness_gate=True,
             rust_module_name="hft_platform.rust_core",
+            validation_profile=_strict_profile(),
         )
     )
     assert not result.gate_f_passed
@@ -775,9 +807,57 @@ def test_build_checklist_with_paper_governance_adds_extra_items(tmp_path: Path):
             require_paper_trade_governance=True,
             paper_trade_summary_path=str(summary_path),
             min_paper_trade_session_minutes=30,
+            validation_profile=_strict_profile(),
         )
     )
     assert result.checklist is not None
     # Base 7 items + 4 paper-trade items = 11
     assert len(result.checklist.items) == 11
     assert result.checklist.all_passed() is True
+
+
+class TestStrictProfileRequirement:
+    def test_promotion_requires_strict_profile(self, tmp_path: Path) -> None:
+        from hft_platform.alpha.promotion import (
+            PromotionConfig,
+            PromotionError,
+            promote_alpha,
+        )
+
+        config = PromotionConfig(
+            alpha_id="test_alpha",
+            owner="test",
+            project_root=str(tmp_path),
+            scorecard_path=None,
+            validation_profile=None,
+        )
+        with pytest.raises(PromotionError, match="strict profile required"):
+            promote_alpha(config)
+
+    def test_promotion_accepts_strict_profile(self, tmp_path: Path) -> None:
+        from hft_platform.alpha._validation_profile import ValidationProfile
+        from hft_platform.alpha.promotion import (
+            PromotionConfig,
+            PromotionError,
+            promote_alpha,
+        )
+
+        prof = ValidationProfile(
+            name="vm_ul6_strict",
+            is_strict=True,
+            thresholds={},
+            blocking_sub_gates=("sharpe_threshold",),
+        )
+        config = PromotionConfig(
+            alpha_id="test_alpha",
+            owner="test",
+            project_root=str(tmp_path),
+            scorecard_path=None,
+            validation_profile=prof,
+        )
+        try:
+            promote_alpha(config)
+        except PromotionError as exc:
+            assert "strict profile required" not in str(exc)
+        except Exception:
+            pass  # other downstream errors are out of scope here
