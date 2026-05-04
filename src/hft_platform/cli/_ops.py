@@ -12,7 +12,7 @@ from typing import Any
 
 import structlog
 
-from hft_platform.config.loader import load_settings
+from hft_platform.config.loader import load_settings, resolve_active_strategy
 from hft_platform.ops.flatten_gate import FlattenGate, FlattenRequest, FlattenStatus
 from hft_platform.ops.manual_rearm import ManualRearmGate
 
@@ -131,9 +131,10 @@ def cmd_contracts_status(args: argparse.Namespace) -> None:
 
 def cmd_strat_test(args: argparse.Namespace) -> None:
     settings, _ = load_settings()
-    module_name = args.module or settings.get("strategy", {}).get("module", "hft_platform.strategies.simple_mm")
-    class_name = args.cls or settings.get("strategy", {}).get("class", "SimpleMarketMaker")
-    strategy_id = args.strategy_id or settings.get("strategy", {}).get("id", "demo")
+    strat = resolve_active_strategy(settings)
+    module_name = args.module or strat.get("module", "hft_platform.strategies.simple_mm")
+    class_name = args.cls or strat.get("class", "SimpleMarketMaker")
+    strategy_id = args.strategy_id or strat.get("id", "demo")
     symbol = args.symbol or (settings.get("symbols") or ["2330"])[0]
     try:
         mod = import_module(module_name)

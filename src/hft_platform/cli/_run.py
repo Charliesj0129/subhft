@@ -15,6 +15,7 @@ from structlog import get_logger
 from hft_platform.config.loader import (
     detect_live_credentials,
     load_settings,
+    resolve_active_strategy,
     summarize_settings,
 )
 
@@ -37,7 +38,19 @@ def cmd_run(args: argparse.Namespace) -> None:
         "mode": mode,
         "symbols": args.symbols or None,
     }
-    if args.strategy:
+
+    loop_id_raw = getattr(args, "loop_id", None)
+    loop_id = loop_id_raw if isinstance(loop_id_raw, str) and loop_id_raw else None
+    if loop_id and args.strategy:
+        print(
+            "[hft run] --loop and --strategy are mutually exclusive; "
+            "the loop YAML defines its own strategy.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    if loop_id:
+        cli_overrides["loop_id"] = loop_id
+    elif args.strategy:
         cli_overrides["strategy"] = {
             "id": args.strategy,
             "module": args.strategy_module or "hft_platform.strategies.simple_mm",
@@ -205,7 +218,7 @@ def cmd_check(args: argparse.Namespace) -> None:
     missing = []
     if not settings.get("symbols"):
         missing.append("symbols")
-    strat = settings.get("strategy", {})
+    strat = resolve_active_strategy(settings)
     if not strat.get("id"):
         missing.append("strategy.id")
     if missing:

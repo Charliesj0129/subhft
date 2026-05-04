@@ -147,7 +147,16 @@ def build_parser() -> argparse.ArgumentParser:
     run = sub.add_parser("run", help="Run pipeline (sim|live|replay)")
     run.add_argument("mode", nargs="?", choices=["sim", "live", "replay"])
     run.add_argument("--mode", dest="mode_flag", choices=["sim", "live", "replay"])
-    run.add_argument("--strategy", help="Strategy id to run")
+    run.add_argument(
+        "--loop",
+        dest="loop_id",
+        help=(
+            "Bind a production loop (loop_v1). Reads config/loops/<loop>.yaml, "
+            "forces strategy + broker, and switches schema to strict mode. "
+            "Mutually exclusive with --strategy."
+        ),
+    )
+    run.add_argument("--strategy", help="Strategy id to run (legacy; rejected with --loop)")
     run.add_argument("--strategy-module", help="Override strategy module")
     run.add_argument("--strategy-class", help="Override strategy class")
     run.add_argument("--symbols", nargs="+", help="Symbols to load")
