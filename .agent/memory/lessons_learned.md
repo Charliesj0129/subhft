@@ -122,3 +122,17 @@
 **Fix**: Split into a private `_get_drawdown_pct_locked()` (assumes caller holds lock) and a public `get_drawdown_pct()` that acquires-then-delegates. Writer call sites switched to the `_locked` variant.
 **Rule**: When promoting a public reader to acquire a non-reentrant lock, audit ALL writer call sites for self-recursion via metric emission, observability hooks, or any "tell me my own state" pattern. The locked/unlocked split is the canonical fix — don't reach for `RLock` (it hides reentrance bugs in adjacent code).
 **Commits**: `f2126f96` (R3-6 introduced bug), `63cac7ec` (R3-6 hole fix).
+
+## [ARCH] Slice A — Promotion Gate Hardening (2026-05)
+
+**Context**: Gate C was advisory-only — every sub-gate (`SharpeThresholdGate`, `MaxDrawdownGate`, `WinningDayPctGate`, `FillQualityGate`, `FillRateValidationGate`, `ICEvaluationGate`) was registered but its result did not affect `passed`. R47-OE1 (39 fills over 31 days, 96.9% of PnL from a single day, 2026-04-02) passed Gate C and reached `R47_MAKER_TMF enabled: true` in production. Live result on 2026-04-21: −1,722 NTD vs +7,701 NTD instant-RTT backtest prediction.
+**Fix**:
+- Ship `config/research/profiles/vm_ul6_strict.yaml` carrying `is_strict: true` plus a `blocking_sub_gates: [...]` list of 13 gate names. `ValidationProfile` is a frozen dataclass loaded by `_validation_profile.load_profile()`; the loader rejects any name that is not registered.
+- Add 7 small-sample sub-gates (`min_sample_size`, `single_day_dominance`, `loo_day_sensitivity`, `outlier_trade_removal`, `day_bootstrap_ci`, `stationary_block_bootstrap`, `deflated_sharpe_maker`) sharing the existing `SubGate` Protocol. R47-OE1 fingerprint fails on `min_sample_size`, `single_day_dominance`, `loo_day_sensitivity` (verified via integration test).
+- Replace `_invoke_sub_gates_advisory()` with `_invoke_sub_gates(*, profile)` returning `(advisory, blocking)`. Aggregator ANDs `blocking["passed"]` into Gate C's `passed`. Loose path (`profile=None`) is bit-for-bit unchanged; backward-compat wrapper preserved.
+- `promote_alpha()` raises `PromotionError("strict profile required for Gate D entry; got profile=...")` when `config.validation_profile is None or not is_strict`. Test fixtures inject a minimal strict profile.
+**Rule**:
+1. Any artifact entering Gate D MUST run with `--validation-profile vm_ul6_strict` (or another `is_strict: true` profile that lists at least the 7 small-sample gates as blocking). Loose `make research` runs do NOT need a profile.
+2. When wiring a new aggregated sub-call into an existing Gate function, place the call BEFORE the `passed = ...` consumer line, not after. Tests that bypass the full Gate function (calling `_invoke_sub_gates` directly) will not catch the order-of-statements bug; ruff F821 will. (We hit this exact bug in Slice A `_gate_c.py`; unit/integration tests stayed green because they call `_invoke_sub_gates` directly, but `ruff check` flagged unbound `maker_blocking`/`taker_blocking`.)
+3. Sub-gate `name` strings are snake_case (`min_sample_size`, not `MinSampleSize`); profile YAML must match the canonical `.name` attribute exactly.
+**Commits**: `6f9ef772` (plan) → `69758563` (CI sweep). Branch `slice-a/promotion-gate-hardening`, 19 commits.
