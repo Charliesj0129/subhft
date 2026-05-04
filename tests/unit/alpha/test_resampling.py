@@ -42,6 +42,10 @@ class TestDropTopTrades:
         with pytest.raises(ValueError, match="pct must be in"):
             drop_top_trades([1.0], pct=1.5)
 
+    def test_raises_for_negative_pct(self) -> None:
+        with pytest.raises(ValueError, match="pct must be in"):
+            drop_top_trades([1.0, 2.0], pct=-0.1)
+
 
 class TestDayBootstrap:
     def test_returns_n_resamples_of_correct_length(self) -> None:
@@ -60,6 +64,12 @@ class TestDayBootstrap:
     def test_raises_when_too_few_days(self) -> None:
         with pytest.raises(ValueError, match="insufficient"):
             day_bootstrap([1.0], n_resamples=10, rng_seed=42)
+
+    def test_reproducible_under_same_seed(self) -> None:
+        daily = [1.0, 2.0, 3.0, 4.0, 5.0]
+        s1 = day_bootstrap(daily, n_resamples=10, rng_seed=99)
+        s2 = day_bootstrap(daily, n_resamples=10, rng_seed=99)
+        assert np.array_equal(s1, s2)
 
 
 class TestStationaryBlockBootstrap:
@@ -81,4 +91,20 @@ class TestStationaryBlockBootstrap:
         with pytest.raises(ValueError, match="block_size"):
             stationary_block_bootstrap(
                 [1.0, 2.0], block_size=0, n_resamples=10, rng_seed=42
+            )
+
+    def test_reproducible_under_same_seed(self) -> None:
+        daily = [float(i) for i in range(20)]
+        s1 = stationary_block_bootstrap(
+            daily, block_size=4, n_resamples=10, rng_seed=99
+        )
+        s2 = stationary_block_bootstrap(
+            daily, block_size=4, n_resamples=10, rng_seed=99
+        )
+        assert np.array_equal(s1, s2)
+
+    def test_raises_when_input_shorter_than_block_size(self) -> None:
+        with pytest.raises(ValueError, match="< block_size"):
+            stationary_block_bootstrap(
+                [1.0, 2.0], block_size=5, n_resamples=10, rng_seed=42
             )
