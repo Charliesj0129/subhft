@@ -101,6 +101,31 @@ PNL_SNAPSHOT_COLUMNS = [
     "drawdown_pct",
 ]
 
+# Slice C task 3: opt-in OrderIntent recorder topic (HFT_INTENT_RECORDER_ENABLED).
+# Aligned with the ``hft.order_intents`` table created by migration
+# ``20260504_001_create_order_intents.sql``. Each value position MUST match the
+# column ordering registered in ``_EXTRACTOR_COLUMNS["intents"]``.
+INTENT_COLUMNS = [
+    "intent_id",
+    "strategy_id",
+    "symbol",
+    "intent_type",
+    "side",
+    "price_scaled",
+    "qty",
+    "tif",
+    "target_order_id",
+    "timestamp_ns",
+    "source_ts_ns",
+    "decision_price",
+    "price_type",
+    "trace_id",
+    "idempotency_key",
+    "ttl_ns",
+    "reason",
+    "ingest_ts",
+]
+
 
 def _extract_market_data_values(row) -> list | None:
     """Fast extractor for market_data events — bypasses generic serialize()."""
@@ -278,6 +303,49 @@ def _extract_pnl_snapshot_values(row) -> list | None:
         return None
 
 
+def _extract_intent_values(row) -> list | None:
+    """Slice C task 3 — extractor for the opt-in ``intents`` topic.
+
+    Accepts the envelope format produced by ``StrategyRunner`` after a
+    successful risk submit: ``{"intent": OrderIntent, "ingest_ts": int_ns}``.
+
+    Returns a list of values ordered identically to ``INTENT_COLUMNS`` so the
+    ``Batcher`` columnar buffer can pack rows without further reflection. Enum
+    fields (``intent_type``, ``side``, ``tif``) are emitted as their ``.name``
+    string for ClickHouse ``String`` columns. ``target_order_id`` of ``None``
+    is normalized to the empty string.
+    """
+    if row is None:
+        return None
+    intent = row.get("intent") if isinstance(row, dict) else row
+    if intent is None:
+        return None
+    try:
+        return [
+            int(getattr(intent, "intent_id", 0)),
+            str(getattr(intent, "strategy_id", "")),
+            str(getattr(intent, "symbol", "")),
+            getattr(getattr(intent, "intent_type", None), "name", str(getattr(intent, "intent_type", ""))),
+            getattr(getattr(intent, "side", None), "name", str(getattr(intent, "side", ""))),
+            int(getattr(intent, "price", 0)),  # scaled int x10000
+            int(getattr(intent, "qty", 0)),
+            getattr(getattr(intent, "tif", None), "name", str(getattr(intent, "tif", ""))),
+            str(getattr(intent, "target_order_id", "") or ""),
+            int(getattr(intent, "timestamp_ns", 0)),
+            int(getattr(intent, "source_ts_ns", 0)),
+            int(getattr(intent, "decision_price", 0)),
+            str(getattr(intent, "price_type", "LMT") or "LMT"),
+            str(getattr(intent, "trace_id", "") or ""),
+            str(getattr(intent, "idempotency_key", "") or ""),
+            int(getattr(intent, "ttl_ns", 0)),
+            str(getattr(intent, "reason", "") or ""),
+            int(row.get("ingest_ts", 0) if isinstance(row, dict) else 0),
+        ]
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("operation_fallback", error=str(exc))
+        return None
+
+
 def _values_to_dict(columns: list[str], values: list | None):
     if values is None:
         return None
@@ -305,6 +373,8 @@ _EXTRACTORS = {
     "orders": _extract_order_values,
     "fills": _extract_fill_values,
     "pnl_snapshots": _extract_pnl_snapshot_values,
+    # Slice C task 3: opt-in intents topic, gated below in RecorderService.__init__
+    "intents": _extract_intent_values,
 }
 
 _EXTRACTOR_COLUMNS = {
@@ -312,6 +382,7 @@ _EXTRACTOR_COLUMNS = {
     "orders": ORDER_COLUMNS,
     "fills": FILL_COLUMNS,
     "pnl_snapshots": PNL_SNAPSHOT_COLUMNS,
+    "intents": INTENT_COLUMNS,
 }
 
 
@@ -457,6 +528,20 @@ class RecorderService:
                 health_tracker=self.health_tracker,
             ),
         }
+
+        # Slice C task 3: opt-in OrderIntent recorder topic. Default disabled
+        # so the existing 7-batcher layout is preserved unless an operator
+        # explicitly turns the producer on.
+        intent_enabled = os.getenv("HFT_INTENT_RECORDER_ENABLED", "0").lower() in {"1", "true", "yes", "on"}
+        if intent_enabled:
+            self.batchers["intents"] = Batcher(
+                "hft.order_intents",
+                writer=self.writer,
+                extractor=_EXTRACTORS.get("intents") if extract_enabled else None,
+                extractor_columns=_EXTRACTOR_COLUMNS.get("intents") if extract_enabled else None,
+                memory_guard=self.memory_guard,
+                health_tracker=self.health_tracker,
+            )
 
         # Register all batchers with memory guard
         for batcher in self.batchers.values():

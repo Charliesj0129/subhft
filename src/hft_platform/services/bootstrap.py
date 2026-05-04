@@ -1024,6 +1024,10 @@ class SystemBootstrapper:
             feature_engine=feature_engine,
             position_store=position_store,
             symbol_metadata=symbol_metadata,
+            # Slice C task 3: pass the same recorder_queue used by
+            # MarketDataService so the opt-in OrderIntent producer hook can
+            # publish to the existing recorder. Drained by RecorderService.run().
+            recorder_queue=recorder_queue,
         )
         # Phase 3: rejection feedback queue.
         # P2 (2026-04-25): the former ``_publish_queue`` was wired into
