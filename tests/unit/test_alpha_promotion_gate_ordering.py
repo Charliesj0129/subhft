@@ -15,7 +15,13 @@ from pathlib import Path
 
 import pytest
 
+from hft_platform.alpha._validation_profile import ValidationProfile
 from hft_platform.alpha.promotion import _verify_gate_c_passed
+
+
+def _strict_profile() -> ValidationProfile:
+    return ValidationProfile(name="test", is_strict=True, thresholds={}, blocking_sub_gates=("sharpe_threshold",))
+
 
 # ---------------------------------------------------------------------------
 # Unit tests for _verify_gate_c_passed
@@ -107,6 +113,7 @@ def test_promote_alpha_raises_when_gate_c_false(tmp_path: Path) -> None:
         owner="test_owner",
         project_root=str(tmp_path),
         scorecard_path=str(sc_path),
+        validation_profile=_strict_profile(),
     )
 
     with pytest.raises(ValueError, match="Gate C has not passed"):

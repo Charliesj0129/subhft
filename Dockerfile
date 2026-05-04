@@ -78,7 +78,7 @@ WORKDIR /app
 # P2-d (2026-04-27): bake commit SHA + build timestamp into the image so the
 # startup banner can read them and Prometheus can expose
 # `hft_build_info{git_sha,build_ts}=1` for image-drift detection across
-# services. Use --build-arg from CI / Makefile / scripts/deploy.sh.
+# services. Use --build-arg from CI / Makefile or pass directly to `docker build`.
 ARG GIT_SHA=unknown
 ARG BUILD_TS=unknown
 ENV HFT_GIT_SHA=${GIT_SHA} \

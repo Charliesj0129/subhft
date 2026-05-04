@@ -68,6 +68,7 @@ class ValidationConfig:
     min_queue_survival_rate: float = 0.3
     enforce_latency_profile: bool = True
     gate_c_tier: str = "promotion"
+    profile: Any | None = None
 
 
 @dataclass(frozen=True, slots=True)

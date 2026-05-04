@@ -62,6 +62,7 @@ Base YAML (config/base/main.yaml)
 | `HFT_RUNTIME_INSTANCE_ID` | `{HOSTNAME}:{PID}` | 執行個體唯一識別（自動生成） | 多主機部署時手動設為固定值 |
 | `HFT_FEED_SESSION_PREFLIGHT_TIMEOUT_S` | `0.5` | Preflight Redis 連線逾時（秒） | 低延遲網路可縮短至 0.2s |
 | `HFT_FEED_SESSION_STALE_TAKEOVER_TTL_S` | `0` | >0 時，TTL 低於此值的 stale lease 可被清除並接管 | 0 = 停用（安全預設） |
+| `HFT_IMAGE` | `hft-platform:latest` | docker-compose 使用的 hft-engine image tag（`docker-compose.yml:13`） | 部署特定版本時設為 image:tag；rollback 時 `unset` 回 latest |
 
 **Runbook 參考**: [Section 12 — Redis Session Lease 衝突](../runbooks.md#12-redis-session-lease-衝突)
 
