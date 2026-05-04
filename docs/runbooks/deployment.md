@@ -252,11 +252,14 @@ If a migration must be undone, restore from the latest ClickHouse backup
 
 ## Core Dump Capture (Forensics Setup)
 
-The engine container ships with `core: -1` ulimit (`docker-compose.yml`
-`*hft-common` anchor) and a host bind mount at `./.cores → /var/cores`
-(same anchor). To make these effective, the **host** kernel core-pattern
-sysctl must point at the bound directory; this is host-side state that is
-not provisioned by the image or by `docker compose`.
+The engine container ships with `core: 4294967296` ulimit (4 GiB cap, one
+engine memory image — matches `deploy.resources.limits.memory: 4G`) on the
+`*hft-common` anchor and a host bind mount at `./.cores → /var/cores`
+(same anchor). The cap bounds the disk-fill cascade documented in **Disk
+usage / retention** below. To make core capture effective, the **host**
+kernel core-pattern sysctl must point at the bound directory; this is
+host-side state that is not provisioned by the image or by
+`docker compose`.
 
 One-time setup on the deploy host:
 
@@ -279,8 +282,13 @@ Verify inside the container after `docker compose up -d hft-engine`:
 
 ```bash
 docker exec hft-engine sh -c 'ulimit -c; ls -ld /var/cores'
-# Expected: unlimited; drwxr-xr-x ... hftuser hftuser ...
+# Expected: 4194304 (kilobytes — 4 GiB cap, NOT unlimited);
+#           drwxr-xr-x ... hftuser hftuser ...
 ```
+
+If `ulimit -c` shows `unlimited`, the cap fix did not deploy — investigate
+before proceeding (the disk-fill cascade in **Disk usage / retention**
+below is no longer bounded).
 
 Sanity check that **does not touch the engine PID** — spawn a throwaway
 shell and SIGSEGV it:
@@ -308,22 +316,36 @@ and follow up with the rust_core maintainer.
 
 ### Disk usage / retention
 
-`core: -1` is unlimited. A 4 GB engine that crash-loops can write 10 GB of
-core files in minutes into `./.cores`, which sits on the same filesystem
-as `./.wal` and `./data`. WAL durability and ClickHouse ingestion lose if
-that disk fills.
+`core: 4294967296` (4 GiB) caps a single dump at one engine memory image,
+but with `restart: always` a segfault loop can still write **N × 4 GiB**
+of cores into `./.cores` — which sits on the same filesystem as `./.wal`
+and `./data`. WAL durability and ClickHouse ingestion lose if that disk
+fills. The cap bounds each dump; the cron below bounds the accumulation.
 
-Mitigations operators must put in place **before** the next crash:
+**Required** operator setup (deploy-time, not optional):
 
 ```bash
-# 1. Pre-deploy disk budget check (run as part of the Pre-Deploy Checklist):
-df -BG --output=avail /home/charl/subhft | awk 'NR==2 && $1+0 < 20 { print "FAIL: <20G free"; exit 1 }'
+# 1. Pre-deploy disk budget gate — MUST pass before bringing the engine up:
+df -BG --output=avail /home/charl/subhft \
+  | awk 'NR==2 && $1+0 < 20 { print "FAIL: <20G free"; exit 1 }'
 
-# 2. Time-based retention (cron or systemd-timer, daily):
-find /home/charl/subhft/.cores -name 'core.*' -mtime +30 -delete
+# 2. Enforced hourly retention cron — install once per host (HIGH-2 fix,
+#    Codex review 2026-05-04). Deletes core files older than 24h.
+sudo tee /etc/cron.d/hft-cores-retention >/dev/null <<'CRON'
+0 * * * * charl find /home/charl/subhft/.cores -type f -name 'core.*' -mmin +1440 -delete
+CRON
+sudo chmod 644 /etc/cron.d/hft-cores-retention
 
-# 3. Hard cap by directory size (cron or pre-restart hook):
-#    Keep at most N most-recent cores; delete the rest.
+# Verify:
+sudo cat /etc/cron.d/hft-cores-retention
+```
+
+Optional defense in depth (only after the cron above is in place):
+
+```bash
+# Hard cap by directory size — keep N most-recent cores, drop the rest.
+# Run from a pre-restart hook if a crash loop is in progress and the
+# hourly cron's <=60 min latency is too slow.
 ls -1t /home/charl/subhft/.cores/core.* 2>/dev/null | tail -n +6 | xargs -r rm --
 ```
 
