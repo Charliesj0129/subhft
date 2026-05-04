@@ -1,4 +1,5 @@
 """Unit tests for ReplayedIntentLog canonical hash + jsonl round-trip."""
+
 from __future__ import annotations
 
 import json

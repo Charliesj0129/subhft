@@ -4,6 +4,7 @@ Builds synthetic .tar.gz fixtures via `tarfile` mirroring the .wal/archive
 layout: each member is a .jsonl shard with a header line carrying
 `__wal_table__` followed by JSON-encoded body rows.
 """
+
 from __future__ import annotations
 
 import io

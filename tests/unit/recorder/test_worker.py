@@ -6,6 +6,7 @@ Covers the opt-in ``intents`` topic added by Slice C task 3:
 - ``_extract_intent_values`` round-trips the OrderIntent fields the
   ``hft.order_intents`` schema persists.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -13,7 +14,7 @@ import os
 import unittest
 from unittest.mock import patch
 
-from hft_platform.contracts.strategy import IntentType, OrderIntent, Side, TIF
+from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, Side
 from hft_platform.recorder import worker as worker_mod
 
 

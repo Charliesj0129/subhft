@@ -10,6 +10,7 @@ Three behaviors:
    ``put_nowait`` + ``asyncio.QueueFull`` and bumps
    ``metrics.recorder_intent_drop_total`` — the strategy MUST never block.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -18,8 +19,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from hft_platform.contracts.strategy import IntentType, OrderIntent, Side, TIF
-
+from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, Side
 
 # ---------------------------------------------------------------------------
 # Helpers / stubs (mirror tests/unit/test_runner_queue_full.py)

@@ -8,6 +8,7 @@ sub-microsecond scheduler jitter from breaking parity, while keeping the
 parity bar tight enough to catch the R47-OE1 cancel-path divergence
 (which is whole-event-shape, not timing).
 """
+
 from __future__ import annotations
 
 import hashlib

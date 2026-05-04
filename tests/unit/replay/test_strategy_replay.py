@@ -6,6 +6,7 @@ canonical hashes. These tests build a tiny in-test ``.tar.gz`` fixture
 (mirroring ``tests/unit/replay/test_wal_fixture_loader.py``) and a tiny
 test-only strategy that emits one ``OrderIntent`` per event.
 """
+
 from __future__ import annotations
 
 import io
@@ -186,9 +187,7 @@ def test_replay_captures_intents_in_order(tmp_fixture: Path) -> None:
     log = replay_strategy(cfg)
 
     timestamps = [int(it.timestamp_ns) for it in log.intents]
-    assert timestamps == sorted(timestamps), (
-        f"timestamp_ns must be monotonic; got {timestamps}"
-    )
+    assert timestamps == sorted(timestamps), f"timestamp_ns must be monotonic; got {timestamps}"
 
 
 def test_replay_respects_max_events(tmp_fixture: Path) -> None:

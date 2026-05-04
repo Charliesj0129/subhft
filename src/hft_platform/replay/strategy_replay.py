@@ -24,6 +24,7 @@ If a strategy uses ``time.monotonic_ns`` / ``time.time_ns`` directly
 (anti-pattern under HFT Core Law §3) the determinism test will detect the
 leak by emitting non-identical hashes — that's intentional evidence.
 """
+
 from __future__ import annotations
 
 import random
@@ -128,9 +129,7 @@ def _market_data_row_to_event(row: dict) -> BidAskEvent | TickEvent:
     symbol = str(row.get("symbol") or "")
     meta = MetaData(seq=seq, source_ts=exch_ts, local_ts=ingest_ts, topic="market_data")
 
-    is_book = row_type in ("bidask", "snapshot") or (
-        row_type == "" and bool(row.get("bids_price"))
-    )
+    is_book = row_type in ("bidask", "snapshot") or (row_type == "" and bool(row.get("bids_price")))
     if is_book:
         bids = _zip_book(row.get("bids_price") or [], row.get("bids_vol") or [])
         asks = _zip_book(row.get("asks_price") or [], row.get("asks_vol") or [])
@@ -179,9 +178,7 @@ def replay_strategy(cfg: ReplayConfig) -> ReplayedIntentLog:
             exch_ts = int(row.get("exch_ts", 0) or 0)
             # Advance the patched clock BEFORE invoking the strategy so its
             # timebase.now_ns() calls observe a deterministic value.
-            clock["now"] = (
-                cfg.clock_start_ns if cfg.clock_start_ns is not None else exch_ts
-            )
+            clock["now"] = cfg.clock_start_ns if cfg.clock_start_ns is not None else exch_ts
             event = _market_data_row_to_event(row)
             intents = strategy.handle_event(ctx, event)  # SYNC contract
             for intent in intents or ():

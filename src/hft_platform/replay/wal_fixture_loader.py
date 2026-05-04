@@ -6,6 +6,7 @@ Public API:
 Each yielded dict is a single market_data row (BidAsk or Tick) from the
 WAL archive, sorted by exch_ts ascending across all shards.
 """
+
 from __future__ import annotations
 
 import json

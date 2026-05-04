@@ -62,8 +62,5 @@ class ReplayParityGate:
                 "threshold": threshold,
                 "first_divergence_idx": first_div,
             },
-            details=(
-                f"match_pct={match_pct:.2f}% vs min {threshold:.2f}% "
-                f"(first_divergence_idx={first_div:.0f})"
-            ),
+            details=(f"match_pct={match_pct:.2f}% vs min {threshold:.2f}% (first_divergence_idx={first_div:.0f})"),
         )

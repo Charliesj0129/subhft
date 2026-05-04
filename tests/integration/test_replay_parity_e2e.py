@@ -23,7 +23,6 @@ from hft_platform.alpha._gate_c import _invoke_sub_gates
 from hft_platform.alpha._validation_profile import load_profile
 from hft_platform.alpha.replay_parity import IntentDiff
 from hft_platform.replay.intent_log import ReplayedIntentLog
-
 from tests.integration.test_strict_profile_e2e import (
     _ParityReport,
     _r47_payload,
@@ -70,9 +69,7 @@ def test_dod_c1_synthetic_r47_kills_at_replay_parity_gate(
     replay_parity sub-gate (proven through profile aggregation).
     """
     live = ReplayedIntentLog.from_jsonl(FIXTURE_DIR / "synthetic_r47_oe1_live.jsonl")
-    replayed = ReplayedIntentLog.from_jsonl(
-        FIXTURE_DIR / "synthetic_r47_oe1_replayed.jsonl"
-    )
+    replayed = ReplayedIntentLog.from_jsonl(FIXTURE_DIR / "synthetic_r47_oe1_replayed.jsonl")
     report = IntentDiff(
         live=live.canonical_records(),
         replayed=replayed.canonical_records(),
@@ -123,9 +120,9 @@ def test_dod_c2_clean_echo_passes(strict_profile: Any) -> None:
 
     assert blocking is not None
     failing_names = {f["name"] for f in blocking["failing"]}
-    assert (
-        "replay_parity" not in failing_names
-    ), f"replay_parity should NOT block on clean echo; failing={blocking['failing']}"
+    assert "replay_parity" not in failing_names, (
+        f"replay_parity should NOT block on clean echo; failing={blocking['failing']}"
+    )
     # And the gate appeared in the advisory list (i.e. it was actually run).
     advisory_names = {g["name"] for g in advisory}
     assert "replay_parity" in advisory_names, advisory_names

@@ -106,9 +106,7 @@ def _invoke_sub_gates(
         # report. Task 11 will attach the report directly on BacktestResult
         # at construction; until then this lets test fixtures inject it.
         try:
-            object.__setattr__(
-                result, "replay_parity_report", result_payload["replay_parity_report"]
-            )
+            object.__setattr__(result, "replay_parity_report", result_payload["replay_parity_report"])
         except Exception:  # noqa: BLE001
             pass
 

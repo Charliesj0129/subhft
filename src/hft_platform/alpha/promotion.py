@@ -343,9 +343,7 @@ def _evaluate_gate_d(scorecard: dict[str, Any], config: PromotionConfig) -> tupl
         "required": True,
         "pass": (match_pct is not None and match_pct >= min_match_pct),
         "detail": (
-            "OK"
-            if match_pct is not None
-            else "MISSING — scorecard.replay_parity must be populated before promotion"
+            "OK" if match_pct is not None else "MISSING — scorecard.replay_parity must be populated before promotion"
         ),
     }
     # Feature set version parity check (warn-only: does NOT block Gate D).
