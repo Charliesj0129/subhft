@@ -260,6 +260,20 @@ Status:
 - audit DDL exists in the `src/hft_platform/migrations/clickhouse/` migration scripts.
 - audit schema is automatically applied by the new migration runner during system bootstrap.
 
+### 7A. Slice C — Replay-Parity Gate (2026-05-04)
+
+Closes the R47-OE1 backtest/live divergence loop (incident `docs/incidents/2026-04-21-r47-backtest-live-divergence.md`). Operator runbook: `docs/runbooks/replay-parity-gate.md`.
+
+| Surface | Path | Purpose |
+| --- | --- | --- |
+| Replay harness | `src/hft_platform/replay/wal_fixture_loader.py` | Load WAL shards as a deterministic event iterator |
+| Replay harness | `src/hft_platform/replay/intent_log.py` | Canonical intent schema + SHA-256 hashing |
+| Replay harness | `src/hft_platform/replay/strategy_replay.py` | `replay_strategy(ReplayConfig)` — clock-patched offline replay |
+| Promotion gate | `src/hft_platform/alpha/replay_parity.py` | `IntentDiff` + `ReplayParityReport` (match_pct / histogram / first divergence) |
+| Promotion gate | `src/hft_platform/alpha/_sub_gates/replay_parity.py` | `ReplayParityGate` sub-gate (blocking under `vm_ul6_strict`, advisory under `vm_ul6`) |
+| Persistence | ClickHouse table `hft.order_intents` (`migrations/clickhouse/20260504_001_create_order_intents.sql`) | Opt-in intent recorder topic, 365 d retention |
+| Env var | `HFT_INTENT_RECORDER_ENABLED` (default `0`) | Enables the intent recorder topic at runtime |
+
 ## 8. Architectural Invariants (Unchanged)
 
 1. Hot path must avoid blocking I/O and excessive allocation.
