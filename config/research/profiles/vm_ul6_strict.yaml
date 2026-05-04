@@ -1,0 +1,58 @@
+# config/research/profiles/vm_ul6_strict.yaml
+# Strict promotion-eligibility profile for the HFT alpha pipeline.
+# Required for any artifact entering Gate D (see promote_alpha()).
+# Loose `make research` runs do not need this profile.
+name: vm_ul6_strict
+is_strict: true
+
+thresholds:
+  taker:
+    sharpe_oos_min: 1.5
+    max_drawdown_pct: 10
+    winning_day_pct_min: 58
+    min_oos_trades: 200
+    min_oos_days: 30
+
+  maker:
+    sharpe_is_min: 1.0
+    sharpe_oos_min: 1.0
+    pnl_per_fill_min_pts: 2.0
+    pnl_per_fill_min_pts_multiplier: 0.5
+    edge_to_cost_ratio_min: 1.5
+    adverse_fill_pct_max: 40
+    winning_day_pct_min: 60
+    max_drawdown_pct: 15
+    fill_rate_deviation_max: 0.5
+
+    # Slice A small-sample gates
+    min_fills: 300
+    min_days: 60
+    outlier_day_contribution_max_pct: 25
+    loo_day_sign_preserved: true
+    outlier_trade_removal_pct: 5
+    bootstrap_ci_lower_bound_min: 0
+    bootstrap_n_resamples: 2000
+    bootstrap_alpha: 0.05
+    block_bootstrap_ci_lower_bound_min: 0
+    block_bootstrap_block_size_days: 5
+    block_bootstrap_n_resamples: 1000
+    block_bootstrap_alpha: 0.05
+    deflated_sharpe_min: 0.5
+    deflated_n_trials: 1
+
+blocking_sub_gates:
+  # Existing — promoted from advisory to blocking under strict
+  - sharpe_threshold
+  - max_drawdown
+  - winning_day_pct
+  - fill_quality
+  - fill_rate_validation
+  - ic_evaluation
+  # New (Slice A)
+  - min_sample_size
+  - single_day_dominance
+  - loo_day_sensitivity
+  - outlier_trade_removal
+  - day_bootstrap_ci
+  - stationary_block_bootstrap
+  - deflated_sharpe_maker

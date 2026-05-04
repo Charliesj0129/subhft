@@ -112,3 +112,28 @@ class TestValidationConfigProfileField:
         prof = load_profile(p)
         cfg = ValidationConfig(alpha_id="x", data_paths=[], profile=prof)
         assert cfg.profile is prof
+
+
+class TestShippedStrictProfile:
+    def test_vm_ul6_strict_loads(self) -> None:
+        from hft_platform.alpha._validation_profile import load_profile
+
+        prof = load_profile("config/research/profiles/vm_ul6_strict.yaml")
+        assert prof.name == "vm_ul6_strict"
+        assert prof.is_strict is True
+        for gate_name in (
+            "sharpe_threshold",
+            "max_drawdown",
+            "winning_day_pct",
+            "fill_quality",
+            "fill_rate_validation",
+            "ic_evaluation",
+            "min_sample_size",
+            "single_day_dominance",
+            "loo_day_sensitivity",
+            "outlier_trade_removal",
+            "day_bootstrap_ci",
+            "stationary_block_bootstrap",
+            "deflated_sharpe_maker",
+        ):
+            assert gate_name in prof.blocking_sub_gates, gate_name
