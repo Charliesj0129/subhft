@@ -132,3 +132,30 @@ def test_dod_c2_clean_echo_passes(strict_profile: Any) -> None:
     # Verify _ParityReport import path is exercised (silences unused-import
     # warning while documenting the helper relationship across both files).
     assert _ParityReport.__name__ == "_ParityReport"
+
+
+@pytest.mark.integration
+def test_loose_profile_does_not_block_on_replay_parity() -> None:
+    """DoD-C3: under a loose (no-profile) call, `replay_parity` MUST stay
+    advisory only — `blocking is None` and the gate appears in the advisory
+    list (proving registration via `ensure_builtin_sub_gates_registered()`,
+    which `_invoke_sub_gates` calls internally).
+    """
+    # No replay_parity_report attached: the gate runs in advisory mode and
+    # reports failure on missing report, but MUST NOT block when profile is
+    # None — that's the loose-profile non-regression invariant.
+    payload = _r47_payload_with(replay_parity_report=None)
+    advisory, blocking = _invoke_sub_gates(
+        strategy_type="maker",
+        result_payload=payload,
+        thresholds={
+            "sharpe_is_min": 0.5,
+            "winning_day_pct_min": 55,
+            "replay_parity_match_pct_min": 95.0,
+        },
+        profile=None,
+    )
+
+    assert blocking is None
+    advisory_names = {g["name"] for g in advisory}
+    assert "replay_parity" in advisory_names, advisory_names
