@@ -5,6 +5,7 @@ Three scenarios:
 2. Robust payload + strict profile -> Gate C PASS.
 3. Same payload as (1) without profile -> behavior identical to pre-change.
 """
+
 from __future__ import annotations
 
 from typing import Any

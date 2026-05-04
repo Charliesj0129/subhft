@@ -10,9 +10,7 @@ from hft_platform.alpha.promotion import PromotionConfig, promote_alpha
 
 
 def _strict_profile() -> ValidationProfile:
-    return ValidationProfile(
-        name="test", is_strict=True, thresholds={}, blocking_sub_gates=("sharpe_threshold",)
-    )
+    return ValidationProfile(name="test", is_strict=True, thresholds={}, blocking_sub_gates=("sharpe_threshold",))
 
 
 def _write_bad_scorecard(path: Path) -> None:

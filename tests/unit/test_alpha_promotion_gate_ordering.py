@@ -20,9 +20,8 @@ from hft_platform.alpha.promotion import _verify_gate_c_passed
 
 
 def _strict_profile() -> ValidationProfile:
-    return ValidationProfile(
-        name="test", is_strict=True, thresholds={}, blocking_sub_gates=("sharpe_threshold",)
-    )
+    return ValidationProfile(name="test", is_strict=True, thresholds={}, blocking_sub_gates=("sharpe_threshold",))
+
 
 # ---------------------------------------------------------------------------
 # Unit tests for _verify_gate_c_passed

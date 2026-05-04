@@ -1,4 +1,5 @@
 """Minimum-sample-size sub-gate (fills + trading days)."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -31,7 +32,5 @@ class MinSampleSizeGate:
                 "min_fills": float(min_fills),
                 "min_days": float(min_days),
             },
-            details=(
-                f"fills={n_fills} (min {min_fills}), days={n_days} (min {min_days})"
-            ),
+            details=(f"fills={n_fills} (min {min_fills}), days={n_days} (min {min_days})"),
         )

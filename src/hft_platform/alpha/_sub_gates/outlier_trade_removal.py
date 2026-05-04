@@ -1,4 +1,5 @@
 """Outlier-trade removal sub-gate."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -40,11 +41,7 @@ class OutlierTradeRemovalGate:
         residual = sum(kept)
         target_sign = 1 if total > 0 else (-1 if total < 0 else 0)
         residual_sign = 1 if residual > 0 else (-1 if residual < 0 else 0)
-        passed = (
-            (target_sign == residual_sign) and target_sign != 0
-            if pct > 0
-            else True
-        )
+        passed = (target_sign == residual_sign) and target_sign != 0 if pct > 0 else True
 
         return SubGateResult(
             name=self.name,

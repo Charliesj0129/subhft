@@ -1,4 +1,5 @@
 """Tests for hft_platform.alpha._validation_profile."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -11,7 +12,6 @@ from hft_platform.alpha._validation_profile import (
     ValidationProfile,
     load_profile,
 )
-
 
 _VALID_BODY = {
     "name": "test_strict",

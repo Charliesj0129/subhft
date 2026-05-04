@@ -1,4 +1,5 @@
 """Day-level bootstrap CI sub-gate."""
+
 from __future__ import annotations
 
 from typing import Any

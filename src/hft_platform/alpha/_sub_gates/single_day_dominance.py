@@ -4,6 +4,7 @@ Rejects runs where the top-magnitude day contributes more than
 ``outlier_day_contribution_max_pct`` percent of the absolute total
 daily PnL.
 """
+
 from __future__ import annotations
 
 from typing import Any

@@ -1,4 +1,5 @@
 """Tests for hft_platform.alpha._resampling primitives."""
+
 from __future__ import annotations
 
 import math
@@ -75,36 +76,24 @@ class TestDayBootstrap:
 class TestStationaryBlockBootstrap:
     def test_returns_n_resamples_of_correct_length(self) -> None:
         daily = [float(i) for i in range(50)]
-        samples = stationary_block_bootstrap(
-            daily, block_size=5, n_resamples=200, rng_seed=42
-        )
+        samples = stationary_block_bootstrap(daily, block_size=5, n_resamples=200, rng_seed=42)
         assert samples.shape == (200, 50)
 
     def test_preserves_first_moment_in_expectation(self) -> None:
         daily = [1.0] * 100
-        samples = stationary_block_bootstrap(
-            daily, block_size=5, n_resamples=500, rng_seed=42
-        )
+        samples = stationary_block_bootstrap(daily, block_size=5, n_resamples=500, rng_seed=42)
         assert math.isclose(samples.mean(), 1.0, abs_tol=1e-6)
 
     def test_raises_when_block_size_too_small(self) -> None:
         with pytest.raises(ValueError, match="block_size"):
-            stationary_block_bootstrap(
-                [1.0, 2.0], block_size=0, n_resamples=10, rng_seed=42
-            )
+            stationary_block_bootstrap([1.0, 2.0], block_size=0, n_resamples=10, rng_seed=42)
 
     def test_reproducible_under_same_seed(self) -> None:
         daily = [float(i) for i in range(20)]
-        s1 = stationary_block_bootstrap(
-            daily, block_size=4, n_resamples=10, rng_seed=99
-        )
-        s2 = stationary_block_bootstrap(
-            daily, block_size=4, n_resamples=10, rng_seed=99
-        )
+        s1 = stationary_block_bootstrap(daily, block_size=4, n_resamples=10, rng_seed=99)
+        s2 = stationary_block_bootstrap(daily, block_size=4, n_resamples=10, rng_seed=99)
         assert np.array_equal(s1, s2)
 
     def test_raises_when_input_shorter_than_block_size(self) -> None:
         with pytest.raises(ValueError, match="< block_size"):
-            stationary_block_bootstrap(
-                [1.0, 2.0], block_size=5, n_resamples=10, rng_seed=42
-            )
+            stationary_block_bootstrap([1.0, 2.0], block_size=5, n_resamples=10, rng_seed=42)

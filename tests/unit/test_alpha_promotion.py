@@ -14,9 +14,7 @@ from hft_platform.alpha.promotion import (
 def _strict_profile():
     from hft_platform.alpha._validation_profile import ValidationProfile
 
-    return ValidationProfile(
-        name="test", is_strict=True, thresholds={}, blocking_sub_gates=("sharpe_threshold",)
-    )
+    return ValidationProfile(name="test", is_strict=True, thresholds={}, blocking_sub_gates=("sharpe_threshold",))
 
 
 def _write_scorecard(
@@ -838,7 +836,6 @@ class TestStrictProfileRequirement:
         from hft_platform.alpha._validation_profile import ValidationProfile
         from hft_platform.alpha.promotion import (
             PromotionConfig,
-            PromotionError,
             promote_alpha,
         )
 
@@ -857,7 +854,5 @@ class TestStrictProfileRequirement:
         )
         try:
             promote_alpha(config)
-        except PromotionError as exc:
-            assert "strict profile required" not in str(exc)
-        except Exception:
-            pass  # other downstream errors are out of scope here
+        except Exception as exc:
+            assert "strict profile required" not in str(exc), exc

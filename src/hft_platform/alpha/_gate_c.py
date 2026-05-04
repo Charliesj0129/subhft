@@ -133,16 +133,17 @@ def _invoke_sub_gates(
                 if not sub.passed:
                     blocking_failing.append(entry)
         except Exception as exc:  # noqa: BLE001
+            gate_name: str = str(getattr(gate, "name", "unknown"))
             entry = {
-                "name": getattr(gate, "name", "unknown"),
+                "name": gate_name,
                 "passed": None,
                 "metrics": {},
                 "details": f"sub-gate error: {exc!r}",
                 "error": True,
             }
             advisory.append(entry)
-            if profile is not None and entry["name"] in blocking_names:
-                blocking_seen.append(entry["name"])
+            if profile is not None and gate_name in blocking_names:
+                blocking_seen.append(gate_name)
                 blocking_failing.append(entry)
 
     if profile is None:
@@ -274,37 +275,8 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
             "max_drawdown": result.max_drawdown <= maker_thresholds.get("max_drawdown_pct", 30) / 100,
             "has_fills": total_fills > 0,
         }
-        maker_passed = all(maker_checks.values()) and (
-            maker_blocking is None or maker_blocking["passed"]
-        )
 
-        # Compute scorecard (reuse existing function with maker data)
-        from research.registry.scorecard import compute_scorecard
-
-        tracker = ExperimentTracker(base_dir=experiments_base)
-        latest_signals = getattr(tracker, "latest_signals_by_alpha", None)
-        pool_signals = latest_signals() if callable(latest_signals) else {}
-        pool_signals = {k: v for k, v in dict(pool_signals).items() if str(k) != str(alpha_id)}
-        data_meta_path = _resolve_first_data_meta_path(resolved_data_paths)
-        scorecard = compute_scorecard(
-            {
-                "signals": result.signals,
-                "sharpe_is": result.sharpe_is,
-                "sharpe_oos": result.sharpe_oos,
-                "ic_mean": result.ic_mean,
-                "ic_std": result.ic_std,
-                "turnover": result.turnover,
-                "max_drawdown": result.max_drawdown,
-                "regime_metrics": result.regime_metrics,
-                "capacity_estimate": result.capacity_estimate,
-                "latency_profile": result.latency_profile,
-            },
-            pool_signals=pool_signals,
-            data_meta_path=data_meta_path,
-        )
-        scorecard_path = experiments_base / "runs" / result.run_id / "scorecard.json"
-
-        # --- Advisory sub-gates (Plan C Task C10) ---
+        # --- Sub-gates (Plan C Task C10 + Slice A profile blocking) ---
         daily_pnl = getattr(result, "daily_pnl", None)
         maker_sub_gates, maker_blocking = _invoke_sub_gates(
             strategy_type="maker",
@@ -335,6 +307,34 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
             calibration_profile=None,
             profile=config.profile,
         )
+
+        maker_passed = all(maker_checks.values()) and (maker_blocking is None or maker_blocking["passed"])
+
+        # Compute scorecard (reuse existing function with maker data)
+        from research.registry.scorecard import compute_scorecard
+
+        tracker = ExperimentTracker(base_dir=experiments_base)
+        latest_signals = getattr(tracker, "latest_signals_by_alpha", None)
+        pool_signals = latest_signals() if callable(latest_signals) else {}
+        pool_signals = {k: v for k, v in dict(pool_signals).items() if str(k) != str(alpha_id)}
+        data_meta_path = _resolve_first_data_meta_path(resolved_data_paths)
+        scorecard = compute_scorecard(
+            {
+                "signals": result.signals,
+                "sharpe_is": result.sharpe_is,
+                "sharpe_oos": result.sharpe_oos,
+                "ic_mean": result.ic_mean,
+                "ic_std": result.ic_std,
+                "turnover": result.turnover,
+                "max_drawdown": result.max_drawdown,
+                "regime_metrics": result.regime_metrics,
+                "capacity_estimate": result.capacity_estimate,
+                "latency_profile": result.latency_profile,
+            },
+            pool_signals=pool_signals,
+            data_meta_path=data_meta_path,
+        )
+        scorecard_path = experiments_base / "runs" / result.run_id / "scorecard.json"
 
         report = GateReport(
             gate="Gate C",
@@ -570,18 +570,8 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
         and (result.max_drawdown >= -abs(config.max_abs_drawdown))
         and (result.turnover >= config.min_turnover)
     )
-    passed = (
-        core_passed
-        and bool(stat_gate_passed)
-        and bool(wf_gate_passed)
-        and bool(optimization_gate_passed)
-        and bool(stress_eval.get("passed"))
-        and bool(robustness_eval.get("passed"))
-        and bool(trend_gate_passed)
-        and (taker_blocking is None or taker_blocking["passed"])
-    )
 
-    # --- Advisory sub-gates (Plan C Task C10) ---
+    # --- Sub-gates (Plan C Task C10 + Slice A profile blocking) ---
     # Compute daily_pnl from equity_curve (cumulative PnL -> diff)
     _eq = getattr(result, "equity_curve", None)
     _daily_pnl = _equity_to_daily_pnl(_eq)
@@ -609,13 +599,16 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
             "daily_pnl": _daily_pnl,
         },
         thresholds=(
-            (config.profile.thresholds_for(strategy_type="taker") | {
-                "sharpe_is_min": float(config.min_sharpe_oos),
-                "max_drawdown_pct": float(abs(config.max_abs_drawdown)) * 100,
-                "winning_day_pct_min": 55.0,
-                "ic_is_min": 0.03,
-                "ic_oos_min": 0.02,
-            })
+            (
+                config.profile.thresholds_for(strategy_type="taker")
+                | {
+                    "sharpe_is_min": float(config.min_sharpe_oos),
+                    "max_drawdown_pct": float(abs(config.max_abs_drawdown)) * 100,
+                    "winning_day_pct_min": 55.0,
+                    "ic_is_min": 0.03,
+                    "ic_oos_min": 0.02,
+                }
+            )
             if config.profile is not None
             else {
                 "sharpe_is_min": float(config.min_sharpe_oos),
@@ -627,6 +620,17 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
         ),
         calibration_profile=None,
         profile=config.profile,
+    )
+
+    passed = (
+        core_passed
+        and bool(stat_gate_passed)
+        and bool(wf_gate_passed)
+        and bool(optimization_gate_passed)
+        and bool(stress_eval.get("passed"))
+        and bool(robustness_eval.get("passed"))
+        and bool(trend_gate_passed)
+        and (taker_blocking is None or taker_blocking["passed"])
     )
 
     report = GateReport(

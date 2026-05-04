@@ -3,6 +3,7 @@
 When the sign of total PnL flips after removing any single day, the
 edge is single-day-dominated and the gate fails.
 """
+
 from __future__ import annotations
 
 from typing import Any

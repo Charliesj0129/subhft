@@ -4,6 +4,7 @@ A `ValidationProfile` carries threshold overrides plus a list of sub-gate
 names that must pass for Gate C to mark a run as ``passed``. Loose runs
 (profile=None) preserve the existing advisory-only behavior bit-for-bit.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -53,9 +54,7 @@ def load_profile(path: str | Path) -> ValidationProfile:
 
     body = yaml.safe_load(p.read_text()) or {}
     if not isinstance(body, dict):
-        raise ProfileValidationError(
-            f"profile {p}: top-level YAML must be a mapping, got {type(body).__name__}"
-        )
+        raise ProfileValidationError(f"profile {p}: top-level YAML must be a mapping, got {type(body).__name__}")
 
     name = str(body.get("name", p.stem))
     is_strict = bool(body.get("is_strict", False))
@@ -83,14 +82,10 @@ def load_profile(path: str | Path) -> ValidationProfile:
     known_names = {g.name for g in get_registered_sub_gates()}
     unknown = [n for n in blocking if n not in known_names]
     if unknown:
-        raise ProfileValidationError(
-            f"profile {name!r}: blocking_sub_gates references unregistered gate(s): {unknown}"
-        )
+        raise ProfileValidationError(f"profile {name!r}: blocking_sub_gates references unregistered gate(s): {unknown}")
 
     if is_strict and not blocking:
-        raise ProfileValidationError(
-            f"profile {name!r}: strict profile must list at least one blocking_sub_gate"
-        )
+        raise ProfileValidationError(f"profile {name!r}: strict profile must list at least one blocking_sub_gate")
 
     logger.info(
         "validation_profile_loaded",

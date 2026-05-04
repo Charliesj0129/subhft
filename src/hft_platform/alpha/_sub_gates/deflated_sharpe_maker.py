@@ -3,6 +3,7 @@
 Reuses the Bonferroni-style penalty from `_param_opt.py`:
     deflated_sharpe = sharpe_oos - sqrt(2 * log(n_trials) / oos_len)
 """
+
 from __future__ import annotations
 
 import math

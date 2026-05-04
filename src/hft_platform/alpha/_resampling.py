@@ -7,6 +7,7 @@ No I/O, no logging, no global state. Used by:
 - DayLevelBootstrapCIGate  -> day_bootstrap
 - StationaryBlockBootstrapGate -> stationary_block_bootstrap
 """
+
 from __future__ import annotations
 
 from collections.abc import Iterator

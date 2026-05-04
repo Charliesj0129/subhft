@@ -1,4 +1,5 @@
 """Stationary block-bootstrap CI sub-gate."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -37,9 +38,7 @@ class StationaryBlockBootstrapGate:
                 details=f"input length {len(daily)} < block_size {block_size}",
             )
 
-        samples = stationary_block_bootstrap(
-            daily, block_size=block_size, n_resamples=n_resamples, rng_seed=seed
-        )
+        samples = stationary_block_bootstrap(daily, block_size=block_size, n_resamples=n_resamples, rng_seed=seed)
         means = samples.mean(axis=1)
         ci_lower = float(np.quantile(means, alpha))
         passed = ci_lower > ci_min
@@ -55,8 +54,5 @@ class StationaryBlockBootstrapGate:
                 "n_resamples": float(n_resamples),
                 "n_days": float(len(daily)),
             },
-            details=(
-                f"block-bootstrap CI[{alpha:.2f}] lower={ci_lower:.4f} "
-                f"(block={block_size}, n={n_resamples})"
-            ),
+            details=(f"block-bootstrap CI[{alpha:.2f}] lower={ci_lower:.4f} (block={block_size}, n={n_resamples})"),
         )

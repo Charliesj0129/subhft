@@ -133,8 +133,7 @@ def promote_alpha(config: PromotionConfig) -> PromotionResult:
     profile = getattr(config, "validation_profile", None)
     if profile is None or not getattr(profile, "is_strict", False):
         raise PromotionError(
-            f"strict profile required for Gate D entry; "
-            f"got profile={getattr(profile, 'name', None)!r}"
+            f"strict profile required for Gate D entry; got profile={getattr(profile, 'name', None)!r}"
         )
     root = Path(config.project_root).resolve()
     alpha_dir = root / "research" / "alphas" / config.alpha_id

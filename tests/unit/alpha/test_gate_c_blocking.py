@@ -1,9 +1,9 @@
 """Unit tests for the Gate C blocking-subset aggregator."""
+
 from __future__ import annotations
 
 from hft_platform.alpha._gate_c import _invoke_sub_gates
 from hft_platform.alpha._validation_profile import ValidationProfile
-
 
 _R47_FINGERPRINT = {
     "run_id": "test",

@@ -1,4 +1,5 @@
 """Verify all 7 new sub-gates are auto-registered."""
+
 from __future__ import annotations
 
 from hft_platform.alpha._sub_gates import (
@@ -6,7 +7,6 @@ from hft_platform.alpha._sub_gates import (
     ensure_builtin_sub_gates_registered,
     get_registered_sub_gates,
 )
-
 
 _NEW_GATE_NAMES = {
     "min_sample_size",
