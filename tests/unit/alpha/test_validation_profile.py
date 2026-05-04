@@ -96,3 +96,19 @@ class TestLoadProfile:
         p = _write_yaml(tmp_path, bad)
         with pytest.raises(ProfileValidationError, match="thresholds must be a mapping"):
             load_profile(p)
+
+
+class TestValidationConfigProfileField:
+    def test_default_is_none(self) -> None:
+        from hft_platform.alpha._validation_types import ValidationConfig
+
+        cfg = ValidationConfig(alpha_id="x", data_paths=[])
+        assert cfg.profile is None
+
+    def test_accepts_profile_object(self, tmp_path: Path) -> None:
+        from hft_platform.alpha._validation_types import ValidationConfig
+
+        p = _write_yaml(tmp_path, _VALID_BODY)
+        prof = load_profile(p)
+        cfg = ValidationConfig(alpha_id="x", data_paths=[], profile=prof)
+        assert cfg.profile is prof
