@@ -45,18 +45,23 @@ def _daily_pnl_sequence(daily_pnl: list[Any] | None) -> list[Any]:
     return list(daily_pnl or [])
 
 
-def _invoke_sub_gates_advisory(
+def _invoke_sub_gates(
     *,
     strategy_type: str,
     result_payload: dict,
     thresholds: dict,
     calibration_profile: Any | None = None,
-) -> list[dict]:
-    """Invoke all applicable sub-gates and return advisory results.
+    profile: Any | None = None,
+) -> tuple[list[dict], dict | None]:
+    """Invoke all applicable sub-gates and compute blocking aggregate.
 
-    This does NOT affect Gate C pass/fail decision — sub-gates are evaluated
-    in parallel with the existing inline checks for visibility and future
-    migration. Each sub-gate failure/error is captured defensively.
+    Returns:
+        advisory: list of dicts, one per registered applicable gate.
+        blocking: None if `profile is None`; otherwise
+            ``{"passed": bool, "failing": [<gate_dict>], "names": [...], "profile": <name>}``
+            with only gates listed in ``profile.blocking_sub_gates`` contributing
+            to ``passed``. Errored gates are treated as ``passed=False`` for
+            blocking purposes (fail-closed).
     """
     import numpy as np
 
@@ -67,7 +72,6 @@ def _invoke_sub_gates_advisory(
     from hft_platform.alpha._sub_gates.maker import FillRateValidationGate
     from hft_platform.backtest.result import BacktestResult
 
-    # Ensure gates are registered even if a test called clear_registry().
     ensure_builtin_sub_gates_registered()
 
     result = BacktestResult(
@@ -92,8 +96,18 @@ def _invoke_sub_gates_advisory(
         ic_oos=result_payload.get("ic_oos"),
         daily_pnl=list(result_payload.get("daily_pnl") or []),
     )
+    if "trade_pnl" in result_payload:
+        try:
+            object.__setattr__(result, "trade_pnl", list(result_payload["trade_pnl"]))
+        except Exception:  # noqa: BLE001
+            pass
 
-    sub_gate_results: list[dict] = []
+    blocking_names: set[str] = set(getattr(profile, "blocking_sub_gates", ()) or ())
+
+    advisory: list[dict] = []
+    blocking_failing: list[dict] = []
+    blocking_seen: list[str] = []
+
     for gate in get_registered_sub_gates():
         if strategy_type not in gate.applies_to:
             continue
@@ -107,25 +121,56 @@ def _invoke_sub_gates_advisory(
                 )
             else:
                 sub = gate.evaluate(result, config=None, thresholds=thresholds)
-            sub_gate_results.append(
-                {
-                    "name": sub.name,
-                    "passed": sub.passed,
-                    "metrics": sub.metrics,
-                    "details": sub.details,
-                }
-            )
-        except Exception as exc:  # noqa: BLE001 - advisory: never break Gate C
-            sub_gate_results.append(
-                {
-                    "name": getattr(gate, "name", "unknown"),
-                    "passed": None,
-                    "metrics": {},
-                    "details": f"sub-gate error: {exc!r}",
-                    "error": True,
-                }
-            )
-    return sub_gate_results
+            entry = {
+                "name": sub.name,
+                "passed": sub.passed,
+                "metrics": sub.metrics,
+                "details": sub.details,
+            }
+            advisory.append(entry)
+            if profile is not None and sub.name in blocking_names:
+                blocking_seen.append(sub.name)
+                if not sub.passed:
+                    blocking_failing.append(entry)
+        except Exception as exc:  # noqa: BLE001
+            entry = {
+                "name": getattr(gate, "name", "unknown"),
+                "passed": None,
+                "metrics": {},
+                "details": f"sub-gate error: {exc!r}",
+                "error": True,
+            }
+            advisory.append(entry)
+            if profile is not None and entry["name"] in blocking_names:
+                blocking_seen.append(entry["name"])
+                blocking_failing.append(entry)
+
+    if profile is None:
+        return advisory, None
+    return advisory, {
+        "passed": len(blocking_failing) == 0,
+        "failing": blocking_failing,
+        "names": blocking_seen,
+        "profile": profile.name,
+    }
+
+
+def _invoke_sub_gates_advisory(
+    *,
+    strategy_type: str,
+    result_payload: dict,
+    thresholds: dict,
+    calibration_profile: Any | None = None,
+) -> list[dict]:
+    """Backward-compatible wrapper for callers that don't pass a profile."""
+    advisory, _ = _invoke_sub_gates(
+        strategy_type=strategy_type,
+        result_payload=result_payload,
+        thresholds=thresholds,
+        calibration_profile=calibration_profile,
+        profile=None,
+    )
+    return advisory
 
 
 def _load_maker_thresholds(root: Path) -> dict:
@@ -229,7 +274,9 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
             "max_drawdown": result.max_drawdown <= maker_thresholds.get("max_drawdown_pct", 30) / 100,
             "has_fills": total_fills > 0,
         }
-        maker_passed = all(maker_checks.values())
+        maker_passed = all(maker_checks.values()) and (
+            maker_blocking is None or maker_blocking["passed"]
+        )
 
         # Compute scorecard (reuse existing function with maker data)
         from research.registry.scorecard import compute_scorecard
@@ -259,7 +306,7 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
 
         # --- Advisory sub-gates (Plan C Task C10) ---
         daily_pnl = getattr(result, "daily_pnl", None)
-        maker_sub_gates = _invoke_sub_gates_advisory(
+        maker_sub_gates, maker_blocking = _invoke_sub_gates(
             strategy_type="maker",
             result_payload={
                 "run_id": result.run_id,
@@ -280,8 +327,13 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
                 "fill_rate_per_day": (float(total_fills) / max(float(n_days), 1.0)),
                 "daily_pnl": _daily_pnl_sequence(daily_pnl),
             },
-            thresholds=maker_thresholds,
-            calibration_profile=None,  # Future: load from calibration_profiles.yaml
+            thresholds=(
+                config.profile.thresholds_for(strategy_type="maker") | maker_thresholds
+                if config.profile is not None
+                else maker_thresholds
+            ),
+            calibration_profile=None,
+            profile=config.profile,
         )
 
         report = GateReport(
@@ -304,6 +356,7 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
                 "maker_thresholds": maker_thresholds,
                 "scorecard_path": str(scorecard_path),
                 "sub_gates_advisory": maker_sub_gates,
+                "sub_gates_blocking": maker_blocking,
                 "note": (
                     "Maker Gate C: IC/optimize/walk-forward/stress tests skipped (not applicable to maker strategies)"
                 ),
@@ -525,6 +578,7 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
         and bool(stress_eval.get("passed"))
         and bool(robustness_eval.get("passed"))
         and bool(trend_gate_passed)
+        and (taker_blocking is None or taker_blocking["passed"])
     )
 
     # --- Advisory sub-gates (Plan C Task C10) ---
@@ -532,7 +586,7 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
     _eq = getattr(result, "equity_curve", None)
     _daily_pnl = _equity_to_daily_pnl(_eq)
 
-    taker_sub_gates = _invoke_sub_gates_advisory(
+    taker_sub_gates, taker_blocking = _invoke_sub_gates(
         strategy_type="taker",
         result_payload={
             "run_id": result.run_id,
@@ -551,17 +605,28 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
             "n_trading_days": int(len(_daily_pnl)),
             "equity_curve": _eq,
             "ic_is": float(result.ic_mean) if result.ic_mean is not None else None,
-            "ic_oos": None,  # Computed from OOS split in future enhancement
+            "ic_oos": None,
             "daily_pnl": _daily_pnl,
         },
-        thresholds={
-            "sharpe_is_min": float(config.min_sharpe_oos),
-            "max_drawdown_pct": float(abs(config.max_abs_drawdown)) * 100,
-            "winning_day_pct_min": 55.0,
-            "ic_is_min": 0.03,
-            "ic_oos_min": 0.02,
-        },
+        thresholds=(
+            (config.profile.thresholds_for(strategy_type="taker") | {
+                "sharpe_is_min": float(config.min_sharpe_oos),
+                "max_drawdown_pct": float(abs(config.max_abs_drawdown)) * 100,
+                "winning_day_pct_min": 55.0,
+                "ic_is_min": 0.03,
+                "ic_oos_min": 0.02,
+            })
+            if config.profile is not None
+            else {
+                "sharpe_is_min": float(config.min_sharpe_oos),
+                "max_drawdown_pct": float(abs(config.max_abs_drawdown)) * 100,
+                "winning_day_pct_min": 55.0,
+                "ic_is_min": 0.03,
+                "ic_oos_min": 0.02,
+            }
+        ),
         calibration_profile=None,
+        profile=config.profile,
     )
 
     report = GateReport(
@@ -631,6 +696,7 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
             "parameter_robustness": robustness_eval,
             "trend_contamination": trend_check,
             "sub_gates_advisory": taker_sub_gates,
+            "sub_gates_blocking": taker_blocking,
             "latency_profile": result.latency_profile,
             "scorecard_path": str(scorecard_path),
             "scorecard_data_meta_path": data_meta_path,
