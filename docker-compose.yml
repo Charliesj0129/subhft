@@ -123,16 +123,20 @@ x-hft-common: &hft-common
     # P1 forensics: host-side core dump sink. Host kernel.core_pattern must
     # be set to /var/cores/core.%e.%p.%t — see docs/runbooks/deployment.md.
     - ./.cores:/var/cores
-  tmpfs:
-    # P2 fix: provide /var/run/hft for services/heartbeat.py. Base image does
-    # not create this path, and the production overlay sets read_only=true,
-    # so a startup mkdir would fail with EROFS. uid/gid 1000 = hftuser.
-    - /var/run/hft:size=10M,mode=0755,uid=1000,gid=1000
+    # P2 fix: bind-mount (NOT tmpfs) so the host watchdog can stat the
+    # heartbeat file written by services/heartbeat.py. Pairs with
+    # HFT_HEARTBEAT_PATH default of /var/run/hft/heartbeat. .hft-runtime/
+    # is .gitignored. Production overlay still sets read_only=true; bind
+    # mounts override read_only at the mount path so the writer succeeds.
+    - ./.hft-runtime:/var/run/hft
   ulimits:
     memlock: -1
     nofile: 65535
     # P1 forensics: allow core dumps so the next segfault leaves an artifact.
-    core: -1
+    # Capped at 4 GiB (one engine memory image, matches deploy.resources.
+    # limits.memory: 4G) to bound the disk-fill cascade in restart-loop
+    # scenarios — see docs/runbooks/deployment.md retention cron.
+    core: 4294967296
   healthcheck:
     test: ["CMD-SHELL", "curl -sf http://localhost:${HFT_HEALTH_PORT:-8080}/healthz || exit 1"]
     interval: 30s
@@ -169,9 +173,13 @@ services:
       - ${CA_CERT_DIR:-./certs}:/app/certs:ro
       # P1 forensics: must be declared explicitly here because hft-engine
       # overrides the *hft-common volumes list (Compose replaces lists, not
-      # extends). Pair with the anchor `core: -1` ulimit and host
-      # `kernel.core_pattern=/var/cores/core.%e.%p.%t`.
+      # extends). Pair with the anchor `core: 4294967296` (4 GiB) ulimit and
+      # host `kernel.core_pattern=/var/cores/core.%e.%p.%t`.
       - ./.cores:/var/cores
+      # P2 fix: heartbeat bind mount, mirrored from anchor for the same
+      # Compose-list-replace reason. Pairs with services/heartbeat.py
+      # writer at /var/run/hft/heartbeat and ops/check-heartbeat.sh on host.
+      - ./.hft-runtime:/var/run/hft
     deploy:
       resources:
         limits:

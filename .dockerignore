@@ -26,6 +26,7 @@ research/
 data/
 .wal/
 .cores/
+.hft-runtime/
 outputs/
 reports/
 benchmark.json

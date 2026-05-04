@@ -30,6 +30,7 @@ config/exported_settings.json
 data/
 logs/
 .cores/
+.hft-runtime/
 .pytest_cache/
 .mypy_cache/
 .hypothesis/
