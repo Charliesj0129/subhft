@@ -40,6 +40,10 @@ services:
     tmpfs:
       - /tmp:size=256M
       - /app/__pycache__:size=64M
+      # P2 fix (2026-05-04): heartbeat path is now a host-visible bind mount
+      # in the base file (./.hft-runtime:/var/run/hft) so ops/check-heartbeat.sh
+      # on the host can stat the file. Bind mounts override read_only at the
+      # mount path; the writer in services/heartbeat.py succeeds without tmpfs.
     networks:
       - hft-internal
 

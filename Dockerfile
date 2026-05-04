@@ -118,6 +118,10 @@ RUN pip install --no-cache-dir "python-telegram-bot[job-queue]>=21.0" "matplotli
 # Create directories for data/wal and set permissions
 RUN mkdir -p .wal data && chown -R hftuser:hftuser /app
 
+# P1 forensics: core-dump destination owned by hftuser. The host bind-mounts
+# ./.cores here; pair with host `kernel.core_pattern=/var/cores/core.%e.%p.%t`.
+RUN mkdir -p /var/cores && chown hftuser:hftuser /var/cores
+
 # Switch to non-root user
 USER hftuser
 
