@@ -29,6 +29,7 @@ config/exported_settings.json
 .wal/
 data/
 logs/
+.cores/
 .pytest_cache/
 .mypy_cache/
 .hypothesis/

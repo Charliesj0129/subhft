@@ -120,9 +120,19 @@ x-hft-common: &hft-common
     - ./config:/app/config
     - ./scripts:/app/scripts
     - ./src:/app/src
+    # P1 forensics: host-side core dump sink. Host kernel.core_pattern must
+    # be set to /var/cores/core.%e.%p.%t — see docs/runbooks/deployment.md.
+    - ./.cores:/var/cores
+  tmpfs:
+    # P2 fix: provide /var/run/hft for services/heartbeat.py. Base image does
+    # not create this path, and the production overlay sets read_only=true,
+    # so a startup mkdir would fail with EROFS. uid/gid 1000 = hftuser.
+    - /var/run/hft:size=10M,mode=0755,uid=1000,gid=1000
   ulimits:
     memlock: -1
     nofile: 65535
+    # P1 forensics: allow core dumps so the next segfault leaves an artifact.
+    core: -1
   healthcheck:
     test: ["CMD-SHELL", "curl -sf http://localhost:${HFT_HEALTH_PORT:-8080}/healthz || exit 1"]
     interval: 30s
@@ -157,6 +167,11 @@ services:
       - /dev/hugepages:/dev/hugepages
       # CA certificate mount (read-only)
       - ${CA_CERT_DIR:-./certs}:/app/certs:ro
+      # P1 forensics: must be declared explicitly here because hft-engine
+      # overrides the *hft-common volumes list (Compose replaces lists, not
+      # extends). Pair with the anchor `core: -1` ulimit and host
+      # `kernel.core_pattern=/var/cores/core.%e.%p.%t`.
+      - ./.cores:/var/cores
     deploy:
       resources:
         limits:

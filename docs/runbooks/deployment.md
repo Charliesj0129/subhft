@@ -249,3 +249,90 @@ If a migration must be undone, restore from the latest ClickHouse backup
 [ ] New CH migrations to apply count : ____
 [ ] Mode after deploy (sim / live)   : ____
 ```
+
+## Core Dump Capture (Forensics Setup)
+
+The engine container ships with `core: -1` ulimit (`docker-compose.yml`
+`*hft-common` anchor) and a host bind mount at `./.cores → /var/cores`
+(same anchor). To make these effective, the **host** kernel core-pattern
+sysctl must point at the bound directory; this is host-side state that is
+not provisioned by the image or by `docker compose`.
+
+One-time setup on the deploy host:
+
+```bash
+# Active session (effective immediately):
+echo '/var/cores/core.%e.%p.%t' | sudo tee /proc/sys/kernel/core_pattern
+
+# Persist across reboots:
+echo 'kernel.core_pattern=/var/cores/core.%e.%p.%t' | \
+  sudo tee /etc/sysctl.d/60-hft-cores.conf
+sudo sysctl --system
+```
+
+> If the host runs `systemd-coredump`, `core_pattern` may be set to a
+> `|/usr/lib/systemd/...` pipe. That captures cores into the journal
+> (`coredumpctl list`) instead of the bind mount — choose one path; do
+> not interleave the two.
+
+Verify inside the container after `docker compose up -d hft-engine`:
+
+```bash
+docker exec hft-engine sh -c 'ulimit -c; ls -ld /var/cores'
+# Expected: unlimited; drwxr-xr-x ... hftuser hftuser ...
+```
+
+Sanity check that **does not touch the engine PID** — spawn a throwaway
+shell and SIGSEGV it:
+
+```bash
+docker exec hft-engine sh -c '(sleep 1; kill -SEGV $$) & wait'
+ls -lh ./.cores/
+# Expected: a fresh core.<comm>.<pid>.<ts> file appears within seconds.
+```
+
+After a real crash, debug with gdb against the same image so symbols line
+up:
+
+```bash
+CORE=$(ls -t .cores/core.* | head -1)
+docker run --rm -it -v "$PWD/.cores:/var/cores:ro" \
+  --entrypoint gdb hft-platform:latest \
+  /usr/bin/python3 "/var/cores/$(basename "$CORE")"
+# (gdb) py-bt   # if python3-dbg available; otherwise: bt
+```
+
+If the crash signature contains `pybind11::error_already_set` or
+originates from `librust_core*.so`, file the dump under `docs/incidents/`
+and follow up with the rust_core maintainer.
+
+### Disk usage / retention
+
+`core: -1` is unlimited. A 4 GB engine that crash-loops can write 10 GB of
+core files in minutes into `./.cores`, which sits on the same filesystem
+as `./.wal` and `./data`. WAL durability and ClickHouse ingestion lose if
+that disk fills.
+
+Mitigations operators must put in place **before** the next crash:
+
+```bash
+# 1. Pre-deploy disk budget check (run as part of the Pre-Deploy Checklist):
+df -BG --output=avail /home/charl/subhft | awk 'NR==2 && $1+0 < 20 { print "FAIL: <20G free"; exit 1 }'
+
+# 2. Time-based retention (cron or systemd-timer, daily):
+find /home/charl/subhft/.cores -name 'core.*' -mtime +30 -delete
+
+# 3. Hard cap by directory size (cron or pre-restart hook):
+#    Keep at most N most-recent cores; delete the rest.
+ls -1t /home/charl/subhft/.cores/core.* 2>/dev/null | tail -n +6 | xargs -r rm --
+```
+
+Add a Prometheus alert on `node_filesystem_avail_bytes` for the project
+mount; page the operator before the device hits 5 GB free. Once you have
+two cores of the same signature, delete the older ones — they rarely add
+diagnostic value past the second occurrence.
+
+If a crash loop is in progress and disk is already low, **do not** wait
+for retention to catch up. Stop the engine (`docker compose stop
+hft-engine`), rotate the cores out of the project tree manually, then
+restart.

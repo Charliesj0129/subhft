@@ -25,6 +25,7 @@ rust_core/target/
 research/
 data/
 .wal/
+.cores/
 outputs/
 reports/
 benchmark.json

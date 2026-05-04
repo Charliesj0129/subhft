@@ -40,6 +40,10 @@ services:
     tmpfs:
       - /tmp:size=256M
       - /app/__pycache__:size=64M
+      # P2 fix: heartbeat path. Required under read_only=true (writer-side
+      # mkdir would EROFS). Mirrors the base-file *hft-common tmpfs entry
+      # so production overlay is self-documenting.
+      - /var/run/hft:size=10M,mode=0755,uid=1000,gid=1000
     networks:
       - hft-internal
 
