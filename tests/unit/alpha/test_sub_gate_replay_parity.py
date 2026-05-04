@@ -62,3 +62,17 @@ class TestReplayParityGate:
     def test_name_is_replay_parity(self) -> None:
         gate = ReplayParityGate()
         assert gate.name == "replay_parity"
+
+
+class TestReplayParityRegistration:
+    def test_replay_parity_auto_registered(self) -> None:
+        """Slice C task 9: ReplayParityGate must be in the built-in registry
+        after ensure_builtin_sub_gates_registered() runs (idempotent)."""
+        from hft_platform.alpha._sub_gates import (
+            ensure_builtin_sub_gates_registered,
+            get_registered_sub_gates,
+        )
+
+        ensure_builtin_sub_gates_registered()
+        names = {g.name for g in get_registered_sub_gates()}
+        assert "replay_parity" in names

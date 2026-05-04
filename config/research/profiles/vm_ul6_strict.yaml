@@ -13,6 +13,9 @@ thresholds:
     min_oos_trades: 200
     min_oos_days: 30
 
+    # Slice C replay-parity gate (applies_to = {"maker", "taker"})
+    replay_parity_match_pct_min: 95.0
+
   maker:
     sharpe_is_min: 1.0
     sharpe_oos_min: 1.0
@@ -40,6 +43,9 @@ thresholds:
     deflated_sharpe_min: 0.5
     deflated_n_trials: 1
 
+    # Slice C replay-parity gate (applies_to = {"maker", "taker"})
+    replay_parity_match_pct_min: 95.0
+
 blocking_sub_gates:
   # Existing — promoted from advisory to blocking under strict
   - sharpe_threshold
@@ -56,3 +62,5 @@ blocking_sub_gates:
   - day_bootstrap_ci
   - stationary_block_bootstrap
   - deflated_sharpe_maker
+  # New (Slice C)
+  - replay_parity

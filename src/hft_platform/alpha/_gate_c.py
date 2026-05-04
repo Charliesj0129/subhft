@@ -101,6 +101,16 @@ def _invoke_sub_gates(
             object.__setattr__(result, "trade_pnl", list(result_payload["trade_pnl"]))
         except Exception:  # noqa: BLE001
             pass
+    if "replay_parity_report" in result_payload:
+        # Slice C: passthrough so ReplayParityGate can read the precomputed
+        # report. Task 11 will attach the report directly on BacktestResult
+        # at construction; until then this lets test fixtures inject it.
+        try:
+            object.__setattr__(
+                result, "replay_parity_report", result_payload["replay_parity_report"]
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
     blocking_names: set[str] = set(getattr(profile, "blocking_sub_gates", ()) or ())
 

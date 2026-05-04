@@ -39,6 +39,7 @@ def ensure_builtin_sub_gates_registered() -> None:
     from hft_platform.alpha._sub_gates.outlier_trade_removal import (
         OutlierTradeRemovalGate,
     )
+    from hft_platform.alpha._sub_gates.replay_parity import ReplayParityGate
     from hft_platform.alpha._sub_gates.single_day_dominance import (
         SingleDayDominanceGate,
     )
@@ -64,6 +65,8 @@ def ensure_builtin_sub_gates_registered() -> None:
         DayLevelBootstrapCIGate(),
         StationaryBlockBootstrapGate(),
         DeflatedSharpeForMakerGate(),
+        # New (Slice C)
+        ReplayParityGate(),
     ]
     for gate in candidates:
         if gate.name not in existing_names:
