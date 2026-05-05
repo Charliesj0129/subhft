@@ -1578,6 +1578,123 @@ class StrategyRunner:
         else:
             self._queue_full_consecutive = 0
 
+    async def dispatch_session_end_force_flat(self, track_name: str) -> int:
+        """Slice B Task 13 — consumer-side hook for SessionPhase.FORCE_FLAT.
+
+        For every registered strategy that exposes ``on_session_end(ctx)``
+        (e.g. ``MakerStrategyBridge``), build a per-strategy context with
+        residual positions populated, invoke the hook, and submit each
+        returned ``IntentType.FORCE_FLAT`` intent through the standard
+        risk pipeline (``self._risk_submit``).
+
+        Returns the number of intents submitted across all strategies.
+
+        Wiring source: SessionGovernor.transition_track triggers a
+        registered phase callback when a track enters
+        ``SessionPhase.FORCE_FLAT`` (see ops/session_governor.py:319-323).
+        That callback dispatches into this method. ``services/system.py``
+        is NOT modified by Task 13 — the producer-side transition path
+        already exists.
+
+        Intents emitted carry ``intent_type=FORCE_FLAT`` so they pass
+        ``filter_intents_by_phase`` under both CLOSE_ONLY and FORCE_FLAT
+        phases (runner.py:1597, 1623-1625).
+        """
+        track_gate = getattr(self, "track_gate", None)
+        if track_gate is None:
+            logger.debug("dispatch_session_end_force_flat_no_track_gate", track=track_name)
+            return 0
+
+        # Symbols on this track (read-only snapshot).
+        symbol_to_tracks = track_gate.symbol_to_track
+        track_symbols = {sym for sym, tracks in symbol_to_tracks.items() if track_name in tracks}
+        if not track_symbols:
+            logger.debug("dispatch_session_end_force_flat_no_symbols", track=track_name)
+            return 0
+
+        # Refresh per-strategy position view so on_session_end sees residuals.
+        try:
+            self._positions_cache = self._build_positions_by_strategy()
+            self._positions_views = {sid: MappingProxyType(inner) for sid, inner in self._positions_cache.items()}
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("dispatch_session_end_force_flat_positions_refresh_failed", error=str(exc))
+
+        submitted = 0
+        for strategy, ctx, _lat_m, _int_m, _aim, _afm, _alts in self._strat_executors:
+            hook = getattr(strategy, "on_session_end", None)
+            if not callable(hook):
+                continue
+
+            # Skip strategies whose subscribed symbols don't intersect this track.
+            strategy_symbols = getattr(strategy, "symbols", None) or set()
+            if strategy_symbols and not (strategy_symbols & track_symbols):
+                continue
+
+            # Populate ctx.positions for this strategy (mirror process_event:1140).
+            ctx.positions = (
+                self._positions_views.get(strategy.strategy_id)
+                or self._positions_views.get("*")
+                or _EMPTY_POSITION_VIEW
+            )
+
+            try:
+                intents = hook(ctx) or []
+            except Exception as exc:  # noqa: BLE001
+                logger.error(
+                    "session_end_hook_failed",
+                    strategy_id=strategy.strategy_id,
+                    track=track_name,
+                    error=str(exc),
+                )
+                continue
+
+            for intent in intents:
+                # Tag decision_price for TCA (mirror process_event:1444-1465).
+                if self._lob_l1_source is not None and isinstance(intent, OrderIntent):
+                    sym = getattr(intent, "symbol", None)
+                    if sym:
+                        l1 = self._lob_l1_source(sym)
+                        if l1 is not None:
+                            mid = l1[3] // 2
+                            if mid > 0:
+                                intent.decision_mid = mid
+                                intent.decision_price = mid
+
+                try:
+                    self._risk_submit(intent)
+                    submitted += 1
+                except asyncio.QueueFull:
+                    _fb_iid, _fb_sid, _fb_sym, _fb_side = _typed_intent_identity(intent)
+                    logger.error(
+                        "session_end_force_flat_queue_full",
+                        strategy_id=_fb_sid or strategy.strategy_id,
+                        symbol=_fb_sym,
+                        track=track_name,
+                    )
+                    if self._rejection_sink is not None:
+                        try:
+                            self._rejection_sink.put_nowait(
+                                RiskFeedback(
+                                    intent_id=_fb_iid,
+                                    strategy_id=_fb_sid or strategy.strategy_id,
+                                    symbol=_fb_sym,
+                                    reason_code="session_end_force_flat_queue_full",
+                                    timestamp_ns=timebase.now_ns(),
+                                    side=_feedback_side(_fb_side),
+                                    was_approved=False,
+                                )
+                            )
+                        except asyncio.QueueFull:
+                            pass
+
+        if submitted:
+            logger.info(
+                "session_end_force_flat_dispatched",
+                track=track_name,
+                intent_count=submitted,
+            )
+        return submitted
+
     @staticmethod
     def filter_intents_by_phase(
         intents: list, track_gate: Any, position_store: Any = None, strategy_id: str | None = None
