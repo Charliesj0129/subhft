@@ -26,6 +26,7 @@ Sidecar artifact (when ``write_artifact=True``):
 Module is offline-only (``alpha/`` permitted to use ``float`` per
 ``.agent/rules/25-architecture-governance.md`` §11). No CK / no live data.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -107,9 +108,7 @@ def cluster_alphas(
     """
     payload = compute_pool_matrix(base_dir=base_dir)
     if not payload.get("alpha_ids"):
-        raise EmptyCorpusError(
-            f"compute_pool_matrix returned no alpha_ids for base_dir={base_dir!r}"
-        )
+        raise EmptyCorpusError(f"compute_pool_matrix returned no alpha_ids for base_dir={base_dir!r}")
 
     assignments = _cluster_from_payload(payload, threshold=threshold, metric=metric)
 
@@ -166,11 +165,7 @@ def _cluster_from_payload(
             )
         ]
 
-    if (
-        corr.ndim != 2
-        or corr.shape[0] != corr.shape[1]
-        or corr.shape[0] != len(raw_ids)
-    ):
+    if corr.ndim != 2 or corr.shape[0] != corr.shape[1] or corr.shape[0] != len(raw_ids):
         # Degenerate / mismatched matrix — emit all singletons defensively.
         # Warn so downstream alerting (Slice-D audit log + Prom) can fire.
         logger.warning(
@@ -276,9 +271,7 @@ def _persist_artifact(
     """Atomic merge-write into ``_ARTIFACT_PATH``."""
     path = _ARTIFACT_PATH
     base_dir_hash = hashlib.sha256(base_dir.encode("utf-8")).hexdigest()
-    corpus_hash = hashlib.sha256(
-        json.dumps(sorted(alpha_ids)).encode("utf-8")
-    ).hexdigest()
+    corpus_hash = hashlib.sha256(json.dumps(sorted(alpha_ids)).encode("utf-8")).hexdigest()
     key = f"{threshold}:{metric}:{base_dir_hash}:{corpus_hash}"
 
     payload: list[dict[str, Any]] = [asdict(a) for a in assignments]

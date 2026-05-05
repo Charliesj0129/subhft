@@ -14,6 +14,7 @@ DoD-D6 is satisfied by T20a alone; T20b is a bonus binding check that
 guarantees the DSL pipeline can consume the on-disk manifest produced
 by Slice D's manifest migration step.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -78,13 +79,9 @@ def test_synthetic_formula_round_trip() -> None:
 
     for source, expected in cases:
         canonical = round_trip(source)
-        assert canonical == expected, (
-            f"round_trip({source!r}) = {canonical!r}, expected {expected!r}"
-        )
+        assert canonical == expected, f"round_trip({source!r}) = {canonical!r}, expected {expected!r}"
         # Idempotence: round_trip is a fixpoint.
-        assert round_trip(canonical) == canonical, (
-            f"round_trip not idempotent for {canonical!r}"
-        )
+        assert round_trip(canonical) == canonical, f"round_trip not idempotent for {canonical!r}"
 
         node = parse(source)
         fn = compile_ast(node)
@@ -115,21 +112,16 @@ def test_r47_maker_pivot_round_trip() -> None:
     AST compiles, and the callable returns finite, shape-matched output
     on synthetic input.
     """
-    manifest_path = (
-        _repo_root() / "research" / "alphas" / "r47_maker_pivot" / "manifest.yaml"
-    )
+    manifest_path = _repo_root() / "research" / "alphas" / "r47_maker_pivot" / "manifest.yaml"
     manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
     formula = manifest.get("dsl_formula")
     assert isinstance(formula, str) and formula, (
-        "r47_maker_pivot manifest.yaml must have a non-empty dsl_formula "
-        "(populated in Slice-D T2)"
+        "r47_maker_pivot manifest.yaml must have a non-empty dsl_formula (populated in Slice-D T2)"
     )
 
     canonical = round_trip(formula)
     # Idempotence: round_trip is a fixpoint regardless of input form.
-    assert round_trip(canonical) == canonical, (
-        f"round_trip not idempotent for {canonical!r}"
-    )
+    assert round_trip(canonical) == canonical, f"round_trip not idempotent for {canonical!r}"
 
     node = parse(formula)
     ident_names = _collect_identifiers(node)

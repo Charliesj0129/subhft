@@ -145,8 +145,7 @@ def bind_to_manifest(formula: str, manifest: AlphaManifest) -> AlphaManifest:
         # full set is included so callers can enumerate.
         first = sorted(missing)[0]
         raise DSLNameError(
-            f"Formula references identifier(s) not in manifest.data_fields: "
-            f"{sorted(missing)}; first missing={first!r}"
+            f"Formula references identifier(s) not in manifest.data_fields: {sorted(missing)}; first missing={first!r}"
         )
     canonical = _unparse(node)
     return dataclasses.replace(manifest, dsl_formula=canonical)

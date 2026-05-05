@@ -15,6 +15,7 @@ Underlying-helper unit tests live in
 ``tests/unit/alpha/test_screener.py``, ``test_kill_ledger.py``, and
 ``test_cluster.py``; we do not duplicate that math here.
 """
+
 from __future__ import annotations
 
 import json
@@ -61,11 +62,7 @@ def _no_ch(monkeypatch: pytest.MonkeyPatch) -> None:
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
-    return [
-        json.loads(line)
-        for line in path.read_text().splitlines()
-        if line.strip()
-    ]
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
 
 def _extract_json_payload(stdout: str) -> Any:
@@ -136,9 +133,7 @@ def test_alpha_kill_inserts_record(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     parser = build_parser()
-    args = parser.parse_args(
-        ["alpha", "kill", "alpha_x", "--reason", "promotion blocked: gate D"]
-    )
+    args = parser.parse_args(["alpha", "kill", "alpha_x", "--reason", "promotion blocked: gate D"])
     cmd_alpha_kill(args)  # exits 0 normally (no SystemExit)
 
     rows = _read_jsonl(_isolated_jsonl)
@@ -175,9 +170,7 @@ def test_alpha_kill_custom_gate_propagates(
     _isolated_jsonl: Path,
 ) -> None:
     parser = build_parser()
-    args = parser.parse_args(
-        ["alpha", "kill", "alpha_x", "--reason", "manifest narrowed", "--gate", "F"]
-    )
+    args = parser.parse_args(["alpha", "kill", "alpha_x", "--reason", "manifest narrowed", "--gate", "F"])
     cmd_alpha_kill(args)
     rows = _read_jsonl(_isolated_jsonl)
     assert len(rows) == 1
@@ -259,9 +252,7 @@ def test_alpha_screen_kill_does_not_write_ledger_without_flag(
     )
 
     parser = build_parser()
-    args = parser.parse_args(
-        ["alpha", "screen", alpha_id, "--project-root", str(tmp_path)]
-    )
+    args = parser.parse_args(["alpha", "screen", alpha_id, "--project-root", str(tmp_path)])
     with pytest.raises(SystemExit) as exc:
         cmd_alpha_screen(args)
     assert exc.value.code == 2
@@ -283,9 +274,7 @@ def test_alpha_screen_emits_json(
     )
 
     parser = build_parser()
-    args = parser.parse_args(
-        ["alpha", "screen", alpha_id, "--project-root", str(tmp_path)]
-    )
+    args = parser.parse_args(["alpha", "screen", alpha_id, "--project-root", str(tmp_path)])
     # smooth signal should not trigger a kill — exit normally.
     cmd_alpha_screen(args)
 
@@ -380,9 +369,7 @@ def test_alpha_cluster_table_output(
             max_intra_cluster_corr=0.92,
         ),
     ]
-    monkeypatch.setattr(
-        cluster_mod, "cluster_alphas", lambda **_kwargs: fake
-    )
+    monkeypatch.setattr(cluster_mod, "cluster_alphas", lambda **_kwargs: fake)
 
     parser = build_parser()
     args = parser.parse_args(["alpha", "cluster"])
@@ -410,9 +397,7 @@ def test_alpha_cluster_json_output(
             max_intra_cluster_corr=0.0,
         ),
     ]
-    monkeypatch.setattr(
-        cluster_mod, "cluster_alphas", lambda **_kwargs: fake
-    )
+    monkeypatch.setattr(cluster_mod, "cluster_alphas", lambda **_kwargs: fake)
 
     parser = build_parser()
     args = parser.parse_args(["alpha", "cluster", "--json"])

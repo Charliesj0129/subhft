@@ -81,18 +81,14 @@ def test_compile_unary_plus() -> None:
 def test_compile_complex_formula_matches_numpy() -> None:
     fn = compile_ast(parse("(a + b) * c"))
     feats = _features()
-    np.testing.assert_array_equal(
-        fn(feats), (feats["a"] + feats["b"]) * feats["c"]
-    )
+    np.testing.assert_array_equal(fn(feats), (feats["a"] + feats["b"]) * feats["c"])
 
 
 def test_compile_precedence_matches_numpy() -> None:
     # a + b * c should respect precedence (b * c first, then a + result).
     fn = compile_ast(parse("a + b * c"))
     feats = _features()
-    np.testing.assert_array_equal(
-        fn(feats), feats["a"] + feats["b"] * feats["c"]
-    )
+    np.testing.assert_array_equal(fn(feats), feats["a"] + feats["b"] * feats["c"])
 
 
 def test_compile_r47_canonical_formula() -> None:
@@ -137,19 +133,13 @@ def test_compile_no_eval_no_exec_no_compile_no_getattr_no_import() -> None:
     ``compiler.py`` and assert none of the dangerous patterns appear.
     """
 
-    src_path = (
-        Path(__file__).resolve().parents[3]
-        / "src/hft_platform/alpha/dsl/compiler.py"
-    )
+    src_path = Path(__file__).resolve().parents[3] / "src/hft_platform/alpha/dsl/compiler.py"
     assert src_path.exists(), f"compiler.py not found at {src_path}"
     source = src_path.read_text(encoding="utf-8")
 
     forbidden = ("eval(", "exec(", "compile(", "__import__", "getattr(")
     found = [needle for needle in forbidden if needle in source]
-    assert not found, (
-        f"compiler.py must not contain dynamic-execution escape hatches; "
-        f"found: {found}"
-    )
+    assert not found, f"compiler.py must not contain dynamic-execution escape hatches; found: {found}"
 
 
 def test_compile_binop_smoke_test() -> None:

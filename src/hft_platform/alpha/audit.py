@@ -302,16 +302,18 @@ def log_kill(record: Any) -> None:
         client = _get_client()
         client.insert(
             "audit.alpha_kill_ledger",
-            [[
-                kill_id,
-                killed_at_ns,
-                record.alpha_id,
-                record.gate,
-                record.reason,
-                record.stable_artifact_hash,
-                record.scorecard_id,
-                record.killed_by,
-            ]],
+            [
+                [
+                    kill_id,
+                    killed_at_ns,
+                    record.alpha_id,
+                    record.gate,
+                    record.reason,
+                    record.stable_artifact_hash,
+                    record.scorecard_id,
+                    record.killed_by,
+                ]
+            ],
             column_names=[
                 "kill_id",
                 "killed_at",

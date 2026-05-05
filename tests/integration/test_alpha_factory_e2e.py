@@ -17,6 +17,7 @@ function monkeypatching) so the integration boundary is validated. The
 deeper unit-level contract tests live under
 ``tests/unit/test_alpha_promotion.py::TestSliceDAutoKill`` (T14).
 """
+
 from __future__ import annotations
 
 import json
@@ -111,9 +112,7 @@ def _setup_alpha_fixture(
     scorecard_path = alpha_dir / "scorecard.json"
     _write_scorecard(scorecard_path, sharpe=sharpe)
 
-    (alpha_dir / "meta.json").write_text(
-        json.dumps({"gate_status": {"gate_c": gate_c_passed}})
-    )
+    (alpha_dir / "meta.json").write_text(json.dumps({"gate_status": {"gate_c": gate_c_passed}}))
 
     (alpha_dir / "manifest.yaml").write_text(
         yaml.safe_dump(
@@ -149,9 +148,7 @@ def _read_ledger(path: Path) -> list[dict]:
 
 
 @pytest.fixture
-def isolated_kill_ledger(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> Path:
+def isolated_kill_ledger(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     """Redirect kill-ledger writes into ``tmp_path`` and reset cache.
 
     Mirrors ``TestSliceDAutoKill._isolate_kill_ledger`` from the T14 unit
@@ -183,9 +180,7 @@ def test_dod_d1_screen_15_alphas() -> None:
     """
     repo_root = _repo_root()
     alpha_ids = _enumerate_manifest_bearing_alphas(repo_root)
-    assert len(alpha_ids) >= 15, (
-        f"DoD-D1 requires >= 15 manifest-bearing alphas, found {len(alpha_ids)}"
-    )
+    assert len(alpha_ids) >= 15, f"DoD-D1 requires >= 15 manifest-bearing alphas, found {len(alpha_ids)}"
 
     durations: list[tuple[str, float, str]] = []
     for alpha_id in alpha_ids:
@@ -194,9 +189,7 @@ def test_dod_d1_screen_15_alphas() -> None:
         dt = time.monotonic() - t0
         durations.append((alpha_id, dt, result.verdict))
         # Per-alpha hard budget.
-        assert dt < BUDGET_S, (
-            f"alpha {alpha_id} took {dt:.2f}s (>= {BUDGET_S:.0f}s budget)"
-        )
+        assert dt < BUDGET_S, f"alpha {alpha_id} took {dt:.2f}s (>= {BUDGET_S:.0f}s budget)"
         # Closed verdict domain.
         assert result.verdict in {"pass", "kill", "unknown"}, (
             f"alpha {alpha_id} returned unexpected verdict {result.verdict!r}"
@@ -210,10 +203,7 @@ def test_dod_d1_screen_15_alphas() -> None:
     p95_idx = max(0, int(0.95 * len(times)) - 1)
     p95 = times[p95_idx]
     max_dur = max(dt for _, dt, _ in durations)
-    assert p95 < BUDGET_S, (
-        f"P95 {p95:.2f}s exceeds {BUDGET_S:.0f}s budget; "
-        f"max={max_dur:.4f}s; details={durations}"
-    )
+    assert p95 < BUDGET_S, f"P95 {p95:.2f}s exceeds {BUDGET_S:.0f}s budget; max={max_dur:.4f}s; details={durations}"
 
 
 # ---------------------------------------------------------------------------
@@ -246,10 +236,7 @@ def test_dod_d3_cluster_finds_r47_family() -> None:
             found = True
             matched_siblings = members & siblings
             break
-    assert found, (
-        f"R47 cluster not detected with r47_maker_pivot + any of {sorted(siblings)}; "
-        f"clusters: {by_cluster}"
-    )
+    assert found, f"R47 cluster not detected with r47_maker_pivot + any of {sorted(siblings)}; clusters: {by_cluster}"
     # Surface which siblings landed in the cluster — useful when this
     # assertion drifts after corpus regeneration.
     assert matched_siblings, "matched siblings unexpectedly empty"
@@ -276,9 +263,7 @@ def test_dod_d4_kill_ledger_row_on_gate_c_raise(
     isolated_kill_ledger: Path,
 ) -> None:
     """Gate-C verification raises ValueError; ledger records gate='C'."""
-    root, sc_path = _setup_alpha_fixture(
-        tmp_path, "alpha_d4_c", gate_c_passed=False
-    )
+    root, sc_path = _setup_alpha_fixture(tmp_path, "alpha_d4_c", gate_c_passed=False)
     cfg = PromotionConfig(
         alpha_id="alpha_d4_c",
         owner="charlie",
@@ -304,9 +289,7 @@ def test_dod_d4_kill_ledger_row_on_gate_d_reject(
     """Gate-D rejection (sharpe < threshold) records gate='D' without raising."""
     # sharpe=0.2 < min_sharpe_oos=1.0 -> Gate D fails, promote_alpha
     # returns approved=False (no exception).
-    root, sc_path = _setup_alpha_fixture(
-        tmp_path, "alpha_d4_d", gate_c_passed=True, sharpe=0.2
-    )
+    root, sc_path = _setup_alpha_fixture(tmp_path, "alpha_d4_d", gate_c_passed=True, sharpe=0.2)
     cfg = PromotionConfig(
         alpha_id="alpha_d4_d",
         owner="charlie",
@@ -332,9 +315,7 @@ def test_dod_d4_kill_ledger_idempotent_under_retry(
     isolated_kill_ledger: Path,
 ) -> None:
     """Running promote_alpha twice on the same Gate-D failure yields one row."""
-    root, sc_path = _setup_alpha_fixture(
-        tmp_path, "alpha_d4_d_idem", gate_c_passed=True, sharpe=0.2
-    )
+    root, sc_path = _setup_alpha_fixture(tmp_path, "alpha_d4_d_idem", gate_c_passed=True, sharpe=0.2)
     cfg = PromotionConfig(
         alpha_id="alpha_d4_d_idem",
         owner="charlie",
@@ -347,8 +328,6 @@ def test_dod_d4_kill_ledger_idempotent_under_retry(
         assert result.approved is False
 
     rows = _read_ledger(isolated_kill_ledger)
-    assert len(rows) == 1, (
-        f"expected idempotent single ledger row, got {len(rows)}: {rows}"
-    )
+    assert len(rows) == 1, f"expected idempotent single ledger row, got {len(rows)}: {rows}"
     # kill_id is deterministic; both retries collapse onto the same one.
     assert rows[0]["kill_id"], "kill_id must be populated"

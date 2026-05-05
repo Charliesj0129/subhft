@@ -119,8 +119,7 @@ def _tokenize(text: str) -> list[_Token]:
                 if text[i] == ".":
                     if seen_dot:
                         raise DSLSyntaxError(
-                            f"Malformed number at position {start}: "
-                            f"multiple '.' in {text[start:i + 1]!r}"
+                            f"Malformed number at position {start}: multiple '.' in {text[start : i + 1]!r}"
                         )
                     seen_dot = True
                 i += 1
@@ -167,9 +166,7 @@ class _Parser:
         node = self._parse_expr()
         eof = self._peek()
         if eof.kind != _TOK_EOF:
-            raise DSLSyntaxError(
-                f"Unexpected trailing token {eof.value!r} at position {eof.pos}"
-            )
+            raise DSLSyntaxError(f"Unexpected trailing token {eof.value!r} at position {eof.pos}")
         return node
 
     def _parse_expr(self) -> Node:
@@ -206,24 +203,17 @@ class _Parser:
             try:
                 value = float(tok.value)
             except ValueError as exc:  # pragma: no cover - tokenizer guards.
-                raise DSLSyntaxError(
-                    f"Invalid number {tok.value!r} at position {tok.pos}"
-                ) from exc
+                raise DSLSyntaxError(f"Invalid number {tok.value!r} at position {tok.pos}") from exc
             return Literal(value)
         if tok.kind == _TOK_LPAREN:
             self._advance()
             node = self._parse_expr()
             close = self._peek()
             if close.kind != _TOK_RPAREN:
-                raise DSLSyntaxError(
-                    f"Unmatched '(' — expected ')' at position {close.pos}, "
-                    f"got {close.kind!r}"
-                )
+                raise DSLSyntaxError(f"Unmatched '(' — expected ')' at position {close.pos}, got {close.kind!r}")
             self._advance()
             return node
-        raise DSLSyntaxError(
-            f"Unexpected token {tok.kind!r} ({tok.value!r}) at position {tok.pos}"
-        )
+        raise DSLSyntaxError(f"Unexpected token {tok.kind!r} ({tok.value!r}) at position {tok.pos}")
 
 
 # ---------------------------------------------------------------------------

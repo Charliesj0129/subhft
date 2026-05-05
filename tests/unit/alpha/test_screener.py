@@ -13,6 +13,7 @@ The tests synthesize tiny ``signal.npy`` files in ``tmp_path`` and a
 matching ``manifest.yaml`` stub so the screener can run against a fake
 project root. No CK / no live data dependencies.
 """
+
 from __future__ import annotations
 
 from dataclasses import fields, is_dataclass
@@ -178,9 +179,7 @@ def test_cheap_screen_insufficient_observations_returns_unknown_not_kill(
     assert "insufficient_observations" in out.reason
 
 
-def test_cheap_screen_budget_exceeded_returns_unknown(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_cheap_screen_budget_exceeded_returns_unknown(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _make_alpha_dir(tmp_path, "alpha_slow")
     rng = np.random.default_rng(42)
     sig = rng.normal(size=200)
@@ -220,9 +219,7 @@ def test_cheap_screen_high_turnover_kills(tmp_path: Path) -> None:
     assert out.turnover > TURNOVER_KILL or out.turnover == TURNOVER_KILL * 1.0
 
 
-def test_cheap_screen_cost_floor_breach_kills(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_cheap_screen_cost_floor_breach_kills(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _make_alpha_dir(tmp_path, "alpha_costy")
     rng = np.random.default_rng(1)
     n = 300

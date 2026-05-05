@@ -847,13 +847,9 @@ def cmd_alpha_screen(args: argparse.Namespace) -> None:
     result = cheap_screen(
         args.alpha_id,
         project_root=Path(getattr(args, "project_root", None) or "."),
-        ic_min_abs=(
-            float(args.threshold_ic) if getattr(args, "threshold_ic", None) is not None else None
-        ),
+        ic_min_abs=(float(args.threshold_ic) if getattr(args, "threshold_ic", None) is not None else None),
         turnover_kill=(
-            float(args.threshold_turnover)
-            if getattr(args, "threshold_turnover", None) is not None
-            else None
+            float(args.threshold_turnover) if getattr(args, "threshold_turnover", None) is not None else None
         ),
     )
     payload = {
@@ -987,7 +983,4 @@ def cmd_alpha_cluster(args: argparse.Namespace) -> None:
     print(header)
     print("-" * len(header))
     for a in assignments:
-        print(
-            f"{a.alpha_id:<40} {a.cluster_id:<28} "
-            f"{a.cluster_size:<5} {a.max_intra_cluster_corr:<10.4f}"
-        )
+        print(f"{a.alpha_id:<40} {a.cluster_id:<28} {a.cluster_size:<5} {a.max_intra_cluster_corr:<10.4f}")

@@ -26,6 +26,7 @@ Module is offline-only (``research/`` and ``alpha/`` are permitted to use
 ``float`` per ``.agent/rules/25-architecture-governance.md`` §11). Hot-path
 laws do not apply here.
 """
+
 from __future__ import annotations
 
 import time
@@ -87,12 +88,12 @@ class ScreenResult:
     """One alpha's cheap-screen verdict (plan §7 T6 API)."""
 
     alpha_id: str
-    verdict: Verdict        # 'pass' | 'kill' | 'unknown'
+    verdict: Verdict  # 'pass' | 'kill' | 'unknown'
     ic_mean: float
     ic_std: float
     turnover: float
     cost_floor_breach: bool
-    reason: str             # populated when verdict in {'kill','unknown'}
+    reason: str  # populated when verdict in {'kill','unknown'}
     duration_s: float
 
 

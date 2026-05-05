@@ -19,6 +19,7 @@ Covers the contract spelled out in plan §7 T7:
 Module is offline-only (``alpha/`` permitted to use ``float`` per
 ``.agent/rules/25-architecture-governance.md`` §11). No CK / no live data.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -298,9 +299,7 @@ def test_write_artifact_creates_file(
     # threshold/metric/base_dir/corpus hash construction contract.
     only_key = next(iter(data))
     base_dir_hash = hashlib.sha256(b"research/experiments").hexdigest()
-    corpus_hash = hashlib.sha256(
-        json.dumps(sorted(payload["alpha_ids"])).encode("utf-8")
-    ).hexdigest()
+    corpus_hash = hashlib.sha256(json.dumps(sorted(payload["alpha_ids"])).encode("utf-8")).hexdigest()
     assert only_key == f"0.7:pearson:{base_dir_hash}:{corpus_hash}"
     # Persisted payload contains 2 records matching the 2 alphas.
     assert len(data[only_key]) == len(out)
@@ -380,9 +379,7 @@ def test_degenerate_matrix_falls_back_to_singletons() -> None:
     }
 
     with structlog.testing.capture_logs() as logs:
-        out = cluster._cluster_from_payload(
-            payload, threshold=0.7, metric="pearson"
-        )
+        out = cluster._cluster_from_payload(payload, threshold=0.7, metric="pearson")
 
     # Structural fallback: 3 singletons in lex order.
     assert len(out) == 3

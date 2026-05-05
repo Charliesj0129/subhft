@@ -13,6 +13,7 @@ Contracts under test:
   * total ``signals.npy`` bytes < 2 MB (plan T7b budget)
   * loaded signal dtype is ``float32`` on disk (tracker upcasts to float64)
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -62,8 +63,7 @@ def signals(tracker: ExperimentTracker) -> dict[str, np.ndarray]:
 
 def test_corpus_directory_exists() -> None:
     assert (CORPUS_BASE / "runs").is_dir(), (
-        "corpus runs/ dir missing -- regenerate with "
-        "`python scripts/generate_slice_d_signal_corpus.py`"
+        "corpus runs/ dir missing -- regenerate with `python scripts/generate_slice_d_signal_corpus.py`"
     )
 
 
@@ -84,9 +84,7 @@ def test_corpus_r47_family_correlated(signals: dict[str, np.ndarray]) -> None:
             pairs.append((R47_FAMILY[i], R47_FAMILY[j], rho))
     assert pairs, "R47 family should have >= 1 pair"
     for ai_id, aj_id, rho in pairs:
-        assert 0.75 <= rho <= 0.85, (
-            f"R47 pair {ai_id} vs {aj_id} corr={rho:.4f} outside [0.75, 0.85]"
-        )
+        assert 0.75 <= rho <= 0.85, f"R47 pair {ai_id} vs {aj_id} corr={rho:.4f} outside [0.75, 0.85]"
 
 
 def test_corpus_non_r47_uncorrelated_with_r47(signals: dict[str, np.ndarray]) -> None:
@@ -95,10 +93,7 @@ def test_corpus_non_r47_uncorrelated_with_r47(signals: dict[str, np.ndarray]) ->
         for rf in R47_FAMILY:
             cross_abs.append(abs(float(np.corrcoef(signals[nr], signals[rf])[0, 1])))
     mean_abs = float(np.mean(cross_abs))
-    assert mean_abs < 0.10, (
-        f"non-R47 vs R47 mean |corr| = {mean_abs:.4f} "
-        "too high (expected < 0.10 for independence)"
-    )
+    assert mean_abs < 0.10, f"non-R47 vs R47 mean |corr| = {mean_abs:.4f} too high (expected < 0.10 for independence)"
 
 
 def test_corpus_byte_size_under_budget() -> None:
@@ -118,7 +113,5 @@ def test_corpus_signal_dtype_is_float32_on_disk() -> None:
     npy_files = list(runs_dir.rglob("signals.npy"))
     assert len(npy_files) == 15, f"expected 15 signals.npy files, got {len(npy_files)}"
     sample = np.load(npy_files[0], allow_pickle=False)
-    assert sample.dtype == np.float32, (
-        f"signal {npy_files[0]} dtype = {sample.dtype}, expected float32"
-    )
+    assert sample.dtype == np.float32, f"signal {npy_files[0]} dtype = {sample.dtype}, expected float32"
     assert sample.shape == (10_000,), f"signal shape {sample.shape}, expected (10000,)"

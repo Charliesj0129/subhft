@@ -10,6 +10,7 @@ is a per-run outcome; the latter lives on the sidecar
 ``research/alphas/_cluster_assignments.json`` because clusters are
 recomputed every cluster run.
 """
+
 from __future__ import annotations
 
 from research.registry.schemas import AlphaManifest, AlphaStatus

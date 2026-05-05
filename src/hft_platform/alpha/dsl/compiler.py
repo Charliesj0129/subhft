@@ -101,10 +101,7 @@ def compile_ast(node: Node) -> _CompiledFn:
     """
 
     if not isinstance(node, (Identifier, Literal, UnaryOp, BinOp)):
-        raise TypeError(
-            f"compile_ast expected a DSL AST node, got "
-            f"{type(node).__name__}"
-        )
+        raise TypeError(f"compile_ast expected a DSL AST node, got {type(node).__name__}")
 
     def _run(features: _Features) -> np.ndarray:
         result = _evaluate(node, features)

@@ -11,6 +11,7 @@ CH is exercised via a fake client injected through monkeypatch on
 ``audit._get_client``; the fake records inserts in-memory and replays the
 SELECT count() pre-check semantics.
 """
+
 from __future__ import annotations
 
 import json

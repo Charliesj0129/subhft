@@ -21,6 +21,7 @@ with ``kill_reason``/``cluster_id`` keys excluded — those keys are not on
 the manifest after the §5 narrow, but the exclusion list is defensive
 against future reintroduction.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -38,9 +39,7 @@ from research.registry.schemas import AlphaManifest
 
 logger = get_logger("alpha_kill_ledger")
 
-_VALID_GATES: frozenset[str] = frozenset(
-    {"A", "B", "C", "D", "E", "F", "pre_screen", "cluster", "manual"}
-)
+_VALID_GATES: frozenset[str] = frozenset({"A", "B", "C", "D", "E", "F", "pre_screen", "cluster", "manual"})
 
 # Excluded from stable_artifact_hash (plan §5 idempotency contract).
 # Defensive even though the §5 narrow already removed kill_reason / cluster_id
@@ -77,9 +76,7 @@ class KillRecord:
         if not self.alpha_id:
             raise ValueError("alpha_id must be non-empty")
         if self.gate not in _VALID_GATES:
-            raise ValueError(
-                f"gate must be one of {sorted(_VALID_GATES)}, got {self.gate!r}"
-            )
+            raise ValueError(f"gate must be one of {sorted(_VALID_GATES)}, got {self.gate!r}")
         if not self.reason:
             raise ValueError("reason must be non-empty")
 
@@ -199,16 +196,18 @@ def _try_append_ch(record: KillRecord, kill_id: str) -> str:
     try:
         client.insert(
             "audit.alpha_kill_ledger",
-            [[
-                kill_id,
-                record.killed_at,
-                record.alpha_id,
-                record.gate,
-                record.reason,
-                record.stable_artifact_hash,
-                record.scorecard_id,
-                record.killed_by,
-            ]],
+            [
+                [
+                    kill_id,
+                    record.killed_at,
+                    record.alpha_id,
+                    record.gate,
+                    record.reason,
+                    record.stable_artifact_hash,
+                    record.scorecard_id,
+                    record.killed_by,
+                ]
+            ],
             column_names=[
                 "kill_id",
                 "killed_at",
@@ -268,15 +267,17 @@ def read_kills(alpha_id: str | None = None) -> list[KillRecord]:
             if alpha_id is not None and row.get("alpha_id") != alpha_id:
                 continue
             try:
-                out.append(KillRecord(
-                    alpha_id=str(row["alpha_id"]),
-                    gate=str(row["gate"]),
-                    reason=str(row["reason"]),
-                    stable_artifact_hash=str(row.get("stable_artifact_hash", "")),
-                    scorecard_id=str(row.get("scorecard_id", "")),
-                    killed_by=str(row.get("killed_by", "system")),
-                    killed_at=int(row.get("killed_at", 0)),
-                ))
+                out.append(
+                    KillRecord(
+                        alpha_id=str(row["alpha_id"]),
+                        gate=str(row["gate"]),
+                        reason=str(row["reason"]),
+                        stable_artifact_hash=str(row.get("stable_artifact_hash", "")),
+                        scorecard_id=str(row.get("scorecard_id", "")),
+                        killed_by=str(row.get("killed_by", "system")),
+                        killed_at=int(row.get("killed_at", 0)),
+                    )
+                )
             except (KeyError, ValueError, TypeError):
                 continue
     return out

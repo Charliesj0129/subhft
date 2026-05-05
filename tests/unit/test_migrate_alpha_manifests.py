@@ -4,6 +4,7 @@ The script backfills the kill ledger from the 2026-04-17 archive sweep.
 Tests cover dry-run discipline, apply path, idempotency, malformed
 manifest fallback, summary dedupe, and live corpus counts (DoD-D2).
 """
+
 from __future__ import annotations
 
 import importlib.util
@@ -22,9 +23,7 @@ SCRIPT_PATH = REPO_ROOT / "scripts" / "migrate_alpha_manifests.py"
 
 def _load_script_module() -> Any:
     """Import the script as a module under a stable name."""
-    spec = importlib.util.spec_from_file_location(
-        "_migrate_alpha_manifests_under_test", SCRIPT_PATH
-    )
+    spec = importlib.util.spec_from_file_location("_migrate_alpha_manifests_under_test", SCRIPT_PATH)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -47,9 +46,7 @@ def _isolated_jsonl(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     return jsonl
 
 
-def _make_archive(
-    tmp_path: Path, with_manifest: list[str], without: list[str]
-) -> Path:
+def _make_archive(tmp_path: Path, with_manifest: list[str], without: list[str]) -> Path:
     """Build a synthetic archive layout under tmp_path."""
     archive = tmp_path / "archive_under_test"
     archive.mkdir()
@@ -96,9 +93,7 @@ def test_dry_run_writes_nothing(
 ) -> None:
     archive = _make_archive(tmp_path, with_manifest=["a"], without=["b"])
     summary = tmp_path / "summary.jsonl"
-    rc = _run_main(
-        monkeypatch, script, archive_dir=archive, summary_path=summary, apply=False
-    )
+    rc = _run_main(monkeypatch, script, archive_dir=archive, summary_path=summary, apply=False)
     assert rc == 0
     assert not summary.exists(), "dry run must not write summary"
     assert not _isolated_jsonl.exists(), "dry run must not write ledger"
@@ -110,20 +105,14 @@ def test_apply_inserts_ledger_rows(
     tmp_path: Path,
     _isolated_jsonl: Path,
 ) -> None:
-    archive = _make_archive(
-        tmp_path, with_manifest=["alpha_with"], without=["alpha_without"]
-    )
+    archive = _make_archive(tmp_path, with_manifest=["alpha_with"], without=["alpha_without"])
     summary = tmp_path / "summary.jsonl"
-    rc = _run_main(
-        monkeypatch, script, archive_dir=archive, summary_path=summary, apply=True
-    )
+    rc = _run_main(monkeypatch, script, archive_dir=archive, summary_path=summary, apply=True)
     assert rc == 0
 
     assert _isolated_jsonl.exists()
     ledger_lines = [
-        json.loads(line)
-        for line in _isolated_jsonl.read_text(encoding="utf-8").splitlines()
-        if line.strip()
+        json.loads(line) for line in _isolated_jsonl.read_text(encoding="utf-8").splitlines() if line.strip()
     ]
     assert len(ledger_lines) == 1
     assert ledger_lines[0]["alpha_id"] == "alpha_with"
@@ -135,11 +124,7 @@ def test_apply_inserts_ledger_rows(
     assert ledger_lines[0]["stable_artifact_hash"]  # non-empty hex
 
     assert summary.exists()
-    summary_lines = [
-        json.loads(line)
-        for line in summary.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
+    summary_lines = [json.loads(line) for line in summary.read_text(encoding="utf-8").splitlines() if line.strip()]
     assert len(summary_lines) == 1
     assert summary_lines[0] == {
         "alpha_id": "alpha_without",
@@ -154,14 +139,10 @@ def test_re_run_is_idempotent(
     tmp_path: Path,
     _isolated_jsonl: Path,
 ) -> None:
-    archive = _make_archive(
-        tmp_path, with_manifest=["alpha_with"], without=["alpha_without"]
-    )
+    archive = _make_archive(tmp_path, with_manifest=["alpha_with"], without=["alpha_without"])
     summary = tmp_path / "summary.jsonl"
 
-    rc1 = _run_main(
-        monkeypatch, script, archive_dir=archive, summary_path=summary, apply=True
-    )
+    rc1 = _run_main(monkeypatch, script, archive_dir=archive, summary_path=summary, apply=True)
     assert rc1 == 0
     ledger_after_first = _isolated_jsonl.read_text(encoding="utf-8")
     summary_after_first = summary.read_text(encoding="utf-8")
@@ -169,9 +150,7 @@ def test_re_run_is_idempotent(
     # Reset the kill_ledger in-memory cache so the second run must re-read disk.
     kill_ledger._reset_cache_for_tests()
 
-    rc2 = _run_main(
-        monkeypatch, script, archive_dir=archive, summary_path=summary, apply=True
-    )
+    rc2 = _run_main(monkeypatch, script, archive_dir=archive, summary_path=summary, apply=True)
     assert rc2 == 0
     assert _isolated_jsonl.read_text(encoding="utf-8") == ledger_after_first
     assert summary.read_text(encoding="utf-8") == summary_after_first
@@ -191,14 +170,10 @@ def test_corrupt_manifest_falls_back_to_default_reason(
     (bad / "manifest.yaml").write_text("alpha_id: [oops\n", encoding="utf-8")
     summary = tmp_path / "summary.jsonl"
 
-    rc = _run_main(
-        monkeypatch, script, archive_dir=archive, summary_path=summary, apply=True
-    )
+    rc = _run_main(monkeypatch, script, archive_dir=archive, summary_path=summary, apply=True)
     assert rc == 0
     ledger_lines = [
-        json.loads(line)
-        for line in _isolated_jsonl.read_text(encoding="utf-8").splitlines()
-        if line.strip()
+        json.loads(line) for line in _isolated_jsonl.read_text(encoding="utf-8").splitlines() if line.strip()
     ]
     assert len(ledger_lines) == 1
     assert ledger_lines[0]["alpha_id"] == "bad_alpha"
@@ -226,19 +201,11 @@ def test_summary_dedupes_on_alpha_id(
         + "\n",
         encoding="utf-8",
     )
-    archive = _make_archive(
-        tmp_path, with_manifest=[], without=["alpha_x", "alpha_y"]
-    )
+    archive = _make_archive(tmp_path, with_manifest=[], without=["alpha_x", "alpha_y"])
 
-    rc = _run_main(
-        monkeypatch, script, archive_dir=archive, summary_path=summary, apply=True
-    )
+    rc = _run_main(monkeypatch, script, archive_dir=archive, summary_path=summary, apply=True)
     assert rc == 0
-    rows = [
-        json.loads(line)
-        for line in summary.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
+    rows = [json.loads(line) for line in summary.read_text(encoding="utf-8").splitlines() if line.strip()]
     assert len(rows) == 2
     by_alpha = {r["alpha_id"]: r for r in rows}
     # Pre-existing row preserved verbatim.
@@ -258,12 +225,8 @@ def test_real_archive_corpus_counts_match_expected(script: Any) -> None:
         pytest.skip(f"real archive not present: {real_archive}")
 
     ledger_rows, summary_rows = script._scan(real_archive)
-    assert len(ledger_rows) == 25, (
-        f"expected 25 ledger rows from real archive, got {len(ledger_rows)}"
-    )
-    assert len(summary_rows) == 21, (
-        f"expected 21 summary rows from real archive, got {len(summary_rows)}"
-    )
+    assert len(ledger_rows) == 25, f"expected 25 ledger rows from real archive, got {len(ledger_rows)}"
+    assert len(summary_rows) == 21, f"expected 21 summary rows from real archive, got {len(summary_rows)}"
     for row in ledger_rows:
         assert row["gate"] == "manual"
         assert row["killed_by"] == "migration:archive_2026_04_17"
@@ -283,9 +246,7 @@ def test_archive_dir_missing_returns_error(
 ) -> None:
     missing = tmp_path / "does_not_exist"
     summary = tmp_path / "summary.jsonl"
-    rc = _run_main(
-        monkeypatch, script, archive_dir=missing, summary_path=summary, apply=False
-    )
+    rc = _run_main(monkeypatch, script, archive_dir=missing, summary_path=summary, apply=False)
     assert rc == 1
     captured = capsys.readouterr()
     assert "Archive dir not found" in captured.err

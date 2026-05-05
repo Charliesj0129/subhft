@@ -957,9 +957,7 @@ class TestSliceDAutoKill:
         _write_scorecard(sc_path, sharpe=sharpe, max_drawdown=-0.05, turnover=0.5, corr=0.3)
 
         # meta.json governs Gate-C verification.
-        (alpha_dir / "meta.json").write_text(
-            json.dumps({"gate_status": {"gate_c": gate_c_passed}})
-        )
+        (alpha_dir / "meta.json").write_text(json.dumps({"gate_status": {"gate_c": gate_c_passed}}))
 
         # Minimal manifest so stable_artifact_hash is computable.
         (alpha_dir / "manifest.yaml").write_text(
@@ -1013,9 +1011,7 @@ class TestSliceDAutoKill:
         tmp_path: Path,
         _isolate_kill_ledger: Path,
     ) -> None:
-        root, sc_path = self._setup_alpha_fixture(
-            tmp_path, "alpha_t14_c", gate_c_passed=False
-        )
+        root, sc_path = self._setup_alpha_fixture(tmp_path, "alpha_t14_c", gate_c_passed=False)
 
         cfg = PromotionConfig(
             alpha_id="alpha_t14_c",
@@ -1039,9 +1035,7 @@ class TestSliceDAutoKill:
         tmp_path: Path,
         _isolate_kill_ledger: Path,
     ) -> None:
-        root, sc_path = self._setup_alpha_fixture(
-            tmp_path, "alpha_t14_c_idem", gate_c_passed=False
-        )
+        root, sc_path = self._setup_alpha_fixture(tmp_path, "alpha_t14_c_idem", gate_c_passed=False)
         cfg = PromotionConfig(
             alpha_id="alpha_t14_c_idem",
             owner="charlie",
@@ -1064,9 +1058,7 @@ class TestSliceDAutoKill:
         _isolate_kill_ledger: Path,
     ) -> None:
         monkeypatch.setenv("HFT_KILL_LEDGER_ENABLED", "0")
-        root, sc_path = self._setup_alpha_fixture(
-            tmp_path, "alpha_t14_c_off", gate_c_passed=False
-        )
+        root, sc_path = self._setup_alpha_fixture(tmp_path, "alpha_t14_c_off", gate_c_passed=False)
         cfg = PromotionConfig(
             alpha_id="alpha_t14_c_off",
             owner="charlie",
@@ -1086,9 +1078,7 @@ class TestSliceDAutoKill:
         _isolate_kill_ledger: Path,
     ) -> None:
         """The auto-kill side effect must NOT swallow the ValueError nor mutate its message."""
-        root, sc_path = self._setup_alpha_fixture(
-            tmp_path, "alpha_t14_c_msg", gate_c_passed=False
-        )
+        root, sc_path = self._setup_alpha_fixture(tmp_path, "alpha_t14_c_msg", gate_c_passed=False)
         cfg = PromotionConfig(
             alpha_id="alpha_t14_c_msg",
             owner="charlie",
@@ -1111,9 +1101,7 @@ class TestSliceDAutoKill:
         _isolate_kill_ledger: Path,
     ) -> None:
         # sharpe=0.2 < min_sharpe_oos=1.0 -> Gate D fails.
-        root, sc_path = self._setup_alpha_fixture(
-            tmp_path, "alpha_t14_d", gate_c_passed=True, sharpe=0.2
-        )
+        root, sc_path = self._setup_alpha_fixture(tmp_path, "alpha_t14_d", gate_c_passed=True, sharpe=0.2)
         cfg = PromotionConfig(
             alpha_id="alpha_t14_d",
             owner="charlie",
@@ -1138,9 +1126,7 @@ class TestSliceDAutoKill:
         tmp_path: Path,
         _isolate_kill_ledger: Path,
     ) -> None:
-        root, sc_path = self._setup_alpha_fixture(
-            tmp_path, "alpha_t14_d_idem", gate_c_passed=True, sharpe=0.2
-        )
+        root, sc_path = self._setup_alpha_fixture(tmp_path, "alpha_t14_d_idem", gate_c_passed=True, sharpe=0.2)
         cfg = PromotionConfig(
             alpha_id="alpha_t14_d_idem",
             owner="charlie",
@@ -1162,9 +1148,7 @@ class TestSliceDAutoKill:
         _isolate_kill_ledger: Path,
     ) -> None:
         monkeypatch.setenv("HFT_KILL_LEDGER_ENABLED", "0")
-        root, sc_path = self._setup_alpha_fixture(
-            tmp_path, "alpha_t14_d_off", gate_c_passed=True, sharpe=0.2
-        )
+        root, sc_path = self._setup_alpha_fixture(tmp_path, "alpha_t14_d_off", gate_c_passed=True, sharpe=0.2)
         cfg = PromotionConfig(
             alpha_id="alpha_t14_d_off",
             owner="charlie",
