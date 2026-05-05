@@ -53,7 +53,14 @@ def _docker_available() -> bool:
 
 
 def _run_compose_config(files: list[Path], timeout: int = 60) -> dict[str, Any]:
-    """Run `docker compose config` and parse the YAML output."""
+    """Run `docker compose config` and parse the YAML output.
+
+    Older docker compose plugin versions (e.g. some GitHub Actions runners
+    with the bundled v2.x plugin) fail to validate volume specs containing
+    ``${VAR:-default}`` substitutions under ``--no-interpolate`` (counted
+    as "too many colons"). Skip cleanly in that case rather than misreport
+    a failure on parity intent.
+    """
     cmd = ["docker", "compose"]
     for f in files:
         cmd += ["-f", str(f)]
@@ -66,6 +73,15 @@ def _run_compose_config(files: list[Path], timeout: int = 60) -> dict[str, Any]:
         cwd=str(REPO_ROOT),
     )
     if result.returncode != 0:
+        # Some older docker compose plugin versions reject ``${VAR:-default}``
+        # under ``--no-interpolate`` with "too many colons". Skip rather than
+        # misreport a parity failure caused by the CI tool, not the compose
+        # files.
+        if "too many colons" in result.stderr:
+            pytest.skip(
+                f"docker compose plugin in this env rejects parameterized volume "
+                f"specs under --no-interpolate; rc={result.returncode}"
+            )
         pytest.fail(f"docker compose config failed (rc={result.returncode}):\n{result.stderr}")
     return yaml.safe_load(result.stdout)
 
