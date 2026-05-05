@@ -234,3 +234,9 @@ research/results/
 research/results_batch6/
 research/results_batch7/
 research/__pycache__/
+
+# Slice-D alpha-factory generated artifacts (writer-side outputs, re-runnable).
+# kill ledger jsonl is the offline fallback for audit.alpha_kill_ledger;
+# cluster assignments json is the per-run cluster sidecar.
+research/alphas/_kill_ledger.jsonl
+research/alphas/_cluster_assignments.json
