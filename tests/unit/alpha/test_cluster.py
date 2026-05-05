@@ -21,6 +21,7 @@ Module is offline-only (``alpha/`` permitted to use ``float`` per
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import fields, is_dataclass
 from pathlib import Path
@@ -293,9 +294,14 @@ def test_write_artifact_creates_file(
     data = json.loads(artifact_path.read_text())
     assert isinstance(data, dict)
     assert len(data) == 1
-    # The single key should encode threshold/metric/base_dir hash/corpus hash.
+    # Assert the full computed key, not just the prefix — locks the
+    # threshold/metric/base_dir/corpus hash construction contract.
     only_key = next(iter(data))
-    assert only_key.startswith("0.7:pearson:")
+    base_dir_hash = hashlib.sha256(b"research/experiments").hexdigest()
+    corpus_hash = hashlib.sha256(
+        json.dumps(sorted(payload["alpha_ids"])).encode("utf-8")
+    ).hexdigest()
+    assert only_key == f"0.7:pearson:{base_dir_hash}:{corpus_hash}"
     # Persisted payload contains 2 records matching the 2 alphas.
     assert len(data[only_key]) == len(out)
     assert {rec["alpha_id"] for rec in data[only_key]} == {"alpha_a", "alpha_b"}
@@ -348,3 +354,46 @@ def test_write_artifact_merges_existing(
     new_keys = [k for k in data if k != pre_existing_key]
     assert len(new_keys) == 1
     assert new_keys[0].startswith("0.7:pearson:")
+
+
+# ---------------------------------------------------------------------------
+# Test 13 — degenerate / mismatched correlation matrix → all singletons + warn
+# ---------------------------------------------------------------------------
+
+
+def test_degenerate_matrix_falls_back_to_singletons() -> None:
+    """A mismatched matrix (1x1 supplied for 3 alphas) must not crash.
+
+    Defensive contract: the helper emits an all-singletons fallback and
+    logs a ``cluster_degenerate_matrix`` warning so downstream alerting
+    can fire. We assert the structural fallback here and verify the
+    warning event was captured via ``structlog.testing.capture_logs``.
+    """
+    import structlog.testing
+
+    payload: dict[str, Any] = {
+        "alpha_ids": ["alpha_a", "alpha_b", "alpha_c"],
+        "matrix": [[1.0]],
+        "pearson_matrix": [[1.0]],  # 1x1 — mismatched against 3 alpha_ids
+        "spearman_matrix": [[1.0]],
+        "sample_length": 256,
+    }
+
+    with structlog.testing.capture_logs() as logs:
+        out = cluster._cluster_from_payload(
+            payload, threshold=0.7, metric="pearson"
+        )
+
+    # Structural fallback: 3 singletons in lex order.
+    assert len(out) == 3
+    assert [a.alpha_id for a in out] == ["alpha_a", "alpha_b", "alpha_c"]
+    for entry in out:
+        assert entry.cluster_size == 1
+        assert entry.max_intra_cluster_corr == 0.0
+        assert entry.cluster_id.startswith("singleton_")
+
+    # Warning event was emitted.
+    warning_events = [e for e in logs if e.get("event") == "cluster_degenerate_matrix"]
+    assert len(warning_events) == 1
+    assert warning_events[0]["log_level"] == "warning"
+    assert warning_events[0]["n_alphas"] == 3

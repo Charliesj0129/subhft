@@ -150,8 +150,10 @@ def _cluster_from_payload(
     corr = np.asarray(raw_matrix, dtype=np.float64)
 
     # Determinism: lex-sort alpha_ids and reorder matrix accordingly.
+    # Build a position map (O(n)) instead of repeated ``list.index`` (O(n²)).
     sorted_ids = sorted(raw_ids)
-    perm = [raw_ids.index(aid) for aid in sorted_ids]
+    raw_id_pos = {aid: i for i, aid in enumerate(raw_ids)}
+    perm = [raw_id_pos[aid] for aid in sorted_ids]
 
     # Singleton corpus — skip linkage entirely.
     if len(sorted_ids) == 1:
@@ -170,6 +172,13 @@ def _cluster_from_payload(
         or corr.shape[0] != len(raw_ids)
     ):
         # Degenerate / mismatched matrix — emit all singletons defensively.
+        # Warn so downstream alerting (Slice-D audit log + Prom) can fire.
+        logger.warning(
+            "cluster_degenerate_matrix",
+            n_alphas=len(sorted_ids),
+            matrix_shape=tuple(corr.shape) if corr.ndim else (),
+            metric=metric,
+        )
         return [
             ClusterAssignment(
                 alpha_id=aid,
