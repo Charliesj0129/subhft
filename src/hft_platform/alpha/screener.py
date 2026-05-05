@@ -31,6 +31,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 import structlog
@@ -63,6 +64,10 @@ COST_FLOOR_PTS: float = 0.0
 #: alpha must produce a ``ScreenResult`` within 60 s.
 BUDGET_S: float = 60.0
 
+#: Closed verdict domain — a perfect 3-element set. Anything outside this
+#: is a bug; ``Literal`` makes that machine-checkable.
+Verdict = Literal["pass", "kill", "unknown"]
+
 #: Forward-return horizon (ticks) — mirrors
 #: ``research/tools/feature_screener.py:_FORWARD_HORIZON``.
 _FORWARD_HORIZON: int = 5
@@ -82,7 +87,7 @@ class ScreenResult:
     """One alpha's cheap-screen verdict (plan §7 T6 API)."""
 
     alpha_id: str
-    verdict: str            # 'pass' | 'kill' | 'unknown'
+    verdict: Verdict        # 'pass' | 'kill' | 'unknown'
     ic_mean: float
     ic_std: float
     turnover: float
@@ -185,7 +190,7 @@ def _cost_floor_breached(alpha_id: str, root: Path) -> bool:
 def _result(
     alpha_id: str,
     *,
-    verdict: str,
+    verdict: Verdict,
     ic_mean: float = float("nan"),
     ic_std: float = float("nan"),
     turnover: float = float("nan"),
@@ -260,7 +265,7 @@ def cheap_screen(alpha_id: str, *, project_root: Path = Path(".")) -> ScreenResu
         return _result(
             alpha_id,
             verdict="unknown",
-            reason="budget_exceeded:timeout_after_signal_load",
+            reason="budget_exceeded:timeout_before_signal_load",
             started=started,
         )
 

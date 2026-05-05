@@ -130,6 +130,54 @@ def test_cheap_screen_missing_signal_returns_unknown(tmp_path: Path) -> None:
     assert "signal" in out.reason
 
 
+def test_cheap_screen_corrupt_npy_returns_unknown_not_kill(tmp_path: Path) -> None:
+    """Corrupt .npy bytes must produce verdict='unknown' (advisory), never 'kill'.
+
+    The fail-closed contract: data errors NEVER auto-kill an alpha.
+    """
+    _make_alpha_dir(tmp_path, "alpha_corrupt")
+    exp_dir = tmp_path / "research" / "experiments" / "alpha_corrupt"
+    exp_dir.mkdir(parents=True, exist_ok=True)
+    (exp_dir / "signal.npy").write_bytes(b"not a valid npy")
+
+    out = cheap_screen("alpha_corrupt", project_root=tmp_path)
+    assert out.verdict == "unknown"
+    assert out.verdict != "kill"
+    assert "signal_load_failed" in out.reason
+
+
+def test_cheap_screen_signal_shape_invalid_returns_unknown_not_kill(
+    tmp_path: Path,
+) -> None:
+    """1-D signal.npy (single column) must produce verdict='unknown', never 'kill'."""
+    _make_alpha_dir(tmp_path, "alpha_1d")
+    exp_dir = tmp_path / "research" / "experiments" / "alpha_1d"
+    exp_dir.mkdir(parents=True, exist_ok=True)
+    np.save(exp_dir / "signal.npy", np.zeros(100))  # 1-D; (100, 1) after reshape
+
+    out = cheap_screen("alpha_1d", project_root=tmp_path)
+    assert out.verdict == "unknown"
+    assert out.verdict != "kill"
+    assert "signal_shape_invalid" in out.reason
+
+
+def test_cheap_screen_insufficient_observations_returns_unknown_not_kill(
+    tmp_path: Path,
+) -> None:
+    """<_MIN_OBS rows ⇒ IC and turnover both NaN ⇒ verdict='unknown', never 'kill'."""
+    _make_alpha_dir(tmp_path, "alpha_tiny")
+    rng = np.random.default_rng(99)
+    n = 10  # well below _MIN_OBS=50
+    sig = rng.normal(size=n)
+    prices = 100.0 + np.cumsum(rng.normal(size=n) * 0.01)
+    _write_signal(tmp_path, "alpha_tiny", signal=sig, prices=prices)
+
+    out = cheap_screen("alpha_tiny", project_root=tmp_path)
+    assert out.verdict == "unknown"
+    assert out.verdict != "kill"
+    assert "insufficient_observations" in out.reason
+
+
 def test_cheap_screen_budget_exceeded_returns_unknown(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
