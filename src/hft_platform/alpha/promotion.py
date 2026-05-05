@@ -150,8 +150,22 @@ def promote_alpha(config: PromotionConfig) -> PromotionResult:
 
     scorecard = json.loads(scorecard_path.read_text())
 
-    # Verify Gate C passed before evaluating promotion gates
-    _verify_gate_c_passed(scorecard_path)
+    # Verify Gate C passed before evaluating promotion gates.
+    # Slice-D T14: on raise, log a kill-ledger row (gate='C') before re-raising
+    # so the rejected alpha is recorded in the durable ledger. The original
+    # ``ValueError`` is preserved for backward compatibility with existing
+    # callers that match on its message.
+    try:
+        _verify_gate_c_passed(scorecard_path)
+    except ValueError as exc:
+        _auto_kill(
+            alpha_id=config.alpha_id,
+            gate="C",
+            reason=str(exc),
+            alpha_dir=alpha_dir,
+            scorecard_path=scorecard_path,
+        )
+        raise
 
     data_ul_value = _to_float(scorecard.get("data_ul"))
     data_ul = int(data_ul_value) if data_ul_value is not None else None
@@ -166,6 +180,18 @@ def promote_alpha(config: PromotionConfig) -> PromotionResult:
     gate_d_passed, gate_d_checks = _evaluate_gate_d(scorecard, config)
     if gate_d_passed:
         _update_manifest_status(config.alpha_id, "GATE_D", root)
+    else:
+        # Slice-D T14: log a kill-ledger row (gate='D') for the rejection.
+        # Gate D failure does not raise here -- promote_alpha returns a
+        # PromotionResult with approved=False -- so this is the *only* path
+        # where the kill is recorded for the Gate-D outcome.
+        _auto_kill(
+            alpha_id=config.alpha_id,
+            gate="D",
+            reason=_aggregate_gate_d_failures(gate_d_checks),
+            alpha_dir=alpha_dir,
+            scorecard_path=scorecard_path,
+        )
 
     gate_e_passed, gate_e_checks = _evaluate_gate_e(config, root)
     if gate_e_passed:
@@ -960,6 +986,96 @@ def _to_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _kill_ledger_enabled() -> bool:
+    """HFT_KILL_LEDGER_ENABLED gates the auto-kill writes (default 1=on)."""
+    import os
+
+    return os.getenv("HFT_KILL_LEDGER_ENABLED", "1") != "0"
+
+
+def _load_manifest_artifact_hash(alpha_dir: Path) -> str:
+    """Best-effort manifest load -> ``stable_artifact_hash``.
+
+    Missing / unparseable manifest yields ``""`` so a kill row still gets
+    written (degraded dedupe key -- same alpha+gate collapses regardless).
+    """
+    manifest_path = alpha_dir / "manifest.yaml"
+    if not manifest_path.exists():
+        return ""
+    try:
+        from hft_platform.alpha.kill_ledger import stable_artifact_hash
+        from research.registry.schemas import AlphaManifest
+
+        payload = yaml.safe_load(manifest_path.read_text()) or {}
+        if not isinstance(payload, dict):
+            return ""
+        manifest = AlphaManifest.from_dict(payload)
+        return stable_artifact_hash(manifest)
+    except Exception:  # noqa: BLE001 -- best-effort; degraded-key kill row is acceptable
+        return ""
+
+
+def _aggregate_gate_d_failures(checks: dict[str, Any]) -> str:
+    """Format failed Gate-D check entries into a single ``key=detail; ...`` string.
+
+    Iterates the checks dict produced by :func:`_evaluate_gate_d` and pulls
+    every entry where the ``pass`` flag is False. Falls back to a sentinel
+    when no specific failure is identifiable so the kill row never carries
+    an empty reason (which ``KillRecord.__post_init__`` rejects).
+    """
+    failures: list[str] = []
+    for key, value in checks.items():
+        if isinstance(value, dict):
+            if value.get("pass") is False:
+                detail = value.get("detail")
+                if detail:
+                    failures.append(f"{key}={detail}")
+                else:
+                    val = value.get("value")
+                    failures.append(f"{key}=value={val!r}")
+        elif value is False:
+            failures.append(f"{key}=False")
+    return "; ".join(failures) if failures else "gate_d_failed:no_detail"
+
+
+def _auto_kill(
+    *,
+    alpha_id: str,
+    gate: str,
+    reason: str,
+    alpha_dir: Path,
+    scorecard_path: Path,
+) -> None:
+    """Best-effort write to the Slice-D kill ledger.
+
+    Failures here MUST NOT propagate -- the original promotion-rejection
+    signal is what callers contract on. Any exception from the ledger write
+    is logged at WARNING and swallowed.
+    """
+    if not _kill_ledger_enabled():
+        return
+    try:
+        from hft_platform.alpha.kill_ledger import KillRecord, append_kill
+
+        append_kill(
+            KillRecord(
+                alpha_id=alpha_id,
+                gate=gate,
+                reason=(reason or f"gate_{gate.lower()}_failed:no_detail")[:8192],
+                stable_artifact_hash=_load_manifest_artifact_hash(alpha_dir),
+                scorecard_id=str(scorecard_path),
+                killed_by="promote_alpha:auto",
+            )
+        )
+    except Exception:  # noqa: BLE001 -- best-effort; never block promotion error path
+        _log.warning(
+            "auto_kill_log_failed",
+            alpha_id=alpha_id,
+            gate=gate,
+            exc_info=True,
+        )
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:

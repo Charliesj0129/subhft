@@ -910,3 +910,270 @@ def test_promotion_passes_when_replay_parity_at_or_above_threshold():
 
     assert checks["replay_parity_audit"]["pass"] is True
     assert checks["replay_parity_audit"]["value"] == 96.0
+
+
+# ---------------------------------------------------------------------------
+# Slice-D T14: promote_alpha auto-kill on Gate-C raise + Gate-D rejection
+# ---------------------------------------------------------------------------
+
+
+class TestSliceDAutoKill:
+    """Auto-kill ledger writes on Gate-C raise and Gate-D rejection paths.
+
+    These tests exercise ``promote_alpha`` end-to-end with a synthetic
+    scorecard + meta.json + manifest.yaml fixture and assert that the
+    Slice-D kill-ledger jsonl sink picks up exactly one row per
+    failed-promotion attempt (idempotent on re-run).
+    """
+
+    @staticmethod
+    def _strict_profile():
+        from hft_platform.alpha._validation_profile import ValidationProfile
+
+        return ValidationProfile(
+            name="test",
+            is_strict=True,
+            thresholds={},
+            blocking_sub_gates=("sharpe_threshold",),
+        )
+
+    @staticmethod
+    def _setup_alpha_fixture(
+        tmp_path: Path,
+        alpha_id: str,
+        *,
+        gate_c_passed: bool,
+        sharpe: float = 1.6,
+    ) -> tuple[Path, Path]:
+        """Lay down ``research/alphas/<alpha_id>/`` with scorecard, meta, manifest.
+
+        Returns ``(project_root, scorecard_path)``.
+        """
+        alpha_dir = tmp_path / "research" / "alphas" / alpha_id
+        alpha_dir.mkdir(parents=True, exist_ok=True)
+
+        # Scorecard tuned to pass Gate D when sharpe >= 1.0.
+        sc_path = alpha_dir / "scorecard.json"
+        _write_scorecard(sc_path, sharpe=sharpe, max_drawdown=-0.05, turnover=0.5, corr=0.3)
+
+        # meta.json governs Gate-C verification.
+        (alpha_dir / "meta.json").write_text(
+            json.dumps({"gate_status": {"gate_c": gate_c_passed}})
+        )
+
+        # Minimal manifest so stable_artifact_hash is computable.
+        (alpha_dir / "manifest.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "alpha_id": alpha_id,
+                    "hypothesis": "synthetic test alpha",
+                    "formula": "x",
+                    "paper_refs": ["1234.5678"],
+                    "data_fields": ["feature[0]"],
+                    "complexity": "O(1)",
+                    "status": "draft",
+                }
+            )
+        )
+        return tmp_path, sc_path
+
+    @pytest.fixture(autouse=True)
+    def _isolate_kill_ledger(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> Path:
+        from hft_platform.alpha import audit, kill_ledger
+
+        jsonl = tmp_path / "_kill_ledger.jsonl"
+        monkeypatch.setenv("HFT_ALPHA_KILL_LEDGER_PATH", str(jsonl))
+        # Force jsonl path: keep CH disabled so the ledger writes land in
+        # the file we can read back from disk.
+        monkeypatch.setenv("HFT_ALPHA_AUDIT_ENABLED", "0")
+        audit._ENABLED = None  # noqa: SLF001 -- re-read env on next call
+        kill_ledger._reset_cache_for_tests()
+        return jsonl
+
+    @staticmethod
+    def _read_ledger(path: Path) -> list[dict]:
+        if not path.exists():
+            return []
+        rows: list[dict] = []
+        for line in path.read_text().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            rows.append(json.loads(line))
+        return rows
+
+    # -- Gate C raise path -----------------------------------------------
+
+    def test_gate_c_failure_writes_kill_ledger_row(
+        self,
+        tmp_path: Path,
+        _isolate_kill_ledger: Path,
+    ) -> None:
+        root, sc_path = self._setup_alpha_fixture(
+            tmp_path, "alpha_t14_c", gate_c_passed=False
+        )
+
+        cfg = PromotionConfig(
+            alpha_id="alpha_t14_c",
+            owner="charlie",
+            project_root=str(root),
+            scorecard_path=str(sc_path),
+            validation_profile=self._strict_profile(),
+        )
+        with pytest.raises(ValueError, match="Gate C has not passed"):
+            promote_alpha(cfg)
+
+        rows = self._read_ledger(_isolate_kill_ledger)
+        assert len(rows) == 1, f"expected exactly 1 ledger row, got {rows}"
+        assert rows[0]["alpha_id"] == "alpha_t14_c"
+        assert rows[0]["gate"] == "C"
+        assert "Gate C has not passed" in rows[0]["reason"]
+        assert rows[0]["killed_by"] == "promote_alpha:auto"
+
+    def test_gate_c_failure_re_run_is_idempotent(
+        self,
+        tmp_path: Path,
+        _isolate_kill_ledger: Path,
+    ) -> None:
+        root, sc_path = self._setup_alpha_fixture(
+            tmp_path, "alpha_t14_c_idem", gate_c_passed=False
+        )
+        cfg = PromotionConfig(
+            alpha_id="alpha_t14_c_idem",
+            owner="charlie",
+            project_root=str(root),
+            scorecard_path=str(sc_path),
+            validation_profile=self._strict_profile(),
+        )
+
+        for _ in range(2):
+            with pytest.raises(ValueError, match="Gate C has not passed"):
+                promote_alpha(cfg)
+
+        rows = self._read_ledger(_isolate_kill_ledger)
+        assert len(rows) == 1, f"expected idempotent single row, got {rows}"
+
+    def test_gate_c_failure_does_not_kill_when_env_off(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _isolate_kill_ledger: Path,
+    ) -> None:
+        monkeypatch.setenv("HFT_KILL_LEDGER_ENABLED", "0")
+        root, sc_path = self._setup_alpha_fixture(
+            tmp_path, "alpha_t14_c_off", gate_c_passed=False
+        )
+        cfg = PromotionConfig(
+            alpha_id="alpha_t14_c_off",
+            owner="charlie",
+            project_root=str(root),
+            scorecard_path=str(sc_path),
+            validation_profile=self._strict_profile(),
+        )
+        with pytest.raises(ValueError, match="Gate C has not passed"):
+            promote_alpha(cfg)
+
+        rows = self._read_ledger(_isolate_kill_ledger)
+        assert rows == [], f"ledger must be empty when env off, got {rows}"
+
+    def test_gate_c_kill_re_raises_original_value_error(
+        self,
+        tmp_path: Path,
+        _isolate_kill_ledger: Path,
+    ) -> None:
+        """The auto-kill side effect must NOT swallow the ValueError nor mutate its message."""
+        root, sc_path = self._setup_alpha_fixture(
+            tmp_path, "alpha_t14_c_msg", gate_c_passed=False
+        )
+        cfg = PromotionConfig(
+            alpha_id="alpha_t14_c_msg",
+            owner="charlie",
+            project_root=str(root),
+            scorecard_path=str(sc_path),
+            validation_profile=self._strict_profile(),
+        )
+        with pytest.raises(ValueError) as exc_info:
+            promote_alpha(cfg)
+
+        # Original message preserved verbatim from _verify_gate_c_passed.
+        assert "Gate C has not passed for this scorecard" in str(exc_info.value)
+        assert str(sc_path) in str(exc_info.value)
+
+    # -- Gate D rejection path -------------------------------------------
+
+    def test_gate_d_rejection_writes_kill_ledger_row(
+        self,
+        tmp_path: Path,
+        _isolate_kill_ledger: Path,
+    ) -> None:
+        # sharpe=0.2 < min_sharpe_oos=1.0 -> Gate D fails.
+        root, sc_path = self._setup_alpha_fixture(
+            tmp_path, "alpha_t14_d", gate_c_passed=True, sharpe=0.2
+        )
+        cfg = PromotionConfig(
+            alpha_id="alpha_t14_d",
+            owner="charlie",
+            project_root=str(root),
+            scorecard_path=str(sc_path),
+            validation_profile=self._strict_profile(),
+        )
+        result = promote_alpha(cfg)
+        assert result.approved is False
+        assert result.gate_d_passed is False
+
+        rows = self._read_ledger(_isolate_kill_ledger)
+        assert len(rows) == 1, f"expected exactly 1 ledger row, got {rows}"
+        assert rows[0]["alpha_id"] == "alpha_t14_d"
+        assert rows[0]["gate"] == "D"
+        # Reason should at least mention the failed sharpe_oos gate.
+        assert "sharpe_oos" in rows[0]["reason"]
+        assert rows[0]["killed_by"] == "promote_alpha:auto"
+
+    def test_gate_d_rejection_re_run_is_idempotent(
+        self,
+        tmp_path: Path,
+        _isolate_kill_ledger: Path,
+    ) -> None:
+        root, sc_path = self._setup_alpha_fixture(
+            tmp_path, "alpha_t14_d_idem", gate_c_passed=True, sharpe=0.2
+        )
+        cfg = PromotionConfig(
+            alpha_id="alpha_t14_d_idem",
+            owner="charlie",
+            project_root=str(root),
+            scorecard_path=str(sc_path),
+            validation_profile=self._strict_profile(),
+        )
+        for _ in range(2):
+            result = promote_alpha(cfg)
+            assert result.approved is False
+
+        rows = self._read_ledger(_isolate_kill_ledger)
+        assert len(rows) == 1, f"expected idempotent single row, got {rows}"
+
+    def test_gate_d_rejection_does_not_kill_when_env_off(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _isolate_kill_ledger: Path,
+    ) -> None:
+        monkeypatch.setenv("HFT_KILL_LEDGER_ENABLED", "0")
+        root, sc_path = self._setup_alpha_fixture(
+            tmp_path, "alpha_t14_d_off", gate_c_passed=True, sharpe=0.2
+        )
+        cfg = PromotionConfig(
+            alpha_id="alpha_t14_d_off",
+            owner="charlie",
+            project_root=str(root),
+            scorecard_path=str(sc_path),
+            validation_profile=self._strict_profile(),
+        )
+        result = promote_alpha(cfg)
+        assert result.approved is False
+
+        rows = self._read_ledger(_isolate_kill_ledger)
+        assert rows == [], f"ledger must be empty when env off, got {rows}"
