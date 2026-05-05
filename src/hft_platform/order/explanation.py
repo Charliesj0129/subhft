@@ -84,7 +84,7 @@ class _PendingExplanation:
     client_order_id: str
     strategy_id: str
     symbol: str
-    inserted_mono: float
+    inserted_monotonic_ts: float
     feature_snapshot: dict[str, Any] = field(default_factory=dict)
     strategy_decision: dict[str, Any] = field(default_factory=dict)
     risk_decision: dict[str, Any] = field(default_factory=dict)
@@ -129,7 +129,7 @@ class OrderExplanationAssembler:
         self._ttl_s = float(ttl_s)
         self._max_in_flight = int(max_in_flight)
         self._pending: dict[str, _PendingExplanation] = {}
-        self._last_sweep_mono: float = 0.0
+        self._last_sweep_monotonic_ts: float = 0.0
 
     # ------------------------------------------------------------------ ingestion
 
@@ -164,7 +164,7 @@ class OrderExplanationAssembler:
             client_order_id=client_order_id,
             strategy_id=strategy_id,
             symbol=symbol,
-            inserted_mono=time.monotonic(),
+            inserted_monotonic_ts=time.monotonic(),
             strategy_decision=dict(intent_payload or {}),
             feature_snapshot=dict(feature_snapshot or {}),
         )
@@ -219,20 +219,20 @@ class OrderExplanationAssembler:
 
     # ------------------------------------------------------------------ sweeping
 
-    def sweep_stale(self, *, now_mono: float | None = None, now_ns: int | None = None) -> int:
+    def sweep_stale(self, *, now_monotonic_ts: float | None = None, now_ns: int | None = None) -> int:
         """Emit ``incomplete`` explanations for entries past ``ttl_s``.
 
         Returns the number of swept entries. Rate-limited to once per 60s
         to keep the cost off the order-dispatch path even when called from
         a per-tick supervisor loop.
         """
-        now_mono = time.monotonic() if now_mono is None else float(now_mono)
-        if now_mono - self._last_sweep_mono < 60.0:
+        now_monotonic_ts = time.monotonic() if now_monotonic_ts is None else float(now_monotonic_ts)
+        if now_monotonic_ts - self._last_sweep_monotonic_ts < 60.0:
             return 0
-        self._last_sweep_mono = now_mono
-        cutoff_mono = now_mono - self._ttl_s
+        self._last_sweep_monotonic_ts = now_monotonic_ts
+        cutoff_monotonic_ts = now_monotonic_ts - self._ttl_s
         ts_ns = int(time.time_ns()) if now_ns is None else int(now_ns)
-        stale_keys = [k for k, e in self._pending.items() if e.inserted_mono < cutoff_mono]
+        stale_keys = [k for k, e in self._pending.items() if e.inserted_monotonic_ts < cutoff_monotonic_ts]
         for k in stale_keys:
             entry = self._pending.pop(k, None)
             if entry is None:
@@ -290,7 +290,7 @@ class OrderExplanationAssembler:
         if len(self._pending) < self._max_in_flight:
             return
         try:
-            oldest_key = min(self._pending, key=lambda k: self._pending[k].inserted_mono)
+            oldest_key = min(self._pending, key=lambda k: self._pending[k].inserted_monotonic_ts)
         except ValueError:
             return
         evicted = self._pending.pop(oldest_key, None)

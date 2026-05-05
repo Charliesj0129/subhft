@@ -166,7 +166,7 @@ class TestTTLSweep:
 
         # Sweep at "t=200" — well past TTL=10s
         monkeypatch.setattr(expl_mod.time, "monotonic", lambda: 200.0)
-        swept = asm.sweep_stale(now_mono=200.0, now_ns=1_700_000_000_000_000_003)
+        swept = asm.sweep_stale(now_monotonic_ts=200.0, now_ns=1_700_000_000_000_000_003)
 
         assert swept == 1
         assert len(emitted) == 1
@@ -188,10 +188,10 @@ class TestTTLSweep:
             symbol="TMFR1",
         )
         # First sweep at t=1000 runs (cutoff = 999, entry at 100 → stale).
-        first = asm.sweep_stale(now_mono=1000.0, now_ns=0)
+        first = asm.sweep_stale(now_monotonic_ts=1000.0, now_ns=0)
         # Second sweep within 60s of the first is rate-limited even with
         # additional stale entries; returns 0.
-        second = asm.sweep_stale(now_mono=1010.0, now_ns=0)
+        second = asm.sweep_stale(now_monotonic_ts=1010.0, now_ns=0)
         assert first == 1
         assert second == 0
 
