@@ -30,7 +30,6 @@ from hft_platform.alpha.cluster import EmptyCorpusError, cluster_alphas
 from hft_platform.alpha.promotion import PromotionConfig, promote_alpha
 from hft_platform.alpha.screener import BUDGET_S, cheap_screen
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
