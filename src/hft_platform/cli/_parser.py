@@ -11,9 +11,11 @@ from ._alpha import (
     cmd_alpha_canary_auto_evaluate,
     cmd_alpha_canary_evaluate,
     cmd_alpha_canary_status,
+    cmd_alpha_cluster,
     cmd_alpha_experiments_best,
     cmd_alpha_experiments_compare,
     cmd_alpha_experiments_list,
+    cmd_alpha_kill,
     cmd_alpha_list,
     cmd_alpha_paper_trade_batch,
     cmd_alpha_pool,
@@ -21,6 +23,7 @@ from ._alpha import (
     cmd_alpha_promote_batch,
     cmd_alpha_rl_promote,
     cmd_alpha_scaffold,
+    cmd_alpha_screen,
     cmd_alpha_search,
     cmd_alpha_validate,
     cmd_alpha_validate_batch,
@@ -512,6 +515,94 @@ def build_parser() -> argparse.ArgumentParser:
     alpha_vb.add_argument("--fail-fast", action="store_true", help="Stop on first failure")
     alpha_vb.add_argument("--out", help="Batch report JSON path")
     alpha_vb.set_defaults(func=cmd_alpha_validate_batch)
+
+    # ── Slice-D Task 11: cheap pre-screener ────────────────────────────
+    alpha_screen = alpha_sub.add_parser(
+        "screen",
+        help="Cheap screener (IC + turnover + cost-floor gate)",
+    )
+    alpha_screen.add_argument("alpha_id", help="Alpha id under research/alphas")
+    alpha_screen.add_argument(
+        "--project-root",
+        default=".",
+        help="Repo root for resolving research/alphas (default: cwd)",
+    )
+    alpha_screen.add_argument(
+        "--threshold-ic",
+        type=float,
+        default=None,
+        help="IC abs minimum override (default: module constant 0.005)",
+    )
+    alpha_screen.add_argument(
+        "--threshold-turnover",
+        type=float,
+        default=None,
+        help="Turnover kill threshold override (default: module constant 2.0)",
+    )
+    alpha_screen.add_argument(
+        "--write-kill",
+        action="store_true",
+        help="On verdict='kill', append a gate='pre_screen' kill ledger row",
+    )
+    alpha_screen.set_defaults(func=cmd_alpha_screen)
+
+    # ── Slice-D Task 12: manual kill ledger entry ──────────────────────
+    alpha_kill = alpha_sub.add_parser(
+        "kill",
+        help="Manually record a kill in the kill ledger",
+    )
+    alpha_kill.add_argument("alpha_id", help="Alpha id to kill")
+    alpha_kill.add_argument(
+        "--reason",
+        required=True,
+        help="Kill reason (must be non-empty / non-whitespace)",
+    )
+    alpha_kill.add_argument(
+        "--gate",
+        default="manual",
+        choices=["A", "B", "C", "D", "E", "F", "pre_screen", "cluster", "manual"],
+        help="Kill gate (default: manual)",
+    )
+    alpha_kill.add_argument(
+        "--killed-by",
+        default="operator",
+        help="Operator identifier for audit trail (default: operator)",
+    )
+    alpha_kill.set_defaults(func=cmd_alpha_kill)
+
+    # ── Slice-D Task 13: hierarchical clustering ───────────────────────
+    alpha_cluster = alpha_sub.add_parser(
+        "cluster",
+        help="Hierarchical correlation clustering across alphas",
+    )
+    alpha_cluster.add_argument(
+        "--base-dir",
+        default="research/experiments",
+        help="Experiment base directory (default: research/experiments)",
+    )
+    alpha_cluster.add_argument(
+        "--threshold",
+        type=float,
+        default=0.7,
+        help="Absolute-correlation cutoff (default: 0.7)",
+    )
+    alpha_cluster.add_argument(
+        "--metric",
+        default="pearson",
+        choices=["pearson", "spearman"],
+        help="Correlation metric (default: pearson)",
+    )
+    alpha_cluster.add_argument(
+        "--write-artifact",
+        action="store_true",
+        help="Persist results to research/alphas/_cluster_assignments.json",
+    )
+    alpha_cluster.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit JSON output instead of an aligned text table",
+    )
+    alpha_cluster.set_defaults(func=cmd_alpha_cluster)
 
     alpha_promote = alpha_sub.add_parser("promote", help="Run promotion pipeline (Gate D-E) and write canary config")
     alpha_promote.add_argument("--alpha-id", required=True, help="Alpha id under research/alphas")

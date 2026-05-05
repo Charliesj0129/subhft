@@ -215,7 +215,13 @@ def _budget_exceeded(started: float) -> bool:
     return (time.monotonic() - started) > BUDGET_S
 
 
-def cheap_screen(alpha_id: str, *, project_root: Path = Path(".")) -> ScreenResult:
+def cheap_screen(
+    alpha_id: str,
+    *,
+    project_root: Path = Path("."),
+    ic_min_abs: float | None = None,
+    turnover_kill: float | None = None,
+) -> ScreenResult:
     """Run the cheap screener for one alpha.
 
     Args:
@@ -225,11 +231,17 @@ def cheap_screen(alpha_id: str, *, project_root: Path = Path(".")) -> ScreenResu
             ``project_root/research/alphas/<alpha_id>/manifest.yaml`` and
             signal data at
             ``project_root/research/experiments/<alpha_id>/signal.npy``.
+        ic_min_abs: optional override for the advisory low-IC floor
+            (default: module-level :data:`IC_MIN_ABS`).
+        turnover_kill: optional override for the turnover kill threshold
+            (default: module-level :data:`TURNOVER_KILL`).
 
     Returns:
         ``ScreenResult`` with verdict in ``{'pass', 'kill', 'unknown'}``.
         ``'unknown'`` is advisory — callers MUST NOT downgrade it to a kill.
     """
+    eff_ic_min_abs = float(IC_MIN_ABS if ic_min_abs is None else ic_min_abs)
+    eff_turnover_kill = float(TURNOVER_KILL if turnover_kill is None else turnover_kill)
     started = time.monotonic()
     logger.debug("cheap_screen_start", alpha_id=alpha_id)
 
@@ -334,7 +346,7 @@ def cheap_screen(alpha_id: str, *, project_root: Path = Path(".")) -> ScreenResu
     breach = _cost_floor_breached(alpha_id, project_root)
 
     # Kill conditions.
-    if turnover_v >= TURNOVER_KILL:
+    if turnover_v >= eff_turnover_kill:
         return _result(
             alpha_id,
             verdict="kill",
@@ -342,7 +354,7 @@ def cheap_screen(alpha_id: str, *, project_root: Path = Path(".")) -> ScreenResu
             ic_std=ic_std,
             turnover=turnover_v,
             cost_floor_breach=breach,
-            reason=f"turnover_above_kill_threshold:{turnover_v:.4f}>={TURNOVER_KILL}",
+            reason=f"turnover_above_kill_threshold:{turnover_v:.4f}>={eff_turnover_kill}",
             started=started,
         )
     if breach:
@@ -360,8 +372,8 @@ def cheap_screen(alpha_id: str, *, project_root: Path = Path(".")) -> ScreenResu
     # Pass — even on low IC. Annotate reason if IC is below the advisory
     # floor (Gate-C will be the gate that actually kills on IC).
     reason = ""
-    if abs(ic_mean) < IC_MIN_ABS:
-        reason = f"low_ic_advisory:|ic|={abs(ic_mean):.4f}<{IC_MIN_ABS}"
+    if abs(ic_mean) < eff_ic_min_abs:
+        reason = f"low_ic_advisory:|ic|={abs(ic_mean):.4f}<{eff_ic_min_abs}"
 
     return _result(
         alpha_id,

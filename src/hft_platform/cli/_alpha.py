@@ -822,3 +822,172 @@ def cmd_alpha_validate_batch(args: argparse.Namespace) -> None:
 
     if failed_ids or errored_ids:
         sys.exit(2)
+
+
+# ---------------------------------------------------------------------------
+# Slice-D Task 11: cmd_alpha_screen
+# ---------------------------------------------------------------------------
+
+
+def cmd_alpha_screen(args: argparse.Namespace) -> None:
+    """Run the cheap pre-screener (IC + turnover + cost-floor) for one alpha.
+
+    On ``verdict='kill'`` and ``--write-kill``, append a ``gate='pre_screen'``
+    row to the kill ledger. Exit codes mirror the promote shape:
+      * 0 — verdict == 'pass' or 'unknown'
+      * 2 — verdict == 'kill'
+      * 1 — infra/import failure
+    """
+    try:
+        from hft_platform.alpha.screener import cheap_screen
+    except Exception as exc:  # noqa: BLE001
+        print(f"Failed to import alpha screener: {exc}")
+        sys.exit(1)
+
+    result = cheap_screen(
+        args.alpha_id,
+        project_root=Path(getattr(args, "project_root", None) or "."),
+        ic_min_abs=(
+            float(args.threshold_ic) if getattr(args, "threshold_ic", None) is not None else None
+        ),
+        turnover_kill=(
+            float(args.threshold_turnover)
+            if getattr(args, "threshold_turnover", None) is not None
+            else None
+        ),
+    )
+    payload = {
+        "alpha_id": result.alpha_id,
+        "verdict": result.verdict,
+        "ic_mean": result.ic_mean,
+        "ic_std": result.ic_std,
+        "turnover": result.turnover,
+        "cost_floor_breach": result.cost_floor_breach,
+        "reason": result.reason,
+        "duration_s": result.duration_s,
+    }
+    print(json.dumps(payload, indent=2, sort_keys=True))
+
+    if result.verdict == "kill" and getattr(args, "write_kill", False):
+        try:
+            from hft_platform.alpha.kill_ledger import KillRecord, append_kill
+
+            record = KillRecord(
+                alpha_id=result.alpha_id,
+                gate="pre_screen",
+                reason=result.reason or "pre_screen_kill",
+                stable_artifact_hash="",
+                scorecard_id="",
+                killed_by="cli:screen",
+            )
+            append_kill(record)
+        except Exception as exc:  # noqa: BLE001
+            print(f"Warning: kill ledger append failed: {exc}", file=sys.stderr)
+
+    if result.verdict == "kill":
+        sys.exit(2)
+
+
+# ---------------------------------------------------------------------------
+# Slice-D Task 12: cmd_alpha_kill
+# ---------------------------------------------------------------------------
+
+
+def cmd_alpha_kill(args: argparse.Namespace) -> None:
+    """Manually record a kill in the kill ledger (operator path).
+
+    Does NOT mutate ``manifest.yaml`` (kill_reason is no longer a manifest
+    field; the kill ledger is the source of truth).
+
+    Exit codes:
+      * 0 — row inserted (or duplicate; idempotent)
+      * 1 — empty/whitespace reason or import failure
+    """
+    reason = (getattr(args, "reason", None) or "").strip()
+    if not reason:
+        print("Error: --reason cannot be empty or whitespace", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        from hft_platform.alpha.kill_ledger import KillRecord, append_kill
+    except Exception as exc:  # noqa: BLE001
+        print(f"Failed to import kill ledger: {exc}")
+        sys.exit(1)
+
+    gate = getattr(args, "gate", None) or "manual"
+    operator = getattr(args, "killed_by", None) or "operator"
+    record = KillRecord(
+        alpha_id=args.alpha_id,
+        gate=gate,
+        reason=reason,
+        stable_artifact_hash="",
+        scorecard_id="",
+        killed_by=f"cli:kill:{operator}",
+    )
+    inserted = append_kill(record)
+    payload = {
+        "alpha_id": record.alpha_id,
+        "gate": record.gate,
+        "reason": record.reason,
+        "kill_id": record.kill_id(),
+        "inserted": bool(inserted),
+    }
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    # Duplicate kill is idempotent success — exit 0 either way.
+
+
+# ---------------------------------------------------------------------------
+# Slice-D Task 13: cmd_alpha_cluster
+# ---------------------------------------------------------------------------
+
+
+def cmd_alpha_cluster(args: argparse.Namespace) -> None:
+    """Run hierarchical correlation clustering across alphas.
+
+    Does NOT mutate ``manifest.yaml`` (cluster_id is no longer a manifest
+    field). Optionally persists a sidecar JSON keyed by
+    ``(threshold, metric, base_dir, corpus)``.
+
+    Exit codes:
+      * 0 — clustering succeeded
+      * 1 — import failure
+      * 2 — empty corpus
+    """
+    try:
+        from hft_platform.alpha.cluster import EmptyCorpusError, cluster_alphas
+    except Exception as exc:  # noqa: BLE001
+        print(f"Failed to import alpha cluster: {exc}")
+        sys.exit(1)
+
+    try:
+        assignments = cluster_alphas(
+            base_dir=getattr(args, "base_dir", None) or "research/experiments",
+            threshold=float(args.threshold),
+            metric=args.metric,
+            write_artifact=bool(getattr(args, "write_artifact", False)),
+        )
+    except EmptyCorpusError:
+        print("No signals available to cluster (empty corpus).", file=sys.stderr)
+        sys.exit(2)
+
+    if getattr(args, "json", False):
+        payload = [
+            {
+                "alpha_id": a.alpha_id,
+                "cluster_id": a.cluster_id,
+                "cluster_size": a.cluster_size,
+                "max_intra_cluster_corr": a.max_intra_cluster_corr,
+            }
+            for a in assignments
+        ]
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    header = f"{'alpha_id':<40} {'cluster_id':<28} {'size':<5} {'max_corr':<10}"
+    print(header)
+    print("-" * len(header))
+    for a in assignments:
+        print(
+            f"{a.alpha_id:<40} {a.cluster_id:<28} "
+            f"{a.cluster_size:<5} {a.max_intra_cluster_corr:<10.4f}"
+        )
