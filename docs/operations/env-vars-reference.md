@@ -29,6 +29,7 @@ Base YAML (config/base/main.yaml)
 | `HFT_QUOTE_VERSION_STRICT` | `0` | `1` = 禁止 watchdog 自動降版至 v0 |
 | `HFT_MD_RECORD_DIRECT` | `1` | `0` = 所有 BidAsk/Tick 經由 bus 錄製（非直接路徑） |
 | `HFT_RECORDER_DROP_ON_FULL` | `1` | `0` = recorder queue 滿時等待（背壓）；`1` = 丟棄 |
+| `HFT_INTENT_RECORDER_ENABLED` | `0` | `1` = 啟用 OrderIntent 錄製至 `hft.order_intents`（Slice C replay-parity gate 證據來源） |
 | `HFT_BUS_BATCH_SIZE` | `0` | >1 時使用 batch consumer，減少事件迴圈喚醒次數 |
 | `HFT_BROKER` | `shioaji` | Broker 後端選擇：`shioaji` / `fubon` |
 | `SYMBOLS_CONFIG` | `config/symbols.yaml` | 交易標的設定檔路徑 |
