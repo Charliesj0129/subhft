@@ -1,6 +1,6 @@
 """R47 opt-in family binding integration test.
 
-Ensures ``config/base/strategies.yaml``'s R47_MAKER_TMF entry is picked up
+Ensures ``config/live/strategies.yaml``'s R47_MAKER_TMF entry is picked up
 correctly by the ``StrategyRegistry`` and ``StrategyRunner`` when the
 ContractFamilyResolver has a live snapshot.
 """
@@ -71,7 +71,7 @@ class TestContractFamilyParser:
 class TestR47Config:
     def test_strategies_yaml_entry_has_tmf_r1_family(self) -> None:
         """Guard against accidental removal of R47's family binding."""
-        text = Path("config/base/strategies.yaml").read_text(encoding="utf-8")
+        text = Path("config/live/strategies.yaml").read_text(encoding="utf-8")
         doc = yaml.safe_load(text)
         entry = next(s for s in doc["strategies"] if s["id"] == "R47_MAKER_TMF")
         families = entry.get("contract_families") or []

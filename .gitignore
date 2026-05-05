@@ -105,6 +105,8 @@ research/*
 !research/backtest/**/*.py
 !research/combinatorial/
 !research/combinatorial/**/*.py
+!research/strategy_archive/
+!research/strategy_archive/*.yaml
 !research/experiments/
 research/experiments/*
 !research/experiments/__init__.py

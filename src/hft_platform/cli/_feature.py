@@ -167,7 +167,7 @@ def cmd_feature_preflight(args: argparse.Namespace) -> None:
     active_profile = reg.get_active_for_set(fe.feature_set_id()) if reg.ids() else None
     if active_profile is not None:
         fe.apply_profile(active_profile)
-    sreg = StrategyRegistry(getattr(args, "strategies", "config/base/strategies.yaml"))
+    sreg = StrategyRegistry(getattr(args, "strategies", "config/live/strategies.yaml"))
     strategies = sreg.instantiate()
     issues = [i.to_dict() for i in check_strategies_feature_compat(strategies, fe)]
     out = {

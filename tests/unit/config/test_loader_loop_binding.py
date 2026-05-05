@@ -22,10 +22,11 @@ def loop_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
     Layout:
       config/base/main.yaml         — base entrypoint with loop_id
-      config/base/strategies.yaml   — registry with R47_MAKER_TMF enabled
+      config/live/strategies.yaml   — registry with R47_MAKER_TMF enabled
       config/loops/r47_tmf_v1.yaml  — loop definition
     """
     (tmp_path / "config" / "base").mkdir(parents=True)
+    (tmp_path / "config" / "live").mkdir(parents=True)
     (tmp_path / "config" / "loops").mkdir(parents=True)
     (tmp_path / "config" / "env").mkdir(parents=True)
 
@@ -40,7 +41,7 @@ def loop_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
             }
         )
     )
-    (tmp_path / "config" / "base" / "strategies.yaml").write_text(
+    (tmp_path / "config" / "live" / "strategies.yaml").write_text(
         yaml.safe_dump(
             {
                 "strategies": [

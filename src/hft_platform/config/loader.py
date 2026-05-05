@@ -9,7 +9,7 @@ from structlog import get_logger
 logger = get_logger("config.loader")
 
 LOOPS_DIR = "config/loops"
-STRATEGIES_YAML_PATH = "config/base/strategies.yaml"
+STRATEGIES_YAML_PATH = "config/live/strategies.yaml"
 
 
 class LoopBindingError(RuntimeError):

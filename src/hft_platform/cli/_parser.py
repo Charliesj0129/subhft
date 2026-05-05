@@ -262,7 +262,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     feat_preflight = feature_sub.add_parser("preflight", help="Check strategy/feature compatibility")
     feat_preflight.add_argument("--profiles", help="Feature profiles YAML path")
-    feat_preflight.add_argument("--strategies", default="config/base/strategies.yaml", help="Strategy config YAML")
+    feat_preflight.add_argument("--strategies", default="config/live/strategies.yaml", help="Strategy config YAML")
     feat_preflight.set_defaults(func=cmd_feature_preflight)
 
     feat_rollout_status = feature_sub.add_parser("rollout-status", help="Inspect local feature rollout state")

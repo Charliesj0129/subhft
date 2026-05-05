@@ -62,7 +62,7 @@ def _parse_contract_families(raw: Any) -> tuple:
 
 
 class StrategyRegistry:
-    def __init__(self, config_path: str = "config/base/strategies.yaml"):
+    def __init__(self, config_path: str = "config/live/strategies.yaml"):
         self.config_path = config_path
         self.configs: List[StrategyConfig] = []
         self.load()

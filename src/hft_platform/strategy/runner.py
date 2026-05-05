@@ -223,7 +223,7 @@ class StrategyRunner:
         lob_engine=None,
         position_store=None,
         feature_engine=None,
-        config_path: str = "config/base/strategies.yaml",
+        config_path: str = "config/live/strategies.yaml",
         symbol_metadata: SymbolMetadata | None = None,
         recorder_queue: "asyncio.Queue | None" = None,
     ):

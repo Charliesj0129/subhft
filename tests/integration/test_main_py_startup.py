@@ -20,6 +20,7 @@ import yaml
 @pytest.fixture
 def loop_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / "config" / "base").mkdir(parents=True)
+    (tmp_path / "config" / "live").mkdir(parents=True)
     (tmp_path / "config" / "loops").mkdir(parents=True)
     (tmp_path / "config" / "env").mkdir(parents=True)
 
@@ -33,7 +34,7 @@ def loop_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
             }
         )
     )
-    (tmp_path / "config" / "base" / "strategies.yaml").write_text(
+    (tmp_path / "config" / "live" / "strategies.yaml").write_text(
         yaml.safe_dump(
             {
                 "strategies": [

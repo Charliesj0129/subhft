@@ -135,7 +135,7 @@ ContractRef = FutureRef | OptionRef | StockRef
 class ContractFamily:
     """Reference to a continuous-contract family (e.g., ``TMF:R1``).
 
-    Used in strategy config (``config/base/strategies.yaml``) so a strategy can
+    Used in strategy config (``config/live/strategies.yaml``) so a strategy can
     declare "I trade the nearest TMF" without pinning an expiry. Runtime
     resolver binds ``ContractFamily`` → concrete ``FutureRef`` / ``OptionRef``
     at snapshot-swap time; binding is observable via ``FamilyBindingChanged``
