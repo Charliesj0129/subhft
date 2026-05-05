@@ -243,3 +243,9 @@ research/__pycache__/
 # cluster assignments json is the per-run cluster sidecar.
 research/alphas/_kill_ledger.jsonl
 research/alphas/_cluster_assignments.json
+
+# Slice-D Task 16: archive sweep summary sidecar is the canonical record of
+# alphas archived 2026-04-17 that lacked a manifest.yaml. Tracked because
+# `research/*` (line 92) otherwise blocks new files under research/archive/.
+!research/archive/
+!research/archive/_kill_summary_*.jsonl
