@@ -15,10 +15,10 @@ The blueprint's Slice B section (`/home/charlie/.claude/plans/curried-launching-
 | `class QueueDepletionFill` (`queue_fraction=0.5` literal) | `research/backtest/fill_models.py` | 42-77 |
 | `class BacktestResult` (frozen dataclass; has `daily_pnl: list[dict] \| None`, `final_pos` already in row) | `research/backtest/types.py` | 43-80 |
 | `class MakerStrategyBridge(BaseStrategy)` (no `on_session_end`) | `src/hft_platform/backtest/maker_bridge.py` | 41 |
-| `vm_ul6_strict.yaml :: blocking_sub_gates` (currently lists 7 entries incl. `replay_parity`) | `config/research/profiles/vm_ul6_strict.yaml` | 49-66 |
-| `class SubGate(Protocol)` + `SubGateResult(name, passed, metrics, details)` frozen | `src/hft_platform/alpha/_sub_gates/registry.py` | 17, 36-50 |
-| `_evaluate_gate_d` (Slice C added `replay_parity_audit` at 339-345) | `src/hft_platform/alpha/promotion.py` | 327-345 |
-| `PromotionConfig` (Slice C added `min_replay_parity_match_pct=95.0`) | `src/hft_platform/alpha/promotion.py` | 39-91 |
+| `vm_ul6_strict.yaml :: blocking_sub_gates` (currently 14 entries: Slice A 13 + Slice C `replay_parity`) | `config/research/profiles/vm_ul6_strict.yaml` | 49-66 |
+| `SubGateResult(frozen, name/passed/metrics/details)` at 17 + `class SubGate(Protocol)` at 36-50 | `src/hft_platform/alpha/_sub_gates/registry.py` | 17-31, 36-50 |
+| `_evaluate_gate_d` (Slice C added `replay_parity_audit` at 340-348) | `src/hft_platform/alpha/promotion.py` | 283-373 |
+| `PromotionConfig` (Slice C added `min_replay_parity_match_pct=95.0` at line 64) | `src/hft_platform/alpha/promotion.py` | 40-135 |
 | `v2026-04-24_measured` Shioaji broker latency profile (place P95 395ms, cancel P95 59ms, 6.7× asymmetric) | `config/research/latency_profiles.yaml` | 71+ |
 
 ## 1. Goal
@@ -90,7 +90,7 @@ Pre-flight to execute at the start of Task 1:
 | `config/research/profiles/vm_ul6_strict.yaml` | Add `cost_floor_per_fill_pts: 0.5` and `cost_uncertainty_p95_lower_bound_min_pts: 0.0` under both maker (line 47) and taker (line 17) thresholds. Append `- inventory_mtm` and `- cost_uncertainty` to `blocking_sub_gates`. |
 | `src/hft_platform/alpha/promotion.py` | `PromotionConfig` gains `min_inventory_mtm_safety_margin_pct: float = 5.0`, `min_cost_uncertainty_p95_lower_bound_pts: float = 0.0`. `_evaluate_gate_d` extends the audits dict with `inventory_mtm_audit` and `cost_uncertainty_audit` mirroring `latency_audit` / `replay_parity_audit`. |
 | `src/hft_platform/alpha/latency_audit.py` | Harden P95 enforcement: when `place_ns/cancel_ns` profile entries are absent, the audit now FAILS CLOSED (currently logs and returns advisory). New strict-mode toggle `strict: bool = False` on the audit signature; `_evaluate_gate_d` passes `strict=True` when profile is `vm_ul6_strict`. |
-| `src/hft_platform/backtest/maker_bridge.py` | Add `def on_session_end(self) → list[OrderIntent]:` returning `[OrderIntent(side=opposite_of_residual, qty=abs(residual_qty), price=cur_mid, kind="MARKET", reason="session_end_force_flat")]`. Wire from supervisor's session-end signal (existing hook in `services/bootstrap.py` if present; otherwise add minimal hook). |
+| `src/hft_platform/backtest/maker_bridge.py` | Add `def on_session_end(self) → list[OrderIntent]:` returning `[OrderIntent(side=opposite_of_residual, qty=abs(residual_qty), price=cur_mid, kind="MARKET", reason="session_end_force_flat")]`. Wire from `SessionPhase` transition into `CLOSE_ONLY` (or `FORCE_FLAT`) inside `services/system.py` (producer; refs at lines 963-966); consumer-side hook lives in `strategy/runner.py:1623` (existing `SessionPhase.FORCE_FLAT` branch). `IntentType.FORCE_FLAT` already defined at `runner.py:1597`. |
 | `docs/operations/env-vars-reference.md` | Add `HFT_MAKER_MARK_METHOD` (default `last_mid`; alternative `worse_of_mid_last_trade`) and `HFT_QUEUE_CALIBRATION_TABLE_PATH` (default `research/backtest/q_hat_data/<HFT_SYMBOLS_PRIMARY>_q_hat.parquet`). |
 | `docs/architecture/current-architecture.md` | Append §7B "Slice B — Maker Realism" mirroring §7A's seven-row surface table. |
 
@@ -553,7 +553,7 @@ class MakerStrategyBridge(BaseStrategy):
         ]
 ```
 
-The supervisor wiring lives in `services/bootstrap.py` — Task 13 follows the existing session-end signal chain (already used for halt-cleanup) and adds a `bridge.on_session_end(ctx)` call site, draining returned intents through the standard risk pipeline.
+The wiring point is the `SessionPhase` transition into `CLOSE_ONLY` (or `FORCE_FLAT`) inside `services/system.py` (producer at lines 963-966). Task 13 adds `bridge.on_session_end(ctx)` invocation from the strategy-runner consumer side (`strategy/runner.py:1623`, mirroring the existing `SessionPhase.FORCE_FLAT` handling), draining returned `IntentType.FORCE_FLAT` intents through the standard risk pipeline. **NOTE:** `services/bootstrap.py` is NOT the wiring point — its `shutdown()`/`teardown()` only handle process-exit Redis lease release, not in-trading-hour session transitions.
 
 **RED tests.**
 1. Residual = 0 → returns `[]`.
