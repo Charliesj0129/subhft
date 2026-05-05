@@ -127,6 +127,14 @@ jobs:
     name: Build & Deploy to Production
     needs: deploy-staging
     runs-on: ubuntu-latest
+    # Loop_v1 stabilization freeze: `production` is a GitHub environment with
+    # required-reviewer protection. Auto-deploy on `workflow_run` cannot
+    # bypass this gate; manual approval is required for every deploy.
+    # Configure the rule server-side: Settings → Environments → production →
+    # Required reviewers. See docs/loop_v1_stabilization_charter.md.
+    environment:
+      name: production
+      url: https://github.com/${{ github.repository }}/actions
     if: >
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main')

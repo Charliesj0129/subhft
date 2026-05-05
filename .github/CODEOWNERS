@@ -14,3 +14,14 @@
 /tests/system/ @Charliesj0129
 /.github/workflows/ @Charliesj0129
 /docs/architecture/ @Charliesj0129
+
+# Loop_v1 stabilization freeze (see docs/loop_v1_stabilization_charter.md).
+# These paths are frozen during the 30-trading-day stabilization clock; any
+# PR that touches them requires explicit operator approval. Bot reviews do
+# not satisfy this requirement.
+/config/loops/ @Charliesj0129
+/config/live/ @Charliesj0129
+/src/hft_platform/strategies/ @Charliesj0129
+/src/hft_platform/alpha/ @Charliesj0129
+/docs/loop_v1_stabilization_charter.md @Charliesj0129
+/docs/loop_v1_stabilization_log.md @Charliesj0129
