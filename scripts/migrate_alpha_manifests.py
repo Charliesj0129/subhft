@@ -174,9 +174,17 @@ def main() -> int:
         action="store_true",
         help="Actually write (default: dry run)",
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Explicitly request dry-run mode (the default; provided for clarity)",
+    )
     parser.add_argument("--archive-dir", type=Path, default=ARCHIVE_DIR)
     parser.add_argument("--summary-path", type=Path, default=SUMMARY_JSONL)
     args = parser.parse_args()
+    if args.dry_run and args.apply:
+        print("--dry-run and --apply are mutually exclusive", file=sys.stderr)
+        return 2
 
     if not args.archive_dir.exists():
         print(f"Archive dir not found: {args.archive_dir}", file=sys.stderr)
