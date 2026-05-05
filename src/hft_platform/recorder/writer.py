@@ -473,8 +473,10 @@ class DataWriter:
             return
         try:
             v_orders, v_fills = _L7_AUDIT_MIGRATION_VERSIONS
+            # v_orders / v_fills are module-level migration version constants
+            # from _L7_AUDIT_MIGRATION_VERSIONS — never user-controlled.
             result = self.ch_client.query(
-                f"SELECT version FROM hft.schema_migrations WHERE version IN ('{v_orders}', '{v_fills}')"
+                f"SELECT version FROM hft.schema_migrations WHERE version IN ('{v_orders}', '{v_fills}')"  # nosec B608
             )
             applied = {row[0] for row in result.result_rows}
             orders_applied = v_orders in applied

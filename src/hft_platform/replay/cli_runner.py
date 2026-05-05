@@ -102,8 +102,11 @@ def _load_live_intents(
         "decision_price",
         "price_type",
     ]
+    # `columns` is a hardcoded module-level list of canonical intent fields;
+    # user-controlled values (session_date, strategy_id) are bound via
+    # clickhouse-connect parameters (%(d)s, %(s)s) — not interpolated.
     query = (
-        f"SELECT {', '.join(columns)} FROM hft.order_intents "
+        f"SELECT {', '.join(columns)} FROM hft.order_intents "  # nosec B608
         "WHERE toDate(toDateTime64(ingest_ts/1e9, 3)) = %(d)s "
         "AND strategy_id = %(s)s "
         "ORDER BY timestamp_ns ASC, intent_id ASC"
