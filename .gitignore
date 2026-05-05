@@ -113,6 +113,9 @@ research/experiments/*
 !research/experiments/comparisons/.gitkeep
 !research/experiments/validations/
 research/experiments/validations/**/20*Z_*/
+# Slice-D synthetic signal corpus (committed for DoD-D3 determinism in CI)
+!research/experiments/_slice_d_fixtures/
+!research/experiments/_slice_d_fixtures/**
 !research/knowledge/
 research/knowledge/*
 !research/knowledge/paper_index.json

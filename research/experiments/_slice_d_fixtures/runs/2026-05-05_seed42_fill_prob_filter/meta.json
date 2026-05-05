@@ -1,0 +1,15 @@
+{
+  "alpha_id": "fill_prob_filter",
+  "backtest_report_path": "research/experiments/_slice_d_fixtures/runs/2026-05-05_seed42_fill_prob_filter/backtest_report.json",
+  "config_hash": "synthetic_seed42",
+  "data_paths": [
+    "synthetic"
+  ],
+  "equity_path": null,
+  "gate_status": {},
+  "metrics": {},
+  "run_id": "2026-05-05_seed42_fill_prob_filter",
+  "scorecard_path": "research/experiments/_slice_d_fixtures/runs/2026-05-05_seed42_fill_prob_filter/scorecard.json",
+  "signals_path": "research/experiments/_slice_d_fixtures/runs/2026-05-05_seed42_fill_prob_filter/signals.npy",
+  "timestamp": "2026-05-05T00:00:00+00:00"
+}

@@ -1,0 +1,15 @@
+{
+  "alpha_id": "c68_txf_rollover_back_front_maker",
+  "backtest_report_path": "research/experiments/_slice_d_fixtures/runs/2026-05-05_seed42_c68_txf_rollover_back_front_maker/backtest_report.json",
+  "config_hash": "synthetic_seed42",
+  "data_paths": [
+    "synthetic"
+  ],
+  "equity_path": null,
+  "gate_status": {},
+  "metrics": {},
+  "run_id": "2026-05-05_seed42_c68_txf_rollover_back_front_maker",
+  "scorecard_path": "research/experiments/_slice_d_fixtures/runs/2026-05-05_seed42_c68_txf_rollover_back_front_maker/scorecard.json",
+  "signals_path": "research/experiments/_slice_d_fixtures/runs/2026-05-05_seed42_c68_txf_rollover_back_front_maker/signals.npy",
+  "timestamp": "2026-05-05T00:00:00+00:00"
+}
