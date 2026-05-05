@@ -692,9 +692,65 @@ Submit this plan to a Codex subagent with the prompt:
 
 Resolve all findings before Task 1 dispatch. Append the Codex verdict and findings list to this plan as §9 (post-review delta).
 
-## 9. Post-review delta (filled in after Codex pass)
+## 9. Post-review delta (Codex adversarial review applied 2026-05-05)
 
-> _To be appended after Codex review. Mirror Slice C plan's §9 structure: ACCEPT-WITH-FIXES; list applied edits with file:line; final verdict._
+**Verdict.** ACCEPT-WITH-FIXES.
+
+**Review process.** Codex `task-mosdl3vv-ptq19b` (rescue dispatch, thread `019df749-3ad5-7c93-83e0-b8932c5da2b1`, started 2026-05-05T08:37:38Z) ran an adversarial sweep of the plan against `main@5861730d`. The Codex process surfaced two anchor defects in its preliminary pass and then exited mid-flight (process gone at 08:45 UTC, 80 jsonl entries, no final verdict written). Cross-cutting checks 1-7 were completed in-line on the foreground session against the same commit. All defects below are anchored to `git show 5861730d:<path>` reads.
+
+### Findings
+
+**[HIGH] §0 anchor row for `_evaluate_gate_d` is off by ~44 lines.**
+- Plan claim: `src/hft_platform/alpha/promotion.py:327-345`, `replay_parity_audit at 339-345`.
+- Code evidence on `5861730d`: `_evaluate_gate_d` defined at line **283**; `replay_parity_audit` block at lines **340-348** (driven by `min_match_pct = getattr(config, "min_replay_parity_match_pct", 95.0)` at line 339).
+- Defect: subagents running Task 12 will land on the wrong code section first; mid-task drift risk.
+- Recommended fix in §0 row: `_evaluate_gate_d (Slice C added replay_parity_audit at 340-348) | promotion.py | 283-373`.
+
+**[HIGH] §0 anchor row for `PromotionConfig` overstates the range.**
+- Plan claim: `promotion.py:39-91`.
+- Code evidence on `5861730d`: `class PromotionConfig` starts at line **40**; `min_replay_parity_match_pct: float = 95.0` at line **64**.
+- Recommended fix in §0 row: `PromotionConfig (Slice C added min_replay_parity_match_pct=95.0 at line 64) | promotion.py | 40-135`.
+
+**[HIGH] Task 13 mis-cites session-end signal source.**
+- Plan claim (lines 93, 556): "supervisor wiring lives in `services/bootstrap.py` ... existing session-end signal chain (already used for halt-cleanup)".
+- Code evidence on `5861730d`: `services/bootstrap.py` only handles runtime shutdown (`shutdown()` at line 174, `teardown()` at line 526) and Redis session lease (`session_lease_*`) — there is **no** in-trading-hour session-end broadcast there. The actual `SessionPhase` state machine (`PRE_OPEN / OPEN / CLOSE_ONLY / FORCE_FLAT`) lives in `src/hft_platform/services/system.py` (referenced at lines 963-966) and the consumer-side phase guards live in `src/hft_platform/strategy/runner.py` (at lines 1605, 1607, 1623 for OPEN / CLOSE_ONLY / FORCE_FLAT branches; `IntentType.FORCE_FLAT` at runner.py:1597).
+- Defect: Task 13 wiring step would land in the wrong file. The signal exists; the citation is wrong.
+- Recommended fix in Task 13 + §5 file table: wiring point is the `SessionPhase` transition into `CLOSE_ONLY` (or `FORCE_FLAT`) inside `services/system.py` (the producer); `MakerStrategyBridge.on_session_end(ctx)` is invoked from the strategy-runner consumer side when `SessionPhase` transitions are observed (mirror existing FORCE_FLAT-phase handling at `runner.py:1623`). Returned intents flow through the standard risk pipeline.
+
+**[MEDIUM] §0 row asserts `blocking_sub_gates` "currently lists 7 entries" — actually 14.**
+- Plan claim (line 18): "currently lists 7 entries incl. `replay_parity`".
+- Code evidence on `5861730d` (`config/research/profiles/vm_ul6_strict.yaml:49-66`): 14 entries — `sharpe_threshold, max_drawdown, winning_day_pct, fill_quality, fill_rate_validation, ic_evaluation, min_sample_size, single_day_dominance, loo_day_sensitivity, outlier_trade_removal, day_bootstrap_ci, stationary_block_bootstrap, deflated_sharpe_maker, replay_parity`.
+- Defect: cosmetic; risk is a subagent miscounting "what is already there" when adding `inventory_mtm` and `cost_uncertainty` (Task 11) and over-removing existing entries.
+- Recommended fix in §0 row: "currently lists 14 entries (Slice A 13 + Slice C `replay_parity`)".
+
+**[MEDIUM] §0 row reverses the symbol order for `registry.py`.**
+- Plan claim (line 19): "`class SubGate(Protocol)` + `SubGateResult(name, passed, metrics, details)` frozen | registry.py | 17, 36-50".
+- Code evidence on `5861730d`: `SubGateResult(frozen)` is defined at lines **17-31**; `SubGate(Protocol)` at lines **36-50**. The line ranges are correct, but the symbol order in the description reads them backwards.
+- Recommended fix in §0 row: "`SubGateResult(frozen, name/passed/metrics/details)` at 17 + `SubGate(Protocol)` at 36-50".
+
+**[LOW] Task 12 should explicitly cite the existing `latency_profile is not None` check it is replacing.**
+- Plan Task 12 (line 495+): hardens `latency_audit.py` to fail-closed when profile missing under strict.
+- Code evidence on `5861730d`: `_evaluate_gate_d` already includes a `latency_profile` check at lines 320-333 with `pass: latency_profile is not None`. Task 12 hardening is layered on top — the new behavior is "under strict, also require `place_ns/cancel_ns` P95 fields populated, not just profile-name set".
+- Recommended fix in Task 12 §: explicit "Existing behaviour" callout naming `promotion.py:320-333`, then "Strict-mode delta" naming the new fail-closed conditions (P95 fields populated, profile-id matches `v2026-04-24_measured` family).
+
+### Cross-cutting checks not flagged
+
+- **Anchor rows verified clean**: `class MakerEngine` at 219, `_run_day` at 364→502, `_compute_fifo_pnl` at 505, `QueueDepletionFill` at 42-77, `BacktestResult` at 43-80, `MakerStrategyBridge` at 41, `vm_ul6_strict.yaml` line 49-66 for `blocking_sub_gates`, `latency_profiles.yaml` `v2026-04-24_measured` at 71+. No shift.
+- **DoD measurability** (B1-B6): all DoDs cite concrete fixtures, commands, or numeric thresholds. DoD-B1 names `+2,398 NTD / 39 fills` baseline and the `v2026-04-24_measured` profile; DoD-B5 names the existing 94/100 R47 synthetic divergence fixture.
+- **OrderIntent shape for `on_session_end()` MARKET force-flat**: `IntentType.FORCE_FLAT` already exists in `strategy/runner.py:1597`, and `runner.py:858` confirms the price-scaling contract. No speculative new contract surface.
+- **Risk path acceptance of FORCE_FLAT in CLOSE_ONLY phase**: covered by `runner.py:1587-1588` ("During CLOSE_ONLY: allow CANCEL, FORCE_FLAT, and position-reducing IOC orders"). No risk-engine reject.
+- **Out-of-scope creep**: no DSL, kill ledger, correlation clustering, new latency profile, recorder topic, or replay infrastructure changes in any of Tasks 1-18. Scope holds.
+- **q_hat depth-bucket cutoff (depth<5 = "shallow")**: Task 5 documents it as a CONFIGURABLE constant; the n<30 cell-drop rule is justified inline as a minimum-power threshold. Acceptable.
+
+### Top 3 residual risks if shipped without further review
+
+1. **Task 13 wiring still requires manual cross-check**: even with the corrected `services/system.py` SessionPhase signal source, the integration test must drive the actual `SessionPhase.CLOSE_ONLY → FORCE_FLAT` transition end-to-end (not just call `on_session_end()` directly). Test Task 13 lands one cycle of integration before declaring it done.
+2. **q_hat fixtures may require larger CK windows**: ±15% backtest-vs-replay tolerance assumes ≥5 trading days per (symbol, hour, depth_bucket) cell with n≥30; Task 7 should report the actual cell occupancy and flag any cell that falls back to `0.5` literal so the calibration coverage is auditable.
+3. **`min_replay_parity_match_pct` default of 95.0 was set in Slice C and never re-verified post-merge**: if Task 14 regression test on the 94/100 R47 fixture passes but the headroom is razor-thin (e.g. 95.0% exactly), a single intent-stream nondeterminism could flip future runs to FAIL. Task 14 should report the actual match_pct and flag if it is within 1pp of the 95% threshold.
+
+### Recommended follow-up edits (separate commit)
+
+The §0 anchor table rows, §5 modified-files row for `maker_bridge.py`, and §6 Task 12 / Task 13 wording should be patched against the recommended fixes above before Task 1 dispatch. They are not yet applied to the plan body — the §9 record above is authoritative for the subagent that will execute Slice B (it should reconcile §0/§5/§6 wording against §9 "Recommended fix" lines on first read).
 
 ## 10. Execution handoff
 
