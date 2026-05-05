@@ -62,6 +62,13 @@ class PromotionConfig:
     # ``scorecard.replay_parity.match_pct``; missing or below-threshold values
     # fail closed (see _evaluate_gate_d).
     min_replay_parity_match_pct: float = 95.0
+    # Slice B Task 12: belt-and-suspenders Gate D audits that mirror the
+    # ``inventory_mtm`` and ``cost_uncertainty`` Gate C sub-gates. The audits
+    # read sub-gate metrics that Gate C wrote to the scorecard and re-check
+    # them at promotion time. Defaults preserve current behaviour for
+    # scorecards that do not carry the Slice B sub-gate payloads.
+    min_inventory_mtm_safety_margin_pct: float = 5.0
+    min_cost_uncertainty_p95_lower_bound_pts: float = 0.0
     enable_rust_readiness_gate: bool = False
     rust_module_name: str | None = None
     rust_parity_test_path: str = "tests/unit/test_rust_hotpath_parity.py"
@@ -281,11 +288,23 @@ def promote_alpha(config: PromotionConfig) -> PromotionResult:
 
 
 def _evaluate_gate_d(scorecard: dict[str, Any], config: PromotionConfig) -> tuple[bool, dict[str, Any]]:
+    from hft_platform.alpha.latency_audit import latency_audit as _latency_audit
+
     sharpe = _to_float(scorecard.get("sharpe_oos"))
     max_dd = _to_float(scorecard.get("max_drawdown"))
     turnover = _to_float(scorecard.get("turnover"))
     corr = _to_float(scorecard.get("correlation_pool_max"))
     latency_profile = scorecard.get("latency_profile") or None
+    # Slice B Task 12 — strict-mode P95 fail-closed check. Only triggered when
+    # the scorecard carries a *resolved* profile dict (i.e. expanded from
+    # config/research/latency_profiles.yaml). String-only metadata preserves
+    # the existing latency_profile-presence check below.
+    profile_obj = getattr(config, "validation_profile", None)
+    profile_is_strict = bool(getattr(profile_obj, "is_strict", False))
+    if isinstance(latency_profile, dict):
+        _audit = _latency_audit(latency_profile, strict=profile_is_strict)
+    else:
+        _audit = None
 
     checks: dict[str, dict[str, Any]] = {
         "sharpe_oos": {
@@ -329,6 +348,17 @@ def _evaluate_gate_d(scorecard: dict[str, Any], config: PromotionConfig) -> tupl
             ),
         },
     }
+    # Slice B Task 12 — surface the strict P95 fail-closed audit when a
+    # resolved profile dict is attached. String-only metadata leaves only
+    # the legacy latency_profile-presence check above (advisory until a
+    # resolved dict is provided upstream).
+    if _audit is not None:
+        checks["latency_audit_strict"] = {
+            "value": _audit.get("profile_id"),
+            "required": profile_is_strict,
+            "pass": bool(_audit.get("passed", False)),
+            "detail": str(_audit.get("reason", "")),
+        }
     # Slice C: replay-parity audit — mirrors latency_profile fail-closed semantics.
     # Promotion-time check that the scorecard recorded a passing replay_parity_report
     # (live → backtest intent reconstruction within tolerance under a strict profile).
@@ -346,6 +376,93 @@ def _evaluate_gate_d(scorecard: dict[str, Any], config: PromotionConfig) -> tupl
             "OK" if match_pct is not None else "MISSING — scorecard.replay_parity must be populated before promotion"
         ),
     }
+
+    # Slice B Task 12: inventory_mtm + cost_uncertainty audits.
+    # Belt-and-suspenders re-check of the Gate C sub-gate results that the
+    # strict profile elevates to blocking. The audits read the sub-gate
+    # payloads Gate C wrote to the scorecard (passed/metrics) — they do NOT
+    # re-evaluate from raw daily_pnl. Pattern mirrors replay_parity_audit above.
+    strategy_type = str(scorecard.get("strategy_type") or "").strip().lower()
+
+    # --- inventory_mtm_audit (maker-only; advisory PASS for taker) ---
+    inventory_mtm_payload = scorecard.get("inventory_mtm")
+    if strategy_type == "taker":
+        checks["inventory_mtm_audit"] = {
+            "value": None,
+            "required": False,
+            "pass": True,
+            "detail": "advisory: inventory_mtm not applicable to taker strategies",
+        }
+    elif isinstance(inventory_mtm_payload, dict):
+        _inv_raw = inventory_mtm_payload.get("metrics")
+        inv_metrics: dict[str, Any] = _inv_raw if isinstance(_inv_raw, dict) else {}
+        sub_passed = bool(inventory_mtm_payload.get("passed", False))
+        net_pts = _to_float(inv_metrics.get("net_pts"))
+        cost_floor_total = _to_float(inv_metrics.get("cost_floor_total_pts"))
+        checks["inventory_mtm_audit"] = {
+            "value": net_pts,
+            "cost_floor_total_pts": cost_floor_total,
+            "safety_margin_pct": float(config.min_inventory_mtm_safety_margin_pct),
+            "required": True,
+            "pass": sub_passed,
+            "detail": (
+                "OK"
+                if sub_passed
+                else str(
+                    inventory_mtm_payload.get("details")
+                    or "inventory_mtm sub-gate FAILED"
+                )
+            ),
+        }
+    else:
+        # Maker / unknown strategy with no inventory_mtm payload on scorecard.
+        # Treat as advisory (legacy run) — promotion is not blocked by this
+        # audit alone; the Gate C blocking_sub_gates list under strict profile
+        # will already have caught the missing payload.
+        checks["inventory_mtm_audit"] = {
+            "value": None,
+            "required": False,
+            "pass": True,
+            "detail": (
+                "advisory: scorecard.inventory_mtm missing "
+                "(legacy run or non-maker strategy)"
+            ),
+        }
+
+    # --- cost_uncertainty_audit (applies to maker + taker) ---
+    cost_uncertainty_payload = scorecard.get("cost_uncertainty")
+    min_p95_lower = float(config.min_cost_uncertainty_p95_lower_bound_pts)
+    if isinstance(cost_uncertainty_payload, dict):
+        _cu_raw = cost_uncertainty_payload.get("metrics")
+        cu_metrics: dict[str, Any] = _cu_raw if isinstance(_cu_raw, dict) else {}
+        sub_passed = bool(cost_uncertainty_payload.get("passed", False))
+        p95_lower = _to_float(cu_metrics.get("p95_lower_bound_pts"))
+        checks["cost_uncertainty_audit"] = {
+            "value": p95_lower,
+            "min": min_p95_lower,
+            "required": True,
+            "pass": sub_passed,
+            "detail": (
+                "OK"
+                if sub_passed
+                else str(
+                    cost_uncertainty_payload.get("details")
+                    or "cost_uncertainty sub-gate FAILED"
+                )
+            ),
+        }
+    else:
+        # No cost_uncertainty payload — advisory PASS (legacy run). Strict
+        # profile blocking_sub_gates will catch missing payload at Gate C.
+        checks["cost_uncertainty_audit"] = {
+            "value": None,
+            "min": min_p95_lower,
+            "required": False,
+            "pass": True,
+            "detail": (
+                "advisory: scorecard.cost_uncertainty missing (legacy run)"
+            ),
+        }
     # Feature set version parity check (warn-only: does NOT block Gate D).
     manifest_fsv = str(config.manifest_feature_set_version or "").strip() or None
     _LIVE_FSV: str | None = None
