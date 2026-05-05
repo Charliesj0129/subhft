@@ -130,6 +130,7 @@ class OrderAdapter:
         "_deferred_terminals",
         "_cmd_created_ns_map",
         "_cmd_tca_map",
+        "_cmd_trace_id_map",
         "_cmd_map_max_size",
         "_mid_price_fn",
         "_storm_guard",
@@ -156,6 +157,7 @@ class OrderAdapter:
         "_phantom_recovery_ttl_s",
         "_phantom_lock",
         "_audit_writer",
+        "_explanation_assembler",
         "_rejection_sink",
         "_pending_fill_index",
         "_pending_fill_registered_at",
@@ -176,6 +178,7 @@ class OrderAdapter:
         broker_codec: BrokerOrderCodec | None = None,
         cmd_created_ns_map: Dict[str, int] | None = None,
         cmd_tca_map: Dict[str, tuple[int, int]] | None = None,
+        cmd_trace_id_map: Dict[str, str] | None = None,
         mid_price_fn: Callable[[str], int] | None = None,
     ) -> None:
         self.config_path = config_path
@@ -199,6 +202,11 @@ class OrderAdapter:
         self._cmd_created_ns_map: Dict[str, int] = cmd_created_ns_map if cmd_created_ns_map is not None else {}
         # TCA price map: order_key -> (decision_price, arrival_price) for fill enrichment
         self._cmd_tca_map: Dict[str, tuple[int, int]] = cmd_tca_map if cmd_tca_map is not None else {}
+        # L8 (loop_v1): trace_id map for FillEvent enrichment. Populated alongside
+        # ``_cmd_tca_map`` in ``_dispatch_to_api`` and read by ExecutionRouter when
+        # a fill is matched to a known order_key. Bounded/evicted in lockstep with
+        # ``_cmd_created_ns_map`` so the three maps share a single TTL.
+        self._cmd_trace_id_map: Dict[str, str] = cmd_trace_id_map if cmd_trace_id_map is not None else {}
         self._mid_price_fn: Callable[[str], int] | None = mid_price_fn
         self._storm_guard: Any = None  # Set post-init to close TOCTOU gap (M1)
         self._order_id_map_max_size = int(os.getenv("HFT_ORDER_ID_MAP_MAX_SIZE", "10000"))
@@ -353,6 +361,10 @@ class OrderAdapter:
 
         # Audit writer for order lifecycle logging (optional, injected post-init)
         self._audit_writer: Any = None
+        # L8 (loop_v1): canonical-explanation assembler (optional, injected post-init).
+        # Receives lifecycle events alongside _audit_writer so a single
+        # OrderExplanation row is emitted per terminal order.
+        self._explanation_assembler: Any = None
         # Rejection feedback sink for dispatch failures (optional, injected post-init)
         self._rejection_sink: asyncio.Queue | None = None
 
@@ -370,6 +382,15 @@ class OrderAdapter:
     def set_audit_writer(self, writer: Any) -> None:
         """Inject audit writer for order lifecycle logging."""
         self._audit_writer = writer
+
+    def set_explanation_assembler(self, assembler: Any) -> None:
+        """Inject ``OrderExplanationAssembler`` for canonical per-order explanations.
+
+        L8 (loop_v1): the assembler receives ``on_intent`` at dispatch,
+        ``on_command`` for OrderCommand details, and ``on_terminal`` from
+        ``on_terminal_state``. Set to ``None`` to disable.
+        """
+        self._explanation_assembler = assembler
 
     def set_rejection_sink(self, sink: asyncio.Queue) -> None:
         """Inject rejection feedback queue so strategies learn about dispatch failures."""
@@ -600,6 +621,34 @@ class OrderAdapter:
                 self._audit_writer.log_order(order_data)
             except Exception:  # noqa: BLE001
                 pass  # audit must never block or crash order dispatch
+        # L8: forward to explanation assembler. Best-effort — exceptions never
+        # propagate to the order path (assembler is observability-only).
+        asm = self._explanation_assembler
+        if asm is None:
+            return
+        try:
+            event = order_data.get("event") if isinstance(order_data, dict) else None
+            intent_type = order_data.get("intent_type") if isinstance(order_data, dict) else None
+            order_key = order_data.get("order_key") if isinstance(order_data, dict) else None
+            target_key = order_data.get("target_key") if isinstance(order_data, dict) else None
+            if not order_key:
+                return
+            if event == "dispatched" and intent_type == "NEW":
+                asm.on_command(client_order_id=str(order_key), command_payload=dict(order_data))
+            elif event == "dispatched" and intent_type in {"CANCEL", "AMEND"}:
+                # Cancel/Amend dispatched against a NEW order — record on the target's
+                # explanation entry so the cancel attempt appears in the timeline.
+                if target_key:
+                    asm.on_cancel(client_order_id=str(target_key), cancel_payload=dict(order_data))
+            elif event in {"cancel_no_op_already_inflight", "cancel_no_op_already_terminal"}:
+                if target_key:
+                    asm.on_cancel(client_order_id=str(target_key), cancel_payload=dict(order_data))
+            elif event == "dispatch_failed":
+                # Dispatch failure: still record on the originating order_key so
+                # the explanation marks the rejected attempt.
+                asm.on_cancel(client_order_id=str(order_key), cancel_payload=dict(order_data))
+        except Exception:  # noqa: BLE001
+            pass
 
     async def invalidate_live_orders(self, reason: str = "reconnect") -> int:
         """Mark all live orders as stale after broker session reset.
@@ -1774,7 +1823,22 @@ class OrderAdapter:
                 self._cmd_created_ns_map.pop(order_key, None)
                 # Clean up TCA price tracking entry
                 self._cmd_tca_map.pop(order_key, None)
+                # L8: clean up trace_id map alongside TCA map
+                self._cmd_trace_id_map.pop(order_key, None)
                 self._remove_pending_fill(order_key)
+                # L8: emit canonical explanation. The lifecycle_status here is
+                # coarse — finer-grained classification (filled vs partial vs
+                # canceled) is best-effort future work; "filled" is the most
+                # common terminal in the steady state.
+                if self._explanation_assembler is not None:
+                    try:
+                        self._explanation_assembler.on_terminal(
+                            client_order_id=order_key,
+                            lifecycle_status="filled",
+                            ts_emit_ns=int(time.time_ns()),
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
                 return
 
             # Check if any order for this strategy is in-flight
@@ -1789,6 +1853,7 @@ class OrderAdapter:
                     self._live_orders_inserted_at.pop(evicted_key, None)
                     self._cmd_created_ns_map.pop(evicted_key, None)
                     self._cmd_tca_map.pop(evicted_key, None)
+                    self._cmd_trace_id_map.pop(evicted_key, None)
                     self.metrics.deferred_terminal_overflow_total.inc()
                     logger.error(
                         "deferred_terminal_overflow",
@@ -2373,6 +2438,13 @@ class OrderAdapter:
             # Record dispatch timestamp for e2e latency tracking (SLO-2)
             if cmd.created_ns > 0:
                 self._cmd_created_ns_map[order_key] = cmd.created_ns
+            # L8: stamp trace_id for fill-side enrichment. NEW only — AMEND/CANCEL
+            # share the original NEW's trace via target_order_key, not their own
+            # intent_id. Empty string (never None) so the FillEvent default holds.
+            if intent.intent_type == IntentType.NEW:
+                _t = str(getattr(intent, "trace_id", "") or "")
+                if _t:
+                    self._cmd_trace_id_map[order_key] = _t
             # TCA: store decision/arrival prices for fill enrichment (NEW only —
             # AMEND/CANCEL should not overwrite the original arrival reference point)
             if intent.intent_type == IntentType.NEW:
@@ -2399,6 +2471,7 @@ class OrderAdapter:
                     if k not in self.live_orders:
                         del self._cmd_created_ns_map[k]
                         self._cmd_tca_map.pop(k, None)
+                        self._cmd_trace_id_map.pop(k, None)
                         evicted += 1
                 if evicted:
                     logger.warning(
@@ -2598,6 +2671,27 @@ class OrderAdapter:
                 self.circuit_breaker.record_success()
                 self._update_cb_metric()
                 self.strategy_cb_mgr.record_success(intent.strategy_id)
+                # L8: register the intent with the explanation assembler BEFORE
+                # the audit log so any deferred terminal that fires during the
+                # audit_log_order call still finds the entry.
+                if self._explanation_assembler is not None:
+                    try:
+                        self._explanation_assembler.on_intent(
+                            client_order_id=order_key,
+                            trace_id=str(getattr(intent, "trace_id", "") or ""),
+                            strategy_id=intent.strategy_id,
+                            symbol=intent.symbol,
+                            intent_payload={
+                                "intent_type": "NEW",
+                                "side": str(intent.side),
+                                "price": int(intent.price),
+                                "qty": int(intent.qty),
+                                "reason": str(getattr(intent, "reason", "") or ""),
+                                "decision_price": int(getattr(intent, "decision_price", 0) or 0),
+                            },
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
                 self._audit_log_order(
                     {
                         "event": "dispatched",

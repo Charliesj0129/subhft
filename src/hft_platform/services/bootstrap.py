@@ -685,6 +685,9 @@ class SystemBootstrapper:
         cmd_created_ns_map: Dict[str, int] = {}
         # TCA: shared map for decision/arrival price enrichment: order_key -> (decision_price, arrival_price)
         cmd_tca_map: Dict[str, tuple[int, int]] = {}
+        # L8 (loop_v1): shared trace_id map (order_key -> OrderIntent.trace_id) so
+        # ExecutionRouter can enrich FillEvent.trace_id for OrderExplanationAssembler.
+        cmd_trace_id_map: Dict[str, str] = {}
         # DriftBurst detector for StormGuard (opt-in via env var)
         drift_burst_detector = None
         if os.getenv("HFT_STORMGUARD_DRIFT_BURST_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}:
@@ -893,6 +896,7 @@ class SystemBootstrapper:
             broker_codec=_broker_codec,
             cmd_created_ns_map=cmd_created_ns_map,
             cmd_tca_map=cmd_tca_map,
+            cmd_trace_id_map=cmd_trace_id_map,
             mid_price_fn=_get_mid_price,
         )
         # Inject shared SymbolMetadata so OrderAdapter resolves exchange/price_scale
@@ -955,6 +959,7 @@ class SystemBootstrapper:
             execution_gateway.on_terminal_state,
             cmd_created_ns_map=cmd_created_ns_map,
             cmd_tca_map=cmd_tca_map,
+            cmd_trace_id_map=cmd_trace_id_map,
             recorder_queue=recorder_queue,
             symbol_metadata=symbol_metadata,
             price_scale_provider=price_scale_provider,

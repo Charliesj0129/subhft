@@ -119,6 +119,31 @@ PNL_SNAPSHOT_COLUMNS = [
     "drawdown_pct",
 ]
 
+# L8 (loop_v1): canonical per-order explanation topic (opt-in).
+# Aligned with ``hft.order_explanations`` (migration 20260505_003).
+# Each value position MUST match _EXTRACTOR_COLUMNS["explanations"].
+EXPLANATION_COLUMNS = [
+    "trace_id",
+    "client_order_id",
+    "loop_id",
+    "strategy_id",
+    "strategy_version",
+    "config_hash",
+    "git_sha",
+    "data_session_id",
+    "symbol",
+    "feature_snapshot",
+    "strategy_decision",
+    "risk_decision",
+    "order",
+    "fills",
+    "cancels",
+    "pnl_after",
+    "lifecycle_status",
+    "ts_emit",
+]
+
+
 # Slice C task 3: opt-in OrderIntent recorder topic (HFT_INTENT_RECORDER_ENABLED).
 # Aligned with the ``hft.order_intents`` table created by migration
 # ``20260504_001_create_order_intents.sql``. Each value position MUST match the
@@ -408,6 +433,83 @@ def _extract_intent_values(row) -> list | None:
         return None
 
 
+def _extract_explanation_values(row) -> list | None:
+    """L8 — extractor for the opt-in ``explanations`` topic.
+
+    Accepts an ``OrderExplanation`` instance (from
+    ``hft_platform.order.explanation``) or an equivalent dict.
+
+    Returns a list of values ordered identically to ``EXPLANATION_COLUMNS``
+    so the ``Batcher`` columnar buffer can pack rows without reflection.
+    Dict / list payload fields are JSON-serialized to match the
+    ``String CODEC(ZSTD)`` column type in ``hft.order_explanations``.
+    """
+    if row is None:
+        return None
+    try:
+        import orjson  # noqa: PLC0415 — local import keeps import-time cheap
+    except ImportError:  # pragma: no cover
+        import json as orjson  # type: ignore[no-redef]
+
+    def _enc(v: object) -> str:
+        if v is None:
+            return ""
+        if isinstance(v, (str, bytes)):
+            return v if isinstance(v, str) else v.decode("utf-8", errors="replace")
+        try:
+            data = orjson.dumps(v)
+            return data.decode("utf-8") if isinstance(data, (bytes, bytearray)) else str(data)
+        except Exception:  # noqa: BLE001
+            return str(v)
+
+    try:
+        if isinstance(row, dict):
+            get = row.get
+            return [
+                str(get("trace_id", "") or ""),
+                str(get("client_order_id", "") or ""),
+                str(get("loop_id", "") or ""),
+                str(get("strategy_id", "") or ""),
+                str(get("strategy_version", "") or ""),
+                str(get("config_hash", "") or ""),
+                str(get("git_sha", "") or ""),
+                str(get("data_session_id", "") or ""),
+                str(get("symbol", "") or ""),
+                _enc(get("feature_snapshot")),
+                _enc(get("strategy_decision")),
+                _enc(get("risk_decision")),
+                _enc(get("order")),
+                _enc(get("fills")),
+                _enc(get("cancels")),
+                _enc(get("pnl_after")),
+                str(get("lifecycle_status", "") or ""),
+                int(get("ts_emit", 0) or 0),
+            ]
+        return [
+            str(getattr(row, "trace_id", "") or ""),
+            str(getattr(row, "client_order_id", "") or ""),
+            str(getattr(row, "loop_id", "") or ""),
+            str(getattr(row, "strategy_id", "") or ""),
+            str(getattr(row, "strategy_version", "") or ""),
+            str(getattr(row, "config_hash", "") or ""),
+            str(getattr(row, "git_sha", "") or ""),
+            str(getattr(row, "data_session_id", "") or ""),
+            str(getattr(row, "symbol", "") or ""),
+            _enc(getattr(row, "feature_snapshot", None)),
+            _enc(getattr(row, "strategy_decision", None)),
+            _enc(getattr(row, "risk_decision", None)),
+            _enc(getattr(row, "order", None)),
+            _enc(getattr(row, "fills", None)),
+            _enc(getattr(row, "cancels", None)),
+            _enc(getattr(row, "pnl_after", None)),
+            str(getattr(row, "lifecycle_status", "") or ""),
+            int(getattr(row, "ts_emit", 0) or 0),
+        ]
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("operation_fallback", error=str(exc))
+        return None
+
+
 def _values_to_dict(columns: list[str], values: list | None):
     if values is None:
         return None
@@ -437,6 +539,8 @@ _EXTRACTORS = {
     "pnl_snapshots": _extract_pnl_snapshot_values,
     # Slice C task 3: opt-in intents topic, gated below in RecorderService.__init__
     "intents": _extract_intent_values,
+    # L8: opt-in explanations topic, gated below in RecorderService.__init__
+    "explanations": _extract_explanation_values,
 }
 
 _EXTRACTOR_COLUMNS = {
@@ -445,6 +549,7 @@ _EXTRACTOR_COLUMNS = {
     "fills": FILL_COLUMNS,
     "pnl_snapshots": PNL_SNAPSHOT_COLUMNS,
     "intents": INTENT_COLUMNS,
+    "explanations": EXPLANATION_COLUMNS,
 }
 
 
@@ -601,6 +706,28 @@ class RecorderService:
                 writer=self.writer,
                 extractor=_EXTRACTORS.get("intents") if extract_enabled else None,
                 extractor_columns=_EXTRACTOR_COLUMNS.get("intents") if extract_enabled else None,
+                memory_guard=self.memory_guard,
+                health_tracker=self.health_tracker,
+            )
+
+        # L8 (loop_v1): opt-in canonical-explanation recorder topic. Default
+        # disabled; auto-enabled when ``HFT_LOOP_ID`` is set (loop runs always
+        # produce explanations) or when the operator opts in via
+        # ``HFT_EXPLANATION_RECORDER_ENABLED=1``. Stays out of the existing
+        # 7-batcher layout otherwise.
+        explanation_explicit = os.getenv("HFT_EXPLANATION_RECORDER_ENABLED", "0").lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        explanation_auto = bool(os.getenv("HFT_LOOP_ID", "").strip())
+        if explanation_explicit or explanation_auto:
+            self.batchers["explanations"] = Batcher(
+                "hft.order_explanations",
+                writer=self.writer,
+                extractor=_EXTRACTORS.get("explanations") if extract_enabled else None,
+                extractor_columns=_EXTRACTOR_COLUMNS.get("explanations") if extract_enabled else None,
                 memory_guard=self.memory_guard,
                 health_tracker=self.health_tracker,
             )
