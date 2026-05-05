@@ -25,6 +25,97 @@ if TYPE_CHECKING:
 _MONTH_LETTERS = "ABCDEFGHIJKL"
 
 
+class StaleInstrumentError(Exception):
+    """Raised when a contract's delivery_date is strictly before today.
+
+    Same-day expiry (rollover day) is permitted: the front month must remain
+    tradeable on the day the previous month rolls off. Only contracts whose
+    delivery_date is in the past trigger this error.
+    """
+
+    __slots__ = ("code", "delivery_date")
+
+    def __init__(self, *, code: str, delivery_date: dt.date) -> None:
+        self.code = code
+        self.delivery_date = delivery_date
+        super().__init__(
+            f"stale_instrument_subscription_blocked: code={code!r} "
+            f"delivery_date={delivery_date.isoformat()}"
+        )
+
+
+def _coerce_delivery_date(value: Any) -> dt.date:
+    """Accept a date object or a YYYYMMDD/YYYY-MM-DD/YYYY/MM/DD string."""
+    if isinstance(value, dt.datetime):
+        return value.date()
+    if isinstance(value, dt.date):
+        return value
+    s = str(value).replace("/", "").replace("-", "")
+    if len(s) >= 8:
+        return dt.date(int(s[:4]), int(s[4:6]), int(s[6:8]))
+    raise ValueError(f"unparseable delivery_date: {value!r}")
+
+
+def assert_not_expired(contract: Any, *, today: dt.date) -> None:
+    """Refuse to subscribe to expired contracts (rollover-day-safe).
+
+    Strict less-than: ``delivery_date < today`` raises ``StaleInstrumentError``.
+    Same-day expiry (``delivery_date == today``) is permitted so the front
+    month remains tradeable through its rollover day.
+
+    ``today`` is keyword-only and required so callers commit to a specific
+    date (improves testability and freezes time at the boundary).
+    """
+    raw = getattr(contract, "delivery_date", None)
+    if raw is None:
+        return  # contract has no delivery_date → not a dated contract
+    delivery_date = _coerce_delivery_date(raw)
+    if delivery_date < today:
+        code = str(getattr(contract, "code", "<unknown>"))
+        raise StaleInstrumentError(code=code, delivery_date=delivery_date)
+
+
+def assert_no_stale_subscriptions(
+    symbols: Any,
+    lookup: Any,
+    *,
+    today: dt.date,
+    log: Any = logger,
+) -> None:
+    """Iterate subscribed symbols, refuse startup if any contract is expired.
+
+    ``symbols`` is the broker client's ``symbols`` list (each entry a mapping
+    with ``code`` / ``exchange`` keys plus a product-type key). ``lookup`` is
+    a broker-supplied callable ``(exchange, code, product_type) -> contract |
+    None`` — typically a thin wrapper around ``md_client._get_contract``.
+
+    On stale contract: emits a structlog ``stale_instrument_subscription_blocked``
+    error event with the offending code + delivery_date, then re-raises so
+    bootstrap fails closed.
+    """
+    for sym in symbols:
+        if not isinstance(sym, dict):
+            continue
+        code = sym.get("code")
+        exchange = sym.get("exchange")
+        if not code or not exchange:
+            continue
+        product_type = sym.get("product_type") or sym.get("security_type") or sym.get("type")
+        contract = lookup(str(exchange), str(code), product_type)
+        if contract is None:
+            continue
+        try:
+            assert_not_expired(contract, today=today)
+        except StaleInstrumentError as exc:
+            log.error(
+                "stale_instrument_subscription_blocked",
+                code=exc.code,
+                delivery_date=exc.delivery_date.isoformat(),
+                today=today.isoformat(),
+            )
+            raise
+
+
 def derive_callback_code(contract: Any, config_code: str) -> str:
     """Derive the actual callback code from a Shioaji contract object.
 

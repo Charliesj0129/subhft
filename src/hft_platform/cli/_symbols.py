@@ -8,6 +8,28 @@ import sys
 
 from ._utils import _print_issues
 
+# Loop_v1 L2: subscription-limit defaults are loop-aware.
+# A bound loop (--loop r47_tmf_v1) caps the subscription universe at the
+# live-minimal size; legacy multi-broker, multi-symbol research runs keep the
+# 480 ceiling (4 conn × 120 codes).
+_MAX_SUBS_LOOP = 8
+_MAX_SUBS_LEGACY = 480
+
+
+def _resolve_max_subscriptions(args: argparse.Namespace) -> int:
+    """Loop-aware default: 8 when --loop is set, otherwise 480.
+
+    Respects an explicit user-provided ``--max-subscriptions`` value when it
+    isn't ``None``. Reads ``loop_id`` defensively so handlers stay safe even
+    if a future subparser drops the flag.
+    """
+    explicit = getattr(args, "max_subscriptions", None)
+    if explicit is not None:
+        return int(explicit)
+    if getattr(args, "loop_id", None):
+        return _MAX_SUBS_LOOP
+    return _MAX_SUBS_LEGACY
+
 
 def _resolve_symbols_shioaji(args: argparse.Namespace) -> None:
     """Resolve TSE/OTC exchanges via Shioaji broker."""
@@ -71,7 +93,9 @@ def cmd_symbols_build(args: argparse.Namespace) -> None:
 
     contract_index = None if args.no_contracts else load_contract_cache(args.contracts, args.metrics)
     result = build_symbols(args.list_path, contract_index)
-    validation = validate_symbols(result.symbols, contract_index, max_subscriptions=args.max_subscriptions)
+    validation = validate_symbols(
+        result.symbols, contract_index, max_subscriptions=_resolve_max_subscriptions(args)
+    )
 
     errors = result.errors + validation.errors
     warnings = result.warnings + validation.warnings
@@ -95,7 +119,9 @@ def cmd_symbols_preview(args: argparse.Namespace) -> None:
 
     contract_index = None if args.no_contracts else load_contract_cache(args.contracts, args.metrics)
     result = build_symbols(args.list_path, contract_index)
-    validation = validate_symbols(result.symbols, contract_index, max_subscriptions=args.max_subscriptions)
+    validation = validate_symbols(
+        result.symbols, contract_index, max_subscriptions=_resolve_max_subscriptions(args)
+    )
 
     for line in preview_lines(result, sample=args.sample):
         print(line)
@@ -140,7 +166,9 @@ def cmd_symbols_validate(args: argparse.Namespace) -> None:
             _print_issues(result.errors, result.warnings)
             sys.exit(1)
 
-    validation = validate_symbols(symbols, contract_index, max_subscriptions=args.max_subscriptions)
+    validation = validate_symbols(
+        symbols, contract_index, max_subscriptions=_resolve_max_subscriptions(args)
+    )
 
     if validation.errors or validation.warnings:
         _print_issues(validation.errors, validation.warnings)
@@ -169,7 +197,9 @@ def cmd_symbols_sync(args: argparse.Namespace) -> None:
     contract_index = ContractIndex(contracts=contracts, metrics_by_code=metrics)
 
     result = build_symbols(args.list_path, contract_index)
-    validation = validate_symbols(result.symbols, contract_index, max_subscriptions=args.max_subscriptions)
+    validation = validate_symbols(
+        result.symbols, contract_index, max_subscriptions=_resolve_max_subscriptions(args)
+    )
 
     errors = result.errors + validation.errors
     warnings = result.warnings + validation.warnings

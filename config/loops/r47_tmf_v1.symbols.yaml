@@ -1,0 +1,10 @@
+# Live-minimal symbol universe for the r47_tmf_v1 production loop.
+# Loop_v1 step L2: only the TMF front-month is subscribed in this loop.
+# Options, TW50, TXF/MXF/EXF stay out of the live engine until a future loop
+# binding explicitly opts in.
+
+symbols:
+  - code: TMFR1
+    exchange: TAIFEX
+    product_type: future
+    point_value: 10

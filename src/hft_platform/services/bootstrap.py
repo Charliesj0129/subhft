@@ -1150,6 +1150,41 @@ class SystemBootstrapper:
 
                 md_service._post_connect_hooks.append(_populate_families_from_fubon)
 
+        # Loop_v1 L2: refuse to start if any subscribed contract has
+        # delivery_date < today. Same-day expiry (rollover day) is permitted.
+        # Shioaji-only for now; Fubon hook to follow when its contract lookup
+        # interface lands. The structlog ``stale_instrument_subscription_blocked``
+        # event + raised StaleInstrumentError fail the bootstrap closed.
+        if broker_id == "shioaji":
+            from datetime import date as _today_date
+
+            from hft_platform.feed_adapter.shioaji.contracts_runtime import (
+                assert_no_stale_subscriptions,
+            )
+
+            def _stale_instrument_gate() -> None:
+                api_lookup = getattr(md_client, "_get_contract", None)
+                if api_lookup is None:
+                    return
+                symbols = list(getattr(md_client, "symbols", []) or [])
+
+                def _lookup(exch: str, code: str, ptype: Any) -> Any:
+                    return api_lookup(
+                        exch,
+                        code,
+                        product_type=ptype,
+                        allow_synthetic=False,
+                    )
+
+                assert_no_stale_subscriptions(
+                    symbols,
+                    _lookup,
+                    today=_today_date.today(),
+                    log=logger,
+                )
+
+            md_service._post_connect_hooks.append(_stale_instrument_gate)
+
         # P2 (2026-04-25): ``set_publish_sink`` wiring removed — the runner
         # never propagated the sink to ``StrategyContext`` instances, so the
         # queue was unconsumed and would silently drop after 64 events.

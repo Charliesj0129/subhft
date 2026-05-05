@@ -83,8 +83,16 @@ def build_parser() -> argparse.ArgumentParser:
     build.add_argument(
         "--max-subscriptions",
         type=int,
-        default=480,
-        help="Subscription limit (4 conn × 120 codes; each code = 2 broker topics)",
+        default=None,
+        help=(
+            "Subscription limit. Default: 8 when --loop is set, otherwise 480 "
+            "(4 conn × 120 codes; each code = 2 broker topics)."
+        ),
+    )
+    build.add_argument(
+        "--loop",
+        dest="loop_id",
+        help="Bind a production loop (loop_v1) for live-minimal subscription cap.",
     )
     build.add_argument("--preview", action="store_true", help="Show preview summary")
     build.add_argument("--sample", type=int, default=10, help="Preview sample size")
@@ -98,8 +106,16 @@ def build_parser() -> argparse.ArgumentParser:
     preview.add_argument(
         "--max-subscriptions",
         type=int,
-        default=480,
-        help="Subscription limit (4 conn × 120 codes; each code = 2 broker topics)",
+        default=None,
+        help=(
+            "Subscription limit. Default: 8 when --loop is set, otherwise 480 "
+            "(4 conn × 120 codes; each code = 2 broker topics)."
+        ),
+    )
+    preview.add_argument(
+        "--loop",
+        dest="loop_id",
+        help="Bind a production loop (loop_v1) for live-minimal subscription cap.",
     )
     preview.add_argument("--sample", type=int, default=10, help="Preview sample size")
     preview.set_defaults(func=cmd_symbols_preview)
@@ -114,8 +130,16 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument(
         "--max-subscriptions",
         type=int,
-        default=480,
-        help="Subscription limit (4 conn × 120 codes; each code = 2 broker topics)",
+        default=None,
+        help=(
+            "Subscription limit. Default: 8 when --loop is set, otherwise 480 "
+            "(4 conn × 120 codes; each code = 2 broker topics)."
+        ),
+    )
+    validate.add_argument(
+        "--loop",
+        dest="loop_id",
+        help="Bind a production loop (loop_v1) for live-minimal subscription cap.",
     )
     validate.set_defaults(func=cmd_symbols_validate)
 
@@ -127,8 +151,16 @@ def build_parser() -> argparse.ArgumentParser:
     sync.add_argument(
         "--max-subscriptions",
         type=int,
-        default=480,
-        help="Subscription limit (4 conn × 120 codes; each code = 2 broker topics)",
+        default=None,
+        help=(
+            "Subscription limit. Default: 8 when --loop is set, otherwise 480 "
+            "(4 conn × 120 codes; each code = 2 broker topics)."
+        ),
+    )
+    sync.add_argument(
+        "--loop",
+        dest="loop_id",
+        help="Bind a production loop (loop_v1) for live-minimal subscription cap.",
     )
     sync.add_argument("--preview", action="store_true", help="Show preview summary")
     sync.add_argument("--sample", type=int, default=10, help="Preview sample size")
