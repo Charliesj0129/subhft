@@ -225,6 +225,126 @@ def log_promotion_result(
         )
 
 
+# Coarse reason buckets keep `alpha_kill_results_total` label cardinality bounded.
+# Mapping is by substring; first match wins; default falls back to gate-derived class.
+_REASON_CLASS_PATTERNS: tuple[tuple[str, str], ...] = (
+    ("inventory_mtm", "inventory_mtm"),
+    ("cost_uncertainty", "cost_uncertainty"),
+    ("cost_floor", "screener_cost_floor"),
+    ("turnover", "screener_turnover"),
+    ("ic_mean", "screener_ic"),
+    ("ic_below", "screener_ic"),
+    ("latency", "latency"),
+    ("replay_parity", "replay_parity"),
+    ("cluster", "cluster_redundant"),
+    ("redundant", "cluster_redundant"),
+    ("manual", "manual"),
+)
+
+
+def _classify_kill_reason(reason: str, gate: str) -> str:
+    """Coarsen a free-form reason string to a bounded label class.
+
+    Bucket order is by substring match, first hit wins. Falls back to a
+    gate-derived class so cardinality stays small even for surprise reasons.
+    """
+    lower = (reason or "").lower()
+    for needle, klass in _REASON_CLASS_PATTERNS:
+        if needle in lower:
+            return klass
+    if gate == "pre_screen":
+        return "screener_other"
+    if gate == "cluster":
+        return "cluster_redundant"
+    if gate == "manual":
+        return "manual"
+    return "other"
+
+
+def log_kill(record: Any) -> None:
+    """Insert one row into ``audit.alpha_kill_ledger``. Fails silently on error.
+
+    Mirrors ``log_promotion_result()`` above (line 144): metrics are
+    best-effort; CH inserts go through ``_get_client``; CH failure falls
+    back to the local jsonl. The dedupe contract lives in
+    ``kill_ledger.append_kill`` — this function is the **logging** entry
+    point, not the dedupe entry point. Callers writing to the ledger
+    should prefer ``kill_ledger.append_kill``; ``log_kill`` is exported
+    for compatibility with the existing audit-pattern boundary.
+    """
+    from hft_platform.alpha.kill_ledger import KillRecord  # local import → avoid cycles
+
+    if not isinstance(record, KillRecord):
+        raise TypeError(f"log_kill requires a KillRecord, got {type(record)!r}")
+
+    kill_id = record.kill_id()
+    reason_class = _classify_kill_reason(record.reason, record.gate)
+
+    try:
+        from hft_platform.observability.metrics import get_metrics
+
+        m = get_metrics()
+        if m is not None:
+            m.alpha_kill_results_total.labels(
+                alpha_id=record.alpha_id,
+                gate=record.gate,
+                reason_class=reason_class,
+            ).inc()
+    except Exception:  # noqa: BLE001
+        pass  # metrics are best-effort
+
+    if not _is_enabled():
+        return
+
+    killed_at_ns = record.killed_at if record.killed_at != 0 else _now_ns()
+
+    try:
+        client = _get_client()
+        client.insert(
+            "audit.alpha_kill_ledger",
+            [[
+                kill_id,
+                killed_at_ns,
+                record.alpha_id,
+                record.gate,
+                record.reason,
+                record.stable_artifact_hash,
+                record.scorecard_id,
+                record.killed_by,
+            ]],
+            column_names=[
+                "kill_id",
+                "killed_at",
+                "alpha_id",
+                "gate",
+                "reason",
+                "stable_artifact_hash",
+                "scorecard_id",
+                "killed_by",
+            ],
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "alpha_audit.log_kill failed",
+            alpha_id=record.alpha_id,
+            gate=record.gate,
+            exc_info=True,
+        )
+        _write_fallback(
+            "alpha_kill_ledger",
+            {
+                "kill_id": kill_id,
+                "killed_at": killed_at_ns,
+                "alpha_id": record.alpha_id,
+                "gate": record.gate,
+                "reason": record.reason,
+                "stable_artifact_hash": record.stable_artifact_hash,
+                "scorecard_id": record.scorecard_id,
+                "killed_by": record.killed_by,
+            },
+        )
+
+
 def log_canary_action(
     alpha_id: str,
     action: str,
