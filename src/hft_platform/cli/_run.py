@@ -59,6 +59,8 @@ def cmd_run(args: argparse.Namespace) -> None:
         }
     settings, defaults = load_settings({k: v for k, v in cli_overrides.items() if v})
 
+    _enforce_loop_trace_policy(settings)
+
     downgraded = None
     if settings.get("mode") == "live" and not detect_live_credentials():
         downgraded = "sim"
@@ -71,8 +73,34 @@ def cmd_run(args: argparse.Namespace) -> None:
         print("Hint: set SHIOAJI_API_KEY / SHIOAJI_SECRET_KEY to enable live.")
 
     if settings.get("mode") == "replay":
-        print("Replay mode not yet wired; please use backtest runner directly.")
-        return
+        from datetime import date as _date
+
+        from hft_platform.replay.cli_runner import run_replay_session
+
+        session_raw = getattr(args, "session", None)
+        fixture_raw = getattr(args, "fixture", None)
+        if not session_raw or not fixture_raw:
+            print(
+                "[hft run] --mode replay requires --session YYYY-MM-DD and --fixture PATH.",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        try:
+            session_date = _date.fromisoformat(session_raw)
+        except ValueError:
+            print(
+                f"[hft run] --session must be YYYY-MM-DD (got {session_raw!r}).",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        sys.exit(
+            run_replay_session(
+                settings,
+                session_date=session_date,
+                fixture_path=fixture_raw,
+                allow_pre_recorder=bool(getattr(args, "allow_pre_recorder", False)),
+            )
+        )
 
     # Live/Sim share the same runtime pipeline; sim runs with Shioaji stub.
     from hft_platform.main import HFTSystem

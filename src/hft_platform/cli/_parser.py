@@ -192,6 +192,26 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--strategy-module", help="Override strategy module")
     run.add_argument("--strategy-class", help="Override strategy class")
     run.add_argument("--symbols", nargs="+", help="Symbols to load")
+    run.add_argument(
+        "--session",
+        dest="session",
+        help="Replay-mode trading session (YYYY-MM-DD). Required for --mode replay.",
+    )
+    run.add_argument(
+        "--fixture",
+        dest="fixture",
+        help="Replay-mode WAL fixture archive (.tar.gz). Required for --mode replay.",
+    )
+    run.add_argument(
+        "--allow-pre-recorder",
+        dest="allow_pre_recorder",
+        action="store_true",
+        default=False,
+        help=(
+            "Replay-mode: opt in to running against a session that predates the "
+            "intent recorder (HFT_INTENT_RECORDER_ENABLED=0). Match pct is null."
+        ),
+    )
     run.set_defaults(func=cmd_run)
 
     init = sub.add_parser("init", help="Generate settings and strategy skeleton")
