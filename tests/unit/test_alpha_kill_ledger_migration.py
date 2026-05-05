@@ -69,7 +69,12 @@ def test_migration_engine_is_mergetree_not_replacing() -> None:
     """Writer-side dedupe is the source of truth; no ReplacingMergeTree merge dependency."""
     src = MIGRATION.read_text()
     assert "ENGINE = MergeTree" in src
-    assert "ReplacingMergeTree" not in src, (
+    # Strip SQL comments before checking — comments may legitimately mention
+    # the alternative engine while the actual ENGINE line must stay MergeTree.
+    code_only = "\n".join(
+        line for line in src.splitlines() if not line.lstrip().startswith("--")
+    )
+    assert "ReplacingMergeTree" not in code_only, (
         "ReplacingMergeTree would mask writer-side dedupe bugs by relying on async merges"
     )
 
