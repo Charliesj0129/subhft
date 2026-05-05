@@ -14,6 +14,7 @@ Tasks 9 and 10 extend the public surface declared here.
 from __future__ import annotations
 
 from .compiler import DSLNameError, compile_ast
+from .formula_context import bind_to_manifest, round_trip
 from .parser import (
     BinOp,
     DSLSyntaxError,
@@ -32,6 +33,8 @@ __all__ = [
     "Literal",
     "Node",
     "UnaryOp",
+    "bind_to_manifest",
     "compile_ast",
     "parse",
+    "round_trip",
 ]
