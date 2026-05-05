@@ -319,3 +319,101 @@ def test_run_folds_residual_mtm_into_daily_pnl_and_equity_curve() -> None:
 
     # equity_curve must end at residual MtM (+10.0 pts).
     assert result.equity_curve[-1] == pytest.approx(10.0, rel=1e-9, abs=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# Case 7 (Task 4): BacktestResult-level aggregation of residual fields.
+#
+# Two-day fixture: each day independently posts a single BUY that fills via a
+# trade and ends long +1 with last_mid=110, avg=100 -> residual_mtm=+10.0 pts.
+# Aggregation policy (decided after Task 3):
+#   * residual_mtm_pts -> SUM across days (mirrors total_gross accumulation)
+#   * residual_qty     -> final-day snapshot (per-day independent FIFO)
+#   * mark_method      -> single string (single-policy design)
+# ---------------------------------------------------------------------------
+class _BuyOnceStrategyMultiDay:
+    """Resets ``_posted`` per call to ``on_tick`` only at start of fixture day.
+
+    Each day's events come fresh from the fake CK source, but the strategy
+    instance persists across days inside MakerEngine.run. To keep both days
+    independent we re-arm by detecting a fresh first bidask of a new day -
+    simpler approach: just count how many BUYs we've posted (max one per day)
+    using the same logic as ``_BuyOnceStrategy`` but with a per-day counter
+    we reset whenever we see a non-trade event with the FIRST exch_ts of a
+    new day. Even simpler: track day boundary via ``_seen_dates`` keyed on a
+    coarse timestamp slot. Simplest of all: reset whenever ``on_tick`` sees
+    ``is_trade == False`` AND we've already posted.
+    """
+
+    def __init__(self) -> None:
+        self._posted = False
+        self._last_ts = -1
+
+    def on_tick(self, tick: TickData):
+        # New day boundary heuristic: a non-trade event whose ts is much
+        # earlier than our last seen ts (the fixture rewinds clocks per day).
+        if not tick.is_trade and tick.exch_ts < self._last_ts:
+            self._posted = False
+        self._last_ts = max(self._last_ts, tick.exch_ts)
+
+        if self._posted or tick.is_trade:
+            return [Hold()]
+        self._posted = True
+        return [PostQuote(side="buy", price=tick.bid_price, qty=1)]
+
+    def on_fill(self, side, price, mid_price) -> None:
+        pass
+
+
+class _FakeCKSourceMultiDay:
+    """Returns the same residual-long events for each requested date."""
+
+    def __init__(self, events_per_day: list[TickData], dates: list[str]) -> None:
+        self._events = events_per_day
+        self._dates = list(dates)
+        self._host = "fake"
+        self._port = 0
+
+    def health_check(self) -> None:
+        return None
+
+    def load_day(self, symbol: str, date: str) -> list[TickData]:
+        # Each call returns a fresh copy so day loops do not share mutable refs.
+        return list(self._events)
+
+    def available_dates(self, symbol: str) -> list[str]:
+        return list(self._dates)
+
+
+def test_backtest_result_aggregates_residual_fields() -> None:
+    """Two-day run -> BacktestResult.residual_mtm_pts == sum(daily residuals),
+    residual_qty == last day's residual, mark_method == default 'last_mid'."""
+    fixture_events = _residual_long_events()
+    dates = ["2026-05-05", "2026-05-06"]
+    engine = MakerEngine(
+        fill_model=_DeterministicFillModel(),
+        cost_model=_ZeroCost(),
+        ck_source=_FakeCKSourceMultiDay(fixture_events, dates),  # type: ignore[arg-type]
+    )
+
+    result = engine.run(
+        strategy=_BuyOnceStrategyMultiDay(),
+        instrument="TEST",
+        dates=dates,
+        pipeline_mode="strict",
+    )
+
+    # Two daily rows, each with +10.0 residual_mtm.
+    assert result.daily_pnl is not None
+    assert len(result.daily_pnl) == 2
+    daily_residuals_sum = sum(d["residual_mtm_pts"] for d in result.daily_pnl)
+    assert daily_residuals_sum == pytest.approx(20.0, rel=1e-9, abs=1e-9)
+
+    # Aggregation contract:
+    # residual_mtm_pts -> sum across days (rounded to 2dp like daily rows).
+    assert result.residual_mtm_pts == round(daily_residuals_sum, 2)
+    # residual_qty -> final-day snapshot.
+    assert result.residual_qty == result.daily_pnl[-1]["residual_qty"]
+    assert result.residual_qty == 1
+    # mark_method -> default policy.
+    assert result.mark_method == "last_mid"

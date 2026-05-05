@@ -277,6 +277,14 @@ class MakerEngine:
         total_gross = 0.0
         total_fills = 0
         spread_breakdown: dict[int, dict] = {}
+        # Slice B Task 4: aggregate residual fields for BacktestResult.
+        # ``total_residual_mtm`` SUMS each day's residual_mtm_pts (mirrors the
+        # ``total_gross`` accumulation; the equity curve already reflects it).
+        # ``final_residual_qty`` snapshots the LAST traded day's residual qty
+        # (per-day FIFO is independent so day-to-day residual qty is not
+        # additive). Both default to 0 if no days traded.
+        total_residual_mtm = 0.0
+        final_residual_qty = 0
 
         for date in dates:
             events = self._ck_source.load_day(instrument, date)
@@ -300,6 +308,11 @@ class MakerEngine:
             day_net = self._cost_model.apply(day_gross_mtm_aware, len(day_fills))
 
             total_gross += day_gross_mtm_aware
+            # Slice B Task 4: track residual aggregation alongside total_gross.
+            # Sum the rounded daily values so the result-level field matches
+            # ``round(sum(d["residual_mtm_pts"] for d in daily_pnl), 2)``.
+            total_residual_mtm += round(day_residual_mtm, 2)
+            final_residual_qty = day_residual_qty
             total_fills += len(day_fills)
             equity_points.append(equity_points[-1] + day_net)
 
@@ -389,6 +402,11 @@ class MakerEngine:
             per_spread_breakdown={
                 str(k): v for k, v in sorted(spread_breakdown.items())
             },
+            # Slice B Task 4: residual decomposition fields. See aggregation
+            # policy comments in research/backtest/types.py.
+            residual_mtm_pts=round(total_residual_mtm, 2),
+            residual_qty=final_residual_qty,
+            mark_method=self._mark_method,
             daily_pnl=daily_pnl,
         )
 

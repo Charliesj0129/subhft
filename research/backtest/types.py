@@ -76,6 +76,21 @@ class BacktestResult:
     maker_scorecard: dict | None = None
     per_spread_breakdown: dict | None = None
     queue_fraction: float | None = None
+    # --- Slice B: Maker Realism (added 2026-05-05) ---
+    # Aggregation policy (set inside ``MakerEngine.run``):
+    #   * ``residual_mtm_pts`` -> SUM across traded days of each day's
+    #     ``residual_mtm_pts`` (mirrors ``total_gross`` accumulation in the
+    #     day loop; the equity curve already reflects this sum).
+    #   * ``residual_qty``     -> final-day snapshot (per-day FIFO is
+    #     independent so day-to-day residual qty is not additive).
+    #   * ``mark_method``      -> single-policy string (identical every day
+    #     under current single-policy design).
+    # All three default to safe zero-values so taker engines and synthetic
+    # fixtures that construct ``BacktestResult`` without these fields stay
+    # backward-compatible.
+    residual_mtm_pts: float = 0.0
+    residual_qty: int = 0
+    mark_method: str = ""
     # --- Daily detail ---
     daily_pnl: list[dict] | None = None
 
