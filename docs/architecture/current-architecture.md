@@ -274,6 +274,20 @@ Closes the R47-OE1 backtest/live divergence loop (incident `docs/incidents/2026-
 | Persistence | ClickHouse table `hft.order_intents` (`migrations/clickhouse/20260504_001_create_order_intents.sql`) | Opt-in intent recorder topic, 365 d retention |
 | Env var | `HFT_INTENT_RECORDER_ENABLED` (default `0`) | Enables the intent recorder topic at runtime |
 
+### 7B. Slice B — Maker Realism (2026-05-05)
+
+Closes the residual-MtM / queue-calibration / cost-uncertainty / strict-latency gap that pre-Slice-B maker backtests left open. Operator runbook: `docs/runbooks/maker-realism-gate.md`.
+
+| Surface | Path | Purpose |
+| --- | --- | --- |
+| Engine MtM hook | `research/backtest/maker_engine.py` (`_compute_residual_mtm`) | Mark un-FIFO'd residual to last_mid (or `worse_of_mid_last_trade`); fold into daily_pnl |
+| Queue calibration | `research/backtest/q_hat_table.py` + `research/backtest/q_hat_data/*.parquet` | Calibrated `queue_fraction` lookup keyed by (symbol, hour, depth_bucket); used by `QueueDepletionFill` |
+| Promotion gate | `src/hft_platform/alpha/_sub_gates/inventory_mtm.py` | `InventoryMtMGate` — fail if `realized + residual_mtm < cost_floor_total` (maker only) |
+| Promotion gate | `src/hft_platform/alpha/_sub_gates/cost_uncertainty.py` | `CostUncertaintyGate` — fail if P95 lower bound of daily P&L ≤ floor (maker + taker) |
+| Latency audit (strict) | `src/hft_platform/alpha/latency_audit.py` | Fail-closed when `place_ns` / `cancel_ns` profile entries are missing under `vm_ul6_strict` |
+| Live FORCE_FLAT | `src/hft_platform/backtest/maker_bridge.py` (`on_session_end`) | Live-side residual close-out via `SessionPhase.FORCE_FLAT` transition |
+| Env vars | `HFT_MAKER_MARK_METHOD`, `HFT_QUEUE_CALIBRATION_TABLE_PATH` | Operator overrides for residual mark method and `q_hat` parquet path |
+
 ## 8. Architectural Invariants (Unchanged)
 
 1. Hot path must avoid blocking I/O and excessive allocation.
