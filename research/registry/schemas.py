@@ -88,6 +88,12 @@ class AlphaManifest:
     strategy_type: str = "taker"
     # Primary instrument for backtest data source (e.g. "TMFD6", "TXFD6").
     instrument: str = ""
+    # Slice-D path-b extension (write-once, intrinsic provenance).
+    # dsl_formula: round-trippable formula text for `alpha/dsl/` parser+compiler.
+    # parent_alpha_id: id of the predecessor alpha this candidate was derived from.
+    # Per plan §5, kill_reason / cluster_id deliberately do NOT live here.
+    dsl_formula: str | None = None
+    parent_alpha_id: str | None = None
 
     def __post_init__(self) -> None:
         bad_roles = set(self.roles_used) - VALID_ROLES
@@ -124,6 +130,8 @@ class AlphaManifest:
             feature_set_version=str(data["feature_set_version"]) if data.get("feature_set_version") else None,
             strategy_type=str(data.get("strategy_type", "taker")),
             instrument=str(data.get("instrument", "")),
+            dsl_formula=str(data["dsl_formula"]) if data.get("dsl_formula") else None,
+            parent_alpha_id=str(data["parent_alpha_id"]) if data.get("parent_alpha_id") else None,
         )
 
 
