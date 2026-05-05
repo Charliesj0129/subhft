@@ -232,9 +232,7 @@ def run_replay_session(
     factory = strategy_factory_override or _build_strategy_factory(settings)
     if factory is None:
         base_payload["eligibility_status"] = (
-            "pre_recorder"
-            if isinstance(eligibility, IneligiblePreRecorder)
-            else "eligible"
+            "pre_recorder" if isinstance(eligibility, IneligiblePreRecorder) else "eligible"
         )
         base_payload["error"] = (
             f"strategy_unbuildable: id={strategy_id!r} "

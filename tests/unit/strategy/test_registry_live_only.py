@@ -50,8 +50,7 @@ class TestLiveRegistryStructure:
         cfg = _load_live_registry()
         ids = [e["id"] for e in cfg["strategies"]]
         assert "R47_MAKER_TMF" in ids, (
-            "R47_MAKER_TMF is the only loop_v1 production strategy; "
-            "it must be present in config/live/strategies.yaml."
+            "R47_MAKER_TMF is the only loop_v1 production strategy; it must be present in config/live/strategies.yaml."
         )
 
     def test_live_registry_does_not_contain_archived_strategies(self) -> None:
@@ -91,8 +90,7 @@ class TestArchiveSnapshot:
         for entry in cfg.get("strategies", []):
             sid = entry.get("id", "<unknown>")
             assert entry.get("enabled") is False, (
-                f"archive entry {sid!r} must have enabled: false; "
-                f"if it became live-eligible, move it to config/live/"
+                f"archive entry {sid!r} must have enabled: false; if it became live-eligible, move it to config/live/"
             )
 
 

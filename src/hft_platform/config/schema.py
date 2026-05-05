@@ -87,6 +87,15 @@ class HftConfig(msgspec.Struct, frozen=True):
     # typos surface fast.
     loop_id: Optional[str] = None
 
+    # Env-overlay service-config blocks. These are consumed by services
+    # (Shadow service, broker adapters) via ``settings.get("<name>")``
+    # rather than as typed structs. Declared here so strict mode accepts
+    # them as known top-level keys instead of treating them as typos.
+    # Source files: ``config/env/shadow/main.yaml``, ``config/env/live/main.yaml``.
+    shadow: Optional[Dict[str, Any]] = None
+    shioaji: Optional[Dict[str, Any]] = None
+    fubon: Optional[Dict[str, Any]] = None
+
 
 # ---------------------------------------------------------------------------
 # Validation helpers
@@ -167,9 +176,7 @@ def validate_config(config_dict: Dict[str, Any], *, strict: bool = False) -> Hft
 
     if extra_keys:
         if strict:
-            raise ConfigValidationError(
-                "unknown top-level keys (strict mode): " + ", ".join(sorted(extra_keys))
-            )
+            raise ConfigValidationError("unknown top-level keys (strict mode): " + ", ".join(sorted(extra_keys)))
         logger.debug("config_schema_extra_keys_ignored", keys=sorted(extra_keys))
 
     # Structural validation via msgspec.convert
@@ -186,9 +193,7 @@ def validate_config(config_dict: Dict[str, Any], *, strict: bool = False) -> Hft
     return cfg
 
 
-def validate_config_or_exit(
-    config_dict: Dict[str, Any], *, strict: bool = False
-) -> HftConfig | None:
+def validate_config_or_exit(config_dict: Dict[str, Any], *, strict: bool = False) -> HftConfig | None:
     """Validate config; on failure log errors and ``sys.exit(1)``.
 
     If ``HFT_SKIP_CONFIG_VALIDATION=1`` is set, validation is skipped and

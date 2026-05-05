@@ -256,9 +256,7 @@ def cmd_alpha_screen(args: argparse.Namespace) -> None:
             payload = json.loads(scorecard_path.read_text())
             payload["screen_only"] = True
             payload["screen_profile"] = "loose_default"
-            payload["screen_timestamp"] = (
-                _dt.datetime.now(tz=_dt.timezone.utc).isoformat()
-            )
+            payload["screen_timestamp"] = _dt.datetime.now(tz=_dt.timezone.utc).isoformat()
             scorecard_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
             summary["screen_only"] = True
     except Exception as exc:  # noqa: BLE001

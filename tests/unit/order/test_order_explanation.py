@@ -262,12 +262,15 @@ class TestGuards:
             strategy_id="R47_MAKER_TMF",
             symbol="TMFR1",
         )
-        # Must not raise even though sink raises.
-        asm.on_terminal(
+        # Must not raise even though sink raises; assembler still returns the
+        # emitted explanation so the caller can route it elsewhere.
+        result = asm.on_terminal(
             client_order_id="R47:49",
             lifecycle_status="filled",
             ts_emit_ns=1,
         )
+        assert result is not None
+        assert result.lifecycle_status == "filled"
 
     def test_terminal_for_unknown_key_returns_none(self) -> None:
         asm = _make_assembler()

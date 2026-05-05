@@ -47,16 +47,11 @@ def test_validate_without_profile_exits_2(capsys: pytest.CaptureFixture[str]) ->
     assert "screen" in err.lower()
 
 
-def test_validate_with_loose_profile_exits_2(
-    capsys: pytest.CaptureFixture[str], tmp_path: Path
-) -> None:
+def test_validate_with_loose_profile_exits_2(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
     from hft_platform.cli._alpha import cmd_alpha_validate
 
     loose = tmp_path / "loose.yaml"
-    loose.write_text(
-        "name: loose_test\nis_strict: false\n"
-        "thresholds: {}\nblocking_sub_gates: []\n"
-    )
+    loose.write_text("name: loose_test\nis_strict: false\nthresholds: {}\nblocking_sub_gates: []\n")
 
     with pytest.raises(SystemExit) as excinfo:
         cmd_alpha_validate(_validate_args(profile=str(loose)))
@@ -77,9 +72,7 @@ def test_validate_with_missing_profile_path_exits_2(
     assert "profile" in err.lower()
 
 
-def test_screen_stamps_screen_only_on_scorecard(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_screen_stamps_screen_only_on_scorecard(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from hft_platform.cli import _alpha as cli_alpha
 
     scorecard_path = tmp_path / "scorecard.json"

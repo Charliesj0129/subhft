@@ -22,9 +22,7 @@ from hft_platform.alpha.promotion import PromotionConfig, promote_alpha
 
 
 def _strict_profile() -> ValidationProfile:
-    return ValidationProfile(
-        name="test", is_strict=True, thresholds={}, blocking_sub_gates=("sharpe_threshold",)
-    )
+    return ValidationProfile(name="test", is_strict=True, thresholds={}, blocking_sub_gates=("sharpe_threshold",))
 
 
 def _write_bad_scorecard(path: Path) -> None:
@@ -56,9 +54,7 @@ def _config(tmp_path: Path, **kwargs: object) -> PromotionConfig:
 
 
 class TestForcedPromotionResearchOnly:
-    def test_forced_artifact_lives_under_research_forced_promotions(
-        self, tmp_path: Path
-    ) -> None:
+    def test_forced_artifact_lives_under_research_forced_promotions(self, tmp_path: Path) -> None:
         config = _config(
             tmp_path,
             force=True,
@@ -74,12 +70,8 @@ class TestForcedPromotionResearchOnly:
         assert "config/strategy_promotions" not in out.as_posix()
         assert out.exists()
 
-    def test_forced_artifact_stamps_live_promotion_eligible_false(
-        self, tmp_path: Path
-    ) -> None:
-        config = _config(
-            tmp_path, force=True, force_reason="emergency override, signed off by risk"
-        )
+    def test_forced_artifact_stamps_live_promotion_eligible_false(self, tmp_path: Path) -> None:
+        config = _config(tmp_path, force=True, force_reason="emergency override, signed off by risk")
         result = promote_alpha(config)
         assert result.promotion_config_path is not None
 

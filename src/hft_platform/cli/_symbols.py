@@ -93,9 +93,7 @@ def cmd_symbols_build(args: argparse.Namespace) -> None:
 
     contract_index = None if args.no_contracts else load_contract_cache(args.contracts, args.metrics)
     result = build_symbols(args.list_path, contract_index)
-    validation = validate_symbols(
-        result.symbols, contract_index, max_subscriptions=_resolve_max_subscriptions(args)
-    )
+    validation = validate_symbols(result.symbols, contract_index, max_subscriptions=_resolve_max_subscriptions(args))
 
     errors = result.errors + validation.errors
     warnings = result.warnings + validation.warnings
@@ -119,9 +117,7 @@ def cmd_symbols_preview(args: argparse.Namespace) -> None:
 
     contract_index = None if args.no_contracts else load_contract_cache(args.contracts, args.metrics)
     result = build_symbols(args.list_path, contract_index)
-    validation = validate_symbols(
-        result.symbols, contract_index, max_subscriptions=_resolve_max_subscriptions(args)
-    )
+    validation = validate_symbols(result.symbols, contract_index, max_subscriptions=_resolve_max_subscriptions(args))
 
     for line in preview_lines(result, sample=args.sample):
         print(line)
@@ -166,9 +162,7 @@ def cmd_symbols_validate(args: argparse.Namespace) -> None:
             _print_issues(result.errors, result.warnings)
             sys.exit(1)
 
-    validation = validate_symbols(
-        symbols, contract_index, max_subscriptions=_resolve_max_subscriptions(args)
-    )
+    validation = validate_symbols(symbols, contract_index, max_subscriptions=_resolve_max_subscriptions(args))
 
     if validation.errors or validation.warnings:
         _print_issues(validation.errors, validation.warnings)
@@ -197,9 +191,7 @@ def cmd_symbols_sync(args: argparse.Namespace) -> None:
     contract_index = ContractIndex(contracts=contracts, metrics_by_code=metrics)
 
     result = build_symbols(args.list_path, contract_index)
-    validation = validate_symbols(
-        result.symbols, contract_index, max_subscriptions=_resolve_max_subscriptions(args)
-    )
+    validation = validate_symbols(result.symbols, contract_index, max_subscriptions=_resolve_max_subscriptions(args))
 
     errors = result.errors + validation.errors
     warnings = result.warnings + validation.warnings

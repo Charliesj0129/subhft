@@ -589,9 +589,7 @@ def build_parser() -> argparse.ArgumentParser:
     alpha_screen.add_argument("--max-abs-drawdown", type=float, default=0.3)
     alpha_screen.add_argument("--skip-gate-b-tests", action="store_true")
     alpha_screen.add_argument("--pytest-timeout", type=int, default=300)
-    alpha_screen.add_argument(
-        "--experiments-dir", default="research/experiments", help="Experiment base directory"
-    )
+    alpha_screen.add_argument("--experiments-dir", default="research/experiments", help="Experiment base directory")
     alpha_screen.add_argument("--out", help="Optional summary JSON output path")
     alpha_screen.set_defaults(func=cmd_alpha_screen)
 

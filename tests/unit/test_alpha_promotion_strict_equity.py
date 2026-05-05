@@ -146,14 +146,11 @@ def test_promote_alpha_screen_only_guard_can_be_disabled(tmp_path: Path) -> None
     # With the screen-only guard disabled, ``cannot_promote_screen_artifact``
     # must NOT be raised. The promotion may then succeed or fail downstream
     # depending on Gate-C/D/E state — we only care that the screen guard
-    # was bypassed.
+    # was bypassed. PromotionError is the only structured raiser; any other
+    # exception type is a real bug and should propagate.
     try:
         promote_alpha(cfg)
     except PromotionError as exc:
         assert "cannot_promote_screen_artifact" not in str(exc), (
             "screen-only guard must be bypassed when reject_screen_only=False"
         )
-    except Exception:
-        # Other failure paths (e.g. Gate C ordering) are acceptable here —
-        # the only invariant under test is "screen-only guard bypassed".
-        pass

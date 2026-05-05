@@ -474,8 +474,7 @@ class DataWriter:
         try:
             v_orders, v_fills = _L7_AUDIT_MIGRATION_VERSIONS
             result = self.ch_client.query(
-                "SELECT version FROM hft.schema_migrations "
-                f"WHERE version IN ('{v_orders}', '{v_fills}')"
+                f"SELECT version FROM hft.schema_migrations WHERE version IN ('{v_orders}', '{v_fills}')"
             )
             applied = {row[0] for row in result.result_rows}
             orders_applied = v_orders in applied

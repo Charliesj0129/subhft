@@ -96,7 +96,8 @@ def test_refuse_helper_passes_with_loop_id_in_shadow(monkeypatch):
 
     monkeypatch.setenv("HFT_RUNTIME_ROLE", "engine")
     monkeypatch.setenv("HFT_ORDER_MODE", "shadow")
-    _refuse_non_sim_without_loop({"loop_id": "r47_tmf_v1"})  # no raise
+    # Returns None on success; assert that explicitly.
+    assert _refuse_non_sim_without_loop({"loop_id": "r47_tmf_v1"}) is None
 
 
 def test_refuse_helper_passes_in_sim_without_loop(monkeypatch):
@@ -104,7 +105,7 @@ def test_refuse_helper_passes_in_sim_without_loop(monkeypatch):
 
     monkeypatch.setenv("HFT_RUNTIME_ROLE", "engine")
     monkeypatch.setenv("HFT_ORDER_MODE", "sim")
-    _refuse_non_sim_without_loop({})  # no raise
+    assert _refuse_non_sim_without_loop({}) is None
 
 
 def test_refuse_helper_skips_non_engine_roles(monkeypatch):
@@ -112,7 +113,8 @@ def test_refuse_helper_skips_non_engine_roles(monkeypatch):
 
     monkeypatch.setenv("HFT_RUNTIME_ROLE", "research")
     monkeypatch.setenv("HFT_ORDER_MODE", "live")
-    _refuse_non_sim_without_loop({})  # research role is exempt
+    # research role is exempt; returns None.
+    assert _refuse_non_sim_without_loop({}) is None
 
 
 def test_main_sim_startup_calls_loader(loop_workspace, monkeypatch):
@@ -131,8 +133,9 @@ def test_main_sim_startup_calls_loader(loop_workspace, monkeypatch):
         captured["settings"] = settings
         return fake_system
 
-    with patch("hft_platform.main.start_resilient_metrics_server"), patch(
-        "hft_platform.main.HFTSystem", side_effect=_capture_ctor
+    with (
+        patch("hft_platform.main.start_resilient_metrics_server"),
+        patch("hft_platform.main.HFTSystem", side_effect=_capture_ctor),
     ):
 
         async def _runner():
@@ -151,9 +154,7 @@ def test_main_shadow_without_loop_refuses(loop_workspace, monkeypatch):
     """Shadow mode without loop_id must abort before HFTSystem is constructed."""
     monkeypatch.setenv("HFT_ORDER_MODE", "shadow")
 
-    with patch("hft_platform.main.start_resilient_metrics_server"), patch(
-        "hft_platform.main.HFTSystem"
-    ) as mock_sys:
+    with patch("hft_platform.main.start_resilient_metrics_server"), patch("hft_platform.main.HFTSystem") as mock_sys:
         with pytest.raises(RuntimeError, match="loop_id required"):
 
             async def _runner():
@@ -183,8 +184,9 @@ def test_main_shadow_with_loop_succeeds(loop_workspace, monkeypatch):
         captured["settings"] = settings
         return fake_system
 
-    with patch("hft_platform.main.start_resilient_metrics_server"), patch(
-        "hft_platform.main.HFTSystem", side_effect=_capture_ctor
+    with (
+        patch("hft_platform.main.start_resilient_metrics_server"),
+        patch("hft_platform.main.HFTSystem", side_effect=_capture_ctor),
     ):
 
         async def _runner():

@@ -39,8 +39,7 @@ class StaleInstrumentError(Exception):
         self.code = code
         self.delivery_date = delivery_date
         super().__init__(
-            f"stale_instrument_subscription_blocked: code={code!r} "
-            f"delivery_date={delivery_date.isoformat()}"
+            f"stale_instrument_subscription_blocked: code={code!r} delivery_date={delivery_date.isoformat()}"
         )
 
 

@@ -697,9 +697,7 @@ class TestCmdAlphaValidate:
         # L6: bypass the strict-profile guard so we can test the import failure.
         from hft_platform.cli import _alpha as _alpha_mod
 
-        monkeypatch.setattr(
-            _alpha_mod, "_load_strict_validation_profile", lambda _arg: MagicMock(is_strict=True)
-        )
+        monkeypatch.setattr(_alpha_mod, "_load_strict_validation_profile", lambda _arg: MagicMock(is_strict=True))
         with patch.dict("sys.modules", {"hft_platform.alpha.validation": None}):
             with pytest.raises(SystemExit) as exc_info:
                 cmd_alpha_validate(
@@ -722,9 +720,7 @@ class TestCmdAlphaValidate:
     def test_validation_pass_outputs_json(self, capsys, monkeypatch):
         from hft_platform.cli import _alpha as _alpha_mod
 
-        monkeypatch.setattr(
-            _alpha_mod, "_load_strict_validation_profile", lambda _arg: MagicMock(is_strict=True)
-        )
+        monkeypatch.setattr(_alpha_mod, "_load_strict_validation_profile", lambda _arg: MagicMock(is_strict=True))
         fake_config_cls = MagicMock()
         fake_result = MagicMock()
         fake_result.passed = True

@@ -86,8 +86,10 @@ def loop_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 # -- _assert_strategy_enabled -------------------------------------------------
 
+
 def test_assert_strategy_enabled_passes_when_enabled(loop_workspace: Path):
-    _assert_strategy_enabled("R47_MAKER_TMF")  # no raise
+    # Returns None on success; assert that explicitly.
+    assert _assert_strategy_enabled("R47_MAKER_TMF") is None
 
 
 def test_assert_strategy_enabled_rejects_disabled(loop_workspace: Path):
@@ -107,6 +109,7 @@ def test_assert_strategy_enabled_rejects_no_registry(tmp_path: Path, monkeypatch
 
 
 # -- _bind_loop ---------------------------------------------------------------
+
 
 def test_bind_loop_overrides_strategy(loop_workspace: Path):
     settings = {
@@ -161,6 +164,7 @@ def test_bind_loop_disabled_strategy_blocks_binding(loop_workspace: Path):
 
 # -- resolve_active_strategy --------------------------------------------------
 
+
 def test_resolve_active_strategy_returns_dict(loop_workspace: Path):
     settings = {"strategy": {"id": "X", "module": "m", "class": "C"}}
     assert resolve_active_strategy(settings) == {"id": "X", "module": "m", "class": "C"}
@@ -172,6 +176,7 @@ def test_resolve_active_strategy_handles_missing():
 
 
 # -- load_settings end-to-end -------------------------------------------------
+
 
 def test_load_settings_resolves_loop_from_main_yaml(loop_workspace: Path):
     settings, _ = load_settings()

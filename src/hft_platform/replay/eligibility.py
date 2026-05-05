@@ -116,15 +116,10 @@ def check_eligibility(
     try:
         n = _count_live_intents(client, session_date, strategy_id)
     except Exception as exc:  # noqa: BLE001
-        return IneligiblePreRecorder(
-            reason=f"intent_recorder_query_failed: {type(exc).__name__}: {exc}"
-        )
+        return IneligiblePreRecorder(reason=f"intent_recorder_query_failed: {type(exc).__name__}: {exc}")
 
     if n == 0:
         return IneligiblePreRecorder(
-            reason=(
-                f"no_intents_recorded_for_{session_date.isoformat()}"
-                f"_strategy={strategy_id}"
-            )
+            reason=(f"no_intents_recorded_for_{session_date.isoformat()}_strategy={strategy_id}")
         )
     return Eligible(n_live_intents=n)

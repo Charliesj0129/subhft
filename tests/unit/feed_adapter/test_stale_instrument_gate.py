@@ -5,6 +5,7 @@ Critical correctness requirement (L2 plan, loop_v1 convergence):
   - delivery_date == today → OK (rollover day: same-day expiry must not block trading)
   - delivery_date > today  → OK (active contract)
 """
+
 from __future__ import annotations
 
 import datetime
@@ -56,8 +57,8 @@ class TestAssertNotExpired:
         today = date(2026, 5, 5)
         contract = _make_contract("TMFE6", today)
 
-        # Must not raise — this is the critical rollover-day-safe requirement
-        assert_not_expired(contract, today=today)
+        # Critical rollover-day-safe requirement: returns None on success.
+        assert assert_not_expired(contract, today=today) is None
 
     def test_passes_for_future_delivery(self) -> None:
         """A contract expiring 30 days from now must not raise."""
@@ -65,8 +66,7 @@ class TestAssertNotExpired:
         future = today + datetime.timedelta(days=30)
         contract = _make_contract("TMFR1", future)
 
-        # Must not raise
-        assert_not_expired(contract, today=today)
+        assert assert_not_expired(contract, today=today) is None
 
     def test_blocks_one_day_before_today(self) -> None:
         """Boundary: exactly one day before today triggers the gate."""
@@ -133,8 +133,8 @@ class TestBootstrapRefusesStartOnStaleSubscription:
         today = date(2026, 5, 5)
         rollover_contract = _make_contract("TMFE6", today)
 
-        # Must succeed without exception
-        assert_not_expired(rollover_contract, today=today)
+        # Must succeed without exception; function returns None.
+        assert assert_not_expired(rollover_contract, today=today) is None
 
 
 # ---------------------------------------------------------------------------
@@ -194,9 +194,9 @@ class TestAssertNoStaleSubscriptions:
     def test_skips_malformed_symbol_entries(self) -> None:
         today = date(2026, 5, 5)
         symbols = [
-            {"exchange": "TAIFEX"},          # no code
-            {"code": "TMFR1"},               # no exchange
-            "not-a-dict",                    # not a mapping
+            {"exchange": "TAIFEX"},  # no code
+            {"code": "TMFR1"},  # no exchange
+            "not-a-dict",  # not a mapping
             {"code": "OK", "exchange": "TAIFEX"},  # valid → resolved
         ]
 

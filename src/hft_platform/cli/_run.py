@@ -43,8 +43,7 @@ def cmd_run(args: argparse.Namespace) -> None:
     loop_id = loop_id_raw if isinstance(loop_id_raw, str) and loop_id_raw else None
     if loop_id and args.strategy:
         print(
-            "[hft run] --loop and --strategy are mutually exclusive; "
-            "the loop YAML defines its own strategy.",
+            "[hft run] --loop and --strategy are mutually exclusive; the loop YAML defines its own strategy.",
             file=sys.stderr,
         )
         sys.exit(2)

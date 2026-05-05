@@ -242,7 +242,8 @@ class TestReconcileStaleQuotesNoneGuard:
             spread_scaled=3_0000,
         )
         # Direct call: must not raise even when on_stats guard is bypassed.
-        strategy._reconcile_stale_quotes(ev)
+        # Function returns None on the early-return guard.
+        assert strategy._reconcile_stale_quotes(ev) is None
 
     def test_reconcile_stale_quotes_returns_on_none_spread(self, strategy):
         """`_reconcile_stale_quotes` must not raise on `spread_scaled is None`."""
@@ -257,4 +258,4 @@ class TestReconcileStaleQuotesNoneGuard:
             mid_price_x2=3_7759_0000 * 2,
             spread_scaled=None,
         )
-        strategy._reconcile_stale_quotes(ev)
+        assert strategy._reconcile_stale_quotes(ev) is None

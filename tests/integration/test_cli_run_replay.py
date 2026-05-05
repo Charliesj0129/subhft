@@ -242,16 +242,12 @@ def test_replay_eligible_with_divergence(tmp_path: Path, _settings: dict) -> Non
     assert report["eligibility_status"] == "eligible"
     assert report["match_pct"] < 95.0
     assert report["first_divergence_idx"] == 0
-    histogram = json.loads(
-        (out_root / "2026-04-21" / "divergence_histogram.json").read_text()
-    )
+    histogram = json.loads((out_root / "2026-04-21" / "divergence_histogram.json").read_text())
     assert histogram.get("price", 0) == 4
     assert histogram.get("decision_price", 0) == 4
 
 
-def test_replay_pre_recorder_session_blocks_without_override(
-    tmp_path: Path, _settings: dict
-) -> None:
+def test_replay_pre_recorder_session_blocks_without_override(tmp_path: Path, _settings: dict) -> None:
     from hft_platform.replay.cli_runner import run_replay_session
 
     fixture = _build_fixture(tmp_path / "wal.tar.gz", _market_rows([1000000]))
@@ -276,9 +272,7 @@ def test_replay_pre_recorder_session_blocks_without_override(
     assert not (out_root / "2026-04-21" / "divergence_histogram.json").exists()
 
 
-def test_replay_pre_recorder_with_override_runs_with_empty_live(
-    tmp_path: Path, _settings: dict
-) -> None:
+def test_replay_pre_recorder_with_override_runs_with_empty_live(tmp_path: Path, _settings: dict) -> None:
     from hft_platform.replay.cli_runner import run_replay_session
 
     prices = [1000000, 1000100]
@@ -302,9 +296,7 @@ def test_replay_pre_recorder_with_override_runs_with_empty_live(
     assert report["n_live_intents"] == 0
     assert report["n_replayed_intents"] == 2
     # Length mismatch -> all replayed entries bucketed under __missing__.
-    histogram = json.loads(
-        (out_root / "2026-04-21" / "divergence_histogram.json").read_text()
-    )
+    histogram = json.loads((out_root / "2026-04-21" / "divergence_histogram.json").read_text())
     assert histogram.get("__missing__", 0) == 2
 
 

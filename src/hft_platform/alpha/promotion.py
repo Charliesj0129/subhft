@@ -353,9 +353,7 @@ def _evaluate_gate_d(scorecard: dict[str, Any], config: PromotionConfig) -> tupl
     if config.require_real_equity:
         allowed_sources = ("real", "real_no_trade")
         equity_source_raw = scorecard.get("equity_source")
-        equity_source = (
-            str(equity_source_raw).strip() if isinstance(equity_source_raw, str) else None
-        )
+        equity_source = str(equity_source_raw).strip() if isinstance(equity_source_raw, str) else None
         if equity_source == "synthetic":
             equity_pass = False
             equity_detail = (
@@ -374,9 +372,7 @@ def _evaluate_gate_d(scorecard: dict[str, Any], config: PromotionConfig) -> tupl
             )
         else:
             equity_pass = False
-            equity_detail = (
-                f"REJECTED — equity_source={equity_source!r} not in {list(allowed_sources)}"
-            )
+            equity_detail = f"REJECTED — equity_source={equity_source!r} not in {list(allowed_sources)}"
         checks["equity_source"] = {
             "value": equity_source,
             "allowed": list(allowed_sources),

@@ -37,21 +37,15 @@ def _assert_strategy_enabled(strategy_id: str, strategies_yaml: str = STRATEGIES
             data = yaml.safe_load(f) or {}
     except FileNotFoundError as exc:
         raise LoopBindingError(
-            f"strategies registry not found at {strategies_yaml!r}; cannot verify "
-            f"strategy_id={strategy_id!r}"
+            f"strategies registry not found at {strategies_yaml!r}; cannot verify strategy_id={strategy_id!r}"
         ) from exc
 
     for entry in data.get("strategies", []) or []:
         if entry.get("id") == strategy_id:
             if not entry.get("enabled", False):
-                raise LoopBindingError(
-                    f"strategy_id={strategy_id!r} bound by loop, but disabled in "
-                    f"{strategies_yaml}"
-                )
+                raise LoopBindingError(f"strategy_id={strategy_id!r} bound by loop, but disabled in {strategies_yaml}")
             return
-    raise LoopBindingError(
-        f"strategy_id={strategy_id!r} bound by loop, but not present in {strategies_yaml}"
-    )
+    raise LoopBindingError(f"strategy_id={strategy_id!r} bound by loop, but not present in {strategies_yaml}")
 
 
 def _bind_loop(settings: Dict[str, Any]) -> Dict[str, Any]:
@@ -77,8 +71,7 @@ def _bind_loop(settings: Dict[str, Any]) -> Dict[str, Any]:
 
     if loop_cfg.get("loop_id") != loop_id:
         raise LoopBindingError(
-            f"loop file {loop_path} has loop_id={loop_cfg.get('loop_id')!r}, "
-            f"settings expected {loop_id!r}"
+            f"loop file {loop_path} has loop_id={loop_cfg.get('loop_id')!r}, settings expected {loop_id!r}"
         )
 
     if "strategy" in loop_cfg:
@@ -92,6 +85,7 @@ def _bind_loop(settings: Dict[str, Any]) -> Dict[str, Any]:
     _assert_strategy_enabled(strategy_id)
 
     return settings
+
 
 DEFAULT_SETTINGS: Dict[str, Any] = {
     "mode": "sim",  # sim | live | replay

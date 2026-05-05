@@ -201,17 +201,13 @@ class HftBacktestRunner:
             # ``adapter.n_fills`` if exposed; otherwise fall back to the
             # risk-rejection delta (zero rejections + zero motion = no-trade).
             adapter_fills = getattr(adapter, "n_fills", None)
-            n_fills_for_classifier = (
-                int(adapter_fills) if adapter_fills is not None else None
-            )
+            n_fills_for_classifier = int(adapter_fills) if adapter_fills is not None else None
             if equity_series is None or not equity_series.is_valid():
                 equity_source: EquitySource = "synthetic"
             elif used_synthetic_equity:
                 equity_source = "synthetic"
             else:
-                equity_source = classify_equity_source(
-                    equity_series.equity, n_fills=n_fills_for_classifier
-                )
+                equity_source = classify_equity_source(equity_series.equity, n_fills=n_fills_for_classifier)
 
             run_result = HftBacktestRunResult(
                 run_id=run_id,

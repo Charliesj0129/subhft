@@ -51,9 +51,7 @@ def ch_client():
     host = os.getenv("HFT_CLICKHOUSE_HOST", "localhost")
     port = int(os.getenv("HFT_CLICKHOUSE_PORT", "9000"))
     try:
-        client = clickhouse_connect.get_client(
-            host=host, port=port, username="default", password=""
-        )
+        client = clickhouse_connect.get_client(host=host, port=port, username="default", password="")
         client.query("SELECT 1")
         return client
     except Exception as exc:
@@ -76,8 +74,7 @@ def _cleanup_test_rows(ch_client) -> None:
     for table, key in (("hft.orders", "order_id"), ("hft.fills", "fill_id")):
         try:
             ch_client.command(
-                f"ALTER TABLE {table} DELETE WHERE {key} LIKE '{L7_TEST_PREFIX}%' "
-                f"SETTINGS mutations_sync = 1"
+                f"ALTER TABLE {table} DELETE WHERE {key} LIKE '{L7_TEST_PREFIX}%' SETTINGS mutations_sync = 1"
             )
         except Exception:  # noqa: BLE001
             pass
@@ -105,11 +102,9 @@ class TestL7Migration:
             assert writer._l7_audit_detected is True
             assert writer._l7_audit_active_tables == {"hft.orders", "hft.fills"}
         finally:
-            try:
-                # Best-effort shutdown so heartbeat thread doesn't leak.
-                writer._heartbeat_running = False
-            except Exception:  # noqa: BLE001
-                pass
+            # Best-effort shutdown so heartbeat thread doesn't leak.
+            # Plain attribute assignment on a connected DataWriter cannot raise.
+            writer._heartbeat_running = False
 
     def test_round_trip_extended_mode_populates_audit_fields(self, schema_applied) -> None:
         ch = schema_applied
@@ -140,8 +135,7 @@ class TestL7Migration:
             keys = list(row.keys())
             ch.insert("hft.orders", [[row[k] for k in keys]], column_names=keys)
             result = ch.query(
-                f"SELECT trace_id, git_sha, data_session_id "
-                f"FROM hft.orders WHERE order_id = '{order_id}'"
+                f"SELECT trace_id, git_sha, data_session_id FROM hft.orders WHERE order_id = '{order_id}'"
             )
             assert len(result.result_rows) == 1
             trace_id, git_sha, session = result.result_rows[0]
@@ -184,9 +178,7 @@ class TestL7Migration:
                 }
             ]
             writer._ch_insert_once("hft.orders", data)
-            result = schema_applied.query(
-                f"SELECT trace_id, git_sha FROM hft.orders WHERE order_id = '{order_id}'"
-            )
+            result = schema_applied.query(f"SELECT trace_id, git_sha FROM hft.orders WHERE order_id = '{order_id}'")
             assert len(result.result_rows) == 1
             trace_id, git_sha = result.result_rows[0]
             # Strip dropped the keys; ClickHouse defaults gave us '' on read.
@@ -194,7 +186,5 @@ class TestL7Migration:
             assert git_sha == ""
         finally:
             _cleanup_test_rows(schema_applied)
-            try:
-                writer._heartbeat_running = False
-            except Exception:  # noqa: BLE001
-                pass
+            # Plain attribute assignment cannot raise.
+            writer._heartbeat_running = False
