@@ -13,6 +13,7 @@ Tasks 9 and 10 extend the public surface declared here.
 
 from __future__ import annotations
 
+from .compiler import DSLNameError, compile_ast
 from .parser import (
     BinOp,
     DSLSyntaxError,
@@ -25,10 +26,12 @@ from .parser import (
 
 __all__ = [
     "BinOp",
+    "DSLNameError",
     "DSLSyntaxError",
     "Identifier",
     "Literal",
     "Node",
     "UnaryOp",
+    "compile_ast",
     "parse",
 ]
