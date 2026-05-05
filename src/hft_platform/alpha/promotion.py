@@ -57,6 +57,11 @@ class PromotionConfig:
     max_abs_drawdown: float = 0.2
     max_turnover: float = 2.0
     max_correlation: float = 0.7
+    # Slice C: minimum replay-parity match percentage required for Gate D promotion.
+    # Scorecards under a strict validation profile must populate
+    # ``scorecard.replay_parity.match_pct``; missing or below-threshold values
+    # fail closed (see _evaluate_gate_d).
+    min_replay_parity_match_pct: float = 95.0
     enable_rust_readiness_gate: bool = False
     rust_module_name: str | None = None
     rust_parity_test_path: str = "tests/unit/test_rust_hotpath_parity.py"
@@ -323,6 +328,23 @@ def _evaluate_gate_d(scorecard: dict[str, Any], config: PromotionConfig) -> tupl
                 "(see docs/architecture/latency-baseline-shioaji-sim-vs-system.md)"
             ),
         },
+    }
+    # Slice C: replay-parity audit — mirrors latency_profile fail-closed semantics.
+    # Promotion-time check that the scorecard recorded a passing replay_parity_report
+    # (live → backtest intent reconstruction within tolerance under a strict profile).
+    replay_parity = scorecard.get("replay_parity") or None
+    match_pct: float | None = None
+    if isinstance(replay_parity, dict):
+        match_pct = _to_float(replay_parity.get("match_pct"))
+    min_match_pct = getattr(config, "min_replay_parity_match_pct", 95.0)
+    checks["replay_parity_audit"] = {
+        "value": match_pct,
+        "min": min_match_pct,
+        "required": True,
+        "pass": (match_pct is not None and match_pct >= min_match_pct),
+        "detail": (
+            "OK" if match_pct is not None else "MISSING — scorecard.replay_parity must be populated before promotion"
+        ),
     }
     # Feature set version parity check (warn-only: does NOT block Gate D).
     manifest_fsv = str(config.manifest_feature_set_version or "").strip() or None

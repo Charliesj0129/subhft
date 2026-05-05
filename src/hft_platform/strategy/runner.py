@@ -210,6 +210,9 @@ class StrategyRunner:
         "_stale_event_threshold_ns",
         "_stale_event_skip_total",
         "_stale_event_metric",
+        # Slice C task 3: opt-in OrderIntent recorder producer hook
+        "_intent_recorder_enabled",
+        "_recorder_queue",
         "__dict__",  # needed for test monkey-patching
     )
 
@@ -222,6 +225,7 @@ class StrategyRunner:
         feature_engine=None,
         config_path: str = "config/base/strategies.yaml",
         symbol_metadata: SymbolMetadata | None = None,
+        recorder_queue: "asyncio.Queue | None" = None,
     ):
         self.bus = bus
         self.risk_queue = risk_queue
@@ -343,6 +347,18 @@ class StrategyRunner:
 
         # Per-strategy intent flood cap: limits intents submitted per event
         self._max_intents_per_event: int = int(os.getenv("HFT_MAX_INTENTS_PER_EVENT", "20"))
+
+        # Slice C task 3: opt-in OrderIntent recorder hook. Off by default; set
+        # ``HFT_INTENT_RECORDER_ENABLED=1`` to record emitted intents to the
+        # ``hft.order_intents`` table via ``RecorderService``. Drops silently
+        # on QueueFull to preserve the hot-path no-block invariant.
+        self._intent_recorder_enabled: bool = os.getenv("HFT_INTENT_RECORDER_ENABLED", "0").lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        self._recorder_queue: "asyncio.Queue | None" = recorder_queue
 
         # Cache for parsed position keys: "pos:strat_id:symbol" → (strat_id, symbol)
         self._position_key_cache: dict[str, tuple[str, str]] = {}
@@ -1470,6 +1486,27 @@ class StrategyRunner:
                         else:
                             self._risk_submit(intent)
                         _d7_submitted += 1
+                        # Slice C task 3: opt-in producer hook for the
+                        # ``intents`` recorder topic. MUST never block: uses
+                        # put_nowait + silent QueueFull drop. Recording must
+                        # never apply back-pressure to strategy emission.
+                        if self._intent_recorder_enabled and self._recorder_queue is not None:
+                            try:
+                                self._recorder_queue.put_nowait(
+                                    {
+                                        "topic": "intents",
+                                        "data": {
+                                            "intent": intent,
+                                            "ingest_ts": timebase.now_ns(),
+                                        },
+                                    }
+                                )
+                            except asyncio.QueueFull:
+                                # Silent drop — observable via the counter only.
+                                try:
+                                    self.metrics.recorder_intent_drop_total.inc()
+                                except Exception:  # noqa: BLE001
+                                    pass
                     except asyncio.QueueFull:
                         _d7_dropped += 1
                         self.metrics.intent_queue_full_total.inc()

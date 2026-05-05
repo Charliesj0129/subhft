@@ -300,6 +300,8 @@ class MetricsRegistry:
                 _pn("recorder_bridge_drops_total"),
                 # Recorder direct-path queue drops
                 _pn("recorder_direct_drops_total"),
+                # Recorder OrderIntent producer drops (Slice C task 3)
+                _pn("recorder_intent_drop_total"),
                 # Rust-to-Python normalizer fallbacks
                 _pn("rust_fallback_total"),
                 # Post-normalization processing errors (LOB/feature/publish)
@@ -718,6 +720,13 @@ class MetricsRegistry:
         self.recorder_direct_drops_total = Counter(
             _pn("recorder_direct_drops_total"),
             "Direct-path recorder queue drops in MarketDataService",
+        )
+        # Slice C task 3: producer-side drops when StrategyRunner cannot enqueue
+        # an OrderIntent envelope onto the (full) recorder queue. The hot path
+        # silently drops; this counter makes the loss observable.
+        self.recorder_intent_drop_total = Counter(
+            _pn("recorder_intent_drop_total"),
+            "OrderIntent recorder drops in StrategyRunner producer hook (queue full)",
         )
         self.recorder_degraded_mode = Gauge(
             _pn("recorder_degraded_mode"),

@@ -8,6 +8,7 @@ Three scenarios:
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -15,6 +16,19 @@ import pytest
 
 from hft_platform.alpha._gate_c import _invoke_sub_gates
 from hft_platform.alpha._validation_profile import load_profile
+
+
+@dataclass
+class _ParityReport:
+    """Synthetic ReplayParityReport stand-in.
+
+    Real reports are wired by Slice C Task 11 (BacktestResult.replay_parity_report)
+    and consumed by ReplayParityGate. The strict profile started enforcing parity
+    in Task 9, so these tests inject a passing report directly into the payload.
+    """
+
+    match_pct: float
+    first_divergence_idx: int | None = None
 
 
 @pytest.fixture(scope="module")
@@ -41,6 +55,9 @@ def _r47_payload() -> dict:
         "adverse_fill_pct": 0.30,
         "fill_rate_per_day": 1.26,
         "daily_pnl": [2325.0] + [-2.4] * 30,
+        # Slice C: passing parity report so the R47 KILL is attributable to
+        # the small-sample/single-day-dominance gates, not to missing parity.
+        "replay_parity_report": _ParityReport(match_pct=99.0),
     }
 
 
@@ -65,6 +82,9 @@ def _robust_payload() -> dict:
         "adverse_fill_pct": 0.30,
         "fill_rate_per_day": 6.0,
         "daily_pnl": daily,
+        # Slice C: passing parity report — robust path must clear the new
+        # strict replay_parity sub-gate.
+        "replay_parity_report": _ParityReport(match_pct=98.5),
     }
 
 

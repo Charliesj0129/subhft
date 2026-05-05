@@ -137,3 +137,17 @@ class TestShippedStrictProfile:
             "deflated_sharpe_maker",
         ):
             assert gate_name in prof.blocking_sub_gates, gate_name
+
+    def test_strict_profile_includes_replay_parity(self) -> None:
+        """Slice C task 9: strict profile must list replay_parity as blocking
+        and define the replay_parity_match_pct_min threshold under BOTH the
+        maker and taker sections (since the gate applies to both)."""
+        from hft_platform.alpha._validation_profile import load_profile
+
+        prof = load_profile("config/research/profiles/vm_ul6_strict.yaml")
+        assert "replay_parity" in prof.blocking_sub_gates
+
+        maker_thresholds = prof.thresholds_for(strategy_type="maker")
+        taker_thresholds = prof.thresholds_for(strategy_type="taker")
+        assert maker_thresholds["replay_parity_match_pct_min"] == 95.0
+        assert taker_thresholds["replay_parity_match_pct_min"] == 95.0

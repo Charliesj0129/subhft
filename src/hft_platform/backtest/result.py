@@ -7,7 +7,7 @@ default to None on the irrelevant side.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
 
 import numpy as np
 
@@ -47,6 +47,12 @@ class BacktestResult:
 
     # Optional daily-pnl series for sub-gate computations
     daily_pnl: list[float] = field(default_factory=list)
+
+    # Slice C: optional replay-parity report attached by the backtest runner
+    # so ReplayParityGate (and other consumers) can read the precomputed
+    # report directly off the dataclass. Default None preserves backward
+    # compatibility with all existing callers.
+    replay_parity_report: Any | None = None
 
     def to_provenance_dict(self) -> dict:
         """Serializable provenance (excludes large arrays)."""

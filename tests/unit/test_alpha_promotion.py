@@ -6,6 +6,7 @@ import yaml
 
 from hft_platform.alpha.promotion import (
     PromotionConfig,
+    _evaluate_gate_d,
     build_promotion_checklist,
     promote_alpha,
 )
@@ -24,15 +25,18 @@ def _write_scorecard(
     turnover: float,
     corr: float | None = 0.2,
     latency_profile: str | None = "sim_p95_v2026-02-26",
+    replay_parity_match_pct: float | None = 100.0,
 ):
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
+    payload: dict = {
         "sharpe_oos": sharpe,
         "max_drawdown": max_drawdown,
         "turnover": turnover,
         "correlation_pool_max": corr,
         "latency_profile": latency_profile,
     }
+    if replay_parity_match_pct is not None:
+        payload["replay_parity"] = {"match_pct": replay_parity_match_pct}
     path.write_text(json.dumps(payload, indent=2, sort_keys=True))
 
 
@@ -856,3 +860,53 @@ class TestStrictProfileRequirement:
             promote_alpha(config)
         except Exception as exc:
             assert "strict profile required" not in str(exc), exc
+
+
+# ---------------------------------------------------------------------------
+# Slice C Task 10: Gate D replay_parity_audit check
+# ---------------------------------------------------------------------------
+
+
+def _gate_d_scorecard_with_parity(match_pct: float | None) -> dict:
+    """Build a scorecard dict that satisfies all other Gate D required fields,
+    so the replay_parity_audit is the focus of the assertion."""
+    payload: dict = {
+        "sharpe_oos": 1.6,
+        "max_drawdown": -0.08,
+        "turnover": 0.2,
+        "correlation_pool_max": 0.2,
+        "latency_profile": "sim_p95_v2026-02-26",
+    }
+    if match_pct is not None:
+        payload["replay_parity"] = {"match_pct": match_pct}
+    return payload
+
+
+def test_promotion_blocks_when_replay_parity_below_threshold():
+    scorecard = _gate_d_scorecard_with_parity(match_pct=80.0)
+    config = PromotionConfig(
+        alpha_id="ofi_mc",
+        owner="charlie",
+        min_replay_parity_match_pct=95.0,
+    )
+
+    passed, checks = _evaluate_gate_d(scorecard, config)
+
+    assert checks["replay_parity_audit"]["pass"] is False
+    assert checks["replay_parity_audit"]["value"] == 80.0
+    assert checks["replay_parity_audit"]["min"] == 95.0
+    assert passed is False
+
+
+def test_promotion_passes_when_replay_parity_at_or_above_threshold():
+    scorecard = _gate_d_scorecard_with_parity(match_pct=96.0)
+    config = PromotionConfig(
+        alpha_id="ofi_mc",
+        owner="charlie",
+        min_replay_parity_match_pct=95.0,
+    )
+
+    _passed, checks = _evaluate_gate_d(scorecard, config)
+
+    assert checks["replay_parity_audit"]["pass"] is True
+    assert checks["replay_parity_audit"]["value"] == 96.0

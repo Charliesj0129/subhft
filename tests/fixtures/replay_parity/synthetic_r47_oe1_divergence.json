@@ -1,0 +1,20 @@
+{
+  "fixture_set": "replay_parity",
+  "version": 1,
+  "scenarios": [
+    {
+      "id": "r47_oe1_cancel_short_circuit",
+      "live_jsonl": "synthetic_r47_oe1_live.jsonl",
+      "replayed_jsonl": "synthetic_r47_oe1_replayed.jsonl",
+      "expected_match_pct_max": 95.0,
+      "rationale": "Live stream omits ~6% of CANCEL intents due to OE1 cancel-path short-circuit observed 2026-04-21. Replay (with fix) emits them, so live<replayed by ~6 intents in the divergence histogram under '__missing__'."
+    },
+    {
+      "id": "clean_1tick_echo",
+      "live_jsonl": "clean_echo_live.jsonl",
+      "replayed_jsonl": "clean_echo_replayed.jsonl",
+      "expected_match_pct_min": 100.0,
+      "rationale": "Deterministic 1-tick echo; live and replayed should match byte-for-byte under canonical hashing."
+    }
+  ]
+}
