@@ -26,10 +26,12 @@ def ensure_builtin_sub_gates_registered() -> None:
         SharpeThresholdGate,
         WinningDayPctGate,
     )
+    from hft_platform.alpha._sub_gates.cost_uncertainty import CostUncertaintyGate
     from hft_platform.alpha._sub_gates.day_bootstrap_ci import DayLevelBootstrapCIGate
     from hft_platform.alpha._sub_gates.deflated_sharpe_maker import (
         DeflatedSharpeForMakerGate,
     )
+    from hft_platform.alpha._sub_gates.inventory_mtm import InventoryMtMGate
     from hft_platform.alpha._sub_gates.loo_day_sensitivity import LOODaySensitivityGate
     from hft_platform.alpha._sub_gates.maker import (
         FillQualityGate,
@@ -67,6 +69,9 @@ def ensure_builtin_sub_gates_registered() -> None:
         DeflatedSharpeForMakerGate(),
         # New (Slice C)
         ReplayParityGate(),
+        # New (Slice B)
+        InventoryMtMGate(),
+        CostUncertaintyGate(),
     ]
     for gate in candidates:
         if gate.name not in existing_names:

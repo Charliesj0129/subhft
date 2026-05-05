@@ -57,11 +57,16 @@ class CostUncertaintyGate:
         floor = thresholds.get("cost_uncertainty_p95_lower_bound_min_pts")
 
         daily = getattr(result, "daily_pnl", None) or []
-        pnl_series = [
-            float(row.get("pnl_pts", 0.0) or 0.0)
-            for row in daily
-            if int(row.get("fills", 0) or 0) > 0  # only count traded days
-        ]
+        # Accept both Slice B dict rows ({pnl_pts, fills, ...}) and legacy
+        # float rows (raw daily PnL). Float rows are assumed to be traded
+        # days; dict rows with fills==0 are excluded as non-traded days.
+        pnl_series: list[float] = []
+        for row in daily:
+            if isinstance(row, dict):
+                if int(row.get("fills", 0) or 0) > 0:
+                    pnl_series.append(float(row.get("pnl_pts", 0.0) or 0.0))
+            else:
+                pnl_series.append(float(row))
 
         n_days = len(pnl_series)
 

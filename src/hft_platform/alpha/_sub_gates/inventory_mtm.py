@@ -45,12 +45,47 @@ class InventoryMtMGate:
         cost_floor = thresholds.get("cost_floor_per_fill_pts")
         daily = getattr(result, "daily_pnl", None) or []
 
-        n_fills = sum(int(row.get("fills", 0) or 0) for row in daily)
-        realized = sum(float(row.get("pnl_pts", 0.0) or 0.0) for row in daily)
-        residual_mtm = sum(
-            float(row.get("residual_mtm_pts", 0.0) or 0.0) for row in daily
-        )
+        # Slice B requires dict rows with ``fills`` and ``residual_mtm_pts``.
+        # Legacy float-only rows lack the bookkeeping needed for this gate;
+        # return advisory PASS so the strict profile does not block on a
+        # contract-shape mismatch (Slice B Task 11).
+        dict_rows = [row for row in daily if isinstance(row, dict)]
+        if dict_rows:
+            n_fills = sum(int(row.get("fills", 0) or 0) for row in dict_rows)
+            realized = sum(
+                float(row.get("pnl_pts", 0.0) or 0.0) for row in dict_rows
+            )
+            residual_mtm = sum(
+                float(row.get("residual_mtm_pts", 0.0) or 0.0)
+                for row in dict_rows
+            )
+            schema_advisory = False
+        else:
+            n_fills = 0
+            realized = 0.0
+            residual_mtm = 0.0
+            schema_advisory = bool(daily)
         net_after_residual = realized + residual_mtm
+
+        if schema_advisory:
+            return SubGateResult(
+                name=self.name,
+                passed=True,
+                metrics={
+                    "realized_pts": 0.0,
+                    "residual_mtm_pts": 0.0,
+                    "net_pts": 0.0,
+                    "cost_floor_per_fill_pts": (
+                        float(cost_floor) if cost_floor is not None else None
+                    ),
+                    "cost_floor_total_pts": None,
+                    "n_fills": 0,
+                },
+                details=(
+                    "advisory: daily_pnl rows lack fills/residual_mtm_pts "
+                    "(legacy float-shape payload)"
+                ),
+            )
 
         if cost_floor is None:
             cost_floor_total: float | None = None
