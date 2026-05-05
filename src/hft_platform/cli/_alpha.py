@@ -174,7 +174,107 @@ def cmd_alpha_list(args: argparse.Namespace) -> None:
             print(f"- {msg}")
 
 
+def _load_strict_validation_profile(profile_arg: str | None) -> Any:
+    """Resolve ``--profile`` for ``hft alpha validate``.
+
+    A strict profile is mandatory for Gate-D-eligible validation runs.
+    Returns the loaded profile object on success; exits with code 2 on
+    any failure (missing arg, file not found, profile not strict).
+    """
+    if not profile_arg:
+        print(
+            "[hft alpha validate] --profile is required and must reference a strict "
+            "validation profile (see config/research/profiles/vm_ul6_strict.yaml). "
+            "Use `hft alpha screen` for loose pre-Gate-C evaluation.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    try:
+        from hft_platform.alpha._validation_profile import load_profile
+    except Exception as exc:
+        print(f"Failed to import validation profile loader: {exc}", file=sys.stderr)
+        sys.exit(1)
+    profile_path = Path(profile_arg)
+    if not profile_path.is_absolute() and not profile_path.exists():
+        candidate = Path("config/research/profiles") / f"{profile_arg}.yaml"
+        if candidate.exists():
+            profile_path = candidate
+    try:
+        profile = load_profile(profile_path)
+    except FileNotFoundError as exc:
+        print(f"[hft alpha validate] profile not found: {exc}", file=sys.stderr)
+        sys.exit(2)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[hft alpha validate] profile load failed: {exc}", file=sys.stderr)
+        sys.exit(2)
+    if not getattr(profile, "is_strict", False):
+        print(
+            f"[hft alpha validate] profile {getattr(profile, 'name', profile_arg)!r} is not "
+            "strict; refusing to run. `hft alpha validate` only accepts strict profiles.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    return profile
+
+
+def cmd_alpha_screen(args: argparse.Namespace) -> None:
+    """Loose-mode alpha screening — stamps ``screen_only=true`` on the scorecard.
+
+    A screen artifact is **not** promotion-eligible; ``hft alpha promote``
+    rejects any scorecard with ``screen_only=true``. Use this for early
+    triage during research; use ``hft alpha validate --profile strict``
+    when an artifact must be eligible for Gate D.
+    """
+    try:
+        from hft_platform.alpha.validation import ValidationConfig, run_alpha_validation
+    except Exception as exc:
+        print(f"Failed to import alpha validation pipeline: {exc}")
+        sys.exit(1)
+
+    import datetime as _dt
+
+    config = ValidationConfig(
+        alpha_id=args.alpha_id,
+        data_paths=[str(p) for p in args.data],
+        is_oos_split=float(getattr(args, "is_oos_split", 0.7)),
+        signal_threshold=float(getattr(args, "signal_threshold", 0.3)),
+        max_position=int(getattr(args, "max_position", 5)),
+        min_sharpe_oos=float(getattr(args, "min_sharpe_oos", 0.0)),
+        max_abs_drawdown=float(getattr(args, "max_abs_drawdown", 0.3)),
+        skip_gate_b_tests=bool(getattr(args, "skip_gate_b_tests", False)),
+        pytest_timeout_s=int(getattr(args, "pytest_timeout", 300)),
+        project_root=".",
+        experiments_dir=str(getattr(args, "experiments_dir", "research/experiments")),
+        profile=None,
+    )
+    result = run_alpha_validation(config)
+    summary = result.to_dict()
+
+    try:
+        scorecard_path = Path(result.scorecard_path)
+        if scorecard_path.exists():
+            payload = json.loads(scorecard_path.read_text())
+            payload["screen_only"] = True
+            payload["screen_profile"] = "loose_default"
+            payload["screen_timestamp"] = (
+                _dt.datetime.now(tz=_dt.timezone.utc).isoformat()
+            )
+            scorecard_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+            summary["screen_only"] = True
+    except Exception as exc:  # noqa: BLE001
+        print(f"Warning: failed to stamp screen_only on scorecard: {exc}", file=sys.stderr)
+
+    if args.out:
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(summary, indent=2, sort_keys=True))
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    if not result.passed:
+        sys.exit(2)
+
+
 def cmd_alpha_validate(args: argparse.Namespace) -> None:
+    profile = _load_strict_validation_profile(getattr(args, "profile", None))
     try:
         from hft_platform.alpha.validation import ValidationConfig, run_alpha_validation
     except Exception as exc:
@@ -228,6 +328,7 @@ def cmd_alpha_validate(args: argparse.Namespace) -> None:
         stress_fee_multiplier=float(getattr(args, "stress_fee_multiplier", 1.5)),
         min_stress_sharpe_ratio=float(getattr(args, "min_stress_sharpe_ratio", 0.5)),
         stress_drawdown_limit_multiplier=float(getattr(args, "stress_drawdown_limit_multiplier", 1.25)),
+        profile=profile,
     )
     result = run_alpha_validation(config)
     summary = result.to_dict()
@@ -240,7 +341,46 @@ def cmd_alpha_validate(args: argparse.Namespace) -> None:
         sys.exit(2)
 
 
+def _refuse_screen_or_synthetic_scorecard(scorecard_arg: str | None) -> None:
+    """L6: Pre-flight scorecard guard for ``hft alpha promote``.
+
+    Reads ``--scorecard`` (when provided) and refuses to invoke the
+    promotion pipeline if the artifact is screen-only or has synthetic
+    equity. This is a fast-fail UX layer; ``promote_alpha`` repeats the
+    check internally for callers that bypass the CLI.
+    """
+    if not scorecard_arg:
+        return
+    path = Path(scorecard_arg)
+    if not path.exists():
+        return
+    try:
+        payload = json.loads(path.read_text())
+    except Exception as exc:  # noqa: BLE001
+        print(f"[hft alpha promote] failed to read scorecard {path}: {exc}", file=sys.stderr)
+        return
+    if bool(payload.get("screen_only", False)):
+        print(
+            f"[hft alpha promote] cannot_promote_screen_artifact: {path} is stamped "
+            "screen_only=true; produce a strict-validation artifact via "
+            "`hft alpha validate --profile strict` first.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    eq_src_raw = payload.get("equity_source")
+    eq_src = str(eq_src_raw).strip() if isinstance(eq_src_raw, str) else None
+    if eq_src == "synthetic":
+        print(
+            f"[hft alpha promote] cannot_promote_synthetic_equity: {path} reports "
+            "equity_source='synthetic'; re-run the backtest under "
+            "strict_equity=True with a real equity series.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+
 def cmd_alpha_promote(args: argparse.Namespace) -> None:
+    _refuse_screen_or_synthetic_scorecard(getattr(args, "scorecard", None))
     try:
         from hft_platform.alpha.promotion import PromotionConfig, promote_alpha
     except Exception as exc:

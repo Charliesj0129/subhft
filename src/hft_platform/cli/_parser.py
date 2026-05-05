@@ -21,6 +21,7 @@ from ._alpha import (
     cmd_alpha_promote_batch,
     cmd_alpha_rl_promote,
     cmd_alpha_scaffold,
+    cmd_alpha_screen,
     cmd_alpha_search,
     cmd_alpha_validate,
     cmd_alpha_validate_batch,
@@ -559,8 +560,40 @@ def build_parser() -> argparse.ArgumentParser:
         default="research/experiments",
         help="Directory to store experiment run artifacts",
     )
+    alpha_validate.add_argument(
+        "--profile",
+        default=None,
+        help=(
+            "REQUIRED: strict validation profile (e.g. vm_ul6_strict). "
+            "Loose runs must use `hft alpha screen` instead — `validate` is "
+            "promotion-eligible only and refuses non-strict profiles."
+        ),
+    )
     alpha_validate.add_argument("--out", help="Optional summary JSON output path")
     alpha_validate.set_defaults(func=cmd_alpha_validate)
+
+    # L6: loose-mode screening — produces a non-promotion-eligible artifact.
+    alpha_screen = alpha_sub.add_parser(
+        "screen",
+        help=(
+            "Run loose alpha screening (Gate A-C with default thresholds); "
+            "stamps screen_only=true on the scorecard so promotion refuses it."
+        ),
+    )
+    alpha_screen.add_argument("--alpha-id", required=True, help="Alpha id under research/alphas")
+    alpha_screen.add_argument("--data", nargs="+", required=True, help="npy/npz path(s) for screening")
+    alpha_screen.add_argument("--is-oos-split", type=float, default=0.7)
+    alpha_screen.add_argument("--signal-threshold", type=float, default=0.3)
+    alpha_screen.add_argument("--max-position", type=int, default=5)
+    alpha_screen.add_argument("--min-sharpe-oos", type=float, default=0.0)
+    alpha_screen.add_argument("--max-abs-drawdown", type=float, default=0.3)
+    alpha_screen.add_argument("--skip-gate-b-tests", action="store_true")
+    alpha_screen.add_argument("--pytest-timeout", type=int, default=300)
+    alpha_screen.add_argument(
+        "--experiments-dir", default="research/experiments", help="Experiment base directory"
+    )
+    alpha_screen.add_argument("--out", help="Optional summary JSON output path")
+    alpha_screen.set_defaults(func=cmd_alpha_screen)
 
     alpha_vb = alpha_sub.add_parser("validate-batch", help="Run Gate A-C across multiple alphas")
     alpha_vb.add_argument("--data", nargs="+", required=True, help="npy/npz path(s)")

@@ -157,6 +157,14 @@ def test_cmd_alpha_validate(monkeypatch, capsys, tmp_path):
         "hft_platform.alpha.validation",
         types.SimpleNamespace(ValidationConfig=_ValidationConfig, run_alpha_validation=_run_alpha_validation),
     )
+    # L6: bypass strict-profile guard with a fake strict profile.
+    from hft_platform.cli import _alpha as _alpha_mod
+
+    monkeypatch.setattr(
+        _alpha_mod,
+        "_load_strict_validation_profile",
+        lambda _arg: types.SimpleNamespace(is_strict=True),
+    )
 
     out_file = tmp_path / "summary.json"
     args = Namespace(
@@ -171,6 +179,7 @@ def test_cmd_alpha_validate(monkeypatch, capsys, tmp_path):
         pytest_timeout=300,
         experiments_dir="research/experiments",
         out=str(out_file),
+        profile="vm_ul6_strict",
     )
     cli.cmd_alpha_validate(args)
 

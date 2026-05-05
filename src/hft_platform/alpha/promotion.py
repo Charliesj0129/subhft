@@ -88,6 +88,14 @@ class PromotionConfig:
     manifest_feature_set_version: str | None = None
     # Strict validation profile required for Gate D entry.
     validation_profile: Any | None = None
+    # L6: equity provenance guard. When True (default) Gate D fails closed if
+    # the scorecard reports ``equity_source="synthetic"`` or omits the field.
+    # ``real`` and ``real_no_trade`` are accepted (a confirmed no-fill
+    # session is a legitimate observation, not a synthetic fallback).
+    require_real_equity: bool = True
+    # L6: artifact provenance guard. When True (default) promotion refuses
+    # scorecards stamped ``screen_only=true`` (produced by ``hft alpha screen``).
+    reject_screen_only: bool = True
 
 
 @dataclass(frozen=True)
@@ -149,6 +157,14 @@ def promote_alpha(config: PromotionConfig) -> PromotionResult:
         raise FileNotFoundError(f"scorecard not found: {scorecard_path}")
 
     scorecard = json.loads(scorecard_path.read_text())
+
+    # L6: refuse screen-only artifacts before any further gate evaluation.
+    if config.reject_screen_only and bool(scorecard.get("screen_only", False)):
+        raise PromotionError(
+            f"cannot_promote_screen_artifact: scorecard {scorecard_path} is stamped "
+            "screen_only=true; run `hft alpha validate --profile strict` to produce "
+            "a promotion-eligible artifact"
+        )
 
     # Verify Gate C passed before evaluating promotion gates
     _verify_gate_c_passed(scorecard_path)
@@ -329,6 +345,45 @@ def _evaluate_gate_d(scorecard: dict[str, Any], config: PromotionConfig) -> tupl
             ),
         },
     }
+    # L6: equity provenance audit — ``synthetic`` (HTML-report fallback) is
+    # fail-closed; ``real`` and ``real_no_trade`` (confirmed no-fill session,
+    # length-valid + zero P&L motion + zero fills) are accepted; missing is
+    # warn-only for back-compat with legacy scorecards (the field was
+    # introduced in loop_v1 L6 and older runs lack it).
+    if config.require_real_equity:
+        allowed_sources = ("real", "real_no_trade")
+        equity_source_raw = scorecard.get("equity_source")
+        equity_source = (
+            str(equity_source_raw).strip() if isinstance(equity_source_raw, str) else None
+        )
+        if equity_source == "synthetic":
+            equity_pass = False
+            equity_detail = (
+                "REJECTED — scorecard.equity_source='synthetic'; re-run the "
+                "backtest under strict_equity=True with a real equity series"
+            )
+        elif equity_source in allowed_sources:
+            equity_pass = True
+            equity_detail = "OK"
+        elif equity_source is None:
+            # Legacy scorecard predating L6 — pass with warning.
+            equity_pass = True
+            equity_detail = (
+                "WARN — scorecard.equity_source missing (legacy); future runs "
+                "should populate {real, real_no_trade} per loop_v1 L6"
+            )
+        else:
+            equity_pass = False
+            equity_detail = (
+                f"REJECTED — equity_source={equity_source!r} not in {list(allowed_sources)}"
+            )
+        checks["equity_source"] = {
+            "value": equity_source,
+            "allowed": list(allowed_sources),
+            "required": True,
+            "pass": equity_pass,
+            "detail": equity_detail,
+        }
     # Slice C: replay-parity audit — mirrors latency_profile fail-closed semantics.
     # Promotion-time check that the scorecard recorded a passing replay_parity_report
     # (live → backtest intent reconstruction within tolerance under a strict profile).
