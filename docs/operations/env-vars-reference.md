@@ -30,6 +30,8 @@ Base YAML (config/base/main.yaml)
 | `HFT_MD_RECORD_DIRECT` | `1` | `0` = 所有 BidAsk/Tick 經由 bus 錄製（非直接路徑） |
 | `HFT_RECORDER_DROP_ON_FULL` | `1` | `0` = recorder queue 滿時等待（背壓）；`1` = 丟棄 |
 | `HFT_INTENT_RECORDER_ENABLED` | `0` | `1` = 啟用 OrderIntent 錄製至 `hft.order_intents`（Slice C replay-parity gate 證據來源） |
+| `HFT_KILL_LEDGER_ENABLED` | `1` | `1` 時 `promote_alpha()` 會在 Gate-C 拋例外或 Gate-D 拒絕時寫入 `audit.alpha_kill_ledger`；設 `0` 可關閉自動寫入（除錯 / operator dry-run） |
+| `HFT_ALPHA_KILL_LEDGER_PATH` | `research/alphas/_kill_ledger.jsonl` | 覆寫離線 kill-ledger jsonl sink 路徑（測試用；生產環境不應設定） |
 | `HFT_BUS_BATCH_SIZE` | `0` | >1 時使用 batch consumer，減少事件迴圈喚醒次數 |
 | `HFT_BROKER` | `shioaji` | Broker 後端選擇：`shioaji` / `fubon` |
 | `SYMBOLS_CONFIG` | `config/symbols.yaml` | 交易標的設定檔路徑 |

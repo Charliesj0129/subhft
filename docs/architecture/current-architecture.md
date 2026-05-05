@@ -274,6 +274,28 @@ Closes the R47-OE1 backtest/live divergence loop (incident `docs/incidents/2026-
 | Persistence | ClickHouse table `hft.order_intents` (`migrations/clickhouse/20260504_001_create_order_intents.sql`) | Opt-in intent recorder topic, 365 d retention |
 | Env var | `HFT_INTENT_RECORDER_ENABLED` (default `0`) | Enables the intent recorder topic at runtime |
 
+### 7C. Slice D — Alpha Factory MVP (2026-05-05)
+
+Adds an offline alpha-factory upstream of promotion: cheap pre-screen, append-only kill ledger, correlation clustering, and a safe minimal DSL. Operator runbook: `docs/runbooks/alpha-factory.md`.
+
+| Component | Source | Purpose |
+| --- | --- | --- |
+| `alpha/screener.py` | `cheap_screen(alpha_id, *, project_root, ic_min_abs=None, turnover_kill=None)` | 60 s-budget IC + turnover + cost-floor pre-check; returns `ScreenResult` with `verdict ∈ {'pass','kill','unknown'}` |
+| `alpha/kill_ledger.py` | `KillRecord` + `append_kill(record) -> bool` | Append-only ledger; CH-first, jsonl fallback; `kill_id`-deduped |
+| `alpha/cluster.py` | `cluster_alphas(*, base_dir, threshold, metric, write_artifact)` | Single-linkage agglomerative on `1-|corr|`; lex-stable cluster_id |
+| `alpha/dsl/{parser,compiler,formula_context}.py` | `parse(s)`, `compile_ast(node)`, `round_trip(s)`, `bind_to_manifest(s, m)` | Minimal safe DSL — no `eval`, `exec`, `compile`, `__import__`, `getattr` |
+| `alpha/audit.py` | `log_kill(record)` + `_classify_kill_reason(reason, gate)` | Best-effort CH writes; `alpha_kill_results_total` Prometheus counter with bounded label cardinality |
+| CLI | `hft alpha {screen, kill, cluster}` | Operator-facing entry points (mirror `cmd_alpha_promote` shape) |
+| ClickHouse table | `audit.alpha_kill_ledger` | MergeTree, partitioned by month, 365-day TTL; `kill_id` first column for dedupe |
+| Promotion auto-kill | `promote_alpha()` | Wraps `_verify_gate_c_passed` and `_evaluate_gate_d`; writes a row on raise/reject; gated by `HFT_KILL_LEDGER_ENABLED` |
+| Sidecar artifacts | `research/alphas/_kill_ledger.jsonl` (gitignored), `research/alphas/_cluster_assignments.json` (gitignored), `research/archive/_kill_summary_2026-04-17.jsonl` (committed) | Offline durability + corpus snapshot |
+
+**Idempotency:** `kill_id = sha256(alpha_id || ':' || gate || ':' || stable_artifact_hash)`; same record twice → exactly one row in CH and one row in the jsonl.
+
+**Safety attestation:** the DSL compiler source is grep-checked for `eval(`, `exec(`, `compile(`, `__import__`, `getattr(` — any future change reintroducing these tokens fails the attestation test.
+
+**Coverage floor:** `make ci` requires ≥87 % line coverage; per `.agent/rules/25-architecture-governance.md` §11, `alpha/` is permitted to use `float` (offline research path) but is NOT exempt from coverage discipline.
+
 ## 8. Architectural Invariants (Unchanged)
 
 1. Hot path must avoid blocking I/O and excessive allocation.
