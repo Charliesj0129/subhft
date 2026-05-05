@@ -502,6 +502,44 @@ class MakerEngine:
         return fills, position
 
     @staticmethod
+    def _compute_residual_mtm(
+        open_pos: int,
+        mark_price: int,
+        avg_entry_price: int,
+        mark_method: str = "last_mid",
+        scale: int = 1_000_000,
+    ) -> float:
+        """Mark-to-market the un-FIFO'd residual position to a chosen mark.
+
+        Slice B Task 2 - pure static helper. Caller-picks-mark design: the
+        helper itself is mark-agnostic; ``mark_method`` is currently advisory
+        (recorded for downstream metadata in Task 4) and does not affect the
+        arithmetic. The caller resolves whichever mark it wants to use
+        (last_mid, last_trade, worse_of_mid_last_trade, ...) and passes the
+        resulting scaled-int price as ``mark_price``.
+
+        Args:
+            open_pos: Residual position. > 0 long, < 0 short, 0 flat.
+            mark_price: Mark price as scaled int (default scale x1_000_000,
+                matching ``_compute_fifo_pnl`` and the golden parquet source).
+            avg_entry_price: Average entry of the residual position, same
+                scale as ``mark_price``.
+            mark_method: Advisory string describing how the caller chose the
+                mark. Persisted into Task 4's BacktestResult metadata.
+            scale: Scaled-int divisor. Defaults to 1_000_000 to match
+                ``MakerEngine._compute_fifo_pnl`` and the engine's data path.
+                Pass 10_000 if working with the platform-wide CLAUDE.md
+                convention (Decimal-style scaled int).
+
+        Returns:
+            PnL in points (float). 0.0 when ``open_pos == 0``.
+        """
+        if open_pos == 0:
+            return 0.0
+        pnl_int = open_pos * (mark_price - avg_entry_price)
+        return pnl_int / scale  # scaled-int -> points
+
+    @staticmethod
     def _compute_fifo_pnl(fills: list[dict]) -> tuple[float, int, int]:
         """FIFO PnL matching. Returns (gross_pnl_pts, n_round_trips, n_wins)."""
         buy_q: list[float] = []
