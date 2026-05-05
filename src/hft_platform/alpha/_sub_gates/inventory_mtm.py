@@ -52,13 +52,8 @@ class InventoryMtMGate:
         dict_rows = [row for row in daily if isinstance(row, dict)]
         if dict_rows:
             n_fills = sum(int(row.get("fills", 0) or 0) for row in dict_rows)
-            realized = sum(
-                float(row.get("pnl_pts", 0.0) or 0.0) for row in dict_rows
-            )
-            residual_mtm = sum(
-                float(row.get("residual_mtm_pts", 0.0) or 0.0)
-                for row in dict_rows
-            )
+            realized = sum(float(row.get("pnl_pts", 0.0) or 0.0) for row in dict_rows)
+            residual_mtm = sum(float(row.get("residual_mtm_pts", 0.0) or 0.0) for row in dict_rows)
             schema_advisory = False
         else:
             n_fills = 0
@@ -75,16 +70,11 @@ class InventoryMtMGate:
                     "realized_pts": 0.0,
                     "residual_mtm_pts": 0.0,
                     "net_pts": 0.0,
-                    "cost_floor_per_fill_pts": (
-                        float(cost_floor) if cost_floor is not None else None
-                    ),
+                    "cost_floor_per_fill_pts": (float(cost_floor) if cost_floor is not None else None),
                     "cost_floor_total_pts": None,
                     "n_fills": 0,
                 },
-                details=(
-                    "advisory: daily_pnl rows lack fills/residual_mtm_pts "
-                    "(legacy float-shape payload)"
-                ),
+                details=("advisory: daily_pnl rows lack fills/residual_mtm_pts (legacy float-shape payload)"),
             )
 
         if cost_floor is None:
@@ -95,24 +85,15 @@ class InventoryMtMGate:
             cost_floor_total = float(cost_floor) * n_fills
             passed = net_after_residual >= cost_floor_total
             details = (
-                "OK"
-                if passed
-                else (
-                    f"net_pts={net_after_residual:.2f} "
-                    f"below cost_floor_total={cost_floor_total:.2f}"
-                )
+                "OK" if passed else (f"net_pts={net_after_residual:.2f} below cost_floor_total={cost_floor_total:.2f}")
             )
 
         metrics: dict[str, Any] = {
             "realized_pts": round(realized, 4),
             "residual_mtm_pts": round(residual_mtm, 4),
             "net_pts": round(net_after_residual, 4),
-            "cost_floor_per_fill_pts": (
-                float(cost_floor) if cost_floor is not None else None
-            ),
-            "cost_floor_total_pts": (
-                round(cost_floor_total, 4) if cost_floor_total is not None else None
-            ),
+            "cost_floor_per_fill_pts": (float(cost_floor) if cost_floor is not None else None),
+            "cost_floor_total_pts": (round(cost_floor_total, 4) if cost_floor_total is not None else None),
             "n_fills": n_fills,
         }
 

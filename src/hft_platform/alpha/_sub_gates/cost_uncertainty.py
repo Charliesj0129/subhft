@@ -74,9 +74,7 @@ class CostUncertaintyGate:
             metrics_short: dict[str, Any] = {
                 "n_days": n_days,
                 "p95_lower_bound_pts": None,
-                "mean_daily_pnl_pts": (
-                    round(pnl_series[0], 4) if pnl_series else 0.0
-                ),
+                "mean_daily_pnl_pts": (round(pnl_series[0], 4) if pnl_series else 0.0),
                 "std_daily_pnl_pts": None,
                 "threshold_pts": float(floor) if floor is not None else None,
             }
@@ -105,21 +103,13 @@ class CostUncertaintyGate:
                 passed=True,
                 metrics=metrics_advisory,
                 details=(
-                    "advisory: cost_uncertainty_p95_lower_bound_min_pts "
-                    f"threshold absent (lower_bound={p95_lower:.4f})"
+                    f"advisory: cost_uncertainty_p95_lower_bound_min_pts threshold absent (lower_bound={p95_lower:.4f})"
                 ),
             )
 
         threshold = float(floor)
         passed = p95_lower > threshold
-        details = (
-            "OK"
-            if passed
-            else (
-                f"P95 lower bound={p95_lower:.4f} "
-                f"<= threshold={threshold:.4f}"
-            )
-        )
+        details = "OK" if passed else (f"P95 lower bound={p95_lower:.4f} <= threshold={threshold:.4f}")
 
         metrics_full: dict[str, Any] = {
             "n_days": n_days,

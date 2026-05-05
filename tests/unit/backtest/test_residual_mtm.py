@@ -30,6 +30,7 @@ worse mark. Test 4 verifies that contract: when the caller hands in the
 worse mark (99 < mid 100, long position), the helper produces the
 worse-case PnL.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -161,9 +162,7 @@ def test_residual_mtm_float_precision_no_artifacts() -> None:
         mark_method="last_mid",
     )
     expected = 10 / SCALE  # = 1.0e-5 with SCALE=1_000_000
-    assert result == expected, (
-        f"Float-precision regression: expected exact {expected!r}, got {result!r}"
-    )
+    assert result == expected, f"Float-precision regression: expected exact {expected!r}, got {result!r}"
 
 
 # ---------------------------------------------------------------------------

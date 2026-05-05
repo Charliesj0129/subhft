@@ -21,6 +21,7 @@ The bottom of this file adds three regression cases for the
 table-hit (looked-up qf used), and table-miss-with-table-supplied (falls back
 to ``QHatTable.fallback`` per the design decision documented inline).
 """
+
 from __future__ import annotations
 
 import pyarrow as pa

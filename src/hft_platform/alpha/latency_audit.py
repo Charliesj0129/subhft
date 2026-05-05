@@ -100,8 +100,7 @@ def latency_audit(
             return {
                 "passed": False,
                 "reason": (
-                    f"{'/'.join(missing)} missing under strict profile "
-                    "(vm_ul6_strict requires submit + cancel P95)"
+                    f"{'/'.join(missing)} missing under strict profile (vm_ul6_strict requires submit + cancel P95)"
                 ),
                 "profile_id": profile_id,
             }
@@ -117,27 +116,19 @@ def latency_audit(
     if max_submit_ms is not None and submit_ms > float(max_submit_ms):
         return {
             "passed": False,
-            "reason": (
-                f"submit_ack_latency_ms={submit_ms:.1f} ms exceeds budget "
-                f"{float(max_submit_ms):.1f} ms"
-            ),
+            "reason": (f"submit_ack_latency_ms={submit_ms:.1f} ms exceeds budget {float(max_submit_ms):.1f} ms"),
             "profile_id": profile_id,
         }
     if max_cancel_ms is not None and cancel_ms > float(max_cancel_ms):
         return {
             "passed": False,
-            "reason": (
-                f"cancel_ack_latency_ms={cancel_ms:.1f} ms exceeds budget "
-                f"{float(max_cancel_ms):.1f} ms"
-            ),
+            "reason": (f"cancel_ack_latency_ms={cancel_ms:.1f} ms exceeds budget {float(max_cancel_ms):.1f} ms"),
             "profile_id": profile_id,
         }
 
     return {
         "passed": True,
-        "reason": (
-            f"OK (submit_p95={submit_ms:.1f} ms, cancel_p95={cancel_ms:.1f} ms)"
-        ),
+        "reason": (f"OK (submit_p95={submit_ms:.1f} ms, cancel_p95={cancel_ms:.1f} ms)"),
         "profile_id": profile_id,
     }
 

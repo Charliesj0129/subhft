@@ -406,12 +406,7 @@ def _evaluate_gate_d(scorecard: dict[str, Any], config: PromotionConfig) -> tupl
             "required": True,
             "pass": sub_passed,
             "detail": (
-                "OK"
-                if sub_passed
-                else str(
-                    inventory_mtm_payload.get("details")
-                    or "inventory_mtm sub-gate FAILED"
-                )
+                "OK" if sub_passed else str(inventory_mtm_payload.get("details") or "inventory_mtm sub-gate FAILED")
             ),
         }
     else:
@@ -423,10 +418,7 @@ def _evaluate_gate_d(scorecard: dict[str, Any], config: PromotionConfig) -> tupl
             "value": None,
             "required": False,
             "pass": True,
-            "detail": (
-                "advisory: scorecard.inventory_mtm missing "
-                "(legacy run or non-maker strategy)"
-            ),
+            "detail": ("advisory: scorecard.inventory_mtm missing (legacy run or non-maker strategy)"),
         }
 
     # --- cost_uncertainty_audit (applies to maker + taker) ---
@@ -445,10 +437,7 @@ def _evaluate_gate_d(scorecard: dict[str, Any], config: PromotionConfig) -> tupl
             "detail": (
                 "OK"
                 if sub_passed
-                else str(
-                    cost_uncertainty_payload.get("details")
-                    or "cost_uncertainty sub-gate FAILED"
-                )
+                else str(cost_uncertainty_payload.get("details") or "cost_uncertainty sub-gate FAILED")
             ),
         }
     else:
@@ -459,9 +448,7 @@ def _evaluate_gate_d(scorecard: dict[str, Any], config: PromotionConfig) -> tupl
             "min": min_p95_lower,
             "required": False,
             "pass": True,
-            "detail": (
-                "advisory: scorecard.cost_uncertainty missing (legacy run)"
-            ),
+            "detail": ("advisory: scorecard.cost_uncertainty missing (legacy run)"),
         }
     # Feature set version parity check (warn-only: does NOT block Gate D).
     manifest_fsv = str(config.manifest_feature_set_version or "").strip() or None

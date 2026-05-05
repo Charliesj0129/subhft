@@ -15,6 +15,7 @@ Why no real ClickHouse: the harness accepts a Protocol ``ChDataSourceLike``
 so tests inject an in-memory fake source. This keeps Task 6 hermetic — Task 7
 will run the harness against a real ChDataSource against committed CK events.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -210,9 +211,7 @@ def test_calibration_recovers_known_q_hat_within_tolerance(tmp_path) -> None:
     # close to the expected aggregate (84 / 400 = 0.21).
     expected = round(target_bid_only * n_attempts) / (2 * n_attempts)
     q_hat = result.table.lookup("TMFD6", 9, depth=3)
-    assert abs(q_hat - expected) <= 0.02, (
-        f"calibrated q_hat={q_hat} differs from expected={expected} by > 0.02"
-    )
+    assert abs(q_hat - expected) <= 0.02, f"calibrated q_hat={q_hat} differs from expected={expected} by > 0.02"
     assert result.cells_calibrated >= 1
     # Verify parquet contents match what QHatTable.load saw.
     arrow_table = pq.read_table(out)
@@ -247,8 +246,7 @@ def test_calibration_drops_cells_below_min_attempts(tmp_path) -> None:
 
     # Assert: hour=9 cell dropped, hour=10 cell calibrated.
     assert result.cells_dropped == 1, (
-        f"expected 1 dropped cell (hour=9 shallow), got {result.cells_dropped}; "
-        f"occupancy={result.cell_occupancy}"
+        f"expected 1 dropped cell (hour=9 shallow), got {result.cells_dropped}; occupancy={result.cell_occupancy}"
     )
     assert result.cells_calibrated == 1, (
         f"expected 1 calibrated cell (hour=10 shallow), got {result.cells_calibrated}; "

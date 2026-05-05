@@ -29,6 +29,7 @@ Live↔replay parity (the actual maker-realism shadow comparison) is the job of
 Slice C / Slice D. This test is the offline determinism gate: "the calibrated
 table that Task 8 wires up matches what re-calibrating right now would yield."
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -86,10 +87,7 @@ class _LocalReplaySource:
         return out
 
     def available_dates(self) -> list[str]:
-        return sorted(
-            p.stem.split("_")[1]
-            for p in self._root.glob(f"{self._symbol}_*_replay_actual.parquet")
-        )
+        return sorted(p.stem.split("_")[1] for p in self._root.glob(f"{self._symbol}_*_replay_actual.parquet"))
 
 
 @pytest.mark.parametrize(
@@ -113,9 +111,7 @@ def test_predicted_qhat_matches_committed_fixture(
     dates = source.available_dates()
 
     assert dates, f"no per-day raw fixtures found for {symbol} under {_FIXTURE_ROOT}"
-    assert committed._data, (
-        f"committed q_hat parquet for {symbol} is empty — Task 7 may be stale"
-    )
+    assert committed._data, f"committed q_hat parquet for {symbol} is empty — Task 7 may be stale"
 
     redo_path = tmp_path / parquet_name
     result = calibrate(symbol, dates, redo_path, ch_source=source)
@@ -142,7 +138,5 @@ def test_predicted_qhat_matches_committed_fixture(
                     f" abs_err={abs(predicted - actual):.6f}"
                 )
 
-    assert not missing_in_redo, (
-        f"{symbol}: cells in committed parquet missing from re-calibration: {missing_in_redo}"
-    )
+    assert not missing_in_redo, f"{symbol}: cells in committed parquet missing from re-calibration: {missing_in_redo}"
     assert not diffs, f"{symbol}: per-cell tolerance violations:\n" + "\n".join(diffs)

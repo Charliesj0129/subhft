@@ -106,9 +106,7 @@ def test_dod_b5_r47_synthetic_divergence_still_fails_after_slice_b(
     visible immediately in test output.
     """
     live = ReplayedIntentLog.from_jsonl(FIXTURE_DIR / "synthetic_r47_oe1_live.jsonl")
-    replayed = ReplayedIntentLog.from_jsonl(
-        FIXTURE_DIR / "synthetic_r47_oe1_replayed.jsonl"
-    )
+    replayed = ReplayedIntentLog.from_jsonl(FIXTURE_DIR / "synthetic_r47_oe1_replayed.jsonl")
     report = IntentDiff(
         live=live.canonical_records(),
         replayed=replayed.canonical_records(),
@@ -119,10 +117,7 @@ def test_dod_b5_r47_synthetic_divergence_still_fails_after_slice_b(
     # change in Slice C still leaves the gate firing on real diff data.
     assert report.match_pct < 95.0, report
     headroom = 95.0 - report.match_pct
-    print(
-        f"[DoD-B5] R47 fixture match_pct={report.match_pct:.4f} "
-        f"(threshold=95.0, headroom={headroom:.4f}pp)"
-    )
+    print(f"[DoD-B5] R47 fixture match_pct={report.match_pct:.4f} (threshold=95.0, headroom={headroom:.4f}pp)")
 
     payload = _r47_payload_with_daily_pnl(
         replay_parity_report=report,
@@ -175,8 +170,7 @@ def test_dod_b5_clean_echo_still_passes_after_slice_b(
     assert blocking is not None
     failing_names = {f["name"] for f in blocking["failing"]}
     assert "replay_parity" not in failing_names, (
-        f"replay_parity should NOT block on 100% match; "
-        f"failing={blocking['failing']}"
+        f"replay_parity should NOT block on 100% match; failing={blocking['failing']}"
     )
     advisory_names = {g["name"] for g in advisory}
     assert "replay_parity" in advisory_names, advisory_names
@@ -193,9 +187,7 @@ def test_dod_b5_maker_realism_gates_co_fire_on_r47(strict_profile: Any) -> None:
     :class:`InventoryMtMGate`).
     """
     live = ReplayedIntentLog.from_jsonl(FIXTURE_DIR / "synthetic_r47_oe1_live.jsonl")
-    replayed = ReplayedIntentLog.from_jsonl(
-        FIXTURE_DIR / "synthetic_r47_oe1_replayed.jsonl"
-    )
+    replayed = ReplayedIntentLog.from_jsonl(FIXTURE_DIR / "synthetic_r47_oe1_replayed.jsonl")
     report = IntentDiff(
         live=live.canonical_records(),
         replayed=replayed.canonical_records(),
