@@ -41,11 +41,7 @@ import pytest
 from hft_platform.alpha._gate_c import _invoke_sub_gates
 from hft_platform.alpha._validation_profile import load_profile
 
-FIXTURE_ROOT = (
-    Path(__file__).resolve().parents[1]
-    / "fixtures"
-    / "maker_engine_pre_mtm_baseline"
-)
+FIXTURE_ROOT = Path(__file__).resolve().parents[1] / "fixtures" / "maker_engine_pre_mtm_baseline"
 
 # ``vm_ul6_strict.yaml :: thresholds.maker.cost_floor_per_fill_pts`` × TMFD6
 # point-value (10 NTD/contract). Keep both numbers visible for auditability.
@@ -74,9 +70,7 @@ def _build_payload(artifact: dict[str, Any], *, run_id: str) -> dict[str, Any]:
         "strategy_name": artifact.get("strategy", ""),
         "engine": "maker_engine",
         "queue_model": f"QueueDepletionFill(qf={artifact.get('queue_fraction', 0.5)})",
-        "calibration_profile_id": str(
-            artifact.get("queue_fraction_table", "uncalibrated")
-        ),
+        "calibration_profile_id": str(artifact.get("queue_fraction_table", "uncalibrated")),
         "data_source": "clickhouse_direct",
         "latency_profile": str(artifact.get("latency_profile", "")),
         "pnl_pts": float(artifact.get("pnl_pts", 0.0)),
@@ -196,17 +190,79 @@ def test_dod_b2_inventory_mtm_gate_fires_on_r47_passes_on_robust(
     )
 
     # Sanity: the synthetic robust fixture really does sit above its CI floor.
-    pnl_series = [
-        float(row["pnl_pts"])
-        for row in robust_artifact["daily_pnl"]
-        if int(row.get("fills", 0)) > 0
-    ]
+    pnl_series = [float(row["pnl_pts"]) for row in robust_artifact["daily_pnl"] if int(row.get("fills", 0)) > 0]
     if len(pnl_series) >= 2:
         mu = statistics.mean(pnl_series)
         sigma = statistics.stdev(pnl_series)
         sem = sigma / (len(pnl_series) ** 0.5)
         p95_lower = mu - 1.645 * sem
         assert p95_lower > 0.0, (
-            f"robust fixture mis-constructed: P95 lower bound {p95_lower:.4f} "
-            f"is non-positive (mu={mu}, sigma={sigma})"
+            f"robust fixture mis-constructed: P95 lower bound {p95_lower:.4f} is non-positive (mu={mu}, sigma={sigma})"
         )
+
+
+@pytest.mark.integration
+def test_dod_b6_loose_profile_does_not_block_on_inventory_mtm_or_cost_uncertainty(
+    post_b_artifact: dict[str, Any],
+) -> None:
+    """DoD-B6 (loose-profile non-regression): under loose / no profile, the new
+    Slice B gates run as advisory PASS with explicit ``threshold absent`` details.
+
+    Per Task 15 finding (``_gate_c.py:119-164``): ``_invoke_sub_gates`` invokes
+    every registered sub-gate whose ``applies_to`` matches the strategy_type
+    *unconditionally*. They are not skipped when thresholds are absent — instead
+    each gate's own ``evaluate()`` returns advisory PASS with details starting
+    ``advisory: ... threshold absent`` (see ``_sub_gates/inventory_mtm.py:93``
+    and ``_sub_gates/cost_uncertainty.py:107-110``).
+
+    The aggregator's ``blocking`` collection is keyed on
+    ``profile.blocking_sub_gates``; with ``profile=None`` it returns ``None``
+    for the blocking summary and never blocks promotion on these advisory PASS
+    entries. This test exercises exactly that contract using the same R47
+    post-B fixture that FAILS the gates under the strict profile in
+    ``test_dod_b2_inventory_mtm_gate_fires_on_r47_passes_on_robust``.
+    """
+    loose_thresholds: dict = {}  # explicit absence: no cost_floor, no p95 floor
+
+    advisory, blocking = _invoke_sub_gates(
+        strategy_type="maker",
+        result_payload=_build_payload(post_b_artifact, run_id="task16-loose-r47-post-b"),
+        thresholds=loose_thresholds,
+        profile=None,
+    )
+
+    by_name = {entry["name"]: entry for entry in advisory}
+
+    # Both new Slice B gates ran (not skipped) under loose profile.
+    assert "inventory_mtm" in by_name, (
+        f"inventory_mtm should run even under loose profile; observed gates={list(by_name)}"
+    )
+    assert "cost_uncertainty" in by_name, (
+        f"cost_uncertainty should run even under loose profile; observed gates={list(by_name)}"
+    )
+
+    # Both PASSED via advisory semantics (threshold absent).
+    assert by_name["inventory_mtm"]["passed"] is True, (
+        f"loose-profile inventory_mtm should advisory PASS; "
+        f"got passed={by_name['inventory_mtm']['passed']}, "
+        f"details={by_name['inventory_mtm']['details']}"
+    )
+    assert by_name["cost_uncertainty"]["passed"] is True, (
+        f"loose-profile cost_uncertainty should advisory PASS; "
+        f"got passed={by_name['cost_uncertainty']['passed']}, "
+        f"details={by_name['cost_uncertainty']['details']}"
+    )
+
+    # Details cite the advisory reason explicitly.
+    inv_details = by_name["inventory_mtm"]["details"]
+    cost_details = by_name["cost_uncertainty"]["details"]
+    assert "advisory" in inv_details and "threshold absent" in inv_details, (
+        f"inventory_mtm details should cite advisory + threshold absent; got: {inv_details!r}"
+    )
+    assert "advisory" in cost_details and "threshold absent" in cost_details, (
+        f"cost_uncertainty details should cite advisory + threshold absent; got: {cost_details!r}"
+    )
+
+    # Aggregator does NOT block on the new gates under loose profile.
+    # With profile=None, _invoke_sub_gates returns blocking=None entirely.
+    assert blocking is None, f"loose profile must yield blocking=None (no aggregator gate); got: {blocking!r}"
