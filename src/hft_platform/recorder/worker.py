@@ -52,6 +52,22 @@ MARKET_DATA_COLUMNS = [
     "expiry",
 ]
 
+# L7 (loop_v1): canonical 7-column audit chain appended to ORDER_COLUMNS and
+# FILL_COLUMNS. These are the audit columns added by migrations
+# 20260505_001_add_audit_columns_to_orders.sql and
+# 20260505_002_add_audit_columns_to_fills.sql. Order MUST stay stable — the
+# dual-write filter in recorder/writer.py strips this exact suffix when the
+# destination table has not yet had the L7 migrations applied.
+L7_AUDIT_COLUMNS: tuple[str, ...] = (
+    "trace_id",
+    "feature_snapshot_id",
+    "risk_decision_id",
+    "strategy_version",
+    "config_hash",
+    "git_sha",
+    "data_session_id",
+)
+
 ORDER_COLUMNS = [
     "order_id",
     "client_order_id",
@@ -65,6 +81,7 @@ ORDER_COLUMNS = [
     "latency_us",
     "instrument_type",
     "oc_type",
+    *L7_AUDIT_COLUMNS,
 ]
 
 FILL_COLUMNS = [
@@ -85,6 +102,7 @@ FILL_COLUMNS = [
     "source",
     "instrument_type",
     "oc_type",
+    *L7_AUDIT_COLUMNS,
 ]
 
 PNL_SNAPSHOT_COLUMNS = [
@@ -180,7 +198,13 @@ def _extract_market_data_values(row) -> list | None:
 
 
 def _extract_order_values(row) -> list | None:
-    """Fast extractor for order events — aligned with mapper.py and CH hft.orders schema."""
+    """Fast extractor for order events — aligned with mapper.py and CH hft.orders schema.
+
+    L7: appends 7 audit columns (trace_id, feature_snapshot_id, risk_decision_id,
+    strategy_version, config_hash, git_sha, data_session_id), defaulting to ''
+    when the producer has not populated them. Defaults are safe because the L7
+    ALTER migrations declare ``DEFAULT ''`` on each column.
+    """
     try:
         if isinstance(row, dict):
             get = row.get
@@ -197,6 +221,14 @@ def _extract_order_values(row) -> list | None:
                 get("latency_us", 0),
                 get("instrument_type", ""),
                 get("oc_type", ""),
+                # L7 audit columns
+                get("trace_id", ""),
+                get("feature_snapshot_id", ""),
+                get("risk_decision_id", ""),
+                get("strategy_version", ""),
+                get("config_hash", ""),
+                get("git_sha", ""),
+                get("data_session_id", ""),
             ]
         return [
             getattr(row, "order_id", None),
@@ -211,6 +243,14 @@ def _extract_order_values(row) -> list | None:
             getattr(row, "latency_us", 0),
             getattr(row, "instrument_type", ""),
             getattr(row, "oc_type", ""),
+            # L7 audit columns
+            getattr(row, "trace_id", "") or "",
+            getattr(row, "feature_snapshot_id", "") or "",
+            getattr(row, "risk_decision_id", "") or "",
+            getattr(row, "strategy_version", "") or "",
+            getattr(row, "config_hash", "") or "",
+            getattr(row, "git_sha", "") or "",
+            getattr(row, "data_session_id", "") or "",
         ]
     except Exception as exc:
         logger.debug("operation_fallback", error=str(exc))
@@ -231,7 +271,13 @@ def _getattr_scaled(obj: object, field: str) -> int | None:
 
 
 def _extract_fill_values(row) -> list | None:
-    """Fast extractor for fill events — aligned with mapper.py and CH hft.fills schema."""
+    """Fast extractor for fill events — aligned with mapper.py and CH hft.fills schema.
+
+    L7: appends 7 audit columns (trace_id, feature_snapshot_id, risk_decision_id,
+    strategy_version, config_hash, git_sha, data_session_id), defaulting to ''
+    when the producer has not populated them. ``trace_id`` on FillEvent is
+    populated by L8's router lookup; until then this stays empty.
+    """
     try:
         if isinstance(row, dict):
             get = row.get
@@ -253,6 +299,14 @@ def _extract_fill_values(row) -> list | None:
                 get("source", ""),
                 get("instrument_type", ""),
                 get("oc_type", ""),
+                # L7 audit columns
+                get("trace_id", ""),
+                get("feature_snapshot_id", ""),
+                get("risk_decision_id", ""),
+                get("strategy_version", ""),
+                get("config_hash", ""),
+                get("git_sha", ""),
+                get("data_session_id", ""),
             ]
         return [
             getattr(row, "ts_exchange", None)
@@ -275,6 +329,14 @@ def _extract_fill_values(row) -> list | None:
             getattr(row, "source", ""),
             getattr(row, "instrument_type", ""),
             getattr(row, "oc_type", ""),
+            # L7 audit columns
+            getattr(row, "trace_id", "") or "",
+            getattr(row, "feature_snapshot_id", "") or "",
+            getattr(row, "risk_decision_id", "") or "",
+            getattr(row, "strategy_version", "") or "",
+            getattr(row, "config_hash", "") or "",
+            getattr(row, "git_sha", "") or "",
+            getattr(row, "data_session_id", "") or "",
         ]
     except Exception as _exc:  # noqa: BLE001
         return None
