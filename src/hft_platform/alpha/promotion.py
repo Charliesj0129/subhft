@@ -937,13 +937,21 @@ def _write_promotion_config(
     forced: bool,
 ) -> Path:
     day = datetime.fromtimestamp(timebase.now_s(), tz=_dt.timezone.utc).strftime("%Y%m%d")
-    out = root / "config" / "strategy_promotions" / day / f"{config.alpha_id}.yaml"
+    if forced:
+        # L9 (loop_v1): forced promotions are research-only escape hatches.
+        # They MUST NOT live under config/strategy_promotions/ — that path is
+        # consumed by live promotion config. CI guard blocks
+        # config/live/** from referencing research/forced_promotions/.
+        out = root / "research" / "forced_promotions" / day / f"{config.alpha_id}.yaml"
+    else:
+        out = root / "config" / "strategy_promotions" / day / f"{config.alpha_id}.yaml"
     out.parent.mkdir(parents=True, exist_ok=True)
 
     payload = {
         "alpha_id": config.alpha_id,
-        "enabled": bool(approved),
-        "weight": float(canary_weight),
+        "enabled": bool(approved) and not forced,
+        "live_promotion_eligible": not forced,
+        "weight": float(canary_weight) if not forced else 0.0,
         "owner": config.owner,
         "expiry_review_date": expiry_review_date,
         "forced": forced,
