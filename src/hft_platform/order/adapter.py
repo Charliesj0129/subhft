@@ -3526,7 +3526,9 @@ class OrderAdapter:
         if sampler is None:
             return
         try:
-            sampler.emit(
+            # L5: every adapter trace is order-bearing (takes OrderIntent),
+            # so bypass sample_every — incomplete chains break replay/explain.
+            sampler.emit_always(
                 stage=stage,
                 trace_id=str(getattr(intent, "trace_id", "") or ""),
                 payload={

@@ -100,6 +100,34 @@ def _resolve_default_mode() -> str:
     return raw
 
 
+def _enforce_loop_trace_policy(settings: Dict[str, Any]) -> None:
+    # L5: a bound loop_id requires complete order-bearing trace chains.
+    # The loop YAML must declare ``trace_policy: order_path_100pct``; we
+    # then force ``HFT_DIAG_TRACE_ENABLED=1`` so the sampler opens its
+    # ``enabled`` gate (default 0 per DecisionTraceSampler.from_env).
+    loop_id = settings.get("loop_id")
+    if not loop_id:
+        return
+    loop_path = os.path.join("config", "loops", f"{loop_id}.yaml")
+    if not os.path.exists(loop_path):
+        # _bind_loop already raises LoopBindingError before we get here when
+        # called from cmd_run; this branch is defensive against direct callers.
+        return
+    import yaml
+
+    with open(loop_path, "r", encoding="utf-8") as f:
+        loop_cfg = yaml.safe_load(f) or {}
+    policy = loop_cfg.get("trace_policy")
+    if policy != "order_path_100pct":
+        print(
+            f"[hft run] loop_id={loop_id!r} requires "
+            f"trace_policy=order_path_100pct (got {policy!r}). Refusing to start.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    os.environ["HFT_DIAG_TRACE_ENABLED"] = "1"
+
+
 def cmd_init(args: argparse.Namespace) -> None:
     """Question-lite init that drops a settings.py and a strategy skeleton."""
     strategy_id = args.strategy_id or "my_strategy"
