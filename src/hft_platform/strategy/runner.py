@@ -223,7 +223,7 @@ class StrategyRunner:
         lob_engine=None,
         position_store=None,
         feature_engine=None,
-        config_path: str = "config/base/strategies.yaml",
+        config_path: str = "config/live/strategies.yaml",
         symbol_metadata: SymbolMetadata | None = None,
         recorder_queue: "asyncio.Queue | None" = None,
     ):
@@ -1464,7 +1464,8 @@ class StrategyRunner:
                                         # Typed intent tuple: position 16 is decision_price
                                         intent = (*intent[:16], _mid)
 
-                    self._emit_trace(
+                    # L5: order-bearing — every OrderIntent gets a trace, no sampling.
+                    self._emit_trace_always(
                         "strategy_intent_submit",
                         trace_id,
                         {
@@ -1631,6 +1632,19 @@ class StrategyRunner:
             return
         try:
             sampler.emit(stage=stage, trace_id=str(trace_id or ""), payload=payload)
+        except (TypeError, ValueError) as exc:
+            logger.debug("trace_emit_failed", error=str(exc))
+            return
+
+    def _emit_trace_always(self, stage: str, trace_id: str, payload: dict[str, Any]) -> None:
+        # L5: order-bearing trace — fires once per OrderIntent emitted.
+        # Bypasses sample_every so the chain (strategy_intent_submit →
+        # risk_check → order_enqueue_api → order_dispatch_ok) is complete.
+        sampler = getattr(self, "_trace_sampler", None)
+        if sampler is None:
+            return
+        try:
+            sampler.emit_always(stage=stage, trace_id=str(trace_id or ""), payload=payload)
         except (TypeError, ValueError) as exc:
             logger.debug("trace_emit_failed", error=str(exc))
             return

@@ -297,6 +297,8 @@ def test_cmd_backtest_run_runner_rejects_multi_data_without_strategy():
 
 
 def test_cmd_run_replay_exits(monkeypatch, capsys):
+    # L4: replay mode now requires --session and --fixture. Without them
+    # cmd_run prints a usage hint to stderr and exits with code 2.
     monkeypatch.setattr("hft_platform.cli._run.load_settings", lambda *_a, **_k: ({"mode": "replay"}, {}))
     args = Namespace(
         mode=None,
@@ -305,10 +307,16 @@ def test_cmd_run_replay_exits(monkeypatch, capsys):
         strategy=None,
         strategy_module=None,
         strategy_class=None,
+        loop_id=None,
+        session=None,
+        fixture=None,
+        allow_pre_recorder=False,
     )
-    cli.cmd_run(args)
-    out = capsys.readouterr().out
-    assert "Replay mode not yet wired" in out
+    with pytest.raises(SystemExit) as excinfo:
+        cli.cmd_run(args)
+    assert excinfo.value.code == 2
+    err = capsys.readouterr().err
+    assert "--mode replay requires --session" in err
 
 
 @pytest.mark.skip(reason="requires full prometheus_client sub-module mock; tracks as known fragile test")

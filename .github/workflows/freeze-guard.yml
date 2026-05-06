@@ -1,0 +1,135 @@
+name: Freeze Guard
+
+# Loop_v1 stabilization freeze enforcement.
+# Blocks PRs that add new strategies / new loop YAMLs while the stabilization
+# clock is running. Bypass requires the `freeze-override: <reason>` label
+# (only the human operator should apply this label).
+#
+# See docs/loop_v1_stabilization_charter.md for the full freeze-allowed
+# scope and exit criteria.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+    branches: [main, "loop-v1/*"]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  detect-frozen-additions:
+    name: Detect frozen-surface additions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Determine merge base
+        id: base
+        run: |
+          base_sha=$(git merge-base origin/${{ github.base_ref }} HEAD)
+          echo "sha=$base_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Collect added files
+        id: added
+        run: |
+          # Only "added" files (status A) — modifications to existing frozen
+          # files are caught by CODEOWNERS, not by this guard.
+          git diff --name-only --diff-filter=A "${{ steps.base.outputs.sha }}"...HEAD > /tmp/added_files.txt
+          echo "----- Added files in this PR -----"
+          cat /tmp/added_files.txt || echo "(none)"
+
+      - name: Check for new strategies
+        id: check_strategies
+        run: |
+          # New strategy module: anything in src/hft_platform/strategies/ that
+          # isn't the existing R47 or its tests/scaffolding.
+          violations=""
+          while IFS= read -r f; do
+            case "$f" in
+              src/hft_platform/strategies/__init__.py) ;;
+              src/hft_platform/strategies/r47_maker.py) ;;
+              src/hft_platform/strategies/r47_maker/*) ;;
+              src/hft_platform/strategies/*.py) violations="$violations $f" ;;
+              src/hft_platform/strategies/*/*.py) violations="$violations $f" ;;
+            esac
+          done < /tmp/added_files.txt
+          if [ -n "$violations" ]; then
+            echo "violations<<EOF" >> "$GITHUB_OUTPUT"
+            echo "$violations" | tr ' ' '\n' | grep -v '^$' >> "$GITHUB_OUTPUT"
+            echo "EOF" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check for new loop YAMLs
+        id: check_loops
+        run: |
+          # New loop YAML: anything in config/loops/ that isn't r47_tmf_v1*.
+          violations=""
+          while IFS= read -r f; do
+            case "$f" in
+              config/loops/r47_tmf_v1.yaml) ;;
+              config/loops/r47_tmf_v1.symbols.yaml) ;;
+              config/loops/README.md) ;;
+              config/loops/*.yaml) violations="$violations $f" ;;
+              config/loops/*.yml) violations="$violations $f" ;;
+            esac
+          done < /tmp/added_files.txt
+          if [ -n "$violations" ]; then
+            echo "violations<<EOF" >> "$GITHUB_OUTPUT"
+            echo "$violations" | tr ' ' '\n' | grep -v '^$' >> "$GITHUB_OUTPUT"
+            echo "EOF" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check for freeze-override label
+        id: override
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          labels_json=$(gh pr view "${{ github.event.pull_request.number }}" --json labels -q '.labels[].name')
+          override=""
+          while IFS= read -r label; do
+            case "$label" in
+              freeze-override:*) override="$label" ;;
+              freeze-override) override="$label" ;;
+            esac
+          done <<< "$labels_json"
+          if [ -n "$override" ]; then
+            echo "label=$override" >> "$GITHUB_OUTPUT"
+            echo "Override label found: $override"
+          else
+            echo "label=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verdict
+        env:
+          STRATEGIES: ${{ steps.check_strategies.outputs.violations }}
+          LOOPS: ${{ steps.check_loops.outputs.violations }}
+          OVERRIDE: ${{ steps.override.outputs.label }}
+        run: |
+          if [ -z "$STRATEGIES" ] && [ -z "$LOOPS" ]; then
+            echo "::notice::No frozen-surface additions detected. PR passes freeze-guard."
+            exit 0
+          fi
+
+          echo "----- Frozen-surface additions detected -----"
+          if [ -n "$STRATEGIES" ]; then
+            echo "Strategy additions:"
+            echo "$STRATEGIES"
+          fi
+          if [ -n "$LOOPS" ]; then
+            echo "Loop YAML additions:"
+            echo "$LOOPS"
+          fi
+
+          if [ -n "$OVERRIDE" ]; then
+            echo "::warning::Freeze-guard bypassed by label '$OVERRIDE'."
+            echo "::warning::Operator override accepted; remember to log the rationale in docs/loop_v1_stabilization_log.md under Charter Amendments."
+            exit 0
+          fi
+
+          echo "::error::Freeze-guard violation. Loop_v1 stabilization is in progress."
+          echo "::error::To bypass, add a 'freeze-override: <reason>' label and document the reason in docs/loop_v1_stabilization_log.md."
+          echo "::error::See docs/loop_v1_stabilization_charter.md for the freeze-allowed PR list."
+          exit 1

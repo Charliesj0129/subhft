@@ -28,6 +28,35 @@ def _disable_clickhouse_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HFT_CLICKHOUSE_ENABLED", "0")
 
 
+@pytest.fixture(autouse=True)
+def _scrub_operator_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Strip developer .env / shell pollution before each unit test.
+
+    Makefile uses ``-include .env`` (see :file:`Makefile:4`), so values like
+    ``HFT_MODE=real`` and ``HFT_QUOTE_CONNECTIONS=2`` reach pytest under
+    ``make ci`` but not under a bare ``uv run pytest`` shell. This made unit
+    tests pass standalone but fail under CI for any test that:
+
+      * loads :class:`HftConfig` via the L1 strict validator (rejects
+        ``mode='real'``);
+      * exercises the single-conn broker facade path (multi-conn pool
+        replaces the facade, breaking ``call_count`` assertions).
+
+    Tests that need these vars must set them explicitly via their own
+    ``monkeypatch.setenv`` — the autouse fixture only clears the *defaults*.
+    """
+    for var in (
+        "HFT_MODE",
+        "HFT_ENV",
+        "HFT_QUOTE_CONNECTIONS",
+        "HFT_LOOP_ID",
+        "HFT_LOOP",
+        "HFT_ORDER_MODE",
+        "HFT_LIVE_CONFIRM",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+
 @pytest.fixture()
 def symbols_yaml(tmp_path):
     """Write a minimal symbols.yaml and return its path."""

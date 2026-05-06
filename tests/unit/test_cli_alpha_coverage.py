@@ -693,7 +693,11 @@ from hft_platform.cli._alpha import cmd_alpha_validate  # noqa: E402
 
 
 class TestCmdAlphaValidate:
-    def test_import_failure_exits(self):
+    def test_import_failure_exits(self, monkeypatch):
+        # L6: bypass the strict-profile guard so we can test the import failure.
+        from hft_platform.cli import _alpha as _alpha_mod
+
+        monkeypatch.setattr(_alpha_mod, "_load_strict_validation_profile", lambda _arg: MagicMock(is_strict=True))
         with patch.dict("sys.modules", {"hft_platform.alpha.validation": None}):
             with pytest.raises(SystemExit) as exc_info:
                 cmd_alpha_validate(
@@ -708,11 +712,15 @@ class TestCmdAlphaValidate:
                         skip_gate_b_tests=False,
                         pytest_timeout=60,
                         experiments_dir="e",
+                        profile="vm_ul6_strict",
                     )
                 )
         assert exc_info.value.code == 1
 
-    def test_validation_pass_outputs_json(self, capsys):
+    def test_validation_pass_outputs_json(self, capsys, monkeypatch):
+        from hft_platform.cli import _alpha as _alpha_mod
+
+        monkeypatch.setattr(_alpha_mod, "_load_strict_validation_profile", lambda _arg: MagicMock(is_strict=True))
         fake_config_cls = MagicMock()
         fake_result = MagicMock()
         fake_result.passed = True
@@ -733,6 +741,7 @@ class TestCmdAlphaValidate:
                     skip_gate_b_tests=False,
                     pytest_timeout=60,
                     experiments_dir="e",
+                    profile="vm_ul6_strict",
                 )
             )
         out = capsys.readouterr().out

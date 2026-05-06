@@ -1,0 +1,82 @@
+groups:
+- name: HFT_Loop_v1_Replay_Parity
+  rules:
+  # Sim phase: parity must be ≥99% (deterministic harness vs. deterministic source).
+  - alert: ReplayParitySimDegraded
+    expr: hft_replay_match_pct{phase="sim",eligibility="eligible"} < 99
+    for: 0s
+    labels:
+      severity: warning
+      loop_phase: sim
+    annotations:
+      summary: "Sim-phase replay parity below 99% threshold"
+      description: |
+        loop_id={{ $labels.loop_id }} strategy_id={{ $labels.strategy_id }}
+        match_pct={{ $value }} (threshold: 99% for sim phase).
+        A sim-phase regression usually means the strategy / replay harness
+        introduced non-determinism. Investigate `outputs/replay/<session>/timeline.md`
+        for the first divergence index, then bisect against last green commit.
+      runbook_url: "docs/loop_v1_stabilization_charter.md#sim-phase-failure-protocol"
+
+  # Shadow phase: parity must be ≥95% (live broker callback timing variance is expected).
+  - alert: ReplayParityShadowDegraded
+    expr: hft_replay_match_pct{phase="shadow",eligibility="eligible"} < 95
+    for: 0s
+    labels:
+      severity: warning
+      loop_phase: shadow
+    annotations:
+      summary: "Shadow-phase replay parity below 95% threshold"
+      description: |
+        loop_id={{ $labels.loop_id }} strategy_id={{ $labels.strategy_id }}
+        match_pct={{ $value }} (threshold: 95% for shadow phase).
+        Drop below 95% in shadow indicates timing-sensitive divergence in the
+        order/risk path. Cross-check against `outputs/replay/<session>/divergence_histogram.json`.
+      runbook_url: "docs/loop_v1_stabilization_charter.md#shadow-phase-failure-protocol"
+
+  # Live phase: parity must be ≥95% on ≥25/30 days (charter rule). Single-day breach
+  # warns; the 30-day stabilization tracker counts allowed breaches.
+  - alert: ReplayParityLiveDegraded
+    expr: hft_replay_match_pct{phase="live",eligibility="eligible"} < 95
+    for: 0s
+    labels:
+      severity: critical
+      loop_phase: live
+    annotations:
+      summary: "Live-phase replay parity below 95% threshold"
+      description: |
+        loop_id={{ $labels.loop_id }} strategy_id={{ $labels.strategy_id }}
+        match_pct={{ $value }} (threshold: 95% for live phase).
+        Live parity breach. Update docs/loop_v1_stabilization_log.md with the
+        breach count; if cumulative breach count exceeds 5/30, halt promotion
+        and rollback to shadow.
+      runbook_url: "docs/loop_v1_stabilization_charter.md#live-phase-failure-protocol"
+
+  # Daily diff job missing: prom textfile not refreshed in 36h ⇒ cron broken.
+  - alert: ReplayParityDailyJobStale
+    expr: (time() - timestamp(hft_replay_match_pct)) > 36 * 3600
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Daily replay diff job has not produced fresh metrics in >36h"
+      description: |
+        The textfile-collector output for hft_replay_match_pct is older than 36h.
+        Check the cron / systemd timer running `make daily-replay-diff`.
+      runbook_url: "docs/loop_v1_stabilization_charter.md#daily-job-failure-protocol"
+
+  # Pre-recorder sentinel: when intent recorder was off for the session, the
+  # script writes match_pct=-1. Operators should know this is informational
+  # only (not a parity failure).
+  - alert: ReplayParityPreRecorder
+    expr: hft_replay_match_pct{eligibility="pre_recorder"} == -1
+    for: 0s
+    labels:
+      severity: info
+    annotations:
+      summary: "Replay session classified pre_recorder (intent recorder off at session time)"
+      description: |
+        loop_id={{ $labels.loop_id }} strategy_id={{ $labels.strategy_id }}
+        Session predates intent recorder enablement. No parity claim possible;
+        Slice C Task 14 backfill is required to make this session eligible.
+      runbook_url: "docs/loop_v1_stabilization_charter.md#pre-recorder-sessions"

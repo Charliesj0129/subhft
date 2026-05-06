@@ -9,7 +9,7 @@ from typing import Any, List
 # Assuming hftbacktest API usage. For this prototype, we'll mock the loop if deps missing.
 from structlog import get_logger
 
-from hft_platform.backtest.equity import extract_equity_series
+from hft_platform.backtest.equity import EquitySource, classify_equity_source, extract_equity_series
 
 logger = get_logger("backtest")
 
@@ -45,6 +45,9 @@ class HftBacktestRunResult:
     report_path: str | None
     risk_rejection_count: int = 0
     risk_rejection_breakdown: dict[str, int] = field(default_factory=dict)
+    # L6: Equity provenance for promotion eligibility. ``synthetic`` cannot
+    # enter Gate D under a strict profile; ``real`` and ``real_no_trade`` can.
+    equity_source: EquitySource = "real"
 
     def __init__(
         self,
@@ -61,6 +64,7 @@ class HftBacktestRunResult:
         report_path: str | None,
         risk_rejection_count: int = 0,
         risk_rejection_breakdown: dict[str, int] | None = None,
+        equity_source: EquitySource | None = None,
     ) -> None:
         resolved_data_path = data_path if data_path is not None else data
         if resolved_data_path is None:
@@ -77,6 +81,10 @@ class HftBacktestRunResult:
         object.__setattr__(self, "report_path", report_path)
         object.__setattr__(self, "risk_rejection_count", risk_rejection_count)
         object.__setattr__(self, "risk_rejection_breakdown", dict(risk_rejection_breakdown or {}))
+        if equity_source is None:
+            # Back-compat: legacy callers pass only ``used_synthetic_equity``.
+            equity_source = "synthetic" if used_synthetic_equity else "real"
+        object.__setattr__(self, "equity_source", equity_source)
 
     @property
     def data(self) -> str:
@@ -165,11 +173,18 @@ class HftBacktestRunner:
 
             if self.cfg.strict_equity and (equity_series is None or not equity_series.is_valid()):
                 logger.error(
-                    "Backtest finished without valid real equity under strict-equity mode",
+                    "strict_equity_fail_closed",
+                    reason="no valid real equity series — refusing to synthesize under strict-equity mode",
                     symbol=self.symbol,
                     strategy=self.strategy_name,
                 )
                 return None
+
+            risk_rejection_count = 0
+            risk_rejection_breakdown: dict[str, int] = {}
+            if hasattr(adapter, "_risk_evaluator") and adapter._risk_evaluator is not None:
+                risk_rejection_count = adapter._risk_evaluator.rejection_count
+                risk_rejection_breakdown = adapter._risk_evaluator.rejection_breakdown
 
             # 4. Generate Report
             report_path: str | None = None
@@ -182,11 +197,17 @@ class HftBacktestRunner:
                 else:
                     report_path, used_synthetic_equity = self._generate_report(pnl)
 
-            risk_rejection_count = 0
-            risk_rejection_breakdown: dict[str, int] = {}
-            if hasattr(adapter, "_risk_evaluator") and adapter._risk_evaluator is not None:
-                risk_rejection_count = adapter._risk_evaluator.rejection_count
-                risk_rejection_breakdown = adapter._risk_evaluator.rejection_breakdown
+            # L6: Classify equity provenance. ``n_fills`` is approximated by
+            # ``adapter.n_fills`` if exposed; otherwise fall back to the
+            # risk-rejection delta (zero rejections + zero motion = no-trade).
+            adapter_fills = getattr(adapter, "n_fills", None)
+            n_fills_for_classifier = int(adapter_fills) if adapter_fills is not None else None
+            if equity_series is None or not equity_series.is_valid():
+                equity_source: EquitySource = "synthetic"
+            elif used_synthetic_equity:
+                equity_source = "synthetic"
+            else:
+                equity_source = classify_equity_source(equity_series.equity, n_fills=n_fills_for_classifier)
 
             run_result = HftBacktestRunResult(
                 run_id=run_id,
@@ -200,6 +221,7 @@ class HftBacktestRunner:
                 report_path=report_path,
                 risk_rejection_count=risk_rejection_count,
                 risk_rejection_breakdown=risk_rejection_breakdown,
+                equity_source=equity_source,
             )
             self._write_run_summary(run_result)
             return run_result

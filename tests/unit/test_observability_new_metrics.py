@@ -66,7 +66,7 @@ def test_strategy_events_received_increments_on_dispatch():
     runner = StrategyRunner(
         bus=bus,
         risk_queue=asyncio.Queue(maxsize=16),
-        config_path="config/base/strategies.yaml",
+        config_path="config/live/strategies.yaml",
     )
     # Clear any strategies loaded from config — we want an isolated strategy.
     runner.strategies = []

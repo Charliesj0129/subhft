@@ -657,6 +657,30 @@ quarterly-health-check: ## Run quarterly infrastructure health check
 	uv run python scripts/quarterly_health_check.py
 
 # ============================================================================
+# Loop_v1 — Stabilization (L11)
+# ============================================================================
+
+# Daily live-vs-replay diff. Defaults to today; override with SESSION=YYYY-MM-DD.
+# FIXTURE must be supplied (or pass SKIP_REPLAY=1 to re-export from existing report).
+# PHASE controls the phase label (sim|shadow|live); used by replay_parity_alert.yml.
+SESSION ?= $(shell date +%F)
+PHASE ?= $(or $(HFT_STABILIZATION_PHASE),sim)
+FIXTURE ?=
+SKIP_REPLAY ?=
+
+daily-replay-diff: ## Run daily replay parity diff and export Prometheus textfile metrics
+	@if [ -z "$(FIXTURE)" ] && [ -z "$(SKIP_REPLAY)" ]; then \
+		echo "ERROR: FIXTURE=<path> required (or SKIP_REPLAY=1 to re-export existing report.json)"; \
+		exit 1; \
+	fi
+	uv run python scripts/ops/daily_replay_diff.py \
+		--session $(SESSION) \
+		--phase $(PHASE) \
+		$(if $(FIXTURE),--fixture $(FIXTURE),) \
+		$(if $(SKIP_REPLAY),--skip-replay,) \
+		$(EXTRA_ARGS)
+
+# ============================================================================
 # Help
 # ============================================================================
 
