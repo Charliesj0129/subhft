@@ -25,3 +25,4 @@ Rules are auto-loaded by agents from `.agent/rules/`.
 - **Skills**: `.agent/skills/` — skill SKILL.md files
 - **Workflows**: `.agent/workflows/` — step-by-step procedures
 - **Evals**: `.agent/evals/` — evaluation scripts for normalizer, LOB, risk
+- **Alpha development workflow** (canonical, end-to-end for new factor authors): `docs/runbooks/alpha-development-workflow.md` — covers Gates A–F, replay-parity, latency-audit, kill ledger, and the loop_v1 L11 live-registry freeze.
