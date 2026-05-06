@@ -385,6 +385,9 @@ def cmd_alpha_promote(args: argparse.Namespace) -> None:
         print(f"Failed to import alpha promotion pipeline: {exc}")
         sys.exit(1)
 
+    profile = _load_strict_validation_profile(getattr(args, "profile", None))
+    dry_run = bool(getattr(args, "dry_run", False))
+
     config = PromotionConfig(
         alpha_id=args.alpha_id,
         owner=args.owner,
@@ -430,6 +433,8 @@ def cmd_alpha_promote(args: argparse.Namespace) -> None:
         force=bool(args.force),
         config_version=str(getattr(args, "config_version", "v1") or "v1"),
         parent_config_version=getattr(args, "parent_config_version", None) or None,
+        validation_profile=profile,
+        dry_run=dry_run,
     )
     result = promote_alpha(config)
     if result.checklist is not None:

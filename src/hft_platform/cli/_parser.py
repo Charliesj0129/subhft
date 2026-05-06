@@ -766,6 +766,24 @@ def build_parser() -> argparse.ArgumentParser:
     alpha_promote.add_argument("--config-version", default="v1", help="Semantic config version (e.g. v1, v2)")
     alpha_promote.add_argument("--parent-config-version", default=None, help="Parent config version on re-promotion")
     alpha_promote.add_argument("--out", help="Optional summary JSON output path")
+    alpha_promote.add_argument(
+        "--profile",
+        default=None,
+        help=(
+            "Strict validation profile (e.g. 'vm_ul6_strict' or absolute path) required "
+            "for Gate D entry. promote_alpha() refuses to run without is_strict=true."
+        ),
+    )
+    alpha_promote.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=(
+            "Run Gate D evaluation without durable side effects: no kill-ledger row "
+            "is appended on rejection, and no YAML is written under "
+            "config/strategy_promotions/. Decision/integration JSONs still land under "
+            "research/experiments/<alpha>/promotions/<ts>/ for auditability."
+        ),
+    )
     alpha_promote.set_defaults(func=cmd_alpha_promote)
 
     alpha_rl_promote = alpha_sub.add_parser(
