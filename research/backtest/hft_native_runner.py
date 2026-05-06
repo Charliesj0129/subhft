@@ -43,6 +43,7 @@ def _ensure_project_root_on_path() -> None:
 
 _ensure_project_root_on_path()
 
+from research.backtest._npz_format import NpzFormat, assert_format  # noqa: E402
 from research.backtest.alpha_strategy_bridge import AlphaStrategyBridge, signal_log_to_arrays  # noqa: E402
 from research.backtest.metrics import (  # noqa: E402
     compute_capacity,
@@ -82,6 +83,31 @@ try:
 except ImportError:
     _HBT_EVENT_DTYPE = None
     _HFTBT_AVAILABLE = False
+
+
+# ---------------------------------------------------------------------------
+# Feature-set version helpers
+# ---------------------------------------------------------------------------
+
+# Schema versions that consume L2-L5 depth-derived features
+# (deep_depth_momentum_x1000 lives at FE-v3 idx 20). Mirror of
+# ``src/hft_platform/feature/registry.py`` builders.
+_L5_DEPTH_SCHEMA_VERSIONS: frozenset[str] = frozenset(
+    {"lob_shared_v2", "lob_shared_v3"}
+)
+
+
+def _alpha_needs_l5_depth(alpha: AlphaProtocol) -> bool:
+    """Return True when the alpha's manifest declares an L5-depth-consuming
+    feature schema. Defensive: any access failure -> False (legacy v1
+    alphas remain unaffected by the format-detector hard-fail)."""
+    try:
+        version = getattr(alpha.manifest, "feature_set_version", "") or ""
+    except Exception:
+        return False
+    if not isinstance(version, str):
+        return False
+    return version.lower() in _L5_DEPTH_SCHEMA_VERSIONS
 
 
 # ---------------------------------------------------------------------------
@@ -410,6 +436,15 @@ def _run_adapter_slice(
         raise ImportError(
             "hft_platform.backtest.adapter.HftBacktestAdapter not available. Ensure hftbacktest is installed."
         )
+
+    # Codex finding 2 (HIGH) reframed: alphas that declare an FE-v3 schema
+    # (lob_shared_v2 / lob_shared_v3) consume features that need L2-L5 depth
+    # (e.g. deep_depth_momentum_x1000). If the npz silently lacks L2-L5
+    # coverage, those features degrade to zero and Gate C scores a strategy
+    # different from the declared one. assert_format raises on mismatch so
+    # the data layer is forced to fix the input.
+    if _alpha_needs_l5_depth(alpha):
+        assert_format(npz_path, NpzFormat.HFTBT_EVENT_L5)
 
     effective_rtt = _effective_broker_rtt_ms(config)
     latency_us = int((config.local_decision_pipeline_latency_us + effective_rtt * 1000))
