@@ -685,6 +685,9 @@ class SystemBootstrapper:
         cmd_created_ns_map: Dict[str, int] = {}
         # TCA: shared map for decision/arrival price enrichment: order_key -> (decision_price, arrival_price)
         cmd_tca_map: Dict[str, tuple[int, int]] = {}
+        # L8 (loop_v1): shared trace_id map (order_key -> OrderIntent.trace_id) so
+        # ExecutionRouter can enrich FillEvent.trace_id for OrderExplanationAssembler.
+        cmd_trace_id_map: Dict[str, str] = {}
         # DriftBurst detector for StormGuard (opt-in via env var)
         drift_burst_detector = None
         if os.getenv("HFT_STORMGUARD_DRIFT_BURST_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}:
@@ -893,6 +896,7 @@ class SystemBootstrapper:
             broker_codec=_broker_codec,
             cmd_created_ns_map=cmd_created_ns_map,
             cmd_tca_map=cmd_tca_map,
+            cmd_trace_id_map=cmd_trace_id_map,
             mid_price_fn=_get_mid_price,
         )
         # Inject shared SymbolMetadata so OrderAdapter resolves exchange/price_scale
@@ -955,6 +959,7 @@ class SystemBootstrapper:
             execution_gateway.on_terminal_state,
             cmd_created_ns_map=cmd_created_ns_map,
             cmd_tca_map=cmd_tca_map,
+            cmd_trace_id_map=cmd_trace_id_map,
             recorder_queue=recorder_queue,
             symbol_metadata=symbol_metadata,
             price_scale_provider=price_scale_provider,
@@ -1149,6 +1154,41 @@ class SystemBootstrapper:
                         logger.warning("family_populator_failed", broker="fubon", error=str(exc))
 
                 md_service._post_connect_hooks.append(_populate_families_from_fubon)
+
+        # Loop_v1 L2: refuse to start if any subscribed contract has
+        # delivery_date < today. Same-day expiry (rollover day) is permitted.
+        # Shioaji-only for now; Fubon hook to follow when its contract lookup
+        # interface lands. The structlog ``stale_instrument_subscription_blocked``
+        # event + raised StaleInstrumentError fail the bootstrap closed.
+        if broker_id == "shioaji":
+            from datetime import date as _today_date
+
+            from hft_platform.feed_adapter.shioaji.contracts_runtime import (
+                assert_no_stale_subscriptions,
+            )
+
+            def _stale_instrument_gate() -> None:
+                api_lookup = getattr(md_client, "_get_contract", None)
+                if api_lookup is None:
+                    return
+                symbols = list(getattr(md_client, "symbols", []) or [])
+
+                def _lookup(exch: str, code: str, ptype: Any) -> Any:
+                    return api_lookup(
+                        exch,
+                        code,
+                        product_type=ptype,
+                        allow_synthetic=False,
+                    )
+
+                assert_no_stale_subscriptions(
+                    symbols,
+                    _lookup,
+                    today=_today_date.today(),
+                    log=logger,
+                )
+
+            md_service._post_connect_hooks.append(_stale_instrument_gate)
 
         # P2 (2026-04-25): ``set_publish_sink`` wiring removed — the runner
         # never propagated the sink to ``StrategyContext`` instances, so the

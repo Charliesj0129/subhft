@@ -78,6 +78,7 @@ class ExecutionRouter:
         overflow_buf: Optional[collections.deque] = None,
         cmd_created_ns_map: Optional[Dict[str, int]] = None,
         cmd_tca_map: Optional[Dict[str, tuple[int, int]]] = None,
+        cmd_trace_id_map: Optional[Dict[str, str]] = None,
         recorder_queue: Optional[asyncio.Queue] = None,
         symbol_metadata: Optional[Any] = None,
         price_scale_provider: Optional[Any] = None,
@@ -93,6 +94,11 @@ class ExecutionRouter:
         self._overflow_buf = overflow_buf
         self._cmd_created_ns_map: Dict[str, int] = cmd_created_ns_map if cmd_created_ns_map is not None else {}
         self._cmd_tca_map: Dict[str, tuple[int, int]] = cmd_tca_map if cmd_tca_map is not None else {}
+        # L8 (loop_v1): order_key -> OrderIntent.trace_id, populated by
+        # OrderAdapter._dispatch_to_api on NEW intents and consumed below to
+        # enrich FillEvent.trace_id so OrderExplanationAssembler can join on
+        # (trace_id, client_order_id).
+        self._cmd_trace_id_map: Dict[str, str] = cmd_trace_id_map if cmd_trace_id_map is not None else {}
         self.running = False
         self.metrics = MetricsRegistry.get()
         self._dlq_retry_interval = int(os.getenv("HFT_DLQ_RETRY_INTERVAL", "100"))  # Retry DLQ every N events processed
@@ -442,6 +448,10 @@ class ExecutionRouter:
                             if _tca is not None:
                                 fill_event.decision_price = _tca[0]
                                 fill_event.arrival_price = _tca[1]
+                            # L8: enrich trace_id (empty fallback → no explanation row)
+                            _trace = self._cmd_trace_id_map.get(_order_key, "")
+                            if _trace:
+                                fill_event.trace_id = _trace
 
                         _pre_realized = 0
                         if self._risk_engine is not None:
@@ -610,6 +620,10 @@ class ExecutionRouter:
                                 if _drain_tca is not None:
                                     fill_event.decision_price = _drain_tca[0]
                                     fill_event.arrival_price = _drain_tca[1]
+                                # L8: enrich trace_id on drain path too
+                                _drain_trace = self._cmd_trace_id_map.get(_drain_order_key, "")
+                                if _drain_trace:
+                                    fill_event.trace_id = _drain_trace
                             if hasattr(self.position_store, "on_fill"):
                                 _pre_realized_sd = 0
                                 if self._risk_engine is not None:
@@ -806,6 +820,10 @@ class ExecutionRouter:
                     if _tca is not None:
                         fill.decision_price = _tca[0]
                         fill.arrival_price = _tca[1]
+                    # L8: enrich trace_id on DLQ-resolved fills too
+                    _dlq_trace = self._cmd_trace_id_map.get(_order_key, "")
+                    if _dlq_trace:
+                        fill.trace_id = _dlq_trace
 
                 # Capture pre-fill realized PnL for incremental delta
                 _pre_realized_dlq = 0

@@ -114,7 +114,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _load_strategies_yaml() -> dict:
-    path = _REPO_ROOT / "config/base/strategies.yaml"
+    path = _REPO_ROOT / "research/strategy_archive/strategies_2026_05.yaml"
     with open(path) as f:
         return yaml.safe_load(f)
 

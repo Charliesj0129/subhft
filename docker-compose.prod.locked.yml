@@ -1,0 +1,1177 @@
+# docker-compose.prod.locked.yml — IMMUTABLE PRODUCTION COMPOSE (auto-generated)
+#
+# DO NOT EDIT BY HAND. Regenerate with:
+#   uv run python scripts/ops/generate_locked_compose.py
+#
+# Generated:        2026-05-05T08:40:04Z (UTC)
+# Git SHA:          b21b9769
+# Base digest:      35cf6f99767a380f  (docker-compose.yml)
+# Prod digest:      15529f83b16a6a9e  (docker-compose.production.yml)
+# Volumes stripped: 15 (broad source-path bind mounts)
+#
+# Stripped targets: /app/src, /app/scripts, /app/config
+# Reason: production must run the image-side code, not the host working
+# tree. Broad source bind mounts override read_only at the mount path,
+# silently masking what was actually shipped (build_info lies, rollback
+# does not roll back the code). See loop_v1 plan section L3a and
+# docs/runbooks/deployment.md.
+#
+# Service-property parity vs base+prod is enforced by
+#   tests/integration/test_prod_compose_parity.py
+#
+# Smoke check after regen:
+#   docker compose -f docker-compose.prod.locked.yml run --rm hft-monitor \
+#       python scripts/monitor_runtime_health.py --check
+
+name: hft_platform
+networks:
+  default:
+    name: hft_platform_default
+  hft-internal:
+    driver: bridge
+    internal: false
+    name: hft_platform_hft-internal
+services:
+  alertmanager:
+    command:
+    - --config.file=/etc/alertmanager/alertmanager.yml
+    container_name: alertmanager
+    deploy:
+      resources:
+        limits:
+          cpus: '0.2'
+          memory: 128M
+    healthcheck:
+      interval: 30s
+      retries: 3
+      test:
+      - CMD-SHELL
+      - wget --no-verbose --tries=1 --spider http://localhost:9093/-/healthy || exit 1
+      timeout: 10s
+    image: prom/alertmanager:v0.27.0
+    logging:
+      driver: json-file
+      options:
+        max-file: '5'
+        max-size: 50m
+    networks:
+      hft-internal: null
+    ports:
+    - host_ip: 127.0.0.1
+      mode: ingress
+      protocol: tcp
+      published: '9093'
+      target: 9093
+    read_only: true
+    security_opt:
+    - no-new-privileges:true
+    tmpfs:
+    - /tmp:size=32M
+    volumes:
+    - read_only: true
+      source: ${HFT_ALERTMANAGER_CONFIG:-./config/monitoring/alerts/alertmanager.production.yml}
+      target: /etc/alertmanager/alertmanager.yml
+      type: volume
+      volume: {}
+  clickhouse:
+    container_name: clickhouse
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 12G
+    environment:
+    - CLICKHOUSE_USER=default
+    - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set}
+    - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
+    healthcheck:
+      interval: 30s
+      retries: 3
+      test:
+      - CMD-SHELL
+      - wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1
+      timeout: 10s
+    image: clickhouse/clickhouse-server:25.12.3
+    logging:
+      driver: json-file
+      options:
+        max-file: '10'
+        max-size: 100m
+    networks:
+      hft-internal: null
+    ports:
+    - host_ip: 127.0.0.1
+      mode: ingress
+      protocol: tcp
+      published: '8123'
+      target: 8123
+    - host_ip: 127.0.0.1
+      mode: ingress
+      protocol: tcp
+      published: '9000'
+      target: 9000
+    security_opt:
+    - no-new-privileges:true
+    ulimits:
+      nofile: 262144
+    volumes:
+    - bind:
+        create_host_path: true
+      source: /home/charlie/hft_platform/config/clickhouse_storage.xml
+      target: /etc/clickhouse-server/config.d/storage.xml
+      type: bind
+    - bind:
+        create_host_path: true
+      source: /home/charlie/hft_platform/config/clickhouse_system_logs.xml
+      target: /etc/clickhouse-server/config.d/system_logs.xml
+      type: bind
+    - bind:
+        create_host_path: true
+      source: /home/charlie/hft_platform/config/clickhouse_memory.xml
+      target: /etc/clickhouse-server/config.d/memory.xml
+      type: bind
+    - bind:
+        create_host_path: true
+      read_only: true
+      source: /home/charlie/hft_platform/config/clickhouse_backup.xml
+      target: /etc/clickhouse-server/config.d/backup.xml
+      type: bind
+    - bind:
+        create_host_path: true
+      read_only: true
+      source: /home/charlie/hft_platform/config/clickhouse_prometheus.xml
+      target: /etc/clickhouse-server/config.d/prometheus.xml
+      type: bind
+    - source: ${CH_BACKUP_PATH:-./backups/clickhouse}
+      target: /backups
+      type: volume
+      volume: {}
+    - source: ${CH_DATA_HOT:-ch_data_hot}
+      target: /var/lib/clickhouse/data/hot
+      type: volume
+      volume: {}
+    - source: ${CH_DATA_COLD:-ch_data_cold}
+      target: /var/lib/clickhouse/data/cold
+      type: volume
+      volume: {}
+    - source: ch_metadata
+      target: /var/lib/clickhouse
+      type: volume
+      volume: {}
+  hft-base:
+    build:
+      args:
+        BUILD_TS: ${HFT_BUILD_TS:-unknown}
+        GIT_SHA: ${HFT_GIT_SHA:-unknown}
+      context: /home/charlie/hft_platform
+      dockerfile: Dockerfile
+    command:
+    - sh
+    - -lc
+    - HFT_RUNTIME_ROLE=maintenance sleep infinity
+    container_name: hft-base
+    env_file:
+    - path: /home/charlie/hft_platform/.env
+      required: true
+    environment:
+    - SHIOAJI_API_KEY=${SHIOAJI_API_KEY}
+    - SHIOAJI_SECRET_KEY=${SHIOAJI_SECRET_KEY}
+    - SHIOAJI_PERSON_ID=${SHIOAJI_PERSON_ID}
+    - CA_CERT_PATH=${CA_CERT_PATH:-}
+    - CA_PASSWORD=${CA_PASSWORD:-}
+    - SHIOAJI_ACTIVATE_CA=${SHIOAJI_ACTIVATE_CA:-0}
+    - SHIOAJI_ACCOUNT=${SHIOAJI_ACCOUNT:-}
+    - HFT_MODE=${HFT_MODE:-sim}
+    - HFT_ORDER_MODE=${HFT_ORDER_MODE:-sim}
+    - HFT_ORDER_NO_CA=${HFT_ORDER_NO_CA:-1}
+    - HFT_QUOTE_VERSION=${HFT_QUOTE_VERSION:-auto}
+    - HFT_QUOTE_NO_DATA_S=${HFT_QUOTE_NO_DATA_S:-30}
+    - HFT_QUOTE_WATCHDOG_S=${HFT_QUOTE_WATCHDOG_S:-5}
+    - HFT_QUOTE_FLAP_WINDOW_S=${HFT_QUOTE_FLAP_WINDOW_S:-60}
+    - HFT_QUOTE_FLAP_THRESHOLD=${HFT_QUOTE_FLAP_THRESHOLD:-5}
+    - HFT_QUOTE_FLAP_COOLDOWN_S=${HFT_QUOTE_FLAP_COOLDOWN_S:-300}
+    - HFT_QUOTE_FORCE_RELOGIN_S=${HFT_QUOTE_FORCE_RELOGIN_S:-15}
+    - HFT_EVENT_MODE=${HFT_EVENT_MODE:-event}
+    - HFT_SYMBOLS=${HFT_SYMBOLS:-}
+    - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    - SYMBOLS_CONFIG=${SYMBOLS_CONFIG:-config/base/symbols.yaml}
+    - HFT_CLICKHOUSE_HOST=clickhouse
+    - HFT_CLICKHOUSE_PORT=${HFT_CLICKHOUSE_PORT:-8123}
+    - HFT_CLICKHOUSE_ENABLED=1
+    - HFT_CH_INSERT_POOL_SIZE=${HFT_CH_INSERT_POOL_SIZE:-4}
+    - HFT_CH_MAX_CONCURRENT_INSERTS=${HFT_CH_MAX_CONCURRENT_INSERTS:-2}
+    - HFT_CH_INSERT_CHUNK_ROWS=${HFT_CH_INSERT_CHUNK_ROWS:-256}
+    - HFT_WAL_LOADER_CONCURRENCY=${HFT_WAL_LOADER_CONCURRENCY:-1}
+    - HFT_INSERT_MAX_RETRIES=${HFT_INSERT_MAX_RETRIES:-4}
+    - HFT_INSERT_BASE_DELAY_S=${HFT_INSERT_BASE_DELAY_S:-0.6}
+    - HFT_INSERT_MAX_BACKOFF_S=${HFT_INSERT_MAX_BACKOFF_S:-8.0}
+    - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set in .env}
+    - HFT_RECONNECT_DAYS=${HFT_RECONNECT_DAYS:-}
+    - HFT_RECONNECT_HOURS=${HFT_RECONNECT_HOURS:-}
+    - HFT_RECONNECT_HOURS_2=${HFT_RECONNECT_HOURS_2:-}
+    - HFT_RECONNECT_TZ=${HFT_RECONNECT_TZ:-Asia/Taipei}
+    - TZ=${TZ:-Asia/Taipei}
+    - HFT_PROM_PORT=${HFT_PROM_PORT:-9090}
+    - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}
+    - HFT_FEATURE_ENGINE_ENABLED=${HFT_FEATURE_ENGINE_ENABLED:-1}
+    - HFT_FUSED_NORMALIZER=${HFT_FUSED_NORMALIZER:-0}
+    - HFT_FEATURE_ENGINE_BACKEND=${HFT_FEATURE_ENGINE_BACKEND:-python}
+    - HFT_GATEWAY_ENABLED=${HFT_GATEWAY_ENABLED:-1}
+    - HFT_HEALTH_PORT=${HFT_HEALTH_PORT:-8080}
+    - HFT_MONITOR_LIVE_ENABLED=${HFT_MONITOR_LIVE_ENABLED:-0}
+    - HFT_MONITOR_REDIS_HOST=${HFT_MONITOR_REDIS_HOST:-redis}
+    - HFT_MONITOR_REDIS_PORT=${HFT_MONITOR_REDIS_PORT:-6379}
+    - HFT_MONITOR_REDIS_PASSWORD=${HFT_MONITOR_REDIS_PASSWORD:-${REDIS_PASSWORD}}
+    - HFT_STORMGUARD_FEED_GAP_STORM_S=${HFT_STORMGUARD_FEED_GAP_STORM_S:-30}
+    - HFT_STORMGUARD_LATENCY_STORM_US=${HFT_STORMGUARD_LATENCY_STORM_US:-10000000}
+    - HFT_STORMGUARD_LATENCY_WARM_US=${HFT_STORMGUARD_LATENCY_WARM_US:-5000000}
+    - HFT_STORMGUARD_STORM_COOLDOWN_S=${HFT_STORMGUARD_STORM_COOLDOWN_S:-30}
+    - HFT_STORMGUARD_DE_ESCALATE_N=${HFT_STORMGUARD_DE_ESCALATE_N:-5}
+    - HFT_STORMGUARD_DRIFT_BURST_ENABLED=${HFT_STORMGUARD_DRIFT_BURST_ENABLED:-0}
+    - HFT_STORMGUARD_HALT_EXEMPT_STRATEGIES=${HFT_STORMGUARD_HALT_EXEMPT_STRATEGIES:-}
+    - HFT_STORMGUARD_FEATURE_RECOVERY_HOLD_S=${HFT_STORMGUARD_FEATURE_RECOVERY_HOLD_S:-5}
+    - HFT_STRATEGY_TIMEOUT_MS=${HFT_STRATEGY_TIMEOUT_MS:-50}
+    - HFT_STRATEGY_TIMEOUT_STRIKES=${HFT_STRATEGY_TIMEOUT_STRIKES:-3}
+    - HFT_STRATEGY_TIMEOUT_RECOVER_S=${HFT_STRATEGY_TIMEOUT_RECOVER_S:-60}
+    - HFT_DEFAULT_INTENT_TTL_MS=${HFT_DEFAULT_INTENT_TTL_MS:-5000}
+    - HFT_MAX_INTENTS_PER_EVENT=${HFT_MAX_INTENTS_PER_EVENT:-20}
+    - HFT_STALE_EVENT_THRESHOLD_MS=${HFT_STALE_EVENT_THRESHOLD_MS:-500}
+    - HFT_GATEWAY_HALT_CANCEL=${HFT_GATEWAY_HALT_CANCEL:-1}
+    - HFT_GATEWAY_DEGRADE_ON_STORM=${HFT_GATEWAY_DEGRADE_ON_STORM:-1}
+    - HFT_FEATURE_ENGINE_EMIT_EVENTS=${HFT_FEATURE_ENGINE_EMIT_EVENTS:-1}
+    - HFT_FEATURE_FAILURE_ESCALATE=${HFT_FEATURE_FAILURE_ESCALATE:-10}
+    - HFT_NORM_FAILURE_ESCALATE=${HFT_NORM_FAILURE_ESCALATE:-50}
+    - HFT_RAW_QUEUE_SIZE=${HFT_RAW_QUEUE_SIZE:-10000}
+    - HFT_RAW_QUEUE_HIGH_WATERMARK=${HFT_RAW_QUEUE_HIGH_WATERMARK:-0.8}
+    - HFT_MD_RECORD_DIRECT=${HFT_MD_RECORD_DIRECT:-1}
+    - HFT_RECORDER_DROP_ON_FULL=${HFT_RECORDER_DROP_ON_FULL:-1}
+    - HFT_WATCHDOG_INTERVAL_S=${HFT_WATCHDOG_INTERVAL_S:-1.0}
+    - HFT_SYMBOL_GAP_THRESHOLD_S=${HFT_SYMBOL_GAP_THRESHOLD_S:-6.0}
+    - HFT_TRADE_CLASSIFICATION_ENABLED=${HFT_TRADE_CLASSIFICATION_ENABLED:-1}
+    - HFT_BUS_OVERFLOW_HALT_THRESHOLD=${HFT_BUS_OVERFLOW_HALT_THRESHOLD:-3}
+    - HFT_BUS_OVERFLOW_RATE_THRESHOLD=${HFT_BUS_OVERFLOW_RATE_THRESHOLD:-10}
+    - HFT_BUS_OVERFLOW_WINDOW_S=${HFT_BUS_OVERFLOW_WINDOW_S:-60}
+    - HFT_BUS_DRAIN_TIMEOUT_MS=${HFT_BUS_DRAIN_TIMEOUT_MS:-500}
+    - HFT_RISK_DLQ_DRAIN_INTERVAL=${HFT_RISK_DLQ_DRAIN_INTERVAL:-50}
+    - HFT_RISK_DLQ_TTL_S=${HFT_RISK_DLQ_TTL_S:-30}
+    - HFT_GC_DISABLE_TRADING=${HFT_GC_DISABLE_TRADING:-0}
+    - HFT_PLATFORM_AUTO_RECOVERY_ENABLED=${HFT_PLATFORM_AUTO_RECOVERY_ENABLED:-1}
+    - HFT_PLATFORM_AUTO_RECOVERY_COOLDOWN_S=${HFT_PLATFORM_AUTO_RECOVERY_COOLDOWN_S:-60}
+    - HFT_PNL_EXPORTER_ENABLED=${HFT_PNL_EXPORTER_ENABLED:-1}
+    - HFT_CH_SHUTDOWN_TIMEOUT_S=${HFT_CH_SHUTDOWN_TIMEOUT_S:-30}
+    - HFT_QUOTE_CONNECTIONS=${HFT_QUOTE_CONNECTIONS:-1}
+    - HFT_ORDER_SHADOW_MODE=${HFT_ORDER_SHADOW_MODE:-0}
+    - HFT_SESSION_GOVERNOR_ENABLED=${HFT_SESSION_GOVERNOR_ENABLED:-0}
+    - HFT_ENV=${HFT_ENV:-dev}
+    - PYTHONDONTWRITEBYTECODE=1
+    healthcheck:
+      interval: 30s
+      retries: 3
+      test:
+      - CMD-SHELL
+      - curl -sf http://localhost:${HFT_HEALTH_PORT:-8080}/healthz || exit 1
+      timeout: 10s
+    image: ${HFT_IMAGE:-hft-platform:latest}
+    networks:
+      hft-internal: null
+    profiles:
+    - maintenance
+    restart: always
+    security_opt:
+    - no-new-privileges:true
+    ulimits:
+      core: 4294967296
+      memlock: -1
+      nofile: 65535
+    volumes:
+    - bind:
+        create_host_path: true
+      source: /home/charlie/hft_platform/.wal
+      target: /app/.wal
+      type: bind
+    - bind:
+        create_host_path: true
+      source: /home/charlie/hft_platform/.state
+      target: /app/.state
+      type: bind
+    - bind:
+        create_host_path: true
+      source: /home/charlie/hft_platform/data
+      target: /app/data
+      type: bind
+    - bind:
+        create_host_path: true
+      source: /home/charlie/hft_platform/.cores
+      target: /var/cores
+      type: bind
+    - bind:
+        create_host_path: true
+      source: /home/charlie/hft_platform/.hft-runtime
+      target: /var/run/hft
+      type: bind
+  hft-bot:
+    build:
+      args:
+        BUILD_TS: ${HFT_BUILD_TS:-unknown}
+        GIT_SHA: ${HFT_GIT_SHA:-unknown}
+      context: /home/charlie/hft_platform
+      dockerfile: Dockerfile
+    command:
+    - sh
+    - -lc
+    - python -m hft_platform.bot
+    container_name: hft-bot
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+        required: true
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+    env_file:
+    - path: /home/charlie/hft_platform/.env
+      required: true
+    environment:
+    - HFT_TELEGRAM_BOT_TOKEN=${HFT_TELEGRAM_BOT_TOKEN:?HFT_TELEGRAM_BOT_TOKEN must be set}
+    - HFT_TELEGRAM_CHAT_ID=${HFT_TELEGRAM_CHAT_ID:?HFT_TELEGRAM_CHAT_ID must be set}
+    - HFT_REPORT_SYMBOLS=${HFT_REPORT_SYMBOLS:-TXFR1}
+    - HFT_CLICKHOUSE_HOST=clickhouse
+    - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set in .env}
+    - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    - TZ=Asia/Taipei
+    healthcheck:
+      interval: 30s
+      retries: 3
+      test:
+      - CMD-SHELL
+      - curl -sf http://localhost:${HFT_HEALTH_PORT:-8080}/healthz || exit 1
+      timeout: 10s
+    image: ${HFT_IMAGE:-hft-platform:latest}
+    networks:
+      default: null
+    restart: unless-stopped
+    ulimits:
+      core: 4294967296
+      memlock: -1
+      nofile: 65535
+    volumes:
+    - bind:
+        create_host_path: true
+      source: /home/charlie/hft_platform/.wal
+      target: /app/.wal
+      type: bind
+    - bind:
+        create_host_path: true
+      source: /home/charlie/hft_platform/.state
+      target: /app/.state
+      type: bind
+    - bind:
+        create_host_path: true
+      source: /home/charlie/hft_platform/data
+      target: /app/data
+      type: bind
+    - bind:
+        create_host_path: true
+      source: /home/charlie/hft_platform/.cores
+      target: /var/cores
+      type: bind
+    - bind:
+        create_host_path: true
+      source: /home/charlie/hft_platform/.hft-runtime
+      target: /var/run/hft
+      type: bind
+  hft-engine:
+    build:
+      args:
+        BUILD_TS: ${HFT_BUILD_TS:-unknown}
+        GIT_SHA: ${HFT_GIT_SHA:-unknown}
+      context: /home/charlie/hft_platform
+      dockerfile: Dockerfile
+    command:
+    - sh
+    - -lc
+    - HFT_RUNTIME_ROLE=engine HFT_RECORDER_MODE=${HFT_ENGINE_RECORDER_MODE:-wal_first} python -m hft_platform.main
+    container_name: hft-engine
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+        required: true
+      redis:
+        condition: service_started
+        required: true
+    deploy:
+      resources:
+        limits:
+          cpus: ${HFT_CPU_LIMIT:-2.0}
+          memory: ${HFT_MEM_LIMIT:-4096M}
+    env_file:
+    - path: /home/charlie/hft_platform/.env
+      required: true
+    environment:
+    - SHIOAJI_API_KEY=${SHIOAJI_API_KEY}
+    - SHIOAJI_SECRET_KEY=${SHIOAJI_SECRET_KEY}
+    - SHIOAJI_PERSON_ID=${SHIOAJI_PERSON_ID}
+    - CA_CERT_PATH=${CA_CERT_PATH:-}
+    - CA_PASSWORD=${CA_PASSWORD:-}
+    - SHIOAJI_ACTIVATE_CA=${SHIOAJI_ACTIVATE_CA:-0}
+    - SHIOAJI_ACCOUNT=${SHIOAJI_ACCOUNT:-}
+    - HFT_MODE=${HFT_MODE:-sim}
+    - HFT_ORDER_MODE=${HFT_ORDER_MODE:-sim}
+    - HFT_ORDER_NO_CA=${HFT_ORDER_NO_CA:-1}
+    - HFT_QUOTE_VERSION=${HFT_QUOTE_VERSION:-auto}
+    - HFT_QUOTE_NO_DATA_S=${HFT_QUOTE_NO_DATA_S:-30}
+    - HFT_QUOTE_WATCHDOG_S=${HFT_QUOTE_WATCHDOG_S:-5}
+    - HFT_QUOTE_FLAP_WINDOW_S=${HFT_QUOTE_FLAP_WINDOW_S:-60}
+    - HFT_QUOTE_FLAP_THRESHOLD=${HFT_QUOTE_FLAP_THRESHOLD:-5}
+    - HFT_QUOTE_FLAP_COOLDOWN_S=${HFT_QUOTE_FLAP_COOLDOWN_S:-300}
+    - HFT_QUOTE_FORCE_RELOGIN_S=${HFT_QUOTE_FORCE_RELOGIN_S:-15}
+    - HFT_EVENT_MODE=${HFT_EVENT_MODE:-event}
+    - HFT_SYMBOLS=${HFT_SYMBOLS:-}
+    - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    - SYMBOLS_CONFIG=${SYMBOLS_CONFIG:-config/base/symbols.yaml}
+    - HFT_CLICKHOUSE_HOST=clickhouse
+    - HFT_CLICKHOUSE_PORT=${HFT_CLICKHOUSE_PORT:-8123}
+    - HFT_CLICKHOUSE_ENABLED=1
+    - HFT_CH_INSERT_POOL_SIZE=${HFT_CH_INSERT_POOL_SIZE:-4}
+    - HFT_CH_MAX_CONCURRENT_INSERTS=${HFT_CH_MAX_CONCURRENT_INSERTS:-2}
+    - HFT_CH_INSERT_CHUNK_ROWS=${HFT_CH_INSERT_CHUNK_ROWS:-256}
+    - HFT_WAL_LOADER_CONCURRENCY=${HFT_WAL_LOADER_CONCURRENCY:-1}
+    - HFT_INSERT_MAX_RETRIES=${HFT_INSERT_MAX_RETRIES:-4}
+    - HFT_INSERT_BASE_DELAY_S=${HFT_INSERT_BASE_DELAY_S:-0.6}
+    - HFT_INSERT_MAX_BACKOFF_S=${HFT_INSERT_MAX_BACKOFF_S:-8.0}
+    - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set in .env}
+    - HFT_RECONNECT_DAYS=${HFT_RECONNECT_DAYS:-}
+    - HFT_RECONNECT_HOURS=${HFT_RECONNECT_HOURS:-}
+    - HFT_RECONNECT_HOURS_2=${HFT_RECONNECT_HOURS_2:-}
+    - HFT_RECONNECT_TZ=${HFT_RECONNECT_TZ:-Asia/Taipei}
+    - TZ=${TZ:-Asia/Taipei}
+    - HFT_PROM_PORT=${HFT_PROM_PORT:-9090}
+    - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}
+    - HFT_FEATURE_ENGINE_ENABLED=${HFT_FEATURE_ENGINE_ENABLED:-1}
+    - HFT_FUSED_NORMALIZER=${HFT_FUSED_NORMALIZER:-0}
+    - HFT_FEATURE_ENGINE_BACKEND=${HFT_FEATURE_ENGINE_BACKEND:-python}
+    - HFT_GATEWAY_ENABLED=${HFT_GATEWAY_ENABLED:-1}
+    - HFT_HEALTH_PORT=${HFT_HEALTH_PORT:-8080}
+    - HFT_MONITOR_LIVE_ENABLED=${HFT_MONITOR_LIVE_ENABLED:-0}
+    - HFT_MONITOR_REDIS_HOST=${HFT_MONITOR_REDIS_HOST:-redis}
+    - HFT_MONITOR_REDIS_PORT=${HFT_MONITOR_REDIS_PORT:-6379}
+    - HFT_MONITOR_REDIS_PASSWORD=${HFT_MONITOR_REDIS_PASSWORD:-${REDIS_PASSWORD}}
+    - HFT_STORMGUARD_FEED_GAP_STORM_S=${HFT_STORMGUARD_FEED_GAP_STORM_S:-30}
+    - HFT_STORMGUARD_LATENCY_STORM_US=${HFT_STORMGUARD_LATENCY_STORM_US:-10000000}
+    - HFT_STORMGUARD_LATENCY_WARM_US=${HFT_STORMGUARD_LATENCY_WARM_US:-5000000}
+    - HFT_STORMGUARD_STORM_COOLDOWN_S=${HFT_STORMGUARD_STORM_COOLDOWN_S:-30}
+    - HFT_STORMGUARD_DE_ESCALATE_N=${HFT_STORMGUARD_DE_ESCALATE_N:-5}
+    - HFT_STORMGUARD_DRIFT_BURST_ENABLED=${HFT_STORMGUARD_DRIFT_BURST_ENABLED:-0}
+    - HFT_STORMGUARD_HALT_EXEMPT_STRATEGIES=${HFT_STORMGUARD_HALT_EXEMPT_STRATEGIES:-}
+    - HFT_STORMGUARD_FEATURE_RECOVERY_HOLD_S=${HFT_STORMGUARD_FEATURE_RECOVERY_HOLD_S:-5}
+    - HFT_STRATEGY_TIMEOUT_MS=${HFT_STRATEGY_TIMEOUT_MS:-50}
+    - HFT_STRATEGY_TIMEOUT_STRIKES=${HFT_STRATEGY_TIMEOUT_STRIKES:-3}
+    - HFT_STRATEGY_TIMEOUT_RECOVER_S=${HFT_STRATEGY_TIMEOUT_RECOVER_S:-60}
+    - HFT_DEFAULT_INTENT_TTL_MS=${HFT_DEFAULT_INTENT_TTL_MS:-5000}
+    - HFT_MAX_INTENTS_PER_EVENT=${HFT_MAX_INTENTS_PER_EVENT:-20}
+    - HFT_STALE_EVENT_THRESHOLD_MS=${HFT_STALE_EVENT_THRESHOLD_MS:-500}
+    - HFT_GATEWAY_HALT_CANCEL=${HFT_GATEWAY_HALT_CANCEL:-1}
+    - HFT_GATEWAY_DEGRADE_ON_STORM=${HFT_GATEWAY_DEGRADE_ON_STORM:-1}
+    - HFT_FEATURE_ENGINE_EMIT_EVENTS=${HFT_FEATURE_ENGINE_EMIT_EVENTS:-1}
+    - HFT_FEATURE_FAILURE_ESCALATE=${HFT_FEATURE_FAILURE_ESCALATE:-10}
+    - HFT_NORM_FAILURE_ESCALATE=${HFT_NORM_FAILURE_ESCALATE:-50}
+    - HFT_RAW_QUEUE_SIZE=${HFT_RAW_QUEUE_SIZE:-10000}
+    - HFT_RAW_QUEUE_HIGH_WATERMARK=${HFT_RAW_QUEUE_HIGH_WATERMARK:-0.8}
+    - HFT_MD_RECORD_DIRECT=${HFT_MD_RECORD_DIRECT:-1}
+    - HFT_RECORDER_DROP_ON_FULL=${HFT_RECORDER_DROP_ON_FULL:-1}
+    - HFT_WATCHDOG_INTERVAL_S=${HFT_WATCHDOG_INTERVAL_S:-1.0}
+    - HFT_SYMBOL_GAP_THRESHOLD_S=${HFT_SYMBOL_GAP_THRESHOLD_S:-6.0}
+    - HFT_TRADE_CLASSIFICATION_ENABLED=${HFT_TRADE_CLASSIFICATION_ENABLED:-1}
+    - HFT_BUS_OVERFLOW_HALT_THRESHOLD=${HFT_BUS_OVERFLOW_HALT_THRESHOLD:-3}
+    - HFT_BUS_OVERFLOW_RATE_THRESHOLD=${HFT_BUS_OVERFLOW_RATE_THRESHOLD:-10}
+    - HFT_BUS_OVERFLOW_WINDOW_S=${HFT_BUS_OVERFLOW_WINDOW_S:-60}
+    - HFT_BUS_DRAIN_TIMEOUT_MS=${HFT_BUS_DRAIN_TIMEOUT_MS:-500}
+    - HFT_RISK_DLQ_DRAIN_INTERVAL=${HFT_RISK_DLQ_DRAIN_INTERVAL:-50}
+    - HFT_RISK_DLQ_TTL_S=${HFT_RISK_DLQ_TTL_S:-30}
+    - HFT_GC_DISABLE_TRADING=${HFT_GC_DISABLE_TRADING:-0}
+    - HFT_PLATFORM_AUTO_RECOVERY_ENABLED=${HFT_PLATFORM_AUTO_RECOVERY_ENABLED:-1}
+    - HFT_PLATFORM_AUTO_RECOVERY_COOLDOWN_S=${HFT_PLATFORM_AUTO_RECOVERY_COOLDOWN_S:-60}
+    - HFT_PNL_EXPORTER_ENABLED=${HFT_PNL_EXPORTER_ENABLED:-1}
+    - HFT_CH_SHUTDOWN_TIMEOUT_S=${HFT_CH_SHUTDOWN_TIMEOUT_S:-30}
+    - HFT_QUOTE_CONNECTIONS=${HFT_QUOTE_CONNECTIONS:-1}
+    - HFT_ORDER_SHADOW_MODE=${HFT_ORDER_SHADOW_MODE:-0}
+    - HFT_SESSION_GOVERNOR_ENABLED=${HFT_SESSION_GOVERNOR_ENABLED:-0}
+    - HFT_ENV=${HFT_ENV:-dev}
+    - PYTHONDONTWRITEBYTECODE=1
+    healthcheck:
+      interval: 30s
+      retries: 3
+      test:
+      - CMD-SHELL
+      - curl -sf http://localhost:${HFT_HEALTH_PORT:-8080}/healthz || exit 1
+      timeout: 10s
+    image: ${HFT_IMAGE:-hft-platform:latest}
+    logging:
+      driver: json-file
+      options:
+        max-file: '10'
+        max-size: 100m
+    networks:
+      hft-internal: null
+    ports:
+    - 127.0.0.1:${HFT_PROM_PORT:-9090}:9090
+    - 127.0.0.1:${HFT_HEALTH_PORT:-8080}:8080
+    read_only: true
+    restart: always
+    security_opt:
+    - no-new-privileges:true
+    tmpfs:
+    - /tmp:size=256M
+    - /app/__pycache__:size=64M
+    ulimits:
+      core: 4294967296
+      memlock: -1
+      nofile: 65535
+    volumes:
+    - bind:
+        create_host_path: true
+      source: /home/charlie/hft_platform/.wal
+      target: /app/.wal
+      type: bind
+    - bind:
+        create_host_path: true
+      source: /home/charlie/hft_platform/.state
+      target: /app/.state
+      type: bind
+    - bind:
+        create_host_path: true
+      source: /home/charlie/hft_platform/data
+      target: /app/data
+      type: bind
+    - bind:
+        create_host_path: true
+      source: /dev/hugepages
+      target: /dev/hugepages
+      type: bind
+    - read_only: true
+      source: ${CA_CERT_DIR:-./certs}
+      target: /app/certs
+      type: volume
+      volume: {}
+    - bind:
+        create_host_path: true
+      source: /home/charlie/hft_platform/.cores
+      target: /var/cores
+      type: bind
+    - bind:
+        create_host_path: true
+      source: /home/charlie/hft_platform/.hft-runtime
+      target: /var/run/hft
+      type: bind
+  hft-monitor:
+    build:
+      args:
+        BUILD_TS: ${HFT_BUILD_TS:-unknown}
+        GIT_SHA: ${HFT_GIT_SHA:-unknown}
+      context: /home/charlie/hft_platform
+      dockerfile: Dockerfile
+    command:
+    - sh
+    - -lc
+    - HFT_RUNTIME_ROLE=monitor python scripts/monitor_runtime_health.py
+    container_name: hft-monitor
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+        required: true
+      hft-engine:
+        condition: service_healthy
+        required: true
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+    env_file:
+    - path: /home/charlie/hft_platform/.env
+      required: true
+    environment:
+    - HFT_MONITOR_METRICS_URL=http://hft-engine:9090/metrics
+    - HFT_CLICKHOUSE_HOST=clickhouse
+    - HFT_CLICKHOUSE_PORT=${HFT_CLICKHOUSE_PORT:-8123}
+    - HFT_CLICKHOUSE_USER=${HFT_CLICKHOUSE_USER:-default}
+    - HFT_CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set in .env}
+    - HFT_MONITOR_INTERVAL_S=${HFT_MONITOR_INTERVAL_S:-10}
+    - HFT_MONITOR_MAX_INGEST_LAG_S=${HFT_MONITOR_MAX_INGEST_LAG_S:-5}
+    - HFT_MONITOR_FUTURE_TOLERANCE_S=${HFT_MONITOR_FUTURE_TOLERANCE_S:-60}
+    - HFT_MONITOR_FEED_GAP_WARN_S=${HFT_MONITOR_FEED_GAP_WARN_S:-5}
+    - HFT_MONITOR_WAL_RATE_WARN=${HFT_MONITOR_WAL_RATE_WARN:-1}
+    - HFT_MONITOR_INGEST_RATE_MIN=${HFT_MONITOR_INGEST_RATE_MIN:-1}
+    healthcheck:
+      interval: 30s
+      retries: 3
+      test:
+      - CMD-SHELL
+      - python -c 'import os; os.kill(1, 0)' || exit 1
+      timeout: 10s
+    image: ${HFT_IMAGE:-hft-platform:latest}
+    networks:
+      hft-internal: null
+    read_only: true
+    restart: always
+    security_opt:
+    - no-new-privileges:true
+    tmpfs:
+    - /tmp:size=64M
+    ulimits:
+      core: 4294967296
+      memlock: -1
+      nofile: 65535
+    volumes:
+    - bind:
+        create_host_path: true
+      source: /home/charlie/hft_platform/.wal
+      target: /app/.wal
+      type: bind
+    - bind:
+        create_host_path: true
+      source: /home/charlie/hft_platform/.state
+      target: /app/.state
+      type: bind
+    - bind:
+        create_host_path: true
+      source: /home/charlie/hft_platform/data
+      target: /app/data
+      type: bind
+    - bind:
+        create_host_path: true
+      source: /home/charlie/hft_platform/.cores
+      target: /var/cores
+      type: bind
+    - bind:
+        create_host_path: true
+      source: /home/charlie/hft_platform/.hft-runtime
+      target: /var/run/hft
+      type: bind
+  loki:
+    command: -config.file=/etc/loki/local-config.yaml
+    container_name: loki
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 512M
+    image: grafana/loki:3.0.0
+    logging:
+      driver: json-file
+      options:
+        max-file: '3'
+        max-size: 20m
+    networks:
+      default: null
+    ports:
+    - host_ip: 127.0.0.1
+      mode: ingress
+      protocol: tcp
+      published: '3100'
+      target: 3100
+    restart: unless-stopped
+    volumes:
+    - source: loki_data
+      target: /loki
+      type: volume
+      volume: {}
+    - bind:
+        create_host_path: true
+      read_only: true
+      source: /home/charlie/hft_platform/config/monitoring/loki.yml
+      target: /etc/loki/local-config.yaml
+      type: bind
+  node-exporter:
+    command:
+    - --path.procfs=/host/proc
+    - --path.sysfs=/host/sys
+    - --path.rootfs=/rootfs
+    - --collector.filesystem.ignored-mount-points=^/(sys|proc|dev|host|etc)($$|/)
+    - --collector.textfile.directory=/var/lib/node-exporter/textfile
+    container_name: node-exporter
+    deploy:
+      resources:
+        limits:
+          cpus: '0.10'
+          memory: 64M
+    image: prom/node-exporter:v1.8.2
+    logging:
+      driver: json-file
+      options:
+        max-file: '3'
+        max-size: 20m
+    networks:
+      hft-internal: null
+    pid: host
+    read_only: true
+    restart: unless-stopped
+    security_opt:
+    - no-new-privileges:true
+    volumes:
+    - bind:
+        create_host_path: true
+      read_only: true
+      source: /proc
+      target: /host/proc
+      type: bind
+    - bind:
+        create_host_path: true
+      read_only: true
+      source: /sys
+      target: /host/sys
+      type: bind
+    - bind:
+        create_host_path: true
+      read_only: true
+      source: /
+      target: /rootfs
+      type: bind
+    - bind:
+        create_host_path: true
+      read_only: true
+      source: /var/lib/node-exporter/textfile
+      target: /var/lib/node-exporter/textfile
+      type: bind
+  prometheus:
+    command:
+    - --config.file=/etc/prometheus/prometheus.yml
+    - --storage.tsdb.retention.time=30d
+    - --storage.tsdb.path=/prometheus
+    - --web.enable-lifecycle
+    container_name: prometheus
+    depends_on:
+      alertmanager:
+        condition: service_started
+        required: true
+      hft-engine:
+        condition: service_started
+        required: true
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+    healthcheck:
+      interval: 30s
+      retries: 3
+      test:
+      - CMD-SHELL
+      - wget --no-verbose --tries=1 --spider http://localhost:9090/-/healthy || exit 1
+      timeout: 10s
+    image: prom/prometheus:v2.51.0
+    logging:
+      driver: json-file
+      options:
+        max-file: '5'
+        max-size: 50m
+    networks:
+      hft-internal: null
+    ports:
+    - host_ip: 127.0.0.1
+      mode: ingress
+      protocol: tcp
+      published: '9091'
+      target: 9090
+    read_only: true
+    security_opt:
+    - no-new-privileges:true
+    tmpfs:
+    - /tmp:size=64M
+    volumes:
+    - bind:
+        create_host_path: true
+      read_only: true
+      source: /home/charlie/hft_platform/config/monitoring/prometheus.yml
+      target: /etc/prometheus/prometheus.yml
+      type: bind
+    - bind:
+        create_host_path: true
+      read_only: true
+      source: /home/charlie/hft_platform/config/monitoring/alerts
+      target: /etc/prometheus/alerts
+      type: bind
+    - source: prometheus_data
+      target: /prometheus
+      type: volume
+      volume: {}
+  promtail:
+    command: -config.file=/etc/promtail/config.yml
+    container_name: promtail
+    depends_on:
+      loki:
+        condition: service_started
+        required: true
+    deploy:
+      resources:
+        limits:
+          cpus: '0.20'
+          memory: 128M
+    image: grafana/promtail:3.0.0
+    logging:
+      driver: json-file
+      options:
+        max-file: '3'
+        max-size: 20m
+    networks:
+      default: null
+    restart: unless-stopped
+    volumes:
+    - bind:
+        create_host_path: true
+      read_only: true
+      source: /home/charlie/hft_platform/config/monitoring/promtail.yml
+      target: /etc/promtail/config.yml
+      type: bind
+    - bind:
+        create_host_path: true
+      read_only: true
+      source: /var/lib/docker/containers
+      target: /var/lib/docker/containers
+      type: bind
+    - bind:
+        create_host_path: true
+      read_only: true
+      source: /var/run/docker.sock
+      target: /var/run/docker.sock
+      type: bind
+  redis:
+    command:
+    - redis-server
+    - --requirepass
+    - ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
+    - --save
+    - ''
+    - --appendonly
+    - 'no'
+    container_name: redis
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 512M
+    healthcheck:
+      interval: 30s
+      retries: 3
+      test:
+      - CMD-SHELL
+      - REDISCLI_AUTH=${REDIS_PASSWORD} redis-cli ping | grep PONG
+      timeout: 5s
+    image: redis:7.4
+    logging:
+      driver: json-file
+      options:
+        max-file: '5'
+        max-size: 50m
+    networks:
+      hft-internal: null
+    ports:
+    - host_ip: 127.0.0.1
+      mode: ingress
+      protocol: tcp
+      published: '6379'
+      target: 6379
+    read_only: true
+    restart: always
+    security_opt:
+    - no-new-privileges:true
+    tmpfs:
+    - /tmp:size=64M
+    - /data:size=256M
+  wal-loader:
+    build:
+      args:
+        BUILD_TS: ${HFT_BUILD_TS:-unknown}
+        GIT_SHA: ${HFT_GIT_SHA:-unknown}
+      context: /home/charlie/hft_platform
+      dockerfile: Dockerfile
+    command:
+    - sh
+    - -lc
+    - HFT_RUNTIME_ROLE=wal_loader python -m hft_platform.recorder.loader
+    container_name: wal-loader
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+        required: true
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+    env_file:
+    - path: /home/charlie/hft_platform/.env
+      required: true
+    environment:
+    - SHIOAJI_API_KEY=${SHIOAJI_API_KEY}
+    - SHIOAJI_SECRET_KEY=${SHIOAJI_SECRET_KEY}
+    - SHIOAJI_PERSON_ID=${SHIOAJI_PERSON_ID}
+    - CA_CERT_PATH=${CA_CERT_PATH:-}
+    - CA_PASSWORD=${CA_PASSWORD:-}
+    - SHIOAJI_ACTIVATE_CA=${SHIOAJI_ACTIVATE_CA:-0}
+    - SHIOAJI_ACCOUNT=${SHIOAJI_ACCOUNT:-}
+    - HFT_MODE=${HFT_MODE:-sim}
+    - HFT_ORDER_MODE=${HFT_ORDER_MODE:-sim}
+    - HFT_ORDER_NO_CA=${HFT_ORDER_NO_CA:-1}
+    - HFT_QUOTE_VERSION=${HFT_QUOTE_VERSION:-auto}
+    - HFT_QUOTE_NO_DATA_S=${HFT_QUOTE_NO_DATA_S:-30}
+    - HFT_QUOTE_WATCHDOG_S=${HFT_QUOTE_WATCHDOG_S:-5}
+    - HFT_QUOTE_FLAP_WINDOW_S=${HFT_QUOTE_FLAP_WINDOW_S:-60}
+    - HFT_QUOTE_FLAP_THRESHOLD=${HFT_QUOTE_FLAP_THRESHOLD:-5}
+    - HFT_QUOTE_FLAP_COOLDOWN_S=${HFT_QUOTE_FLAP_COOLDOWN_S:-300}
+    - HFT_QUOTE_FORCE_RELOGIN_S=${HFT_QUOTE_FORCE_RELOGIN_S:-15}
+    - HFT_EVENT_MODE=${HFT_EVENT_MODE:-event}
+    - HFT_SYMBOLS=${HFT_SYMBOLS:-}
+    - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    - SYMBOLS_CONFIG=${SYMBOLS_CONFIG:-config/base/symbols.yaml}
+    - HFT_CLICKHOUSE_HOST=clickhouse
+    - HFT_CLICKHOUSE_PORT=${HFT_CLICKHOUSE_PORT:-8123}
+    - HFT_CLICKHOUSE_ENABLED=1
+    - HFT_CH_INSERT_POOL_SIZE=${HFT_CH_INSERT_POOL_SIZE:-4}
+    - HFT_CH_MAX_CONCURRENT_INSERTS=${HFT_CH_MAX_CONCURRENT_INSERTS:-2}
+    - HFT_CH_INSERT_CHUNK_ROWS=${HFT_CH_INSERT_CHUNK_ROWS:-256}
+    - HFT_WAL_LOADER_CONCURRENCY=${HFT_WAL_LOADER_CONCURRENCY:-1}
+    - HFT_INSERT_MAX_RETRIES=${HFT_INSERT_MAX_RETRIES:-4}
+    - HFT_INSERT_BASE_DELAY_S=${HFT_INSERT_BASE_DELAY_S:-0.6}
+    - HFT_INSERT_MAX_BACKOFF_S=${HFT_INSERT_MAX_BACKOFF_S:-8.0}
+    - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set in .env}
+    - HFT_RECONNECT_DAYS=${HFT_RECONNECT_DAYS:-}
+    - HFT_RECONNECT_HOURS=${HFT_RECONNECT_HOURS:-}
+    - HFT_RECONNECT_HOURS_2=${HFT_RECONNECT_HOURS_2:-}
+    - HFT_RECONNECT_TZ=${HFT_RECONNECT_TZ:-Asia/Taipei}
+    - TZ=${TZ:-Asia/Taipei}
+    - HFT_PROM_PORT=${HFT_PROM_PORT:-9090}
+    - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}
+    - HFT_FEATURE_ENGINE_ENABLED=${HFT_FEATURE_ENGINE_ENABLED:-1}
+    - HFT_FUSED_NORMALIZER=${HFT_FUSED_NORMALIZER:-0}
+    - HFT_FEATURE_ENGINE_BACKEND=${HFT_FEATURE_ENGINE_BACKEND:-python}
+    - HFT_GATEWAY_ENABLED=${HFT_GATEWAY_ENABLED:-1}
+    - HFT_HEALTH_PORT=${HFT_HEALTH_PORT:-8080}
+    - HFT_MONITOR_LIVE_ENABLED=${HFT_MONITOR_LIVE_ENABLED:-0}
+    - HFT_MONITOR_REDIS_HOST=${HFT_MONITOR_REDIS_HOST:-redis}
+    - HFT_MONITOR_REDIS_PORT=${HFT_MONITOR_REDIS_PORT:-6379}
+    - HFT_MONITOR_REDIS_PASSWORD=${HFT_MONITOR_REDIS_PASSWORD:-${REDIS_PASSWORD}}
+    - HFT_STORMGUARD_FEED_GAP_STORM_S=${HFT_STORMGUARD_FEED_GAP_STORM_S:-30}
+    - HFT_STORMGUARD_LATENCY_STORM_US=${HFT_STORMGUARD_LATENCY_STORM_US:-10000000}
+    - HFT_STORMGUARD_LATENCY_WARM_US=${HFT_STORMGUARD_LATENCY_WARM_US:-5000000}
+    - HFT_STORMGUARD_STORM_COOLDOWN_S=${HFT_STORMGUARD_STORM_COOLDOWN_S:-30}
+    - HFT_STORMGUARD_DE_ESCALATE_N=${HFT_STORMGUARD_DE_ESCALATE_N:-5}
+    - HFT_STORMGUARD_DRIFT_BURST_ENABLED=${HFT_STORMGUARD_DRIFT_BURST_ENABLED:-0}
+    - HFT_STORMGUARD_HALT_EXEMPT_STRATEGIES=${HFT_STORMGUARD_HALT_EXEMPT_STRATEGIES:-}
+    - HFT_STORMGUARD_FEATURE_RECOVERY_HOLD_S=${HFT_STORMGUARD_FEATURE_RECOVERY_HOLD_S:-5}
+    - HFT_STRATEGY_TIMEOUT_MS=${HFT_STRATEGY_TIMEOUT_MS:-50}
+    - HFT_STRATEGY_TIMEOUT_STRIKES=${HFT_STRATEGY_TIMEOUT_STRIKES:-3}
+    - HFT_STRATEGY_TIMEOUT_RECOVER_S=${HFT_STRATEGY_TIMEOUT_RECOVER_S:-60}
+    - HFT_DEFAULT_INTENT_TTL_MS=${HFT_DEFAULT_INTENT_TTL_MS:-5000}
+    - HFT_MAX_INTENTS_PER_EVENT=${HFT_MAX_INTENTS_PER_EVENT:-20}
+    - HFT_STALE_EVENT_THRESHOLD_MS=${HFT_STALE_EVENT_THRESHOLD_MS:-500}
+    - HFT_GATEWAY_HALT_CANCEL=${HFT_GATEWAY_HALT_CANCEL:-1}
+    - HFT_GATEWAY_DEGRADE_ON_STORM=${HFT_GATEWAY_DEGRADE_ON_STORM:-1}
+    - HFT_FEATURE_ENGINE_EMIT_EVENTS=${HFT_FEATURE_ENGINE_EMIT_EVENTS:-1}
+    - HFT_FEATURE_FAILURE_ESCALATE=${HFT_FEATURE_FAILURE_ESCALATE:-10}
+    - HFT_NORM_FAILURE_ESCALATE=${HFT_NORM_FAILURE_ESCALATE:-50}
+    - HFT_RAW_QUEUE_SIZE=${HFT_RAW_QUEUE_SIZE:-10000}
+    - HFT_RAW_QUEUE_HIGH_WATERMARK=${HFT_RAW_QUEUE_HIGH_WATERMARK:-0.8}
+    - HFT_MD_RECORD_DIRECT=${HFT_MD_RECORD_DIRECT:-1}
+    - HFT_RECORDER_DROP_ON_FULL=${HFT_RECORDER_DROP_ON_FULL:-1}
+    - HFT_WATCHDOG_INTERVAL_S=${HFT_WATCHDOG_INTERVAL_S:-1.0}
+    - HFT_SYMBOL_GAP_THRESHOLD_S=${HFT_SYMBOL_GAP_THRESHOLD_S:-6.0}
+    - HFT_TRADE_CLASSIFICATION_ENABLED=${HFT_TRADE_CLASSIFICATION_ENABLED:-1}
+    - HFT_BUS_OVERFLOW_HALT_THRESHOLD=${HFT_BUS_OVERFLOW_HALT_THRESHOLD:-3}
+    - HFT_BUS_OVERFLOW_RATE_THRESHOLD=${HFT_BUS_OVERFLOW_RATE_THRESHOLD:-10}
+    - HFT_BUS_OVERFLOW_WINDOW_S=${HFT_BUS_OVERFLOW_WINDOW_S:-60}
+    - HFT_BUS_DRAIN_TIMEOUT_MS=${HFT_BUS_DRAIN_TIMEOUT_MS:-500}
+    - HFT_RISK_DLQ_DRAIN_INTERVAL=${HFT_RISK_DLQ_DRAIN_INTERVAL:-50}
+    - HFT_RISK_DLQ_TTL_S=${HFT_RISK_DLQ_TTL_S:-30}
+    - HFT_GC_DISABLE_TRADING=${HFT_GC_DISABLE_TRADING:-0}
+    - HFT_PLATFORM_AUTO_RECOVERY_ENABLED=${HFT_PLATFORM_AUTO_RECOVERY_ENABLED:-1}
+    - HFT_PLATFORM_AUTO_RECOVERY_COOLDOWN_S=${HFT_PLATFORM_AUTO_RECOVERY_COOLDOWN_S:-60}
+    - HFT_PNL_EXPORTER_ENABLED=${HFT_PNL_EXPORTER_ENABLED:-1}
+    - HFT_CH_SHUTDOWN_TIMEOUT_S=${HFT_CH_SHUTDOWN_TIMEOUT_S:-30}
+    - HFT_QUOTE_CONNECTIONS=${HFT_QUOTE_CONNECTIONS:-1}
+    - HFT_ORDER_SHADOW_MODE=${HFT_ORDER_SHADOW_MODE:-0}
+    - HFT_SESSION_GOVERNOR_ENABLED=${HFT_SESSION_GOVERNOR_ENABLED:-0}
+    - HFT_ENV=${HFT_ENV:-dev}
+    - PYTHONDONTWRITEBYTECODE=1
+    healthcheck:
+      interval: 30s
+      retries: 3
+      test:
+      - CMD-SHELL
+      - python -c 'import os; os.kill(1, 0)' || exit 1
+      timeout: 10s
+    image: ${HFT_IMAGE:-hft-platform:latest}
+    networks:
+      hft-internal: null
+    read_only: true
+    restart: always
+    security_opt:
+    - no-new-privileges:true
+    tmpfs:
+    - /tmp:size=128M
+    ulimits:
+      core: 4294967296
+      memlock: -1
+      nofile: 65535
+    volumes:
+    - bind:
+        create_host_path: true
+      source: /home/charlie/hft_platform/.wal
+      target: /app/.wal
+      type: bind
+    - bind:
+        create_host_path: true
+      source: /home/charlie/hft_platform/.state
+      target: /app/.state
+      type: bind
+    - bind:
+        create_host_path: true
+      source: /home/charlie/hft_platform/data
+      target: /app/data
+      type: bind
+    - bind:
+        create_host_path: true
+      source: /home/charlie/hft_platform/.cores
+      target: /var/cores
+      type: bind
+    - bind:
+        create_host_path: true
+      source: /home/charlie/hft_platform/.hft-runtime
+      target: /var/run/hft
+      type: bind
+volumes:
+  ch_data_cold:
+    name: hft_platform_ch_data_cold
+  ch_data_hot:
+    name: hft_platform_ch_data_hot
+  ch_metadata:
+    name: hft_platform_ch_metadata
+  loki_data:
+    name: hft_platform_loki_data
+  prometheus_data:
+    name: hft_platform_prometheus_data
+x-hft-common:
+  build:
+    args:
+      BUILD_TS: ${HFT_BUILD_TS:-unknown}
+      GIT_SHA: ${HFT_GIT_SHA:-unknown}
+    context: .
+  env_file: .env
+  environment:
+  - SHIOAJI_API_KEY=${SHIOAJI_API_KEY}
+  - SHIOAJI_SECRET_KEY=${SHIOAJI_SECRET_KEY}
+  - SHIOAJI_PERSON_ID=${SHIOAJI_PERSON_ID}
+  - CA_CERT_PATH=${CA_CERT_PATH:-}
+  - CA_PASSWORD=${CA_PASSWORD:-}
+  - SHIOAJI_ACTIVATE_CA=${SHIOAJI_ACTIVATE_CA:-0}
+  - SHIOAJI_ACCOUNT=${SHIOAJI_ACCOUNT:-}
+  - HFT_MODE=${HFT_MODE:-sim}
+  - HFT_ORDER_MODE=${HFT_ORDER_MODE:-sim}
+  - HFT_ORDER_NO_CA=${HFT_ORDER_NO_CA:-1}
+  - HFT_QUOTE_VERSION=${HFT_QUOTE_VERSION:-auto}
+  - HFT_QUOTE_NO_DATA_S=${HFT_QUOTE_NO_DATA_S:-30}
+  - HFT_QUOTE_WATCHDOG_S=${HFT_QUOTE_WATCHDOG_S:-5}
+  - HFT_QUOTE_FLAP_WINDOW_S=${HFT_QUOTE_FLAP_WINDOW_S:-60}
+  - HFT_QUOTE_FLAP_THRESHOLD=${HFT_QUOTE_FLAP_THRESHOLD:-5}
+  - HFT_QUOTE_FLAP_COOLDOWN_S=${HFT_QUOTE_FLAP_COOLDOWN_S:-300}
+  - HFT_QUOTE_FORCE_RELOGIN_S=${HFT_QUOTE_FORCE_RELOGIN_S:-15}
+  - HFT_EVENT_MODE=${HFT_EVENT_MODE:-event}
+  - HFT_SYMBOLS=${HFT_SYMBOLS:-}
+  - LOG_LEVEL=${LOG_LEVEL:-INFO}
+  - SYMBOLS_CONFIG=${SYMBOLS_CONFIG:-config/base/symbols.yaml}
+  - HFT_CLICKHOUSE_HOST=clickhouse
+  - HFT_CLICKHOUSE_PORT=${HFT_CLICKHOUSE_PORT:-8123}
+  - HFT_CLICKHOUSE_ENABLED=1
+  - HFT_CH_INSERT_POOL_SIZE=${HFT_CH_INSERT_POOL_SIZE:-4}
+  - HFT_CH_MAX_CONCURRENT_INSERTS=${HFT_CH_MAX_CONCURRENT_INSERTS:-2}
+  - HFT_CH_INSERT_CHUNK_ROWS=${HFT_CH_INSERT_CHUNK_ROWS:-256}
+  - HFT_WAL_LOADER_CONCURRENCY=${HFT_WAL_LOADER_CONCURRENCY:-1}
+  - HFT_INSERT_MAX_RETRIES=${HFT_INSERT_MAX_RETRIES:-4}
+  - HFT_INSERT_BASE_DELAY_S=${HFT_INSERT_BASE_DELAY_S:-0.6}
+  - HFT_INSERT_MAX_BACKOFF_S=${HFT_INSERT_MAX_BACKOFF_S:-8.0}
+  - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set in .env}
+  - HFT_RECONNECT_DAYS=${HFT_RECONNECT_DAYS:-}
+  - HFT_RECONNECT_HOURS=${HFT_RECONNECT_HOURS:-}
+  - HFT_RECONNECT_HOURS_2=${HFT_RECONNECT_HOURS_2:-}
+  - HFT_RECONNECT_TZ=${HFT_RECONNECT_TZ:-Asia/Taipei}
+  - TZ=${TZ:-Asia/Taipei}
+  - HFT_PROM_PORT=${HFT_PROM_PORT:-9090}
+  - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}
+  - HFT_FEATURE_ENGINE_ENABLED=${HFT_FEATURE_ENGINE_ENABLED:-1}
+  - HFT_FUSED_NORMALIZER=${HFT_FUSED_NORMALIZER:-0}
+  - HFT_FEATURE_ENGINE_BACKEND=${HFT_FEATURE_ENGINE_BACKEND:-python}
+  - HFT_GATEWAY_ENABLED=${HFT_GATEWAY_ENABLED:-1}
+  - HFT_HEALTH_PORT=${HFT_HEALTH_PORT:-8080}
+  - HFT_MONITOR_LIVE_ENABLED=${HFT_MONITOR_LIVE_ENABLED:-0}
+  - HFT_MONITOR_REDIS_HOST=${HFT_MONITOR_REDIS_HOST:-redis}
+  - HFT_MONITOR_REDIS_PORT=${HFT_MONITOR_REDIS_PORT:-6379}
+  - HFT_MONITOR_REDIS_PASSWORD=${HFT_MONITOR_REDIS_PASSWORD:-${REDIS_PASSWORD}}
+  - HFT_STORMGUARD_FEED_GAP_STORM_S=${HFT_STORMGUARD_FEED_GAP_STORM_S:-30}
+  - HFT_STORMGUARD_LATENCY_STORM_US=${HFT_STORMGUARD_LATENCY_STORM_US:-10000000}
+  - HFT_STORMGUARD_LATENCY_WARM_US=${HFT_STORMGUARD_LATENCY_WARM_US:-5000000}
+  - HFT_STORMGUARD_STORM_COOLDOWN_S=${HFT_STORMGUARD_STORM_COOLDOWN_S:-30}
+  - HFT_STORMGUARD_DE_ESCALATE_N=${HFT_STORMGUARD_DE_ESCALATE_N:-5}
+  - HFT_STORMGUARD_DRIFT_BURST_ENABLED=${HFT_STORMGUARD_DRIFT_BURST_ENABLED:-0}
+  - HFT_STORMGUARD_HALT_EXEMPT_STRATEGIES=${HFT_STORMGUARD_HALT_EXEMPT_STRATEGIES:-}
+  - HFT_STORMGUARD_FEATURE_RECOVERY_HOLD_S=${HFT_STORMGUARD_FEATURE_RECOVERY_HOLD_S:-5}
+  - HFT_STRATEGY_TIMEOUT_MS=${HFT_STRATEGY_TIMEOUT_MS:-50}
+  - HFT_STRATEGY_TIMEOUT_STRIKES=${HFT_STRATEGY_TIMEOUT_STRIKES:-3}
+  - HFT_STRATEGY_TIMEOUT_RECOVER_S=${HFT_STRATEGY_TIMEOUT_RECOVER_S:-60}
+  - HFT_DEFAULT_INTENT_TTL_MS=${HFT_DEFAULT_INTENT_TTL_MS:-5000}
+  - HFT_MAX_INTENTS_PER_EVENT=${HFT_MAX_INTENTS_PER_EVENT:-20}
+  - HFT_STALE_EVENT_THRESHOLD_MS=${HFT_STALE_EVENT_THRESHOLD_MS:-500}
+  - HFT_GATEWAY_HALT_CANCEL=${HFT_GATEWAY_HALT_CANCEL:-1}
+  - HFT_GATEWAY_DEGRADE_ON_STORM=${HFT_GATEWAY_DEGRADE_ON_STORM:-1}
+  - HFT_FEATURE_ENGINE_EMIT_EVENTS=${HFT_FEATURE_ENGINE_EMIT_EVENTS:-1}
+  - HFT_FEATURE_FAILURE_ESCALATE=${HFT_FEATURE_FAILURE_ESCALATE:-10}
+  - HFT_NORM_FAILURE_ESCALATE=${HFT_NORM_FAILURE_ESCALATE:-50}
+  - HFT_RAW_QUEUE_SIZE=${HFT_RAW_QUEUE_SIZE:-10000}
+  - HFT_RAW_QUEUE_HIGH_WATERMARK=${HFT_RAW_QUEUE_HIGH_WATERMARK:-0.8}
+  - HFT_MD_RECORD_DIRECT=${HFT_MD_RECORD_DIRECT:-1}
+  - HFT_RECORDER_DROP_ON_FULL=${HFT_RECORDER_DROP_ON_FULL:-1}
+  - HFT_WATCHDOG_INTERVAL_S=${HFT_WATCHDOG_INTERVAL_S:-1.0}
+  - HFT_SYMBOL_GAP_THRESHOLD_S=${HFT_SYMBOL_GAP_THRESHOLD_S:-6.0}
+  - HFT_TRADE_CLASSIFICATION_ENABLED=${HFT_TRADE_CLASSIFICATION_ENABLED:-1}
+  - HFT_BUS_OVERFLOW_HALT_THRESHOLD=${HFT_BUS_OVERFLOW_HALT_THRESHOLD:-3}
+  - HFT_BUS_OVERFLOW_RATE_THRESHOLD=${HFT_BUS_OVERFLOW_RATE_THRESHOLD:-10}
+  - HFT_BUS_OVERFLOW_WINDOW_S=${HFT_BUS_OVERFLOW_WINDOW_S:-60}
+  - HFT_BUS_DRAIN_TIMEOUT_MS=${HFT_BUS_DRAIN_TIMEOUT_MS:-500}
+  - HFT_RISK_DLQ_DRAIN_INTERVAL=${HFT_RISK_DLQ_DRAIN_INTERVAL:-50}
+  - HFT_RISK_DLQ_TTL_S=${HFT_RISK_DLQ_TTL_S:-30}
+  - HFT_GC_DISABLE_TRADING=${HFT_GC_DISABLE_TRADING:-0}
+  - HFT_PLATFORM_AUTO_RECOVERY_ENABLED=${HFT_PLATFORM_AUTO_RECOVERY_ENABLED:-1}
+  - HFT_PLATFORM_AUTO_RECOVERY_COOLDOWN_S=${HFT_PLATFORM_AUTO_RECOVERY_COOLDOWN_S:-60}
+  - HFT_PNL_EXPORTER_ENABLED=${HFT_PNL_EXPORTER_ENABLED:-1}
+  - HFT_CH_SHUTDOWN_TIMEOUT_S=${HFT_CH_SHUTDOWN_TIMEOUT_S:-30}
+  - HFT_QUOTE_CONNECTIONS=${HFT_QUOTE_CONNECTIONS:-1}
+  - HFT_ORDER_SHADOW_MODE=${HFT_ORDER_SHADOW_MODE:-0}
+  - HFT_SESSION_GOVERNOR_ENABLED=${HFT_SESSION_GOVERNOR_ENABLED:-0}
+  - HFT_ENV=${HFT_ENV:-dev}
+  - PYTHONDONTWRITEBYTECODE=1
+  healthcheck:
+    interval: 30s
+    retries: 3
+    test:
+    - CMD-SHELL
+    - curl -sf http://localhost:${HFT_HEALTH_PORT:-8080}/healthz || exit 1
+    timeout: 10s
+  image: ${HFT_IMAGE:-hft-platform:latest}
+  restart: always
+  ulimits:
+    core: 4294967296
+    memlock: -1
+    nofile: 65535
+  volumes:
+  - ./.wal:/app/.wal
+  - ./.state:/app/.state
+  - ./data:/app/data
+  - ./config:/app/config
+  - ./scripts:/app/scripts
+  - ./src:/app/src
+  - ./.cores:/var/cores
+  - ./.hft-runtime:/var/run/hft
+x-security-common:
+  security_opt:
+  - no-new-privileges:true

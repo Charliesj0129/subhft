@@ -30,6 +30,43 @@ class WriterDoubleFaultError(Exception):
     pass
 
 
+class L7PartialMigrationError(RuntimeError):
+    """Raised when only one of the two L7 audit-column migrations is applied.
+
+    The L7 dual-write contract requires both ``20260505_001`` (orders) and
+    ``20260505_002`` (fills) to be applied together OR neither to be applied.
+    A half-applied state is unsafe because the recorder cannot decide whether
+    to emit audit columns for hft.fills if hft.orders accepted them — and
+    vice versa. Operator must complete or roll back the missing half before
+    the recorder will start.
+    """
+
+    pass
+
+
+# L7: canonical 7-column audit chain. MUST match recorder/worker.py
+# ``L7_AUDIT_COLUMNS`` exactly.
+_L7_AUDIT_COLUMN_NAMES: frozenset[str] = frozenset(
+    {
+        "trace_id",
+        "feature_snapshot_id",
+        "risk_decision_id",
+        "strategy_version",
+        "config_hash",
+        "git_sha",
+        "data_session_id",
+    }
+)
+
+# Tables governed by the L7 dual-write filter. Migrations 20260505_001 and
+# 20260505_002 add the audit columns to these two tables only; other tables
+# (market_data, latency_spans, pnl_snapshots, order_intents, etc.) are not
+# subject to the strip.
+_L7_AUDIT_TABLES: frozenset[str] = frozenset({"hft.orders", "hft.fills"})
+
+_L7_AUDIT_MIGRATION_VERSIONS: tuple[str, str] = ("20260505_001", "20260505_002")
+
+
 class DataWriter:
     # Default to native protocol (port 9000) for better performance
     # HTTP protocol (8123) is slower but more compatible
@@ -182,6 +219,16 @@ class DataWriter:
             self.metrics = MetricsRegistry.get()
         except Exception as _exc:  # noqa: BLE001
             self.metrics = None
+
+        # L7: dual-write mapper state. Populated by ``_detect_l7_audit_columns``
+        # after ``apply_schema()`` succeeds. ``_l7_audit_active_tables`` is the
+        # set of tables (from _L7_AUDIT_TABLES) for which the L7 audit columns
+        # are present in the destination schema; absent tables get the audit
+        # columns stripped at insert time. ``_l7_audit_detected`` is False until
+        # detection runs successfully — when False, behavior defaults to legacy
+        # (strip), matching pre-L7 deployments where the migration has not run.
+        self._l7_audit_active_tables: set[str] = set()
+        self._l7_audit_detected: bool = False
 
     @classmethod
     def _is_native_interface_unsupported_error(cls, exc: Exception) -> bool:
@@ -397,11 +444,117 @@ class DataWriter:
                     pass
             return
 
+        # L7 dual-write: detect whether audit columns are live on hft.orders
+        # and hft.fills. Must run AFTER apply_schema() so that newly-applied
+        # migrations are visible in hft.schema_migrations. ``L7PartialMigrationError``
+        # propagates — the recorder must refuse to start in partial state.
+        self._detect_l7_audit_columns()
+
         try:
             ensure_price_scaled_views(self.ch_client)
         except Exception as se:
             logger.error("Schema view repair failed", error=str(se))
             # Views are optional, don't fail completely
+
+    def _detect_l7_audit_columns(self) -> None:
+        """Query hft.schema_migrations to populate ``_l7_audit_active_tables``.
+
+        Mapping (migration_version → table):
+          * ``20260505_001`` → ``hft.orders``
+          * ``20260505_002`` → ``hft.fills``
+
+        Behavior matrix:
+          * Both versions present → both tables active (full L7 mode).
+          * Neither present → no tables active (legacy mode; strip audit cols).
+          * Exactly one present → raise ``L7PartialMigrationError``.
+          * Query failure → log + leave detected=False so insert path strips.
+        """
+        if self.ch_client is None:
+            return
+        try:
+            v_orders, v_fills = _L7_AUDIT_MIGRATION_VERSIONS
+            # v_orders / v_fills are module-level migration version constants
+            # from _L7_AUDIT_MIGRATION_VERSIONS — never user-controlled.
+            result = self.ch_client.query(
+                f"SELECT version FROM hft.schema_migrations WHERE version IN ('{v_orders}', '{v_fills}')"  # nosec B608
+            )
+            applied = {row[0] for row in result.result_rows}
+            orders_applied = v_orders in applied
+            fills_applied = v_fills in applied
+
+            if orders_applied != fills_applied:
+                missing = v_orders if not orders_applied else v_fills
+                applied_one = v_orders if orders_applied else v_fills
+                raise L7PartialMigrationError(
+                    f"L7 audit-column migration partial state: applied={applied_one}, "
+                    f"missing={missing}. Either complete the missing migration "
+                    "(re-run apply_schema with the file present) or roll back the "
+                    "applied one. Refusing to start the writer in partial state."
+                )
+
+            active: set[str] = set()
+            if orders_applied:
+                active.add("hft.orders")
+            if fills_applied:
+                active.add("hft.fills")
+            self._l7_audit_active_tables = active
+            self._l7_audit_detected = True
+            logger.info(
+                "l7_audit_columns_detected",
+                active_tables=sorted(active),
+                mode="extended" if active else "legacy",
+            )
+        except L7PartialMigrationError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            # Detection failure is non-fatal: default to legacy (strip) so we
+            # never insert a column that doesn't exist on the destination.
+            logger.warning(
+                "l7_audit_columns_detection_failed_defaulting_legacy",
+                error=str(exc),
+            )
+            self._l7_audit_active_tables = set()
+            self._l7_audit_detected = False
+
+    def _l7_should_strip(self, table: str) -> bool:
+        """True if audit columns must be stripped before INSERT into ``table``.
+
+        Tables outside ``_L7_AUDIT_TABLES`` always pass through (False).
+        Audited tables strip when the migration is not applied for that table
+        (legacy mode) or when detection has not yet run.
+        """
+        if table not in _L7_AUDIT_TABLES:
+            return False
+        return table not in self._l7_audit_active_tables
+
+    def _strip_l7_columnar(
+        self,
+        table: str,
+        column_names: list[str],
+        column_data: list[list[Any]],
+    ) -> tuple[list[str], list[list[Any]]]:
+        """Drop L7 audit columns from a columnar payload when destination is legacy.
+
+        No-op for tables outside ``_L7_AUDIT_TABLES``. Returns a new (names, data)
+        pair without mutating the inputs so the caller's references stay valid
+        for retry/WAL fallback.
+        """
+        if not self._l7_should_strip(table):
+            return column_names, column_data
+        keep_idx = [i for i, n in enumerate(column_names) if n not in _L7_AUDIT_COLUMN_NAMES]
+        if len(keep_idx) == len(column_names):
+            return column_names, column_data
+        return [column_names[i] for i in keep_idx], [column_data[i] for i in keep_idx]
+
+    def _strip_l7_rowdicts(self, table: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Drop L7 audit keys from each row dict when destination is legacy.
+
+        No-op for tables outside ``_L7_AUDIT_TABLES``. Returns a fresh list of
+        dicts to avoid mutating shared references.
+        """
+        if not self._l7_should_strip(table):
+            return rows
+        return [{k: v for k, v in row.items() if k not in _L7_AUDIT_COLUMN_NAMES} for row in rows]
 
     def _start_heartbeat_thread(self) -> None:
         """Start daemon thread for connection heartbeat."""
@@ -601,6 +754,9 @@ class DataWriter:
         column_data: list[list[Any]],
         row_count: int,
     ) -> None:
+        # L7 dual-write: strip audit columns when destination table is in
+        # legacy schema state. No-op for tables outside _L7_AUDIT_TABLES.
+        column_names, column_data = self._strip_l7_columnar(table, column_names, column_data)
         self._ch_columnar_insert_count += 1
         if self._should_log_insert_success(self._ch_columnar_insert_count):
             logger.info("ClickHouse columnar insert start", table=table, rows=row_count)
@@ -741,6 +897,10 @@ class DataWriter:
             self._ch_insert_once(table, chunk)
 
     def _ch_insert_once(self, table: str, data: list[dict[str, Any]]) -> None:
+        # L7 dual-write: strip audit keys from each row dict when destination
+        # table is in legacy schema state. No-op for tables outside
+        # _L7_AUDIT_TABLES.
+        data = self._strip_l7_rowdicts(table, data)
         self._ch_insert_count += 1
         if self._should_log_insert_success(self._ch_insert_count):
             logger.info("ClickHouse row insert start", table=table, rows=len(data))

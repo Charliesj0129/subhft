@@ -4,12 +4,38 @@ import signal
 
 from structlog import get_logger
 
+from hft_platform.config.loader import load_settings
 from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.observability.metrics_server import start_resilient_metrics_server
 from hft_platform.services.system import HFTSystem
 
 # Configure structlog globally? HFTSystem does it.
 logger = get_logger("launcher")
+
+
+_NON_SIM_ORDER_MODES = {"shadow", "live"}
+
+
+def _refuse_non_sim_without_loop(settings: dict) -> None:
+    """Block Docker-path startup if a non-sim engine has no loop binding.
+
+    The bare ``python -m hft_platform.main`` entrypoint historically called
+    ``HFTSystem()`` with no settings, which silently fell back to defaults.
+    Loop_v1 demands a single source of truth: any production-shaped run
+    (engine role + shadow/live order mode) MUST carry a loop_id.
+    """
+    runtime_role = str(os.getenv("HFT_RUNTIME_ROLE", "engine")).strip().lower().replace("-", "_")
+    order_mode = str(os.getenv("HFT_ORDER_MODE", "sim")).strip().lower()
+    if runtime_role != "engine":
+        return
+    if order_mode not in _NON_SIM_ORDER_MODES:
+        return
+    if not settings.get("loop_id"):
+        raise RuntimeError(
+            "loop_id required for non-sim engine startup "
+            f"(runtime_role={runtime_role}, order_mode={order_mode}). "
+            "Set HFT_LOOP=<id> or add loop_id to config/base/main.yaml."
+        )
 
 
 async def main():
@@ -27,9 +53,12 @@ async def main():
     start_resilient_metrics_server(prom_port, addr=prom_addr)
     logger.info("Prometheus metrics started", port=prom_port, addr=prom_addr)
 
-    # Load settings from file or env?
-    # For now, minimal.
-    system = HFTSystem()
+    # Loop_v1: route Docker entrypoint through the CLI's loader so the
+    # `loop_id` binding (and strict-mode validation) is honored. Without
+    # this, `python -m hft_platform.main` bypassed loop binding entirely.
+    settings, _ = load_settings()
+    _refuse_non_sim_without_loop(settings)
+    system = HFTSystem(settings)
 
     main_logger = get_logger("main")
 

@@ -1,5 +1,17 @@
-# Strategy Registry — loaded by strategy/registry.py
-# Format: strategies: list of {id, module, class, params, ...}
+# Strategy Archive — 2026-05 snapshot (loop_v1 L10).
+#
+# Archived from `config/base/strategies.yaml` on 2026-05-05 as part of the
+# loop_v1 convergence: live registry now contains only enabled-true entries
+# (`config/live/strategies.yaml`). This file preserves the historical roster —
+# disabled, killed, revoked, exception-live-then-reverted, and shadow-only
+# strategies — verbatim with original comments for traceability.
+#
+# DO NOT load this file at runtime. It is research-only. Comments cite
+# memory/docs/research artifacts that motivated each kill/revoke/disable.
+# Re-enabling any entry requires:
+#   1. Move to `config/live/strategies.yaml` (only enabled-true)
+#   2. Pass Gate D/E/F under strict profile
+#   3. CODEOWNERS approval (loop_v1 L11 freeze)
 #
 # IMPORTANT: All spread thresholds use POINTS (not bps).
 # Points are stable across price levels; bps shifts with index value.
@@ -101,42 +113,6 @@ strategies:
       cooldown_ns: 5000000000         # 5s between entries
       session_start_sec: 2700         # 00:45 UTC = 08:45 TWN
       session_end_sec: 20700          # 05:45 UTC = 13:45 TWN
-
-  # --- R47 Maker (TMF) — Spread-Filtered MM ---
-  # Compromise backtest (25 days, CK-direct with queue model):
-  #   spr5_back (most conservative): +10,856 pts, 36,217 fills, 69.3% WR
-  #   spr5_mid: +34,051 pts, 55,639 fills, 73.6% WR, +13.6K NTD/day
-  # TMF economics: 1pt=10NTD, RT cost=4.0pts. spread>=5 profitable with QI skew.
-  # 2026-04-10: Optimized for TMF fee structure. QI skew reduces AS by ~20%.
-  - id: "R47_MAKER_TMF"
-    module: "hft_platform.strategies.r47_maker"
-    class: "R47MakerStrategy"
-    enabled: true
-    product_type: "FUT"
-    symbols: ["TMFE6"]              # Concrete May-2026 expiry; still listed for MD subscription via symbols.yaml. After Option-3 Gate 1 verification this hardcode becomes removable — contract_families below keeps strategy.symbols current across rollovers.
-    # Option-3 Gate 1 prod (2026-04-19): opt-in family binding. On broker
-    # login the ContractFamilyResolver (Shioaji populator) reads delivery_month
-    # per TAIFEX contract and swaps an atomic snapshot. The StrategyRunner
-    # rebind hook keeps strategy.symbols aligned with the current nearest
-    # expiry, eliminating the Bug-12 class of silent-drop failures.
-    contract_families:
-      - product: FUTURE
-        root: TMF
-        family: R1
-    params:
-      pe_danger_threshold: 0.0     # Disabled
-      pe_window: 100
-      queue_cancel_threshold: 1.0  # Disabled (1.0 = never suppress)
-      queue_ema_alpha: 0.05
-      mfg_skew_z_threshold: 100.0  # Disabled
-      mfg_ema_alpha: 0.01
-      spread_threshold_pts: 5      # TMFD6: spr>=5 profitable after 4.0pts RT cost
-      toxicity_max: 9999           # Disabled (negligible on TMFD6)
-      qi_skew_threshold: 0.10     # D4: QI |imbalance| > 0.10 → widen adverse side
-      qi_widen_ticks: 1           # Widen by 1 tick (w=1 optimal for total PnL + Sharpe)
-      stale_quote_max_ticks: 3    # D1 (2026-04-21 fix): cancel active quote when |mid - last_quote| > 3 pts regardless of placement-gate state. Today's incident: spread gate blocked 96.3% of ticks, abandoned orders sat up to 41 s.
-      quote_cooldown_ms: 1000     # D2 (2026-04-21 fix): re-quote cooldown must exceed Shioaji P95 RTT (~800 ms) so _active_*_oid is populated before the next placement; else earlier in-flight orders get orphaned.
-      max_pos: 1                   # Emergency rollback to 1 lot after 2026-04-20 HALT episode
 
   # --- Electronic Eye (TXO Options MM + Delta Hedge) — DISABLED ---
   # Phase 3: Automated options market-making with delta-neutral hedging.

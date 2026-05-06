@@ -1,23 +1,21 @@
-broker: shioaji  # shioaji | fubon — selects BrokerFacade implementation
+# L1 (loop_v1): main.yaml is now an entrypoint stub. The strategy block
+# moved into config/loops/r47_tmf_v1.yaml — the single source of truth for
+# the production trading loop. Setting `loop_id` triggers loader binding:
+#   1. Reads config/loops/<loop_id>.yaml
+#   2. Forces strategy.id / module / class
+#   3. Asserts strategy is `enabled: true` in config/base/strategies.yaml
+#   4. Switches the schema to strict mode (unknown top-level keys fail)
+#
+# Override the active loop at startup with `--loop <id>` (CLI) or
+# `HFT_LOOP=<id>` (env). Sim runs without a loop are still permitted; live
+# and shadow modes refuse to start without a bound loop_id (main.py / CLI).
+loop_id: r47_tmf_v1
 
 mode: sim
+broker: shioaji  # shioaji | fubon — selects BrokerFacade implementation
 symbols:
   - "TMFR1"    # R1 = Shioaji continuous front-month (no monthly update)
   - "TXFR1"    # R1 = Shioaji continuous front-month
-
-strategy:
-  id: CBS_TMF
-  module: hft_platform.strategies.cascade_bounce
-  class: CascadeBounceStrategy
-  params:
-    lookback_ns: 60000000000
-    trigger_sigma: 3.0
-    max_hold_ns: 300000000000
-    take_profit_pts: 8
-    stop_loss_pts: 6
-    min_vol_samples: 8
-    session_start_sec: 0
-    session_end_sec: 86400
 
 paths:
   symbols: config/base/symbols.yaml

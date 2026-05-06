@@ -5,6 +5,16 @@
 name: vm_ul6_strict
 is_strict: true
 
+# L6: Equity provenance guard — the promotion pipeline refuses any scorecard
+# whose ``equity_source`` is not one of these. ``synthetic`` (the
+# HTML-report fallback when a real equity series is unavailable) is
+# explicitly excluded; ``real_no_trade`` is a confirmed no-fill session
+# cross-checked against ``hft.fills`` and is acceptable.
+require_real_equity: true
+allowed_equity_sources:
+  - real
+  - real_no_trade
+
 thresholds:
   taker:
     sharpe_oos_min: 1.5

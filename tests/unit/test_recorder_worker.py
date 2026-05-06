@@ -548,7 +548,12 @@ class TestExtractFillValues(unittest.TestCase):
         assert "fill_id" in result
 
     def test_fill_columns_match_hft_fills_schema(self):
-        """FILL_COLUMNS must contain all required hft.fills columns."""
+        """FILL_COLUMNS must contain all required hft.fills columns.
+
+        L7 (loop_v1): the 7-column audit chain is appended to FILL_COLUMNS;
+        the dual-write filter in recorder/writer.py strips them when the
+        destination schema has not yet had the L7 migrations applied.
+        """
         required = {
             "ts_exchange",
             "ts_local",
@@ -567,6 +572,14 @@ class TestExtractFillValues(unittest.TestCase):
             "source",
             "instrument_type",
             "oc_type",
+            # L7 audit columns
+            "trace_id",
+            "feature_snapshot_id",
+            "risk_decision_id",
+            "strategy_version",
+            "config_hash",
+            "git_sha",
+            "data_session_id",
         }
         assert set(FILL_COLUMNS) == required
 

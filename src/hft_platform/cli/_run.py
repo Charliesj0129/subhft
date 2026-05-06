@@ -15,6 +15,7 @@ from structlog import get_logger
 from hft_platform.config.loader import (
     detect_live_credentials,
     load_settings,
+    resolve_active_strategy,
     summarize_settings,
 )
 
@@ -37,7 +38,18 @@ def cmd_run(args: argparse.Namespace) -> None:
         "mode": mode,
         "symbols": args.symbols or None,
     }
-    if args.strategy:
+
+    loop_id_raw = getattr(args, "loop_id", None)
+    loop_id = loop_id_raw if isinstance(loop_id_raw, str) and loop_id_raw else None
+    if loop_id and args.strategy:
+        print(
+            "[hft run] --loop and --strategy are mutually exclusive; the loop YAML defines its own strategy.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    if loop_id:
+        cli_overrides["loop_id"] = loop_id
+    elif args.strategy:
         cli_overrides["strategy"] = {
             "id": args.strategy,
             "module": args.strategy_module or "hft_platform.strategies.simple_mm",
@@ -45,6 +57,8 @@ def cmd_run(args: argparse.Namespace) -> None:
             "params": {},
         }
     settings, defaults = load_settings({k: v for k, v in cli_overrides.items() if v})
+
+    _enforce_loop_trace_policy(settings)
 
     downgraded = None
     if settings.get("mode") == "live" and not detect_live_credentials():
@@ -58,8 +72,34 @@ def cmd_run(args: argparse.Namespace) -> None:
         print("Hint: set SHIOAJI_API_KEY / SHIOAJI_SECRET_KEY to enable live.")
 
     if settings.get("mode") == "replay":
-        print("Replay mode not yet wired; please use backtest runner directly.")
-        return
+        from datetime import date as _date
+
+        from hft_platform.replay.cli_runner import run_replay_session
+
+        session_raw = getattr(args, "session", None)
+        fixture_raw = getattr(args, "fixture", None)
+        if not session_raw or not fixture_raw:
+            print(
+                "[hft run] --mode replay requires --session YYYY-MM-DD and --fixture PATH.",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        try:
+            session_date = _date.fromisoformat(session_raw)
+        except ValueError:
+            print(
+                f"[hft run] --session must be YYYY-MM-DD (got {session_raw!r}).",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        sys.exit(
+            run_replay_session(
+                settings,
+                session_date=session_date,
+                fixture_path=fixture_raw,
+                allow_pre_recorder=bool(getattr(args, "allow_pre_recorder", False)),
+            )
+        )
 
     # Live/Sim share the same runtime pipeline; sim runs with Shioaji stub.
     from hft_platform.main import HFTSystem
@@ -85,6 +125,34 @@ def _resolve_default_mode() -> str:
     if raw not in {"sim", "live", "replay"}:
         return "sim"
     return raw
+
+
+def _enforce_loop_trace_policy(settings: Dict[str, Any]) -> None:
+    # L5: a bound loop_id requires complete order-bearing trace chains.
+    # The loop YAML must declare ``trace_policy: order_path_100pct``; we
+    # then force ``HFT_DIAG_TRACE_ENABLED=1`` so the sampler opens its
+    # ``enabled`` gate (default 0 per DecisionTraceSampler.from_env).
+    loop_id = settings.get("loop_id")
+    if not loop_id:
+        return
+    loop_path = os.path.join("config", "loops", f"{loop_id}.yaml")
+    if not os.path.exists(loop_path):
+        # _bind_loop already raises LoopBindingError before we get here when
+        # called from cmd_run; this branch is defensive against direct callers.
+        return
+    import yaml
+
+    with open(loop_path, "r", encoding="utf-8") as f:
+        loop_cfg = yaml.safe_load(f) or {}
+    policy = loop_cfg.get("trace_policy")
+    if policy != "order_path_100pct":
+        print(
+            f"[hft run] loop_id={loop_id!r} requires "
+            f"trace_policy=order_path_100pct (got {policy!r}). Refusing to start.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    os.environ["HFT_DIAG_TRACE_ENABLED"] = "1"
 
 
 def cmd_init(args: argparse.Namespace) -> None:
@@ -205,7 +273,7 @@ def cmd_check(args: argparse.Namespace) -> None:
     missing = []
     if not settings.get("symbols"):
         missing.append("symbols")
-    strat = settings.get("strategy", {})
+    strat = resolve_active_strategy(settings)
     if not strat.get("id"):
         missing.append("strategy.id")
     if missing:

@@ -613,7 +613,8 @@ def test_emit_trace_with_sampler(engine):
     intent = _intent()
 
     engine._emit_trace("risk_test", intent, {"stage": "test"})
-    sampler.emit.assert_called_once()
+    # L5: order-bearing risk traces use emit_always (bypasses sample_every).
+    sampler.emit_always.assert_called_once()
 
 
 def test_emit_trace_no_sampler(engine):
@@ -624,10 +625,10 @@ def test_emit_trace_no_sampler(engine):
 
 def test_emit_trace_exception_swallowed(engine):
     sampler = MagicMock()
-    sampler.emit.side_effect = TypeError("bad payload")
+    sampler.emit_always.side_effect = TypeError("bad payload")
     engine._trace_sampler = sampler
     engine._emit_trace("stage", _intent(), {"key": "val"})  # Must not raise
-    assert sampler.emit.called  # confirms emit was attempted before exception
+    assert sampler.emit_always.called  # confirms emit_always was attempted before exception
 
 
 # ── notify_fill_pnl ────────────────────────────────────────────────────────

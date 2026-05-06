@@ -1,0 +1,26 @@
+# Loop v1 — single source of truth for the production trading loop.
+#
+# Bound by the loader (src/hft_platform/config/loader.py) when the merged
+# settings carry `loop_id: r47_tmf_v1`. Selecting a loop_id forces:
+#   1. Reads config/loops/<loop_id>.yaml
+#   2. Forces strategy.id / module / class
+#   3. Asserts strategy is `enabled: true` in config/base/strategies.yaml
+#   4. Switches the schema to strict mode (unknown top-level keys fail)
+#
+# Anti-scope: do not add a second strategy here. Loop_v1 is intentionally
+# small. Multi-strategy live deployment is blocked until L11 stabilization
+# completes (see plan superpowers-writing-plans-repo-readme-c-mellow-codd.md).
+loop_id: r47_tmf_v1
+
+strategy:
+  id: R47_MAKER_TMF
+  module: hft_platform.strategies.r47_maker
+  class: R47MakerStrategy
+
+symbol_family: TMFR1            # Shioaji continuous front-month alias
+broker: shioaji
+risk_profile: single_lot_5000_loss
+recorder_mode: wal_first
+strict_equity: true             # promotion path forbids synthetic equity
+trace_policy: order_path_100pct # L5 — 100% capture for order-bearing events
+intent_recorder_required: true  # HFT_INTENT_RECORDER_ENABLED must be 1

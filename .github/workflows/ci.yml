@@ -308,6 +308,38 @@ jobs:
         run: make dependency-boundary
 
   # ============================================================================
+  # Stage 2d: Forced-Promotion Live Config Guard (loop_v1 L9)
+  # ============================================================================
+  verify-no-forced-live-config:
+    name: 🚫 Forced Promotions Out of Live Config
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    needs: lint
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Block forced-promotion artifacts in live config
+        # config/live/ may not exist yet (created by L10); skip cleanly when absent.
+        # Otherwise, fail if any file under config/live/** references either the
+        # forced_promotions research path or stamps `forced: true`.
+        run: |
+          if [ ! -d config/live ]; then
+            echo "config/live/ does not exist yet (L10 not landed) — guard is a no-op."
+            exit 0
+          fi
+          set +e
+          matches=$(grep -rEn "(research/forced_promotions|forced:[[:space:]]*true)" config/live/ 2>/dev/null)
+          rc=$?
+          set -e
+          if [ "$rc" -eq 0 ] && [ -n "$matches" ]; then
+            echo "::error::Forced promotion artifact referenced inside config/live/." >&2
+            echo "$matches" >&2
+            echo "::error::Forced promotions are research-only. Move them under research/forced_promotions/." >&2
+            exit 1
+          fi
+          echo "OK: no forced-promotion references in config/live/."
+
+  # ============================================================================
   # ============================================================================
   # Stage 3: Unit Tests + Coverage Gates
   # ============================================================================

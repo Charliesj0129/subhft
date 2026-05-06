@@ -48,6 +48,17 @@ class DecisionTraceSampler:
         self._counter = (self._counter + 1) % self.sample_every
         if self._counter != 0:
             return
+        self._write_record(stage=stage, trace_id=trace_id, payload=payload)
+
+    def emit_always(self, *, stage: str, trace_id: str, payload: dict[str, Any]) -> None:
+        # L5: order-bearing events (every OrderIntent → RiskDecision → dispatch)
+        # bypass sample_every so the trace chain is always complete. Still
+        # respects ``enabled`` so the global toggle works the same way.
+        if not self.enabled:
+            return
+        self._write_record(stage=stage, trace_id=trace_id, payload=payload)
+
+    def _write_record(self, *, stage: str, trace_id: str, payload: dict[str, Any]) -> None:
         record = {
             "ts_ns": timebase.now_ns(),
             "stage": str(stage),

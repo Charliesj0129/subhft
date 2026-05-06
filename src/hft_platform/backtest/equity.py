@@ -1,18 +1,62 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Iterable, Mapping
+from dataclasses import dataclass, field
+from typing import Any, Iterable, Literal, Mapping
 
 import numpy as np
+
+EquitySource = Literal["real", "real_no_trade", "synthetic"]
 
 
 @dataclass(frozen=True)
 class EquitySeries:
     timestamps_ns: np.ndarray
     equity: np.ndarray
+    equity_source: EquitySource = field(default="real")
 
     def is_valid(self) -> bool:
         return self.timestamps_ns.size >= 2 and self.equity.size >= 2
+
+
+def classify_equity_source(
+    equity: np.ndarray | Iterable[float] | None,
+    *,
+    n_fills: int | None = None,
+    is_synthetic: bool = False,
+) -> EquitySource:
+    """Classify a backtest equity series for promotion eligibility.
+
+    Rule (from loop_v1 L6 plan):
+      * ``synthetic`` -- caller flagged the series as synthesized (e.g. a
+        report fallback). Cannot enter Gate D.
+      * ``real`` -- equity has at least one non-zero P&L delta.
+      * ``real_no_trade`` -- equity is well-formed and constant *and* the
+        backtest recorded zero fills, matching a confirmed no-fill session.
+        Acceptable for Gate D under a strict profile.
+
+    When ``n_fills`` is unknown a constant-equity series is conservatively
+    treated as ``real`` (we can't prove it's a true no-trade day without
+    cross-checking ``hft.fills``); promotion-time classification should
+    therefore be done by the runner, which has the fill count.
+    """
+    if is_synthetic:
+        return "synthetic"
+    if equity is None:
+        return "synthetic"
+    arr = np.asarray(equity, dtype=np.float64)
+    if arr.size == 0:
+        return "synthetic"
+    deltas = np.diff(arr)
+    has_pnl_motion = bool(np.any(deltas != 0.0)) if deltas.size else False
+    if has_pnl_motion:
+        return "real"
+    if n_fills is not None and int(n_fills) == 0:
+        return "real_no_trade"
+    # Constant equity with unknown / non-zero fills: treat as real to avoid
+    # falsely rejecting strategies whose P&L happened to be exactly flat
+    # on a tick boundary; the runner will downgrade to real_no_trade when
+    # it can prove zero fills.
+    return "real"
 
 
 def mark_to_market_equity(

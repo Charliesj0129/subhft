@@ -30,6 +30,8 @@ class TestDeferredTerminal:
         a._pending_order_keys = set()
         a._deferred_terminals = collections.deque(maxlen=256)
         a._cmd_created_ns_map = {}
+        a._cmd_trace_id_map = {}
+        a._explanation_assembler = None
         a._cmd_tca_map = {}
         a._pending_fill_index = {}
         a._pending_fill_registered_at = {}

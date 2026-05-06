@@ -1035,7 +1035,9 @@ class RiskEngine:
         if sampler is None:
             return
         try:
-            sampler.emit(
+            # L5: every risk trace is order-bearing (takes intent), so bypass
+            # sample_every — incomplete chains break replay/explain.
+            sampler.emit_always(
                 stage=stage,
                 trace_id=str(getattr(intent, "trace_id", "") or ""),
                 payload={

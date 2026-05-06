@@ -715,11 +715,12 @@ def test_emit_trace_no_sampler(tmp_config):
 def test_emit_trace_exception_swallowed(tmp_config):
     adapter = _make_adapter(tmp_config)
     sampler = MagicMock()
-    sampler.emit.side_effect = TypeError("bad")
+    # L5: order-bearing _emit_trace bypasses sample_every via emit_always.
+    sampler.emit_always.side_effect = TypeError("bad")
     adapter._trace_sampler = sampler
     intent = _make_cmd().intent
     adapter._emit_trace("stage", intent, {})  # Must not raise
-    assert sampler.emit.called  # confirms emit was attempted before exception
+    assert sampler.emit_always.called  # confirms emit_always was attempted before exception
 
 
 def test_emit_trace_with_sampler(tmp_config):
@@ -728,7 +729,8 @@ def test_emit_trace_with_sampler(tmp_config):
     adapter._trace_sampler = sampler
     intent = _make_cmd().intent
     adapter._emit_trace("order_dispatch_start", intent, {"cmd_id": 1, "intent_type": 0})
-    sampler.emit.assert_called_once()
+    # L5: order-bearing traces use emit_always, not emit.
+    sampler.emit_always.assert_called_once()
 
 
 # ── _api_worker exception handler ──────────────────────────────────────────

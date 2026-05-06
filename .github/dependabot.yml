@@ -1,17 +1,40 @@
 version: 2
+
+# Loop_v1 stabilization freeze allowlist (see
+# docs/loop_v1_stabilization_charter.md). During the 30-trading-day clock,
+# Dependabot is restricted to:
+#   - Security advisories (handled by GitHub's Dependabot security alerts —
+#     separate from the schedule below; major bumps in security branches
+#     still land here for review).
+#   - Patch and minor version bumps for non-runtime dev tooling.
+# Major version bumps are explicitly ignored to prevent supply-chain or
+# behavioural drift in the order/risk/recorder paths.
+
 updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    open-pull-requests-limit: 3
     labels:
       - dependencies
       - ci
+      - freeze-allowed
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
 
   - package-ecosystem: pip
     directory: /
     schedule:
       interval: weekly
+    open-pull-requests-limit: 3
     labels:
       - dependencies
       - python
+      - freeze-allowed
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"

@@ -86,8 +86,16 @@ def build_parser() -> argparse.ArgumentParser:
     build.add_argument(
         "--max-subscriptions",
         type=int,
-        default=480,
-        help="Subscription limit (4 conn × 120 codes; each code = 2 broker topics)",
+        default=None,
+        help=(
+            "Subscription limit. Default: 8 when --loop is set, otherwise 480 "
+            "(4 conn × 120 codes; each code = 2 broker topics)."
+        ),
+    )
+    build.add_argument(
+        "--loop",
+        dest="loop_id",
+        help="Bind a production loop (loop_v1) for live-minimal subscription cap.",
     )
     build.add_argument("--preview", action="store_true", help="Show preview summary")
     build.add_argument("--sample", type=int, default=10, help="Preview sample size")
@@ -101,8 +109,16 @@ def build_parser() -> argparse.ArgumentParser:
     preview.add_argument(
         "--max-subscriptions",
         type=int,
-        default=480,
-        help="Subscription limit (4 conn × 120 codes; each code = 2 broker topics)",
+        default=None,
+        help=(
+            "Subscription limit. Default: 8 when --loop is set, otherwise 480 "
+            "(4 conn × 120 codes; each code = 2 broker topics)."
+        ),
+    )
+    preview.add_argument(
+        "--loop",
+        dest="loop_id",
+        help="Bind a production loop (loop_v1) for live-minimal subscription cap.",
     )
     preview.add_argument("--sample", type=int, default=10, help="Preview sample size")
     preview.set_defaults(func=cmd_symbols_preview)
@@ -117,8 +133,16 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument(
         "--max-subscriptions",
         type=int,
-        default=480,
-        help="Subscription limit (4 conn × 120 codes; each code = 2 broker topics)",
+        default=None,
+        help=(
+            "Subscription limit. Default: 8 when --loop is set, otherwise 480 "
+            "(4 conn × 120 codes; each code = 2 broker topics)."
+        ),
+    )
+    validate.add_argument(
+        "--loop",
+        dest="loop_id",
+        help="Bind a production loop (loop_v1) for live-minimal subscription cap.",
     )
     validate.set_defaults(func=cmd_symbols_validate)
 
@@ -130,8 +154,16 @@ def build_parser() -> argparse.ArgumentParser:
     sync.add_argument(
         "--max-subscriptions",
         type=int,
-        default=480,
-        help="Subscription limit (4 conn × 120 codes; each code = 2 broker topics)",
+        default=None,
+        help=(
+            "Subscription limit. Default: 8 when --loop is set, otherwise 480 "
+            "(4 conn × 120 codes; each code = 2 broker topics)."
+        ),
+    )
+    sync.add_argument(
+        "--loop",
+        dest="loop_id",
+        help="Bind a production loop (loop_v1) for live-minimal subscription cap.",
     )
     sync.add_argument("--preview", action="store_true", help="Show preview summary")
     sync.add_argument("--sample", type=int, default=10, help="Preview sample size")
@@ -150,10 +182,39 @@ def build_parser() -> argparse.ArgumentParser:
     run = sub.add_parser("run", help="Run pipeline (sim|live|replay)")
     run.add_argument("mode", nargs="?", choices=["sim", "live", "replay"])
     run.add_argument("--mode", dest="mode_flag", choices=["sim", "live", "replay"])
-    run.add_argument("--strategy", help="Strategy id to run")
+    run.add_argument(
+        "--loop",
+        dest="loop_id",
+        help=(
+            "Bind a production loop (loop_v1). Reads config/loops/<loop>.yaml, "
+            "forces strategy + broker, and switches schema to strict mode. "
+            "Mutually exclusive with --strategy."
+        ),
+    )
+    run.add_argument("--strategy", help="Strategy id to run (legacy; rejected with --loop)")
     run.add_argument("--strategy-module", help="Override strategy module")
     run.add_argument("--strategy-class", help="Override strategy class")
     run.add_argument("--symbols", nargs="+", help="Symbols to load")
+    run.add_argument(
+        "--session",
+        dest="session",
+        help="Replay-mode trading session (YYYY-MM-DD). Required for --mode replay.",
+    )
+    run.add_argument(
+        "--fixture",
+        dest="fixture",
+        help="Replay-mode WAL fixture archive (.tar.gz). Required for --mode replay.",
+    )
+    run.add_argument(
+        "--allow-pre-recorder",
+        dest="allow_pre_recorder",
+        action="store_true",
+        default=False,
+        help=(
+            "Replay-mode: opt in to running against a session that predates the "
+            "intent recorder (HFT_INTENT_RECORDER_ENABLED=0). Match pct is null."
+        ),
+    )
     run.set_defaults(func=cmd_run)
 
     init = sub.add_parser("init", help="Generate settings and strategy skeleton")
@@ -203,7 +264,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     feat_preflight = feature_sub.add_parser("preflight", help="Check strategy/feature compatibility")
     feat_preflight.add_argument("--profiles", help="Feature profiles YAML path")
-    feat_preflight.add_argument("--strategies", default="config/base/strategies.yaml", help="Strategy config YAML")
+    feat_preflight.add_argument("--strategies", default="config/live/strategies.yaml", help="Strategy config YAML")
     feat_preflight.set_defaults(func=cmd_feature_preflight)
 
     feat_rollout_status = feature_sub.add_parser("rollout-status", help="Inspect local feature rollout state")
@@ -501,8 +562,38 @@ def build_parser() -> argparse.ArgumentParser:
         default="research/experiments",
         help="Directory to store experiment run artifacts",
     )
+    alpha_validate.add_argument(
+        "--profile",
+        default=None,
+        help=(
+            "REQUIRED: strict validation profile (e.g. vm_ul6_strict). "
+            "Loose runs must use `hft alpha screen` instead — `validate` is "
+            "promotion-eligible only and refuses non-strict profiles."
+        ),
+    )
     alpha_validate.add_argument("--out", help="Optional summary JSON output path")
     alpha_validate.set_defaults(func=cmd_alpha_validate)
+
+    # L6: loose-mode screening — produces a non-promotion-eligible artifact.
+    alpha_screen = alpha_sub.add_parser(
+        "screen",
+        help=(
+            "Run loose alpha screening (Gate A-C with default thresholds); "
+            "stamps screen_only=true on the scorecard so promotion refuses it."
+        ),
+    )
+    alpha_screen.add_argument("--alpha-id", required=True, help="Alpha id under research/alphas")
+    alpha_screen.add_argument("--data", nargs="+", required=True, help="npy/npz path(s) for screening")
+    alpha_screen.add_argument("--is-oos-split", type=float, default=0.7)
+    alpha_screen.add_argument("--signal-threshold", type=float, default=0.3)
+    alpha_screen.add_argument("--max-position", type=int, default=5)
+    alpha_screen.add_argument("--min-sharpe-oos", type=float, default=0.0)
+    alpha_screen.add_argument("--max-abs-drawdown", type=float, default=0.3)
+    alpha_screen.add_argument("--skip-gate-b-tests", action="store_true")
+    alpha_screen.add_argument("--pytest-timeout", type=int, default=300)
+    alpha_screen.add_argument("--experiments-dir", default="research/experiments", help="Experiment base directory")
+    alpha_screen.add_argument("--out", help="Optional summary JSON output path")
+    alpha_screen.set_defaults(func=cmd_alpha_screen)
 
     alpha_vb = alpha_sub.add_parser("validate-batch", help="Run Gate A-C across multiple alphas")
     alpha_vb.add_argument("--data", nargs="+", required=True, help="npy/npz path(s)")

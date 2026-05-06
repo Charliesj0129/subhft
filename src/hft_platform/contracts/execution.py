@@ -57,6 +57,11 @@ class FillEvent:
     decision_price: int = 0  # LOB mid-price at signal time (x10000)
     arrival_price: int = 0  # Price at order submit time (x10000)
     client_order_id: str = ""  # Stable internal order key ("strategy_id:intent_id")
+    # L8 (loop_v1): trace_id propagated from OrderIntent → OrderCommand →
+    # FillEvent so OrderExplanationAssembler can join on (trace_id,
+    # client_order_id). Default empty for legacy callers (broker DLQ replay,
+    # phantom fills) — the assembler treats empty as "no explanation row".
+    trace_id: str = ""
 
 
 @dataclass(slots=True)

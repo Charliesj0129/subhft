@@ -606,15 +606,16 @@ def test_emit_trace_with_sampler(engine):
     sampler = MagicMock()
     engine._trace_sampler = sampler
     engine._emit_trace("test_stage", _make_intent(), {"key": "val"})
-    sampler.emit.assert_called_once()
+    # L5: order-bearing risk traces use emit_always (bypasses sample_every).
+    sampler.emit_always.assert_called_once()
 
 
 def test_emit_trace_sampler_exception(engine):
     sampler = MagicMock()
-    sampler.emit.side_effect = RuntimeError("boom")
+    sampler.emit_always.side_effect = RuntimeError("boom")
     engine._trace_sampler = sampler
     engine._emit_trace("test_stage", _make_intent(), {"key": "val"})
-    sampler.emit.assert_called_once()
+    sampler.emit_always.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
