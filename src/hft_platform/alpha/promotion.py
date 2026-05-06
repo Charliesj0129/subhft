@@ -96,6 +96,12 @@ class PromotionConfig:
     # L6: artifact provenance guard. When True (default) promotion refuses
     # scorecards stamped ``screen_only=true`` (produced by ``hft alpha screen``).
     reject_screen_only: bool = True
+    # Loop_v1 L11 stabilization: ``--dry-run`` runs Gate D evaluation without
+    # any durable side effects -- no kill-ledger row, no
+    # ``config/strategy_promotions/`` YAML write. Research artifacts (decision
+    # JSON, integration report) still land under the experiments dir for
+    # auditability. Set via ``hft alpha promote --dry-run``.
+    dry_run: bool = False
 
 
 @dataclass(frozen=True)
@@ -174,13 +180,14 @@ def promote_alpha(config: PromotionConfig) -> PromotionResult:
     try:
         _verify_gate_c_passed(scorecard_path)
     except ValueError as exc:
-        _auto_kill(
-            alpha_id=config.alpha_id,
-            gate="C",
-            reason=str(exc),
-            alpha_dir=alpha_dir,
-            scorecard_path=scorecard_path,
-        )
+        if not config.dry_run:
+            _auto_kill(
+                alpha_id=config.alpha_id,
+                gate="C",
+                reason=str(exc),
+                alpha_dir=alpha_dir,
+                scorecard_path=scorecard_path,
+            )
         raise
 
     data_ul_value = _to_float(scorecard.get("data_ul"))
@@ -195,12 +202,19 @@ def promote_alpha(config: PromotionConfig) -> PromotionResult:
     }
     gate_d_passed, gate_d_checks = _evaluate_gate_d(scorecard, config)
     if gate_d_passed:
-        _update_manifest_status(config.alpha_id, "GATE_D", root)
-    else:
+        # Dry-run (Loop_v1 L11) must not mutate alpha status on disk.
+        # Codex adversarial-review 2026-05-06 finding 6 (MEDIUM): the call
+        # below rewrites ``research/alphas/<alpha_id>/impl.py`` ``status =``
+        # field, which is a durable side effect that ``--dry-run`` is
+        # contractually required to avoid.
+        if not config.dry_run:
+            _update_manifest_status(config.alpha_id, "GATE_D", root)
+    elif not config.dry_run:
         # Slice-D T14: log a kill-ledger row (gate='D') for the rejection.
         # Gate D failure does not raise here -- promote_alpha returns a
         # PromotionResult with approved=False -- so this is the *only* path
         # where the kill is recorded for the Gate-D outcome.
+        # Dry-run mode (Loop_v1 L11) suppresses the durable kill write.
         _auto_kill(
             alpha_id=config.alpha_id,
             gate="D",
@@ -211,7 +225,11 @@ def promote_alpha(config: PromotionConfig) -> PromotionResult:
 
     gate_e_passed, gate_e_checks = _evaluate_gate_e(config, root)
     if gate_e_passed:
-        _update_manifest_status(config.alpha_id, "GATE_E", root)
+        # Codex adversarial-review 2026-05-06 finding 6 (MEDIUM): same
+        # contract as the Gate-D mutation above. Dry-run never persists
+        # status transitions.
+        if not config.dry_run:
+            _update_manifest_status(config.alpha_id, "GATE_E", root)
 
     gate_f_passed, gate_f_checks = _evaluate_gate_f(config, root)
 
@@ -273,7 +291,7 @@ def promote_alpha(config: PromotionConfig) -> PromotionResult:
     _write_json(decision_path, decision_payload)
 
     promotion_config_path: Path | None = None
-    if approved and config.write_promotion_config:
+    if approved and config.write_promotion_config and not config.dry_run:
         promotion_config_path = _write_promotion_config(
             root=root,
             config=config,
@@ -283,6 +301,8 @@ def promote_alpha(config: PromotionConfig) -> PromotionResult:
             approved=approved,
             forced=forced,
         )
+    elif approved and config.dry_run:
+        reasons.append("dry_run=true: promotion config not persisted")
     elif approved and not config.write_promotion_config:
         reasons.append("promotion_config_write_disabled=true (research-only run)")
 
