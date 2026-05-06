@@ -85,6 +85,41 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
+# Adapter feature_mode resolver
+# ---------------------------------------------------------------------------
+# Schema-version strings that require the FeatureEngine to be live so the
+# StrategyContext can deliver canonical FE tuples to AlphaStrategyBridge.
+# Mirrors ``src/hft_platform/feature/registry.py`` builders.
+_FEATURE_ENGINE_SCHEMA_VERSIONS: frozenset[str] = frozenset(
+    {"lob_shared_v2", "lob_shared_v3"}
+)
+
+
+def _resolve_feature_mode(alpha: Any) -> str:
+    """Pick HftBacktestAdapter ``feature_mode`` from the alpha manifest.
+
+    Returns ``"lob_feature"`` for alphas that declare
+    ``feature_set_version`` of ``lob_shared_v2`` or ``lob_shared_v3`` (so
+    the adapter instantiates ``FeatureEngine`` and
+    ``ctx.get_feature_tuple`` returns a real tuple); returns
+    ``"stats_only"`` for v1 / unspecified / unknown / malformed --
+    preserving the legacy default for every existing alpha.
+
+    Defensive: if accessing the manifest raises (broken alpha objects in
+    research code), falls back to ``"stats_only"`` rather than propagate.
+    """
+    try:
+        version = getattr(alpha.manifest, "feature_set_version", "")
+    except Exception:
+        return "stats_only"
+    if not isinstance(version, str):
+        return "stats_only"
+    if version.lower() in _FEATURE_ENGINE_SCHEMA_VERSIONS:
+        return "lob_feature"
+    return "stats_only"
+
+
+# ---------------------------------------------------------------------------
 # NPZ splitting helper
 # ---------------------------------------------------------------------------
 def _split_npz(path: str, split: float = 0.7) -> tuple[str, str]:
@@ -429,7 +464,7 @@ def _run_adapter_slice(
         maker_fee=float(config.maker_fee_bps) / 10_000.0,
         taker_fee=float(config.taker_fee_bps) / 10_000.0,
         equity_sample_ns=1_000_000,  # 1ms equity samples
-        feature_mode="stats_only",
+        feature_mode=_resolve_feature_mode(alpha),
         queue_model=getattr(config, "queue_model", "PowerProbQueueModel(3.0)"),
         latency_model=getattr(config, "latency_model", "ConstantLatency"),
         exchange_model=getattr(config, "exchange_model", "NoPartialFillExchange"),
