@@ -19,7 +19,10 @@ from hft_platform.strategy.base import BaseStrategy, StrategyContext
 
 _PRICE_SCALE = 10_000  # platform default
 
-# FeatureEngine tuple keys (lob_shared_v1, 16 values)
+# FeatureEngine tuple keys (lob_shared_v1, 16 values).
+# Legacy ``fe_*`` prefix preserved for backward compatibility with alphas that
+# read these specific kwarg names. Do not rename -- doing so silently breaks
+# every existing alpha that wires to the v1 schema.
 _FE_KEYS: tuple[str, ...] = (
     "fe_best_bid",
     "fe_best_ask",
@@ -37,6 +40,39 @@ _FE_KEYS: tuple[str, ...] = (
     "fe_ofi_l1_ema8",
     "fe_spread_ema8",
     "fe_imbalance_ema8_ppm",
+)
+
+# FE-v3 (lob_shared_v3) canonical names, indices 0..26.
+# Source of truth: ``src/hft_platform/feature/registry.py`` builders
+# ``build_default_lob_feature_set_v1/v2/v3``. Keep aligned with the registry.
+_FE_KEYS_V3: tuple[str, ...] = (
+    "best_bid",                  # 0
+    "best_ask",                  # 1
+    "mid_price_x2",              # 2
+    "spread_scaled",             # 3
+    "bid_depth",                 # 4
+    "ask_depth",                 # 5
+    "depth_imbalance_ppm",       # 6
+    "microprice_x2",             # 7
+    "l1_bid_qty",                # 8
+    "l1_ask_qty",                # 9
+    "l1_imbalance_ppm",          # 10
+    "ofi_l1_raw",                # 11
+    "ofi_l1_cum",                # 12
+    "ofi_l1_ema8",               # 13
+    "spread_ema8_scaled",        # 14
+    "depth_imbalance_ema8_ppm",  # 15
+    "ofi_depth_norm_ppm",        # 16
+    "ret_autocov_5s_x1e6",       # 17
+    "tob_survival_ms",           # 18
+    "impact_surprise_x1000",     # 19
+    "deep_depth_momentum_x1000", # 20
+    "toxicity_ema50_x1000",      # 21
+    "ofi_l1_ema5s",              # 22
+    "ofi_l1_ema30s",             # 23
+    "imbalance_ema5s_ppm",       # 24
+    "spread_ema30s",             # 25
+    "spread_ema300s",            # 26
 )
 
 
@@ -145,13 +181,31 @@ class AlphaStrategyBridge(BaseStrategy):
             "local_ts": ts_ns,
         }
 
-        # Enrich with FeatureEngine values if available
+        # Enrich with FeatureEngine values if available.
+        #
+        # Two enrichment shapes are supported additively:
+        #
+        # * v1 (16-tuple): legacy ``fe_*``-prefixed keys (``_FE_KEYS``) for
+        #   alphas that wire to the v1 schema. Untouched semantics.
+        # * v3 (>=27-tuple): registry-canonical names (``_FE_KEYS_V3``) AND
+        #   a single ``features=tuple(ft)`` kwarg so AlphaProtocol-style
+        #   alphas that consume the full feature vector by index can
+        #   resolve every FE-v3 entry. Without this, every feature at
+        #   indices 16-26 (e.g. ``ofi_l1_ema5s``, ``ofi_l1_ema30s``,
+        #   ``deep_depth_momentum_x1000``) is silently dropped, which
+        #   masquerades as an all-zero signal in Gate C output.
         try:
             if hasattr(self, "ctx") and self.ctx is not None:
                 ft = self.ctx.get_feature_tuple(self._symbol)
-                if ft is not None and len(ft) >= len(_FE_KEYS):
-                    for k, v in zip(_FE_KEYS, ft):
-                        payload[k] = v
+                if ft is not None:
+                    if len(ft) >= len(_FE_KEYS_V3):
+                        ft_tuple = tuple(ft)
+                        payload["features"] = ft_tuple
+                        for k, v in zip(_FE_KEYS_V3, ft_tuple):
+                            payload[k] = v
+                    elif len(ft) >= len(_FE_KEYS):
+                        for k, v in zip(_FE_KEYS, ft):
+                            payload[k] = v
         except Exception:
             pass  # Graceful degradation — FeatureEngine may not be wired
 
@@ -172,6 +226,25 @@ class AlphaStrategyBridge(BaseStrategy):
                 signal = 0.0
         except Exception:
             signal = 0.0
+
+        # Codex adversarial-review 2026-05-06 finding 4 (HIGH): if the alpha
+        # exposes a discrete fire gate (e.g. c75's 300-tick warmup +
+        # spread-regime guard), the backtest must respect it; otherwise Gate C
+        # scores a different strategy than the one declared for live use.
+        # Gated-signal approach: when ``should_fire() == 0`` the composite is
+        # zeroed before the position-converter sees it, preserving the existing
+        # ``signal_threshold``-based interface for alphas that don't expose a
+        # fire gate. The ``hasattr`` guard is load-bearing -- without it,
+        # alphas that rely on raw signal-to-position semantics break.
+        should_fire = getattr(self._alpha, "should_fire", None)
+        if callable(should_fire):
+            try:
+                if int(should_fire()) == 0:
+                    signal = 0.0
+            except Exception:
+                # Fail-open on a misbehaving fire gate is safer than
+                # fail-closed -- the threshold gate downstream still filters.
+                pass
 
         self._signal_log.append((ts_ns, signal, mid_price))
 

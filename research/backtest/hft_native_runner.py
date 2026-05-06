@@ -88,11 +88,12 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # Feature-set version helpers
 # ---------------------------------------------------------------------------
-
-# Schema versions that consume L2-L5 depth-derived features
-# (deep_depth_momentum_x1000 lives at FE-v3 idx 20). Mirror of
-# ``src/hft_platform/feature/registry.py`` builders.
-_L5_DEPTH_SCHEMA_VERSIONS: frozenset[str] = frozenset(
+# Schema versions that (a) consume L2-L5 depth-derived features (e.g.
+# deep_depth_momentum_x1000 at FE-v3 idx 20) and (b) require FeatureEngine
+# to be live so StrategyContext can deliver canonical FE tuples to
+# AlphaStrategyBridge. Both conditions hold for the same set today.
+# Mirrors ``src/hft_platform/feature/registry.py`` builders.
+_FE_V2_V3_SCHEMA_VERSIONS: frozenset[str] = frozenset(
     {"lob_shared_v2", "lob_shared_v3"}
 )
 
@@ -107,7 +108,31 @@ def _alpha_needs_l5_depth(alpha: AlphaProtocol) -> bool:
         return False
     if not isinstance(version, str):
         return False
-    return version.lower() in _L5_DEPTH_SCHEMA_VERSIONS
+    return version.lower() in _FE_V2_V3_SCHEMA_VERSIONS
+
+
+def _resolve_feature_mode(alpha: Any) -> str:
+    """Pick HftBacktestAdapter ``feature_mode`` from the alpha manifest.
+
+    Returns ``"lob_feature"`` for alphas that declare
+    ``feature_set_version`` of ``lob_shared_v2`` or ``lob_shared_v3`` (so
+    the adapter instantiates ``FeatureEngine`` and
+    ``ctx.get_feature_tuple`` returns a real tuple); returns
+    ``"stats_only"`` for v1 / unspecified / unknown / malformed --
+    preserving the legacy default for every existing alpha.
+
+    Defensive: if accessing the manifest raises (broken alpha objects in
+    research code), falls back to ``"stats_only"`` rather than propagate.
+    """
+    try:
+        version = getattr(alpha.manifest, "feature_set_version", "")
+    except Exception:
+        return "stats_only"
+    if not isinstance(version, str):
+        return "stats_only"
+    if version.lower() in _FE_V2_V3_SCHEMA_VERSIONS:
+        return "lob_feature"
+    return "stats_only"
 
 
 # ---------------------------------------------------------------------------
@@ -464,7 +489,7 @@ def _run_adapter_slice(
         maker_fee=float(config.maker_fee_bps) / 10_000.0,
         taker_fee=float(config.taker_fee_bps) / 10_000.0,
         equity_sample_ns=1_000_000,  # 1ms equity samples
-        feature_mode="stats_only",
+        feature_mode=_resolve_feature_mode(alpha),
         queue_model=getattr(config, "queue_model", "PowerProbQueueModel(3.0)"),
         latency_model=getattr(config, "latency_model", "ConstantLatency"),
         exchange_model=getattr(config, "exchange_model", "NoPartialFillExchange"),
