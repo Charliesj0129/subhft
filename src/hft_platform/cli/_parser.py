@@ -11,6 +11,7 @@ from ._alpha import (
     cmd_alpha_canary_auto_evaluate,
     cmd_alpha_canary_evaluate,
     cmd_alpha_canary_status,
+    cmd_alpha_cheap_screen,
     cmd_alpha_cluster,
     cmd_alpha_experiments_best,
     cmd_alpha_experiments_compare,
@@ -607,35 +608,38 @@ def build_parser() -> argparse.ArgumentParser:
     alpha_vb.add_argument("--out", help="Batch report JSON path")
     alpha_vb.set_defaults(func=cmd_alpha_validate_batch)
 
-    # ── Slice-D Task 11: cheap pre-screener ────────────────────────────
-    alpha_screen = alpha_sub.add_parser(
-        "screen",
+    # ── Slice-D Task 11: cheap pre-screener (renamed onto #341) ─────────
+    # `alpha screen` is the loose-mode validate verb from #341; the
+    # cheap pre-screener registers as `alpha cheap-screen` to avoid the
+    # subparser-name collision.
+    alpha_cheap_screen = alpha_sub.add_parser(
+        "cheap-screen",
         help="Cheap screener (IC + turnover + cost-floor gate)",
     )
-    alpha_screen.add_argument("alpha_id", help="Alpha id under research/alphas")
-    alpha_screen.add_argument(
+    alpha_cheap_screen.add_argument("alpha_id", help="Alpha id under research/alphas")
+    alpha_cheap_screen.add_argument(
         "--project-root",
         default=".",
         help="Repo root for resolving research/alphas (default: cwd)",
     )
-    alpha_screen.add_argument(
+    alpha_cheap_screen.add_argument(
         "--threshold-ic",
         type=float,
         default=None,
         help="IC abs minimum override (default: module constant 0.005)",
     )
-    alpha_screen.add_argument(
+    alpha_cheap_screen.add_argument(
         "--threshold-turnover",
         type=float,
         default=None,
         help="Turnover kill threshold override (default: module constant 2.0)",
     )
-    alpha_screen.add_argument(
+    alpha_cheap_screen.add_argument(
         "--write-kill",
         action="store_true",
         help="On verdict='kill', append a gate='pre_screen' kill ledger row",
     )
-    alpha_screen.set_defaults(func=cmd_alpha_screen)
+    alpha_cheap_screen.set_defaults(func=cmd_alpha_cheap_screen)
 
     # ── Slice-D Task 12: manual kill ledger entry ──────────────────────
     alpha_kill = alpha_sub.add_parser(

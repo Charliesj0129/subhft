@@ -27,9 +27,9 @@ import pytest
 
 from hft_platform.alpha import audit, kill_ledger
 from hft_platform.cli._alpha import (
+    cmd_alpha_cheap_screen,
     cmd_alpha_cluster,
     cmd_alpha_kill,
-    cmd_alpha_screen,
 )
 from hft_platform.cli._parser import build_parser
 
@@ -178,7 +178,7 @@ def test_alpha_kill_custom_gate_propagates(
 
 
 # ---------------------------------------------------------------------------
-# T11 — cmd_alpha_screen
+# T11 — cmd_alpha_cheap_screen
 # ---------------------------------------------------------------------------
 
 
@@ -216,7 +216,7 @@ def test_alpha_screen_kill_writes_ledger_when_flag_set(
     args = parser.parse_args(
         [
             "alpha",
-            "screen",
+            "cheap-screen",
             alpha_id,
             "--project-root",
             str(tmp_path),
@@ -224,7 +224,7 @@ def test_alpha_screen_kill_writes_ledger_when_flag_set(
         ]
     )
     with pytest.raises(SystemExit) as exc:
-        cmd_alpha_screen(args)
+        cmd_alpha_cheap_screen(args)
     assert exc.value.code == 2
 
     payload = _extract_json_payload(capsys.readouterr().out)
@@ -252,9 +252,9 @@ def test_alpha_screen_kill_does_not_write_ledger_without_flag(
     )
 
     parser = build_parser()
-    args = parser.parse_args(["alpha", "screen", alpha_id, "--project-root", str(tmp_path)])
+    args = parser.parse_args(["alpha", "cheap-screen", alpha_id, "--project-root", str(tmp_path)])
     with pytest.raises(SystemExit) as exc:
-        cmd_alpha_screen(args)
+        cmd_alpha_cheap_screen(args)
     assert exc.value.code == 2
 
     capsys.readouterr()  # drain
@@ -274,9 +274,9 @@ def test_alpha_screen_emits_json(
     )
 
     parser = build_parser()
-    args = parser.parse_args(["alpha", "screen", alpha_id, "--project-root", str(tmp_path)])
+    args = parser.parse_args(["alpha", "cheap-screen", alpha_id, "--project-root", str(tmp_path)])
     # smooth signal should not trigger a kill — exit normally.
-    cmd_alpha_screen(args)
+    cmd_alpha_cheap_screen(args)
 
     payload = _extract_json_payload(capsys.readouterr().out)
     assert payload["alpha_id"] == alpha_id
@@ -309,7 +309,7 @@ def test_alpha_screen_threshold_overrides_plumb_through(
     args = parser.parse_args(
         [
             "alpha",
-            "screen",
+            "cheap-screen",
             alpha_id,
             "--project-root",
             str(tmp_path),
@@ -318,7 +318,7 @@ def test_alpha_screen_threshold_overrides_plumb_through(
         ]
     )
     with pytest.raises(SystemExit) as exc:
-        cmd_alpha_screen(args)
+        cmd_alpha_cheap_screen(args)
     assert exc.value.code == 2
     payload = _extract_json_payload(capsys.readouterr().out)
     assert payload["verdict"] == "kill"

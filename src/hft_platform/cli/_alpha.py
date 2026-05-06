@@ -963,11 +963,13 @@ def cmd_alpha_validate_batch(args: argparse.Namespace) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Slice-D Task 11: cmd_alpha_screen
+# Slice-D Task 11: cmd_alpha_cheap_screen
+# (Renamed during rebase onto #341 — `alpha screen` is the loose-mode validate
+# verb from #341, so the cheap pre-screener registers as `alpha cheap-screen`.)
 # ---------------------------------------------------------------------------
 
 
-def cmd_alpha_screen(args: argparse.Namespace) -> None:
+def cmd_alpha_cheap_screen(args: argparse.Namespace) -> None:
     """Run the cheap pre-screener (IC + turnover + cost-floor) for one alpha.
 
     On ``verdict='kill'`` and ``--write-kill``, append a ``gate='pre_screen'``

@@ -28,7 +28,7 @@ CLI subcommands and their purpose:
 ```bash
 # Cheap-screen one alpha (60 s budget; verdict pass | kill | unknown).
 # On verdict='kill' AND --write-kill, appends a gate='pre_screen' row.
-hft alpha screen <alpha_id> \
+hft alpha cheap-screen <alpha_id> \
     [--threshold-ic 0.005] \
     [--threshold-turnover 2.0] \
     [--write-kill]
@@ -140,7 +140,7 @@ future change reintroducing a banned token fails CI.
 - **`research/alphas/_kill_ledger.jsonl` is gitignored** — it's the
   offline fallback, not the source of truth. CH
   `audit.alpha_kill_ledger` is canonical when CH is up.
-- **`hft alpha screen` returns `verdict='unknown'` when signals are
+- **`hft alpha cheap-screen` returns `verdict='unknown'` when signals are
   missing** — the screener fails closed; it never auto-kills on data
   errors. The ledger row is only written when `--write-kill` is set
   AND verdict is `'kill'` (turnover or cost-floor breach).
