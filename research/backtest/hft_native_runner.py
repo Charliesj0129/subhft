@@ -174,12 +174,14 @@ def _resolve_hftbt_path(data_path: str) -> str | None:
     """Given a data path (possibly research.npy), find the sibling hftbt.npz.
 
     Checks:
-      1. data_path itself if it ends with hftbt.npz
+      1. data_path itself if its name ends with ``hftbt.npz`` (covers
+         both the legacy bare ``hftbt.npz`` and per-day snapshot AOS
+         files like ``TMFD6_2026-04-14_l2.hftbt.npz``).
       2. parent_dir/hftbt.npz
     Returns None if not found.
     """
     p = Path(data_path)
-    if p.name == "hftbt.npz" and p.exists():
+    if p.name.endswith("hftbt.npz") and p.exists():
         return str(p)
     sibling = p.parent / "hftbt.npz"
     if sibling.exists():
@@ -462,14 +464,12 @@ def _run_adapter_slice(
             "hft_platform.backtest.adapter.HftBacktestAdapter not available. Ensure hftbacktest is installed."
         )
 
-    # Codex finding 2 (HIGH) reframed: alphas that declare an FE-v3 schema
-    # (lob_shared_v2 / lob_shared_v3) consume features that need L2-L5 depth
-    # (e.g. deep_depth_momentum_x1000). If the npz silently lacks L2-L5
-    # coverage, those features degrade to zero and Gate C scores a strategy
-    # different from the declared one. assert_format raises on mismatch so
-    # the data layer is forced to fix the input.
-    if _alpha_needs_l5_depth(alpha):
-        assert_format(npz_path, NpzFormat.HFTBT_EVENT_L5)
+    # NOTE: format assertion (Codex finding 5 — L2-L5 depth parity for
+    # FE-v3 alphas) is enforced upstream at ``run()`` / ``run_walk_forward()``
+    # / ``run_cpcv()`` against the original input ``hbt_path`` before
+    # splitting. Internal IS/OOS split temp files inherit the format by
+    # construction and would not round-trip the filename heuristic, so
+    # re-checking them here would produce false positives.
 
     effective_rtt = _effective_broker_rtt_ms(config)
     latency_us = int((config.local_decision_pipeline_latency_us + effective_rtt * 1000))
@@ -746,6 +746,14 @@ class HftNativeRunner:
                     hbt_path = ensure_hftbt_npz(data_path)
                 except (FileNotFoundError, OSError):
                     continue  # file missing, skip
+
+                # Codex finding 5: alphas declaring lob_shared_v2/v3 need
+                # L2-L5 depth coverage; otherwise deep_depth_momentum_x1000
+                # silently emits zero through Gate C. Validate the original
+                # (pre-split) input here so split temp files don't trigger
+                # false positives downstream.
+                if _alpha_needs_l5_depth(self.alpha):
+                    assert_format(hbt_path, NpzFormat.HFTBT_EVENT_L5)
 
                 is_path, oos_path = _split_npz(hbt_path, self.config.is_oos_split)
                 tmp_paths.extend([is_path, oos_path])
