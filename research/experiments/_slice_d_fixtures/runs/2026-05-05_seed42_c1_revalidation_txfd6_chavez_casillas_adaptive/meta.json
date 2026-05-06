@@ -1,0 +1,15 @@
+{
+  "alpha_id": "c1_revalidation_txfd6_chavez_casillas_adaptive",
+  "backtest_report_path": "research/experiments/_slice_d_fixtures/runs/2026-05-05_seed42_c1_revalidation_txfd6_chavez_casillas_adaptive/backtest_report.json",
+  "config_hash": "synthetic_seed42",
+  "data_paths": [
+    "synthetic"
+  ],
+  "equity_path": null,
+  "gate_status": {},
+  "metrics": {},
+  "run_id": "2026-05-05_seed42_c1_revalidation_txfd6_chavez_casillas_adaptive",
+  "scorecard_path": "research/experiments/_slice_d_fixtures/runs/2026-05-05_seed42_c1_revalidation_txfd6_chavez_casillas_adaptive/scorecard.json",
+  "signals_path": "research/experiments/_slice_d_fixtures/runs/2026-05-05_seed42_c1_revalidation_txfd6_chavez_casillas_adaptive/signals.npy",
+  "timestamp": "2026-05-05T00:00:00+00:00"
+}

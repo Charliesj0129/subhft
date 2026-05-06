@@ -1148,6 +1148,14 @@ class MetricsRegistry:
             "Alpha canary state transitions",
             ["alpha_id", "action"],  # action: "hold" | "escalated" | "rolled_back" | "graduated"
         )
+        # Slice-D kill ledger counter — labels are coarsened to bound cardinality.
+        # gate ∈ {A,B,C,D,E,F,pre_screen,cluster,manual}; reason_class is a fixed enum
+        # (see hft_platform.alpha.audit._classify_kill_reason for the mapping).
+        self.alpha_kill_results_total = Counter(
+            _pn("alpha_kill_results_total"),
+            "Alpha kill-ledger appends grouped by gate and reason class",
+            ["alpha_id", "gate", "reason_class"],
+        )
         # Strategy exception counter — strategy, exception_type, method
         self.strategy_exceptions_total = Counter(
             _pn("strategy_exceptions_total"),

@@ -115,6 +115,9 @@ research/experiments/*
 !research/experiments/comparisons/.gitkeep
 !research/experiments/validations/
 research/experiments/validations/**/20*Z_*/
+# Slice-D synthetic signal corpus (committed for DoD-D3 determinism in CI)
+!research/experiments/_slice_d_fixtures/
+!research/experiments/_slice_d_fixtures/**
 !research/knowledge/
 research/knowledge/*
 !research/knowledge/paper_index.json
@@ -236,3 +239,15 @@ research/results/
 research/results_batch6/
 research/results_batch7/
 research/__pycache__/
+
+# Slice-D alpha-factory generated artifacts (writer-side outputs, re-runnable).
+# kill ledger jsonl is the offline fallback for audit.alpha_kill_ledger;
+# cluster assignments json is the per-run cluster sidecar.
+research/alphas/_kill_ledger.jsonl
+research/alphas/_cluster_assignments.json
+
+# Slice-D Task 16: archive sweep summary sidecar is the canonical record of
+# alphas archived 2026-04-17 that lacked a manifest.yaml. Tracked because
+# `research/*` (line 92) otherwise blocks new files under research/archive/.
+!research/archive/
+!research/archive/_kill_summary_*.jsonl

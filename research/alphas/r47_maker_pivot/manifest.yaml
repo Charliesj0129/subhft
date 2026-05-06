@@ -6,6 +6,13 @@ owner: charlie
 strategy_type: maker
 instrument: TMFD6
 
+# Slice-D path-b extension (write-once intrinsic provenance).
+# DSL expression for round-trip via `src/hft_platform/alpha/dsl/`.
+# Signal keys must match the `signals:` section below (d1_pe_entropy,
+# d2_queue_survival, d3_mfg_inventory) — NOT the draft's `d3_mfg_skew`.
+dsl_formula: "d1_pe_entropy * d2_queue_survival * d3_mfg_inventory"
+parent_alpha_id: null  # r47_maker_pivot has no on-disk predecessor
+
 instruments:
   - TMFD6
 

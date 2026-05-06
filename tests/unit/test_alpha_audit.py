@@ -170,3 +170,151 @@ class TestAuditEnabled:
             # Should not raise — fails silently on connection error
             result = log_promotion_result(_make_promotion_result(), "hash")
             assert result is None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Slice-D Task 5: log_kill() + reason_class coarsening
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _make_kill_record(**overrides):
+    from hft_platform.alpha.kill_ledger import KillRecord
+
+    base = dict(
+        alpha_id="alpha1",
+        gate="C",
+        reason="failed gate C: invalid_data",
+        stable_artifact_hash="hash_abc",
+        scorecard_id="sc_001",
+        killed_at=1_700_000_000_000_000_000,
+    )
+    base.update(overrides)
+    return KillRecord(**base)
+
+
+class TestClassifyKillReason:
+    """The reason_class coarsening keeps Prometheus label cardinality bounded."""
+
+    def test_inventory_mtm_bucket(self):
+        from hft_platform.alpha.audit import _classify_kill_reason
+
+        assert _classify_kill_reason("inventory_mtm: residual >0", "D") == "inventory_mtm"
+
+    def test_cost_uncertainty_bucket(self):
+        from hft_platform.alpha.audit import _classify_kill_reason
+
+        assert _classify_kill_reason("cost_uncertainty band crosses zero", "D") == "cost_uncertainty"
+
+    def test_screener_buckets(self):
+        from hft_platform.alpha.audit import _classify_kill_reason
+
+        assert _classify_kill_reason("ic_mean below threshold", "pre_screen") == "screener_ic"
+        assert _classify_kill_reason("turnover too high", "pre_screen") == "screener_turnover"
+        assert _classify_kill_reason("cost_floor breach", "pre_screen") == "screener_cost_floor"
+
+    def test_replay_parity_bucket(self):
+        from hft_platform.alpha.audit import _classify_kill_reason
+
+        assert _classify_kill_reason("replay_parity divergence 7%", "D") == "replay_parity"
+
+    def test_cluster_bucket(self):
+        from hft_platform.alpha.audit import _classify_kill_reason
+
+        assert _classify_kill_reason("redundant in cluster_3", "cluster") == "cluster_redundant"
+
+    def test_manual_bucket(self):
+        from hft_platform.alpha.audit import _classify_kill_reason
+
+        assert _classify_kill_reason("operator decision", "manual") == "manual"
+
+    def test_unknown_reason_falls_back_to_gate_class(self):
+        from hft_platform.alpha.audit import _classify_kill_reason
+
+        assert _classify_kill_reason("totally novel failure mode", "pre_screen") == "screener_other"
+        assert _classify_kill_reason("totally novel failure mode", "C") == "other"
+
+
+class TestLogKill:
+    """log_kill() mirrors log_promotion_result(): metrics best-effort, CH+fallback."""
+
+    def setup_method(self):
+        import hft_platform.alpha.audit as mod
+
+        mod._ENABLED = None
+
+    def test_log_kill_noop_when_disabled_still_increments_metrics(self):
+        from hft_platform.alpha.audit import log_kill
+
+        with patch.dict(os.environ, {"HFT_ALPHA_AUDIT_ENABLED": "0"}, clear=False):
+            import hft_platform.alpha.audit as mod
+
+            mod._ENABLED = None
+            # Should not raise; metrics counter increment is best-effort.
+            result = log_kill(_make_kill_record())
+            assert result is None
+
+    def test_log_kill_rejects_non_kill_record(self):
+        from hft_platform.alpha.audit import log_kill
+
+        with patch.dict(os.environ, {"HFT_ALPHA_AUDIT_ENABLED": "0"}, clear=False):
+            import hft_platform.alpha.audit as mod
+
+            mod._ENABLED = None
+            try:
+                log_kill({"alpha_id": "alpha1"})
+            except TypeError as exc:
+                assert "KillRecord" in str(exc)
+            else:
+                raise AssertionError("log_kill should reject non-KillRecord input")
+
+    @patch("hft_platform.alpha.audit._get_client")
+    def test_log_kill_inserts_row_when_enabled(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+
+        from hft_platform.alpha.audit import log_kill
+
+        with patch.dict(os.environ, {"HFT_ALPHA_AUDIT_ENABLED": "1"}, clear=False):
+            import hft_platform.alpha.audit as mod
+
+            mod._ENABLED = None
+            record = _make_kill_record()
+            log_kill(record)
+
+        mock_client.insert.assert_called_once()
+        call_args = mock_client.insert.call_args
+        assert call_args[0][0] == "audit.alpha_kill_ledger"
+        row = call_args[0][1][0]
+        assert row[0] == record.kill_id()  # kill_id
+        assert row[2] == "alpha1"  # alpha_id
+        assert row[3] == "C"  # gate
+
+    @patch("hft_platform.alpha.audit._get_client")
+    def test_log_kill_fails_silently(self, mock_get_client):
+        mock_get_client.side_effect = ConnectionError("no CH")
+
+        from hft_platform.alpha.audit import log_kill
+
+        with patch.dict(os.environ, {"HFT_ALPHA_AUDIT_ENABLED": "1"}, clear=False):
+            import hft_platform.alpha.audit as mod
+
+            mod._ENABLED = None
+            # Should not raise — falls back to local jsonl via _write_fallback.
+            result = log_kill(_make_kill_record())
+            assert result is None
+
+    @patch("hft_platform.alpha.audit._get_client")
+    def test_log_kill_killed_at_zero_filled_with_now(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+
+        from hft_platform.alpha.audit import log_kill
+
+        with patch.dict(os.environ, {"HFT_ALPHA_AUDIT_ENABLED": "1"}, clear=False):
+            import hft_platform.alpha.audit as mod
+
+            mod._ENABLED = None
+            log_kill(_make_kill_record(killed_at=0))
+
+        row = mock_client.insert.call_args[0][1][0]
+        assert row[1] > 0, "killed_at=0 must be replaced with timebase.now_ns()"
