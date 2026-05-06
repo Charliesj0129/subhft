@@ -71,7 +71,11 @@ All prices are scaled int (x10000). Contract flow: `OrderIntent → RiskDecision
 
 ## 🧬 Alpha Governance Pipeline
 
-Research → Gates A/B/C/D/E → Canary. Implementation in `src/hft_platform/alpha/`. Research artifacts: `research/alphas/<alpha_id>/`.
+Research → Gates A/B/C/D/E/F → Canary → Shadow → Live (currently FROZEN under loop_v1 L11 — registry locked to `r47_tmf_v1`). Implementation in `src/hft_platform/alpha/`; research artifacts under `research/alphas/<alpha_id>/`.
+
+- **Canonical workflow doc**: [`docs/runbooks/alpha-development-workflow.md`](docs/runbooks/alpha-development-workflow.md) — single end-to-end reference for new alpha authors.
+- **Stabilization charter**: [`docs/loop_v1_stabilization_charter.md`](docs/loop_v1_stabilization_charter.md) — 30-day live-registry freeze + clock; CI enforcement via `.github/workflows/freeze-guard.yml`.
+- **Strict profile**: `config/research/profiles/vm_ul6_strict.yaml` — 14 blocking sub-gates today (16 once Slice B merges); `latency_audit --strict` + `replay_parity_audit` are Gate D blockers; synthetic equity rejected.
 
 ## 🤖 Commands
 

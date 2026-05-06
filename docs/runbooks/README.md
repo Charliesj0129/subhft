@@ -1,4 +1,13 @@
 # Runbooks
+
+## Workflow
+
+| Workflow | Runbook |
+|----------|---------|
+| Alpha development (canonical, end-to-end) | [alpha-development-workflow.md](alpha-development-workflow.md) |
+
+## Alert → Runbook
+
 | Alert | Runbook |
 |-------|---------|
 | FeedGapCritical | [FeedGapCritical.md](FeedGapCritical.md) |
