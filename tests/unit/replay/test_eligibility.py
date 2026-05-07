@@ -120,3 +120,123 @@ def test_check_eligibility_ck_failure_falls_back_to_pre_recorder(tmp_path: Path)
     assert isinstance(result, IneligiblePreRecorder)
     assert "intent_recorder_query_failed" in result.reason
     assert "RuntimeError" in result.reason
+
+
+# ---------------------------------------------------------------------------
+# F2 fix coverage — `_default_ck_client` delegates to the canonical CH factory.
+#
+# Background mirrors `tests/unit/alpha/test_audit.py`: this module's
+# `_default_ck_client` had a comment "Mirrors hft_platform.alpha.audit._get_client
+# to keep credential handling consistent" and propagated the same auth-bypass
+# bug. After the fix it must delegate to `infra.ch_client.get_ch_client`.
+# See `docs/runbooks/alpha-factory-dogfood-2026-05-06.md` §F2.
+# ---------------------------------------------------------------------------
+
+
+def test_default_ck_client_delegates_to_canonical_factory(monkeypatch) -> None:
+    """`_default_ck_client` must route through `infra.ch_client.get_ch_client`."""
+    from typing import Any
+
+    from hft_platform.replay import eligibility
+
+    sentinel = object()
+    calls: list[dict[str, Any]] = []
+
+    def fake_get_ch_client(**kwargs: Any) -> Any:
+        calls.append(dict(kwargs))
+        return sentinel
+
+    monkeypatch.setattr("hft_platform.infra.ch_client.get_ch_client", fake_get_ch_client)
+
+    result = eligibility._default_ck_client()
+
+    assert result is sentinel
+    assert len(calls) == 1, f"expected exactly one call to canonical factory, got {len(calls)}"
+
+
+# ---------------------------------------------------------------------------
+# F2-followup coverage — `_default_ck_client` failures must degrade gracefully.
+#
+# Codex adversarial-review (2026-05-07) finding [HIGH]: the F2 switch to the
+# canonical CH factory introduced a regression where connection / auth /
+# import / env-parse failures from ``get_ch_client()`` propagate out of
+# ``check_eligibility`` instead of being caught and converted into an
+# ``IneligiblePreRecorder`` fallback. The fix wraps the default-client
+# construction in its own exception boundary with the
+# ``intent_recorder_client_init_failed:`` reason prefix so operators can
+# distinguish client-init failures from query failures during triage.
+# ---------------------------------------------------------------------------
+
+
+import pytest
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        ConnectionError("ck host unreachable"),
+        ImportError("clickhouse_connect not installed"),
+        KeyError("HFT_CLICKHOUSE_HOST"),
+        RuntimeError("env parse failure"),
+    ],
+)
+def test_check_eligibility_default_client_init_failure_falls_back_to_pre_recorder(
+    tmp_path: Path, monkeypatch, exc: Exception
+) -> None:
+    """When ``_default_ck_client()`` raises during construction, the result
+    must be ``IneligiblePreRecorder`` with the ``intent_recorder_client_init_failed:``
+    reason prefix — never propagate.
+    """
+    from hft_platform.replay import eligibility
+
+    fp = tmp_path / "wal.tar.gz"
+    fp.write_bytes(b"x")
+
+    def _raise() -> None:
+        raise exc
+
+    monkeypatch.setattr(eligibility, "_default_ck_client", _raise)
+
+    result = check_eligibility(
+        session_date=date(2026, 5, 7),
+        strategy_id="ECHO",
+        fixture_path=fp,
+        # ck_client=None forces the default-client path
+    )
+    assert isinstance(result, IneligiblePreRecorder)
+    assert "intent_recorder_client_init_failed" in result.reason
+    assert type(exc).__name__ in result.reason
+
+
+def test_default_ck_client_does_not_call_clickhouse_connect_directly(monkeypatch) -> None:
+    """Regression guard: must NOT bypass the factory."""
+    from typing import Any
+
+    from hft_platform.replay import eligibility
+
+    canonical_calls: list[dict[str, Any]] = []
+    direct_calls: list[dict[str, Any]] = []
+
+    def fake_get_ch_client(**kwargs: Any) -> Any:
+        canonical_calls.append(dict(kwargs))
+        return object()
+
+    monkeypatch.setattr("hft_platform.infra.ch_client.get_ch_client", fake_get_ch_client)
+
+    import clickhouse_connect
+
+    real_get_client = clickhouse_connect.get_client
+
+    def spy_get_client(*args: Any, **kwargs: Any) -> Any:
+        direct_calls.append(dict(kwargs))
+        return real_get_client(*args, **kwargs)
+
+    monkeypatch.setattr(clickhouse_connect, "get_client", spy_get_client)
+
+    eligibility._default_ck_client()
+
+    assert len(canonical_calls) == 1
+    assert direct_calls == [], (
+        f"_default_ck_client must not call clickhouse_connect.get_client directly; "
+        f"detected: {direct_calls!r}"
+    )

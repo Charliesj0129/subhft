@@ -8,8 +8,11 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import structlog
 
 from hft_platform.alpha.experiments import ExperimentTracker
+
+logger = structlog.get_logger(__name__)
 
 
 class AlphaPool:
@@ -312,10 +315,24 @@ def _aligned_signal_matrix(
     if not alpha_ids:
         return [], np.empty((0, 0), dtype=np.float64)
 
-    rows = [np.asarray(signals[alpha_id], dtype=np.float64) for alpha_id in alpha_ids]
-    min_len = min((row.size for row in rows), default=0)
-    if min_len == 0:
+    # F1: drop empty signals before computing min_len. A single 0-element
+    # entry would otherwise short-circuit the entire corpus to empty —
+    # see docs/runbooks/alpha-factory-dogfood-2026-05-06.md §F1.
+    rows_with_ids = [(aid, np.asarray(signals[aid], dtype=np.float64)) for aid in alpha_ids]
+    non_empty = [(aid, row) for aid, row in rows_with_ids if row.size > 0]
+    dropped = [aid for aid, row in rows_with_ids if row.size == 0]
+    if dropped:
+        logger.warning(
+            "aligned_signal_matrix: dropping empty signals",
+            dropped_alpha_ids=sorted(dropped),
+            kept=len(non_empty),
+        )
+    if not non_empty:
         return [], np.empty((0, 0), dtype=np.float64)
+
+    alpha_ids = [aid for aid, _ in non_empty]
+    rows = [row for _, row in non_empty]
+    min_len = min(row.size for row in rows)
     data = np.vstack([row[:min_len] for row in rows])
     if sample_step > 1:
         data = data[:, ::sample_step]
