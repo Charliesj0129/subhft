@@ -27,6 +27,7 @@ import tempfile
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import structlog
@@ -43,6 +44,7 @@ def _ensure_project_root_on_path() -> None:
 
 _ensure_project_root_on_path()
 
+from research.backtest._npz_format import NpzFormat, assert_format  # noqa: E402
 from research.backtest.alpha_strategy_bridge import AlphaStrategyBridge, signal_log_to_arrays  # noqa: E402
 from research.backtest.metrics import (  # noqa: E402
     compute_capacity,
@@ -85,6 +87,56 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
+# Feature-set version helpers
+# ---------------------------------------------------------------------------
+# Schema versions that (a) consume L2-L5 depth-derived features (e.g.
+# deep_depth_momentum_x1000 at FE-v3 idx 20) and (b) require FeatureEngine
+# to be live so StrategyContext can deliver canonical FE tuples to
+# AlphaStrategyBridge. Both conditions hold for the same set today.
+# Mirrors ``src/hft_platform/feature/registry.py`` builders.
+_FE_V2_V3_SCHEMA_VERSIONS: frozenset[str] = frozenset(
+    {"lob_shared_v2", "lob_shared_v3"}
+)
+
+
+def _alpha_needs_l5_depth(alpha: AlphaProtocol) -> bool:
+    """Return True when the alpha's manifest declares an L5-depth-consuming
+    feature schema. Defensive: any access failure -> False (legacy v1
+    alphas remain unaffected by the format-detector hard-fail)."""
+    try:
+        version = getattr(alpha.manifest, "feature_set_version", "") or ""
+    except Exception:
+        return False
+    if not isinstance(version, str):
+        return False
+    return version.lower() in _FE_V2_V3_SCHEMA_VERSIONS
+
+
+def _resolve_feature_mode(alpha: Any) -> str:
+    """Pick HftBacktestAdapter ``feature_mode`` from the alpha manifest.
+
+    Returns ``"lob_feature"`` for alphas that declare
+    ``feature_set_version`` of ``lob_shared_v2`` or ``lob_shared_v3`` (so
+    the adapter instantiates ``FeatureEngine`` and
+    ``ctx.get_feature_tuple`` returns a real tuple); returns
+    ``"stats_only"`` for v1 / unspecified / unknown / malformed --
+    preserving the legacy default for every existing alpha.
+
+    Defensive: if accessing the manifest raises (broken alpha objects in
+    research code), falls back to ``"stats_only"`` rather than propagate.
+    """
+    try:
+        version = getattr(alpha.manifest, "feature_set_version", "")
+    except Exception:
+        return "stats_only"
+    if not isinstance(version, str):
+        return "stats_only"
+    if version.lower() in _FE_V2_V3_SCHEMA_VERSIONS:
+        return "lob_feature"
+    return "stats_only"
+
+
+# ---------------------------------------------------------------------------
 # NPZ splitting helper
 # ---------------------------------------------------------------------------
 def _split_npz(path: str, split: float = 0.7) -> tuple[str, str]:
@@ -123,12 +175,14 @@ def _resolve_hftbt_path(data_path: str) -> str | None:
     """Given a data path (possibly research.npy), find the sibling hftbt.npz.
 
     Checks:
-      1. data_path itself if it ends with hftbt.npz
+      1. data_path itself if its name ends with ``hftbt.npz`` (covers
+         both the legacy bare ``hftbt.npz`` and per-day snapshot AOS
+         files like ``TMFD6_2026-04-14_l2.hftbt.npz``).
       2. parent_dir/hftbt.npz
     Returns None if not found.
     """
     p = Path(data_path)
-    if p.name == "hftbt.npz" and p.exists():
+    if p.name.endswith("hftbt.npz") and p.exists():
         return str(p)
     sibling = p.parent / "hftbt.npz"
     if sibling.exists():
@@ -411,6 +465,13 @@ def _run_adapter_slice(
             "hft_platform.backtest.adapter.HftBacktestAdapter not available. Ensure hftbacktest is installed."
         )
 
+    # NOTE: format assertion (Codex finding 5 — L2-L5 depth parity for
+    # FE-v3 alphas) is enforced upstream at ``run()`` / ``run_walk_forward()``
+    # / ``run_cpcv()`` against the original input ``hbt_path`` before
+    # splitting. Internal IS/OOS split temp files inherit the format by
+    # construction and would not round-trip the filename heuristic, so
+    # re-checking them here would produce false positives.
+
     effective_rtt = _effective_broker_rtt_ms(config)
     latency_us = int((config.local_decision_pipeline_latency_us + effective_rtt * 1000))
     bridge = AlphaStrategyBridge(
@@ -429,7 +490,7 @@ def _run_adapter_slice(
         maker_fee=float(config.maker_fee_bps) / 10_000.0,
         taker_fee=float(config.taker_fee_bps) / 10_000.0,
         equity_sample_ns=1_000_000,  # 1ms equity samples
-        feature_mode="stats_only",
+        feature_mode=_resolve_feature_mode(alpha),
         queue_model=getattr(config, "queue_model", "PowerProbQueueModel(3.0)"),
         latency_model=getattr(config, "latency_model", "ConstantLatency"),
         exchange_model=getattr(config, "exchange_model", "NoPartialFillExchange"),
@@ -686,6 +747,14 @@ class HftNativeRunner:
                     hbt_path = ensure_hftbt_npz(data_path)
                 except (FileNotFoundError, OSError):
                     continue  # file missing, skip
+
+                # Codex finding 5: alphas declaring lob_shared_v2/v3 need
+                # L2-L5 depth coverage; otherwise deep_depth_momentum_x1000
+                # silently emits zero through Gate C. Validate the original
+                # (pre-split) input here so split temp files don't trigger
+                # false positives downstream.
+                if _alpha_needs_l5_depth(self.alpha):
+                    assert_format(hbt_path, NpzFormat.HFTBT_EVENT_L5)
 
                 is_path, oos_path = _split_npz(hbt_path, self.config.is_oos_split)
                 tmp_paths.extend([is_path, oos_path])

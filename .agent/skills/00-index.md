@@ -1,230 +1,82 @@
 # Skills Index
 
-> **~160 skills** from HFT Platform + [everything-claude-code](https://github.com/affaan-m/everything-claude-code) and other community repos
-> Each skill has a `SKILL.md`. Read it with `view_file` before using.
-> 13 legacy / unreferenced skills archived 2026-04-19 to `_archive-2026-04-19/` (XML-format + zero external refs).
+> 精簡後的 HFT Platform 技能索引。只保留本專案常用的 HFT、TAIFEX、Python/Rust、ClickHouse、研究治理、測試/安全/運維與架構技能。
+>
+> 使用原則：先讀本索引，再只開啟當前任務直接相關的 `SKILL.md`。不要把整個 skills 目錄載入上下文。
 
 ## HFT Core
 
-| Skill | Description |
+| Skill | When to use |
 | --- | --- |
-| `hft-helper` | Router skill: directs to the right HFT skill based on task domain |
-| `hft-market-data` | **NEW** Market data plane: normalizer (51KB), LOB (27KB), Shioaji/Fubon adapters, Rust accel, FeatureEngine v3 (47+8 files) |
-| `hft-architect` | Architecture design: 7 runtime planes, module boundaries, Python-Rust split, design review checklist |
-| `hft-strategy-dev` | Strategy implementation: BaseStrategy, FeatureEngine v3 (27 features), 12 strategies, hot-path rules |
-| `hft-execution` | Execution plane: fills, positions, reconciliation, optimizer, imbalance timer, TCA (27 files) |
-| `hft-recorder` | **NEW** Persistence pipeline: batcher, CH writer, WAL, WAL-first (CE-M3), loader, disk monitor (22 files) |
-| `hft-ops` | Operations: session governor, autonomy degradation, position flattener, pre/post market (14 files) |
-| `hft-alpha-research` | Alpha research: scaffold, governed datasets, factory workflow, Gate A-E governance |
-| `hft-backtest` | Raw hftbacktest V2 engine semantics: status codes, event arrays, model selection |
-| `hft-backtester` | HftBacktestAdapter: latency modeling (P95 ~36ms), parity, Gate C lane |
-| `validation-gate` | Alpha validation: Gate A-E interpretation, promotion blockers, UL6 thresholds |
-| `troubleshoot-metrics` | Runtime diagnostics: Prometheus, Docker, StormGuard, WAL, execution, ops health |
-| `clickhouse-io` | ClickHouse schema (15 migrations, 13+ tables), queries, TTL, recorder IO, WAL replay |
-| `fubon-tradeapi` | Fubon TradeAPI reference: auth, SDK, endpoints, order types, env vars |
-| `multi-broker-ops` | Multi-broker operations: broker switching, failover, credentials, latency profiles |
-| `symbols-sync` | Symbol universe sync: symbols.list -> symbols.yaml |
-| `research-factory` | End-to-end alpha pipeline: paper -> prototype -> backtest -> promote -> live (8 stages) |
-| `research-data-governance` | Dataset governance: metadata sidecars, synthetic LOB, UL6 provenance |
-| `hft-production-audit` | **NEW** Multi-plane runtime safety audit: 7-plane sweep protocol derived from ae243a08 pattern |
-| `hft-hot-path-dev` | **NEW** Constitution-compliant hot-path development: 5 Laws checklist, discipline gates, latency guard |
-| `hft-strategy-lifecycle` | **NEW** Strategy scaffold→shadow→live lifecycle: R47-pattern config-driven enablement, all gates |
-| `hft-test-hft` | **NEW** HFT-specific test patterns: scaled int, monotonic time, fail-closed Rust, state matrices |
-| `hft-release-gate` | **NEW** Release readiness: 7-gate unified checklist (code quality, coverage, architecture, security, pre-market, latency) |
-| `taifex-alpha-kill-criteria` | **NEW** Pre-research feasibility: 50+ killed alpha lessons, structural exhaustion zones, mandatory IC/execution gates |
-| `taifex-market-structure` | **NEW** TAIFEX domain: TMFD6/TXFD6/TXO economics, fee schedule, spread regimes, liquidity patterns, data conventions |
-| `hft-backtest-calibration` | **NEW** Backtest fidelity: CK vs hftbacktest 14x bias, fill models, latency profiles, walk-forward, statistical traps |
-| `hft-strategy-sdk` | **NEW** BaseStrategy full reference: 8 hooks, order API, position tracking, gap resilience, config, tick grid snapping |
-| `hft-mm-design` | **NEW** Market-making design: R47 three-layer pattern, structural properties, V-shape recovery, improvements that KILL |
+| `hft-helper` | 不確定該用哪個 HFT 技能時的路由入口 |
+| `hft-architect` | runtime planes、Python/Rust 邊界、模組邊界、架構決策 |
+| `hft-market-data` | broker ingestion、Normalizer、LOBEngine、FeatureEngine、market-data hot path |
+| `hft-hot-path-dev` | tick loop / hot path 變更，檢查 allocator、precision、latency discipline |
+| `hft-strategy-dev` | live strategy、`BaseStrategy`、`StrategyContext`、`OrderIntent` |
+| `hft-strategy-sdk` | strategy hook/API、position tracking、config-driven strategy wiring |
+| `hft-strategy-lifecycle` | strategy scaffold -> shadow -> live 的生命週期與 gates |
+| `hft-mm-design` | market-making 策略設計與失效條件 |
+| `hft-execution` | fills、positions、reconciliation、execution optimizer、TCA |
+| `hft-recorder` | WAL、ClickHouse writer、loader、disk pressure、recorder IO |
+| `hft-ops` | session governor、autonomy degradation、position flattener、pre/post market ops |
+| `hft-data-contracts` | `OrderIntent`、`RiskDecision`、`FillEvent` 等核心資料契約 |
+| `hft-env-vars` | `HFT_*`、`SHIOAJI_*`、`CH_*` runtime/env reference |
+| `hft-rust-exports` | `rust_core` PyO3 exports and Python/Rust boundary reference |
+| `hft-production-audit` | 多平面 runtime safety audit |
+| `hft-release-gate` | release readiness、latency、coverage、security、pre-market checklist |
+| `hft-test-hft` | HFT-specific tests: scaled int、monotonic time、fail-closed Rust、state matrices |
+| `troubleshoot-metrics` | Prometheus、Docker、StormGuard、WAL、execution、ops health diagnostics |
 
-## Python & Rust
+## Broker / Market Structure
 
-| Skill | Description |
+| Skill | When to use |
 | --- | --- |
-| `async-python-patterns` | Master Python asyncio, concurrent programming, and async/await patterns for high-performance applications. Use when building async APIs, concurrent systems, or I/O-bound applications requiring non-blocking operations. |
-| `coding-standards` | Universal coding standards _(ECC)_ |
-| `cpp-coding-standards` | C++ Core Guidelines _(ECC)_ |
-| `cpp-testing` | GoogleTest, CTest, sanitizers _(ECC)_ |
-| `python-patterns` | Pythonic idioms, PEP 8, type hints _(ECC)_ |
-| `python-pro` | Python 3.12+ modern features, async |
-| `python-testing` | pytest TDD, fixtures, mocking _(ECC)_ |
-| `python-testing-patterns` | Comprehensive pytest strategies |
-| `rust-pro` | Rust 1.75+ async, advanced types |
-| `rust_feature_engineering` | Rust+PyO3 feature engineering workflow |
+| `broker-abstraction` | broker facade、multi-broker contracts、adapter boundary |
+| `multi-broker-ops` | broker switching、failover、credentials、latency profiles |
+| `fubon-tradeapi` | Fubon TradeAPI runtime/API reference |
+| `fubon-contracts` | Fubon contracts and symbol handling |
+| `taifex-market-structure` | TAIFEX/TMFD/TXFD/TXO conventions、fees、spread/liquidity regimes |
+| `symbols-sync` | `symbols.list` -> `symbols.yaml` synchronization |
 
-## Frontend & UI Design
+## Alpha Research / Backtest
 
-| Skill | Description |
+| Skill | When to use |
 | --- | --- |
-| `cache-components` |  |
-| `design-system-starter` | Create and evolve design systems with design tokens, component architecture, accessibility guidelines, and documentation templates. Ensures consistent, scalable, and accessible UI across products. |
-| `frontend-patterns` | React, Next.js patterns _(ECC)_ |
-| `mui` | Material-UI v7 component library patterns including sx prop styling, theme integration, responsive design, and MUI-specific hooks. Use when working with MUI components, styling with sx prop, theme customization, or MUI utilities. |
-| `react-dev` | This skill should be used when building React components with TypeScript, typing hooks, handling events, or when React TypeScript, React 19, Server Components are mentioned. Covers type-safe patterns for React 18-19 including generic components, proper event typing, and routing integration (TanStack Router, React Router). |
-| `react-useeffect` | React useEffect best practices from official docs. Use when writing/reviewing useEffect, useState for derived values, data fetching, or state synchronization. Teaches when NOT to use Effect and better alternatives. |
+| `hft-alpha-research` | alpha scaffold、governed datasets、Gate A-C、research artifacts |
+| `research-factory` | paper -> prototype -> backtest -> promote -> live workflow |
+| `research-data-governance` | dataset sidecars、synthetic LOB、UL6 provenance |
+| `validation-gate` | Gate A-E interpretation and promotion blockers |
+| `hft-backtest` | raw hftbacktest semantics、queue/fill model details |
+| `hft-backtester` | project `HftBacktestAdapter`、latency modeling、Gate C lane |
+| `hft-backtest-calibration` | fill-model realism、latency profiles、walk-forward traps |
+| `taifex-alpha-kill-criteria` | pre-research feasibility and structural alpha kill criteria |
 
-## Backend & Architecture
+## Python / Rust / Performance
 
-| Skill | Description |
+| Skill | When to use |
 | --- | --- |
-| `api-design` | REST API design patterns _(ECC)_ |
-| `backend-patterns` | Backend architecture (Node.js, Express) _(ECC)_ |
-| `backend-to-frontend-handoff-docs` | Create API handoff documentation for frontend developers. Use when backend work is complete and needs to be documented for frontend integration, or user says 'create handoff', 'document API', 'frontend handoff', or 'API documentation'. |
-| `c4-architecture` | Generate architecture documentation using C4 model Mermaid diagrams. Use when asked to create architecture diagrams, document system architecture, visualize software structure, create C4 diagrams, or generate context/container/component/deployment diagrams. Triggers include "architecture diagram", "C4 diagram", "system context", "container diagram", "component diagram", "deployment diagram", "document architecture", "visualize architecture". |
-| `data-flow-verify` | No description |
-| `deployment-patterns` | CI/CD, health checks, rollback _(ECC)_ |
-| `docker-patterns` | Docker/Compose patterns _(ECC)_ |
-| `frontend-to-backend-requirements` | Document frontend data needs for backend developers. Use when frontend needs to communicate API requirements to backend, or user says 'backend requirements', 'what data do I need', 'API requirements', or is describing data needs for a UI. |
-| `mermaid-diagrams` | Comprehensive guide for creating software diagrams using Mermaid syntax. Use when users need to create, visualize, or document software through diagrams including class diagrams (domain modeling, object-oriented design), sequence diagrams (application flows, API interactions, code execution), flowcharts (processes, algorithms, user journeys), entity relationship diagrams (database schemas), C4 architecture diagrams (system context, containers, components), state diagrams, git graphs, pie charts, gantt charts, or any other diagram type. Triggers include requests to "diagram", "visualize", "model", "map out", "show the flow", or when explaining system architecture, database design, code structure, or user/application flows. |
-| `openapi-to-typescript` | Converts OpenAPI 3.0 JSON/YAML to TypeScript interfaces and type guards. This skill should be used when the user asks to generate types from OpenAPI, convert schema to TS, create API interfaces, or generate TypeScript types from an API specification. |
+| `python-pro` | Python 3.12+ implementation details |
+| `python-testing-patterns` | pytest patterns, fixtures, regression coverage |
+| `async-python-patterns` | asyncio/concurrency and non-blocking service work |
+| `rust-pro` | Rust implementation and review |
+| `rust_feature_engineering` | Rust + PyO3 feature-kernel workflow |
+| `performance-profiling` | profiling and latency/performance investigation |
+| `sequential-thinking` | complex debugging where hypotheses must be explicitly eliminated |
 
-## Data & Storage
+## Data / Ops / Architecture Support
 
-| Skill | Description |
+| Skill | When to use |
 | --- | --- |
-| `cc-skill-clickhouse-io` | ClickHouse database patterns, query optimization, analytics, and data engineering best practices for high-performance analytical workloads. |
-| `content-hash-cache-pattern` | SHA-256 content hash caching _(ECC)_ |
-| `database-migrations` | Zero-downtime migrations (Postgres, MySQL, ORMs) _(ECC)_ |
-| `database-schema-designer` | Design robust, scalable database schemas for SQL and NoSQL databases. Provides normalization guidelines, indexing strategies, migration patterns, constraint design, and performance optimization. Ensures data integrity, query performance, and maintainable data models. |
-| `postgres-patterns` | PostgreSQL query optimization _(ECC)_ |
-
-## Testing & Quality
-
-| Skill | Description |
-| --- | --- |
-| `e2e-testing` | Playwright E2E patterns _(ECC)_ |
-| `eval-harness` | Eval-driven development framework _(ECC)_ |
-| `naming-analyzer` | Suggest better variable, function, and class names based on context and conventions. |
-| `qa-test-planner` | Generate comprehensive test plans, manual test cases, regression test suites, and bug reports for QA engineers. Includes Figma MCP integration for design validation. |
-| `security-review` | Security checklist and patterns _(ECC)_ |
-| `security-scan` | AgentShield config scanning _(ECC)_ |
-| `tdd-workflow` | Test-driven development workflow _(ECC)_ |
-| `verification-loop` | Comprehensive verification system _(ECC)_ |
-
-## AI & LLM
-
-| Skill | Description |
-| --- | --- |
-| `agent-md-refactor` | Refactor bloated AGENTS.md, CLAUDE.md, or similar agent instruction files to follow progressive disclosure principles. Splits monolithic files into organized, linked documentation. |
-| `codex` | Use when the user asks to run Codex CLI (codex exec, codex resume) or references OpenAI Codex for code analysis, refactoring, or automated editing. Uses GPT-5.2 by default for state-of-the-art software engineering. |
-| `coding-agent` | Delegate coding tasks to Codex, Claude Code, or Pi agents via background process. Use when: (1) building/creating new features or apps, (2) reviewing PRs (spawn in temp dir), (3) refactoring large codebases, (4) iterative coding that needs file exploration. NOT for: simple one-liner fixes (just edit), reading code (use read tool), or any work in ~/clawd workspace (never spawn agents here). Requires a bash tool that supports pty:true. |
-| `configure-ecc` | Interactive ECC installer _(ECC)_ |
-| `continuous-learning` | Extract patterns from sessions _(ECC)_ |
-| `continuous-learning-v2` | Instinct-based learning system _(ECC)_ |
-| `cost-aware-llm-pipeline` | LLM cost optimization, model routing _(ECC)_ |
-| `gepetto` | Creates detailed, sectionized implementation plans through research, stakeholder interviews, and multi-LLM review. Use when planning features that need thorough pre-implementation analysis. |
-| `iterative-retrieval` | Progressive context retrieval _(ECC)_ |
-| `lesson-learned` | Analyze recent code changes via git history and extract software engineering lessons. Use when the user asks 'what is the lesson here?', 'what can I learn from this?', 'engineering takeaway', 'what did I just learn?', 'reflect on this code', or wants to extract principles from recent work. |
-| `regex-vs-llm-structured-text` | Regex vs LLM decision framework _(ECC)_ |
-| `search-first` | Research-before-coding workflow _(ECC)_ |
-| `session-handoff` | Creates comprehensive handoff documents for seamless AI agent session transfers. Triggered when: (1) user requests handoff/memory/context save, (2) context window approaches capacity, (3) major task milestone completed, (4) work session ending, (5) user says 'save state', 'create handoff', 'I need to pause', 'context is getting full', (6) resuming work with 'load handoff', 'resume from', 'continue where we left off'. Proactively suggests handoffs after substantial work (multiple file edits, complex debugging, architecture decisions). Solves long-running agent context exhaustion by enabling fresh agents to continue with zero ambiguity. |
-| `skill-judge` | Evaluate Agent Skill design quality against official specifications and best practices. Use when reviewing, auditing, or improving SKILL.md files and skill packages. Provides multi-dimensional scoring and actionable improvement suggestions. |
-| `strategic-compact` | Manual context compaction _(ECC)_ |
-
-## Django / Spring Boot
-
-| Skill | Description |
-| --- | --- |
-| `django-patterns` | Django + DRF patterns _(ECC)_ |
-| `django-security` | Django security best practices _(ECC)_ |
-| `django-tdd` | Django testing with pytest-django _(ECC)_ |
-| `django-verification` | Django verification loop _(ECC)_ |
-| `java-coding-standards` | Java coding standards _(ECC)_ |
-| `jpa-patterns` | JPA/Hibernate patterns _(ECC)_ |
-| `springboot-patterns` | Spring Boot architecture _(ECC)_ |
-| `springboot-security` | Spring Security best practices _(ECC)_ |
-| `springboot-tdd` | Spring Boot TDD (JUnit 5) _(ECC)_ |
-| `springboot-verification` | Spring Boot verification loop _(ECC)_ |
-
-## Go
-
-| Skill | Description |
-| --- | --- |
-| `golang-patterns` | Idiomatic Go patterns _(ECC)_ |
-| `golang-testing` | Go testing, benchmarks, fuzzing _(ECC)_ |
-
-## Swift
-
-| Skill | Description |
-| --- | --- |
-| `swift-actor-persistence` | Swift actor-based persistence _(ECC)_ |
-| `swift-protocol-di-testing` | Swift protocol-based DI _(ECC)_ |
-
-## Document Processing
-
-| Skill | Description |
-| --- | --- |
-| `defuddle` | Extract clean markdown content from web pages using Defuddle CLI, removing clutter and navigation to save tokens. Use instead of WebFetch when the user provides a URL to read or analyze, for online documentation, articles, blog posts, or any standard web page. |
-| `excalidraw` | Use when working with *.excalidraw or *.excalidraw.json files, user mentions diagrams/flowcharts, or requests architecture visualization - delegates all Excalidraw operations to subagents to prevent context exhaustion from verbose JSON (single files: 4k-22k tokens, can exceed read limits) |
-| `humanizer` |  |
-| `json-canvas` | Create and edit JSON Canvas files (.canvas) with nodes, edges, groups, and connections. Use when working with .canvas files, creating visual canvases, mind maps, flowcharts, or when the user mentions Canvas files in Obsidian. |
-| `marp-slide` | Create professional Marp presentation slides with 7 beautiful themes (default, minimal, colorful, dark, gradient, tech, business). Use when users request slide creation, presentations, or Marp documents. Supports custom themes, image layouts, and "make it look good" requests with automatic quality improvements. |
-| `nutrient-document-processing` | PDF/DOCX/XLSX processing via Nutrient _(ECC)_ |
-| `project-guidelines-example` | Project-specific skill template _(ECC)_ |
-| `web-to-markdown` | Use ONLY when the user explicitly says: 'use the skill web-to-markdown ...' (or 'use a skill web-to-markdown ...'). Converts webpage URLs to clean Markdown by calling the local web2md CLI (Puppeteer + Readability), suitable for JS-rendered pages. |
-
-## Dev Workflow & Ops
-
-| Skill | Description |
-| --- | --- |
-| `command-creator` | This skill should be used when creating a Claude Code slash command. Use when users ask to "create a command", "make a slash command", "add a command", or want to document a workflow as a reusable command. Essential for creating optimized, agent-executable slash commands with proper structure and best practices. |
-| `commit-work` | Create high-quality git commits: review/stage intended changes, split into logical commits, and write clear commit messages (including Conventional Commits). Use when the user asks to commit, craft a commit message, stage changes, or split work into multiple commits. |
-| `config-env` | No description |
-| `crafting-effective-readmes` | Use when writing or improving README files. Not all READMEs are the same — provides templates and guidance matched to your audience and project type. |
-| `dependency-updater` | Smart dependency management for any language. Auto-detects project type, applies safe updates automatically, prompts for major versions, diagnoses and fixes dependency issues. |
-| `doc-updater` | Auto-generate codemaps and reconcile architectural docs with the current source tree. Use when docs drift from code, when regenerating `docs/CODEMAPS/structure.md`, or when verifying `docs/ARCHITECTURE.md` still matches `src/`. |
-| `flags` | Feature flag management |
-| `healthcheck` | Host security hardening |
-| `performance-profiling` | Profiling and optimization |
-| `planner` | Generate a phased implementation plan (requirements, architecture, step-by-step phases, risk) before coding. Use when the user asks for a new feature, a large refactor, or "how should we build X?". |
-| `plugin-forge` | Create and manage Claude Code plugins with proper structure, manifests, and marketplace integration. Use when creating plugins for a marketplace, adding plugin components (commands, agents, hooks), bumping plugin versions, or working with plugin.json/marketplace.json manifests. |
-| `reducing-entropy` | Manual-only skill for minimizing total codebase size. Only activate when explicitly requested by user. Measures success by final code amount, not effort. Bias toward deletion. |
-| `requirements-clarity` | Clarify ambiguous requirements through focused dialogue before implementation. Use when requirements are unclear, features are complex (>2 days), or involve cross-team coordination. Ask two core questions - Why? (YAGNI check) and Simpler? (KISS check) - to ensure clarity before coding. |
-| `runtime-debug` | Runtime debugging |
-| `sequential-thinking` | Force step-by-step reasoning (hypothesis → evidence → elimination → conclusion) to reduce hallucination on complex logic. Use when debugging race conditions, designing distributed system flows, or answering "why did this happen?". |
-| `session-manager` | Session management |
-| `skill-lookup` | Skill discovery |
-| `writing-skills` | Skill creation and editing |
-
-## External Integrations
-
-| Skill | Description |
-| --- | --- |
-| `bear-notes` | Create, search, and manage Bear notes via grizzly CLI. |
-| `datadog-cli` | Datadog CLI for searching logs, querying metrics, tracing requests, and managing dashboards. Use this when debugging production issues or working with Datadog observability. |
-| `deploy-docker` | Docker deploy |
-| `discord` | Discord operations |
-| `draw-io` | draw.io diagram creation, editing, and review. Use for .drawio XML editing, PNG conversion, layout adjustment, and AWS icon usage. |
-| `feishu-perm` | Feishu permissions |
-| `feishu-wiki` | Feishu wiki |
-| `gemini` | Gemini CLI integration |
-| `gh-issues` | GitHub issues → PRs pipeline |
-| `git-parallel` | Manage git worktrees for parallel development — context-switch without stashing. Use when the user says "work on X while keeping Y open", starts a parallel task, or wants a long-running backtest workspace isolated from active coding. |
-| `github` | GitHub CLI operations |
-| `gog` | Google Workspace CLI |
-| `himalaya` | Email via IMAP/SMTP |
-| `jira` | Use when the user mentions Jira issues (e.g., "PROJ-123"), asks about tickets, wants to create/view/update issues, check sprint status, or manage their Jira workflow. Triggers on keywords like "jira", "issue", "ticket", "sprint", "backlog", or issue key patterns. |
-| `mcporter` | MCP server management |
-| `notion` | Notion API |
-| `obsidian` | Obsidian vault automation |
-| `obsidian-bases` | Create and edit Obsidian Bases (.base files) with views, filters, formulas, and summaries. Use when working with .base files, creating database-like views of notes, or when the user mentions Bases, table views, card views, filters, or formulas in Obsidian. |
-| `obsidian-cli` | Interact with Obsidian vaults using the Obsidian CLI to read, create, search, and manage notes, tasks, properties, and more. Also supports plugin and theme development with commands to reload plugins, run JavaScript, capture errors, take screenshots, and inspect the DOM. Use when the user asks to interact with their Obsidian vault, manage notes, search vault content, perform vault operations from the command line, or develop and debug Obsidian plugins and themes. |
-| `obsidian-markdown` | Create and edit Obsidian Flavored Markdown with wikilinks, embeds, callouts, properties, and other Obsidian-specific syntax. Use when working with .md files in Obsidian, or when the user mentions wikilinks, callouts, frontmatter, tags, embeds, or Obsidian notes. |
-| `perplexity` | Web search and research using Perplexity AI. Use when user says "search", "find", "look up", "ask", "research", or "what's the latest" for generic queries. NOT for library/framework docs (use Context7) or workspace questions. |
-| `portainer` | Portainer CE management |
-| `slack` | Slack control |
-
-## Productivity & Communication
-
-| Skill | Description |
-| --- | --- |
-| `daily-meeting-update` | Interactive daily standup/meeting update generator. Use when user says 'daily', 'standup', 'scrum update', 'status update', 'what did I do yesterday', 'prepare for meeting', 'morning update', or 'team sync'. Pulls activity from GitHub, Jira, and Claude Code session history. Conducts 4-question interview (yesterday, today, blockers, discussion topics) and generates formatted Markdown update. |
-| `difficult-workplace-conversations` | Structured approach to workplace conflicts, performance discussions, and challenging feedback using preparation-delivery-followup framework. Use when preparing for tough conversations, addressing conflicts, giving critical feedback, or navigating sensitive workplace discussions. |
-| `domain-name-brainstormer` | Generates creative domain name ideas for your project and checks availability across multiple TLDs (.com, .io, .dev, .ai, etc.). Saves hours of brainstorming and manual checking. |
-| `feedback-mastery` | Navigate difficult conversations and deliver constructive feedback using structured frameworks. Covers the Preparation-Delivery-Follow-up model and Situation-Behavior-Impact (SBI) feedback technique. Use when preparing for difficult conversations, giving feedback, or managing conflicts. |
-| `game-changing-features` | Find 10x product opportunities and high-leverage improvements. Use when user wants strategic product thinking, mentions '10x', wants to find high-impact features, or says 'what would make this 10x better', 'product strategy', or 'what should we build next'. |
-| `meme-factory` | Generate memes using the memegen.link API. Use when users request memes, want to add humor to content, or need visual aids for social media. Supports 100+ popular templates with custom text and styling. |
-| `professional-communication` | Guide technical communication for software developers. Covers email structure, team messaging etiquette, meeting agendas, and adapting messages for technical vs non-technical audiences. Use when drafting professional messages, preparing meeting communications, or improving written communication. |
-| `ship-learn-next` | Transform learning content (like YouTube transcripts, articles, tutorials) into actionable implementation plans using the Ship-Learn-Next framework. Use when user wants to turn advice, lessons, or educational content into concrete action steps, reps, or a learning quest. |
-| `writing-clearly-and-concisely` | Use when writing prose humans will read—documentation, commit messages, error messages, explanations, reports, or UI text. Applies Strunk's timeless rules for clearer, stronger, more professional writing. |
-
+| `clickhouse-io` | ClickHouse schema、queries、TTL、recorder IO、WAL replay |
+| `data-flow-verify` | event/data-flow contract verification |
+| `config-env` | runtime configuration and environment variable work |
+| `runtime-debug` | live/runtime debugging |
+| `healthcheck` | host and runtime health checks |
+| `c4-architecture` | C4 architecture diagrams |
+| `mermaid-diagrams` | focused Mermaid diagrams for architecture or flow explanations |
+| `doc-updater` | reconcile docs/codemaps with current source tree |
+| `planner` | phased implementation plan for large HFT changes |
+| `commit-work` | staging and commit hygiene |
+| `git-parallel` | worktrees for isolated experiments or long-running backtests |
+| `github` | GitHub CLI issue/PR operations |
+| `session-manager` | project session state management |

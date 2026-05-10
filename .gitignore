@@ -213,13 +213,19 @@ notebooks/.ipynb_checkpoints
 # Agent prompts (local only) — but rules/ is tracked so auto-loaded rules work across machines
 /.agent/*
 !/.agent/rules/
+!/.agent/contexts/
+!/.agent/contexts/*.md
+!/.agent/skills/
+!/.agent/skills/00-index.md
+!/.agent/skills/*/
+!/.agent/skills/*/SKILL.md
 /agent_prompts/
 
 # Claude Code local state
 .claude/worktrees/
 .claude/agents/
 .claude/*.lock
-# Note: .claude/skills/ IS tracked — project-specific on-demand reference skills
+# Project-specific on-demand reference skills live in .agent/skills/.
 
 # ArXiv paper storage (local only)
 arxiv_papers/

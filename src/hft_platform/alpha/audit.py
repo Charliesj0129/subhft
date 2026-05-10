@@ -66,11 +66,13 @@ def _is_enabled() -> bool:
 
 
 def _get_client() -> Any:
-    import clickhouse_connect
+    # F2: delegate to the canonical CH client factory (full env precedence
+    # for username/password). Direct clickhouse_connect.get_client(host,port)
+    # silently dropped auth and broke the kill-ledger 365-day TTL durability
+    # promise — see docs/runbooks/alpha-factory-dogfood-2026-05-06.md §F2.
+    from hft_platform.infra.ch_client import get_ch_client
 
-    host = os.getenv("HFT_CLICKHOUSE_HOST", "localhost")
-    port = int(os.getenv("HFT_CLICKHOUSE_PORT", "8123"))
-    return clickhouse_connect.get_client(host=host, port=port)
+    return get_ch_client()
 
 
 def log_gate_result(

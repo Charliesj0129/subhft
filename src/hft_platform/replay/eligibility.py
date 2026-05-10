@@ -26,7 +26,6 @@ as an environmental error.
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -52,16 +51,16 @@ Eligibility = Union[Eligible, IneligiblePreRecorder, IneligibleNoFixture]
 
 
 def _default_ck_client() -> Any:
-    """Build a ``clickhouse_connect`` client from HFT_CLICKHOUSE_* env vars.
+    """Build a ``clickhouse_connect`` client via the canonical factory.
 
-    Mirrors ``hft_platform.alpha.audit._get_client`` to keep credential
-    handling consistent across the codebase.
+    F2: delegates to ``hft_platform.infra.ch_client.get_ch_client`` which
+    carries the full username/password env precedence chain. The previous
+    implementation mirrored ``alpha.audit._get_client`` and propagated its
+    auth-bypass bug — see ``docs/runbooks/alpha-factory-dogfood-2026-05-06.md`` §F2.
     """
-    import clickhouse_connect  # noqa: PLC0415  (heavy import; defer)
+    from hft_platform.infra.ch_client import get_ch_client  # noqa: PLC0415  (heavy import; defer)
 
-    host = os.getenv("HFT_CLICKHOUSE_HOST", "localhost")
-    port = int(os.getenv("HFT_CLICKHOUSE_PORT", "8123"))
-    return clickhouse_connect.get_client(host=host, port=port)
+    return get_ch_client()
 
 
 def _count_live_intents(client: Any, session_date: date, strategy_id: str) -> int:
@@ -112,7 +111,21 @@ def check_eligibility(
     if not fp.exists():
         return IneligibleNoFixture(fixture_path=str(fp))
 
-    client = ck_client if ck_client is not None else _default_ck_client()
+    # Codex adversarial-review (2026-05-07) finding [HIGH]: building the
+    # default client outside the exception boundary lets connection / auth /
+    # import / env-parse failures from get_ch_client() propagate out of
+    # ``check_eligibility`` instead of degrading to ``IneligiblePreRecorder``.
+    # Distinct ``intent_recorder_client_init_failed:`` reason prefix so
+    # operators can tell client-construction failures apart from query
+    # failures during incident triage.
+    if ck_client is not None:
+        client = ck_client
+    else:
+        try:
+            client = _default_ck_client()
+        except Exception as exc:  # noqa: BLE001
+            return IneligiblePreRecorder(reason=f"intent_recorder_client_init_failed: {type(exc).__name__}: {exc}")
+
     try:
         n = _count_live_intents(client, session_date, strategy_id)
     except Exception as exc:  # noqa: BLE001

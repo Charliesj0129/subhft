@@ -332,15 +332,15 @@ def _check_hftbacktest_v2_data_format(path: str) -> list[str]:
         if "ev" in names:
             if arr.dtype["ev"].kind not in ("i", "u"):
                 errors.append("'ev' flag must be an integer field")
-            elif len(arr) > 0:
-                try:
-                    from hftbacktest import DEPTH_SNAPSHOT_EVENT
-
-                    first_ev = int(arr[0]["ev"])
-                    if not (first_ev & DEPTH_SNAPSHOT_EVENT):
-                        errors.append("First event is not DEPTH_SNAPSHOT_EVENT")
-                except ImportError:
-                    pass
+            # Note: previous versions of this check additionally asserted that
+            # ``first_ev & DEPTH_SNAPSHOT_EVENT`` was set. That assertion was
+            # never satisfied by real CK exports (which start with regular
+            # DEPTH+BUY/SELL events), so it produced spurious errors for every
+            # valid corpus file -- bypassed only by alphas with empty
+            # ``data_fields`` (e.g. c75). The check has been removed in favour
+            # of ``research/backtest/_npz_format.py::detect_npz_format``,
+            # which is consumed by the runner when ``feature_mode`` requires
+            # L5 depth. See docs/runbooks/npz-formats-2026-05-06.md.
         else:
             errors.append("Missing required field 'ev'")
 

@@ -1,0 +1,63 @@
+alpha_id: c75_tmf_mw_ofi_taker
+name: "Multi-Window OFI Taker (FE-v3, frozen weights)"
+version: "0.2.0"
+status: GATE_B
+tier: TIER_2
+owner: charlie
+strategy_type: taker
+instrument: TMFD6
+
+instruments:
+  - TMFD6
+
+# Slice-D path-b extension: round-trippable formula text for
+# `src/hft_platform/alpha/dsl/`. Updated 2026-05-06 to drop the
+# deep_depth_momentum_x1000 term per
+# docs/runbooks/c75-depth-parity-decision-2026-05-06.md.
+dsl_formula: "0.667 * ofi_l1_ema5s + 0.333 * ofi_l1_ema30s"
+parent_alpha_id: null
+
+hypothesis: >
+  Composite multi-window OFI signal (0.667 * ofi_l1_ema5s
+  + 0.333 * ofi_l1_ema30s) predicts informed flow when spread is not in
+  anomalous-widen regime. Fires IOC market-aggressing taker on the
+  favorable side at 1.5-sigma threshold. Frozen weights from
+  Cont-Kukanov 2014 (multi-window OFI lineage), rebalanced from
+  0.6/0.3 to 0.667/0.333 after the deep-depth-momentum term was dropped
+  per the 2026-05-06 depth-parity decision -- preserves the original
+  6:3 short/long-window ratio while honestly reflecting what the
+  backtest can score.
+
+formula: "alpha_t = 0.667 * ofi_l1_ema5s_t + 0.333 * ofi_l1_ema30s_t"
+
+paper_refs:
+  - "Cont-Kukanov 2014 OFI"
+
+# FE-v3 derived features are computed by FeatureEngine inside the
+# AlphaStrategyBridge -- the alpha indexes the 27-tuple directly.  No raw
+# data_fields are required; Gate A's field-availability check is loose.
+data_fields: []
+
+complexity: "O(1)"
+
+feature_set_version: lob_shared_v3
+
+# Latency realism: Shioaji asymmetric measured profile (per
+# docs/architecture/latency-baseline-shioaji-sim-vs-system.md).
+latency_profile: r47_maker_shioaji_p95_v2026-04-24_measured
+
+# Frozen tunables -- zero-free-parameter alpha. Do not sweep.
+parameters:
+  weights:
+    ofi_l1_ema5s: 0.667
+    ofi_l1_ema30s: 0.333
+  fire_threshold_stdev_multiplier: 1.5
+  fire_threshold_window_ticks: 300
+  spread_regime_multiplier: 1.5
+  warmup_ticks: 300
+
+# SOP attribution
+roles_used:
+  - planner
+skills_used:
+  - hft-backtester

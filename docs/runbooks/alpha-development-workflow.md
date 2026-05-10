@@ -330,7 +330,7 @@ A minimal expression language for declaring screener formulas: parser, compiler,
 - **Constitution:** `CLAUDE.md`, `.agent/rules/01-core-laws.md`.
 - **Stabilization charter:** `docs/loop_v1_stabilization_charter.md`, `docs/loop_v1_stabilization_log.md`.
 - **Deep-dive runbooks:** `docs/runbooks/replay-parity-gate.md`, `docs/runbooks/loop_v1_migration_l7.md`, `docs/runbooks/research-feature-promotion.md`, `docs/runbooks/forced_promotion.md`.
-- **Reviewer skill (read-only):** `.claude/skills/hft-alpha-promotion/`.
+- **Reviewer skill (read-only):** `.agent/skills/validation-gate/`.
 - **Agent team:** `.agent/teams/alpha-research/` (roles, hooks, rounds, shared-context template).
 - **Project memory:**
   - `backtest_method_reliability.md` — choose the backtest method honestly.

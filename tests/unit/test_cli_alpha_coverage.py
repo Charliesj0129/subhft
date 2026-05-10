@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -23,6 +24,10 @@ def _ns(**kwargs) -> argparse.Namespace:
     }
     defaults.update(kwargs)
     return argparse.Namespace(**defaults)
+
+
+def _strict_profile_loader_module() -> SimpleNamespace:
+    return SimpleNamespace(load_profile=MagicMock(return_value=SimpleNamespace(name="vm_ul6_strict", is_strict=True)))
 
 
 # ---------------------------------------------------------------------------
@@ -803,6 +808,7 @@ class TestCmdAlphaPromote:
             max_live_slippage_bps=5.0,
             max_live_drawdown_contribution=0.1,
             max_execution_error_rate=0.01,
+            profile="vm_ul6_strict",
         )
 
     def test_import_failure_exits(self):
@@ -818,8 +824,15 @@ class TestCmdAlphaPromote:
         fake_result.to_dict.return_value = {"approved": True}
         fake_mod = MagicMock()
         fake_mod.PromotionConfig = MagicMock()
+        fake_mod.PromotionResult = MagicMock()
         fake_mod.promote_alpha.return_value = fake_result
-        with patch.dict("sys.modules", {"hft_platform.alpha.promotion": fake_mod}):
+        with patch.dict(
+            "sys.modules",
+            {
+                "hft_platform.alpha.promotion": fake_mod,
+                "hft_platform.alpha._validation_profile": _strict_profile_loader_module(),
+            },
+        ):
             cmd_alpha_promote(self._make_args())
         out = capsys.readouterr().out
         data = json.loads(out)
@@ -832,8 +845,15 @@ class TestCmdAlphaPromote:
         fake_result.to_dict.return_value = {"approved": False}
         fake_mod = MagicMock()
         fake_mod.PromotionConfig = MagicMock()
+        fake_mod.PromotionResult = MagicMock()
         fake_mod.promote_alpha.return_value = fake_result
-        with patch.dict("sys.modules", {"hft_platform.alpha.promotion": fake_mod}):
+        with patch.dict(
+            "sys.modules",
+            {
+                "hft_platform.alpha.promotion": fake_mod,
+                "hft_platform.alpha._validation_profile": _strict_profile_loader_module(),
+            },
+        ):
             with pytest.raises(SystemExit) as exc_info:
                 cmd_alpha_promote(self._make_args())
         assert exc_info.value.code == 2
@@ -849,8 +869,15 @@ class TestCmdAlphaPromote:
         fake_result.to_dict.return_value = {"approved": True}
         fake_mod = MagicMock()
         fake_mod.PromotionConfig = MagicMock()
+        fake_mod.PromotionResult = MagicMock()
         fake_mod.promote_alpha.return_value = fake_result
-        with patch.dict("sys.modules", {"hft_platform.alpha.promotion": fake_mod}):
+        with patch.dict(
+            "sys.modules",
+            {
+                "hft_platform.alpha.promotion": fake_mod,
+                "hft_platform.alpha._validation_profile": _strict_profile_loader_module(),
+            },
+        ):
             cmd_alpha_promote(self._make_args())
         out = capsys.readouterr().out
         assert "Gate D" in out

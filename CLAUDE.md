@@ -27,7 +27,7 @@ Violation causes critical latency penalties or financial loss.
 - **C4 diagrams**: `.agent/library/c4-model-current.md`
 - **Cluster evolution backlog**: `.agent/library/cluster-evolution-backlog.md`
 - **Detailed governance rules**: `.agent/rules/` (auto-loaded)
-- **Rust exports reference**: `.claude/skills/hft-rust-exports/` (on-demand skill)
+- **Rust exports reference**: `.agent/skills/hft-rust-exports/` (on-demand skill)
 
 ### Runtime Pipeline
 
@@ -67,7 +67,7 @@ Do not rename these packages — they are load-bearing across hundreds of import
 
 ## 📦 Key Data Contracts
 
-All prices are scaled int (x10000). Contract flow: `OrderIntent → RiskDecision → OrderCommand → FillEvent → PositionDelta`. Field reference (per-contract files and columns): `.claude/skills/hft-data-contracts/` (on-demand skill).
+All prices are scaled int (x10000). Contract flow: `OrderIntent → RiskDecision → OrderCommand → FillEvent → PositionDelta`. Field reference (per-contract files and columns): `.agent/skills/hft-data-contracts/` (on-demand skill).
 
 ## 🧬 Alpha Governance Pipeline
 
@@ -91,7 +91,7 @@ Research → Gates A/B/C/D/E/F → Canary → Shadow → Live (currently FROZEN 
 
 ## 🌐 Critical Environment Variables
 
-Essential runtime/safety vars (full reference in `.claude/skills/hft-env-vars/`):
+Essential runtime/safety vars (full reference in `.agent/skills/hft-env-vars/`):
 
 | Variable                | Default     | Purpose                                   |
 | ----------------------- | ----------- | ----------------------------------------- |

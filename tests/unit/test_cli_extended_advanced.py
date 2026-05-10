@@ -218,7 +218,12 @@ def test_cmd_alpha_promote(monkeypatch, capsys, tmp_path):
     monkeypatch.setitem(
         sys.modules,
         "hft_platform.alpha.promotion",
-        types.SimpleNamespace(PromotionConfig=_PromotionConfig, promote_alpha=_promote_alpha),
+        types.SimpleNamespace(PromotionConfig=_PromotionConfig, PromotionResult=_Result, promote_alpha=_promote_alpha),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "hft_platform.alpha._validation_profile",
+        types.SimpleNamespace(load_profile=lambda _path: types.SimpleNamespace(name="vm_ul6_strict", is_strict=True)),
     )
 
     out_file = tmp_path / "promote.json"
@@ -244,6 +249,7 @@ def test_cmd_alpha_promote(monkeypatch, capsys, tmp_path):
         config_version="v1",
         parent_config_version=None,
         out=str(out_file),
+        profile="vm_ul6_strict",
     )
     cli.cmd_alpha_promote(args)
     assert calls["promote_called"]

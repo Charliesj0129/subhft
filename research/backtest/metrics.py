@@ -217,16 +217,18 @@ def compute_ic_halflife(signals: np.ndarray, max_lag: int = 50) -> int:
     if var < 1e-15:
         return 0
 
-    # Vectorized autocovariance for all lags at once via np.correlate
     centered = arr - mean
     n_lags = min(max_lag, n // 2 - 1)
     if n_lags < 1:
         return max_lag
-    # Full autocorrelation via np.correlate; extract positive lags 1..n_lags
-    full_corr = np.correlate(centered, centered, mode="full")
-    # full_corr has length 2*n-1; midpoint is lag=0 at index n-1
-    # Lags 1..n_lags are at indices n, n+1, ..., n+n_lags-1
-    lag_covs = full_corr[n : n + n_lags] / n  # mean covariance (divide by n, matching np.mean)
+    # Direct autocovariance for the only lags we consume (1..n_lags).
+    # Earlier revision used np.correlate(mode="full"), which materialises
+    # all 2N-1 lags via O(N^2) direct convolution — the wasted work
+    # (factor n/n_lags) hung Gate C runs at N>=28k.
+    lag_covs = np.empty(n_lags, dtype=np.float64)
+    for k in range(1, n_lags + 1):
+        lag_covs[k - 1] = np.dot(centered[:-k], centered[k:])
+    lag_covs /= n  # mean covariance (divide by n, matching np.mean)
     acf = lag_covs / var
 
     # Find first lag where ACF < 0.5
