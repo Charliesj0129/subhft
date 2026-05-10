@@ -148,7 +148,7 @@ class PromotionResult:
         return d
 
 
-def promote_alpha(config: PromotionConfig) -> PromotionResult:
+def promote_alpha(config: PromotionConfig) -> PromotionResult:  # noqa: C901
     profile = getattr(config, "validation_profile", None)
     if profile is None or not getattr(profile, "is_strict", False):
         raise PromotionError(

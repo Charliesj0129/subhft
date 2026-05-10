@@ -26,7 +26,6 @@ as an environmental error.
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -125,9 +124,7 @@ def check_eligibility(
         try:
             client = _default_ck_client()
         except Exception as exc:  # noqa: BLE001
-            return IneligiblePreRecorder(
-                reason=f"intent_recorder_client_init_failed: {type(exc).__name__}: {exc}"
-            )
+            return IneligiblePreRecorder(reason=f"intent_recorder_client_init_failed: {type(exc).__name__}: {exc}")
 
     try:
         n = _count_live_intents(client, session_date, strategy_id)

@@ -237,6 +237,5 @@ def test_default_ck_client_does_not_call_clickhouse_connect_directly(monkeypatch
 
     assert len(canonical_calls) == 1
     assert direct_calls == [], (
-        f"_default_ck_client must not call clickhouse_connect.get_client directly; "
-        f"detected: {direct_calls!r}"
+        f"_default_ck_client must not call clickhouse_connect.get_client directly; detected: {direct_calls!r}"
     )

@@ -22,7 +22,6 @@ from pathlib import Path
 from hft_platform.alpha._validation_profile import ValidationProfile
 from hft_platform.alpha.promotion import PromotionConfig, promote_alpha
 
-
 _IMPL_PY_TEMPLATE = '''"""Synthetic alpha impl.py used by promotion-dry-run tests."""
 
 from hft_platform.alpha.types import AlphaStatus

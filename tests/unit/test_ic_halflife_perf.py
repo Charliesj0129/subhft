@@ -11,6 +11,7 @@ These tests:
   * lock in the bit-identical output behaviour on a small case;
   * lock in the perf budget at the sizes Gate C actually exercises.
 """
+
 from __future__ import annotations
 
 import time
@@ -65,8 +66,7 @@ class TestComputeICHalflifePerf:
         result = compute_ic_halflife(signals)
         elapsed = time.perf_counter() - start
         assert elapsed < 15.0, (
-            f"compute_ic_halflife took {elapsed:.2f}s at N={n}; "
-            "regression of the np.correlate(mode='full') O(N^2) bug."
+            f"compute_ic_halflife took {elapsed:.2f}s at N={n}; regression of the np.correlate(mode='full') O(N^2) bug."
         )
         assert isinstance(result, int)
         assert 0 <= result <= 50
@@ -79,7 +79,6 @@ class TestComputeICHalflifePerf:
         result = compute_ic_halflife(signals)
         elapsed = time.perf_counter() - start
         assert elapsed < 15.0, (
-            f"compute_ic_halflife took {elapsed:.2f}s at N=410k; "
-            "Gate C will hang on full-day signal series."
+            f"compute_ic_halflife took {elapsed:.2f}s at N=410k; Gate C will hang on full-day signal series."
         )
         assert isinstance(result, int)
