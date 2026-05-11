@@ -689,7 +689,7 @@ groups:
 
   # ── Gateway Heartbeat (M-11) ─────────────────────────────────
   - alert: ExecutionGatewayHeartbeatStale
-    expr: (time() - execution_gateway_heartbeat_ts) > 60
+    expr: execution_gateway_heartbeat_ts > 0 and (time() - execution_gateway_heartbeat_ts) > 60
     for: 30s
     labels:
       severity: critical

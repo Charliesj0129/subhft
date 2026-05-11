@@ -186,6 +186,25 @@ def test_backup_stale_gates_on_nonzero_timestamp():
     )
 
 
+def test_execution_gateway_heartbeat_stale_gates_on_nonzero_timestamp():
+    """ExecutionGatewayHeartbeatStale must not fire when heartbeat is 0.
+
+    When HFT_GATEWAY_ENABLED=0 the gateway never advances
+    `execution_gateway_heartbeat_ts`, so it stays at the default 0. Without
+    the `> 0` gate `(time() - 0) > 60` is always true and the alert fires
+    forever on engines that intentionally don't run the gateway. Same bug
+    class as AlphaSignalSilent and BackupStale.
+    """
+    alerts = _load_alerts_by_name()
+    assert "ExecutionGatewayHeartbeatStale" in alerts
+    expr = alerts["ExecutionGatewayHeartbeatStale"]["expr"]
+    assert "execution_gateway_heartbeat_ts > 0" in expr, (
+        "ExecutionGatewayHeartbeatStale must gate on a non-zero heartbeat so "
+        "engines with HFT_GATEWAY_ENABLED=0 do not page continuously. "
+        f"Current expression: {expr!r}"
+    )
+
+
 def test_redis_connection_down_alert_removed():
     """RedisConnectionDown must not exist — engine does not probe Redis.
 
