@@ -46,6 +46,46 @@ def test_alpha_signal_silent_gates_on_nonzero_timestamp():
     )
 
 
+def test_alpha_signal_silent_uses_any_alpha_decision_activity():
+    """AlphaSignalSilent must not fire while a strategy is actively deciding flat.
+
+    `alpha_last_signal_ts` is intentionally updated only for non-flat intents.
+    Strategies can remain healthy while emitting only `flat` outcomes, so the
+    alert must use `alpha_signal_events_total` activity to detect real pipeline
+    silence instead of treating no new non-flat signal as no alpha activity.
+    """
+    alerts = _load_alerts_by_name()
+    assert "AlphaSignalSilent" in alerts, "AlphaSignalSilent alert missing from rules.yaml"
+    expr = alerts["AlphaSignalSilent"]["expr"]
+    assert "increase(alpha_signal_events_total[5m])" in expr, (
+        "AlphaSignalSilent must gate on recent alpha decision activity so flat "
+        f"decisions do not page as pipeline silence. Current expression: {expr!r}"
+    )
+    assert 'outcome="intent"' not in expr, (
+        "AlphaSignalSilent must count both intent and flat outcomes. "
+        f"Current expression: {expr!r}"
+    )
+
+
+def test_feature_quality_flags_spike_excludes_partial_warmup_flags():
+    """FeatureQualityFlagsSpike must only page on corrupt feature flags.
+
+    PARTIAL is emitted for crossed/empty book warmup-style updates and is accepted
+    by strategy feature gating. It should not keep Telegram noisy by itself.
+    """
+    alerts = _load_alerts_by_name()
+    assert "FeatureQualityFlagsSpike" in alerts
+    expr = alerts["FeatureQualityFlagsSpike"]["expr"]
+    assert "partial" not in expr, (
+        "FeatureQualityFlagsSpike must not include partial warmup flags. "
+        f"Current expression: {expr!r}"
+    )
+    assert "state_reset" in expr, (
+        "FeatureQualityFlagsSpike should include state_reset with other corrupt "
+        f"feature flags. Current expression: {expr!r}"
+    )
+
+
 def test_feed_gap_critical_gates_on_trading_hours():
     """FeedGapCritical must not fire during exchange holidays or closed sessions."""
     alerts = _load_alerts_by_name()
@@ -54,6 +94,57 @@ def test_feed_gap_critical_gates_on_trading_hours():
     assert "market_trading_hours_active == 1" in expr, (
         "FeedGapCritical must use the runtime trading-hours gauge so a restart "
         f"during holidays/off-hours does not page Telegram. Current expression: {expr!r}"
+    )
+
+
+def test_shioaji_watchdog_thread_down_gates_on_trading_hours():
+    """ShioajiWatchdogThreadDown must not page during holidays/off-hours.
+
+    The quote watchdog intentionally skips recovery outside trading hours. If
+    the broker session is refreshed or logged out during a closed market, the
+    thread liveness gauge can be 0 without live market-data risk.
+    """
+    alerts = _load_alerts_by_name()
+    assert "ShioajiWatchdogThreadDown" in alerts
+    expr = alerts["ShioajiWatchdogThreadDown"]["expr"]
+    assert "market_trading_hours_active == 1" in expr, (
+        "ShioajiWatchdogThreadDown must use the runtime trading-hours gauge so "
+        f"weekends/holidays do not page Telegram. Current expression: {expr!r}"
+    )
+
+
+def test_shioaji_crash_signature_detected_gates_on_trading_hours():
+    """ShioajiCrashSignatureDetected must not page during holidays/off-hours.
+
+    The Shioaji Solace C library intermittently corrupts the Python heap during
+    `subscribe_symbol` and segfaults the engine, which Docker `restart_policy=always`
+    relaunches. Outside trading hours those restarts are operational noise — the
+    engine is not handling live market data and we cannot fix the broker C lib.
+    Same rationale as ShioajiWatchdogThreadDown.
+    """
+    alerts = _load_alerts_by_name()
+    assert "ShioajiCrashSignatureDetected" in alerts
+    expr = alerts["ShioajiCrashSignatureDetected"]["expr"]
+    assert "market_trading_hours_active == 1" in expr, (
+        "ShioajiCrashSignatureDetected must use the runtime trading-hours gauge "
+        f"so weekends/holidays do not page Telegram on each engine restart. "
+        f"Current expression: {expr!r}"
+    )
+
+
+def test_feed_reconnect_failure_ratio_high_gates_on_trading_hours():
+    """FeedReconnectFailureRatioHigh must not page during holidays/off-hours.
+
+    Reconnect retries during an engine restart loop on a closed market are
+    operational noise. The actionable feed-reconnect failures happen during
+    trading hours when live market data is at risk.
+    """
+    alerts = _load_alerts_by_name()
+    assert "FeedReconnectFailureRatioHigh" in alerts
+    expr = alerts["FeedReconnectFailureRatioHigh"]["expr"]
+    assert "market_trading_hours_active == 1" in expr, (
+        "FeedReconnectFailureRatioHigh must use the runtime trading-hours gauge "
+        f"so weekends/holidays do not page Telegram. Current expression: {expr!r}"
     )
 
 
