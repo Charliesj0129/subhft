@@ -332,13 +332,13 @@ groups:
         description: "feature_plane_latency_ns p99 exceeded 500us for 5m."
 
   - alert: FeatureQualityFlagsSpike
-    expr: sum(increase(feature_quality_flags_total{flag=~"gap|state_reset|out_of_order"}[10m])) > 0
+    expr: sum(increase(feature_quality_flags_total{flag=~"gap|out_of_order"}[10m])) > 0
     for: 2m
     labels:
         severity: warning
     annotations:
         summary: "Feature quality flags spike"
-        description: "Corrupt feature quality flags (gap/state_reset/out_of_order) increased in the last 10m."
+        description: "Corrupt feature quality flags (gap/out_of_order) increased in the last 10m. state_reset is excluded -- it is a designed warmup/reconnect signal that trickles in for hours after startup as thinly-traded symbols tick."
 
   - alert: FeaturePlaneUpdateErrorRatioHigh
     expr: |
@@ -526,7 +526,7 @@ groups:
 
   # Event loop lag
   - alert: EventLoopLagHigh
-    expr: event_loop_lag_ms > 5
+    expr: event_loop_lag_ms > 5 and on() market_trading_hours_active == 1
     for: 1m
     labels:
         severity: warning
@@ -643,6 +643,7 @@ groups:
     expr: |
       (sum by (strategy) (increase(alpha_signal_events_total[5m])) == 0)
       and on(strategy) alpha_last_signal_ts > 0
+      and on() market_trading_hours_active == 1
     for: 1m
     labels:
       severity: warning
