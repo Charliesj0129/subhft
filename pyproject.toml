@@ -6,7 +6,7 @@ requires-python = ">=3.12"
 dependencies = [
     "numpy>=2.2,<3",
     "pandas>=2.3,<4",
-    "clickhouse-connect>=0.10,<1",
+    "clickhouse-connect>=0.10,<2",
     "structlog>=25.1,<26",
     "msgspec>=0.20,<1",
     "hftbacktest>=2.4,<3",
