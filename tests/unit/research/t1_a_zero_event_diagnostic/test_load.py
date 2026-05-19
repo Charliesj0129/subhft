@@ -117,3 +117,20 @@ def test_freshness_check_matches_summary(tmp_path: Path, make_coverage_csv):
     assert out["audited_trading_days_summary"] == 2
     assert out["audited_trading_days_in_input"] == 2
     assert out["match"] is True
+
+
+def test_freshness_check_uses_unique_trading_days(tmp_path: Path, make_coverage_csv):
+    coverage = make_coverage_csv(
+        [
+            coverage_row(contract="TXFB6", trading_day="2026-04-01"),
+            coverage_row(contract="TXFD6", trading_day="2026-04-01"),
+        ]
+    )
+    df, _ = load_and_dedupe_coverage([coverage])
+    events = tmp_path / "20260513T153706Z_opening_range_events.csv"
+    events.write_text("", encoding="utf-8")
+    summary = tmp_path / "20260513T153706Z_summary.json"
+    summary.write_text('{"audited_trading_days": 1, "events": 0}', encoding="utf-8")
+    out = freshness_check(df, events)
+    assert out["audited_trading_days_in_input"] == 1
+    assert out["match"] is True

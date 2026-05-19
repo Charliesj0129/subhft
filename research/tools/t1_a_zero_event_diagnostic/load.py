@@ -114,9 +114,9 @@ def find_summary_sibling(path: str | Path) -> Path | None:
 
 
 def freshness_check(df: pd.DataFrame, viability_events_csv: str | Path) -> dict:
-    """Compare deduped coverage row count to sibling viability summary days."""
+    """Compare deduped unique trading days to sibling viability summary days."""
     summary_path = find_summary_sibling(viability_events_csv)
-    input_days = int(len(df))
+    input_days = int(df["trading_day"].nunique()) if "trading_day" in df.columns else 0
     result = {
         "summary_path": str(summary_path) if summary_path else None,
         "audited_trading_days_summary": None,
