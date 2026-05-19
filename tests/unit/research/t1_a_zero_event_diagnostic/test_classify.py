@@ -84,6 +84,19 @@ def test_classify_row_uses_max_break_pts_not_first_touch():
     assert cause == "would_emit"
 
 
+def test_classify_row_trusts_detector_selected_flag_as_single_source_of_truth():
+    row = coverage_row(
+        break_side="up",
+        break_magnitude_pts=1.0,
+        max_upside_break_pts=12.0,
+        max_downside_break_pts=0.0,
+        realized_vol_ratio=1.40,
+        vwap_side_at_break="below",
+        event_selected_by_v0=True,
+    )
+    assert classify_rejection_cause(row) == "would_emit"
+
+
 def test_classify_row_rv_ratio_below():
     row = coverage_row(
         break_side="up",

@@ -50,6 +50,8 @@ def classify_rejection_cause(row: Mapping) -> str:
         return "missing_opening"
     if status == "missing_post":
         return "missing_post"
+    if bool(row.get("event_selected_by_v0")):
+        return "would_emit"
 
     rv_ratio = row.get("realized_vol_ratio")
     mag_vs_rv = row.get("break_magnitude_vs_prior_realized_vol")

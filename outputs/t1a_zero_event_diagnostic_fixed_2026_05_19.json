@@ -1,0 +1,114 @@
+{
+  "aggregate": {
+    "cause_counts": {
+      "break_below_8pt": 0,
+      "missing_opening": 19,
+      "missing_post": 15,
+      "no_break": 8,
+      "rv_ratio_below_1.25": 36,
+      "vwap_filter_fail": 0,
+      "would_emit": 7,
+      "zero_opening_rv": 1
+    },
+    "conditional_probs": {
+      "P_break_given_post": 0.8461538461538461,
+      "P_mag_ge_8_given_break": 1.0,
+      "P_post_present": 0.6046511627906976,
+      "P_rv_ratio_ge_1_25_given_break": 0.1590909090909091,
+      "P_vwap_ok_given_qualifying": 1.0,
+      "P_would_emit": 0.08139534883720931
+    },
+    "contract_month_grid": {
+      "TXFB6|2026-01|missing_opening": 1,
+      "TXFB6|2026-01|rv_ratio_below_1.25": 2,
+      "TXFB6|2026-01|would_emit": 2,
+      "TXFB6|2026-02|missing_opening": 2,
+      "TXFB6|2026-02|no_break": 1,
+      "TXFB6|2026-02|rv_ratio_below_1.25": 2,
+      "TXFC6|2026-02|missing_opening": 1,
+      "TXFC6|2026-02|rv_ratio_below_1.25": 1,
+      "TXFC6|2026-03|no_break": 3,
+      "TXFC6|2026-03|rv_ratio_below_1.25": 8,
+      "TXFC6|2026-03|would_emit": 1,
+      "TXFD6|2026-01|missing_opening": 3,
+      "TXFD6|2026-01|missing_post": 1,
+      "TXFD6|2026-01|no_break": 1,
+      "TXFD6|2026-02|missing_opening": 2,
+      "TXFD6|2026-02|missing_post": 3,
+      "TXFD6|2026-02|no_break": 1,
+      "TXFD6|2026-02|rv_ratio_below_1.25": 1,
+      "TXFD6|2026-03|missing_opening": 2,
+      "TXFD6|2026-03|rv_ratio_below_1.25": 5,
+      "TXFD6|2026-03|would_emit": 1,
+      "TXFD6|2026-04|missing_opening": 2,
+      "TXFD6|2026-04|rv_ratio_below_1.25": 6,
+      "TXFD6|2026-04|would_emit": 1,
+      "TXFE6|2026-02|missing_opening": 1,
+      "TXFE6|2026-02|missing_post": 1,
+      "TXFE6|2026-03|missing_opening": 1,
+      "TXFE6|2026-03|missing_post": 10,
+      "TXFE6|2026-03|rv_ratio_below_1.25": 2,
+      "TXFE6|2026-03|would_emit": 1,
+      "TXFE6|2026-03|zero_opening_rv": 1,
+      "TXFE6|2026-04|missing_opening": 3,
+      "TXFE6|2026-04|no_break": 2,
+      "TXFE6|2026-04|rv_ratio_below_1.25": 5,
+      "TXFE6|2026-04|would_emit": 1,
+      "TXFE6|2026-05|missing_opening": 1,
+      "TXFE6|2026-05|rv_ratio_below_1.25": 4
+    },
+    "longest_no_break_trading_day_streak": 5,
+    "n_total": 86,
+    "pair_availability_gap_rate": null,
+    "per_contract_day_counts": {
+      "TXFB6": 10,
+      "TXFC6": 14,
+      "TXFD6": 29,
+      "TXFE6": 33
+    },
+    "would_emit_count_from_coverage": 7
+  },
+  "primary_reason": "A1",
+  "reasons": [
+    "A1: P(missing_opening)=22.09% >= 20%"
+  ],
+  "run_config": {
+    "coverage_csv_sha256_by_path": {
+      "research/experiments/validations/T1_A_opening_range_definition_coverage_audit_v0_fixed_20260519/20260519T095812Z_opening_range_coverage.csv": "69aceddd871277e78ab3adf48dfd0af62198bc159086c5ccf81ae3872a8a8e13"
+    },
+    "freshness_check": {
+      "audited_trading_days_in_input": 57,
+      "audited_trading_days_summary": 57,
+      "match": true,
+      "summary_path": "research/experiments/validations/T1_regime_viability_audit_v0_fixed_20260519/20260519T100217Z_summary.json"
+    },
+    "git_sha": "f4deecd31f583ce38fc2b44ae1a16d9802ef1928",
+    "spec_path": "docs/superpowers/specs/2026-05-19-t1a-zero-event-diagnostic-design.md",
+    "spec_sha256": "4d2bf2df832cf66af3160b0cdf349673571588e31950193e9bfef52f72b96802",
+    "thresholds": {
+      "A1_missing_opening_rate": 0.2,
+      "A2_missing_post_rate": 0.2,
+      "A3_zero_rv_rate": 0.2,
+      "A4_break_rate": 0.1,
+      "A4_n_post_floor": 20,
+      "B0_n_break_floor": 10,
+      "B0_n_post_floor": 20,
+      "B1_break_rate": 0.3,
+      "B2_would_emit_rate": 0.1,
+      "B3a_mag_ge_8_rate": 0.2,
+      "B3b_n_mag_floor": 5,
+      "B3b_rv_rate": 0.3,
+      "B3c_n_qualifying_floor": 5,
+      "B3c_vwap_rate": 0.3,
+      "C1_days_per_contract": 20,
+      "C1_min_contracts_below": 2,
+      "C2_pair_gap_rate": 0.3,
+      "C3_consecutive_days": 14
+    },
+    "viability_event_count": 7,
+    "viability_events_csv": "research/experiments/validations/T1_regime_viability_audit_v0_fixed_20260519/20260519T100217Z_opening_range_events.csv",
+    "viability_events_csv_sha256": "f122ad147e2f2e461a6aa5dedc34f2f29f8b47e9cf8111ac21ba5e643c0c3a8b",
+    "viability_summary_event_count": 7
+  },
+  "verdict": "DETECTOR_BUG"
+}

@@ -1,0 +1,31 @@
+{
+  "track": "T1: TXF Higher-Timeframe Regime -> TMF Expression",
+  "candidate": "T1_regime_viability_audit_v0",
+  "events": 7,
+  "audited_trading_days": 57,
+  "event_trading_days": 7,
+  "contracts": [
+    "TXFB6",
+    "TXFC6",
+    "TXFD6",
+    "TXFE6"
+  ],
+  "median_return_30m": -82.0,
+  "p10_return_30m": -187.0,
+  "remove_best_1_median_return_30m": -89.0,
+  "stop_breach_rate": 0.8571428571428571,
+  "csv_path": "research/experiments/validations/T1_regime_viability_audit_v0_fixed_20260519/20260519T100217Z_opening_range_events.csv",
+  "definition": {
+    "l2_alpha_restriction": "L2 is used only for executable bid/ask and quote sanity checks; entry is TXF higher-timeframe regime.",
+    "opening_range_minutes": 30,
+    "confirm_minutes": 30,
+    "min_break_points": 8.0,
+    "min_rv_ratio": 1.25,
+    "months": [
+      "B6",
+      "C6",
+      "D6",
+      "E6"
+    ]
+  }
+}
