@@ -133,6 +133,20 @@ def _render_markdown(payload: dict[str, Any]) -> str:
         formatted = "-" if value is None else f"{value:.2%}"
         lines.append(f"| {metric} | {formatted} |")
 
+    lines.extend(
+        [
+            "",
+            "## Contract-Month Breakdown",
+            "",
+            "| contract | year_month | cause | count |",
+            "| --- | --- | --- | ---: |",
+        ]
+    )
+    grid = payload["aggregate"]["contract_month_grid"]
+    for key in sorted(grid):
+        contract, year_month, cause = key.split("|", 2)
+        lines.append(f"| {contract} | {year_month} | {cause} | {grid[key]} |")
+
     return "\n".join(lines) + "\n"
 
 

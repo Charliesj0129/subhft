@@ -55,8 +55,9 @@
       "TXFE6|2026-05|missing_opening": 1,
       "TXFE6|2026-05|rv_ratio_below_1.25": 4
     },
-    "longest_no_break_trading_day_streak": 2,
+    "longest_no_break_trading_day_streak": 8,
     "n_total": 86,
+    "pair_availability_gap_rate": null,
     "per_contract_day_counts": {
       "TXFB6": 10,
       "TXFC6": 14,
@@ -81,7 +82,7 @@
       "match": true,
       "summary_path": "research/experiments/validations/T1_regime_viability_audit_v0/20260513T153706Z_summary.json"
     },
-    "git_sha": "a9f5d06959bf399b386492686619fce9c960f360",
+    "git_sha": "a6af810c162d3e798c59ccb81bfc525a9a992762",
     "spec_path": "docs/superpowers/specs/2026-05-19-t1a-zero-event-diagnostic-design.md",
     "spec_sha256": "4d2bf2df832cf66af3160b0cdf349673571588e31950193e9bfef52f72b96802",
     "thresholds": {
@@ -101,6 +102,7 @@
       "B3c_vwap_rate": 0.3,
       "C1_days_per_contract": 20,
       "C1_min_contracts_below": 2,
+      "C2_pair_gap_rate": 0.3,
       "C3_consecutive_days": 14
     },
     "viability_event_count": 0,

@@ -161,8 +161,50 @@ def test_aggregate_per_contract_per_month_breakdown():
 
 def test_aggregate_longest_no_break_trading_day_streak():
     rows = [
-        coverage_row(trading_day=f"2026-04-{day:02d}", break_side="none")
+        coverage_row(
+            trading_day=f"2026-04-{day:02d}",
+            break_side="none",
+            max_upside_break_pts=2.0,
+            max_downside_break_pts=0.0,
+            realized_vol_ratio=1.10,
+            break_magnitude_vs_prior_realized_vol=0.04,
+        )
         for day in range(1, 16)
     ]
     agg = aggregate(_classify(rows))
     assert agg.longest_no_break_trading_day_streak == 15
+
+
+def test_aggregate_longest_no_break_streak_uses_global_trading_day_sequence():
+    rows = [
+        coverage_row(
+            contract="TXFB6",
+            trading_day="2026-04-01",
+            coverage_status="missing_opening",
+            break_side="none",
+            max_upside_break_pts=None,
+            max_downside_break_pts=None,
+            realized_vol_ratio=None,
+            break_magnitude_vs_prior_realized_vol=None,
+        ),
+        coverage_row(
+            contract="TXFD6",
+            trading_day="2026-04-02",
+            break_side="none",
+            max_upside_break_pts=2.0,
+            max_downside_break_pts=0.0,
+            realized_vol_ratio=1.10,
+            break_magnitude_vs_prior_realized_vol=0.04,
+        ),
+        coverage_row(
+            contract="TXFE6",
+            trading_day="2026-04-03",
+            break_side="up",
+            max_upside_break_pts=12.0,
+            max_downside_break_pts=0.0,
+            realized_vol_ratio=1.40,
+            vwap_side_at_break="above",
+        ),
+    ]
+    agg = aggregate(_classify(rows))
+    assert agg.longest_no_break_trading_day_streak == 2

@@ -22,6 +22,7 @@ class AggregateResult:
     contract_month_grid: dict[tuple[str, str, str], int]
     per_contract_day_counts: dict[str, int]
     longest_no_break_trading_day_streak: int
+    pair_availability_gap_rate: float | None
     would_emit_count_from_coverage: int
 
 
@@ -60,16 +61,14 @@ def _longest_no_break_streak(df: pd.DataFrame) -> int:
     if df.empty:
         return 0
     longest = 0
-    for _contract, sub in df.sort_values(["contract", "trading_day"]).groupby(
-        "contract", sort=False
-    ):
-        streak = 0
-        for cause in sub["rejection_cause"].tolist():
-            if cause == "no_break":
-                streak += 1
-                longest = max(longest, streak)
-            else:
-                streak = 0
+    streak = 0
+    ordered = df.sort_values(["trading_day", "contract"], kind="mergesort")
+    for row in ordered.to_dict("records"):
+        if row.get("break_side") == "none" and row.get("rejection_cause") != "would_emit":
+            streak += 1
+            longest = max(longest, streak)
+        else:
+            streak = 0
     return longest
 
 
@@ -137,5 +136,6 @@ def aggregate(df: pd.DataFrame) -> AggregateResult:
         contract_month_grid=grid,
         per_contract_day_counts=per_contract_day_counts,
         longest_no_break_trading_day_streak=_longest_no_break_streak(df),
+        pair_availability_gap_rate=None,
         would_emit_count_from_coverage=n_would_emit,
     )

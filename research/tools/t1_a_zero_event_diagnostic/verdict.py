@@ -30,6 +30,7 @@ THRESHOLDS: dict[str, float] = {
     "B3c_n_qualifying_floor": 5,
     "C1_days_per_contract": 20,
     "C1_min_contracts_below": 2,
+    "C2_pair_gap_rate": 0.30,
     "C3_consecutive_days": 14,
 }
 
@@ -202,6 +203,17 @@ def _v3_reasons(agg: AggregateResult) -> list[str]:
                 f"contracts with <{THRESHOLDS['C1_days_per_contract']} days: {under}",
             )
         )
+    if (
+        agg.pair_availability_gap_rate is not None
+        and agg.pair_availability_gap_rate > THRESHOLDS["C2_pair_gap_rate"]
+    ):
+        reasons.append(
+            _reason(
+                "C2",
+                "pair availability gap rate="
+                f"{agg.pair_availability_gap_rate:.2%} > {THRESHOLDS['C2_pair_gap_rate']:.0%}",
+            )
+        )
     if agg.longest_no_break_trading_day_streak > THRESHOLDS["C3_consecutive_days"]:
         reasons.append(
             _reason(
@@ -232,8 +244,8 @@ def decide_verdict(agg: AggregateResult, *, viability_event_count: int) -> Verdi
         return VerdictResult("V0_RULE_TOO_STRICT", primary_v2, v2)
 
     v3 = _v3_reasons(agg)
-    primary_v3 = _primary(v3, ("C1", "C3"))
+    primary_v3 = _primary(v3, ("C1", "C2", "C3"))
     if primary_v3:
-        return VerdictResult("DATA_COVERAGE_NARROW", primary_v3, v3)
+        return VerdictResult("DATA_COVERAGE_NARROW", primary_v3, v2 + v3)
 
     return VerdictResult("INCONCLUSIVE", "", v2 + v3)

@@ -15,6 +15,7 @@ def _agg(
     per_contract_day_counts: dict[str, int] | None = None,
     contract_month_grid: dict[tuple[str, str, str], int] | None = None,
     longest_no_break_trading_day_streak: int = 0,
+    pair_availability_gap_rate: float | None = None,
 ) -> AggregateResult:
     counts = {
         "missing_opening": 0,
@@ -42,6 +43,7 @@ def _agg(
         contract_month_grid=contract_month_grid or {},
         per_contract_day_counts=per_contract_day_counts or {},
         longest_no_break_trading_day_streak=longest_no_break_trading_day_streak,
+        pair_availability_gap_rate=pair_availability_gap_rate,
         would_emit_count_from_coverage=counts["would_emit"],
     )
 
@@ -223,6 +225,26 @@ def test_verdict_v2_b3c_alone_does_not_fire():
     assert any("B3c" in reason for reason in out.reasons)
 
 
+def test_verdict_v2_b3c_diagnostic_preserved_when_v3_fires():
+    agg = _agg(
+        n_total=80,
+        cause_counts={"vwap_filter_fail": 5, "no_break": 30, "rv_ratio_below_1.25": 10, "break_below_8pt": 35},
+        conditional_probs={
+            "P_post_present": 1.0,
+            "P_break_given_post": 50 / 80,
+            "P_mag_ge_8_given_break": 0.40,
+            "P_rv_ratio_ge_1_25_given_break": 0.80,
+            "P_vwap_ok_given_qualifying": 0.10,
+            "P_would_emit": 0.0,
+        },
+        per_contract_day_counts={"TXFB6": 5, "TXFD6": 5},
+    )
+    out = decide_verdict(agg, viability_event_count=0)
+    assert out.verdict == "DATA_COVERAGE_NARROW"
+    assert out.primary_reason == "C1"
+    assert any("B3c" in reason for reason in out.reasons)
+
+
 def test_verdict_v2_b3c_combined_with_b3a_fires_with_b3a_primary():
     agg = _agg(
         n_total=80,
@@ -259,6 +281,26 @@ def test_verdict_v3_data_coverage_narrow_c1():
     out = decide_verdict(agg, viability_event_count=0)
     assert out.verdict == "DATA_COVERAGE_NARROW"
     assert out.primary_reason == "C1"
+
+
+def test_verdict_v3_data_coverage_narrow_c2():
+    agg = _agg(
+        n_total=40,
+        cause_counts={"no_break": 30, "break_below_8pt": 10},
+        conditional_probs={
+            "P_post_present": 1.0,
+            "P_break_given_post": 0.25,
+            "P_mag_ge_8_given_break": 0.5,
+            "P_rv_ratio_ge_1_25_given_break": 0.5,
+            "P_vwap_ok_given_qualifying": 0.5,
+            "P_would_emit": 0.0,
+        },
+        per_contract_day_counts={"TXFB6": 25, "TXFD6": 25, "TXFC6": 25, "TXFE6": 25},
+        pair_availability_gap_rate=0.31,
+    )
+    out = decide_verdict(agg, viability_event_count=0)
+    assert out.verdict == "DATA_COVERAGE_NARROW"
+    assert out.primary_reason == "C2"
 
 
 def test_verdict_v3_c3_uses_trading_day_sequence_not_calendar():
@@ -335,4 +377,5 @@ def test_verdict_thresholds_are_literal_constants():
     assert THRESHOLDS["B3c_n_qualifying_floor"] == 5
     assert THRESHOLDS["C1_days_per_contract"] == 20
     assert THRESHOLDS["C1_min_contracts_below"] == 2
+    assert THRESHOLDS["C2_pair_gap_rate"] == 0.30
     assert THRESHOLDS["C3_consecutive_days"] == 14

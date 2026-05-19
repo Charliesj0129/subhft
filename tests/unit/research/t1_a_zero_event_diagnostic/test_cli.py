@@ -141,6 +141,29 @@ def test_cli_concatenates_multiple_csv_inputs(
     assert payload["aggregate"]["n_total"] == 2
 
 
+def test_cli_markdown_includes_contract_month_breakdown(
+    tmp_path: Path, make_coverage_csv, viability_event_csv
+):
+    cov = make_coverage_csv([coverage_row(trading_day="2026-04-01")])
+    ev = viability_event_csv(n_events=0)
+    md = tmp_path / "out.md"
+    main(
+        [
+            "--coverage-csv",
+            str(cov),
+            "--viability-events-csv",
+            str(ev),
+            "--out-markdown",
+            str(md),
+            "--out-json",
+            str(tmp_path / "out.json"),
+        ]
+    )
+    text = md.read_text(encoding="utf-8")
+    assert "## Contract-Month Breakdown" in text
+    assert "| TXFD6 | 2026-04 |" in text
+
+
 def test_cli_reports_freshness_check(tmp_path: Path, make_coverage_csv):
     cov = make_coverage_csv([coverage_row(trading_day="2026-04-01")])
     ev = tmp_path / "20260513T153706Z_opening_range_events.csv"
