@@ -4,7 +4,11 @@ import json
 from pathlib import Path
 from typing import Any
 
+from structlog import get_logger
+
 from hft_platform.core import timebase
+
+logger = get_logger("manual_rearm")
 
 DEFAULT_RUNTIME_STATE_PATH = Path("outputs/production_rollout/autonomy/runtime_state.json")
 
@@ -54,10 +58,23 @@ class ManualRearmGate:
                 ctrl = _pd._shared_controller
             if ctrl is not None:
                 ctrl.force_clear(reason="manual_rearm_gate")
-        except Exception:
+            else:
+                # Different process from the live engine (typical Docker
+                # path: `docker compose exec` runs a fresh interpreter).
+                # The persisted flag will be honoured on the next engine
+                # restart via PlatformDegradeController state restore.
+                logger.warning(
+                    "manual_rearm_ipc_unreachable",
+                    state_path=str(self.state_path),
+                    note=(
+                        "Persisted to runtime_state.json but live controller "
+                        "not in this process. Restart hft-engine to apply."
+                    ),
+                )
+        except Exception as exc:
             # Persistence above is the source of truth; swallow any
             # runtime-coupling error to keep the operator path robust.
-            pass
+            logger.warning("manual_rearm_ipc_error", error=str(exc))
 
     def requires_manual_rearm(self, scope: str, *, strategy_id: str | None = None) -> bool:
         state = self._load_state()

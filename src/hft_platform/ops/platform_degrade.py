@@ -26,6 +26,11 @@ _AUTO_RECOVERABLE_REASONS: frozenset[str] = frozenset(
         "feed_reconnect_flapping",
         "reconciliation_drift",
         "rss_unhealthy",
+        # queue_depth_exceeded is level-based in platform_inputs.reduce_only_reasons:
+        # the reason is re-emitted each tick only while max(queues) >= threshold.
+        # Treating it as auto-recoverable avoids the Docker-bound latch where the
+        # rearm CLI cannot reach _shared_controller across process boundaries.
+        "queue_depth_exceeded",
     }
 )
 
@@ -331,10 +336,32 @@ def get_shared_platform_degrade_controller(
                 auto_recovery_enabled=_auto_enabled,
                 auto_recovery_cooldown_s=_cooldown,
             )
+            _restore_manual_rearm_state(_shared_controller)
         elif metrics is not None and _shared_controller.metrics is None:
             _shared_controller.metrics = metrics
             _shared_controller._sync_metrics()
         return _shared_controller
+
+
+def _restore_manual_rearm_state(controller: "PlatformDegradeController") -> None:
+    """Re-enter reduce_only if a prior run persisted manual_rearm_required.
+
+    Bridges the docker-exec rearm CLI path: when the operator runs rearm in
+    a separate process, the persistence write succeeds but the live engine's
+    `_shared_controller` is not reachable. The next engine restart used to
+    boot in NORMAL, silently clearing a flag the operator never confirmed.
+
+    Now bootstrap honours the persisted flag and starts latched until the
+    operator clears it — matching what the CLI claims to do.
+    """
+    try:
+        from hft_platform.ops.manual_rearm import ManualRearmGate
+
+        gate = ManualRearmGate()
+        if gate.requires_manual_rearm("platform"):
+            controller.enter_reduce_only(reason="restored_from_runtime_state")
+    except Exception as exc:
+        logger.warning("platform_rearm_state_restore_failed", error=str(exc))
 
 
 def reset_shared_platform_degrade_controller() -> None:

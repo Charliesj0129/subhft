@@ -110,14 +110,38 @@ class TestAutoRecovery:
     def test_auto_recovery_blocked_by_non_recoverable_reason(self):
         ctrl = PlatformDegradeController(auto_recovery_enabled=True, auto_recovery_cooldown_s=60)
         ctrl.enter_reduce_only(reason="feed_reconnect_unhealthy")
-        ctrl.enter_reduce_only(reason="queue_depth_exceeded")
-        # Feed clears but queue_depth_exceeded remains (truly non-recoverable)
+        ctrl.enter_reduce_only(reason="recorder_data_loss")
+        # Feed clears but recorder_data_loss remains (truly non-recoverable)
         recovered = ctrl.check_auto_recovery(current_reasons=[], now_ns=1_000_000_000)
         assert recovered is False
         # Even after cooldown
         recovered = ctrl.check_auto_recovery(current_reasons=[], now_ns=61_000_000_001)
         assert recovered is False
         assert ctrl.reduce_only_active is True
+
+    def test_queue_depth_exceeded_auto_recovers_when_queues_drop(self):
+        ctrl = PlatformDegradeController(auto_recovery_enabled=True, auto_recovery_cooldown_s=60)
+        ctrl.enter_reduce_only(reason="queue_depth_exceeded")
+        # Queues drop below threshold → reason no longer in current_reasons
+        ctrl.check_auto_recovery(current_reasons=[], now_ns=1_000_000_000)
+        assert ctrl.reduce_only_active is True  # still in 60s cooldown
+        recovered = ctrl.check_auto_recovery(current_reasons=[], now_ns=61_000_000_001)
+        assert recovered is True
+        assert ctrl.reduce_only_active is False
+
+    def test_queue_depth_exceeded_recovery_resets_on_retrigger(self):
+        ctrl = PlatformDegradeController(auto_recovery_enabled=True, auto_recovery_cooldown_s=60)
+        ctrl.enter_reduce_only(reason="queue_depth_exceeded")
+        ctrl.check_auto_recovery(current_reasons=[], now_ns=1_000_000_000)
+        # Burst re-fires during cooldown
+        ctrl.check_auto_recovery(current_reasons=["queue_depth_exceeded"], now_ns=30_000_000_000)
+        # 60s from t=1s would be 61s; should still NOT recover because re-fire reset the timer
+        ctrl.check_auto_recovery(current_reasons=[], now_ns=50_000_000_000)
+        recovered = ctrl.check_auto_recovery(current_reasons=[], now_ns=61_000_000_001)
+        assert recovered is False
+        # 60s after re-clear at t=50s → recover at t=111s
+        recovered = ctrl.check_auto_recovery(current_reasons=[], now_ns=111_000_000_000)
+        assert recovered is True
 
     def test_auto_recovery_reset_on_retrigger(self):
         ctrl = PlatformDegradeController(auto_recovery_enabled=True, auto_recovery_cooldown_s=60)
@@ -335,6 +359,39 @@ class TestManualRearmGateBridge:
         gate.rearm_platform()  # must not raise
         snapshot = gate.snapshot()
         assert snapshot["platform"]["manual_rearm_required"] is False
+
+
+class TestSingletonRestoresManualRearmState:
+    def setup_method(self):
+        reset_shared_platform_degrade_controller()
+
+    def teardown_method(self):
+        reset_shared_platform_degrade_controller()
+
+    def test_singleton_enters_reduce_only_when_persisted_rearm_required(self, tmp_path, monkeypatch):
+        """A prior CLI rearm sets the live engine on the wrong process; this
+        run starts fresh. The singleton must read runtime_state.json and
+        re-enter reduce_only so the operator's earlier latch decision is
+        honoured across restart."""
+        state_path = tmp_path / "runtime_state.json"
+        state_path.write_text(
+            '{"platform": {"manual_rearm_required": true, "reason": "queue_depth_exceeded"}, "strategies": {}}',
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            "hft_platform.ops.manual_rearm.DEFAULT_RUNTIME_STATE_PATH", state_path
+        )
+        ctrl = get_shared_platform_degrade_controller()
+        assert ctrl.reduce_only_active is True
+        assert "restored_from_runtime_state" in ctrl._active_reasons
+
+    def test_singleton_stays_normal_when_no_persisted_rearm(self, tmp_path, monkeypatch):
+        state_path = tmp_path / "runtime_state.json"  # absent — defaults to clean
+        monkeypatch.setattr(
+            "hft_platform.ops.manual_rearm.DEFAULT_RUNTIME_STATE_PATH", state_path
+        )
+        ctrl = get_shared_platform_degrade_controller()
+        assert ctrl.reduce_only_active is False
 
 
 class TestHFTSystemManualRearmRequest:
