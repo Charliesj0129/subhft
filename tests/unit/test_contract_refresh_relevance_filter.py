@@ -100,8 +100,7 @@ class TestRelevanceFilterInDiff:
         )
 
         assert diff["relevant_count"] == 0, (
-            "Catalog rotation of unrelated codes must not look relevant. "
-            f"got diff={diff!r}"
+            f"Catalog rotation of unrelated codes must not look relevant. got diff={diff!r}"
         )
 
     def test_diff_records_relevant_overlap_for_subscribed_removed_code(self) -> None:
@@ -140,8 +139,7 @@ class TestRelevanceFilterInDiff:
         )
 
         assert diff["relevant_count"] == 1, (
-            "Relevance scan must run on full add/remove sets, not the "
-            f"truncated log lists. got diff={diff!r}"
+            f"Relevance scan must run on full add/remove sets, not the truncated log lists. got diff={diff!r}"
         )
         assert "ZZZZ_RELEVANT" in diff["relevant_codes"]
         assert len(diff["removed_codes"]) == 200
@@ -204,9 +202,7 @@ class TestResubscribeSettleDelay:
         client.subscribed_count = 1
         return client
 
-    def test_sleep_called_between_unsub_and_sub_with_default_interval(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_sleep_called_between_unsub_and_sub_with_default_interval(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("HFT_RESUBSCRIBE_UNSUBSCRIBE_SETTLE_S", raising=False)
         from hft_platform.feed_adapter.shioaji.subscription_manager import SubscriptionManager
 

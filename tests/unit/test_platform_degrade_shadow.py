@@ -401,18 +401,14 @@ class TestSingletonRestoresManualRearmState:
             '{"platform": {"manual_rearm_required": true, "reason": "queue_depth_exceeded"}, "strategies": {}}',
             encoding="utf-8",
         )
-        monkeypatch.setattr(
-            "hft_platform.ops.manual_rearm.DEFAULT_RUNTIME_STATE_PATH", state_path
-        )
+        monkeypatch.setattr("hft_platform.ops.manual_rearm.DEFAULT_RUNTIME_STATE_PATH", state_path)
         ctrl = get_shared_platform_degrade_controller()
         assert ctrl.reduce_only_active is True
         assert "restored_from_runtime_state" in ctrl._active_reasons
 
     def test_singleton_stays_normal_when_no_persisted_rearm(self, tmp_path, monkeypatch):
         state_path = tmp_path / "runtime_state.json"  # absent — defaults to clean
-        monkeypatch.setattr(
-            "hft_platform.ops.manual_rearm.DEFAULT_RUNTIME_STATE_PATH", state_path
-        )
+        monkeypatch.setattr("hft_platform.ops.manual_rearm.DEFAULT_RUNTIME_STATE_PATH", state_path)
         ctrl = get_shared_platform_degrade_controller()
         assert ctrl.reduce_only_active is False
 

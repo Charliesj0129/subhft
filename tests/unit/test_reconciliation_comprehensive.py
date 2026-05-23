@@ -166,9 +166,7 @@ class TestReconciliationService:
         """
         svc, _ = make_recon_service()
         svc.client.account_gateway = MagicMock()
-        svc.client.account_gateway.last_positions_error = (
-            "stock: 500 Please check param."
-        )
+        svc.client.account_gateway.last_positions_error = "stock: 500 Please check param."
 
         with (
             patch.object(svc, "_metrics"),

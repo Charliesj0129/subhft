@@ -62,28 +62,43 @@ def test_alpha_signal_silent_uses_any_alpha_decision_activity():
         f"decisions do not page as pipeline silence. Current expression: {expr!r}"
     )
     assert 'outcome="intent"' not in expr, (
-        "AlphaSignalSilent must count both intent and flat outcomes. "
-        f"Current expression: {expr!r}"
+        f"AlphaSignalSilent must count both intent and flat outcomes. Current expression: {expr!r}"
     )
 
 
-def test_feature_quality_flags_spike_excludes_partial_warmup_flags():
-    """FeatureQualityFlagsSpike must only page on corrupt feature flags.
+def test_feature_quality_flags_spike_excludes_design_time_signals():
+    """FeatureQualityFlagsSpike must only page on true corruption flags.
 
-    PARTIAL is emitted for crossed/empty book warmup-style updates and is accepted
-    by strategy feature gating. It should not keep Telegram noisy by itself.
+    Three flags represent feature-state hygiene events that are NOT corruption:
+
+    - ``partial``: crossed/empty book warmup-style updates; accepted by strategy
+      feature gating.
+    - ``state_reset``: emitted by ``FeatureEngine.reset_symbol(s)`` /
+      ``reset_all`` after legitimate facade reconnect/warmup. Each emission is
+      a one-tick signal that the next feature update for the symbol is fresh
+      state; thinly-traded symbols trickle in for hours after a single startup
+      reset, so bundling it with corruption causes false-positive paging.
+    - ``stale_input``: feed-staleness is covered by ``FeedGapCritical`` and
+      ``FeedFreshness*`` rules directly, not by the feature-quality bundle.
+
+    Only ``gap`` (lost data) and ``out_of_order`` (sequence inversion) belong
+    here -- both indicate the downstream feature pipeline cannot trust its
+    inputs. Reconnect-storm visibility belongs on a dedicated rule keyed off
+    ``facade_warmup_reset`` / ``feed_resubscribe_total`` once those counters
+    exist.
     """
     alerts = _load_alerts_by_name()
     assert "FeatureQualityFlagsSpike" in alerts
     expr = alerts["FeatureQualityFlagsSpike"]["expr"]
-    assert "partial" not in expr, (
-        "FeatureQualityFlagsSpike must not include partial warmup flags. "
-        f"Current expression: {expr!r}"
-    )
-    assert "state_reset" in expr, (
-        "FeatureQualityFlagsSpike should include state_reset with other corrupt "
-        f"feature flags. Current expression: {expr!r}"
-    )
+    for benign in ("partial", "state_reset", "stale_input"):
+        assert benign not in expr, (
+            f"FeatureQualityFlagsSpike must not include {benign!r} "
+            f"(design-time signal, not corruption). Current expression: {expr!r}"
+        )
+    for corrupt in ("gap", "out_of_order"):
+        assert corrupt in expr, (
+            f"FeatureQualityFlagsSpike must continue to page on {corrupt!r}. Current expression: {expr!r}"
+        )
 
 
 def test_feed_gap_critical_gates_on_trading_hours():

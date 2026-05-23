@@ -13,13 +13,7 @@ from pathlib import Path
 
 import yaml
 
-AM_PATH = (
-    Path(__file__).resolve().parents[2]
-    / "config"
-    / "monitoring"
-    / "alerts"
-    / "alertmanager.yml"
-)
+AM_PATH = Path(__file__).resolve().parents[2] / "config" / "monitoring" / "alerts" / "alertmanager.yml"
 
 
 def _load_am() -> dict:
@@ -57,15 +51,9 @@ def test_taipei_off_hours_covers_weekday_lunch_break():
         e
         for e in sub
         if e.get("weekdays") == ["monday:friday"]
-        and any(
-            t.get("start_time") == "13:45" and t.get("end_time") == "15:00"
-            for t in e.get("times", [])
-        )
+        and any(t.get("start_time") == "13:45" and t.get("end_time") == "15:00" for t in e.get("times", []))
     ]
-    assert weekday_lunch, (
-        "Off-hours mute must include weekday 13:45-15:00 lunch break. "
-        f"Sub-intervals: {sub!r}"
-    )
+    assert weekday_lunch, f"Off-hours mute must include weekday 13:45-15:00 lunch break. Sub-intervals: {sub!r}"
 
 
 def test_taipei_off_hours_covers_weekday_morning_gap():
@@ -76,15 +64,9 @@ def test_taipei_off_hours_covers_weekday_morning_gap():
         e
         for e in sub
         if e.get("weekdays") == ["monday:friday"]
-        and any(
-            t.get("start_time") == "05:00" and t.get("end_time") == "08:45"
-            for t in e.get("times", [])
-        )
+        and any(t.get("start_time") == "05:00" and t.get("end_time") == "08:45" for t in e.get("times", []))
     ]
-    assert weekday_morning, (
-        "Off-hours mute must include weekday 05:00-08:45 morning gap. "
-        f"Sub-intervals: {sub!r}"
-    )
+    assert weekday_morning, f"Off-hours mute must include weekday 05:00-08:45 morning gap. Sub-intervals: {sub!r}"
 
 
 def test_severity_routes_reference_off_hours_mute():
@@ -100,8 +82,7 @@ def test_severity_routes_reference_off_hours_mute():
         assert sev in by_severity, f"Missing severity={sev!r} sub-route"
         mutes = by_severity[sev].get("mute_time_intervals", [])
         assert "taipei_off_hours" in mutes, (
-            f"severity={sev!r} sub-route must reference taipei_off_hours. "
-            f"Current mutes: {mutes!r}"
+            f"severity={sev!r} sub-route must reference taipei_off_hours. Current mutes: {mutes!r}"
         )
 
 
@@ -109,6 +90,5 @@ def test_root_route_has_no_mute_time_intervals():
     """AM rejects mute_time_intervals at the root route — guard against regressions."""
     cfg = _load_am()
     assert "mute_time_intervals" not in cfg["route"], (
-        "Root route must not declare mute_time_intervals (AM forbids it). "
-        "Move the field down to each child route."
+        "Root route must not declare mute_time_intervals (AM forbids it). Move the field down to each child route."
     )

@@ -258,9 +258,7 @@ class TestAlertmanagerBridgeServer:
             bridge.stop()
 
     @pytest.mark.asyncio
-    async def test_forwarded_log_includes_alertname_severity_status(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_forwarded_log_includes_alertname_severity_status(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Post-Cycle-2: bridge must emit alertname/severity/status so
         post-hoc audits can identify the rule that drove a TG burst without
         firing-time correlation."""
