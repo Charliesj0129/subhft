@@ -4,7 +4,7 @@
 -include .env
 export
 
-.PHONY: dev build-rust test test-all test-integration verify-ce3 coverage coverage-html arch-gate dependency-boundary test-assertion-check test-name-check test-quality-pattern-check test-collection-check test-hygiene-check test-file test-node lint lint-fix format format-check typecheck check latency-gate-ci benchmark benchmark-baseline benchmark-compare start start-engine start-monitor start-maintenance stop logs swarm-start swarm-stop swarm-logs clean clean-rust clean-all ci recorder-status wal-dlq-status wal-dlq-replay wal-dlq-replay-dry-run wal-manifest-tmp-cleanup drill-ck-down drill-wal-pressure drill-loader-lag wal-archive-cleanup soak-daily-report soak-weekly-report soak-canary-report deploy-drift-snapshot deploy-drift-check deploy-pre-sync-template release-channel-gate release-channel-promote release-converge-scan release-converge-clean release-converge release-converge-mvp release-first-ops-gate release-first-ops-promote release-readiness-check canary-snapshot canary-evaluate canary-auto reliability-monthly-pack roadmap-delivery-check roadmap-delivery-execute ch-query-guard-check ch-query-guard-run ch-query-guard-suite env-vars-guard feature-canary-report callback-latency-report incident-timeline history-repair research-init research-converge-tools research-clean research-audit research-audit-strict research-index research-optimize research research-run research-triage research-scaffold research-report research-fetch-paper research-search-papers research-paper-prototype research-record-paper research-summarize-paper research-check-paper-governance research-gen-synth-lob research-stamp-data-meta research-validate-data-meta monitor-remote experiment-gc experiment-gc-dry-run help pre-market-check post-market-check alert-test drill-recon-mismatch rollback-drill git-precheck git-postcheck git-session-check
+.PHONY: dev build-rust test test-all test-integration verify-ce3 coverage coverage-html arch-gate dependency-boundary test-assertion-check test-name-check test-quality-pattern-check test-collection-check test-hygiene-check test-file test-node lint lint-fix format format-check typecheck check latency-gate-ci benchmark benchmark-baseline benchmark-compare start start-engine start-monitor start-maintenance stop logs swarm-start swarm-stop swarm-logs clean clean-rust clean-all ci recorder-status wal-dlq-status wal-dlq-replay wal-dlq-replay-dry-run wal-manifest-tmp-cleanup drill-ck-down drill-wal-pressure drill-loader-lag wal-archive-cleanup soak-daily-report soak-weekly-report soak-canary-report deploy-drift-snapshot deploy-drift-check deploy-pre-sync-template release-channel-gate release-channel-promote release-converge-scan release-converge-clean release-converge release-converge-mvp release-first-ops-gate release-first-ops-promote release-readiness-check canary-snapshot canary-evaluate canary-auto reliability-monthly-pack roadmap-delivery-check roadmap-delivery-execute ch-query-guard-check ch-query-guard-run ch-query-guard-suite env-vars-guard feature-canary-report callback-latency-report incident-timeline history-repair research-init research-converge-tools research-clean research-audit research-audit-strict research-index research-optimize research research-run research-triage research-scaffold research-report research-fetch-paper research-search-papers research-paper-prototype research-record-paper research-summarize-paper research-check-paper-governance research-gen-synth-lob research-stamp-data-meta research-validate-data-meta research-export-l2-ticks research-validate-l2-ticks research-hftbacktest monitor-remote experiment-gc experiment-gc-dry-run help rebuild-symbols-yaml pre-market-check post-market-check alert-test drill-recon-mismatch rollback-drill git-precheck git-postcheck git-session-check
 
 PY ?= uv run python
 
@@ -279,6 +279,19 @@ latency-audit: ## Validate alpha scorecards declare latency profile + pass Gate 
 # ============================================================================
 # Failure Simulation / Drill Targets
 # ============================================================================
+
+rebuild-symbols-yaml: ## Regenerate config/symbols.yaml from current contracts cache (run after contract roll)
+	@# Pool-mode engines never auto-rebuild symbols.yaml (Fix 1, 2026-05-23):
+	@# the prior in-process rebuild was overwriting per-conn shards. Operators
+	@# must regenerate the canonical YAML offline after each contract roll so
+	@# the next pool boot partitions the fresh universe. ``--no-contracts``
+	@# is intentionally NOT used — we want the live broker cache to drive
+	@# month selection and drop expired derivatives.
+	$(PY) -m hft_platform symbols build \
+		--list-path config/symbols.list \
+		--contracts config/contracts.json \
+		--output config/symbols.yaml \
+		--preview
 
 pre-market-check: ## Run pre-market health checks (Docker, ClickHouse, Redis, WAL, metrics)
 	$(PY) scripts/pre_market_check.py
@@ -617,6 +630,27 @@ research-validate-data-meta: ## Validate data metadata sidecar for dataset
 		exit 2; \
 	fi
 	$(PY) -m research validate-data-meta "$(DATA_PATH)" $(ARGS)
+
+research-export-l2-ticks: ## Export canonical ClickHouse L2 hftbacktest NPZ plus tick NPY
+	@if [ -z "$(SYMBOLS)" ] || [ -z "$(DATE_FROM)" ] || [ -z "$(DATE_TO)" ]; then \
+		echo "Usage: make research-export-l2-ticks SYMBOLS=TMFD6 DATE_FROM=2026-03-19 DATE_TO=2026-03-19 [ARGS='--host localhost --owner research']"; \
+		exit 2; \
+	fi
+	$(PY) -m research data-pipeline export-l2-ticks --symbols "$(SYMBOLS)" --date-from "$(DATE_FROM)" --date-to "$(DATE_TO)" $(ARGS)
+
+research-validate-l2-ticks: ## Validate canonical L2 hftbacktest NPZ contract
+	@if [ -z "$(DATA_PATH)" ]; then \
+		echo "Usage: make research-validate-l2-ticks DATA_PATH=research/data/raw/tmfd6/TMFD6_2026-03-19_l2.hftbt.npz"; \
+		exit 2; \
+	fi
+	$(PY) -m research data-pipeline validate --path "$(DATA_PATH)"
+
+research-hftbacktest: ## Run hftbacktest via the canonical L2 data pipeline
+	@if [ -z "$(ALPHA)" ] || [ -z "$(DATA_PATH)" ]; then \
+		echo "Usage: make research-hftbacktest ALPHA=<alpha_id> DATA_PATH=<*_l2.hftbt.npz> [ARGS='--symbol TMFD6']"; \
+		exit 2; \
+	fi
+	$(PY) -m research data-pipeline backtest --alpha-id "$(ALPHA)" --data "$(DATA_PATH)" $(ARGS)
 
 
 research-batch-correlation: ## Batch compute pool correlations across all alpha scorecards
