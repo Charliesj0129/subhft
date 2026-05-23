@@ -130,29 +130,59 @@ def render_symbol_reload_failed(reason: str, count: int, limit: int) -> str:
     )
 
 
-def render_subscription_truncated(reason: str, requested: int, subscribed: int, limit: int) -> str:
-    """Subscription truncated below configured universe (P2 #8 fix).
+def render_subscription_truncated(
+    reason: str,
+    requested: int,
+    subscribed: int,
+    limit: int,
+    *,
+    conn_id: str | None = None,
+) -> str:
+    """Subscription truncated below this facade's shard (P2 #8 / 2026-05-23).
 
     Args:
         reason: Truncation reason label (currently ``conn_limit``).
-        requested: Number of symbols loaded into the client.
-        subscribed: Number of symbols actually subscribed before truncation.
-        limit: Per-conn cap (``MAX_SUBSCRIPTIONS_PER_CONN``) that triggered
-            truncation.
+        requested: Per-facade shard size (NOT pool universe — the prior
+            wording "requested" was misleading and is preserved only for
+            API compatibility with the dispatcher signature).
+        subscribed: Number of symbols this facade actually subscribed
+            before hitting the cap.
+        limit: Per-conn cap (``MAX_SUBSCRIPTIONS_PER_CONN``) that
+            triggered truncation.
+        conn_id: Pool connection id (``0``-``num_conns-1``) when the
+            facade is part of a ``QuoteConnectionPool``. ``None`` for
+            legacy single-facade deployments.
 
     Returns:
         Formatted subscription-truncation notification string.
+
+    2026-05-23 rewrite — the prior text suggested "increase
+    HFT_QUOTE_CONNECTIONS" as the universal remedy. That advice is wrong
+    when the real cause is a per-conn shard being overwritten (the
+    contract-refresh / pool-shard collision fixed in
+    ``contracts_runtime.py``). The message now prescribes a
+    diagnose-first checklist so an operator does not blindly raise the
+    pool size when partitioning is the actual fault.
     """
     missed = max(0, requested - subscribed)
+    conn_line = f"conn: {conn_id}\n" if conn_id is not None else ""
     return (
-        "🔴 Quote subscription TRUNCATED\n"
+        "⚠️ Quote subscription TRUNCATED\n"
         f"reason: {reason}\n"
-        f"requested: {requested}\n"
-        f"subscribed: {subscribed}\n"
-        f"missed: {missed}\n"
+        f"{conn_line}"
+        f"shard_size: {requested}\n"
+        f"subscribed_this_facade: {subscribed}\n"
+        f"dropped_this_facade: {missed}\n"
         f"per_conn_limit: {limit}\n"
-        "Symbols loaded but NEVER subscribed — increase HFT_QUOTE_CONNECTIONS "
-        "or reduce config/symbols.yaml universe."
+        "\n"
+        "Diagnose (do NOT blindly raise HFT_QUOTE_CONNECTIONS):\n"
+        "  1. ls -la /tmp/hft_quote_pool_*/symbols_group_*.yaml\n"
+        "     each shard should be ~universe/num_conns; outlier == bug\n"
+        "  2. if shard_size matches the full universe, the per-conn shard\n"
+        "     was overwritten by refresh_contracts_and_symbols (see\n"
+        "     contracts_runtime.py); restart engine to recover partition\n"
+        "  3. only if ALL shards are healthy AND total > pool capacity,\n"
+        "     raise HFT_QUOTE_CONNECTIONS"
     )
 
 

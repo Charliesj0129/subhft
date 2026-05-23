@@ -359,6 +359,12 @@ class QuoteConnectionPool:
                 config_path=self._shard_paths[group_id],
                 shioaji_config=per_conn_cfg,
             )
+            # Inject conn_id onto the inner client so subscription_manager log
+            # emitters can bind it without reaching back into the pool.
+            try:
+                facade._client.conn_id = str(group_id)  # type: ignore[attr-defined]
+            except Exception:  # pragma: no cover — facade shape guarded by tests
+                pass
             self._clients.append(facade)
 
             # Read shard YAML to extract symbol codes for the slot
