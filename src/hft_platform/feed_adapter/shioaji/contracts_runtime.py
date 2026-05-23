@@ -716,12 +716,26 @@ class ContractsRuntime:
             if not list_path.exists():
                 list_path = Path(DEFAULT_LIST_PATH)
             build_result = build_symbols(str(list_path), contract_index)
-            if build_result.symbols:
+            # Pool mode: ``config_path`` points at a QuoteConnectionPool shard
+            # (``/tmp/hft_quote_pool_*/symbols_group_<id>.yaml``) which holds
+            # only this facade's partition (~universe/num_conns). Writing the
+            # full rebuilt universe back here corrupts the partition — the
+            # 2026-05-23 root cause where ``symbols_group_0.yaml`` was being
+            # promoted to 478 symbols every hour. The pool owns shard
+            # composition; refresh only updates the broker contract index here.
+            is_pool_shard = "/hft_quote_pool_" in str(self._client.config_path)
+            if build_result.symbols and not is_pool_shard:
                 write_symbols_yaml(build_result.symbols, self._client.config_path)
                 logger.info(
                     "Symbols rebuilt from fresh contracts",
                     count=len(build_result.symbols),
                     errors=len(build_result.errors),
+                )
+            elif build_result.symbols and is_pool_shard:
+                logger.debug(
+                    "skip_symbol_yaml_write_in_pool_mode",
+                    config_path=str(self._client.config_path),
+                    rebuilt_count=len(build_result.symbols),
                 )
             if build_result.errors:
                 logger.warning("Symbol rebuild had errors", errors=build_result.errors[:5])
