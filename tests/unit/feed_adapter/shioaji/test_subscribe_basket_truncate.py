@@ -146,12 +146,16 @@ def test_subscribe_basket_bumps_truncate_metric_and_logs_critical(monkeypatch, c
     # Per-conn cap honored: subscribed_count never exceeds limit.
     assert client.subscribed_count == 120
 
-    # Critical log emitted at the truncation site. structlog formats to
-    # stdout/stderr by default — capsys captures both.
+    # Per-facade log emitted at the truncation site. structlog formats to
+    # stdout/stderr by default — capsys captures both. 2026-05-23 rewrite:
+    # template renamed to ``subscription_limit_reached`` with explicit
+    # ``shard_size``/``dropped_this_facade`` fields and downgraded to
+    # warning; the misleading ``severity="critical"`` string was dropped.
     captured = capsys.readouterr()
     combined = captured.out + captured.err
-    assert "Subscription limit reached" in combined, "truncate event must be logged"
-    assert "severity=critical" in combined, f"truncate log must carry severity=critical, got: {combined!r}"
+    assert "subscription_limit_reached" in combined, "truncate event must be logged"
+    assert "shard_size=200" in combined, f"truncate log must record shard_size, got: {combined!r}"
+    assert "dropped_this_facade=80" in combined, f"truncate log must record drop count, got: {combined!r}"
 
 
 def test_subscribe_basket_no_metric_bump_when_under_per_conn_cap(monkeypatch):
@@ -183,17 +187,21 @@ def test_subscribe_basket_invokes_dispatcher_on_truncate(monkeypatch):
             requested: int,
             subscribed: int,
             limit: int,
+            conn_id: str | None = None,
         ) -> None:
             captured["reason"] = reason
             captured["requested"] = requested
             captured["subscribed"] = subscribed
             captured["limit"] = limit
+            captured["conn_id"] = conn_id
 
     client = _ClientStub(
         symbols=_make_symbols(200),
         max_subscriptions=120,
         notification_dispatcher=_DispatcherSpy(),
     )
+    # Simulate a pool-attached facade so dispatcher receives conn_id.
+    client.conn_id = "0"
     mgr = SubscriptionManager(client)  # type: ignore[arg-type]
     monkeypatch.setattr(SubscriptionManager, "_subscribe_symbol", _patched_subscribe_symbol)
 
@@ -206,6 +214,7 @@ def test_subscribe_basket_invokes_dispatcher_on_truncate(monkeypatch):
         "requested": 200,
         "subscribed": 120,
         "limit": 120,
+        "conn_id": "0",
     }
 
 

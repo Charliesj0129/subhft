@@ -27,6 +27,44 @@ if TYPE_CHECKING:
 logger = get_logger("feed_adapter.subscription_manager")
 
 
+def _log_truncate_event(client: Any, *, requested: int, phase: str) -> None:
+    """Emit the per-facade subscription-truncate event.
+
+    2026-05-23 rewrite: prior template ("Subscription limit reached ...")
+    omitted ``conn_id`` and used the misleading field name ``requested`` for
+    what is really the per-facade shard size. The HH:04 hourly noise on the
+    live engine — driven by the contract-refresh shard-overwrite bug — went
+    undiagnosed for weeks because the template hid which conn was affected
+    and implied a pool-wide cap miss when only one shard was corrupted.
+    Severity downgraded from ``error`` to ``warning`` since the Counter
+    ``feed_subscription_truncate_total`` already records the event and no
+    alert rule consumed the prior ``severity="critical"`` string tag.
+    """
+    conn_id = str(getattr(client, "conn_id", "unknown"))
+    per_conn_limit = int(getattr(client, "MAX_SUBSCRIPTIONS", 0) or 0)
+    subscribed = int(getattr(client, "subscribed_count", 0) or 0)
+    dropped = max(0, int(requested) - subscribed)
+    symbols = getattr(client, "symbols", None) or []
+    sample: list[Any] = []
+    for sym in symbols[subscribed : subscribed + 5]:
+        if isinstance(sym, dict):
+            sample.append(sym.get("code"))
+    log = logger.bind(conn_id=conn_id)
+    log.warning(
+        "subscription_limit_reached",
+        phase=phase,
+        per_conn_limit=per_conn_limit,
+        shard_size=int(requested),
+        subscribed_this_facade=subscribed,
+        dropped_this_facade=dropped,
+        dropped_sample=sample,
+        hint=(
+            "check shard integrity (shard_size should be ~universe/num_conns); "
+            "if shard_size >> expected, suspect refresh_contracts_and_symbols overwrite"
+        ),
+    )
+
+
 class SubscriptionManager:
     """Manages symbol subscription lifecycle for Shioaji quote feeds.
 
@@ -117,22 +155,16 @@ class SubscriptionManager:
                 # P2 #8 (2026-04-27): RC-1 raised the ``_load_config`` ceiling
                 # to MAX_SUBSCRIPTIONS_PER_CLIENT (default 600) but this loop
                 # still gates at the per-conn cap (MAX_SUBSCRIPTIONS=120).
-                # When a deployment forgets to size ``HFT_QUOTE_CONNECTIONS``,
-                # 121–600 symbols are loaded but only the first 120 ever get
-                # subscribed. Previously this surfaced only as a single
-                # ``logger.error`` line — no Counter, no alert, no Telegram.
-                # We now bump ``feed_subscription_truncate_total{reason="conn_limit"}``
-                # and raise log severity to ``critical`` so the silent miss is
-                # observable. Notification dispatch happens once after the
-                # loop to avoid spamming on every iteration.
+                # Counter ``feed_subscription_truncate_total{reason="conn_limit"}``
+                # is bumped once after the loop via ``_signal_subscription_truncated``.
+                #
+                # 2026-05-23: log template rewritten to per-facade scope with
+                # ``conn_id`` + ``shard_size`` (renamed from misleading
+                # ``requested``) + ``dropped_sample`` + actionable diagnostic
+                # hint, since the old "Subscription limit reached" message hid
+                # the contract-refresh shard-overwrite bug for weeks.
                 truncated_at_limit = True
-                logger.error(
-                    "Subscription limit reached",
-                    limit=c.MAX_SUBSCRIPTIONS,
-                    requested=requested,
-                    subscribed=c.subscribed_count,
-                    severity="critical",
-                )
+                _log_truncate_event(c, requested=requested, phase="subscribe_basket")
                 break
             if self._subscribe_symbol(sym, cb):
                 code = sym.get("code")
@@ -334,15 +366,10 @@ class SubscriptionManager:
                 if c.subscribed_count >= c.MAX_SUBSCRIPTIONS:
                     # P2 #8 (2026-04-27): mirror subscribe_basket. The
                     # resubscribe path also silently dropped 121+ symbols
-                    # before this fix.
+                    # before this fix. 2026-05-23: shared log template via
+                    # ``_log_truncate_event`` (per-facade scope w/ conn_id).
                     truncated_at_limit = True
-                    logger.error(
-                        "Subscription limit reached during resubscribe",
-                        limit=c.MAX_SUBSCRIPTIONS,
-                        requested=requested,
-                        subscribed=c.subscribed_count,
-                        severity="critical",
-                    )
+                    _log_truncate_event(c, requested=requested, phase="resubscribe")
                     break
                 if self._subscribe_symbol(sym, c.tick_callback):
                     code = sym.get("code")
@@ -465,6 +492,7 @@ class SubscriptionManager:
                 requested=requested,
                 subscribed=subscribed,
                 limit=limit,
+                conn_id=str(getattr(c, "conn_id", "unknown")),
             )
             try:
                 loop = _asyncio.get_running_loop()
