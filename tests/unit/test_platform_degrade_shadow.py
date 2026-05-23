@@ -129,6 +129,29 @@ class TestAutoRecovery:
         assert recovered is True
         assert ctrl.reduce_only_active is False
 
+    def test_infra_transient_reasons_auto_recover(self):
+        """redis_unhealthy / wal_backlog_unhealthy / clickhouse_unhealthy are all
+        level-based probes (re-emitted each tick from live health checks). They
+        must auto-recover when the probe goes healthy again — otherwise a brief
+        Redis blip or CH restart latches platform_reduce_only until the engine
+        is bounced. recorder_data_loss stays non-recoverable (HALT path)."""
+        for reason in ("redis_unhealthy", "wal_backlog_unhealthy", "clickhouse_unhealthy"):
+            ctrl = PlatformDegradeController(auto_recovery_enabled=True, auto_recovery_cooldown_s=60)
+            ctrl.enter_reduce_only(reason=reason)
+            ctrl.check_auto_recovery(current_reasons=[], now_ns=1_000_000_000)
+            recovered = ctrl.check_auto_recovery(current_reasons=[], now_ns=61_000_000_001)
+            assert recovered is True, f"{reason} should auto-recover"
+            assert ctrl.reduce_only_active is False
+
+    def test_recorder_data_loss_remains_manual(self):
+        """recorder_data_loss must remain non-recoverable; autonomy_monitor
+        routes it to trigger_halt and any auto-clear would mask data integrity."""
+        ctrl = PlatformDegradeController(auto_recovery_enabled=True, auto_recovery_cooldown_s=60)
+        ctrl.enter_reduce_only(reason="recorder_data_loss")
+        recovered = ctrl.check_auto_recovery(current_reasons=[], now_ns=61_000_000_001)
+        assert recovered is False
+        assert ctrl.reduce_only_active is True
+
     def test_queue_depth_exceeded_recovery_resets_on_retrigger(self):
         ctrl = PlatformDegradeController(auto_recovery_enabled=True, auto_recovery_cooldown_s=60)
         ctrl.enter_reduce_only(reason="queue_depth_exceeded")

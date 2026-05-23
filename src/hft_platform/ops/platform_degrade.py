@@ -26,11 +26,16 @@ _AUTO_RECOVERABLE_REASONS: frozenset[str] = frozenset(
         "feed_reconnect_flapping",
         "reconciliation_drift",
         "rss_unhealthy",
-        # queue_depth_exceeded is level-based in platform_inputs.reduce_only_reasons:
-        # the reason is re-emitted each tick only while max(queues) >= threshold.
-        # Treating it as auto-recoverable avoids the Docker-bound latch where the
-        # rearm CLI cannot reach _shared_controller across process boundaries.
+        # The reasons below are all level-based in platform_inputs.reduce_only_reasons:
+        # re-emitted each tick only while the live probe still observes the failure.
+        # Without auto-recovery they latch indefinitely after a transient blip and
+        # the docker-exec rearm CLI cannot reach _shared_controller to clear them.
+        # `recorder_data_loss` is intentionally excluded: autonomy_monitor routes it
+        # to trigger_halt (data-integrity gate, manual reconciliation required).
         "queue_depth_exceeded",
+        "redis_unhealthy",
+        "wal_backlog_unhealthy",
+        "clickhouse_unhealthy",
     }
 )
 
