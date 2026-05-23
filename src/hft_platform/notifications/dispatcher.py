@@ -553,52 +553,62 @@ class NotificationDispatcher:
         requested: int,
         subscribed: int,
         limit: int,
+        *,
+        conn_id: str | None = None,
     ) -> None:
-        """Notify operator that quote subscription was truncated below the
-        configured universe.
+        """Notify operator that quote subscription was truncated on a facade.
 
-        P2 #8 fix (2026-04-27): closes the silent-miss gap RC-1 left open.
-        ``ShioajiClient._load_config`` accepts up to
-        ``MAX_SUBSCRIPTIONS_PER_CLIENT`` (default 600) symbols, but
-        ``SubscriptionManager`` still gates per-conn at
-        ``MAX_SUBSCRIPTIONS_PER_CONN`` (120). When a deployment forgets to
-        size ``HFT_QUOTE_CONNECTIONS``, half the universe gets loaded but
-        never subscribed — and previously there was no alert path. This
-        entrypoint pages within seconds of the truncation event.
+        2026-05-23 rewrite: prior message blindly recommended raising
+        ``HFT_QUOTE_CONNECTIONS``, which is wrong when the real cause is
+        a per-conn shard being inflated by ``refresh_contracts_and_symbols``
+        (the shard-overwrite bug fixed in ``contracts_runtime.py``). The
+        new template provides a diagnose-first checklist and ``conn_id``
+        so operators can distinguish "pool too small" from "shard
+        corrupted".
 
         Args:
             reason: Truncation reason label (currently ``conn_limit``).
-            requested: Number of symbols loaded into the client.
-            subscribed: Number of symbols actually subscribed.
+            requested: Per-facade shard size (kept named ``requested`` for
+                signature compatibility; rendered as ``shard_size``).
+            subscribed: Number of symbols this facade actually subscribed.
             limit: Per-conn cap that triggered truncation.
+            conn_id: Pool connection id, when emitted from a
+                ``QuoteConnectionPool`` facade.
         """
         msg = templates.render_subscription_truncated(
-            reason=reason, requested=requested, subscribed=subscribed, limit=limit
-        )
-        logger.error(
-            "dispatcher.notify_subscription_truncated",
             reason=reason,
             requested=requested,
             subscribed=subscribed,
             limit=limit,
+            conn_id=conn_id,
         )
+        logger.warning(
+            "dispatcher.notify_subscription_truncated",
+            reason=reason,
+            conn_id=conn_id,
+            shard_size=requested,
+            subscribed_this_facade=subscribed,
+            per_conn_limit=limit,
+        )
+        dedup_scope = conn_id if conn_id is not None else "_"
         alert = Alert(
             alert_id=_make_alert_id(),
-            severity=AlertSeverity.CRITICAL,
+            severity=AlertSeverity.WARN,
             category="infra",
             source="quote_subscription",
-            title=f"Quote subscription TRUNCATED ({reason})",
+            title=f"Quote subscription TRUNCATED ({reason}, conn={dedup_scope})",
             detail=msg,
             ts_ns=timebase.now_ns(),
-            dedup_key=f"subscription_truncated:{reason}",
+            dedup_key=f"subscription_truncated:{reason}:{dedup_scope}",
             metadata={
                 "reason": reason,
-                "requested": requested,
-                "subscribed": subscribed,
-                "limit": limit,
+                "conn_id": conn_id,
+                "shard_size": requested,
+                "subscribed_this_facade": subscribed,
+                "per_conn_limit": limit,
             },
         )
-        await self._emit_or_legacy(alert, msg, critical=True)
+        await self._emit_or_legacy(alert, msg, critical=False)
 
     async def notify_pre_market_fail(self, failed_checks: list[str]) -> None:
         """Notify operator that the pre-market health check failed.
