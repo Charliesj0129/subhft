@@ -256,3 +256,61 @@ class TestAlertmanagerBridgeServer:
             assert call_args[1]["critical"] is False
         finally:
             bridge.stop()
+
+    @pytest.mark.asyncio
+    async def test_forwarded_log_includes_alertname_severity_status(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Post-Cycle-2: bridge must emit alertname/severity/status so
+        post-hoc audits can identify the rule that drove a TG burst without
+        firing-time correlation."""
+        from unittest.mock import MagicMock
+
+        from hft_platform.notifications import alertmanager_bridge as br_mod
+
+        captured: list[dict] = []
+
+        def _capture_info(event: str, **kwargs: object) -> None:
+            captured.append({"event": event, **kwargs})
+
+        fake_logger = MagicMock()
+        fake_logger.info = _capture_info
+        monkeypatch.setattr(br_mod, "logger", fake_logger)
+
+        mock_sender = AsyncMock(spec=TelegramSender)
+        mock_sender.send = AsyncMock(return_value=True)
+        bridge = AlertmanagerBridge(port=0, sender=mock_sender)
+        bridge._server = await asyncio.start_server(bridge._handle_connection, "127.0.0.1", 0)
+        port = bridge._server.sockets[0].getsockname()[1]
+
+        payload = {
+            "status": "firing",
+            "alerts": [
+                {
+                    "status": "firing",
+                    "labels": {"alertname": "MonitorLiveDrop", "severity": "critical"},
+                    "annotations": {"summary": "Live monitor drop"},
+                },
+                {
+                    "status": "firing",
+                    "labels": {"alertname": "FeedGapCritical", "severity": "critical"},
+                    "annotations": {"summary": "feed gap"},
+                },
+            ],
+        }
+        try:
+            reader, writer = await asyncio.open_connection("127.0.0.1", port)
+            body = json.dumps(payload).encode()
+            req = (f"POST /webhook/alertmanager HTTP/1.1\r\nContent-Length: {len(body)}\r\n\r\n").encode() + body
+            writer.write(req)
+            await writer.drain()
+            await asyncio.wait_for(reader.read(4096), timeout=5.0)
+            writer.close()
+
+            forwarded = [r for r in captured if r["event"] == "alertmanager_webhook_forwarded"]
+            assert forwarded, "no alertmanager_webhook_forwarded log emitted"
+            rec = forwarded[-1]
+            assert rec["alert_count"] == 2
+            assert rec["alertnames"] == ["FeedGapCritical", "MonitorLiveDrop"]
+            assert rec["severities"] == ["critical"]
+            assert rec["statuses"] == ["firing"]
+        finally:
+            bridge.stop()

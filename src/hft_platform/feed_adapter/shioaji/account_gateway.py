@@ -14,10 +14,15 @@ logger = get_logger("feed_adapter.account_gateway")
 class AccountGateway:
     """Dedicated account/usage/snapshot query gateway."""
 
-    __slots__ = ("_client",)
+    __slots__ = ("_client", "_last_positions_error")
 
     def __init__(self, client: "ShioajiClient") -> None:
         self._client = client
+        self._last_positions_error: str | None = None
+
+    @property
+    def last_positions_error(self) -> str | None:
+        return self._last_positions_error
 
     def get_usage(self) -> dict[str, Any]:
         cached = self._client._cache_get("usage")
@@ -38,36 +43,69 @@ class AccountGateway:
         return {"subscribed": self._client.subscribed_count, "bytes_used": 0}
 
     def get_positions(self) -> list[Any] | None:
-        """Return broker positions, or None if the query fails (caller must treat None as unhealthy).
+        """Return broker positions, or None if both account queries fail.
 
-        Returns [] only when the broker confirms an empty portfolio.
-        Returns None when the query itself fails — callers MUST NOT treat this as "no positions".
+        Stock and futopt queries are independent at the broker — historically a
+        stock-side 500 ("Please check param.") aborted the entire call, hiding
+        a healthy futopt portfolio and tripping the reduce-only safety latch
+        for the trading lane. They are now queried separately: if at least one
+        succeeds, its positions are returned (others logged as warnings on
+        ``last_positions_error``). Returns None only when BOTH fail.
         """
         if self._client.mode == "simulation":
+            self._last_positions_error = None
             return []
         cached = self._client._cache_get("positions")
         if cached is not None:
             return cached
         start_ns = time.perf_counter_ns()
-        try:
-            if not self._client._rate_limit_api("positions"):
-                # Rate-limited: return stale cache if available, else None (unknown state)
-                return cached
-            positions: list[Any] = []
-            if hasattr(self._client.api, "stock_account") and self._client.api.stock_account is not None:
+        if not self._client._rate_limit_api("positions"):
+            return cached  # may be None: caller treats as unknown
+
+        positions: list[Any] = []
+        errors: list[str] = []
+        queried_any = False
+
+        if hasattr(self._client.api, "stock_account") and self._client.api.stock_account is not None:
+            queried_any = True
+            try:
                 positions.extend(self._client.api.list_positions(self._client.api.stock_account))
-            if hasattr(self._client.api, "futopt_account") and self._client.api.futopt_account is not None:
+            except Exception as exc:
+                errors.append(f"stock: {exc!s}")
+
+        if hasattr(self._client.api, "futopt_account") and self._client.api.futopt_account is not None:
+            queried_any = True
+            try:
                 positions.extend(self._client.api.list_positions(self._client.api.futopt_account))
+            except Exception as exc:
+                errors.append(f"futopt: {exc!s}")
+
+        if not queried_any:
             self._client._record_api_latency("positions", start_ns, ok=True)
-            self._client._cache_set("positions", self._client._positions_cache_ttl_s, positions)
+            self._last_positions_error = None
             return positions
-        except Exception as exc:
+
+        if len(errors) == 2:
             self._client._record_api_latency("positions", start_ns, ok=False)
-            logger.error("Failed to fetch positions — returning None (unknown broker state)", error=str(exc))
-            # Do NOT return cached or [] here: stale data is better than silent empty,
-            # but returning None forces the caller to skip the sync cycle rather than
-            # treating a query failure as "broker has no positions".
+            self._last_positions_error = " | ".join(errors)
+            logger.error(
+                "Failed to fetch positions — both accounts failed, returning None",
+                error=self._last_positions_error,
+            )
             return None
+
+        if errors:
+            self._last_positions_error = errors[0]
+            logger.warning(
+                "Partial positions fetch — one account failed, returning the other",
+                error=self._last_positions_error,
+            )
+        else:
+            self._last_positions_error = None
+
+        self._client._record_api_latency("positions", start_ns, ok=True)
+        self._client._cache_set("positions", self._client._positions_cache_ttl_s, positions)
+        return positions
 
     def fetch_snapshots(self) -> list[Any]:
         if not self._client.api or not self._client.logged_in:

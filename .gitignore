@@ -190,6 +190,8 @@ research/tools/*
 !research/tools/backtest_mm_l2.py
 !research/tools/legacy/
 !research/tools/legacy/**/*.py
+!research/tools/t1_a_zero_event_diagnostic/
+!research/tools/t1_a_zero_event_diagnostic/**/*.py
 !research/logs/
 !research/logs/.gitkeep
 !research/results/

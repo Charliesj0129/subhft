@@ -158,6 +158,46 @@ class TestReconciliationService:
         assert d.diff == 50
 
     @pytest.mark.asyncio
+    async def test_sync_portfolio_none_raises_with_broker_detail(self):
+        """When get_positions() returns None the RuntimeError must include the
+        underlying broker error (from account_gateway.last_positions_error) so
+        operators can diagnose the actual cause instead of seeing only the
+        generic "returned None" message.
+        """
+        svc, _ = make_recon_service()
+        svc.client.account_gateway = MagicMock()
+        svc.client.account_gateway.last_positions_error = "stock: 500 Please check param."
+
+        with (
+            patch.object(svc, "_metrics"),
+            patch(
+                "hft_platform.execution.reconciliation.asyncio.to_thread",
+                new=AsyncMock(return_value=None),
+            ),
+            pytest.raises(RuntimeError) as excinfo,
+        ):
+            await svc.sync_portfolio()
+
+        msg = str(excinfo.value)
+        assert "broker query unhealthy" in msg
+        assert "stock: 500 Please check param." in msg
+
+    @pytest.mark.asyncio
+    async def test_sync_portfolio_none_falls_back_when_no_gateway_detail(self):
+        """If no broker detail is exposed, the legacy message must still raise."""
+        svc, _ = make_recon_service()
+
+        with (
+            patch.object(svc, "_metrics"),
+            patch(
+                "hft_platform.execution.reconciliation.asyncio.to_thread",
+                new=AsyncMock(return_value=None),
+            ),
+            pytest.raises(RuntimeError, match="broker query unhealthy"),
+        ):
+            await svc.sync_portfolio()
+
+    @pytest.mark.asyncio
     async def test_sync_portfolio_success_path(self):
         """sync_portfolio fetches broker positions and computes discrepancies."""
         local_pos = MagicMock()

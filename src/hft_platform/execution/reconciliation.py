@@ -29,6 +29,26 @@ _DEFAULT_BACKOFF_MAX = float(os.environ.get("HFT_RECON_BACKOFF_MAX", "60"))  # p
 _BACKOFF_JITTER = 0.2
 
 
+def _extract_positions_error(client: Any) -> str | None:
+    """Best-effort extraction of the underlying broker error captured by the
+    account gateway. Used to enrich the recon RuntimeError so logs surface the
+    actual broker-side reason (e.g. ``stock: 500 Please check param.``) instead
+    of the generic "returned None" message that hid the cause for months.
+
+    Only string values are accepted to avoid leaking ``MagicMock`` placeholders
+    from tests or unrelated attribute namespaces.
+    """
+    gw = getattr(client, "account_gateway", None)
+    if gw is not None:
+        detail = getattr(gw, "last_positions_error", None)
+        if isinstance(detail, str) and detail:
+            return detail
+    direct = getattr(client, "last_positions_error", None)
+    if isinstance(direct, str) and direct:
+        return direct
+    return None
+
+
 @dataclass(slots=True)
 class PositionDiscrepancy:
     """Represents a mismatch between local and broker positions."""
@@ -292,7 +312,11 @@ class ReconciliationService:
             # None means the query itself failed — treat as an unhealthy sync cycle.
             # Do NOT build broker_map from None; that would silently mask real positions.
             if raw_positions is None:
-                raise RuntimeError("get_positions() returned None — broker query unhealthy")
+                broker_detail = _extract_positions_error(self.client)
+                msg = "get_positions() returned None — broker query unhealthy"
+                if broker_detail:
+                    msg = f"{msg}: {broker_detail}"
+                raise RuntimeError(msg)
 
             # 2. Build broker position map {symbol: qty}
             broker_map = self._build_broker_map(raw_positions)

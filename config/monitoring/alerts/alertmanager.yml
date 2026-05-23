@@ -1,6 +1,42 @@
 global:
   resolve_timeout: 5m
 
+time_intervals:
+  # Mutes alerts outside TAIFEX trading sessions, matching
+  # core/market_calendar.is_trading_hours(product_type="future"):
+  #   day session   Mon-Fri 08:45-13:45 Asia/Taipei
+  #   night session Mon-Fri 15:00 → next day 05:00 Asia/Taipei
+  # Off-hours windows (union of below):
+  - name: taipei_off_hours
+    time_intervals:
+      # weekday gap between night-close and day-open: 05:00-08:45
+      - times:
+          - start_time: "05:00"
+            end_time: "08:45"
+        weekdays: ["monday:friday"]
+        location: "Asia/Taipei"
+      # weekday lunch between day-close and night-open: 13:45-15:00
+      - times:
+          - start_time: "13:45"
+            end_time: "15:00"
+        weekdays: ["monday:friday"]
+        location: "Asia/Taipei"
+      # Saturday after final night-close at 05:00 → end of day
+      - times:
+          - start_time: "05:00"
+            end_time: "24:00"
+        weekdays: ["saturday"]
+        location: "Asia/Taipei"
+      # Sunday all day (no TAIFEX session)
+      - weekdays: ["sunday"]
+        location: "Asia/Taipei"
+      # Monday 00:00-05:00 (no preceding trading day → no night session)
+      - times:
+          - start_time: "00:00"
+            end_time: "05:00"
+        weekdays: ["monday"]
+        location: "Asia/Taipei"
+
 route:
   group_by: [alertname, severity, symbol]
   group_wait: 30s
@@ -14,6 +50,7 @@ route:
       group_wait: 10s
       group_interval: 1m
       repeat_interval: 15m
+      mute_time_intervals: [taipei_off_hours]
       continue: false
 
     - match:
@@ -22,11 +59,18 @@ route:
       group_wait: 30s
       group_interval: 5m
       repeat_interval: 1h
+      mute_time_intervals: [taipei_off_hours]
       continue: false
 
     - match:
         severity: info
       receiver: "null"
+      continue: false
+
+    # Fallback for alerts without severity label — apply mute too.
+    - matchers: ['severity!=critical', 'severity!=warning', 'severity!=info']
+      receiver: telegram-bridge
+      mute_time_intervals: [taipei_off_hours]
       continue: false
 
 receivers:

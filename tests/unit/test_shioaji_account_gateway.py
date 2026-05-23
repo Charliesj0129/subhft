@@ -238,3 +238,77 @@ class TestListProfitLossDetail:
         client.api.list_profit_loss_detail.side_effect = RuntimeError("x")
         gw = AccountGateway(client)
         assert gw.list_profit_loss_detail() == []
+
+
+# ---------------------------------------------------------------------------
+# get_positions — decoupled stock / futopt failure handling
+# ---------------------------------------------------------------------------
+
+
+def _make_positions_client() -> MagicMock:
+    client = _make_client()
+    client._positions_cache_ttl_s = 5
+    return client
+
+
+class TestGetPositionsDecoupled:
+    """Regression: a broker-side failure on stock must not mask a healthy futopt
+    query. Futopt is the trading lane (TXF/TMF/MXF); a stock-side 500 historically
+    tripped the reduce-only safety latch unnecessarily.
+    """
+
+    def test_stock_fails_futopt_succeeds_returns_futopt_positions(self) -> None:
+        client = _make_positions_client()
+        fut_pos = [SimpleNamespace(code="TXFE6", quantity=1)]
+
+        def _list(account):
+            if account is client.api.stock_account:
+                raise RuntimeError("500 Please check param.")
+            return fut_pos
+
+        client.api.list_positions.side_effect = _list
+        gw = AccountGateway(client)
+        result = gw.get_positions()
+        assert result == fut_pos
+        assert gw.last_positions_error is not None
+        assert "stock" in gw.last_positions_error.lower()
+        assert "500" in gw.last_positions_error
+
+    def test_both_fail_returns_none_with_combined_error(self) -> None:
+        client = _make_positions_client()
+        client.api.list_positions.side_effect = RuntimeError("broker down")
+        gw = AccountGateway(client)
+        assert gw.get_positions() is None
+        assert gw.last_positions_error is not None
+        assert "stock" in gw.last_positions_error.lower()
+        assert "futopt" in gw.last_positions_error.lower()
+        assert "broker down" in gw.last_positions_error
+
+    def test_both_succeed_clears_last_error(self) -> None:
+        client = _make_positions_client()
+        client.api.list_positions.return_value = []
+        gw = AccountGateway(client)
+        gw._last_positions_error = "stale"
+        result = gw.get_positions()
+        assert result == []
+        assert gw.last_positions_error is None
+
+    def test_last_positions_error_initial_none(self) -> None:
+        gw = AccountGateway(_make_positions_client())
+        assert gw.last_positions_error is None
+
+    def test_futopt_fails_stock_succeeds_returns_stock_positions(self) -> None:
+        client = _make_positions_client()
+        stock_pos = [SimpleNamespace(code="2330", quantity=1000)]
+
+        def _list(account):
+            if account is client.api.futopt_account:
+                raise RuntimeError("timeout")
+            return stock_pos
+
+        client.api.list_positions.side_effect = _list
+        gw = AccountGateway(client)
+        result = gw.get_positions()
+        assert result == stock_pos
+        assert gw.last_positions_error is not None
+        assert "futopt" in gw.last_positions_error.lower()

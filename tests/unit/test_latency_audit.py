@@ -643,3 +643,30 @@ class TestStrictExitCode:
 
         results = audit_alphas(tmp_path)
         assert _strict_exit_code(results) == 1
+
+    def test_screen_only_exempt_from_stress_test(self, tmp_path: Path) -> None:
+        """Gate A/B-only scorecards skip the Gate-D stress_test requirement."""
+        from hft_platform.alpha.latency_audit import _strict_exit_code, audit_alphas
+
+        _write_profiles(tmp_path)
+        sc = dict(_COMPLIANT_SCORECARD)
+        sc.pop("stress_test", None)
+        sc["screen_only"] = True
+        _write_scorecard(tmp_path, "screen_only_alpha", sc)
+
+        results = audit_alphas(tmp_path)
+        assert len(results) == 1
+        assert results[0].screen_only is True
+        assert results[0].stress_tested is False
+        assert _strict_exit_code(results) == 0
+
+    def test_screen_only_still_requires_valid_profile(self, tmp_path: Path) -> None:
+        """screen_only does not exempt from latency_profile validation."""
+        from hft_platform.alpha.latency_audit import _strict_exit_code, audit_alphas
+
+        _write_profiles(tmp_path)
+        sc = {"alpha_id": "screen_no_prof", "screen_only": True}
+        _write_scorecard(tmp_path, "screen_no_prof", sc)
+
+        results = audit_alphas(tmp_path)
+        assert _strict_exit_code(results) == 1

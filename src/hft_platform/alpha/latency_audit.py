@@ -43,6 +43,7 @@ class LatencyAuditResult:
     profile_valid: bool
     stress_tested: bool
     issues: tuple[str, ...]
+    screen_only: bool = False
 
 
 def _load_latency_profiles(project_root: Path) -> dict[str, Any]:
@@ -179,6 +180,7 @@ def _audit_scorecard(
 
     latency_profile = data.get("latency_profile")
     has_profile = isinstance(latency_profile, dict) and bool(latency_profile)
+    screen_only = bool(data.get("screen_only", False))
 
     issues: list[str] = []
     profile_valid = False
@@ -217,6 +219,7 @@ def _audit_scorecard(
         has_profile=has_profile,
         profile_valid=profile_valid,
         stress_tested=stress_tested,
+        screen_only=screen_only,
         issues=tuple(issues),
     )
 
@@ -348,9 +351,15 @@ def _detect_project_root() -> Path:
 
 
 def _strict_exit_code(results: list[LatencyAuditResult]) -> int:
-    """Return 1 if any audit result indicates non-compliance, else 0."""
+    """Return 1 if any audit result indicates non-compliance, else 0.
+
+    Screen-only scorecards (Gate A/B-only artifacts) are exempt from the
+    stress_test requirement — that gate applies at Gate D promotion only.
+    """
     for r in results:
-        if not r.has_profile or not r.profile_valid or not r.stress_tested:
+        if not r.has_profile or not r.profile_valid:
+            return 1
+        if not r.stress_tested and not r.screen_only:
             return 1
     return 0
 

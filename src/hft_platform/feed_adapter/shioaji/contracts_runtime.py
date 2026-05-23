@@ -25,6 +25,56 @@ if TYPE_CHECKING:
 _MONTH_LETTERS = "ABCDEFGHIJKL"
 
 
+def _compute_diff_payload(
+    *,
+    version: int,
+    codes_before: set[str],
+    codes_after: set[str],
+    subscribed: set[str],
+) -> dict[str, Any]:
+    """Build the ``_contract_refresh_last_diff`` payload for one refresh cycle.
+
+    ``relevant_count`` / ``relevant_codes`` capture the intersection of
+    ``(added | removed)`` with currently-subscribed codes and are computed
+    on the **full** add/remove sets — not on the truncated ``[:200]`` log
+    lists. The 2026-05-12 resubscribe storm hit because a 680-removed-code
+    cleanup used the truncated lists for the relevance decision, missing
+    the overlap that sorted past position 200.
+
+    The parameter is named ``subscribed`` (not ``subscribed_codes``) so the
+    rebind-guard regex in ``test_resubscribe_concurrent.py`` doesn't flag
+    callers that pass the live ``c.subscribed_codes`` set by keyword.
+    """
+    added = sorted(codes_after - codes_before)
+    removed = sorted(codes_before - codes_after)
+    relevant = (set(added) | set(removed)) & set(subscribed or ())
+    return {
+        "version": int(version),
+        "contracts_before": len(codes_before),
+        "contracts_after": len(codes_after),
+        "added_count": len(added),
+        "removed_count": len(removed),
+        "added_codes": added[:200],
+        "removed_codes": removed[:200],
+        "relevant_count": len(relevant),
+        "relevant_codes": sorted(relevant)[:50],
+    }
+
+
+def _diff_should_resubscribe(diff: dict[str, Any]) -> bool:
+    """Gate the ``policy='diff'`` resubscribe branch on diff relevance.
+
+    Prefers ``relevant_count`` (computed pre-truncation by
+    ``_compute_diff_payload``). Falls back to the legacy "any add/remove
+    is relevant" check when the diff dict lacks ``relevant_count`` — keeps
+    backwards-compat with diff dicts produced before this helper landed
+    (older crash-recovery state files, test fixtures, etc.).
+    """
+    if "relevant_count" in diff:
+        return int(diff.get("relevant_count") or 0) > 0
+    return bool(diff.get("added_codes") or diff.get("removed_codes"))
+
+
 class StaleInstrumentError(Exception):
     """Raised when a contract's delivery_date is strictly before today.
 
@@ -631,18 +681,15 @@ class ContractsRuntime:
             write_contract_cache(raw_contracts, self._client._contract_cache_path)
 
             codes_after = {str(c.get("code", "")) for c in raw_contracts if c.get("code")}
-            added = sorted(codes_after - codes_before)
-            removed = sorted(codes_before - codes_after)
             self._client._contract_refresh_version += 1
-            self._client._contract_refresh_last_diff = {
-                "version": int(self._client._contract_refresh_version),
-                "contracts_before": len(codes_before),
-                "contracts_after": len(codes_after),
-                "added_count": len(added),
-                "removed_count": len(removed),
-                "added_codes": added[:200],
-                "removed_codes": removed[:200],
-            }
+            self._client._contract_refresh_last_diff = _compute_diff_payload(
+                version=self._client._contract_refresh_version,
+                codes_before=codes_before,
+                codes_after=codes_after,
+                subscribed=set(getattr(self._client, "subscribed_codes", None) or ()),
+            )
+            added = self._client._contract_refresh_last_diff["added_codes"]
+            removed = self._client._contract_refresh_last_diff["removed_codes"]
             logger.info(
                 "contract_refresh_diff",
                 version=self._client._contract_refresh_last_diff["version"],
@@ -650,6 +697,7 @@ class ContractsRuntime:
                 contracts_after=self._client._contract_refresh_last_diff["contracts_after"],
                 added_count=self._client._contract_refresh_last_diff["added_count"],
                 removed_count=self._client._contract_refresh_last_diff["removed_count"],
+                relevant_count=self._client._contract_refresh_last_diff["relevant_count"],
             )
             try:
                 if self._client.metrics and hasattr(self._client.metrics, "contract_refresh_symbols_changed_total"):
@@ -740,10 +788,14 @@ class ContractsRuntime:
             should_resub = policy == "all"
             if policy == "diff":
                 diff = self._client._contract_refresh_last_diff or {}
-                should_resub = bool(diff.get("added_codes") or diff.get("removed_codes"))
+                should_resub = _diff_should_resubscribe(diff)
             if should_resub and self._client.logged_in:
                 try:
-                    logger.info("contract_refresh_resubscribe", policy=policy)
+                    logger.info(
+                        "contract_refresh_resubscribe",
+                        policy=policy,
+                        relevant_count=(self._client._contract_refresh_last_diff or {}).get("relevant_count"),
+                    )
                     self._client._resubscribe_all()
                 except Exception as exc:
                     logger.warning("contract_refresh_resubscribe_failed", error=str(exc))

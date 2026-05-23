@@ -30,6 +30,15 @@ profiles:
     local_decision_pipeline_latency_us: 250
     measurement_date: "2026-02-26"
 
+  sim_p95_v2026-02-26:
+    description: "Legacy unprefixed alias of shioaji_sim_p95_v2026-02-26 (pre-MB-06)"
+    source: "docs/architecture/latency-baseline-shioaji-sim-vs-system.md"
+    submit_ack_latency_ms: 36.0
+    modify_ack_latency_ms: 43.0
+    cancel_ack_latency_ms: 47.0
+    local_decision_pipeline_latency_us: 250
+    measurement_date: "2026-02-26"
+
   shioaji_sim_p95_v2026-03-01:
     description: "Shioaji sim API RTT P95 — 2026-03-01 (backward compat)"
     source: "docs/architecture/latency-baseline-shioaji-sim-vs-system.md"

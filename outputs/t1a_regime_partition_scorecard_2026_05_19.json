@@ -1,0 +1,424 @@
+{
+  "cells": {
+    "baseline": {
+      "metrics": {
+        "cohort_pf_spread": 7.138888888888889,
+        "cohort_sign_disagreement": true,
+        "contracts_present": [
+          "TXFB6->TMFB6",
+          "TXFC6->TMFC6",
+          "TXFD6->TMFD6",
+          "TXFE6->TMFE6"
+        ],
+        "hit_rate": 0.14285714285714285,
+        "max_loss_net_30m": -274.0,
+        "mean_net_30m": -59.57142857142857,
+        "median_net_30m": -82.0,
+        "n_contracts": 4,
+        "n_days": 7,
+        "n_events": 7,
+        "p10_net_30m": -187.0,
+        "p25_net_30m": -112.5,
+        "p75_net_30m": -46.5,
+        "p90_net_30m": 81.2000000000001,
+        "pos_days_frac": 0.14285714285714285,
+        "profit_factor": 0.38130563798219586,
+        "remove_best_1_mean": -112.33333333333333,
+        "remove_best_2_mean": -127.6,
+        "remove_best_3_mean": -145.25,
+        "single_day_dominance": 0.29430719656283566,
+        "stop_breach_excess_pp": 0.0,
+        "stop_breach_rate": 0.8571428571428571
+      },
+      "reasons": [
+        "n_events 7 < 20 (additional_n_needed=13)"
+      ],
+      "verdict": "INCONCLUSIVE"
+    },
+    "invalid_regime": {
+      "metrics": {
+        "cohort_pf_spread": 0.0,
+        "cohort_sign_disagreement": false,
+        "contracts_present": [
+          "TXFC6->TMFC6"
+        ],
+        "hit_rate": 0.0,
+        "max_loss_net_30m": -129.0,
+        "mean_net_30m": -129.0,
+        "median_net_30m": -129.0,
+        "n_contracts": 1,
+        "n_days": 1,
+        "n_events": 1,
+        "p10_net_30m": -129.0,
+        "p25_net_30m": -129.0,
+        "p75_net_30m": -129.0,
+        "p90_net_30m": -129.0,
+        "pos_days_frac": 0.0,
+        "profit_factor": 0.0,
+        "remove_best_1_mean": null,
+        "remove_best_2_mean": null,
+        "remove_best_3_mean": null,
+        "single_day_dominance": 1.0,
+        "stop_breach_excess_pp": 14.28571428571429,
+        "stop_breach_rate": 1.0
+      },
+      "reasons": [
+        "n_events 1 < 20 (additional_n_needed=19)"
+      ],
+      "verdict": "INCONCLUSIVE"
+    },
+    "missing_regime": {
+      "metrics": {
+        "cohort_pf_spread": null,
+        "cohort_sign_disagreement": false,
+        "contracts_present": [],
+        "hit_rate": null,
+        "max_loss_net_30m": null,
+        "mean_net_30m": null,
+        "median_net_30m": null,
+        "n_contracts": 0,
+        "n_days": 0,
+        "n_events": 0,
+        "p10_net_30m": null,
+        "p25_net_30m": null,
+        "p75_net_30m": null,
+        "p90_net_30m": null,
+        "pos_days_frac": null,
+        "profit_factor": null,
+        "remove_best_1_mean": null,
+        "remove_best_2_mean": null,
+        "remove_best_3_mean": null,
+        "single_day_dominance": null,
+        "stop_breach_excess_pp": null,
+        "stop_breach_rate": null
+      },
+      "reasons": [
+        "n_events 0 < 20 (additional_n_needed=20)"
+      ],
+      "verdict": "INCONCLUSIVE"
+    },
+    "mixed_regime": {
+      "metrics": {
+        "cohort_pf_spread": null,
+        "cohort_sign_disagreement": false,
+        "contracts_present": [],
+        "hit_rate": null,
+        "max_loss_net_30m": null,
+        "mean_net_30m": null,
+        "median_net_30m": null,
+        "n_contracts": 0,
+        "n_days": 0,
+        "n_events": 0,
+        "p10_net_30m": null,
+        "p25_net_30m": null,
+        "p75_net_30m": null,
+        "p90_net_30m": null,
+        "pos_days_frac": null,
+        "profit_factor": null,
+        "remove_best_1_mean": null,
+        "remove_best_2_mean": null,
+        "remove_best_3_mean": null,
+        "single_day_dominance": null,
+        "stop_breach_excess_pp": null,
+        "stop_breach_rate": null
+      },
+      "reasons": [
+        "n_events 0 < 20 (additional_n_needed=20)"
+      ],
+      "verdict": "INCONCLUSIVE"
+    },
+    "regime_3": {
+      "metrics": {
+        "cohort_pf_spread": 7.138888888888889,
+        "cohort_sign_disagreement": true,
+        "contracts_present": [
+          "TXFD6->TMFD6",
+          "TXFE6->TMFE6"
+        ],
+        "hit_rate": 0.3333333333333333,
+        "max_loss_net_30m": -82.0,
+        "mean_net_30m": 46.333333333333336,
+        "median_net_30m": -36.0,
+        "n_contracts": 2,
+        "n_days": 3,
+        "n_events": 3,
+        "p10_net_30m": -72.8,
+        "p25_net_30m": -59.0,
+        "p75_net_30m": 110.5,
+        "p90_net_30m": 198.4,
+        "pos_days_frac": 0.3333333333333333,
+        "profit_factor": 2.1779661016949152,
+        "remove_best_1_mean": -59.0,
+        "remove_best_2_mean": -82.0,
+        "remove_best_3_mean": null,
+        "single_day_dominance": 0.6853333333333333,
+        "stop_breach_excess_pp": -19.047619047619047,
+        "stop_breach_rate": 0.6666666666666666
+      },
+      "reasons": [
+        "n_events 3 < 20 (additional_n_needed=17)"
+      ],
+      "verdict": "INCONCLUSIVE"
+    },
+    "regime_5": {
+      "metrics": {
+        "cohort_pf_spread": 0.0,
+        "cohort_sign_disagreement": false,
+        "contracts_present": [
+          "TXFE6->TMFE6"
+        ],
+        "hit_rate": 0.0,
+        "max_loss_net_30m": -274.0,
+        "mean_net_30m": -274.0,
+        "median_net_30m": -274.0,
+        "n_contracts": 1,
+        "n_days": 1,
+        "n_events": 1,
+        "p10_net_30m": -274.0,
+        "p25_net_30m": -274.0,
+        "p75_net_30m": -274.0,
+        "p90_net_30m": -274.0,
+        "pos_days_frac": 0.0,
+        "profit_factor": 0.0,
+        "remove_best_1_mean": null,
+        "remove_best_2_mean": null,
+        "remove_best_3_mean": null,
+        "single_day_dominance": 1.0,
+        "stop_breach_excess_pp": 14.28571428571429,
+        "stop_breach_rate": 1.0
+      },
+      "reasons": [
+        "n_events 1 < 20 (additional_n_needed=19)"
+      ],
+      "verdict": "INCONCLUSIVE"
+    }
+  },
+  "hypothesis_id": "t1a",
+  "run_config": {
+    "audit_csv": "research/experiments/validations/T1_regime_viability_audit_v0_fixed_20260519/20260519T100217Z_opening_range_events.csv",
+    "baseline_stop_breach_rate": 0.8571428571428571,
+    "git_sha": "f4deecd31f583ce38fc2b44ae1a16d9802ef1928",
+    "latency_profile_id": "r47_maker_shioaji_p95_v2026-04-24_measured",
+    "regime_csv": "research/data/derived/regime_panels_front_1s/front_month_single_regime_intraday_active_h30s.csv",
+    "regime_csv_sha256": "36c4dab242345a177250f1b5c4339cc5053a04855c54364a30d7a9ddf86acbac",
+    "seed": 20260519,
+    "spec_docs": {
+      "regime_partition_design": {
+        "path": "docs/superpowers/specs/2026-05-19-regime-conditioned-t1-revalidation-design.md",
+        "sha256": "1687d05e58ad6732ca8032dd4fa4b014f1c87f7e7a573aa7ae6a81d287d9bfb4"
+      },
+      "t1a": {
+        "path": "docs/alpha-research/t1a_opening_range_expansion_spec_2026_05_13.md",
+        "sha256": "cfd17bcef0581a240fcaf4c3f4a0a6573def8968295cbcae725c7087c9942bd7"
+      },
+      "t1b": null,
+      "t1c": null
+    },
+    "thresholds": {
+      "cohort_pf_spread_kill": 1.0,
+      "median_min": 0.0,
+      "n_contracts_min": 3,
+      "n_events_min": 20,
+      "pf_min": 1.2,
+      "pos_days_min": 0.55,
+      "single_day_dominance_kill": 0.6,
+      "stop_breach_excess_pp_max": 15.0
+    }
+  },
+  "txf_ablation_cells": {
+    "baseline": {
+      "metrics": {
+        "cohort_pf_spread": 7.138888888888889,
+        "cohort_sign_disagreement": true,
+        "contracts_present": [
+          "TXFB6->TMFB6",
+          "TXFC6->TMFC6",
+          "TXFD6->TMFD6",
+          "TXFE6->TMFE6"
+        ],
+        "hit_rate": 0.14285714285714285,
+        "max_loss_net_30m": -274.0,
+        "mean_net_30m": -59.57142857142857,
+        "median_net_30m": -82.0,
+        "n_contracts": 4,
+        "n_days": 7,
+        "n_events": 7,
+        "p10_net_30m": -187.0,
+        "p25_net_30m": -112.5,
+        "p75_net_30m": -46.5,
+        "p90_net_30m": 81.2000000000001,
+        "pos_days_frac": 0.14285714285714285,
+        "profit_factor": 0.38130563798219586,
+        "remove_best_1_mean": -112.33333333333333,
+        "remove_best_2_mean": -127.6,
+        "remove_best_3_mean": -145.25,
+        "single_day_dominance": 0.29430719656283566,
+        "stop_breach_excess_pp": 0.0,
+        "stop_breach_rate": 0.8571428571428571
+      },
+      "reasons": [
+        "n_events 7 < 20 (additional_n_needed=13)"
+      ],
+      "verdict": "INCONCLUSIVE"
+    },
+    "invalid_regime": {
+      "metrics": {
+        "cohort_pf_spread": 0.0,
+        "cohort_sign_disagreement": false,
+        "contracts_present": [
+          "TXFC6->TMFC6"
+        ],
+        "hit_rate": 0.0,
+        "max_loss_net_30m": -129.0,
+        "mean_net_30m": -129.0,
+        "median_net_30m": -129.0,
+        "n_contracts": 1,
+        "n_days": 1,
+        "n_events": 1,
+        "p10_net_30m": -129.0,
+        "p25_net_30m": -129.0,
+        "p75_net_30m": -129.0,
+        "p90_net_30m": -129.0,
+        "pos_days_frac": 0.0,
+        "profit_factor": 0.0,
+        "remove_best_1_mean": null,
+        "remove_best_2_mean": null,
+        "remove_best_3_mean": null,
+        "single_day_dominance": 1.0,
+        "stop_breach_excess_pp": 14.28571428571429,
+        "stop_breach_rate": 1.0
+      },
+      "reasons": [
+        "n_events 1 < 20 (additional_n_needed=19)"
+      ],
+      "verdict": "INCONCLUSIVE"
+    },
+    "missing_regime": {
+      "metrics": {
+        "cohort_pf_spread": null,
+        "cohort_sign_disagreement": false,
+        "contracts_present": [],
+        "hit_rate": null,
+        "max_loss_net_30m": null,
+        "mean_net_30m": null,
+        "median_net_30m": null,
+        "n_contracts": 0,
+        "n_days": 0,
+        "n_events": 0,
+        "p10_net_30m": null,
+        "p25_net_30m": null,
+        "p75_net_30m": null,
+        "p90_net_30m": null,
+        "pos_days_frac": null,
+        "profit_factor": null,
+        "remove_best_1_mean": null,
+        "remove_best_2_mean": null,
+        "remove_best_3_mean": null,
+        "single_day_dominance": null,
+        "stop_breach_excess_pp": null,
+        "stop_breach_rate": null
+      },
+      "reasons": [
+        "n_events 0 < 20 (additional_n_needed=20)"
+      ],
+      "verdict": "INCONCLUSIVE"
+    },
+    "mixed_regime": {
+      "metrics": {
+        "cohort_pf_spread": 0.0,
+        "cohort_sign_disagreement": false,
+        "contracts_present": [
+          "TXFE6->TMFE6"
+        ],
+        "hit_rate": 0.0,
+        "max_loss_net_30m": -82.0,
+        "mean_net_30m": -82.0,
+        "median_net_30m": -82.0,
+        "n_contracts": 1,
+        "n_days": 1,
+        "n_events": 1,
+        "p10_net_30m": -82.0,
+        "p25_net_30m": -82.0,
+        "p75_net_30m": -82.0,
+        "p90_net_30m": -82.0,
+        "pos_days_frac": 0.0,
+        "profit_factor": 0.0,
+        "remove_best_1_mean": null,
+        "remove_best_2_mean": null,
+        "remove_best_3_mean": null,
+        "single_day_dominance": 1.0,
+        "stop_breach_excess_pp": 14.28571428571429,
+        "stop_breach_rate": 1.0
+      },
+      "reasons": [
+        "n_events 1 < 20 (additional_n_needed=19)"
+      ],
+      "verdict": "INCONCLUSIVE"
+    },
+    "regime_3": {
+      "metrics": {
+        "cohort_pf_spread": 0.0,
+        "cohort_sign_disagreement": false,
+        "contracts_present": [
+          "TXFD6->TMFD6"
+        ],
+        "hit_rate": 1.0,
+        "max_loss_net_30m": 257.0,
+        "mean_net_30m": 257.0,
+        "median_net_30m": 257.0,
+        "n_contracts": 1,
+        "n_days": 1,
+        "n_events": 1,
+        "p10_net_30m": 257.0,
+        "p25_net_30m": 257.0,
+        "p75_net_30m": 257.0,
+        "p90_net_30m": 257.0,
+        "pos_days_frac": 1.0,
+        "profit_factor": null,
+        "remove_best_1_mean": null,
+        "remove_best_2_mean": null,
+        "remove_best_3_mean": null,
+        "single_day_dominance": 1.0,
+        "stop_breach_excess_pp": -85.71428571428571,
+        "stop_breach_rate": 0.0
+      },
+      "reasons": [
+        "n_events 1 < 20 (additional_n_needed=19)"
+      ],
+      "verdict": "INCONCLUSIVE"
+    },
+    "regime_5": {
+      "metrics": {
+        "cohort_pf_spread": 0.0,
+        "cohort_sign_disagreement": false,
+        "contracts_present": [
+          "TXFD6->TMFD6",
+          "TXFE6->TMFE6"
+        ],
+        "hit_rate": 0.0,
+        "max_loss_net_30m": -274.0,
+        "mean_net_30m": -155.0,
+        "median_net_30m": -155.0,
+        "n_contracts": 2,
+        "n_days": 2,
+        "n_events": 2,
+        "p10_net_30m": -250.2,
+        "p25_net_30m": -214.5,
+        "p75_net_30m": -95.5,
+        "p90_net_30m": -59.8,
+        "pos_days_frac": 0.0,
+        "profit_factor": 0.0,
+        "remove_best_1_mean": -274.0,
+        "remove_best_2_mean": null,
+        "remove_best_3_mean": null,
+        "single_day_dominance": 0.8838709677419355,
+        "stop_breach_excess_pp": 14.28571428571429,
+        "stop_breach_rate": 1.0
+      },
+      "reasons": [
+        "n_events 2 < 20 (additional_n_needed=18)"
+      ],
+      "verdict": "INCONCLUSIVE"
+    }
+  }
+}
