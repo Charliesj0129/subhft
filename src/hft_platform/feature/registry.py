@@ -3,6 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, Iterable
 
+# Feature flag bits (``FeatureSpec.flags``).
+# PROMOTED marks a feature as part of the minimal cross-path "promoted family"
+# that research / replay / live / Rust must agree on within ``parity_atol``.
+FEATURE_FLAG_PROMOTED = 1 << 0
+
 
 @dataclass(frozen=True, slots=True)
 class FeatureSpec:
@@ -12,6 +17,14 @@ class FeatureSpec:
     warmup_min_events: int = 1
     source_kind: str = "book"
     flags: int = 0
+    # Max absolute difference tolerated when comparing this feature across
+    # compute backends (Python / Rust / hftbacktest). 0 means exact equality.
+    # Non-zero only for float-accumulated features rounded to int (rounding ULP).
+    parity_atol: int = 0
+
+    @property
+    def is_promoted(self) -> bool:
+        return bool(self.flags & FEATURE_FLAG_PROMOTED)
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,6 +89,7 @@ class FeatureRegistry:
                             "warmup_min_events": spec.warmup_min_events,
                             "source_kind": spec.source_kind,
                             "flags": spec.flags,
+                            "parity_atol": spec.parity_atol,
                         }
                         for spec in fs.features
                     ],
@@ -108,31 +122,42 @@ FEATURE_SET_VERSION = "lob_shared_v3"
 
 def build_default_lob_feature_set_v1() -> FeatureSet:
     """Default shared LOB-derived feature set for the initial FeatureEngine prototype."""
+    # Promoted family: the minimal cross-path microstructure primitives that
+    # research / replay / live / Rust must agree on (see feature/parity.py).
+    # All members are within v1 indices so the 16-feature Rust kernel can compute
+    # them. EMA features carry parity_atol=1 (float accumulate -> i64 rounding ULP).
+    _P = FEATURE_FLAG_PROMOTED
     return FeatureSet(
         feature_set_id="lob_shared_v1",
         schema_version=1,
         features=(
             FeatureSpec("best_bid", "i64", scale=10_000, source_kind="book"),
             FeatureSpec("best_ask", "i64", scale=10_000, source_kind="book"),
-            FeatureSpec("mid_price_x2", "i64", scale=10_000, source_kind="book"),
-            FeatureSpec("spread_scaled", "i64", scale=10_000, source_kind="book"),
+            FeatureSpec("mid_price_x2", "i64", scale=10_000, source_kind="book", flags=_P),
+            FeatureSpec("spread_scaled", "i64", scale=10_000, source_kind="book", flags=_P),
             FeatureSpec("bid_depth", "i64", source_kind="book"),
             FeatureSpec("ask_depth", "i64", source_kind="book"),
             # ratio in parts-per-million to keep integer semantics in v1
-            FeatureSpec("depth_imbalance_ppm", "i64", scale=1_000_000, source_kind="book"),
+            FeatureSpec("depth_imbalance_ppm", "i64", scale=1_000_000, source_kind="book", flags=_P),
             # microprice*2 in scaled price units (rounded int)
-            FeatureSpec("microprice_x2", "i64", scale=10_000, source_kind="book"),
+            FeatureSpec("microprice_x2", "i64", scale=10_000, source_kind="book", flags=_P),
             # L1 queue quantities (preferred for microstructure deltas/OFI)
             FeatureSpec("l1_bid_qty", "i64", source_kind="book"),
             FeatureSpec("l1_ask_qty", "i64", source_kind="book"),
-            FeatureSpec("l1_imbalance_ppm", "i64", scale=1_000_000, source_kind="book"),
+            FeatureSpec("l1_imbalance_ppm", "i64", scale=1_000_000, source_kind="book", flags=_P),
             # OFI-style bounded-state features
-            FeatureSpec("ofi_l1_raw", "i64", source_kind="book", warmup_min_events=2),
-            FeatureSpec("ofi_l1_cum", "i64", source_kind="book", warmup_min_events=2),
-            FeatureSpec("ofi_l1_ema8", "i64", source_kind="book", warmup_min_events=2),
+            FeatureSpec("ofi_l1_raw", "i64", source_kind="book", warmup_min_events=2, flags=_P),
+            FeatureSpec("ofi_l1_cum", "i64", source_kind="book", warmup_min_events=2, flags=_P),
+            FeatureSpec("ofi_l1_ema8", "i64", source_kind="book", warmup_min_events=2, flags=_P, parity_atol=1),
             # Rolling-like bounded-state filters (EMA proxies)
-            FeatureSpec("spread_ema8_scaled", "i64", scale=10_000, source_kind="book", warmup_min_events=2),
-            FeatureSpec("depth_imbalance_ema8_ppm", "i64", scale=1_000_000, source_kind="book", warmup_min_events=2),
+            FeatureSpec(
+                "spread_ema8_scaled", "i64", scale=10_000, source_kind="book",
+                warmup_min_events=2, flags=_P, parity_atol=1,
+            ),
+            FeatureSpec(
+                "depth_imbalance_ema8_ppm", "i64", scale=1_000_000, source_kind="book",
+                warmup_min_events=2, flags=_P, parity_atol=1,
+            ),
         ),
     )
 
@@ -230,6 +255,21 @@ def feature_id_to_index(feature_set: FeatureSet, feature_id: str) -> int:
     if idx is None:
         raise KeyError(f"Feature '{feature_id}' not found in feature_set '{feature_set.feature_set_id}'")
     return idx
+
+
+def promoted_specs(feature_set: FeatureSet) -> tuple[FeatureSpec, ...]:
+    """Return the promoted-family ``FeatureSpec`` entries, in schema index order."""
+    return tuple(spec for spec in feature_set.features if spec.is_promoted)
+
+
+def promoted_indices(feature_set: FeatureSet) -> tuple[int, ...]:
+    """Return the schema indices of the promoted-family features, in order."""
+    return tuple(idx for idx, spec in enumerate(feature_set.features) if spec.is_promoted)
+
+
+def promoted_feature_ids(feature_set: FeatureSet) -> tuple[str, ...]:
+    """Return the promoted-family ``feature_id`` strings, in schema index order."""
+    return tuple(spec.feature_id for spec in feature_set.features if spec.is_promoted)
 
 
 def default_feature_registry() -> FeatureRegistry:
