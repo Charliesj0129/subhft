@@ -21,8 +21,11 @@ def test_feature_parity_ok_emits_json_and_exits_zero(capsys) -> None:
     # Happy path: real self-test over available backends should pass.
     _feature.cmd_feature_parity(_run())
     out = capsys.readouterr().out
-    # The JSON payload starts at the first "{" (structlog warnings may precede it).
-    payload = json.loads(out[out.index("{") :])
+    # run_self_test() may emit compact single-line structlog warnings to stdout before the
+    # indented result JSON; locate the result block (begins with "{\n" from json.dumps(indent=2))
+    # and decode just that object, ignoring any surrounding log lines.
+    start = out.index("{\n")
+    payload, _ = json.JSONDecoder().raw_decode(out[start:])
     assert payload["ok"] is True
     assert payload["feature_set_id"] == "lob_shared_v3"
     assert payload["promoted_feature_ids"][0] == "mid_price_x2"
