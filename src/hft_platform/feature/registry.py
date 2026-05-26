@@ -151,12 +151,22 @@ def build_default_lob_feature_set_v1() -> FeatureSet:
             FeatureSpec("ofi_l1_ema8", "i64", source_kind="book", warmup_min_events=2, flags=_P, parity_atol=1),
             # Rolling-like bounded-state filters (EMA proxies)
             FeatureSpec(
-                "spread_ema8_scaled", "i64", scale=10_000, source_kind="book",
-                warmup_min_events=2, flags=_P, parity_atol=1,
+                "spread_ema8_scaled",
+                "i64",
+                scale=10_000,
+                source_kind="book",
+                warmup_min_events=2,
+                flags=_P,
+                parity_atol=1,
             ),
             FeatureSpec(
-                "depth_imbalance_ema8_ppm", "i64", scale=1_000_000, source_kind="book",
-                warmup_min_events=2, flags=_P, parity_atol=1,
+                "depth_imbalance_ema8_ppm",
+                "i64",
+                scale=1_000_000,
+                source_kind="book",
+                warmup_min_events=2,
+                flags=_P,
+                parity_atol=1,
             ),
         ),
     )

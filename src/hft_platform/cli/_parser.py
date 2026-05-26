@@ -268,9 +268,7 @@ def build_parser() -> argparse.ArgumentParser:
         "parity", help="Run cross-path promoted-family parity gate (Python/Rust/hftbacktest)"
     )
     feat_parity.add_argument("--feature-set", dest="feature_set", help="Feature set id (default: registry default)")
-    feat_parity.add_argument(
-        "--require-rust", action="store_true", help="Fail if the Rust backend is unavailable"
-    )
+    feat_parity.add_argument("--require-rust", action="store_true", help="Fail if the Rust backend is unavailable")
     feat_parity.set_defaults(func=cmd_feature_parity)
 
     feat_preflight = feature_sub.add_parser("preflight", help="Check strategy/feature compatibility")

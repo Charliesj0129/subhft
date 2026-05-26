@@ -134,9 +134,7 @@ class ParityReport:
 
     def format(self) -> str:
         if self.ok:
-            return (
-                f"PARITY OK: {self.n_frames} frames, paths={list(self.compared_paths)}"
-            )
+            return f"PARITY OK: {self.n_frames} frames, paths={list(self.compared_paths)}"
         if self.schema_mismatch is not None:
             return f"SCHEMA MISMATCH: {self.schema_mismatch}"
         if self.warmup_mismatch is not None:
@@ -248,26 +246,19 @@ def compare_paths(
     else:
         compare_idx = tuple(range(len(specs)))
 
-    report = ParityReport(
-        n_frames=len(ref), compared_paths=tuple(names)
-    )
+    report = ParityReport(n_frames=len(ref), compared_paths=tuple(names))
 
     for cand_name in names[1:]:
         cand = results_by_name[cand_name]
         pair = f"{ref_name} vs {cand_name}"
         if len(ref) != len(cand):
             report.ok = False
-            report.schema_mismatch = (
-                f"{pair}: frame count {len(ref)} != {len(cand)}"
-            )
+            report.schema_mismatch = f"{pair}: frame count {len(ref)} != {len(cand)}"
             return report
         for fi, (r, c) in enumerate(zip(ref, cand, strict=True)):
             if r.feature_ids != c.feature_ids:
                 report.ok = False
-                report.schema_mismatch = (
-                    f"{pair} frame {fi}: feature_ids differ "
-                    f"({r.feature_ids} != {c.feature_ids})"
-                )
+                report.schema_mismatch = f"{pair} frame {fi}: feature_ids differ ({r.feature_ids} != {c.feature_ids})"
                 return report
             if r.warmup_ready_mask != c.warmup_ready_mask:
                 report.ok = False
