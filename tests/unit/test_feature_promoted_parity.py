@@ -10,15 +10,16 @@ from __future__ import annotations
 
 import dataclasses
 
-import numpy as np
 import pytest
 
 from hft_platform.feature.parity import (
     LobInputFrame,
+    build_synthetic_frames,
     compare_paths,
     run_hftbacktest_shared,
     run_python_engine,
     run_rust_engine,
+    run_self_test,
 )
 from hft_platform.feature.registry import (
     default_feature_registry,
@@ -26,64 +27,10 @@ from hft_platform.feature.registry import (
     promoted_indices,
 )
 
-SYMBOL = "TXFR1"
-TICK = 1_000  # 0.1 * 10_000 scaled price step
-
-
-def _book(best_bid: int, best_ask: int, bid_qty: int, ask_qty: int) -> tuple[np.ndarray, np.ndarray]:
-    """Build a 5-level book around the given top-of-book."""
-    bids = np.array(
-        [[best_bid - i * TICK, max(1, bid_qty - i * 3)] for i in range(5)],
-        dtype=np.int64,
-    )
-    asks = np.array(
-        [[best_ask + i * TICK, max(1, ask_qty - i * 3)] for i in range(5)],
-        dtype=np.int64,
-    )
-    return bids, asks
-
-
-def _build_frames() -> list[LobInputFrame]:
-    """Deterministic sequence: warmup ramp, steady, one-sided, reset+re-warm."""
-    frames: list[LobInputFrame] = []
-    base_bid = 1_000_000
-    ts = 1_000
-
-    # Warmup ramp + steady book with moving top-of-book (exercises OFI/EMA state).
-    for i in range(40):
-        bb = base_bid + (i % 6) * TICK
-        ba = bb + 2 * TICK
-        bids, asks = _book(bb, ba, 50 + i, 40 + (i % 7))
-        frames.append(LobInputFrame(SYMBOL, ts, bids, asks))
-        ts += 125
-
-    # One-sided thin ask book.
-    for i in range(5):
-        bb = base_bid + 3 * TICK
-        ba = bb + TICK
-        bids, asks = _book(bb, ba, 80, 1)
-        frames.append(LobInputFrame(SYMBOL, ts, bids, asks))
-        ts += 125
-
-    # Gap-triggered reset, then re-warm from scratch.
-    bb = base_bid + 2 * TICK
-    ba = bb + 2 * TICK
-    bids, asks = _book(bb, ba, 60, 55)
-    frames.append(LobInputFrame(SYMBOL, ts, bids, asks, is_reset=True))
-    ts += 125
-    for i in range(10):
-        bb = base_bid + (i % 4) * TICK
-        ba = bb + 2 * TICK
-        bids, asks = _book(bb, ba, 45 + i, 50 - i)
-        frames.append(LobInputFrame(SYMBOL, ts, bids, asks))
-        ts += 125
-
-    return frames
-
 
 @pytest.fixture(scope="module")
 def frames() -> list[LobInputFrame]:
-    return _build_frames()
+    return build_synthetic_frames()
 
 
 @pytest.fixture(scope="module")
@@ -182,3 +129,16 @@ def test_divergence_report_pinpoints_first_mismatch(frames, feature_set) -> None
     msg = report.format()
     assert "microprice_x2" in msg
     assert str(bad_frame.timestamp) in msg
+
+
+def test_run_self_test_passes_and_is_json_serializable() -> None:
+    """The CLI/ops self-test gate reports ok over all available paths."""
+    import json
+
+    result = run_self_test()
+    assert result["ok"] is True, json.dumps(result, indent=2)
+    assert result["n_frames"] > 0
+    assert result["feature_set_id"] == "lob_shared_v3"
+    assert "hftbacktest_shared" in {c["pair"].split(" vs ")[1] for c in result["comparisons"]}
+    # Must round-trip through JSON for CLI emission.
+    json.dumps(result)

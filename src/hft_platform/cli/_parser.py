@@ -31,6 +31,7 @@ from ._alpha import (
 )
 from ._feasibility import cmd_feasibility_report
 from ._feature import (
+    cmd_feature_parity,
     cmd_feature_preflight,
     cmd_feature_profiles,
     cmd_feature_rollout_rollback,
@@ -262,6 +263,15 @@ def build_parser() -> argparse.ArgumentParser:
     feat_validate = feature_sub.add_parser("validate", help="Validate feature profiles and apply active profile")
     feat_validate.add_argument("--path", help="Feature profiles YAML path")
     feat_validate.set_defaults(func=cmd_feature_validate)
+
+    feat_parity = feature_sub.add_parser(
+        "parity", help="Run cross-path promoted-family parity gate (Python/Rust/hftbacktest)"
+    )
+    feat_parity.add_argument("--feature-set", dest="feature_set", help="Feature set id (default: registry default)")
+    feat_parity.add_argument(
+        "--require-rust", action="store_true", help="Fail if the Rust backend is unavailable"
+    )
+    feat_parity.set_defaults(func=cmd_feature_parity)
 
     feat_preflight = feature_sub.add_parser("preflight", help="Check strategy/feature compatibility")
     feat_preflight.add_argument("--profiles", help="Feature profiles YAML path")

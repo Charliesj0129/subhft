@@ -32,9 +32,14 @@ from hft_platform.feature.engine import FeatureEngine
 from hft_platform.feature.registry import (
     FeatureSet,
     default_feature_registry,
+    promoted_feature_ids,
     promoted_indices,
 )
 from hft_platform.feed_adapter.lob_engine import LOBEngine
+
+# Canonical synthetic book scale: 0.1 * 10_000 (matches feed_adapter conventions).
+_SELFTEST_TICK = 1_000
+_SELFTEST_SYMBOL = "PARITYR1"
 
 
 def _rust_available() -> bool:
@@ -317,3 +322,106 @@ class RecordingFeatureSink:
                 warmup_ready_mask=int(getattr(evt, "warmup_ready_mask", 0) or 0),
             )
         )
+
+
+# ---------------------------------------------------------------------------
+# Synthetic self-test (shared by the unit test and the `hft feature parity` CLI)
+# ---------------------------------------------------------------------------
+def _selftest_book(best_bid: int, best_ask: int, bid_qty: int, ask_qty: int) -> tuple[np.ndarray, np.ndarray]:
+    bids = np.array(
+        [[best_bid - i * _SELFTEST_TICK, max(1, bid_qty - i * 3)] for i in range(5)],
+        dtype=np.int64,
+    )
+    asks = np.array(
+        [[best_ask + i * _SELFTEST_TICK, max(1, ask_qty - i * 3)] for i in range(5)],
+        dtype=np.int64,
+    )
+    return bids, asks
+
+
+def build_synthetic_frames(symbol: str = _SELFTEST_SYMBOL) -> list[LobInputFrame]:
+    """Deterministic frame sequence exercising warmup, one-sided book, and reset re-warm.
+
+    Shared by ``tests/unit/test_feature_promoted_parity.py`` and the
+    ``hft feature parity`` CLI so the test and the ops gate cover the same inputs.
+    """
+    frames: list[LobInputFrame] = []
+    base_bid = 1_000_000
+    ts = 1_000
+    for i in range(40):  # warmup ramp + steady book with moving top-of-book
+        bb = base_bid + (i % 6) * _SELFTEST_TICK
+        ba = bb + 2 * _SELFTEST_TICK
+        bids, asks = _selftest_book(bb, ba, 50 + i, 40 + (i % 7))
+        frames.append(LobInputFrame(symbol, ts, bids, asks))
+        ts += 125
+    for _ in range(5):  # one-sided thin ask book
+        bb = base_bid + 3 * _SELFTEST_TICK
+        ba = bb + _SELFTEST_TICK
+        bids, asks = _selftest_book(bb, ba, 80, 1)
+        frames.append(LobInputFrame(symbol, ts, bids, asks))
+        ts += 125
+    bb = base_bid + 2 * _SELFTEST_TICK  # gap-triggered reset, then re-warm
+    bids, asks = _selftest_book(bb, bb + 2 * _SELFTEST_TICK, 60, 55)
+    frames.append(LobInputFrame(symbol, ts, bids, asks, is_reset=True))
+    ts += 125
+    for i in range(10):
+        bb = base_bid + (i % 4) * _SELFTEST_TICK
+        bids, asks = _selftest_book(bb, bb + 2 * _SELFTEST_TICK, 45 + i, 50 - i)
+        frames.append(LobInputFrame(symbol, ts, bids, asks))
+        ts += 125
+    return frames
+
+
+def run_self_test(*, feature_set: FeatureSet | None = None) -> dict:
+    """Run the synthetic parity gate across all available paths.
+
+    Returns a JSON-serializable summary: per-pair parity results vs the Python
+    reference, with the first divergence's full coordinates when a pair fails.
+    Suitable for a CI/ops gate (``ok`` is False on any divergence).
+    """
+    if feature_set is None:
+        feature_set = default_feature_registry().get_default()
+    frames = build_synthetic_frames()
+
+    python = run_python_engine(frames)
+    rust = run_rust_engine(frames)
+    hftbt = run_hftbacktest_shared(frames)
+
+    candidates: dict[str, PathResult] = {"hftbacktest_shared": hftbt}
+    if rust is not None:
+        candidates["rust"] = rust
+
+    comparisons = []
+    overall_ok = True
+    for name, result in candidates.items():
+        report = compare_paths({"python": python, name: result}, feature_set=feature_set)
+        overall_ok = overall_ok and report.ok
+        entry: dict = {"pair": f"python vs {name}", "ok": report.ok, "n_frames": report.n_frames}
+        if report.schema_mismatch is not None:
+            entry["schema_mismatch"] = report.schema_mismatch
+        if report.warmup_mismatch is not None:
+            entry["warmup_mismatch"] = report.warmup_mismatch
+        if report.first_divergence is not None:
+            d = report.first_divergence
+            entry["first_divergence"] = {
+                "frame_index": d.frame_index,
+                "symbol": d.symbol,
+                "timestamp": d.timestamp,
+                "feature_id": d.feature_id,
+                "index": d.index,
+                "expected": d.expected,
+                "actual": d.actual,
+                "abs_diff": d.abs_diff,
+                "tolerance": d.tolerance,
+            }
+        comparisons.append(entry)
+
+    return {
+        "ok": overall_ok,
+        "feature_set_id": feature_set.feature_set_id,
+        "schema_version": int(feature_set.schema_version),
+        "n_frames": len(python),
+        "rust_available": rust is not None,
+        "promoted_feature_ids": list(promoted_feature_ids(feature_set)),
+        "comparisons": comparisons,
+    }
