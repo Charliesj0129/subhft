@@ -356,6 +356,11 @@ jobs:
       - name: Run unit tests with coverage
         run: make test-unit-ci
 
+      - name: Feature plane parity gate (Python/Rust/hftbacktest)
+        # Blocks merges on promoted-family feature drift across compute paths.
+        # --require-rust fails if the compiled kernel is missing (setup-rust built it above).
+        run: uv run python -m hft_platform.cli feature parity --require-rust
+
       - name: Check branch coverage
         run: make coverage-branch-gate
 
