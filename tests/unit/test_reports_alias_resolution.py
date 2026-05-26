@@ -95,6 +95,34 @@ class TestAliasResolution:
         # 1 alias-resolve + 2 OHLCV = 3 total. Alias probe ran once.
         assert mock_execute.call_count == 3
 
+    def test_alias_resolution_scoped_to_latest_trading_day(self) -> None:
+        """Resolution must rank by the most-recent day's volume, not 14-day cumulative.
+
+        Regression for the monthly-rollover blackout (2026-05-21): after TXFE6
+        expired on 2026-05-20, its trailing-14-day *cumulative* volume still
+        exceeded the new front month TXFF6, so a pure ``sum(volume) ... INTERVAL
+        14 DAY`` ranking kept resolving TXFR1 → TXFE6 (which had zero ticks
+        post-roll) and every daily report returned no_data for ~2 weeks. The
+        resolution SQL must therefore restrict ranking to the latest day that
+        actually has data so the live front month always wins on the roll date.
+        """
+        collector, mock_execute = _make_collector()
+        mock_execute.side_effect = [
+            [("TXFF6", 63_334)],  # alias-resolution probe (latest-day winner)
+            [],  # OHLCV
+        ]
+
+        collector._query_ohlcv("TXFR1", "exch_ts > 0")
+
+        resolution_sql = mock_execute.call_args_list[0].args[0]
+        # The ranking window must be pinned to the most-recent day with data,
+        # not the whole trailing window (which is biased toward the just-expired
+        # contract for ~2 weeks after every roll).
+        assert "max(toDate(" in resolution_sql, (
+            "alias resolution must restrict ranking to the latest trading day; "
+            f"got SQL without a max-date scope:\n{resolution_sql}"
+        )
+
     def test_alias_resolution_falls_back_when_no_match(self) -> None:
         """If CH has no active month for the root, return alias unchanged."""
         collector, mock_execute = _make_collector()
