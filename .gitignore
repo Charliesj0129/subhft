@@ -117,6 +117,18 @@ research/experiments/*
 !research/experiments/comparisons/.gitkeep
 !research/experiments/validations/
 research/experiments/validations/**/20*Z_*/
+# Re-exclude bulk data artifacts under validations/: the un-ignore above
+# whitelisted the whole tree, allowing multi-GB run outputs (.npz/.json/.csv,
+# up to ~1GB each) to be committed accidentally. Keep .md/.py text only.
+research/experiments/validations/**/*.npz
+research/experiments/validations/**/*.npy
+research/experiments/validations/**/*.parquet
+research/experiments/validations/**/*.feather
+research/experiments/validations/**/*.arrow
+research/experiments/validations/**/*.h5
+research/experiments/validations/**/*.pkl
+research/experiments/validations/**/*.csv
+research/experiments/validations/**/*.json
 # Slice-D synthetic signal corpus (committed for DoD-D3 determinism in CI)
 !research/experiments/_slice_d_fixtures/
 !research/experiments/_slice_d_fixtures/**
