@@ -790,6 +790,9 @@ class DataCollector:
         parts: list[str] = []
         for d in prev_dates:
             tf = filter_fn(d)
+            # The lag must be computed in a subquery (ClickHouse rejects a
+            # window function nested inside an aggregate argument, Code 184
+            # ILLEGAL_AGGREGATION) — mirrors the Q3 _query_flow pattern.
             part = f"""
                 SELECT
                     '{d}'                                     AS day,
@@ -798,16 +801,21 @@ class DataCollector:
                     min(price_scaled)                         AS low_ch,
                     argMax(price_scaled, exch_ts)             AS close_ch,
                     sum(volume)                               AS total_vol,
-                    sumIf(volume, price_scaled > lagInFrame(price_scaled) OVER (
-                        ORDER BY exch_ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
-                    ))                                        AS uptick_vol,
-                    sumIf(volume, price_scaled < lagInFrame(price_scaled) OVER (
-                        ORDER BY exch_ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
-                    ))                                        AS downtick_vol
-                FROM hft.market_data
-                WHERE symbol = %(symbol)s
-                  AND type = 'Tick'
-                  AND {tf}
+                    sumIf(volume, price_scaled > prev_price)  AS uptick_vol,
+                    sumIf(volume, price_scaled < prev_price)  AS downtick_vol
+                FROM (
+                    SELECT
+                        exch_ts,
+                        price_scaled,
+                        volume,
+                        lagInFrame(price_scaled) OVER (
+                            ORDER BY exch_ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
+                        ) AS prev_price
+                    FROM hft.market_data
+                    WHERE symbol = %(symbol)s
+                      AND type = 'Tick'
+                      AND {tf}
+                )
             """  # nosec B608
             parts.append(part)
 
