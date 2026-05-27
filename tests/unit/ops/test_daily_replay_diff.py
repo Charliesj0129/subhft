@@ -174,10 +174,44 @@ def test_main_fails_closed_on_eligible_divergence(mod, tmp_path: Path):
     )
     rc = mod.main(
         [
-            "--session", session,
+            "--session",
+            session,
             "--skip-replay",
-            "--out-root", str(out_root),
-            "--prom-file", str(tmp_path / "m.prom"),
+            "--out-root",
+            str(out_root),
+            "--prom-file",
+            str(tmp_path / "m.prom"),
+        ]
+    )
+    assert rc == 1
+
+
+def test_main_no_prom_fails_closed_on_eligible_divergence(mod, tmp_path: Path):
+    """--no-prom must NOT weaken the exit-code contract: an eligible ok=false
+    session still exits 1 even when Prometheus export is skipped."""
+    session = "2026-05-04"
+    out_root = tmp_path / "out"
+    _write_report_json(
+        out_root,
+        session,
+        {
+            "eligibility_status": "eligible",
+            "ok": False,
+            "match_pct": 80.0,
+            "mismatch_type": "intent_hash_mismatch",
+            "first_divergence_idx": 2,
+            "n_live_intents": 10,
+            "n_replayed_intents": 10,
+        },
+    )
+    rc = mod.main(
+        [
+            "--session",
+            session,
+            "--skip-replay",
+            "--out-root",
+            str(out_root),
+            "--no-prom",
         ]
     )
     assert rc == 1
@@ -200,10 +234,13 @@ def test_main_exits_zero_on_eligible_match(mod, tmp_path: Path):
     )
     rc = mod.main(
         [
-            "--session", session,
+            "--session",
+            session,
             "--skip-replay",
-            "--out-root", str(out_root),
-            "--prom-file", str(tmp_path / "m.prom"),
+            "--out-root",
+            str(out_root),
+            "--prom-file",
+            str(tmp_path / "m.prom"),
         ]
     )
     assert rc == 0

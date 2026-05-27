@@ -9,10 +9,13 @@ Every test here asserts a *fail-closed* outcome with a populated
 
 from __future__ import annotations
 
+import pytest
+
 from hft_platform.replay.intent_diff import (
     HASH_VERSION,
     INTENT_SCHEMA_VERSION,
     MismatchType,
+    MissingDecisionField,
     canonicalize_intent,
     diff_intent_streams,
     stable_intent_hash,
@@ -196,3 +199,36 @@ def test_optional_context_surfaced_in_first_divergence() -> None:
     fd = diff_intent_streams([e], [a]).first_divergence
     assert fd.context.get("feature_set_id") == "fs-7"
     assert fd.context.get("session_phase") == "day"
+
+
+# --------------------------------------------------------------------------
+# Required decision fields must not be masked by defaults
+# --------------------------------------------------------------------------
+
+
+def test_canonicalize_rejects_missing_side() -> None:
+    """A missing `side` must raise, not default to BUY — defaulting would let a
+    malformed intent hash-match a real BUY decision."""
+    bad = _intent()
+    del bad["side"]
+    with pytest.raises(MissingDecisionField):
+        canonicalize_intent(bad)
+
+
+def test_canonicalize_rejects_missing_qty() -> None:
+    """A missing `qty` must raise, not default to 0."""
+    bad = _intent()
+    del bad["qty"]
+    with pytest.raises(MissingDecisionField):
+        canonicalize_intent(bad)
+
+
+def test_diff_reports_schema_mismatch_on_missing_required_decision_field() -> None:
+    """A record that bypassed canonicalize_intent and lacks a required decision
+    field must fail closed as schema_mismatch — never hash-match on a default."""
+    good = _canon(intent_id=0, price=1000)
+    broken = dict(good)
+    broken.pop("side")  # directly-constructed record missing a hashed field
+    res = diff_intent_streams([good], [broken])
+    assert res.ok is False
+    assert res.first_divergence.mismatch_type == MismatchType.SCHEMA_MISMATCH.value

@@ -69,9 +69,7 @@ class TestReplayParityGate:
         of match_pct — a structural ordering/missing mismatch can leave
         match_pct high yet must not certify parity."""
         gate = ReplayParityGate()
-        report = _FakeStrictReport(
-            match_pct=99.9, ok=False, first_divergence_idx=3, mismatch_type="ordering_mismatch"
-        )
+        report = _FakeStrictReport(match_pct=99.9, ok=False, first_divergence_idx=3, mismatch_type="ordering_mismatch")
         result = _FakeResult(replay_parity_report=report)
         thresholds = {"replay_parity_match_pct_min": 95.0}
 

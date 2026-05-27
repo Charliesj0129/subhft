@@ -167,10 +167,7 @@ def _format_prom(report: dict[str, Any], *, loop_id: str, strategy_id: str, phas
     ok_val = (1 if match_pct >= 95.0 else 0) if ok_raw is None else (1 if ok_raw else 0)
 
     def _labels() -> str:
-        return (
-            f'loop_id="{loop_id}",strategy_id="{strategy_id}",'
-            f'eligibility="{eligibility}",phase="{phase}"'
-        )
+        return f'loop_id="{loop_id}",strategy_id="{strategy_id}",eligibility="{eligibility}",phase="{phase}"'
 
     lines = [
         "# HELP hft_replay_match_pct Daily live-vs-replay parity score (0..100, -1 if ineligible)",
@@ -244,26 +241,27 @@ def main(argv: list[str] | None = None) -> int:
             report.get("n_live_intents"),
             report.get("n_replayed_intents"),
         )
-        return 0
+    else:
+        prom_text = _format_prom(report, loop_id=args.loop, strategy_id=args.strategy, phase=args.phase)
+        try:
+            _write_prom(prom_text, args.prom_file)
+        except OSError as exc:
+            logger.error("Cannot write %s: %s", args.prom_file, exc)
+            return 1
 
-    prom_text = _format_prom(report, loop_id=args.loop, strategy_id=args.strategy, phase=args.phase)
-    try:
-        _write_prom(prom_text, args.prom_file)
-    except OSError as exc:
-        logger.error("Cannot write %s: %s", args.prom_file, exc)
-        return 1
+        logger.info(
+            "Replay parity exported: session=%s match_pct=%s phase=%s",
+            session.isoformat(),
+            report.get("match_pct"),
+            args.phase,
+        )
 
-    logger.info(
-        "Replay parity exported: session=%s match_pct=%s phase=%s",
-        session.isoformat(),
-        report.get("match_pct"),
-        args.phase,
-    )
-
-    # Fail closed: an eligible session whose strict parity flag is False
-    # exits non-zero so cron / CI alarms on the divergence itself rather than
-    # relying solely on a (mutable) Prometheus alert rule. Pre-recorder /
-    # ineligible observation runs stay exit 0 — they never claim a pass.
+    # Fail closed: an eligible session whose strict parity flag is False exits
+    # non-zero so cron / CI alarms on the divergence itself rather than relying
+    # solely on a (mutable) Prometheus alert rule. This check is independent of
+    # --no-prom — the exit-code contract must not weaken just because metrics
+    # export was skipped. Pre-recorder / ineligible observation runs stay exit
+    # 0 — they never claim a pass.
     if str(report.get("eligibility_status")) == "eligible" and report.get("ok") is False:
         logger.error(
             "Replay parity FAILED CLOSED: session=%s mismatch_type=%s first_divergence_idx=%s",

@@ -70,6 +70,20 @@ _OPTIONAL_CONTEXT_FIELDS: tuple[str, ...] = (
 )
 
 
+# Required decision fields: a canonical intent missing any of these cannot be
+# safely hashed — defaulting them (e.g. ``side`` -> ``"BUY"``, ``qty`` -> 0)
+# would let a malformed intent hash-match a real decision and create false
+# safety. ``canonicalize_intent`` raises :class:`MissingDecisionField`; the
+# diff engine reports ``schema_mismatch`` for directly-constructed streams.
+REQUIRED_DECISION_FIELDS: tuple[str, ...] = ("symbol", "side", "price", "qty")
+
+_MISSING = object()
+
+
+class MissingDecisionField(ValueError):
+    """Raised when an intent lacks a required decision field (cannot be hashed)."""
+
+
 class MismatchType(str, Enum):
     """Taxonomy of parity failures. All are fail-closed (ok=False)."""
 
@@ -87,6 +101,24 @@ def _get(intent: Any, name: str, default: Any) -> Any:
     if isinstance(intent, dict):
         return intent.get(name, default)
     return getattr(intent, name, default)
+
+
+def _require_field(intent: Any, name: str) -> Any:
+    """Return a required decision field or raise — never substitute a default."""
+    val = _get(intent, name, _MISSING)
+    if val is _MISSING or val is None:
+        raise MissingDecisionField(f"intent missing required decision field: {name!r}")
+    return val
+
+
+def _first_missing_required(rec: dict[str, Any]) -> str | None:
+    """Return the first required decision field absent/None in a canonical
+    record, or ``None`` if all are present. Used by the diff engine to flag a
+    directly-constructed stream that bypassed :func:`canonicalize_intent`."""
+    for fld in REQUIRED_DECISION_FIELDS:
+        if rec.get(fld) is None:
+            return fld
+    return None
 
 
 def _enum_name(value: Any, default: str) -> str:
@@ -118,17 +150,17 @@ def canonicalize_intent(intent: Any) -> dict[str, Any]:
         local_ts = int(_get(intent, "timestamp_ns", 0) or 0) // 1000
 
     rec: dict[str, Any] = {
-        "intent_schema_version": str(
-            _get(intent, "intent_schema_version", INTENT_SCHEMA_VERSION)
-        ),
+        "intent_schema_version": str(_get(intent, "intent_schema_version", INTENT_SCHEMA_VERSION)),
         # --- hashed decision fields ---
+        # Required fields are read via _require_field so a missing/None value
+        # raises instead of silently defaulting to a tradeable value.
         "strategy_id": str(_get(intent, "strategy_id", "") or ""),
-        "symbol": str(_get(intent, "symbol", "") or ""),
-        "side": _enum_name(_get(intent, "side", None), "BUY"),
+        "symbol": str(_require_field(intent, "symbol")),
+        "side": _enum_name(_require_field(intent, "side"), "BUY"),
         "intent_type": _enum_name(_get(intent, "intent_type", None), "NEW"),
         "tif": _enum_name(_get(intent, "tif", None), "LIMIT"),
-        "price": int(_get(intent, "price", 0) or 0),
-        "qty": int(_get(intent, "qty", 0) or 0),
+        "price": int(_require_field(intent, "price")),
+        "qty": int(_require_field(intent, "qty")),
         "price_type": str(_get(intent, "price_type", "LMT") or "LMT"),
         "target_order_id": str(_get(intent, "target_order_id", "") or ""),
         "decision_price": int(_get(intent, "decision_price", 0) or 0),
@@ -340,6 +372,34 @@ def diff_intent_streams(
             divergence_histogram={MismatchType.SCHEMA_MISMATCH.value: 1},
         )
 
+    # 2b. Required-decision-field validation. A record that bypassed
+    #     canonicalize_intent (e.g. a directly-constructed stream) and is
+    #     missing a hashed decision field must fail as schema_mismatch rather
+    #     than hash-matching on a defaulted value.
+    for stream in (expected, actual):
+        for idx, rec in enumerate(stream):
+            missing = _first_missing_required(rec)
+            if missing is not None:
+                on_expected = stream is expected
+                return IntentDiffResult(
+                    ok=False,
+                    path_pair=path_pair,
+                    n_expected=n_exp,
+                    n_actual=n_act,
+                    n_compared=0,
+                    match_pct=0.0,
+                    first_divergence=_divergence(
+                        path_pair=path_pair,
+                        index=idx,
+                        mismatch_type=MismatchType.SCHEMA_MISMATCH,
+                        expected=rec if on_expected else None,
+                        actual=None if on_expected else rec,
+                        expected_hash=None,
+                        actual_hash=None,
+                    ),
+                    divergence_histogram={MismatchType.SCHEMA_MISMATCH.value: 1},
+                )
+
     # 3. Empty streams — fail closed, never trivially "100%".
     if expect_nonempty and (n_exp == 0 or n_act == 0):
         mt = MismatchType.EMPTY_REPLAY if n_act == 0 else MismatchType.MISSING_INTENT_LOG
@@ -382,9 +442,7 @@ def diff_intent_streams(
     # Same multiset, different order → ordering_mismatch.
     same_multiset = Counter(exp_hashes) == Counter(act_hashes)
 
-    first_idx, mismatch_type = _classify_first_divergence(
-        exp_hashes, act_hashes, same_multiset
-    )
+    first_idx, mismatch_type = _classify_first_divergence(exp_hashes, act_hashes, same_multiset)
     e = expected[first_idx] if first_idx < n_exp else None
     a = actual[first_idx] if first_idx < n_act else None
     n_compared = max(n_exp, n_act)
