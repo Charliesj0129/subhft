@@ -43,6 +43,7 @@ from hft_platform.replay.eligibility import (
     IneligiblePreRecorder,
     check_eligibility,
 )
+from hft_platform.replay.intent_diff import canonicalize_intent
 from hft_platform.replay.intent_log import ReplayedIntentLog
 from hft_platform.replay.strategy_replay import ReplayConfig, replay_strategy
 
@@ -58,28 +59,32 @@ def _file_sha256(path: Path) -> str:
 
 
 def _row_to_canonical(row: tuple, columns: list[str]) -> dict[str, Any]:
-    """Project a ClickHouse ``hft.order_intents`` row to the canonical
-    schema produced by :func:`hft_platform.replay.intent_log._intent_to_canonical`.
+    """Project a ClickHouse ``hft.order_intents`` row onto the canonical
+    schema via the single source of truth
+    (:func:`hft_platform.replay.intent_diff.canonicalize_intent`).
 
-    The canonical schema deliberately uses ``timestamp_us`` (microseconds)
-    rather than nanoseconds so sub-microsecond scheduler jitter doesn't
-    break parity.
+    The CK column names (``price_scaled``, ``timestamp_ns``) are mapped to the
+    intent-shaped keys the canonicalizer expects; the canonicalizer then
+    derives ``source_ts`` / ``local_ts`` and the stable-hash subset so the
+    live-load path and the replay path cannot drift apart.
     """
     d = dict(zip(columns, row, strict=False))
-    return {
-        "intent_id": int(d.get("intent_id", 0)),
+    intent_like = {
+        "intent_id": int(d.get("intent_id", 0) or 0),
         "strategy_id": str(d.get("strategy_id", "")),
         "symbol": str(d.get("symbol", "")),
         "intent_type": str(d.get("intent_type", "")),
         "side": str(d.get("side", "")),
         "tif": str(d.get("tif", "LIMIT")),
-        "price": int(d.get("price_scaled", 0)),
-        "qty": int(d.get("qty", 0)),
+        "price": int(d.get("price_scaled", 0) or 0),
+        "qty": int(d.get("qty", 0) or 0),
         "target_order_id": str(d.get("target_order_id", "") or ""),
-        "timestamp_us": int(d.get("timestamp_ns", 0)) // 1000,
-        "decision_price": int(d.get("decision_price", 0)),
+        "timestamp_ns": int(d.get("timestamp_ns", 0) or 0),
+        "source_ts_ns": int(d.get("source_ts_ns", 0) or 0),
+        "decision_price": int(d.get("decision_price", 0) or 0),
         "price_type": str(d.get("price_type", "LMT")),
     }
+    return canonicalize_intent(intent_like)
 
 
 def _load_live_intents(
@@ -99,6 +104,7 @@ def _load_live_intents(
         "tif",
         "target_order_id",
         "timestamp_ns",
+        "source_ts_ns",
         "decision_price",
         "price_type",
     ]
@@ -267,10 +273,16 @@ def run_replay_session(
         live_records = []
         eligibility_status = "pre_recorder"
 
+    is_eligible = isinstance(eligibility, Eligible)
     diff = IntentDiff(
         live=live_records,
         replayed=replayed_records,
         evidence_path=str(out_dir / "report.json"),
+        # Eligible sessions must have non-empty live + replay streams; an
+        # empty side is a fail-closed condition. Pre-recorder + override is an
+        # operator-acknowledged observation run, so don't trip the empty check
+        # (the report still carries ok=False so it can never read as a pass).
+        expect_nonempty=is_eligible,
     )
     report: ReplayParityReport = diff.compute()
 
@@ -281,8 +293,21 @@ def run_replay_session(
     base_payload["match_pct"] = report.match_pct
     base_payload["first_divergence_idx"] = report.first_divergence_idx
     base_payload["divergence_histogram"] = dict(report.divergence_histogram)
+    base_payload["ok"] = report.ok
+    base_payload["mismatch_type"] = report.mismatch_type
+    base_payload["first_divergence"] = report.first_divergence
+    base_payload["path_pair"] = report.path_pair
+    base_payload["intent_schema_version"] = report.intent_schema_version
+    base_payload["hash_version"] = report.hash_version
 
     _write_report(out_dir, base_payload, parity=report)
+
+    # Fail closed: an eligible session whose live intents diverge from the
+    # deterministic replay exits non-zero so the daily job / CI alarms. A
+    # pre-recorder override run stays exit 0 (the operator opted in) but its
+    # report ok=False keeps it from ever certifying parity.
+    if is_eligible and not report.ok:
+        return 1
     return 0
 
 

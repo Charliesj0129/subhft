@@ -158,6 +158,7 @@ class _FakeCKClient:
                     d["tif"],
                     d["target_order_id"],
                     int(d["timestamp_us"]) * 1000,
+                    int(d.get("source_ts_ns", 0)),
                     d["decision_price"],
                     d["price_type"],
                 )
@@ -224,10 +225,14 @@ def test_replay_eligible_with_divergence(tmp_path: Path, _settings: dict) -> Non
         strategy_factory_override=_factory,
     )
 
-    assert rc == 0
+    # Strict fail-closed: an eligible session that diverges exits non-zero.
+    assert rc == 1
     report = json.loads((out_root / "2026-04-21" / "report.json").read_text())
+    assert report["ok"] is False
     assert report["match_pct"] < 95.0
     assert report["first_divergence_idx"] == 0
+    assert report["mismatch_type"]
+    assert report["first_divergence"]["expected_hash"] != report["first_divergence"]["actual_hash"]
     histogram = json.loads((out_root / "2026-04-21" / "divergence_histogram.json").read_text())
     assert histogram.get("price", 0) == 4
 
@@ -389,6 +394,7 @@ def test_row_to_canonical_projects_clickhouse_row() -> None:
         "tif",
         "target_order_id",
         "timestamp_ns",
+        "source_ts_ns",
         "decision_price",
         "price_type",
     ]
@@ -403,6 +409,7 @@ def test_row_to_canonical_projects_clickhouse_row() -> None:
         "LIMIT",
         "",
         5_000_000_000,
+        4_000_000_000,
         1_234_567,
         "LMT",
     )
@@ -410,5 +417,8 @@ def test_row_to_canonical_projects_clickhouse_row() -> None:
     canonical = _row_to_canonical(row, columns)
     assert canonical["intent_id"] == 7
     assert canonical["price"] == 1_234_567
-    assert canonical["timestamp_us"] == 5_000_000
+    # v2 canonical: wall-clock emission ts -> local_ts (reporting only, not hashed);
+    # event source ts -> source_ts (hashed input-locality key). Both in microseconds.
+    assert canonical["local_ts"] == 5_000_000
+    assert canonical["source_ts"] == 4_000_000
     assert canonical["price_type"] == "LMT"

@@ -148,6 +148,67 @@ def test_settings_for_uses_loop_and_strategy(mod):
     assert s["strategy"]["class"] == "R47MakerStrategy"
 
 
+def _write_report_json(out_root: Path, session: str, report: dict) -> None:
+    d = out_root / session
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "report.json").write_text(json.dumps(report))
+
+
+def test_main_fails_closed_on_eligible_divergence(mod, tmp_path: Path):
+    """An eligible session with ok=False must make main() exit non-zero so the
+    daily cron / CI alarms on the divergence itself, not just a Prom alert."""
+    session = "2026-05-04"
+    out_root = tmp_path / "out"
+    _write_report_json(
+        out_root,
+        session,
+        {
+            "eligibility_status": "eligible",
+            "ok": False,
+            "match_pct": 80.0,
+            "mismatch_type": "missing_expected_intent",
+            "first_divergence_idx": 3,
+            "n_live_intents": 10,
+            "n_replayed_intents": 9,
+        },
+    )
+    rc = mod.main(
+        [
+            "--session", session,
+            "--skip-replay",
+            "--out-root", str(out_root),
+            "--prom-file", str(tmp_path / "m.prom"),
+        ]
+    )
+    assert rc == 1
+
+
+def test_main_exits_zero_on_eligible_match(mod, tmp_path: Path):
+    session = "2026-05-04"
+    out_root = tmp_path / "out"
+    _write_report_json(
+        out_root,
+        session,
+        {
+            "eligibility_status": "eligible",
+            "ok": True,
+            "match_pct": 100.0,
+            "first_divergence_idx": None,
+            "n_live_intents": 10,
+            "n_replayed_intents": 10,
+        },
+    )
+    rc = mod.main(
+        [
+            "--session", session,
+            "--skip-replay",
+            "--out-root", str(out_root),
+            "--prom-file", str(tmp_path / "m.prom"),
+        ]
+    )
+    assert rc == 0
+
+
 def test_write_prom_atomic_replace(mod, tmp_path: Path):
     target = tmp_path / "metrics" / "hft_replay.prom"
     mod._write_prom("hft_replay_match_pct{} 99.0\n", str(target))

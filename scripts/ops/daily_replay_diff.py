@@ -160,6 +160,11 @@ def _format_prom(report: dict[str, Any], *, loop_id: str, strategy_id: str, phas
     n_market = int(report.get("n_market_events", 0))
     first_div_raw = report.get("first_divergence_idx")
     first_div = -1 if first_div_raw is None else int(first_div_raw)
+    # ``ok`` is the strict parity flag from the shared diff engine. Legacy
+    # reports without it fall back to the match_pct>=95 heuristic so the gauge
+    # is never silently 1 on an unknown-shape report.
+    ok_raw = report.get("ok")
+    ok_val = (1 if match_pct >= 95.0 else 0) if ok_raw is None else (1 if ok_raw else 0)
 
     def _labels() -> str:
         return (
@@ -184,6 +189,9 @@ def _format_prom(report: dict[str, Any], *, loop_id: str, strategy_id: str, phas
         "# HELP hft_replay_first_divergence_idx Index of first parity divergence (-1 if none)",
         "# TYPE hft_replay_first_divergence_idx gauge",
         f"hft_replay_first_divergence_idx{{{_labels()}}} {first_div}",
+        "# HELP hft_replay_ok Strict parity flag (1=ok, 0=any divergence/empty/schema/ordering)",
+        "# TYPE hft_replay_ok gauge",
+        f"hft_replay_ok{{{_labels()}}} {ok_val}",
     ]
     return "\n".join(lines) + "\n"
 
@@ -251,6 +259,19 @@ def main(argv: list[str] | None = None) -> int:
         report.get("match_pct"),
         args.phase,
     )
+
+    # Fail closed: an eligible session whose strict parity flag is False
+    # exits non-zero so cron / CI alarms on the divergence itself rather than
+    # relying solely on a (mutable) Prometheus alert rule. Pre-recorder /
+    # ineligible observation runs stay exit 0 — they never claim a pass.
+    if str(report.get("eligibility_status")) == "eligible" and report.get("ok") is False:
+        logger.error(
+            "Replay parity FAILED CLOSED: session=%s mismatch_type=%s first_divergence_idx=%s",
+            session.isoformat(),
+            report.get("mismatch_type"),
+            report.get("first_divergence_idx"),
+        )
+        return 1
     return 0
 
 

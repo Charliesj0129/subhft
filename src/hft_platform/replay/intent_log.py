@@ -1,54 +1,37 @@
-"""Canonical intent log for Slice C replay-parity gate.
+"""Canonical intent log for the replay-parity gate.
 
-`ReplayedIntentLog` collects emitted intents and produces a canonical
-``bytes`` form for hashing. The same canonical form is used to hash a
-"live" intent stream loaded from ``hft.order_intents`` (Task 14) or a
-synthetic fixture (Task 7). Microsecond-rounded timestamps prevent
-sub-microsecond scheduler jitter from breaking parity, while keeping the
-parity bar tight enough to catch the R47-OE1 cancel-path divergence
-(which is whole-event-shape, not timing).
+`ReplayedIntentLog` collects emitted intents and produces a canonical record
+list + a deterministic stream digest for parity comparison. Canonicalization
+and hashing are delegated to the single source of truth in
+:mod:`hft_platform.replay.intent_diff` so the live-load path
+(``cli_runner._row_to_canonical``) and the replay path cannot drift.
+
+The stable hash excludes generated ids and the wall-clock emission timestamp
+(``local_ts``) so the same logical decision hashes identically in live and
+replay; it includes the event source timestamp (``source_ts``) as the
+input-locating key. See ``intent_diff.HASH_FIELDS``.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from hft_platform.replay.intent_diff import (
+    canonicalize_intent,
+    stable_intent_hash,
+)
 
-def _intent_to_canonical(intent: Any) -> dict[str, Any]:
-    """Project an intent (real ``OrderIntent`` or ``_DictIntent`` shim) onto
-    the canonical schema. Volatile/runtime-uniqued fields (``trace_id``,
-    ``idempotency_key``, ``ttl_ns``, ``reason``, ``ingest_ts``,
-    ``source_ts_ns``) are intentionally excluded.
-    """
-    return {
-        "intent_id": int(getattr(intent, "intent_id", 0)),
-        "strategy_id": str(getattr(intent, "strategy_id", "")),
-        "symbol": str(getattr(intent, "symbol", "")),
-        "intent_type": getattr(intent.intent_type, "name", str(intent.intent_type)),
-        "side": getattr(intent.side, "name", str(intent.side)),
-        "tif": getattr(intent.tif, "name", str(intent.tif)),
-        "price": int(getattr(intent, "price", 0)),
-        "qty": int(getattr(intent, "qty", 0)),
-        "target_order_id": str(getattr(intent, "target_order_id", "") or ""),
-        "timestamp_us": int(getattr(intent, "timestamp_ns", 0)) // 1000,
-        "decision_price": int(getattr(intent, "decision_price", 0)),
-        "price_type": str(getattr(intent, "price_type", "LMT")),
-    }
+# Back-compat alias: older modules/docstrings reference ``_intent_to_canonical``.
+_intent_to_canonical = canonicalize_intent
 
 
 @dataclass
 class _DictIntent:
-    """Shim for jsonl-loaded intents (mirrors ``OrderIntent`` fields by name).
-
-    Canonical fixtures stored on disk use ``timestamp_us`` (microseconds);
-    :py:meth:`ReplayedIntentLog.from_jsonl` promotes it to ``timestamp_ns``
-    before instantiation so the round-trip lands in the same microsecond
-    bucket: ``timestamp_us == (timestamp_us * 1000) // 1000``.
-    """
+    """Shim for jsonl-loaded intents (mirrors ``OrderIntent`` fields by name)."""
 
     intent_id: int = 0
     strategy_id: str = ""
@@ -60,8 +43,10 @@ class _DictIntent:
     qty: int = 0
     target_order_id: str = ""
     timestamp_ns: int = 0
+    source_ts_ns: int = 0
     decision_price: int = 0
     price_type: str = "LMT"
+    reason: str = ""
 
 
 @dataclass
@@ -78,42 +63,38 @@ class ReplayedIntentLog:
         return len(self.intents)
 
     def canonical_records(self) -> list[dict[str, Any]]:
-        return [_intent_to_canonical(it) for it in self.intents]
+        return [canonicalize_intent(it) for it in self.intents]
 
     def hash(self) -> str:
-        """SHA-256 of the JSONL-encoded canonical records.
+        """SHA-256 of the per-record stable intent hashes, in order.
 
-        Determinism: ``json.dumps(..., sort_keys=True, separators=(",", ":"))``
-        yields a stable byte sequence across processes and Python versions.
+        Determinism comes from :func:`stable_intent_hash` (sorted-key JSON,
+        version-tagged). Two logs whose intents differ only in generated ids
+        or wall-clock emission timestamps produce an identical digest.
         """
         h = hashlib.sha256()
         for rec in self.canonical_records():
-            h.update(json.dumps(rec, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+            h.update(stable_intent_hash(rec).encode("ascii"))
             h.update(b"\n")
         return h.hexdigest()
 
     @classmethod
     def from_jsonl(cls, path: str | Path) -> "ReplayedIntentLog":
-        """Load a canonical-record JSONL file produced by ``canonical_records``.
+        """Load a canonical-record JSONL file.
 
-        Tolerates blank lines and forward-compat extra keys (silently dropped).
-        Promotes ``timestamp_us`` -> ``timestamp_ns`` so a round-trip through
-        :py:meth:`hash` produces an identical digest.
+        Tolerates blank lines and forward-compat extra keys. Legacy fixtures
+        that store ``timestamp_us`` (microseconds, the pre-v2 schema) are
+        promoted to ``local_ts`` — a reporting-only field, so the stream
+        digest is unaffected. Records are stored as canonical dicts;
+        :func:`canonicalize_intent` is idempotent on them.
         """
         log = cls()
-        allowed = {f.name for f in fields(_DictIntent)}
         for line in Path(path).read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if not line:
                 continue
             d = json.loads(line)
-            # Canonical fixtures store timestamp_us (microseconds, rounded).
-            # Promote it to timestamp_ns so _intent_to_canonical(...) round-trips
-            # to the same bucket: timestamp_us = (timestamp_us * 1000) // 1000.
-            if "timestamp_us" in d and "timestamp_ns" not in d:
-                d["timestamp_ns"] = int(d.pop("timestamp_us")) * 1000
-            # Drop any keys _DictIntent doesn't accept (defensive against
-            # canonical-schema additions in future slices).
-            d = {k: v for k, v in d.items() if k in allowed}
-            log.intents.append(_DictIntent(**d))
+            if "timestamp_us" in d and "local_ts" not in d:
+                d["local_ts"] = int(d.pop("timestamp_us"))
+            log.intents.append(canonicalize_intent(d))
         return log

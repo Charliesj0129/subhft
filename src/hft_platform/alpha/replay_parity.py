@@ -1,23 +1,26 @@
-"""IntentDiff + ReplayParityReport — Slice C task 6.
+"""IntentDiff + ReplayParityReport — replay-parity gate.
 
-Compares two canonical intent streams (live + replayed) and produces a
-:class:`ReplayParityReport` describing match percentage, first divergence
-index, and a per-field divergence histogram. Consumed by the
-ReplayParityGate sub-gate (Slice C task 8) and Gate D replay_parity_audit
-(task 10).
+Thin adapter over the shared diff engine
+(:mod:`hft_platform.replay.intent_diff`). ``IntentDiff.compute`` delegates to
+:func:`diff_intent_streams` so the gate, the CLI runner, and the daily ops job
+share one comparison; there is no second diff implementation.
 
-The canonical intent dict schema is produced by
-``hft_platform.alpha.intent_log._intent_to_canonical`` (Slice C task 5).
-This module is schema-agnostic: it diffs whatever keys exist in the live
-side. Each entry is treated as one observation; per-key inequality counts
-toward the divergence histogram, and a length mismatch is bucketed under
-the special ``__missing__`` key.
+``ReplayParityReport`` keeps the historical ``match_pct`` /
+``first_divergence_idx`` / ``divergence_histogram`` surface (consumed by the
+ReplayParityGate sub-gate and Gate D) and adds the strict ``ok`` flag,
+``mismatch_type`` and the localizable ``first_divergence`` payload.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
+
+from hft_platform.replay.intent_diff import (
+    HASH_VERSION,
+    INTENT_SCHEMA_VERSION,
+    diff_intent_streams,
+)
 
 
 @dataclass(frozen=True)
@@ -27,6 +30,12 @@ class ReplayParityReport:
     first_divergence_idx: int | None
     divergence_histogram: dict[str, int]
     evidence_path: str
+    ok: bool = True
+    mismatch_type: str | None = None
+    first_divergence: dict[str, Any] | None = None
+    path_pair: str = "live_vs_replay"
+    intent_schema_version: str = INTENT_SCHEMA_VERSION
+    hash_version: str = HASH_VERSION
     harness_version: str = "slice-c.v1"
 
 
@@ -35,35 +44,27 @@ class IntentDiff:
     live: list[dict[str, Any]]
     replayed: list[dict[str, Any]]
     evidence_path: str = ""
+    path_pair: str = "live_vs_replay"
+    expect_nonempty: bool = True
 
     def compute(self) -> ReplayParityReport:
-        n_compared = max(len(self.live), len(self.replayed))
-        if n_compared == 0:
-            return ReplayParityReport(100.0, 0, None, {}, self.evidence_path)
-        first_div: int | None = None
-        hist: dict[str, int] = {}
-        n_match = 0
-        for i in range(n_compared):
-            a = self.live[i] if i < len(self.live) else None
-            b = self.replayed[i] if i < len(self.replayed) else None
-            if a is None or b is None:
-                hist["__missing__"] = hist.get("__missing__", 0) + 1
-                if first_div is None:
-                    first_div = i
-                continue
-            diffs = [k for k in a if a[k] != b.get(k)]
-            if not diffs:
-                n_match += 1
-                continue
-            for k in diffs:
-                hist[k] = hist.get(k, 0) + 1
-            if first_div is None:
-                first_div = i
-        match_pct = (n_match / n_compared) * 100.0
+        result = diff_intent_streams(
+            self.live,
+            self.replayed,
+            path_pair=self.path_pair,
+            expect_nonempty=self.expect_nonempty,
+        )
+        fd = result.first_divergence
         return ReplayParityReport(
-            match_pct=match_pct,
-            n_compared=n_compared,
-            first_divergence_idx=first_div,
-            divergence_histogram=dict(hist),
+            match_pct=result.match_pct,
+            n_compared=result.n_compared,
+            first_divergence_idx=fd.event_index if fd is not None else None,
+            divergence_histogram=dict(result.divergence_histogram),
             evidence_path=self.evidence_path,
+            ok=result.ok,
+            mismatch_type=fd.mismatch_type if fd is not None else None,
+            first_divergence=fd.to_dict() if fd is not None else None,
+            path_pair=result.path_pair,
+            intent_schema_version=result.intent_schema_version,
+            hash_version=result.hash_version,
         )

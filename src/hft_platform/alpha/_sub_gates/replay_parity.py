@@ -20,12 +20,17 @@ class ReplayParityGate:
     """Check replay-parity match percentage against threshold.
 
     Expects ``result.replay_parity_report`` to expose:
+      * ``ok: bool`` — strict parity flag (False on ANY divergence:
+        missing / unexpected / ordering / schema / empty / hash).
       * ``match_pct: float`` — percentage of intents that matched on replay.
-      * ``first_divergence_idx: int | None`` — index of first mismatch
-        (None when there is no divergence).
+      * ``first_divergence_idx: int | None`` — index of first mismatch.
+      * ``mismatch_type: str | None`` — divergence taxonomy.
 
-    A missing report (None) is a hard failure: the gate cannot certify
-    parity it never observed.
+    Fail-closed policy (strict 100%): a missing report OR ``ok is False``
+    is a hard failure. The gate cannot certify parity it never observed, and
+    any first divergence — structural or hash-level — blocks promotion. The
+    ``match_pct`` threshold is retained only as an informational metric;
+    older reports without an ``ok`` attribute fall back to the threshold.
     """
 
     name = "replay_parity"
@@ -52,8 +57,17 @@ class ReplayParityGate:
         # `or -1` guards against first_divergence_idx=None; explicit cast
         # keeps the metrics dict json-serializable.
         first_div = float(getattr(report, "first_divergence_idx", -1) or -1)
+        mismatch_type = getattr(report, "mismatch_type", None)
 
-        passed = match_pct >= threshold
+        # Strict fail-closed: any divergence blocks promotion. ``ok`` is the
+        # authoritative signal; fall back to the threshold only for legacy
+        # reports that predate the ``ok`` flag.
+        ok_attr = getattr(report, "ok", None)
+        if ok_attr is None:
+            passed = match_pct >= threshold
+        else:
+            passed = bool(ok_attr)
+
         return SubGateResult(
             name=self.name,
             passed=passed,
@@ -61,6 +75,10 @@ class ReplayParityGate:
                 "match_pct": match_pct,
                 "threshold": threshold,
                 "first_divergence_idx": first_div,
+                "ok": 1.0 if passed else 0.0,
             },
-            details=(f"match_pct={match_pct:.2f}% vs min {threshold:.2f}% (first_divergence_idx={first_div:.0f})"),
+            details=(
+                f"ok={passed} mismatch_type={mismatch_type} "
+                f"match_pct={match_pct:.2f}% (first_divergence_idx={first_div:.0f})"
+            ),
         )

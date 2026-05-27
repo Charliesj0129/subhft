@@ -171,6 +171,7 @@ class _FakeCKClient:
                     d["tif"],
                     d["target_order_id"],
                     int(d["timestamp_us"]) * 1000,  # timestamp_ns
+                    int(d.get("source_ts_ns", 0)),  # source_ts_ns
                     d["decision_price"],
                     d["price_type"],
                 )
@@ -237,11 +238,14 @@ def test_replay_eligible_with_divergence(tmp_path: Path, _settings: dict) -> Non
         strategy_factory_override=_factory,
     )
 
-    assert rc == 0
+    # Strict fail-closed: an eligible session that diverges exits non-zero.
+    assert rc == 1
     report = json.loads((out_root / "2026-04-21" / "report.json").read_text())
     assert report["eligibility_status"] == "eligible"
+    assert report["ok"] is False
     assert report["match_pct"] < 95.0
     assert report["first_divergence_idx"] == 0
+    assert report["mismatch_type"]
     histogram = json.loads((out_root / "2026-04-21" / "divergence_histogram.json").read_text())
     assert histogram.get("price", 0) == 4
     assert histogram.get("decision_price", 0) == 4

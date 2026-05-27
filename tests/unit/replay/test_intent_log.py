@@ -68,21 +68,32 @@ def test_canonical_form_changes_on_price() -> None:
     assert log_a.hash() != log_b.hash()
 
 
-def test_canonical_form_rounds_timestamp_to_us() -> None:
-    """Sub-microsecond timestamp jitter (<=999 ns) must collapse to same hash."""
+def test_wall_clock_emission_ts_never_affects_hash() -> None:
+    """v2 contract: the wall-clock emission timestamp is reporting-only
+    (local_ts) and MUST NOT affect the stable hash — live and replay observe
+    different wall clocks for the same logical decision."""
     base_ns = 1_700_000_000_000_000_000
     log_a = ReplayedIntentLog()
     log_b = ReplayedIntentLog()
 
     log_a.append(_make_intent(timestamp_ns=base_ns))
-    log_b.append(_make_intent(timestamp_ns=base_ns + 500))
+    # A full second of emission-time skew must still hash identically.
+    log_b.append(_make_intent(timestamp_ns=base_ns + 1_000_000_000))
 
     assert log_a.hash() == log_b.hash()
 
-    # Cross-microsecond jitter (+1000 ns) must NOT collapse.
-    log_c = ReplayedIntentLog()
-    log_c.append(_make_intent(timestamp_ns=base_ns + 1_000))
-    assert log_a.hash() != log_c.hash()
+
+def test_event_source_ts_affects_hash() -> None:
+    """The event source timestamp (source_ts) is the input-locality key and
+    is part of the stable hash."""
+    base_ns = 1_700_000_000_000_000_000
+    log_a = ReplayedIntentLog()
+    log_b = ReplayedIntentLog()
+
+    log_a.append(_make_intent(source_ts_ns=base_ns))
+    log_b.append(_make_intent(source_ts_ns=base_ns + 1_000_000))  # +1ms source ts
+
+    assert log_a.hash() != log_b.hash()
 
 
 def test_load_from_jsonl(tmp_path: Path) -> None:
