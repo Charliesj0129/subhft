@@ -94,6 +94,13 @@ class AlphaManifest:
     # Per plan §5, kill_reason / cluster_id deliberately do NOT live here.
     dsl_formula: str | None = None
     parent_alpha_id: str | None = None
+    # Stage 3 (2026-05-28): canonical cost-profile reference.
+    # Each entry MUST be a key in ``config/research/cost_profiles.yaml`` (e.g.
+    # "TXFD6", "TMFD6").  Replaces the older practice of embedding the
+    # commission/tax numerics inside ``manifest.yaml::cost_model:`` (now
+    # renamed to ``cost_profile_notes:`` for alpha-author provenance only).
+    # See research.backtest.cost_models.load_cost_profile for the resolver.
+    cost_profile_refs: tuple[str, ...] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
         bad_roles = set(self.roles_used) - VALID_ROLES
@@ -113,7 +120,20 @@ class AlphaManifest:
         return data
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "AlphaManifest":
+    def from_dict(cls, data: dict[str, Any], *, strict: bool = False) -> "AlphaManifest":
+        """Build an ``AlphaManifest`` from a parsed YAML mapping.
+
+        When ``strict=True``, raises ``ValueError`` on any top-level key that
+        is neither a schema field nor a member of ``_KNOWN_EXTRA_KEYS`` (the
+        alpha-author metadata the platform deliberately ignores).
+        """
+        if strict:
+            unknown = set(data) - _SCHEMA_FIELDS - _KNOWN_EXTRA_KEYS
+            if unknown:
+                raise ValueError(
+                    f"AlphaManifest.from_dict(strict=True): unknown top-level keys "
+                    f"in alpha_id={data.get('alpha_id', '<unset>')!r}: {sorted(unknown)}"
+                )
         return cls(
             alpha_id=str(data["alpha_id"]),
             hypothesis=str(data.get("hypothesis", "")),
@@ -132,7 +152,60 @@ class AlphaManifest:
             instrument=str(data.get("instrument", "")),
             dsl_formula=str(data["dsl_formula"]) if data.get("dsl_formula") else None,
             parent_alpha_id=str(data["parent_alpha_id"]) if data.get("parent_alpha_id") else None,
+            cost_profile_refs=tuple(str(r) for r in data.get("cost_profile_refs", ())),
         )
+
+
+# ---------------------------------------------------------------------------
+# Stage 3 (2026-05-28): strict-mode top-level key registry.
+# Used only when ``AlphaManifest.from_dict(..., strict=True)`` is called.
+# ---------------------------------------------------------------------------
+
+_SCHEMA_FIELDS: frozenset[str] = frozenset(
+    {
+        "alpha_id",
+        "hypothesis",
+        "formula",
+        "paper_refs",
+        "data_fields",
+        "complexity",
+        "status",
+        "tier",
+        "rust_module",
+        "latency_profile",
+        "roles_used",
+        "skills_used",
+        "feature_set_version",
+        "strategy_type",
+        "instrument",
+        "dsl_formula",
+        "parent_alpha_id",
+        "cost_profile_refs",
+    }
+)
+
+# Alpha-author metadata keys the platform tolerates but does not consume.
+# Anything else under ``strict=True`` is rejected.  Keep this set small;
+# prefer renaming non-canonical keys over adding to it.
+_KNOWN_EXTRA_KEYS: frozenset[str] = frozenset(
+    {
+        "cost_profile_notes",  # Stage 3 rename of legacy ``cost_model:`` block
+        "expected_edge",
+        "governance",
+        "notes",
+        "h2_framework",
+        "switch_semantics",
+        "deployment_notes",
+        "research_artifacts",
+        "execution_envelope",
+        "kill_reason",
+        "experiment_metadata",
+        "schema_version",
+        "version",
+        "description",
+        "alphabet",
+    }
+)
 
 
 @dataclass(frozen=True)

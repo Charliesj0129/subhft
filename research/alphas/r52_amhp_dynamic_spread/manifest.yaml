@@ -25,7 +25,14 @@ latency_profile_detail:
   cancel_p95_ms: 59
   asymmetry_note: "cancel 6.7x faster than submit; structurally favors dynamic re-quote"
 
-cost_model:
+# Stage 3 (2026-05-28) refactor: canonical cost profile lookup.
+# Numeric commission/tax/scale values live in config/research/cost_profiles.yaml
+# under these keys; the cost_profile_notes block below preserves alpha-author
+# provenance (memos, confirmation dates, drag analysis) only.
+cost_profile_refs:
+  - "TMFD6"
+
+cost_profile_notes:
   rt_cost_pts: 4               # TMF retail RT (40 NTD); cited from feedback_taifex_fee_structure.md
   rt_cost_ntd: 40
   per_side_cost_pts: 2
