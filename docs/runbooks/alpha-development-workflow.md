@@ -146,6 +146,20 @@ A *narrower* screener that runs **before** Gate A. Source: `src/hft_platform/alp
 - **Auto-kill:** with `--write-kill`, a `verdict='kill'` outcome appends a `gate='pre_screen'` row to the kill ledger (`audit.alpha_kill_ledger` ClickHouse table + `research/alphas/_kill_ledger.jsonl` fallback) keyed by `kill_id = sha256(alpha_id ":" gate ":" stable_artifact_hash)`. Idempotent (`(alpha_id, kill_id)` dedupe in both sinks).
 - **Disambiguation:** `cheap-screen` is **not** a substitute for `screen`. The two run different stages: `cheap-screen` is a 60 s pre-Gate-A signal triage; `screen` is the loose Gate-A–C path that produces a (non-promotion-eligible) scorecard. Use `cheap-screen` first to drop dead signals cheaply, then `screen` for promising ones, then `validate --profile vm_ul6_strict` for promotion candidates.
 
+### 4c. Profile reference — two namespaces (do not confuse)
+
+The "strict UL6" profile is expressed with **two different tokens on two different
+entrypoints**. They are *not* typos of each other — pick the one matching the command:
+
+| Entrypoint | Flag | Token | Mechanism |
+|---|---|---|---|
+| `make research` / `python -m research.pipeline run` | `--validation-profile` | **`vm_ul6`** | Argparse override-token applied in `research/pipeline.py::_apply_validation_profile`. `vm_ul6_strict` here raises `Unknown validation_profile`. |
+| `hft alpha validate` / `hft alpha promote` | `--profile` | **`vm_ul6_strict`** | File-resolved to `config/research/profiles/vm_ul6_strict.yaml` by `_alpha.py::_load_strict_validation_profile`. A bare `vm_ul6` does not resolve to a profile file. |
+
+- The `loose` profile (default for `hft alpha screen`) runs every sub-gate but only blocks on
+  the 6 baseline names; its scorecard is stamped `screen_only=true` and is never promotion-eligible.
+- When in doubt: pipeline entrance → `vm_ul6`; `hft alpha …` → `vm_ul6_strict`.
+
 ---
 
 ## 5. Gate A — manifest & data-field validation
@@ -245,7 +259,7 @@ Source: `src/hft_platform/alpha/promotion.py::_evaluate_gate_d`.
 
 ### Strict checks
 
-- **Replay-parity audit** — `BacktestResult.replay_parity_report` must be present; missing report = hard fail.
+- **Replay-parity audit** — `BacktestResult.replay_parity_report` must be present; missing report = hard fail. Under strict the sub-gate blocks promotion whenever `ok is False` — i.e. **any** structural or hash-level divergence — regardless of `match_pct`. The `replay_parity_match_pct_min: 95.0` threshold is an informational metric only. Fail-closed matrix and canonicalization rules: `docs/runbooks/replay-parity-gate.md`.
 - **Latency audit** — `python -m hft_platform.alpha.latency_audit --strict` runs against the scorecard. 80 % tolerance violations on P95 for `place_order` / `update_order` / `cancel_order` = hard fail. Source: `latency_audit.py`.
 - **Auto-kill (Slice D, merged #342)** — Gate D rejection writes a row with `gate='D'` to the kill ledger via `kill_ledger.append_kill()`. Default-enabled (`HFT_KILL_LEDGER_ENABLED=1`); set to `0` only in unit-test isolation.
 
@@ -283,9 +297,9 @@ Source: `src/hft_platform/alpha/promotion.py::_evaluate_gate_d`.
 1. Set `HFT_INTENT_RECORDER_ENABLED=1` for live / shadow runs that should produce reconstruction evidence.
 2. Run `hft run --mode replay` (loop_v1 step L4) over a recorded session. Source: `src/hft_platform/replay/cli_runner.py`.
 3. The engine emits an `IntentDiff` stream; `replay_parity.py` compares live vs. replay.
-4. ≥ 95 % match required → Gate D blocks closed under strict otherwise.
+4. Under strict, Gate D blocks closed on **any** divergence (`ok is False`); the 95 % `match_pct` is informational only.
 
-Deep dive: `docs/runbooks/replay-parity-gate.md`.
+Deep dive (fail-closed matrix, canonical schema, stable hash): `docs/runbooks/replay-parity-gate.md`.
 
 ---
 

@@ -35,6 +35,15 @@
 
 Hot-path 檔案包含 market data ingestion、LOB、feature engine、event bus、strategy dispatch、risk、order/execution gateway 等；修改前必讀對應 rule/skill。
 
+## Alpha Governance
+
+Research → Gates A/B/C/D/E/F → Canary → Shadow → Live. Live registry currently **FROZEN** under loop_v1 L11 (locked to `r47_tmf_v1`). Implementation: `src/hft_platform/alpha/`; research artifacts: `research/alphas/<alpha_id>/`.
+
+- End-to-end workflow + Gates A–F + profile reference: `docs/runbooks/alpha-development-workflow.md`
+- Factory operations handbook (entrance, 8 stages, data governance, paper-trade, triage): `research/README.md`
+- Freeze charter + CI gate: `docs/loop_v1_stabilization_charter.md`, `.github/workflows/freeze-guard.yml`
+- Strict profile: `config/research/profiles/vm_ul6_strict.yaml` — `latency_audit --strict` + `replay_parity_audit` are Gate D blockers. Two profile tokens: `make research` uses `--validation-profile vm_ul6`; `hft alpha …` uses `--profile vm_ul6_strict` (workflow doc §4c).
+
 ## Task Routing
 
 先讀 `.agent/skills/00-index.md`，再只打開當前任務直接相關的 `SKILL.md`。

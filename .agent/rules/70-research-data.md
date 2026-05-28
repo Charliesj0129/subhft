@@ -35,6 +35,11 @@ Unusable dates (< 1000 rows): `20260125`, `20260207`, `20260209`.
 
 ## Export CLI: `research/tools/ch_batch_export.py`
 
+> **Canonical export contract:** the governed L2+tick export (hftbacktest NPZ + tick NPY +
+> sidecar dtype/validation rules) is owned by `research.data_pipeline` — see
+> `docs/runbooks/research-data-pipeline.md` (`make research-export-l2-ticks`).
+> `ch_batch_export.py` is the L1/legacy wrapper; do not reimplement the dtype/sidecar rules.
+
 ```bash
 # L1 (.npy) for alpha feature precompute
 python research/tools/ch_batch_export.py \

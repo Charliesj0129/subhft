@@ -16,6 +16,22 @@ Focus: Alpha research, architecture questions, evidence-first investigation
 4. Verify with tests, scorecards, metadata, or runtime evidence
 5. Summarize findings
 
+## Canonical docs (read before acting)
+- Factory operations (entrance, 8 stages, layout, data governance, paper-trade, triage): `research/README.md`
+- Lifecycle + Gates A–F + profile semantics (`vm_ul6` vs `vm_ul6_strict`): `docs/runbooks/alpha-development-workflow.md`
+- Replay-parity gate (fail-closed matrix, canonical hash): `docs/runbooks/replay-parity-gate.md`
+- Data source + L1/L2 formats: `.agent/rules/70-research-data.md`; export contract: `docs/runbooks/research-data-pipeline.md`
+- Constrained hypothesis ideation: `.agent/teams/alpha-research/factor-ideation-pipeline.md`
+
+## Reuse-first inventory (do NOT reinvent)
+- Entrances: `make research` (Makefile), `hft alpha {scaffold,validate,screen,cheap-screen,promote,cluster,kill,pool,canary}`.
+- Result persistence: `research/registry/result_store.py` (`ResultStore`) — never hand-roll run output.
+- Gate logic: add new sub-gates to `src/hft_platform/alpha/_sub_gates/` (registry-driven), not ad-hoc scripts.
+- Kill / dedup: `src/hft_platform/alpha/kill_ledger.py`; correlation cull: `src/hft_platform/alpha/cluster.py`.
+- Data governance: `research/tools/data_governance.py`; scaffolding: `research/tools/alpha_scaffold.py`; backtest engines: `research/backtest/`.
+- Profile token differs by entrypoint — see the Profile reference in the workflow doc.
+- No ad-hoc scripts at `research/` root; `research/tools/legacy/` is non-official.
+
 ## Tools to favor
 - `rg` / `rg --files` for local retrieval
 - `research/alphas/*`, `research/data/*`, `config/research/*`
