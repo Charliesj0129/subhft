@@ -1135,3 +1135,33 @@ def cmd_alpha_cluster(args: argparse.Namespace) -> None:
     print("-" * len(header))
     for a in assignments:
         print(f"{a.alpha_id:<40} {a.cluster_id:<28} {a.cluster_size:<5} {a.max_intra_cluster_corr:<10.4f}")
+
+
+# ── Stage 5: canonical pipeline orchestrator wrappers (D2) ──────────────────
+# Thin delegates onto research.pipeline._run_pipeline so that
+# `hft alpha pipeline {run,triage}` and `make research[-triage]` share a single
+# orchestration codepath. Do NOT duplicate orchestration logic here.
+
+def cmd_alpha_pipeline_run(args: argparse.Namespace) -> None:
+    from research.pipeline import _run_pipeline
+
+    code = int(_run_pipeline(args, mode="strict"))
+    if code != 0:
+        sys.exit(code)
+
+
+def cmd_alpha_pipeline_triage(args: argparse.Namespace) -> None:
+    import os
+
+    from research.pipeline import _run_pipeline
+
+    if os.environ.get("HFT_RESEARCH_ALLOW_TRIAGE", "0") != "1":
+        print(
+            "[hft alpha pipeline triage] disabled by default. "
+            "Set HFT_RESEARCH_ALLOW_TRIAGE=1 to acknowledge non-promotable bypass mode.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    code = int(_run_pipeline(args, mode="triage"))
+    if code != 0:
+        sys.exit(code)
