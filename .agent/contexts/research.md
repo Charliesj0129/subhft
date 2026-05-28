@@ -35,7 +35,7 @@ Focus: Alpha research, architecture questions, evidence-first investigation
 ## Tools to favor
 - `rg` / `rg --files` for local retrieval
 - `research/alphas/*`, `research/data/*`, `config/research/*`
-- HFT skills: `hft-alpha-research`, `research-factory`, `research-data-governance`, `validation-gate`, `hft-backtester`
+- HFT skills: `hft-alpha-research`, `research-factory`, `research-data-governance`, `validation-gate`, `hft-backtest-engine`
 
 ## Output
 Findings first, recommendations second

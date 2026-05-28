@@ -52,7 +52,7 @@ Research → Gates A/B/C/D/E/F → Canary → Shadow → Live. Live registry cur
 | --- | --- |
 | Market data, normalizer, LOB, feature engine | `.agent/skills/hft-market-data/SKILL.md`, `.agent/skills/hft-hot-path-dev/SKILL.md` |
 | Strategy changes | `.agent/skills/hft-strategy-dev/SKILL.md`, `.agent/skills/hft-strategy-sdk/SKILL.md` |
-| Alpha research, backtest, promotion gates | `.agent/skills/hft-alpha-research/SKILL.md`, `.agent/skills/research-factory/SKILL.md`, `.agent/skills/validation-gate/SKILL.md` |
+| Alpha research, backtest, promotion gates | `.agent/skills/hft-alpha-research/SKILL.md`, `.agent/skills/research-factory/SKILL.md`, `.agent/skills/hft-backtest-engine/SKILL.md`, `.agent/skills/hft-backtest-validation/SKILL.md`, `.agent/skills/validation-gate/SKILL.md` |
 | Execution, fills, positions, TCA | `.agent/skills/hft-execution/SKILL.md` |
 | Recorder, WAL, ClickHouse | `.agent/skills/hft-recorder/SKILL.md`, `.agent/skills/clickhouse-io/SKILL.md` |
 | Ops, sessions, alerts, health | `.agent/skills/hft-ops/SKILL.md`, `.agent/skills/troubleshoot-metrics/SKILL.md` |

@@ -31,10 +31,10 @@ contract and profile semantics, the canonical source is
 | --- | ---------------------- | -------------------------- | --------------- | ----------------------------------- | --------- |
 | 1   | 論文 (Paper Intake)    | `knowledge/`               | `planner`       | `iterative-retrieval` + `arxiv` MCP | scope, data plan, acceptance criteria; `make research-fetch-paper ARXIV=...` |
 | 2   | 基礎原型 (Prototype)   | `alphas/<id>/`             | `architect`     | `hft-architect`, `python-pro`       | scaffold via `research/tools/alpha_scaffold.py`; gate/latency/cost assumptions |
-| 3   | 資料 (Data)            | `data/`                    | `planner`       | `hft-backtester` (ingestion)        | dataset under allowed roots + metadata sidecar |
-| 4   | 回測 (Backtest)        | `backtest/`                | `architect`     | `hft-backtester`, `validation-gate` | engine auto-selected from `manifest.strategy_type` |
+| 3   | 資料 (Data)            | `data/`                    | `planner`       | `hft-backtest-engine` (ingestion)        | dataset under allowed roots + metadata sidecar |
+| 4   | 回測 (Backtest)        | `backtest/`                | `architect`     | `hft-backtest-engine`, `hft-backtest-validation`, `validation-gate` | engine auto-selected from `manifest.strategy_type` |
 | 5   | 因子有效 (Statistical) | `experiments/validations/` | `code-reviewer` | `validation-gate`                   | regression, governance-bypass, operational-risk checks |
-| 6   | 參數優化 (Param Opt)   | `experiments/runs/`        | `architect`     | `hft-backtester`                    | anti-overfit trap detection, robustness sweep |
+| 6   | 參數優化 (Param Opt)   | `experiments/runs/`        | `architect`     | `hft-backtest-engine`                    | anti-overfit trap detection, robustness sweep |
 | 7   | Paper Trade            | `experiments/promotions/`  | `code-reviewer` | Gate-E paper-trade `make` targets   | min 5 shadow sessions (Gate E `min_shadow_sessions=5`) |
 | 8   | Live (Rust)            | `rust_core/src/`           | `architect`     | `rust_feature_engineering`          | profile Python baseline before porting |
 

@@ -356,7 +356,7 @@ def _audit_alpha_contract(errors: list[str], warnings: list[str], details: dict[
         warnings.append(
             "Manifest skills_used is empty for: "
             + ", ".join(sorted(alphas_missing_skills))
-            + ". Add skill attribution per SOP Stage 2 (iterative-retrieval, hft-backtester, etc.)."
+            + ". Add skill attribution per SOP Stage 2 (iterative-retrieval, hft-backtest-engine, etc.)."
         )
     if alphas_missing_roles:
         warnings.append(

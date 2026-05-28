@@ -25,7 +25,14 @@ VALID_SKILLS: frozenset[str] = frozenset(
     {
         "iterative-retrieval",
         "validation-gate",
-        "hft-backtester",
+        # Stage 7 (2026-05-28): hft-backtester → hft-backtest-engine,
+        # hft-backtest-calibration → hft-backtest-validation. The legacy
+        # tokens remain accepted so historical manifests round-trip cleanly
+        # under strict=True.
+        "hft-backtest-engine",
+        "hft-backtest-validation",
+        "hft-backtester",  # legacy alias
+        "hft-backtest-calibration",  # legacy alias
         "paper_trader",
         "rust_feature_engineering",
     }
@@ -78,7 +85,9 @@ class AlphaManifest:
     # Research process attribution (SOP governance).
     # roles_used: which SOP roles were applied (planner, architect, code-reviewer, refactor-cleaner).
     # skills_used: which SOP skills were applied (iterative-retrieval, validation-gate,
-    #              hft-backtester, paper_trader, rust_feature_engineering).
+    #              hft-backtest-engine, hft-backtest-validation, paper_trader,
+    #              rust_feature_engineering). Legacy hft-backtester / hft-backtest-calibration
+    #              tokens remain accepted under strict=True for historical-manifest round-trip.
     # Empty tuples are valid (warn-only at Gate A); not enforced for DRAFT status.
     roles_used: tuple[str, ...] = field(default_factory=tuple)
     skills_used: tuple[str, ...] = field(default_factory=tuple)

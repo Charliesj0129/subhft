@@ -1,11 +1,17 @@
 ---
-name: hft-backtest-calibration
-description: Use when running backtests, interpreting backtest results, calibrating fill models, or comparing hftbacktest vs ClickHouse-direct results. Prevents the 14x pessimism bias and mid-price execution traps.
+name: hft-backtest-validation
+description: Use when interpreting backtest results, calibrating fill models against CK-direct ground truth, running sub-gate evaluation, or diagnosing the 14× pessimism / 577× optimism bias profile. Renamed from `hft-backtest-calibration` in Stage 7 of the 2026-05-28 consolidation.
 ---
 
-# HFT Backtest Calibration
+# HFT Backtest Validation
 
-Calibration rules for accurate backtesting on TAIFEX. Derived from R47 calibration regression (PowerProb 14x too pessimistic) and CBS mid-price trap (+3 bps mid → -48 bps bid/ask).
+Validation + calibration rules for interpreting backtest results on TAIFEX.
+For engine **configuration** (queue / latency / exchange models, contract
+spec, adapter wiring) use **`hft-backtest-engine`** instead.
+
+Derived from R47 calibration regression (PowerProb 14× too pessimistic) and
+the CBS mid-price trap (+3 bps mid → −48 bps bid/ask). The canonical bias
+matrix lives in `docs/runbooks/backtest-engine-selection.md`.
 
 ## Backtest Engine Hierarchy
 

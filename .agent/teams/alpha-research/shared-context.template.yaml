@@ -14,10 +14,10 @@ skills:
     - .agent/skills/taifex-market-structure/SKILL.md       # TAIFEX domain knowledge
   devils_advocate:
     - .agent/skills/taifex-alpha-kill-criteria/SKILL.md    # Kill registry + mandatory gates
-    - .agent/skills/hft-backtest-calibration/SKILL.md      # Backtest fidelity + statistical traps
+    - .agent/skills/hft-backtest-validation/SKILL.md      # Backtest fidelity + statistical traps
   executor:
     - .agent/skills/hft-strategy-sdk/SKILL.md              # BaseStrategy contract + hooks
-    - .agent/skills/hft-backtest-calibration/SKILL.md      # CK vs hftbacktest calibration
+    - .agent/skills/hft-backtest-validation/SKILL.md      # CK vs hftbacktest calibration
     - .agent/skills/hft-test-hft/SKILL.md                  # HFT-specific test patterns
     - .agent/skills/taifex-market-structure/SKILL.md       # Cost/data conventions
   executor_mm_only:
