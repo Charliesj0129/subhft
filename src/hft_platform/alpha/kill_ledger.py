@@ -167,12 +167,39 @@ def append_kill(record: KillRecord) -> bool:
     if audit._is_enabled():  # noqa: SLF001 — audit is the canonical gate
         ch_result = _try_append_ch(finalized, kill_id)
         if ch_result == "inserted":
+            _emit_lifecycle_advisory(finalized)
             return True
         if ch_result == "duplicate":
             return False
         # "failed" → fall through to jsonl
 
-    return _try_append_jsonl(finalized, kill_id)
+    inserted = _try_append_jsonl(finalized, kill_id)
+    if inserted:
+        _emit_lifecycle_advisory(finalized)
+    return inserted
+
+
+def _emit_lifecycle_advisory(record: KillRecord) -> None:
+    """Stage-6 (D6) post-kill advisory.
+
+    The kill ledger is the authoritative log; the *operator-facing* mirror is
+    ``manifest.yaml::status`` + the directory's location under
+    ``research/alphas/`` vs ``research/archive/``. We emit a structured log
+    naming both moves so operators (or follow-up CI hooks) can keep the
+    derived stores in sync. Kept advisory-only to avoid coupling kill writes
+    to filesystem moves — ``make research-audit-lifecycle`` is the gate that
+    actually flags drift.
+    """
+    logger.info(
+        "alpha_kill_recorded",
+        alpha_id=record.alpha_id,
+        gate=record.gate,
+        reason=record.reason,
+        next_steps=(
+            f"git mv research/alphas/{record.alpha_id} research/archive/alphas_<YYYY-MM-DD>/{record.alpha_id} "
+            f"&& update manifest.yaml status: KILLED; then `make research-audit-lifecycle` should return 0 errors."
+        ),
+    )
 
 
 def _try_append_ch(record: KillRecord, kill_id: str) -> str:

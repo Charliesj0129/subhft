@@ -531,6 +531,9 @@ research-audit: ## Audit research pipeline contract and write report
 research-audit-strict: ## Strict audit (--fail-on-warning) for CI compatibility
 	$(PY) -m research.factory audit --fail-on-warning
 
+research-audit-lifecycle: ## Cross-check alpha lifecycle drift across manifest/ledger/cluster/paper_index
+	$(PY) -m research.tools.lifecycle_audit
+
 research-index: ## Build machine-readable research pipeline index
 	$(PY) -m research.factory index
 

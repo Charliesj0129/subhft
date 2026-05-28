@@ -45,6 +45,10 @@ class AlphaStatus(str, Enum):
     GATE_E = "GATE_E"
     PRODUCTION = "PRODUCTION"
     DEPRECATED = "DEPRECATED"
+    # Stage 6 (D6): terminal state for ledger-confirmed kills. Manifests with
+    # this status must live under ``research/archive/`` — enforced by
+    # ``research/tools/lifecycle_audit.py``.
+    KILLED = "KILLED"
 
 
 class AlphaTier(str, Enum):

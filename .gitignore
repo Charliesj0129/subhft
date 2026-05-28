@@ -160,6 +160,7 @@ research/tools/*
 !research/tools/alpha_scaffold.py
 !research/tools/data_governance.py
 !research/tools/factor_registry.py
+!research/tools/lifecycle_audit.py
 !research/tools/feature_benchmark_matrix.py
 !research/tools/feature_promotion_check.py
 !research/tools/fetch_paper.py
