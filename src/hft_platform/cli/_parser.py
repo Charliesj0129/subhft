@@ -951,6 +951,14 @@ def build_parser() -> argparse.ArgumentParser:
     alpha_promote_batch.add_argument("--owner", default="batch", help="Promotion owner name")
     alpha_promote_batch.add_argument("--alpha-ids", nargs="+", help="Specific alpha IDs to promote")
     alpha_promote_batch.add_argument("--top-n", type=int, default=50, help="Max alphas to process")
+    alpha_promote_batch.add_argument(
+        "--profile",
+        default=None,
+        help=(
+            "Strict validation profile (e.g. vm_ul6_strict). Required — batch promotion "
+            "must enter Gate D with the same profile contract as single-alpha promotion."
+        ),
+    )
     alpha_promote_batch.add_argument("--min-sharpe-oos", type=float, default=1.0, help="Minimum OOS Sharpe threshold")
     alpha_promote_batch.add_argument("--max-abs-drawdown", type=float, default=0.2, help="Maximum absolute drawdown")
     alpha_promote_batch.add_argument("--max-correlation", type=float, default=0.7, help="Maximum pool correlation")

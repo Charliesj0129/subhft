@@ -28,6 +28,7 @@ class BatchPromoter:
         "_min_sharpe_oos",
         "_max_abs_drawdown",
         "_max_correlation",
+        "_validation_profile",
     )
 
     def __init__(
@@ -39,6 +40,7 @@ class BatchPromoter:
         min_sharpe_oos: float = 1.0,
         max_abs_drawdown: float = 0.2,
         max_correlation: float = 0.7,
+        validation_profile: Any | None = None,
     ) -> None:
         self._experiments_dir = str(experiments_dir)
         self._project_root = str(project_root)
@@ -46,6 +48,7 @@ class BatchPromoter:
         self._min_sharpe_oos = float(min_sharpe_oos)
         self._max_abs_drawdown = float(max_abs_drawdown)
         self._max_correlation = float(max_correlation)
+        self._validation_profile = validation_profile
 
     def run_fleet(
         self,
@@ -121,6 +124,7 @@ class BatchPromoter:
                     max_correlation=self._max_correlation,
                     write_promotion_config=not dry_run,
                     force=False,
+                    validation_profile=self._validation_profile,
                 )
                 result = promote_alpha(config)
                 results.append(

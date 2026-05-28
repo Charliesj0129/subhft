@@ -29,6 +29,11 @@ class ValidationProfile:
     is_strict: bool
     thresholds: dict[str, dict[str, Any]] = field(default_factory=dict)
     blocking_sub_gates: tuple[str, ...] = ()
+    # Stage-2 (2026-05-28): argparse-arg overrides for research.pipeline.
+    # Optional — profiles that don't drive the pipeline (e.g. unit-test
+    # fixtures) leave these empty.
+    pipeline_overrides: dict[str, Any] = field(default_factory=dict)
+    pipeline_baseline_defaults: dict[str, Any] = field(default_factory=dict)
 
     def thresholds_for(self, *, strategy_type: str) -> dict[str, Any]:
         """Return thresholds for the given strategy type (maker|taker)."""
@@ -87,15 +92,29 @@ def load_profile(path: str | Path) -> ValidationProfile:
     if is_strict and not blocking:
         raise ProfileValidationError(f"profile {name!r}: strict profile must list at least one blocking_sub_gate")
 
+    raw_overrides = body.get("pipeline_overrides") or {}
+    if not isinstance(raw_overrides, dict):
+        raise ProfileValidationError(
+            f"profile {name!r}: pipeline_overrides must be a mapping, got {type(raw_overrides).__name__}"
+        )
+    raw_baselines = body.get("pipeline_baseline_defaults") or {}
+    if not isinstance(raw_baselines, dict):
+        raise ProfileValidationError(
+            f"profile {name!r}: pipeline_baseline_defaults must be a mapping, got {type(raw_baselines).__name__}"
+        )
+
     logger.info(
         "validation_profile_loaded",
         name=name,
         is_strict=is_strict,
         blocking_gate_count=len(blocking),
+        pipeline_override_count=len(raw_overrides),
     )
     return ValidationProfile(
         name=name,
         is_strict=is_strict,
         thresholds=thresholds,
         blocking_sub_gates=blocking,
+        pipeline_overrides=dict(raw_overrides),
+        pipeline_baseline_defaults=dict(raw_baselines),
     )

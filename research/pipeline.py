@@ -3,95 +3,30 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import warnings
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+from hft_platform.alpha._validation_profile import ValidationProfile, load_profile
 from hft_platform.alpha.promotion import PromotionConfig, promote_alpha
 from hft_platform.alpha.validation import ValidationConfig, run_alpha_validation
 from research import factory
 
 _STANDARD_VALIDATION_PROFILE = "standard"
-_VM_UL6_VALIDATION_PROFILE = "vm_ul6"
+_VM_UL6_VALIDATION_PROFILE = "vm_ul6"  # legacy alias for vm_ul6_strict
+_VM_UL6_STRICT_VALIDATION_PROFILE = "vm_ul6_strict"
 
-# Keep in sync with argparse defaults in _add_common_run_args.
-_PROFILE_BASELINE_DEFAULTS: dict[str, Any] = {
-    "latency_profile_id": "sim_p95_v2026-02-26",
-    "local_decision_pipeline_latency_us": 250,
-    "submit_ack_latency_ms": 36.0,
-    "modify_ack_latency_ms": 43.0,
-    "cancel_ack_latency_ms": 47.0,
-    "live_uplift_factor": 1.5,
-    "maker_fee_bps": -0.2,
-    "taker_fee_bps": 0.2,
-    "stat_pvalue_threshold": 0.1,
-    "min_stat_tests_pass": 2,
-    "bootstrap_samples": 1000,
-    "opt_signal_threshold_steps": 8,
-    "opt_max_is_oos_gap": 1.0,
-    "opt_min_neighbor_objective_ratio": 0.6,
-    "opt_min_deflated_sharpe": -0.1,
-    "required_data_provenance_fields": [],
-    "data_ul": 2,
-    "stress_latency_multiplier": 1.5,
-    "stress_fee_multiplier": 1.5,
-    "min_stress_sharpe_ratio": 0.5,
-    "stress_drawdown_limit_multiplier": 1.25,
-    "min_shadow_sessions": 5,
-    "max_execution_reject_rate": 0.01,
-    "min_paper_trade_calendar_days": 7,
-    "min_paper_trade_trading_days": 5,
-    "min_paper_trade_session_minutes": 30,
-    "min_sharpe_oos_gate_d": 1.0,
-    "max_abs_drawdown_gate_d": 0.2,
-    "max_turnover_gate_d": 2.0,
-    "max_correlation_gate_d": 0.7,
-    "enforce_rust_benchmark_gate": False,
-}
+# Stage 2 (2026-05-28): the legacy in-code overrides dict
+# ``_VM_UL6_PROFILE_OVERRIDES`` and ``_PROFILE_BASELINE_DEFAULTS`` were removed.
+# Their values now live in ``config/research/profiles/vm_ul6_strict.yaml`` under
+# the ``pipeline_overrides:`` / ``pipeline_baseline_defaults:`` keys and are
+# loaded by ``hft_platform.alpha._validation_profile.load_profile``.
+# See /home/charlie/.claude/plans/swift-meandering-avalanche.md Stage 2.
 
-_VM_UL6_PROFILE_OVERRIDES: dict[str, Any] = {
-    "latency_profile_id": "sim_stress_v2026-02-26",
-    "local_decision_pipeline_latency_us": 1000,
-    "submit_ack_latency_ms": 56.0,
-    "modify_ack_latency_ms": 75.0,
-    "cancel_ack_latency_ms": 70.0,
-    "live_uplift_factor": 1.8,
-    "maker_fee_bps": -0.05,
-    "taker_fee_bps": 0.35,
-    "stat_pvalue_threshold": 0.05,
-    "min_stat_tests_pass": 3,
-    "bootstrap_samples": 3000,
-    "opt_signal_threshold_steps": 12,
-    "opt_max_is_oos_gap": 0.5,
-    "opt_min_neighbor_objective_ratio": 0.8,
-    "opt_min_deflated_sharpe": 0.2,
-    "required_data_provenance_fields": [
-        "source",
-        "generator",
-        "seed",
-        "created_at",
-        "data_file",
-        "split",
-        "symbols",
-    ],
-    "data_ul": 6,
-    "stress_latency_multiplier": 2.0,
-    "stress_fee_multiplier": 2.0,
-    "min_stress_sharpe_ratio": 0.7,
-    "stress_drawdown_limit_multiplier": 1.0,
-    "min_shadow_sessions": 20,
-    "max_execution_reject_rate": 0.005,
-    "min_paper_trade_calendar_days": 28,
-    "min_paper_trade_trading_days": 20,
-    "min_paper_trade_session_minutes": 60,
-    "min_sharpe_oos_gate_d": 1.8,
-    "max_abs_drawdown_gate_d": 0.10,
-    "max_turnover_gate_d": 1.2,
-    "max_correlation_gate_d": 0.5,
-    "enforce_rust_benchmark_gate": True,
-}
+_PROFILE_YAML_DIR = Path("config/research/profiles")
 
 
 def _now_iso() -> str:
@@ -162,37 +97,85 @@ def _values_equal(left: Any, right: Any) -> bool:
     return left == right
 
 
-def _apply_validation_profile(args: argparse.Namespace, *, strict_mode: bool, notes: list[str]) -> None:
-    raw_profile = str(getattr(args, "validation_profile", _STANDARD_VALIDATION_PROFILE)).strip().lower()
-    if raw_profile == _STANDARD_VALIDATION_PROFILE:
-        return
+def _resolve_profile_token(token: str, *, notes: list[str]) -> str | None:
+    """Normalize a ``--validation-profile`` token to a YAML stem, or None for standard.
 
-    if raw_profile != _VM_UL6_VALIDATION_PROFILE:
-        raise ValueError(f"Unknown validation_profile: {raw_profile}")
+    ``vm_ul6`` is accepted as a deprecation-warned alias for ``vm_ul6_strict``
+    (Stage 2 unification, 2026-05-28).
+    """
+    raw = token.strip().lower()
+    if raw == _STANDARD_VALIDATION_PROFILE:
+        return None
+    if raw == _VM_UL6_VALIDATION_PROFILE:
+        msg = (
+            "validation_profile='vm_ul6' is a legacy alias for 'vm_ul6_strict'; "
+            "update callers to use 'vm_ul6_strict' (the alias will be removed in a "
+            "future release)."
+        )
+        warnings.warn(msg, DeprecationWarning, stacklevel=3)
+        notes.append(msg)
+        return _VM_UL6_STRICT_VALIDATION_PROFILE
+    if raw == _VM_UL6_STRICT_VALIDATION_PROFILE:
+        return _VM_UL6_STRICT_VALIDATION_PROFILE
+    raise ValueError(f"Unknown validation_profile: {raw}")
+
+
+def _load_pipeline_profile(profile_stem: str) -> ValidationProfile:
+    """Locate ``config/research/profiles/<stem>.yaml`` and load it."""
+    path = _PROFILE_YAML_DIR / f"{profile_stem}.yaml"
+    if not path.exists():
+        raise FileNotFoundError(
+            f"validation profile YAML not found: {path} (expected under {_PROFILE_YAML_DIR}/)"
+        )
+    return load_profile(path)
+
+
+def _apply_validation_profile(
+    args: argparse.Namespace, *, strict_mode: bool, notes: list[str]
+) -> ValidationProfile | None:
+    """Resolve --validation-profile, apply pipeline overrides, and return the loaded profile.
+
+    Returns ``None`` for the ``standard`` token (no overrides applied, no
+    profile object plumbed into Gate D).
+    """
+    raw_profile = str(getattr(args, "validation_profile", _STANDARD_VALIDATION_PROFILE))
+    profile_stem = _resolve_profile_token(raw_profile, notes=notes)
+    if profile_stem is None:
+        return None
+
+    profile = _load_pipeline_profile(profile_stem)
+    overrides = profile.pipeline_overrides
+    baselines = profile.pipeline_baseline_defaults
 
     applied: list[str] = []
-    for key, target in _VM_UL6_PROFILE_OVERRIDES.items():
+    for key, target in overrides.items():
         if not hasattr(args, key):
             continue
-        baseline = _PROFILE_BASELINE_DEFAULTS.get(key)
+        baseline = baselines.get(key)
         current = getattr(args, key)
         if baseline is not None and not _values_equal(current, baseline):
+            # User explicitly overrode the baseline default — respect that.
             continue
         setattr(args, key, target)
         applied.append(key)
 
     if not strict_mode:
         notes.append(
-            "validation_profile=vm_ul6 requested in triage mode; output remains non-promotable by policy."
+            f"validation_profile={profile.name} requested in triage mode; "
+            "output remains non-promotable by policy."
         )
 
     if applied:
         notes.append(
-            "Applied validation profile vm_ul6 overrides: "
+            f"Applied validation profile {profile.name} overrides: "
             + ", ".join(sorted(applied))
         )
     else:
-        notes.append("validation_profile=vm_ul6 requested; no default-value fields were available to override.")
+        notes.append(
+            f"validation_profile={profile.name} requested; no default-value fields "
+            "were available to override."
+        )
+    return profile
 
 
 def _run_pipeline(args: argparse.Namespace, *, mode: str) -> int:
@@ -217,7 +200,7 @@ def _run_pipeline(args: argparse.Namespace, *, mode: str) -> int:
     skip_gate_b_tests = bool(getattr(args, "skip_gate_b_tests", False)) if not strict_mode else False
     no_promote = bool(getattr(args, "no_promote", False)) if not strict_mode else False
     force_promote = bool(getattr(args, "force_promote", False)) if not strict_mode else False
-    _apply_validation_profile(args, strict_mode=strict_mode, notes=notes)
+    loaded_profile = _apply_validation_profile(args, strict_mode=strict_mode, notes=notes)
 
     optimize_rc = _run_factory_optimize(
         optimize_path,
@@ -335,6 +318,7 @@ def _run_pipeline(args: argparse.Namespace, *, mode: str) -> int:
                 canary_weight=(float(args.canary_weight) if args.canary_weight is not None else None),
                 force=force_promote,
                 write_promotion_config=strict_mode,
+                validation_profile=loaded_profile,
             )
         )
         _write_json(promote_path, promotion.to_dict())
@@ -397,9 +381,17 @@ def cmd_triage(args: argparse.Namespace) -> int:
 def _add_common_run_args(cmd: argparse.ArgumentParser, *, strict: bool) -> None:
     cmd.add_argument(
         "--validation-profile",
-        choices=(_STANDARD_VALIDATION_PROFILE, _VM_UL6_VALIDATION_PROFILE),
+        choices=(
+            _STANDARD_VALIDATION_PROFILE,
+            _VM_UL6_STRICT_VALIDATION_PROFILE,
+            _VM_UL6_VALIDATION_PROFILE,  # legacy alias for vm_ul6_strict (deprecated)
+        ),
         default=_STANDARD_VALIDATION_PROFILE,
-        help="Validation parameter profile preset. vm_ul6 enables stricter institutional-grade defaults.",
+        help=(
+            "Validation parameter profile preset. vm_ul6_strict enables stricter "
+            "institutional-grade defaults loaded from "
+            "config/research/profiles/vm_ul6_strict.yaml. vm_ul6 is a deprecated alias."
+        ),
     )
     cmd.add_argument("--alpha-id", required=True, help="Alpha id under research/alphas/<alpha_id>")
     cmd.add_argument("--owner", required=True, help="Promotion owner")

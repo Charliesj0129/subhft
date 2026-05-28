@@ -803,6 +803,11 @@ def cmd_alpha_promote_batch(args: argparse.Namespace) -> None:
         print(f"Failed to import batch promote module: {exc}")
         sys.exit(1)
 
+    # Stage 2 (2026-05-28): batch promotion must enter Gate D with the same
+    # strict-profile contract as single-alpha promotion. Without this, batch
+    # promote silently bypassed the YAML profile (D9).
+    profile = _load_strict_validation_profile(getattr(args, "profile", None))
+
     promoter = BatchPromoter(
         experiments_dir=str(getattr(args, "experiments_dir", "research/experiments")),
         project_root=".",
@@ -810,6 +815,7 @@ def cmd_alpha_promote_batch(args: argparse.Namespace) -> None:
         min_sharpe_oos=float(getattr(args, "min_sharpe_oos", 1.0)),
         max_abs_drawdown=float(getattr(args, "max_abs_drawdown", 0.2)),
         max_correlation=float(getattr(args, "max_correlation", 0.7)),
+        validation_profile=profile,
     )
 
     alpha_ids = list(getattr(args, "alpha_ids", None) or []) or None

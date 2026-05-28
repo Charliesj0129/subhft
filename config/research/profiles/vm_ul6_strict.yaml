@@ -2,6 +2,13 @@
 # Strict promotion-eligibility profile for the HFT alpha pipeline.
 # Required for any artifact entering Gate D (see promote_alpha()).
 # Loose `make research` runs do not need this profile.
+#
+# This file is the SINGLE SOURCE OF TRUTH for both:
+#   * Gate-D thresholds (consumed by hft_platform.alpha._validation_profile),
+#   * argparse-arg overrides applied by research.pipeline._apply_validation_profile.
+# A legacy in-code dict (`_VM_UL6_PROFILE_OVERRIDES`) was removed in Stage 2
+# of the research-workflow deep consolidation (2026-05-28); see
+# /home/charlie/.claude/plans/swift-meandering-avalanche.md.
 name: vm_ul6_strict
 is_strict: true
 
@@ -17,7 +24,9 @@ allowed_equity_sources:
 
 thresholds:
   taker:
-    sharpe_oos_min: 1.5
+    # Stage-2 drift resolution: previously 1.5 here vs 1.8 in the legacy
+    # pipeline override dict. Stricter value wins (matches dict).
+    sharpe_oos_min: 1.8
     max_drawdown_pct: 10
     winning_day_pct_min: 58
     min_oos_trades: 200
@@ -55,6 +64,87 @@ thresholds:
 
     # Slice C replay-parity gate (applies_to = {"maker", "taker"})
     replay_parity_match_pct_min: 95.0
+
+# Argparse-arg overrides applied by research.pipeline._run_pipeline when the
+# pipeline is invoked with --validation-profile vm_ul6_strict (or the legacy
+# alias vm_ul6).  Each key matches an argparse dest in
+# research.pipeline._add_common_run_args; values override the argparse default
+# only when the user has not explicitly supplied a non-baseline value.
+pipeline_overrides:
+  latency_profile_id: "sim_stress_v2026-02-26"
+  local_decision_pipeline_latency_us: 1000
+  submit_ack_latency_ms: 56.0
+  modify_ack_latency_ms: 75.0
+  cancel_ack_latency_ms: 70.0
+  live_uplift_factor: 1.8
+  maker_fee_bps: -0.05
+  taker_fee_bps: 0.35
+  stat_pvalue_threshold: 0.05
+  min_stat_tests_pass: 3
+  bootstrap_samples: 3000
+  opt_signal_threshold_steps: 12
+  opt_max_is_oos_gap: 0.5
+  opt_min_neighbor_objective_ratio: 0.8
+  opt_min_deflated_sharpe: 0.2
+  required_data_provenance_fields:
+    - source
+    - generator
+    - seed
+    - created_at
+    - data_file
+    - split
+    - symbols
+  data_ul: 6
+  stress_latency_multiplier: 2.0
+  stress_fee_multiplier: 2.0
+  min_stress_sharpe_ratio: 0.7
+  stress_drawdown_limit_multiplier: 1.0
+  min_shadow_sessions: 20
+  max_execution_reject_rate: 0.005
+  min_paper_trade_calendar_days: 28
+  min_paper_trade_trading_days: 20
+  min_paper_trade_session_minutes: 60
+  min_sharpe_oos_gate_d: 1.8
+  max_abs_drawdown_gate_d: 0.10
+  max_turnover_gate_d: 1.2
+  max_correlation_gate_d: 0.5
+  enforce_rust_benchmark_gate: true
+
+# Argparse baseline-defaults — the override-only-if-default rule needs to know
+# what value the user "didn't change" so explicit user input wins over the
+# profile.  Mirrors the defaults declared in research.pipeline._add_common_run_args.
+pipeline_baseline_defaults:
+  latency_profile_id: "sim_p95_v2026-02-26"
+  local_decision_pipeline_latency_us: 250
+  submit_ack_latency_ms: 36.0
+  modify_ack_latency_ms: 43.0
+  cancel_ack_latency_ms: 47.0
+  live_uplift_factor: 1.5
+  maker_fee_bps: -0.2
+  taker_fee_bps: 0.2
+  stat_pvalue_threshold: 0.1
+  min_stat_tests_pass: 2
+  bootstrap_samples: 1000
+  opt_signal_threshold_steps: 8
+  opt_max_is_oos_gap: 1.0
+  opt_min_neighbor_objective_ratio: 0.6
+  opt_min_deflated_sharpe: -0.1
+  required_data_provenance_fields: []
+  data_ul: 2
+  stress_latency_multiplier: 1.5
+  stress_fee_multiplier: 1.5
+  min_stress_sharpe_ratio: 0.5
+  stress_drawdown_limit_multiplier: 1.25
+  min_shadow_sessions: 5
+  max_execution_reject_rate: 0.01
+  min_paper_trade_calendar_days: 7
+  min_paper_trade_trading_days: 5
+  min_paper_trade_session_minutes: 30
+  min_sharpe_oos_gate_d: 1.0
+  max_abs_drawdown_gate_d: 0.2
+  max_turnover_gate_d: 2.0
+  max_correlation_gate_d: 0.7
+  enforce_rust_benchmark_gate: false
 
 blocking_sub_gates:
   # Existing — promoted from advisory to blocking under strict
