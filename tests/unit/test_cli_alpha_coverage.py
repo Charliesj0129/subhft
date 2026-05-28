@@ -639,6 +639,10 @@ class TestCmdAlphaPromoteBatch:
         defaults = dict(
             experiments_dir="e",
             owner="batch",
+            # Stage 2 (D9) made --profile mandatory for promote-batch so the
+            # unified strict-profile contract is enforced. Tests that exercise
+            # the CLI dispatch surface must therefore supply one.
+            profile="vm_ul6_strict",
             min_sharpe_oos=1.0,
             max_abs_drawdown=0.2,
             max_correlation=0.7,
@@ -658,7 +662,9 @@ class TestCmdAlphaPromoteBatch:
         with patch.dict("sys.modules", {"hft_platform.alpha.batch_promote": fake_mod}):
             cmd_alpha_promote_batch(self._make_args())
         out = capsys.readouterr().out
-        data = json.loads(out)
+        # Stage 2: profile loader emits a structlog info line on stdout before
+        # the JSON payload; skip preamble to the first '{'.
+        data = json.loads(out[out.find("{"):])
         assert data["approved"] == 1
 
     def test_none_approved_exits_2(self, capsys):
@@ -679,7 +685,8 @@ class TestCmdAlphaPromoteBatch:
         with patch.dict("sys.modules", {"hft_platform.alpha.batch_promote": fake_mod}):
             cmd_alpha_promote_batch(self._make_args())  # no SystemExit
         out = capsys.readouterr().out
-        data = json.loads(out)
+        # Stage 2: skip profile-loader stdout preamble.
+        data = json.loads(out[out.find("{"):])
         assert data["total"] == 0
 
     def test_import_failure_exits(self):

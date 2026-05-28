@@ -35,6 +35,9 @@ thresholds:
     # Slice C replay-parity gate (applies_to = {"maker", "taker"})
     replay_parity_match_pct_min: 95.0
 
+    # Slice B cost-uncertainty gate (applies_to = {"maker", "taker"})
+    cost_uncertainty_p95_lower_bound_min_pts: 0.0
+
   maker:
     sharpe_is_min: 1.0
     sharpe_oos_min: 1.0
@@ -64,6 +67,12 @@ thresholds:
 
     # Slice C replay-parity gate (applies_to = {"maker", "taker"})
     replay_parity_match_pct_min: 95.0
+
+    # Slice B inventory-MtM gate (applies_to = {"maker"})
+    cost_floor_per_fill_pts: 0.5
+
+    # Slice B cost-uncertainty gate (applies_to = {"maker", "taker"})
+    cost_uncertainty_p95_lower_bound_min_pts: 0.0
 
 # Argparse-arg overrides applied by research.pipeline._run_pipeline when the
 # pipeline is invoked with --validation-profile vm_ul6_strict (or the legacy
@@ -164,3 +173,6 @@ blocking_sub_gates:
   - deflated_sharpe_maker
   # New (Slice C)
   - replay_parity
+  # New (Slice B)
+  - inventory_mtm
+  - cost_uncertainty

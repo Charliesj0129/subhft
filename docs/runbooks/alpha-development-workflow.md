@@ -32,7 +32,7 @@ hypothesis ──▶ scaffold ──▶ backtest ──▶ alpha cheap-screen (S
 2. Latency profile is mandatory — Gate D rejects scorecards without one.
 3. Backtest must emit a replay-parity report under strict.
 4. `hft alpha cheap-screen` (Slice D) for pre-Gate-A IC/turnover/cost triage; `hft alpha screen` for loose Gate-A–C iteration; `hft alpha validate --profile vm_ul6_strict` for promotion eligibility.
-5. Strict profile has 14 blocking sub-gates today (16 once Slice B merges).
+5. Strict profile has 16 blocking sub-gates (Slice B merged 2026-05-29 as part of the Stage-8 research-workflow consolidation).
 6. Synthetic equity is rejected — `require_real_equity: true`.
 7. Canary defaults to 1–7 day evaluation window.
 8. Live promotion is paused — no merges to `config/loops/<id>.yaml` during the freeze.
@@ -203,24 +203,22 @@ hft alpha validate --alpha-id <id> --profile vm_ul6_strict --data <paths>
 | `stationary_block_bootstrap.py` | maker | Slice A (#337) |
 | `deflated_sharpe_maker.py` | maker | Slice A (#337) |
 | `replay_parity.py` | maker + taker | Slice C (#339) |
+| `inventory_mtm.py` | maker | Slice B (#340, merged 2026-05-29) |
+| `cost_uncertainty.py` | maker + taker | Slice B (#340, merged 2026-05-29) |
 
 ### Blocking sub-gates under `vm_ul6_strict` (verified from `config/research/profiles/vm_ul6_strict.yaml::blocking_sub_gates`)
 
-Today: **14 blocking** under strict —
+Today: **16 blocking** under strict (Slice B merged 2026-05-29) —
 
 - 6 promoted from advisory: `sharpe_threshold`, `max_drawdown`, `winning_day_pct`, `fill_quality`, `fill_rate_validation`, `ic_evaluation`
 - 7 Slice A (merged #337): `min_sample_size`, `single_day_dominance`, `loo_day_sensitivity`, `outlier_trade_removal`, `day_bootstrap_ci`, `stationary_block_bootstrap`, `deflated_sharpe_maker`
 - 1 Slice C (merged #339): `replay_parity`
-
-After Slice B (PR #340) merges → **16 blocking**:
-
-- + `inventory_mtm` (residual mark-to-market gate)
-- + `cost_uncertainty`
+- 2 Slice B (merged 2026-05-29): `inventory_mtm` (residual mark-to-market gate), `cost_uncertainty`
 
 ### Profile selection
 
 - `--profile loose` (default for `screen`): all sub-gates run, but only the 6 baseline names are blocking; output is advisory.
-- `--profile vm_ul6_strict` (required for promotion): the 14 names above are blocking; failure short-circuits Gate D.
+- `--profile vm_ul6_strict` (required for promotion): the 16 names above are blocking; failure short-circuits Gate D.
 
 Sources: `_gate_c.py`, `_sub_gates/registry.py`, `config/research/profiles/vm_ul6_strict.yaml`.
 
@@ -360,10 +358,4 @@ A minimal expression language for declaring screener formulas: parser, compiler,
 | PR | Status | Branch | Adds | Sections impacted |
 |---|---|---|---|---|
 | #342 Slice D | **MERGED 2026-05-06** (commit `a1451835`) | `slice-d/alpha-factory-mvp` | `alpha cheap-screen` (`screener.py`), `alpha cluster` (`cluster.py`), DSL (`dsl/`), kill ledger (`kill_ledger.py`) + auto-kill | §4b, §8, §13 |
-| #340 Slice B | OPEN | `slice-b/maker-realism` | `inventory_mtm`, `cost_uncertainty`, strict `latency_audit`, q_hat queue calibration, on-session-end `FORCE_FLAT` | §7 (sub-gate count → 16 blocking, 12 modules), §8 (latency-audit advisory→blocking transition closed) |
-
-When #340 merges, also:
-
-- Verify the two new sub-gate modules exist under `src/hft_platform/alpha/_sub_gates/` (`inventory_mtm.py`, `cost_uncertainty.py`).
-- Update the sub-gate inventory table in §7.
-- Update the "16 with Slice B" forward-references in TL;DR line 5 and §7.
+| #340 Slice B | **MERGED 2026-05-29** (Stage 8 of the research-workflow consolidation; merge commit on `consolidation/research-workflow-deep`) | `slice-b/maker-realism` | `inventory_mtm`, `cost_uncertainty`, strict `latency_audit`, q_hat queue calibration, on-session-end `FORCE_FLAT` | §7 (16 blocking), §8 (latency-audit advisory→blocking transition closed) |

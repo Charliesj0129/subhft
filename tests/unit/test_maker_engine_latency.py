@@ -117,7 +117,7 @@ class TestLatencyProfileInjection:
             latency_profile=LatencyProfile(place_ns=0, cancel_ns=0),
         )
         strat = _BuyOnceStrategy()
-        fills, _ = engine._run_day(strat, _mk_events())
+        fills, _, _, _ = engine._run_day(strat, _mk_events())
         assert len(fills) == 1, "Zero-latency should fill on first trade"
         assert fills[0]["side"] == "buy"
 
@@ -130,7 +130,7 @@ class TestLatencyProfileInjection:
             latency_profile=LatencyProfile(place_ns=500_000_000, cancel_ns=0),
         )
         strat = _BuyOnceStrategy()
-        fills, _ = engine._run_day(strat, _mk_events())
+        fills, _, _, _ = engine._run_day(strat, _mk_events())
         # Only the later trade (t=+1000ms) should fill; the +100ms trade is
         # lost because the order is in flight.
         assert len(fills) == 1
@@ -185,7 +185,7 @@ class TestLatencyProfileInjection:
             cost_model=_ZeroCost(),
             latency_profile=LatencyProfile(place_ns=400_000_000, cancel_ns=0),
         )
-        fills, _ = engine._run_day(_BuyStrat(), events)
+        fills, _, _, _ = engine._run_day(_BuyStrat(), events)
         assert len(fills) == 0, "D5: order in flight (place_ns=400ms, trade at +100ms) must NOT fill"
 
     def test_cancel_latency_allows_intermediate_fill(self):
@@ -249,7 +249,7 @@ class TestLatencyProfileInjection:
             cost_model=_ZeroCost(),
             latency_profile=LatencyProfile(place_ns=0, cancel_ns=500_000_000),
         )
-        fills, _ = engine._run_day(_PostThenCancelStrat(), events)
+        fills, _, _, _ = engine._run_day(_PostThenCancelStrat(), events)
         assert len(fills) == 1, (
             "D5: cancel in flight (cancel_ns=500ms, trade at +200ms after "
             "cancel issued) must still fill the order — adverse-selection "
@@ -265,7 +265,7 @@ class TestLatencyProfileDefaults:
             cost_model=_ZeroCost(),
         )
         strat = _BuyOnceStrategy()
-        fills, _ = engine._run_day(strat, _mk_events())
+        fills, _, _, _ = engine._run_day(strat, _mk_events())
         assert len(fills) == 1
 
     def test_shioaji_profile_exists(self):

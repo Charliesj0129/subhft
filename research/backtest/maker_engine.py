@@ -219,7 +219,15 @@ class ClickHouseSource:
 class MakerEngine:
     """CK-direct maker backtest engine."""
 
-    __slots__ = ("_fill_model", "_cost_model", "_ck_source", "_latency")
+    __slots__ = (
+        "_fill_model",
+        "_cost_model",
+        "_ck_source",
+        "_latency",
+        "_mark_method",
+        "_last_mid",
+        "_last_avg_entry",
+    )
 
     def __init__(
         self,
@@ -227,12 +235,20 @@ class MakerEngine:
         cost_model: CostModel,
         ck_source: ClickHouseSource | None = None,
         latency_profile: LatencyProfile | None = None,
+        mark_method: str = "last_mid",
     ) -> None:
         self._fill_model = fill_model
         self._cost_model = cost_model
         self._ck_source = ck_source or ClickHouseSource()
         # D5: None = instant-RTT (backward compat). Set for live-faithful sim.
         self._latency = latency_profile
+        # Slice B Task 3: mark-to-market policy for residual position. The
+        # day loop computes ``last_mid`` and the FIFO-residual avg entry and
+        # passes them through the static ``_compute_residual_mtm`` helper.
+        # ``mark_method`` is currently advisory (recorded in daily_pnl rows).
+        self._mark_method = mark_method
+        self._last_mid: int = 0
+        self._last_avg_entry: int = 0
 
     @property
     def engine_type(self) -> str:
@@ -261,17 +277,42 @@ class MakerEngine:
         total_gross = 0.0
         total_fills = 0
         spread_breakdown: dict[int, dict] = {}
+        # Slice B Task 4: aggregate residual fields for BacktestResult.
+        # ``total_residual_mtm`` SUMS each day's residual_mtm_pts (mirrors the
+        # ``total_gross`` accumulation; the equity curve already reflects it).
+        # ``final_residual_qty`` snapshots the LAST traded day's residual qty
+        # (per-day FIFO is independent so day-to-day residual qty is not
+        # additive). Both default to 0 if no days traded.
+        total_residual_mtm = 0.0
+        final_residual_qty = 0
 
         for date in dates:
             events = self._ck_source.load_day(instrument, date)
             if not events:
                 continue
 
-            day_fills, day_position = self._run_day(strategy, events)
+            day_fills, day_position, day_last_mid, day_last_avg = self._run_day(
+                strategy, events
+            )
             day_gross, day_trips, day_wins = self._compute_fifo_pnl(day_fills)
-            day_net = self._cost_model.apply(day_gross, len(day_fills))
 
-            total_gross += day_gross
+            # Slice B Task 3: residual MtM folded into day-level accounting.
+            day_residual_mtm = self._compute_residual_mtm(
+                open_pos=day_position,
+                mark_price=day_last_mid,
+                avg_entry_price=day_last_avg,
+                mark_method=self._mark_method,
+            )
+            day_residual_qty = abs(day_position)
+            day_gross_mtm_aware = day_gross + day_residual_mtm
+            day_net = self._cost_model.apply(day_gross_mtm_aware, len(day_fills))
+
+            total_gross += day_gross_mtm_aware
+            # Slice B Task 4: track residual aggregation alongside total_gross.
+            # Sum the rounded daily values so the result-level field matches
+            # ``round(sum(d["residual_mtm_pts"] for d in daily_pnl), 2)``.
+            total_residual_mtm += round(day_residual_mtm, 2)
+            final_residual_qty = day_residual_qty
             total_fills += len(day_fills)
             equity_points.append(equity_points[-1] + day_net)
 
@@ -284,6 +325,9 @@ class MakerEngine:
                     "trips": day_trips,
                     "wins": day_wins,
                     "final_pos": day_position,
+                    "residual_mtm_pts": round(day_residual_mtm, 2),
+                    "residual_qty": day_residual_qty,
+                    "mark_method": self._mark_method,
                 }
             )
 
@@ -358,6 +402,11 @@ class MakerEngine:
             per_spread_breakdown={
                 str(k): v for k, v in sorted(spread_breakdown.items())
             },
+            # Slice B Task 4: residual decomposition fields. See aggregation
+            # policy comments in research/backtest/types.py.
+            residual_mtm_pts=round(total_residual_mtm, 2),
+            residual_qty=final_residual_qty,
+            mark_method=self._mark_method,
             daily_pnl=daily_pnl,
         )
 
@@ -365,7 +414,7 @@ class MakerEngine:
         self,
         strategy: MakerStrategy,
         events: list[TickData],
-    ) -> tuple[list[dict], int]:
+    ) -> tuple[list[dict], int, int, int]:
         """Run strategy on one day of events.
 
         When ``self._latency`` is set, PostQuote/CancelQuote actions do not
@@ -373,12 +422,19 @@ class MakerEngine:
         and applied once the market clock reaches it. This models broker RTT
         (Shioaji P95 ~800 ms today) and reproduces the adverse-selection
         window where a cancel is in flight but a trade still fills the order.
+
+        Slice B Task 3 return shape: ``(fills, position, last_mid, last_avg_entry)``.
+        ``last_mid`` is the scaled-int mid from the final well-formed bidask
+        of the day; ``last_avg_entry`` is the volume-weighted entry price of
+        the FIFO residual at end of day (or ``last_mid`` if flat).
         """
         buy_order: QueuePosition | None = None
         sell_order: QueuePosition | None = None
         position = 0
         fills: list[dict] = []
         cur_bid = cur_ask = cur_bid_v = cur_ask_v = 0
+        # Slice B Task 3: track last well-formed mid (scaled int) for MtM.
+        last_mid_scaled: int = 0
 
         # D5 pending-action queues. Each entry is (activation_ts, op, payload).
         # op ∈ {"place_buy", "place_sell", "cancel_buy", "cancel_sell"}.
@@ -415,6 +471,11 @@ class MakerEngine:
 
                 if cur_ask <= cur_bid:
                     continue
+
+                # Slice B Task 3: capture the last well-formed mid (scaled
+                # int) for residual MtM. Crossed/locked books are skipped
+                # above, so this only updates from sane snapshots.
+                last_mid_scaled = (cur_bid + cur_ask) // 2
 
                 if buy_order is not None and buy_order.price != cur_bid:
                     buy_order = None
@@ -499,7 +560,91 @@ class MakerEngine:
                         position -= 1
                         sell_order = None
 
-        return fills, position
+        # Slice B Task 3: derive the FIFO-residual avg entry. If flat, use
+        # last_mid so residual_mtm == 0 (matches helper's open_pos==0 path).
+        if position == 0:
+            last_avg_entry = last_mid_scaled
+        else:
+            last_avg_entry = self._compute_residual_avg_entry(fills)
+
+        return fills, position, last_mid_scaled, last_avg_entry
+
+    @staticmethod
+    def _compute_residual_mtm(
+        open_pos: int,
+        mark_price: int,
+        avg_entry_price: int,
+        mark_method: str = "last_mid",
+        scale: int = 1_000_000,
+    ) -> float:
+        """Mark-to-market the un-FIFO'd residual position to a chosen mark.
+
+        Slice B Task 2 - pure static helper. Caller-picks-mark design: the
+        helper itself is mark-agnostic; ``mark_method`` is currently advisory
+        (recorded for downstream metadata in Task 4) and does not affect the
+        arithmetic. The caller resolves whichever mark it wants to use
+        (last_mid, last_trade, worse_of_mid_last_trade, ...) and passes the
+        resulting scaled-int price as ``mark_price``.
+
+        Args:
+            open_pos: Residual position. > 0 long, < 0 short, 0 flat.
+            mark_price: Mark price as scaled int (default scale x1_000_000,
+                matching ``_compute_fifo_pnl`` and the golden parquet source).
+            avg_entry_price: Average entry of the residual position, same
+                scale as ``mark_price``.
+            mark_method: Advisory string describing how the caller chose the
+                mark. Persisted into Task 4's BacktestResult metadata.
+            scale: Scaled-int divisor. Defaults to 1_000_000 to match
+                ``MakerEngine._compute_fifo_pnl`` and the engine's data path.
+                Pass 10_000 if working with the platform-wide CLAUDE.md
+                convention (Decimal-style scaled int).
+
+        Returns:
+            PnL in points (float). 0.0 when ``open_pos == 0``.
+        """
+        if open_pos == 0:
+            return 0.0
+        pnl_int = open_pos * (mark_price - avg_entry_price)
+        return pnl_int / scale  # scaled-int -> points
+
+    @staticmethod
+    def _compute_residual_avg_entry(fills: list[dict]) -> int:
+        """Volume-weighted entry price (scaled int) of the FIFO residual.
+
+        Walks the same matching logic as ``_compute_fifo_pnl`` but instead of
+        realizing PnL, returns the mean of whichever side's queue is non-empty
+        at end of walk (the un-matched residual). Returns 0 when both queues
+        are empty (flat residual — caller's open_pos==0 short-circuit applies).
+
+        We do NOT reuse ``_compute_fifo_pnl`` directly because that helper
+        discards the residual queue contents during matching; surfacing them
+        would require either (a) refactoring its return signature
+        (cross-cutting, would touch all callers and change a frozen helper)
+        or (b) a parallel walker. We chose (b) for locality and to keep
+        ``_compute_fifo_pnl``'s contract stable.
+        """
+        buy_q: list[int] = []
+        sell_q: list[int] = []
+
+        for f in fills:
+            price_scaled = int(f["price"])
+            if f["side"] == "buy":
+                if sell_q:
+                    sell_q.pop(0)
+                else:
+                    buy_q.append(price_scaled)
+            else:
+                if buy_q:
+                    buy_q.pop(0)
+                else:
+                    sell_q.append(price_scaled)
+
+        residual = buy_q if buy_q else sell_q
+        if not residual:
+            return 0
+        # Integer mean — matches scaled-int convention; trailing fraction
+        # below 1 unit is irrelevant at scale=1_000_000 (sub-microtick).
+        return sum(residual) // len(residual)
 
     @staticmethod
     def _compute_fifo_pnl(fills: list[dict]) -> tuple[float, int, int]:

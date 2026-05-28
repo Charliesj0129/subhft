@@ -190,16 +190,23 @@ def _emit_lifecycle_advisory(record: KillRecord) -> None:
     to filesystem moves — ``make research-audit-lifecycle`` is the gate that
     actually flags drift.
     """
-    logger.info(
-        "alpha_kill_recorded",
-        alpha_id=record.alpha_id,
-        gate=record.gate,
-        reason=record.reason,
-        next_steps=(
-            f"git mv research/alphas/{record.alpha_id} research/archive/alphas_<YYYY-MM-DD>/{record.alpha_id} "
-            f"&& update manifest.yaml status: KILLED; then `make research-audit-lifecycle` should return 0 errors."
-        ),
-    )
+    # Opt-in advisory: only emit when the operator explicitly asks for it,
+    # so CLI commands that serialize JSON payloads on stdout (e.g.
+    # `hft alpha kill`) stay clean by default. ``make research-audit-lifecycle``
+    # is the actual drift gate; this log line is purely an operator
+    # breadcrumb listing the manual commands to keep filesystem placement
+    # + manifest status in sync.
+    if os.getenv("HFT_KILL_LIFECYCLE_ADVISORY_LOG", "0") == "1":
+        logger.info(
+            "alpha_kill_recorded",
+            alpha_id=record.alpha_id,
+            gate=record.gate,
+            reason=record.reason,
+            next_steps=(
+                f"git mv research/alphas/{record.alpha_id} research/archive/alphas_<YYYY-MM-DD>/{record.alpha_id} "
+                f"&& update manifest.yaml status: KILLED; then `make research-audit-lifecycle` should return 0 errors."
+            ),
+        )
 
 
 def _try_append_ch(record: KillRecord, kill_id: str) -> str:
