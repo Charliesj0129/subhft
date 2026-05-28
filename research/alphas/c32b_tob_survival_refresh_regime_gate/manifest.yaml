@@ -115,3 +115,9 @@ notes:
   - "Research-module float exception (Rule 11 of 25-architecture-governance). Strategy operates on integer prices from CK (scale=1_000_000); live pipeline uses x10_000."
   - "Threshold 200ms is FROZEN (IS-selected, DA-validated). Do NOT retune in T4/T5."
   - "Max hold 250ms is FROZEN (role-template cap). Release fires on mid-move, regime flip, or timeout."
+
+# roles_used / skills_used backfilled 2026-05-28 — conservative baseline per
+# /home/charlie/.claude/plans/swift-meandering-avalanche.md Stage 1.3.
+roles_used:
+  - architect
+  - code-reviewer

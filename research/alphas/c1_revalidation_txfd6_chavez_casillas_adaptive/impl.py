@@ -575,7 +575,7 @@ class C1Alpha:
             tier=AlphaTier.TIER_1,
             rust_module=None,
             latency_profile="r47_maker_shioaji_p95_v2026-04-24_measured",
-            roles_used=(),
+            roles_used=("architect", "code-reviewer"),
             skills_used=("hft-backtester",),
             feature_set_version=None,
             strategy_type="maker",

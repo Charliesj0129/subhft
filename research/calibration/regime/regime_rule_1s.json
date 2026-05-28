@@ -1,0 +1,17 @@
+{
+  "direction_window": 180,
+  "range_window": 180,
+  "rv_short_window": 30,
+  "rv_long_window": 180,
+  "variance_ratio_window": 180,
+  "variance_ratio_q": 3,
+  "compression_window_mult": 3,
+  "vol_high_pctl": 0.7,
+  "vol_low_pctl": 0.3,
+  "direction_z_threshold": 0.5,
+  "compression_top_pctl": 0.2,
+  "min_state_duration_snaps": 60,
+  "switch_margin": 0.1,
+  "breakout_followthrough_snaps": 30,
+  "tod_bucket_minutes": 15
+}

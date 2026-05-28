@@ -61,8 +61,10 @@ ALLOWED_ROOT_DIRS: set[str] = {
     "arxiv_papers",
     "archive",
     "backtest",
+    "calibration",  # research.calibration package (audit.py, cli.py, replay.py …)
     "combinatorial",
     "data",
+    "data_pipeline",  # research.data_pipeline package — canonical L2+tick export contract
     "experiments",
     "knowledge",
     "logs",
@@ -71,6 +73,8 @@ ALLOWED_ROOT_DIRS: set[str] = {
     "results_batch7",
     "registry",
     "results",
+    "strategy_archive",  # load-bearing: config/live/strategies.yaml + loop_v1 charter pin this path
+    "t1",  # research.t1 package — TXF-led mainline (regime_viability.py et al.)
     "tools",
 }
 

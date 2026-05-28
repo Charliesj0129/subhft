@@ -160,3 +160,9 @@ notes:
   - "Hedge-ratio 20 is FIXED by dollar-neutral physics. Do NOT make configurable except for test coverage."
   - "C74 is mutually exclusive with C63 on TXFD6 during an open trip — inventory conflict. Live deployment must not co-enable."
   - "Basis mean mu and stdev sigma are adaptive over window_seconds. Fixed-sigma variants would hit R14-prior structural-break class."
+
+# roles_used / skills_used backfilled 2026-05-28 — conservative baseline per
+# /home/charlie/.claude/plans/swift-meandering-avalanche.md Stage 1.3.
+roles_used:
+  - architect
+  - code-reviewer

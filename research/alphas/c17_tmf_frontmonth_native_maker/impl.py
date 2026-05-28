@@ -329,7 +329,7 @@ class C17Alpha:
             tier=AlphaTier.TIER_1,
             rust_module=None,
             latency_profile="sim_p95_v2026-02-26",
-            roles_used=(),
+            roles_used=("architect", "code-reviewer"),
             skills_used=("hft-backtester",),
             feature_set_version=None,
             strategy_type="maker",

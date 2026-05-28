@@ -126,3 +126,9 @@ notes:
   - "Research-module float exception (Rule 11 of 25-architecture-governance). Strategy operates on integer prices from CK source at scale=1_000_000; live pipeline uses x10_000."
   - "TXFD6 live-platform price scale is x10_000; CK storage is x1_000_000. See memory/feedback_golden_data_scale."
   - "No concurrent R47 signal layers (PE/queue/MFG) — intentional minimum per R47 structural-minimal best practice; T5 can enable them via C30Params if needed."
+
+# roles_used / skills_used backfilled 2026-05-28 — conservative baseline per
+# /home/charlie/.claude/plans/swift-meandering-avalanche.md Stage 1.3.
+roles_used:
+  - architect
+  - code-reviewer

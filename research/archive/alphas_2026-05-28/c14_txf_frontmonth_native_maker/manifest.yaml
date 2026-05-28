@@ -107,3 +107,9 @@ notes:
   - "Reuses R47 quoting sub-states via composition from research.alphas.r47_maker_pivot.impl. No R47 code is modified."
   - "Research-module float/scale exception applies (rule 11 of 25-architecture-governance). The strategy operates on integer prices from the CK source at scale=1_000_000; no float arithmetic in the fill path."
   - "Rollover rule: volume-crossover with calendar fallback (see frontmonth.py). On rollover day, outgoing contract position is flattened before new quotes open — no cross-contract carry."
+
+# roles_used / skills_used backfilled 2026-05-28 — conservative baseline per
+# /home/charlie/.claude/plans/swift-meandering-avalanche.md Stage 1.3.
+roles_used:
+  - architect
+  - code-reviewer

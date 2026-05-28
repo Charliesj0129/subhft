@@ -144,3 +144,9 @@ notes:
   - "Calendar gate is a NEW layer vs C33/C63 — novel axis under B (inst tier enables back-month trading); NOT a C41-prior-style session-variant dynamic threshold."
   - "'Emergency unwind' discipline: if rollover window ends with |pos|>0, caller must flatten via taker cross (spread reverts to 100+ pt beyond window)."
   - "Do NOT re-enable hedge-pair framing without a fresh DA review of hedge-leg execution costs (T1 concluded -0.9 pt/RT inversion)."
+
+# roles_used / skills_used backfilled 2026-05-28 — conservative baseline per
+# /home/charlie/.claude/plans/swift-meandering-avalanche.md Stage 1.3.
+roles_used:
+  - architect
+  - code-reviewer

@@ -117,3 +117,9 @@ governance:
 notes:
   - "Research-module float exception (Rule 11 of 25-architecture-governance). Demand-function regression uses floats (intrinsic to Chávez-Casillas method); strategy decisions use scaled-integer arithmetic."
   - "TXFD6 price scale: x10_000 (live platform), x1_000_000 (CK storage)."
+
+# roles_used / skills_used backfilled 2026-05-28 — conservative baseline per
+# /home/charlie/.claude/plans/swift-meandering-avalanche.md Stage 1.3.
+roles_used:
+  - architect
+  - code-reviewer
