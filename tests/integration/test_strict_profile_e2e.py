@@ -63,7 +63,30 @@ def _r47_payload() -> dict:
 
 def _robust_payload() -> dict:
     rng = np.random.default_rng(0)
-    daily = rng.normal(loc=20.0, scale=10.0, size=60).tolist()
+    daily_values = rng.normal(loc=20.0, scale=10.0, size=60).tolist()
+    # Dict shape required by strict gates (inventory_mtm, monthly_distribution).
+    # 60 trading days across 3 calendar months (20/month) clears the
+    # monthly_distribution min_months gate; residual_mtm/fills cover
+    # the inventory_mtm legacy-payload strict-fail path.
+    daily = []
+    for i, pnl in enumerate(daily_values):
+        month = (i // 20) + 1
+        day = (i % 20) + 1
+        daily.append(
+            {
+                "date": f"2026-{month:02d}-{day:02d}",
+                "pnl_pts": round(pnl, 2),
+                "gross_pts": round(pnl + 0.5, 2),
+                "fills": 6,
+                "trips": 3,
+                "wins": 2,
+                "final_pos": 0,
+                "residual_mtm_pts": 0.0,
+                "residual_qty": 0,
+                "abs_residual_qty": 0,
+                "mark_method": "settlement",
+            }
+        )
     return {
         "run_id": "test_robust",
         "config_hash": "xyz",
@@ -74,11 +97,11 @@ def _robust_payload() -> dict:
         "calibration_profile_id": "uncalibrated",
         "data_source": "ck",
         "latency_profile": "shioaji_measured_p95",
-        "pnl_pts": float(sum(daily)),
+        "pnl_pts": float(sum(daily_values)),
         "n_fills": 360,
         "n_trading_days": 60,
         "equity_curve": None,
-        "pnl_per_fill": float(sum(daily)) / 360.0,
+        "pnl_per_fill": float(sum(daily_values)) / 360.0,
         "adverse_fill_pct": 0.30,
         "fill_rate_per_day": 6.0,
         "daily_pnl": daily,
