@@ -1,121 +1,53 @@
-# CLAUDE.md — HFT Platform AI Context (The Constitution)
+# CLAUDE.md - HFT Platform Compact Context
 
-## 🏦 System Identity
+## Identity
 
-- **Project**: `hft-platform` — 事件驅動高頻交易平台
-- **Broker**: Shioaji (永豐金證券 API) / Fubon (富邦證券 API) — TWSE/OTC 股票 + 期貨; selected via `broker:` key in config or `HFT_BROKER` env var
-- **Stack**: Python 3.12 + Rust (PyO3 via `rust_core`) + ClickHouse + Prometheus
-- **Entry CLI**: `hft run sim|live` → `src/hft_platform/cli.py`
+`hft_platform`: Python 3.12 + Rust/PyO3 high-frequency trading platform for Shioaji/Fubon, ClickHouse, Redis, Prometheus. Money-facing and latency-sensitive.
 
-## 🛡️ Critical HFT Laws
+## Retrieval First
 
-Five non-negotiable laws. Full detail in `.agent/rules/01-core-laws.md`:
+Before claims or edits, read:
+1. `docs/MODULES_REFERENCE.md`
+2. `.agent/rules/00-index.md`
+3. `.agent/skills/00-index.md`
 
-1. **Allocator** — no heap allocations on the hot path (tick loop). Use pre-allocated buffers / object pools / Rust.
-2. **Cache** — Structure of Arrays, not Array of Structures. Pack data for locality (`numpy`, Rust `Vec`).
-3. **Async** — no blocking IO or compute > 1ms on the main event loop. Offload to threads or use async primitives.
-4. **Precision** — never `float` for prices/balances. Use `Decimal` or scaled int (x10000).
-5. **Boundary** — zero-copy Python↔Rust. Use `PyBuffer` protocol, Arrow, or shared memory.
+Then open only task-relevant rules, skills, source, architecture docs, and `.agent/memory/module_gotchas.md` when relevant. Missing referenced docs: report the path, find canonical replacements with `rg --files`.
 
-Violation causes critical latency penalties or financial loss.
+## Non-Negotiable Laws
 
-## 🏛️ Architecture Quick Reference
+Hot path means market ingestion, normalizer, LOB, feature engine, event bus, strategy dispatch, risk, gateway, order/execution.
 
-- **Canonical architecture doc**: `docs/architecture/current-architecture.md` (354 lines, last updated 2026-04-12)
-- **Feature/Lob/Research unification spec (TODO plan)**: `docs/architecture/feature-engine-lob-research-unification-spec.md`
-- **Latency realism baseline (system vs Shioaji sim API RTT)**: `docs/architecture/latency-baseline-shioaji-sim-vs-system.md`
-- **C4 diagrams**: `.agent/library/c4-model-current.md`
-- **Cluster evolution backlog**: `.agent/library/cluster-evolution-backlog.md`
-- **Detailed governance rules**: `.agent/rules/` (auto-loaded)
-- **Rust exports reference**: `.agent/skills/hft-rust-exports/` (on-demand skill)
+1. No heap allocation per tick; preallocate, pool, ring-buffer, or Rust.
+2. Prefer cache-local packed data; avoid pointer chasing.
+3. No blocking IO or >1 ms sync compute on the event loop.
+4. Price/accounting values use scaled int x10000 or explicit safe types; no hot-path float price math.
+5. Python/Rust boundary must avoid large copies; use buffers/shared memory/clear FFI contracts.
 
-### Runtime Pipeline
+## Runtime Map
 
-```
-Exchange → BrokerFacade(Shioaji|Fubon) → Normalizer → LOBEngine → FeatureEngine → RingBufferBus → StrategyRunner → RiskEngine → OrderAdapter → BrokerFacade
-                                                                          ↘ RecorderService → WAL / ClickHouse
-```
+Exchange -> BrokerFacade -> Normalizer -> LOBEngine -> FeatureEngine -> RingBufferBus -> StrategyRunner -> RiskEngine/GatewayService -> OrderAdapter -> BrokerFacade -> Execution/Positions -> Recorder WAL/ClickHouse.
 
-> **Multi-broker**: The `BrokerFacade` is a polymorphic adapter selected at startup by `config.broker` / `HFT_BROKER`. Each implementation exposes identical `login()`, `subscribe()`, `place_order()`, `cancel_order()` interfaces. See `docs/architecture/multi-broker-support.md` for the ADR.
+Core contracts: `OrderIntent -> RiskDecision -> OrderCommand -> FillEvent -> PositionDelta`. Canonical event prices are scaled int x10000.
 
-**Feature Engine** (Phase 18→v3): `FeatureEngine` sits between `LOBEngine` and `RingBufferBus`, computing 27 shared features across 3 schema versions (`lob_shared_v1`:16, `lob_shared_v2`:22, `lob_shared_v3`:27 — default). v1: 8 stateless + 8 rolling (OFI L1, EMA spread/imbalance). v2 adds: depth-normalized OFI, return autocovariance, TOB survival, impact surprise, deep depth momentum, trade-signed toxicity. v3 adds: multi-window EMA aggregation (5s/30s/300s OFI, imbalance, spread). Enabled by default (`HFT_FEATURE_ENGINE_ENABLED=1`); disable with `HFT_FEATURE_ENGINE_ENABLED=0`. See `feature/engine.py`, `feature/registry.py`. Production hardening (Rust kernel promotion, parity testing) tracked in `docs/TODO.md`.
+## Alpha Governance
 
-### Latency Realism Guard (Research / Backtest / Promotion)
+Research -> Gates A/B/C/D/E/F -> Canary -> Shadow -> Live. Live registry is FROZEN under loop_v1 L11, locked to `r47_tmf_v1`.
 
-**Do not assume local microsecond-stage latency implies executable trading latency.**
+Canonical refs: `docs/runbooks/alpha-development-workflow.md`, `research/README.md`, `docs/loop_v1_stabilization_charter.md`, `config/research/profiles/vm_ul6_strict.yaml`.
 
-For Shioaji-driven strategies, the measured system internal lower-bound is on the order of **tens of microseconds**, but the measured **simulation API RTT** is on the order of **tens of milliseconds** (roughly **500x+** larger). See:
+## Work Rules
 
-- `docs/architecture/latency-baseline-shioaji-sim-vs-system.md`
+- Keep changes scoped; preserve dirty user work.
+- Use `rg` and source inspection before behavioral claims.
+- Use structured parsers/APIs for structured data.
+- Read task-specific skill before hot-path, alpha, broker, config, Rust, ops, or testing work.
+- Do not run live trading, destructive filesystem, or destructive git operations unless explicitly requested.
+- Never expose secrets, broker credentials, account IDs, or tokens.
 
-Mandatory policy:
-1. Model `place_order`, `update_order`, and `cancel_order` latencies separately in research/backtests.
-2. Use at least **P95** latency assumptions for promotion decisions (P99 for stress tests).
-3. Record latency assumptions in research artifacts; missing latency profile = non-promotion-ready.
-4. Treat sub-broker-RTT alpha half-lives as optimistic until validated via shadow/live evidence.
+## Verification
 
-### Package Naming Convention
+Match blast radius. Docs-only: verify referenced paths and review diff. Bug fix: add/update focused regression test. Hot-path/shared contract: run targeted tests plus scaled-int, monotonic-time, fail-closed, state-transition, and latency-sensitive checks. Never claim tests pass unless run.
 
-Two splits in the codebase can look confusing but are intentional:
+## Common Commands
 
-| Split | Framework side | Implementation side | Rule |
-|-------|----------------|---------------------|------|
-| Strategies | `strategy/` — BaseStrategy, StrategyRunner, StrategyContext, registry | `strategies/` — concrete strategy classes (r47_maker, cascade_bounce, etc.) | Concrete strategy code lives in `strategies/`. Framework code lives in `strategy/`. |
-| Runtime | `engine/` — low-level event bus (RingBufferBus) | `services/` — high-level service orchestration (bootstrap, HFTSystem, market_data) | Generic infrastructure lives in `engine/`. Service graph wiring lives in `services/`. |
-
-Do not rename these packages — they are load-bearing across hundreds of imports. Add a new package if you need a new layer.
-
-## 📦 Key Data Contracts
-
-All prices are scaled int (x10000). Contract flow: `OrderIntent → RiskDecision → OrderCommand → FillEvent → PositionDelta`. Field reference (per-contract files and columns): `.agent/skills/hft-data-contracts/` (on-demand skill).
-
-## 🧬 Alpha Governance Pipeline
-
-Research → Gates A/B/C/D/E/F → Canary → Shadow → Live (currently FROZEN under loop_v1 L11 — registry locked to `r47_tmf_v1`). Implementation in `src/hft_platform/alpha/`; research artifacts under `research/alphas/<alpha_id>/`.
-
-- **Canonical workflow doc**: [`docs/runbooks/alpha-development-workflow.md`](docs/runbooks/alpha-development-workflow.md) — single end-to-end reference for new alpha authors.
-- **Stabilization charter**: [`docs/loop_v1_stabilization_charter.md`](docs/loop_v1_stabilization_charter.md) — 30-day live-registry freeze + clock; CI enforcement via `.github/workflows/freeze-guard.yml`.
-- **Strict profile**: `config/research/profiles/vm_ul6_strict.yaml` — 14 blocking sub-gates today (16 once Slice B merges); `latency_audit --strict` + `replay_parity_audit` are Gate D blockers; synthetic equity rejected.
-
-## 🤖 Commands
-
-- **Setup**: `sudo ./ops.sh setup` (Installs Docker, creates dirs)
-- **Install**: `uv sync` or `pip install -e .`
-- **Build Rust**: `uv run maturin develop --manifest-path rust_core/Cargo.toml`
-- **Test**: `make test` (unit) / `make test-all` (unit+integration)
-- **Lint**: `make lint` → `ruff check src/ tests/`
-- **Type Check**: `make typecheck` → `mypy`
-- **CI locally**: `make ci` (format-check + lint + typecheck + coverage)
-- **Run**: `uv run hft run sim` or `python -m hft_platform run sim`
-- **Docker**: `make start` / `make stop` / `make logs`
-
-## 🌐 Critical Environment Variables
-
-Essential runtime/safety vars (full reference in `.agent/skills/hft-env-vars/`):
-
-| Variable                | Default     | Purpose                                   |
-| ----------------------- | ----------- | ----------------------------------------- |
-| `HFT_MODE`              | `sim`       | Runtime mode: `sim` / `real` / `replay`   |
-| `HFT_ORDER_MODE`        | `sim`       | Order execution: `sim` / `live` (LIVE = real money) |
-| `HFT_STRICT_PRICE_MODE` | `0`         | `1` = reject float prices with TypeError  |
-| `HFT_BROKER`            | `shioaji`   | Broker backend: `shioaji` / `fubon`       |
-| `HFT_GATEWAY_ENABLED`   | `0`         | `1` = enable CE-M2 order/risk gateway     |
-| `HFT_FEATURE_ENGINE_ENABLED` | `1`    | `0` = disable FeatureEngine in runtime pipeline (default: v3 with 27 features) |
-
-## 🎨 Coding Style (Strict)
-
-- **Python**: Type hints (3.12+), `structlog` (no print), `pydantic`/`msgspec` for schemas, `__slots__` on dataclasses.
-- **Rust**: `clippy` strict, `pyo3` bindings, `thiserror` for errors.
-- **Commits**: Conventional Commits (`feat:`, `fix:`, `perf:`).
-- **Timestamps**: Always `timebase.now_ns()` — never `datetime.now()` or `time.time()`.
-
-## 🚩 Red Flags (Code Review)
-
-- [ ] Any `float` usage in financial logic? → **REJECT**
-- [ ] `import pandas` in hot path? → **REJECT** (Too slow)
-- [ ] `unwrap()` in Rust code reachable from Python? → **REJECT** (Panic risk)
-- [ ] No unit tests for new logic? → **REJECT**
-- [ ] `datetime.now()` instead of `timebase.now_ns()`? → **REJECT**
-- [ ] Missing `__slots__` on new hot-path dataclass? → **WARN**
-- [ ] `print()` instead of `structlog`? → **REJECT**
-- [ ] Research/backtest assumes zero-latency or mean-only broker RTT for Shioaji? → **REJECT**
+Setup/install: `uv sync`; Rust: `uv run maturin develop --manifest-path rust_core/Cargo.toml`; tests: `make test`, `make test-all`; lint/type/CI: `make lint`, `make typecheck`, `make ci`; run sim: `uv run hft run sim`; Docker: `make start`, `make stop`, `make logs`.

@@ -18,7 +18,7 @@ contract and profile semantics, the canonical source is
 | Factory operations (this handbook) | `research/README.md` |
 | Replay-parity gate (why / enable / schema / fail-closed) | `docs/runbooks/replay-parity-gate.md` |
 | Research data source + L1/L2 formats | `.agent/rules/70-research-data.md` |
-| Governed L2+tick export contract | `docs/runbooks/research-data-pipeline.md` |
+| Governed L2+tick export contract | `research.data_pipeline`, `make research-export-l2-ticks`, `make research-validate-l2-ticks` |
 | Constrained hypothesis ideation | `.agent/teams/alpha-research/factor-ideation-pipeline.md` |
 
 ## Factor Factory Pipeline (8 Stages)
@@ -74,7 +74,7 @@ Strict Gate A enforces:
 
 Data source, scaling (CH x1,000,000 vs platform x10,000), and the governed L2+tick export
 contract are documented in `.agent/rules/70-research-data.md` and
-`docs/runbooks/research-data-pipeline.md` — do not reimplement the dtype/sidecar/validation rules.
+`research.data_pipeline` — do not reimplement the dtype/sidecar/validation rules.
 
 ### Synthetic Data Fast Path (OU-Hawkes-Markov v2)
 

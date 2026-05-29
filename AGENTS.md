@@ -1,99 +1,55 @@
-# AGENTS.md
+# AGENTS.md - HFT Platform Agent Rules
 
-> 重要：本專案是 Python HFT 平台。處理任何任務時，請優先使用基於檢索的推理（retrieval-led reasoning）：先讀本 repo 的文件、規則、技能與相關原始碼，再做判斷或修改。
+重要：本 repo 是 latency-sensitive、money-facing 的 Python/Rust HFT 平台。所有判斷採 retrieval-led reasoning，先讀現行文件與原始碼，不靠記憶猜測。
 
-## Project Context
+## First Reads
 
-| Key | Value |
-| --- | --- |
-| Name | `hft_platform` |
-| Domain | High-frequency trading platform |
-| Primary tech | Python, Rust/PyO3 fast paths, ClickHouse/Redis integrations |
-| Risk profile | Latency-sensitive, money-facing, safety-critical |
+每次開始任務先讀：
+1. `docs/MODULES_REFERENCE.md`
+2. `.agent/rules/00-index.md`
+3. `.agent/skills/00-index.md`
 
-## Mandatory First Reads
+再只讀任務相關的 `SKILL.md`、`.agent/rules/*.md`、source、`docs/architecture/`。涉及 gotcha 時讀 `.agent/memory/module_gotchas.md`。引用路徑不存在時，明確回報並用 `rg --files` 找 canonical source。
 
-開始工作前先讀這些目前存在的索引與地圖，不要依賴記憶猜測專案規則：
+## HFT Five Laws
 
-1. `docs/MODULES_REFERENCE.md` - module map, hot-path modules, contracts, runtime planes.
-2. `.agent/rules/00-index.md` - project rule index.
-3. `.agent/skills/00-index.md` - task-to-skill routing.
+Hot path 包含 market ingestion、Normalizer、LOB、FeatureEngine、EventBus、StrategyRunner、Risk、Gateway、Order/Execution。
 
-任務涉及架構或模組邊界時，再讀 `docs/architecture/` 中相關文件。任務涉及已知 gotcha 時，檢查 `.agent/memory/module_gotchas.md`（若存在且相關）。
-
-若引用的文件不存在：明確說出缺少的路徑，用 `rg --files` 搜尋最接近的現行文件，改讀目前 repo 內的 canonical source；不要憑預訓練記憶補規則。
-
-## Hard HFT Laws
-
-完整規則以 `.agent/rules/01-core-laws.md` 與 `.agent/rules/10-hft-performance.md` 為準。摘要如下：
-
-1. **Allocator Law**: hot path / tick loop 不得配置 heap 物件；使用預配置 buffer、ring buffer、object pool 或 Rust。
-2. **Cache Law**: 優先 cache-local / packed data；避免 pointer chasing。
-3. **Async Law**: event loop 不得做 blocking IO 或超過 1 ms 的同步計算。
-4. **Precision Law**: 價格與金額使用 scaled int（專案慣例 x10000）或明確安全型別；hot path 禁用 float price math。
-5. **Boundary Law**: Python/Rust 邊界避免大資料 copy；優先 zero-copy buffer、shared memory 或明確的 FFI contract。
-
-Hot-path 檔案包含 market data ingestion、LOB、feature engine、event bus、strategy dispatch、risk、order/execution gateway 等；修改前必讀對應 rule/skill。
-
-## Alpha Governance
-
-Research → Gates A/B/C/D/E/F → Canary → Shadow → Live. Live registry currently **FROZEN** under loop_v1 L11 (locked to `r47_tmf_v1`). Implementation: `src/hft_platform/alpha/`; research artifacts: `research/alphas/<alpha_id>/`.
-
-- End-to-end workflow + Gates A–F + profile reference: `docs/runbooks/alpha-development-workflow.md`
-- Factory operations handbook (entrance, 8 stages, data governance, paper-trade, triage): `research/README.md`
-- Freeze charter + CI gate: `docs/loop_v1_stabilization_charter.md`, `.github/workflows/freeze-guard.yml`
-- Strict profile: `config/research/profiles/vm_ul6_strict.yaml` — `latency_audit --strict` + `replay_parity_audit` are Gate D blockers. Single token `vm_ul6_strict` across all entrypoints (`make research`, `hft alpha pipeline run`, `hft alpha validate|promote`); legacy `vm_ul6` accepted with `DeprecationWarning` for one release.
-- Canonical orchestrator: `hft alpha pipeline {run,triage}` (Stage 5, 2026-05-28). `make research` shells out to it.
-- Lifecycle drift gate: `make research-audit-lifecycle` — run weekly. `manifest.yaml::status` is the source of truth; six other stores are derived. See `docs/runbooks/alpha-lifecycle-state.md`.
+1. Allocator: tick loop 不配置 heap；用預配置 buffer、ring buffer、object pool 或 Rust。
+2. Cache: cache-local/packed data 優先；避免 pointer chasing。
+3. Async: event loop 不做 blocking IO 或 >1 ms 同步計算。
+4. Precision: 價格/金額用 scaled int x10000 或安全型別；hot path 禁 float price math。
+5. Boundary: Python/Rust 邊界避免大 copy；使用 zero-copy buffer/shared memory/明確 FFI contract。
 
 ## Task Routing
 
-先讀 `.agent/skills/00-index.md`，再只打開當前任務直接相關的 `SKILL.md`。
+先看 `.agent/skills/00-index.md`，只開直接相關技能：
 
-| Task | First references |
-| --- | --- |
-| Market data, normalizer, LOB, feature engine | `.agent/skills/hft-market-data/SKILL.md`, `.agent/skills/hft-hot-path-dev/SKILL.md` |
-| Strategy changes | `.agent/skills/hft-strategy-dev/SKILL.md`, `.agent/skills/hft-strategy-sdk/SKILL.md` |
-| Alpha research, backtest, promotion gates | `.agent/skills/hft-alpha-research/SKILL.md`, `.agent/skills/research-factory/SKILL.md`, `.agent/skills/hft-backtest-engine/SKILL.md`, `.agent/skills/hft-backtest-validation/SKILL.md`, `.agent/skills/validation-gate/SKILL.md` |
-| Execution, fills, positions, TCA | `.agent/skills/hft-execution/SKILL.md` |
-| Recorder, WAL, ClickHouse | `.agent/skills/hft-recorder/SKILL.md`, `.agent/skills/clickhouse-io/SKILL.md` |
-| Ops, sessions, alerts, health | `.agent/skills/hft-ops/SKILL.md`, `.agent/skills/troubleshoot-metrics/SKILL.md` |
-| Rust/PyO3 changes | `.agent/skills/rust-pro/SKILL.md`, `.agent/skills/hft-rust-exports/SKILL.md` |
-| Tests and verification | `.agent/rules/50-testing.md`, `.agent/skills/hft-test-hft/SKILL.md`, `.agent/skills/python-testing-patterns/SKILL.md` |
-| Docs, codemaps, generated references | `.agent/skills/doc-updater/SKILL.md`, `docs/MODULES_REFERENCE.md` |
-| Architecture decisions | `docs/architecture/`, `.agent/skills/hft-architect/SKILL.md`, `.agent/rules/25-architecture-governance.md` |
-| Broker abstraction / multi-broker work | `.agent/skills/broker-abstraction/SKILL.md`, `.agent/skills/multi-broker-ops/SKILL.md`, `.agent/rules/26-multi-broker-governance.md` |
-| Config and environment variables | `.agent/skills/config-env/SKILL.md`, `.agent/skills/hft-env-vars/SKILL.md` |
+- Market data/LOB/feature: `hft-market-data`, `hft-hot-path-dev`
+- Strategy: `hft-strategy-dev`, `hft-strategy-sdk`
+- Alpha/backtest/promotion: `hft-alpha-research`, `research-factory`, `hft-backtest-*`, `validation-gate`
+- Execution/fills/TCA: `hft-execution`
+- Recorder/WAL/ClickHouse: `hft-recorder`, `clickhouse-io`
+- Ops/alerts/health: `hft-ops`, `troubleshoot-metrics`
+- Rust/PyO3: `rust-pro`, `hft-rust-exports`
+- Tests: `.agent/rules/50-testing.md`, `hft-test-hft`, `python-testing-patterns`
+- Docs/architecture: `doc-updater`, `hft-architect`, `docs/architecture/`
+- Broker/config: `broker-abstraction`, `multi-broker-ops`, `config-env`, `hft-env-vars`
 
-## Workflow Expectations
+## Alpha Governance
 
-- Read relevant docs/skills before implementation.
-- Use `rg`/source inspection before making behavioral claims.
-- Keep edits scoped to the user request; do not perform unrelated refactors.
-- Treat hot-path changes as high-risk and verify allocator, precision, latency, and async behavior.
-- Preserve user work in dirty worktrees. Do not revert unrelated changes.
-- Prefer structured parsers/APIs over ad hoc string handling when changing structured data.
-- When changing docs that list paths, verify the paths exist.
+Research -> Gates A/B/C/D/E/F -> Canary -> Shadow -> Live. Live registry is FROZEN under loop_v1 L11 (`r47_tmf_v1`). Canonical refs: `docs/runbooks/alpha-development-workflow.md`, `research/README.md`, `docs/loop_v1_stabilization_charter.md`, `config/research/profiles/vm_ul6_strict.yaml`.
 
-## Testing and Verification
+## Work Rules
 
-Verification should match blast radius:
+- Scope edits to the request; never revert unrelated user work.
+- Use `rg`/source inspection before claims.
+- Prefer structured parsers/APIs for structured data.
+- Docs listing paths must verify paths exist.
+- Never expose secrets or broker/account identifiers.
+- No production-impacting, live-trading, destructive filesystem, or destructive git commands without explicit request.
+- Commit/stage only intentional files.
 
-- Narrow docs-only change: inspect rendered/readable Markdown, verify referenced paths, review `git diff`.
-- Bug fix: add or update a focused regression test before/with the fix.
-- Shared contract or hot-path change: run targeted unit tests plus relevant HFT-specific tests for scaled ints, monotonic time, fail-closed behavior, state transitions, and latency-sensitive paths.
-- Architecture or workflow change: update related docs/codemaps and verify no stale references remain.
+## Verification
 
-Do not claim tests pass unless the command was run and the result is known.
-
-## Safety and Git Hygiene
-
-- Never expose secrets, API keys, broker credentials, account identifiers, or production tokens in logs, docs, tests, commits, or chat.
-- Do not run production-impacting commands, live trading commands, destructive filesystem operations, or destructive git commands unless explicitly requested.
-- Commit only intentional files. If the worktree is dirty, inspect/stage narrowly.
-- Avoid modifying generated or cached artifacts unless the task explicitly requires it.
-- If instructions conflict, follow the most specific current user instruction that does not violate safety, project rules, or higher-priority system/developer instructions.
-
----
-
-_Maintained as the agent entry point for `hft_platform`; detailed rules live in `.agent/rules/`, skills in `.agent/skills/`, and architecture docs in `docs/architecture/`._
+Docs-only: inspect Markdown, verify paths, review diff. Bug fix: focused regression test. Hot-path/shared contract: targeted tests plus scaled-int, monotonic-time, fail-closed, state-transition, async/latency checks. Do not claim tests pass unless run.

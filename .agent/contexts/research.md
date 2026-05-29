@@ -20,7 +20,7 @@ Focus: Alpha research, architecture questions, evidence-first investigation
 - Factory operations (entrance, 8 stages, layout, data governance, paper-trade, triage): `research/README.md`
 - Lifecycle + Gates A–F + profile semantics (`vm_ul6` vs `vm_ul6_strict`): `docs/runbooks/alpha-development-workflow.md`
 - Replay-parity gate (fail-closed matrix, canonical hash): `docs/runbooks/replay-parity-gate.md`
-- Data source + L1/L2 formats: `.agent/rules/70-research-data.md`; export contract: `docs/runbooks/research-data-pipeline.md`
+- Data source + L1/L2 formats: `.agent/rules/70-research-data.md`; export contract: `research.data_pipeline`, `make research-export-l2-ticks`, `.agent/skills/research-data-governance/SKILL.md`
 - Constrained hypothesis ideation: `.agent/teams/alpha-research/factor-ideation-pipeline.md`
 
 ## Reuse-first inventory (do NOT reinvent)

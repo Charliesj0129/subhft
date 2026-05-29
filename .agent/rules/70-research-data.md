@@ -1,104 +1,11 @@
-# Research Data Access Guide
+# Research Data
 
-## Data Source
+Local L2/tick source is ClickHouse `hft.market_data` on 8123/9000. Auth comes from `.env`; never expose password. Main fields: `exch_ts`, `ingest_ts` ns, `type`, `price_scaled`, 5-level bid/ask arrays. Raw ClickHouse price scale is x1,000,000; live platform scale is x10,000, so conversion must be explicit.
 
-All L2 market data is in local ClickHouse.
+Best known complete research interval: 2026-03-02 to 2026-03-24. Avoid known sparse/unusable dates unless intentionally testing gaps.
 
-| Item                | Value                                          |
-| ------------------- | ---------------------------------------------- |
-| **Table**           | `hft.market_data` (MergeTree)                  |
-| **Host**            | `localhost:8123` (HTTP) / `localhost:9000` (native) |
-| **Auth**            | user=`default`, password from `.env` `CLICKHOUSE_PASSWORD` |
-| **Docker access**   | `docker exec clickhouse clickhouse-client`     |
-| **Price**           | `price_scaled` Int64 x1,000,000 (note: differs from platform's x10,000) |
-| **Timestamp**       | `exch_ts` / `ingest_ts` Int64 nanoseconds      |
-| **Depth**           | 5-level arrays: `bids_price`, `asks_price`, `bids_vol`, `asks_vol` |
-| **Event types**     | `BidAsk` (L2 quotes, ~87%) and `Tick` (trades, ~13%) |
-| **TTL**             | 6 months on `ingest_ts`                        |
-| **Memory limit**    | 2GB/query; add `SETTINGS max_memory_usage=2500000000` for large queries |
+Canonical governed L2+tick export is `research.data_pipeline` via `make research-export-l2-ticks`. Sidecar/data-root rules live in `.agent/skills/research-data-governance/SKILL.md`. `research/tools/ch_batch_export.py` is legacy/L1 wrapper and must not reimplement sidecar/dtype governance.
 
-## Best Research Interval
+Every export needs metadata sidecar with dataset ID, source, rows, symbols, date, fingerprint, and data UL/provenance. L2 exports dedup identical BidAsk within 0.5 ms where applicable.
 
-**Recommended**: `2026-03-02` to `2026-03-24` (17 consecutive complete trading days, ~8M rows/day, 98-120 symbols).
-
-### Data Availability
-
-| Period          | Trading Days | Status      |
-| --------------- | ------------ | ----------- |
-| 01/26-01/31     | 5            | Complete (pre-CNY night only) |
-| 02/03-02/06     | 4            | Complete    |
-| 02/07-02/22     | ~10          | **Sparse** (only 02/10, 02/11 partial) |
-| 02/23-02/26     | 4            | Complete (02/27 missing) |
-| **03/02-03/24** | **17**       | **Complete — best interval** |
-
-Unusable dates (< 1000 rows): `20260125`, `20260207`, `20260209`.
-
-## Export CLI: `research/tools/ch_batch_export.py`
-
-> **Canonical export contract:** the governed L2+tick export (hftbacktest NPZ + tick NPY +
-> sidecar dtype/validation rules) is owned by `research.data_pipeline` — see
-> `docs/runbooks/research-data-pipeline.md` (`make research-export-l2-ticks`).
-> `ch_batch_export.py` is the L1/legacy wrapper; do not reimplement the dtype/sidecar rules.
-
-```bash
-# L1 (.npy) for alpha feature precompute
-python research/tools/ch_batch_export.py \
-    --symbols TXFD6,MXFD6,2330 \
-    --password "$CLICKHOUSE_PASSWORD" \
-    --formats l1 \
-    --date-from 2026-03-02 --date-to 2026-03-24
-
-# L2 (.npz) for hftbacktest MM backtesting
-python research/tools/ch_batch_export.py \
-    --symbols TXFD6 --password "$CLICKHOUSE_PASSWORD" \
-    --formats l1,l2 --date-from 2026-03-02 --date-to 2026-03-24
-
-# Dry-run / concat flags also supported: --dry-run, --concat
-```
-
-Output: `research/data/raw/<symbol>/`.
-
-## Direct ClickHouse Query (Python)
-
-```python
-import clickhouse_connect
-client = clickhouse_connect.get_client(
-    host="localhost", port=8123,
-    username="default", password="<from .env CLICKHOUSE_PASSWORD>",
-)
-rows = client.query("""
-    SELECT exch_ts, type, price_scaled, volume,
-           bids_price, bids_vol, asks_price, asks_vol
-    FROM hft.market_data
-    WHERE symbol = 'TXFD6'
-      AND toDate(fromUnixTimestamp64Nano(ingest_ts)) = '2026-03-05'
-    ORDER BY exch_ts, seq_no
-    SETTINGS max_memory_usage=2500000000
-""").result_rows
-```
-
-## Output Formats
-
-### L1 (.npy) — structured numpy array
-
-Fields: `bid_px`, `ask_px`, `bid_qty`, `ask_qty`, `mid_price`, `spread_bps`, `volume` (all f64); `local_ts` (i64 ns).
-
-### L2 (.npz) — hftbacktest-compatible
-
-Events: `DEPTH_SNAPSHOT_EVENT`, `DEPTH_EVENT` (5 levels), `TRADE_EVENT`. Built-in dedup: identical BidAsk within 0.5ms filtered.
-
-### Metadata Sidecar (.meta.json)
-
-Every export has a sidecar with: `dataset_id`, `source_type`, `source`, `rows`, `fields`, `symbols`, `date`, `data_fingerprint`, `data_ul`.
-
-## Asset Coverage
-
-- **Futures (15)**: `TXFD6` (most liquid), `MXFD6` (HF), `TMFD6` (highest tick count), `TXFE6`/`MXFE6` (far month), …
-- **Stocks (71)**: Top 10: 2408, 2303, 2409, 1303, 2317, 1326, 2330, 2327, 1301, 2609.
-- **Options (160)**: TXO call/put across multiple strikes/months.
-
-## Data Quality Notes
-
-1. **Dedup**: MergeTree does not auto-dedupe. `ch_batch_export.py` L2 dedups within 0.5ms. Raw duplicates < 0.01% most days; 20260310 ~0.55% (migration overlap).
-2. **Price scale mismatch**: ClickHouse x1,000,000; live platform x10,000. Verify via `CH_PRICE_SCALE_INT = 1_000_000.0` in `ch_batch_export.py`.
-3. **Night session**: Futures 15:00-05:00 partitioned by `ingest_ts`, not `exch_ts` — one partition may span two calendar dates.
+Large queries must set memory limits and preserve deterministic ordering by exchange timestamp/sequence.
