@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
@@ -161,24 +162,49 @@ def _invoke_sub_gates(
                 blocking_seen.append(gate_name)
                 blocking_failing.append(entry)
 
+    blocking: dict | None
     if profile is None:
-        return advisory, None
+        blocking = None
+    else:
+        triage_status, triage_reasons = _derive_triage_status(blocking_failing)
+        blocking = {
+            "passed": len(blocking_failing) == 0,
+            "failing": blocking_failing,
+            "names": blocking_seen,
+            "profile": profile.name,
+            # Goal §4: sub-threshold runs must NOT be collapsed into a
+            # generic KILL.  When the only blocking failure is
+            # min_sample_size and its sample_adequacy_label is informational
+            # (promising / needs_more_sample / inconclusive), surface that
+            # label so the outer pipeline routes the run to "needs more
+            # data" rather than "dead candidate".
+            "triage_status": triage_status,
+            "triage_reasons": triage_reasons,
+        }
 
-    triage_status, triage_reasons = _derive_triage_status(blocking_failing)
-    return advisory, {
-        "passed": len(blocking_failing) == 0,
-        "failing": blocking_failing,
-        "names": blocking_seen,
-        "profile": profile.name,
-        # Goal §4: sub-threshold runs must NOT be collapsed into a generic
-        # KILL.  When the only blocking failure is min_sample_size and its
-        # sample_adequacy_label is informational (promising /
-        # needs_more_sample / inconclusive), surface that label so the
-        # outer pipeline routes the run to "needs more data" rather than
-        # "dead candidate".
-        "triage_status": triage_status,
-        "triage_reasons": triage_reasons,
-    }
+    # Goal §4 / §9 traceability: when the audit flag is on, emit one JSONL
+    # row per invocation so every Gate-C decision is replayable later.
+    # Failure of the writer must never break the validation path —
+    # swallow all exceptions and log.
+    if os.getenv("HFT_SUB_GATE_AUDIT_ENABLED", "0") == "1":
+        try:
+            from hft_platform.alpha import sub_gate_audit
+
+            run_id = str(result_payload.get("run_id") or "")
+            if run_id:
+                sub_gate_audit.record_sub_gate_run(
+                    run_id=run_id,
+                    strategy_name=str(result_payload.get("strategy_name") or ""),
+                    instrument=str(result_payload.get("instrument") or ""),
+                    strategy_type=strategy_type,
+                    profile_name=(profile.name if profile is not None else ""),
+                    advisory=advisory,
+                    blocking=blocking,
+                )
+        except Exception:  # noqa: BLE001
+            logger.warning("sub_gate_audit emit failed", exc_info=True)
+
+    return advisory, blocking
 
 
 _SAMPLE_LABELS = {"promising", "needs_more_sample", "inconclusive"}
