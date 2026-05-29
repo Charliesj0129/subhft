@@ -1930,8 +1930,10 @@ class TestDailyReportServiceWiring:
         ):
             registry = _build_with_mocks()
 
-        # Phase callback registered
-        mock_gov.register_phase_callback.assert_called_once_with(mock_daily_svc.on_phase_transition)
+        # Phase callback registered. Two callbacks now register: the FORCE_FLAT
+        # dispatcher (punch-list 2026-05-29) and the daily-report svc transition hook.
+        registered = [c.args[0] for c in mock_gov.register_phase_callback.call_args_list]
+        assert mock_daily_svc.on_phase_transition in registered
 
 
 # ===================================================================
