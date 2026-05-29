@@ -46,6 +46,10 @@ thresholds:
     # Per-round-trip net edge floor (goal §5 hard bar: > 10 pts/trade)
     mean_net_edge_pts_per_trade_min: 10.0
 
+    # Trade-level concentration (goal §5: loss-distribution + dominance)
+    top_trade_share_max_pct: 40.0
+    worst_loss_share_max_pct: 50.0
+
   maker:
     sharpe_is_min: 1.0
     sharpe_oos_min: 1.0
@@ -89,6 +93,10 @@ thresholds:
 
     # Per-round-trip net edge floor (goal §5 hard bar: > 10 pts/trade)
     mean_net_edge_pts_per_trade_min: 10.0
+
+    # Trade-level concentration (goal §5: loss-distribution + dominance)
+    top_trade_share_max_pct: 40.0
+    worst_loss_share_max_pct: 50.0
 
 # Argparse-arg overrides applied by research.pipeline._run_pipeline when the
 # pipeline is invoked with --validation-profile vm_ul6_strict (or the legacy
@@ -196,3 +204,5 @@ blocking_sub_gates:
   - monthly_distribution
   # Per-round-trip net edge floor (goal §5)
   - edge_per_round_trip
+  # Trade-level concentration (goal §5)
+  - trade_concentration
