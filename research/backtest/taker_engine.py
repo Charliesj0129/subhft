@@ -111,6 +111,11 @@ class TakerEngine:
                 n_fills = 0
                 for i in range(1, len(positions)):
                     n_fills += abs(int(positions[i]) - int(positions[i - 1]))
+                # Round 41: force-flat residual adds abs(positions[-1])
+                # synthetic close fills (the projector defaults to
+                # force_flat_at_end=True so the cost must be charged
+                # for those fills too).
+                n_fills += abs(int(positions[-1]))
                 gross_sum = float(sum(trips))
                 total_net_pts = float(cost_model.apply(gross_sum, n_fills))
             except Exception:  # noqa: BLE001 — defensive; never break enrich.

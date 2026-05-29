@@ -40,6 +40,7 @@ def project_trade_pnl_from_position_series(
     prices: Any,
     *,
     price_scale: float = 1.0,
+    force_flat_at_end: bool = True,
 ) -> list[float]:
     """Round 38: derive per-trip PnL from a (positions, prices) series.
 
@@ -58,6 +59,15 @@ def project_trade_pnl_from_position_series(
     ``prices`` may be raw scaled int (live tick path: x10000) or
     points (offline path: x1).  Pass ``price_scale`` accordingly —
     ``1.0`` means prices are already in points.
+
+    Round 41: ``force_flat_at_end`` (default True) handles residual
+    inventory per goal 驗證標準 §3 — "若有未平倉殘倉，必須先用 MtM
+    或 force-flat rule 納入 PnL".  When the series ends with a non-zero
+    position, a synthetic close transition (positions[-1] -> 0 at
+    ``prices[-1]``) is appended before FIFO matching so the residual
+    is realized into trips rather than silently dropped (which would
+    inflate edge by hiding inventory losses).  Pass ``False`` only
+    when the caller is supplying residual MtM via a different path.
 
     Defensive: returns ``[]`` for mismatched-length arrays, empty
     arrays, or arrays of length<2 (no transitions possible).  Never
@@ -92,6 +102,22 @@ def project_trade_pnl_from_position_series(
         fills.extend(
             {"side": side, "price": price_raw} for _ in range(abs(delta))
         )
+    if force_flat_at_end:
+        try:
+            end_pos = int(positions[-1])
+        except (TypeError, ValueError):
+            end_pos = 0
+        if end_pos != 0:
+            try:
+                last_price = float(prices[-1])
+            except (TypeError, ValueError):
+                last_price = None
+            if last_price is not None:
+                close_side = "sell" if end_pos > 0 else "buy"
+                fills.extend(
+                    {"side": close_side, "price": last_price}
+                    for _ in range(abs(end_pos))
+                )
     return project_trade_pnl(fills, price_scale=scale)
 
 

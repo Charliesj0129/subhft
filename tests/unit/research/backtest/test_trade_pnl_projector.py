@@ -168,12 +168,24 @@ class TestProjectFromPositionSeries:
         assert math.isclose(trips[0], -5.0, abs_tol=1e-9)
 
     def test_multi_unit_delta_splits_into_unit_fills(self) -> None:
-        # Step from 0 -> 2 = two synthetic buys at the same price; then
-        # one sell drops to 1, leaving one unit unmatched in the FIFO.
+        # Round 41 default: force_flat_at_end=True closes residual
+        # long-1 at the final price, so both buys get matched.
         positions = np.array([0, 2, 1])
         prices = np.array([100.0, 100.0, 103.0])
         trips = project_trade_pnl_from_position_series(positions, prices)
-        # 2 buys @ 100, 1 sell @ 103 -> exactly ONE matched trip @ +3.
+        # 2 buys @ 100, 1 sell @ 103, 1 force-flat sell @ 103 ->
+        # TWO matched trips both @ +3.
+        assert len(trips) == 2
+        assert [round(t, 6) for t in trips] == [3.0, 3.0]
+
+    def test_force_flat_disabled_preserves_residual(self) -> None:
+        # When force_flat_at_end=False, residual stays in the FIFO
+        # (Round 38 behaviour).
+        positions = np.array([0, 2, 1])
+        prices = np.array([100.0, 100.0, 103.0])
+        trips = project_trade_pnl_from_position_series(
+            positions, prices, force_flat_at_end=False
+        )
         assert len(trips) == 1
         assert math.isclose(trips[0], 3.0, abs_tol=1e-9)
 
@@ -185,6 +197,34 @@ class TestProjectFromPositionSeries:
             positions, prices, price_scale=10_000.0
         )
         assert math.isclose(trips[0], 5.0, abs_tol=1e-9)
+
+    def test_force_flat_short_residual_emits_buy_close(self) -> None:
+        # Short residual at end -> synthetic buy at last price.
+        # 0 -> -1 sell @100 ; force-flat buy @95 -> +5 trip realized.
+        positions = np.array([0, -1, -1])
+        prices = np.array([99.0, 100.0, 95.0])
+        trips = project_trade_pnl_from_position_series(positions, prices)
+        assert len(trips) == 1
+        assert math.isclose(trips[0], 5.0, abs_tol=1e-9)
+
+    def test_force_flat_long_residual_emits_loss_when_price_drops(self) -> None:
+        # Goal §3: residual MUST be realized; cannot silently hide losses.
+        # Buy @100 then price drops to 92 by end -> -8 forced-flat trip.
+        positions = np.array([0, 1, 1])
+        prices = np.array([100.0, 100.0, 92.0])
+        trips = project_trade_pnl_from_position_series(positions, prices)
+        assert len(trips) == 1
+        assert math.isclose(trips[0], -8.0, abs_tol=1e-9)
+
+    def test_force_flat_zero_end_position_is_noop(self) -> None:
+        # Series ending flat -> force-flat adds nothing.
+        positions = np.array([0, 1, 0])
+        prices = np.array([100.0, 100.0, 105.0])
+        trips_flat = project_trade_pnl_from_position_series(positions, prices)
+        trips_no_flat = project_trade_pnl_from_position_series(
+            positions, prices, force_flat_at_end=False
+        )
+        assert trips_flat == trips_no_flat
 
     def test_non_numeric_entries_skipped_not_raised(self) -> None:
         # Defensive: a corrupted price at one step must not abort the run.
@@ -496,6 +536,37 @@ class TestTakerEngineEnrichPopulatesTradePnl:
             cost_model=_Cost(),
         )
         assert out.trade_pnl is None
+
+    def test_force_flat_residual_charged_to_n_fills(self) -> None:
+        # Round 41: force-flat fills must be charged cost too.
+        # positions [0,1,1] -> 1 entry delta + 1 force-flat -> n_fills=2.
+        from research.backtest.taker_engine import TakerEngine
+
+        class _StubCost:
+            def __init__(self) -> None:
+                self.n_fills_seen: int | None = None
+
+            def apply(self, gross_pnl_pts: float, n_fills: int) -> float:
+                self.n_fills_seen = n_fills
+                return gross_pnl_pts - n_fills * 0.5
+
+        cost = _StubCost()
+        base = self._base_result(
+            positions=np.array([0, 1, 1]),
+            mid_prices=np.array([100.0, 100.0, 110.0]),
+        )
+        out = TakerEngine().enrich_result(
+            base,
+            instrument="TXFD6",
+            data_period="d",
+            pipeline_mode="research",
+            cost_model=cost,
+        )
+        # 1 entry buy + 1 force-flat sell = 2 fills.
+        assert cost.n_fills_seen == 2
+        # Gross +10 (forced sell @110) - 2*0.5 = net 9.
+        assert out.trade_pnl is not None
+        assert math.isclose(sum(out.trade_pnl), 9.0, abs_tol=1e-9)
 
     def test_real_taifex_cost_model_round_trips(self) -> None:
         # Anchor: the actual TAIFEXCost from research.backtest.cost_models
