@@ -49,9 +49,7 @@ class TestMonthlyDistributionGate:
 
     def test_fails_when_single_month_dominates(self) -> None:
         gate = MonthlyDistributionGate()
-        daily = [_entry("2026-01-15", 1000.0)] + [
-            _entry(f"2026-0{m}-15", 5.0) for m in range(2, 7)
-        ]
+        daily = [_entry("2026-01-15", 1000.0)] + [_entry(f"2026-0{m}-15", 5.0) for m in range(2, 7)]
         r = _FakeResult(daily_pnl=daily)
         out = gate.evaluate(r, config=None, thresholds=_THRESHOLDS)
         assert out.passed is False

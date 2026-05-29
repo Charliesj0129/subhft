@@ -55,9 +55,7 @@ class ReplayParityGate:
         first_div = float(getattr(report, "first_divergence_idx", -1) or -1)
         histogram = getattr(report, "divergence_histogram", None) or {}
         category_counts = categorize_histogram(histogram)
-        dominant_category = (
-            max(category_counts, key=category_counts.get) if category_counts else ""
-        )
+        dominant_category = max(category_counts, key=category_counts.get) if category_counts else ""
 
         passed = match_pct >= threshold
         metrics: dict[str, Any] = {
@@ -67,15 +65,12 @@ class ReplayParityGate:
             "divergence_categories": category_counts,
             "dominant_divergence_category": dominant_category,
         }
-        suffix = (
-            f", dominant_category={dominant_category}" if dominant_category else ""
-        )
+        suffix = f", dominant_category={dominant_category}" if dominant_category else ""
         return SubGateResult(
             name=self.name,
             passed=passed,
             metrics=metrics,
             details=(
-                f"match_pct={match_pct:.2f}% vs min {threshold:.2f}% "
-                f"(first_divergence_idx={first_div:.0f}{suffix})"
+                f"match_pct={match_pct:.2f}% vs min {threshold:.2f}% (first_divergence_idx={first_div:.0f}{suffix})"
             ),
         )

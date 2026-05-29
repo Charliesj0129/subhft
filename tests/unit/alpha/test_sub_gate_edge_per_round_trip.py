@@ -108,9 +108,7 @@ class TestEdgePerRoundTripGate:
         gate = EdgePerRoundTripGate()
         daily = [_row(pnl=600.0, trips=50)]
         r = _FakeResult(daily_pnl=daily)
-        out = gate.evaluate(
-            r, config=None, thresholds={"mean_net_edge_pts_per_trade_min": 20.0}
-        )
+        out = gate.evaluate(r, config=None, thresholds={"mean_net_edge_pts_per_trade_min": 20.0})
         # 600/50 = 12, < 20 floor
         assert out.passed is False
         assert out.metrics["mean_net_edge_pts_per_trade"] == 12.0

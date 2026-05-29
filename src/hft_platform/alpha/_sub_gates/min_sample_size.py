@@ -74,8 +74,5 @@ class MinSampleSizeGate:
             name=self.name,
             passed=passed,
             metrics=metrics,
-            details=(
-                f"fills={n_fills} (min {min_fills}), "
-                f"days={n_days} (min {min_days}), label={label}"
-            ),
+            details=(f"fills={n_fills} (min {min_fills}), days={n_days} (min {min_days}), label={label}"),
         )

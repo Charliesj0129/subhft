@@ -54,6 +54,7 @@ class SampleInsufficientKillError(ValueError):
     losing recoverable candidates.
     """
 
+
 # Excluded from stable_artifact_hash (plan §5 idempotency contract).
 # Defensive even though the §5 narrow already removed kill_reason / cluster_id
 # from the manifest — re-add here if any future schema mutation lands.
@@ -139,17 +140,13 @@ class KillRecord:
                 "promising / needs_more_sample / inconclusive instead"
             )
         if blocking.get("passed", False):
-            raise ValueError(
-                f"refusing to log kill for alpha_id={alpha_id!r}: "
-                "blocking aggregate reports passed=True"
-            )
+            raise ValueError(f"refusing to log kill for alpha_id={alpha_id!r}: blocking aggregate reports passed=True")
         reasons = blocking.get("triage_reasons") or [
             f["name"] for f in (blocking.get("failing") or []) if isinstance(f, dict)
         ]
         if not reasons:
             raise ValueError(
-                f"refusing to log kill for alpha_id={alpha_id!r}: "
-                "no failing gates recorded in blocking aggregate"
+                f"refusing to log kill for alpha_id={alpha_id!r}: no failing gates recorded in blocking aggregate"
             )
         reason = "|".join(str(r) for r in reasons)
         return cls(

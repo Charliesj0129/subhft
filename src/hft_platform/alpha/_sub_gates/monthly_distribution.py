@@ -132,20 +132,14 @@ class MonthlyDistributionGate:
                 name=self.name,
                 passed=False,
                 metrics=metrics,
-                details=(
-                    f"insufficient months: {n_months} < {min_months} required"
-                ),
+                details=(f"insufficient months: {n_months} < {min_months} required"),
             )
 
         reasons: list[str] = []
         if top_pct > top_max:
-            reasons.append(
-                f"top_month={top_pct:.1f}% > {top_max:.1f}%"
-            )
+            reasons.append(f"top_month={top_pct:.1f}% > {top_max:.1f}%")
         if avg_monthly <= 0:
-            reasons.append(
-                f"avg_monthly={avg_monthly:.2f} pts <= 0 (no positive baseline)"
-            )
+            reasons.append(f"avg_monthly={avg_monthly:.2f} pts <= 0 (no positive baseline)")
         elif dd_ratio > dd_max_ratio:
             reasons.append(
                 f"mdd/avg_monthly={dd_ratio:.2f} > {dd_max_ratio:.2f} "

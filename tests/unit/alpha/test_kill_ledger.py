@@ -308,9 +308,7 @@ class TestKillRecordFromBlocking:
             status="killed",
             reasons=["min_sample_size", "single_day_dominance"],
         )
-        rec = KillRecord.from_blocking(
-            alpha_id="c99", gate="C", blocking=blocking, stable_artifact_hash="h"
-        )
+        rec = KillRecord.from_blocking(alpha_id="c99", gate="C", blocking=blocking, stable_artifact_hash="h")
         assert rec.alpha_id == "c99"
         assert rec.gate == "C"
         assert rec.reason == "min_sample_size|single_day_dominance"
@@ -321,16 +319,12 @@ class TestKillRecordFromBlocking:
             KillRecord.from_blocking(alpha_id="c99", gate="C", blocking=blocking)
 
     def test_sample_needs_more_sample_rejected(self) -> None:
-        blocking = self._blocking(
-            status="sample_needs_more_sample", reasons=["min_sample_size"]
-        )
+        blocking = self._blocking(status="sample_needs_more_sample", reasons=["min_sample_size"])
         with pytest.raises(kill_ledger.SampleInsufficientKillError):
             KillRecord.from_blocking(alpha_id="c99", gate="C", blocking=blocking)
 
     def test_sample_inconclusive_rejected(self) -> None:
-        blocking = self._blocking(
-            status="sample_inconclusive", reasons=["min_sample_size"]
-        )
+        blocking = self._blocking(status="sample_inconclusive", reasons=["min_sample_size"])
         with pytest.raises(kill_ledger.SampleInsufficientKillError):
             KillRecord.from_blocking(alpha_id="c99", gate="C", blocking=blocking)
 
@@ -365,9 +359,7 @@ class TestKillRecordFromBlocking:
             "profile": "legacy",
             "triage_status": "killed",
         }
-        rec = KillRecord.from_blocking(
-            alpha_id="c99", gate="C", blocking=blocking, stable_artifact_hash="h"
-        )
+        rec = KillRecord.from_blocking(alpha_id="c99", gate="C", blocking=blocking, stable_artifact_hash="h")
         assert rec.reason == "edge_per_round_trip"
 
     def test_non_dict_blocking_rejected(self) -> None:
