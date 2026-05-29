@@ -664,7 +664,7 @@ class TestCmdAlphaPromoteBatch:
         out = capsys.readouterr().out
         # Stage 2: profile loader emits a structlog info line on stdout before
         # the JSON payload; skip preamble to the first '{'.
-        data = json.loads(out[out.find("{"):])
+        data = json.loads(out[out.find("{") :])
         assert data["approved"] == 1
 
     def test_none_approved_exits_2(self, capsys):
@@ -686,7 +686,7 @@ class TestCmdAlphaPromoteBatch:
             cmd_alpha_promote_batch(self._make_args())  # no SystemExit
         out = capsys.readouterr().out
         # Stage 2: skip profile-loader stdout preamble.
-        data = json.loads(out[out.find("{"):])
+        data = json.loads(out[out.find("{") :])
         assert data["total"] == 0
 
     def test_import_failure_exits(self):

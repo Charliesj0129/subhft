@@ -1142,6 +1142,7 @@ def cmd_alpha_cluster(args: argparse.Namespace) -> None:
 # `hft alpha pipeline {run,triage}` and `make research[-triage]` share a single
 # orchestration codepath. Do NOT duplicate orchestration logic here.
 
+
 def cmd_alpha_pipeline_run(args: argparse.Namespace) -> None:
     from research.pipeline import _run_pipeline
 
