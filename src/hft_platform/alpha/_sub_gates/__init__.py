@@ -55,6 +55,9 @@ def ensure_builtin_sub_gates_registered() -> None:
         StationaryBlockBootstrapGate,
     )
     from hft_platform.alpha._sub_gates.taker import ICEvaluationGate
+    from hft_platform.alpha._sub_gates.trade_concentration import (
+        TradeConcentrationGate,
+    )
 
     existing_names = {g.name for g in get_registered_sub_gates()}
     candidates: list[SubGate] = [
@@ -82,6 +85,8 @@ def ensure_builtin_sub_gates_registered() -> None:
         MonthlyDistributionGate(),
         # Per-round-trip net edge floor (goal §5: > 10 pts/trade)
         EdgePerRoundTripGate(),
+        # Trade-level concentration (goal §5: loss-distribution + dominance)
+        TradeConcentrationGate(),
     ]
     for gate in candidates:
         if gate.name not in existing_names:
