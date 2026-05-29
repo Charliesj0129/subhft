@@ -595,6 +595,95 @@ class TestTakerEngineEnrichPopulatesTradePnl:
         assert out.trade_pnl is not None
         assert math.isclose(out.trade_pnl[0], 8.8, abs_tol=1e-9)
 
+    def test_residual_qty_recorded_when_positions_end_long(self) -> None:
+        # Round 42: closing long position must surface to residual_qty.
+        from research.backtest.taker_engine import TakerEngine
+
+        base = self._base_result(
+            positions=np.array([0, 1, 1]),
+            mid_prices=np.array([100.0, 100.0, 105.0]),
+        )
+        out = TakerEngine().enrich_result(
+            base,
+            instrument="TXFD6",
+            data_period="d",
+            pipeline_mode="research",
+        )
+        assert out.residual_qty == 1
+        assert out.abs_residual_qty == 1
+        assert out.mark_method == "force_flat_last_mid"
+
+    def test_residual_qty_signed_negative_for_short(self) -> None:
+        from research.backtest.taker_engine import TakerEngine
+
+        base = self._base_result(
+            positions=np.array([0, -1, -1]),
+            mid_prices=np.array([100.0, 100.0, 95.0]),
+        )
+        out = TakerEngine().enrich_result(
+            base,
+            instrument="TXFD6",
+            data_period="d",
+            pipeline_mode="research",
+        )
+        # Sign preserved — auditor needs direction to size the close.
+        assert out.residual_qty == -1
+        assert out.abs_residual_qty == 1
+        assert out.mark_method == "force_flat_last_mid"
+
+    def test_zero_residual_emits_no_residual_mark_method(self) -> None:
+        from research.backtest.taker_engine import TakerEngine
+
+        base = self._base_result(
+            positions=np.array([0, 1, 0]),
+            mid_prices=np.array([100.0, 100.0, 105.0]),
+        )
+        out = TakerEngine().enrich_result(
+            base,
+            instrument="TXFD6",
+            data_period="d",
+            pipeline_mode="research",
+        )
+        assert out.residual_qty == 0
+        assert out.abs_residual_qty == 0
+        assert out.mark_method == "no_residual"
+
+    def test_residual_qty_when_positions_missing_is_zero(self) -> None:
+        from research.backtest.taker_engine import TakerEngine
+
+        base = self._base_result(
+            positions=None,
+            mid_prices=None,
+        )
+        out = TakerEngine().enrich_result(
+            base,
+            instrument="TXFD6",
+            data_period="d",
+            pipeline_mode="research",
+        )
+        # No positions → no inference possible → safe zero defaults.
+        assert out.residual_qty == 0
+        assert out.abs_residual_qty == 0
+        assert out.mark_method == "no_residual"
+
+    def test_residual_qty_multi_unit_close(self) -> None:
+        # Magnitude matters: a 3-unit long residual sizes the force-flat
+        # close exactly that much.
+        from research.backtest.taker_engine import TakerEngine
+
+        base = self._base_result(
+            positions=np.array([0, 3, 3]),
+            mid_prices=np.array([100.0, 100.0, 110.0]),
+        )
+        out = TakerEngine().enrich_result(
+            base,
+            instrument="TXFD6",
+            data_period="d",
+            pipeline_mode="research",
+        )
+        assert out.residual_qty == 3
+        assert out.abs_residual_qty == 3
+
     def test_provenance_fields_still_set(self) -> None:
         from research.backtest.taker_engine import TakerEngine
 

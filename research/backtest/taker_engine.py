@@ -129,6 +129,21 @@ class TakerEngine:
             trips = [t + delta for t in trips]
         trade_pnl = trips if trips else None
 
+        # Round 42: surface residual / force-flat metadata so reviewers
+        # can tell whether a candidate's edge is propped up by
+        # force-flat trips (goal 驗證標準 §3 + §5).  positions[-1] is
+        # the open position the projector force-flats away; recording
+        # it on the result lets downstream auditors / sub-gates flag
+        # candidates whose realized PnL hinges on the closing mark.
+        residual_qty_signed = 0
+        try:
+            if positions is not None and len(positions) > 0:
+                residual_qty_signed = int(positions[-1])
+        except (TypeError, ValueError):
+            residual_qty_signed = 0
+        abs_residual_qty = abs(residual_qty_signed)
+        mark_method = "force_flat_last_mid" if abs_residual_qty > 0 else "no_residual"
+
         return replace(
             base_result,
             engine_type="taker",
@@ -139,4 +154,7 @@ class TakerEngine:
             pipeline_mode=pipeline_mode,
             created_at=datetime.now(timezone.utc).isoformat(),
             trade_pnl=trade_pnl,
+            residual_qty=residual_qty_signed,
+            abs_residual_qty=abs_residual_qty,
+            mark_method=mark_method,
         )
