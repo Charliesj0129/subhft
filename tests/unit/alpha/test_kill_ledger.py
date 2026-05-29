@@ -284,3 +284,92 @@ def test_ch_failure_falls_back_to_jsonl(monkeypatch: pytest.MonkeyPatch, _isolat
     assert _isolated_jsonl.exists()
     rows = _isolated_jsonl.read_text().splitlines()
     assert len(rows) == 1
+
+
+class TestKillRecordFromBlocking:
+    """Guard: triage_status='sample_*' must not be loggable as a KILL.
+
+    Goal 限制 §3 / 驗證標準 §4 forbid marking sample-insufficient runs
+    complete or dead; the hypothesis is still alive pending more data.
+    """
+
+    def _blocking(self, *, status: str, reasons: list[str], passed: bool = False) -> dict:
+        return {
+            "passed": passed,
+            "failing": [{"name": r, "passed": False, "metrics": {}, "details": ""} for r in reasons],
+            "names": reasons,
+            "profile": "test_strict",
+            "triage_status": status,
+            "triage_reasons": reasons,
+        }
+
+    def test_killed_status_builds_record_with_pipe_separated_reasons(self) -> None:
+        blocking = self._blocking(
+            status="killed",
+            reasons=["min_sample_size", "single_day_dominance"],
+        )
+        rec = KillRecord.from_blocking(
+            alpha_id="c99", gate="C", blocking=blocking, stable_artifact_hash="h"
+        )
+        assert rec.alpha_id == "c99"
+        assert rec.gate == "C"
+        assert rec.reason == "min_sample_size|single_day_dominance"
+
+    def test_sample_promising_rejected(self) -> None:
+        blocking = self._blocking(status="sample_promising", reasons=["min_sample_size"])
+        with pytest.raises(kill_ledger.SampleInsufficientKillError, match="sample_promising"):
+            KillRecord.from_blocking(alpha_id="c99", gate="C", blocking=blocking)
+
+    def test_sample_needs_more_sample_rejected(self) -> None:
+        blocking = self._blocking(
+            status="sample_needs_more_sample", reasons=["min_sample_size"]
+        )
+        with pytest.raises(kill_ledger.SampleInsufficientKillError):
+            KillRecord.from_blocking(alpha_id="c99", gate="C", blocking=blocking)
+
+    def test_sample_inconclusive_rejected(self) -> None:
+        blocking = self._blocking(
+            status="sample_inconclusive", reasons=["min_sample_size"]
+        )
+        with pytest.raises(kill_ledger.SampleInsufficientKillError):
+            KillRecord.from_blocking(alpha_id="c99", gate="C", blocking=blocking)
+
+    def test_passed_blocking_rejected(self) -> None:
+        # Defensive: if the caller hands us a blocking dict that actually
+        # passed, refuse to write a kill — there's nothing to kill.
+        blocking = self._blocking(status="passed", reasons=[], passed=True)
+        with pytest.raises(ValueError, match="passed=True"):
+            KillRecord.from_blocking(alpha_id="c99", gate="C", blocking=blocking)
+
+    def test_empty_reasons_rejected(self) -> None:
+        blocking = {
+            "passed": False,
+            "failing": [],
+            "names": [],
+            "profile": "test_strict",
+            "triage_status": "killed",
+            "triage_reasons": [],
+        }
+        with pytest.raises(ValueError, match="no failing gates"):
+            KillRecord.from_blocking(alpha_id="c99", gate="C", blocking=blocking)
+
+    def test_falls_back_to_failing_names_when_triage_reasons_absent(self) -> None:
+        # Backward-compat: older blocking dicts (pre-Round-6) won't carry
+        # triage_reasons; build the reason string from failing[] instead.
+        blocking = {
+            "passed": False,
+            "failing": [
+                {"name": "edge_per_round_trip", "passed": False, "metrics": {}, "details": ""},
+            ],
+            "names": ["edge_per_round_trip"],
+            "profile": "legacy",
+            "triage_status": "killed",
+        }
+        rec = KillRecord.from_blocking(
+            alpha_id="c99", gate="C", blocking=blocking, stable_artifact_hash="h"
+        )
+        assert rec.reason == "edge_per_round_trip"
+
+    def test_non_dict_blocking_rejected(self) -> None:
+        with pytest.raises(TypeError):
+            KillRecord.from_blocking(alpha_id="c99", gate="C", blocking="not a dict")  # type: ignore[arg-type]
