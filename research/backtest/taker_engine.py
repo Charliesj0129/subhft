@@ -37,12 +37,43 @@ class TakerEngine:
         data_period: str,
         pipeline_mode: str,
         data_source: str = "npy",
+        price_scale: float = 1.0,
     ) -> Any:
         """Add provenance metadata to an existing BacktestResult from hft_native_runner.
+
+        Round 38: also populates ``trade_pnl`` (per-round-trip points)
+        from ``base_result.positions`` + ``base_result.mid_prices`` via
+        :func:`project_trade_pnl_from_position_series`.  This closes the
+        Round-24 gap where ``edge_per_round_trip`` and trade-axis
+        sub-gates silently fell back to ``daily_pnl`` on taker runs.
+
+        ``price_scale`` describes the unit of ``mid_prices`` (1.0 if
+        already in points; 10_000 / 1_000_000 if scaled int).  Defaults
+        to 1.0 because the existing hft_native_runner emits ``mid_prices``
+        in points; callers passing scaled-int arrays must say so.
+
+        If either array is absent (e.g. the runner ran in a mode that
+        skipped position recording) ``trade_pnl`` stays ``None`` — the
+        sub-gate fall-back path then re-engages.
 
         Uses dataclasses.replace() to set new fields while preserving all existing ones.
         """
         from dataclasses import replace
+
+        from research.backtest.trade_pnl_projector import (
+            project_trade_pnl_from_position_series,
+        )
+
+        trade_pnl: list[float] | None
+        positions = getattr(base_result, "positions", None)
+        prices = getattr(base_result, "mid_prices", None)
+        try:
+            trips = project_trade_pnl_from_position_series(
+                positions, prices, price_scale=price_scale
+            )
+        except Exception:  # noqa: BLE001 — defensive; never break enrich.
+            trips = []
+        trade_pnl = trips if trips else None
 
         return replace(
             base_result,
@@ -53,4 +84,5 @@ class TakerEngine:
             data_source=data_source,
             pipeline_mode=pipeline_mode,
             created_at=datetime.now(timezone.utc).isoformat(),
+            trade_pnl=trade_pnl,
         )

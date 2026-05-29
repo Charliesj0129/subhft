@@ -112,3 +112,188 @@ class TestProjectTradePnl:
         # top = 10 / 13 ≈ 77 % > 60 % threshold -> fails
         assert out.passed is False
         assert out.metrics["n_trades"] == 3.0
+
+
+# --- Round 38: position-series projector + taker engine wiring -------
+
+
+import numpy as np
+
+from research.backtest.trade_pnl_projector import (
+    project_trade_pnl_from_position_series,
+)
+
+
+class TestProjectFromPositionSeries:
+    def test_empty_returns_empty(self) -> None:
+        assert project_trade_pnl_from_position_series([], []) == []
+
+    def test_none_inputs_return_empty(self) -> None:
+        assert project_trade_pnl_from_position_series(None, None) == []
+        assert project_trade_pnl_from_position_series(None, [1.0]) == []
+        assert project_trade_pnl_from_position_series([0, 1], None) == []
+
+    def test_length_mismatch_returns_empty(self) -> None:
+        assert project_trade_pnl_from_position_series([0, 1, 1], [100.0, 101.0]) == []
+
+    def test_length_one_returns_empty(self) -> None:
+        # No transition possible from a single sample.
+        assert project_trade_pnl_from_position_series([1], [100.0]) == []
+
+    def test_no_position_change_emits_no_trips(self) -> None:
+        positions = np.array([0, 0, 0, 0])
+        prices = np.array([100.0, 100.5, 101.0, 99.0])
+        assert project_trade_pnl_from_position_series(positions, prices) == []
+
+    def test_single_buy_and_close_emits_one_trip(self) -> None:
+        # 0 -> 1 (buy @ 100) ; 1 -> 0 (sell @ 105) -> +5 pts
+        positions = np.array([0, 1, 1, 0])
+        prices = np.array([99.0, 100.0, 102.0, 105.0])
+        trips = project_trade_pnl_from_position_series(positions, prices)
+        assert len(trips) == 1
+        assert math.isclose(trips[0], 5.0, abs_tol=1e-9)
+
+    def test_short_and_cover_emits_positive_trip(self) -> None:
+        # 0 -> -1 (sell @ 100) ; -1 -> 0 (buy @ 97) -> +3 pts
+        positions = np.array([0, -1, 0])
+        prices = np.array([99.0, 100.0, 97.0])
+        trips = project_trade_pnl_from_position_series(positions, prices)
+        assert math.isclose(trips[0], 3.0, abs_tol=1e-9)
+
+    def test_loss_trip_is_negative(self) -> None:
+        positions = np.array([0, 1, 0])
+        prices = np.array([100.0, 100.0, 95.0])
+        trips = project_trade_pnl_from_position_series(positions, prices)
+        assert trips[0] < 0
+        assert math.isclose(trips[0], -5.0, abs_tol=1e-9)
+
+    def test_multi_unit_delta_splits_into_unit_fills(self) -> None:
+        # Step from 0 -> 2 = two synthetic buys at the same price; then
+        # one sell drops to 1, leaving one unit unmatched in the FIFO.
+        positions = np.array([0, 2, 1])
+        prices = np.array([100.0, 100.0, 103.0])
+        trips = project_trade_pnl_from_position_series(positions, prices)
+        # 2 buys @ 100, 1 sell @ 103 -> exactly ONE matched trip @ +3.
+        assert len(trips) == 1
+        assert math.isclose(trips[0], 3.0, abs_tol=1e-9)
+
+    def test_price_scale_x10000_supported(self) -> None:
+        # Live tick path: prices stored x10000.
+        positions = np.array([0, 1, 0])
+        prices = np.array([100 * 10_000, 100 * 10_000, 105 * 10_000])
+        trips = project_trade_pnl_from_position_series(
+            positions, prices, price_scale=10_000.0
+        )
+        assert math.isclose(trips[0], 5.0, abs_tol=1e-9)
+
+    def test_non_numeric_entries_skipped_not_raised(self) -> None:
+        # Defensive: a corrupted price at one step must not abort the run.
+        positions = [0, 1, 1, 0]
+        prices = [100.0, 100.0, "junk", 105.0]
+        trips = project_trade_pnl_from_position_series(positions, prices)
+        # The buy @ idx=1 (price 100) and sell @ idx=3 (price 105) still
+        # match — idx=2 was a no-op (no position change) so the corrupt
+        # value never participated.
+        assert math.isclose(trips[0], 5.0, abs_tol=1e-9)
+
+
+class TestTakerEngineEnrichPopulatesTradePnl:
+    def _base_result(self, *, positions, mid_prices) -> "object":
+        # Minimal stand-in for BacktestResult — TakerEngine.enrich_result
+        # uses dataclasses.replace which works on the real frozen
+        # dataclass.  We construct one with only the fields we care
+        # about, leaving everything else at default.
+        from research.backtest.types import BacktestResult
+
+        return BacktestResult(
+            signals=np.zeros(0),
+            equity_curve=np.zeros(0),
+            positions=positions,
+            sharpe_is=0.0,
+            sharpe_oos=0.0,
+            ic_series=np.zeros(0),
+            ic_mean=0.0,
+            ic_std=0.0,
+            ic_tstat=0.0,
+            ic_pvalue=0.0,
+            ic_halflife=0,
+            sortino=0.0,
+            cvar_5pct=0.0,
+            turnover=0.0,
+            max_drawdown=0.0,
+            regime_metrics={},
+            capacity_estimate=0.0,
+            run_id="r38_smoke",
+            config_hash="x",
+            latency_profile={},
+            mid_prices=mid_prices,
+        )
+
+    def test_populates_trade_pnl_when_positions_and_prices_present(self) -> None:
+        from research.backtest.taker_engine import TakerEngine
+
+        base = self._base_result(
+            positions=np.array([0, 1, 0, -1, 0]),
+            mid_prices=np.array([100.0, 100.0, 103.0, 102.0, 99.0]),
+        )
+        out = TakerEngine().enrich_result(
+            base,
+            instrument="TXFD6",
+            data_period="2026-01-02..2026-05-13",
+            pipeline_mode="research",
+        )
+        # buy @100 / sell @103 -> +3 ; sell @102 / buy @99 -> +3 ; total +6
+        assert out.trade_pnl is not None
+        assert len(out.trade_pnl) == 2
+        assert math.isclose(sum(out.trade_pnl), 6.0, abs_tol=1e-9)
+
+    def test_leaves_trade_pnl_none_when_mid_prices_missing(self) -> None:
+        from research.backtest.taker_engine import TakerEngine
+
+        base = self._base_result(
+            positions=np.array([0, 1, 0]),
+            mid_prices=None,
+        )
+        out = TakerEngine().enrich_result(
+            base,
+            instrument="TXFD6",
+            data_period="2026-01-02..2026-05-13",
+            pipeline_mode="research",
+        )
+        assert out.trade_pnl is None
+
+    def test_leaves_trade_pnl_none_when_no_position_changes(self) -> None:
+        from research.backtest.taker_engine import TakerEngine
+
+        base = self._base_result(
+            positions=np.zeros(8),
+            mid_prices=np.arange(8.0) + 100.0,
+        )
+        out = TakerEngine().enrich_result(
+            base,
+            instrument="TXFD6",
+            data_period="2026-01-02..2026-05-13",
+            pipeline_mode="research",
+        )
+        # No transitions -> empty list -> stored as None (sub-gate fallback).
+        assert out.trade_pnl is None
+
+    def test_provenance_fields_still_set(self) -> None:
+        from research.backtest.taker_engine import TakerEngine
+
+        base = self._base_result(
+            positions=np.array([0, 1, 0]),
+            mid_prices=np.array([100.0, 100.0, 105.0]),
+        )
+        out = TakerEngine().enrich_result(
+            base,
+            instrument="TXFD6",
+            data_period="2026-01-02..2026-05-13",
+            pipeline_mode="research",
+        )
+        # Round 38 must NOT regress Round 18's provenance population.
+        assert out.engine_type == "taker"
+        assert out.instrument == "TXFD6"
+        assert out.data_period == "2026-01-02..2026-05-13"
+        assert out.pipeline_mode == "research"
+        assert out.created_at  # non-empty ISO string

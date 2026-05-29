@@ -35,6 +35,66 @@ from typing import Any
 _DEFAULT_PRICE_SCALE = 1_000_000
 
 
+def project_trade_pnl_from_position_series(
+    positions: Any,
+    prices: Any,
+    *,
+    price_scale: float = 1.0,
+) -> list[float]:
+    """Round 38: derive per-trip PnL from a (positions, prices) series.
+
+    Mirrors :func:`project_trade_pnl` for engines that don't produce a
+    discrete fill list — most notably the taker path that wraps
+    ``hft_native_runner``.  Goal §5.1 requires per-round-trip PnL on the
+    taker side too, otherwise ``edge_per_round_trip`` / trade-axis
+    sub-gates silently fall back to daily aggregates.
+
+    Algorithm: every step ``i`` whose position differs from ``i-1``
+    is split into ``abs(delta)`` unit-sized synthetic fills priced at
+    ``prices[i]`` and fed through the same FIFO matcher.  This is the
+    minimum reconstruction that respects FIFO without changing the
+    runner.
+
+    ``prices`` may be raw scaled int (live tick path: x10000) or
+    points (offline path: x1).  Pass ``price_scale`` accordingly —
+    ``1.0`` means prices are already in points.
+
+    Defensive: returns ``[]`` for mismatched-length arrays, empty
+    arrays, or arrays of length<2 (no transitions possible).  Never
+    raises on shape — the caller (taker_engine) sweeps many runner
+    outputs and a single weird series must not abort the batch.
+    """
+    if positions is None or prices is None:
+        return []
+    try:
+        n_pos = len(positions)
+        n_px = len(prices)
+    except TypeError:
+        return []
+    if n_pos < 2 or n_pos != n_px:
+        return []
+
+    fills: list[dict[str, Any]] = []
+    scale = float(price_scale) if price_scale else 1.0
+    for i in range(1, n_pos):
+        try:
+            delta = int(positions[i]) - int(positions[i - 1])
+        except (TypeError, ValueError):
+            continue
+        if delta == 0:
+            continue
+        side = "buy" if delta > 0 else "sell"
+        try:
+            price_raw = float(prices[i])
+        except (TypeError, ValueError):
+            continue
+        # Re-scale so project_trade_pnl's divisor lands on points.
+        fills.extend(
+            {"side": side, "price": price_raw} for _ in range(abs(delta))
+        )
+    return project_trade_pnl(fills, price_scale=scale)
+
+
 def project_trade_pnl(
     fills: list[dict[str, Any]],
     *,
