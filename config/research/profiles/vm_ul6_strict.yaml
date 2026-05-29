@@ -38,6 +38,11 @@ thresholds:
     # Slice B cost-uncertainty gate (applies_to = {"maker", "taker"})
     cost_uncertainty_p95_lower_bound_min_pts: 0.0
 
+    # Monthly-distribution credibility gate (applies_to = {"maker", "taker"})
+    top_month_contribution_max_pct: 50.0
+    drawdown_to_avg_monthly_max_ratio: 2.0
+    monthly_distribution_min_months: 2
+
   maker:
     sharpe_is_min: 1.0
     sharpe_oos_min: 1.0
@@ -73,6 +78,11 @@ thresholds:
 
     # Slice B cost-uncertainty gate (applies_to = {"maker", "taker"})
     cost_uncertainty_p95_lower_bound_min_pts: 0.0
+
+    # Monthly-distribution credibility gate (applies_to = {"maker", "taker"})
+    top_month_contribution_max_pct: 50.0
+    drawdown_to_avg_monthly_max_ratio: 2.0
+    monthly_distribution_min_months: 2
 
 # Argparse-arg overrides applied by research.pipeline._run_pipeline when the
 # pipeline is invoked with --validation-profile vm_ul6_strict (or the legacy
@@ -176,3 +186,5 @@ blocking_sub_gates:
   # New (Slice B)
   - inventory_mtm
   - cost_uncertainty
+  # Monthly-distribution credibility gate (goal §6)
+  - monthly_distribution

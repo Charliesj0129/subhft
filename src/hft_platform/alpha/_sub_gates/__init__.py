@@ -38,6 +38,9 @@ def ensure_builtin_sub_gates_registered() -> None:
         FillRateValidationGate,
     )
     from hft_platform.alpha._sub_gates.min_sample_size import MinSampleSizeGate
+    from hft_platform.alpha._sub_gates.monthly_distribution import (
+        MonthlyDistributionGate,
+    )
     from hft_platform.alpha._sub_gates.outlier_trade_removal import (
         OutlierTradeRemovalGate,
     )
@@ -72,6 +75,8 @@ def ensure_builtin_sub_gates_registered() -> None:
         # New (Slice B)
         InventoryMtMGate(),
         CostUncertaintyGate(),
+        # Monthly-distribution credibility gate (goal §6)
+        MonthlyDistributionGate(),
     ]
     for gate in candidates:
         if gate.name not in existing_names:
