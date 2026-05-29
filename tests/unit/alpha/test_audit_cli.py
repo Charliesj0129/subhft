@@ -209,3 +209,104 @@ class TestMain:
         rc = audit_cli.main(["show", "r1", "--strategy-type", "taker"])
         assert rc == 0
         assert "t_only" in capsys.readouterr().out
+
+
+# --- Round 19: spec_provenance diff rendering tests (carried from Round 18) ---
+
+
+def _write_with_prov(
+    *,
+    run_id: str,
+    edge: float = 8.0,
+    status: str = "sample_promising",
+    spec_provenance: dict | None = None,
+) -> None:
+    sub_gate_audit.record_sub_gate_run(
+        run_id=run_id,
+        strategy_name="r47",
+        instrument="TMFD6",
+        strategy_type="maker",
+        profile_name="vm_ul6_strict",
+        advisory=_advisory(edge=edge),
+        blocking=_blocking(status, ["min_sample_size"] if status != "passed" else []),
+        spec_provenance=spec_provenance,
+    )
+
+
+class TestCompareSpecProvenance:
+    def test_compare_omits_spec_block_when_neither_side_has_it(
+        self, _isolated: Path
+    ) -> None:
+        _write(run_id="r1", edge=8.0)
+        _write(run_id="r2", edge=12.5)
+        out = audit_cli.compare("r1", "r2")
+        assert "spec_provenance" not in out
+
+    def test_compare_shows_drift_when_data_range_differs(
+        self, _isolated: Path
+    ) -> None:
+        _write_with_prov(
+            run_id="r1",
+            spec_provenance={
+                "data_range": "2026-01..2026-03",
+                "cost_model_id": "p95+0.4bp/2.0bp/0.5pts",
+                "required_gates": ["min_sample_size"],
+            },
+        )
+        _write_with_prov(
+            run_id="r2",
+            edge=12.5,
+            status="killed",
+            spec_provenance={
+                "data_range": "2026-04..2026-05",
+                "cost_model_id": "p95+0.4bp/2.0bp/0.5pts",
+                "required_gates": ["min_sample_size"],
+            },
+        )
+        out = audit_cli.compare("r1", "r2")
+        assert "spec_provenance:" in out
+        assert "~ data_range:" in out
+        assert "'2026-01..2026-03' -> '2026-04..2026-05'" in out
+        # Unchanged keys still rendered (no `~`), so operator can confirm
+        # what stayed constant — fewer false leads when chasing drift.
+        assert "cost_model_id:" in out
+        assert "required_gates:" in out
+
+    def test_compare_flags_cost_model_drift(self, _isolated: Path) -> None:
+        _write_with_prov(
+            run_id="r1",
+            spec_provenance={
+                "data_range": "2026-01..2026-05",
+                "cost_model_id": "p95+0.4bp/2.0bp/0.5pts",
+                "required_gates": ["min_sample_size"],
+            },
+        )
+        _write_with_prov(
+            run_id="r2",
+            spec_provenance={
+                "data_range": "2026-01..2026-05",
+                "cost_model_id": "p95+0.5bp/2.0bp/0.5pts",  # fee changed
+                "required_gates": ["min_sample_size"],
+            },
+        )
+        out = audit_cli.compare("r1", "r2")
+        assert "~ cost_model_id:" in out
+
+    def test_compare_handles_one_sided_provenance(self, _isolated: Path) -> None:
+        # r1 has no provenance (pre-Round-17 row); r2 has it.  The diff
+        # should still render so the operator sees the schema upgrade,
+        # not silently skip the block.
+        _write(run_id="r1", edge=8.0)
+        _write_with_prov(
+            run_id="r2",
+            edge=12.5,
+            status="killed",
+            spec_provenance={
+                "data_range": "2026-01..2026-05",
+                "cost_model_id": "p95+0.4bp/2.0bp/0.5pts",
+                "required_gates": ["min_sample_size"],
+            },
+        )
+        out = audit_cli.compare("r1", "r2")
+        assert "spec_provenance:" in out
+        assert "~ data_range:" in out
