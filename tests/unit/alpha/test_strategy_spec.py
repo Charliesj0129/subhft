@@ -155,27 +155,21 @@ class TestInstrumentShape:
 
 
 class TestSubBlocks:
-    @pytest.mark.parametrize(
-        "field", ["max_position", "max_drawdown_pts", "force_flat_rule"]
-    )
+    @pytest.mark.parametrize("field", ["max_position", "max_drawdown_pts", "force_flat_rule"])
     def test_risk_control_required_fields(self, field: str) -> None:
         spec = _valid_spec()
         spec["risk_control"].pop(field)
         errors = validate_spec(spec)
         assert any(f"risk_control.{field}" in e for e in errors)
 
-    @pytest.mark.parametrize(
-        "field", ["fee_bps", "tax_bps", "slippage_pts", "latency_profile"]
-    )
+    @pytest.mark.parametrize("field", ["fee_bps", "tax_bps", "slippage_pts", "latency_profile"])
     def test_cost_model_required_fields(self, field: str) -> None:
         spec = _valid_spec()
         spec["cost_model"].pop(field)
         errors = validate_spec(spec)
         assert any(f"cost_model.{field}" in e for e in errors)
 
-    @pytest.mark.parametrize(
-        "field", ["min_round_trips", "min_oos_trading_days"]
-    )
+    @pytest.mark.parametrize("field", ["min_round_trips", "min_oos_trading_days"])
     def test_sample_targets_required(self, field: str) -> None:
         spec = _valid_spec()
         spec["validation_plan"]["sample_targets"].pop(field)

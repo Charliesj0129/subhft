@@ -81,9 +81,7 @@ def show(run_id: str, strategy_type: str | None = None) -> str:
     return "\n".join(lines)
 
 
-def _metric_diff(
-    metrics_a: dict, metrics_b: dict
-) -> list[tuple[str, object, object]]:
+def _metric_diff(metrics_a: dict, metrics_b: dict) -> list[tuple[str, object, object]]:
     """Return [(key, a_value, b_value), ...] for keys whose values differ.
 
     Missing on either side is treated as a difference (recorded as None).
@@ -118,19 +116,10 @@ def compare(
     lines: list[str] = []
     lines.append(f"A run_id : {run_id_a}  ({a.get('strategy_name', '')})")
     lines.append(f"B run_id : {run_id_b}  ({b.get('strategy_name', '')})")
-    lines.append(
-        f"profile       : {a.get('profile_name', '')!r} -> {b.get('profile_name', '')!r}"
-    )
-    lines.append(
-        f"blocking_pass : {a.get('blocking_passed')} -> {b.get('blocking_passed')}"
-    )
-    lines.append(
-        f"triage_status : {a.get('triage_status', '')!r} -> {b.get('triage_status', '')!r}"
-    )
-    lines.append(
-        "triage_reasons: "
-        f"{a.get('triage_reasons') or []} -> {b.get('triage_reasons') or []}"
-    )
+    lines.append(f"profile       : {a.get('profile_name', '')!r} -> {b.get('profile_name', '')!r}")
+    lines.append(f"blocking_pass : {a.get('blocking_passed')} -> {b.get('blocking_passed')}")
+    lines.append(f"triage_status : {a.get('triage_status', '')!r} -> {b.get('triage_status', '')!r}")
+    lines.append(f"triage_reasons: {a.get('triage_reasons') or []} -> {b.get('triage_reasons') or []}")
 
     # Round 18: spec-provenance drift surfacing.  When either side
     # carries spec_provenance, show the diff so the operator can
@@ -162,9 +151,7 @@ def compare(
             lines.append(f"  - {name} (only in A): passed={ga.get('passed')}")
             continue
         if ga.get("passed") != gb.get("passed"):
-            lines.append(
-                f"  ~ {name}: passed {ga.get('passed')} -> {gb.get('passed')}"
-            )
+            lines.append(f"  ~ {name}: passed {ga.get('passed')} -> {gb.get('passed')}")
         drift = _metric_diff(ga.get("metrics") or {}, gb.get("metrics") or {})
         if drift:
             if not (ga.get("passed") != gb.get("passed")):
@@ -194,9 +181,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "show":
         out = show(args.run_id, strategy_type=args.strategy_type)
     elif args.cmd == "compare":
-        out = compare(
-            args.run_id_a, args.run_id_b, strategy_type=args.strategy_type
-        )
+        out = compare(args.run_id_a, args.run_id_b, strategy_type=args.strategy_type)
     else:  # pragma: no cover — argparse already enforces this
         parser.print_usage()
         return 2

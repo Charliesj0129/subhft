@@ -71,17 +71,13 @@ class TestTradeConcentrationGate:
         # Wins and losses cancel out; biggest_win > 0 so top share clamps
         # to 100% (the strategy is entirely held together by that trade).
         trades = [10.0, -10.0]
-        out = _gate().evaluate(
-            _FakeResult(trade_pnl=trades), config=None, thresholds={}
-        )
+        out = _gate().evaluate(_FakeResult(trade_pnl=trades), config=None, thresholds={})
         assert out.metrics["top_trade_share_pct"] == 100.0
         assert out.passed is False
 
     def test_default_thresholds_used_when_absent(self) -> None:
         trades = [50.0, 30.0, 20.0]  # top = 50/100 = 50%, > default 40%
-        out = _gate().evaluate(
-            _FakeResult(trade_pnl=trades), config=None, thresholds={}
-        )
+        out = _gate().evaluate(_FakeResult(trade_pnl=trades), config=None, thresholds={})
         assert out.passed is False  # default 40% top trips
 
     def test_falls_back_to_daily_pnl_when_trade_pnl_absent(self) -> None:
@@ -98,9 +94,7 @@ class TestTradeConcentrationGate:
 
     def test_details_string_includes_both_metrics(self) -> None:
         trades = [10.0, 15.0, -5.0]
-        out = _gate().evaluate(
-            _FakeResult(trade_pnl=trades), config=None, thresholds={}
-        )
+        out = _gate().evaluate(_FakeResult(trade_pnl=trades), config=None, thresholds={})
         assert "top" in out.details
         assert "worst-loss" in out.details
 

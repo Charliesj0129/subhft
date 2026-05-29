@@ -94,9 +94,7 @@ class TestShow:
         assert "m_strat" in out_maker
         assert "t_strat" in out_taker
 
-    def test_strategy_type_filter_misses_returns_not_found(
-        self, _isolated: Path
-    ) -> None:
+    def test_strategy_type_filter_misses_returns_not_found(self, _isolated: Path) -> None:
         _write(run_id="r1", strategy_type="maker")
         out = audit_cli.show("r1", strategy_type="taker")
         assert out.startswith("no audit row")
@@ -170,41 +168,31 @@ class TestCompare:
 
 
 class TestMain:
-    def test_show_command_prints_and_exit_zero(
-        self, _isolated: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_show_command_prints_and_exit_zero(self, _isolated: Path, capsys: pytest.CaptureFixture[str]) -> None:
         _write(run_id="r1")
         rc = audit_cli.main(["show", "r1"])
         assert rc == 0
         out = capsys.readouterr().out
         assert "run_id          : r1" in out
 
-    def test_show_unknown_exits_one(
-        self, _isolated: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_show_unknown_exits_one(self, _isolated: Path, capsys: pytest.CaptureFixture[str]) -> None:
         rc = audit_cli.main(["show", "missing"])
         assert rc == 1
         assert "no audit row" in capsys.readouterr().out
 
-    def test_compare_command_works(
-        self, _isolated: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_compare_command_works(self, _isolated: Path, capsys: pytest.CaptureFixture[str]) -> None:
         _write(run_id="r1", edge=8.0)
         _write(run_id="r2", edge=12.5)
         rc = audit_cli.main(["compare", "r1", "r2"])
         assert rc == 0
         assert "triage_status" in capsys.readouterr().out
 
-    def test_compare_missing_exits_one(
-        self, _isolated: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_compare_missing_exits_one(self, _isolated: Path, capsys: pytest.CaptureFixture[str]) -> None:
         _write(run_id="r1")
         rc = audit_cli.main(["compare", "r1", "r_missing"])
         assert rc == 1
 
-    def test_strategy_type_arg_propagates(
-        self, _isolated: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_strategy_type_arg_propagates(self, _isolated: Path, capsys: pytest.CaptureFixture[str]) -> None:
         _write(run_id="r1", strategy_type="taker", strategy_name="t_only")
         rc = audit_cli.main(["show", "r1", "--strategy-type", "taker"])
         assert rc == 0
@@ -234,17 +222,13 @@ def _write_with_prov(
 
 
 class TestCompareSpecProvenance:
-    def test_compare_omits_spec_block_when_neither_side_has_it(
-        self, _isolated: Path
-    ) -> None:
+    def test_compare_omits_spec_block_when_neither_side_has_it(self, _isolated: Path) -> None:
         _write(run_id="r1", edge=8.0)
         _write(run_id="r2", edge=12.5)
         out = audit_cli.compare("r1", "r2")
         assert "spec_provenance" not in out
 
-    def test_compare_shows_drift_when_data_range_differs(
-        self, _isolated: Path
-    ) -> None:
+    def test_compare_shows_drift_when_data_range_differs(self, _isolated: Path) -> None:
         _write_with_prov(
             run_id="r1",
             spec_provenance={

@@ -84,9 +84,7 @@ def _isolated_audit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 class TestSpecToAuditEndToEnd:
-    def test_exemplar_provenance_flows_into_audit_row(
-        self, _isolated_audit: Path
-    ) -> None:
+    def test_exemplar_provenance_flows_into_audit_row(self, _isolated_audit: Path) -> None:
         prov = load_spec_provenance("_templates", root="research/alphas")
         assert prov is not None, "Round 13 exemplar must load"
         prof = _strict_profile()
@@ -110,9 +108,7 @@ class TestSpecToAuditEndToEnd:
         # threading does NOT change the validation verdict.
         assert rows[0]["triage_status"].startswith("sample_")
 
-    def test_audit_row_omits_block_when_no_provenance_injected(
-        self, _isolated_audit: Path
-    ) -> None:
+    def test_audit_row_omits_block_when_no_provenance_injected(self, _isolated_audit: Path) -> None:
         prof = _strict_profile()
         _invoke_sub_gates(
             strategy_type="maker",
@@ -168,7 +164,4 @@ class TestSpecToAuditEndToEnd:
         assert rows_b[0]["spec_provenance"]["data_range"] == "2026-04..2026-05"
         # cost_model_id stayed constant — that's what compare relies on
         # to attribute outcome diffs to data_range, not cost drift.
-        assert (
-            rows_a[0]["spec_provenance"]["cost_model_id"]
-            == rows_b[0]["spec_provenance"]["cost_model_id"]
-        )
+        assert rows_a[0]["spec_provenance"]["cost_model_id"] == rows_b[0]["spec_provenance"]["cost_model_id"]

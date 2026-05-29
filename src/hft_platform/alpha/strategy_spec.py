@@ -41,13 +41,9 @@ REQUIRED_TOP_LEVEL_FIELDS: tuple[str, ...] = (
     "validation_plan",
 )
 
-ALLOWED_TIMEFRAMES: frozenset[str] = frozenset(
-    {"tick", "1s", "5s", "1m", "5m", "15m", "60m", "1d"}
-)
+ALLOWED_TIMEFRAMES: frozenset[str] = frozenset({"tick", "1s", "5s", "1m", "5m", "15m", "60m", "1d"})
 
-ALLOWED_FREQUENCY_CLASSES: frozenset[str] = frozenset(
-    {"minute", "intraday_hft", "overnight"}
-)
+ALLOWED_FREQUENCY_CLASSES: frozenset[str] = frozenset({"minute", "intraday_hft", "overnight"})
 
 ALLOWED_MARKETS: frozenset[str] = frozenset({"TAIFEX"})
 
@@ -105,26 +101,19 @@ def _check_top_level_presence(spec: dict, errors: list[str]) -> None:
 def _check_market(spec: dict, errors: list[str]) -> None:
     market = spec.get("market")
     if isinstance(market, str) and market not in ALLOWED_MARKETS:
-        errors.append(
-            f"market={market!r} not in allowed set {sorted(ALLOWED_MARKETS)}"
-        )
+        errors.append(f"market={market!r} not in allowed set {sorted(ALLOWED_MARKETS)}")
 
 
 def _check_timeframe(spec: dict, errors: list[str]) -> None:
     tf = spec.get("timeframe")
     if isinstance(tf, str) and tf not in ALLOWED_TIMEFRAMES:
-        errors.append(
-            f"timeframe={tf!r} not in allowed set {sorted(ALLOWED_TIMEFRAMES)}"
-        )
+        errors.append(f"timeframe={tf!r} not in allowed set {sorted(ALLOWED_TIMEFRAMES)}")
 
 
 def _check_frequency_class(spec: dict, errors: list[str]) -> None:
     fc = spec.get("frequency_class")
     if isinstance(fc, str) and fc not in ALLOWED_FREQUENCY_CLASSES:
-        errors.append(
-            "frequency_class="
-            f"{fc!r} not in allowed set {sorted(ALLOWED_FREQUENCY_CLASSES)}"
-        )
+        errors.append(f"frequency_class={fc!r} not in allowed set {sorted(ALLOWED_FREQUENCY_CLASSES)}")
 
 
 def _check_instrument(spec: dict, errors: list[str]) -> None:
@@ -133,24 +122,16 @@ def _check_instrument(spec: dict, errors: list[str]) -> None:
         return
     if isinstance(inst, list):
         if len(inst) < 2:
-            errors.append(
-                "instrument list of length<2 — use a single string for "
-                "single-leg candidates"
-            )
+            errors.append("instrument list of length<2 — use a single string for single-leg candidates")
         for i, leg in enumerate(inst):
             if not isinstance(leg, str) or not leg.strip():
                 errors.append(f"instrument[{i}] is not a non-empty string")
         return
     if inst is not None:
-        errors.append(
-            "instrument must be a string (single-leg) or list of strings "
-            "(multi-leg)"
-        )
+        errors.append("instrument must be a string (single-leg) or list of strings (multi-leg)")
 
 
-def _check_subblock(
-    spec: dict, key: str, required: tuple[str, ...], errors: list[str]
-) -> None:
+def _check_subblock(spec: dict, key: str, required: tuple[str, ...], errors: list[str]) -> None:
     block = spec.get(key)
     if not isinstance(block, dict):
         return
@@ -168,9 +149,7 @@ def _check_validation_block(spec: dict, errors: list[str]) -> None:
     if isinstance(targets, dict):
         for field in _SAMPLE_TARGETS_REQUIRED:
             if field not in targets or _is_empty(targets.get(field)):
-                errors.append(
-                    f"validation_plan.sample_targets.{field}: missing or empty"
-                )
+                errors.append(f"validation_plan.sample_targets.{field}: missing or empty")
     gates = block.get("required_gates")
     if isinstance(gates, list):
         if len(gates) == 0:
@@ -181,8 +160,7 @@ def _check_validation_block(spec: dict, errors: list[str]) -> None:
     floor = block.get("net_edge_floor_pts")
     if isinstance(floor, (int, float)) and floor < 10.0:
         errors.append(
-            "validation_plan.net_edge_floor_pts < 10.0 — goal 限制 §3 "
-            "forbids relaxing the > 10 pts/trade bar"
+            "validation_plan.net_edge_floor_pts < 10.0 — goal 限制 §3 forbids relaxing the > 10 pts/trade bar"
         )
 
 

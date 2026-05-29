@@ -75,9 +75,7 @@ class TradeConcentrationGate:
             worst_share = 100.0 if biggest_loss < 0 else 0.0
         else:
             top_share = 100.0 * biggest_win / abs_total if biggest_win > 0 else 0.0
-            worst_share = (
-                100.0 * abs(biggest_loss) / abs_total if biggest_loss < 0 else 0.0
-            )
+            worst_share = 100.0 * abs(biggest_loss) / abs_total if biggest_loss < 0 else 0.0
 
         top_passed = top_share <= top_max
         worst_passed = worst_share <= worst_max
@@ -97,7 +95,6 @@ class TradeConcentrationGate:
                 "worst_loss_share_max_pct": worst_max,
             },
             details=(
-                f"top {top_share:.1f}% (max {top_max:.1f}%), "
-                f"worst-loss {worst_share:.1f}% (max {worst_max:.1f}%)"
+                f"top {top_share:.1f}% (max {top_max:.1f}%), worst-loss {worst_share:.1f}% (max {worst_max:.1f}%)"
             ),
         )

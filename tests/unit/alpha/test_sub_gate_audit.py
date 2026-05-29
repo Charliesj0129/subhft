@@ -158,9 +158,7 @@ class TestRecordSubGateRun:
         assert record_sub_gate_run(**kwargs) is False
         assert len(_isolated_jsonl.read_text().splitlines()) == 1
 
-    def test_same_run_id_different_strategy_type_kept_separate(
-        self, _isolated_jsonl: Path
-    ) -> None:
+    def test_same_run_id_different_strategy_type_kept_separate(self, _isolated_jsonl: Path) -> None:
         base = dict(
             run_id="r1",
             strategy_name="r47",
@@ -199,9 +197,7 @@ class TestRecordSubGateRun:
         assert only_r1[0]["strategy_name"] == "r47"
         assert only_r1[0]["triage_status"] == "killed"
 
-    def test_recovers_dedupe_cache_across_processes_via_warm(
-        self, _isolated_jsonl: Path
-    ) -> None:
+    def test_recovers_dedupe_cache_across_processes_via_warm(self, _isolated_jsonl: Path) -> None:
         # Simulate a fresh process by clearing the cache after the first write;
         # the second write should still dedupe by reading the file.
         record_sub_gate_run(
@@ -237,6 +233,7 @@ class TestSpecProvenance:
 
     def test_schema_version_is_v2(self) -> None:
         from hft_platform.alpha.sub_gate_audit import SCHEMA_VERSION as ver
+
         assert ver == "sub_gate_run.v2"
 
     def test_row_omits_spec_provenance_when_not_provided(self) -> None:
@@ -304,9 +301,7 @@ class TestSpecProvenance:
         )
         assert row["spec_provenance"]["required_gates"] == []
 
-    def test_record_sub_gate_run_persists_provenance(
-        self, _isolated_jsonl: Path
-    ) -> None:
+    def test_record_sub_gate_run_persists_provenance(self, _isolated_jsonl: Path) -> None:
         sub_gate_audit.record_sub_gate_run(
             run_id="r1",
             strategy_name="r47",

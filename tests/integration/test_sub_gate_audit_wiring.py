@@ -67,9 +67,7 @@ def _isolated_audit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 class TestSubGateAuditWiring:
-    def test_no_record_emitted_when_flag_off(
-        self, _isolated_audit: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_no_record_emitted_when_flag_off(self, _isolated_audit: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("HFT_SUB_GATE_AUDIT_ENABLED", raising=False)
         prof = _strict_profile()
         _invoke_sub_gates(
@@ -151,9 +149,7 @@ class TestSubGateAuditWiring:
         assert blocking["triage_status"] == "killed"
         assert len(advisory) > 0
 
-    def test_missing_run_id_skips_emit_silently(
-        self, _isolated_audit: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_missing_run_id_skips_emit_silently(self, _isolated_audit: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         # Payloads without run_id (legacy fixtures) must not crash the
         # gate; we just skip the row.
         monkeypatch.setenv("HFT_SUB_GATE_AUDIT_ENABLED", "1")

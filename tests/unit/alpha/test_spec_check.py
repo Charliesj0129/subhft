@@ -105,18 +105,14 @@ class TestDiscoverSpecs:
 
 
 class TestMain:
-    def test_single_valid_path_exit_zero(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_single_valid_path_exit_zero(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         p = tmp_path / "spec.yaml"
         _write(p, _valid_spec_dict())
         rc = spec_check.main([str(p)])
         assert rc == 0
         assert "[ok]" in capsys.readouterr().out
 
-    def test_single_invalid_path_exit_one(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_single_invalid_path_exit_one(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         spec = _valid_spec_dict()
         spec.pop("entry_rule")
         p = tmp_path / "spec.yaml"
@@ -127,9 +123,7 @@ class TestMain:
         assert "[FAIL]" in out
         assert "entry_rule" in out
 
-    def test_all_flag_scans_root(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_all_flag_scans_root(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         _write(tmp_path / "c01" / "spec.yaml", _valid_spec_dict())
         bad = _valid_spec_dict()
         bad.pop("hypothesis")
@@ -145,17 +139,13 @@ class TestMain:
         assert "[FAIL]" in out
         assert "hypothesis" in out
 
-    def test_all_flag_all_valid_exit_zero(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_all_flag_all_valid_exit_zero(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         _write(tmp_path / "c01" / "spec.yaml", _valid_spec_dict())
         _write(tmp_path / "c02" / "spec.yaml", _valid_spec_dict())
         rc = spec_check.main(["--all", "--root", str(tmp_path)])
         assert rc == 0
 
-    def test_all_flag_empty_root_exits_one(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_all_flag_empty_root_exits_one(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         # Silent zero would mask a wiring break (e.g. wrong --root).
         rc = spec_check.main(["--all", "--root", str(tmp_path)])
         assert rc == 1
