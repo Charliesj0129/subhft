@@ -19,7 +19,9 @@ returned string and exits 0 on success, 1 on missing-row / bad args.
 from __future__ import annotations
 
 import argparse
+import shutil
 import sys
+from pathlib import Path
 from typing import Iterable
 
 from hft_platform.alpha import sub_gate_audit
@@ -241,6 +243,71 @@ def list_runs(
     out.extend(_fmt(c) for c in body)
     out.append(f"({len(body)} row{'s' if len(body) != 1 else ''})")
     return "\n".join(out)
+
+
+_DEFAULT_TEMPLATE = Path("research/alphas/_templates/spec.yaml")
+_DEFAULT_ALPHAS_ROOT = Path("research/alphas")
+_TEMPLATE_NAME = "exemplar_txfd6_demo"
+
+
+def init_candidate(
+    alpha_id: str,
+    *,
+    template: str | Path = _DEFAULT_TEMPLATE,
+    root: str | Path = _DEFAULT_ALPHAS_ROOT,
+    strategy_name: str | None = None,
+    force: bool = False,
+) -> str:
+    """Scaffold a new candidate directory from the spec template.
+
+    Goal §3 + §9: "固定模板新增策略" should be a single command, not a
+    manual file-copy ritual.  This:
+      1. Validates ``alpha_id`` is a safe directory name.
+      2. Refuses to overwrite an existing directory unless ``force``.
+      3. Copies the template spec to ``<root>/<alpha_id>/spec.yaml``.
+      4. Substitutes ``strategy_name`` (default: ``alpha_id``).
+      5. Runs ``spec_check.check_one`` and reports the verdict.
+
+    Returns a multi-line status string suitable for stdout.
+    """
+    from hft_platform.alpha import spec_check
+
+    if not alpha_id or "/" in alpha_id or alpha_id.startswith("."):
+        return f"refused: alpha_id {alpha_id!r} must be a plain directory name"
+    template_path = Path(template)
+    if not template_path.is_file():
+        return f"refused: template not found at {template_path}"
+    target_dir = Path(root) / alpha_id
+    target_spec = target_dir / "spec.yaml"
+    if target_spec.exists() and not force:
+        return (
+            f"refused: {target_spec} already exists; pass --force to overwrite, "
+            "or pick a different alpha_id"
+        )
+
+    target_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(template_path, target_spec)
+    raw = target_spec.read_text(encoding="utf-8")
+    new_name = strategy_name or alpha_id
+    # Single literal substitution: the template's strategy_name slot.
+    if _TEMPLATE_NAME in raw:
+        raw = raw.replace(_TEMPLATE_NAME, new_name)
+        target_spec.write_text(raw, encoding="utf-8")
+
+    passed, errors = spec_check.check_one(target_spec)
+    lines: list[str] = []
+    lines.append(f"created : {target_spec}")
+    lines.append(f"strategy_name set to : {new_name}")
+    if passed:
+        lines.append("spec_check: PASS")
+    else:
+        lines.append(f"spec_check: FAIL ({len(errors)} error{'s' if len(errors) != 1 else ''})")
+        lines.extend(f"  - {e}" for e in errors)
+        lines.append(
+            "(this is expected — fill in hypothesis / entry_rule / exit_rule / "
+            "validation_plan before promotion)"
+        )
+    return "\n".join(lines)
 
 
 def gates(
@@ -623,6 +690,16 @@ def main(argv: list[str] | None = None) -> int:
     cmp_p.add_argument("run_id_b")
     cmp_p.add_argument("--strategy-type", choices=("maker", "taker"), default=None)
 
+    init_p = sub.add_parser(
+        "init",
+        help="Scaffold a new candidate directory + spec.yaml from the template.",
+    )
+    init_p.add_argument("alpha_id", help="Directory name under research/alphas/.")
+    init_p.add_argument("--strategy-name", default=None, help="Defaults to alpha_id.")
+    init_p.add_argument("--root", default=str(_DEFAULT_ALPHAS_ROOT))
+    init_p.add_argument("--template", default=str(_DEFAULT_TEMPLATE))
+    init_p.add_argument("--force", action="store_true")
+
     gat_p = sub.add_parser(
         "gates",
         help="Per-sub-gate failure-frequency view across audit rows.",
@@ -689,6 +766,14 @@ def main(argv: list[str] | None = None) -> int:
         )
     elif args.cmd == "summary":
         out = summary(strategy_type=args.strategy_type, profile=args.profile)
+    elif args.cmd == "init":
+        out = init_candidate(
+            args.alpha_id,
+            template=args.template,
+            root=args.root,
+            strategy_name=args.strategy_name,
+            force=args.force,
+        )
     elif args.cmd == "gates":
         out = gates(
             strategy_type=args.strategy_type,
