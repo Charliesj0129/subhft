@@ -294,3 +294,50 @@ class TestExtractProvenance:
         b_spec["cost_model"]["fee_bps"] = 0.5  # was 0.4
         b = extract_provenance(b_spec)
         assert a["cost_model_id"] != b["cost_model_id"]
+
+
+# --- Round 20: load_spec_provenance one-call helper -----------------
+
+from hft_platform.alpha.strategy_spec import load_spec_provenance
+
+
+class TestLoadSpecProvenance:
+    def test_returns_none_for_missing_alpha_id(self, tmp_path: Path) -> None:
+        # Empty root; unknown id should resolve to None, not raise.
+        assert load_spec_provenance("c99_missing", root=tmp_path) is None
+
+    def test_resolves_alpha_id_under_root(self, tmp_path: Path) -> None:
+        spec_dir = tmp_path / "c01"
+        spec_dir.mkdir()
+        (spec_dir / "spec.yaml").write_text(
+            yaml.safe_dump(_valid_spec()),
+            encoding="utf-8",
+        )
+        prov = load_spec_provenance("c01", root=tmp_path)
+        assert prov is not None
+        assert prov["data_range"] == "2026-01-02..2026-05-13"
+
+    def test_resolves_explicit_file_path(self, tmp_path: Path) -> None:
+        path = tmp_path / "spec.yaml"
+        path.write_text(yaml.safe_dump(_valid_spec()), encoding="utf-8")
+        prov = load_spec_provenance(path)
+        assert prov is not None
+        assert "shioaji_measured_p95" in prov["cost_model_id"]
+
+    def test_repo_exemplar_resolves(self) -> None:
+        # The Round-13 exemplar must produce a non-None provenance row.
+        prov = load_spec_provenance("_templates", root="research/alphas")
+        assert prov is not None
+        assert prov["data_range"]
+        assert prov["cost_model_id"]
+        assert prov["required_gates"]
+
+    def test_corrupt_yaml_returns_none(self, tmp_path: Path) -> None:
+        path = tmp_path / "spec.yaml"
+        path.write_text("not: a: valid: yaml: : :", encoding="utf-8")
+        assert load_spec_provenance(path) is None
+
+    def test_non_mapping_spec_returns_none(self, tmp_path: Path) -> None:
+        path = tmp_path / "spec.yaml"
+        path.write_text("- one\n- two\n", encoding="utf-8")
+        assert load_spec_provenance(path) is None

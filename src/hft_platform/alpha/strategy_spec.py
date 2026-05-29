@@ -213,6 +213,42 @@ def is_multi_leg(spec: dict[str, Any]) -> bool:
     return isinstance(inst, list) and len(inst) >= 2
 
 
+def load_spec_provenance(
+    alpha_id_or_path: str | Path,
+    root: str | Path = "research/alphas",
+) -> dict[str, Any] | None:
+    """One-call helper: locate a candidate spec.yaml and project it onto
+    the audit-row provenance triple.
+
+    Resolution order:
+      1. If ``alpha_id_or_path`` is a path to an existing file, load it.
+      2. Else treat it as an alpha_id and look for ``<root>/<id>/spec.yaml``.
+      3. Else return ``None`` so the caller can omit ``spec_provenance``
+         from the result_payload (writers treat ``None`` as opt-out).
+
+    Load failures (parse error, non-mapping) return ``None`` rather than
+    raising — pipeline callers running across many candidates can keep
+    going.  The strict validation gate is ``hft_platform.alpha.spec_check``;
+    this helper is the metadata read-side and stays permissive.
+    """
+    p = Path(alpha_id_or_path)
+    spec_path: Path
+    if p.is_file():
+        spec_path = p
+    else:
+        candidate = Path(root) / str(alpha_id_or_path) / "spec.yaml"
+        if not candidate.is_file():
+            return None
+        spec_path = candidate
+    try:
+        spec = load_spec(spec_path)
+    except (ValueError, OSError):
+        return None
+    except Exception:  # noqa: BLE001 — defensive: yaml.YAMLError etc.
+        return None
+    return extract_provenance(spec)
+
+
 def extract_provenance(spec: dict[str, Any]) -> dict[str, Any]:
     """Project a candidate spec onto the audit-row provenance triple.
 
