@@ -255,6 +255,10 @@ research/__pycache__/
 research/alphas/_kill_ledger.jsonl
 research/alphas/_cluster_assignments.json
 
+# Round 8 sub-gate audit jsonl: per-run traceability mirror of Gate-C
+# blocking decisions. Off-repo for the same reason as the kill ledger.
+research/audit/sub_gate_runs.jsonl
+
 # Slice-D Task 16: archive sweep summary sidecar is the canonical record of
 # alphas archived 2026-04-17 that lacked a manifest.yaml. Tracked because
 # `research/*` (line 92) otherwise blocks new files under research/archive/.
