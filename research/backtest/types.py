@@ -98,6 +98,15 @@ class BacktestResult:
     mark_method: str = ""
     # --- Daily detail ---
     daily_pnl: list[dict] | None = None
+    # --- Round-trip / FIFO matched trade PnL (added 2026-05-29) ---
+    # Per-trade net PnL in points after FIFO matching.  Required by the
+    # trade-axis sub-gates (trade_concentration, outlier_trade_removal,
+    # edge_per_round_trip) — without this they fall back to daily_pnl,
+    # which silently degrades trade-level dominance checks.
+    # Engines that can derive trades (e.g. MakerEngine via
+    # ``research/backtest/trade_pnl_projector.py``) should populate it;
+    # taker engines without explicit fills may leave it ``None``.
+    trade_pnl: list[float] | None = None
 
 
 @dataclass(frozen=True)
