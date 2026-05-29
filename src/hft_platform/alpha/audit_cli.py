@@ -310,6 +310,140 @@ def init_candidate(
     return "\n".join(lines)
 
 
+_PLACEHOLDER_MARKERS: tuple[str, ...] = ("TODO", "FILLME", "PLACEHOLDER", "exemplar_txfd6_demo")
+
+
+def _field_state(value: object) -> str:
+    """Classify a top-level spec field value.
+
+    Returns one of: ``"missing"``, ``"placeholder"``, ``"set"``.
+
+    ``missing``     — key absent or value is None / empty string / empty list/dict.
+    ``placeholder`` — value contains a known TODO / placeholder marker
+                      (recursively for strings inside lists / dicts).
+    ``set``         — anything else (treated as actually filled-in).
+    """
+    if value is None:
+        return "missing"
+    if isinstance(value, str):
+        if not value.strip():
+            return "missing"
+        upper = value.upper()
+        if any(m.upper() in upper for m in _PLACEHOLDER_MARKERS):
+            return "placeholder"
+        return "set"
+    if isinstance(value, (list, tuple)):
+        if not value:
+            return "missing"
+        # If any element is a placeholder string, surface that.
+        states = [_field_state(v) for v in value]
+        if "placeholder" in states:
+            return "placeholder"
+        return "set"
+    if isinstance(value, dict):
+        if not value:
+            return "missing"
+        states = [_field_state(v) for v in value.values()]
+        if "placeholder" in states:
+            return "placeholder"
+        return "set"
+    return "set"
+
+
+def verify_spec(
+    alpha_id: str | None = None,
+    *,
+    root: str | Path = _DEFAULT_ALPHAS_ROOT,
+    all_specs: bool = False,
+) -> str:
+    """Show per-field fill-state for one or every candidate spec.
+
+    Goal §3 + §9: backfill stubs need a way to track which required
+    fields are still placeholders.  ``audit verify-spec <id>`` prints
+    a per-field breakdown; ``--all`` produces a summary table
+    (alpha_id | total | set | placeholder | missing | spec_check).
+    """
+    from hft_platform.alpha import spec_check
+    from hft_platform.alpha.strategy_spec import (
+        REQUIRED_TOP_LEVEL_FIELDS,
+        load_spec,
+    )
+
+    root_path = Path(root)
+    if not root_path.is_dir():
+        return f"refused: alphas root not found at {root_path}"
+
+    if all_specs:
+        rows: list[tuple[str, int, int, int, int, str]] = []
+        for d in sorted(root_path.iterdir()):
+            if not d.is_dir() or d.name.startswith("_"):
+                continue
+            spec_path = d / "spec.yaml"
+            if not spec_path.is_file():
+                rows.append((d.name, len(REQUIRED_TOP_LEVEL_FIELDS), 0, 0, len(REQUIRED_TOP_LEVEL_FIELDS), "NO_SPEC"))
+                continue
+            try:
+                spec = load_spec(spec_path)
+            except Exception:  # noqa: BLE001
+                rows.append((d.name, len(REQUIRED_TOP_LEVEL_FIELDS), 0, 0, 0, "PARSE_ERR"))
+                continue
+            counts = {"set": 0, "placeholder": 0, "missing": 0}
+            for fld in REQUIRED_TOP_LEVEL_FIELDS:
+                counts[_field_state(spec.get(fld))] += 1
+            passed, _errors = spec_check.check_one(spec_path)
+            rows.append(
+                (
+                    d.name,
+                    len(REQUIRED_TOP_LEVEL_FIELDS),
+                    counts["set"],
+                    counts["placeholder"],
+                    counts["missing"],
+                    "PASS" if passed else "FAIL",
+                )
+            )
+        if not rows:
+            return f"no candidate directories under {root_path}"
+        headers = ("alpha_id", "total", "set", "placeholder", "missing", "spec_check")
+        body = [tuple(str(c) for c in r) for r in rows]
+        widths = [max(len(h), max(len(b[i]) for b in body)) for i, h in enumerate(headers)]
+
+        def _fmt(cells: tuple[str, ...]) -> str:
+            return "  ".join(c.ljust(widths[i]) for i, c in enumerate(cells))
+
+        out: list[str] = [_fmt(headers), _fmt(tuple("-" * w for w in widths))]
+        out.extend(_fmt(c) for c in body)
+        out.append(f"({len(body)} candidates scanned)")
+        return "\n".join(out)
+
+    # Single-spec mode.
+    if not alpha_id:
+        return "refused: pass an alpha_id, or use --all"
+    spec_path = root_path / alpha_id / "spec.yaml"
+    if not spec_path.is_file():
+        return f"no spec.yaml at {spec_path}"
+    try:
+        spec = load_spec(spec_path)
+    except Exception as exc:  # noqa: BLE001
+        return f"parse error: {exc!r}"
+
+    lines = [f"alpha_id : {alpha_id}", f"path     : {spec_path}", "fields:"]
+    counts = {"set": 0, "placeholder": 0, "missing": 0}
+    for fld in REQUIRED_TOP_LEVEL_FIELDS:
+        state = _field_state(spec.get(fld))
+        counts[state] += 1
+        marker = {"set": "OK ", "placeholder": "TODO", "missing": "MISS"}[state]
+        lines.append(f"  [{marker}] {fld}")
+    lines.append(
+        f"summary  : set={counts['set']} placeholder={counts['placeholder']} "
+        f"missing={counts['missing']} / total={len(REQUIRED_TOP_LEVEL_FIELDS)}"
+    )
+    passed, errors = spec_check.check_one(spec_path)
+    lines.append(f"spec_check: {'PASS' if passed else 'FAIL'}")
+    if errors:
+        lines.extend(f"  - {e}" for e in errors[:10])
+    return "\n".join(lines)
+
+
 def backfill_specs(
     *,
     template: str | Path = _DEFAULT_TEMPLATE,
@@ -759,6 +893,14 @@ def main(argv: list[str] | None = None) -> int:
     cmp_p.add_argument("run_id_b")
     cmp_p.add_argument("--strategy-type", choices=("maker", "taker"), default=None)
 
+    vs_p = sub.add_parser(
+        "verify-spec",
+        help="Per-field fill-state for one or all candidate specs.",
+    )
+    vs_p.add_argument("alpha_id", nargs="?", default=None)
+    vs_p.add_argument("--root", default=str(_DEFAULT_ALPHAS_ROOT))
+    vs_p.add_argument("--all", dest="all_specs", action="store_true")
+
     bf_p = sub.add_parser(
         "backfill-specs",
         help="Scaffold spec.yaml stubs for existing candidate dirs missing one.",
@@ -847,6 +989,12 @@ def main(argv: list[str] | None = None) -> int:
         )
     elif args.cmd == "summary":
         out = summary(strategy_type=args.strategy_type, profile=args.profile)
+    elif args.cmd == "verify-spec":
+        out = verify_spec(
+            args.alpha_id,
+            root=args.root,
+            all_specs=args.all_specs,
+        )
     elif args.cmd == "backfill-specs":
         out = backfill_specs(
             template=args.template,
