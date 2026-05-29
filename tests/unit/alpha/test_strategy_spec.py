@@ -242,3 +242,55 @@ class TestDefensive:
         before = copy.deepcopy(spec)
         validate_spec(spec)
         assert spec == before
+
+
+# --- Round 18: extract_provenance helper (goal §4) ------------------
+
+from hft_platform.alpha.strategy_spec import extract_provenance
+
+
+class TestExtractProvenance:
+    def test_full_spec_round_trips_to_provenance_triple(self) -> None:
+        prov = extract_provenance(_valid_spec())
+        assert prov["data_range"] == "2026-01-02..2026-05-13"
+        assert "shioaji_measured_p95" in prov["cost_model_id"]
+        assert "0.4bp" in prov["cost_model_id"]
+        assert "2.0bp" in prov["cost_model_id"]
+        assert "0.5pts" in prov["cost_model_id"]
+        assert prov["required_gates"] == [
+            "min_sample_size",
+            "edge_per_round_trip",
+            "monthly_distribution",
+        ]
+
+    def test_missing_cost_model_yields_empty_id(self) -> None:
+        spec = _valid_spec()
+        spec.pop("cost_model")
+        prov = extract_provenance(spec)
+        assert prov["cost_model_id"] == ""
+
+    def test_non_list_required_gates_filtered_to_empty(self) -> None:
+        spec = _valid_spec()
+        spec["validation_plan"]["required_gates"] = "not_a_list"
+        prov = extract_provenance(spec)
+        assert prov["required_gates"] == []
+
+    def test_non_string_required_gates_dropped(self) -> None:
+        spec = _valid_spec()
+        spec["validation_plan"]["required_gates"] = ["min_sample_size", None, 7]
+        prov = extract_provenance(spec)
+        # Strings kept, ints coerced, None dropped (non str/int/float).
+        assert "min_sample_size" in prov["required_gates"]
+        assert "7" in prov["required_gates"]
+        assert None not in prov["required_gates"]
+
+    def test_non_dict_spec_returns_empty_shape(self) -> None:
+        prov = extract_provenance("not a dict")  # type: ignore[arg-type]
+        assert prov == {"data_range": "", "cost_model_id": "", "required_gates": []}
+
+    def test_cost_model_id_changes_when_any_knob_drifts(self) -> None:
+        a = extract_provenance(_valid_spec())
+        b_spec = _valid_spec()
+        b_spec["cost_model"]["fee_bps"] = 0.5  # was 0.4
+        b = extract_provenance(b_spec)
+        assert a["cost_model_id"] != b["cost_model_id"]

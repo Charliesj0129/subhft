@@ -211,3 +211,42 @@ def is_multi_leg(spec: dict[str, Any]) -> bool:
     """True iff this spec declares a multi-leg instrument."""
     inst = spec.get("instrument")
     return isinstance(inst, list) and len(inst) >= 2
+
+
+def extract_provenance(spec: dict[str, Any]) -> dict[str, Any]:
+    """Project a candidate spec onto the audit-row provenance triple.
+
+    Returns the dict shape that ``sub_gate_audit.build_record`` expects
+    in ``spec_provenance`` (Round 17): ``data_range``,
+    ``cost_model_id``, ``required_gates``.
+
+    ``cost_model_id`` is synthesised from cost_model so the audit log
+    records a single human-comparable id rather than a free-form dict.
+    The format ``"<latency_profile>+<fee_bps>bp/<tax_bps>bp/<slip>pts"``
+    keeps the four cost knobs visible at a glance — any drift on any
+    knob produces a different id so ``audit_cli.compare`` can flag it.
+
+    Defensive on every branch: missing keys collapse to "" / [] rather
+    than raise, because this helper runs on partially-filled spec
+    drafts during scaffolding.
+    """
+    if not isinstance(spec, dict):
+        return {"data_range": "", "cost_model_id": "", "required_gates": []}
+    vp = spec.get("validation_plan") if isinstance(spec.get("validation_plan"), dict) else {}
+    cost = spec.get("cost_model") if isinstance(spec.get("cost_model"), dict) else {}
+    data_range = str(vp.get("data_range") or "")
+    raw_gates = vp.get("required_gates") if isinstance(vp.get("required_gates"), list) else []
+    required_gates = [str(g) for g in raw_gates if isinstance(g, (str, int, float))]
+    if cost:
+        latency = str(cost.get("latency_profile") or "unspecified")
+        fee = cost.get("fee_bps")
+        tax = cost.get("tax_bps")
+        slip = cost.get("slippage_pts")
+        cost_model_id = f"{latency}+{fee}bp/{tax}bp/{slip}pts"
+    else:
+        cost_model_id = ""
+    return {
+        "data_range": data_range,
+        "cost_model_id": cost_model_id,
+        "required_gates": required_gates,
+    }

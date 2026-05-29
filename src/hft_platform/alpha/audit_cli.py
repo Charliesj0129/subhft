@@ -132,6 +132,22 @@ def compare(
         f"{a.get('triage_reasons') or []} -> {b.get('triage_reasons') or []}"
     )
 
+    # Round 18: spec-provenance drift surfacing.  When either side
+    # carries spec_provenance, show the diff so the operator can
+    # attribute outcome differences to data_range / cost_model_id /
+    # required_gates changes rather than treat them as noise.
+    prov_a = a.get("spec_provenance") or {}
+    prov_b = b.get("spec_provenance") or {}
+    if prov_a or prov_b:
+        lines.append("spec_provenance:")
+        for key in ("data_range", "cost_model_id", "required_gates"):
+            va = prov_a.get(key, "" if key != "required_gates" else [])
+            vb = prov_b.get(key, "" if key != "required_gates" else [])
+            if va != vb:
+                lines.append(f"  ~ {key}: {va!r} -> {vb!r}")
+            else:
+                lines.append(f"    {key}: {va!r}")
+
     gates_a = {g["name"]: g for g in a.get("sub_gates", [])}
     gates_b = {g["name"]: g for g in b.get("sub_gates", [])}
     all_names = sorted(set(gates_a) | set(gates_b))
