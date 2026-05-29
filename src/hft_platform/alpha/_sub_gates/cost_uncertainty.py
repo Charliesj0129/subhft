@@ -55,6 +55,11 @@ class CostUncertaintyGate:
         thresholds: dict,
     ) -> SubGateResult:
         floor = thresholds.get("cost_uncertainty_p95_lower_bound_min_pts")
+        is_strict = bool(thresholds.get("_is_strict_profile", False))
+        # Minimum sample size under strict profile: variance from <5 days
+        # is too unstable to gate promotion on.  Loose profile keeps n>=2
+        # to preserve the back-compat advisory branch.
+        min_n_strict = int(thresholds.get("cost_uncertainty_min_days_strict", 5))
 
         daily = getattr(result, "daily_pnl", None) or []
         # Accept both Slice B dict rows ({pnl_pts, fills, ...}) and legacy
@@ -70,7 +75,8 @@ class CostUncertaintyGate:
 
         n_days = len(pnl_series)
 
-        if n_days < 2:
+        # Strict profile: insufficient sample → FAIL.  Loose: keep advisory PASS.
+        if (is_strict and n_days < min_n_strict) or n_days < 2:
             metrics_short: dict[str, Any] = {
                 "n_days": n_days,
                 "p95_lower_bound_pts": None,
@@ -78,6 +84,15 @@ class CostUncertaintyGate:
                 "std_daily_pnl_pts": None,
                 "threshold_pts": float(floor) if floor is not None else None,
             }
+            if is_strict and n_days < min_n_strict:
+                return SubGateResult(
+                    name=self.name,
+                    passed=False,
+                    metrics=metrics_short,
+                    details=(
+                        f"STRICT FAIL: n_days={n_days} < min_n_strict={min_n_strict} (insufficient sample for CI)"
+                    ),
+                )
             return SubGateResult(
                 name=self.name,
                 passed=True,
@@ -98,12 +113,14 @@ class CostUncertaintyGate:
                 "std_daily_pnl_pts": round(sigma, 4),
                 "threshold_pts": None,
             }
+            prefix = "STRICT FAIL" if is_strict else "advisory"
             return SubGateResult(
                 name=self.name,
-                passed=True,
+                passed=not is_strict,
                 metrics=metrics_advisory,
                 details=(
-                    f"advisory: cost_uncertainty_p95_lower_bound_min_pts threshold absent (lower_bound={p95_lower:.4f})"
+                    f"{prefix}: cost_uncertainty_p95_lower_bound_min_pts threshold "
+                    f"absent (lower_bound={p95_lower:.4f})"
                 ),
             )
 

@@ -140,3 +140,62 @@ class TestCostUncertaintyGate:
         gate = CostUncertaintyGate()
         assert "maker" in gate.applies_to
         assert "taker" in gate.applies_to
+
+
+class TestCostUncertaintyGateStrictMode:
+    """Punch-list (2026-05-29): strict profile fails on low N / missing threshold."""
+
+    def _days(self, n: int, pnl: float = 1.0) -> list[dict]:
+        return [{"pnl_pts": pnl, "fills": 1} for _ in range(n)]
+
+    def test_strict_fails_when_n_days_below_min(self) -> None:
+        # Strict floor is 5 days; supplying 3 must FAIL.
+        result = _FakeResult(daily_pnl=self._days(3))
+        out = CostUncertaintyGate().evaluate(
+            result,
+            config=None,
+            thresholds={
+                "cost_uncertainty_p95_lower_bound_min_pts": 0.0,
+                "_is_strict_profile": True,
+            },
+        )
+        assert out.passed is False
+        assert "STRICT FAIL" in out.details
+        assert "n_days=3" in out.details
+
+    def test_loose_advisory_passes_when_n_days_short(self) -> None:
+        # Same input, loose profile (no _is_strict_profile) → advisory PASS
+        # for n>=2 but legitimate evaluation; n<2 is still advisory.
+        result = _FakeResult(daily_pnl=self._days(1))
+        out = CostUncertaintyGate().evaluate(
+            result,
+            config=None,
+            thresholds={"cost_uncertainty_p95_lower_bound_min_pts": 0.0},
+        )
+        assert out.passed is True
+        assert "advisory" in out.details
+
+    def test_strict_fails_when_threshold_absent(self) -> None:
+        result = _FakeResult(daily_pnl=self._days(10, pnl=5.0))
+        out = CostUncertaintyGate().evaluate(
+            result,
+            config=None,
+            thresholds={"_is_strict_profile": True},  # no min_pts threshold
+        )
+        assert out.passed is False
+        assert "STRICT FAIL" in out.details
+        assert "threshold absent" in out.details
+
+    def test_strict_passes_on_legitimate_high_n_positive_lower_bound(self) -> None:
+        # 10 days, all +5, std=0 → lower bound = 5 > 0 → pass
+        result = _FakeResult(daily_pnl=self._days(10, pnl=5.0))
+        out = CostUncertaintyGate().evaluate(
+            result,
+            config=None,
+            thresholds={
+                "cost_uncertainty_p95_lower_bound_min_pts": 0.0,
+                "_is_strict_profile": True,
+            },
+        )
+        assert out.passed is True
+        assert out.metrics["n_days"] == 10

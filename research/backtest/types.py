@@ -3,6 +3,7 @@
 Extracted from hbt_runner.py in v1.1 so that HftNativeRunner and Gate C
 can import types without pulling in the retired ResearchBacktestRunner.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -81,15 +82,19 @@ class BacktestResult:
     #   * ``residual_mtm_pts`` -> SUM across traded days of each day's
     #     ``residual_mtm_pts`` (mirrors ``total_gross`` accumulation in the
     #     day loop; the equity curve already reflects this sum).
-    #   * ``residual_qty``     -> final-day snapshot (per-day FIFO is
-    #     independent so day-to-day residual qty is not additive).
+    #   * ``residual_qty``     -> final-day snapshot, SIGNED (positive=long,
+    #     negative=short).  Per-day FIFO is independent so day-to-day residual
+    #     qty is not additive.  Sign preserved for accounting.
+    #   * ``abs_residual_qty`` -> ``abs(residual_qty)`` derived field for
+    #     display / aggregation contexts where sign would mask scale.
     #   * ``mark_method``      -> single-policy string (identical every day
     #     under current single-policy design).
-    # All three default to safe zero-values so taker engines and synthetic
+    # All four default to safe zero-values so taker engines and synthetic
     # fixtures that construct ``BacktestResult`` without these fields stay
     # backward-compatible.
     residual_mtm_pts: float = 0.0
     residual_qty: int = 0
+    abs_residual_qty: int = 0
     mark_method: str = ""
     # --- Daily detail ---
     daily_pnl: list[dict] | None = None
@@ -168,5 +173,3 @@ class CPCVResult:
 def _hash_config(config: BacktestConfig) -> str:
     payload = json.dumps(asdict(config), sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
-
-

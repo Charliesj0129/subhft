@@ -4,6 +4,7 @@ Extracted and generalized from research/tools/r47_ck_direct_backtest_v2.py.
 Strategy logic is injected via MakerStrategy protocol — engine handles
 market simulation, fill determination, and PnL accounting.
 """
+
 from __future__ import annotations
 
 import os
@@ -291,9 +292,7 @@ class MakerEngine:
             if not events:
                 continue
 
-            day_fills, day_position, day_last_mid, day_last_avg = self._run_day(
-                strategy, events
-            )
+            day_fills, day_position, day_last_mid, day_last_avg = self._run_day(strategy, events)
             day_gross, day_trips, day_wins = self._compute_fifo_pnl(day_fills)
 
             # Slice B Task 3: residual MtM folded into day-level accounting.
@@ -303,7 +302,11 @@ class MakerEngine:
                 avg_entry_price=day_last_avg,
                 mark_method=self._mark_method,
             )
-            day_residual_qty = abs(day_position)
+            # Punch-list (2026-05-29): preserve signed residual_qty
+            # (positive=long, negative=short) for accounting; expose
+            # ``abs_residual_qty`` as the derived display/aggregate field.
+            day_residual_qty_signed = int(day_position)
+            day_abs_residual_qty = abs(day_residual_qty_signed)
             day_gross_mtm_aware = day_gross + day_residual_mtm
             day_net = self._cost_model.apply(day_gross_mtm_aware, len(day_fills))
 
@@ -312,7 +315,7 @@ class MakerEngine:
             # Sum the rounded daily values so the result-level field matches
             # ``round(sum(d["residual_mtm_pts"] for d in daily_pnl), 2)``.
             total_residual_mtm += round(day_residual_mtm, 2)
-            final_residual_qty = day_residual_qty
+            final_residual_qty = day_residual_qty_signed
             total_fills += len(day_fills)
             equity_points.append(equity_points[-1] + day_net)
 
@@ -326,7 +329,8 @@ class MakerEngine:
                     "wins": day_wins,
                     "final_pos": day_position,
                     "residual_mtm_pts": round(day_residual_mtm, 2),
-                    "residual_qty": day_residual_qty,
+                    "residual_qty": day_residual_qty_signed,
+                    "abs_residual_qty": day_abs_residual_qty,
                     "mark_method": self._mark_method,
                 }
             )
@@ -345,9 +349,7 @@ class MakerEngine:
 
         sharpe = 0.0
         if len(daily_returns) > 1 and np.std(daily_returns) > 0:
-            sharpe = float(
-                np.mean(daily_returns) / np.std(daily_returns) * np.sqrt(252)
-            )
+            sharpe = float(np.mean(daily_returns) / np.std(daily_returns) * np.sqrt(252))
 
         max_dd = 0.0
         peak = equity[0]
@@ -394,18 +396,16 @@ class MakerEngine:
                 "total_fills": total_fills,
                 "pnl_per_fill": round(pnl_per_fill, 4),
                 "winning_days": winning_days,
-                "winning_day_pct": (
-                    round(winning_days / n_days * 100, 1) if n_days > 0 else 0
-                ),
+                "winning_day_pct": (round(winning_days / n_days * 100, 1) if n_days > 0 else 0),
                 "n_days": n_days,
             },
-            per_spread_breakdown={
-                str(k): v for k, v in sorted(spread_breakdown.items())
-            },
-            # Slice B Task 4: residual decomposition fields. See aggregation
-            # policy comments in research/backtest/types.py.
+            per_spread_breakdown={str(k): v for k, v in sorted(spread_breakdown.items())},
+            # Slice B Task 4 + 2026-05-29 punch list: residual decomposition.
+            # ``residual_qty`` carries the signed final-day position; the
+            # unsigned magnitude is exposed via ``abs_residual_qty``.
             residual_mtm_pts=round(total_residual_mtm, 2),
             residual_qty=final_residual_qty,
+            abs_residual_qty=abs(final_residual_qty),
             mark_method=self._mark_method,
             daily_pnl=daily_pnl,
         )
@@ -510,9 +510,7 @@ class MakerEngine:
                         else:
                             pending.append((event.exch_ts + cancel_ns, op, None))
             else:
-                mid = (
-                    (cur_bid + cur_ask) / (2 * event.scale) if cur_bid > 0 else 0
-                )
+                mid = (cur_bid + cur_ask) / (2 * event.scale) if cur_bid > 0 else 0
 
                 if buy_order is not None:
                     result = self._fill_model.check_fills(
@@ -526,11 +524,7 @@ class MakerEngine:
                                 "side": "buy",
                                 "price": buy_order.price,
                                 "mid": mid,
-                                "spread_pts": (
-                                    (cur_ask - cur_bid) // event.scale
-                                    if cur_bid > 0
-                                    else 0
-                                ),
+                                "spread_pts": ((cur_ask - cur_bid) // event.scale if cur_bid > 0 else 0),
                             }
                         )
                         strategy.on_fill("buy", buy_order.price, mid)
@@ -549,11 +543,7 @@ class MakerEngine:
                                 "side": "sell",
                                 "price": sell_order.price,
                                 "mid": mid,
-                                "spread_pts": (
-                                    (cur_ask - cur_bid) // event.scale
-                                    if cur_bid > 0
-                                    else 0
-                                ),
+                                "spread_pts": ((cur_ask - cur_bid) // event.scale if cur_bid > 0 else 0),
                             }
                         )
                         strategy.on_fill("sell", sell_order.price, mid)

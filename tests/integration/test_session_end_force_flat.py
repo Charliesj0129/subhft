@@ -174,3 +174,61 @@ async def test_non_maker_strategies_ignored_by_session_end_dispatch():
 
     await asyncio.sleep(0)
     assert risk_queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_force_flat_via_session_governor_transition_track():
+    """Punch-list (2026-05-29): wiring regression.
+
+    The reviewer's complaint was that prior tests called
+    ``dispatch_session_end_force_flat`` directly, bypassing the
+    SessionGovernor → phase-callback wiring path actually used in
+    production. This test exercises the canonical path:
+
+        SessionGovernor.transition_track(TRACK, FORCE_FLAT)
+            → registered phase callback
+            → StrategyRunner.dispatch_session_end_force_flat(TRACK)
+            → risk_queue receives FORCE_FLAT intent
+
+    If anyone breaks the bootstrap callback registration (or
+    ``register_phase_callback`` plumbing), this test fails closed.
+    """
+    from hft_platform.ops.session_governor import SessionGovernor
+
+    runner, risk_queue, track_gate = _build_runner_with_track(SessionPhase.CLOSE_ONLY)
+
+    inner = MagicMock()
+    bridge = MakerStrategyBridge(inner=inner, strategy_id="maker_test", symbol=SYMBOL)
+    runner.register(bridge)
+    _attach_position_store(runner, net_qty=2)
+
+    # Construct a governor with no position_flattener (avoid broker-side path)
+    # and inject the same TrackGate the runner uses so phase reads agree.
+    governor = SessionGovernor(evidence_writer=None, position_flattener=None)
+    governor._track_gate = track_gate  # type: ignore[attr-defined]
+    governor._tracks[TRACK] = SimpleNamespace(symbols={SYMBOL})  # type: ignore[attr-defined]
+
+    # The exact wiring bootstrap.py installs (mirrored verbatim).
+    dispatched_tasks: list[asyncio.Task] = []
+
+    def _force_flat_phase_callback(track_name, _old, new_phase):
+        if new_phase != SessionPhase.FORCE_FLAT:
+            return
+        loop = asyncio.get_running_loop()
+        dispatched_tasks.append(loop.create_task(runner.dispatch_session_end_force_flat(track_name)))
+
+    governor.register_phase_callback(_force_flat_phase_callback)
+
+    # Drive the canonical transition — NOT the direct dispatch.
+    governor.transition_track(TRACK, SessionPhase.FORCE_FLAT)
+
+    # Let the scheduled dispatch task run to completion.
+    assert dispatched_tasks, "phase callback never scheduled a dispatch task"
+    await asyncio.gather(*dispatched_tasks)
+
+    # FORCE_FLAT intent must have landed on risk_queue via the wired path.
+    intent = await asyncio.wait_for(risk_queue.get(), timeout=1.0)
+    assert intent.intent_type == IntentType.FORCE_FLAT
+    assert intent.symbol == SYMBOL
+    assert intent.strategy_id == "maker_test"
+    assert intent.qty == 2  # absolute size of the residual

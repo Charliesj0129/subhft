@@ -106,3 +106,51 @@ class TestInventoryMtMGate:
     def test_name_is_inventory_mtm(self) -> None:
         gate = InventoryMtMGate()
         assert gate.name == "inventory_mtm"
+
+
+class TestInventoryMtMGateStrictMode:
+    """Punch-list (2026-05-29): strict profile must fail-closed on missing evidence."""
+
+    def test_strict_fails_on_legacy_float_shape(self) -> None:
+        # Float rows (pre-Slice-B payload) lack ``fills``/``residual_mtm_pts``.
+        result = _FakeResult(daily_pnl=[1.2, -0.4, 2.0])  # type: ignore[arg-type]
+        out = InventoryMtMGate().evaluate(
+            result,
+            config=None,
+            thresholds={"cost_floor_per_fill_pts": 0.5, "_is_strict_profile": True},
+        )
+        assert out.passed is False
+        assert "STRICT FAIL" in out.details
+        assert "legacy float-shape" in out.details
+
+    def test_loose_advisory_passes_on_legacy_float_shape(self) -> None:
+        # Same input under loose profile → advisory PASS (back-compat).
+        result = _FakeResult(daily_pnl=[1.2, -0.4, 2.0])  # type: ignore[arg-type]
+        out = InventoryMtMGate().evaluate(
+            result,
+            config=None,
+            thresholds={"cost_floor_per_fill_pts": 0.5},  # no _is_strict_profile
+        )
+        assert out.passed is True
+        assert "advisory" in out.details
+
+    def test_strict_fails_when_cost_floor_threshold_absent(self) -> None:
+        result = _FakeResult(daily_pnl=[{"pnl_pts": 5.0, "fills": 3, "residual_mtm_pts": 0.0}])
+        out = InventoryMtMGate().evaluate(
+            result,
+            config=None,
+            thresholds={"_is_strict_profile": True},  # no cost_floor_per_fill_pts
+        )
+        assert out.passed is False
+        assert "cost_floor_per_fill_pts" in out.details
+        assert "STRICT FAIL" in out.details
+
+    def test_strict_passes_when_legitimate_pass(self) -> None:
+        result = _FakeResult(daily_pnl=[{"pnl_pts": 100.0, "fills": 10, "residual_mtm_pts": 5.0}])
+        out = InventoryMtMGate().evaluate(
+            result,
+            config=None,
+            thresholds={"cost_floor_per_fill_pts": 0.5, "_is_strict_profile": True},
+        )
+        # net = 105, threshold = 5 → pass
+        assert out.passed is True

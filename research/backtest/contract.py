@@ -65,7 +65,13 @@ class BacktestContractSpec:
     fill_model_name: str = "QueueDepletionFill"
     queue_model_name: str = DEFAULT_QUEUE_MODEL
     exchange_model_name: str = DEFAULT_EXCHANGE_MODEL
-    # Latency contract — id resolves via hft_platform.alpha.latency_profiles.
+    # hftbacktest-native engine model identifier (e.g. "IntpOrderLatency",
+    # "ConstantLatency").  Distinct from ``latency_profile_id`` which names a
+    # *profile* of P50/P95 numbers; ``latency_model_name`` is the *model class*
+    # the engine instantiates to apply those numbers.
+    latency_model_name: str = DEFAULT_LATENCY_MODEL
+    # Latency profile id — resolves via hft_platform.alpha.latency_profiles to
+    # the YAML row carrying submit/cancel ack ms.  NOT a model name.
     latency_profile_id: str = DEFAULT_LATENCY_PROFILE_ID
     # When non-zero, override the latency-profile-derived value (the engines
     # that take raw µs constructors use these directly).
@@ -167,10 +173,19 @@ class BacktestContractSpec:
         }
 
     def hft_native_runner_kwargs(self) -> dict[str, Any]:
-        """Kwargs forwarded into :class:`research.backtest.types.BacktestConfig`."""
+        """Kwargs forwarded into :class:`research.backtest.types.BacktestConfig`.
+
+        ``latency_model`` is the hftbacktest model identifier (an engine class
+        name); ``latency_profile_id`` is metadata identifying which YAML profile
+        of P50/P95 numbers the run is calibrated against.  Earlier revisions
+        mistakenly emitted the profile id where the model name belonged, which
+        either crashed the adapter or silently fell back to ``ConstantLatency``
+        — confirmed by the post-merge punch list (2026-05-29).
+        """
         return {
             "queue_model": self.queue_model_name,
-            "latency_model": self.latency_profile_id,
+            "latency_model": self.latency_model_name,
+            "latency_profile_id": self.latency_profile_id,
             "exchange_model": self.exchange_model_name,
         }
 

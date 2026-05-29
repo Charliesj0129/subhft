@@ -112,6 +112,13 @@ def _invoke_sub_gates(
 
     blocking_names: set[str] = set(getattr(profile, "blocking_sub_gates", ()) or ())
 
+    # Punch-list (2026-05-29): expose strict-profile state to sub-gates via the
+    # thresholds dict so they can fail-closed on missing evidence / legacy
+    # scorecard shape / insufficient sample.  Loose-profile semantics
+    # (advisory PASS) are preserved when the flag is False.
+    is_strict = bool(getattr(profile, "is_strict", False))
+    eval_thresholds: dict = {**thresholds, "_is_strict_profile": is_strict}
+
     advisory: list[dict] = []
     blocking_failing: list[dict] = []
     blocking_seen: list[str] = []
@@ -124,11 +131,11 @@ def _invoke_sub_gates(
                 sub = gate.evaluate(
                     result,
                     config=None,
-                    thresholds=thresholds,
+                    thresholds=eval_thresholds,
                     profile=calibration_profile,
                 )
             else:
-                sub = gate.evaluate(result, config=None, thresholds=thresholds)
+                sub = gate.evaluate(result, config=None, thresholds=eval_thresholds)
             entry = {
                 "name": sub.name,
                 "passed": sub.passed,

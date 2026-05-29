@@ -125,6 +125,33 @@ def test_hft_native_runner_kwargs_match_backtest_config_fields() -> None:
         assert k in field_names, f"BacktestConfig has no field '{k}'"
 
 
+def test_hft_native_runner_kwargs_split_model_vs_profile_id() -> None:
+    """Regression for the 2026-05-29 punch-list bug.
+
+    Before the fix, ``hft_native_runner_kwargs`` mistakenly emitted the
+    *profile id* (e.g. ``sim_p95_v2026-02-26``) as ``latency_model``,
+    where the hftbacktest adapter expects an engine *model class name*
+    (e.g. ``IntpOrderLatency``).  The two must be threaded as separate
+    keys so the adapter can instantiate the model and tag the run with
+    the profile id independently.
+    """
+    spec = BacktestContractSpec(
+        instrument="TMFD6",
+        cost_profile_ref="TMFD6",
+        latency_model_name="IntpOrderLatency",
+        latency_profile_id="sim_stress_v2026-02-26",
+    )
+    kwargs = spec.hft_native_runner_kwargs()
+    # latency_model is the engine model class identifier.
+    assert kwargs["latency_model"] == "IntpOrderLatency"
+    # latency_profile_id is the YAML row identifier — must NOT collide.
+    assert kwargs["latency_profile_id"] == "sim_stress_v2026-02-26"
+    assert kwargs["latency_model"] != kwargs["latency_profile_id"]
+    # Defensive: profile id must not start with the model-class prefix
+    # families ("Intp", "Constant", "Forward"), proving they're disjoint.
+    assert not kwargs["latency_profile_id"].startswith(("Intp", "Constant", "Forward"))
+
+
 def test_hft_backtest_adapter_kwargs_accepted_by_constructor() -> None:
     """hft_backtest_adapter_kwargs must produce keys HftBacktestAdapter.__init__ accepts."""
     from hft_platform.backtest.adapter import HftBacktestAdapter

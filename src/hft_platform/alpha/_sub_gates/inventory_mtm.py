@@ -43,12 +43,15 @@ class InventoryMtMGate:
         thresholds: dict,
     ) -> SubGateResult:
         cost_floor = thresholds.get("cost_floor_per_fill_pts")
+        is_strict = bool(thresholds.get("_is_strict_profile", False))
         daily = getattr(result, "daily_pnl", None) or []
 
         # Slice B requires dict rows with ``fills`` and ``residual_mtm_pts``.
-        # Legacy float-only rows lack the bookkeeping needed for this gate;
-        # return advisory PASS so the strict profile does not block on a
-        # contract-shape mismatch (Slice B Task 11).
+        # Legacy float-only rows lack the bookkeeping needed for this gate.
+        # Under loose profile: advisory PASS (back-compat with pre-Slice-B
+        # scorecards).  Under strict profile: FAIL — strict promotion must
+        # not silently accept a contract-shape mismatch as an OK result
+        # (punch-list item 2, 2026-05-29).
         dict_rows = [row for row in daily if isinstance(row, dict)]
         if dict_rows:
             n_fills = sum(int(row.get("fills", 0) or 0) for row in dict_rows)
@@ -65,7 +68,7 @@ class InventoryMtMGate:
         if schema_advisory:
             return SubGateResult(
                 name=self.name,
-                passed=True,
+                passed=not is_strict,
                 metrics={
                     "realized_pts": 0.0,
                     "residual_mtm_pts": 0.0,
@@ -74,13 +77,37 @@ class InventoryMtMGate:
                     "cost_floor_total_pts": None,
                     "n_fills": 0,
                 },
-                details=("advisory: daily_pnl rows lack fills/residual_mtm_pts (legacy float-shape payload)"),
+                details=(
+                    "STRICT FAIL: daily_pnl rows lack fills/residual_mtm_pts (legacy float-shape payload)"
+                    if is_strict
+                    else "advisory: daily_pnl rows lack fills/residual_mtm_pts (legacy float-shape payload)"
+                ),
+            )
+
+        # Strict-only: empty daily_pnl is insufficient evidence.
+        if is_strict and not dict_rows and not daily:
+            return SubGateResult(
+                name=self.name,
+                passed=False,
+                metrics={
+                    "realized_pts": 0.0,
+                    "residual_mtm_pts": 0.0,
+                    "net_pts": 0.0,
+                    "cost_floor_per_fill_pts": (float(cost_floor) if cost_floor is not None else None),
+                    "cost_floor_total_pts": None,
+                    "n_fills": 0,
+                },
+                details="STRICT FAIL: daily_pnl is empty (no evidence)",
             )
 
         if cost_floor is None:
             cost_floor_total: float | None = None
-            passed = True
-            details = "advisory: cost_floor_per_fill_pts threshold absent"
+            passed = not is_strict
+            details = (
+                "STRICT FAIL: cost_floor_per_fill_pts threshold absent"
+                if is_strict
+                else "advisory: cost_floor_per_fill_pts threshold absent"
+            )
         else:
             cost_floor_total = float(cost_floor) * n_fills
             passed = net_after_residual >= cost_floor_total

@@ -35,6 +35,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import numpy as np
 import pytest
 
 from research.backtest.cost_models import CostModel
@@ -411,8 +412,67 @@ def test_backtest_result_aggregates_residual_fields() -> None:
     # Aggregation contract:
     # residual_mtm_pts -> sum across days (rounded to 2dp like daily rows).
     assert result.residual_mtm_pts == round(daily_residuals_sum, 2)
-    # residual_qty -> final-day snapshot.
+    # residual_qty -> final-day snapshot (SIGNED — positive=long).
     assert result.residual_qty == result.daily_pnl[-1]["residual_qty"]
     assert result.residual_qty == 1
     # mark_method -> default policy.
     assert result.mark_method == "last_mid"
+
+
+def test_residual_qty_signed_short_position() -> None:
+    """Punch-list (2026-05-29): residual_qty must preserve sign.
+
+    A short (negative) residual must surface as ``residual_qty=-N`` at both
+    daily-row and result-aggregate level; ``abs_residual_qty`` exposes the
+    magnitude for display contexts.
+    """
+    from research.backtest.types import BacktestResult
+
+    # Result-level contract (the maker_engine populates these fields from
+    # the signed final-day position; see maker_engine.py:413-415).  Only
+    # the residual triple matters here; everything else is filler.
+    empty = np.array([])
+    result = BacktestResult(
+        signals=empty,
+        equity_curve=np.zeros(1),
+        positions=empty,
+        sharpe_is=0.0,
+        sharpe_oos=0.0,
+        ic_series=empty,
+        ic_mean=0.0,
+        ic_std=0.0,
+        ic_tstat=0.0,
+        ic_pvalue=1.0,
+        ic_halflife=0,
+        sortino=0.0,
+        cvar_5pct=0.0,
+        turnover=0.0,
+        max_drawdown=0.0,
+        regime_metrics={},
+        capacity_estimate=0.0,
+        run_id="t",
+        config_hash="",
+        latency_profile={},
+        residual_mtm_pts=-12.5,
+        residual_qty=-3,  # signed short
+        abs_residual_qty=3,
+        mark_method="last_mid",
+        daily_pnl=[
+            {
+                "date": "2026-05-01",
+                "pnl_pts": -12.5,
+                "fills": 1,
+                "residual_mtm_pts": -12.5,
+                "residual_qty": -3,
+                "abs_residual_qty": 3,
+            }
+        ],
+    )
+    # Sign preserved at result level.
+    assert result.residual_qty == -3
+    assert result.abs_residual_qty == 3
+    # Sign preserved at daily-row level.
+    assert result.daily_pnl[0]["residual_qty"] == -3
+    assert result.daily_pnl[0]["abs_residual_qty"] == 3
+    # Display invariant: abs_residual_qty == abs(residual_qty).
+    assert result.abs_residual_qty == abs(result.residual_qty)
