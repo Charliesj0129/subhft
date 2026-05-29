@@ -63,11 +63,10 @@ def _r47_payload() -> dict:
 
 def _robust_payload() -> dict:
     rng = np.random.default_rng(0)
-    daily_values = rng.normal(loc=20.0, scale=10.0, size=60).tolist()
-    # Dict shape required by strict gates (inventory_mtm, monthly_distribution).
-    # 60 trading days across 3 calendar months (20/month) clears the
-    # monthly_distribution min_months gate; residual_mtm/fills cover
-    # the inventory_mtm legacy-payload strict-fail path.
+    # Per-day mean 30 pts net across 2 round-trips → ~15 pts/trip,
+    # clears edge_per_round_trip > 10 floor. 5 fills/day × 60 days = 300
+    # fills, satisfies min_fills_min=300 (Slice A).
+    daily_values = rng.normal(loc=30.0, scale=10.0, size=60).tolist()
     daily = []
     for i, pnl in enumerate(daily_values):
         month = (i // 20) + 1
@@ -77,9 +76,9 @@ def _robust_payload() -> dict:
                 "date": f"2026-{month:02d}-{day:02d}",
                 "pnl_pts": round(pnl, 2),
                 "gross_pts": round(pnl + 0.5, 2),
-                "fills": 6,
-                "trips": 3,
-                "wins": 2,
+                "fills": 5,
+                "trips": 2,
+                "wins": 1,
                 "final_pos": 0,
                 "residual_mtm_pts": 0.0,
                 "residual_qty": 0,

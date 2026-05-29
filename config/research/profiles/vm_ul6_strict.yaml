@@ -43,6 +43,9 @@ thresholds:
     drawdown_to_avg_monthly_max_ratio: 2.0
     monthly_distribution_min_months: 2
 
+    # Per-round-trip net edge floor (goal §5 hard bar: > 10 pts/trade)
+    mean_net_edge_pts_per_trade_min: 10.0
+
   maker:
     sharpe_is_min: 1.0
     sharpe_oos_min: 1.0
@@ -83,6 +86,9 @@ thresholds:
     top_month_contribution_max_pct: 50.0
     drawdown_to_avg_monthly_max_ratio: 2.0
     monthly_distribution_min_months: 2
+
+    # Per-round-trip net edge floor (goal §5 hard bar: > 10 pts/trade)
+    mean_net_edge_pts_per_trade_min: 10.0
 
 # Argparse-arg overrides applied by research.pipeline._run_pipeline when the
 # pipeline is invoked with --validation-profile vm_ul6_strict (or the legacy
@@ -188,3 +194,5 @@ blocking_sub_gates:
   - cost_uncertainty
   # Monthly-distribution credibility gate (goal §6)
   - monthly_distribution
+  # Per-round-trip net edge floor (goal §5)
+  - edge_per_round_trip

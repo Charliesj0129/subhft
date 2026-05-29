@@ -31,6 +31,9 @@ def ensure_builtin_sub_gates_registered() -> None:
     from hft_platform.alpha._sub_gates.deflated_sharpe_maker import (
         DeflatedSharpeForMakerGate,
     )
+    from hft_platform.alpha._sub_gates.edge_per_round_trip import (
+        EdgePerRoundTripGate,
+    )
     from hft_platform.alpha._sub_gates.inventory_mtm import InventoryMtMGate
     from hft_platform.alpha._sub_gates.loo_day_sensitivity import LOODaySensitivityGate
     from hft_platform.alpha._sub_gates.maker import (
@@ -77,6 +80,8 @@ def ensure_builtin_sub_gates_registered() -> None:
         CostUncertaintyGate(),
         # Monthly-distribution credibility gate (goal §6)
         MonthlyDistributionGate(),
+        # Per-round-trip net edge floor (goal §5: > 10 pts/trade)
+        EdgePerRoundTripGate(),
     ]
     for gate in candidates:
         if gate.name not in existing_names:
