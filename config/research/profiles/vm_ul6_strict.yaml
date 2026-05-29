@@ -50,6 +50,11 @@ thresholds:
     top_trade_share_max_pct: 40.0
     worst_loss_share_max_pct: 50.0
 
+    # Force-flat residual dominance (goal §3 + §5): cap fraction of
+    # trips closed by the end-of-window force-flat synthetic.  Edge
+    # propped up by inventory marked at the last mid isn't alpha.
+    force_flat_trip_share_max_pct: 30.0
+
   maker:
     sharpe_is_min: 1.0
     sharpe_oos_min: 1.0
@@ -97,6 +102,9 @@ thresholds:
     # Trade-level concentration (goal §5: loss-distribution + dominance)
     top_trade_share_max_pct: 40.0
     worst_loss_share_max_pct: 50.0
+
+    # Force-flat residual dominance (goal §3 + §5)
+    force_flat_trip_share_max_pct: 30.0
 
 # Argparse-arg overrides applied by research.pipeline._run_pipeline when the
 # pipeline is invoked with --validation-profile vm_ul6_strict (or the legacy
@@ -206,3 +214,5 @@ blocking_sub_gates:
   - edge_per_round_trip
   # Trade-level concentration (goal §5)
   - trade_concentration
+  # Force-flat residual dominance (goal §3 + §5)
+  - force_flat_residual
