@@ -77,6 +77,13 @@ _FIELD_TO_CATEGORY: dict[str, DivergenceCategory] = {
     "price": DivergenceCategory.IMPLEMENTATION_DRIFT,
     "target_order_id": DivergenceCategory.IMPLEMENTATION_DRIFT,
     "price_type": DivergenceCategory.IMPLEMENTATION_DRIFT,
+    # Round 15: optional parity fields added to the canonical intent
+    # log to surface session / risk / force-flat consistency drift
+    # (goal §7).  Exact mapping (rather than prefix) keeps the contract
+    # explicit at the same status as the legacy canonical fields.
+    "session_phase": DivergenceCategory.SESSION_PHASE_FILTER,
+    "risk_filter_active": DivergenceCategory.RISK_FILTER,
+    "force_flat_triggered": DivergenceCategory.RISK_FILTER,
 }
 
 
