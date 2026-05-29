@@ -99,19 +99,24 @@ This runs strict `research.pipeline run`, which includes the factory optimize pr
 3. Gate D/E promotion
 4. `factory index` finalization
 
-### VM-UL6 profile (institutional/near-live strictness)
+### VM-UL6 strict profile (institutional/near-live strictness)
 
 ```bash
-make research ALPHA=<alpha_id> OWNER=<owner> DATA='<path.npy>' ARGS='--validation-profile vm_ul6'
+make research ALPHA=<alpha_id> OWNER=<owner> DATA='<path.npy>' ARGS='--validation-profile vm_ul6_strict'
 ```
 
-`vm_ul6` tightens latency/cost assumptions, stress multipliers, promotion thresholds,
-paper-trade requirements, the Rust benchmark gate, and data provenance metadata requirements.
+`vm_ul6_strict` tightens latency/cost assumptions, stress multipliers, promotion thresholds,
+paper-trade requirements, the Rust benchmark gate, and data provenance metadata
+requirements. Since Stage 2 (2026-05-28) every entrypoint (`make research`,
+`python -m research.pipeline run`, `hft alpha pipeline run`, `hft alpha validate|promote`)
+file-resolves the same `config/research/profiles/vm_ul6_strict.yaml`. The legacy `vm_ul6`
+token is accepted with a `DeprecationWarning` for one release.
 
-> **Profile token differs by entrypoint.** The `make research` / `research.pipeline` entrance
-> uses `--validation-profile vm_ul6` (override token), while `hft alpha validate|promote` uses
-> `--profile vm_ul6_strict` (file-resolved). These are not typos of each other — see the
-> **Profile Reference** in `docs/runbooks/alpha-development-workflow.md`.
+### Backtest engine selection
+
+For the bias matrix (14× pessimistic to 577× optimistic across engines), calibration
+requirements, and the `BacktestContractSpec` config entrypoint, see
+[`docs/runbooks/backtest-engine-selection.md`](../docs/runbooks/backtest-engine-selection.md).
 
 ## One Factory Flow
 

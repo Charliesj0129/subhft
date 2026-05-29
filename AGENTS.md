@@ -42,7 +42,9 @@ Research → Gates A/B/C/D/E/F → Canary → Shadow → Live. Live registry cur
 - End-to-end workflow + Gates A–F + profile reference: `docs/runbooks/alpha-development-workflow.md`
 - Factory operations handbook (entrance, 8 stages, data governance, paper-trade, triage): `research/README.md`
 - Freeze charter + CI gate: `docs/loop_v1_stabilization_charter.md`, `.github/workflows/freeze-guard.yml`
-- Strict profile: `config/research/profiles/vm_ul6_strict.yaml` — `latency_audit --strict` + `replay_parity_audit` are Gate D blockers. Two profile tokens: `make research` uses `--validation-profile vm_ul6`; `hft alpha …` uses `--profile vm_ul6_strict` (workflow doc §4c).
+- Strict profile: `config/research/profiles/vm_ul6_strict.yaml` — `latency_audit --strict` + `replay_parity_audit` are Gate D blockers. Single token `vm_ul6_strict` across all entrypoints (`make research`, `hft alpha pipeline run`, `hft alpha validate|promote`); legacy `vm_ul6` accepted with `DeprecationWarning` for one release.
+- Canonical orchestrator: `hft alpha pipeline {run,triage}` (Stage 5, 2026-05-28). `make research` shells out to it.
+- Lifecycle drift gate: `make research-audit-lifecycle` — run weekly. `manifest.yaml::status` is the source of truth; six other stores are derived. See `docs/runbooks/alpha-lifecycle-state.md`.
 
 ## Task Routing
 

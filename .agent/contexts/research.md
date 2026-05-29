@@ -24,12 +24,15 @@ Focus: Alpha research, architecture questions, evidence-first investigation
 - Constrained hypothesis ideation: `.agent/teams/alpha-research/factor-ideation-pipeline.md`
 
 ## Reuse-first inventory (do NOT reinvent)
-- Entrances: `make research` (Makefile), `hft alpha {scaffold,validate,screen,cheap-screen,promote,cluster,kill,pool,canary}`.
+- Canonical orchestrator: `hft alpha pipeline {run,triage}` (Stage 5, 2026-05-28). `make research` is a thin shim over it.
+- Other entrances: `hft alpha {scaffold,validate,screen,cheap-screen,promote,cluster,kill,pool,canary}`.
+- Backtest engine config: `research/backtest/contract.py::BacktestContractSpec` (Stage 4) — one declarative spec drives `MakerEngine`, `HftNativeRunner`, `HftBacktestAdapter`. Do not pass loose cost/fill/latency kwargs.
 - Result persistence: `research/registry/result_store.py` (`ResultStore`) — never hand-roll run output.
 - Gate logic: add new sub-gates to `src/hft_platform/alpha/_sub_gates/` (registry-driven), not ad-hoc scripts.
 - Kill / dedup: `src/hft_platform/alpha/kill_ledger.py`; correlation cull: `src/hft_platform/alpha/cluster.py`.
 - Data governance: `research/tools/data_governance.py`; scaffolding: `research/tools/alpha_scaffold.py`; backtest engines: `research/backtest/`.
-- Profile token differs by entrypoint — see the Profile reference in the workflow doc.
+- Lifecycle source of truth: `manifest.yaml::status`. Drift gate: `make research-audit-lifecycle` (Stage 6). Six derived stores listed in `docs/runbooks/alpha-lifecycle-state.md`.
+- Validation profile: single token `vm_ul6_strict` across all entrypoints; `vm_ul6` is a legacy alias with `DeprecationWarning` for one release.
 - No ad-hoc scripts at `research/` root; `research/tools/legacy/` is non-official.
 
 ## Tools to favor

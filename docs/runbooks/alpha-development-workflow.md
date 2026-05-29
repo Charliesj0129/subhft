@@ -146,19 +146,19 @@ A *narrower* screener that runs **before** Gate A. Source: `src/hft_platform/alp
 - **Auto-kill:** with `--write-kill`, a `verdict='kill'` outcome appends a `gate='pre_screen'` row to the kill ledger (`audit.alpha_kill_ledger` ClickHouse table + `research/alphas/_kill_ledger.jsonl` fallback) keyed by `kill_id = sha256(alpha_id ":" gate ":" stable_artifact_hash)`. Idempotent (`(alpha_id, kill_id)` dedupe in both sinks).
 - **Disambiguation:** `cheap-screen` is **not** a substitute for `screen`. The two run different stages: `cheap-screen` is a 60 s pre-Gate-A signal triage; `screen` is the loose Gate-A–C path that produces a (non-promotion-eligible) scorecard. Use `cheap-screen` first to drop dead signals cheaply, then `screen` for promising ones, then `validate --profile vm_ul6_strict` for promotion candidates.
 
-### 4c. Profile reference — two namespaces (do not confuse)
+### 4c. Profile reference — single token
 
-The "strict UL6" profile is expressed with **two different tokens on two different
-entrypoints**. They are *not* typos of each other — pick the one matching the command:
+All entrypoints accept **`vm_ul6_strict`**, file-resolved to
+`config/research/profiles/vm_ul6_strict.yaml`. `vm_ul6` is a deprecated alias kept on
+`make research` / `python -m research.pipeline run` / `hft alpha pipeline run` for one
+release; it emits a `DeprecationWarning` and resolves to the same YAML. The `loose` profile
+(default for `hft alpha screen`) runs every sub-gate but only blocks on the 6 baseline
+names; its scorecard is stamped `screen_only=true` and is never promotion-eligible.
 
-| Entrypoint | Flag | Token | Mechanism |
-|---|---|---|---|
-| `make research` / `python -m research.pipeline run` | `--validation-profile` | **`vm_ul6`** | Argparse override-token applied in `research/pipeline.py::_apply_validation_profile`. `vm_ul6_strict` here raises `Unknown validation_profile`. |
-| `hft alpha validate` / `hft alpha promote` | `--profile` | **`vm_ul6_strict`** | File-resolved to `config/research/profiles/vm_ul6_strict.yaml` by `_alpha.py::_load_strict_validation_profile`. A bare `vm_ul6` does not resolve to a profile file. |
-
-- The `loose` profile (default for `hft alpha screen`) runs every sub-gate but only blocks on
-  the 6 baseline names; its scorecard is stamped `screen_only=true` and is never promotion-eligible.
-- When in doubt: pipeline entrance → `vm_ul6`; `hft alpha …` → `vm_ul6_strict`.
+Source: Stage 2 (commit `23edc664`, 2026-05-28) deleted the in-code
+`_VM_UL6_PROFILE_OVERRIDES` dict; `research/pipeline.py::_apply_validation_profile` now
+loads the YAML via `hft_platform.alpha._validation_profile.load_profile` — the same path
+`hft alpha …` uses.
 
 ---
 
