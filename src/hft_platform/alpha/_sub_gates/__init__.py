@@ -34,6 +34,9 @@ def ensure_builtin_sub_gates_registered() -> None:
     from hft_platform.alpha._sub_gates.edge_per_round_trip import (
         EdgePerRoundTripGate,
     )
+    from hft_platform.alpha._sub_gates.force_flat_residual import (
+        ForceFlatResidualGate,
+    )
     from hft_platform.alpha._sub_gates.inventory_mtm import InventoryMtMGate
     from hft_platform.alpha._sub_gates.loo_day_sensitivity import LOODaySensitivityGate
     from hft_platform.alpha._sub_gates.maker import (
@@ -87,6 +90,9 @@ def ensure_builtin_sub_gates_registered() -> None:
         EdgePerRoundTripGate(),
         # Trade-level concentration (goal §5: loss-distribution + dominance)
         TradeConcentrationGate(),
+        # Force-flat residual dominance (goal §3 + §5): flag edges
+        # propped up by inventory closed at end-of-window mark.
+        ForceFlatResidualGate(),
     ]
     for gate in candidates:
         if gate.name not in existing_names:
