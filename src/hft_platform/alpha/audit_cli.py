@@ -243,6 +243,107 @@ def list_runs(
     return "\n".join(out)
 
 
+def _replay_parity_entry(row: dict) -> dict | None:
+    """Locate the replay_parity sub-gate entry in an audit row."""
+    for entry in row.get("sub_gates") or []:
+        if isinstance(entry, dict) and entry.get("name") == "replay_parity":
+            return entry
+    return None
+
+
+def divergence(
+    strategy_type: str | None = None,
+    *,
+    profile: str | None = None,
+    category: str | None = None,
+    only_failed: bool = False,
+) -> str:
+    """List replay-parity divergence categorization per audit row.
+
+    Goal §7 / §8 require parity checks and a canonical divergence
+    taxonomy.  ``replay_parity`` already records match_pct,
+    first_divergence_idx, and a category histogram in each row's
+    sub_gates[].metrics.  This view tabulates them so an operator can
+    answer "which runs diverge, and what bucket are they in?" at a
+    glance — without parsing JSONL.
+
+    Filters (all AND-combined):
+      * ``strategy_type``  — maker / taker
+      * ``profile``        — exact profile_name match
+      * ``category``       — keep rows whose dominant_divergence_category
+                             equals this value (e.g. ``data_mismatch``)
+      * ``only_failed``    — keep rows where the gate did not pass
+
+    Output columns: run_id | strategy | match_pct | first_idx |
+    dominant_category | top_categories.
+    """
+    rows = sub_gate_audit.read_runs()
+    if strategy_type is not None:
+        rows = [r for r in rows if r.get("strategy_type") == strategy_type]
+    if profile is not None:
+        rows = [r for r in rows if r.get("profile_name") == profile]
+
+    body: list[tuple[str, ...]] = []
+    for row in rows:
+        entry = _replay_parity_entry(row)
+        if entry is None:
+            continue
+        metrics = entry.get("metrics") or {}
+        passed = entry.get("passed")
+        if only_failed and passed is not False:
+            continue
+        dominant = str(metrics.get("dominant_divergence_category", "") or "")
+        if category is not None and dominant != category:
+            continue
+        match_pct = metrics.get("match_pct")
+        match_str = f"{float(match_pct):.2f}" if isinstance(match_pct, (int, float)) else "n/a"
+        first_idx = metrics.get("first_divergence_idx")
+        idx_str = (
+            f"{int(float(first_idx))}"
+            if isinstance(first_idx, (int, float)) and float(first_idx) >= 0
+            else "(none)"
+        )
+        cats_dict = metrics.get("divergence_categories") or {}
+        if isinstance(cats_dict, dict) and cats_dict:
+            top = sorted(cats_dict.items(), key=lambda kv: kv[1], reverse=True)[:3]
+            top_str = ",".join(f"{k}={v}" for k, v in top)
+        else:
+            top_str = ""
+        body.append(
+            (
+                str(row.get("run_id", ""))[:24],
+                str(row.get("strategy_name", ""))[:24],
+                match_str,
+                idx_str,
+                dominant or "(none)",
+                top_str,
+            )
+        )
+
+    if not body:
+        return "no audit rows match filter."
+
+    headers = (
+        "run_id",
+        "strategy",
+        "match_pct",
+        "first_idx",
+        "dominant_category",
+        "top_categories",
+    )
+    widths = [
+        max(len(h), max(len(b[i]) for b in body)) for i, h in enumerate(headers)
+    ]
+
+    def _fmt(cells: tuple[str, ...]) -> str:
+        return "  ".join(c.ljust(widths[i]) for i, c in enumerate(cells))
+
+    out: list[str] = [_fmt(headers), _fmt(tuple("-" * w for w in widths))]
+    out.extend(_fmt(c) for c in body)
+    out.append(f"({len(body)} row{'s' if len(body) != 1 else ''})")
+    return "\n".join(out)
+
+
 _EXPORT_COLUMNS: tuple[str, ...] = (
     "run_id",
     "strategy_name",
@@ -439,6 +540,23 @@ def main(argv: list[str] | None = None) -> int:
     cmp_p.add_argument("run_id_b")
     cmp_p.add_argument("--strategy-type", choices=("maker", "taker"), default=None)
 
+    div_p = sub.add_parser(
+        "divergence",
+        help="List replay-parity divergence categorization per row.",
+    )
+    div_p.add_argument("--strategy-type", choices=("maker", "taker"), default=None)
+    div_p.add_argument("--profile", default=None)
+    div_p.add_argument(
+        "--category",
+        default=None,
+        help="Restrict to rows whose dominant_divergence_category matches.",
+    )
+    div_p.add_argument(
+        "--only-failed",
+        action="store_true",
+        help="Only rows where the replay_parity sub-gate failed.",
+    )
+
     exp_p = sub.add_parser("export", help="Export audit rows as CSV or Markdown.")
     exp_p.add_argument("--fmt", choices=("csv", "md"), default="csv")
     exp_p.add_argument("--strategy-type", choices=("maker", "taker"), default=None)
@@ -480,6 +598,13 @@ def main(argv: list[str] | None = None) -> int:
         )
     elif args.cmd == "summary":
         out = summary(strategy_type=args.strategy_type, profile=args.profile)
+    elif args.cmd == "divergence":
+        out = divergence(
+            strategy_type=args.strategy_type,
+            profile=args.profile,
+            category=args.category,
+            only_failed=args.only_failed,
+        )
     elif args.cmd == "export":
         out = export(
             fmt=args.fmt,
