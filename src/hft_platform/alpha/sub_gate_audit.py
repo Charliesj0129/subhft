@@ -108,6 +108,37 @@ def _normalize_sub_gates(entries: list[dict] | None) -> list[dict]:
     return out
 
 
+def _extract_mean_net_edge(advisory: list[dict] | None) -> float | None:
+    """Lift the goal §5 hard-bar metric from the edge_per_round_trip entry.
+
+    Round 22-25 wired ``mean_net_edge_pts_per_trade`` into the
+    edge_per_round_trip sub-gate's metrics dict.  That value is buried
+    inside ``sub_gates[*].metrics`` — queryable but not at a glance.
+    This helper lifts it to a top-level row field so ``audit show`` /
+    ``audit compare`` can highlight the candidate's edge against the
+    goal §5 ``> 10 pts/trade`` floor without callers parsing the gate
+    list.  Returns ``None`` when the gate didn't run or wasn't applicable.
+    """
+    if not advisory:
+        return None
+    for entry in advisory:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("name") != "edge_per_round_trip":
+            continue
+        metrics = entry.get("metrics") or {}
+        if not isinstance(metrics, dict):
+            return None
+        value = metrics.get("mean_net_edge_pts_per_trade")
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
 def _normalize_spec_provenance(prov: dict | None) -> dict[str, Any]:
     """Project a candidate spec provenance dict onto the row's stable shape.
 
@@ -174,6 +205,9 @@ def build_record(
         "triage_reasons": triage_reasons,
         "sub_gates": _normalize_sub_gates(advisory),
     }
+    edge = _extract_mean_net_edge(advisory)
+    if edge is not None:
+        row["mean_net_edge_pts_per_trade"] = edge
     prov = _normalize_spec_provenance(spec_provenance)
     if prov:
         row["spec_provenance"] = prov

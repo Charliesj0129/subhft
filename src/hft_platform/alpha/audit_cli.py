@@ -76,6 +76,15 @@ def show(run_id: str, strategy_type: str | None = None) -> str:
     lines.append(f"triage_status   : {row.get('triage_status', '') or '(n/a)'}")
     reasons = row.get("triage_reasons") or []
     lines.append(f"triage_reasons  : {', '.join(reasons) if reasons else '(none)'}")
+    # Goal §5 hard bar (Round 26): surface the per-round-trip edge at the
+    # top of the row so audit show / compare highlight the > 10 pts/trade
+    # floor without callers spelunking through sub_gates[*].metrics.
+    edge = row.get("mean_net_edge_pts_per_trade")
+    if edge is None:
+        lines.append("mean_net_edge   : (n/a — edge_per_round_trip gate not run)")
+    else:
+        marker = "PASS" if edge > 10.0 else "FAIL"
+        lines.append(f"mean_net_edge   : {edge:.3f} pts/trade  [vs goal §5 floor 10.0 -> {marker}]")
     lines.append("sub_gates:")
     lines.extend(_format_gate_lines(row.get("sub_gates", [])))
     return "\n".join(lines)
@@ -120,6 +129,12 @@ def compare(
     lines.append(f"blocking_pass : {a.get('blocking_passed')} -> {b.get('blocking_passed')}")
     lines.append(f"triage_status : {a.get('triage_status', '')!r} -> {b.get('triage_status', '')!r}")
     lines.append(f"triage_reasons: {a.get('triage_reasons') or []} -> {b.get('triage_reasons') or []}")
+    # Round 26: edge drift surfacing.  Either side may have the metric.
+    edge_a = a.get("mean_net_edge_pts_per_trade")
+    edge_b = b.get("mean_net_edge_pts_per_trade")
+    if edge_a is not None or edge_b is not None:
+        marker = "~" if edge_a != edge_b else " "
+        lines.append(f"  {marker} mean_net_edge: {edge_a!r} -> {edge_b!r}  (goal §5 floor: 10.0)")
 
     # Round 18: spec-provenance drift surfacing.  When either side
     # carries spec_provenance, show the diff so the operator can
