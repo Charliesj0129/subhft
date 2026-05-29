@@ -243,6 +243,105 @@ def list_runs(
     return "\n".join(out)
 
 
+_EXPORT_COLUMNS: tuple[str, ...] = (
+    "run_id",
+    "strategy_name",
+    "instrument",
+    "strategy_type",
+    "profile_name",
+    "blocking_passed",
+    "triage_status",
+    "mean_net_edge_pts_per_trade",
+    "data_range",
+    "cost_model_id",
+)
+
+
+def _export_row(row: dict) -> dict[str, str]:
+    """Project a JSONL row onto the flat export schema (10 columns).
+
+    ``data_range`` and ``cost_model_id`` are lifted from ``spec_provenance``
+    when present so external records (Markdown notebook, CSV in a Linear
+    ticket) carry the spec context that drove the audit verdict.
+    """
+    prov = row.get("spec_provenance") or {}
+    edge = row.get("mean_net_edge_pts_per_trade")
+    edge_str = f"{float(edge):.6f}" if isinstance(edge, (int, float)) else ""
+    blk = row.get("blocking_passed")
+    blk_str = "" if blk is None else ("true" if blk else "false")
+    return {
+        "run_id": str(row.get("run_id", "")),
+        "strategy_name": str(row.get("strategy_name", "")),
+        "instrument": str(row.get("instrument", "")),
+        "strategy_type": str(row.get("strategy_type", "")),
+        "profile_name": str(row.get("profile_name", "")),
+        "blocking_passed": blk_str,
+        "triage_status": str(row.get("triage_status", "") or ""),
+        "mean_net_edge_pts_per_trade": edge_str,
+        "data_range": str(prov.get("data_range", "") if isinstance(prov, dict) else ""),
+        "cost_model_id": str(prov.get("cost_model_id", "") if isinstance(prov, dict) else ""),
+    }
+
+
+def export(
+    fmt: str = "csv",
+    *,
+    strategy_type: str | None = None,
+    profile: str | None = None,
+    edge_min: float | None = None,
+    only_passing: bool = False,
+) -> str:
+    """Emit audit rows as CSV or Markdown for external experiment records.
+
+    Goal §4 / §9: every experiment should leave a traceable record.
+    show / list / summary cover the human-readable side; this surface
+    exports the same row set into formats that paste into a Linear
+    ticket, Notion notebook, or feed an Excel pivot directly — no
+    JSONL parsing required on the receiving end.
+
+    Filters mirror ``list_runs``.
+    """
+    if fmt not in ("csv", "md"):
+        raise ValueError(f"unsupported export fmt: {fmt!r} (want 'csv' or 'md')")
+
+    rows = sub_gate_audit.read_runs()
+    if strategy_type is not None:
+        rows = [r for r in rows if r.get("strategy_type") == strategy_type]
+    if profile is not None:
+        rows = [r for r in rows if r.get("profile_name") == profile]
+    if only_passing:
+        rows = [r for r in rows if r.get("blocking_passed") is True]
+    if edge_min is not None:
+        rows = [
+            r
+            for r in rows
+            if isinstance(r.get("mean_net_edge_pts_per_trade"), (int, float))
+            and float(r["mean_net_edge_pts_per_trade"]) >= edge_min
+        ]
+
+    projected = [_export_row(r) for r in rows]
+
+    if fmt == "csv":
+        import csv
+        import io
+
+        buf = io.StringIO()
+        writer = csv.DictWriter(buf, fieldnames=list(_EXPORT_COLUMNS))
+        writer.writeheader()
+        for p in projected:
+            writer.writerow(p)
+        return buf.getvalue().rstrip("\n")
+
+    # md: GFM table.
+    lines: list[str] = []
+    lines.append("| " + " | ".join(_EXPORT_COLUMNS) + " |")
+    lines.append("|" + "|".join(["---"] * len(_EXPORT_COLUMNS)) + "|")
+    for p in projected:
+        cells = [p[c].replace("|", r"\|") for c in _EXPORT_COLUMNS]
+        lines.append("| " + " | ".join(cells) + " |")
+    return "\n".join(lines)
+
+
 def _percentile(values: list[float], pct: float) -> float:
     """Linear-interpolated percentile (numpy-compatible) without numpy.
 
@@ -340,6 +439,13 @@ def main(argv: list[str] | None = None) -> int:
     cmp_p.add_argument("run_id_b")
     cmp_p.add_argument("--strategy-type", choices=("maker", "taker"), default=None)
 
+    exp_p = sub.add_parser("export", help="Export audit rows as CSV or Markdown.")
+    exp_p.add_argument("--fmt", choices=("csv", "md"), default="csv")
+    exp_p.add_argument("--strategy-type", choices=("maker", "taker"), default=None)
+    exp_p.add_argument("--profile", default=None)
+    exp_p.add_argument("--edge-min", type=float, default=None)
+    exp_p.add_argument("--only-passing", action="store_true")
+
     sum_p = sub.add_parser("summary", help="Aggregate counts across audit rows.")
     sum_p.add_argument("--strategy-type", choices=("maker", "taker"), default=None)
     sum_p.add_argument("--profile", default=None, help="Exact profile_name filter.")
@@ -374,6 +480,14 @@ def main(argv: list[str] | None = None) -> int:
         )
     elif args.cmd == "summary":
         out = summary(strategy_type=args.strategy_type, profile=args.profile)
+    elif args.cmd == "export":
+        out = export(
+            fmt=args.fmt,
+            strategy_type=args.strategy_type,
+            profile=args.profile,
+            edge_min=args.edge_min,
+            only_passing=args.only_passing,
+        )
     else:  # pragma: no cover — argparse already enforces this
         parser.print_usage()
         return 2
