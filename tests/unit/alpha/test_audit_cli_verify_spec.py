@@ -124,3 +124,40 @@ class TestVerifySpecAll:
         captured = capsys.readouterr().out
         assert "from_main" in captured
         assert "summary" in captured
+
+
+# --- Round 37: shape line surfaces classify_strategy_shape ----------
+
+
+STRADDLE_SRC = Path("research/alphas/_templates/spec.straddle.yaml")
+FUTURES_PAIR_SRC = Path("research/alphas/_templates/spec.futures_pair.yaml")
+
+
+class TestVerifySpecShapeLine:
+    def test_single_leg_template_shape_is_single(self, _alphas: Path) -> None:
+        _seed(_alphas, "single_one")
+        out = audit_cli.verify_spec("single_one", root=_alphas)
+        assert "shape    : single" in out
+
+    def test_straddle_exemplar_shape_is_straddle(self, _alphas: Path) -> None:
+        d = _alphas / "strad_one"
+        d.mkdir()
+        import shutil
+        shutil.copyfile(STRADDLE_SRC, d / "spec.yaml")
+        out = audit_cli.verify_spec("strad_one", root=_alphas)
+        assert "shape    : straddle" in out
+
+    def test_futures_pair_exemplar_shape_is_multi_leg_futures(self, _alphas: Path) -> None:
+        d = _alphas / "pair_one"
+        d.mkdir()
+        import shutil
+        shutil.copyfile(FUTURES_PAIR_SRC, d / "spec.yaml")
+        out = audit_cli.verify_spec("pair_one", root=_alphas)
+        assert "shape    : multi_leg_futures" in out
+
+    def test_shape_line_precedes_fields_block(self, _alphas: Path) -> None:
+        _seed(_alphas, "ordered")
+        out = audit_cli.verify_spec("ordered", root=_alphas)
+        i_shape = out.index("shape    :")
+        i_fields = out.index("fields:")
+        assert i_shape < i_fields

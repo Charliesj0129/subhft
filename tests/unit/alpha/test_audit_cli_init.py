@@ -110,3 +110,68 @@ class TestAuditCliInit:
         captured = capsys.readouterr().out
         assert "created" in captured
         assert (_tmproot / "from_main" / "spec.yaml").is_file()
+
+
+# --- Round 37: --shape selector across exemplars --------------------
+
+
+class TestAuditCliInitShape:
+    def test_shape_single_uses_default_template(self, _tmproot: Path) -> None:
+        audit_cli.init_candidate("c_single", shape="single", root=_tmproot)
+        body = (_tmproot / "c_single" / "spec.yaml").read_text()
+        assert "strategy_name: c_single" in body
+        assert "exemplar_txfd6_demo" not in body
+
+    def test_shape_straddle_writes_options_exemplar(self, _tmproot: Path) -> None:
+        out = audit_cli.init_candidate("c_strad", shape="straddle", root=_tmproot)
+        body = (_tmproot / "c_strad" / "spec.yaml").read_text()
+        assert "strategy_name: c_strad" in body
+        assert "txo_straddle_atm_demo" not in body
+        assert "legs:" in body
+        assert "greeks_exposure:" in body
+        assert "spec_check: PASS" in out
+
+    def test_shape_futures_pair_writes_pair_exemplar(self, _tmproot: Path) -> None:
+        import yaml
+
+        out = audit_cli.init_candidate(
+            "c_pair", shape="futures_pair", root=_tmproot
+        )
+        path = _tmproot / "c_pair" / "spec.yaml"
+        body = path.read_text()
+        assert "strategy_name: c_pair" in body
+        assert "txf_tmf_hedged_pair_demo" not in body
+        # Parse YAML so we test the actual mapping, not a comment
+        # that happens to mention `greeks_exposure:` as documentation.
+        spec = yaml.safe_load(body)
+        assert "legs" in spec
+        # futures_pair intentionally has NO greeks_exposure block.
+        assert "greeks_exposure" not in spec
+        assert "spec_check: PASS" in out
+
+    def test_unknown_shape_refused(self, _tmproot: Path) -> None:
+        out = audit_cli.init_candidate("x", shape="stradle", root=_tmproot)
+        assert "refused" in out
+        assert "unknown shape" in out
+
+    def test_shape_and_template_together_refused(self, _tmproot: Path) -> None:
+        out = audit_cli.init_candidate(
+            "x", shape="straddle", template=TEMPLATE_SRC, root=_tmproot
+        )
+        assert "refused" in out
+        assert "either" in out
+
+    def test_no_args_falls_back_to_default_template(self, _tmproot: Path) -> None:
+        # No --template, no --shape -> single-leg default (back-compat).
+        out = audit_cli.init_candidate("c_default", root=_tmproot)
+        assert "created" in out
+        body = (_tmproot / "c_default" / "spec.yaml").read_text()
+        assert "strategy_name: c_default" in body
+
+    def test_main_dispatches_shape(self, _tmproot: Path, capsys) -> None:
+        rc = audit_cli.main(
+            ["init", "c_main_shape", "--shape", "straddle", "--root", str(_tmproot)]
+        )
+        assert rc == 0
+        body = (_tmproot / "c_main_shape" / "spec.yaml").read_text()
+        assert "legs:" in body

@@ -249,11 +249,28 @@ _DEFAULT_TEMPLATE = Path("research/alphas/_templates/spec.yaml")
 _DEFAULT_ALPHAS_ROOT = Path("research/alphas")
 _TEMPLATE_NAME = "exemplar_txfd6_demo"
 
+# Round 37: map shape tag -> (template path, placeholder strategy_name).
+# `audit init --shape <tag>` picks the right exemplar without the
+# author having to know the file path.  Keep `single` first so it
+# remains the default and the back-compat behavior is preserved.
+_SHAPE_TEMPLATES: dict[str, tuple[Path, str]] = {
+    "single": (_DEFAULT_TEMPLATE, _TEMPLATE_NAME),
+    "straddle": (
+        Path("research/alphas/_templates/spec.straddle.yaml"),
+        "txo_straddle_atm_demo",
+    ),
+    "futures_pair": (
+        Path("research/alphas/_templates/spec.futures_pair.yaml"),
+        "txf_tmf_hedged_pair_demo",
+    ),
+}
+
 
 def init_candidate(
     alpha_id: str,
     *,
-    template: str | Path = _DEFAULT_TEMPLATE,
+    template: str | Path | None = None,
+    shape: str | None = None,
     root: str | Path = _DEFAULT_ALPHAS_ROOT,
     strategy_name: str | None = None,
     force: bool = False,
@@ -274,7 +291,24 @@ def init_candidate(
 
     if not alpha_id or "/" in alpha_id or alpha_id.startswith("."):
         return f"refused: alpha_id {alpha_id!r} must be a plain directory name"
-    template_path = Path(template)
+    # Round 37: shape -> template resolution.  Explicit --template wins
+    # so old callers keep working.  `shape` must be one of the known
+    # exemplar tags or the call is refused (no silent fall-back to
+    # single — that would mask typos like --shape stradle).
+    if template is not None and shape is not None:
+        return "refused: pass either --template OR --shape, not both"
+    placeholder_name = _TEMPLATE_NAME
+    if template is not None:
+        template_path = Path(template)
+    elif shape is not None:
+        if shape not in _SHAPE_TEMPLATES:
+            return (
+                f"refused: unknown shape {shape!r}; "
+                f"choose from {sorted(_SHAPE_TEMPLATES)}"
+            )
+        template_path, placeholder_name = _SHAPE_TEMPLATES[shape]
+    else:
+        template_path = _DEFAULT_TEMPLATE
     if not template_path.is_file():
         return f"refused: template not found at {template_path}"
     target_dir = Path(root) / alpha_id
@@ -289,9 +323,9 @@ def init_candidate(
     shutil.copyfile(template_path, target_spec)
     raw = target_spec.read_text(encoding="utf-8")
     new_name = strategy_name or alpha_id
-    # Single literal substitution: the template's strategy_name slot.
-    if _TEMPLATE_NAME in raw:
-        raw = raw.replace(_TEMPLATE_NAME, new_name)
+    # Single literal substitution: the exemplar's strategy_name slot.
+    if placeholder_name in raw:
+        raw = raw.replace(placeholder_name, new_name)
         target_spec.write_text(raw, encoding="utf-8")
 
     passed, errors = spec_check.check_one(target_spec)
@@ -426,7 +460,14 @@ def verify_spec(
     except Exception as exc:  # noqa: BLE001
         return f"parse error: {exc!r}"
 
-    lines = [f"alpha_id : {alpha_id}", f"path     : {spec_path}", "fields:"]
+    from hft_platform.alpha.strategy_spec import classify_strategy_shape
+
+    lines = [
+        f"alpha_id : {alpha_id}",
+        f"path     : {spec_path}",
+        f"shape    : {classify_strategy_shape(spec)}",
+        "fields:",
+    ]
     counts = {"set": 0, "placeholder": 0, "missing": 0}
     for fld in REQUIRED_TOP_LEVEL_FIELDS:
         state = _field_state(spec.get(fld))
@@ -920,7 +961,17 @@ def main(argv: list[str] | None = None) -> int:
     init_p.add_argument("alpha_id", help="Directory name under research/alphas/.")
     init_p.add_argument("--strategy-name", default=None, help="Defaults to alpha_id.")
     init_p.add_argument("--root", default=str(_DEFAULT_ALPHAS_ROOT))
-    init_p.add_argument("--template", default=str(_DEFAULT_TEMPLATE))
+    init_p.add_argument(
+        "--template",
+        default=None,
+        help="Explicit template path; mutually exclusive with --shape.",
+    )
+    init_p.add_argument(
+        "--shape",
+        default=None,
+        choices=sorted(_SHAPE_TEMPLATES),
+        help="Pick exemplar by shape tag instead of a literal path.",
+    )
     init_p.add_argument("--force", action="store_true")
 
     gat_p = sub.add_parser(
@@ -1005,6 +1056,7 @@ def main(argv: list[str] | None = None) -> int:
         out = init_candidate(
             args.alpha_id,
             template=args.template,
+            shape=args.shape,
             root=args.root,
             strategy_name=args.strategy_name,
             force=args.force,
