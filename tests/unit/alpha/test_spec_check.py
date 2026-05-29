@@ -164,3 +164,15 @@ class TestMain:
     def test_path_and_all_are_mutually_exclusive(self, tmp_path: Path) -> None:
         with pytest.raises(SystemExit):
             spec_check.main([str(tmp_path / "spec.yaml"), "--all"])
+
+
+class TestExemplarSpec:
+    """The shipped exemplar at research/alphas/_templates/spec.yaml is
+    SOP's reference implementation; if it ever drifts out of compliance,
+    every author copying it inherits the breakage.  Lock it down."""
+
+    def test_repo_exemplar_passes_gate(self) -> None:
+        exemplar = Path("research/alphas/_templates/spec.yaml")
+        assert exemplar.is_file(), "exemplar spec missing from _templates/"
+        passed, errors = spec_check.check_one(exemplar)
+        assert passed is True, errors

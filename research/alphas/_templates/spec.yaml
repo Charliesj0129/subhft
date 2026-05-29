@@ -1,0 +1,61 @@
+# Exemplar candidate spec.yaml (goal 完成狀態 §3).
+#
+# This file lives under research/alphas/_templates/ as a reference
+# implementation: copy it into a real candidate directory
+# (research/alphas/<id>/spec.yaml), then mutate the identity /
+# hypothesis / rules / cost / validation values to match the
+# candidate.  All 13 required top-level fields are populated with
+# representative values so `python -m hft_platform.alpha.spec_check`
+# returns clean against THIS file — the goal is to give authors a
+# working baseline rather than a blank form.
+#
+# 限制 §3 reminder: net_edge_floor_pts CANNOT drop below 10.0.
+# 限制 §4 reminder: fee/tax/slippage MUST reflect the real cost
+# stack — do not lower numbers to make a candidate pass.
+
+strategy_name: exemplar_txfd6_demo
+market: TAIFEX
+instrument: TXFD6
+
+hypothesis: >
+  Opening-range expansion in TXFD6 telegraphs short-horizon
+  directional follow-through during the first hour of cash session.
+
+timeframe: 5m
+holding_period: intraday <2h
+frequency_class: intraday_hft
+
+entry_rule: >
+  After 09:00 TPE, enter long on a 5m close above the 08:45–09:00
+  range high, short on the symmetric breach low; one position at a
+  time.
+exit_rule: >
+  Exit on 5m close back inside the opening range, on per_trade_stop
+  hit, or on 13:25 force-flat — whichever fires first.
+position_sizing: fixed 1 lot (governed centrally per CLAUDE.md 限制 §2)
+
+risk_control:
+  max_position: 1
+  max_drawdown_pts: 80
+  force_flat_rule: 13:25 TPE cash close + overnight HALT
+  per_trade_stop_pts: 15
+
+cost_model:
+  fee_bps: 0.4
+  tax_bps: 2.0
+  slippage_pts: 0.5
+  latency_profile: shioaji_measured_p95
+
+validation_plan:
+  data_range: 2026-01-02..2026-05-13
+  oos_split: 70/30 by trading day
+  sample_targets:
+    min_round_trips: 300
+    min_oos_trading_days: 60
+  required_gates:
+    - min_sample_size
+    - single_day_dominance
+    - monthly_distribution
+    - edge_per_round_trip
+    - replay_parity
+  net_edge_floor_pts: 10.0
