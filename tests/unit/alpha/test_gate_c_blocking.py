@@ -93,3 +93,88 @@ class TestInvokeSubGatesBlocking:
             profile=prof,
         )
         assert blocking is not None and blocking["passed"] is True
+        assert blocking["triage_status"] == "passed"
+        assert blocking["triage_reasons"] == []
+
+
+class TestBlockingTriageStatus:
+    """Goal §4 — sample-insufficient runs are NOT generic KILLs."""
+
+    def _profile(self, blocking: tuple[str, ...]) -> ValidationProfile:
+        return ValidationProfile(
+            name="test_strict",
+            is_strict=True,
+            thresholds={"maker": {"min_fills": 300, "min_days": 60}},
+            blocking_sub_gates=blocking,
+        )
+
+    def _payload(self, *, fills: int, days: int) -> dict:
+        # Robust shape on every axis except sample-size, so only
+        # min_sample_size can fail.
+        p = dict(_R47_FINGERPRINT)
+        p["n_fills"] = fills
+        p["n_trading_days"] = days
+        p["daily_pnl"] = [10.0] * max(days, 1)
+        return p
+
+    def test_status_sample_promising_when_close_to_threshold(self) -> None:
+        # 240/300 = 0.80, 50/60 = 0.83 → promising
+        prof = self._profile(("min_sample_size",))
+        _, blocking = _invoke_sub_gates(
+            strategy_type="maker",
+            result_payload=self._payload(fills=240, days=50),
+            thresholds=prof.thresholds_for(strategy_type="maker"),
+            profile=prof,
+        )
+        assert blocking is not None
+        assert blocking["passed"] is False
+        assert blocking["triage_status"] == "sample_promising"
+        assert blocking["triage_reasons"] == ["min_sample_size"]
+
+    def test_status_sample_needs_more_when_well_below(self) -> None:
+        prof = self._profile(("min_sample_size",))
+        _, blocking = _invoke_sub_gates(
+            strategy_type="maker",
+            result_payload=self._payload(fills=60, days=20),
+            thresholds=prof.thresholds_for(strategy_type="maker"),
+            profile=prof,
+        )
+        assert blocking is not None
+        assert blocking["triage_status"] == "sample_needs_more_sample"
+
+    def test_status_sample_inconclusive_when_zero_fills(self) -> None:
+        prof = self._profile(("min_sample_size",))
+        _, blocking = _invoke_sub_gates(
+            strategy_type="maker",
+            result_payload=self._payload(fills=0, days=20),
+            thresholds=prof.thresholds_for(strategy_type="maker"),
+            profile=prof,
+        )
+        assert blocking is not None
+        assert blocking["triage_status"] == "sample_inconclusive"
+
+    def test_status_killed_when_non_sample_gate_also_fails(self) -> None:
+        # min_sample_size fails AND single_day_dominance fails (R47
+        # fingerprint has 2325 of 2253 from one day) → real KILL, not a
+        # sample-triage routing.
+        prof = ValidationProfile(
+            name="test_strict",
+            is_strict=True,
+            thresholds={
+                "maker": {
+                    "min_fills": 300,
+                    "min_days": 60,
+                    "outlier_day_contribution_max_pct": 25.0,
+                }
+            },
+            blocking_sub_gates=("min_sample_size", "single_day_dominance"),
+        )
+        _, blocking = _invoke_sub_gates(
+            strategy_type="maker",
+            result_payload=_R47_FINGERPRINT,
+            thresholds=prof.thresholds_for(strategy_type="maker"),
+            profile=prof,
+        )
+        assert blocking is not None
+        assert blocking["triage_status"] == "killed"
+        assert "single_day_dominance" in blocking["triage_reasons"]

@@ -163,12 +163,44 @@ def _invoke_sub_gates(
 
     if profile is None:
         return advisory, None
+
+    triage_status, triage_reasons = _derive_triage_status(blocking_failing)
     return advisory, {
         "passed": len(blocking_failing) == 0,
         "failing": blocking_failing,
         "names": blocking_seen,
         "profile": profile.name,
+        # Goal §4: sub-threshold runs must NOT be collapsed into a generic
+        # KILL.  When the only blocking failure is min_sample_size and its
+        # sample_adequacy_label is informational (promising /
+        # needs_more_sample / inconclusive), surface that label so the
+        # outer pipeline routes the run to "needs more data" rather than
+        # "dead candidate".
+        "triage_status": triage_status,
+        "triage_reasons": triage_reasons,
     }
+
+
+_SAMPLE_LABELS = {"promising", "needs_more_sample", "inconclusive"}
+
+
+def _derive_triage_status(failing: list[dict]) -> tuple[str, list[str]]:
+    """Classify the blocking-failure set into a triage status.
+
+    Returns ("passed", []) when nothing failed; ("sample_<label>", names)
+    when the only failures carry a sample_adequacy_label from
+    ``_SAMPLE_LABELS``; otherwise ("killed", names).
+    """
+    if not failing:
+        return "passed", []
+
+    names = [f["name"] for f in failing]
+    sample_only = all(f["name"] == "min_sample_size" for f in failing)
+    if sample_only:
+        label = (failing[0].get("metrics") or {}).get("sample_adequacy_label")
+        if label in _SAMPLE_LABELS:
+            return f"sample_{label}", names
+    return "killed", names
 
 
 def _invoke_sub_gates_advisory(
