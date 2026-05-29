@@ -225,3 +225,104 @@ class TestRecordSubGateRun:
         )
         assert ok is False
         assert len(_isolated_jsonl.read_text().splitlines()) == 1
+
+
+# --- Round 17: spec provenance threading (goal §4) ------------------
+
+
+class TestSpecProvenance:
+    """The audit row should carry data_range / cost_model_id /
+    required_gates from the candidate spec so future comparisons
+    can attribute drift to spec changes rather than noise."""
+
+    def test_schema_version_is_v2(self) -> None:
+        from hft_platform.alpha.sub_gate_audit import SCHEMA_VERSION as ver
+        assert ver == "sub_gate_run.v2"
+
+    def test_row_omits_spec_provenance_when_not_provided(self) -> None:
+        row = sub_gate_audit.build_record(
+            run_id="r1",
+            strategy_name="x",
+            instrument="TXFD6",
+            strategy_type="maker",
+            profile_name="",
+            advisory=_advisory(),
+            blocking=None,
+            spec_provenance=None,
+        )
+        assert "spec_provenance" not in row
+
+    def test_row_includes_spec_provenance_when_provided(self) -> None:
+        prov = {
+            "data_range": "2026-01-02..2026-05-13",
+            "cost_model_id": "shioaji_measured_p95+2bps",
+            "required_gates": ["min_sample_size", "edge_per_round_trip"],
+        }
+        row = sub_gate_audit.build_record(
+            run_id="r1",
+            strategy_name="x",
+            instrument="TXFD6",
+            strategy_type="maker",
+            profile_name="vm_ul6_strict",
+            advisory=_advisory(),
+            blocking=_blocking(),
+            spec_provenance=prov,
+        )
+        assert row["spec_provenance"]["data_range"] == "2026-01-02..2026-05-13"
+        assert row["spec_provenance"]["cost_model_id"] == "shioaji_measured_p95+2bps"
+        assert row["spec_provenance"]["required_gates"] == [
+            "min_sample_size",
+            "edge_per_round_trip",
+        ]
+
+    def test_partial_provenance_fills_defaults(self) -> None:
+        row = sub_gate_audit.build_record(
+            run_id="r1",
+            strategy_name="x",
+            instrument="TXFD6",
+            strategy_type="maker",
+            profile_name="",
+            advisory=_advisory(),
+            blocking=None,
+            spec_provenance={"data_range": "2026-Q1"},
+        )
+        prov = row["spec_provenance"]
+        assert prov["data_range"] == "2026-Q1"
+        assert prov["cost_model_id"] == ""
+        assert prov["required_gates"] == []
+
+    def test_non_list_required_gates_coerced_to_empty(self) -> None:
+        row = sub_gate_audit.build_record(
+            run_id="r1",
+            strategy_name="x",
+            instrument="TXFD6",
+            strategy_type="maker",
+            profile_name="",
+            advisory=_advisory(),
+            blocking=None,
+            spec_provenance={"required_gates": "not_a_list"},
+        )
+        assert row["spec_provenance"]["required_gates"] == []
+
+    def test_record_sub_gate_run_persists_provenance(
+        self, _isolated_jsonl: Path
+    ) -> None:
+        sub_gate_audit.record_sub_gate_run(
+            run_id="r1",
+            strategy_name="r47",
+            instrument="TMFD6",
+            strategy_type="maker",
+            profile_name="vm_ul6_strict",
+            advisory=_advisory(),
+            blocking=_blocking(),
+            spec_provenance={
+                "data_range": "2026-01-02..2026-05-13",
+                "cost_model_id": "shioaji_measured_p95",
+                "required_gates": ["min_sample_size"],
+            },
+        )
+        rows = sub_gate_audit.read_runs(run_id="r1")
+        assert len(rows) == 1
+        prov = rows[0]["spec_provenance"]
+        assert prov["data_range"] == "2026-01-02..2026-05-13"
+        assert prov["cost_model_id"] == "shioaji_measured_p95"

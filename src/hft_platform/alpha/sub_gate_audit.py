@@ -33,7 +33,7 @@ from hft_platform.core import timebase
 
 logger = get_logger("alpha_sub_gate_audit")
 
-SCHEMA_VERSION = "sub_gate_run.v1"
+SCHEMA_VERSION = "sub_gate_run.v2"
 
 _DEFAULT_JSONL_PATH = Path("research/audit/sub_gate_runs.jsonl")
 
@@ -108,6 +108,34 @@ def _normalize_sub_gates(entries: list[dict] | None) -> list[dict]:
     return out
 
 
+def _normalize_spec_provenance(prov: dict | None) -> dict[str, Any]:
+    """Project a candidate spec provenance dict onto the row's stable shape.
+
+    Round 17 (goal §4): every row should answer "what data range,
+    cost-model id, and required-gate set did this Gate-C run think it
+    was operating under?".  Today the orchestrator carries those in
+    the candidate ``spec.yaml`` (Round 11); piping them into the
+    audit row makes ``audit compare`` able to explain run-to-run
+    differences as spec drift rather than result noise.
+
+    Missing keys collapse to ``""`` / ``[]`` so a row never holds None
+    for these fields — schema is opt-in by ``prov is not None`` but
+    once opted-in the shape is fixed.
+    """
+    if not isinstance(prov, dict):
+        return {}
+    data_range = prov.get("data_range") or ""
+    cost_model_id = prov.get("cost_model_id") or ""
+    required_gates = prov.get("required_gates") or []
+    if not isinstance(required_gates, list):
+        required_gates = []
+    return {
+        "data_range": str(data_range),
+        "cost_model_id": str(cost_model_id),
+        "required_gates": [str(g) for g in required_gates],
+    }
+
+
 def build_record(
     *,
     run_id: str,
@@ -118,6 +146,7 @@ def build_record(
     advisory: list[dict] | None,
     blocking: dict | None,
     recorded_at_ns: int | None = None,
+    spec_provenance: dict | None = None,
 ) -> dict[str, Any]:
     """Construct the JSONL row from a Gate-C invocation result."""
     if not run_id:
@@ -132,7 +161,7 @@ def build_record(
         blocking_passed = bool(blocking.get("passed", False))
         triage_status = str(blocking.get("triage_status", ""))
         triage_reasons = [str(r) for r in (blocking.get("triage_reasons") or [])]
-    return {
+    row: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "recorded_at_ns": int(ts),
         "run_id": str(run_id),
@@ -145,6 +174,10 @@ def build_record(
         "triage_reasons": triage_reasons,
         "sub_gates": _normalize_sub_gates(advisory),
     }
+    prov = _normalize_spec_provenance(spec_provenance)
+    if prov:
+        row["spec_provenance"] = prov
+    return row
 
 
 def record_sub_gate_run(
@@ -157,6 +190,7 @@ def record_sub_gate_run(
     advisory: list[dict] | None,
     blocking: dict | None,
     recorded_at_ns: int | None = None,
+    spec_provenance: dict | None = None,
 ) -> bool:
     """Append one row; return True iff a new row was written.
 
@@ -177,6 +211,7 @@ def record_sub_gate_run(
         advisory=advisory,
         blocking=blocking,
         recorded_at_ns=recorded_at_ns,
+        spec_provenance=spec_provenance,
     )
     try:
         path.parent.mkdir(parents=True, exist_ok=True)

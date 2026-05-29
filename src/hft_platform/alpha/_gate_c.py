@@ -192,6 +192,9 @@ def _invoke_sub_gates(
 
             run_id = str(result_payload.get("run_id") or "")
             if run_id:
+                prov = result_payload.get("spec_provenance")
+                if not isinstance(prov, dict):
+                    prov = None
                 sub_gate_audit.record_sub_gate_run(
                     run_id=run_id,
                     strategy_name=str(result_payload.get("strategy_name") or ""),
@@ -200,6 +203,7 @@ def _invoke_sub_gates(
                     profile_name=(profile.name if profile is not None else ""),
                     advisory=advisory,
                     blocking=blocking,
+                    spec_provenance=prov,
                 )
         except Exception:  # noqa: BLE001
             logger.warning("sub_gate_audit emit failed", exc_info=True)
