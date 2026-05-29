@@ -23,7 +23,6 @@ two lines:
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -129,7 +128,6 @@ class TestSpecToAuditEndToEnd:
     ) -> None:
         # Build two specs differing only in data_range; show the audit
         # rows reflect the drift end-to-end, suitable for `audit compare`.
-        import yaml
 
         from hft_platform.alpha.strategy_spec import extract_provenance
 

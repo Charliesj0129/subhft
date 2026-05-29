@@ -17,7 +17,6 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
-
 _OPTIONAL_PARITY_FIELDS: tuple[str, ...] = (
     # Round 15: goal §7 parity checks for session filter / risk filter /
     # force-flat consistency.  Emitted ONLY when present on the source

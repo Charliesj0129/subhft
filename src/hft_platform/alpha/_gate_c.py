@@ -46,7 +46,7 @@ def _daily_pnl_sequence(daily_pnl: list[Any] | None) -> list[Any]:
     return list(daily_pnl or [])
 
 
-def _invoke_sub_gates(
+def _invoke_sub_gates(  # noqa: C901 - branchy dispatch; refactor tracked as follow-up
     *,
     strategy_type: str,
     result_payload: dict,
