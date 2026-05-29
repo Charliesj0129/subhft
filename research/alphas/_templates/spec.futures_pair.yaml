@@ -1,0 +1,75 @@
+# Multi-leg / futures exemplar — TXF/TMF hedged pair (goal §2).
+#
+# This file lives under research/alphas/_templates/ as a reference
+# shape for non-option multi-leg candidates.  It exercises Round 35's
+# `legs:` schema without `option:` payloads, so `greeks_exposure:`
+# is intentionally absent — only required when at least one leg
+# carries an option.
+#
+# Copy into a real candidate directory and overwrite the demo
+# identity / hypothesis / rules / cost / validation values to match
+# the candidate before running spec_check.
+#
+# 限制 §3 reminder: net_edge_floor_pts CANNOT drop below 10.0.
+# 限制 §4 reminder: TXF and TMF have different point values
+# (1pt = NT$200 vs NT$10) and may have different fee tiers; the
+# cost_model below quotes the TXF leg's tier.  Verify against the
+# real cost stack of each leg before running.
+
+strategy_name: txf_tmf_hedged_pair_demo
+market: TAIFEX
+# Single label kept for back-compat with audit / logging code that
+# has not yet been taught about `legs:`.  Authoritative leg list
+# lives in `legs:` below.
+instrument: TXF_TMF_PAIR
+
+hypothesis: >
+  TXF leads TMF on short-horizon directional moves; trading a TXF
+  long against a 4x-notional TMF short captures the cross-contract
+  lead-lag spread while staying close to delta-neutral on price.
+
+timeframe: 1m
+holding_period: intraday <30m
+frequency_class: intraday_hft
+
+entry_rule: >
+  When 1m TXF-vs-TMF z-score crosses ±2.0 with both legs liquid,
+  enter long TXF (1) + short TMF (4); only one pair open at a time.
+exit_rule: >
+  Exit on z-score mean-reversion through 0, per_trade_stop breach
+  on the PAIR net PnL, or 13:25 force flat — whichever fires first.
+position_sizing: fixed 1 TXF leg + 4 TMF legs (governed centrally per CLAUDE.md 限制 §2)
+
+legs:
+  - symbol: TXFD6
+    side: long
+    qty: 1
+  - symbol: TMFD6
+    side: short
+    qty: 4
+
+risk_control:
+  max_position: 1
+  max_drawdown_pts: 60
+  force_flat_rule: 13:25 TPE cash close + overnight HALT
+  per_trade_stop_pts: 12
+
+cost_model:
+  fee_bps: 0.4
+  tax_bps: 2.0
+  slippage_pts: 0.5
+  latency_profile: shioaji_measured_p95
+
+validation_plan:
+  data_range: 2026-01-02..2026-05-13
+  oos_split: 70/30 by trading day
+  sample_targets:
+    min_round_trips: 300
+    min_oos_trading_days: 60
+  required_gates:
+    - min_sample_size
+    - single_day_dominance
+    - monthly_distribution
+    - edge_per_round_trip
+    - replay_parity
+  net_edge_floor_pts: 10.0

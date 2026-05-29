@@ -1,0 +1,91 @@
+# Multi-leg / options exemplar — long ATM straddle on TXO (goal §2).
+#
+# This file lives under research/alphas/_templates/ as a reference
+# shape for option-based candidates.  It exercises Round 35's
+# `legs:` + `greeks_exposure:` schema with the simplest two-leg
+# structure (long call + long put at the same strike / expiry).
+#
+# Copy into a real candidate directory and overwrite the demo
+# identity / hypothesis / rules / cost / validation values to match
+# the candidate before running spec_check.
+#
+# 限制 §3 reminder: net_edge_floor_pts CANNOT drop below 10.0.
+# 限制 §4 reminder: fee/tax/slippage MUST reflect the real cost
+# stack for OPTIONS — do not copy futures cost numbers without
+# verifying.  Option fee/tax structures differ from futures.
+
+strategy_name: txo_straddle_atm_demo
+market: TAIFEX
+# Single human-readable label kept for back-compat with audit /
+# logging code that has not yet been taught about `legs:`.  The
+# authoritative leg list lives in `legs:` below.
+instrument: TXO_STRADDLE
+
+hypothesis: >
+  TXO daily ATM straddle bought 1h before a scheduled event window
+  captures realized variance excess over implied prior to event
+  resolution.
+
+timeframe: 5m
+holding_period: intraday <4h
+frequency_class: intraday_hft
+
+entry_rule: >
+  At T-60min before the scheduled CPI release window, buy 1 ATM
+  call + 1 ATM put of the front-week TXO expiry; only one straddle
+  open at a time per session.
+exit_rule: >
+  Close both legs simultaneously at the earlier of: T+15min after
+  release, breach of either-leg per_trade_stop, or 13:25 force flat.
+position_sizing: fixed 1 straddle (governed centrally per CLAUDE.md 限制 §2)
+
+legs:
+  - symbol: TXO_W_C_ATM
+    side: long
+    qty: 1
+    option:
+      right: C
+      strike: 18000.0
+      expiry: 2026-06-25
+  - symbol: TXO_W_P_ATM
+    side: long
+    qty: 1
+    option:
+      right: P
+      strike: 18000.0
+      expiry: 2026-06-25
+
+greeks_exposure:
+  max_net_delta: 0.30
+  max_net_gamma: 0.10
+  max_net_vega: 400.0
+  max_net_theta: -120.0
+
+risk_control:
+  max_position: 1
+  max_drawdown_pts: 80
+  force_flat_rule: 13:25 TPE cash close + overnight HALT
+  per_trade_stop_pts: 25
+
+cost_model:
+  # Options fee/tax differ from futures — these numbers are the
+  # default exemplar placeholder; verify against the live cost
+  # stack before running.
+  fee_bps: 0.6
+  tax_bps: 1.0
+  slippage_pts: 1.0
+  latency_profile: shioaji_measured_p95
+
+validation_plan:
+  data_range: 2026-01-02..2026-05-13
+  oos_split: 70/30 by trading day
+  sample_targets:
+    min_round_trips: 120
+    min_oos_trading_days: 40
+  required_gates:
+    - min_sample_size
+    - single_day_dominance
+    - monthly_distribution
+    - edge_per_round_trip
+    - replay_parity
+  net_edge_floor_pts: 10.0
