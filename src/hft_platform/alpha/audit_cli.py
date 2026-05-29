@@ -176,6 +176,73 @@ def compare(
     return "\n".join(lines)
 
 
+def list_runs(
+    strategy_type: str | None = None,
+    *,
+    profile: str | None = None,
+    edge_min: float | None = None,
+    only_passing: bool = False,
+) -> str:
+    """List all audit rows as a fixed-width table (goal §5 / §9 visibility).
+
+    Columns: run_id | strategy_name | instrument | type | edge | block | triage.
+
+    Filters (all AND-combined):
+      * ``strategy_type`` — restrict to maker / taker rows
+      * ``profile``       — exact match on ``profile_name`` (e.g. vm_ul6_strict)
+      * ``edge_min``      — drop rows whose mean_net_edge is below this floor;
+                            rows missing the metric are dropped only when an
+                            explicit floor is supplied (caller wants edge-only)
+      * ``only_passing``  — keep only rows with ``blocking_passed is True``
+    """
+    rows = sub_gate_audit.read_runs()
+    if strategy_type is not None:
+        rows = [r for r in rows if r.get("strategy_type") == strategy_type]
+    if profile is not None:
+        rows = [r for r in rows if r.get("profile_name") == profile]
+    if only_passing:
+        rows = [r for r in rows if r.get("blocking_passed") is True]
+    if edge_min is not None:
+        rows = [
+            r
+            for r in rows
+            if isinstance(r.get("mean_net_edge_pts_per_trade"), (int, float))
+            and float(r["mean_net_edge_pts_per_trade"]) >= edge_min
+        ]
+    if not rows:
+        return "no audit rows match filter."
+
+    headers = ("run_id", "strategy_name", "instrument", "type", "edge", "block", "triage")
+
+    def _cells(row: dict) -> tuple[str, ...]:
+        edge = row.get("mean_net_edge_pts_per_trade")
+        edge_str = f"{float(edge):.2f}" if isinstance(edge, (int, float)) else "n/a"
+        block = row.get("blocking_passed")
+        block_str = {True: "PASS", False: "FAIL", None: "(loose)"}.get(block, str(block))
+        return (
+            str(row.get("run_id", ""))[:24],
+            str(row.get("strategy_name", ""))[:24],
+            str(row.get("instrument", ""))[:10],
+            str(row.get("strategy_type", ""))[:6],
+            edge_str,
+            block_str,
+            str(row.get("triage_status", "") or "")[:18],
+        )
+
+    body = [_cells(r) for r in rows]
+    widths = [
+        max(len(h), max(len(b[i]) for b in body)) for i, h in enumerate(headers)
+    ]
+
+    def _fmt(cells: tuple[str, ...]) -> str:
+        return "  ".join(c.ljust(widths[i]) for i, c in enumerate(cells))
+
+    out: list[str] = [_fmt(headers), _fmt(tuple("-" * w for w in widths))]
+    out.extend(_fmt(c) for c in body)
+    out.append(f"({len(body)} row{'s' if len(body) != 1 else ''})")
+    return "\n".join(out)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="hft-alpha-audit",
@@ -192,11 +259,34 @@ def main(argv: list[str] | None = None) -> int:
     cmp_p.add_argument("run_id_b")
     cmp_p.add_argument("--strategy-type", choices=("maker", "taker"), default=None)
 
+    list_p = sub.add_parser("list", help="Tabulate all audit rows.")
+    list_p.add_argument("--strategy-type", choices=("maker", "taker"), default=None)
+    list_p.add_argument("--profile", default=None, help="Exact profile_name filter.")
+    list_p.add_argument(
+        "--edge-min",
+        type=float,
+        default=None,
+        help="Drop rows whose mean_net_edge_pts_per_trade < this floor (and "
+        "rows with no edge metric).",
+    )
+    list_p.add_argument(
+        "--only-passing",
+        action="store_true",
+        help="Restrict to rows where blocking_passed is True.",
+    )
+
     args = parser.parse_args(argv)
     if args.cmd == "show":
         out = show(args.run_id, strategy_type=args.strategy_type)
     elif args.cmd == "compare":
         out = compare(args.run_id_a, args.run_id_b, strategy_type=args.strategy_type)
+    elif args.cmd == "list":
+        out = list_runs(
+            strategy_type=args.strategy_type,
+            profile=args.profile,
+            edge_min=args.edge_min,
+            only_passing=args.only_passing,
+        )
     else:  # pragma: no cover — argparse already enforces this
         parser.print_usage()
         return 2
