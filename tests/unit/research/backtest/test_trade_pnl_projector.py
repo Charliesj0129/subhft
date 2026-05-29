@@ -278,6 +278,122 @@ class TestTakerEngineEnrichPopulatesTradePnl:
         # No transitions -> empty list -> stored as None (sub-gate fallback).
         assert out.trade_pnl is None
 
+    def test_total_net_pts_allocates_cost_evenly(self) -> None:
+        # Two +5 gross trips, total_net = +8 -> delta = -1 per trip ->
+        # each trip becomes +4.  Invariant: sum(trade_pnl) == total_net.
+        from research.backtest.taker_engine import TakerEngine
+
+        base = self._base_result(
+            positions=np.array([0, 1, 0, 1, 0]),
+            mid_prices=np.array([100.0, 100.0, 105.0, 100.0, 105.0]),
+        )
+        out = TakerEngine().enrich_result(
+            base,
+            instrument="TXFD6",
+            data_period="2026-01-02..2026-05-13",
+            pipeline_mode="research",
+            total_net_pts=8.0,
+        )
+        assert out.trade_pnl is not None
+        assert len(out.trade_pnl) == 2
+        assert math.isclose(sum(out.trade_pnl), 8.0, abs_tol=1e-9)
+        assert math.isclose(out.trade_pnl[0], 4.0, abs_tol=1e-9)
+        assert math.isclose(out.trade_pnl[1], 4.0, abs_tol=1e-9)
+
+    def test_total_net_pts_none_keeps_gross_trips(self) -> None:
+        # Round 38 back-compat: omit total_net_pts -> gross trips returned.
+        from research.backtest.taker_engine import TakerEngine
+
+        base = self._base_result(
+            positions=np.array([0, 1, 0]),
+            mid_prices=np.array([100.0, 100.0, 105.0]),
+        )
+        out = TakerEngine().enrich_result(
+            base,
+            instrument="TXFD6",
+            data_period="2026-01-02..2026-05-13",
+            pipeline_mode="research",
+        )
+        assert out.trade_pnl is not None
+        assert math.isclose(out.trade_pnl[0], 5.0, abs_tol=1e-9)
+
+    def test_total_net_pts_can_be_negative(self) -> None:
+        # Costs exceed gross PnL -> negative net total -> per-trip
+        # should reflect that loss after allocation.
+        from research.backtest.taker_engine import TakerEngine
+
+        base = self._base_result(
+            positions=np.array([0, 1, 0]),
+            mid_prices=np.array([100.0, 100.0, 102.0]),  # +2 gross
+        )
+        out = TakerEngine().enrich_result(
+            base,
+            instrument="TXFD6",
+            data_period="2026-01-02..2026-05-13",
+            pipeline_mode="research",
+            total_net_pts=-3.0,
+        )
+        assert out.trade_pnl is not None
+        assert math.isclose(sum(out.trade_pnl), -3.0, abs_tol=1e-9)
+        assert out.trade_pnl[0] < 0
+
+    def test_total_net_pts_zero_collapses_to_zero(self) -> None:
+        # Cost exactly cancels gross -> per-trip == 0.
+        from research.backtest.taker_engine import TakerEngine
+
+        base = self._base_result(
+            positions=np.array([0, 1, 0]),
+            mid_prices=np.array([100.0, 100.0, 105.0]),
+        )
+        out = TakerEngine().enrich_result(
+            base,
+            instrument="TXFD6",
+            data_period="2026-01-02..2026-05-13",
+            pipeline_mode="research",
+            total_net_pts=0.0,
+        )
+        assert out.trade_pnl == [0.0]
+
+    def test_total_net_pts_ignored_when_no_trips(self) -> None:
+        # No transition -> still None even with a net total argument
+        # (no trips to allocate over).
+        from research.backtest.taker_engine import TakerEngine
+
+        base = self._base_result(
+            positions=np.zeros(4),
+            mid_prices=np.array([100.0, 100.0, 101.0, 102.0]),
+        )
+        out = TakerEngine().enrich_result(
+            base,
+            instrument="TXFD6",
+            data_period="2026-01-02..2026-05-13",
+            pipeline_mode="research",
+            total_net_pts=-2.0,
+        )
+        assert out.trade_pnl is None
+
+    def test_allocation_matches_maker_per_trip_pattern(self) -> None:
+        # Goal §5.1 contract: per-trip allocation mirrors maker's
+        # (day_net - day_gross) / n_trips formula, applied at run-level.
+        # Three trips of +10, +5, -1 = gross 14; net 11 -> delta = -1.
+        from research.backtest.taker_engine import TakerEngine
+
+        base = self._base_result(
+            positions=np.array([0, 1, 0, 1, 0, -1, 0]),
+            mid_prices=np.array([100.0, 100.0, 110.0, 100.0, 105.0, 100.0, 101.0]),
+        )
+        out = TakerEngine().enrich_result(
+            base,
+            instrument="TXFD6",
+            data_period="2026-01-02..2026-05-13",
+            pipeline_mode="research",
+            total_net_pts=11.0,
+        )
+        assert out.trade_pnl is not None
+        # Gross expected: +10, +5, -1.  Net per trip = gross - 1.
+        assert [round(t, 6) for t in out.trade_pnl] == [9.0, 4.0, -2.0]
+        assert math.isclose(sum(out.trade_pnl), 11.0, abs_tol=1e-9)
+
     def test_provenance_fields_still_set(self) -> None:
         from research.backtest.taker_engine import TakerEngine
 

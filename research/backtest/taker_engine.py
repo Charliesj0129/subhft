@@ -38,6 +38,7 @@ class TakerEngine:
         pipeline_mode: str,
         data_source: str = "npy",
         price_scale: float = 1.0,
+        total_net_pts: float | None = None,
     ) -> Any:
         """Add provenance metadata to an existing BacktestResult from hft_native_runner.
 
@@ -51,6 +52,19 @@ class TakerEngine:
         already in points; 10_000 / 1_000_000 if scaled int).  Defaults
         to 1.0 because the existing hft_native_runner emits ``mid_prices``
         in points; callers passing scaled-int arrays must say so.
+
+        Round 39: ``total_net_pts`` (optional) is the run-level NET
+        PnL in points — i.e. gross mid-to-mid minus fees / tax /
+        slippage / spread / residual MtM, computed by the caller's
+        cost model.  When provided, the cost delta is allocated evenly
+        across all matched trips (mirrors ``MakerEngine``'s day-level
+        ``(day_net - day_gross) / n_trips`` allocation, just at the
+        run-level since ``hft_native_runner`` exposes a single
+        aggregate equity curve, not per-day breakdowns).  The
+        invariant ``sum(trade_pnl) == total_net_pts`` holds whenever
+        at least one trip is matched.  When ``None``, trips remain
+        gross mid-to-mid (Round 38 behaviour) so callers that don't
+        know the net total still see correct per-trip ordering.
 
         If either array is absent (e.g. the runner ran in a mode that
         skipped position recording) ``trade_pnl`` stays ``None`` — the
@@ -73,6 +87,13 @@ class TakerEngine:
             )
         except Exception:  # noqa: BLE001 — defensive; never break enrich.
             trips = []
+        if trips and total_net_pts is not None:
+            # Round 39 cost allocation: spread the run-level (net - gross)
+            # delta evenly across trips so trade-axis sub-gates see net
+            # per-trip PnL rather than mid-to-mid gross.
+            gross_sum = float(sum(trips))
+            delta = (float(total_net_pts) - gross_sum) / len(trips)
+            trips = [t + delta for t in trips]
         trade_pnl = trips if trips else None
 
         return replace(
