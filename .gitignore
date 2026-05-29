@@ -107,6 +107,8 @@ research/*
 !research/combinatorial/**/*.py
 !research/strategy_archive/
 !research/strategy_archive/*.yaml
+!research/templates/
+!research/templates/*.yaml
 !research/experiments/
 research/experiments/*
 !research/experiments/__init__.py
