@@ -243,6 +243,89 @@ def list_runs(
     return "\n".join(out)
 
 
+def gates(
+    strategy_type: str | None = None,
+    *,
+    profile: str | None = None,
+    top: int | None = None,
+) -> str:
+    """Per-sub-gate failure-frequency view (research bottleneck dashboard).
+
+    For each sub-gate name present in any matching row, count:
+      * ``evaluated`` — rows where the gate ran (sub_gates entry present)
+      * ``failed``    — entry with passed == False
+      * ``errored``   — entry with passed == None or error == True
+      * ``fail_rate`` — failed / evaluated (rendered as %)
+
+    Sorted by failed descending so the top of the table shows which
+    gates are killing the most candidates — answers goal §9's "what's
+    the kept/killed rationale" at the *gate population* axis instead
+    of per-row.  ``--top N`` truncates the list to the worst N.
+
+    Filters (AND-combined): strategy_type, profile.
+    """
+    rows = sub_gate_audit.read_runs()
+    if strategy_type is not None:
+        rows = [r for r in rows if r.get("strategy_type") == strategy_type]
+    if profile is not None:
+        rows = [r for r in rows if r.get("profile_name") == profile]
+    if not rows:
+        return "no audit rows match filter."
+
+    counters: dict[str, dict[str, int]] = {}
+    for row in rows:
+        for entry in row.get("sub_gates") or []:
+            if not isinstance(entry, dict):
+                continue
+            name = str(entry.get("name", "") or "")
+            if not name:
+                continue
+            bucket = counters.setdefault(name, {"evaluated": 0, "failed": 0, "errored": 0})
+            bucket["evaluated"] += 1
+            passed = entry.get("passed")
+            is_error = bool(entry.get("error"))
+            if passed is None or is_error:
+                bucket["errored"] += 1
+            elif passed is False:
+                bucket["failed"] += 1
+
+    if not counters:
+        return "no sub-gate entries recorded across matched rows."
+
+    items = sorted(
+        counters.items(),
+        key=lambda kv: (kv[1]["failed"], kv[1]["errored"], kv[1]["evaluated"]),
+        reverse=True,
+    )
+    if top is not None and top > 0:
+        items = items[:top]
+
+    headers = ("sub_gate", "evaluated", "failed", "errored", "fail_rate")
+    body: list[tuple[str, ...]] = []
+    for name, c in items:
+        ev = c["evaluated"]
+        rate = (100.0 * c["failed"] / ev) if ev else 0.0
+        body.append(
+            (
+                name[:32],
+                str(ev),
+                str(c["failed"]),
+                str(c["errored"]),
+                f"{rate:.1f}%",
+            )
+        )
+
+    widths = [max(len(h), max(len(b[i]) for b in body)) for i, h in enumerate(headers)]
+
+    def _fmt(cells: tuple[str, ...]) -> str:
+        return "  ".join(c.ljust(widths[i]) for i, c in enumerate(cells))
+
+    out: list[str] = [_fmt(headers), _fmt(tuple("-" * w for w in widths))]
+    out.extend(_fmt(c) for c in body)
+    out.append(f"({len(body)} sub-gate{'s' if len(body) != 1 else ''} across {len(rows)} rows)")
+    return "\n".join(out)
+
+
 def _replay_parity_entry(row: dict) -> dict | None:
     """Locate the replay_parity sub-gate entry in an audit row."""
     for entry in row.get("sub_gates") or []:
@@ -540,6 +623,14 @@ def main(argv: list[str] | None = None) -> int:
     cmp_p.add_argument("run_id_b")
     cmp_p.add_argument("--strategy-type", choices=("maker", "taker"), default=None)
 
+    gat_p = sub.add_parser(
+        "gates",
+        help="Per-sub-gate failure-frequency view across audit rows.",
+    )
+    gat_p.add_argument("--strategy-type", choices=("maker", "taker"), default=None)
+    gat_p.add_argument("--profile", default=None)
+    gat_p.add_argument("--top", type=int, default=None, help="Truncate to worst N gates.")
+
     div_p = sub.add_parser(
         "divergence",
         help="List replay-parity divergence categorization per row.",
@@ -598,6 +689,12 @@ def main(argv: list[str] | None = None) -> int:
         )
     elif args.cmd == "summary":
         out = summary(strategy_type=args.strategy_type, profile=args.profile)
+    elif args.cmd == "gates":
+        out = gates(
+            strategy_type=args.strategy_type,
+            profile=args.profile,
+            top=args.top,
+        )
     elif args.cmd == "divergence":
         out = divergence(
             strategy_type=args.strategy_type,
