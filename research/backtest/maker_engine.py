@@ -19,6 +19,7 @@ import structlog
 
 from research.backtest.cost_models import CostModel
 from research.backtest.fill_models import FillModel, QueuePosition
+from research.backtest.trade_pnl_projector import project_trade_pnl
 from research.backtest.types import BacktestResult
 
 logger = structlog.get_logger()
@@ -286,6 +287,13 @@ class MakerEngine:
         # additive). Both default to 0 if no days traded.
         total_residual_mtm = 0.0
         final_residual_qty = 0
+        # Round 24/25: accumulate per-round-trip NET PnL across days so the
+        # trade-axis sub-gates (trade_concentration, outlier_trade_removal,
+        # edge_per_round_trip) read goal §1's per-round-trip edge directly
+        # instead of falling back to daily_pnl.  Per-trip net allocates the
+        # day-level cost/MtM delta evenly across that day's trips so the
+        # invariant ``sum(day-trips) == day_net`` holds whenever day_trips > 0.
+        trade_pnl_pts: list[float] = []
 
         for date in dates:
             events = self._ck_source.load_day(instrument, date)
@@ -340,6 +348,14 @@ class MakerEngine:
                 if spr not in spread_breakdown:
                     spread_breakdown[spr] = {"fills": 0, "gross_pnl": 0.0}
                 spread_breakdown[spr]["fills"] += 1
+
+            # Round 25: project per-round-trip PnL from this day's fills,
+            # allocate day-level (cost + residual MtM) delta evenly across
+            # trips so sum-per-day == day_net (when day_trips > 0).
+            day_trip_grosses = project_trade_pnl(day_fills)
+            if day_trip_grosses:
+                delta_per_trip = (day_net - day_gross) / len(day_trip_grosses)
+                trade_pnl_pts.extend(g + delta_per_trip for g in day_trip_grosses)
 
         equity = np.array(equity_points)
         total_net = self._cost_model.apply(total_gross, total_fills)
@@ -407,6 +423,7 @@ class MakerEngine:
             residual_qty=final_residual_qty,
             abs_residual_qty=abs(final_residual_qty),
             mark_method=self._mark_method,
+            trade_pnl=trade_pnl_pts if trade_pnl_pts else None,
             daily_pnl=daily_pnl,
         )
 
