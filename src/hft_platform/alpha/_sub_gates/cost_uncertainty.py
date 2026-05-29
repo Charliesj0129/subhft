@@ -119,8 +119,7 @@ class CostUncertaintyGate:
                 passed=not is_strict,
                 metrics=metrics_advisory,
                 details=(
-                    f"{prefix}: cost_uncertainty_p95_lower_bound_min_pts threshold "
-                    f"absent (lower_bound={p95_lower:.4f})"
+                    f"{prefix}: cost_uncertainty_p95_lower_bound_min_pts threshold absent (lower_bound={p95_lower:.4f})"
                 ),
             )
 
