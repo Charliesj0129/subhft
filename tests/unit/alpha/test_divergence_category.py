@@ -36,6 +36,68 @@ class TestClassifyField:
     def test_unknown_key_maps_to_unknown(self) -> None:
         assert classify_field("not_a_real_field") is DivergenceCategory.UNKNOWN
 
+    # --- Round 14: prefix matching for the three previously-unmapped
+    # divergence categories.  Any sidecar field starting with these
+    # prefixes routes to the right triage owner without waiting on a
+    # canonical-intent schema rev.
+
+    def test_feature_prefix_maps_to_feature_mismatch(self) -> None:
+        assert classify_field("feature_obi") is DivergenceCategory.FEATURE_MISMATCH
+        assert classify_field("feature_microprice") is DivergenceCategory.FEATURE_MISMATCH
+
+    def test_session_prefix_maps_to_session_phase_filter(self) -> None:
+        assert (
+            classify_field("session_phase")
+            is DivergenceCategory.SESSION_PHASE_FILTER
+        )
+        assert (
+            classify_field("session_window_active")
+            is DivergenceCategory.SESSION_PHASE_FILTER
+        )
+
+    def test_risk_prefix_maps_to_risk_filter(self) -> None:
+        assert classify_field("risk_filter_breach") is DivergenceCategory.RISK_FILTER
+        assert classify_field("risk_brake_active") is DivergenceCategory.RISK_FILTER
+
+    def test_exact_field_match_wins_over_prefix(self) -> None:
+        # Defensive: an exact-mapped field must NOT be re-routed by a
+        # prefix rule.  Today no canonical field starts with these
+        # prefixes but the contract should be explicit.
+        assert (
+            classify_field("symbol") is DivergenceCategory.DATA_MISMATCH
+        )  # control — no prefix conflict
+        # Force a synthetic check: every exact mapping should still
+        # round-trip regardless of prefix table.
+        for canonical_key in (
+            "__missing__",
+            "symbol",
+            "timestamp_us",
+            "decision_price",
+            "qty",
+            "strategy_id",
+        ):
+            cat = classify_field(canonical_key)
+            assert cat is not DivergenceCategory.UNKNOWN
+            # Specifically: prefix-matched categories should not steal
+            # an exact-mapped field.
+            assert cat not in {
+                DivergenceCategory.FEATURE_MISMATCH,
+                DivergenceCategory.SESSION_PHASE_FILTER,
+                DivergenceCategory.RISK_FILTER,
+            }
+
+    def test_prefix_without_suffix_still_routes(self) -> None:
+        # Edge case: "feature_" alone (empty body) still matches the
+        # prefix and routes to FEATURE_MISMATCH — operator producing
+        # a malformed key still sees the divergence rather than UNKNOWN.
+        assert classify_field("feature_") is DivergenceCategory.FEATURE_MISMATCH
+
+    def test_unrelated_prefix_falls_through_to_unknown(self) -> None:
+        # Sanity: a key that looks like a prefix neighbor but isn't
+        # should still land in UNKNOWN.
+        assert classify_field("featureless_x") is DivergenceCategory.UNKNOWN
+        assert classify_field("sessionless") is DivergenceCategory.UNKNOWN
+
     def test_known_intent_fields_have_non_unknown_mapping(self) -> None:
         # Every key emitted by replay.intent_log._intent_to_canonical()
         # should classify to something other than UNKNOWN — leaving any
@@ -70,6 +132,9 @@ class TestCategorizeHistogram:
             "qty": 4,
             "side": 7,  # implementation_drift
             "intent_type": 2,  # implementation_drift
+            "feature_obi": 3,  # Round 14 prefix -> feature_mismatch
+            "session_phase": 2,  # Round 14 prefix -> session_phase_filter
+            "risk_filter_breach": 4,  # Round 14 prefix -> risk_filter
             "unmapped_field": 1,
         }
         out = categorize_histogram(hist)
@@ -78,6 +143,9 @@ class TestCategorizeHistogram:
         assert out[DivergenceCategory.LATENCY_SHIFT.value] == 1
         assert out[DivergenceCategory.POSITION_LIMIT.value] == 4
         assert out[DivergenceCategory.IMPLEMENTATION_DRIFT.value] == 9  # 7 + 2
+        assert out[DivergenceCategory.FEATURE_MISMATCH.value] == 3
+        assert out[DivergenceCategory.SESSION_PHASE_FILTER.value] == 2
+        assert out[DivergenceCategory.RISK_FILTER.value] == 4
         assert out[DivergenceCategory.UNKNOWN.value] == 1
 
     def test_empty_histogram_returns_empty_dict(self) -> None:

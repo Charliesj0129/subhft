@@ -80,9 +80,38 @@ _FIELD_TO_CATEGORY: dict[str, DivergenceCategory] = {
 }
 
 
+_PREFIX_TO_CATEGORY: tuple[tuple[str, DivergenceCategory], ...] = (
+    # Round 14: prefix matching so sidecar producers can surface
+    # divergences in the three categories with no canonical intent
+    # field today.  The replay-parity harness records per-field
+    # histogram keys; when an upstream emits e.g. ``feature_obi`` /
+    # ``session_phase`` / ``risk_filter_breach`` we route the count
+    # to the right triage owner without waiting on a schema rev.
+    #
+    # Ordering matters — first match wins.  More specific prefixes
+    # should appear earlier; the current set is already disjoint.
+    ("feature_", DivergenceCategory.FEATURE_MISMATCH),
+    ("session_", DivergenceCategory.SESSION_PHASE_FILTER),
+    ("risk_", DivergenceCategory.RISK_FILTER),
+)
+
+
 def classify_field(field_name: str) -> DivergenceCategory:
-    """Return the category for a histogram field, falling back to UNKNOWN."""
-    return _FIELD_TO_CATEGORY.get(field_name, DivergenceCategory.UNKNOWN)
+    """Return the category for a histogram field, falling back to UNKNOWN.
+
+    Resolution order:
+      1. Exact match against ``_FIELD_TO_CATEGORY``.
+      2. Prefix match against ``_PREFIX_TO_CATEGORY`` (Round 14).
+      3. ``DivergenceCategory.UNKNOWN`` — we never silently drop a
+         field, so triage can still see the count.
+    """
+    exact = _FIELD_TO_CATEGORY.get(field_name)
+    if exact is not None:
+        return exact
+    for prefix, category in _PREFIX_TO_CATEGORY:
+        if field_name.startswith(prefix):
+            return category
+    return DivergenceCategory.UNKNOWN
 
 
 def categorize_histogram(histogram: dict[str, int]) -> dict[str, int]:
