@@ -502,11 +502,24 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
                 from pathlib import Path as _Path
 
                 data_period = ",".join(str(_Path(p).stem) for p in resolved_data_paths)
+            # Round 40: thread the per-instrument cost profile so
+            # ``BacktestResult.trade_pnl`` reflects NET per-trip PnL.
+            # Missing profile (unknown instrument) falls back to gross
+            # mid-to-mid trips rather than fabricating a cost — goal
+            # 限制 §4.  We never default to a stand-in cost model.
+            _cost_model = None
+            try:
+                from research.backtest.cost_models import load_cost_profile
+
+                _cost_model = load_cost_profile(instrument)
+            except (KeyError, FileNotFoundError):
+                _cost_model = None
             base_result = TakerEngine().enrich_result(
                 base_result,
                 instrument=instrument,
                 data_period=data_period,
                 pipeline_mode="strict",
+                cost_model=_cost_model,
             )
             ResultStore().save(base_result, alpha_id)
     _runner_cls = type(runner)

@@ -39,6 +39,7 @@ class TakerEngine:
         data_source: str = "npy",
         price_scale: float = 1.0,
         total_net_pts: float | None = None,
+        cost_model: Any = None,
     ) -> Any:
         """Add provenance metadata to an existing BacktestResult from hft_native_runner.
 
@@ -52,6 +53,19 @@ class TakerEngine:
         already in points; 10_000 / 1_000_000 if scaled int).  Defaults
         to 1.0 because the existing hft_native_runner emits ``mid_prices``
         in points; callers passing scaled-int arrays must say so.
+
+        Round 40: ``cost_model`` (optional) is any object satisfying
+        :class:`research.backtest.cost_models.CostModel` — typically
+        ``load_cost_profile(instrument)``.  When supplied AND
+        ``total_net_pts`` is not provided, the engine derives the
+        net total via ``cost_model.apply(gross_sum, n_fills)``
+        where ``n_fills`` is the same synthetic-unit-fill count the
+        per-trip projector uses (``sum(|position deltas|)``).  This
+        is the maker / taker symmetry: maker reaches ``cost_model.apply``
+        on each day's fills; taker reaches it on the run-level totals
+        because ``hft_native_runner`` exposes only an aggregate equity
+        curve.  Explicit ``total_net_pts`` still wins when both are
+        passed (caller knows best).
 
         Round 39: ``total_net_pts`` (optional) is the run-level NET
         PnL in points — i.e. gross mid-to-mid minus fees / tax /
@@ -87,6 +101,20 @@ class TakerEngine:
             )
         except Exception:  # noqa: BLE001 — defensive; never break enrich.
             trips = []
+        # Round 40: if a cost_model is supplied AND no explicit
+        # total_net_pts was given, derive it via the same Protocol the
+        # maker engine uses: cost_model.apply(gross_sum, n_fills).
+        # n_fills mirrors the synthetic-unit-fill expansion in
+        # project_trade_pnl_from_position_series — sum(|deltas|).
+        if trips and cost_model is not None and total_net_pts is None:
+            try:
+                n_fills = 0
+                for i in range(1, len(positions)):
+                    n_fills += abs(int(positions[i]) - int(positions[i - 1]))
+                gross_sum = float(sum(trips))
+                total_net_pts = float(cost_model.apply(gross_sum, n_fills))
+            except Exception:  # noqa: BLE001 — defensive; never break enrich.
+                total_net_pts = None
         if trips and total_net_pts is not None:
             # Round 39 cost allocation: spread the run-level (net - gross)
             # delta evenly across trips so trade-axis sub-gates see net

@@ -394,6 +394,136 @@ class TestTakerEngineEnrichPopulatesTradePnl:
         assert [round(t, 6) for t in out.trade_pnl] == [9.0, 4.0, -2.0]
         assert math.isclose(sum(out.trade_pnl), 11.0, abs_tol=1e-9)
 
+    def test_cost_model_derives_total_net_pts(self) -> None:
+        # Round 40: passing cost_model alone derives total_net_pts via
+        # cost_model.apply(gross_sum, n_fills).  Validate with a tiny
+        # in-test stub matching the Protocol.
+        from research.backtest.taker_engine import TakerEngine
+
+        class _StubCost:
+            def __init__(self, per_side: float) -> None:
+                self.per_side = per_side
+                self.n_fills_seen: int | None = None
+                self.gross_seen: float | None = None
+
+            def apply(self, gross_pnl_pts: float, n_fills: int) -> float:
+                self.n_fills_seen = n_fills
+                self.gross_seen = gross_pnl_pts
+                return gross_pnl_pts - n_fills * self.per_side
+
+        cost = _StubCost(per_side=0.5)
+        base = self._base_result(
+            positions=np.array([0, 1, 0, -1, 0]),
+            mid_prices=np.array([100.0, 100.0, 103.0, 100.0, 99.0]),
+        )
+        out = TakerEngine().enrich_result(
+            base,
+            instrument="TXFD6",
+            data_period="2026-01-02..2026-05-13",
+            pipeline_mode="research",
+            cost_model=cost,
+        )
+        # Trips gross: buy@100/sell@103 = +3 ; sell@100/buy@99 = +1.
+        # Position transitions: 4 unit deltas -> n_fills=4.
+        # Net total = 4 - 4*0.5 = 2.0.
+        assert cost.n_fills_seen == 4
+        assert math.isclose(cost.gross_seen, 4.0, abs_tol=1e-9)
+        assert out.trade_pnl is not None
+        assert math.isclose(sum(out.trade_pnl), 2.0, abs_tol=1e-9)
+
+    def test_explicit_total_net_pts_overrides_cost_model(self) -> None:
+        # Caller-supplied total_net_pts wins; cost_model is ignored.
+        from research.backtest.taker_engine import TakerEngine
+
+        class _StubCost:
+            def apply(self, gross_pnl_pts: float, n_fills: int) -> float:
+                return -999.0  # would-be result if used
+
+        base = self._base_result(
+            positions=np.array([0, 1, 0]),
+            mid_prices=np.array([100.0, 100.0, 105.0]),
+        )
+        out = TakerEngine().enrich_result(
+            base,
+            instrument="TXFD6",
+            data_period="2026-01-02..2026-05-13",
+            pipeline_mode="research",
+            total_net_pts=4.0,
+            cost_model=_StubCost(),
+        )
+        assert out.trade_pnl == [4.0]
+
+    def test_cost_model_raising_falls_back_to_gross(self) -> None:
+        # 限制 §4: never fabricate cost.  If cost_model.apply errors,
+        # trips revert to gross (Round 38 behaviour) — better to under-
+        # report cost in metrics than to invent a wrong number.
+        from research.backtest.taker_engine import TakerEngine
+
+        class _BrokenCost:
+            def apply(self, gross_pnl_pts: float, n_fills: int) -> float:
+                raise RuntimeError("simulated cost-model failure")
+
+        base = self._base_result(
+            positions=np.array([0, 1, 0]),
+            mid_prices=np.array([100.0, 100.0, 105.0]),
+        )
+        out = TakerEngine().enrich_result(
+            base,
+            instrument="TXFD6",
+            data_period="2026-01-02..2026-05-13",
+            pipeline_mode="research",
+            cost_model=_BrokenCost(),
+        )
+        # Gross +5 retained; allocation skipped.
+        assert out.trade_pnl == [5.0]
+
+    def test_cost_model_with_no_trips_returns_none(self) -> None:
+        from research.backtest.taker_engine import TakerEngine
+
+        class _Cost:
+            def apply(self, gross_pnl_pts: float, n_fills: int) -> float:
+                return gross_pnl_pts  # would-be no-op
+
+        base = self._base_result(
+            positions=np.zeros(4),
+            mid_prices=np.array([100.0, 101.0, 102.0, 103.0]),
+        )
+        out = TakerEngine().enrich_result(
+            base,
+            instrument="TXFD6",
+            data_period="2026-01-02..2026-05-13",
+            pipeline_mode="research",
+            cost_model=_Cost(),
+        )
+        assert out.trade_pnl is None
+
+    def test_real_taifex_cost_model_round_trips(self) -> None:
+        # Anchor: the actual TAIFEXCost from research.backtest.cost_models
+        # satisfies the contract end-to-end (no Protocol mismatch).
+        from research.backtest.cost_models import TAIFEXCost
+        from research.backtest.taker_engine import TakerEngine
+
+        cost = TAIFEXCost(
+            instrument="TEST",
+            commission_pts_per_side=0.4,
+            tax_pts_per_side=0.2,
+            point_value_nwd=200,
+        )
+        base = self._base_result(
+            positions=np.array([0, 1, 0]),
+            mid_prices=np.array([100.0, 100.0, 110.0]),
+        )
+        out = TakerEngine().enrich_result(
+            base,
+            instrument="TEST",
+            data_period="d",
+            pipeline_mode="research",
+            cost_model=cost,
+        )
+        # Gross +10; n_fills=2; cost_per_side=0.6 -> net = 10 - 2*0.6 = 8.8.
+        assert out.trade_pnl is not None
+        assert math.isclose(out.trade_pnl[0], 8.8, abs_tol=1e-9)
+
     def test_provenance_fields_still_set(self) -> None:
         from research.backtest.taker_engine import TakerEngine
 
