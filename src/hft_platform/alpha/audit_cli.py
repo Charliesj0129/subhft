@@ -310,6 +310,75 @@ def init_candidate(
     return "\n".join(lines)
 
 
+def backfill_specs(
+    *,
+    template: str | Path = _DEFAULT_TEMPLATE,
+    root: str | Path = _DEFAULT_ALPHAS_ROOT,
+    apply: bool = False,
+) -> str:
+    """Backfill missing ``spec.yaml`` for existing candidate directories.
+
+    Goal §3 + §9: every candidate needs a spec.  ``audit init`` covers
+    new candidates; this surface covers the legacy directories that
+    pre-date the spec template.  Default is dry-run — lists which dirs
+    would receive a stub.  Pass ``apply=True`` to actually create them.
+
+    Skipped names:
+      * starts with ``_`` (``_templates``, ``__pycache__``, ``_archive``)
+      * not a directory
+      * already has ``spec.yaml``
+
+    Each stub copies the template and substitutes ``strategy_name`` to
+    the directory name.  spec_check is run; FAIL is recorded but does
+    not abort the backfill (legacy candidates are expected to need
+    hypothesis / entry_rule / etc. filled in by hand).
+    """
+    from hft_platform.alpha import spec_check
+
+    root_path = Path(root)
+    template_path = Path(template)
+    if not template_path.is_file():
+        return f"refused: template not found at {template_path}"
+    if not root_path.is_dir():
+        return f"refused: alphas root not found at {root_path}"
+
+    candidates: list[Path] = sorted(
+        p for p in root_path.iterdir() if p.is_dir() and not p.name.startswith("_")
+    )
+    missing: list[Path] = [c for c in candidates if not (c / "spec.yaml").is_file()]
+    if not missing:
+        return f"no missing specs under {root_path} ({len(candidates)} candidate dirs scanned)"
+
+    lines: list[str] = []
+    lines.append(f"scanned {len(candidates)} candidate dirs under {root_path}")
+    lines.append(f"missing spec.yaml: {len(missing)}")
+    lines.append("mode    : " + ("APPLY (will write files)" if apply else "DRY-RUN (no changes)"))
+
+    failed_specs = 0
+    for c in missing:
+        target = c / "spec.yaml"
+        if not apply:
+            lines.append(f"  [dry-run] would scaffold {target}")
+            continue
+        shutil.copyfile(template_path, target)
+        raw = target.read_text(encoding="utf-8")
+        if _TEMPLATE_NAME in raw:
+            raw = raw.replace(_TEMPLATE_NAME, c.name)
+            target.write_text(raw, encoding="utf-8")
+        passed, _errors = spec_check.check_one(target)
+        marker = "OK" if passed else "spec_check FAIL"
+        if not passed:
+            failed_specs += 1
+        lines.append(f"  [apply ] wrote     {target}  ({marker})")
+
+    if apply:
+        lines.append(
+            f"summary: {len(missing) - failed_specs} pass / {failed_specs} spec_check FAIL"
+            " (legacy stubs expected to need manual fill-in)"
+        )
+    return "\n".join(lines)
+
+
 def gates(
     strategy_type: str | None = None,
     *,
@@ -690,6 +759,18 @@ def main(argv: list[str] | None = None) -> int:
     cmp_p.add_argument("run_id_b")
     cmp_p.add_argument("--strategy-type", choices=("maker", "taker"), default=None)
 
+    bf_p = sub.add_parser(
+        "backfill-specs",
+        help="Scaffold spec.yaml stubs for existing candidate dirs missing one.",
+    )
+    bf_p.add_argument("--root", default=str(_DEFAULT_ALPHAS_ROOT))
+    bf_p.add_argument("--template", default=str(_DEFAULT_TEMPLATE))
+    bf_p.add_argument(
+        "--apply",
+        action="store_true",
+        help="Actually write the stubs (default: dry-run).",
+    )
+
     init_p = sub.add_parser(
         "init",
         help="Scaffold a new candidate directory + spec.yaml from the template.",
@@ -766,6 +847,12 @@ def main(argv: list[str] | None = None) -> int:
         )
     elif args.cmd == "summary":
         out = summary(strategy_type=args.strategy_type, profile=args.profile)
+    elif args.cmd == "backfill-specs":
+        out = backfill_specs(
+            template=args.template,
+            root=args.root,
+            apply=args.apply,
+        )
     elif args.cmd == "init":
         out = init_candidate(
             args.alpha_id,
