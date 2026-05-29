@@ -243,6 +243,87 @@ def list_runs(
     return "\n".join(out)
 
 
+def _percentile(values: list[float], pct: float) -> float:
+    """Linear-interpolated percentile (numpy-compatible) without numpy.
+
+    Returns 0.0 for empty input — callers gate on ``with_edge_count``
+    before reading p50/p95 so the value is purely defensive.
+    """
+    if not values:
+        return 0.0
+    s = sorted(values)
+    if len(s) == 1:
+        return s[0]
+    k = (len(s) - 1) * (pct / 100.0)
+    lo = int(k)
+    hi = min(lo + 1, len(s) - 1)
+    frac = k - lo
+    return s[lo] + (s[hi] - s[lo]) * frac
+
+
+def summary(
+    strategy_type: str | None = None,
+    *,
+    profile: str | None = None,
+) -> str:
+    """Aggregate counts across the audit JSONL (goal §5 + §9 dashboard).
+
+    Output groups:
+      * total / by strategy_type / by blocking_passed
+      * goal §5 hard bar: rows with edge, edge >= 10, edge p50/p95
+      * triage_status distribution
+    """
+    rows = sub_gate_audit.read_runs()
+    if strategy_type is not None:
+        rows = [r for r in rows if r.get("strategy_type") == strategy_type]
+    if profile is not None:
+        rows = [r for r in rows if r.get("profile_name") == profile]
+    if not rows:
+        return "no audit rows match filter."
+
+    total = len(rows)
+    maker = sum(1 for r in rows if r.get("strategy_type") == "maker")
+    taker = sum(1 for r in rows if r.get("strategy_type") == "taker")
+    blk_pass = sum(1 for r in rows if r.get("blocking_passed") is True)
+    blk_fail = sum(1 for r in rows if r.get("blocking_passed") is False)
+    blk_loose = sum(1 for r in rows if r.get("blocking_passed") is None)
+
+    edges: list[float] = [
+        float(r["mean_net_edge_pts_per_trade"])
+        for r in rows
+        if isinstance(r.get("mean_net_edge_pts_per_trade"), (int, float))
+    ]
+    above_floor = sum(1 for e in edges if e > 10.0)
+
+    triage_counts: dict[str, int] = {}
+    for r in rows:
+        key = str(r.get("triage_status") or "(none)")
+        triage_counts[key] = triage_counts.get(key, 0) + 1
+
+    lines: list[str] = []
+    lines.append("audit summary")
+    lines.append(f"  filter         : strategy_type={strategy_type!r} profile={profile!r}")
+    lines.append(f"  total rows     : {total}")
+    lines.append(f"  by type        : maker={maker} taker={taker}")
+    lines.append(
+        f"  blocking_passed: PASS={blk_pass} FAIL={blk_fail} (loose)={blk_loose}"
+    )
+    lines.append("goal §5 hard bar (mean_net_edge_pts_per_trade > 10):")
+    lines.append(f"  rows with edge : {len(edges)} / {total}")
+    lines.append(f"  rows > floor   : {above_floor}")
+    if edges:
+        lines.append(
+            f"  edge p50/p95   : {_percentile(edges, 50):.3f} / {_percentile(edges, 95):.3f} pts/trade"
+        )
+        lines.append(
+            f"  edge min/max   : {min(edges):.3f} / {max(edges):.3f} pts/trade"
+        )
+    lines.append("triage_status distribution:")
+    for key in sorted(triage_counts):
+        lines.append(f"  {key:24s}: {triage_counts[key]}")
+    return "\n".join(lines)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="hft-alpha-audit",
@@ -258,6 +339,10 @@ def main(argv: list[str] | None = None) -> int:
     cmp_p.add_argument("run_id_a")
     cmp_p.add_argument("run_id_b")
     cmp_p.add_argument("--strategy-type", choices=("maker", "taker"), default=None)
+
+    sum_p = sub.add_parser("summary", help="Aggregate counts across audit rows.")
+    sum_p.add_argument("--strategy-type", choices=("maker", "taker"), default=None)
+    sum_p.add_argument("--profile", default=None, help="Exact profile_name filter.")
 
     list_p = sub.add_parser("list", help="Tabulate all audit rows.")
     list_p.add_argument("--strategy-type", choices=("maker", "taker"), default=None)
@@ -287,6 +372,8 @@ def main(argv: list[str] | None = None) -> int:
             edge_min=args.edge_min,
             only_passing=args.only_passing,
         )
+    elif args.cmd == "summary":
+        out = summary(strategy_type=args.strategy_type, profile=args.profile)
     else:  # pragma: no cover — argparse already enforces this
         parser.print_usage()
         return 2
