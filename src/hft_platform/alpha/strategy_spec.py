@@ -47,6 +47,17 @@ ALLOWED_FREQUENCY_CLASSES: frozenset[str] = frozenset({"minute", "intraday_hft",
 
 ALLOWED_MARKETS: frozenset[str] = frozenset({"TAIFEX"})
 
+ALLOWED_LEG_SIDES: frozenset[str] = frozenset({"long", "short"})
+ALLOWED_OPTION_RIGHTS: frozenset[str] = frozenset({"C", "P"})
+_LEG_REQUIRED: tuple[str, ...] = ("symbol", "side", "qty")
+_OPTION_REQUIRED: tuple[str, ...] = ("right", "strike", "expiry")
+_GREEKS_FIELDS: tuple[str, ...] = (
+    "max_net_delta",
+    "max_net_gamma",
+    "max_net_vega",
+    "max_net_theta",
+)
+
 _RISK_REQUIRED: tuple[str, ...] = (
     "max_position",
     "max_drawdown_pts",
@@ -164,6 +175,86 @@ def _check_validation_block(spec: dict, errors: list[str]) -> None:
         )
 
 
+def _check_legs(spec: dict, errors: list[str]) -> None:
+    """Optional ``legs:`` array — per-leg symbol/side/qty plus optional option payload.
+
+    Round 35 (goal §2): unlocks spread / straddle / strangle / calendar
+    shapes without touching the engine.  If ``legs`` is absent the spec
+    is single-leg (or list-of-strings multi-leg via ``instrument``) and
+    this check is a no-op.
+    """
+    legs = spec.get("legs")
+    if legs is None:
+        return
+    if not isinstance(legs, list):
+        errors.append("legs must be a list of leg dicts when present")
+        return
+    if len(legs) < 2:
+        errors.append("legs: list of length<2 — use single-leg 'instrument' string instead")
+    has_option = False
+    for i, leg in enumerate(legs):
+        if not isinstance(leg, dict):
+            errors.append(f"legs[{i}] must be a mapping")
+            continue
+        for field in _LEG_REQUIRED:
+            if field not in leg or _is_empty(leg.get(field)):
+                errors.append(f"legs[{i}].{field}: missing or empty")
+        side = leg.get("side")
+        if isinstance(side, str) and side not in ALLOWED_LEG_SIDES:
+            errors.append(f"legs[{i}].side={side!r} not in {sorted(ALLOWED_LEG_SIDES)}")
+        qty = leg.get("qty")
+        if isinstance(qty, bool) or not isinstance(qty, int):
+            if qty is not None:
+                errors.append(f"legs[{i}].qty must be a positive int")
+        elif qty <= 0:
+            errors.append(f"legs[{i}].qty must be > 0 (got {qty})")
+        symbol = leg.get("symbol")
+        if symbol is not None and (not isinstance(symbol, str) or not symbol.strip()):
+            errors.append(f"legs[{i}].symbol must be a non-empty string")
+        option = leg.get("option")
+        if option is not None:
+            has_option = True
+            if not isinstance(option, dict):
+                errors.append(f"legs[{i}].option must be a mapping")
+                continue
+            for field in _OPTION_REQUIRED:
+                if field not in option or _is_empty(option.get(field)):
+                    errors.append(f"legs[{i}].option.{field}: missing or empty")
+            right = option.get("right")
+            if isinstance(right, str) and right not in ALLOWED_OPTION_RIGHTS:
+                errors.append(
+                    f"legs[{i}].option.right={right!r} not in {sorted(ALLOWED_OPTION_RIGHTS)}"
+                )
+            strike = option.get("strike")
+            if strike is not None and not isinstance(strike, (int, float)):
+                errors.append(f"legs[{i}].option.strike must be numeric")
+            if isinstance(strike, bool):
+                errors.append(f"legs[{i}].option.strike must be numeric (got bool)")
+    if has_option and spec.get("greeks_exposure") is None:
+        errors.append(
+            "legs include options but greeks_exposure block is absent — "
+            "goal §2 requires Greeks caps for option strategies"
+        )
+
+
+def _check_greeks_exposure(spec: dict, errors: list[str]) -> None:
+    block = spec.get("greeks_exposure")
+    if block is None:
+        return
+    if not isinstance(block, dict):
+        errors.append("greeks_exposure must be a mapping when present")
+        return
+    if len(block) == 0:
+        errors.append("greeks_exposure: empty mapping — declare at least one cap")
+        return
+    for field in _GREEKS_FIELDS:
+        if field not in block:
+            continue
+        value = block.get(field)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            errors.append(f"greeks_exposure.{field} must be numeric")
+
+
 def validate_spec(spec: dict[str, Any]) -> list[str]:
     """Return a list of human-readable error strings; empty list == valid.
 
@@ -182,13 +273,61 @@ def validate_spec(spec: dict[str, Any]) -> list[str]:
     _check_subblock(spec, "risk_control", _RISK_REQUIRED, errors)
     _check_subblock(spec, "cost_model", _COST_REQUIRED, errors)
     _check_validation_block(spec, errors)
+    _check_legs(spec, errors)
+    _check_greeks_exposure(spec, errors)
     return errors
 
 
 def is_multi_leg(spec: dict[str, Any]) -> bool:
-    """True iff this spec declares a multi-leg instrument."""
+    """True iff this spec declares a multi-leg instrument or legs array."""
+    legs = spec.get("legs")
+    if isinstance(legs, list) and len(legs) >= 2:
+        return True
     inst = spec.get("instrument")
     return isinstance(inst, list) and len(inst) >= 2
+
+
+def has_options(spec: dict[str, Any]) -> bool:
+    """True iff any leg carries an ``option:`` payload."""
+    legs = spec.get("legs")
+    if not isinstance(legs, list):
+        return False
+    for leg in legs:
+        if isinstance(leg, dict) and leg.get("option") is not None:
+            return True
+    return False
+
+
+def classify_strategy_shape(spec: dict[str, Any]) -> str:
+    """Coarse shape tag for reporting / scaffolding.
+
+    Returns one of: ``single`` | ``multi_leg_futures`` | ``straddle`` |
+    ``strangle`` | ``calendar`` | ``vertical_spread`` | ``options_multi`` |
+    ``unknown``.  Heuristic only — engine selection still drives behavior.
+    """
+    legs = spec.get("legs")
+    if not isinstance(legs, list) or len(legs) < 2:
+        return "single"
+    if not has_options(spec):
+        return "multi_leg_futures"
+    opt_legs = [leg for leg in legs if isinstance(leg, dict) and isinstance(leg.get("option"), dict)]
+    if len(opt_legs) != len(legs):
+        return "options_multi"
+    rights = {leg["option"].get("right") for leg in opt_legs}
+    strikes = {leg["option"].get("strike") for leg in opt_legs}
+    expiries = {leg["option"].get("expiry") for leg in opt_legs}
+    if len(legs) == 2:
+        same_expiry = len(expiries) == 1
+        same_strike = len(strikes) == 1
+        if not same_expiry and same_strike:
+            return "calendar"
+        if same_expiry and same_strike and rights == ALLOWED_OPTION_RIGHTS:
+            return "straddle"
+        if same_expiry and len(strikes) == 2 and rights == ALLOWED_OPTION_RIGHTS:
+            return "strangle"
+        if same_expiry and len(rights) == 1 and len(strikes) == 2:
+            return "vertical_spread"
+    return "options_multi"
 
 
 def load_spec_provenance(
