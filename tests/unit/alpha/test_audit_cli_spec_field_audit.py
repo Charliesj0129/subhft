@@ -134,6 +134,40 @@ class TestSpecFieldAuditRound71Timeframe:
         assert "6/12 traceable" in line
 
 
+class TestSummaryAggregatesSpecFieldCoverage:
+    """Round 73: summary() reports the cohort §3 field-coverage distribution
+    and export() carries a per-row spec_fields_traceable column."""
+
+    def test_summary_groups_rows_by_coverage(self, _isolated) -> None:
+        tf_prov = dict(_FULL)
+        tf_prov["timeframe"] = "15m"
+        tf_prov["holding_period"] = "intraday"
+        _record(run_id="six", prov=tf_prov)  # 6/12
+        _record(run_id="four", prov=dict(_FULL))  # 4/12
+        _record(run_id="two", prov=None)  # 2/12
+        out = audit_cli.summary()
+        block = out.split("spec_fields (完成狀態 §3")[1]
+        assert "6/12 traceable: 1" in block
+        assert "4/12 traceable: 1" in block
+        assert "2/12 traceable: 1" in block
+
+    def test_export_carries_spec_fields_traceable_column(self, _isolated) -> None:
+        import csv
+        import io
+
+        tf_prov = dict(_FULL)
+        tf_prov["timeframe"] = "15m"
+        tf_prov["holding_period"] = "intraday"
+        _record(run_id="six", prov=tf_prov)
+        _record(run_id="bare", prov=None)
+        out = audit_cli.export("csv")
+        reader = csv.DictReader(io.StringIO(out))
+        rows = {r["run_id"]: r for r in reader}
+        assert "spec_fields_traceable" in reader.fieldnames
+        assert rows["six"]["spec_fields_traceable"] == "6/12"
+        assert rows["bare"]["spec_fields_traceable"] == "2/12"
+
+
 class TestShowSurfacesSpecFieldAudit:
     def test_show_counts_traceable_fields(self, _isolated) -> None:
         _record(run_id="s_full", prov=dict(_FULL))

@@ -1183,6 +1183,7 @@ _EXPORT_COLUMNS: tuple[str, ...] = (
     "promotion_blockers",
     "triage_reason",
     "spec_provenance_complete",
+    "spec_fields_traceable",
     "data_range",
     "cost_model_id",
 )
@@ -1215,6 +1216,7 @@ def _export_row(row: dict) -> dict[str, str]:
     sample_str = sample_label if isinstance(sample_label, str) else ""
     ready, blockers = promotion_readiness(row)
     spec_ok, _ = spec_provenance_complete(row)
+    traceable_fields, _untraceable = spec_field_audit(row)
     blk = row.get("blocking_passed")
     blk_str = "" if blk is None else ("true" if blk else "false")
     return {
@@ -1235,6 +1237,7 @@ def _export_row(row: dict) -> dict[str, str]:
         "promotion_blockers": ";".join(blockers),
         "triage_reason": triage_reason(row),
         "spec_provenance_complete": "true" if spec_ok else "false",
+        "spec_fields_traceable": f"{len(traceable_fields)}/{len(_SPEC_FIELDS_3)}",
         "data_range": str(prov.get("data_range", "") if isinstance(prov, dict) else ""),
         "cost_model_id": str(prov.get("cost_model_id", "") if isinstance(prov, dict) else ""),
     }
@@ -1504,6 +1507,22 @@ def summary(
     if missing_key_counts:
         top_key, top_n = max(missing_key_counts.items(), key=lambda kv: kv[1])
         lines.append(f"  top missing key: {top_key} ({top_n})")
+    # Round 73: cohort-level §3 fixed-spec field traceability — how many of
+    # the 12 完成狀態 §3 fields the audit record itself can attest to, summed
+    # across the cohort.  Distinct from spec_provenance completeness (which is
+    # the §4 audit-trail triple): this is the §3 field-coverage distribution,
+    # built from spec_field_audit per row so a reviewer sees whether the
+    # cohort's records stand on their own or lean on spec.yaml.
+    coverage_counts: dict[int, int] = {}
+    for r in rows:
+        traceable, _untraceable = spec_field_audit(r)
+        n = len(traceable)
+        coverage_counts[n] = coverage_counts.get(n, 0) + 1
+    lines.append(
+        f"spec_fields (完成狀態 §3, attestable from record / {len(_SPEC_FIELDS_3)}):"
+    )
+    for n in sorted(coverage_counts, reverse=True):
+        lines.append(f"  {n:2d}/{len(_SPEC_FIELDS_3)} traceable: {coverage_counts[n]}")
     # Round 65: triage-reason distribution (驗證標準 §9 比較策略) — how the
     # cohort splits across the kept/killed vocabulary, derived from the
     # composite verdict rather than the raw blocking triage_status.
