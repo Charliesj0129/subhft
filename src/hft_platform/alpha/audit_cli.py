@@ -275,6 +275,22 @@ def show(run_id: str, strategy_type: str | None = None) -> str:
         lines.append(
             f"worst_loss_share: {worst_loss:.1f}% of |loss|  [vs strict cap 50.0% -> {wl_marker}]"
         )
+    # Round 62: replay parity (驗證標準 §7/§8) — backtest↔replay intent match,
+    # with the dominant divergence category named when below the floor.
+    replay_match = row.get("replay_match_pct")
+    if replay_match is None:
+        lines.append("replay_parity  : (n/a — replay_parity gate not run)")
+    else:
+        rp_marker = "PASS" if replay_match >= 95.0 else "FAIL"
+        category = row.get("replay_divergence_category")
+        suffix = (
+            f"; dominant={category}"
+            if isinstance(category, str) and category and replay_match < 95.0
+            else ""
+        )
+        lines.append(
+            f"replay_parity  : {replay_match:.1f}% match  [vs strict floor 95.0% -> {rp_marker}{suffix}]"
+        )
     # Round 51: composite promotion verdict over every lifted axis, so a
     # reviewer gets the kept/killed answer (驗證標準 §9) in one line.
     ready, blockers = promotion_readiness(row)

@@ -326,6 +326,66 @@ def _extract_worst_loss_share(advisory: list[dict] | None) -> float | None:
     return None
 
 
+def _extract_replay_match_pct(advisory: list[dict] | None) -> float | None:
+    """Lift match_pct from the ``replay_parity`` gate to a top-level row
+    field (Round 62).
+
+    驗證標準 §7 (回測↔replay/paper/live 訊號一致性): the share of recorded
+    intents that the deterministic replay reproduced.  A low match_pct means
+    the backtest and the executed path disagree on signal timing / direction
+    / size, so the edge is not trustworthy regardless of its magnitude.
+    Surfacing it lets ``audit show`` flag a parity break without parsing the
+    gate list.  Returns ``None`` when the gate didn't run.
+    """
+    if not advisory:
+        return None
+    for entry in advisory:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("name") != "replay_parity":
+            continue
+        metrics = entry.get("metrics") or {}
+        if not isinstance(metrics, dict):
+            return None
+        value = metrics.get("match_pct")
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _extract_replay_divergence_category(
+    advisory: list[dict] | None,
+) -> str | None:
+    """Lift dominant_divergence_category from the ``replay_parity`` gate to a
+    top-level row field (Round 62).
+
+    驗證標準 §8: when backtest and replay disagree, the divergence must be
+    classified (data_mismatch / timestamp_alignment_error / latency_shift /
+    …).  Surfacing the dominant category lets ``audit show`` name *why* a
+    parity break happened.  Returns ``None`` when the gate didn't run or
+    recorded no category.
+    """
+    if not advisory:
+        return None
+    for entry in advisory:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("name") != "replay_parity":
+            continue
+        metrics = entry.get("metrics") or {}
+        if not isinstance(metrics, dict):
+            return None
+        value = metrics.get("dominant_divergence_category")
+        if isinstance(value, str) and value:
+            return value
+        return None
+    return None
+
+
 _SAMPLE_ADEQUACY_LABELS = frozenset(
     {"adequate", "promising", "needs_more_sample", "inconclusive"}
 )
@@ -453,6 +513,12 @@ def build_record(
     worst_loss_share = _extract_worst_loss_share(advisory)
     if worst_loss_share is not None:
         row["worst_loss_share_pct"] = worst_loss_share
+    replay_match = _extract_replay_match_pct(advisory)
+    if replay_match is not None:
+        row["replay_match_pct"] = replay_match
+    replay_category = _extract_replay_divergence_category(advisory)
+    if replay_category is not None:
+        row["replay_divergence_category"] = replay_category
     prov = _normalize_spec_provenance(spec_provenance)
     if prov:
         row["spec_provenance"] = prov
