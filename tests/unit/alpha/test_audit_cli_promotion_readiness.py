@@ -18,6 +18,7 @@ def _record(
     label: str | None = "adequate",
     dd_ratio: float | None = None,
     top_month: float | None = None,
+    worst_loss: float | None = None,
     blocking_passed: bool = True,
 ) -> None:
     advisory: list[dict] = []
@@ -74,6 +75,19 @@ def _record(
                 "passed": (dd_ratio is None or dd_ratio <= 2.0)
                 and (top_month is None or top_month <= 50.0),
                 "metrics": metrics,
+                "details": "",
+            }
+        )
+    if worst_loss is not None:
+        advisory.append(
+            {
+                "name": "trade_concentration",
+                "passed": worst_loss <= 50.0,
+                "metrics": {
+                    "n_trades": 80.0,
+                    "worst_loss_share_pct": worst_loss,
+                    "worst_loss_share_max_pct": 50.0,
+                },
                 "details": "",
             }
         )
@@ -189,6 +203,25 @@ class TestPromotionReadinessFunction:
         ready, blockers = audit_cli.promotion_readiness(_row("tm_na"))
         assert ready is True
         assert not any(b.startswith("top_month") for b in blockers)
+
+    def test_worst_loss_breach_blocks(self, _isolated) -> None:
+        # §5: one trade carrying >50% of total loss blocks promotion.
+        _record(run_id="wl", worst_loss=75.0)
+        ready, blockers = audit_cli.promotion_readiness(_row("wl"))
+        assert ready is False
+        assert "worst_loss" in blockers
+
+    def test_worst_loss_within_cap_is_ready(self, _isolated) -> None:
+        _record(run_id="wl_ok", worst_loss=35.0)
+        ready, blockers = audit_cli.promotion_readiness(_row("wl_ok"))
+        assert ready is True
+        assert blockers == []
+
+    def test_worst_loss_missing_is_not_a_blocker(self, _isolated) -> None:
+        _record(run_id="wl_na")  # no worst_loss
+        ready, blockers = audit_cli.promotion_readiness(_row("wl_na"))
+        assert ready is True
+        assert not any(b.startswith("worst_loss") for b in blockers)
 
     def test_missing_edge_and_dominance_and_sample_are_blockers(self, _isolated) -> None:
         _record(run_id="bare", edge=None, ff_share=None, day_dom=None, label=None)

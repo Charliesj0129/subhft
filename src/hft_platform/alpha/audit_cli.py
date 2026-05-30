@@ -70,6 +70,7 @@ _FORCE_FLAT_CAP_PCT = 30.0
 _DAY_DOMINANCE_CAP_PCT = 25.0
 _DRAWDOWN_RATIO_CAP = 2.0
 _TOP_MONTH_CAP_PCT = 50.0
+_WORST_LOSS_SHARE_CAP_PCT = 50.0
 
 
 def promotion_readiness(row: dict) -> tuple[bool, list[str]]:
@@ -79,8 +80,8 @@ def promotion_readiness(row: dict) -> tuple[bool, list[str]]:
     candidate is promotion-ready only when every credibility axis clears
     its bar *and* blocking gates passed.  Pure function over fields the
     earlier rounds lifted (edge / force-flat / dominance / sample-adequacy /
-    drawdown-ratio / top-month-share) plus ``blocking_passed`` — it
-    re-derives nothing and relaxes nothing
+    drawdown-ratio / top-month-share / worst-loss-share) plus
+    ``blocking_passed`` — it re-derives nothing and relaxes nothing
     (限制 §3).  A missing metric is treated as a blocker (the gate must
     have run to clear the axis), tagged ``<axis>:missing``.
 
@@ -128,6 +129,13 @@ def promotion_readiness(row: dict) -> tuple[bool, list[str]]:
     top_month = row.get("top_month_contribution_pct")
     if isinstance(top_month, (int, float)) and float(top_month) > _TOP_MONTH_CAP_PCT:
         blockers.append("top_month")
+
+    # Round 61: 驗證標準 §5 (虧損分布/是否被少數交易支配) — one trade carrying
+    # >50% of total loss makes the edge hostage to a single fill. Same
+    # missing-not-a-blocker semantics as the dominance axes.
+    worst_loss = row.get("worst_loss_share_pct")
+    if isinstance(worst_loss, (int, float)) and float(worst_loss) > _WORST_LOSS_SHARE_CAP_PCT:
+        blockers.append("worst_loss")
 
     if row.get("blocking_passed") is not True:
         blockers.append("blocking")
