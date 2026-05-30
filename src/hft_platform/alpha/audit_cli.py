@@ -647,6 +647,93 @@ def show(run_id: str, strategy_type: str | None = None) -> str:
     return "\n".join(lines)
 
 
+# Round 80: the ordered axis catalogue for the promotion scorecard — each axis
+# names the 驗證標準 clause, the row field it reads, and the promotion_readiness
+# blocker keys that mean FAIL (hard breach) vs MISSING (record gap). The verdict
+# is sourced from promotion_readiness so the scorecard never drifts from the
+# kept/killed decision.
+_SCORECARD_AXES: tuple[tuple[str, str, str, tuple[str, ...], tuple[str, ...]], ...] = (
+    ("edge>10 (§5)", "mean_net_edge_pts_per_trade", "pts", ("edge",), ("edge:missing",)),
+    ("force_flat<=30 (§2/§3)", "force_flat_trip_share_pct", "%", ("force_flat",), ()),
+    ("day_dom<=25 (§5)", "single_day_dominance_pct", "%", ("dominance",), ("dominance:missing",)),
+    ("sample (§4)", "sample_adequacy_label", "", ("sample", "sample:discrepant"), ("sample:missing",)),
+    ("drawdown<=2x (§6)", "drawdown_to_avg_monthly_ratio", "x", ("drawdown",), ()),
+    ("top_month<=50 (§6)", "top_month_contribution_pct", "%", ("top_month",), ()),
+    ("worst_loss<=50 (§5)", "worst_loss_share_pct", "%", ("worst_loss",), ()),
+    ("replay>=95 (§7/§8)", "replay_match_pct", "%", ("replay_parity",), ()),
+    ("blocking (§9)", "blocking_passed", "", ("blocking",), ()),
+)
+
+
+def scorecard_axes(row: dict) -> list[tuple[str, str, str]]:
+    """Return ``[(axis, value, verdict), ...]`` for the promotion scorecard.
+
+    驗證標準 §9 (知道策略保留/淘汰原因 + 回放研究決策): collapses the per-axis
+    state into one compact decision record.  The ``verdict`` is derived from
+    ``promotion_readiness`` so the scorecard is always consistent with the
+    kept/killed call — ``FAIL`` when a hard-breach blocker for the axis fired,
+    ``MISSING`` when a ``*:missing`` blocker fired, ``PASS`` when the value is
+    present and unblocked, ``n/a`` when the axis simply didn't run.
+    """
+    _ready, blockers = promotion_readiness(row)
+    blocker_set = set(blockers)
+    out: list[tuple[str, str, str]] = []
+    for axis, field, unit, fail_keys, missing_keys in _SCORECARD_AXES:
+        raw = row.get(field)
+        if isinstance(raw, bool):
+            value = "yes" if raw else "no"
+        elif isinstance(raw, (int, float)):
+            value = "inf" if raw == float("inf") else f"{float(raw):.2f}{unit}"
+        elif isinstance(raw, str) and raw:
+            value = raw
+        else:
+            value = "(n/a)"
+        if any(k in blocker_set for k in fail_keys):
+            verdict = "FAIL"
+        elif any(k in blocker_set for k in missing_keys):
+            verdict = "MISSING"
+        elif value == "(n/a)":
+            verdict = "n/a"
+        else:
+            verdict = "PASS"
+        out.append((axis, value, verdict))
+    return out
+
+
+def scorecard(run_id: str, *, strategy_type: str | None = None) -> str:
+    """Render a one-block promotion decision record for a single run (§9).
+
+    Distinct from ``show`` (which lists every axis verbosely with its own
+    threshold text): the scorecard is the compact kept/killed summary — header,
+    composite ``promotion_ready`` + ``triage_reason``, an aligned axis→verdict
+    table, and the blocker list — so a reviewer (or a decision replay) reads
+    the retain/kill rationale at a glance.
+    """
+    rows = sub_gate_audit.read_runs(run_id)
+    if strategy_type is not None:
+        rows = [r for r in rows if r.get("strategy_type") == strategy_type]
+    if not rows:
+        return f"no audit row for run_id={run_id!r}."
+    row = rows[0]
+    ready, blockers = promotion_readiness(row)
+    reason = triage_reason(row)
+    lines = [
+        f"promotion scorecard: {row.get('run_id', '')}",
+        f"  strategy={row.get('strategy_name', '')}  instrument={row.get('instrument', '')}"
+        f"  type={row.get('strategy_type', '')}",
+        f"  verdict: {'READY' if ready else 'NOT-READY'}  triage={reason}",
+        "  axes:",
+    ]
+    axes = scorecard_axes(row)
+    aw = max(len(a) for a, _v, _vd in axes)
+    vw = max(len(v) for _a, v, _vd in axes)
+    for axis, value, verdict in axes:
+        lines.append(f"    {axis.ljust(aw)}  {value.rjust(vw)}  {verdict}")
+    if blockers:
+        lines.append(f"  blockers: {', '.join(blockers)}")
+    return "\n".join(lines)
+
+
 def _metric_diff(metrics_a: dict, metrics_b: dict) -> list[tuple[str, object, object]]:
     """Return [(key, a_value, b_value), ...] for keys whose values differ.
 
@@ -2008,6 +2095,13 @@ def main(argv: list[str] | None = None) -> int:
     show_p.add_argument("run_id")
     show_p.add_argument("--strategy-type", choices=("maker", "taker"), default=None)
 
+    sc_p = sub.add_parser(
+        "scorecard",
+        help="One-block promotion decision record (axis->verdict) for a run (§9).",
+    )
+    sc_p.add_argument("run_id")
+    sc_p.add_argument("--strategy-type", choices=("maker", "taker"), default=None)
+
     cmp_p = sub.add_parser("compare", help="Diff two audit rows.")
     cmp_p.add_argument("run_id_a")
     cmp_p.add_argument("run_id_b")
@@ -2170,6 +2264,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.cmd == "show":
         out = show(args.run_id, strategy_type=args.strategy_type)
+    elif args.cmd == "scorecard":
+        out = scorecard(args.run_id, strategy_type=args.strategy_type)
     elif args.cmd == "compare":
         out = compare(args.run_id_a, args.run_id_b, strategy_type=args.strategy_type)
     elif args.cmd == "list":
