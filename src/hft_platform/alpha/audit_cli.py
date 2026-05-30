@@ -1572,6 +1572,29 @@ def summary(
     )
     for n in sorted(coverage_counts, reverse=True):
         lines.append(f"  {n:2d}/{len(_SPEC_FIELDS_3)} traceable: {coverage_counts[n]}")
+    # Round 77: replay-parity divergence-category distribution (驗證標準 §8) —
+    # among rows whose replay_match_pct is below the strict 95% floor, which
+    # §8 inconsistency class (data_mismatch / latency_shift / …) dominates the
+    # cohort's parity failures.  Mirrors the triage-reason distribution; lets a
+    # reviewer see the systemic backtest↔replay gap at a glance rather than
+    # opening each below-floor row.
+    below_floor = 0
+    divergence_counts: dict[str, int] = {}
+    for r in rows:
+        match = r.get("replay_match_pct")
+        if not isinstance(match, (int, float)) or float(match) >= _REPLAY_MATCH_FLOOR_PCT:
+            continue
+        below_floor += 1
+        cat = r.get("replay_divergence_category")
+        cat = cat if isinstance(cat, str) and cat else "unknown"
+        divergence_counts[cat] = divergence_counts.get(cat, 0) + 1
+    if below_floor:
+        lines.append(
+            f"replay divergence (驗證標準 §8, below {_REPLAY_MATCH_FLOOR_PCT:.0f}% floor): "
+            f"{below_floor} rows"
+        )
+        for cat, n in sorted(divergence_counts.items(), key=lambda kv: (-kv[1], kv[0])):
+            lines.append(f"  {cat:26s}: {n}")
     # Round 65: triage-reason distribution (驗證標準 §9 比較策略) — how the
     # cohort splits across the kept/killed vocabulary, derived from the
     # composite verdict rather than the raw blocking triage_status.
