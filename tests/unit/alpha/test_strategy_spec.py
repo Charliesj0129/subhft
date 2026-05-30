@@ -14,6 +14,7 @@ from hft_platform.alpha.strategy_spec import (
     REQUIRED_TOP_LEVEL_FIELDS,
     is_multi_leg,
     load_spec,
+    template_field_audit,
     validate_spec,
 )
 
@@ -350,3 +351,56 @@ class TestLoadSpecProvenance:
         path = tmp_path / "spec.yaml"
         path.write_text("- one\n- two\n", encoding="utf-8")
         assert load_spec_provenance(path) is None
+
+
+# --- Round 82: template_field_audit (完成狀態 §3 + §9 固定模板) -----------
+
+_SHAPE_TEMPLATE_PATHS = [
+    "research/alphas/_templates/spec.yaml",
+    "research/alphas/_templates/spec.straddle.yaml",
+    "research/alphas/_templates/spec.futures_pair.yaml",
+]
+
+
+class TestTemplateFieldAudit:
+    def test_full_spec_has_no_missing_fields(self) -> None:
+        present, missing, extra = template_field_audit(_valid_spec())
+        assert set(present) == set(REQUIRED_TOP_LEVEL_FIELDS)
+        assert missing == []
+        assert extra == []
+
+    def test_present_is_in_canonical_order(self) -> None:
+        present, _missing, _extra = template_field_audit(_valid_spec())
+        assert present == list(REQUIRED_TOP_LEVEL_FIELDS)
+
+    def test_dropped_required_field_is_flagged_missing(self) -> None:
+        spec = _valid_spec()
+        spec.pop("risk_control")
+        spec.pop("cost_model")
+        _present, missing, _extra = template_field_audit(spec)
+        assert "risk_control" in missing
+        assert "cost_model" in missing
+
+    def test_shape_specific_keys_are_extra_not_missing(self) -> None:
+        spec = _valid_spec()
+        spec["legs"] = [{"symbol": "TXO", "side": "long", "qty": 1}]
+        spec["greeks_exposure"] = {"max_net_delta": 1.0}
+        _present, missing, extra = template_field_audit(spec)
+        assert missing == []
+        assert "legs" in extra
+        assert "greeks_exposure" in extra
+
+    def test_non_dict_spec_all_missing(self) -> None:
+        present, missing, extra = template_field_audit("not a dict")  # type: ignore[arg-type]
+        assert present == []
+        assert set(missing) == set(REQUIRED_TOP_LEVEL_FIELDS)
+        assert extra == []
+
+    @pytest.mark.parametrize("template_path", _SHAPE_TEMPLATE_PATHS)
+    def test_shipped_templates_cover_all_required_fields(self, template_path: str) -> None:
+        # SOP guard: every scaffolding template must carry the full §3 field set.
+        path = Path(template_path)
+        if not path.is_file():
+            pytest.skip(f"template not present: {template_path}")
+        _present, missing, _extra = template_field_audit(load_spec(path))
+        assert missing == [], f"{template_path} drifted, missing: {missing}"

@@ -92,6 +92,35 @@ def load_spec(path: str | Path) -> dict[str, Any]:
     return data
 
 
+def template_field_audit(
+    spec: dict[str, Any],
+) -> tuple[list[str], list[str], list[str]]:
+    """Reconcile a 固定模板 spec's top-level fields against the canonical set.
+
+    完成狀態 §3 + §9 (固定模板新增策略): a scaffolding template is only a
+    *fixed* spec if it carries exactly the required top-level fields.  This
+    read-only helper compares a loaded template's keys against
+    ``REQUIRED_TOP_LEVEL_FIELDS`` so SOP/CI can detect drift — a template that
+    silently drops ``risk_control`` or ``cost_model`` would let an incomplete
+    candidate scaffold pass.  Returns ``(present, missing, extra)``:
+
+      * ``present`` — required fields the template carries (ordered as the
+                      canonical tuple)
+      * ``missing`` — required fields absent from the template (drift — bad)
+      * ``extra``   — template keys outside the required set (e.g. shape-
+                      specific ``legs`` / ``greeks_exposure`` for multi-leg /
+                      Greeks templates — informational, not an error)
+
+    Pure over the dict; no file IO, no validation of field *values* (that is
+    ``check_one``'s job) — this only audits field *coverage*.
+    """
+    keys = set(spec) if isinstance(spec, dict) else set()
+    present = [f for f in REQUIRED_TOP_LEVEL_FIELDS if f in keys]
+    missing = [f for f in REQUIRED_TOP_LEVEL_FIELDS if f not in keys]
+    extra = sorted(keys - set(REQUIRED_TOP_LEVEL_FIELDS))
+    return (present, missing, extra)
+
+
 def _is_empty(value: Any) -> bool:
     """Empty == None or empty str/list/dict.  0 and False are NOT empty."""
     if value is None:
