@@ -700,6 +700,93 @@ def scorecard_axes(row: dict) -> list[tuple[str, str, str]]:
     return out
 
 
+def research_record(run_id: str, *, strategy_type: str | None = None) -> str:
+    """Auto-generate one self-contained research record for a run (§9 自動產生研究紀錄).
+
+    驗證標準 §9 names 自動產生研究紀錄 as a required research-flow capability and
+    §4 requires every experiment to leave a traceable record (資料區間 / 成本假設 /
+    回測結果 / 風險指標 / 保留或淘汰理由).  ``scorecard`` is the compact axis→verdict
+    block and ``export`` is a cohort table; neither emits a single readable
+    document consolidating *one* run's full provenance + every sub-gate metric +
+    the kept/killed rationale.  This renders that record as GitHub-flavoured
+    Markdown — header, spec provenance, the credibility scorecard, the full
+    sub-gate metric table, and the verdict + triage + blocker list — so it pastes
+    straight into a ticket/notebook with no JSONL parsing.
+
+    Pure read + format over already-stored fields; re-derives nothing and relaxes
+    nothing (限制 §3), fabricates nothing (限制 §4).
+    """
+    rows = sub_gate_audit.read_runs(run_id)
+    if strategy_type is not None:
+        rows = [r for r in rows if r.get("strategy_type") == strategy_type]
+    if not rows:
+        return f"no audit row for run_id={run_id!r}."
+    row = rows[0]
+    ready, blockers = promotion_readiness(row)
+    reason = triage_reason(row)
+    prov_complete, prov_missing = spec_provenance_complete(row)
+
+    lines: list[str] = [
+        f"# Research Record — {row.get('strategy_name', '')}",
+        "",
+        f"- run_id: `{row.get('run_id', '')}`",
+        f"- instrument: {row.get('instrument', '')}",
+        f"- strategy_type: {row.get('strategy_type', '')}",
+        f"- profile: {row.get('profile_name', '')}",
+        f"- recorded_at_ns: {row.get('recorded_at_ns', '')}",
+        "",
+        "## Verdict",
+        "",
+        f"- promotion_ready: **{'READY' if ready else 'NOT-READY'}**",
+        f"- triage: `{reason}`",
+        f"- blockers: {', '.join(blockers) if blockers else '(none)'}",
+        "",
+        "## Spec provenance (§4 資料區間 / 成本假設)",
+        "",
+    ]
+    prov = row.get("spec_provenance")
+    if isinstance(prov, dict) and prov:
+        lines.append(f"- data_range: {prov.get('data_range', '')}")
+        lines.append(f"- cost_model_id: {prov.get('cost_model_id', '')}")
+        lines.append(f"- required_gates: {prov.get('required_gates', [])}")
+        if "timeframe" in prov:
+            lines.append(f"- timeframe: {prov.get('timeframe', '')}")
+        if "holding_period" in prov:
+            lines.append(f"- holding_period: {prov.get('holding_period', '')}")
+    else:
+        lines.append("- (no spec_provenance recorded)")
+    if not prov_complete:
+        lines.append(f"- ⚠ provenance incomplete — missing: {', '.join(prov_missing)}")
+    lines.append("")
+
+    lines.append("## Credibility scorecard")
+    lines.append("")
+    lines.append("| axis | value | verdict |")
+    lines.append("| --- | --- | --- |")
+    for axis, value, verdict in scorecard_axes(row):
+        lines.append(f"| {axis} | {value} | {verdict} |")
+    lines.append("")
+
+    lines.append("## Sub-gate metrics")
+    lines.append("")
+    sub_gates = row.get("sub_gates")
+    if isinstance(sub_gates, list) and sub_gates:
+        lines.append("| gate | passed | metrics |")
+        lines.append("| --- | --- | --- |")
+        for sg in sub_gates:
+            name = str(sg.get("name", ""))
+            passed = sg.get("passed")
+            metrics = sg.get("metrics") or {}
+            metric_cell = ", ".join(
+                f"{k}={v}" for k, v in sorted(metrics.items())
+            ).replace("|", r"\|")
+            lines.append(f"| {name} | {passed} | {metric_cell} |")
+    else:
+        lines.append("- (no sub-gate results recorded)")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def scorecard(run_id: str, *, strategy_type: str | None = None) -> str:
     """Render a one-block promotion decision record for a single run (§9).
 
@@ -2496,6 +2583,13 @@ def main(argv: list[str] | None = None) -> int:
     lb_p.add_argument("--strategy-type", choices=("maker", "taker"), default=None)
     lb_p.add_argument("--profile", default=None, help="Exact profile_name filter.")
 
+    rr_p = sub.add_parser(
+        "record",
+        help="Auto-generate one run's full research record as Markdown (§9 自動產生研究紀錄).",
+    )
+    rr_p.add_argument("run_id")
+    rr_p.add_argument("--strategy-type", choices=("maker", "taker"), default=None)
+
     dt_p = sub.add_parser(
         "decision-trail",
         help="Replay one strategy's run history in decision order (驗證標準 §9 回放研究決策).",
@@ -2562,6 +2656,8 @@ def main(argv: list[str] | None = None) -> int:
             strategy_type=args.strategy_type,
             profile=args.profile,
         )
+    elif args.cmd == "record":
+        out = research_record(args.run_id, strategy_type=args.strategy_type)
     elif args.cmd == "decision-trail":
         out = decision_trail(
             args.strategy_name,
