@@ -1690,6 +1690,95 @@ def loss_concentration_offenders(
     return "\n".join(out)
 
 
+def dominance_offenders(
+    strategy_type: str | None = None,
+    *,
+    profile: str | None = None,
+) -> str:
+    """List runs whose edge is dominated by a single day or a single month.
+
+    驗證標準 §5 requires OOS to check whether PnL is 被少數交易/日期支配.
+    ``loss_concentration_offenders`` names the *trade*-dominated cohorts; this
+    view names the *date*-dominated ones — rows where ``single_day_dominance_pct``
+    exceeds its strict 25.0% cap OR ``top_month_contribution_pct`` exceeds its
+    strict 50.0% cap (the two caps differ, so each axis is judged against its
+    own).  A row is an offender if *either* axis breaches; the breached
+    axis(es) are named.  Sorted by worst excess-over-cap ratio first so the
+    most date-dependent cohort surfaces at the top.
+
+    Filters (AND-combined): strategy_type, profile.
+    """
+    rows = sub_gate_audit.read_runs()
+    if strategy_type is not None:
+        rows = [r for r in rows if r.get("strategy_type") == strategy_type]
+    if profile is not None:
+        rows = [r for r in rows if r.get("profile_name") == profile]
+    if not rows:
+        return "no audit rows match filter."
+
+    offenders: list[tuple[float, dict]] = []
+    for row in rows:
+        day = row.get("single_day_dominance_pct")
+        month = row.get("top_month_contribution_pct")
+        day_excess = (
+            float(day) / _DAY_DOMINANCE_CAP_PCT
+            if isinstance(day, (int, float)) and float(day) > _DAY_DOMINANCE_CAP_PCT
+            else 0.0
+        )
+        month_excess = (
+            float(month) / _TOP_MONTH_CAP_PCT
+            if isinstance(month, (int, float)) and float(month) > _TOP_MONTH_CAP_PCT
+            else 0.0
+        )
+        worst = max(day_excess, month_excess)
+        if worst > 0.0:
+            offenders.append((worst, row))
+
+    if not offenders:
+        return (
+            f"no rows over dominance caps (day {_DAY_DOMINANCE_CAP_PCT:.1f}% / "
+            f"month {_TOP_MONTH_CAP_PCT:.1f}%) across {len(rows)} matched rows."
+        )
+
+    offenders.sort(key=lambda kv: kv[0], reverse=True)
+
+    headers = ("run_id", "strategy_name", "instrument", "type", "day_dom", "top_month", "axis")
+    body: list[tuple[str, ...]] = []
+    for _worst, row in offenders:
+        day = row.get("single_day_dominance_pct")
+        month = row.get("top_month_contribution_pct")
+        day_over = isinstance(day, (int, float)) and float(day) > _DAY_DOMINANCE_CAP_PCT
+        month_over = isinstance(month, (int, float)) and float(month) > _TOP_MONTH_CAP_PCT
+        axes = []
+        if day_over:
+            axes.append("day")
+        if month_over:
+            axes.append("month")
+        body.append(
+            (
+                str(row.get("run_id", ""))[:28],
+                str(row.get("strategy_name", ""))[:24],
+                str(row.get("instrument", ""))[:12],
+                str(row.get("strategy_type", ""))[:6],
+                f"{float(day):.1f}%" if isinstance(day, (int, float)) else "(n/a)",
+                f"{float(month):.1f}%" if isinstance(month, (int, float)) else "(n/a)",
+                "+".join(axes),
+            )
+        )
+
+    widths = [max(len(h), max(len(b[i]) for b in body)) for i, h in enumerate(headers)]
+
+    def _fmt(cells: tuple[str, ...]) -> str:
+        return "  ".join(c.ljust(widths[i]) for i, c in enumerate(cells))
+
+    out: list[str] = [_fmt(headers), _fmt(tuple("-" * w for w in widths))]
+    out.extend(_fmt(c) for c in body)
+    out.append(
+        f"({len(offenders)} over dominance caps of {len(rows)} matched rows)"
+    )
+    return "\n".join(out)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="hft-alpha-audit",
@@ -1830,6 +1919,13 @@ def main(argv: list[str] | None = None) -> int:
         "(default: strict 50.0%% cap).",
     )
 
+    dom_p = sub.add_parser(
+        "dominance",
+        help="List runs whose edge is dominated by a single day or month (over caps).",
+    )
+    dom_p.add_argument("--strategy-type", choices=("maker", "taker"), default=None)
+    dom_p.add_argument("--profile", default=None, help="Exact profile_name filter.")
+
     list_p = sub.add_parser("list", help="Tabulate all audit rows.")
     list_p.add_argument("--strategy-type", choices=("maker", "taker"), default=None)
     list_p.add_argument("--profile", default=None, help="Exact profile_name filter.")
@@ -1871,6 +1967,11 @@ def main(argv: list[str] | None = None) -> int:
             strategy_type=args.strategy_type,
             profile=args.profile,
             min_share=args.min_share,
+        )
+    elif args.cmd == "dominance":
+        out = dominance_offenders(
+            strategy_type=args.strategy_type,
+            profile=args.profile,
         )
     elif args.cmd == "verify-spec":
         out = verify_spec(
