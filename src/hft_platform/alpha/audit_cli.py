@@ -1699,6 +1699,13 @@ _EXPORT_COLUMNS: tuple[str, ...] = (
     "replay_match_pct",
     "replay_divergence_category",
     "monthly_stability",
+    # Round 88: residual mark-to-market (驗證標準 §2/§3 殘倉 mark-to-market) — how
+    # much of net edge is carried by the end-of-window residual mark vs realized
+    # fills. show() surfaces it (Round 66); it must also travel with the unified
+    # export so an external pivot can see whether un-FIFO'd inventory props the
+    # edge up, the same as every other credibility axis.
+    "residual_mtm_pts",
+    "inventory_net_pts",
     "sample_adequacy_label",
     "promotion_ready",
     "promotion_blockers",
@@ -1748,6 +1755,10 @@ def _export_row(row: dict) -> dict[str, str]:
     rm_str = f"{float(rm):.4f}" if isinstance(rm, (int, float)) else ""
     rdc = row.get("replay_divergence_category")
     rdc_str = rdc if isinstance(rdc, str) else ""
+    res_mtm = row.get("residual_mtm_pts")
+    res_mtm_str = f"{float(res_mtm):.4f}" if isinstance(res_mtm, (int, float)) else ""
+    inv_net = row.get("inventory_net_pts")
+    inv_net_str = f"{float(inv_net):.4f}" if isinstance(inv_net, (int, float)) else ""
     ms_verdict, _ms_reasons = monthly_stability(row)
     ready, blockers = promotion_readiness(row)
     spec_ok, _ = spec_provenance_complete(row)
@@ -1773,6 +1784,8 @@ def _export_row(row: dict) -> dict[str, str]:
         "replay_match_pct": rm_str,
         "replay_divergence_category": rdc_str,
         "monthly_stability": ms_verdict,
+        "residual_mtm_pts": res_mtm_str,
+        "inventory_net_pts": inv_net_str,
         "sample_adequacy_label": sample_str,
         "promotion_ready": "true" if ready else "false",
         "promotion_blockers": ";".join(blockers),
