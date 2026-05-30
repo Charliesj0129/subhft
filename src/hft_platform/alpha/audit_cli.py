@@ -69,6 +69,7 @@ _EDGE_FLOOR_PTS = 10.0
 _FORCE_FLAT_CAP_PCT = 30.0
 _DAY_DOMINANCE_CAP_PCT = 25.0
 _DRAWDOWN_RATIO_CAP = 2.0
+_TOP_MONTH_CAP_PCT = 50.0
 
 
 def promotion_readiness(row: dict) -> tuple[bool, list[str]]:
@@ -78,8 +79,8 @@ def promotion_readiness(row: dict) -> tuple[bool, list[str]]:
     candidate is promotion-ready only when every credibility axis clears
     its bar *and* blocking gates passed.  Pure function over fields the
     earlier rounds lifted (edge / force-flat / dominance / sample-adequacy /
-    drawdown-ratio) plus ``blocking_passed`` — it re-derives nothing and
-    relaxes nothing
+    drawdown-ratio / top-month-share) plus ``blocking_passed`` — it
+    re-derives nothing and relaxes nothing
     (限制 §3).  A missing metric is treated as a blocker (the gate must
     have run to clear the axis), tagged ``<axis>:missing``.
 
@@ -120,6 +121,13 @@ def promotion_readiness(row: dict) -> tuple[bool, list[str]]:
     dd_ratio = row.get("drawdown_to_avg_monthly_ratio")
     if isinstance(dd_ratio, (int, float)) and float(dd_ratio) > _DRAWDOWN_RATIO_CAP:
         blockers.append("drawdown")
+
+    # Round 57: 驗證標準 §6 單月收益支配性 — a candidate whose net PnL leans on
+    # one calendar month is not a durable monthly stream. Same gate as the
+    # drawdown axis, so a missing share is not a blocker; a present breach is.
+    top_month = row.get("top_month_contribution_pct")
+    if isinstance(top_month, (int, float)) and float(top_month) > _TOP_MONTH_CAP_PCT:
+        blockers.append("top_month")
 
     if row.get("blocking_passed") is not True:
         blockers.append("blocking")

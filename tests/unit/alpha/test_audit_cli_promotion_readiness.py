@@ -17,6 +17,7 @@ def _record(
     day_dom: float | None = 15.0,
     label: str | None = "adequate",
     dd_ratio: float | None = None,
+    top_month: float | None = None,
     blocking_passed: bool = True,
 ) -> None:
     advisory: list[dict] = []
@@ -56,17 +57,23 @@ def _record(
                 "details": "",
             }
         )
-    if dd_ratio is not None:
+    if dd_ratio is not None or top_month is not None:
+        metrics: dict[str, float] = {
+            "n_months": 4.0,
+            "avg_monthly_net_pnl_pts": 100.0,
+        }
+        if dd_ratio is not None:
+            metrics["drawdown_to_avg_monthly_ratio"] = dd_ratio
+            metrics["drawdown_to_avg_monthly_max_ratio"] = 2.0
+        if top_month is not None:
+            metrics["top_month_contribution_pct"] = top_month
+            metrics["top_month_contribution_max_pct"] = 50.0
         advisory.append(
             {
                 "name": "monthly_distribution",
-                "passed": dd_ratio <= 2.0,
-                "metrics": {
-                    "n_months": 4.0,
-                    "avg_monthly_net_pnl_pts": 100.0,
-                    "drawdown_to_avg_monthly_ratio": dd_ratio,
-                    "drawdown_to_avg_monthly_max_ratio": 2.0,
-                },
+                "passed": (dd_ratio is None or dd_ratio <= 2.0)
+                and (top_month is None or top_month <= 50.0),
+                "metrics": metrics,
                 "details": "",
             }
         )
@@ -163,6 +170,25 @@ class TestPromotionReadinessFunction:
         ready, blockers = audit_cli.promotion_readiness(_row("dd_na"))
         assert ready is True
         assert not any(b.startswith("drawdown") for b in blockers)
+
+    def test_top_month_breach_blocks(self, _isolated) -> None:
+        # §6 單月收益支配性: one month carrying >50% of net PnL blocks.
+        _record(run_id="tm", top_month=75.0)
+        ready, blockers = audit_cli.promotion_readiness(_row("tm"))
+        assert ready is False
+        assert "top_month" in blockers
+
+    def test_top_month_within_cap_is_ready(self, _isolated) -> None:
+        _record(run_id="tm_ok", top_month=40.0)
+        ready, blockers = audit_cli.promotion_readiness(_row("tm_ok"))
+        assert ready is True
+        assert blockers == []
+
+    def test_top_month_missing_is_not_a_blocker(self, _isolated) -> None:
+        _record(run_id="tm_na")  # no top_month
+        ready, blockers = audit_cli.promotion_readiness(_row("tm_na"))
+        assert ready is True
+        assert not any(b.startswith("top_month") for b in blockers)
 
     def test_missing_edge_and_dominance_and_sample_are_blockers(self, _isolated) -> None:
         _record(run_id="bare", edge=None, ff_share=None, day_dom=None, label=None)
