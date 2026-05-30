@@ -482,11 +482,21 @@ def _normalize_spec_provenance(prov: dict | None) -> dict[str, Any]:
     required_gates = prov.get("required_gates") or []
     if not isinstance(required_gates, list):
         required_gates = []
-    return {
+    out: dict[str, Any] = {
         "data_range": str(data_range),
         "cost_model_id": str(cost_model_id),
         "required_gates": [str(g) for g in required_gates],
     }
+    # Round 71 (完成狀態 §3): additively carry timeframe / holding_period
+    # when the candidate spec supplied them.  Absent keys are simply not
+    # added so rows that predate this keep the Round-17 triple shape.
+    timeframe = prov.get("timeframe")
+    if isinstance(timeframe, str) and timeframe:
+        out["timeframe"] = timeframe
+    holding_period = prov.get("holding_period")
+    if isinstance(holding_period, str) and holding_period:
+        out["holding_period"] = holding_period
+    return out
 
 
 def build_record(

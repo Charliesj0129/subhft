@@ -83,6 +83,57 @@ class TestSpecFieldAuditFunction:
         assert "cost_model" not in traceable
 
 
+class TestSpecFieldAuditRound71Timeframe:
+    """Round 71: timeframe / holding_period carried additively in
+    spec_provenance let the audit record attest two more 完成狀態 §3 fields
+    without re-loading spec.yaml."""
+
+    def test_provenance_with_timeframe_attests_two_more_fields(self, _isolated) -> None:
+        prov = dict(_FULL)
+        prov["timeframe"] = "15m"
+        prov["holding_period"] = "intraday"
+        _record(run_id="tf", prov=prov)
+        traceable, untraceable = audit_cli.spec_field_audit(_row("tf"))
+        assert "timeframe" in traceable
+        assert "holding_period" in traceable
+        assert "timeframe" not in untraceable
+        assert "holding_period" not in untraceable
+        # The four prior fields stay attested → six total now.
+        assert set(traceable) == {
+            "strategy_name",
+            "instrument",
+            "cost_model",
+            "validation_plan",
+            "timeframe",
+            "holding_period",
+        }
+
+    def test_absent_timeframe_stays_untraceable(self, _isolated) -> None:
+        # Rows that predate the extension carry no timeframe key.
+        _record(run_id="no_tf", prov=dict(_FULL))
+        _traceable, untraceable = audit_cli.spec_field_audit(_row("no_tf"))
+        assert "timeframe" in untraceable
+        assert "holding_period" in untraceable
+
+    def test_empty_timeframe_not_attested(self, _isolated) -> None:
+        prov = dict(_FULL)
+        prov["timeframe"] = ""
+        prov["holding_period"] = "   "  # whitespace is still truthy → carried
+        _record(run_id="empty_tf", prov=prov)
+        _traceable, untraceable = audit_cli.spec_field_audit(_row("empty_tf"))
+        # Empty string collapses (normalize drops falsy); whitespace is kept.
+        assert "timeframe" in untraceable
+
+    def test_show_counts_six_with_timeframe(self, _isolated) -> None:
+        prov = dict(_FULL)
+        prov["timeframe"] = "15m"
+        prov["holding_period"] = "intraday"
+        _record(run_id="s_tf", prov=prov)
+        out = audit_cli.show("s_tf")
+        line = out.split("spec_fields")[1].split("\n")[0]
+        assert "6/12 traceable" in line
+
+
 class TestShowSurfacesSpecFieldAudit:
     def test_show_counts_traceable_fields(self, _isolated) -> None:
         _record(run_id="s_full", prov=dict(_FULL))

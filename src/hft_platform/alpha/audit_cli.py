@@ -302,6 +302,10 @@ def spec_field_audit(row: dict) -> tuple[list[str], list[str]]:
         "instrument": bool(row.get("instrument")),
         "cost_model": cost_ok,
         "validation_plan": has_validation,
+        # Round 71: carried additively in spec_provenance when the candidate
+        # spec supplied them; absent for rows that predate the extension.
+        "timeframe": bool(prov.get("timeframe")),
+        "holding_period": bool(prov.get("holding_period")),
     }
     traceable = [f for f in _SPEC_FIELDS_3 if attestable.get(f, False)]
     untraceable = [f for f in _SPEC_FIELDS_3 if not attestable.get(f, False)]
