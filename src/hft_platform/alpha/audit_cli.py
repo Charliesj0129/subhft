@@ -350,6 +350,62 @@ def monthly_stability(row: dict) -> tuple[str, list[str]]:
     return ("unstable", reasons) if reasons else ("stable", [])
 
 
+def _min_sample_entry(row: dict) -> dict | None:
+    """Locate the min_sample_size sub-gate entry in an audit row."""
+    for entry in row.get("sub_gates") or []:
+        if isinstance(entry, dict) and entry.get("name") == "min_sample_size":
+            return entry
+    return None
+
+
+def sample_adequacy_audit(row: dict) -> tuple[str, list[str]]:
+    """Reconcile the §4 sample-adequacy *label* against its *evidence*.
+
+    驗證標準 §4 / 限制 §3 ("不足樣本不得完成"): a row labelled ``adequate`` is
+    allowed to clear the sample axis, but the label is only trustworthy if the
+    underlying counts substantiate it — ``min_sample_size`` requires *both*
+    ``n_fills >= min_fills`` *and* ``n_days >= min_days`` (trade count AND
+    trade-day count, 驗證標準 §5).  This helper reads those counts from the
+    gate entry and flags any row whose ``adequate`` label the record cannot
+    back up, so a fabricated or stale label can't slip a sample-short
+    candidate through.  No threshold is introduced — it re-derives the gate's
+    own ``>=`` checks.
+
+    Returns:
+      * ``("no_gate", [])``     — min_sample_size didn't run
+      * ``("consistent", [])``  — label matches the evidence (or label isn't
+                                  ``adequate`` so there is nothing to over-claim)
+      * ``("discrepant", [reasons])`` — label is ``adequate`` but evidence is
+                                  missing or below a minimum
+    """
+    entry = _min_sample_entry(row)
+    if entry is None:
+        return ("no_gate", [])
+    label = row.get("sample_adequacy_label")
+    if label != "adequate":
+        # Non-adequate labels are self-limiting (NOT-READY); nothing to refute.
+        return ("consistent", [])
+    metrics = entry.get("metrics") or {}
+    if not isinstance(metrics, dict):
+        return ("discrepant", ["evidence_missing"])
+    reasons: list[str] = []
+    n_fills = metrics.get("n_fills")
+    min_fills = metrics.get("min_fills")
+    n_days = metrics.get("n_days")
+    min_days = metrics.get("min_days")
+    if isinstance(n_fills, (int, float)) and isinstance(min_fills, (int, float)):
+        if float(n_fills) < float(min_fills):
+            reasons.append("fills_below_min")
+    else:
+        reasons.append("fills_evidence_missing")
+    if isinstance(n_days, (int, float)) and isinstance(min_days, (int, float)):
+        if float(n_days) < float(min_days):
+            reasons.append("days_below_min")
+    else:
+        reasons.append("days_evidence_missing")
+    return ("discrepant", reasons) if reasons else ("consistent", [])
+
+
 def _token_is_number(token: str, suffix: str) -> bool:
     """True when ``token`` is ``<number><suffix>`` with a parseable number."""
     body = token[: -len(suffix)] if suffix and token.endswith(suffix) else token
@@ -448,8 +504,16 @@ def show(run_id: str, strategy_type: str | None = None) -> str:
         lines.append("sample_adequacy: (n/a — min_sample_size gate not run)")
     else:
         sample_marker = "READY" if sample_label == "adequate" else "NOT-READY"
+        # Round 78: reconcile the 'adequate' label against its evidence so a
+        # label the record cannot substantiate is flagged (限制 §3 不足樣本不得完成).
+        verdict, reasons = sample_adequacy_audit(row)
+        suffix = (
+            f"  !! label-vs-evidence DISCREPANT [{', '.join(reasons)}]"
+            if verdict == "discrepant"
+            else ""
+        )
         lines.append(
-            f"sample_adequacy: {sample_label}  [§4 -> {sample_marker}]"
+            f"sample_adequacy: {sample_label}  [§4 -> {sample_marker}]{suffix}"
         )
     # Round 53: drawdown-to-avg-monthly ratio (驗證標準 §6) — max_drawdown must
     # stay within 2× average monthly net PnL, else a candidate's edge is not
