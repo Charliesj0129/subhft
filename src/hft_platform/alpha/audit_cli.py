@@ -1280,6 +1280,54 @@ def backfill_specs(
     return "\n".join(lines)
 
 
+def template_check() -> str:
+    """Audit every scaffolding template's §3 field coverage (固定模板 SOP).
+
+    完成狀態 §9 (固定模板新增策略): the test-level SOP guard
+    (``template_field_audit``) checks the shipped templates carry the full
+    required field set — this exposes the same check as an operator command so
+    it can run in SOP/CI outside pytest.  For each ``_SHAPE_TEMPLATES`` entry it
+    loads the template and reports present/missing/extra; any ``missing`` field
+    is drift and marks the template FAIL.  Read-only — never writes a template.
+    """
+    from hft_platform.alpha.strategy_spec import (
+        REQUIRED_TOP_LEVEL_FIELDS,
+        load_spec,
+        template_field_audit,
+    )
+
+    lines: list[str] = [
+        f"template field-coverage check (vs {len(REQUIRED_TOP_LEVEL_FIELDS)} required §3 fields):"
+    ]
+    any_fail = False
+    for shape, (template_path, _placeholder) in sorted(_SHAPE_TEMPLATES.items()):
+        path = Path(template_path)
+        if not path.is_file():
+            any_fail = True
+            lines.append(f"  [MISS] {shape:12s} — template not found at {path}")
+            continue
+        try:
+            spec = load_spec(path)
+        except Exception as exc:  # noqa: BLE001 — report, don't crash the SOP check
+            any_fail = True
+            lines.append(f"  [ERR ] {shape:12s} — parse error: {exc}")
+            continue
+        present, missing, extra = template_field_audit(spec)
+        if missing:
+            any_fail = True
+            lines.append(
+                f"  [FAIL] {shape:12s} — {len(present)}/{len(REQUIRED_TOP_LEVEL_FIELDS)} "
+                f"present, MISSING: {', '.join(missing)}"
+            )
+        else:
+            extra_note = f"  (+extra: {', '.join(extra)})" if extra else ""
+            lines.append(
+                f"  [OK  ] {shape:12s} — all {len(REQUIRED_TOP_LEVEL_FIELDS)} present{extra_note}"
+            )
+    lines.append(f"verdict: {'DRIFT DETECTED' if any_fail else 'all templates cover §3'}")
+    return "\n".join(lines)
+
+
 def gates(
     strategy_type: str | None = None,
     *,
@@ -2329,6 +2377,11 @@ def main(argv: list[str] | None = None) -> int:
     ms_p.add_argument("--strategy-type", choices=("maker", "taker"), default=None)
     ms_p.add_argument("--profile", default=None, help="Exact profile_name filter.")
 
+    sub.add_parser(
+        "template-check",
+        help="Audit every scaffolding template's §3 field coverage (固定模板 SOP).",
+    )
+
     lb_p = sub.add_parser(
         "leaderboard",
         help="Rank candidate runs by promotion-readiness (驗證標準 §9 比較策略).",
@@ -2395,6 +2448,8 @@ def main(argv: list[str] | None = None) -> int:
             strategy_type=args.strategy_type,
             profile=args.profile,
         )
+    elif args.cmd == "template-check":
+        out = template_check()
     elif args.cmd == "verify-spec":
         out = verify_spec(
             args.alpha_id,
