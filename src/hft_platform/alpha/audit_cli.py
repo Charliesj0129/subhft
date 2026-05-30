@@ -175,6 +175,18 @@ def show(run_id: str, strategy_type: str | None = None) -> str:
         lines.append(
             f"sample_adequacy: {sample_label}  [§4 -> {sample_marker}]"
         )
+    # Round 53: drawdown-to-avg-monthly ratio (驗證標準 §6) — max_drawdown must
+    # stay within 2× average monthly net PnL, else a candidate's edge is not
+    # survivable month-to-month. inf (avg_monthly <= 0) always reads FAIL.
+    dd_ratio = row.get("drawdown_to_avg_monthly_ratio")
+    if dd_ratio is None:
+        lines.append("drawdown_ratio : (n/a — monthly_distribution gate not run)")
+    else:
+        dd_marker = "PASS" if dd_ratio <= 2.0 else "FAIL"
+        dd_text = "inf" if dd_ratio == float("inf") else f"{dd_ratio:.2f}"
+        lines.append(
+            f"drawdown_ratio : {dd_text}× avg-monthly  [vs strict cap 2.0× -> {dd_marker}]"
+        )
     # Round 51: composite promotion verdict over every lifted axis, so a
     # reviewer gets the kept/killed answer (驗證標準 §9) in one line.
     ready, blockers = promotion_readiness(row)

@@ -200,6 +200,37 @@ def _extract_single_day_dominance(advisory: list[dict] | None) -> float | None:
     return None
 
 
+def _extract_drawdown_ratio(advisory: list[dict] | None) -> float | None:
+    """Lift drawdown_to_avg_monthly_ratio from the ``monthly_distribution``
+    gate to a top-level row field (Round 53).
+
+    驗證標準 §6: max_drawdown <= 2 × average_monthly_net_pnl.  The gate
+    computes mdd / avg_monthly (``inf`` when there is no positive monthly
+    baseline) but the ratio sits inside ``sub_gates[*].metrics``.
+    Surfacing it lets ``audit show`` flag a candidate that clears edge yet
+    breaches the drawdown-to-monthly-income constraint, without parsing
+    the gate list.  Returns ``None`` when the gate didn't run.
+    """
+    if not advisory:
+        return None
+    for entry in advisory:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("name") != "monthly_distribution":
+            continue
+        metrics = entry.get("metrics") or {}
+        if not isinstance(metrics, dict):
+            return None
+        value = metrics.get("drawdown_to_avg_monthly_ratio")
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
 _SAMPLE_ADEQUACY_LABELS = frozenset(
     {"adequate", "promising", "needs_more_sample", "inconclusive"}
 )
@@ -312,6 +343,9 @@ def build_record(
     sample_label = _extract_sample_adequacy_label(advisory)
     if sample_label is not None:
         row["sample_adequacy_label"] = sample_label
+    dd_ratio = _extract_drawdown_ratio(advisory)
+    if dd_ratio is not None:
+        row["drawdown_to_avg_monthly_ratio"] = dd_ratio
     prov = _normalize_spec_provenance(spec_provenance)
     if prov:
         row["spec_provenance"] = prov
