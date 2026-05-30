@@ -115,6 +115,18 @@ def promotion_readiness(row: dict) -> tuple[bool, list[str]]:
         blockers.append("sample:missing")
     elif sample != "adequate":
         blockers.append("sample")
+    else:
+        # Round 79: 限制 §3 (不足樣本不得完成) — an 'adequate' label that its
+        # own counts *contradict* (n_fills/n_days present and below the gate
+        # minimum) must not pass the sample axis. Evidence that is merely
+        # absent does NOT block (missing-not-a-blocker, mirroring every other
+        # lifted axis); only a present-and-below count does. The advisory show
+        # line still surfaces the evidence-missing case (Round 78).
+        _sample_verdict, _sample_reasons = sample_adequacy_audit(row)
+        if _sample_verdict == "discrepant" and any(
+            r.endswith("_below_min") for r in _sample_reasons
+        ):
+            blockers.append("sample:discrepant")
 
     # Round 56: 驗證標準 §6 — max_drawdown must stay within 2× avg-monthly net
     # PnL. Like force-flat, a missing ratio is not a blocker on its own: the
@@ -175,6 +187,9 @@ _BLOCKER_TRIAGE_CATEGORY: dict[str, str] = {
     "worst_loss": "blocked_by_risk",
     "blocking": "blocked_by_risk",
     "sample": "needs_more_sample",
+    # Round 79: a label-vs-evidence discrepancy is a record-trust failure, not
+    # merely a sample shortfall — treat it as an audit block.
+    "sample:discrepant": "blocked_by_audit",
     "cost_model": "blocked_by_audit",
     "edge": "failed",
     "dominance": "failed",

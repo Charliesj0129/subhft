@@ -22,6 +22,7 @@ def _record(
     replay_match: float | None = None,
     cost_model_id: str | None = None,
     blocking_passed: bool = True,
+    sample_counts: tuple[float, float, float, float] | None = None,
 ) -> None:
     advisory: list[dict] = []
     if edge is not None:
@@ -52,11 +53,22 @@ def _record(
             }
         )
     if label is not None:
+        sample_metrics: dict[str, float | str] = {"sample_adequacy_label": label}
+        if sample_counts is not None:
+            n_fills, min_fills, n_days, min_days = sample_counts
+            sample_metrics.update(
+                {
+                    "n_fills": n_fills,
+                    "min_fills": min_fills,
+                    "n_days": n_days,
+                    "min_days": min_days,
+                }
+            )
         advisory.append(
             {
                 "name": "min_sample_size",
                 "passed": label == "adequate",
-                "metrics": {"sample_adequacy_label": label},
+                "metrics": sample_metrics,
                 "details": "",
             }
         )
@@ -285,6 +297,30 @@ class TestPromotionReadinessFunction:
     def test_incomplete_cost_model_triages_blocked_by_audit(self, _isolated) -> None:
         _record(run_id="cm_tr", cost_model_id="measured+Nonebp/2.0bp/1.0pts")
         assert audit_cli.triage_reason(_row("cm_tr")) == "blocked_by_audit"
+
+    def test_adequate_label_contradicted_by_counts_blocks(self, _isolated) -> None:
+        # Round 79: 'adequate' but n_fills below min_fills -> sample:discrepant.
+        _record(run_id="disc", sample_counts=(40.0, 80.0, 25.0, 20.0))
+        ready, blockers = audit_cli.promotion_readiness(_row("disc"))
+        assert ready is False
+        assert "sample:discrepant" in blockers
+
+    def test_adequate_label_with_backing_counts_is_ready(self, _isolated) -> None:
+        _record(run_id="backed", sample_counts=(120.0, 80.0, 25.0, 20.0))
+        ready, blockers = audit_cli.promotion_readiness(_row("backed"))
+        assert ready is True
+        assert not any(b.startswith("sample") for b in blockers)
+
+    def test_adequate_label_without_counts_is_not_a_blocker(self, _isolated) -> None:
+        # Evidence merely absent -> missing-not-a-blocker (advisory only).
+        _record(run_id="nocounts")  # adequate label, no sample_counts
+        ready, blockers = audit_cli.promotion_readiness(_row("nocounts"))
+        assert ready is True
+        assert not any(b.startswith("sample") for b in blockers)
+
+    def test_discrepant_sample_triages_blocked_by_audit(self, _isolated) -> None:
+        _record(run_id="disc_tr", sample_counts=(40.0, 80.0, 25.0, 20.0))
+        assert audit_cli.triage_reason(_row("disc_tr")) == "blocked_by_audit"
 
     def test_missing_edge_and_dominance_and_sample_are_blockers(self, _isolated) -> None:
         _record(run_id="bare", edge=None, ff_share=None, day_dom=None, label=None)
