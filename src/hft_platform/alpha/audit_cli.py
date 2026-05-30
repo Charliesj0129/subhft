@@ -68,6 +68,7 @@ def _format_gate_lines(sub_gates: list[dict]) -> Iterable[str]:
 _EDGE_FLOOR_PTS = 10.0
 _FORCE_FLAT_CAP_PCT = 30.0
 _DAY_DOMINANCE_CAP_PCT = 25.0
+_DRAWDOWN_RATIO_CAP = 2.0
 
 
 def promotion_readiness(row: dict) -> tuple[bool, list[str]]:
@@ -76,8 +77,9 @@ def promotion_readiness(row: dict) -> tuple[bool, list[str]]:
     Answers 驗證標準 §9 ("know the kept/killed rationale") in one place: a
     candidate is promotion-ready only when every credibility axis clears
     its bar *and* blocking gates passed.  Pure function over fields the
-    earlier rounds lifted (edge / force-flat / dominance / sample-adequacy)
-    plus ``blocking_passed`` — it re-derives nothing and relaxes nothing
+    earlier rounds lifted (edge / force-flat / dominance / sample-adequacy /
+    drawdown-ratio) plus ``blocking_passed`` — it re-derives nothing and
+    relaxes nothing
     (限制 §3).  A missing metric is treated as a blocker (the gate must
     have run to clear the axis), tagged ``<axis>:missing``.
 
@@ -109,6 +111,15 @@ def promotion_readiness(row: dict) -> tuple[bool, list[str]]:
         blockers.append("sample:missing")
     elif sample != "adequate":
         blockers.append("sample")
+
+    # Round 56: 驗證標準 §6 — max_drawdown must stay within 2× avg-monthly net
+    # PnL. Like force-flat, a missing ratio is not a blocker on its own: the
+    # monthly_distribution gate needs >=2 months and is inapplicable to a
+    # short-window candidate. But a *present* breach (incl. inf when there is
+    # no positive monthly baseline) blocks promotion.
+    dd_ratio = row.get("drawdown_to_avg_monthly_ratio")
+    if isinstance(dd_ratio, (int, float)) and float(dd_ratio) > _DRAWDOWN_RATIO_CAP:
+        blockers.append("drawdown")
 
     if row.get("blocking_passed") is not True:
         blockers.append("blocking")

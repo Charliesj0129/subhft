@@ -16,6 +16,7 @@ def _record(
     ff_share: float | None = 10.0,
     day_dom: float | None = 15.0,
     label: str | None = "adequate",
+    dd_ratio: float | None = None,
     blocking_passed: bool = True,
 ) -> None:
     advisory: list[dict] = []
@@ -52,6 +53,20 @@ def _record(
                 "name": "min_sample_size",
                 "passed": label == "adequate",
                 "metrics": {"sample_adequacy_label": label},
+                "details": "",
+            }
+        )
+    if dd_ratio is not None:
+        advisory.append(
+            {
+                "name": "monthly_distribution",
+                "passed": dd_ratio <= 2.0,
+                "metrics": {
+                    "n_months": 4.0,
+                    "avg_monthly_net_pnl_pts": 100.0,
+                    "drawdown_to_avg_monthly_ratio": dd_ratio,
+                    "drawdown_to_avg_monthly_max_ratio": 2.0,
+                },
                 "details": "",
             }
         )
@@ -121,6 +136,33 @@ class TestPromotionReadinessFunction:
         _record(run_id="blk", blocking_passed=False)
         _, blockers = audit_cli.promotion_readiness(_row("blk"))
         assert "blocking" in blockers
+
+    def test_drawdown_breach_blocks(self, _isolated) -> None:
+        # §6: max_drawdown must stay within 2× avg-monthly net PnL.
+        _record(run_id="dd", dd_ratio=3.0)
+        ready, blockers = audit_cli.promotion_readiness(_row("dd"))
+        assert ready is False
+        assert "drawdown" in blockers
+
+    def test_drawdown_inf_blocks(self, _isolated) -> None:
+        # inf (no positive monthly baseline) is a breach.
+        _record(run_id="dd_inf", dd_ratio=float("inf"))
+        _, blockers = audit_cli.promotion_readiness(_row("dd_inf"))
+        assert "drawdown" in blockers
+
+    def test_drawdown_within_cap_is_ready(self, _isolated) -> None:
+        _record(run_id="dd_ok", dd_ratio=1.5)
+        ready, blockers = audit_cli.promotion_readiness(_row("dd_ok"))
+        assert ready is True
+        assert blockers == []
+
+    def test_drawdown_missing_is_not_a_blocker(self, _isolated) -> None:
+        # The monthly_distribution gate needs >=2 months; absence is
+        # inapplicable, not failing (mirrors force-flat).
+        _record(run_id="dd_na")  # no dd_ratio
+        ready, blockers = audit_cli.promotion_readiness(_row("dd_na"))
+        assert ready is True
+        assert not any(b.startswith("drawdown") for b in blockers)
 
     def test_missing_edge_and_dominance_and_sample_are_blockers(self, _isolated) -> None:
         _record(run_id="bare", edge=None, ff_share=None, day_dom=None, label=None)
