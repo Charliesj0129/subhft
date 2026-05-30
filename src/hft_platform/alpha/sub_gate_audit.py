@@ -29,11 +29,17 @@ from typing import Any
 
 from structlog import get_logger
 
+from hft_platform.alpha.divergence_category import DivergenceCategory
 from hft_platform.core import timebase
 
 logger = get_logger("alpha_sub_gate_audit")
 
 SCHEMA_VERSION = "sub_gate_run.v2"
+
+# 驗證標準 §8 fixed divergence vocabulary, derived from the canonical enum so
+# the audit layer never drifts from the categorizer. An out-of-vocabulary
+# label collapses to ``unknown`` on lift (Round 69).
+_DIVERGENCE_CATEGORIES = frozenset(c.value for c in DivergenceCategory)
 
 _DEFAULT_JSONL_PATH = Path("research/audit/sub_gate_runs.jsonl")
 
@@ -397,10 +403,12 @@ def _extract_replay_divergence_category(
     top-level row field (Round 62).
 
     驗證標準 §8: when backtest and replay disagree, the divergence must be
-    classified (data_mismatch / timestamp_alignment_error / latency_shift /
-    …).  Surfacing the dominant category lets ``audit show`` name *why* a
-    parity break happened.  Returns ``None`` when the gate didn't run or
-    recorded no category.
+    classified against the fixed vocabulary (data_mismatch /
+    timestamp_alignment_error / latency_shift / …).  Surfacing the dominant
+    category lets ``audit show`` name *why* a parity break happened.  A label
+    outside the §8 vocabulary collapses to ``unknown`` so an out-of-vocab
+    value can't silently propagate (mirrors the sample-label validation).
+    Returns ``None`` when the gate didn't run or recorded no category.
     """
     if not advisory:
         return None
@@ -414,7 +422,7 @@ def _extract_replay_divergence_category(
             return None
         value = metrics.get("dominant_divergence_category")
         if isinstance(value, str) and value:
-            return value
+            return value if value in _DIVERGENCE_CATEGORIES else "unknown"
         return None
     return None
 

@@ -76,6 +76,30 @@ class TestBuildRecordLiftsReplayParity:
         rows = sub_gate_audit.read_runs()
         assert rows[0]["replay_divergence_category"] == "latency_shift"
 
+    def test_all_vocab_categories_lift_verbatim(self, _isolated) -> None:
+        # Every §8 category must round-trip unchanged.
+        vocab = [
+            "data_mismatch",
+            "feature_mismatch",
+            "timestamp_alignment_error",
+            "latency_shift",
+            "session_phase_filter",
+            "risk_filter",
+            "position_limit",
+            "implementation_drift",
+            "unknown",
+        ]
+        for i, cat in enumerate(vocab):
+            _record(run_id=f"v{i}", match_pct=80.0, category=cat)
+        rows = {r["run_id"]: r for r in sub_gate_audit.read_runs()}
+        for i, cat in enumerate(vocab):
+            assert rows[f"v{i}"]["replay_divergence_category"] == cat
+
+    def test_out_of_vocab_category_collapses_to_unknown(self, _isolated) -> None:
+        _record(run_id="oov", match_pct=80.0, category="some_made_up_label")
+        rows = sub_gate_audit.read_runs()
+        assert rows[0]["replay_divergence_category"] == "unknown"
+
     def test_absent_when_gate_didnt_run(self, _isolated) -> None:
         _record(run_id="b", match_pct=None)
         rows = sub_gate_audit.read_runs()
