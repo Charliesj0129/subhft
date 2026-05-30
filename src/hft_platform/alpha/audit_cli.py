@@ -87,6 +87,17 @@ def show(run_id: str, strategy_type: str | None = None) -> str:
     else:
         marker = "PASS" if edge > 10.0 else "FAIL"
         lines.append(f"mean_net_edge   : {edge:.3f} pts/trade  [vs goal §5 floor 10.0 -> {marker}]")
+    # Round 45: surface force-flat residual share next to the edge so a
+    # reviewer can immediately see whether the edge is propped up by
+    # end-of-window inventory marks (Round 41-44 chain).
+    ff_share = row.get("force_flat_trip_share_pct")
+    if ff_share is None:
+        lines.append("force_flat_share: (n/a — force_flat_residual gate not run)")
+    else:
+        ff_marker = "PASS" if ff_share <= 30.0 else "FAIL"
+        lines.append(
+            f"force_flat_share: {ff_share:.1f}% of trips  [vs strict cap 30.0% -> {ff_marker}]"
+        )
     lines.append("sub_gates:")
     lines.extend(_format_gate_lines(row.get("sub_gates", [])))
     return "\n".join(lines)
@@ -911,6 +922,24 @@ def summary(
         )
         lines.append(
             f"  edge min/max   : {min(edges):.3f} / {max(edges):.3f} pts/trade"
+        )
+    # Round 45: force-flat residual aggregation so reviewers can spot
+    # whether the edge cohort is dominated by inventory-mark artifacts.
+    ff_shares: list[float] = [
+        float(r["force_flat_trip_share_pct"])
+        for r in rows
+        if isinstance(r.get("force_flat_trip_share_pct"), (int, float))
+    ]
+    above_ff_cap = sum(1 for s in ff_shares if s > 30.0)
+    lines.append("force_flat_residual (strict cap 30.0% of trips):")
+    lines.append(f"  rows with metric: {len(ff_shares)} / {total}")
+    lines.append(f"  rows over cap   : {above_ff_cap}")
+    if ff_shares:
+        lines.append(
+            f"  share p50/p95   : {_percentile(ff_shares, 50):.1f}% / {_percentile(ff_shares, 95):.1f}%"
+        )
+        lines.append(
+            f"  share min/max   : {min(ff_shares):.1f}% / {max(ff_shares):.1f}%"
         )
     lines.append("triage_status distribution:")
     for key in sorted(triage_counts):

@@ -139,6 +139,35 @@ def _extract_mean_net_edge(advisory: list[dict] | None) -> float | None:
     return None
 
 
+def _extract_force_flat_share(advisory: list[dict] | None) -> float | None:
+    """Lift force_flat_trip_share_pct from the ``force_flat_residual`` gate
+    (Round 43) to a top-level row field (Round 45).
+
+    Mirrors :func:`_extract_mean_net_edge`: ``audit show`` / ``summary``
+    can flag candidates whose mean_net_edge is propped up by force-flat
+    trips without parsing the sub_gates list.  Returns ``None`` when
+    the gate didn't run or wasn't applicable.
+    """
+    if not advisory:
+        return None
+    for entry in advisory:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("name") != "force_flat_residual":
+            continue
+        metrics = entry.get("metrics") or {}
+        if not isinstance(metrics, dict):
+            return None
+        value = metrics.get("force_flat_trip_share_pct")
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
 def _normalize_spec_provenance(prov: dict | None) -> dict[str, Any]:
     """Project a candidate spec provenance dict onto the row's stable shape.
 
@@ -208,6 +237,9 @@ def build_record(
     edge = _extract_mean_net_edge(advisory)
     if edge is not None:
         row["mean_net_edge_pts_per_trade"] = edge
+    ff_share = _extract_force_flat_share(advisory)
+    if ff_share is not None:
+        row["force_flat_trip_share_pct"] = ff_share
     prov = _normalize_spec_provenance(spec_provenance)
     if prov:
         row["spec_provenance"] = prov
