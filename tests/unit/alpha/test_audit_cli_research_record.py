@@ -16,6 +16,7 @@ def _record(
     run_id: str = "r1",
     edge: float = 12.0,
     with_provenance: bool = True,
+    inventory: tuple[float, float, float] | None = None,
 ) -> None:
     advisory = [
         {
@@ -31,6 +32,20 @@ def _record(
             "details": "",
         },
     ]
+    if inventory is not None:
+        realized, residual, net = inventory
+        advisory.append(
+            {
+                "name": "inventory_mtm",
+                "passed": True,
+                "metrics": {
+                    "realized_pts": realized,
+                    "residual_mtm_pts": residual,
+                    "net_pts": net,
+                },
+                "details": "",
+            }
+        )
     prov = (
         {
             "data_range": "2026-Q1",
@@ -118,6 +133,22 @@ class TestResearchRecord:
         out = audit_cli.research_record("r1")
         assert "NOT-READY" in out
         assert "edge" in out  # blocker name surfaces
+
+    def test_propped_flag_in_record(self, _isolated) -> None:
+        # net>0 but realized<=0 -> §3 residual-propped edge.
+        _record(inventory=(-3.0, 15.0, 12.0))
+        out = audit_cli.research_record("r1")
+        assert "residual_propped (§3): **PROPPED**" in out
+
+    def test_clean_residual_flag_in_record(self, _isolated) -> None:
+        _record(inventory=(8.0, 4.0, 12.0))
+        out = audit_cli.research_record("r1")
+        assert "residual_propped (§3): clean" in out
+
+    def test_residual_line_omitted_when_gate_absent(self, _isolated) -> None:
+        _record()  # no inventory_mtm gate
+        out = audit_cli.research_record("r1")
+        assert "residual_propped" not in out
 
     def test_cli_dispatch(self, _isolated, capsys) -> None:
         _record()

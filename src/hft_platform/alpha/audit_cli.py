@@ -780,6 +780,17 @@ def research_record(run_id: str, *, strategy_type: str | None = None) -> str:
         f"- promotion_ready: **{'READY' if ready else 'NOT-READY'}**",
         f"- triage: `{reason}`",
         f"- blockers: {', '.join(blockers) if blockers else '(none)'}",
+    ]
+    # Round 90: carry the §3 residual-propped flag into the auto-generated record
+    # (it was advisory-only in show() since Round 89) so the residual-credibility
+    # signal travels with every traceable record. Advisory; omitted when the
+    # inventory_mtm gate didn't run.
+    rp_verdict, rp_detail = residual_propped_edge(row)
+    if rp_verdict == "propped":
+        lines.append(f"- ⚠ residual_propped (§3): **PROPPED** — {rp_detail}")
+    elif rp_verdict == "clean":
+        lines.append(f"- residual_propped (§3): clean — {rp_detail}")
+    lines += [
         "",
         "## Spec provenance (§4 資料區間 / 成本假設)",
         "",
