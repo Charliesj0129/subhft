@@ -1618,6 +1618,78 @@ def force_flat_offenders(
     return "\n".join(out)
 
 
+def loss_concentration_offenders(
+    strategy_type: str | None = None,
+    *,
+    profile: str | None = None,
+    min_share: float = _WORST_LOSS_SHARE_CAP_PCT,
+) -> str:
+    """List runs whose loss distribution is dominated by a few large losses.
+
+    驗證標準 §5 requires OOS to check the loss distribution (虧損分布) — not
+    only whether average edge clears the bar, but whether that edge survives a
+    handful of outsized losing trades.  ``summary`` already surfaces the
+    cohort context; this view names the offending ``run_id``s, mirroring
+    ``force_flat_offenders``, so a reviewer can jump straight to the cohorts
+    whose ``worst_loss_share_pct`` exceeds the strict 50.0% cap (one losing
+    trade accounting for over half the gross loss).  Sorted by share
+    descending (most concentrated first).
+
+    Filters (AND-combined): strategy_type, profile.
+    """
+    rows = sub_gate_audit.read_runs()
+    if strategy_type is not None:
+        rows = [r for r in rows if r.get("strategy_type") == strategy_type]
+    if profile is not None:
+        rows = [r for r in rows if r.get("profile_name") == profile]
+    if not rows:
+        return "no audit rows match filter."
+
+    offenders: list[tuple[float, dict]] = []
+    for row in rows:
+        share = row.get("worst_loss_share_pct")
+        if not isinstance(share, (int, float)):
+            continue
+        if float(share) > min_share:
+            offenders.append((float(share), row))
+
+    if not offenders:
+        return (
+            f"no rows over worst-loss-share cap ({min_share:.1f}% of gross loss) "
+            f"across {len(rows)} matched rows."
+        )
+
+    offenders.sort(key=lambda kv: kv[0], reverse=True)
+
+    headers = ("run_id", "strategy_name", "instrument", "type", "mean_net_edge", "worst_loss_share")
+    body: list[tuple[str, ...]] = []
+    for share, row in offenders:
+        edge = row.get("mean_net_edge_pts_per_trade")
+        edge_cell = f"{float(edge):.3f}" if isinstance(edge, (int, float)) else "(n/a)"
+        body.append(
+            (
+                str(row.get("run_id", ""))[:28],
+                str(row.get("strategy_name", ""))[:24],
+                str(row.get("instrument", ""))[:12],
+                str(row.get("strategy_type", ""))[:6],
+                edge_cell,
+                f"{share:.1f}%",
+            )
+        )
+
+    widths = [max(len(h), max(len(b[i]) for b in body)) for i, h in enumerate(headers)]
+
+    def _fmt(cells: tuple[str, ...]) -> str:
+        return "  ".join(c.ljust(widths[i]) for i, c in enumerate(cells))
+
+    out: list[str] = [_fmt(headers), _fmt(tuple("-" * w for w in widths))]
+    out.extend(_fmt(c) for c in body)
+    out.append(
+        f"({len(offenders)} over cap {min_share:.1f}% of {len(rows)} matched rows)"
+    )
+    return "\n".join(out)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="hft-alpha-audit",
@@ -1744,6 +1816,20 @@ def main(argv: list[str] | None = None) -> int:
         "(default: strict 30.0%% cap).",
     )
 
+    lc_p = sub.add_parser(
+        "loss-concentration",
+        help="List runs whose loss distribution is dominated by a few large losses (over cap).",
+    )
+    lc_p.add_argument("--strategy-type", choices=("maker", "taker"), default=None)
+    lc_p.add_argument("--profile", default=None, help="Exact profile_name filter.")
+    lc_p.add_argument(
+        "--min-share",
+        type=float,
+        default=_WORST_LOSS_SHARE_CAP_PCT,
+        help="Show rows whose worst_loss_share_pct strictly exceeds this "
+        "(default: strict 50.0%% cap).",
+    )
+
     list_p = sub.add_parser("list", help="Tabulate all audit rows.")
     list_p.add_argument("--strategy-type", choices=("maker", "taker"), default=None)
     list_p.add_argument("--profile", default=None, help="Exact profile_name filter.")
@@ -1776,6 +1862,12 @@ def main(argv: list[str] | None = None) -> int:
         out = summary(strategy_type=args.strategy_type, profile=args.profile)
     elif args.cmd == "force-flat":
         out = force_flat_offenders(
+            strategy_type=args.strategy_type,
+            profile=args.profile,
+            min_share=args.min_share,
+        )
+    elif args.cmd == "loss-concentration":
+        out = loss_concentration_offenders(
             strategy_type=args.strategy_type,
             profile=args.profile,
             min_share=args.min_share,
