@@ -152,6 +152,61 @@ def promotion_readiness(row: dict) -> tuple[bool, list[str]]:
     return (not blockers, blockers)
 
 
+# Round 64: map each promotion blocker onto the 迭代規則 §5 triage vocabulary
+# (failed / needs_more_sample / blocked_by_parity / blocked_by_risk /
+# blocked_by_audit). A row may carry several blockers; the dominant one is
+# chosen by category precedence below.
+_BLOCKER_TRIAGE_CATEGORY: dict[str, str] = {
+    "replay_parity": "blocked_by_parity",
+    "drawdown": "blocked_by_risk",
+    "worst_loss": "blocked_by_risk",
+    "blocking": "blocked_by_risk",
+    "sample": "needs_more_sample",
+    "edge": "failed",
+    "dominance": "failed",
+    "top_month": "failed",
+    "force_flat": "failed",
+}
+# Highest precedence first: an incomplete audit record can't be trusted at
+# all, then a parity break, then risk-limit breaches, then sample shortfall,
+# then a plain credibility failure.
+_TRIAGE_PRECEDENCE: tuple[str, ...] = (
+    "blocked_by_audit",
+    "blocked_by_parity",
+    "blocked_by_risk",
+    "needs_more_sample",
+    "failed",
+)
+
+
+def triage_reason(row: dict) -> str:
+    """Map a row's promotion verdict onto the user's triage vocabulary.
+
+    驗證標準 §9 + 迭代規則 §5: every kept/killed decision must carry a reason
+    in the fixed vocabulary.  ``promotion_readiness`` already lists the
+    failing axes; this collapses them to the single dominant triage label so
+    ``audit show`` and any decision-replay reads the *category* of failure,
+    not just which metric tripped.  Pure derivation over the verdict — no
+    relaxation, no re-computation.
+
+    Returns ``"promotable"`` when the row clears every axis, else the
+    highest-precedence triage category among its blockers.  Any
+    ``<axis>:missing`` blocker maps to ``blocked_by_audit`` (the record can't
+    be evaluated until the gate runs).
+    """
+    ready, blockers = promotion_readiness(row)
+    if ready:
+        return "promotable"
+    categories = {
+        "blocked_by_audit" if b.endswith(":missing") else _BLOCKER_TRIAGE_CATEGORY.get(b, "failed")
+        for b in blockers
+    }
+    for category in _TRIAGE_PRECEDENCE:
+        if category in categories:
+            return category
+    return "failed"
+
+
 # Round 58: the spec-provenance keys a traceable Gate-C run must carry
 # (goal §4: 資料區間 / 成本假設 / required-gate set). These mirror
 # strategy_spec.load_spec_provenance's output shape.
@@ -307,6 +362,9 @@ def show(run_id: str, strategy_type: str | None = None) -> str:
         lines.append("promotion_ready: READY  [all credibility axes + blocking clear]")
     else:
         lines.append(f"promotion_ready: NOT-READY  [blockers: {', '.join(blockers)}]")
+    # Round 64: dominant triage reason in the user's fixed vocabulary
+    # (迭代規則 §5) so the kept/killed rationale (驗證標準 §9) is one word.
+    lines.append(f"triage_reason  : {triage_reason(row)}")
     # Round 58: traceability completeness (goal §4) — separate from the
     # credibility verdict; flags a row whose audit trail can't answer
     # data-range / cost-model / required-gate provenance.
