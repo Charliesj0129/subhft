@@ -1245,6 +1245,22 @@ def summary(
     ready_count = sum(1 for r in rows if promotion_readiness(r)[0])
     lines.append("promotion_readiness (all axes + blocking clear):")
     lines.append(f"  READY rows     : {ready_count} / {total}")
+    # Round 59: cohort-level traceability gap (goal §4) — distinct from the
+    # credibility distribution; how many rows carry a complete audit trail
+    # (data_range / cost_model_id / required_gates) vs are missing provenance.
+    complete_count = 0
+    missing_key_counts: dict[str, int] = {}
+    for r in rows:
+        ok, missing = spec_provenance_complete(r)
+        if ok:
+            complete_count += 1
+        for key in missing:
+            missing_key_counts[key] = missing_key_counts.get(key, 0) + 1
+    lines.append("spec_provenance (goal §4 traceability):")
+    lines.append(f"  complete rows  : {complete_count} / {total}")
+    if missing_key_counts:
+        top_key, top_n = max(missing_key_counts.items(), key=lambda kv: kv[1])
+        lines.append(f"  top missing key: {top_key} ({top_n})")
     lines.append("triage_status distribution:")
     for key in sorted(triage_counts):
         lines.append(f"  {key:24s}: {triage_counts[key]}")

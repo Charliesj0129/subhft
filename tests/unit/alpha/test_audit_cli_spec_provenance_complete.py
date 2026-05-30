@@ -99,6 +99,26 @@ class TestShowSurfacesProvenanceCompleteness:
         assert "data_range" in line
 
 
+class TestSummaryAggregatesProvenance:
+    def test_summary_counts_complete_and_top_missing(self, _isolated) -> None:
+        _record(run_id="full", prov=dict(_FULL))
+        _record(run_id="bare1", prov=None)
+        _record(run_id="bare2", prov=None)
+        out = audit_cli.summary()
+        assert "spec_provenance (goal §4 traceability):" in out
+        section = out.split("spec_provenance (goal")[1]
+        assert "complete rows  : 1 / 3" in section
+        # bare rows miss all three keys; ties resolve to a real missing key.
+        assert "top missing key:" in section
+
+    def test_summary_all_complete_has_no_top_missing(self, _isolated) -> None:
+        _record(run_id="full", prov=dict(_FULL))
+        out = audit_cli.summary()
+        section = out.split("spec_provenance (goal")[1]
+        assert "complete rows  : 1 / 1" in section
+        assert "top missing key:" not in section.split("triage_status")[0]
+
+
 class TestExportCarriesProvenanceCompleteness:
     def test_csv_column_true_false(self, _isolated) -> None:
         _record(run_id="full", prov=dict(_FULL))
