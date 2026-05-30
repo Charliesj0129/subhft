@@ -168,6 +168,38 @@ def _extract_force_flat_share(advisory: list[dict] | None) -> float | None:
     return None
 
 
+def _extract_single_day_dominance(advisory: list[dict] | None) -> float | None:
+    """Lift top_day_contribution_pct from the ``single_day_dominance`` gate
+    to a top-level row field (Round 48).
+
+    Mirrors :func:`_extract_mean_net_edge` / :func:`_extract_force_flat_share`.
+    驗證標準 §5 requires checking whether OOS PnL is dominated by a few
+    dates; the single-day-dominance pathology recurs across the team's
+    KILLed rounds (R65 / cd600 / T1-A).  Surfacing the share next to the
+    edge lets ``audit show`` / ``summary`` flag a candidate whose edge is
+    carried by one trading day without parsing the sub_gates list.
+    Returns ``None`` when the gate didn't run or wasn't applicable.
+    """
+    if not advisory:
+        return None
+    for entry in advisory:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("name") != "single_day_dominance":
+            continue
+        metrics = entry.get("metrics") or {}
+        if not isinstance(metrics, dict):
+            return None
+        value = metrics.get("top_day_contribution_pct")
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
 def _normalize_spec_provenance(prov: dict | None) -> dict[str, Any]:
     """Project a candidate spec provenance dict onto the row's stable shape.
 
@@ -240,6 +272,9 @@ def build_record(
     ff_share = _extract_force_flat_share(advisory)
     if ff_share is not None:
         row["force_flat_trip_share_pct"] = ff_share
+    day_dom = _extract_single_day_dominance(advisory)
+    if day_dom is not None:
+        row["single_day_dominance_pct"] = day_dom
     prov = _normalize_spec_provenance(spec_provenance)
     if prov:
         row["spec_provenance"] = prov

@@ -98,6 +98,17 @@ def show(run_id: str, strategy_type: str | None = None) -> str:
         lines.append(
             f"force_flat_share: {ff_share:.1f}% of trips  [vs strict cap 30.0% -> {ff_marker}]"
         )
+    # Round 48: surface single-day dominance (驗證標準 §5) next to the edge
+    # so a reviewer sees whether the edge is carried by one trading day —
+    # the pathology that KILLed R65 / cd600 / T1-A.
+    day_dom = row.get("single_day_dominance_pct")
+    if day_dom is None:
+        lines.append("single_day_dom : (n/a — single_day_dominance gate not run)")
+    else:
+        dom_marker = "PASS" if day_dom <= 25.0 else "FAIL"
+        lines.append(
+            f"single_day_dom : {day_dom:.1f}% of |total|  [vs strict cap 25.0% -> {dom_marker}]"
+        )
     lines.append("sub_gates:")
     lines.extend(_format_gate_lines(row.get("sub_gates", [])))
     return "\n".join(lines)
