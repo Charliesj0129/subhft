@@ -770,6 +770,7 @@ _EXPORT_COLUMNS: tuple[str, ...] = (
     "triage_status",
     "mean_net_edge_pts_per_trade",
     "force_flat_trip_share_pct",
+    "single_day_dominance_pct",
     "data_range",
     "cost_model_id",
 )
@@ -787,6 +788,8 @@ def _export_row(row: dict) -> dict[str, str]:
     edge_str = f"{float(edge):.6f}" if isinstance(edge, (int, float)) else ""
     ff = row.get("force_flat_trip_share_pct")
     ff_str = f"{float(ff):.4f}" if isinstance(ff, (int, float)) else ""
+    dom = row.get("single_day_dominance_pct")
+    dom_str = f"{float(dom):.4f}" if isinstance(dom, (int, float)) else ""
     blk = row.get("blocking_passed")
     blk_str = "" if blk is None else ("true" if blk else "false")
     return {
@@ -799,6 +802,7 @@ def _export_row(row: dict) -> dict[str, str]:
         "triage_status": str(row.get("triage_status", "") or ""),
         "mean_net_edge_pts_per_trade": edge_str,
         "force_flat_trip_share_pct": ff_str,
+        "single_day_dominance_pct": dom_str,
         "data_range": str(prov.get("data_range", "") if isinstance(prov, dict) else ""),
         "cost_model_id": str(prov.get("cost_model_id", "") if isinstance(prov, dict) else ""),
     }
@@ -812,6 +816,7 @@ def export(
     edge_min: float | None = None,
     only_passing: bool = False,
     max_force_flat_share: float | None = None,
+    max_day_dominance: float | None = None,
 ) -> str:
     """Emit audit rows as CSV or Markdown for external experiment records.
 
@@ -829,7 +834,12 @@ def export(
     not propped up by force-flat marks.  Rows missing the metric are kept
     (the gate simply didn't run); use ``force-flat`` to inspect offenders.
 
-    Filters mirror ``list_runs`` plus ``max_force_flat_share``.
+    ``single_day_dominance_pct`` (驗證標準 §5) travels the same way, with a
+    parallel ``max_day_dominance`` filter, so the full edge-credibility +
+    distribution-dominance signal set survives into exported artifacts.
+
+    Filters mirror ``list_runs`` plus ``max_force_flat_share`` and
+    ``max_day_dominance``.
     """
     if fmt not in ("csv", "md"):
         raise ValueError(f"unsupported export fmt: {fmt!r} (want 'csv' or 'md')")
@@ -856,6 +866,14 @@ def export(
             for r in rows
             if not isinstance(r.get("force_flat_trip_share_pct"), (int, float))
             or float(r["force_flat_trip_share_pct"]) <= max_force_flat_share
+        ]
+    if max_day_dominance is not None:
+        # Same keep-missing-metric semantics as max_force_flat_share.
+        rows = [
+            r
+            for r in rows
+            if not isinstance(r.get("single_day_dominance_pct"), (int, float))
+            or float(r["single_day_dominance_pct"]) <= max_day_dominance
         ]
 
     projected = [_export_row(r) for r in rows]
@@ -973,6 +991,24 @@ def summary(
         )
         lines.append(
             f"  share min/max   : {min(ff_shares):.1f}% / {max(ff_shares):.1f}%"
+        )
+    # Round 49: single-day-dominance aggregation (驗證標準 §5) so reviewers
+    # can spot whether the cohort's edge is carried by one trading day.
+    dom_shares: list[float] = [
+        float(r["single_day_dominance_pct"])
+        for r in rows
+        if isinstance(r.get("single_day_dominance_pct"), (int, float))
+    ]
+    above_dom_cap = sum(1 for s in dom_shares if s > 25.0)
+    lines.append("single_day_dominance (strict cap 25.0% of |total|):")
+    lines.append(f"  rows with metric: {len(dom_shares)} / {total}")
+    lines.append(f"  rows over cap   : {above_dom_cap}")
+    if dom_shares:
+        lines.append(
+            f"  share p50/p95   : {_percentile(dom_shares, 50):.1f}% / {_percentile(dom_shares, 95):.1f}%"
+        )
+        lines.append(
+            f"  share min/max   : {min(dom_shares):.1f}% / {max(dom_shares):.1f}%"
         )
     lines.append("triage_status distribution:")
     for key in sorted(triage_counts):
@@ -1145,6 +1181,13 @@ def main(argv: list[str] | None = None) -> int:
         help="Drop rows whose force_flat_trip_share_pct strictly exceeds this "
         "(rows missing the metric are kept).",
     )
+    exp_p.add_argument(
+        "--max-day-dominance",
+        type=float,
+        default=None,
+        help="Drop rows whose single_day_dominance_pct strictly exceeds this "
+        "(rows missing the metric are kept).",
+    )
 
     sum_p = sub.add_parser("summary", help="Aggregate counts across audit rows.")
     sum_p.add_argument("--strategy-type", choices=("maker", "taker"), default=None)
@@ -1242,6 +1285,7 @@ def main(argv: list[str] | None = None) -> int:
             edge_min=args.edge_min,
             only_passing=args.only_passing,
             max_force_flat_share=args.max_force_flat_share,
+            max_day_dominance=args.max_day_dominance,
         )
     else:  # pragma: no cover — argparse already enforces this
         parser.print_usage()

@@ -17,6 +17,7 @@ def _record(
     edge: float | None,
     blocking_passed: bool | None = True,
     triage: str = "passed",
+    day_dom: float | None = None,
 ) -> None:
     advisory: list[dict] = []
     if edge is not None:
@@ -25,6 +26,15 @@ def _record(
                 "name": "edge_per_round_trip",
                 "passed": edge > 10.0,
                 "metrics": {"mean_net_edge_pts_per_trade": edge},
+                "details": "stub",
+            }
+        )
+    if day_dom is not None:
+        advisory.append(
+            {
+                "name": "single_day_dominance",
+                "passed": day_dom <= 25.0,
+                "metrics": {"top_day_contribution_pct": day_dom, "threshold_pct": 25.0},
                 "details": "stub",
             }
         )
@@ -110,3 +120,34 @@ class TestAuditCliSummary:
         captured = capsys.readouterr().out
         assert "audit summary" in captured
         assert "rows > floor   : 1" in captured
+
+
+class TestSummaryAggregatesDayDominance:
+    """Round 49: single-day-dominance aggregation block (驗證標準 §5)."""
+
+    def test_summary_reports_dominance_block(self, _isolated) -> None:
+        _record(run_id="dd_a", edge=12.0, day_dom=10.0)
+        _record(run_id="dd_b", edge=12.0, day_dom=40.0)
+        _record(run_id="dd_c", edge=12.0, day_dom=20.0)
+        out = audit_cli.summary()
+        assert "single_day_dominance" in out
+        assert "rows with metric: 3 / 3" in out
+        assert "rows over cap   : 1" in out  # only 40 % exceeds 25 %
+        assert "share min/max" in out
+
+    def test_summary_handles_rows_without_dominance(self, _isolated) -> None:
+        _record(run_id="dd_x", edge=12.0, day_dom=12.0)
+        _record(run_id="dd_y", edge=12.0, day_dom=None)
+        out = audit_cli.summary()
+        # The force_flat block also says "rows with metric"; assert against
+        # the dominance section specifically.
+        dom_section = out.split("single_day_dominance")[1]
+        assert "rows with metric: 1 / 2" in dom_section
+
+    def test_summary_dominance_header_renders_without_metric(self, _isolated) -> None:
+        _record(run_id="dd_empty", edge=12.0, day_dom=None)
+        out = audit_cli.summary()
+        assert "single_day_dominance" in out
+        dom_section = out.split("single_day_dominance")[1]
+        assert "rows with metric: 0 / 1" in dom_section
+        assert "rows over cap   : 0" in dom_section

@@ -22,6 +22,7 @@ def _record(
     triage: str = "passed",
     spec_provenance: dict | None = None,
     ff_share: float | None = None,
+    day_dom: float | None = None,
 ) -> None:
     advisory: list[dict] = []
     if edge is not None:
@@ -39,6 +40,15 @@ def _record(
                 "name": "force_flat_residual",
                 "passed": ff_share <= 30.0,
                 "metrics": {"force_flat_trip_share_pct": ff_share},
+                "details": "stub",
+            }
+        )
+    if day_dom is not None:
+        advisory.append(
+            {
+                "name": "single_day_dominance",
+                "passed": day_dom <= 25.0,
+                "metrics": {"top_day_contribution_pct": day_dom, "threshold_pct": 25.0},
                 "details": "stub",
             }
         )
@@ -202,3 +212,58 @@ class TestAuditCliExportForceFlat:
         out = capsys.readouterr().out
         assert "cli_keep" in out
         assert "cli_drop" not in out
+
+
+class TestAuditCliExportDayDominance:
+    """Round 49: single_day_dominance_pct travels into exported artifacts."""
+
+    def test_dominance_column_in_csv_header(self, _isolated) -> None:
+        _record(run_id="dd_hdr", edge=12.0, day_dom=18.0)
+        out = audit_cli.export(fmt="csv")
+        assert "single_day_dominance_pct" in out.split("\n")[0]
+
+    def test_dominance_value_round_trips(self, _isolated) -> None:
+        _record(run_id="dd_val", edge=12.0, day_dom=17.5)
+        out = audit_cli.export(fmt="csv")
+        row = next(csv.DictReader(io.StringIO(out)))
+        assert row["single_day_dominance_pct"] == "17.5000"
+
+    def test_missing_dominance_renders_empty(self, _isolated) -> None:
+        _record(run_id="dd_none", edge=12.0, day_dom=None)
+        out = audit_cli.export(fmt="csv")
+        row = next(csv.DictReader(io.StringIO(out)))
+        assert row["single_day_dominance_pct"] == ""
+
+    def test_max_day_dominance_drops_over_bound(self, _isolated) -> None:
+        _record(run_id="dd_keep", edge=12.0, day_dom=20.0)
+        _record(run_id="dd_drop", edge=12.0, day_dom=60.0)
+        out = audit_cli.export(fmt="csv", max_day_dominance=25.0)
+        ids = [r["run_id"] for r in csv.DictReader(io.StringIO(out))]
+        assert ids == ["dd_keep"]
+
+    def test_max_day_dominance_keeps_rows_without_metric(self, _isolated) -> None:
+        _record(run_id="dd_no_metric", edge=12.0, day_dom=None)
+        _record(run_id="dd_over", edge=12.0, day_dom=90.0)
+        out = audit_cli.export(fmt="csv", max_day_dominance=25.0)
+        ids = [r["run_id"] for r in csv.DictReader(io.StringIO(out))]
+        assert ids == ["dd_no_metric"]
+
+    def test_edge_force_flat_and_dominance_compose(self, _isolated) -> None:
+        # Only the candidate clean on all three axes survives.
+        _record(run_id="clean", edge=15.0, ff_share=10.0, day_dom=10.0)
+        _record(run_id="propped_day", edge=15.0, ff_share=10.0, day_dom=90.0)
+        _record(run_id="propped_ff", edge=15.0, ff_share=80.0, day_dom=10.0)
+        out = audit_cli.export(
+            fmt="csv", edge_min=10.0, max_force_flat_share=30.0, max_day_dominance=25.0
+        )
+        ids = [r["run_id"] for r in csv.DictReader(io.StringIO(out))]
+        assert ids == ["clean"]
+
+    def test_main_max_day_dominance_flag(self, _isolated, capsys) -> None:
+        _record(run_id="cli_dd_keep", edge=12.0, day_dom=10.0)
+        _record(run_id="cli_dd_drop", edge=12.0, day_dom=70.0)
+        rc = audit_cli.main(["export", "--fmt", "csv", "--max-day-dominance", "25"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "cli_dd_keep" in out
+        assert "cli_dd_drop" not in out
