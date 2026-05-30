@@ -294,6 +294,39 @@ def _extract_top_month_share(advisory: list[dict] | None) -> float | None:
     return None
 
 
+def _extract_inventory_metric(
+    advisory: list[dict] | None, key: str
+) -> float | None:
+    """Lift a named numeric metric from the ``inventory_mtm`` gate to a
+    top-level row field (Round 66).
+
+    驗證標準 §2/§3: net edge must fold in residual mark-to-market — un-FIFO'd
+    inventory cannot be silently dropped to inflate edge.  The gate marks the
+    residual and reports ``realized_pts`` / ``residual_mtm_pts`` / ``net_pts``;
+    surfacing them lets ``audit show`` reveal how much of net edge is realized
+    vs carried by the residual mark.  Returns ``None`` when the gate didn't
+    run or the key is absent.
+    """
+    if not advisory:
+        return None
+    for entry in advisory:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("name") != "inventory_mtm":
+            continue
+        metrics = entry.get("metrics") or {}
+        if not isinstance(metrics, dict):
+            return None
+        value = metrics.get(key)
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
 def _extract_worst_loss_share(advisory: list[dict] | None) -> float | None:
     """Lift worst_loss_share_pct from the ``trade_concentration`` gate to a
     top-level row field (Round 60).
@@ -519,6 +552,12 @@ def build_record(
     replay_category = _extract_replay_divergence_category(advisory)
     if replay_category is not None:
         row["replay_divergence_category"] = replay_category
+    residual_mtm = _extract_inventory_metric(advisory, "residual_mtm_pts")
+    if residual_mtm is not None:
+        row["residual_mtm_pts"] = residual_mtm
+    inventory_net = _extract_inventory_metric(advisory, "net_pts")
+    if inventory_net is not None:
+        row["inventory_net_pts"] = inventory_net
     prov = _normalize_spec_provenance(spec_provenance)
     if prov:
         row["spec_provenance"] = prov

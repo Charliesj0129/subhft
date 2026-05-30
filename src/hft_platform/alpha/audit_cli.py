@@ -355,6 +355,21 @@ def show(run_id: str, strategy_type: str | None = None) -> str:
         lines.append(
             f"replay_parity  : {replay_match:.1f}% match  [vs strict floor 95.0% -> {rp_marker}{suffix}]"
         )
+    # Round 66: residual mark-to-market (驗證標準 §2/§3) — how much of net edge
+    # is carried by the residual mark vs realized fills, so a reviewer can see
+    # whether un-FIFO'd inventory is propping the edge up.
+    residual_mtm = row.get("residual_mtm_pts")
+    if residual_mtm is None:
+        lines.append("residual_mtm   : (n/a — inventory_mtm gate not run)")
+    else:
+        inv_net = row.get("inventory_net_pts")
+        if isinstance(inv_net, (int, float)) and inv_net != 0:
+            share = residual_mtm / inv_net * 100.0
+            lines.append(
+                f"residual_mtm   : {residual_mtm:.1f} pts  ({share:.0f}% of net {inv_net:.1f})"
+            )
+        else:
+            lines.append(f"residual_mtm   : {residual_mtm:.1f} pts  (net n/a)")
     # Round 51: composite promotion verdict over every lifted axis, so a
     # reviewer gets the kept/killed answer (驗證標準 §9) in one line.
     ready, blockers = promotion_readiness(row)
