@@ -231,6 +231,38 @@ def _extract_drawdown_ratio(advisory: list[dict] | None) -> float | None:
     return None
 
 
+def _extract_monthly_metric(
+    advisory: list[dict] | None, key: str
+) -> float | None:
+    """Lift a named numeric metric from the ``monthly_distribution`` gate to
+    a top-level row field (Round 55).
+
+    驗證標準 §6 ("需檢查 median_monthly_net_pnl、worst_month"): the monthly
+    stability sub-metrics live inside ``sub_gates[*].metrics``.  Surfacing
+    them lets a cross-candidate export sort/filter on monthly stability
+    without parsing the gate list.  Returns ``None`` when the gate didn't run
+    or the key is absent.
+    """
+    if not advisory:
+        return None
+    for entry in advisory:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("name") != "monthly_distribution":
+            continue
+        metrics = entry.get("metrics") or {}
+        if not isinstance(metrics, dict):
+            return None
+        value = metrics.get(key)
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
 def _extract_top_month_share(advisory: list[dict] | None) -> float | None:
     """Lift top_month_contribution_pct from the ``monthly_distribution``
     gate to a top-level row field (Round 54).
@@ -380,6 +412,12 @@ def build_record(
     top_month = _extract_top_month_share(advisory)
     if top_month is not None:
         row["top_month_contribution_pct"] = top_month
+    median_month = _extract_monthly_metric(advisory, "median_monthly_net_pnl_pts")
+    if median_month is not None:
+        row["median_monthly_net_pnl_pts"] = median_month
+    worst_month = _extract_monthly_metric(advisory, "worst_monthly_pnl_pts")
+    if worst_month is not None:
+        row["worst_monthly_pnl_pts"] = worst_month
     prov = _normalize_spec_provenance(spec_provenance)
     if prov:
         row["spec_provenance"] = prov

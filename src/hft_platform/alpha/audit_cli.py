@@ -867,6 +867,8 @@ _EXPORT_COLUMNS: tuple[str, ...] = (
     "mean_net_edge_pts_per_trade",
     "force_flat_trip_share_pct",
     "single_day_dominance_pct",
+    "median_monthly_net_pnl_pts",
+    "worst_monthly_pnl_pts",
     "sample_adequacy_label",
     "promotion_ready",
     "promotion_blockers",
@@ -892,6 +894,12 @@ def _export_row(row: dict) -> dict[str, str]:
     ff_str = f"{float(ff):.4f}" if isinstance(ff, (int, float)) else ""
     dom = row.get("single_day_dominance_pct")
     dom_str = f"{float(dom):.4f}" if isinstance(dom, (int, float)) else ""
+    med_month = row.get("median_monthly_net_pnl_pts")
+    med_month_str = f"{float(med_month):.4f}" if isinstance(med_month, (int, float)) else ""
+    worst_month = row.get("worst_monthly_pnl_pts")
+    worst_month_str = (
+        f"{float(worst_month):.4f}" if isinstance(worst_month, (int, float)) else ""
+    )
     sample_label = row.get("sample_adequacy_label")
     sample_str = sample_label if isinstance(sample_label, str) else ""
     ready, blockers = promotion_readiness(row)
@@ -908,6 +916,8 @@ def _export_row(row: dict) -> dict[str, str]:
         "mean_net_edge_pts_per_trade": edge_str,
         "force_flat_trip_share_pct": ff_str,
         "single_day_dominance_pct": dom_str,
+        "median_monthly_net_pnl_pts": med_month_str,
+        "worst_monthly_pnl_pts": worst_month_str,
         "sample_adequacy_label": sample_str,
         "promotion_ready": "true" if ready else "false",
         "promotion_blockers": ";".join(blockers),
