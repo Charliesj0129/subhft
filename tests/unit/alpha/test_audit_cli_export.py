@@ -23,6 +23,7 @@ def _record(
     spec_provenance: dict | None = None,
     ff_share: float | None = None,
     day_dom: float | None = None,
+    label: str | None = None,
 ) -> None:
     advisory: list[dict] = []
     if edge is not None:
@@ -49,6 +50,15 @@ def _record(
                 "name": "single_day_dominance",
                 "passed": day_dom <= 25.0,
                 "metrics": {"top_day_contribution_pct": day_dom, "threshold_pct": 25.0},
+                "details": "stub",
+            }
+        )
+    if label is not None:
+        advisory.append(
+            {
+                "name": "min_sample_size",
+                "passed": label == "adequate",
+                "metrics": {"sample_adequacy_label": label},
                 "details": "stub",
             }
         )
@@ -267,3 +277,53 @@ class TestAuditCliExportDayDominance:
         out = capsys.readouterr().out
         assert "cli_dd_keep" in out
         assert "cli_dd_drop" not in out
+
+
+def _ready_kwargs() -> dict:
+    """All-axes-clear kwargs so the row is promotion-ready by default."""
+    return dict(edge=12.0, ff_share=10.0, day_dom=15.0, label="adequate")
+
+
+class TestAuditCliExportPromotionReady:
+    """Round 52: promotion verdict travels into exported artifacts."""
+
+    def test_promotion_columns_in_header(self, _isolated) -> None:
+        _record(run_id="pr_hdr", **_ready_kwargs())
+        header = audit_cli.export(fmt="csv").split("\n")[0]
+        assert "promotion_ready" in header
+        assert "promotion_blockers" in header
+        assert "sample_adequacy_label" in header
+
+    def test_ready_row_marks_true_with_no_blockers(self, _isolated) -> None:
+        _record(run_id="pr_ok", **_ready_kwargs())
+        row = next(csv.DictReader(io.StringIO(audit_cli.export(fmt="csv"))))
+        assert row["promotion_ready"] == "true"
+        assert row["promotion_blockers"] == ""
+
+    def test_not_ready_row_lists_blockers(self, _isolated) -> None:
+        kw = _ready_kwargs()
+        kw["edge"] = 4.0
+        _record(run_id="pr_bad", **kw)
+        row = next(csv.DictReader(io.StringIO(audit_cli.export(fmt="csv"))))
+        assert row["promotion_ready"] == "false"
+        assert "edge" in row["promotion_blockers"]
+
+    def test_only_ready_filters_to_ready_cohort(self, _isolated) -> None:
+        _record(run_id="keep", **_ready_kwargs())
+        bad = _ready_kwargs()
+        bad["day_dom"] = 90.0
+        _record(run_id="drop", **bad)
+        out = audit_cli.export(fmt="csv", only_ready=True)
+        ids = [r["run_id"] for r in csv.DictReader(io.StringIO(out))]
+        assert ids == ["keep"]
+
+    def test_main_only_ready_flag(self, _isolated, capsys) -> None:
+        _record(run_id="cli_keep", **_ready_kwargs())
+        bad = _ready_kwargs()
+        bad["edge"] = 3.0
+        _record(run_id="cli_drop", **bad)
+        rc = audit_cli.main(["export", "--fmt", "csv", "--only-ready"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "cli_keep" in out
+        assert "cli_drop" not in out

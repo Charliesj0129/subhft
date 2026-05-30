@@ -844,17 +844,23 @@ _EXPORT_COLUMNS: tuple[str, ...] = (
     "mean_net_edge_pts_per_trade",
     "force_flat_trip_share_pct",
     "single_day_dominance_pct",
+    "sample_adequacy_label",
+    "promotion_ready",
+    "promotion_blockers",
     "data_range",
     "cost_model_id",
 )
 
 
 def _export_row(row: dict) -> dict[str, str]:
-    """Project a JSONL row onto the flat export schema (10 columns).
+    """Project a JSONL row onto the flat export schema (``_EXPORT_COLUMNS``).
 
     ``data_range`` and ``cost_model_id`` are lifted from ``spec_provenance``
     when present so external records (Markdown notebook, CSV in a Linear
-    ticket) carry the spec context that drove the audit verdict.
+    ticket) carry the spec context that drove the audit verdict.  The
+    ``promotion_ready`` / ``promotion_blockers`` columns carry the Round 51
+    composite verdict so the kept/killed answer (驗證標準 §9) travels with
+    the row.
     """
     prov = row.get("spec_provenance") or {}
     edge = row.get("mean_net_edge_pts_per_trade")
@@ -863,6 +869,9 @@ def _export_row(row: dict) -> dict[str, str]:
     ff_str = f"{float(ff):.4f}" if isinstance(ff, (int, float)) else ""
     dom = row.get("single_day_dominance_pct")
     dom_str = f"{float(dom):.4f}" if isinstance(dom, (int, float)) else ""
+    sample_label = row.get("sample_adequacy_label")
+    sample_str = sample_label if isinstance(sample_label, str) else ""
+    ready, blockers = promotion_readiness(row)
     blk = row.get("blocking_passed")
     blk_str = "" if blk is None else ("true" if blk else "false")
     return {
@@ -876,6 +885,9 @@ def _export_row(row: dict) -> dict[str, str]:
         "mean_net_edge_pts_per_trade": edge_str,
         "force_flat_trip_share_pct": ff_str,
         "single_day_dominance_pct": dom_str,
+        "sample_adequacy_label": sample_str,
+        "promotion_ready": "true" if ready else "false",
+        "promotion_blockers": ";".join(blockers),
         "data_range": str(prov.get("data_range", "") if isinstance(prov, dict) else ""),
         "cost_model_id": str(prov.get("cost_model_id", "") if isinstance(prov, dict) else ""),
     }
@@ -890,6 +902,7 @@ def export(
     only_passing: bool = False,
     max_force_flat_share: float | None = None,
     max_day_dominance: float | None = None,
+    only_ready: bool = False,
 ) -> str:
     """Emit audit rows as CSV or Markdown for external experiment records.
 
@@ -911,8 +924,13 @@ def export(
     parallel ``max_day_dominance`` filter, so the full edge-credibility +
     distribution-dominance signal set survives into exported artifacts.
 
-    Filters mirror ``list_runs`` plus ``max_force_flat_share`` and
-    ``max_day_dominance``.
+    The Round 51 composite verdict travels as ``promotion_ready`` /
+    ``promotion_blockers`` columns; ``only_ready`` restricts the export to
+    the deployment-ready cohort (every credibility axis + blocking clear),
+    so a reviewer can export exactly the kept set (驗證標準 §9).
+
+    Filters mirror ``list_runs`` plus ``max_force_flat_share``,
+    ``max_day_dominance`` and ``only_ready``.
     """
     if fmt not in ("csv", "md"):
         raise ValueError(f"unsupported export fmt: {fmt!r} (want 'csv' or 'md')")
@@ -948,6 +966,8 @@ def export(
             if not isinstance(r.get("single_day_dominance_pct"), (int, float))
             or float(r["single_day_dominance_pct"]) <= max_day_dominance
         ]
+    if only_ready:
+        rows = [r for r in rows if promotion_readiness(r)[0]]
 
     projected = [_export_row(r) for r in rows]
 
@@ -1280,6 +1300,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Drop rows whose single_day_dominance_pct strictly exceeds this "
         "(rows missing the metric are kept).",
     )
+    exp_p.add_argument(
+        "--only-ready",
+        action="store_true",
+        help="Restrict to promotion-ready rows (all credibility axes + "
+        "blocking clear).",
+    )
 
     sum_p = sub.add_parser("summary", help="Aggregate counts across audit rows.")
     sum_p.add_argument("--strategy-type", choices=("maker", "taker"), default=None)
@@ -1378,6 +1404,7 @@ def main(argv: list[str] | None = None) -> int:
             only_passing=args.only_passing,
             max_force_flat_share=args.max_force_flat_share,
             max_day_dominance=args.max_day_dominance,
+            only_ready=args.only_ready,
         )
     else:  # pragma: no cover — argparse already enforces this
         parser.print_usage()
