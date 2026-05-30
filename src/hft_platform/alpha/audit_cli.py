@@ -947,6 +947,77 @@ def summary(
     return "\n".join(lines)
 
 
+def force_flat_offenders(
+    strategy_type: str | None = None,
+    *,
+    profile: str | None = None,
+    min_share: float = 30.0,
+) -> str:
+    """List the specific runs whose edge is propped up by force-flat marks.
+
+    ``summary`` aggregates the ``force_flat_trip_share_pct`` distribution;
+    this view names the offending ``run_id``s so a reviewer can jump
+    straight to the cohort whose ``mean_net_edge_pts_per_trade`` may be an
+    inventory-mark artifact rather than tradeable edge (驗證標準 §2/§3:
+    residual MtM must not inflate edge).  Only rows whose share strictly
+    exceeds ``min_share`` (default = strict 30.0% cap) are shown, sorted by
+    share descending (worst inflation first).
+
+    Filters (AND-combined): strategy_type, profile.
+    """
+    rows = sub_gate_audit.read_runs()
+    if strategy_type is not None:
+        rows = [r for r in rows if r.get("strategy_type") == strategy_type]
+    if profile is not None:
+        rows = [r for r in rows if r.get("profile_name") == profile]
+    if not rows:
+        return "no audit rows match filter."
+
+    offenders: list[tuple[float, dict]] = []
+    for row in rows:
+        share = row.get("force_flat_trip_share_pct")
+        if not isinstance(share, (int, float)):
+            continue
+        if float(share) > min_share:
+            offenders.append((float(share), row))
+
+    if not offenders:
+        return (
+            f"no rows over force_flat cap ({min_share:.1f}% of trips) "
+            f"across {len(rows)} matched rows."
+        )
+
+    offenders.sort(key=lambda kv: kv[0], reverse=True)
+
+    headers = ("run_id", "strategy_name", "instrument", "type", "mean_net_edge", "ff_share")
+    body: list[tuple[str, ...]] = []
+    for share, row in offenders:
+        edge = row.get("mean_net_edge_pts_per_trade")
+        edge_cell = f"{float(edge):.3f}" if isinstance(edge, (int, float)) else "(n/a)"
+        body.append(
+            (
+                str(row.get("run_id", ""))[:28],
+                str(row.get("strategy_name", ""))[:24],
+                str(row.get("instrument", ""))[:12],
+                str(row.get("strategy_type", ""))[:6],
+                edge_cell,
+                f"{share:.1f}%",
+            )
+        )
+
+    widths = [max(len(h), max(len(b[i]) for b in body)) for i, h in enumerate(headers)]
+
+    def _fmt(cells: tuple[str, ...]) -> str:
+        return "  ".join(c.ljust(widths[i]) for i, c in enumerate(cells))
+
+    out: list[str] = [_fmt(headers), _fmt(tuple("-" * w for w in widths))]
+    out.extend(_fmt(c) for c in body)
+    out.append(
+        f"({len(offenders)} over cap {min_share:.1f}% of {len(rows)} matched rows)"
+    )
+    return "\n".join(out)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="hft-alpha-audit",
@@ -1039,6 +1110,20 @@ def main(argv: list[str] | None = None) -> int:
     sum_p.add_argument("--strategy-type", choices=("maker", "taker"), default=None)
     sum_p.add_argument("--profile", default=None, help="Exact profile_name filter.")
 
+    ff_p = sub.add_parser(
+        "force-flat",
+        help="List runs whose edge is propped up by force-flat marks (over cap).",
+    )
+    ff_p.add_argument("--strategy-type", choices=("maker", "taker"), default=None)
+    ff_p.add_argument("--profile", default=None, help="Exact profile_name filter.")
+    ff_p.add_argument(
+        "--min-share",
+        type=float,
+        default=30.0,
+        help="Show rows whose force_flat_trip_share_pct strictly exceeds this "
+        "(default: strict 30.0%% cap).",
+    )
+
     list_p = sub.add_parser("list", help="Tabulate all audit rows.")
     list_p.add_argument("--strategy-type", choices=("maker", "taker"), default=None)
     list_p.add_argument("--profile", default=None, help="Exact profile_name filter.")
@@ -1069,6 +1154,12 @@ def main(argv: list[str] | None = None) -> int:
         )
     elif args.cmd == "summary":
         out = summary(strategy_type=args.strategy_type, profile=args.profile)
+    elif args.cmd == "force-flat":
+        out = force_flat_offenders(
+            strategy_type=args.strategy_type,
+            profile=args.profile,
+            min_share=args.min_share,
+        )
     elif args.cmd == "verify-spec":
         out = verify_spec(
             args.alpha_id,
