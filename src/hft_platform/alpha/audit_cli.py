@@ -1042,6 +1042,7 @@ _EXPORT_COLUMNS: tuple[str, ...] = (
     "sample_adequacy_label",
     "promotion_ready",
     "promotion_blockers",
+    "triage_reason",
     "spec_provenance_complete",
     "data_range",
     "cost_model_id",
@@ -1093,6 +1094,7 @@ def _export_row(row: dict) -> dict[str, str]:
         "sample_adequacy_label": sample_str,
         "promotion_ready": "true" if ready else "false",
         "promotion_blockers": ";".join(blockers),
+        "triage_reason": triage_reason(row),
         "spec_provenance_complete": "true" if spec_ok else "false",
         "data_range": str(prov.get("data_range", "") if isinstance(prov, dict) else ""),
         "cost_model_id": str(prov.get("cost_model_id", "") if isinstance(prov, dict) else ""),
@@ -1363,6 +1365,24 @@ def summary(
     if missing_key_counts:
         top_key, top_n = max(missing_key_counts.items(), key=lambda kv: kv[1])
         lines.append(f"  top missing key: {top_key} ({top_n})")
+    # Round 65: triage-reason distribution (驗證標準 §9 比較策略) — how the
+    # cohort splits across the kept/killed vocabulary, derived from the
+    # composite verdict rather than the raw blocking triage_status.
+    triage_reason_counts: dict[str, int] = {}
+    for r in rows:
+        reason = triage_reason(r)
+        triage_reason_counts[reason] = triage_reason_counts.get(reason, 0) + 1
+    lines.append("triage_reason distribution (迭代規則 §5 vocabulary):")
+    for reason in (
+        "promotable",
+        "failed",
+        "needs_more_sample",
+        "blocked_by_parity",
+        "blocked_by_risk",
+        "blocked_by_audit",
+    ):
+        if reason in triage_reason_counts:
+            lines.append(f"  {reason:18s}: {triage_reason_counts[reason]}")
     lines.append("triage_status distribution:")
     for key in sorted(triage_counts):
         lines.append(f"  {key:24s}: {triage_counts[key]}")
