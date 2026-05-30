@@ -282,6 +282,21 @@ class TestExtractProvenance:
         prov = extract_provenance("not a dict")  # type: ignore[arg-type]
         assert prov == {"data_range": "", "cost_model_id": "", "required_gates": []}
 
+    def test_timeframe_and_holding_period_carried_when_present(self) -> None:
+        # Round 72: additive §3 fields land in provenance when the spec has them.
+        prov = extract_provenance(_valid_spec())
+        assert prov["timeframe"] == "5m"
+        assert prov["holding_period"] == "intraday <2h"
+
+    def test_missing_timeframe_omits_key(self) -> None:
+        # Back-compatible: absent/empty fields are not added, triple shape kept.
+        spec = _valid_spec()
+        spec.pop("timeframe")
+        spec["holding_period"] = ""
+        prov = extract_provenance(spec)
+        assert "timeframe" not in prov
+        assert "holding_period" not in prov
+
     def test_cost_model_id_changes_when_any_knob_drifts(self) -> None:
         a = extract_provenance(_valid_spec())
         b_spec = _valid_spec()

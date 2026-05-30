@@ -272,6 +272,45 @@ class TestSpecProvenance:
             "edge_per_round_trip",
         ]
 
+    def test_provenance_carries_timeframe_and_holding_period(self) -> None:
+        # Round 72: end-to-end — a spec-derived provenance dict carrying the
+        # two additive §3 fields lands them on the row's spec_provenance.
+        prov = {
+            "data_range": "2026-Q1",
+            "cost_model_id": "x+1bp/2bp/1pts",
+            "required_gates": ["edge_per_round_trip"],
+            "timeframe": "15m",
+            "holding_period": "intraday <2h",
+        }
+        row = sub_gate_audit.build_record(
+            run_id="r1",
+            strategy_name="x",
+            instrument="TXFD6",
+            strategy_type="maker",
+            profile_name="vm_ul6_strict",
+            advisory=_advisory(),
+            blocking=_blocking(),
+            spec_provenance=prov,
+        )
+        assert row["spec_provenance"]["timeframe"] == "15m"
+        assert row["spec_provenance"]["holding_period"] == "intraday <2h"
+
+    def test_provenance_without_timeframe_keeps_triple_shape(self) -> None:
+        # Back-compatible: a row whose provenance predates the extension has
+        # no timeframe / holding_period keys.
+        row = sub_gate_audit.build_record(
+            run_id="r1",
+            strategy_name="x",
+            instrument="TXFD6",
+            strategy_type="maker",
+            profile_name="",
+            advisory=_advisory(),
+            blocking=None,
+            spec_provenance={"data_range": "2026-Q1"},
+        )
+        assert "timeframe" not in row["spec_provenance"]
+        assert "holding_period" not in row["spec_provenance"]
+
     def test_partial_provenance_fills_defaults(self) -> None:
         row = sub_gate_audit.build_record(
             run_id="r1",

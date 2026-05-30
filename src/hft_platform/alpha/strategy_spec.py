@@ -398,8 +398,20 @@ def extract_provenance(spec: dict[str, Any]) -> dict[str, Any]:
         cost_model_id = f"{latency}+{fee}bp/{tax}bp/{slip}pts"
     else:
         cost_model_id = ""
-    return {
+    out: dict[str, Any] = {
         "data_range": data_range,
         "cost_model_id": cost_model_id,
         "required_gates": required_gates,
     }
+    # Round 72 (完成狀態 §3): additively carry two stable, low-cardinality
+    # fixed-spec fields so the audit record can attest them without a spec
+    # reload (the row-side normalize/attest landed in Round 71).  Only
+    # emitted when present and non-empty — the non-dict early-return and the
+    # Round-17 triple shape stay back-compatible for specs that predate this.
+    timeframe = spec.get("timeframe")
+    if isinstance(timeframe, str) and timeframe:
+        out["timeframe"] = timeframe
+    holding_period = spec.get("holding_period")
+    if isinstance(holding_period, str) and holding_period:
+        out["holding_period"] = holding_period
+    return out
