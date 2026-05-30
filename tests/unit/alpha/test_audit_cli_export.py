@@ -21,6 +21,7 @@ def _record(
     blocking_passed: bool | None = True,
     triage: str = "passed",
     spec_provenance: dict | None = None,
+    ff_share: float | None = None,
 ) -> None:
     advisory: list[dict] = []
     if edge is not None:
@@ -29,6 +30,15 @@ def _record(
                 "name": "edge_per_round_trip",
                 "passed": edge > 10.0,
                 "metrics": {"mean_net_edge_pts_per_trade": edge},
+                "details": "stub",
+            }
+        )
+    if ff_share is not None:
+        advisory.append(
+            {
+                "name": "force_flat_residual",
+                "passed": ff_share <= 30.0,
+                "metrics": {"force_flat_trip_share_pct": ff_share},
                 "details": "stub",
             }
         )
@@ -137,3 +147,58 @@ class TestAuditCliExport:
         captured = capsys.readouterr().out
         assert "run_id,strategy_name" in captured
         assert "e_main" in captured
+
+
+class TestAuditCliExportForceFlat:
+    """Round 47: force_flat_trip_share_pct travels into exported artifacts."""
+
+    def test_force_flat_column_in_csv_header(self, _isolated) -> None:
+        _record(run_id="ff_hdr", edge=12.0, ff_share=15.0)
+        out = audit_cli.export(fmt="csv")
+        header = out.split("\n")[0]
+        assert "force_flat_trip_share_pct" in header
+
+    def test_force_flat_value_round_trips(self, _isolated) -> None:
+        _record(run_id="ff_val", edge=12.0, ff_share=22.5)
+        out = audit_cli.export(fmt="csv")
+        row = next(csv.DictReader(io.StringIO(out)))
+        assert row["force_flat_trip_share_pct"] == "22.5000"
+
+    def test_missing_force_flat_renders_empty(self, _isolated) -> None:
+        _record(run_id="ff_none", edge=12.0, ff_share=None)
+        out = audit_cli.export(fmt="csv")
+        row = next(csv.DictReader(io.StringIO(out)))
+        assert row["force_flat_trip_share_pct"] == ""
+
+    def test_max_force_flat_share_drops_over_bound(self, _isolated) -> None:
+        _record(run_id="ff_keep", edge=12.0, ff_share=20.0)
+        _record(run_id="ff_drop", edge=12.0, ff_share=55.0)
+        out = audit_cli.export(fmt="csv", max_force_flat_share=30.0)
+        ids = [r["run_id"] for r in csv.DictReader(io.StringIO(out))]
+        assert ids == ["ff_keep"]
+
+    def test_max_force_flat_share_keeps_rows_without_metric(self, _isolated) -> None:
+        # Gate didn't run -> no metric -> must not be silently dropped.
+        _record(run_id="ff_no_metric", edge=12.0, ff_share=None)
+        _record(run_id="ff_over", edge=12.0, ff_share=80.0)
+        out = audit_cli.export(fmt="csv", max_force_flat_share=30.0)
+        ids = [r["run_id"] for r in csv.DictReader(io.StringIO(out))]
+        assert ids == ["ff_no_metric"]
+
+    def test_edge_min_and_max_force_flat_compose(self, _isolated) -> None:
+        # Only the high-edge, low-force-flat candidate survives both filters.
+        _record(run_id="clean", edge=15.0, ff_share=10.0)
+        _record(run_id="low_edge", edge=5.0, ff_share=10.0)
+        _record(run_id="propped", edge=15.0, ff_share=90.0)
+        out = audit_cli.export(fmt="csv", edge_min=10.0, max_force_flat_share=30.0)
+        ids = [r["run_id"] for r in csv.DictReader(io.StringIO(out))]
+        assert ids == ["clean"]
+
+    def test_main_max_force_flat_flag(self, _isolated, capsys) -> None:
+        _record(run_id="cli_keep", edge=12.0, ff_share=10.0)
+        _record(run_id="cli_drop", edge=12.0, ff_share=70.0)
+        rc = audit_cli.main(["export", "--fmt", "csv", "--max-force-flat-share", "30"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "cli_keep" in out
+        assert "cli_drop" not in out

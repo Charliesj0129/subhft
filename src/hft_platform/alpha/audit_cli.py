@@ -758,6 +758,7 @@ _EXPORT_COLUMNS: tuple[str, ...] = (
     "blocking_passed",
     "triage_status",
     "mean_net_edge_pts_per_trade",
+    "force_flat_trip_share_pct",
     "data_range",
     "cost_model_id",
 )
@@ -773,6 +774,8 @@ def _export_row(row: dict) -> dict[str, str]:
     prov = row.get("spec_provenance") or {}
     edge = row.get("mean_net_edge_pts_per_trade")
     edge_str = f"{float(edge):.6f}" if isinstance(edge, (int, float)) else ""
+    ff = row.get("force_flat_trip_share_pct")
+    ff_str = f"{float(ff):.4f}" if isinstance(ff, (int, float)) else ""
     blk = row.get("blocking_passed")
     blk_str = "" if blk is None else ("true" if blk else "false")
     return {
@@ -784,6 +787,7 @@ def _export_row(row: dict) -> dict[str, str]:
         "blocking_passed": blk_str,
         "triage_status": str(row.get("triage_status", "") or ""),
         "mean_net_edge_pts_per_trade": edge_str,
+        "force_flat_trip_share_pct": ff_str,
         "data_range": str(prov.get("data_range", "") if isinstance(prov, dict) else ""),
         "cost_model_id": str(prov.get("cost_model_id", "") if isinstance(prov, dict) else ""),
     }
@@ -796,6 +800,7 @@ def export(
     profile: str | None = None,
     edge_min: float | None = None,
     only_passing: bool = False,
+    max_force_flat_share: float | None = None,
 ) -> str:
     """Emit audit rows as CSV or Markdown for external experiment records.
 
@@ -805,7 +810,15 @@ def export(
     ticket, Notion notebook, or feed an Excel pivot directly — no
     JSONL parsing required on the receiving end.
 
-    Filters mirror ``list_runs``.
+    The ``force_flat_trip_share_pct`` column travels with the edge so the
+    edge-credibility signal (驗證標準 §2/§3: residual MtM must not inflate
+    edge) survives into exported review artifacts.  ``max_force_flat_share``
+    drops rows whose share strictly exceeds the bound — combine with
+    ``edge_min`` to export only candidates whose edge is both high *and*
+    not propped up by force-flat marks.  Rows missing the metric are kept
+    (the gate simply didn't run); use ``force-flat`` to inspect offenders.
+
+    Filters mirror ``list_runs`` plus ``max_force_flat_share``.
     """
     if fmt not in ("csv", "md"):
         raise ValueError(f"unsupported export fmt: {fmt!r} (want 'csv' or 'md')")
@@ -823,6 +836,15 @@ def export(
             for r in rows
             if isinstance(r.get("mean_net_edge_pts_per_trade"), (int, float))
             and float(r["mean_net_edge_pts_per_trade"]) >= edge_min
+        ]
+    if max_force_flat_share is not None:
+        # Keep rows missing the metric (gate didn't run); drop only those
+        # whose recorded share strictly exceeds the bound.
+        rows = [
+            r
+            for r in rows
+            if not isinstance(r.get("force_flat_trip_share_pct"), (int, float))
+            or float(r["force_flat_trip_share_pct"]) <= max_force_flat_share
         ]
 
     projected = [_export_row(r) for r in rows]
@@ -1105,6 +1127,13 @@ def main(argv: list[str] | None = None) -> int:
     exp_p.add_argument("--profile", default=None)
     exp_p.add_argument("--edge-min", type=float, default=None)
     exp_p.add_argument("--only-passing", action="store_true")
+    exp_p.add_argument(
+        "--max-force-flat-share",
+        type=float,
+        default=None,
+        help="Drop rows whose force_flat_trip_share_pct strictly exceeds this "
+        "(rows missing the metric are kept).",
+    )
 
     sum_p = sub.add_parser("summary", help="Aggregate counts across audit rows.")
     sum_p.add_argument("--strategy-type", choices=("maker", "taker"), default=None)
@@ -1201,6 +1230,7 @@ def main(argv: list[str] | None = None) -> int:
             profile=args.profile,
             edge_min=args.edge_min,
             only_passing=args.only_passing,
+            max_force_flat_share=args.max_force_flat_share,
         )
     else:  # pragma: no cover — argparse already enforces this
         parser.print_usage()
