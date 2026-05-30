@@ -818,6 +818,83 @@ def leaderboard(
     return "\n".join(out)
 
 
+def decision_trail(
+    strategy_name: str,
+    *,
+    profile: str | None = None,
+) -> str:
+    """Replay one strategy's run history in decision order (驗證標準 §9 回放研究決策).
+
+    ``scorecard`` reads a single run and ``leaderboard`` ranks a cohort snapshot;
+    neither shows how *one* strategy's kept/killed verdict evolved across reruns
+    (e.g. ``needs_more_sample`` early then ``promotable`` once the sample grew, or
+    a regression back to ``failed``).  This selects every run whose
+    ``strategy_name`` matches, orders them by ``recorded_at_ns`` ascending, and
+    tabulates seq | run_id | recorded_at_ns | edge | ready | triage so a reviewer
+    can replay the decision sequence.  Verdicts come from
+    ``promotion_readiness`` / ``triage_reason`` so the trail never drifts from the
+    live kept/killed call.  A trailing line names the latest verdict and flags
+    whether the triage category changed across the trail.
+
+    Filters (AND-combined): exact strategy_name (required), profile.
+    """
+    rows = sub_gate_audit.read_runs()
+    rows = [r for r in rows if r.get("strategy_name") == strategy_name]
+    if profile is not None:
+        rows = [r for r in rows if r.get("profile_name") == profile]
+    if not rows:
+        return f"no audit rows for strategy_name={strategy_name!r}."
+
+    # Stable order: recorded_at_ns ascending; rows without a timestamp sort last
+    # while preserving their append order (natural read order).
+    def _ts(row: dict) -> int:
+        ts = row.get("recorded_at_ns")
+        return int(ts) if isinstance(ts, (int, float)) else 2**63 - 1
+
+    ordered = sorted(rows, key=_ts)
+
+    headers = ("seq", "run_id", "recorded_at_ns", "edge", "ready", "triage")
+    body: list[tuple[str, ...]] = []
+    reasons_seq: list[str] = []
+    for i, row in enumerate(ordered, start=1):
+        ready, _blockers = promotion_readiness(row)
+        reason = triage_reason(row)
+        reasons_seq.append(reason)
+        edge = row.get("mean_net_edge_pts_per_trade")
+        edge_cell = f"{float(edge):.2f}" if isinstance(edge, (int, float)) else "(n/a)"
+        ts = row.get("recorded_at_ns")
+        ts_cell = str(int(ts)) if isinstance(ts, (int, float)) else "(n/a)"
+        body.append(
+            (
+                str(i),
+                str(row.get("run_id", ""))[:24],
+                ts_cell,
+                edge_cell,
+                "READY" if ready else "no",
+                reason,
+            )
+        )
+
+    widths = [max(len(h), max(len(b[i]) for b in body)) for i, h in enumerate(headers)]
+
+    def _fmt(cells: tuple[str, ...]) -> str:
+        return "  ".join(c.ljust(widths[i]) for i, c in enumerate(cells))
+
+    out: list[str] = [
+        f"decision trail: {strategy_name}",
+        _fmt(headers),
+        _fmt(tuple("-" * w for w in widths)),
+    ]
+    out.extend(_fmt(c) for c in body)
+    latest = reasons_seq[-1]
+    changed = len(set(reasons_seq)) > 1
+    out.append(
+        f"({len(ordered)} runs; latest triage={latest}; "
+        f"triage {'changed' if changed else 'stable'} across trail)"
+    )
+    return "\n".join(out)
+
+
 def _metric_diff(metrics_a: dict, metrics_b: dict) -> list[tuple[str, object, object]]:
     """Return [(key, a_value, b_value), ...] for keys whose values differ.
 
@@ -2419,6 +2496,13 @@ def main(argv: list[str] | None = None) -> int:
     lb_p.add_argument("--strategy-type", choices=("maker", "taker"), default=None)
     lb_p.add_argument("--profile", default=None, help="Exact profile_name filter.")
 
+    dt_p = sub.add_parser(
+        "decision-trail",
+        help="Replay one strategy's run history in decision order (驗證標準 §9 回放研究決策).",
+    )
+    dt_p.add_argument("strategy_name", help="Exact strategy_name to replay.")
+    dt_p.add_argument("--profile", default=None, help="Exact profile_name filter.")
+
     list_p = sub.add_parser("list", help="Tabulate all audit rows.")
     list_p.add_argument("--strategy-type", choices=("maker", "taker"), default=None)
     list_p.add_argument("--profile", default=None, help="Exact profile_name filter.")
@@ -2476,6 +2560,11 @@ def main(argv: list[str] | None = None) -> int:
     elif args.cmd == "leaderboard":
         out = leaderboard(
             strategy_type=args.strategy_type,
+            profile=args.profile,
+        )
+    elif args.cmd == "decision-trail":
+        out = decision_trail(
+            args.strategy_name,
             profile=args.profile,
         )
     elif args.cmd == "template-check":
