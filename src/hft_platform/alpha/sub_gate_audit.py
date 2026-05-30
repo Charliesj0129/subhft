@@ -200,6 +200,40 @@ def _extract_single_day_dominance(advisory: list[dict] | None) -> float | None:
     return None
 
 
+_SAMPLE_ADEQUACY_LABELS = frozenset(
+    {"adequate", "promising", "needs_more_sample", "inconclusive"}
+)
+
+
+def _extract_sample_adequacy_label(advisory: list[dict] | None) -> str | None:
+    """Lift sample_adequacy_label from the ``min_sample_size`` gate to a
+    top-level row field (Round 50).
+
+    驗證標準 §4: a candidate with too few fills/days may only be marked
+    promising / needs_more_sample / inconclusive — never complete.  The
+    ``min_sample_size`` gate already classifies the run, but the label
+    sits inside ``sub_gates[*].metrics``.  Surfacing it lets ``audit
+    show`` / ``summary`` warn that a *blocking-passed* candidate is still
+    sample-insufficient and must not be promoted.  Returns ``None`` when
+    the gate didn't run or emitted an unrecognized label.
+    """
+    if not advisory:
+        return None
+    for entry in advisory:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("name") != "min_sample_size":
+            continue
+        metrics = entry.get("metrics") or {}
+        if not isinstance(metrics, dict):
+            return None
+        value = metrics.get("sample_adequacy_label")
+        if isinstance(value, str) and value in _SAMPLE_ADEQUACY_LABELS:
+            return value
+        return None
+    return None
+
+
 def _normalize_spec_provenance(prov: dict | None) -> dict[str, Any]:
     """Project a candidate spec provenance dict onto the row's stable shape.
 
@@ -275,6 +309,9 @@ def build_record(
     day_dom = _extract_single_day_dominance(advisory)
     if day_dom is not None:
         row["single_day_dominance_pct"] = day_dom
+    sample_label = _extract_sample_adequacy_label(advisory)
+    if sample_label is not None:
+        row["sample_adequacy_label"] = sample_label
     prov = _normalize_spec_provenance(spec_provenance)
     if prov:
         row["spec_provenance"] = prov

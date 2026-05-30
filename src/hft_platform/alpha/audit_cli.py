@@ -109,6 +109,17 @@ def show(run_id: str, strategy_type: str | None = None) -> str:
         lines.append(
             f"single_day_dom : {day_dom:.1f}% of |total|  [vs strict cap 25.0% -> {dom_marker}]"
         )
+    # Round 50: sample-adequacy label (驗證標準 §4) — a blocking-passed
+    # candidate that is not 'adequate' must still be triaged as
+    # promising / needs_more_sample / inconclusive, never complete.
+    sample_label = row.get("sample_adequacy_label")
+    if sample_label is None:
+        lines.append("sample_adequacy: (n/a — min_sample_size gate not run)")
+    else:
+        sample_marker = "READY" if sample_label == "adequate" else "NOT-READY"
+        lines.append(
+            f"sample_adequacy: {sample_label}  [§4 -> {sample_marker}]"
+        )
     lines.append("sub_gates:")
     lines.extend(_format_gate_lines(row.get("sub_gates", [])))
     return "\n".join(lines)
@@ -1010,6 +1021,20 @@ def summary(
         lines.append(
             f"  share min/max   : {min(dom_shares):.1f}% / {max(dom_shares):.1f}%"
         )
+    # Round 50: sample-adequacy distribution (驗證標準 §4) — how many
+    # candidates are actually deployment-ready vs must stay flagged
+    # promising / needs_more_sample / inconclusive.
+    sample_counts: dict[str, int] = {}
+    for r in rows:
+        lbl = r.get("sample_adequacy_label")
+        if isinstance(lbl, str):
+            sample_counts[lbl] = sample_counts.get(lbl, 0) + 1
+    rows_with_label = sum(sample_counts.values())
+    lines.append("sample_adequacy (驗證標準 §4, only 'adequate' is deployment-ready):")
+    lines.append(f"  rows with label : {rows_with_label} / {total}")
+    for lbl in ("adequate", "promising", "needs_more_sample", "inconclusive"):
+        if lbl in sample_counts:
+            lines.append(f"  {lbl:16s}: {sample_counts[lbl]}")
     lines.append("triage_status distribution:")
     for key in sorted(triage_counts):
         lines.append(f"  {key:24s}: {triage_counts[key]}")
