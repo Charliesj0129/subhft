@@ -135,6 +135,45 @@ def promotion_readiness(row: dict) -> tuple[bool, list[str]]:
     return (not blockers, blockers)
 
 
+# Round 58: the spec-provenance keys a traceable Gate-C run must carry
+# (goal §4: 資料區間 / 成本假設 / required-gate set). These mirror
+# strategy_spec.load_spec_provenance's output shape.
+_REQUIRED_PROVENANCE_KEYS: tuple[str, ...] = (
+    "data_range",
+    "cost_model_id",
+    "required_gates",
+)
+
+
+def spec_provenance_complete(row: dict) -> tuple[bool, list[str]]:
+    """Report whether a row carries a complete spec provenance (goal §4).
+
+    A traceable experiment record must answer "what data range, cost-model,
+    and required-gate set drove this run?".  ``spec_provenance`` is opt-in at
+    record time, but once a row claims promotability a reviewer needs to know
+    the audit trail is intact — a row whose provenance is absent or has empty
+    required fields is *traceability-incomplete*, distinct from the
+    credibility verdict (``promotion_readiness``).  This re-derives and
+    relaxes nothing; it only inspects already-stored fields.
+
+    Returns ``(complete, missing)`` where ``missing`` lists the absent/empty
+    provenance keys (and is empty iff complete).  A row with no
+    ``spec_provenance`` at all reports every required key as missing.
+    """
+    prov = row.get("spec_provenance")
+    if not isinstance(prov, dict):
+        return (False, list(_REQUIRED_PROVENANCE_KEYS))
+    missing: list[str] = []
+    for key in _REQUIRED_PROVENANCE_KEYS:
+        value = prov.get(key)
+        if key == "required_gates":
+            if not isinstance(value, list) or not value:
+                missing.append(key)
+        elif not (isinstance(value, str) and value):
+            missing.append(key)
+    return (not missing, missing)
+
+
 def show(run_id: str, strategy_type: str | None = None) -> str:
     """Pretty-print one audit row (or return a not-found message)."""
     row = _pick_row(run_id, strategy_type)
@@ -224,6 +263,16 @@ def show(run_id: str, strategy_type: str | None = None) -> str:
         lines.append("promotion_ready: READY  [all credibility axes + blocking clear]")
     else:
         lines.append(f"promotion_ready: NOT-READY  [blockers: {', '.join(blockers)}]")
+    # Round 58: traceability completeness (goal §4) — separate from the
+    # credibility verdict; flags a row whose audit trail can't answer
+    # data-range / cost-model / required-gate provenance.
+    spec_ok, spec_missing = spec_provenance_complete(row)
+    if spec_ok:
+        lines.append("spec_provenance: complete  [data_range, cost_model_id, required_gates]")
+    else:
+        lines.append(
+            f"spec_provenance: INCOMPLETE  [missing: {', '.join(spec_missing)}]"
+        )
     lines.append("sub_gates:")
     lines.extend(_format_gate_lines(row.get("sub_gates", [])))
     return "\n".join(lines)
@@ -891,6 +940,7 @@ _EXPORT_COLUMNS: tuple[str, ...] = (
     "sample_adequacy_label",
     "promotion_ready",
     "promotion_blockers",
+    "spec_provenance_complete",
     "data_range",
     "cost_model_id",
 )
@@ -922,6 +972,7 @@ def _export_row(row: dict) -> dict[str, str]:
     sample_label = row.get("sample_adequacy_label")
     sample_str = sample_label if isinstance(sample_label, str) else ""
     ready, blockers = promotion_readiness(row)
+    spec_ok, _ = spec_provenance_complete(row)
     blk = row.get("blocking_passed")
     blk_str = "" if blk is None else ("true" if blk else "false")
     return {
@@ -940,6 +991,7 @@ def _export_row(row: dict) -> dict[str, str]:
         "sample_adequacy_label": sample_str,
         "promotion_ready": "true" if ready else "false",
         "promotion_blockers": ";".join(blockers),
+        "spec_provenance_complete": "true" if spec_ok else "false",
         "data_range": str(prov.get("data_range", "") if isinstance(prov, dict) else ""),
         "cost_model_id": str(prov.get("cost_model_id", "") if isinstance(prov, dict) else ""),
     }
