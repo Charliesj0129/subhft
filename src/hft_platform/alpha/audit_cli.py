@@ -61,6 +61,61 @@ def _format_gate_lines(sub_gates: list[dict]) -> Iterable[str]:
         yield f"  [{marker}] {name}: {details}"
 
 
+# Round 51: strict-profile thresholds for the composite promotion verdict.
+# These mirror the per-axis caps already surfaced in show()/summary() and
+# vm_ul6_strict.yaml; the verdict is purely derived (no relaxation of any
+# bar — 限制 §3).
+_EDGE_FLOOR_PTS = 10.0
+_FORCE_FLAT_CAP_PCT = 30.0
+_DAY_DOMINANCE_CAP_PCT = 25.0
+
+
+def promotion_readiness(row: dict) -> tuple[bool, list[str]]:
+    """Derive a single promotion verdict from the already-lifted row fields.
+
+    Answers 驗證標準 §9 ("know the kept/killed rationale") in one place: a
+    candidate is promotion-ready only when every credibility axis clears
+    its bar *and* blocking gates passed.  Pure function over fields the
+    earlier rounds lifted (edge / force-flat / dominance / sample-adequacy)
+    plus ``blocking_passed`` — it re-derives nothing and relaxes nothing
+    (限制 §3).  A missing metric is treated as a blocker (the gate must
+    have run to clear the axis), tagged ``<axis>:missing``.
+
+    Returns ``(ready, blockers)`` where ``blockers`` is empty iff ready.
+    """
+    blockers: list[str] = []
+
+    edge = row.get("mean_net_edge_pts_per_trade")
+    if not isinstance(edge, (int, float)):
+        blockers.append("edge:missing")
+    elif not float(edge) > _EDGE_FLOOR_PTS:
+        blockers.append("edge")
+
+    ff = row.get("force_flat_trip_share_pct")
+    if isinstance(ff, (int, float)) and float(ff) > _FORCE_FLAT_CAP_PCT:
+        blockers.append("force_flat")
+    # force-flat missing is not a blocker on its own: the gate may be
+    # inapplicable (no residual); the residual gate passes advisory in
+    # that case and the edge already accounts for realized PnL.
+
+    dom = row.get("single_day_dominance_pct")
+    if not isinstance(dom, (int, float)):
+        blockers.append("dominance:missing")
+    elif float(dom) > _DAY_DOMINANCE_CAP_PCT:
+        blockers.append("dominance")
+
+    sample = row.get("sample_adequacy_label")
+    if not isinstance(sample, str):
+        blockers.append("sample:missing")
+    elif sample != "adequate":
+        blockers.append("sample")
+
+    if row.get("blocking_passed") is not True:
+        blockers.append("blocking")
+
+    return (not blockers, blockers)
+
+
 def show(run_id: str, strategy_type: str | None = None) -> str:
     """Pretty-print one audit row (or return a not-found message)."""
     row = _pick_row(run_id, strategy_type)
@@ -120,6 +175,13 @@ def show(run_id: str, strategy_type: str | None = None) -> str:
         lines.append(
             f"sample_adequacy: {sample_label}  [§4 -> {sample_marker}]"
         )
+    # Round 51: composite promotion verdict over every lifted axis, so a
+    # reviewer gets the kept/killed answer (驗證標準 §9) in one line.
+    ready, blockers = promotion_readiness(row)
+    if ready:
+        lines.append("promotion_ready: READY  [all credibility axes + blocking clear]")
+    else:
+        lines.append(f"promotion_ready: NOT-READY  [blockers: {', '.join(blockers)}]")
     lines.append("sub_gates:")
     lines.extend(_format_gate_lines(row.get("sub_gates", [])))
     return "\n".join(lines)
@@ -1035,6 +1097,11 @@ def summary(
     for lbl in ("adequate", "promising", "needs_more_sample", "inconclusive"):
         if lbl in sample_counts:
             lines.append(f"  {lbl:16s}: {sample_counts[lbl]}")
+    # Round 51: composite promotion verdict count (驗證標準 §9) — how many
+    # candidates clear *every* credibility axis plus blocking at once.
+    ready_count = sum(1 for r in rows if promotion_readiness(r)[0])
+    lines.append("promotion_readiness (all axes + blocking clear):")
+    lines.append(f"  READY rows     : {ready_count} / {total}")
     lines.append("triage_status distribution:")
     for key in sorted(triage_counts):
         lines.append(f"  {key:24s}: {triage_counts[key]}")
