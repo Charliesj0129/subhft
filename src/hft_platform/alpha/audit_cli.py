@@ -246,6 +246,48 @@ def spec_provenance_complete(row: dict) -> tuple[bool, list[str]]:
     return (not missing, missing)
 
 
+def _token_is_number(token: str, suffix: str) -> bool:
+    """True when ``token`` is ``<number><suffix>`` with a parseable number."""
+    body = token[: -len(suffix)] if suffix and token.endswith(suffix) else token
+    try:
+        float(body)
+    except ValueError:
+        return False
+    return True
+
+
+def cost_model_complete(row: dict) -> tuple[bool, list[str]]:
+    """Report which §2 cost knobs the row's declared cost_model omits.
+
+    驗證標準 §2: net edge must subtract 手續費 / 稅 / 滑點 / latency adverse
+    selection (plus bid-ask spread, force-flat, residual MtM — those are
+    surfaced separately).  ``extract_provenance`` packs the first four into
+    ``cost_model_id = "<latency>+<fee>bp/<tax>bp/<slip>pts"``; a knob left
+    unset serialises as ``None``/empty, so a reviewer can't tell a deducted
+    cost from a silently-omitted one.  This parses the already-stored id and
+    flags any knob that is absent or non-numeric — it reads, never relaxes,
+    the cost model (限制 §2).
+
+    Returns ``(complete, missing)`` over ``{latency_profile, fee_bps,
+    tax_bps, slippage_pts}``.  A row with no cost_model_id reports all four.
+    """
+    knobs = ["latency_profile", "fee_bps", "tax_bps", "slippage_pts"]
+    prov = row.get("spec_provenance")
+    cmid = prov.get("cost_model_id") if isinstance(prov, dict) else None
+    if not isinstance(cmid, str) or "+" not in cmid:
+        return (False, list(knobs))
+    latency, _, rest = cmid.partition("+")
+    missing: list[str] = []
+    if not latency or latency in ("unspecified", "None"):
+        missing.append("latency_profile")
+    parts = rest.split("/")
+    checks = (("fee_bps", "bp"), ("tax_bps", "bp"), ("slippage_pts", "pts"))
+    for idx, (name, suffix) in enumerate(checks):
+        if idx >= len(parts) or not _token_is_number(parts[idx], suffix):
+            missing.append(name)
+    return (not missing, missing)
+
+
 def show(run_id: str, strategy_type: str | None = None) -> str:
     """Pretty-print one audit row (or return a not-found message)."""
     row = _pick_row(run_id, strategy_type)
@@ -389,6 +431,15 @@ def show(run_id: str, strategy_type: str | None = None) -> str:
     else:
         lines.append(
             f"spec_provenance: INCOMPLETE  [missing: {', '.join(spec_missing)}]"
+        )
+    # Round 67: §2 cost-knob completeness parsed from the declared cost_model_id
+    # so a silently-omitted fee/tax/slippage/latency can't pass unnoticed.
+    cost_ok, cost_missing = cost_model_complete(row)
+    if cost_ok:
+        lines.append("cost_model     : complete  [latency, fee, tax, slippage declared]")
+    else:
+        lines.append(
+            f"cost_model     : INCOMPLETE  [§2 missing: {', '.join(cost_missing)}]"
         )
     lines.append("sub_gates:")
     lines.extend(_format_gate_lines(row.get("sub_gates", [])))
