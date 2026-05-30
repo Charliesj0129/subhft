@@ -20,6 +20,7 @@ def _record(
     top_month: float | None = None,
     worst_loss: float | None = None,
     replay_match: float | None = None,
+    cost_model_id: str | None = None,
     blocking_passed: bool = True,
 ) -> None:
     advisory: list[dict] = []
@@ -101,6 +102,13 @@ def _record(
                 "details": "",
             }
         )
+    prov = None
+    if cost_model_id is not None:
+        prov = {
+            "data_range": "2026-01-01..2026-03-31",
+            "cost_model_id": cost_model_id,
+            "required_gates": ["A", "B"],
+        }
     sub_gate_audit.record_sub_gate_run(
         run_id=run_id,
         strategy_name=f"demo_{run_id}",
@@ -114,6 +122,7 @@ def _record(
             "triage_status": "passed" if blocking_passed else "killed",
         },
         recorded_at_ns=1,
+        spec_provenance=prov,
     )
 
 
@@ -251,6 +260,31 @@ class TestPromotionReadinessFunction:
         ready, blockers = audit_cli.promotion_readiness(_row("rp_na"))
         assert ready is True
         assert not any(b.startswith("replay_parity") for b in blockers)
+
+    def test_incomplete_cost_model_blocks(self, _isolated) -> None:
+        # §2 / 限制 §3: a declared cost model omitting a knob blocks.
+        _record(run_id="cm", cost_model_id="measured+Nonebp/2.0bp/1.0pts")
+        ready, blockers = audit_cli.promotion_readiness(_row("cm"))
+        assert ready is False
+        assert "cost_model" in blockers
+
+    def test_complete_cost_model_is_ready(self, _isolated) -> None:
+        _record(run_id="cm_ok", cost_model_id="measured+1.5bp/2.0bp/1.0pts")
+        ready, blockers = audit_cli.promotion_readiness(_row("cm_ok"))
+        assert ready is True
+        assert blockers == []
+
+    def test_absent_cost_model_id_is_not_a_blocker(self, _isolated) -> None:
+        # No spec_provenance at all -> traceability concern, not a promotion
+        # blocker here (mirrors the established missing-not-a-blocker rule).
+        _record(run_id="cm_na")  # no cost_model_id
+        ready, blockers = audit_cli.promotion_readiness(_row("cm_na"))
+        assert ready is True
+        assert not any(b.startswith("cost_model") for b in blockers)
+
+    def test_incomplete_cost_model_triages_blocked_by_audit(self, _isolated) -> None:
+        _record(run_id="cm_tr", cost_model_id="measured+Nonebp/2.0bp/1.0pts")
+        assert audit_cli.triage_reason(_row("cm_tr")) == "blocked_by_audit"
 
     def test_missing_edge_and_dominance_and_sample_are_blockers(self, _isolated) -> None:
         _record(run_id="bare", edge=None, ff_share=None, day_dom=None, label=None)

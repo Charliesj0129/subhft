@@ -81,8 +81,9 @@ def promotion_readiness(row: dict) -> tuple[bool, list[str]]:
     candidate is promotion-ready only when every credibility axis clears
     its bar *and* blocking gates passed.  Pure function over fields the
     earlier rounds lifted (edge / force-flat / dominance / sample-adequacy /
-    drawdown-ratio / top-month-share / worst-loss-share / replay-parity) plus
-    ``blocking_passed`` — it re-derives nothing and relaxes nothing
+    drawdown-ratio / top-month-share / worst-loss-share / replay-parity /
+    cost-model) plus ``blocking_passed`` — it re-derives nothing and relaxes
+    nothing
     (限制 §3).  A missing metric is treated as a blocker (the gate must
     have run to clear the axis), tagged ``<axis>:missing``.
 
@@ -146,6 +147,18 @@ def promotion_readiness(row: dict) -> tuple[bool, list[str]]:
     if isinstance(replay_match, (int, float)) and float(replay_match) < _REPLAY_MATCH_FLOOR_PCT:
         blockers.append("replay_parity")
 
+    # Round 68: 驗證標準 §2 / 限制 §3 (成本扣除 不可放寬) — a *declared but
+    # incomplete* cost model blocks: if a cost_model_id is present yet omits a
+    # §2 knob (fee/tax/slip/latency), the edge can't be trusted as net. A row
+    # with no cost_model_id at all is not blocked here (that traceability gap
+    # is reported by spec_provenance_complete instead).
+    prov = row.get("spec_provenance")
+    cmid = prov.get("cost_model_id") if isinstance(prov, dict) else None
+    if isinstance(cmid, str) and cmid:
+        cost_ok, _cost_missing = cost_model_complete(row)
+        if not cost_ok:
+            blockers.append("cost_model")
+
     if row.get("blocking_passed") is not True:
         blockers.append("blocking")
 
@@ -162,6 +175,7 @@ _BLOCKER_TRIAGE_CATEGORY: dict[str, str] = {
     "worst_loss": "blocked_by_risk",
     "blocking": "blocked_by_risk",
     "sample": "needs_more_sample",
+    "cost_model": "blocked_by_audit",
     "edge": "failed",
     "dominance": "failed",
     "top_month": "failed",
