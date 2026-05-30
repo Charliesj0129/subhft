@@ -256,6 +256,17 @@ def show(run_id: str, strategy_type: str | None = None) -> str:
         lines.append(
             f"top_month_share: {top_month:.1f}% of net  [vs strict cap 50.0% -> {tm_marker}]"
         )
+    # Round 60: worst-trade loss share (驗證標準 §5 損益/虧損分布) — what
+    # fraction of total loss the single worst trade carries; high share means
+    # the edge is hostage to one trade landing differently.
+    worst_loss = row.get("worst_loss_share_pct")
+    if worst_loss is None:
+        lines.append("worst_loss_share: (n/a — trade_concentration gate not run)")
+    else:
+        wl_marker = "PASS" if worst_loss <= 50.0 else "FAIL"
+        lines.append(
+            f"worst_loss_share: {worst_loss:.1f}% of |loss|  [vs strict cap 50.0% -> {wl_marker}]"
+        )
     # Round 51: composite promotion verdict over every lifted axis, so a
     # reviewer gets the kept/killed answer (驗證標準 §9) in one line.
     ready, blockers = promotion_readiness(row)

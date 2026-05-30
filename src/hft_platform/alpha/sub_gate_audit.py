@@ -294,6 +294,38 @@ def _extract_top_month_share(advisory: list[dict] | None) -> float | None:
     return None
 
 
+def _extract_worst_loss_share(advisory: list[dict] | None) -> float | None:
+    """Lift worst_loss_share_pct from the ``trade_concentration`` gate to a
+    top-level row field (Round 60).
+
+    驗證標準 §5 (損益分布 / 虧損分布 / 是否被少數交易支配): the share of total
+    loss carried by the single worst trade.  A high share means the
+    candidate's edge survives only because one trade's loss didn't land
+    differently — the trade-level analogue of single-day/single-month
+    dominance.  The gate computes it; surfacing it lets ``audit show`` flag
+    loss-distribution fragility without parsing the gate list.  Returns
+    ``None`` when the gate didn't run.
+    """
+    if not advisory:
+        return None
+    for entry in advisory:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("name") != "trade_concentration":
+            continue
+        metrics = entry.get("metrics") or {}
+        if not isinstance(metrics, dict):
+            return None
+        value = metrics.get("worst_loss_share_pct")
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
 _SAMPLE_ADEQUACY_LABELS = frozenset(
     {"adequate", "promising", "needs_more_sample", "inconclusive"}
 )
@@ -418,6 +450,9 @@ def build_record(
     worst_month = _extract_monthly_metric(advisory, "worst_monthly_pnl_pts")
     if worst_month is not None:
         row["worst_monthly_pnl_pts"] = worst_month
+    worst_loss_share = _extract_worst_loss_share(advisory)
+    if worst_loss_share is not None:
+        row["worst_loss_share_pct"] = worst_loss_share
     prov = _normalize_spec_provenance(spec_provenance)
     if prov:
         row["spec_provenance"] = prov
