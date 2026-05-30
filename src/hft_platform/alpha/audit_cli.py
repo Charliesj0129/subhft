@@ -312,6 +312,44 @@ def spec_field_audit(row: dict) -> tuple[list[str], list[str]]:
     return (traceable, untraceable)
 
 
+def monthly_stability(row: dict) -> tuple[str, list[str]]:
+    """Classify a row's monthly-income stability (驗證標準 §6 secondary checks).
+
+    §6 says: ``max_drawdown <= 2 * average_monthly_net_pnl``; *and* 若月收益不穩
+    (if monthly income is unstable) 需檢查 median_monthly_net_pnl / worst_month /
+    單月收益支配性.  The drawdown ratio and top-month dominance are already
+    blocking axes; this helper is the advisory secondary view that names *why*
+    a passing-drawdown cohort might still have an unstable monthly stream,
+    using only factual fields already on the row (no new threshold, no relaxed
+    bar):
+
+      * ``negative_worst_month``  — worst_monthly_pnl_pts < 0 (a losing month)
+      * ``nonpositive_median``    — median_monthly_net_pnl_pts <= 0 (over half
+                                     the months non-positive)
+      * ``top_month_dominant``    — top_month_contribution_pct > 50.0% (one
+                                     month carries the stream)
+
+    Returns ``("unknown", [])`` when no monthly fields are present, else
+    ``("unstable", [reasons])`` if any flag fires or ``("stable", [])``.
+    """
+    median = row.get("median_monthly_net_pnl_pts")
+    worst = row.get("worst_monthly_pnl_pts")
+    top_month = row.get("top_month_contribution_pct")
+    has_any = any(
+        isinstance(v, (int, float)) for v in (median, worst, top_month)
+    )
+    if not has_any:
+        return ("unknown", [])
+    reasons: list[str] = []
+    if isinstance(worst, (int, float)) and float(worst) < 0:
+        reasons.append("negative_worst_month")
+    if isinstance(median, (int, float)) and float(median) <= 0:
+        reasons.append("nonpositive_median")
+    if isinstance(top_month, (int, float)) and float(top_month) > _TOP_MONTH_CAP_PCT:
+        reasons.append("top_month_dominant")
+    return ("unstable", reasons) if reasons else ("stable", [])
+
+
 def _token_is_number(token: str, suffix: str) -> bool:
     """True when ``token`` is ``<number><suffix>`` with a parseable number."""
     body = token[: -len(suffix)] if suffix and token.endswith(suffix) else token
@@ -436,6 +474,17 @@ def show(run_id: str, strategy_type: str | None = None) -> str:
         lines.append(
             f"top_month_share: {top_month:.1f}% of net  [vs strict cap 50.0% -> {tm_marker}]"
         )
+    # Round 76: monthly-stability secondary verdict (驗證標準 §6 "若月收益不穩，
+    # 需檢查 median_monthly_net_pnl / worst_month / 單月收益支配性") — advisory,
+    # built from factual fields, names why a passing-drawdown stream may be
+    # unstable.
+    ms_verdict, ms_reasons = monthly_stability(row)
+    if ms_verdict == "unknown":
+        lines.append("monthly_stability: (n/a — no monthly metrics on record)")
+    elif ms_verdict == "stable":
+        lines.append("monthly_stability: stable")
+    else:
+        lines.append(f"monthly_stability: UNSTABLE  [{', '.join(ms_reasons)}]")
     # Round 60: worst-trade loss share (驗證標準 §5 損益/虧損分布) — what
     # fraction of total loss the single worst trade carries; high share means
     # the edge is hostage to one trade landing differently.
@@ -1779,6 +1828,73 @@ def dominance_offenders(
     return "\n".join(out)
 
 
+def monthly_stability_review(
+    strategy_type: str | None = None,
+    *,
+    profile: str | None = None,
+) -> str:
+    """List runs whose monthly-income stream is unstable (驗證標準 §6 secondary).
+
+    The drawdown-ratio and top-month caps are blocking; this review names the
+    cohorts that ``monthly_stability`` flags as unstable (losing worst month,
+    non-positive median, or single-month-dominant) so a reviewer can inspect
+    the §6 secondary checks without parsing each row.  Sorted worst-monthly
+    PnL ascending (deepest losing month first).
+
+    Filters (AND-combined): strategy_type, profile.
+    """
+    rows = sub_gate_audit.read_runs()
+    if strategy_type is not None:
+        rows = [r for r in rows if r.get("strategy_type") == strategy_type]
+    if profile is not None:
+        rows = [r for r in rows if r.get("profile_name") == profile]
+    if not rows:
+        return "no audit rows match filter."
+
+    flagged: list[dict] = []
+    for row in rows:
+        verdict, _reasons = monthly_stability(row)
+        if verdict == "unstable":
+            flagged.append(row)
+
+    if not flagged:
+        return f"no rows flagged monthly-unstable across {len(rows)} matched rows."
+
+    def _worst_key(row: dict) -> float:
+        w = row.get("worst_monthly_pnl_pts")
+        return float(w) if isinstance(w, (int, float)) else float("inf")
+
+    flagged.sort(key=_worst_key)
+
+    headers = ("run_id", "strategy_name", "instrument", "type", "median_mo", "worst_mo", "reasons")
+    body: list[tuple[str, ...]] = []
+    for row in flagged:
+        _verdict, reasons = monthly_stability(row)
+        median = row.get("median_monthly_net_pnl_pts")
+        worst = row.get("worst_monthly_pnl_pts")
+        body.append(
+            (
+                str(row.get("run_id", ""))[:28],
+                str(row.get("strategy_name", ""))[:24],
+                str(row.get("instrument", ""))[:12],
+                str(row.get("strategy_type", ""))[:6],
+                f"{float(median):.1f}" if isinstance(median, (int, float)) else "(n/a)",
+                f"{float(worst):.1f}" if isinstance(worst, (int, float)) else "(n/a)",
+                ",".join(reasons),
+            )
+        )
+
+    widths = [max(len(h), max(len(b[i]) for b in body)) for i, h in enumerate(headers)]
+
+    def _fmt(cells: tuple[str, ...]) -> str:
+        return "  ".join(c.ljust(widths[i]) for i, c in enumerate(cells))
+
+    out: list[str] = [_fmt(headers), _fmt(tuple("-" * w for w in widths))]
+    out.extend(_fmt(c) for c in body)
+    out.append(f"({len(flagged)} monthly-unstable of {len(rows)} matched rows)")
+    return "\n".join(out)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="hft-alpha-audit",
@@ -1926,6 +2042,13 @@ def main(argv: list[str] | None = None) -> int:
     dom_p.add_argument("--strategy-type", choices=("maker", "taker"), default=None)
     dom_p.add_argument("--profile", default=None, help="Exact profile_name filter.")
 
+    ms_p = sub.add_parser(
+        "monthly-stability",
+        help="List runs whose monthly-income stream is unstable (驗證標準 §6 secondary).",
+    )
+    ms_p.add_argument("--strategy-type", choices=("maker", "taker"), default=None)
+    ms_p.add_argument("--profile", default=None, help="Exact profile_name filter.")
+
     list_p = sub.add_parser("list", help="Tabulate all audit rows.")
     list_p.add_argument("--strategy-type", choices=("maker", "taker"), default=None)
     list_p.add_argument("--profile", default=None, help="Exact profile_name filter.")
@@ -1970,6 +2093,11 @@ def main(argv: list[str] | None = None) -> int:
         )
     elif args.cmd == "dominance":
         out = dominance_offenders(
+            strategy_type=args.strategy_type,
+            profile=args.profile,
+        )
+    elif args.cmd == "monthly-stability":
+        out = monthly_stability_review(
             strategy_type=args.strategy_type,
             profile=args.profile,
         )
