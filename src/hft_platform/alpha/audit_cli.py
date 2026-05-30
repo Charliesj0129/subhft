@@ -260,6 +260,54 @@ def spec_provenance_complete(row: dict) -> tuple[bool, list[str]]:
     return (not missing, missing)
 
 
+# Round 70: the 完成狀態 §3 fixed-spec top-level fields. The audit record can
+# attest to only a subset from what it stores; the rest live solely in
+# spec.yaml. Listing both halves makes the traceability boundary explicit.
+_SPEC_FIELDS_3: tuple[str, ...] = (
+    "strategy_name",
+    "market",
+    "instrument",
+    "hypothesis",
+    "timeframe",
+    "holding_period",
+    "entry_rule",
+    "exit_rule",
+    "position_sizing",
+    "risk_control",
+    "cost_model",
+    "validation_plan",
+)
+
+
+def spec_field_audit(row: dict) -> tuple[list[str], list[str]]:
+    """Report which 完成狀態 §3 spec fields the audit record can attest to.
+
+    The fixed spec has 12 top-level fields, but a sub-gate audit row only
+    stores a handful directly (``strategy_name``, ``instrument``) plus
+    evidence for ``cost_model`` / ``validation_plan`` via ``spec_provenance``.
+    The behavioural fields (hypothesis / entry_rule / risk_control / …) live
+    only in ``spec.yaml`` and are *not* recoverable from the audit log alone.
+
+    This makes that boundary explicit (迭代規則 §2 可追溯性) without re-loading
+    the spec file or fabricating evidence: it returns ``(traceable,
+    untraceable)`` over ``_SPEC_FIELDS_3`` so a reviewer sees the audit record
+    attests to N of 12 fields and which N are missing from the record.
+    """
+    prov = row.get("spec_provenance")
+    prov = prov if isinstance(prov, dict) else {}
+    cost_ok, _ = cost_model_complete(row)
+    has_validation = bool(prov.get("data_range")) or bool(prov.get("required_gates"))
+    attestable: dict[str, bool] = {
+        "strategy_name": bool(row.get("strategy_name")),
+        "instrument": bool(row.get("instrument")),
+        "cost_model": cost_ok,
+        "validation_plan": has_validation,
+    }
+    traceable = [f for f in _SPEC_FIELDS_3 if attestable.get(f, False)]
+    untraceable = [f for f in _SPEC_FIELDS_3 if not attestable.get(f, False)]
+    return (traceable, untraceable)
+
+
 def _token_is_number(token: str, suffix: str) -> bool:
     """True when ``token`` is ``<number><suffix>`` with a parseable number."""
     body = token[: -len(suffix)] if suffix and token.endswith(suffix) else token
@@ -455,6 +503,13 @@ def show(run_id: str, strategy_type: str | None = None) -> str:
         lines.append(
             f"cost_model     : INCOMPLETE  [§2 missing: {', '.join(cost_missing)}]"
         )
+    # Round 70: 完成狀態 §3 fixed-spec coverage the audit record can attest to;
+    # behavioural fields live only in spec.yaml, not the audit log.
+    traceable, untraceable = spec_field_audit(row)
+    spec_line = f"spec_fields    : {len(traceable)}/{len(_SPEC_FIELDS_3)} traceable in record"
+    if untraceable:
+        spec_line += f"  [not in audit log: {', '.join(untraceable)}]"
+    lines.append(spec_line)
     lines.append("sub_gates:")
     lines.extend(_format_gate_lines(row.get("sub_gates", [])))
     return "\n".join(lines)
