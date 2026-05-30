@@ -71,6 +71,7 @@ _DAY_DOMINANCE_CAP_PCT = 25.0
 _DRAWDOWN_RATIO_CAP = 2.0
 _TOP_MONTH_CAP_PCT = 50.0
 _WORST_LOSS_SHARE_CAP_PCT = 50.0
+_REPLAY_MATCH_FLOOR_PCT = 95.0
 
 
 def promotion_readiness(row: dict) -> tuple[bool, list[str]]:
@@ -80,7 +81,7 @@ def promotion_readiness(row: dict) -> tuple[bool, list[str]]:
     candidate is promotion-ready only when every credibility axis clears
     its bar *and* blocking gates passed.  Pure function over fields the
     earlier rounds lifted (edge / force-flat / dominance / sample-adequacy /
-    drawdown-ratio / top-month-share / worst-loss-share) plus
+    drawdown-ratio / top-month-share / worst-loss-share / replay-parity) plus
     ``blocking_passed`` — it re-derives nothing and relaxes nothing
     (限制 §3).  A missing metric is treated as a blocker (the gate must
     have run to clear the axis), tagged ``<axis>:missing``.
@@ -136,6 +137,14 @@ def promotion_readiness(row: dict) -> tuple[bool, list[str]]:
     worst_loss = row.get("worst_loss_share_pct")
     if isinstance(worst_loss, (int, float)) and float(worst_loss) > _WORST_LOSS_SHARE_CAP_PCT:
         blockers.append("worst_loss")
+
+    # Round 63: 驗證標準 §7 (回測↔replay 訊號一致性, 限制 §3 不可放寬) — a present
+    # replay-parity result below the 95% match floor blocks. A missing result
+    # is not a blocker here (mirrors the other lifted axes); demonstrating
+    # parity for a row that has no replay log is left to a later round.
+    replay_match = row.get("replay_match_pct")
+    if isinstance(replay_match, (int, float)) and float(replay_match) < _REPLAY_MATCH_FLOOR_PCT:
+        blockers.append("replay_parity")
 
     if row.get("blocking_passed") is not True:
         blockers.append("blocking")

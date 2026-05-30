@@ -19,6 +19,7 @@ def _record(
     dd_ratio: float | None = None,
     top_month: float | None = None,
     worst_loss: float | None = None,
+    replay_match: float | None = None,
     blocking_passed: bool = True,
 ) -> None:
     advisory: list[dict] = []
@@ -88,6 +89,15 @@ def _record(
                     "worst_loss_share_pct": worst_loss,
                     "worst_loss_share_max_pct": 50.0,
                 },
+                "details": "",
+            }
+        )
+    if replay_match is not None:
+        advisory.append(
+            {
+                "name": "replay_parity",
+                "passed": replay_match >= 95.0,
+                "metrics": {"match_pct": replay_match, "threshold": 95.0},
                 "details": "",
             }
         )
@@ -222,6 +232,25 @@ class TestPromotionReadinessFunction:
         ready, blockers = audit_cli.promotion_readiness(_row("wl_na"))
         assert ready is True
         assert not any(b.startswith("worst_loss") for b in blockers)
+
+    def test_replay_parity_break_blocks(self, _isolated) -> None:
+        # §7 (限制 §3): backtest↔replay match below 95% floor blocks.
+        _record(run_id="rp", replay_match=80.0)
+        ready, blockers = audit_cli.promotion_readiness(_row("rp"))
+        assert ready is False
+        assert "replay_parity" in blockers
+
+    def test_replay_parity_above_floor_is_ready(self, _isolated) -> None:
+        _record(run_id="rp_ok", replay_match=99.0)
+        ready, blockers = audit_cli.promotion_readiness(_row("rp_ok"))
+        assert ready is True
+        assert blockers == []
+
+    def test_replay_parity_missing_is_not_a_blocker(self, _isolated) -> None:
+        _record(run_id="rp_na")  # no replay_match
+        ready, blockers = audit_cli.promotion_readiness(_row("rp_na"))
+        assert ready is True
+        assert not any(b.startswith("replay_parity") for b in blockers)
 
     def test_missing_edge_and_dominance_and_sample_are_blockers(self, _isolated) -> None:
         _record(run_id="bare", edge=None, ff_share=None, day_dom=None, label=None)
