@@ -1525,6 +1525,16 @@ _EXPORT_COLUMNS: tuple[str, ...] = (
     "single_day_dominance_pct",
     "median_monthly_net_pnl_pts",
     "worst_monthly_pnl_pts",
+    # Round 84: unified-metrics parity (§9 輸出統一 metrics) — the remaining
+    # surfaced credibility axes (§6 drawdown/top-month, §5 worst-loss, §7/§8
+    # replay) travel with the export so an external pivot has the same signal
+    # set as scorecard/show.
+    "drawdown_to_avg_monthly_ratio",
+    "top_month_contribution_pct",
+    "worst_loss_share_pct",
+    "replay_match_pct",
+    "replay_divergence_category",
+    "monthly_stability",
     "sample_adequacy_label",
     "promotion_ready",
     "promotion_blockers",
@@ -1561,6 +1571,20 @@ def _export_row(row: dict) -> dict[str, str]:
     )
     sample_label = row.get("sample_adequacy_label")
     sample_str = sample_label if isinstance(sample_label, str) else ""
+    dd = row.get("drawdown_to_avg_monthly_ratio")
+    if isinstance(dd, (int, float)):
+        dd_str = "inf" if dd == float("inf") else f"{float(dd):.4f}"
+    else:
+        dd_str = ""
+    tm = row.get("top_month_contribution_pct")
+    tm_str = f"{float(tm):.4f}" if isinstance(tm, (int, float)) else ""
+    wl = row.get("worst_loss_share_pct")
+    wl_str = f"{float(wl):.4f}" if isinstance(wl, (int, float)) else ""
+    rm = row.get("replay_match_pct")
+    rm_str = f"{float(rm):.4f}" if isinstance(rm, (int, float)) else ""
+    rdc = row.get("replay_divergence_category")
+    rdc_str = rdc if isinstance(rdc, str) else ""
+    ms_verdict, _ms_reasons = monthly_stability(row)
     ready, blockers = promotion_readiness(row)
     spec_ok, _ = spec_provenance_complete(row)
     traceable_fields, _untraceable = spec_field_audit(row)
@@ -1579,6 +1603,12 @@ def _export_row(row: dict) -> dict[str, str]:
         "single_day_dominance_pct": dom_str,
         "median_monthly_net_pnl_pts": med_month_str,
         "worst_monthly_pnl_pts": worst_month_str,
+        "drawdown_to_avg_monthly_ratio": dd_str,
+        "top_month_contribution_pct": tm_str,
+        "worst_loss_share_pct": wl_str,
+        "replay_match_pct": rm_str,
+        "replay_divergence_category": rdc_str,
+        "monthly_stability": ms_verdict,
         "sample_adequacy_label": sample_str,
         "promotion_ready": "true" if ready else "false",
         "promotion_blockers": ";".join(blockers),
