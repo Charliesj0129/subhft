@@ -98,6 +98,33 @@ class TestResidualProppedEdge:
         assert verdict == "propped"
 
 
+class TestProppedBlocksPromotion:
+    def test_propped_adds_blocker(self, _isolated) -> None:
+        _record(run_id="bad", realized=-3.0, residual=15.0, net=12.0)
+        _ready, blockers = audit_cli.promotion_readiness(_row("bad"))
+        assert "residual:propped" in blockers
+
+    def test_propped_triage_is_blocked_by_audit(self, _isolated) -> None:
+        _record(run_id="bad", realized=-3.0, residual=15.0, net=12.0)
+        assert audit_cli.triage_reason(_row("bad")) == "blocked_by_audit"
+
+    def test_clean_split_adds_no_residual_blocker(self, _isolated) -> None:
+        _record(run_id="ok", realized=8.0, residual=4.0, net=12.0)
+        _ready, blockers = audit_cli.promotion_readiness(_row("ok"))
+        assert "residual:propped" not in blockers
+
+    def test_missing_inventory_split_is_not_a_blocker(self, _isolated) -> None:
+        # missing-not-a-blocker: no inventory_mtm gate -> no residual blocker.
+        _record(run_id="bare", realized=None, residual=None, net=None)
+        _ready, blockers = audit_cli.promotion_readiness(_row("bare"))
+        assert "residual:propped" not in blockers
+
+    def test_net_nonpositive_split_is_not_a_blocker(self, _isolated) -> None:
+        _record(run_id="neg", realized=-5.0, residual=2.0, net=-3.0)
+        _ready, blockers = audit_cli.promotion_readiness(_row("neg"))
+        assert "residual:propped" not in blockers
+
+
 class TestShowSurfacesResidualPropped:
     def test_show_flags_propped(self, _isolated) -> None:
         _record(run_id="bad", realized=-3.0, residual=15.0, net=12.0)

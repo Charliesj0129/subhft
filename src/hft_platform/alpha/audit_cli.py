@@ -159,6 +159,22 @@ def promotion_readiness(row: dict) -> tuple[bool, list[str]]:
     if isinstance(replay_match, (int, float)) and float(replay_match) < _REPLAY_MATCH_FLOOR_PCT:
         blockers.append("replay_parity")
 
+    # Round 91: 驗證標準 §3 (不得忽略殘倉提高 edge) — a net-positive edge whose
+    # realized half is non-positive is carried entirely by the unrealized residual
+    # mark and is not tradeable as stated. Like every other lifted axis this is
+    # missing-not-a-blocker: only a *present* realized+net pair that is propped
+    # blocks (a row with no inventory_mtm split stays advisory). No invented cap —
+    # the condition is the sign test net>0 & realized<=0.
+    realized_pts = row.get("inventory_realized_pts")
+    inv_net_pts = row.get("inventory_net_pts")
+    if (
+        isinstance(realized_pts, (int, float))
+        and isinstance(inv_net_pts, (int, float))
+        and float(inv_net_pts) > 0.0
+        and float(realized_pts) <= 0.0
+    ):
+        blockers.append("residual:propped")
+
     # Round 68: 驗證標準 §2 / 限制 §3 (成本扣除 不可放寬) — a *declared but
     # incomplete* cost model blocks: if a cost_model_id is present yet omits a
     # §2 knob (fee/tax/slip/latency), the edge can't be trusted as net. A row
@@ -191,6 +207,9 @@ _BLOCKER_TRIAGE_CATEGORY: dict[str, str] = {
     # merely a sample shortfall — treat it as an audit block.
     "sample:discrepant": "blocked_by_audit",
     "cost_model": "blocked_by_audit",
+    # Round 91: a residual-mark-propped edge is a credibility/record-trust
+    # failure (§3) — the stated net edge is not realized — so it blocks as audit.
+    "residual:propped": "blocked_by_audit",
     "edge": "failed",
     "dominance": "failed",
     "top_month": "failed",
