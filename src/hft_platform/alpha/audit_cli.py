@@ -187,6 +187,17 @@ def show(run_id: str, strategy_type: str | None = None) -> str:
         lines.append(
             f"drawdown_ratio : {dd_text}× avg-monthly  [vs strict cap 2.0× -> {dd_marker}]"
         )
+    # Round 54: single-month dominance (驗證標準 §6 "單月收益支配性") — the
+    # monthly analogue of single_day_dom; a candidate whose net PnL leans on
+    # one calendar month is not a durable monthly-income stream.
+    top_month = row.get("top_month_contribution_pct")
+    if top_month is None:
+        lines.append("top_month_share: (n/a — monthly_distribution gate not run)")
+    else:
+        tm_marker = "PASS" if top_month <= 50.0 else "FAIL"
+        lines.append(
+            f"top_month_share: {top_month:.1f}% of net  [vs strict cap 50.0% -> {tm_marker}]"
+        )
     # Round 51: composite promotion verdict over every lifted axis, so a
     # reviewer gets the kept/killed answer (驗證標準 §9) in one line.
     ready, blockers = promotion_readiness(row)
@@ -1114,6 +1125,25 @@ def summary(
         )
         lines.append(
             f"  share min/max   : {min(dom_shares):.1f}% / {max(dom_shares):.1f}%"
+        )
+    # Round 54: single-month-dominance aggregation (驗證標準 §6 "單月收益支配性")
+    # — the monthly analogue, so reviewers spot a cohort whose edge leans on
+    # one calendar month rather than a durable monthly stream.
+    month_shares: list[float] = [
+        float(r["top_month_contribution_pct"])
+        for r in rows
+        if isinstance(r.get("top_month_contribution_pct"), (int, float))
+    ]
+    above_month_cap = sum(1 for s in month_shares if s > 50.0)
+    lines.append("top_month_dominance (strict cap 50.0% of net):")
+    lines.append(f"  rows with metric: {len(month_shares)} / {total}")
+    lines.append(f"  rows over cap   : {above_month_cap}")
+    if month_shares:
+        lines.append(
+            f"  share p50/p95   : {_percentile(month_shares, 50):.1f}% / {_percentile(month_shares, 95):.1f}%"
+        )
+        lines.append(
+            f"  share min/max   : {min(month_shares):.1f}% / {max(month_shares):.1f}%"
         )
     # Round 50: sample-adequacy distribution (驗證標準 §4) — how many
     # candidates are actually deployment-ready vs must stay flagged

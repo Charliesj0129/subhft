@@ -231,6 +231,37 @@ def _extract_drawdown_ratio(advisory: list[dict] | None) -> float | None:
     return None
 
 
+def _extract_top_month_share(advisory: list[dict] | None) -> float | None:
+    """Lift top_month_contribution_pct from the ``monthly_distribution``
+    gate to a top-level row field (Round 54).
+
+    驗證標準 §6 ("單月收益支配性"): a candidate whose net PnL is concentrated
+    in a single calendar month is not a durable monthly-income stream — the
+    monthly analogue of the Round 48 single-day-dominance lift.  The gate
+    already computes the share; surfacing it lets ``audit show``/``summary``
+    flag month-dominance without parsing the gate list.  Returns ``None``
+    when the gate didn't run.
+    """
+    if not advisory:
+        return None
+    for entry in advisory:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("name") != "monthly_distribution":
+            continue
+        metrics = entry.get("metrics") or {}
+        if not isinstance(metrics, dict):
+            return None
+        value = metrics.get("top_month_contribution_pct")
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
 _SAMPLE_ADEQUACY_LABELS = frozenset(
     {"adequate", "promising", "needs_more_sample", "inconclusive"}
 )
@@ -346,6 +377,9 @@ def build_record(
     dd_ratio = _extract_drawdown_ratio(advisory)
     if dd_ratio is not None:
         row["drawdown_to_avg_monthly_ratio"] = dd_ratio
+    top_month = _extract_top_month_share(advisory)
+    if top_month is not None:
+        row["top_month_contribution_pct"] = top_month
     prov = _normalize_spec_provenance(spec_provenance)
     if prov:
         row["spec_provenance"] = prov
