@@ -734,6 +734,90 @@ def scorecard(run_id: str, *, strategy_type: str | None = None) -> str:
     return "\n".join(lines)
 
 
+# Round 81: rank order for the cohort leaderboard — READY first, then by how
+# few axes a row fails, then by edge descending. A triage precedence index
+# breaks ties among NOT-READY rows so the "closest to promotable" surfaces
+# above the structurally-failed ones.
+_LEADERBOARD_TRIAGE_RANK: dict[str, int] = {
+    "promotable": 0,
+    "needs_more_sample": 1,
+    "blocked_by_parity": 2,
+    "blocked_by_risk": 3,
+    "blocked_by_audit": 4,
+    "failed": 5,
+}
+
+
+def leaderboard(
+    strategy_type: str | None = None,
+    *,
+    profile: str | None = None,
+) -> str:
+    """Rank candidate runs by promotion-readiness for cross-candidate selection.
+
+    驗證標準 §9 (比較策略 / 知道策略保留/淘汰原因): ``compare`` diffs exactly two
+    rows' raw metrics and ``summary`` aggregates the cohort, but neither *ranks*
+    candidates by how close each is to promotion.  This tabulates one row per
+    run — edge, FAIL-axis count, triage reason, READY flag — sorted READY-first,
+    then fewest failing axes, then highest edge, so a reviewer sees the retain
+    order at a glance.  Verdicts come from ``scorecard_axes`` /
+    ``promotion_readiness`` so the ranking never drifts from the kept/killed
+    call.
+
+    Filters (AND-combined): strategy_type, profile.
+    """
+    rows = sub_gate_audit.read_runs()
+    if strategy_type is not None:
+        rows = [r for r in rows if r.get("strategy_type") == strategy_type]
+    if profile is not None:
+        rows = [r for r in rows if r.get("profile_name") == profile]
+    if not rows:
+        return "no audit rows match filter."
+
+    ranked: list[tuple[int, int, float, dict, str, int]] = []
+    for row in rows:
+        ready, _blockers = promotion_readiness(row)
+        reason = triage_reason(row)
+        fails = sum(1 for _a, _v, vd in scorecard_axes(row) if vd in ("FAIL", "MISSING"))
+        edge = row.get("mean_net_edge_pts_per_trade")
+        edge_val = float(edge) if isinstance(edge, (int, float)) else float("-inf")
+        triage_rank = _LEADERBOARD_TRIAGE_RANK.get(reason, 9)
+        # Sort key: READY first (0/1), then fewest fails, then triage rank,
+        # then highest edge (negate for ascending sort).
+        ranked.append((0 if ready else 1, fails, -edge_val, row, reason, triage_rank))
+
+    ranked.sort(key=lambda t: (t[0], t[1], t[5], t[2]))
+
+    headers = ("rank", "run_id", "strategy_name", "type", "edge", "fails", "triage", "ready")
+    body: list[tuple[str, ...]] = []
+    for i, (_r, fails, neg_edge, row, reason, _tr) in enumerate(ranked, start=1):
+        edge_cell = f"{-neg_edge:.2f}" if neg_edge != float("inf") else "(n/a)"
+        ready_cell = "READY" if _r == 0 else "no"
+        body.append(
+            (
+                str(i),
+                str(row.get("run_id", ""))[:24],
+                str(row.get("strategy_name", ""))[:22],
+                str(row.get("strategy_type", ""))[:6],
+                edge_cell,
+                str(fails),
+                reason,
+                ready_cell,
+            )
+        )
+
+    widths = [max(len(h), max(len(b[i]) for b in body)) for i, h in enumerate(headers)]
+
+    def _fmt(cells: tuple[str, ...]) -> str:
+        return "  ".join(c.ljust(widths[i]) for i, c in enumerate(cells))
+
+    out: list[str] = [_fmt(headers), _fmt(tuple("-" * w for w in widths))]
+    out.extend(_fmt(c) for c in body)
+    ready_n = sum(1 for t in ranked if t[0] == 0)
+    out.append(f"({ready_n} READY of {len(ranked)} ranked)")
+    return "\n".join(out)
+
+
 def _metric_diff(metrics_a: dict, metrics_b: dict) -> list[tuple[str, object, object]]:
     """Return [(key, a_value, b_value), ...] for keys whose values differ.
 
@@ -2245,6 +2329,13 @@ def main(argv: list[str] | None = None) -> int:
     ms_p.add_argument("--strategy-type", choices=("maker", "taker"), default=None)
     ms_p.add_argument("--profile", default=None, help="Exact profile_name filter.")
 
+    lb_p = sub.add_parser(
+        "leaderboard",
+        help="Rank candidate runs by promotion-readiness (驗證標準 §9 比較策略).",
+    )
+    lb_p.add_argument("--strategy-type", choices=("maker", "taker"), default=None)
+    lb_p.add_argument("--profile", default=None, help="Exact profile_name filter.")
+
     list_p = sub.add_parser("list", help="Tabulate all audit rows.")
     list_p.add_argument("--strategy-type", choices=("maker", "taker"), default=None)
     list_p.add_argument("--profile", default=None, help="Exact profile_name filter.")
@@ -2296,6 +2387,11 @@ def main(argv: list[str] | None = None) -> int:
         )
     elif args.cmd == "monthly-stability":
         out = monthly_stability_review(
+            strategy_type=args.strategy_type,
+            profile=args.profile,
+        )
+    elif args.cmd == "leaderboard":
+        out = leaderboard(
             strategy_type=args.strategy_type,
             profile=args.profile,
         )
