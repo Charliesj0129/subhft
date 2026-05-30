@@ -570,6 +570,9 @@ def build_record(
     replay_category = _extract_replay_divergence_category(advisory)
     if replay_category is not None:
         row["replay_divergence_category"] = replay_category
+    realized_pts = _extract_inventory_metric(advisory, "realized_pts")
+    if realized_pts is not None:
+        row["inventory_realized_pts"] = realized_pts
     residual_mtm = _extract_inventory_metric(advisory, "residual_mtm_pts")
     if residual_mtm is not None:
         row["residual_mtm_pts"] = residual_mtm

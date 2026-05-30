@@ -606,6 +606,14 @@ def show(run_id: str, strategy_type: str | None = None) -> str:
             )
         else:
             lines.append(f"residual_mtm   : {residual_mtm:.1f} pts  (net n/a)")
+    # Round 89: 驗證標準 §3 — flag a net-positive edge that is carried entirely by
+    # the unrealized residual mark (realized<=0 while net>0). Advisory only (no
+    # invented cap), so a reviewer sees residual-propped edges at a glance.
+    _rp_verdict, _rp_detail = residual_propped_edge(row)
+    if _rp_verdict == "propped":
+        lines.append(f"residual_propped: !! PROPPED — {_rp_detail}")
+    elif _rp_verdict == "clean":
+        lines.append(f"residual_propped: clean  ({_rp_detail})")
     # Round 51: composite promotion verdict over every lifted axis, so a
     # reviewer gets the kept/killed answer (驗證標準 §9) in one line.
     ready, blockers = promotion_readiness(row)
@@ -698,6 +706,38 @@ def scorecard_axes(row: dict) -> list[tuple[str, str, str]]:
             verdict = "PASS"
         out.append((axis, value, verdict))
     return out
+
+
+def residual_propped_edge(row: dict) -> tuple[str, str]:
+    """Flag when a positive net edge is carried entirely by the unrealized mark.
+
+    驗證標準 §3 (不得忽略殘倉提高 edge): residual mark-to-market must be folded
+    into PnL, never used to inflate edge.  The ``inventory_mtm`` gate reports the
+    realized/residual split; this derives — without inventing any threshold — the
+    case that most directly violates §3: ``net_pts > 0`` while
+    ``inventory_realized_pts <= 0``, i.e. the candidate is net-positive *only*
+    because of an open-position mark that no fill realized.  Such an edge is not
+    tradeable as stated.
+
+    Returns ``(verdict, detail)`` where verdict is one of:
+      * ``"n/a"``       — the inventory_mtm gate did not run (no split to judge),
+      * ``"clean"``     — realized PnL alone is non-negative (mark not propping),
+      * ``"propped"``   — net>0 but realized<=0 (edge is residual-mark-carried).
+
+    Pure derivation over already-lifted fields; re-derives nothing, relaxes
+    nothing (限制 §3), invents no cap.
+    """
+    realized = row.get("inventory_realized_pts")
+    net = row.get("inventory_net_pts")
+    if not isinstance(realized, (int, float)) or not isinstance(net, (int, float)):
+        return ("n/a", "inventory_mtm gate not run")
+    if float(net) > 0.0 and float(realized) <= 0.0:
+        return (
+            "propped",
+            f"net {float(net):.1f} pts but realized {float(realized):.1f} pts "
+            "— edge carried entirely by residual mark",
+        )
+    return ("clean", f"realized {float(realized):.1f} pts of net {float(net):.1f} pts")
 
 
 def research_record(run_id: str, *, strategy_type: str | None = None) -> str:
