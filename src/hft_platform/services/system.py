@@ -40,6 +40,23 @@ def _log_safety_dispatch_error(task: "asyncio.Task[None]") -> None:
         logger.critical("halt_drain_safety_cmd_execute_failed", error=str(exc))
 
 
+def _audit_persistence_writer_for_recorder(recorder: Any) -> Any | None:
+    """Return the correct AuditWriter sink for the recorder's active mode."""
+    mode = getattr(getattr(recorder, "_mode", ""), "value", getattr(recorder, "_mode", ""))
+    if mode == "wal_first":
+        queue = getattr(recorder, "queue", None)
+        if queue is None:
+            logger.warning(
+                "audit_writer_wal_first_queue_unavailable",
+                message="Audit rows will use structlog fallback; recorder queue is unavailable.",
+            )
+            return None
+        from hft_platform.recorder.audit import RecorderQueueAuditWriter
+
+        return RecorderQueueAuditWriter(queue)
+    return getattr(recorder, "writer", None)
+
+
 class HFTSystem:
     # -- Typed helpers to replace hasattr probes ----------------------------------
 
@@ -453,7 +470,7 @@ class HFTSystem:
                 # rewrites the DDL to match producer payloads — without that
                 # migration this wiring would just trade silent fallback for
                 # noisy CH write errors.
-                _recorder_writer = getattr(self.recorder, "writer", None)
+                _recorder_writer = _audit_persistence_writer_for_recorder(self.recorder)
                 if _recorder_writer is not None and hasattr(self._audit_writer, "set_writer"):
                     self._audit_writer.set_writer(_recorder_writer)
                 await self._audit_writer.start()
@@ -470,9 +487,14 @@ class HFTSystem:
                         ),
                     )
                 else:
+                    _audit_persistence = (
+                        "wal_first_recorder_queue"
+                        if type(_recorder_writer).__name__ == "RecorderQueueAuditWriter"
+                        else "clickhouse"
+                    )
                     logger.info(
                         "audit_writer_started",
-                        persistence="clickhouse",
+                        persistence=_audit_persistence,
                         writer_type=type(_recorder_writer).__name__,
                     )
                 # Inject audit writer into OrderAdapter for order lifecycle logging

@@ -167,6 +167,8 @@ def mark_processed(svc: Any, filename: str) -> None:
 # Table name parsing
 # ---------------------------------------------------------------------------
 
+_AUDIT_TABLES = frozenset({"audit.orders_log", "audit.risk_log", "audit.guardrail_log"})
+
 
 def parse_table_from_filename(fname: str) -> str:
     """Extract target table name from WAL filename."""
@@ -175,6 +177,10 @@ def parse_table_from_filename(fname: str) -> str:
     # filename-based parsing is not needed and would produce wrong results.
     if base.startswith("emergency"):
         return "unknown"
+    stem = os.path.splitext(fname)[0]
+    for audit_table in _AUDIT_TABLES:
+        if stem == audit_table or stem.startswith(f"{audit_table}_"):
+            return audit_table
     if "_" in fname:
         base = "_".join(fname.split("_")[:-1])
     if base.startswith("hft."):
@@ -200,6 +206,8 @@ def parse_batch_table_name(table_name: str) -> str:
     """Map batch writer table names to loader table names."""
     if table_name.startswith("hft."):
         table_name = table_name[4:]
+    if table_name in _AUDIT_TABLES:
+        return table_name
     mapping = {
         "market_data": "market_data",
         "orders": "orders",

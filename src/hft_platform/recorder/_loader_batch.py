@@ -376,6 +376,36 @@ def format_risk_log(
 
 
 # ---------------------------------------------------------------------------
+# audit.* tables
+# ---------------------------------------------------------------------------
+
+
+def format_audit_table(table: str, rows: list[dict[str, Any]]) -> tuple[list[str], list[list]]:
+    """Return ``(cols, data)`` for canonical audit tables."""
+    from hft_platform.recorder.audit import _AUDIT_SCHEMA_DEFAULTS, _normalize_row
+
+    schema = _AUDIT_SCHEMA_DEFAULTS[table]
+    cols = list(schema.keys())
+    data: list[list] = []
+    for row in rows:
+        normalized = _normalize_row(table, row)
+        data.append([normalized.get(col, schema[col]) for col in cols])
+    return cols, data
+
+
+def format_audit_orders_log(rows: list[dict[str, Any]]) -> tuple[list[str], list[list]]:
+    return format_audit_table("audit.orders_log", rows)
+
+
+def format_audit_risk_log(rows: list[dict[str, Any]]) -> tuple[list[str], list[list]]:
+    return format_audit_table("audit.risk_log", rows)
+
+
+def format_audit_guardrail_log(rows: list[dict[str, Any]]) -> tuple[list[str], list[list]]:
+    return format_audit_table("audit.guardrail_log", rows)
+
+
+# ---------------------------------------------------------------------------
 # backtest_runs
 # ---------------------------------------------------------------------------
 
@@ -508,6 +538,9 @@ _TABLE_FORMATTERS = {
     "backtest_runs": ("hft.backtest_runs", format_backtest_runs),
     "pnl_snapshots": ("hft.pnl_snapshots", format_pnl_snapshots),
     "latency_spans": ("hft.latency_spans", format_latency_spans),
+    "audit.orders_log": ("audit.orders_log", format_audit_orders_log),
+    "audit.risk_log": ("audit.risk_log", format_audit_risk_log),
+    "audit.guardrail_log": ("audit.guardrail_log", format_audit_guardrail_log),
 }
 
 

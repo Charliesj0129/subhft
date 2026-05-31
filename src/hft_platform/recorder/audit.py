@@ -127,6 +127,26 @@ _RESERVED_STRUCTLOG_KEYS: frozenset[str] = frozenset(
 _audit_writer: AuditWriter | None = None
 
 
+class RecorderQueueAuditWriter:
+    """AuditWriter persistence sink for recorder WAL-first mode.
+
+    It matches the DataWriter ``write(table, rows)`` interface but sends the
+    normalized audit batch into RecorderService's queue. The recorder then uses
+    its configured mode, so WAL-first audit writes do not touch the direct
+    ClickHouse DataWriter or its health tracker.
+    """
+
+    __slots__ = ("_queue",)
+
+    def __init__(self, queue: "asyncio.Queue[dict[str, Any]]") -> None:
+        self._queue = queue
+
+    async def write(self, table: str, rows: list[dict[str, Any]]) -> None:
+        if not rows:
+            return
+        await self._queue.put({"topic": table, "data": list(rows)})
+
+
 class AuditWriter:
     """Non-blocking audit writer with bounded queues and background flush.
 
