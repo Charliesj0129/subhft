@@ -310,6 +310,12 @@ class DataCollector:
             FROM hft.market_data
             WHERE match(symbol, '^{root}[A-L][0-9]$')
               AND exch_ts >= toUnixTimestamp64Nano(now64(3) - INTERVAL {_ALIAS_RESOLUTION_LOOKBACK_DAYS} DAY)
+              AND toDate(exch_ts / 1e9) = (
+                  SELECT max(toDate(exch_ts / 1e9))
+                  FROM hft.market_data
+                  WHERE match(symbol, '^{root}[A-L][0-9]$')
+                    AND exch_ts >= toUnixTimestamp64Nano(now64(3) - INTERVAL {_ALIAS_RESOLUTION_LOOKBACK_DAYS} DAY)
+              )
             GROUP BY symbol
             ORDER BY vol DESC
             LIMIT 1
