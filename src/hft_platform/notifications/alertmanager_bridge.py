@@ -137,11 +137,22 @@ class AlertmanagerBridge:
 
         msg = format_alert_message(payload)
         if msg:
-            is_critical = any(a.get("labels", {}).get("severity") == "critical" for a in payload.get("alerts", []))
+            alerts = payload.get("alerts", [])
+            is_critical = any(a.get("labels", {}).get("severity") == "critical" for a in alerts)
             sent = await self._sender.send(msg, critical=is_critical)
+            # Emit alertname/severity/status so post-hoc audits can identify
+            # which rule(s) drove a telegram burst without re-deriving from
+            # firing-time correlation. Sorted+deduped to keep log line bounded
+            # even on grouped alerts.
+            alertnames = sorted({a.get("labels", {}).get("alertname", "?") for a in alerts})
+            severities = sorted({a.get("labels", {}).get("severity", "?") for a in alerts})
+            statuses = sorted({a.get("status", "?") for a in alerts})
             logger.info(
                 "alertmanager_webhook_forwarded",
-                alert_count=len(payload.get("alerts", [])),
+                alert_count=len(alerts),
+                alertnames=alertnames,
+                severities=severities,
+                statuses=statuses,
                 sent=sent,
             )
         await self._send_response(writer, 200, b'{"status":"accepted"}')

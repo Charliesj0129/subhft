@@ -67,6 +67,87 @@ except Exception:  # pragma: no cover - fallback when library absent
     sj = None
 
 
+_SOLACE_ARITY_SHIM_APPLIED = False
+
+
+def _apply_solace_arity_shim() -> None:
+    """Defensive variadic shim for Shioaji SolClient callback wrappers.
+
+    Shioaji 1.2.9 defines ``*_callback_wrap(self, a, b, c)`` (4 positional
+    incl. self), but the bundled libsolclient build observed on prod calls
+    them with one extra argument, raising:
+        TypeError: SolClient.onreply_callback_wrap() takes 4 positional
+                   arguments but 5 were given
+    which escapes pybind11 as a C++ exception → terminate → SIGABRT and
+    crash-loops the engine every ~hour. Until shioaji is upgraded to a
+    version whose Python wrap signature matches the loaded .so, rewrap
+    each callback to accept ``*args`` and forward only the prefix the
+    original wrap declared. Extras are recorded once per attr for triage.
+    """
+    global _SOLACE_ARITY_SHIM_APPLIED
+    if _SOLACE_ARITY_SHIM_APPLIED:
+        return
+    # Use a local logger handle: this function runs at module-import time,
+    # before the module-level ``logger`` symbol is assigned further below.
+    _log = get_logger("feed_adapter")
+    try:
+        import inspect
+
+        from shioaji.backend.solace import api as _solapi  # type: ignore[import-not-found]
+    except Exception as exc:  # pragma: no cover - lib absent in test
+        _log.debug("shioaji_solace_arity_shim_skip", err=str(exc))
+        _SOLACE_ARITY_SHIM_APPLIED = True
+        return
+
+    sol_cls = getattr(_solapi, "SolClient", None)
+    if sol_cls is None:
+        _SOLACE_ARITY_SHIM_APPLIED = True
+        return
+
+    seen_extra: set[str] = set()
+    for attr in (
+        "onreply_callback_wrap",
+        "reply_callback_wrap",
+        "event_callback_wrap",
+        "msg_callback_wrap",
+        "p2p_callback_wrap",
+        "session_down_callback_wrap",
+    ):
+        orig = getattr(sol_cls, attr, None)
+        if orig is None or getattr(orig, "_hft_arity_shim", False):
+            continue
+        try:
+            arity = len(inspect.signature(orig).parameters)
+        except (TypeError, ValueError):
+            continue
+
+        def _make_shim(fn: Callable[..., Any], n: int, name: str) -> Callable[..., Any]:
+            def shim(*args: Any, **kwargs: Any) -> Any:
+                if len(args) > n and name not in seen_extra:
+                    seen_extra.add(name)
+                    _log.warning(
+                        "shioaji_solace_callback_arity_mismatch",
+                        attr=name,
+                        expected=n,
+                        received=len(args),
+                    )
+                return fn(*args[:n], **kwargs)
+
+            shim._hft_arity_shim = True  # type: ignore[attr-defined]
+            shim.__wrapped__ = fn  # type: ignore[attr-defined]
+            shim.__name__ = getattr(fn, "__name__", "shim")
+            return shim
+
+        setattr(sol_cls, attr, _make_shim(orig, arity, attr))
+
+    _SOLACE_ARITY_SHIM_APPLIED = True
+    _log.info("shioaji_solace_arity_shim_installed")
+
+
+if sj is not None:
+    _apply_solace_arity_shim()
+
+
 def _sdk() -> Any:
     """Return the ``sj`` module handle from the **compat shim** module.
 

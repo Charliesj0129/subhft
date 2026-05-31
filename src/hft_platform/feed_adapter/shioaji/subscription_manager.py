@@ -314,6 +314,14 @@ class SubscriptionManager:
                         self._unsubscribe_symbol(sym)
                     except Exception as exc:
                         logger.debug("unsubscribe_before_resubscribe_failed", code=code, error=str(exc))
+            # Solace settling delay: per-session topic slots are not freed
+            # synchronously on unsubscribe, so the resubscribe burst below
+            # can overshoot the broker ~250-topic cap and produce the 2026-05-12
+            # event_4 storm. Default 200 ms is empirically sufficient; set to 0
+            # via HFT_RESUBSCRIBE_UNSUBSCRIBE_SETTLE_S to disable.
+            settle_s = float(os.getenv("HFT_RESUBSCRIBE_UNSUBSCRIBE_SETTLE_S", "0.2"))
+            if settle_s > 0:
+                time.sleep(settle_s)
             # D2: in-place clear preserves object identity. Peer readers
             # holding a reference (e.g. the watchdog's snapshot path)
             # always see a consistent live object — never an orphaned set.
