@@ -301,10 +301,19 @@ class DataCollector:
             self._alias_cache[symbol] = symbol
             return symbol
         root = match.group(1)
-        # Pick the highest-volume month code matching ``<root>[A-L][0-9]`` over
-        # the recent window. The match() regex is anchored so injection via
-        # the symbol parameter cannot escape; root has already been validated
-        # by ``_validate_symbol`` upstream.
+        # Pick the highest-volume month code matching ``<root>[A-L][0-9]`` *on
+        # the most recent trading day that has data*, within the lookback window.
+        #
+        # Why not rank by trailing-window cumulative volume: on a monthly roll
+        # the just-expired contract keeps the largest 14-day cumulative volume
+        # for ~2 weeks, so a cumulative ranking resolves TXFR1 to the dead
+        # contract (zero ticks post-roll) and every report returns no_data until
+        # the new front month overtakes it. Scoping the ranking to the latest
+        # day with data makes the live front month win on the roll date itself.
+        # (Regression: 2026-05-21 daily-report blackout after TXFE6 expiry.)
+        #
+        # The match() regex is anchored so injection via the symbol parameter
+        # cannot escape; root has already been validated by ``_validate_symbol``.
         sql = f"""
             SELECT symbol, sum(volume) AS vol
             FROM hft.market_data
@@ -781,6 +790,9 @@ class DataCollector:
         parts: list[str] = []
         for d in prev_dates:
             tf = filter_fn(d)
+            # The lag must be computed in a subquery (ClickHouse rejects a
+            # window function nested inside an aggregate argument, Code 184
+            # ILLEGAL_AGGREGATION) — mirrors the Q3 _query_flow pattern.
             part = f"""
                 SELECT
                     '{d}'                                     AS day,
@@ -789,16 +801,21 @@ class DataCollector:
                     min(price_scaled)                         AS low_ch,
                     argMax(price_scaled, exch_ts)             AS close_ch,
                     sum(volume)                               AS total_vol,
-                    sumIf(volume, price_scaled > lagInFrame(price_scaled) OVER (
-                        ORDER BY exch_ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
-                    ))                                        AS uptick_vol,
-                    sumIf(volume, price_scaled < lagInFrame(price_scaled) OVER (
-                        ORDER BY exch_ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
-                    ))                                        AS downtick_vol
-                FROM hft.market_data
-                WHERE symbol = %(symbol)s
-                  AND type = 'Tick'
-                  AND {tf}
+                    sumIf(volume, price_scaled > prev_price)  AS uptick_vol,
+                    sumIf(volume, price_scaled < prev_price)  AS downtick_vol
+                FROM (
+                    SELECT
+                        exch_ts,
+                        price_scaled,
+                        volume,
+                        lagInFrame(price_scaled) OVER (
+                            ORDER BY exch_ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
+                        ) AS prev_price
+                    FROM hft.market_data
+                    WHERE symbol = %(symbol)s
+                      AND type = 'Tick'
+                      AND {tf}
+                )
             """  # nosec B608
             parts.append(part)
 

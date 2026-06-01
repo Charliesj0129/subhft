@@ -220,6 +220,37 @@ def test_execution_gateway_heartbeat_stale_gates_on_nonzero_timestamp():
     )
 
 
+def test_feed_subscription_permanently_failed_alerts_on_emitted_metric():
+    """A permanently-failed subscription must page — it is the only signal that a
+    stale ``config/symbols.yaml`` (expired month code after a contract roll) has
+    left the engine subscribing to a contract the broker has dropped.
+
+    Root cause this guards (2026-05-21 May roll): pool-mode engines no longer
+    auto-rebuild ``symbols.yaml`` (Fix-1, 2026-05-23), so an un-regenerated YAML
+    keeps literal ``TXFE6``/``MXFE6`` codes that the broker has delisted. Those
+    subscriptions cross ``HFT_SUB_RETRY_MAX_ATTEMPTS`` and stop retrying, bumping
+    ``feed_subscription_permanent_failures_total`` (emitted at
+    ``quote_runtime._bump_permanent_metric``). Before this alert the condition was
+    recorded but never routed to Telegram, so it accrued silently for days.
+    """
+    alerts = _load_alerts_by_name()
+    assert "FeedSubscriptionPermanentlyFailed" in alerts, (
+        "FeedSubscriptionPermanentlyFailed alert missing from rules.yaml — a "
+        "stale post-roll symbols.yaml would page nobody."
+    )
+    expr = alerts["FeedSubscriptionPermanentlyFailed"]["expr"]
+    assert "feed_subscription_permanent_failures_total" in expr, (
+        "Alert must key off the counter that quote_runtime actually emits at "
+        f"permanent failure. Current expression: {expr!r}"
+    )
+    # House invariant (same as FeedGapCritical / ShioajiCrashSignatureDetected):
+    # gate on trading hours so off-hours Shioaji restart loops do not page.
+    assert "market_trading_hours_active == 1" in expr, (
+        "FeedSubscriptionPermanentlyFailed must gate on the trading-hours gauge "
+        f"so weekend/holiday restart noise does not page Telegram. Current: {expr!r}"
+    )
+
+
 def test_redis_connection_down_alert_removed():
     """RedisConnectionDown must not exist — engine does not probe Redis.
 

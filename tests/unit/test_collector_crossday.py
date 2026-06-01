@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from unittest.mock import patch
 
 from hft_platform.reports.models import DaySnapshot
@@ -42,6 +43,32 @@ def test_collect_cross_day_zero_downtick():
     with patch.object(collector, "_execute", return_value=fake_rows):
         snapshots = collector.collect_cross_day("TXFD6", "day", "2026-03-27")
     assert snapshots[0].ud_ratio > 10
+
+
+def test_collect_cross_day_sql_does_not_nest_window_fn_in_aggregate():
+    """Q7 SQL must not nest lagInFrame() inside sumIf().
+
+    ClickHouse rejects a window function inside an aggregate argument with
+    Code 184 ILLEGAL_AGGREGATION, which silently degraded cross-day
+    uptick/downtick flow to empty rows. The lag must be computed in a
+    subquery and referenced as a derived column (as Q3 _query_flow does).
+    """
+    captured: list[str] = []
+
+    def fake_execute(sql, params=None):
+        captured.append(sql)
+        return []
+
+    collector = _make_collector()
+    with patch.object(collector, "_execute", side_effect=fake_execute):
+        collector.collect_cross_day("TXFD6", "day", "2026-03-27")
+
+    assert captured, "expected collect_cross_day to issue a query"
+    normalized = re.sub(r"\s+", " ", captured[0])
+    assert "sumIf(volume, price_scaled > lagInFrame" not in normalized
+    assert "sumIf(volume, price_scaled < lagInFrame" not in normalized
+    # The fix references a pre-computed lag column instead of nesting the window fn.
+    assert "prev_price" in normalized
 
 
 def test_collect_cross_day_skips_weekends():

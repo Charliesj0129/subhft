@@ -56,6 +56,22 @@ groups:
           >= len(symbols).
         runbook_url: "docs/runbooks/SymbolConfigReloadFailed.md"
 
+  - alert: FeedSubscriptionPermanentlyFailed
+    expr: feed_subscription_permanent_failures_total > 0 and on() market_trading_hours_active == 1
+    for: 15m
+    labels:
+        severity: warning
+    annotations:
+        summary: "Symbol subscription permanently failed (likely stale symbols.yaml after a contract roll)"
+        description: |
+          symbol="{{ $labels.symbol }}" crossed HFT_SUB_RETRY_MAX_ATTEMPTS and
+          stopped retrying. Most common cause: config/symbols.yaml lists an
+          expired month code (e.g. TXFE6 after the May settlement) that the
+          broker has dropped, so subscribe returns "Contract not found".
+          Pool-mode engines do NOT auto-rebuild symbols.yaml — regenerate it
+          offline (make rebuild-symbols-yaml) and restart the engine.
+        runbook_url: "docs/runbooks/SymbolsYamlRegeneration.md"
+
   - alert: FeedReconnectFailureRatioHigh
     expr: |
       (
