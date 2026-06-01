@@ -5,7 +5,7 @@ description = "High Frequency Trading Platform"
 requires-python = ">=3.12"
 dependencies = [
     "numpy>=2.2,<3",
-    "pandas>=2.3,<3",
+    "pandas>=2.3,<4",
     "clickhouse-connect>=0.10,<1",
     "structlog>=25.1,<26",
     "msgspec>=0.20,<1",
