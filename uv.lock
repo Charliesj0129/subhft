@@ -1259,7 +1259,7 @@ research = [
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.11,<4" },
-    { name = "clickhouse-connect", specifier = ">=0.10,<1" },
+    { name = "clickhouse-connect", specifier = ">=0.10,<2" },
     { name = "exchange-calendars", specifier = ">=4.13.1,<5" },
     { name = "fubon-neo", marker = "extra == 'fubon'", specifier = ">=2.2.7" },
     { name = "hftbacktest", specifier = ">=2.4,<3" },
@@ -1267,14 +1267,14 @@ requires-dist = [
     { name = "numba", specifier = ">=0.61,<1" },
     { name = "numpy", specifier = ">=2.2,<3" },
     { name = "orjson", specifier = ">=3.10,<4" },
-    { name = "pandas", specifier = ">=2.3,<3" },
+    { name = "pandas", specifier = ">=2.3,<4" },
     { name = "prometheus-client", specifier = ">=0.23,<0.25" },
     { name = "psutil", specifier = ">=7.1,<8" },
     { name = "python-telegram-bot", extras = ["job-queue"], marker = "extra == 'bot'", specifier = ">=21.0" },
     { name = "pyyaml", specifier = ">=6.0,<7" },
     { name = "rich", marker = "extra == 'monitor'", specifier = ">=13.0" },
     { name = "scipy", specifier = ">=1.15.3,<2" },
-    { name = "shioaji", extras = ["speed"], specifier = "==1.2.9" },
+    { name = "shioaji", extras = ["speed"], specifier = "==1.3.3" },
     { name = "shioaji", extras = ["speed"], marker = "extra == 'shioaji-broker'" },
     { name = "structlog", specifier = ">=25.1,<26" },
 ]
@@ -4367,7 +4367,7 @@ wheels = [
 
 [[package]]
 name = "shioaji"
-version = "1.2.9"
+version = "1.3.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "base58" },
@@ -4384,25 +4384,25 @@ dependencies = [
     { name = "xxhash" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0f/21/1534524412de6f930d02894c8504fb66ac509cfbd910b9d8f93e1b6afe0a/shioaji-1.2.9-cp312-cp312-macosx_10_15_x86_64.whl", hash = "sha256:d6de9ec9996aa06a1345f5c0509b55f54baac6c52c2aed2614cb78579e37f548", size = 604285, upload-time = "2025-10-30T06:49:38.782Z" },
-    { url = "https://files.pythonhosted.org/packages/93/2e/2e8fd1a342a9ec304e6426bdc4d32a00cebe220d6c33e73d803f29497952/shioaji-1.2.9-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:a738a8bf3640e96d8f82fe0e4a769497751e8a206f6f565322a212782ef6401b", size = 537773, upload-time = "2025-10-30T06:49:40.218Z" },
-    { url = "https://files.pythonhosted.org/packages/00/62/ab9a10ce46de04be9528b691269fbffa3c87ee86846e447d481a6849b4bb/shioaji-1.2.9-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:40b92c7cda6632da3e6e220e427ca4ab0e4457369c1692e1c1ffc03eeee62d60", size = 674931, upload-time = "2025-10-30T06:49:42.275Z" },
-    { url = "https://files.pythonhosted.org/packages/e2/37/d487c675c2470febd637e4b203aa9f4d6cf8b675e40cace1509a2a5a4a03/shioaji-1.2.9-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:39255f956e523992573e16afea22afd8c58bfc9e21229873af2a0f560ed0a64a", size = 727202, upload-time = "2025-10-30T06:49:43.794Z" },
-    { url = "https://files.pythonhosted.org/packages/44/46/cb9e717b551bbe88bb8fab40f3e80963fcf4fad6fc5830facec556a27b2b/shioaji-1.2.9-cp312-cp312-win_amd64.whl", hash = "sha256:f084de25f43e409fa6920695a068ff0751ec99af27b06ddacfb356327ebe9499", size = 550308, upload-time = "2025-10-30T06:49:45.608Z" },
-    { url = "https://files.pythonhosted.org/packages/28/9a/5c8ecbbfda21ea23a5681e0fc92003b9aa75db86728042170d477870169d/shioaji-1.2.9-cp313-cp313-macosx_10_15_x86_64.whl", hash = "sha256:837eeea394dd823f6daf75f5f5b68637a554218adf10d50c240299af2a739862", size = 603314, upload-time = "2025-10-30T06:49:47.115Z" },
-    { url = "https://files.pythonhosted.org/packages/d2/ab/c0d8c59475ed8f9feefc059f0d013397ee73ba14fe9278b2f07eff52c421/shioaji-1.2.9-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:6fc9f5cf96c8bc5e39a4e58d1964a16272d4bd7eae57dad803d31c3a6632471d", size = 531640, upload-time = "2025-10-30T06:49:48.593Z" },
-    { url = "https://files.pythonhosted.org/packages/13/26/fcb1642c3c6de83904678bf4148f1ba027c9bcfa80df90d1839963f08664/shioaji-1.2.9-cp313-cp313-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:3fff7da8c5515f2a9bcc7846f85463df8458e52b35161706fdba82c634d519a3", size = 671027, upload-time = "2025-10-30T06:49:50.451Z" },
-    { url = "https://files.pythonhosted.org/packages/13/ba/81e2bd34baa6589fa379d05e1d4cb7f914604bb041c27f8a5e1cea03d70d/shioaji-1.2.9-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:27a2daf2c171cc3a1dcf7580be3f42691f7cb44d8c34aa5ad0c3defe2180660f", size = 728058, upload-time = "2025-10-30T06:49:52.139Z" },
-    { url = "https://files.pythonhosted.org/packages/f0/f7/4f8536a4c7317fc55fdf57d861386f3b3ef3040b6809f7f3216a5535da5e/shioaji-1.2.9-cp313-cp313-win_amd64.whl", hash = "sha256:559b47e268b402c1d837a43f3ee34c9c8a87103ced8dd71af4fad3fe74df1011", size = 548086, upload-time = "2025-10-30T06:49:54.242Z" },
-    { url = "https://files.pythonhosted.org/packages/54/f0/1cc4f0316faf3570516e37e0d257754057a35ca4d81c2e1fbf65dd0a618e/shioaji-1.2.9-cp314-cp314-macosx_10_15_x86_64.whl", hash = "sha256:888ae54acfeb38c3969509fa7668b17b021ab4211b20077210a57839e01163a5", size = 605865, upload-time = "2025-10-30T06:49:55.837Z" },
-    { url = "https://files.pythonhosted.org/packages/bc/75/8068fe20773d7c3ff9324f908fd1f995e0d09eb09ad0a01b4c7b82bd93e2/shioaji-1.2.9-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:e96eac241d3c859f392f57ed36edd780a0bb4af0e70ac4064cefb47b213f0263", size = 534640, upload-time = "2025-10-30T06:49:57.47Z" },
-    { url = "https://files.pythonhosted.org/packages/c8/c6/000863ea900e67f7992902fda222bb5a5676b5a4fb2cc2a8ce760687f070/shioaji-1.2.9-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:d6f920c9f665a3a457506c0d1b802fab5a948a8d909cb2e9b4eae4049ca16eb3", size = 678545, upload-time = "2025-10-30T06:49:59.114Z" },
-    { url = "https://files.pythonhosted.org/packages/8d/5d/e853c318b7cec599f45e703c7c6836bba5b6269abd38b09299ca1d5ce454/shioaji-1.2.9-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:4bf8cf6842e0d3f0a0ca82a65eedb39c0fa747da98080dab402062c8d5a7aa8f", size = 729108, upload-time = "2025-10-30T06:50:01.168Z" },
-    { url = "https://files.pythonhosted.org/packages/e9/39/0cf843e91f68db3a271872242dadce70637b129fa198afbf303c3e08cf2e/shioaji-1.2.9-cp314-cp314-win_amd64.whl", hash = "sha256:c7f0a2cfc91d62e1048b410b72a342b067d81c9d6274fa27ce4729a9e3e5e85b", size = 558526, upload-time = "2025-10-30T06:50:02.692Z" },
-    { url = "https://files.pythonhosted.org/packages/09/e9/4549ebab77d8fca9087512fac53d155fb36b09d6ae9e3a150c0c5fbbb996/shioaji-1.2.9-cp314-cp314t-macosx_10_15_x86_64.whl", hash = "sha256:e33933c8395ee5d75d6324f895fb220f76ebd5be93ce808c8405f37d65e1d0b0", size = 699358, upload-time = "2025-10-30T06:50:04.286Z" },
-    { url = "https://files.pythonhosted.org/packages/af/4e/d0d08ad42784d008052d1ba69edb925ff4dfd48362bc9adf62583e60d828/shioaji-1.2.9-cp314-cp314t-macosx_11_0_arm64.whl", hash = "sha256:2bba58acf23ada07bb8e46f79ed37836ef1364f8d457521f159a04c5db0dadbc", size = 608425, upload-time = "2025-10-30T06:50:05.917Z" },
-    { url = "https://files.pythonhosted.org/packages/80/02/5f4505e192da2bd2928e9e0936cbe769b3bb0d0eacb21131cba1c04cd7a9/shioaji-1.2.9-cp314-cp314t-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:83b8f92ffbaf14468348d18dda6a0c6c82df5e50733ceff88907daa1c331e1ab", size = 662326, upload-time = "2025-10-30T06:50:07.88Z" },
-    { url = "https://files.pythonhosted.org/packages/98/ba/bc4990a0b86a93be97868162b9373b865a24a9ee934107ac66f585754c24/shioaji-1.2.9-cp314-cp314t-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:19f366f08968f3660aa334394059c17493fcb7a7f01aec27630e670c84905663", size = 701559, upload-time = "2025-10-30T06:50:09.583Z" },
+    { url = "https://files.pythonhosted.org/packages/ff/95/f2f23a1f43a50055d65fdd3058c0169e9e532c4a97215b95fac0baee2a12/shioaji-1.3.3-cp312-cp312-macosx_10_15_x86_64.whl", hash = "sha256:67092cfe50fe82edb19d9da0708717eba7975c0c39980c6a919d78f40183d59d", size = 667878, upload-time = "2026-04-09T07:05:09.939Z" },
+    { url = "https://files.pythonhosted.org/packages/54/58/e0057ea6470ed475faf6e931921191f8dc6b57688e0fa71a132bf0ee184c/shioaji-1.3.3-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:faf76a0186e73eae4c4289a21aa17cb9c498816d152fd10b6c7fcd58ba9d26c7", size = 592088, upload-time = "2026-04-09T07:05:11.237Z" },
+    { url = "https://files.pythonhosted.org/packages/d9/e2/d9bbc69ac2078ea1096b57aca37d1a54463d755a700fdca9943ff8c779ad/shioaji-1.3.3-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:e5fac48361b5824e1f96fd7d7d4f3dc9f012c8341781e5db897a409bb51eb178", size = 718725, upload-time = "2026-04-09T07:05:12.632Z" },
+    { url = "https://files.pythonhosted.org/packages/71/00/0a1b6ca2591cdd20a90ff46d2e0a46d2f0199f7da32e9cd939cec34f1754/shioaji-1.3.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:e61dc00fc8a4abe4e20a6a79b7f83874b786858ad70f22c4ffcc7dbcdbce5455", size = 786746, upload-time = "2026-04-09T07:05:13.997Z" },
+    { url = "https://files.pythonhosted.org/packages/25/16/3fbd6f0a8b28b8b01d1bce278984a4c8efa45dc681078fe91ac7e3060dbf/shioaji-1.3.3-cp312-cp312-win_amd64.whl", hash = "sha256:3c282e455d112d5a391b1de1fbacd08aaf6d4dc4bc34d1941f8cb343eb4d4a6a", size = 592751, upload-time = "2026-04-09T07:05:15.394Z" },
+    { url = "https://files.pythonhosted.org/packages/4d/85/f2c0f08b3799e8f3b6373bde0166635547fe2e0e4ca9483eb9294c436b27/shioaji-1.3.3-cp313-cp313-macosx_10_15_x86_64.whl", hash = "sha256:14e560852ec71410f08ee74f7cb298a7a611446544c625479d3fcd0c17b5496e", size = 667167, upload-time = "2026-04-09T07:05:16.767Z" },
+    { url = "https://files.pythonhosted.org/packages/ee/1e/badc88422400dd5038afd62e52ec1ef4d52a21a2aaad3f493b5c17c5aa6a/shioaji-1.3.3-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:bfb4a97783d38ad3e70aeccee56f8df352cd1946209ba0d82bf68318a22b4d27", size = 585535, upload-time = "2026-04-09T07:05:18.106Z" },
+    { url = "https://files.pythonhosted.org/packages/05/38/7b1b7f209899b0c56e0b0994a9670d5a35858cfb42abd2d15c49413e8cb0/shioaji-1.3.3-cp313-cp313-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:777e81457d97946a98ab06f43bd3fa9beb61020d939ee37033795f3b0905ffa9", size = 718702, upload-time = "2026-04-09T07:05:19.775Z" },
+    { url = "https://files.pythonhosted.org/packages/39/06/9c08518dee75eae40a186fca7a22fd4f7b27f927824da21f6db407b33f7d/shioaji-1.3.3-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:74e747c485d8e2d43163d0d8350436dbcf8c48d3a52963f0d2cc499052fd949e", size = 786103, upload-time = "2026-04-09T07:05:21.27Z" },
+    { url = "https://files.pythonhosted.org/packages/e9/3d/7e04164b57b28244109aafebba165e5a15eed36ae17ceeed30cc2b34cb36/shioaji-1.3.3-cp313-cp313-win_amd64.whl", hash = "sha256:7e3eded48b8b9f25ae9378e010960f1b4aec986a058943d21d6dd373bbd19fea", size = 590123, upload-time = "2026-04-09T07:05:22.649Z" },
+    { url = "https://files.pythonhosted.org/packages/4f/f7/0bee3a23aa600044131f8a8947abbe96b602c48430cc6a4bfa5f77c0962f/shioaji-1.3.3-cp314-cp314-macosx_10_15_x86_64.whl", hash = "sha256:3b2f2efea9063b411b3fa209c72facddda14efe4c41d692a18421f30a30f1860", size = 670315, upload-time = "2026-04-09T07:05:24.14Z" },
+    { url = "https://files.pythonhosted.org/packages/9c/f6/7f5893faac91ea9924acf09aa534a7cfbd7d1765c0202e3321381286c49f/shioaji-1.3.3-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:e8a824a90740e748722ff2e0867ce1277f8a66a633a0c2bdfebd19d4da601c2c", size = 591508, upload-time = "2026-04-09T07:05:25.552Z" },
+    { url = "https://files.pythonhosted.org/packages/20/84/8c90f2443fabdb9158bd5a5823d15ccc4234b865e6e519be852e8cb7cff3/shioaji-1.3.3-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:537f8ecc2577ad57e72dc76e507f852633539810143bbc52c612eb86545e842d", size = 727900, upload-time = "2026-04-09T07:05:27.337Z" },
+    { url = "https://files.pythonhosted.org/packages/b9/83/d43f954f720c03d7a81bac48c8eaceaa5629c9ce31b0a3fabdc5b8a182f8/shioaji-1.3.3-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:cc69e2bb6af9740ae1b932e942b2ce7c9d2cec41eb5d4c02b84c126b8b4ac444", size = 787383, upload-time = "2026-04-09T07:05:28.89Z" },
+    { url = "https://files.pythonhosted.org/packages/e7/c1/dbf00f8af4635ed7f9beb6001c0ca17b53577525636b144dc243871f2f48/shioaji-1.3.3-cp314-cp314-win_amd64.whl", hash = "sha256:9a5eb5024b2eda6094e30d5505e3b476866b5014367dda25564e232aa5bbb595", size = 603580, upload-time = "2026-04-09T07:05:30.651Z" },
+    { url = "https://files.pythonhosted.org/packages/e4/a2/ad89290a2985536d17368c7c709b0b63583b610488aa89496f09b775b6a4/shioaji-1.3.3-cp314-cp314t-macosx_10_15_x86_64.whl", hash = "sha256:93a8d3e4de6ff79975418b1131816fbd91fff6ad9928b817ce373550a5f637b6", size = 771152, upload-time = "2026-04-09T07:05:33.124Z" },
+    { url = "https://files.pythonhosted.org/packages/69/59/df3417bb010d9041420d0088910b96dff66a915bd62bf8f6d30edb118660/shioaji-1.3.3-cp314-cp314t-macosx_11_0_arm64.whl", hash = "sha256:5c4a8599aa31e73557641850fb424a5a813e647bd5c02b8d06709eab12d65af7", size = 676585, upload-time = "2026-04-09T07:05:34.492Z" },
+    { url = "https://files.pythonhosted.org/packages/97/9c/e0cede7c3093f2fc5076bb96baea20b366889836904d4644f1e70f40bb44/shioaji-1.3.3-cp314-cp314t-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:01816faeb7f694eb20adb8d40c84365cf9bd46688bdf2b5046e8a9bb44dd479c", size = 709677, upload-time = "2026-04-09T07:05:35.859Z" },
+    { url = "https://files.pythonhosted.org/packages/cc/5b/cfcb87a8cf664ba363f0c6621194898509ffda7b455234134ef351506daa/shioaji-1.3.3-cp314-cp314t-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:b6000a36703c01016a493e421f11841f97f88f92428922524a5dddc614bd3c5b", size = 752411, upload-time = "2026-04-09T07:05:37.481Z" },
 ]
 
 [package.optional-dependencies]
