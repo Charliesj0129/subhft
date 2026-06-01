@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -105,6 +106,10 @@ class TestDiscoverSpecs:
 
 
 class TestMain:
+    def test_main_avoids_production_print_guard(self) -> None:
+        source = Path(spec_check.__file__).read_text(encoding="utf-8")
+        assert re.search(r"^\s*print\(", source, re.MULTILINE) is None
+
     def test_single_valid_path_exit_zero(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         p = tmp_path / "spec.yaml"
         _write(p, _valid_spec_dict())

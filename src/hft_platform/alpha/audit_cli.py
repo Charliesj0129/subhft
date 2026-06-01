@@ -123,9 +123,7 @@ def promotion_readiness(row: dict) -> tuple[bool, list[str]]:
         # lifted axis); only a present-and-below count does. The advisory show
         # line still surfaces the evidence-missing case (Round 78).
         _sample_verdict, _sample_reasons = sample_adequacy_audit(row)
-        if _sample_verdict == "discrepant" and any(
-            r.endswith("_below_min") for r in _sample_reasons
-        ):
+        if _sample_verdict == "discrepant" and any(r.endswith("_below_min") for r in _sample_reasons):
             blockers.append("sample:discrepant")
 
     # Round 56: 驗證標準 §6 — max_drawdown must stay within 2× avg-monthly net
@@ -246,8 +244,7 @@ def triage_reason(row: dict) -> str:
     if ready:
         return "promotable"
     categories = {
-        "blocked_by_audit" if b.endswith(":missing") else _BLOCKER_TRIAGE_CATEGORY.get(b, "failed")
-        for b in blockers
+        "blocked_by_audit" if b.endswith(":missing") else _BLOCKER_TRIAGE_CATEGORY.get(b, "failed") for b in blockers
     }
     for category in _TRIAGE_PRECEDENCE:
         if category in categories:
@@ -369,9 +366,7 @@ def monthly_stability(row: dict) -> tuple[str, list[str]]:
     median = row.get("median_monthly_net_pnl_pts")
     worst = row.get("worst_monthly_pnl_pts")
     top_month = row.get("top_month_contribution_pct")
-    has_any = any(
-        isinstance(v, (int, float)) for v in (median, worst, top_month)
-    )
+    has_any = any(isinstance(v, (int, float)) for v in (median, worst, top_month))
     if not has_any:
         return ("unknown", [])
     reasons: list[str] = []
@@ -516,9 +511,7 @@ def show(run_id: str, strategy_type: str | None = None) -> str:
         lines.append("force_flat_share: (n/a — force_flat_residual gate not run)")
     else:
         ff_marker = "PASS" if ff_share <= 30.0 else "FAIL"
-        lines.append(
-            f"force_flat_share: {ff_share:.1f}% of trips  [vs strict cap 30.0% -> {ff_marker}]"
-        )
+        lines.append(f"force_flat_share: {ff_share:.1f}% of trips  [vs strict cap 30.0% -> {ff_marker}]")
     # Round 48: surface single-day dominance (驗證標準 §5) next to the edge
     # so a reviewer sees whether the edge is carried by one trading day —
     # the pathology that KILLed R65 / cd600 / T1-A.
@@ -527,9 +520,7 @@ def show(run_id: str, strategy_type: str | None = None) -> str:
         lines.append("single_day_dom : (n/a — single_day_dominance gate not run)")
     else:
         dom_marker = "PASS" if day_dom <= 25.0 else "FAIL"
-        lines.append(
-            f"single_day_dom : {day_dom:.1f}% of |total|  [vs strict cap 25.0% -> {dom_marker}]"
-        )
+        lines.append(f"single_day_dom : {day_dom:.1f}% of |total|  [vs strict cap 25.0% -> {dom_marker}]")
     # Round 50: sample-adequacy label (驗證標準 §4) — a blocking-passed
     # candidate that is not 'adequate' must still be triaged as
     # promising / needs_more_sample / inconclusive, never complete.
@@ -541,14 +532,8 @@ def show(run_id: str, strategy_type: str | None = None) -> str:
         # Round 78: reconcile the 'adequate' label against its evidence so a
         # label the record cannot substantiate is flagged (限制 §3 不足樣本不得完成).
         verdict, reasons = sample_adequacy_audit(row)
-        suffix = (
-            f"  !! label-vs-evidence DISCREPANT [{', '.join(reasons)}]"
-            if verdict == "discrepant"
-            else ""
-        )
-        lines.append(
-            f"sample_adequacy: {sample_label}  [§4 -> {sample_marker}]{suffix}"
-        )
+        suffix = f"  !! label-vs-evidence DISCREPANT [{', '.join(reasons)}]" if verdict == "discrepant" else ""
+        lines.append(f"sample_adequacy: {sample_label}  [§4 -> {sample_marker}]{suffix}")
     # Round 53: drawdown-to-avg-monthly ratio (驗證標準 §6) — max_drawdown must
     # stay within 2× average monthly net PnL, else a candidate's edge is not
     # survivable month-to-month. inf (avg_monthly <= 0) always reads FAIL.
@@ -558,9 +543,7 @@ def show(run_id: str, strategy_type: str | None = None) -> str:
     else:
         dd_marker = "PASS" if dd_ratio <= 2.0 else "FAIL"
         dd_text = "inf" if dd_ratio == float("inf") else f"{dd_ratio:.2f}"
-        lines.append(
-            f"drawdown_ratio : {dd_text}× avg-monthly  [vs strict cap 2.0× -> {dd_marker}]"
-        )
+        lines.append(f"drawdown_ratio : {dd_text}× avg-monthly  [vs strict cap 2.0× -> {dd_marker}]")
     # Round 54: single-month dominance (驗證標準 §6 "單月收益支配性") — the
     # monthly analogue of single_day_dom; a candidate whose net PnL leans on
     # one calendar month is not a durable monthly-income stream.
@@ -569,9 +552,7 @@ def show(run_id: str, strategy_type: str | None = None) -> str:
         lines.append("top_month_share: (n/a — monthly_distribution gate not run)")
     else:
         tm_marker = "PASS" if top_month <= 50.0 else "FAIL"
-        lines.append(
-            f"top_month_share: {top_month:.1f}% of net  [vs strict cap 50.0% -> {tm_marker}]"
-        )
+        lines.append(f"top_month_share: {top_month:.1f}% of net  [vs strict cap 50.0% -> {tm_marker}]")
     # Round 76: monthly-stability secondary verdict (驗證標準 §6 "若月收益不穩，
     # 需檢查 median_monthly_net_pnl / worst_month / 單月收益支配性") — advisory,
     # built from factual fields, names why a passing-drawdown stream may be
@@ -591,9 +572,7 @@ def show(run_id: str, strategy_type: str | None = None) -> str:
         lines.append("worst_loss_share: (n/a — trade_concentration gate not run)")
     else:
         wl_marker = "PASS" if worst_loss <= 50.0 else "FAIL"
-        lines.append(
-            f"worst_loss_share: {worst_loss:.1f}% of |loss|  [vs strict cap 50.0% -> {wl_marker}]"
-        )
+        lines.append(f"worst_loss_share: {worst_loss:.1f}% of |loss|  [vs strict cap 50.0% -> {wl_marker}]")
     # Round 62: replay parity (驗證標準 §7/§8) — backtest↔replay intent match,
     # with the dominant divergence category named when below the floor.
     replay_match = row.get("replay_match_pct")
@@ -602,14 +581,8 @@ def show(run_id: str, strategy_type: str | None = None) -> str:
     else:
         rp_marker = "PASS" if replay_match >= 95.0 else "FAIL"
         category = row.get("replay_divergence_category")
-        suffix = (
-            f"; dominant={category}"
-            if isinstance(category, str) and category and replay_match < 95.0
-            else ""
-        )
-        lines.append(
-            f"replay_parity  : {replay_match:.1f}% match  [vs strict floor 95.0% -> {rp_marker}{suffix}]"
-        )
+        suffix = f"; dominant={category}" if isinstance(category, str) and category and replay_match < 95.0 else ""
+        lines.append(f"replay_parity  : {replay_match:.1f}% match  [vs strict floor 95.0% -> {rp_marker}{suffix}]")
     # Round 66: residual mark-to-market (驗證標準 §2/§3) — how much of net edge
     # is carried by the residual mark vs realized fills, so a reviewer can see
     # whether un-FIFO'd inventory is propping the edge up.
@@ -620,9 +593,7 @@ def show(run_id: str, strategy_type: str | None = None) -> str:
         inv_net = row.get("inventory_net_pts")
         if isinstance(inv_net, (int, float)) and inv_net != 0:
             share = residual_mtm / inv_net * 100.0
-            lines.append(
-                f"residual_mtm   : {residual_mtm:.1f} pts  ({share:.0f}% of net {inv_net:.1f})"
-            )
+            lines.append(f"residual_mtm   : {residual_mtm:.1f} pts  ({share:.0f}% of net {inv_net:.1f})")
         else:
             lines.append(f"residual_mtm   : {residual_mtm:.1f} pts  (net n/a)")
     # Round 89: 驗證標準 §3 — flag a net-positive edge that is carried entirely by
@@ -650,18 +621,14 @@ def show(run_id: str, strategy_type: str | None = None) -> str:
     if spec_ok:
         lines.append("spec_provenance: complete  [data_range, cost_model_id, required_gates]")
     else:
-        lines.append(
-            f"spec_provenance: INCOMPLETE  [missing: {', '.join(spec_missing)}]"
-        )
+        lines.append(f"spec_provenance: INCOMPLETE  [missing: {', '.join(spec_missing)}]")
     # Round 67: §2 cost-knob completeness parsed from the declared cost_model_id
     # so a silently-omitted fee/tax/slippage/latency can't pass unnoticed.
     cost_ok, cost_missing = cost_model_complete(row)
     if cost_ok:
         lines.append("cost_model     : complete  [latency, fee, tax, slippage declared]")
     else:
-        lines.append(
-            f"cost_model     : INCOMPLETE  [§2 missing: {', '.join(cost_missing)}]"
-        )
+        lines.append(f"cost_model     : INCOMPLETE  [§2 missing: {', '.join(cost_missing)}]")
     # Round 70: 完成狀態 §3 fixed-spec coverage the audit record can attest to;
     # behavioural fields live only in spec.yaml, not the audit log.
     traceable, untraceable = spec_field_audit(row)
@@ -688,6 +655,10 @@ _SCORECARD_AXES: tuple[tuple[str, str, str, tuple[str, ...], tuple[str, ...]], .
     ("top_month<=50 (§6)", "top_month_contribution_pct", "%", ("top_month",), ()),
     ("worst_loss<=50 (§5)", "worst_loss_share_pct", "%", ("worst_loss",), ()),
     ("replay>=95 (§7/§8)", "replay_match_pct", "%", ("replay_parity",), ()),
+    # Round 92: the §3 residual-propped axis (realized half of inventory_mtm).
+    # FAIL iff the residual:propped blocker fired (net>0 & realized<=0); the
+    # blocker is missing-not-a-value, so a row with no inventory split shows n/a.
+    ("residual (§3)", "inventory_realized_pts", "pts", ("residual:propped",), ()),
     ("blocking (§9)", "blocking_passed", "", ("blocking",), ()),
 )
 
@@ -753,8 +724,7 @@ def residual_propped_edge(row: dict) -> tuple[str, str]:
     if float(net) > 0.0 and float(realized) <= 0.0:
         return (
             "propped",
-            f"net {float(net):.1f} pts but realized {float(realized):.1f} pts "
-            "— edge carried entirely by residual mark",
+            f"net {float(net):.1f} pts but realized {float(realized):.1f} pts — edge carried entirely by residual mark",
         )
     return ("clean", f"realized {float(realized):.1f} pts of net {float(net):.1f} pts")
 
@@ -847,9 +817,7 @@ def research_record(run_id: str, *, strategy_type: str | None = None) -> str:
             name = str(sg.get("name", ""))
             passed = sg.get("passed")
             metrics = sg.get("metrics") or {}
-            metric_cell = ", ".join(
-                f"{k}={v}" for k, v in sorted(metrics.items())
-            ).replace("|", r"\|")
+            metric_cell = ", ".join(f"{k}={v}" for k, v in sorted(metrics.items())).replace("|", r"\|")
             lines.append(f"| {name} | {passed} | {metric_cell} |")
     else:
         lines.append("- (no sub-gate results recorded)")
@@ -1046,8 +1014,7 @@ def decision_trail(
     latest = reasons_seq[-1]
     changed = len(set(reasons_seq)) > 1
     out.append(
-        f"({len(ordered)} runs; latest triage={latest}; "
-        f"triage {'changed' if changed else 'stable'} across trail)"
+        f"({len(ordered)} runs; latest triage={latest}; triage {'changed' if changed else 'stable'} across trail)"
     )
     return "\n".join(out)
 
@@ -1192,9 +1159,7 @@ def list_runs(
         )
 
     body = [_cells(r) for r in rows]
-    widths = [
-        max(len(h), max(len(b[i]) for b in body)) for i, h in enumerate(headers)
-    ]
+    widths = [max(len(h), max(len(b[i]) for b in body)) for i, h in enumerate(headers)]
 
     def _fmt(cells: tuple[str, ...]) -> str:
         return "  ".join(c.ljust(widths[i]) for i, c in enumerate(cells))
@@ -1262,10 +1227,7 @@ def init_candidate(
         template_path = Path(template)
     elif shape is not None:
         if shape not in _SHAPE_TEMPLATES:
-            return (
-                f"refused: unknown shape {shape!r}; "
-                f"choose from {sorted(_SHAPE_TEMPLATES)}"
-            )
+            return f"refused: unknown shape {shape!r}; choose from {sorted(_SHAPE_TEMPLATES)}"
         template_path, placeholder_name = _SHAPE_TEMPLATES[shape]
     else:
         template_path = _DEFAULT_TEMPLATE
@@ -1274,10 +1236,7 @@ def init_candidate(
     target_dir = Path(root) / alpha_id
     target_spec = target_dir / "spec.yaml"
     if target_spec.exists() and not force:
-        return (
-            f"refused: {target_spec} already exists; pass --force to overwrite, "
-            "or pick a different alpha_id"
-        )
+        return f"refused: {target_spec} already exists; pass --force to overwrite, or pick a different alpha_id"
 
     target_dir.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(template_path, target_spec)
@@ -1298,8 +1257,7 @@ def init_candidate(
         lines.append(f"spec_check: FAIL ({len(errors)} error{'s' if len(errors) != 1 else ''})")
         lines.extend(f"  - {e}" for e in errors)
         lines.append(
-            "(this is expected — fill in hypothesis / entry_rule / exit_rule / "
-            "validation_plan before promotion)"
+            "(this is expected — fill in hypothesis / entry_rule / exit_rule / validation_plan before promotion)"
         )
     return "\n".join(lines)
 
@@ -1477,9 +1435,7 @@ def backfill_specs(
     if not root_path.is_dir():
         return f"refused: alphas root not found at {root_path}"
 
-    candidates: list[Path] = sorted(
-        p for p in root_path.iterdir() if p.is_dir() and not p.name.startswith("_")
-    )
+    candidates: list[Path] = sorted(p for p in root_path.iterdir() if p.is_dir() and not p.name.startswith("_"))
     missing: list[Path] = [c for c in candidates if not (c / "spec.yaml").is_file()]
     if not missing:
         return f"no missing specs under {root_path} ({len(candidates)} candidate dirs scanned)"
@@ -1530,9 +1486,7 @@ def template_check() -> str:
         template_field_audit,
     )
 
-    lines: list[str] = [
-        f"template field-coverage check (vs {len(REQUIRED_TOP_LEVEL_FIELDS)} required §3 fields):"
-    ]
+    lines: list[str] = [f"template field-coverage check (vs {len(REQUIRED_TOP_LEVEL_FIELDS)} required §3 fields):"]
     any_fail = False
     for shape, (template_path, _placeholder) in sorted(_SHAPE_TEMPLATES.items()):
         path = Path(template_path)
@@ -1555,9 +1509,7 @@ def template_check() -> str:
             )
         else:
             extra_note = f"  (+extra: {', '.join(extra)})" if extra else ""
-            lines.append(
-                f"  [OK  ] {shape:12s} — all {len(REQUIRED_TOP_LEVEL_FIELDS)} present{extra_note}"
-            )
+            lines.append(f"  [OK  ] {shape:12s} — all {len(REQUIRED_TOP_LEVEL_FIELDS)} present{extra_note}")
     lines.append(f"verdict: {'DRIFT DETECTED' if any_fail else 'all templates cover §3'}")
     return "\n".join(lines)
 
@@ -1701,9 +1653,7 @@ def divergence(
         match_str = f"{float(match_pct):.2f}" if isinstance(match_pct, (int, float)) else "n/a"
         first_idx = metrics.get("first_divergence_idx")
         idx_str = (
-            f"{int(float(first_idx))}"
-            if isinstance(first_idx, (int, float)) and float(first_idx) >= 0
-            else "(none)"
+            f"{int(float(first_idx))}" if isinstance(first_idx, (int, float)) and float(first_idx) >= 0 else "(none)"
         )
         cats_dict = metrics.get("divergence_categories") or {}
         if isinstance(cats_dict, dict) and cats_dict:
@@ -1733,9 +1683,7 @@ def divergence(
         "dominant_category",
         "top_categories",
     )
-    widths = [
-        max(len(h), max(len(b[i]) for b in body)) for i, h in enumerate(headers)
-    ]
+    widths = [max(len(h), max(len(b[i]) for b in body)) for i, h in enumerate(headers)]
 
     def _fmt(cells: tuple[str, ...]) -> str:
         return "  ".join(c.ljust(widths[i]) for i, c in enumerate(cells))
@@ -1774,6 +1722,7 @@ _EXPORT_COLUMNS: tuple[str, ...] = (
     # fills. show() surfaces it (Round 66); it must also travel with the unified
     # export so an external pivot can see whether un-FIFO'd inventory props the
     # edge up, the same as every other credibility axis.
+    "inventory_realized_pts",
     "residual_mtm_pts",
     "inventory_net_pts",
     "sample_adequacy_label",
@@ -1807,9 +1756,7 @@ def _export_row(row: dict) -> dict[str, str]:
     med_month = row.get("median_monthly_net_pnl_pts")
     med_month_str = f"{float(med_month):.4f}" if isinstance(med_month, (int, float)) else ""
     worst_month = row.get("worst_monthly_pnl_pts")
-    worst_month_str = (
-        f"{float(worst_month):.4f}" if isinstance(worst_month, (int, float)) else ""
-    )
+    worst_month_str = f"{float(worst_month):.4f}" if isinstance(worst_month, (int, float)) else ""
     sample_label = row.get("sample_adequacy_label")
     sample_str = sample_label if isinstance(sample_label, str) else ""
     dd = row.get("drawdown_to_avg_monthly_ratio")
@@ -1825,6 +1772,8 @@ def _export_row(row: dict) -> dict[str, str]:
     rm_str = f"{float(rm):.4f}" if isinstance(rm, (int, float)) else ""
     rdc = row.get("replay_divergence_category")
     rdc_str = rdc if isinstance(rdc, str) else ""
+    inv_realized = row.get("inventory_realized_pts")
+    inv_realized_str = f"{float(inv_realized):.4f}" if isinstance(inv_realized, (int, float)) else ""
     res_mtm = row.get("residual_mtm_pts")
     res_mtm_str = f"{float(res_mtm):.4f}" if isinstance(res_mtm, (int, float)) else ""
     inv_net = row.get("inventory_net_pts")
@@ -1854,6 +1803,7 @@ def _export_row(row: dict) -> dict[str, str]:
         "replay_match_pct": rm_str,
         "replay_divergence_category": rdc_str,
         "monthly_stability": ms_verdict,
+        "inventory_realized_pts": inv_realized_str,
         "residual_mtm_pts": res_mtm_str,
         "inventory_net_pts": inv_net_str,
         "sample_adequacy_label": sample_str,
@@ -2028,19 +1978,13 @@ def summary(
     lines.append(f"  filter         : strategy_type={strategy_type!r} profile={profile!r}")
     lines.append(f"  total rows     : {total}")
     lines.append(f"  by type        : maker={maker} taker={taker}")
-    lines.append(
-        f"  blocking_passed: PASS={blk_pass} FAIL={blk_fail} (loose)={blk_loose}"
-    )
+    lines.append(f"  blocking_passed: PASS={blk_pass} FAIL={blk_fail} (loose)={blk_loose}")
     lines.append("goal §5 hard bar (mean_net_edge_pts_per_trade > 10):")
     lines.append(f"  rows with edge : {len(edges)} / {total}")
     lines.append(f"  rows > floor   : {above_floor}")
     if edges:
-        lines.append(
-            f"  edge p50/p95   : {_percentile(edges, 50):.3f} / {_percentile(edges, 95):.3f} pts/trade"
-        )
-        lines.append(
-            f"  edge min/max   : {min(edges):.3f} / {max(edges):.3f} pts/trade"
-        )
+        lines.append(f"  edge p50/p95   : {_percentile(edges, 50):.3f} / {_percentile(edges, 95):.3f} pts/trade")
+        lines.append(f"  edge min/max   : {min(edges):.3f} / {max(edges):.3f} pts/trade")
     # Round 45: force-flat residual aggregation so reviewers can spot
     # whether the edge cohort is dominated by inventory-mark artifacts.
     ff_shares: list[float] = [
@@ -2053,12 +1997,8 @@ def summary(
     lines.append(f"  rows with metric: {len(ff_shares)} / {total}")
     lines.append(f"  rows over cap   : {above_ff_cap}")
     if ff_shares:
-        lines.append(
-            f"  share p50/p95   : {_percentile(ff_shares, 50):.1f}% / {_percentile(ff_shares, 95):.1f}%"
-        )
-        lines.append(
-            f"  share min/max   : {min(ff_shares):.1f}% / {max(ff_shares):.1f}%"
-        )
+        lines.append(f"  share p50/p95   : {_percentile(ff_shares, 50):.1f}% / {_percentile(ff_shares, 95):.1f}%")
+        lines.append(f"  share min/max   : {min(ff_shares):.1f}% / {max(ff_shares):.1f}%")
     # Round 49: single-day-dominance aggregation (驗證標準 §5) so reviewers
     # can spot whether the cohort's edge is carried by one trading day.
     dom_shares: list[float] = [
@@ -2071,12 +2011,8 @@ def summary(
     lines.append(f"  rows with metric: {len(dom_shares)} / {total}")
     lines.append(f"  rows over cap   : {above_dom_cap}")
     if dom_shares:
-        lines.append(
-            f"  share p50/p95   : {_percentile(dom_shares, 50):.1f}% / {_percentile(dom_shares, 95):.1f}%"
-        )
-        lines.append(
-            f"  share min/max   : {min(dom_shares):.1f}% / {max(dom_shares):.1f}%"
-        )
+        lines.append(f"  share p50/p95   : {_percentile(dom_shares, 50):.1f}% / {_percentile(dom_shares, 95):.1f}%")
+        lines.append(f"  share min/max   : {min(dom_shares):.1f}% / {max(dom_shares):.1f}%")
     # Round 54: single-month-dominance aggregation (驗證標準 §6 "單月收益支配性")
     # — the monthly analogue, so reviewers spot a cohort whose edge leans on
     # one calendar month rather than a durable monthly stream.
@@ -2090,12 +2026,8 @@ def summary(
     lines.append(f"  rows with metric: {len(month_shares)} / {total}")
     lines.append(f"  rows over cap   : {above_month_cap}")
     if month_shares:
-        lines.append(
-            f"  share p50/p95   : {_percentile(month_shares, 50):.1f}% / {_percentile(month_shares, 95):.1f}%"
-        )
-        lines.append(
-            f"  share min/max   : {min(month_shares):.1f}% / {max(month_shares):.1f}%"
-        )
+        lines.append(f"  share p50/p95   : {_percentile(month_shares, 50):.1f}% / {_percentile(month_shares, 95):.1f}%")
+        lines.append(f"  share min/max   : {min(month_shares):.1f}% / {max(month_shares):.1f}%")
     # Round 50: sample-adequacy distribution (驗證標準 §4) — how many
     # candidates are actually deployment-ready vs must stay flagged
     # promising / needs_more_sample / inconclusive.
@@ -2142,9 +2074,7 @@ def summary(
         traceable, _untraceable = spec_field_audit(r)
         n = len(traceable)
         coverage_counts[n] = coverage_counts.get(n, 0) + 1
-    lines.append(
-        f"spec_fields (完成狀態 §3, attestable from record / {len(_SPEC_FIELDS_3)}):"
-    )
+    lines.append(f"spec_fields (完成狀態 §3, attestable from record / {len(_SPEC_FIELDS_3)}):")
     for n in sorted(coverage_counts, reverse=True):
         lines.append(f"  {n:2d}/{len(_SPEC_FIELDS_3)} traceable: {coverage_counts[n]}")
     # Round 77: replay-parity divergence-category distribution (驗證標準 §8) —
@@ -2164,10 +2094,7 @@ def summary(
         cat = cat if isinstance(cat, str) and cat else "unknown"
         divergence_counts[cat] = divergence_counts.get(cat, 0) + 1
     if below_floor:
-        lines.append(
-            f"replay divergence (驗證標準 §8, below {_REPLAY_MATCH_FLOOR_PCT:.0f}% floor): "
-            f"{below_floor} rows"
-        )
+        lines.append(f"replay divergence (驗證標準 §8, below {_REPLAY_MATCH_FLOOR_PCT:.0f}% floor): {below_floor} rows")
         for cat, n in sorted(divergence_counts.items(), key=lambda kv: (-kv[1], kv[0])):
             lines.append(f"  {cat:26s}: {n}")
     # Round 65: triage-reason distribution (驗證標準 §9 比較策略) — how the
@@ -2229,10 +2156,7 @@ def force_flat_offenders(
             offenders.append((float(share), row))
 
     if not offenders:
-        return (
-            f"no rows over force_flat cap ({min_share:.1f}% of trips) "
-            f"across {len(rows)} matched rows."
-        )
+        return f"no rows over force_flat cap ({min_share:.1f}% of trips) across {len(rows)} matched rows."
 
     offenders.sort(key=lambda kv: kv[0], reverse=True)
 
@@ -2259,9 +2183,7 @@ def force_flat_offenders(
 
     out: list[str] = [_fmt(headers), _fmt(tuple("-" * w for w in widths))]
     out.extend(_fmt(c) for c in body)
-    out.append(
-        f"({len(offenders)} over cap {min_share:.1f}% of {len(rows)} matched rows)"
-    )
+    out.append(f"({len(offenders)} over cap {min_share:.1f}% of {len(rows)} matched rows)")
     return "\n".join(out)
 
 
@@ -2301,10 +2223,7 @@ def loss_concentration_offenders(
             offenders.append((float(share), row))
 
     if not offenders:
-        return (
-            f"no rows over worst-loss-share cap ({min_share:.1f}% of gross loss) "
-            f"across {len(rows)} matched rows."
-        )
+        return f"no rows over worst-loss-share cap ({min_share:.1f}% of gross loss) across {len(rows)} matched rows."
 
     offenders.sort(key=lambda kv: kv[0], reverse=True)
 
@@ -2331,9 +2250,7 @@ def loss_concentration_offenders(
 
     out: list[str] = [_fmt(headers), _fmt(tuple("-" * w for w in widths))]
     out.extend(_fmt(c) for c in body)
-    out.append(
-        f"({len(offenders)} over cap {min_share:.1f}% of {len(rows)} matched rows)"
-    )
+    out.append(f"({len(offenders)} over cap {min_share:.1f}% of {len(rows)} matched rows)")
     return "\n".join(out)
 
 
@@ -2420,9 +2337,7 @@ def dominance_offenders(
 
     out: list[str] = [_fmt(headers), _fmt(tuple("-" * w for w in widths))]
     out.extend(_fmt(c) for c in body)
-    out.append(
-        f"({len(offenders)} over dominance caps of {len(rows)} matched rows)"
-    )
+    out.append(f"({len(offenders)} over dominance caps of {len(rows)} matched rows)")
     return "\n".join(out)
 
 
@@ -2591,21 +2506,18 @@ def main(argv: list[str] | None = None) -> int:
         "--max-force-flat-share",
         type=float,
         default=None,
-        help="Drop rows whose force_flat_trip_share_pct strictly exceeds this "
-        "(rows missing the metric are kept).",
+        help="Drop rows whose force_flat_trip_share_pct strictly exceeds this (rows missing the metric are kept).",
     )
     exp_p.add_argument(
         "--max-day-dominance",
         type=float,
         default=None,
-        help="Drop rows whose single_day_dominance_pct strictly exceeds this "
-        "(rows missing the metric are kept).",
+        help="Drop rows whose single_day_dominance_pct strictly exceeds this (rows missing the metric are kept).",
     )
     exp_p.add_argument(
         "--only-ready",
         action="store_true",
-        help="Restrict to promotion-ready rows (all credibility axes + "
-        "blocking clear).",
+        help="Restrict to promotion-ready rows (all credibility axes + blocking clear).",
     )
 
     sum_p = sub.add_parser("summary", help="Aggregate counts across audit rows.")
@@ -2622,8 +2534,7 @@ def main(argv: list[str] | None = None) -> int:
         "--min-share",
         type=float,
         default=30.0,
-        help="Show rows whose force_flat_trip_share_pct strictly exceeds this "
-        "(default: strict 30.0%% cap).",
+        help="Show rows whose force_flat_trip_share_pct strictly exceeds this (default: strict 30.0%% cap).",
     )
 
     lc_p = sub.add_parser(
@@ -2636,8 +2547,7 @@ def main(argv: list[str] | None = None) -> int:
         "--min-share",
         type=float,
         default=_WORST_LOSS_SHARE_CAP_PCT,
-        help="Show rows whose worst_loss_share_pct strictly exceeds this "
-        "(default: strict 50.0%% cap).",
+        help="Show rows whose worst_loss_share_pct strictly exceeds this (default: strict 50.0%% cap).",
     )
 
     dom_p = sub.add_parser(
@@ -2687,8 +2597,7 @@ def main(argv: list[str] | None = None) -> int:
         "--edge-min",
         type=float,
         default=None,
-        help="Drop rows whose mean_net_edge_pts_per_trade < this floor (and "
-        "rows with no edge metric).",
+        help="Drop rows whose mean_net_edge_pts_per_trade < this floor (and rows with no edge metric).",
     )
     list_p.add_argument(
         "--only-passing",

@@ -82,6 +82,10 @@ def _format_report(path: Path, passed: bool, errors: list[str]) -> str:
     return "\n".join(lines)
 
 
+def _emit(line: str) -> None:
+    sys.stdout.write(f"{line}\n")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="hft-alpha-spec-check",
@@ -107,7 +111,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.all:
         specs = discover_specs(args.root)
         if not specs:
-            print(f"no spec.yaml files found under {args.root}")
+            _emit(f"no spec.yaml files found under {args.root}")
             return 1
     else:
         specs = [Path(args.path)]
@@ -115,7 +119,7 @@ def main(argv: list[str] | None = None) -> int:
     rc = 0
     for spec_path in specs:
         passed, errors = check_one(spec_path)
-        print(_format_report(spec_path, passed, errors))
+        _emit(_format_report(spec_path, passed, errors))
         if not passed:
             rc = 1
     return rc

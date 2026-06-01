@@ -1,7 +1,8 @@
-"""Round 88: residual mark-to-market (驗證標準 §2/§3 殘倉 mark-to-market) travels
-with the unified-metrics export.  show() surfaces residual_mtm (Round 66); the
-export must carry residual_mtm_pts + inventory_net_pts too so an external pivot
-can see whether un-FIFO'd inventory props the edge up.  Audit-layer only."""
+"""Round 88/92: residual mark-to-market (驗證標準 §2/§3 殘倉 mark-to-market)
+travels with the unified-metrics export.  show() surfaces residual_mtm (Round
+66); the export must carry the realized/residual/net inventory split too so an
+external pivot can see whether un-FIFO'd inventory props the edge up.
+Audit-layer only."""
 
 from __future__ import annotations
 
@@ -64,6 +65,7 @@ class TestResidualMtmExportColumns:
     def test_columns_in_header(self, _isolated) -> None:
         _record(run_id="h", with_inventory=True)
         _rows, fieldnames = _csv_rows(audit_cli.export("csv"))
+        assert "inventory_realized_pts" in fieldnames
         assert "residual_mtm_pts" in fieldnames
         assert "inventory_net_pts" in fieldnames
 
@@ -71,6 +73,7 @@ class TestResidualMtmExportColumns:
         _record(run_id="inv", with_inventory=True)
         rows, _ = _csv_rows(audit_cli.export("csv"))
         r = rows["inv"]
+        assert r["inventory_realized_pts"] == "8.0000"
         assert r["residual_mtm_pts"] == "4.0000"
         assert r["inventory_net_pts"] == "12.0000"
 
@@ -78,6 +81,7 @@ class TestResidualMtmExportColumns:
         _record(run_id="bare", with_inventory=False)
         rows, _ = _csv_rows(audit_cli.export("csv"))
         r = rows["bare"]
+        assert r["inventory_realized_pts"] == ""
         assert r["residual_mtm_pts"] == ""
         assert r["inventory_net_pts"] == ""
 

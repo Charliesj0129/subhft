@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -9,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import yaml
 
 from research.tools.data_governance import validate_metadata_payload
 
@@ -75,6 +77,7 @@ ALLOWED_ROOT_DIRS: set[str] = {
     "results",
     "strategy_archive",  # load-bearing: config/live/strategies.yaml + loop_v1 charter pin this path
     "t1",  # research.t1 package — TXF-led mainline (regime_viability.py et al.)
+    "templates",  # canonical authoring templates, including strategy_spec.yaml
     "tools",
 }
 
@@ -114,6 +117,7 @@ CORE_TOOL_FILES: set[str] = {
     "hypothesis_queue.py",
     "kalman_filter.py",
     "latency_profiles.py",
+    "lifecycle_audit.py",
     "maintenance.py",
     "microstructure_explorer.py",
     "mm_diagnostics.py",
@@ -426,39 +430,204 @@ def _audit_tools_layout(errors: list[str], details: dict[str, Any]) -> None:
 
 def _audit_paper_refs(warnings: list[str], details: dict[str, Any]) -> None:
     unresolved: dict[str, list[str]] = {}
+    unresolved_classes: dict[str, list[dict[str, str]]] = {}
+    unresolved_local_research_refs: set[str] = set()
+    resolved_local_research_refs: dict[str, str] = {}
     index_path = ROOT / "knowledge" / "paper_index.json"
     if not index_path.exists():
         warnings.append("Missing research/knowledge/paper_index.json; paper reference mapping cannot be verified.")
         details["unresolved_paper_refs"] = unresolved
+        details["unresolved_paper_ref_classes"] = unresolved_classes
+        details["local_research_ref_repair_hints"] = {}
+        details["resolved_local_research_refs"] = resolved_local_research_refs
         return
 
     try:
         payload = json.loads(index_path.read_text())
-        known_refs = set(str(k) for k in payload.keys())
+        known_refs = _paper_index_aliases(payload)
     except (OSError, ValueError):
         warnings.append("Invalid research/knowledge/paper_index.json; failed to parse paper refs.")
         details["unresolved_paper_refs"] = unresolved
+        details["unresolved_paper_ref_classes"] = unresolved_classes
+        details["local_research_ref_repair_hints"] = {}
+        details["resolved_local_research_refs"] = resolved_local_research_refs
         return
 
-    try:
-        from research.registry.alpha_registry import AlphaRegistry
+    local_alpha_refs = {
+        path.name
+        for root in (ROOT / "alphas", ROOT / "archive")
+        if root.exists()
+        for path in root.rglob("*")
+        if path.is_dir() and (path / "manifest.yaml").exists()
+    }
+    local_research_refs = _local_research_ref_aliases(ROOT.parent)
 
-        registry = AlphaRegistry()
-        loaded = registry.discover(ROOT / "alphas")
-        if registry.errors:
-            warnings.append("Alpha registry discovery reported import errors during paper-ref audit.")
-            details["registry_errors"] = list(registry.errors)
-        for alpha_id, alpha in loaded.items():
-            refs = [str(ref) for ref in alpha.manifest.paper_refs]
-            unknown = [ref for ref in refs if ref and ref not in known_refs]
+    try:
+        for manifest_path in sorted((ROOT / "alphas").glob("*/manifest.yaml")):
+            if manifest_path.parent.name.startswith("_"):
+                continue
+            data = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+            if not isinstance(data, dict):
+                warnings.append(f"Invalid alpha manifest shape: {manifest_path.relative_to(ROOT)}")
+                continue
+            alpha_id = str(data.get("alpha_id") or manifest_path.parent.name)
+            refs = [str(ref) for ref in data.get("paper_refs", ())]
+            unknown: list[str] = []
+            for ref in refs:
+                if not ref:
+                    continue
+                if _paper_ref_resolved(ref, known_refs, local_alpha_refs, local_research_refs):
+                    if ref in local_research_refs:
+                        resolved_local_research_refs.setdefault(ref, local_research_refs[ref])
+                    continue
+                unknown.append(ref)
             if unknown:
                 unresolved[alpha_id] = unknown
+                classifications: list[dict[str, str]] = []
+                for ref in unknown:
+                    reason = _classify_unresolved_paper_ref(ref)
+                    classifications.append({"ref": ref, "reason": reason})
+                    if reason == "local_research_ref_not_indexed":
+                        unresolved_local_research_refs.add(ref)
+                unresolved_classes[alpha_id] = classifications
     except Exception as exc:
         warnings.append(f"Failed to audit manifest paper_refs: {exc}")
 
     details["unresolved_paper_refs"] = unresolved
+    details["unresolved_paper_ref_classes"] = unresolved_classes
+    details["local_research_ref_repair_hints"] = _local_research_ref_repair_hints(
+        ROOT.parent,
+        unresolved_local_research_refs,
+    )
+    details["resolved_local_research_refs"] = dict(sorted(resolved_local_research_refs.items()))
     if unresolved:
         warnings.append("Some manifest paper_refs are not mapped in research/knowledge/paper_index.json.")
+
+
+_ARXIV_ID_RE = re.compile(r"(?P<id>\d{4}\.\d{4,5})(?:v\d+)?")
+
+_LOCAL_RESEARCH_REF_ALIASES: dict[str, str] = {
+    "c13_vol_gate_disable_R7_kill": (
+        "outputs/team_artifacts/alpha-research/archive/"
+        "halted-2026-04-18-pre-B-C/round-7/artifacts/t1_researcher_proposal.md"
+    ),
+    "memory/backtest_method_reliability": "docs/runbooks/backtest-engine-selection.md",
+    "r47_backtest_data_regression": "docs/incidents/2026-04-24-r47-backtest-credibility-audit.md",
+    "r47_maker_strategy": "research/alphas/r47_maker_pivot/manifest.yaml",
+    "r47_structural_properties": ".agent/skills/hft-mm-design/SKILL.md",
+    "r47_tmfd6_economics": "outputs/team_artifacts/alpha-research/r47_tmfd6_economics.md",
+    "r7_summary C66 hedge-cost-dominance lesson": (
+        "outputs/team_artifacts/alpha-research/archive/"
+        "halted-2026-04-19-inst-options/round-7/summary.md"
+    ),
+}
+
+_LOCAL_RESEARCH_REF_REPAIR_HINTS: dict[str, dict[str, Any]] = {
+    "feedback_taifex_fee_structure": {
+        "missing_path": "memory/feedback_taifex_fee_structure.md",
+        "candidate_paths": (
+            ".agent/teams/alpha-research/roles/researcher.md",
+            ".agent/teams/alpha-research/roles/devils-advocate.md",
+        ),
+        "repair_action": (
+            "Restore the missing memory file or promote one current cost-source gate artifact "
+            "before resolving this cost-related reference."
+        ),
+    },
+    "shared-context_2026-04-19_cost_model": {
+        "missing_path": "shared-context_2026-04-19_cost_model",
+        "candidate_paths": (
+            "config/research/cost_profiles.yaml",
+            "research/alphas/c60_tmfd6_r47_minimal_inst_rt/manifest.yaml",
+            "research/alphas/c63_txfd6_r47_tight_spread/manifest.yaml",
+            "research/alphas/c68_txf_rollover_back_front_maker/manifest.yaml",
+            "research/alphas/c72_tmfd6_queue_position_aware/manifest.yaml",
+            "research/alphas/c74_txf_tmf_basis_mean_reversion/manifest.yaml",
+        ),
+        "repair_action": (
+            "Recover the 2026-04-19 shared-context cost-model snapshot or promote a dated "
+            "cost-model provenance note before resolving this institutional-estimate reference."
+        ),
+    },
+}
+
+
+def _paper_index_aliases(payload: Any) -> set[str]:
+    aliases: set[str] = set()
+    if not isinstance(payload, dict):
+        return aliases
+    for key, value in payload.items():
+        aliases.add(str(key))
+        if not isinstance(value, dict):
+            continue
+        for field in ("ref", "arxiv_id", "title"):
+            raw = value.get(field)
+            if raw:
+                text = str(raw)
+                aliases.add(text)
+                match = _ARXIV_ID_RE.search(text)
+                if match:
+                    aliases.add(match.group("id"))
+        raw_aliases = value.get("aliases", ())
+        if isinstance(raw_aliases, str):
+            raw_aliases = (raw_aliases,)
+        if isinstance(raw_aliases, list | tuple):
+            for raw_alias in raw_aliases:
+                if raw_alias:
+                    aliases.add(str(raw_alias))
+    return aliases
+
+
+def _local_research_ref_aliases(project_root: Path) -> dict[str, str]:
+    aliases: dict[str, str] = {}
+    for ref, rel_path in _LOCAL_RESEARCH_REF_ALIASES.items():
+        if (project_root / rel_path).exists():
+            aliases[ref] = rel_path
+    return aliases
+
+
+def _local_research_ref_repair_hints(project_root: Path, refs: set[str]) -> dict[str, dict[str, Any]]:
+    hints: dict[str, dict[str, Any]] = {}
+    for ref in sorted(refs):
+        hint = _LOCAL_RESEARCH_REF_REPAIR_HINTS.get(ref)
+        if not hint:
+            continue
+        candidate_paths = [
+            rel_path
+            for rel_path in hint.get("candidate_paths", ())
+            if (project_root / str(rel_path)).exists()
+        ]
+        hints[ref] = {
+            "missing_path": str(hint["missing_path"]),
+            "candidate_paths": candidate_paths,
+            "repair_action": str(hint["repair_action"]),
+        }
+    return hints
+
+
+def _paper_ref_resolved(
+    ref: str,
+    known_refs: set[str],
+    local_alpha_refs: set[str],
+    local_research_refs: dict[str, str],
+) -> bool:
+    if ref in known_refs or ref in local_alpha_refs or ref in local_research_refs:
+        return True
+    match = _ARXIV_ID_RE.search(ref)
+    return bool(match and match.group("id") in known_refs)
+
+
+def _classify_unresolved_paper_ref(ref: str) -> str:
+    if _ARXIV_ID_RE.search(ref):
+        return "arxiv_ref_not_indexed"
+    if (
+        ref.startswith("memory/")
+        or ref.startswith("shared-context_")
+        or ref.startswith("feedback_")
+        or re.match(r"^[cr]\d+[_-]", ref)
+    ):
+        return "local_research_ref_not_indexed"
+    return "external_citation_not_indexed"
 
 
 def _audit_binary_pollution(warnings: list[str], details: dict[str, Any]) -> None:
@@ -472,10 +641,16 @@ def _audit_binary_pollution(warnings: list[str], details: dict[str, Any]) -> Non
             if not file_path.is_file():
                 continue
             if file_path.suffix.lower() in binary_ext:
+                if _is_allowed_research_binary_fixture(file_path):
+                    continue
                 hits.append(str(file_path.relative_to(ROOT)))
     details["binary_pollution_in_source_zones"] = sorted(hits)
     if hits:
         warnings.append("Binary artifacts detected in source zones; move to research/data or research/archive.")
+
+
+def _is_allowed_research_binary_fixture(file_path: Path) -> bool:
+    return file_path.parent == ROOT / "backtest" / "q_hat_data" and file_path.suffix.lower() == ".parquet"
 
 
 def _dataset_metadata_candidates(data_path: Path) -> tuple[Path, ...]:
