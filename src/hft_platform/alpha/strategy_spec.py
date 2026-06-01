@@ -412,10 +412,13 @@ def extract_provenance(spec: dict[str, Any]) -> dict[str, Any]:
     """
     if not isinstance(spec, dict):
         return {"data_range": "", "cost_model_id": "", "required_gates": []}
-    vp = spec.get("validation_plan") if isinstance(spec.get("validation_plan"), dict) else {}
-    cost = spec.get("cost_model") if isinstance(spec.get("cost_model"), dict) else {}
+    vp_raw = spec.get("validation_plan")
+    vp = vp_raw if isinstance(vp_raw, dict) else {}
+    cost_raw = spec.get("cost_model")
+    cost = cost_raw if isinstance(cost_raw, dict) else {}
     data_range = str(vp.get("data_range") or "")
-    raw_gates = vp.get("required_gates") if isinstance(vp.get("required_gates"), list) else []
+    raw_gates_val = vp.get("required_gates")
+    raw_gates = raw_gates_val if isinstance(raw_gates_val, list) else []
     required_gates = [str(g) for g in raw_gates if isinstance(g, (str, int, float))]
     if cost:
         latency = str(cost.get("latency_profile") or "unspecified")

@@ -91,7 +91,10 @@ class EdgePerRoundTripGate:
 
         edge = total_net / n_trips
         passed = edge > floor  # strict > per goal §5 "edge > 10"
-        metrics = {**metrics_base, "mean_net_edge_pts_per_trade": float(edge)}
+        metrics: dict[str, float | None] = {
+            **metrics_base,
+            "mean_net_edge_pts_per_trade": float(edge),
+        }
         return SubGateResult(
             name=self.name,
             passed=passed,

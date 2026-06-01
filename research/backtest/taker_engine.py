@@ -106,7 +106,12 @@ class TakerEngine:
         # maker engine uses: cost_model.apply(gross_sum, n_fills).
         # n_fills mirrors the synthetic-unit-fill expansion in
         # project_trade_pnl_from_position_series — sum(|deltas|).
-        if trips and cost_model is not None and total_net_pts is None:
+        if (
+            trips
+            and cost_model is not None
+            and total_net_pts is None
+            and positions is not None
+        ):
             try:
                 n_fills = 0
                 for i in range(1, len(positions)):

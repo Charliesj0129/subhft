@@ -124,7 +124,7 @@ def project_trade_pnl_from_position_series(
 def project_trade_pnl(
     fills: list[dict[str, Any]],
     *,
-    price_scale: int = _DEFAULT_PRICE_SCALE,
+    price_scale: float = _DEFAULT_PRICE_SCALE,
 ) -> list[float]:
     """Return per-round-trip PnL in points via FIFO matching.
 

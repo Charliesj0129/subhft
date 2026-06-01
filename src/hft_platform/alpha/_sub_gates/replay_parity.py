@@ -55,7 +55,7 @@ class ReplayParityGate:
         first_div = float(getattr(report, "first_divergence_idx", -1) or -1)
         histogram = getattr(report, "divergence_histogram", None) or {}
         category_counts = categorize_histogram(histogram)
-        dominant_category = max(category_counts, key=category_counts.get) if category_counts else ""
+        dominant_category = max(category_counts, key=lambda k: category_counts[k]) if category_counts else ""
 
         passed = match_pct >= threshold
         metrics: dict[str, Any] = {

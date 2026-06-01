@@ -1089,7 +1089,7 @@ def compare(
         ga = gates_a.get(name)
         gb = gates_b.get(name)
         if ga is None:
-            lines.append(f"  + {name} (only in B): passed={gb.get('passed')}")
+            lines.append(f"  + {name} (only in B): passed={(gb or {}).get('passed')}")
             continue
         if gb is None:
             lines.append(f"  - {name} (only in A): passed={ga.get('passed')}")

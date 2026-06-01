@@ -115,7 +115,7 @@ class MonthlyDistributionGate:
         else:
             dd_ratio = float("inf")
 
-        metrics = {
+        metrics: dict[str, float | None] = {
             "n_months": float(n_months),
             "top_month_contribution_pct": float(top_pct),
             "top_month_contribution_max_pct": float(top_max),
