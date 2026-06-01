@@ -1,0 +1,23 @@
+# HFT Platform gitleaks configuration
+#
+# Extends the upstream default rule set. The only addition is a global
+# allowlist for snake_case threshold-key identifiers used as YAML config
+# references inside alpha-gate docstrings. These are config field names
+# (e.g. ``cost_uncertainty_p95_lower_bound_min_pts``), NOT credentials.
+#
+# Trigger: Slice B (#340) Security Scan flagged
+# src/hft_platform/alpha/_sub_gates/cost_uncertainty.py:13 with
+# generic-api-key (entropy 4.065). The flagged "secret" is the YAML
+# threshold-key identifier; treating snake_case_with_numbers identifiers
+# in alpha-gate docstrings as config references keeps the rule narrow.
+
+title = "HFT Platform gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Snake_case threshold-key identifiers in alpha-gate docstrings are YAML config keys, not credentials."
+regexes = [
+    '''cost_uncertainty_p95_lower_bound_min_pts''',
+]

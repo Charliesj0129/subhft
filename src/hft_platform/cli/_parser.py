@@ -19,6 +19,8 @@ from ._alpha import (
     cmd_alpha_kill,
     cmd_alpha_list,
     cmd_alpha_paper_trade_batch,
+    cmd_alpha_pipeline_run,
+    cmd_alpha_pipeline_triage,
     cmd_alpha_pool,
     cmd_alpha_promote,
     cmd_alpha_promote_batch,
@@ -951,6 +953,14 @@ def build_parser() -> argparse.ArgumentParser:
     alpha_promote_batch.add_argument("--owner", default="batch", help="Promotion owner name")
     alpha_promote_batch.add_argument("--alpha-ids", nargs="+", help="Specific alpha IDs to promote")
     alpha_promote_batch.add_argument("--top-n", type=int, default=50, help="Max alphas to process")
+    alpha_promote_batch.add_argument(
+        "--profile",
+        default=None,
+        help=(
+            "Strict validation profile (e.g. vm_ul6_strict). Required — batch promotion "
+            "must enter Gate D with the same profile contract as single-alpha promotion."
+        ),
+    )
     alpha_promote_batch.add_argument("--min-sharpe-oos", type=float, default=1.0, help="Minimum OOS Sharpe threshold")
     alpha_promote_batch.add_argument("--max-abs-drawdown", type=float, default=0.2, help="Maximum absolute drawdown")
     alpha_promote_batch.add_argument("--max-correlation", type=float, default=0.7, help="Maximum pool correlation")
@@ -962,6 +972,33 @@ def build_parser() -> argparse.ArgumentParser:
     )
     alpha_promote_batch.add_argument("--out", help="Optional JSON output path")
     alpha_promote_batch.set_defaults(func=cmd_alpha_promote_batch)
+
+    # ── Stage 5: canonical pipeline orchestrator (D2) ───────────────────
+    # `hft alpha pipeline {run,triage}` is the single entrypoint that
+    # `make research` / `make research-triage` now shell out to. Argument
+    # spec is borrowed verbatim from `research.pipeline._add_common_run_args`
+    # so any new arg landed there is automatically exposed here.
+    from research.pipeline import _add_common_run_args as _research_add_common_run_args
+
+    alpha_pipeline = alpha_sub.add_parser(
+        "pipeline",
+        help="Canonical research pipeline orchestrator (mirrors `make research`).",
+    )
+    alpha_pipeline_sub = alpha_pipeline.add_subparsers(dest="alpha_pipeline_cmd", required=True)
+
+    alpha_pipeline_run = alpha_pipeline_sub.add_parser(
+        "run",
+        help="Strict SOP: optimize preflight → validate → promote → index (non-bypassable).",
+    )
+    _research_add_common_run_args(alpha_pipeline_run, strict=True)
+    alpha_pipeline_run.set_defaults(func=cmd_alpha_pipeline_run)
+
+    alpha_pipeline_triage = alpha_pipeline_sub.add_parser(
+        "triage",
+        help="Internal debug mode (requires HFT_RESEARCH_ALLOW_TRIAGE=1); outputs non-promotable.",
+    )
+    _research_add_common_run_args(alpha_pipeline_triage, strict=False)
+    alpha_pipeline_triage.set_defaults(func=cmd_alpha_pipeline_triage)
 
     # ── TCA ─────────────────────────────────────────────────────────────
     tca = sub.add_parser("tca", help="Transaction Cost Analysis utilities")

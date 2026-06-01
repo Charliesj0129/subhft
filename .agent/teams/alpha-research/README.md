@@ -8,8 +8,8 @@ Reusable team structure for alpha research rounds (R32+).
 |------|-------|-----|------------|
 | Lead (your session) | Sonnet | Orchestrate, inject context, KILL/PROMOTE | `hft-strategy-lifecycle`, `hft-release-gate` |
 | Researcher | Opus | Literature search, hypothesis, `explore.py` | `taifex-alpha-kill-criteria`, `taifex-market-structure` |
-| Devil's Advocate | Opus | Kill Checklist (H1-H6, S1-S6), adversarial review | `taifex-alpha-kill-criteria`, `hft-backtest-calibration` |
-| Executor | Opus | `impl.py`, backtest, scorecard | `hft-strategy-sdk`, `hft-backtest-calibration`, `hft-test-hft` |
+| Devil's Advocate | Opus | Kill Checklist (H1-H6, S1-S6), adversarial review | `taifex-alpha-kill-criteria`, `hft-backtest-validation` |
+| Executor | Opus | `impl.py`, backtest, scorecard | `hft-strategy-sdk`, `hft-backtest-validation`, `hft-test-hft` |
 
 ## Skill Pipeline (per stage)
 
@@ -19,17 +19,17 @@ T0 Lead:          (init) hft-mm-design, taifex-market-structure
 T1 Researcher:    taifex-alpha-kill-criteria → avoid dead ends
                   taifex-market-structure    → correct cost/spread assumptions
 T2 Devil's Adv:   taifex-alpha-kill-criteria → 50+ killed directions reference
-                  hft-backtest-calibration   → validate execution model claims
+                  hft-backtest-validation   → validate execution model claims
 T4 Executor:      hft-strategy-sdk           → BaseStrategy hooks + order API
-                  hft-backtest-calibration   → CK vs hftbacktest, latency profiles
+                  hft-backtest-validation   → CK vs hftbacktest, latency profiles
                   hft-test-hft              → scaled int + monotonic time tests
-T5 Executor:      hft-backtest-calibration   → scorecard interpretation + traps
+T5 Executor:      hft-backtest-validation   → scorecard interpretation + traps
                   (if MM) hft-mm-design      → R47 three-layer pattern
-T6 Devil's Adv:   hft-backtest-calibration   → statistical validation checklist
+T6 Devil's Adv:   hft-backtest-validation   → statistical validation checklist
 T7 Lead:          hft-strategy-lifecycle     → promotion path (shadow → live)
                   hft-release-gate           → deployment readiness
 T8 Lead:          hft-strategy-lifecycle    → post-PROMOTE scaffold
-                  hft-backtest-calibration  → validate regen candidates
+                  hft-backtest-validation  → validate regen candidates
 T9 Lead:          (halt path) hft-release-gate / hft-production-audit if final PROMOTE
 ```
 

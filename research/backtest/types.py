@@ -3,6 +3,7 @@
 Extracted from hbt_runner.py in v1.1 so that HftNativeRunner and Gate C
 can import types without pulling in the retired ResearchBacktestRunner.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -76,8 +77,36 @@ class BacktestResult:
     maker_scorecard: dict | None = None
     per_spread_breakdown: dict | None = None
     queue_fraction: float | None = None
+    # --- Slice B: Maker Realism (added 2026-05-05) ---
+    # Aggregation policy (set inside ``MakerEngine.run``):
+    #   * ``residual_mtm_pts`` -> SUM across traded days of each day's
+    #     ``residual_mtm_pts`` (mirrors ``total_gross`` accumulation in the
+    #     day loop; the equity curve already reflects this sum).
+    #   * ``residual_qty``     -> final-day snapshot, SIGNED (positive=long,
+    #     negative=short).  Per-day FIFO is independent so day-to-day residual
+    #     qty is not additive.  Sign preserved for accounting.
+    #   * ``abs_residual_qty`` -> ``abs(residual_qty)`` derived field for
+    #     display / aggregation contexts where sign would mask scale.
+    #   * ``mark_method``      -> single-policy string (identical every day
+    #     under current single-policy design).
+    # All four default to safe zero-values so taker engines and synthetic
+    # fixtures that construct ``BacktestResult`` without these fields stay
+    # backward-compatible.
+    residual_mtm_pts: float = 0.0
+    residual_qty: int = 0
+    abs_residual_qty: int = 0
+    mark_method: str = ""
     # --- Daily detail ---
     daily_pnl: list[dict] | None = None
+    # --- Round-trip / FIFO matched trade PnL (added 2026-05-29) ---
+    # Per-trade net PnL in points after FIFO matching.  Required by the
+    # trade-axis sub-gates (trade_concentration, outlier_trade_removal,
+    # edge_per_round_trip) — without this they fall back to daily_pnl,
+    # which silently degrades trade-level dominance checks.
+    # Engines that can derive trades (e.g. MakerEngine via
+    # ``research/backtest/trade_pnl_projector.py``) should populate it;
+    # taker engines without explicit fills may leave it ``None``.
+    trade_pnl: list[float] | None = None
 
 
 @dataclass(frozen=True)
@@ -153,5 +182,3 @@ class CPCVResult:
 def _hash_config(config: BacktestConfig) -> str:
     payload = json.dumps(asdict(config), sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
-
-

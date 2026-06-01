@@ -1,38 +1,14 @@
-# HFT Performance Guidelines
+# HFT Performance
 
-Optimization checklists and project-specific anti-patterns. For the 5 Core Laws (Allocator / Cache / Async / Precision / Boundary), see `01-core-laws.md`.
+Hot-path checklist:
 
-## Performance Checklist (Hot Path)
+- No per-tick object/list/dict allocation; preallocate/reuse.
+- No unnecessary copies; use views/references/zero-copy FFI.
+- O(1) lookups only; no scans in tick loops.
+- Use `__slots__`, `msgspec.Struct`, `NamedTuple`, packed arrays, or Rust for hot data.
+- Event-loop lag budget is 1 ms; CPU-heavy Rust should release the GIL.
+- Disable/avoid GC during active trading only with explicit lifecycle handling.
 
-### Memory
+Anti-patterns: `datetime.now()`/`time.time()` -> `timebase.now_ns()`; `Decimal` in hot path -> scaled int; `pandas` in loop -> arrays/Rust; `print()` -> `structlog`; exceptions for control flow -> branch/return codes.
 
-- [ ] Objects created in tick loop? → pre-allocate buffers or reuse.
-- [ ] GC running during trading? → `gc.disable()` during active hours.
-- [ ] Unnecessary copies? → use views / slices / references.
-
-### Data Structures
-
-- [ ] `__slots__` on Python classes (30% less mem, faster access)?
-- [ ] All lookups O(1)? No O(n) linear scans?
-
-### Concurrency
-
-- [ ] Event loop lag > 1ms? → check `asyncio` loop lag metrics.
-- [ ] Rust code holding GIL unnecessarily? → `Python::allow_threads` for CPU-bound tasks.
-
-## Anti-Patterns
-
-| Pattern                      | Why bad              | Replacement                          |
-| ---------------------------- | -------------------- | ------------------------------------ |
-| `datetime.now()`             | syscall overhead     | `timebase.now_ns()` (monotonic)      |
-| `decimal.Decimal` (hot path) | slow allocation      | scaled int (x10000)                  |
-| `pandas.DataFrame` (in loop) | heavy overhead       | `numpy` arrays / dict of arrays      |
-| `print()`                    | blocking I/O         | `structlog`                          |
-| `try-except` (in loop)       | stack-unwind cost    | branching / return codes             |
-| `dataclass` (default)        | mutable overhead     | `msgspec.Struct` or `NamedTuple`     |
-
-## Optimization Techniques (project-specific)
-
-1. **Warm-up**: run a dummy trading session for 10s before market open (JIT/page-cache prewarm).
-2. **CPU isolation**: `./ops.sh isolate` to pin strategy threads to isolated cores.
-3. **Kernel bypass (advanced)**: evaluate Solarflare / AF_XDP; check `rust_core` capabilities.
+Advanced ops such as CPU isolation or kernel-bypass experiments require explicit verification and docs.

@@ -32,7 +32,7 @@ hypothesis ──▶ scaffold ──▶ backtest ──▶ alpha cheap-screen (S
 2. Latency profile is mandatory — Gate D rejects scorecards without one.
 3. Backtest must emit a replay-parity report under strict.
 4. `hft alpha cheap-screen` (Slice D) for pre-Gate-A IC/turnover/cost triage; `hft alpha screen` for loose Gate-A–C iteration; `hft alpha validate --profile vm_ul6_strict` for promotion eligibility.
-5. Strict profile has 14 blocking sub-gates today (16 once Slice B merges).
+5. Strict profile has 16 blocking sub-gates (Slice B merged 2026-05-29 as part of the Stage-8 research-workflow consolidation).
 6. Synthetic equity is rejected — `require_real_equity: true`.
 7. Canary defaults to 1–7 day evaluation window.
 8. Live promotion is paused — no merges to `config/loops/<id>.yaml` during the freeze.
@@ -146,6 +146,20 @@ A *narrower* screener that runs **before** Gate A. Source: `src/hft_platform/alp
 - **Auto-kill:** with `--write-kill`, a `verdict='kill'` outcome appends a `gate='pre_screen'` row to the kill ledger (`audit.alpha_kill_ledger` ClickHouse table + `research/alphas/_kill_ledger.jsonl` fallback) keyed by `kill_id = sha256(alpha_id ":" gate ":" stable_artifact_hash)`. Idempotent (`(alpha_id, kill_id)` dedupe in both sinks).
 - **Disambiguation:** `cheap-screen` is **not** a substitute for `screen`. The two run different stages: `cheap-screen` is a 60 s pre-Gate-A signal triage; `screen` is the loose Gate-A–C path that produces a (non-promotion-eligible) scorecard. Use `cheap-screen` first to drop dead signals cheaply, then `screen` for promising ones, then `validate --profile vm_ul6_strict` for promotion candidates.
 
+### 4c. Profile reference — single token
+
+All entrypoints accept **`vm_ul6_strict`**, file-resolved to
+`config/research/profiles/vm_ul6_strict.yaml`. `vm_ul6` is a deprecated alias kept on
+`make research` / `python -m research.pipeline run` / `hft alpha pipeline run` for one
+release; it emits a `DeprecationWarning` and resolves to the same YAML. The `loose` profile
+(default for `hft alpha screen`) runs every sub-gate but only blocks on the 6 baseline
+names; its scorecard is stamped `screen_only=true` and is never promotion-eligible.
+
+Source: Stage 2 (commit `23edc664`, 2026-05-28) deleted the in-code
+`_VM_UL6_PROFILE_OVERRIDES` dict; `research/pipeline.py::_apply_validation_profile` now
+loads the YAML via `hft_platform.alpha._validation_profile.load_profile` — the same path
+`hft alpha …` uses.
+
 ---
 
 ## 5. Gate A — manifest & data-field validation
@@ -189,24 +203,22 @@ hft alpha validate --alpha-id <id> --profile vm_ul6_strict --data <paths>
 | `stationary_block_bootstrap.py` | maker | Slice A (#337) |
 | `deflated_sharpe_maker.py` | maker | Slice A (#337) |
 | `replay_parity.py` | maker + taker | Slice C (#339) |
+| `inventory_mtm.py` | maker | Slice B (#340, merged 2026-05-29) |
+| `cost_uncertainty.py` | maker + taker | Slice B (#340, merged 2026-05-29) |
 
 ### Blocking sub-gates under `vm_ul6_strict` (verified from `config/research/profiles/vm_ul6_strict.yaml::blocking_sub_gates`)
 
-Today: **14 blocking** under strict —
+Today: **16 blocking** under strict (Slice B merged 2026-05-29) —
 
 - 6 promoted from advisory: `sharpe_threshold`, `max_drawdown`, `winning_day_pct`, `fill_quality`, `fill_rate_validation`, `ic_evaluation`
 - 7 Slice A (merged #337): `min_sample_size`, `single_day_dominance`, `loo_day_sensitivity`, `outlier_trade_removal`, `day_bootstrap_ci`, `stationary_block_bootstrap`, `deflated_sharpe_maker`
 - 1 Slice C (merged #339): `replay_parity`
-
-After Slice B (PR #340) merges → **16 blocking**:
-
-- + `inventory_mtm` (residual mark-to-market gate)
-- + `cost_uncertainty`
+- 2 Slice B (merged 2026-05-29): `inventory_mtm` (residual mark-to-market gate), `cost_uncertainty`
 
 ### Profile selection
 
 - `--profile loose` (default for `screen`): all sub-gates run, but only the 6 baseline names are blocking; output is advisory.
-- `--profile vm_ul6_strict` (required for promotion): the 14 names above are blocking; failure short-circuits Gate D.
+- `--profile vm_ul6_strict` (required for promotion): the 16 names above are blocking; failure short-circuits Gate D.
 
 Sources: `_gate_c.py`, `_sub_gates/registry.py`, `config/research/profiles/vm_ul6_strict.yaml`.
 
@@ -245,7 +257,7 @@ Source: `src/hft_platform/alpha/promotion.py::_evaluate_gate_d`.
 
 ### Strict checks
 
-- **Replay-parity audit** — `BacktestResult.replay_parity_report` must be present; missing report = hard fail.
+- **Replay-parity audit** — `BacktestResult.replay_parity_report` must be present; missing report = hard fail. Under strict the sub-gate blocks promotion whenever `ok is False` — i.e. **any** structural or hash-level divergence — regardless of `match_pct`. The `replay_parity_match_pct_min: 95.0` threshold is an informational metric only. Fail-closed matrix and canonicalization rules: `docs/runbooks/replay-parity-gate.md`.
 - **Latency audit** — `python -m hft_platform.alpha.latency_audit --strict` runs against the scorecard. 80 % tolerance violations on P95 for `place_order` / `update_order` / `cancel_order` = hard fail. Source: `latency_audit.py`.
 - **Auto-kill (Slice D, merged #342)** — Gate D rejection writes a row with `gate='D'` to the kill ledger via `kill_ledger.append_kill()`. Default-enabled (`HFT_KILL_LEDGER_ENABLED=1`); set to `0` only in unit-test isolation.
 
@@ -283,9 +295,9 @@ Source: `src/hft_platform/alpha/promotion.py::_evaluate_gate_d`.
 1. Set `HFT_INTENT_RECORDER_ENABLED=1` for live / shadow runs that should produce reconstruction evidence.
 2. Run `hft run --mode replay` (loop_v1 step L4) over a recorded session. Source: `src/hft_platform/replay/cli_runner.py`.
 3. The engine emits an `IntentDiff` stream; `replay_parity.py` compares live vs. replay.
-4. ≥ 95 % match required → Gate D blocks closed under strict otherwise.
+4. Under strict, Gate D blocks closed on **any** divergence (`ok is False`); the 95 % `match_pct` is informational only.
 
-Deep dive: `docs/runbooks/replay-parity-gate.md`.
+Deep dive (fail-closed matrix, canonical schema, stable hash): `docs/runbooks/replay-parity-gate.md`.
 
 ---
 
@@ -346,10 +358,4 @@ A minimal expression language for declaring screener formulas: parser, compiler,
 | PR | Status | Branch | Adds | Sections impacted |
 |---|---|---|---|---|
 | #342 Slice D | **MERGED 2026-05-06** (commit `a1451835`) | `slice-d/alpha-factory-mvp` | `alpha cheap-screen` (`screener.py`), `alpha cluster` (`cluster.py`), DSL (`dsl/`), kill ledger (`kill_ledger.py`) + auto-kill | §4b, §8, §13 |
-| #340 Slice B | OPEN | `slice-b/maker-realism` | `inventory_mtm`, `cost_uncertainty`, strict `latency_audit`, q_hat queue calibration, on-session-end `FORCE_FLAT` | §7 (sub-gate count → 16 blocking, 12 modules), §8 (latency-audit advisory→blocking transition closed) |
-
-When #340 merges, also:
-
-- Verify the two new sub-gate modules exist under `src/hft_platform/alpha/_sub_gates/` (`inventory_mtm.py`, `cost_uncertainty.py`).
-- Update the sub-gate inventory table in §7.
-- Update the "16 with Slice B" forward-references in TL;DR line 5 and §7.
+| #340 Slice B | **MERGED 2026-05-29** (Stage 8 of the research-workflow consolidation; merge commit on `consolidation/research-workflow-deep`) | `slice-b/maker-realism` | `inventory_mtm`, `cost_uncertainty`, strict `latency_audit`, q_hat queue calibration, on-session-end `FORCE_FLAT` | §7 (16 blocking), §8 (latency-audit advisory→blocking transition closed) |

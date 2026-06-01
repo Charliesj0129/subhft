@@ -41,6 +41,20 @@ logger = get_logger("alpha_kill_ledger")
 
 _VALID_GATES: frozenset[str] = frozenset({"A", "B", "C", "D", "E", "F", "pre_screen", "cluster", "manual"})
 
+
+class SampleInsufficientKillError(ValueError):
+    """Raised when a caller tries to log a sample-insufficient run as a KILL.
+
+    Goal 限制 §3 / 驗證標準 §4: runs whose only failure is sample-size
+    must be triaged as ``promising`` / ``needs_more_sample`` /
+    ``inconclusive`` and NOT marked complete (or killed) — the hypothesis
+    is still alive and may pass once more data accumulates.  This
+    exception is the kill-ledger's last-mile guard against the operator /
+    automation accidentally collapsing both routes into ``KILLED`` and
+    losing recoverable candidates.
+    """
+
+
 # Excluded from stable_artifact_hash (plan §5 idempotency contract).
 # Defensive even though the §5 narrow already removed kill_reason / cluster_id
 # from the manifest — re-add here if any future schema mutation lands.
@@ -89,6 +103,60 @@ class KillRecord:
         d = asdict(self)
         d["kill_id"] = self.kill_id()
         return d
+
+    @classmethod
+    def from_blocking(
+        cls,
+        *,
+        alpha_id: str,
+        gate: str,
+        blocking: dict[str, Any],
+        stable_artifact_hash: str = "",
+        scorecard_id: str = "",
+        killed_by: str = "system",
+    ) -> "KillRecord":
+        """Build a ``KillRecord`` from a Gate-C blocking-aggregate dict.
+
+        The blocking dict is the canonical output of
+        ``hft_platform.alpha._gate_c._invoke_sub_gates`` and carries a
+        ``triage_status`` field (Round 6) classifying the failure mode.
+        This factory enforces the guard from goal 驗證標準 §4: when the
+        triage status is one of the ``sample_*`` routes the run is NOT a
+        kill — the hypothesis is still alive pending more data — and we
+        raise ``SampleInsufficientKillError`` rather than poison the
+        ledger.
+
+        Reason is built from ``triage_reasons`` so the durable record
+        names the actual failing gates instead of a free-text blob.
+        """
+        if not isinstance(blocking, dict):
+            raise TypeError("blocking must be a dict from _invoke_sub_gates")
+        status = str(blocking.get("triage_status", ""))
+        if status.startswith("sample_"):
+            raise SampleInsufficientKillError(
+                f"refusing to log kill for alpha_id={alpha_id!r}: "
+                f"triage_status={status!r} indicates the hypothesis "
+                "is still alive pending more data — record as "
+                "promising / needs_more_sample / inconclusive instead"
+            )
+        if blocking.get("passed", False):
+            raise ValueError(f"refusing to log kill for alpha_id={alpha_id!r}: blocking aggregate reports passed=True")
+        reasons = blocking.get("triage_reasons") or [
+            f["name"] for f in (blocking.get("failing") or []) if isinstance(f, dict)
+        ]
+        if not reasons:
+            raise ValueError(
+                f"refusing to log kill for alpha_id={alpha_id!r}: no failing gates recorded in blocking aggregate"
+            )
+        reason = "|".join(str(r) for r in reasons)
+        return cls(
+            alpha_id=alpha_id,
+            gate=gate,
+            reason=reason,
+            stable_artifact_hash=stable_artifact_hash,
+            scorecard_id=scorecard_id,
+            killed_by=killed_by,
+        )
 
 
 def stable_artifact_hash(manifest: AlphaManifest) -> str:
@@ -167,12 +235,46 @@ def append_kill(record: KillRecord) -> bool:
     if audit._is_enabled():  # noqa: SLF001 — audit is the canonical gate
         ch_result = _try_append_ch(finalized, kill_id)
         if ch_result == "inserted":
+            _emit_lifecycle_advisory(finalized)
             return True
         if ch_result == "duplicate":
             return False
         # "failed" → fall through to jsonl
 
-    return _try_append_jsonl(finalized, kill_id)
+    inserted = _try_append_jsonl(finalized, kill_id)
+    if inserted:
+        _emit_lifecycle_advisory(finalized)
+    return inserted
+
+
+def _emit_lifecycle_advisory(record: KillRecord) -> None:
+    """Stage-6 (D6) post-kill advisory.
+
+    The kill ledger is the authoritative log; the *operator-facing* mirror is
+    ``manifest.yaml::status`` + the directory's location under
+    ``research/alphas/`` vs ``research/archive/``. We emit a structured log
+    naming both moves so operators (or follow-up CI hooks) can keep the
+    derived stores in sync. Kept advisory-only to avoid coupling kill writes
+    to filesystem moves — ``make research-audit-lifecycle`` is the gate that
+    actually flags drift.
+    """
+    # Opt-in advisory: only emit when the operator explicitly asks for it,
+    # so CLI commands that serialize JSON payloads on stdout (e.g.
+    # `hft alpha kill`) stay clean by default. ``make research-audit-lifecycle``
+    # is the actual drift gate; this log line is purely an operator
+    # breadcrumb listing the manual commands to keep filesystem placement
+    # + manifest status in sync.
+    if os.getenv("HFT_KILL_LIFECYCLE_ADVISORY_LOG", "0") == "1":
+        logger.info(
+            "alpha_kill_recorded",
+            alpha_id=record.alpha_id,
+            gate=record.gate,
+            reason=record.reason,
+            next_steps=(
+                f"git mv research/alphas/{record.alpha_id} research/archive/alphas_<YYYY-MM-DD>/{record.alpha_id} "
+                f"&& update manifest.yaml status: KILLED; then `make research-audit-lifecycle` should return 0 errors."
+            ),
+        )
 
 
 def _try_append_ch(record: KillRecord, kill_id: str) -> str:

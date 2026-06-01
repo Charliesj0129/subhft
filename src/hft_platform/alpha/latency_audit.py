@@ -8,6 +8,12 @@ Validates that each alpha scorecard:
 Usage:
     python -m hft_platform.alpha.latency_audit
     python -m hft_platform.alpha.latency_audit --project-root /path/to/project
+
+Slice B Task 12 also exposes the runtime helper :func:`latency_audit`, which
+``_evaluate_gate_d`` calls to verify that the resolved broker latency profile
+populates ``submit_ack_latency_ms`` / ``cancel_ack_latency_ms``. Under
+``strict=True`` (vm_ul6_strict profile) missing fields fail closed; under
+``strict=False`` the check returns advisory PASS for backward compatibility.
 """
 
 from __future__ import annotations
@@ -32,6 +38,99 @@ _NUMERIC_LATENCY_FIELDS: tuple[str, ...] = (
 
 # Minimum ratio: scorecard value must be >= reference * _GATE_D_TOLERANCE
 _GATE_D_TOLERANCE: float = 0.8
+
+# Slice B Task 12 — broker P95 fields required under strict promotion profile.
+# Under the vm_ul6_strict profile a scorecard's resolved latency profile must
+# populate both fields or the audit fails closed (no advisory fallback).
+_STRICT_REQUIRED_P95_FIELDS: tuple[str, ...] = (
+    "submit_ack_latency_ms",
+    "cancel_ack_latency_ms",
+)
+
+
+def latency_audit(
+    profile: dict[str, Any] | None,
+    *,
+    strict: bool = False,
+    max_submit_ms: float | None = None,
+    max_cancel_ms: float | None = None,
+) -> dict[str, Any]:
+    """Audit a resolved latency profile dict against strict-mode P95 requirements.
+
+    This is the runtime helper used by ``_evaluate_gate_d`` (see
+    ``src/hft_platform/alpha/promotion.py``). Distinct from the CLI scorecard
+    auditor (:func:`audit_alphas`), which scans on-disk scorecards.
+
+    Args:
+        profile: Resolved latency profile dict (e.g. from
+            ``config/research/latency_profiles.yaml`` or attached to a
+            scorecard). May be ``None`` when no profile was resolvable.
+        strict: When ``True`` (vm_ul6_strict profile) missing P95 fields fail
+            closed. When ``False`` (default / loose profile) missing P95 fields
+            return an advisory PASS to preserve backward-compatible behaviour.
+        max_submit_ms: Optional explicit P95 budget for ``submit_ack_latency_ms``;
+            ``None`` skips the budget check.
+        max_cancel_ms: Optional explicit P95 budget for ``cancel_ack_latency_ms``;
+            ``None`` skips the budget check.
+
+    Returns:
+        Dict with keys ``passed: bool``, ``reason: str``, and (when present)
+        ``profile_id: str``. The shape mirrors the existing ``replay_parity_audit``
+        check entry consumed by ``_evaluate_gate_d``.
+    """
+    if profile is None or not isinstance(profile, dict):
+        if strict:
+            return {
+                "passed": False,
+                "reason": "latency_profile missing under strict profile",
+            }
+        return {
+            "passed": True,
+            "reason": "advisory: profile not resolved (loose mode)",
+        }
+
+    profile_id_raw = profile.get("latency_profile_id")
+    profile_id = str(profile_id_raw).strip() if profile_id_raw else None
+    if profile_id == "":
+        profile_id = None
+
+    missing = [f for f in _STRICT_REQUIRED_P95_FIELDS if profile.get(f) is None]
+    if missing:
+        if strict:
+            return {
+                "passed": False,
+                "reason": (
+                    f"{'/'.join(missing)} missing under strict profile (vm_ul6_strict requires submit + cancel P95)"
+                ),
+                "profile_id": profile_id,
+            }
+        return {
+            "passed": True,
+            "reason": f"advisory: profile missing fields {missing}",
+            "profile_id": profile_id,
+        }
+
+    submit_ms = float(profile["submit_ack_latency_ms"])
+    cancel_ms = float(profile["cancel_ack_latency_ms"])
+
+    if max_submit_ms is not None and submit_ms > float(max_submit_ms):
+        return {
+            "passed": False,
+            "reason": (f"submit_ack_latency_ms={submit_ms:.1f} ms exceeds budget {float(max_submit_ms):.1f} ms"),
+            "profile_id": profile_id,
+        }
+    if max_cancel_ms is not None and cancel_ms > float(max_cancel_ms):
+        return {
+            "passed": False,
+            "reason": (f"cancel_ack_latency_ms={cancel_ms:.1f} ms exceeds budget {float(max_cancel_ms):.1f} ms"),
+            "profile_id": profile_id,
+        }
+
+    return {
+        "passed": True,
+        "reason": (f"OK (submit_p95={submit_ms:.1f} ms, cancel_p95={cancel_ms:.1f} ms)"),
+        "profile_id": profile_id,
+    }
 
 
 @dataclass(frozen=True, slots=True)

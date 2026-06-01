@@ -154,5 +154,5 @@ make research-gen-synth-lob OUT=research/data/processed/<id>/synth_test.npy \
 | --- | --- |
 | research-factory | Full pipeline orchestration |
 | hft-alpha-research | Alpha scaffold and manifest preparation |
-| hft-backtester | Backtest adapter and latency profile configuration |
+| hft-backtest-engine | Backtest adapter and latency profile configuration |
 | validation-gate | Gate A-E pass/fail interpretation |

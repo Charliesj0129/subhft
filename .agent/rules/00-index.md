@@ -1,28 +1,21 @@
 # Agent Rules Index
 
-Rules are auto-loaded by agents from `.agent/rules/`.
+Read only the file needed for the task. These rules are compact guardrails; canonical details live in source, `docs/architecture/`, runbooks, and task skills.
 
-| File                              | Scope                                                 | Lines |
-| --------------------------------- | ----------------------------------------------------- | ----- |
-| `01-core-laws.md`                 | HFT Laws: memory, precision, async, Rust boundary     | ~39   |
-| `05-project-structure.md`         | Directory layout, lifecycle hooks, session protocol   | ~36   |
-| `10-hft-performance.md`           | Latency checklist, anti-patterns, CPU tuning         | ~38   |
-| `15-security.md`                  | Credentials, logging, network, Docker security        | ~26   |
-| `20-data-flow.md`                 | Hot path pipeline, recording path, verification       | ~38   |
-| `25-architecture-governance.md`   | CE-M2/M3 design, ADR process, module boundaries       | ~88   |
-| `26-multi-broker-governance.md`   | Multi-broker protocol, isolation, credential rules    | ~49   |
-| `30-git.md`                       | Commits, branches, pre-commit, hygiene                | ~63   |
-| `40-ops.md`                       | Docker Compose, service health, common ops            | ~46   |
-| `50-testing.md`                   | Coverage goals, test pyramid, what to test            | ~32   |
-| `55-enforcement.md`               | Pre-commit hooks, discipline rules, CI gates          | ~43   |
-| `60-agent-workflow-governance.md` | Agent mutual exclusion, blast radius, conflict protocol | ~99 |
-| `70-research-data.md`             | ClickHouse research data access, export CLI, formats  | ~99   |
+| File | Scope |
+| --- | --- |
+| `01-core-laws.md` | HFT allocator/cache/async/precision/boundary laws |
+| `05-project-structure.md` | Layout and session hooks |
+| `10-hft-performance.md` | Hot-path performance checklist |
+| `15-security.md` | Secrets, logs, network, Docker |
+| `20-data-flow.md` | Runtime/recording flow invariants |
+| `25-architecture-governance.md` | Boundaries, queues, durability, alpha, exposure |
+| `26-multi-broker-governance.md` | Broker protocol, isolation, latency, credentials |
+| `30-git.md` | Commit and git hygiene |
+| `40-ops.md` | Docker, services, live config changes |
+| `50-testing.md` | Coverage, naming, HFT test focus |
+| `55-enforcement.md` | Pre-commit, discipline, CI gates |
+| `60-agent-workflow-governance.md` | Git-state safety and multi-agent coordination |
+| `70-research-data.md` | ClickHouse research data and export contract |
 
-## Related Context
-
-- **Memory**: `.agent/memory/` — module gotchas, lessons learned
-- **Library**: `docs/architecture/` — architecture docs (canonical source of truth)
-- **Skills**: `.agent/skills/` — skill SKILL.md files
-- **Workflows**: `.agent/workflows/` — step-by-step procedures
-- **Evals**: `.agent/evals/` — evaluation scripts for normalizer, LOB, risk
-- **Alpha development workflow** (canonical, end-to-end for new factor authors): `docs/runbooks/alpha-development-workflow.md` — covers Gates A–F, replay-parity, latency-audit, kill ledger, and the loop_v1 L11 live-registry freeze.
+Related: `.agent/memory/`, `.agent/skills/00-index.md`, `docs/MODULES_REFERENCE.md`, `docs/architecture/`, `docs/runbooks/alpha-development-workflow.md`.

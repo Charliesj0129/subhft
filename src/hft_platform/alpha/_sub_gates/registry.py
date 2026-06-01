@@ -24,7 +24,7 @@ class SubGateResult:
 
     name: str
     passed: bool
-    metrics: dict[str, float] = field(default_factory=dict)
+    metrics: dict[str, float | None] = field(default_factory=dict)
     details: str = ""
 
     def __post_init__(self) -> None:

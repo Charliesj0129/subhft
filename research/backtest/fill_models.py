@@ -1,8 +1,28 @@
-"""Fill models for maker backtest engine."""
+"""Fill models for maker backtest engine.
+
+Slice B Task 8 wires :class:`QueueDepletionFill` to a calibrated
+``QHatTable`` so the previously-literal ``queue_fraction = 0.5`` is replaced by
+``q_hat(symbol, hour, depth_bucket)`` whenever a table is supplied. The legacy
+positional constructor ``QueueDepletionFill(queue_fraction=0.5)`` keeps working
+unchanged (backward compat for ``_gate_c.py:232`` and existing fixtures).
+
+Fallback policy (when a table IS supplied)
+------------------------------------------
+On a table-cell miss, ``QueueDepletionFill`` uses ``QHatTable.fallback`` (the
+table's own documented fallback, default 0.5), NOT the constructor's
+``queue_fraction`` argument. Rationale: callers wiring a table opt into the
+table's graceful-degradation policy as the single source of truth for fallback.
+Mixing the constructor's qf into the missing-cell path would re-introduce two
+competing fallbacks and confuse later promotion gates. The constructor's
+``queue_fraction`` only matters when no table is supplied.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import TYPE_CHECKING, Callable, Protocol
+
+if TYPE_CHECKING:
+    from research.backtest.q_hat_table import QHatTable
 
 
 @dataclass
@@ -40,12 +60,39 @@ class FillModel(Protocol):
 
 
 class QueueDepletionFill:
-    """CK-direct fill model: queue depletion tracking."""
+    """CK-direct fill model: queue depletion tracking.
 
-    __slots__ = ("_qf",)
+    Backward-compatible constructor:
+        ``QueueDepletionFill(queue_fraction=0.5)`` — pre-Slice-B behavior.
 
-    def __init__(self, queue_fraction: float = 0.5) -> None:
+    Slice B Task 8 keyword-only extension:
+        ``QueueDepletionFill(queue_fraction=0.5, *, q_hat_table=table,
+        symbol="TMFD6", clock=clock_fn)`` — uses calibrated q_hat per
+        (symbol, hour-of-day, depth_bucket). When a cell is missing, falls
+        through to ``q_hat_table.fallback`` (NOT ``queue_fraction``).
+
+    The new params are keyword-only (after the ``*`` barrier) so positional
+    calls at ``_gate_c.py:232`` and elsewhere remain unaffected.
+    """
+
+    __slots__ = ("_qf", "_q_hat_table", "_symbol", "_clock")
+
+    def __init__(
+        self,
+        queue_fraction: float = 0.5,
+        *,
+        q_hat_table: "QHatTable | None" = None,
+        symbol: str = "",
+        clock: Callable[[], int] | None = None,
+    ) -> None:
         self._qf = queue_fraction
+        self._q_hat_table = q_hat_table
+        self._symbol = symbol
+        # Default clock returns 0 ns -> hour=0; only relevant when a table is
+        # supplied without a clock, in which case the caller has effectively
+        # asked for the hour=0 cells. This mirrors the calibration harness's
+        # epoch-modulo convention (see calibrate_queue_fill._hour_of_day).
+        self._clock = clock if clock is not None else (lambda: 0)
 
     @property
     def label(self) -> str:
@@ -56,7 +103,19 @@ class QueueDepletionFill:
         return self._qf
 
     def post_quote(self, side: str, price: int, book_qty: int) -> QueuePosition:
-        queue_ahead = max(1, int(book_qty * self._qf))
+        # Default to the legacy literal qf so the no-table path is byte-for-byte
+        # identical to pre-Slice-B behavior.
+        qf = self._qf
+        if self._q_hat_table is not None:
+            # Hour-of-day must match the calibration harness convention
+            # (see research/backtest/calibrate_queue_fill._hour_of_day):
+            # epoch-ns -> seconds -> hours mod 24.
+            hour = (self._clock() // 1_000_000_000) // 3600 % 24
+            # On a missing cell the lookup returns ``q_hat_table.fallback`` —
+            # see module docstring for the design rationale (single source
+            # of truth for fallback when a table is wired).
+            qf = self._q_hat_table.lookup(self._symbol, int(hour), book_qty)
+        queue_ahead = max(1, int(book_qty * qf))
         return QueuePosition(side=side, price=price, queue_ahead=queue_ahead)
 
     def check_fills(

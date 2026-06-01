@@ -73,7 +73,7 @@ make research-gen-synth-lob OUT=research/data/processed/<alpha_id>/<file>.npy AR
 
 Keep these responsibilities separated:
 
-- Use `hft-backtester` for latency realism and adapter behavior.
+- Use `hft-backtest-engine` for latency realism and adapter behavior.
 - Use `validation-gate` for pass/fail interpretation and promotion blockers.
 - Use `hft-strategy-dev` only after the logic moves toward live strategy integration.
 - Use `hft-architect` when the alpha requires new runtime modules, feature contracts, or Rust migration.
@@ -84,7 +84,7 @@ Keep these responsibilities separated:
 | --- | --- |
 | Gate A rejects dataset provenance | regenerate or validate sidecar metadata |
 | Gate B cannot find tests | inspect alpha-specific test path and run from repo root |
-| Gate C Sharpe collapses to zero | inspect latency application and `local_ts` cadence with `hft-backtester` |
+| Gate C Sharpe collapses to zero | inspect latency application and `local_ts` cadence with `hft-backtest-engine` |
 | Gate D blocks on feature set version | align the manifest with the live feature registry version |
 
 ## Paper-to-Prototype Bridge
@@ -126,4 +126,4 @@ research/alphas/<alpha_id>/
 | research-factory | Full end-to-end pipeline orchestration |
 | research-data-governance | Dataset preparation and metadata sidecar management |
 | validation-gate | Gate A-E pass/fail interpretation and promotion blockers |
-| hft-backtester | Backtest adapter configuration and latency realism |
+| hft-backtest-engine | Backtest adapter configuration and latency realism |

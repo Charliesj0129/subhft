@@ -1,0 +1,115 @@
+alpha_id: c14_txf_frontmonth_native_maker
+name: "R47 Maker on TXF Rolling Front-Month"
+version: "0.2.0"
+status: KILLED  # 2026-04-18: cost-model error invalidated R6 PROMOTE
+correction_note: |
+  2026-04-18: R6 PROMOTE REVOKED. Original cost_model assumed TXF retail RT = 0.48 pt
+  (commission 0.24/side + tax 0.24/side). Actual user retail RT ≈ 3 pt
+  (~600 NTD/RT at 200 NTD/pt: ~120 NTD commission + ~480 NTD sell-side tax).
+  Re-computed under corrected RT:
+    OOS net edge/fill: -1.69 pt (claimed +0.829)
+    OOS NTD/day:       -638,000 (claimed +312,900)
+    Edge/RT ratio:     0.44x (deep under 1x floor)
+    H2 literal:        FAIL by 5.6x (1.31 pt gross vs 7.3 pt threshold)
+    Maker-unit:        FAIL by 2.3x (1.31 vs 2*half_RT 3.0)
+  See memory/r6_cost_model_correction.md and round-6/summary.md Correction section.
+  DO NOT enable shadow. DO NOT enable live.
+owner: alpha-research-20260417-0815
+strategy_type: maker
+instrument: TXF_frontmonth
+instruments:
+  - TXFB6
+  - TXFC6
+  - TXFD6
+
+hypothesis: >
+  [INVALID 2026-04-18] R47's structural edge is venue-invariant within
+  the same cost-structure class. Running R47 on TXF rolling front-month
+  captures the same edge at a more favourable cost-to-spread ratio.
+  CORRECTION: hypothesis was built on wrong RT (0.48 pt assumed; actual
+  ~3 pt retail). True drag is 60-75% on TXF, not 10-16% — close to
+  TMFD6's 80-133%, not the 8x advantage claimed. Hypothesis FALSIFIED
+  on cost grounds; venue-axis thesis collapses.
+
+paper_refs:
+  - r47_maker_strategy
+  - r47_structural_properties
+  - r47_backtest_data_regression
+  - "2008 Avellaneda-Stoikov HFT in LOB"
+  - "2011 Huang-Polak LOBSTER reconstruction"
+
+signals:
+  reuse: "R47 three-layer (PE regime / queue survival / MFG skew). Minimal-layer defaults."
+
+parameters:
+  spread_threshold_pts: 3
+  pe_danger_threshold: 0.0       # disabled (R47 structural)
+  pe_window: 100
+  queue_cancel_threshold: 1.0    # disabled (R47 structural)
+  queue_ema_alpha: 0.05
+  mfg_skew_z_threshold: 100.0    # disabled (R47 structural)
+  mfg_ema_alpha: 0.01
+  max_pos: 3                     # R47 non-linear optimum
+  inventory_skew_tenths: 2       # 0.2 ticks/contract fixed skew
+
+rollover:
+  rule: "volume_crossover_with_calendar_fallback"
+  calendar_windows:
+    TXFB6: "2026-01-26..2026-02-25"
+    TXFC6: "2026-02-26..2026-03-18"
+    TXFD6: "2026-03-19..2026-04-14"
+  boundary_behaviour: "flatten_outgoing_before_quoting_incoming"
+  cost_accounting: "rollover-day slippage included in backtest (T2 P2 WARN requirement)"
+
+latency_profile: "sim_p95_v2026-02-26"
+
+# cost_model corrected 2026-04-18 per user-confirmed retail RT
+# Source of truth: memory/feedback_taifex_fee_structure.md
+cost_model:
+  TXFB6:
+    commission_pts_per_rt: 0.6     # ~120 NTD / 200 NTD/pt (~60 NTD per side x 2)
+    tax_pts_per_rt_sellside: 2.4   # ~480 NTD / 200 NTD/pt (sell-side only, ~1.07 bps on 22.5K mid)
+    total_rt_pts: 3.0              # USER-CONFIRMED 2026-04-18
+    point_value_ntd: 200
+  TXFC6:
+    commission_pts_per_rt: 0.6
+    tax_pts_per_rt_sellside: 2.4
+    total_rt_pts: 3.0
+    point_value_ntd: 200
+  TXFD6:
+    commission_pts_per_rt: 0.6
+    tax_pts_per_rt_sellside: 2.4
+    total_rt_pts: 3.0
+    point_value_ntd: 200
+
+expected_edge:
+  # ALL FIGURES BELOW ARE FROM THE INVALID R6 BACKTEST (RT=0.48 assumption).
+  # Re-computation under corrected RT=3.0 in correction_note above.
+  status: "INVALID — see correction_note"
+  invalid_historical_ck_direct_pts_per_day: 375
+  invalid_pessimistic_fullqueue_pts_per_day: 99
+  invalid_post_retail_discount_ntd_per_day: "12k..45k"
+  point_value_ntd: 200
+  rt_cost_pts_assumed: 0.48      # WRONG
+  rt_cost_pts_actual: 3.0         # USER-CONFIRMED
+
+governance:
+  t1_proposal: outputs/team_artifacts/alpha-research/round-6/artifacts/t1_researcher_proposal.md
+  t2_review: outputs/team_artifacts/alpha-research/round-6/artifacts/t2_challenger_review.md
+  t2_verdict: APPROVE                    # under wrong RT assumption
+  t2_warn: "P2 — rollover engineering cost"
+  t6_revise_verdict: PASS                # under wrong RT assumption
+  t7_verdict: PROMOTE                    # under wrong RT assumption
+  t7_correction_2026_04_18: REVOKED      # promote → KILL on cost-model error
+  correction_authority: user_confirmation
+
+notes:
+  - "Reuses R47 quoting sub-states via composition from research.alphas.r47_maker_pivot.impl. No R47 code is modified."
+  - "Research-module float/scale exception applies (rule 11 of 25-architecture-governance). The strategy operates on integer prices from the CK source at scale=1_000_000; no float arithmetic in the fill path."
+  - "Rollover rule: volume-crossover with calendar fallback (see frontmonth.py). On rollover day, outgoing contract position is flattened before new quotes open — no cross-contract carry."
+
+# roles_used / skills_used backfilled 2026-05-28 — conservative baseline per
+# /home/charlie/.claude/plans/swift-meandering-avalanche.md Stage 1.3.
+roles_used:
+  - architect
+  - code-reviewer

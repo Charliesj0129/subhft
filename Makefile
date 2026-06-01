@@ -531,6 +531,13 @@ research-audit: ## Audit research pipeline contract and write report
 research-audit-strict: ## Strict audit (--fail-on-warning) for CI compatibility
 	$(PY) -m research.factory audit --fail-on-warning
 
+research-audit-lifecycle: ## Cross-check alpha lifecycle drift across manifest/ledger/cluster/paper_index
+	$(PY) -m research.tools.lifecycle_audit
+
+.PHONY: research-spec-check
+research-spec-check: ## Validate every candidate spec.yaml against the goal-§3 schema
+	$(PY) -m hft_platform.alpha.spec_check --all
+
 research-index: ## Build machine-readable research pipeline index
 	$(PY) -m research.factory index
 
@@ -542,7 +549,7 @@ research: ## Official single entrance: strict pipeline with factory optimize pre
 		echo "Usage: make research ALPHA=<alpha_id> OWNER=<owner> DATA='<path1.npy [path2.npy ...]' [ARGS='--min-sharpe-oos-gate-d 1.2']"; \
 		exit 2; \
 	fi
-	$(PY) -m research.pipeline run --alpha-id "$(ALPHA)" --owner "$(OWNER)" --data $(DATA) $(ARGS)
+	$(PY) -m hft_platform alpha pipeline run --alpha-id "$(ALPHA)" --owner "$(OWNER)" --data $(DATA) $(ARGS)
 
 research-run: research ## Backward-compatible alias of `make research`
 
@@ -555,7 +562,7 @@ research-triage: ## Internal debug flow (requires HFT_RESEARCH_ALLOW_TRIAGE=1)
 		echo "Usage: make research-triage ALPHA=<alpha_id> OWNER=<owner> DATA='<path1.npy [path2.npy ...]' [ARGS='--skip-gate-b-tests --no-promote --allow-gate-fail']"; \
 		exit 2; \
 	fi
-	$(PY) -m research.pipeline triage --alpha-id "$(ALPHA)" --owner "$(OWNER)" --data $(DATA) $(ARGS)
+	$(PY) -m hft_platform alpha pipeline triage --alpha-id "$(ALPHA)" --owner "$(OWNER)" --data $(DATA) $(ARGS)
 
 research-scaffold: ## Scaffold a new governed alpha package under research/alphas/
 	@if [ -z "$(ALPHA)" ]; then \

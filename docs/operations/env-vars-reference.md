@@ -371,6 +371,19 @@ Shadow deployment note:
 
 ---
 
+## 17. Maker Realism / Backtest 校準（Slice B）
+
+Slice B 引入 Maker 策略 backtest 的殘餘部位 MtM、佇列校準、成本不確定性 gate 與嚴格延遲 audit；以下兩個變數為 operator 介面的覆寫。
+
+| 變數 | 預設值 | 用途 | 調整建議 |
+|---|---|---|---|
+| `HFT_MAKER_MARK_METHOD` | `last_mid` | `MakerEngine` 對日終未 FIFO 殘餘部位的 mark 方法；Slice B `_compute_residual_mtm` 使用。允許值：`last_mid` / `worse_of_mid_last_trade` | 標準 equity-curve 慣例使用 `last_mid`；最後一筆 trade 與 mid 偏離大時改用 `worse_of_mid_last_trade` 取保守估計 |
+| `HFT_QUEUE_CALIBRATION_TABLE_PATH` | `research/backtest/q_hat_data/<HFT_SYMBOLS_PRIMARY>_q_hat.parquet` | `QueueDepletionFill` 用於 `queue_fraction` 查找的校準 `QHatTable` parquet 路徑；未設置時走 `0.5` 常數 fallback | 校準窗口變更（regime shift / 換約）或非預設標的 mix 跑 backtest 時覆寫 |
+
+**Runbook 參考**: [maker-realism-gate](../runbooks/maker-realism-gate.md)
+
+---
+
 ## 快速參考：故障對照表
 
 | 症狀 | 優先檢查 | Runbook |

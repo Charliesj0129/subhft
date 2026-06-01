@@ -117,3 +117,57 @@ class MakerStrategyBridge(BaseStrategy):
             return []
 
         raise TypeError(f"MakerStrategyBridge: unknown action type {type(action).__name__}")
+
+    def on_session_end(self, ctx: Any) -> list[OrderIntent]:
+        """Return FORCE_FLAT MARKET intent(s) for any non-zero residual position.
+
+        Slice B Task 13 (2026-05-05): wired by StrategyRunner on
+        SessionPhase.FORCE_FLAT transitions. Empty list when flat.
+
+        Position semantics:
+          net_qty > 0 (long)  → SELL to flatten
+          net_qty < 0 (short) → BUY to flatten
+          net_qty == 0        → no intent
+
+        The returned intent uses ``price_type="MKT"`` so the order adapter
+        treats it as a market order. ``intent_type=IntentType.FORCE_FLAT``
+        is recognised by ``StrategyRunner.filter_intents_by_phase`` as an
+        always-allowed safety intent during CLOSE_ONLY/FORCE_FLAT phases
+        (see strategy/runner.py:1597).
+        """
+        symbol = self._symbol
+        positions = getattr(ctx, "positions", None) or {}
+        residual_qty = int(positions.get(symbol, 0))
+        if residual_qty == 0:
+            return []
+
+        opposite_side = Side.SELL if residual_qty > 0 else Side.BUY
+
+        # Best-effort mid price from L1 snapshot. MARKET intents do not depend
+        # on price for execution, but we populate it for telemetry/TCA.
+        cur_mid = 0
+        get_l1 = getattr(ctx, "get_l1_scaled", None)
+        if callable(get_l1):
+            l1 = get_l1(symbol)
+            if l1 is not None:
+                # Tuple shape: (ts, best_bid, best_ask, mid_x2, spread, bd, ad).
+                # mid_x2 is mid * 2 (scaled int); divide by 2 for mid.
+                try:
+                    cur_mid = int(l1[3]) // 2
+                except (IndexError, TypeError, ValueError):
+                    cur_mid = 0
+
+        return [
+            OrderIntent(
+                intent_id=self._next_intent_id(),
+                strategy_id=self.strategy_id,
+                symbol=symbol,
+                intent_type=IntentType.FORCE_FLAT,
+                side=opposite_side,
+                price=cur_mid,
+                qty=abs(residual_qty),
+                tif=TIF.IOC,
+                price_type="MKT",
+                reason="session_end_force_flat",
+            )
+        ]

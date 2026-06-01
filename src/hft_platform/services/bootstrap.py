@@ -1228,7 +1228,38 @@ class SystemBootstrapper:
                 md_service._post_connect_hooks.append(
                     lambda: _gov.resolve_symbol_aliases(getattr(symbol_metadata, "alias_to_actual", None))
                 )
-                logger.info("SessionGovernor created and TrackGate wired into StrategyRunner")
+
+                # Punch-list (2026-05-29): wire SessionGovernor FORCE_FLAT
+                # phase callback into StrategyRunner.dispatch_session_end_force_flat
+                # so the consumer-side hook actually fires on phase transition.
+                # Without this wiring, transition_track(..., FORCE_FLAT) only
+                # closes broker-side positions via PositionFlattener; the
+                # strategies' ``on_session_end(ctx)`` hooks are never invoked
+                # and no FORCE_FLAT intent reaches the risk queue.
+                from hft_platform.ops.session_governor import SessionPhase
+
+                def _force_flat_phase_callback(
+                    track_name: str,
+                    _old: SessionPhase,
+                    new_phase: SessionPhase,
+                ) -> None:
+                    if new_phase != SessionPhase.FORCE_FLAT:
+                        return
+                    try:
+                        loop = asyncio.get_running_loop()
+                    except RuntimeError:
+                        logger.warning(
+                            "force_flat_dispatch_no_loop",
+                            track=track_name,
+                        )
+                        return
+                    loop.create_task(strategy_runner.dispatch_session_end_force_flat(track_name))
+
+                session_governor.register_phase_callback(_force_flat_phase_callback)
+                logger.info(
+                    "SessionGovernor created and TrackGate wired into StrategyRunner; "
+                    "FORCE_FLAT phase callback registered"
+                )
             except Exception as exc:
                 logger.warning("SessionGovernor creation failed", error=str(exc))
                 session_governor = None

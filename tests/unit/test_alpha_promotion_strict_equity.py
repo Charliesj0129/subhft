@@ -41,7 +41,14 @@ def _gate_d_passing_scorecard(equity_source: str | None) -> dict[str, Any]:
         "max_drawdown": -0.05,
         "turnover": 0.5,
         "correlation_pool_max": 0.3,
-        "latency_profile": {"latency_profile_id": "sim_p95_v2026-02-26"},
+        # Slice B (merged 2026-05-29): strict latency_audit now expects submit
+        # and cancel P95 fields when latency_profile is a dict under a strict
+        # validation profile.
+        "latency_profile": {
+            "latency_profile_id": "sim_p95_v2026-02-26",
+            "submit_ack_latency_ms": 36.0,
+            "cancel_ack_latency_ms": 47.0,
+        },
         "replay_parity": {"match_pct": 99.0},
     }
     if equity_source is not None:

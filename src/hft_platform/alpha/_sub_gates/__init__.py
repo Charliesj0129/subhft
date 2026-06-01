@@ -26,16 +26,27 @@ def ensure_builtin_sub_gates_registered() -> None:
         SharpeThresholdGate,
         WinningDayPctGate,
     )
+    from hft_platform.alpha._sub_gates.cost_uncertainty import CostUncertaintyGate
     from hft_platform.alpha._sub_gates.day_bootstrap_ci import DayLevelBootstrapCIGate
     from hft_platform.alpha._sub_gates.deflated_sharpe_maker import (
         DeflatedSharpeForMakerGate,
     )
+    from hft_platform.alpha._sub_gates.edge_per_round_trip import (
+        EdgePerRoundTripGate,
+    )
+    from hft_platform.alpha._sub_gates.force_flat_residual import (
+        ForceFlatResidualGate,
+    )
+    from hft_platform.alpha._sub_gates.inventory_mtm import InventoryMtMGate
     from hft_platform.alpha._sub_gates.loo_day_sensitivity import LOODaySensitivityGate
     from hft_platform.alpha._sub_gates.maker import (
         FillQualityGate,
         FillRateValidationGate,
     )
     from hft_platform.alpha._sub_gates.min_sample_size import MinSampleSizeGate
+    from hft_platform.alpha._sub_gates.monthly_distribution import (
+        MonthlyDistributionGate,
+    )
     from hft_platform.alpha._sub_gates.outlier_trade_removal import (
         OutlierTradeRemovalGate,
     )
@@ -47,6 +58,9 @@ def ensure_builtin_sub_gates_registered() -> None:
         StationaryBlockBootstrapGate,
     )
     from hft_platform.alpha._sub_gates.taker import ICEvaluationGate
+    from hft_platform.alpha._sub_gates.trade_concentration import (
+        TradeConcentrationGate,
+    )
 
     existing_names = {g.name for g in get_registered_sub_gates()}
     candidates: list[SubGate] = [
@@ -67,6 +81,18 @@ def ensure_builtin_sub_gates_registered() -> None:
         DeflatedSharpeForMakerGate(),
         # New (Slice C)
         ReplayParityGate(),
+        # New (Slice B)
+        InventoryMtMGate(),
+        CostUncertaintyGate(),
+        # Monthly-distribution credibility gate (goal §6)
+        MonthlyDistributionGate(),
+        # Per-round-trip net edge floor (goal §5: > 10 pts/trade)
+        EdgePerRoundTripGate(),
+        # Trade-level concentration (goal §5: loss-distribution + dominance)
+        TradeConcentrationGate(),
+        # Force-flat residual dominance (goal §3 + §5): flag edges
+        # propped up by inventory closed at end-of-window mark.
+        ForceFlatResidualGate(),
     ]
     for gate in candidates:
         if gate.name not in existing_names:

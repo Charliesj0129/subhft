@@ -46,9 +46,8 @@
 | `research-factory` | paper -> prototype -> backtest -> promote -> live workflow |
 | `research-data-governance` | dataset sidecars、synthetic LOB、UL6 provenance |
 | `validation-gate` | Gate A-E interpretation and promotion blockers |
-| `hft-backtest` | raw hftbacktest semantics、queue/fill model details |
-| `hft-backtester` | project `HftBacktestAdapter`、latency modeling、Gate C lane |
-| `hft-backtest-calibration` | fill-model realism、latency profiles、walk-forward traps |
+| `hft-backtest-engine` | hftbacktest V2 + HftBacktestAdapter + MakerEngine config (queue/exchange/latency models, BacktestContractSpec, Gate C lane) |
+| `hft-backtest-validation` | bias matrix (14× pess / 577× opt), fill-model calibration vs CK ground truth, walk-forward + statistical traps |
 | `taifex-alpha-kill-criteria` | pre-research feasibility and structural alpha kill criteria |
 
 ## Python / Rust / Performance

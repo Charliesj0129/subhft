@@ -1161,3 +1161,172 @@ class TestSliceDAutoKill:
 
         rows = self._read_ledger(_isolate_kill_ledger)
         assert rows == [], f"ledger must be empty when env off, got {rows}"
+
+
+# ---------------------------------------------------------------------------
+# Slice B Task 12: Gate D inventory_mtm_audit + cost_uncertainty_audit checks
+# ---------------------------------------------------------------------------
+
+
+def _gate_d_base_scorecard(strategy_type: str = "maker") -> dict:
+    """Build a scorecard dict that satisfies all other Gate D required fields,
+    so the new Slice B audits are the focus of the assertion. Includes a
+    passing replay_parity payload so that gate doesn't short-circuit."""
+    return {
+        "sharpe_oos": 1.6,
+        "max_drawdown": -0.08,
+        "turnover": 0.2,
+        "correlation_pool_max": 0.2,
+        "latency_profile": "sim_p95_v2026-02-26",
+        "replay_parity": {"match_pct": 96.0},
+        "strategy_type": strategy_type,
+    }
+
+
+# --- inventory_mtm_audit -----------------------------------------------------
+
+
+def test_inventory_mtm_audit_blocks_when_maker_subgate_failed():
+    """Maker scorecard recorded an inventory_mtm sub-gate FAILURE.
+    The promotion-time audit mirrors the failure (belt-and-suspenders)."""
+    scorecard = _gate_d_base_scorecard(strategy_type="maker")
+    scorecard["inventory_mtm"] = {
+        "passed": False,
+        "metrics": {
+            "net_pts": 50.0,
+            "cost_floor_total_pts": 200.0,
+            "n_fills": 400,
+        },
+        "details": "net_pts=50.0 below cost_floor_total=200.0",
+    }
+    config = PromotionConfig(
+        alpha_id="r47_maker",
+        owner="charlie",
+    )
+
+    passed, checks = _evaluate_gate_d(scorecard, config)
+
+    assert checks["inventory_mtm_audit"]["pass"] is False
+    assert passed is False
+
+
+def test_inventory_mtm_audit_passes_when_maker_subgate_passed():
+    """Maker scorecard with a passing inventory_mtm sub-gate result."""
+    scorecard = _gate_d_base_scorecard(strategy_type="maker")
+    scorecard["inventory_mtm"] = {
+        "passed": True,
+        "metrics": {
+            "net_pts": 800.0,
+            "cost_floor_total_pts": 200.0,
+            "n_fills": 400,
+        },
+        "details": "OK",
+    }
+    config = PromotionConfig(
+        alpha_id="r47_maker",
+        owner="charlie",
+    )
+
+    _passed, checks = _evaluate_gate_d(scorecard, config)
+
+    assert checks["inventory_mtm_audit"]["pass"] is True
+
+
+def test_inventory_mtm_audit_advisory_pass_for_taker_strategy():
+    """Taker strategies do not populate inventory_mtm; audit advisory PASS."""
+    scorecard = _gate_d_base_scorecard(strategy_type="taker")
+    # No inventory_mtm key on scorecard — taker engine never emits it.
+    config = PromotionConfig(
+        alpha_id="taker_alpha",
+        owner="charlie",
+    )
+
+    _passed, checks = _evaluate_gate_d(scorecard, config)
+
+    assert checks["inventory_mtm_audit"]["pass"] is True
+    detail = str(checks["inventory_mtm_audit"].get("detail", "")).lower()
+    assert "advisory" in detail or "taker" in detail
+
+
+# --- cost_uncertainty_audit --------------------------------------------------
+
+
+def test_cost_uncertainty_audit_blocks_when_p95_lower_below_floor():
+    """Sub-gate P95 lower bound at/below the configured floor → FAIL."""
+    scorecard = _gate_d_base_scorecard(strategy_type="maker")
+    scorecard["cost_uncertainty"] = {
+        "passed": False,
+        "metrics": {
+            "n_days": 30,
+            "p95_lower_bound_pts": -5.0,
+            "mean_daily_pnl_pts": 1.0,
+            "std_daily_pnl_pts": 20.0,
+            "threshold_pts": 0.0,
+        },
+        "details": "P95 lower bound=-5.00 <= threshold=0.00",
+    }
+    config = PromotionConfig(
+        alpha_id="r47_maker",
+        owner="charlie",
+        min_cost_uncertainty_p95_lower_bound_pts=0.0,
+    )
+
+    passed, checks = _evaluate_gate_d(scorecard, config)
+
+    assert checks["cost_uncertainty_audit"]["pass"] is False
+    assert checks["cost_uncertainty_audit"]["value"] == -5.0
+    assert passed is False
+
+
+def test_cost_uncertainty_audit_passes_when_p95_lower_above_floor():
+    """Sub-gate P95 lower bound above the configured floor → PASS."""
+    scorecard = _gate_d_base_scorecard(strategy_type="maker")
+    scorecard["cost_uncertainty"] = {
+        "passed": True,
+        "metrics": {
+            "n_days": 30,
+            "p95_lower_bound_pts": 2.5,
+            "mean_daily_pnl_pts": 5.0,
+            "std_daily_pnl_pts": 8.0,
+            "threshold_pts": 0.0,
+        },
+        "details": "OK",
+    }
+    config = PromotionConfig(
+        alpha_id="r47_maker",
+        owner="charlie",
+        min_cost_uncertainty_p95_lower_bound_pts=0.0,
+    )
+
+    _passed, checks = _evaluate_gate_d(scorecard, config)
+
+    assert checks["cost_uncertainty_audit"]["pass"] is True
+    assert checks["cost_uncertainty_audit"]["value"] == 2.5
+
+
+def test_cost_uncertainty_audit_advisory_when_metrics_missing():
+    """Scorecard lacks cost_uncertainty payload (legacy run); advisory PASS."""
+    scorecard = _gate_d_base_scorecard(strategy_type="taker")
+    # No cost_uncertainty key on scorecard.
+    config = PromotionConfig(
+        alpha_id="legacy_alpha",
+        owner="charlie",
+    )
+
+    _passed, checks = _evaluate_gate_d(scorecard, config)
+
+    assert checks["cost_uncertainty_audit"]["pass"] is True
+    detail = str(checks["cost_uncertainty_audit"].get("detail", "")).lower()
+    assert "advisory" in detail or "missing" in detail
+
+
+# --- PromotionConfig field defaults -----------------------------------------
+
+
+def test_promotion_config_new_slice_b_fields_have_defaults():
+    """``min_inventory_mtm_safety_margin_pct`` and
+    ``min_cost_uncertainty_p95_lower_bound_pts`` must default to values that
+    preserve current behaviour on existing tests."""
+    cfg = PromotionConfig(alpha_id="x", owner="y")
+    assert cfg.min_inventory_mtm_safety_margin_pct == 5.0
+    assert cfg.min_cost_uncertainty_p95_lower_bound_pts == 0.0

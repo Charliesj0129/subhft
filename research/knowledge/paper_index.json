@@ -1261,6 +1261,9 @@
     "alphas": [
       "ofi_mc"
     ],
+    "aliases": [
+      "Cont-Kukanov 2014 OFI"
+    ],
     "arxiv_id": "1011.6402v3",
     "note_file": "research/knowledge/notes/122_the_price_impact_of_order_book_events.md",
     "ref": "122",
@@ -1500,6 +1503,330 @@
     "title": "Unwinding Toxic Flow with Partial Information",
     "authors": "Alexander Barzykin, Robert Boyce, Eyal Neuman",
     "year": 2024
+  },
+  "137": {
+    "alphas": [
+      "r47_maker_pivot",
+      "r52_amhp_dynamic_spread"
+    ],
+    "arxiv_id": "1105.3115",
+    "ref": "137",
+    "source_url": "https://arxiv.org/abs/1105.3115",
+    "status": "reviewed",
+    "tags": [
+      "market_making",
+      "inventory_risk",
+      "microstructure"
+    ],
+    "title": "Dealing with the Inventory Risk. A solution to the market making problem",
+    "authors": "Olivier Gu\u00e9ant, Charles-Albert Lehalle, Joaquin Fernandez Tapia",
+    "year": 2011
+  },
+  "138": {
+    "alphas": [
+      "r47_maker_pivot"
+    ],
+    "arxiv_id": "1206.4810",
+    "ref": "138",
+    "source_url": "https://arxiv.org/abs/1206.4810",
+    "status": "reviewed",
+    "tags": [
+      "market_making",
+      "inventory_risk",
+      "directional_bets"
+    ],
+    "title": "High-frequency market-making with inventory constraints and directional bets",
+    "authors": "Pietro Fodra, Mauricio Labadie",
+    "year": 2012
+  },
+  "139": {
+    "alphas": [
+      "c72_tmfd6_queue_position_aware"
+    ],
+    "arxiv_id": "1312.0514",
+    "ref": "139",
+    "source_url": "https://arxiv.org/abs/1312.0514",
+    "status": "reviewed",
+    "tags": [
+      "quote_imbalance",
+      "queue_dynamics",
+      "microstructure"
+    ],
+    "title": "Trade arrival dynamics and quote imbalance in a limit order book",
+    "authors": "Alexander Lipton, Umberto Pesavento, Michael G Sotiropoulos",
+    "year": 2013
+  },
+  "140": {
+    "alphas": [
+      "c60_tmfd6_r47_minimal_inst_rt",
+      "c72_tmfd6_queue_position_aware"
+    ],
+    "arxiv_id": "1806.05101",
+    "ref": "140",
+    "source_url": "https://arxiv.org/abs/1806.05101",
+    "status": "reviewed",
+    "tags": [
+      "market_making",
+      "order_book_model",
+      "microstructure"
+    ],
+    "title": "Order-book modelling and market making strategies",
+    "authors": "Xiaofei Lu, Fr\u00e9d\u00e9ric Abergel",
+    "year": 2018
+  },
+  "141": {
+    "alphas": [
+      "r47_maker_pivot"
+    ],
+    "arxiv_id": "1806.05849",
+    "ref": "141",
+    "source_url": "https://arxiv.org/abs/1806.05849",
+    "status": "reviewed",
+    "tags": [
+      "market_making",
+      "latency",
+      "microstructure"
+    ],
+    "title": "Optimal Market Making in the Presence of Latency",
+    "authors": "Xuefeng Gao, Yunhan Wang",
+    "year": 2018
+  },
+  "142": {
+    "alphas": [
+      "c1_revalidation_txfd6_chavez_casillas_adaptive"
+    ],
+    "arxiv_id": "1812.07369",
+    "ref": "142",
+    "source_url": "https://arxiv.org/abs/1812.07369",
+    "status": "reviewed",
+    "tags": [
+      "stylized_facts",
+      "market_open",
+      "microstructure"
+    ],
+    "title": "Emergence of stylized facts during the opening of stock markets",
+    "authors": "Sebastian M. Krause, Jonas A. Fiegen, Thomas Guhr",
+    "year": 2018
+  },
+  "143": {
+    "alphas": [
+      "c72_tmfd6_queue_position_aware"
+    ],
+    "arxiv_id": "1903.07222",
+    "ref": "143",
+    "source_url": "https://arxiv.org/abs/1903.07222",
+    "status": "reviewed",
+    "tags": [
+      "market_making",
+      "limit_order_book",
+      "microstructure"
+    ],
+    "title": "Market Making under a Weakly Consistent Limit Order Book Model",
+    "authors": "Baron Law, Frederi Viens",
+    "year": 2019
+  },
+  "144": {
+    "alphas": [
+      "c60_tmfd6_r47_minimal_inst_rt"
+    ],
+    "arxiv_id": "2211.00496",
+    "ref": "144",
+    "source_url": "https://arxiv.org/abs/2211.00496",
+    "status": "reviewed",
+    "tags": [
+      "maker_taker_fees",
+      "market_making",
+      "microstructure"
+    ],
+    "title": "Can maker-taker fees prevent algorithmic cooperation in market making?",
+    "authors": "Bingyan Han",
+    "year": 2022
+  },
+  "145": {
+    "alphas": [
+      "fill_prob_filter",
+      "r47_maker_pivot",
+      "r52_amhp_dynamic_spread"
+    ],
+    "arxiv_id": "2403.02572",
+    "ref": "145",
+    "source_url": "https://arxiv.org/abs/2403.02572",
+    "status": "reviewed",
+    "tags": [
+      "fill_probability",
+      "limit_order_book",
+      "microstructure"
+    ],
+    "title": "Fill Probabilities in a Limit Order Book with State-Dependent Stochastic Order Flows",
+    "authors": "Felix Lokin, Fenghui Yu",
+    "year": 2024
+  },
+  "146": {
+    "alphas": [
+      "c1_revalidation_txfd6_chavez_casillas_adaptive",
+      "c60_tmfd6_r47_minimal_inst_rt"
+    ],
+    "arxiv_id": "2405.11444",
+    "ref": "146",
+    "source_url": "https://arxiv.org/abs/2405.11444",
+    "status": "reviewed",
+    "tags": [
+      "market_making",
+      "inventory_liquidation",
+      "microstructure"
+    ],
+    "title": "Adaptive Optimal Market Making Strategies with Inventory Liquidation Cos",
+    "authors": "Jonathan Ch\u00e1vez-Casillas, Jos\u00e9 E. Figueroa-L\u00f3pez, Chuyi Yu, Yi Zhang",
+    "year": 2024
+  },
+  "147": {
+    "alphas": [
+      "fill_prob_filter"
+    ],
+    "arxiv_id": "2502.18625",
+    "ref": "147",
+    "source_url": "https://arxiv.org/abs/2502.18625",
+    "status": "reviewed",
+    "tags": [
+      "fill_probability",
+      "adverse_selection",
+      "market_making"
+    ],
+    "title": "The Market Maker's Dilemma: Navigating the Fill Probability vs. Post-Fill Returns Trade-Off",
+    "authors": "Jakob Albers, Mihai Cucuringu, Sam Howison, Alexander Y. Shestopaloff",
+    "year": 2025
+  },
+  "148": {
+    "alphas": [
+      "r47_maker_pivot"
+    ],
+    "arxiv_id": "2508.16588",
+    "ref": "148",
+    "source_url": "https://arxiv.org/abs/2508.16588",
+    "status": "reviewed",
+    "tags": [
+      "market_making",
+      "selective_quoting",
+      "reinforcement_learning"
+    ],
+    "title": "Robust Market Making: To Quote, or not To Quote",
+    "authors": "Ziyi Wang, Carmine Ventre, Maria Polukarov",
+    "year": 2025
+  },
+  "149": {
+    "alphas": [
+      "c60_tmfd6_r47_minimal_inst_rt",
+      "c72_tmfd6_queue_position_aware"
+    ],
+    "arxiv_id": "2510.27334",
+    "ref": "149",
+    "source_url": "https://arxiv.org/abs/2510.27334",
+    "status": "reviewed",
+    "tags": [
+      "adverse_selection",
+      "market_making",
+      "reinforcement_learning"
+    ],
+    "title": "When AI Trading Agents Compete: Adverse Selection of Meta-Orders by Reinforcement Learning-Based Market Making",
+    "authors": "Ali Raza Jafree, Konark Jain, Nick Firoozye",
+    "year": 2025
+  },
+  "150": {
+    "alphas": [
+      "c17_tmf_frontmonth_native_maker",
+      "c30_txf_maker_tmf_hedge_pair",
+      "c33_txfd6_solo_passive_maker",
+      "c63_txfd6_r47_tight_spread",
+      "c68_txf_rollover_back_front_maker",
+      "c74_txf_tmf_basis_mean_reversion"
+    ],
+    "aliases": [
+      "2008 Avellaneda-Stoikov",
+      "2008 Avellaneda-Stoikov HFT in LOB"
+    ],
+    "authors": "Marco Avellaneda, Sasha Stoikov",
+    "journal": "Quantitative Finance 8(3), 217-224",
+    "ref": "150",
+    "source_url": "https://www.tandfonline.com/doi/abs/10.1080/14697680701381228",
+    "status": "reviewed",
+    "tags": [
+      "market_making",
+      "inventory_control",
+      "limit_order_book"
+    ],
+    "title": "High-frequency trading in a limit order book",
+    "year": 2008
+  },
+  "151": {
+    "alphas": [
+      "c30_txf_maker_tmf_hedge_pair",
+      "c33_txfd6_solo_passive_maker",
+      "c63_txfd6_r47_tight_spread",
+      "c68_txf_rollover_back_front_maker",
+      "c74_txf_tmf_basis_mean_reversion"
+    ],
+    "aliases": [
+      "2015 Cartea-Jaimungal Optimal execution with limit and market orders",
+      "2015 Cartea-Jaimungal-Penalva",
+      "2015 Cartea-Jaimungal-Penalva MM economics"
+    ],
+    "authors": "Alvaro Cartea, Sebastian Jaimungal, Jose Penalva",
+    "isbn": "978-1-107-09114-6",
+    "publisher": "Cambridge University Press",
+    "ref": "151",
+    "source_url": "https://assets.cambridge.org/97811070/91146/frontmatter/9781107091146_frontmatter.pdf",
+    "status": "reviewed",
+    "tags": [
+      "market_making",
+      "optimal_execution",
+      "pairs_trading"
+    ],
+    "title": "Algorithmic and High-Frequency Trading",
+    "year": 2015
+  },
+  "152": {
+    "alphas": [
+      "c33_txfd6_solo_passive_maker",
+      "c63_txfd6_r47_tight_spread",
+      "c68_txf_rollover_back_front_maker"
+    ],
+    "aliases": [
+      "2010 Cont-Stoikov-Talreja queue fill probability"
+    ],
+    "authors": "Rama Cont, Sasha Stoikov, Rishi Talreja",
+    "journal": "Operations Research 58(3), 549-563",
+    "ref": "152",
+    "source_url": "https://pubsonline.informs.org/doi/10.1287/opre.1090.0780",
+    "status": "reviewed",
+    "tags": [
+      "queue_dynamics",
+      "fill_probability",
+      "limit_order_book"
+    ],
+    "title": "A Stochastic Model for Order Book Dynamics",
+    "year": 2010
+  },
+  "153": {
+    "alphas": [
+      "c1_revalidation_txfd6_chavez_casillas_adaptive"
+    ],
+    "aliases": [
+      "2014_Stoikov_microprice",
+      "2018 Stoikov micro-price"
+    ],
+    "authors": "Sasha Stoikov",
+    "doi": "10.1080/14697688.2018.1489139",
+    "journal": "Quantitative Finance 18(12), 1959-1966",
+    "ref": "153",
+    "source_url": "https://www.tandfonline.com/doi/abs/10.1080/14697688.2018.1489139",
+    "status": "reviewed",
+    "tags": [
+      "microprice",
+      "short_term_price_prediction",
+      "limit_order_book"
+    ],
+    "title": "The micro-price: a high-frequency estimator of future prices",
+    "year": 2018
   },
   "depth_slope_ref": {
     "alphas": [

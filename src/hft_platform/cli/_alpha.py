@@ -803,6 +803,11 @@ def cmd_alpha_promote_batch(args: argparse.Namespace) -> None:
         print(f"Failed to import batch promote module: {exc}")
         sys.exit(1)
 
+    # Stage 2 (2026-05-28): batch promotion must enter Gate D with the same
+    # strict-profile contract as single-alpha promotion. Without this, batch
+    # promote silently bypassed the YAML profile (D9).
+    profile = _load_strict_validation_profile(getattr(args, "profile", None))
+
     promoter = BatchPromoter(
         experiments_dir=str(getattr(args, "experiments_dir", "research/experiments")),
         project_root=".",
@@ -810,6 +815,7 @@ def cmd_alpha_promote_batch(args: argparse.Namespace) -> None:
         min_sharpe_oos=float(getattr(args, "min_sharpe_oos", 1.0)),
         max_abs_drawdown=float(getattr(args, "max_abs_drawdown", 0.2)),
         max_correlation=float(getattr(args, "max_correlation", 0.7)),
+        validation_profile=profile,
     )
 
     alpha_ids = list(getattr(args, "alpha_ids", None) or []) or None
@@ -1129,3 +1135,34 @@ def cmd_alpha_cluster(args: argparse.Namespace) -> None:
     print("-" * len(header))
     for a in assignments:
         print(f"{a.alpha_id:<40} {a.cluster_id:<28} {a.cluster_size:<5} {a.max_intra_cluster_corr:<10.4f}")
+
+
+# ── Stage 5: canonical pipeline orchestrator wrappers (D2) ──────────────────
+# Thin delegates onto research.pipeline._run_pipeline so that
+# `hft alpha pipeline {run,triage}` and `make research[-triage]` share a single
+# orchestration codepath. Do NOT duplicate orchestration logic here.
+
+
+def cmd_alpha_pipeline_run(args: argparse.Namespace) -> None:
+    from research.pipeline import _run_pipeline
+
+    code = int(_run_pipeline(args, mode="strict"))
+    if code != 0:
+        sys.exit(code)
+
+
+def cmd_alpha_pipeline_triage(args: argparse.Namespace) -> None:
+    import os
+
+    from research.pipeline import _run_pipeline
+
+    if os.environ.get("HFT_RESEARCH_ALLOW_TRIAGE", "0") != "1":
+        print(
+            "[hft alpha pipeline triage] disabled by default. "
+            "Set HFT_RESEARCH_ALLOW_TRIAGE=1 to acknowledge non-promotable bypass mode.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    code = int(_run_pipeline(args, mode="triage"))
+    if code != 0:
+        sys.exit(code)

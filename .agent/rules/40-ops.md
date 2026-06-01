@@ -1,46 +1,11 @@
-# Ops Rules
+# Ops
 
-## Docker Compose
+Docker basics: `docker compose up -d --build`, `docker compose ps`, `docker compose logs -f hft-engine`. `make docker-clean` deletes volumes and ClickHouse data.
 
-- Deploy: `docker compose up -d --build`
-- Health: `docker compose ps` — all services should be `Up (healthy)`.
-- Logs: `docker compose logs -f hft-engine` for trading runtime.
-- Reset: `make docker-clean` removes volumes — **THIS DELETES ALL CLICKHOUSE DATA**.
+Ports: engine metrics 9090, ClickHouse 8123/9000, Redis 6379, Prometheus 9091, Grafana 3000, Alertmanager 9093.
 
-## Services and Ports
+Live-impacting config changes follow `docs/ops_change_control.md`: document what/why/risk/rollback, test in `HFT_MODE=sim`, watch metrics, keep rollback ready.
 
-| Service      | Port                       | Health              |
-| ------------ | -------------------------- | ------------------- |
-| `hft-engine` | 9090 (Prometheus)          | `/metrics`          |
-| `clickhouse` | 8123 HTTP / 9000 native    | `SELECT 1`          |
-| `redis`      | 6379                       | `redis-cli ping`    |
-| `prometheus` | 9091                       | `/-/healthy`        |
-| `grafana`    | 3000                       | `/api/health`       |
-| `alertmanager` | 9093                     | `/-/healthy`        |
+Important env: `HFT_MODE`, `HFT_ORDER_MODE`, `HFT_CLICKHOUSE_ENABLED`, `HFT_RECORDER_MODE`, `HFT_GATEWAY_ENABLED`, `HFT_OBS_POLICY`. Full reference via `hft-env-vars`.
 
-## Config Changes Affecting Live Trading
-
-Follow `docs/ops_change_control.md`:
-1. Document what/why/risk/rollback.
-2. Apply in sim mode first (`HFT_MODE=sim`).
-3. Verify metrics for 5 minutes.
-4. Rollback: revert config and restart container.
-
-## Common Operations
-
-```bash
-docker compose build hft-engine && docker compose up -d hft-engine   # rebuild
-docker compose run --rm wal-loader                                    # WAL replay
-docker exec clickhouse clickhouse-client --query \
-  "SELECT count(), max(toDateTime64(exch_ts/1e9,3)) FROM hft.market_data"
-```
-
-## Resource Limits
-
-- `hft-engine`: 2 CPUs, 2GB RAM (docker-compose.yml).
-- `clickhouse`: 4GB RAM recommended.
-- WAL dir (`.wal/`): monitor disk; set `HFT_WAL_RETENTION_DAYS` for auto-cleanup.
-
-## Ops-Critical Env Vars
-
-`HFT_MODE` (`sim`|`live`), `HFT_CLICKHOUSE_ENABLED`, `HFT_RECORDER_MODE` (`direct`|`wal_first`), `HFT_GATEWAY_ENABLED`, `HFT_OBS_POLICY` (`balanced`|`minimal`). Full list: see `hft-env-vars` skill.
+Monitor WAL disk and ClickHouse health. Do not run production-impacting ops unless explicitly requested.

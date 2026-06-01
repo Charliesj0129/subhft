@@ -1,26 +1,9 @@
-# Security Rules
+# Security
 
-## Credentials
-
-- NEVER hardcode API keys, passwords, or tokens.
-- Store secrets in `.env` (local) or env vars (Docker/prod). Verify `git check-ignore .env` returns `.env`.
-- Env var prefixes: `HFT_*` (platform), `SHIOAJI_*` (Shioaji), `HFT_FUBON_*` (Fubon). Never share across brokers.
-
-## Logging
-
-- NEVER log credential values; `structlog` processors MUST scrub sensitive fields.
-- Prefixes OK (`api_key_prefix=ABC***`); full values forbidden.
-- Never pass secrets as CLI args (visible in `ps aux`).
-
-## Network
-
-- Broker API (`ShioajiClient`, Fubon) uses TLS. Never disable cert verification.
-- ClickHouse default has no auth; in prod set `HFT_CLICKHOUSE_USER` + `HFT_CLICKHOUSE_PASSWORD`.
-- Prometheus/Grafana ports (9090, 9091, 3000) MUST be firewalled in prod.
-
-## Config & Docker
-
-- `config/settings.py` is `.gitignore`-d (may contain per-machine overrides).
-- Never commit `symbols.yaml` with proprietary annotations.
-- Production images use non-root user (`--user hft` in Dockerfile).
-- Pin image versions (e.g., `clickhouse-server:25.12.3`, not `:latest`).
+- Never hardcode, print, commit, or chat secrets, API keys, broker credentials, account IDs, production tokens.
+- Secrets live in `.env`, ignored config, or env vars. Broker prefixes stay isolated: `SHIOAJI_*`, `HFT_FUBON_*`, platform `HFT_*`.
+- Never pass secrets as CLI args; scrub `structlog` fields.
+- Broker APIs keep TLS verification enabled.
+- Production ClickHouse must use auth; Prometheus/Grafana/Alertmanager ports must be firewalled.
+- Do not commit `config/settings.py`, proprietary `symbols.yaml` annotations, data/WAL exports, or local reports with sensitive content.
+- Production images run non-root and pin image versions.

@@ -17,14 +17,30 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
+_OPTIONAL_PARITY_FIELDS: tuple[str, ...] = (
+    # Round 15: goal §7 parity checks for session filter / risk filter /
+    # force-flat consistency.  Emitted ONLY when present on the source
+    # intent so historical fixtures (which never had these attrs) hash
+    # identically — adding them unconditionally would invalidate every
+    # previously-stored canonical digest.
+    "session_phase",
+    "risk_filter_active",
+    "force_flat_triggered",
+)
+
 
 def _intent_to_canonical(intent: Any) -> dict[str, Any]:
     """Project an intent (real ``OrderIntent`` or ``_DictIntent`` shim) onto
     the canonical schema. Volatile/runtime-uniqued fields (``trace_id``,
     ``idempotency_key``, ``ttl_ns``, ``reason``, ``ingest_ts``,
     ``source_ts_ns``) are intentionally excluded.
+
+    The three optional parity fields (``session_phase``,
+    ``risk_filter_active``, ``force_flat_triggered``) are included only
+    when the source intent carries a non-``None`` value, keeping
+    historical hashes stable for intents that predate Round 15.
     """
-    return {
+    record: dict[str, Any] = {
         "intent_id": int(getattr(intent, "intent_id", 0)),
         "strategy_id": str(getattr(intent, "strategy_id", "")),
         "symbol": str(getattr(intent, "symbol", "")),
@@ -38,6 +54,15 @@ def _intent_to_canonical(intent: Any) -> dict[str, Any]:
         "decision_price": int(getattr(intent, "decision_price", 0)),
         "price_type": str(getattr(intent, "price_type", "LMT")),
     }
+    for name in _OPTIONAL_PARITY_FIELDS:
+        value = getattr(intent, name, None)
+        if value is None:
+            continue
+        if name == "session_phase":
+            record[name] = str(value)
+        else:
+            record[name] = bool(value)
+    return record
 
 
 @dataclass
@@ -62,6 +87,12 @@ class _DictIntent:
     timestamp_ns: int = 0
     decision_price: int = 0
     price_type: str = "LMT"
+    # Round 15 optional parity fields (goal §7).  ``None`` is the
+    # "field absent" sentinel — it tells ``_intent_to_canonical`` to
+    # skip emitting the key so historical hashes stay stable.
+    session_phase: str | None = None
+    risk_filter_active: bool | None = None
+    force_flat_triggered: bool | None = None
 
 
 @dataclass

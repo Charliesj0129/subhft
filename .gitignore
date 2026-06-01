@@ -107,6 +107,8 @@ research/*
 !research/combinatorial/**/*.py
 !research/strategy_archive/
 !research/strategy_archive/*.yaml
+!research/templates/
+!research/templates/*.yaml
 !research/experiments/
 research/experiments/*
 !research/experiments/__init__.py
@@ -160,6 +162,7 @@ research/tools/*
 !research/tools/alpha_scaffold.py
 !research/tools/data_governance.py
 !research/tools/factor_registry.py
+!research/tools/lifecycle_audit.py
 !research/tools/feature_benchmark_matrix.py
 !research/tools/feature_promotion_check.py
 !research/tools/fetch_paper.py
@@ -253,6 +256,10 @@ research/__pycache__/
 # cluster assignments json is the per-run cluster sidecar.
 research/alphas/_kill_ledger.jsonl
 research/alphas/_cluster_assignments.json
+
+# Round 8 sub-gate audit jsonl: per-run traceability mirror of Gate-C
+# blocking decisions. Off-repo for the same reason as the kill ledger.
+research/audit/sub_gate_runs.jsonl
 
 # Slice-D Task 16: archive sweep summary sidecar is the canonical record of
 # alphas archived 2026-04-17 that lacked a manifest.yaml. Tracked because

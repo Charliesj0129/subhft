@@ -1,38 +1,15 @@
-# Data Flow Rules
+# Data Flow
 
-## Hot Path (Latency-Critical)
+Runtime path: broker callback -> `call_soon_threadsafe` -> bounded raw queue -> normalizer -> LOB -> FeatureEngine -> RingBufferBus -> StrategyRunner -> `OrderIntent` -> Gateway/Risk -> `OrderCommand` -> OrderAdapter -> broker -> execution -> positions/reconciliation.
 
-```
-ShioajiClient.callback (broker thread) → loop.call_soon_threadsafe(_enqueue_raw)
-→ raw_queue (bounded asyncio.Queue) → MarketDataService.run()
-→ normalizer.normalize_{tick,bidask} [Rust] → LOBEngine.process_event() [Rust]
-→ FeatureEngine.process_lob_stats() → FeatureUpdateEvent [27 features v3]
-→ RingBufferBus.publish_nowait() → StrategyRunner.process_event()
-→ strategy.handle_event() → OrderIntent[] → risk_queue / LocalIntentChannel
-→ GatewayService (if enabled) or RiskEngine.evaluate()
-→ OrderAdapter._api_queue.put_nowait(OrderCommand) → ShioajiClient.place_order()
-```
+Recording path: market event -> recorder queue `put_nowait()` -> RecorderService -> Batcher -> ClickHouse, with WAL fallback/wal-first as configured.
 
-Full hop-by-hop trace: `docs/architecture/pipeline-chains.md`.
+Invariants:
 
-## Recording Path (Parallel, Non-Blocking)
+- Recording never blocks hot path; bounded queue overflow has explicit drop/degrade policy.
+- Normalizer emits scaled int prices x10000; raw floats do not pass downstream.
+- Use `timebase.now_ns()` for local timestamps; preserve exchange/source timestamp.
+- Broker callbacks cross threads only via thread-safe event-loop handoff.
+- Verify changed flows with queue depth, latency histograms, metrics, and WAL/ClickHouse ingestion.
 
-```
-MarketDataService._record_direct_event() → recorder_queue.put_nowait() [drops on full]
-→ RecorderService.run() → Batcher → DataWriter → ClickHouse INSERT (or WAL if wal_first)
-```
-
-## Verification After Changes
-
-1. Metrics: `curl http://localhost:9090/metrics | grep hft_`
-2. CH: `SELECT count() FROM hft.market_data WHERE toDate(exch_ts/1e9) = today()`
-3. WAL: check `.wal/` for new files if CH disabled.
-4. Queue depths: `raw_queue_depth`, `gateway_intent_channel_depth`.
-5. Latency histograms: `normalize_latency_ns`, `lob_process_latency_ns`, `strategy_latency_ns`.
-
-## Invariants
-
-- Recording MUST NEVER block the hot path; use `put_nowait()` with drop policy.
-- Normalizer output is always scaled int (x10000); no raw float prices downstream.
-- Timestamps: `timebase.now_ns()`, never `datetime.now()`.
-- Broker callbacks run in a separate thread; MUST use `call_soon_threadsafe()` to cross into event loop.
+Full trace: `docs/architecture/pipeline-chains.md`.

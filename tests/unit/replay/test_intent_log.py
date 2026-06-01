@@ -121,3 +121,89 @@ def test_load_from_jsonl(tmp_path: Path) -> None:
     loaded_extra = ReplayedIntentLog.from_jsonl(extra_path)
     assert loaded_extra.n_intents() == 3
     assert loaded_extra.hash() == expected_hash
+
+
+# --- Round 15: optional parity fields (goal §7) ----------------------
+
+
+def test_optional_fields_omitted_by_default_keeps_legacy_hash() -> None:
+    """Legacy intent without session/risk/force-flat attrs must hash
+    identically before and after the Round 15 schema extension."""
+    intent = _make_intent()
+    rec = ReplayedIntentLog([intent]).canonical_records()[0]
+    # None of the new keys should leak into the canonical record.
+    for name in ("session_phase", "risk_filter_active", "force_flat_triggered"):
+        assert name not in rec, f"{name} leaked into legacy canonical record"
+    # And key count is exactly the original 12-field shape.
+    assert len(rec) == 12
+
+
+def test_session_phase_emitted_when_set() -> None:
+    intent = _make_intent(session_phase="cash_open")
+    rec = ReplayedIntentLog([intent]).canonical_records()[0]
+    assert rec["session_phase"] == "cash_open"
+
+
+def test_risk_filter_active_emitted_when_set() -> None:
+    intent = _make_intent(risk_filter_active=True)
+    rec = ReplayedIntentLog([intent]).canonical_records()[0]
+    assert rec["risk_filter_active"] is True
+
+
+def test_force_flat_triggered_emitted_when_set() -> None:
+    intent = _make_intent(force_flat_triggered=False)
+    rec = ReplayedIntentLog([intent]).canonical_records()[0]
+    # False is a meaningful value (the strategy explicitly recorded
+    # "force-flat did NOT fire"); must round-trip, not be skipped.
+    assert rec["force_flat_triggered"] is False
+
+
+def test_optional_field_drift_changes_hash() -> None:
+    """Two otherwise-identical intents differing only in session_phase
+    must hash differently — that's the whole point of adding the field."""
+    a = ReplayedIntentLog([_make_intent(session_phase="cash_open")])
+    b = ReplayedIntentLog([_make_intent(session_phase="cash_close")])
+    assert a.hash() != b.hash()
+
+
+def test_jsonl_round_trip_preserves_optional_fields(tmp_path: Path) -> None:
+    log = ReplayedIntentLog(
+        [
+            _make_intent(
+                session_phase="cash_open",
+                risk_filter_active=True,
+                force_flat_triggered=False,
+            )
+        ]
+    )
+    expected = log.hash()
+    canonical = log.canonical_records()
+
+    path = tmp_path / "intents.jsonl"
+    with path.open("w", encoding="utf-8") as f:
+        for rec in canonical:
+            f.write(json.dumps(rec) + "\n")
+
+    loaded = ReplayedIntentLog.from_jsonl(path)
+    assert loaded.n_intents() == 1
+    assert loaded.hash() == expected
+    rec = loaded.canonical_records()[0]
+    assert rec["session_phase"] == "cash_open"
+    assert rec["risk_filter_active"] is True
+    assert rec["force_flat_triggered"] is False
+
+
+def test_legacy_jsonl_fixture_still_loads_unchanged(tmp_path: Path) -> None:
+    """JSONL without the new keys (representative of historical fixtures)
+    must load and hash exactly as before — the optional-field rollout is
+    backward compatible by construction."""
+    legacy = ReplayedIntentLog([_make_intent()])
+    expected = legacy.hash()
+    canonical = legacy.canonical_records()
+    path = tmp_path / "legacy.jsonl"
+    with path.open("w", encoding="utf-8") as f:
+        for rec in canonical:
+            f.write(json.dumps(rec) + "\n")
+
+    loaded = ReplayedIntentLog.from_jsonl(path)
+    assert loaded.hash() == expected

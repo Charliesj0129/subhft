@@ -38,10 +38,10 @@ The factory runs these steps before entering the pipeline:
 | --- | --- | --- | --- | --- | --- |
 | 1 | 論文 Paper Intake | `research/knowledge/` | planner | iterative-retrieval | `make research-paper-prototype PAPER_REF=<ref>` |
 | 2 | 基礎原型 Prototype | `research/alphas/<id>/` | architect | hft-architect | `uv run python -m research scaffold <alpha_id>` |
-| 3 | 資料 Data | `research/data/` | planner | hft-backtester | `make research-gen-synth-lob`, `make research-validate-data-meta` |
-| 4 | 回測 Backtest | `research/backtest/` | architect | hft-backtester + validation-gate | `uv run python -m research.factory run-gate-c` |
+| 3 | 資料 Data | `research/data/` | planner | hft-backtest-engine | `make research-gen-synth-lob`, `make research-validate-data-meta` |
+| 4 | 回測 Backtest | `research/backtest/` | architect | hft-backtest-engine + validation-gate | `uv run python -m research.factory run-gate-c` |
 | 5 | 因子有效 Statistical | `research/experiments/validations/` | code-reviewer | validation-gate | `uv run hft alpha validate <alpha_id>` |
-| 6 | 參數優化 Param Opt | `research/experiments/runs/` | architect | hft-backtester | `uv run python -m research.factory optimize` |
+| 6 | 參數優化 Param Opt | `research/experiments/runs/` | architect | hft-backtest-engine | `uv run python -m research.factory optimize` |
 | 7 | Paper Trade | `research/experiments/promotions/` | code-reviewer | validation-gate | `make research-record-paper`, `make research-check-paper-governance` |
 | 8 | Live Rust | `rust_core/src/` | architect | rust_feature_engineering | `uv run hft alpha promote <alpha_id>` |
 
@@ -151,7 +151,7 @@ make research-triage ALPHA=<id> OWNER=<owner> DATA='<path.npy>' ARGS='--skip-gat
 | --- | --- |
 | iterative-retrieval | Paper search and knowledge extraction via MCP arxiv tools |
 | validation-gate | Gate A-E pass/fail interpretation and promotion blockers |
-| hft-backtester | Latency-realistic backtest configuration and adapter behavior (v3 feature parity) |
+| hft-backtest-engine | Latency-realistic backtest configuration and adapter behavior (v3 feature parity) |
 | hft-strategy-dev | Live strategy code, FeatureEngine v3 (27 features), StrategyContext API |
 | hft-execution | Execution optimizer, imbalance timer, regime classifier, TCA tracking |
 | hft-recorder | Persistence pipeline, WAL durability, ClickHouse schema (15 migrations) |

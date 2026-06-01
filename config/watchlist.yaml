@@ -9,7 +9,10 @@ monitor:
   data_source: auto
   # Keep the shipped default on an alpha that exists in research/alphas
   # and can run directly on the monitor's L1 payload shape.
-  default_alpha_ids: [c14_txf_frontmonth_native_maker]
+  # c14_txf_frontmonth_native_maker was archived 2026-05-28 (Stage 1 of the
+  # research-workflow consolidation); the structurally-identical TMF clone
+  # c17_tmf_frontmonth_native_maker remains the live default.
+  default_alpha_ids: [c17_tmf_frontmonth_native_maker]
 
 symbols:
   # === Futures (night + day) — R1 = Shioaji continuous front month (no monthly update) ===

@@ -1,0 +1,60 @@
+# Canonical strategy specification template (goal 完成狀態 §3).
+#
+# Every new alpha candidate MUST start from a copy of this file and
+# fill every required field before any backtest is run.  The file
+# travels with the candidate (research/alphas/<id>/spec.yaml) and is
+# the source of truth for hypothesis / cost / validation assumptions.
+#
+# Multi-leg note (goal 完成狀態 §2):
+#   ``instrument`` accepts a single string (single-leg) OR a list of
+#   strings (multi-leg: spreads / straddles / strangles / calendars).
+#   When multi-leg, each leg name should follow repo conventions
+#   (e.g. TXOD6_C18000 for option strikes).
+
+# --- Identity -------------------------------------------------------
+strategy_name:   # e.g. c99_txfd6_momentum_breakout
+market: TAIFEX   # currently the only supported market
+
+# Single-leg: a string.  Multi-leg: a list of strings.
+instrument:      # e.g. TMFD6  OR  [TXOD6_C18000, TXOD6_P18000]
+
+# --- Hypothesis & timing -------------------------------------------
+hypothesis:      # one-sentence economic claim — what edge, why it exists
+timeframe:       # one of: tick | 1s | 5s | 1m | 5m | 15m | 60m | 1d
+holding_period:  # human description: "intraday <3h", "1-3 days", etc.
+frequency_class: # one of: minute | intraday_hft | overnight
+
+# --- Trading rules --------------------------------------------------
+entry_rule:      # plain-text trigger spec (formulas + thresholds)
+exit_rule:       # plain-text exit spec (stop / target / time)
+position_sizing: # how qty is chosen; reference position_sizing rule
+                 # (governed centrally — CLAUDE.md 限制 §2 forbids changes)
+
+# --- Risk ----------------------------------------------------------
+risk_control:
+  max_position:                # int, e.g. 1
+  max_drawdown_pts:            # int/float, points (scaled int when monetary)
+  force_flat_rule:             # e.g. "TPE 13:30 close + overnight HALT"
+  per_trade_stop_pts:          # optional but recommended
+
+# --- Cost model (NO defaults — explicit per candidate) -------------
+cost_model:
+  fee_bps:                     # round-trip fee in bps
+  tax_bps:                     # sell-side TAIFEX tax (~2.0 bps futures)
+  slippage_pts:                # assumed slippage per fill, in points
+  latency_profile:             # ref to config/research/latency_profiles.yaml entry
+
+# --- Validation plan -----------------------------------------------
+validation_plan:
+  data_range:                  # ISO date range, e.g. "2026-01-02..2026-05-13"
+  oos_split:                   # rule, e.g. "70/30 by trading day"
+  sample_targets:
+    min_round_trips:           # required FIFO matched trades
+    min_oos_trading_days:      # required OOS day count
+  required_gates:              # list — names from blocking_sub_gates
+    - min_sample_size
+    - single_day_dominance
+    - monthly_distribution
+    - edge_per_round_trip
+    - replay_parity
+  net_edge_floor_pts: 10.0     # goal §5 hard bar; 限制 §3 forbids relaxing

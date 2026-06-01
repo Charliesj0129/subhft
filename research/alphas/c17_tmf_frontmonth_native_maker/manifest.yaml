@@ -57,7 +57,16 @@ rollover:
 
 latency_profile: "sim_p95_v2026-02-26"
 
-cost_model:
+# Stage 3 (2026-05-28) refactor: canonical cost profile lookup.
+# Numeric commission/tax/scale values live in config/research/cost_profiles.yaml
+# under these keys; the cost_profile_notes block below preserves alpha-author
+# provenance (memos, confirmation dates, drag analysis) only.
+cost_profile_refs:
+  - "TMFB6"
+  - "TMFC6"
+  - "TMFD6"
+
+cost_profile_notes:
   TMFB6:
     commission_pts_per_side: 1.3
     tax_pts_per_side: 0.7
@@ -88,3 +97,9 @@ notes:
   - "Research-module float exception applies (rule 11 of 25-architecture-governance). Strategy operates on integer prices from CK source at scale=1_000_000."
   - "TMF scale is x10000 in live pipeline (same as TXF). CK storage is x1_000_000. See feedback memory golden_data_scale."
   - "SWITCH from deployed TMFD6 R47 max_pos=1 — see switch_semantics above."
+
+# roles_used / skills_used backfilled 2026-05-28 — conservative baseline per
+# /home/charlie/.claude/plans/swift-meandering-avalanche.md Stage 1.3.
+roles_used:
+  - architect
+  - code-reviewer

@@ -156,7 +156,7 @@ def run_gate_a(
     if not skills_used:
         skills_warnings.append(
             "manifest.skills_used is empty — add skill attribution per SOP Stage 2"
-            " (e.g. iterative-retrieval, hft-backtester)"
+            " (e.g. iterative-retrieval, hft-backtest-engine)"
         )
     if not roles_used:
         skills_warnings.append(

@@ -599,7 +599,7 @@ class C74Alpha:
             tier=AlphaTier.TIER_1,
             rust_module=None,
             latency_profile="shioaji_sim_p95_v2026-03-04",
-            roles_used=(),
+            roles_used=("architect", "code-reviewer"),
             skills_used=("hft-backtester",),
             feature_set_version=None,
             strategy_type="maker",     # cross_instrument_mm not in enum; maker closest

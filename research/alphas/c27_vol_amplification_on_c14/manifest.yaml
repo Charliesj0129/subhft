@@ -63,3 +63,9 @@ notes:
   - "No modifications to C14, R47, or R6 backtest code. C27 composes C14's TxfFrontMonthMaker via import."
   - "Scaled int convention: live x10000, CK x1_000_000 (inherited from C14)."
   - "Research-module float exception applies — VolPercentileGate uses float for running vol std."
+
+# roles_used / skills_used backfilled 2026-05-28 — conservative baseline per
+# /home/charlie/.claude/plans/swift-meandering-avalanche.md Stage 1.3.
+roles_used:
+  - architect
+  - code-reviewer

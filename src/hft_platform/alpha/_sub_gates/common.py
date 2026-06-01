@@ -10,6 +10,26 @@ import numpy as np
 from hft_platform.alpha._sub_gates.registry import SubGateResult
 
 
+def _entry_to_float(entry: Any) -> float:
+    """Coerce a ``daily_pnl`` row to its scalar net PnL value.
+
+    ``BacktestResult.daily_pnl`` was historically a ``list[float]``; the
+    canonical shape (per ``research/backtest/types.py``) is now
+    ``list[dict]`` with ``pnl_pts`` and the per-day audit fields.  Strict
+    sub-gates (``inventory_mtm``, ``monthly_distribution``) require dict
+    shape; legacy ones (``sharpe_threshold``, ``max_drawdown``,
+    ``winning_day_pct``) used to require float shape.  This helper
+    bridges both so the same fixture/payload feeds every gate.
+    """
+    if isinstance(entry, dict):
+        return float(entry.get("pnl_pts", 0.0))
+    return float(entry)
+
+
+def _to_float_list(daily: Any) -> list[float]:
+    return [_entry_to_float(e) for e in (daily or [])]
+
+
 class SharpeThresholdGate:
     """Daily Sharpe ratio threshold check (annualized by sqrt(252))."""
 
@@ -17,7 +37,7 @@ class SharpeThresholdGate:
     applies_to = {"maker", "taker"}
 
     def evaluate(self, result: Any, config: Any, thresholds: dict) -> SubGateResult:
-        pnl = result.daily_pnl
+        pnl = _to_float_list(result.daily_pnl)
         if len(pnl) < 2:
             return SubGateResult(
                 name=self.name,
@@ -45,7 +65,7 @@ class MaxDrawdownGate:
     applies_to = {"maker", "taker"}
 
     def evaluate(self, result: Any, config: Any, thresholds: dict) -> SubGateResult:
-        pnl = result.daily_pnl
+        pnl = _to_float_list(result.daily_pnl)
         if not pnl:
             return SubGateResult(
                 name=self.name,
@@ -77,7 +97,7 @@ class WinningDayPctGate:
     applies_to = {"maker", "taker"}
 
     def evaluate(self, result: Any, config: Any, thresholds: dict) -> SubGateResult:
-        pnl = result.daily_pnl
+        pnl = _to_float_list(result.daily_pnl)
         if not pnl:
             return SubGateResult(
                 name=self.name,

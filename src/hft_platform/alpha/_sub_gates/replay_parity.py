@@ -14,6 +14,7 @@ from __future__ import annotations
 from typing import Any
 
 from hft_platform.alpha._sub_gates.registry import SubGateResult
+from hft_platform.alpha.divergence_category import categorize_histogram
 
 
 class ReplayParityGate:
@@ -52,15 +53,24 @@ class ReplayParityGate:
         # `or -1` guards against first_divergence_idx=None; explicit cast
         # keeps the metrics dict json-serializable.
         first_div = float(getattr(report, "first_divergence_idx", -1) or -1)
+        histogram = getattr(report, "divergence_histogram", None) or {}
+        category_counts = categorize_histogram(histogram)
+        dominant_category = max(category_counts, key=lambda k: category_counts[k]) if category_counts else ""
 
         passed = match_pct >= threshold
+        metrics: dict[str, Any] = {
+            "match_pct": match_pct,
+            "threshold": threshold,
+            "first_divergence_idx": first_div,
+            "divergence_categories": category_counts,
+            "dominant_divergence_category": dominant_category,
+        }
+        suffix = f", dominant_category={dominant_category}" if dominant_category else ""
         return SubGateResult(
             name=self.name,
             passed=passed,
-            metrics={
-                "match_pct": match_pct,
-                "threshold": threshold,
-                "first_divergence_idx": first_div,
-            },
-            details=(f"match_pct={match_pct:.2f}% vs min {threshold:.2f}% (first_divergence_idx={first_div:.0f})"),
+            metrics=metrics,
+            details=(
+                f"match_pct={match_pct:.2f}% vs min {threshold:.2f}% (first_divergence_idx={first_div:.0f}{suffix})"
+            ),
         )

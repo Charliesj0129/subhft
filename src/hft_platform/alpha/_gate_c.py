@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
@@ -45,7 +46,7 @@ def _daily_pnl_sequence(daily_pnl: list[Any] | None) -> list[Any]:
     return list(daily_pnl or [])
 
 
-def _invoke_sub_gates(
+def _invoke_sub_gates(  # noqa: C901 - branchy dispatch; refactor tracked as follow-up
     *,
     strategy_type: str,
     result_payload: dict,
@@ -112,6 +113,13 @@ def _invoke_sub_gates(
 
     blocking_names: set[str] = set(getattr(profile, "blocking_sub_gates", ()) or ())
 
+    # Punch-list (2026-05-29): expose strict-profile state to sub-gates via the
+    # thresholds dict so they can fail-closed on missing evidence / legacy
+    # scorecard shape / insufficient sample.  Loose-profile semantics
+    # (advisory PASS) are preserved when the flag is False.
+    is_strict = bool(getattr(profile, "is_strict", False))
+    eval_thresholds: dict = {**thresholds, "_is_strict_profile": is_strict}
+
     advisory: list[dict] = []
     blocking_failing: list[dict] = []
     blocking_seen: list[str] = []
@@ -124,11 +132,11 @@ def _invoke_sub_gates(
                 sub = gate.evaluate(
                     result,
                     config=None,
-                    thresholds=thresholds,
+                    thresholds=eval_thresholds,
                     profile=calibration_profile,
                 )
             else:
-                sub = gate.evaluate(result, config=None, thresholds=thresholds)
+                sub = gate.evaluate(result, config=None, thresholds=eval_thresholds)
             entry = {
                 "name": sub.name,
                 "passed": sub.passed,
@@ -154,14 +162,75 @@ def _invoke_sub_gates(
                 blocking_seen.append(gate_name)
                 blocking_failing.append(entry)
 
+    blocking: dict | None
     if profile is None:
-        return advisory, None
-    return advisory, {
-        "passed": len(blocking_failing) == 0,
-        "failing": blocking_failing,
-        "names": blocking_seen,
-        "profile": profile.name,
-    }
+        blocking = None
+    else:
+        triage_status, triage_reasons = _derive_triage_status(blocking_failing)
+        blocking = {
+            "passed": len(blocking_failing) == 0,
+            "failing": blocking_failing,
+            "names": blocking_seen,
+            "profile": profile.name,
+            # Goal §4: sub-threshold runs must NOT be collapsed into a
+            # generic KILL.  When the only blocking failure is
+            # min_sample_size and its sample_adequacy_label is informational
+            # (promising / needs_more_sample / inconclusive), surface that
+            # label so the outer pipeline routes the run to "needs more
+            # data" rather than "dead candidate".
+            "triage_status": triage_status,
+            "triage_reasons": triage_reasons,
+        }
+
+    # Goal §4 / §9 traceability: when the audit flag is on, emit one JSONL
+    # row per invocation so every Gate-C decision is replayable later.
+    # Failure of the writer must never break the validation path —
+    # swallow all exceptions and log.
+    if os.getenv("HFT_SUB_GATE_AUDIT_ENABLED", "0") == "1":
+        try:
+            from hft_platform.alpha import sub_gate_audit
+
+            run_id = str(result_payload.get("run_id") or "")
+            if run_id:
+                prov = result_payload.get("spec_provenance")
+                if not isinstance(prov, dict):
+                    prov = None
+                sub_gate_audit.record_sub_gate_run(
+                    run_id=run_id,
+                    strategy_name=str(result_payload.get("strategy_name") or ""),
+                    instrument=str(result_payload.get("instrument") or ""),
+                    strategy_type=strategy_type,
+                    profile_name=(profile.name if profile is not None else ""),
+                    advisory=advisory,
+                    blocking=blocking,
+                    spec_provenance=prov,
+                )
+        except Exception:  # noqa: BLE001
+            logger.warning("sub_gate_audit emit failed", exc_info=True)
+
+    return advisory, blocking
+
+
+_SAMPLE_LABELS = {"promising", "needs_more_sample", "inconclusive"}
+
+
+def _derive_triage_status(failing: list[dict]) -> tuple[str, list[str]]:
+    """Classify the blocking-failure set into a triage status.
+
+    Returns ("passed", []) when nothing failed; ("sample_<label>", names)
+    when the only failures carry a sample_adequacy_label from
+    ``_SAMPLE_LABELS``; otherwise ("killed", names).
+    """
+    if not failing:
+        return "passed", []
+
+    names = [f["name"] for f in failing]
+    sample_only = all(f["name"] == "min_sample_size" for f in failing)
+    if sample_only:
+        label = (failing[0].get("metrics") or {}).get("sample_adequacy_label")
+        if label in _SAMPLE_LABELS:
+            return f"sample_{label}", names
+    return "killed", names
 
 
 def _invoke_sub_gates_advisory(
@@ -433,11 +502,24 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
                 from pathlib import Path as _Path
 
                 data_period = ",".join(str(_Path(p).stem) for p in resolved_data_paths)
+            # Round 40: thread the per-instrument cost profile so
+            # ``BacktestResult.trade_pnl`` reflects NET per-trip PnL.
+            # Missing profile (unknown instrument) falls back to gross
+            # mid-to-mid trips rather than fabricating a cost — goal
+            # 限制 §4.  We never default to a stand-in cost model.
+            _cost_model = None
+            try:
+                from research.backtest.cost_models import load_cost_profile
+
+                _cost_model = load_cost_profile(instrument)
+            except (KeyError, FileNotFoundError):
+                _cost_model = None
             base_result = TakerEngine().enrich_result(
                 base_result,
                 instrument=instrument,
                 data_period=data_period,
                 pipeline_mode="strict",
+                cost_model=_cost_model,
             )
             ResultStore().save(base_result, alpha_id)
     _runner_cls = type(runner)

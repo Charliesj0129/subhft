@@ -14,8 +14,8 @@ Use this skill as a router, not as a source of deep implementation detail.
 | --- | --- |
 | alpha scaffolding, governed datasets, research factory flow | `hft-alpha-research` |
 | pass/fail interpretation for Gate A-E | `validation-gate` |
-| adapter-based backtest realism or parity | `hft-backtester` |
-| raw `hftbacktest` engine semantics | `hft-backtest` |
+| backtest engine config (adapter, MakerEngine, queue/latency/exchange models, raw hftbacktest V2 semantics) | `hft-backtest-engine` |
+| backtest result interpretation, calibration vs CK ground truth, bias diagnosis | `hft-backtest-validation` |
 | live strategy code and feature-plane access | `hft-strategy-dev` |
 | market data: normalizer, LOB, feed adapter, Rust accel, feature engine | `hft-market-data` |
 | architecture boundaries, runtime planes, Python-Rust design | `hft-architect` |
@@ -35,7 +35,7 @@ Use this skill as a router, not as a source of deep implementation detail.
 
 ### Alpha Development (Paper to Live)
 ```text
-paper -> hft-alpha-research -> validation-gate -> hft-backtester -> hft-strategy-dev -> hft-architect
+paper -> hft-alpha-research -> validation-gate -> hft-backtest-engine -> hft-strategy-dev -> hft-architect
 ```
 
 ### Runtime Debugging

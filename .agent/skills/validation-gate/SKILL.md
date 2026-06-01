@@ -86,7 +86,7 @@ Check Gate E for:
 | --- | --- | --- |
 | Gate A rejects `data_ul` or metadata | missing or stale sidecar metadata | restamp and validate the dataset |
 | Gate B fails from the wrong root | validation launched from `research/` instead of repo root | rerun from the repository root |
-| Gate C Sharpe collapses to zero | latency wrapper keeps deferring fills | inspect position-latency logic with `hft-backtester` |
+| Gate C Sharpe collapses to zero | latency wrapper keeps deferring fills | inspect position-latency logic with `hft-backtest-engine` |
 | Gate C inflates unrealistically | missing `local_ts` or wrong step cadence | rebuild data with proper timestamps |
 | Gate D blocks on feature-set version | manifest and live feature registry diverged | align the manifest version |
 | Gate E blocks on execution quality | paper sessions or reject-rate evidence incomplete | record more sessions and rerun governance checks |
@@ -94,7 +94,7 @@ Check Gate E for:
 ## Cross-References
 
 - Use `hft-alpha-research` for scaffold and dataset preparation.
-- Use `hft-backtester` when Gate C issues look like latency-model or adapter problems.
+- Use `hft-backtest-engine` when Gate C issues look like latency-model or adapter problems.
 - Use `paper-trader` for Gate E session recording and shadow-trading evidence.
 
 ## Gate E Paper-Trade Governance
