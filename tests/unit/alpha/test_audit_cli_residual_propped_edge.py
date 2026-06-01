@@ -31,9 +31,7 @@ def _record(
             metrics["realized_pts"] = realized
         if residual is not None:
             metrics["residual_mtm_pts"] = residual
-        advisory.append(
-            {"name": "inventory_mtm", "passed": True, "metrics": metrics, "details": ""}
-        )
+        advisory.append({"name": "inventory_mtm", "passed": True, "metrics": metrics, "details": ""})
     sub_gate_audit.record_sub_gate_run(
         run_id=run_id,
         strategy_name=f"demo_{run_id}",

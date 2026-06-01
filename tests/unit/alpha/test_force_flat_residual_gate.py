@@ -129,9 +129,7 @@ class TestForceFlatResidualGate:
         # Threshold absent → loose-profile advisory PASS with metrics.
         assert out.passed is True
         assert out.metrics["force_flat_trip_share_max_pct"] is None
-        assert out.metrics["force_flat_trip_share_pct"] == pytest.approx(
-            100.0 * 2 / 3
-        )
+        assert out.metrics["force_flat_trip_share_pct"] == pytest.approx(100.0 * 2 / 3)
         assert "advisory" in out.details
 
     def test_missing_attributes_default_to_safe_zero(self) -> None:

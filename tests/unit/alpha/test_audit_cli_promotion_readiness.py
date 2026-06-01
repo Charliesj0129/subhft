@@ -86,8 +86,7 @@ def _record(
         advisory.append(
             {
                 "name": "monthly_distribution",
-                "passed": (dd_ratio is None or dd_ratio <= 2.0)
-                and (top_month is None or top_month <= 50.0),
+                "passed": (dd_ratio is None or dd_ratio <= 2.0) and (top_month is None or top_month <= 50.0),
                 "metrics": metrics,
                 "details": "",
             }

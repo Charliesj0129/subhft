@@ -47,9 +47,7 @@ class TestTemplateCheck:
             ),
             encoding="utf-8",
         )
-        monkeypatch.setitem(
-            audit_cli._SHAPE_TEMPLATES, "single", (bad, "demo")
-        )
+        monkeypatch.setitem(audit_cli._SHAPE_TEMPLATES, "single", (bad, "demo"))
         out = audit_cli.template_check()
         assert "DRIFT DETECTED" in out
         assert "[FAIL]" in out

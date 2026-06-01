@@ -143,6 +143,7 @@ class TestVerifySpecShapeLine:
         d = _alphas / "strad_one"
         d.mkdir()
         import shutil
+
         shutil.copyfile(STRADDLE_SRC, d / "spec.yaml")
         out = audit_cli.verify_spec("strad_one", root=_alphas)
         assert "shape    : straddle" in out
@@ -151,6 +152,7 @@ class TestVerifySpecShapeLine:
         d = _alphas / "pair_one"
         d.mkdir()
         import shutil
+
         shutil.copyfile(FUTURES_PAIR_SRC, d / "spec.yaml")
         out = audit_cli.verify_spec("pair_one", root=_alphas)
         assert "shape    : multi_leg_futures" in out

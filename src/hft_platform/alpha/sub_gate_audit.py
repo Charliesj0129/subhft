@@ -237,9 +237,7 @@ def _extract_drawdown_ratio(advisory: list[dict] | None) -> float | None:
     return None
 
 
-def _extract_monthly_metric(
-    advisory: list[dict] | None, key: str
-) -> float | None:
+def _extract_monthly_metric(advisory: list[dict] | None, key: str) -> float | None:
     """Lift a named numeric metric from the ``monthly_distribution`` gate to
     a top-level row field (Round 55).
 
@@ -300,9 +298,7 @@ def _extract_top_month_share(advisory: list[dict] | None) -> float | None:
     return None
 
 
-def _extract_inventory_metric(
-    advisory: list[dict] | None, key: str
-) -> float | None:
+def _extract_inventory_metric(advisory: list[dict] | None, key: str) -> float | None:
     """Lift a named numeric metric from the ``inventory_mtm`` gate to a
     top-level row field (Round 66).
 
@@ -427,9 +423,7 @@ def _extract_replay_divergence_category(
     return None
 
 
-_SAMPLE_ADEQUACY_LABELS = frozenset(
-    {"adequate", "promising", "needs_more_sample", "inconclusive"}
-)
+_SAMPLE_ADEQUACY_LABELS = frozenset({"adequate", "promising", "needs_more_sample", "inconclusive"})
 
 
 def _extract_sample_adequacy_label(advisory: list[dict] | None) -> str | None:

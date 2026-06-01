@@ -263,9 +263,7 @@ class TestAuditCliExportDayDominance:
         _record(run_id="clean", edge=15.0, ff_share=10.0, day_dom=10.0)
         _record(run_id="propped_day", edge=15.0, ff_share=10.0, day_dom=90.0)
         _record(run_id="propped_ff", edge=15.0, ff_share=80.0, day_dom=10.0)
-        out = audit_cli.export(
-            fmt="csv", edge_min=10.0, max_force_flat_share=30.0, max_day_dominance=25.0
-        )
+        out = audit_cli.export(fmt="csv", edge_min=10.0, max_force_flat_share=30.0, max_day_dominance=25.0)
         ids = [r["run_id"] for r in csv.DictReader(io.StringIO(out))]
         assert ids == ["clean"]
 

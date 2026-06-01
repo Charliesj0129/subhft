@@ -27,9 +27,7 @@ def _tmproot(tmp_path: Path) -> Path:
 
 class TestAuditCliInit:
     def test_creates_spec_yaml_in_target_directory(self, _tmproot: Path) -> None:
-        out = audit_cli.init_candidate(
-            "demo_one", template=TEMPLATE_SRC, root=_tmproot
-        )
+        out = audit_cli.init_candidate("demo_one", template=TEMPLATE_SRC, root=_tmproot)
         target = _tmproot / "demo_one" / "spec.yaml"
         assert target.is_file()
         assert "created" in out
@@ -90,9 +88,7 @@ class TestAuditCliInit:
     def test_runs_spec_check_and_reports_pass(self, _tmproot: Path) -> None:
         # The shipped template populates every required field, so the
         # scaffold straight off the template should pass spec_check.
-        out = audit_cli.init_candidate(
-            "fresh_pass", template=TEMPLATE_SRC, root=_tmproot
-        )
+        out = audit_cli.init_candidate("fresh_pass", template=TEMPLATE_SRC, root=_tmproot)
         assert "spec_check: PASS" in out
 
     def test_main_dispatches_init(self, _tmproot: Path, capsys) -> None:
@@ -134,9 +130,7 @@ class TestAuditCliInitShape:
     def test_shape_futures_pair_writes_pair_exemplar(self, _tmproot: Path) -> None:
         import yaml
 
-        out = audit_cli.init_candidate(
-            "c_pair", shape="futures_pair", root=_tmproot
-        )
+        out = audit_cli.init_candidate("c_pair", shape="futures_pair", root=_tmproot)
         path = _tmproot / "c_pair" / "spec.yaml"
         body = path.read_text()
         assert "strategy_name: c_pair" in body
@@ -155,9 +149,7 @@ class TestAuditCliInitShape:
         assert "unknown shape" in out
 
     def test_shape_and_template_together_refused(self, _tmproot: Path) -> None:
-        out = audit_cli.init_candidate(
-            "x", shape="straddle", template=TEMPLATE_SRC, root=_tmproot
-        )
+        out = audit_cli.init_candidate("x", shape="straddle", template=TEMPLATE_SRC, root=_tmproot)
         assert "refused" in out
         assert "either" in out
 
@@ -169,9 +161,7 @@ class TestAuditCliInitShape:
         assert "strategy_name: c_default" in body
 
     def test_main_dispatches_shape(self, _tmproot: Path, capsys) -> None:
-        rc = audit_cli.main(
-            ["init", "c_main_shape", "--shape", "straddle", "--root", str(_tmproot)]
-        )
+        rc = audit_cli.main(["init", "c_main_shape", "--shape", "straddle", "--root", str(_tmproot)])
         assert rc == 0
         body = (_tmproot / "c_main_shape" / "spec.yaml").read_text()
         assert "legs:" in body

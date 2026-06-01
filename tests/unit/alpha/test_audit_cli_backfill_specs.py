@@ -74,15 +74,11 @@ class TestAuditCliBackfillSpecs:
         assert "real_one" in out
 
     def test_refuses_missing_template(self, _alphas: Path, tmp_path: Path) -> None:
-        out = audit_cli.backfill_specs(
-            template=tmp_path / "nope.yaml", root=_alphas
-        )
+        out = audit_cli.backfill_specs(template=tmp_path / "nope.yaml", root=_alphas)
         assert "refused" in out
 
     def test_refuses_missing_root(self, tmp_path: Path) -> None:
-        out = audit_cli.backfill_specs(
-            template=TEMPLATE_SRC, root=tmp_path / "nope"
-        )
+        out = audit_cli.backfill_specs(template=TEMPLATE_SRC, root=tmp_path / "nope")
         assert "refused" in out
 
     def test_spec_check_pass_count_in_summary(self, _alphas: Path) -> None:

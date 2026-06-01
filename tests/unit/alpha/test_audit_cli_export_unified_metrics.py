@@ -43,9 +43,7 @@ def _record(
     if worst_month is not None:
         mdist["worst_monthly_pnl_pts"] = worst_month
     if mdist:
-        advisory.append(
-            {"name": "monthly_distribution", "passed": True, "metrics": mdist, "details": ""}
-        )
+        advisory.append({"name": "monthly_distribution", "passed": True, "metrics": mdist, "details": ""})
     if worst_loss is not None:
         advisory.append(
             {

@@ -66,9 +66,7 @@ class ForceFlatResidualGate:
                     "abs_residual_qty": float(abs_residual),
                     "n_trips": 0.0,
                     "force_flat_trip_share_pct": 0.0,
-                    "force_flat_trip_share_max_pct": (
-                        float(max_share) if max_share is not None else None
-                    ),
+                    "force_flat_trip_share_max_pct": (float(max_share) if max_share is not None else None),
                 },
                 details="no trade pnl — advisory skip",
             )
@@ -82,9 +80,7 @@ class ForceFlatResidualGate:
                     "abs_residual_qty": 0.0,
                     "n_trips": float(n_trips),
                     "force_flat_trip_share_pct": 0.0,
-                    "force_flat_trip_share_max_pct": (
-                        float(max_share) if max_share is not None else None
-                    ),
+                    "force_flat_trip_share_max_pct": (float(max_share) if max_share is not None else None),
                 },
                 details=f"no residual ({mark_method or 'no_residual'})",
             )
@@ -104,10 +100,7 @@ class ForceFlatResidualGate:
                     "force_flat_trip_share_pct": float(ff_share_pct),
                     "force_flat_trip_share_max_pct": None,
                 },
-                details=(
-                    f"advisory: ff_share={ff_share_pct:.1f}% "
-                    f"(threshold absent; mark={mark_method or 'unknown'})"
-                ),
+                details=(f"advisory: ff_share={ff_share_pct:.1f}% (threshold absent; mark={mark_method or 'unknown'})"),
             )
 
         max_share_f = float(max_share)

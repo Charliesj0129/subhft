@@ -251,9 +251,7 @@ def _check_legs(spec: dict, errors: list[str]) -> None:
                     errors.append(f"legs[{i}].option.{field}: missing or empty")
             right = option.get("right")
             if isinstance(right, str) and right not in ALLOWED_OPTION_RIGHTS:
-                errors.append(
-                    f"legs[{i}].option.right={right!r} not in {sorted(ALLOWED_OPTION_RIGHTS)}"
-                )
+                errors.append(f"legs[{i}].option.right={right!r} not in {sorted(ALLOWED_OPTION_RIGHTS)}")
             strike = option.get("strike")
             if strike is not None and not isinstance(strike, (int, float)):
                 errors.append(f"legs[{i}].option.strike must be numeric")

@@ -130,12 +130,8 @@ class TestDecisionTrail:
         assert "(1 runs;" in out
 
     def test_profile_filter(self, _isolated) -> None:
-        _record(
-            run_id="p1", strategy_name="alpha_a", recorded_at_ns=1, edge=12.0, profile="vm_ul6_strict"
-        )
-        _record(
-            run_id="p2", strategy_name="alpha_a", recorded_at_ns=2, edge=12.0, profile="other"
-        )
+        _record(run_id="p1", strategy_name="alpha_a", recorded_at_ns=1, edge=12.0, profile="vm_ul6_strict")
+        _record(run_id="p2", strategy_name="alpha_a", recorded_at_ns=2, edge=12.0, profile="other")
         out = audit_cli.decision_trail("alpha_a", profile="vm_ul6_strict")
         assert "p1" in out
         assert "p2" not in out

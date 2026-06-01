@@ -37,9 +37,7 @@ def _record(
                 "metrics": {
                     "n_months": 4.0,
                     "avg_monthly_net_pnl_pts": 100.0,
-                    "max_drawdown_pts": dd_ratio * 100.0
-                    if dd_ratio != float("inf")
-                    else 50.0,
+                    "max_drawdown_pts": dd_ratio * 100.0 if dd_ratio != float("inf") else 50.0,
                     "drawdown_to_avg_monthly_ratio": dd_ratio,
                     "drawdown_to_avg_monthly_max_ratio": 2.0,
                 },

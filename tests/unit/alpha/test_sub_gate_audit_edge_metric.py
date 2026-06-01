@@ -8,9 +8,7 @@ from hft_platform.alpha import audit_cli, sub_gate_audit
 
 
 def _advisory_with_edge(value: float | None) -> list[dict]:
-    metrics: dict[str, float] = (
-        {"mean_net_edge_pts_per_trade": value} if value is not None else {}
-    )
+    metrics: dict[str, float] = {"mean_net_edge_pts_per_trade": value} if value is not None else {}
     return [
         {
             "name": "some_other_gate",
@@ -48,9 +46,7 @@ class TestBuildRecordExtractsEdge:
             instrument="TXFD6",
             strategy_type="maker",
             profile_name="vm_ul6_strict",
-            advisory=[
-                {"name": "sharpe_threshold", "passed": True, "metrics": {}, "details": ""}
-            ],
+            advisory=[{"name": "sharpe_threshold", "passed": True, "metrics": {}, "details": ""}],
             blocking={"passed": True, "failing": [], "triage_status": "passed"},
             recorded_at_ns=1,
         )
