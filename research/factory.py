@@ -507,9 +507,14 @@ def _audit_paper_refs(warnings: list[str], details: dict[str, Any]) -> None:
 _ARXIV_ID_RE = re.compile(r"(?P<id>\d{4}\.\d{4,5})(?:v\d+)?")
 
 _LOCAL_RESEARCH_REF_ALIASES: dict[str, str] = {
+    "AMHP-2024": "docs/alpha-research/round-1-hawkes-amhp/artifacts/t1_researcher_c1.md",
     "c13_vol_gate_disable_R7_kill": (
         "outputs/team_artifacts/alpha-research/archive/"
         "halted-2026-04-18-pre-B-C/round-7/artifacts/t1_researcher_proposal.md"
+    ),
+    "feedback_taifex_fee_structure": (
+        "outputs/team_artifacts/alpha-research/archive/"
+        "halted-2026-04-18-pre-B-C/round-6/summary.md"
     ),
     "memory/backtest_method_reliability": "docs/runbooks/backtest-engine-selection.md",
     "r47_backtest_data_regression": "docs/incidents/2026-04-24-r47-backtest-credibility-audit.md",
@@ -520,14 +525,23 @@ _LOCAL_RESEARCH_REF_ALIASES: dict[str, str] = {
         "outputs/team_artifacts/alpha-research/archive/"
         "halted-2026-04-19-inst-options/round-7/summary.md"
     ),
+    "shared-context_2026-04-19_cost_model": (
+        "outputs/team_artifacts/alpha-research/archive/"
+        "halted-2026-04-19-inst-options/final_summary.md"
+    ),
 }
 
 _LOCAL_RESEARCH_REF_REPAIR_HINTS: dict[str, dict[str, Any]] = {
     "feedback_taifex_fee_structure": {
         "missing_path": "memory/feedback_taifex_fee_structure.md",
         "candidate_paths": (
+            "config/research/cost_profiles.yaml",
             ".agent/teams/alpha-research/roles/researcher.md",
             ".agent/teams/alpha-research/roles/devils-advocate.md",
+            "research/alphas/c1_revalidation_txfd6_chavez_casillas_adaptive/manifest.yaml",
+            "research/alphas/c30_txf_maker_tmf_hedge_pair/manifest.yaml",
+            "research/alphas/c32b_tob_survival_refresh_regime_gate/manifest.yaml",
+            "research/alphas/c33_txfd6_solo_passive_maker/manifest.yaml",
         ),
         "repair_action": (
             "Restore the missing memory file or promote one current cost-source gate artifact "
@@ -537,6 +551,12 @@ _LOCAL_RESEARCH_REF_REPAIR_HINTS: dict[str, dict[str, Any]] = {
     "shared-context_2026-04-19_cost_model": {
         "missing_path": "shared-context_2026-04-19_cost_model",
         "candidate_paths": (
+            "outputs/team_artifacts/alpha-research/archive/"
+            "halted-2026-04-19-inst-options/candidate_pool.json",
+            "outputs/team_artifacts/alpha-research/archive/"
+            "halted-2026-04-19-inst-options/progress.jsonl",
+            "outputs/team_artifacts/alpha-research/archive/"
+            "halted-2026-04-19-inst-options/final_summary.md",
             "config/research/cost_profiles.yaml",
             "research/alphas/c60_tmfd6_r47_minimal_inst_rt/manifest.yaml",
             "research/alphas/c63_txfd6_r47_tight_spread/manifest.yaml",
@@ -772,6 +792,280 @@ def _audit_data_governance(
         errors.append("Data governance violation: metadata sidecar invalid for dataset(s): " + bad)
 
 
+def _audit_experiment_edge_metric_semantics(details: dict[str, Any]) -> None:
+    """Audit Gate-C edge artifacts for trustworthy edge semantics.
+
+    Buckets each artifact carrying an ``edge_per_round_trip`` metric into:
+    ``missing_semantics`` (label absent, predates stamping), ``unvalidated``
+    (label present but a supporting gate failed/absent — e.g. a residual-propped
+    or single-day-dominated edge), or ``complete`` (label present and validated).
+    """
+    experiments_root = ROOT / "experiments"
+    report_paths = sorted(experiments_root.glob("**/backtest_report.json")) if experiments_root.exists() else []
+    missing_semantics: list[dict[str, Any]] = []
+    unvalidated: list[dict[str, Any]] = []
+    complete: list[dict[str, str]] = []
+    parse_errors: list[str] = []
+    reports_with_edge_gate = 0
+
+    for report_path in report_paths:
+        report = _load_json_object(report_path)
+        report_rel = str(report_path.relative_to(ROOT))
+        if report is None:
+            parse_errors.append(report_rel)
+            continue
+        if not _contains_edge_round_trip_metric(report):
+            continue
+
+        reports_with_edge_gate += 1
+        scorecard_path = report_path.parent / "scorecard.json"
+        scorecard = _load_json_object(scorecard_path) if scorecard_path.exists() else None
+        scorecard_rel = str(scorecard_path.relative_to(ROOT))
+        missing: list[str] = []
+        if not _contains_edge_metric_semantics(scorecard):
+            missing.append("scorecard.edge_metric_semantics")
+        if not _contains_edge_metric_semantics(report):
+            missing.append("report.edge_metric_semantics")
+
+        row = {
+            "run_dir": str(report_path.parent.relative_to(ROOT)),
+            "report_path": report_rel,
+            "scorecard_path": scorecard_rel,
+        }
+        if missing:
+            missing_semantics.append({**row, "missing": missing})
+            continue
+
+        validated, failing_gates = _edge_metric_semantics_validation(scorecard)
+        if not validated:
+            unvalidated.append({**row, "failing_gates": failing_gates})
+        else:
+            complete.append(row)
+
+    details["experiment_edge_metric_semantics"] = {
+        "scanned_reports": len(report_paths),
+        "reports_with_edge_gate": reports_with_edge_gate,
+        "missing_semantics": missing_semantics,
+        "unvalidated": unvalidated,
+        "complete": complete,
+        "parse_errors": parse_errors,
+    }
+
+
+def _audit_experiment_research_decisions(details: dict[str, Any]) -> None:
+    """Report Gate-C experiment metadata that cannot replay keep/kill decisions."""
+    experiments_root = ROOT / "experiments"
+    meta_paths = sorted(experiments_root.glob("**/meta.json")) if experiments_root.exists() else []
+    missing_decisions: list[dict[str, Any]] = []
+    derivable_decisions: list[dict[str, Any]] = []
+    not_derivable_decisions: list[dict[str, str]] = []
+    complete: list[dict[str, str]] = []
+    parse_errors: list[str] = []
+    gate_c_runs = 0
+
+    for meta_path in meta_paths:
+        meta = _load_json_object(meta_path)
+        meta_rel = _rel_to_root(meta_path)
+        if meta is None:
+            parse_errors.append(meta_rel)
+            continue
+
+        report_path = _experiment_report_path(meta_path, meta)
+        report = _load_json_object(report_path) if report_path.exists() else None
+        if not _is_gate_c_experiment(meta, report):
+            continue
+
+        gate_c_runs += 1
+        row = {
+            "run_dir": _rel_to_root(meta_path.parent),
+            "meta_path": meta_rel,
+            "report_path": _rel_to_root(report_path),
+        }
+        missing = _research_decision_missing_fields(meta.get("research_decision"))
+        if missing:
+            missing_decisions.append({**row, "missing": missing})
+            derived = _derive_gate_c_research_decision(report)
+            if derived:
+                derivable_decisions.append({**row, "research_decision": derived})
+            else:
+                not_derivable_decisions.append({**row, "reason": "missing_gate_c_blocking_evidence"})
+        else:
+            decision = meta["research_decision"]
+            complete.append(
+                {
+                    **row,
+                    "status": str(decision["status"]),
+                    "reason": str(decision["reason"]),
+                }
+            )
+
+    details["experiment_research_decisions"] = {
+        "scanned_meta": len(meta_paths),
+        "gate_c_runs": gate_c_runs,
+        "missing_decisions": missing_decisions,
+        "derivable_decisions": derivable_decisions,
+        "not_derivable_decisions": not_derivable_decisions,
+        "complete": complete,
+        "parse_errors": parse_errors,
+    }
+
+
+def cmd_backfill_research_decisions(args: argparse.Namespace) -> int:
+    """Build a dry-run plan for safely backfilling replayable research decisions."""
+    details: dict[str, Any] = {}
+    _audit_experiment_research_decisions(details)
+    decision_audit = details["experiment_research_decisions"]
+    planned = list(decision_audit["derivable_decisions"])
+    skipped = list(decision_audit["not_derivable_decisions"])
+    apply_changes = bool(getattr(args, "apply", False))
+
+    payload = {
+        "generated_at": _now_iso(),
+        "mode": "apply" if apply_changes else "dry_run",
+        "apply": apply_changes,
+        "planned_count": len(planned),
+        "skipped_count": len(skipped),
+        "planned": planned,
+        "skipped": skipped,
+    }
+    out_path = (
+        Path(args.out).resolve()
+        if getattr(args, "out", "")
+        else (ROOT / "reports" / "research_decision_backfill.json")
+    )
+    _write_json(out_path, payload)
+    print(f"[research.factory] research-decision backfill plan: {out_path}")
+    print(
+        "[research.factory] "
+        f"mode={payload['mode']} planned={payload['planned_count']} skipped={payload['skipped_count']}"
+    )
+    return 0
+
+
+def _load_json_object(path: Path) -> dict[str, Any] | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _rel_to_root(path: Path) -> str:
+    try:
+        return str(path.relative_to(ROOT))
+    except ValueError:
+        return str(path)
+
+
+def _experiment_report_path(meta_path: Path, meta: dict[str, Any]) -> Path:
+    raw_path = str(meta.get("backtest_report_path", "") or "").strip()
+    if not raw_path:
+        return meta_path.parent / "backtest_report.json"
+
+    candidate = Path(raw_path)
+    if candidate.is_absolute():
+        return candidate
+    if (ROOT / candidate).exists():
+        return ROOT / candidate
+    if (ROOT.parent / candidate).exists():
+        return ROOT.parent / candidate
+    return meta_path.parent / candidate
+
+
+def _is_gate_c_experiment(meta: dict[str, Any], report: dict[str, Any] | None) -> bool:
+    gate_status = meta.get("gate_status")
+    if isinstance(gate_status, dict) and "gate_c" in gate_status:
+        return True
+    if report is None:
+        return False
+    if str(report.get("gate", "")).strip().lower() == "gate c":
+        return True
+    return _contains_gate_c_sub_gate_payload(report)
+
+
+def _contains_gate_c_sub_gate_payload(value: Any) -> bool:
+    if isinstance(value, dict):
+        if "sub_gates_blocking" in value or "sub_gates_advisory" in value:
+            return True
+        return any(_contains_gate_c_sub_gate_payload(v) for v in value.values())
+    if isinstance(value, list | tuple):
+        return any(_contains_gate_c_sub_gate_payload(v) for v in value)
+    return False
+
+
+def _research_decision_missing_fields(payload: Any) -> list[str]:
+    if not isinstance(payload, dict) or not payload:
+        return ["meta.research_decision"]
+    missing: list[str] = []
+    if not str(payload.get("status", "")).strip():
+        missing.append("meta.research_decision.status")
+    if not str(payload.get("reason", "")).strip():
+        missing.append("meta.research_decision.reason")
+    return missing
+
+
+def _derive_gate_c_research_decision(report: dict[str, Any] | None) -> dict[str, Any]:
+    if report is None:
+        return {}
+    from hft_platform.alpha.experiments import derive_research_decision_from_gate_c_report
+
+    return derive_research_decision_from_gate_c_report(report)
+
+
+def _contains_edge_round_trip_metric(value: Any) -> bool:
+    if isinstance(value, dict):
+        if value.get("name") == "edge_per_round_trip":
+            metrics = value.get("metrics")
+            return isinstance(metrics, dict) and "mean_net_edge_pts_per_trade" in metrics
+        return any(_contains_edge_round_trip_metric(v) for v in value.values())
+    if isinstance(value, list | tuple):
+        return any(_contains_edge_round_trip_metric(v) for v in value)
+    return False
+
+
+def _contains_edge_metric_semantics(value: Any) -> bool:
+    return _find_edge_metric_semantics(value) is not None
+
+
+def _find_edge_metric_semantics(value: Any) -> dict[str, Any] | None:
+    if isinstance(value, dict):
+        semantics = value.get("edge_metric_semantics")
+        if isinstance(semantics, dict) and (
+            semantics.get("schema") == "edge_metric_semantics.v1"
+            and semantics.get("metric") == "mean_net_edge_pts_per_trade"
+            and semantics.get("source_gate") == "edge_per_round_trip"
+        ):
+            return semantics
+        for v in value.values():
+            found = _find_edge_metric_semantics(v)
+            if found is not None:
+                return found
+        return None
+    if isinstance(value, list | tuple):
+        for v in value:
+            found = _find_edge_metric_semantics(v)
+            if found is not None:
+                return found
+    return None
+
+
+def _edge_metric_semantics_validation(value: Any) -> tuple[bool, list[str]]:
+    """Return ``(validated, failing_gates)`` for a stamped edge-semantics label.
+
+    Mirrors ``hft_platform.alpha.experiments``: a label proves trustworthiness
+    only when ``validated is True``. Labels stamped before evidence was recorded
+    (no ``validated`` key) are treated as unvalidated.
+    """
+    semantics = _find_edge_metric_semantics(value)
+    if semantics is None:
+        return False, []
+    status_map = semantics.get("supporting_gates_status")
+    failing: list[str] = []
+    if isinstance(status_map, dict):
+        failing = sorted(str(gate) for gate, status in status_map.items() if str(status) != "pass")
+    return semantics.get("validated") is True, failing
+
+
 def cmd_audit(args: argparse.Namespace) -> int:
     errors: list[str] = []
     warnings: list[str] = []
@@ -784,6 +1078,8 @@ def cmd_audit(args: argparse.Namespace) -> int:
     _audit_paper_refs(warnings, details)
     _audit_binary_pollution(warnings, details)
     _audit_data_governance(errors, details, data_paths=list(getattr(args, "data", []) or []))
+    _audit_experiment_edge_metric_semantics(details)
+    _audit_experiment_research_decisions(details)
 
     result = AuditResult(
         generated_at=_now_iso(),
@@ -1176,6 +1472,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional dataset path scope for data-governance audit.",
     )
     audit_cmd.set_defaults(func=cmd_audit)
+
+    backfill_decisions_cmd = sub.add_parser(
+        "backfill-research-decisions",
+        help="Write a dry-run plan for safely backfilling Gate-C research_decision metadata.",
+    )
+    backfill_decisions_cmd.add_argument("--out", default="", help="Output json plan path.")
+    backfill_decisions_cmd.set_defaults(func=cmd_backfill_research_decisions, apply=False)
 
     index_cmd = sub.add_parser("index", help="Build machine-readable alpha pipeline index.")
     index_cmd.add_argument("--out", default="", help="Output json path.")

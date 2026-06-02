@@ -64,6 +64,12 @@ class ReplayParityGate:
             "first_divergence_idx": first_div,
             "divergence_categories": category_counts,
             "dominant_divergence_category": dominant_category,
+            # Preserve the raw per-field histogram (goal §7): the category
+            # rollup above collapses field identity, so an operator can no
+            # longer see *which* intent field (price/qty/side/session_phase/...)
+            # diverged. Keep it so the per-field audit view can re-derive each
+            # field's §8 category without re-running the replay.
+            "per_field_divergences": dict(histogram),
         }
         suffix = f", dominant_category={dominant_category}" if dominant_category else ""
         return SubGateResult(
