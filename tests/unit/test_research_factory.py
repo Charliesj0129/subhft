@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import yaml
 
 import research.factory as factory
 import research.tools.data_governance as data_governance
@@ -16,6 +17,52 @@ def _bootstrap_research_root(root: Path) -> None:
     (root / "data" / "raw").mkdir(parents=True, exist_ok=True)
     (root / "data" / "interim").mkdir(parents=True, exist_ok=True)
     (root / "data" / "processed").mkdir(parents=True, exist_ok=True)
+
+
+def _valid_strategy_spec() -> dict:
+    return {
+        "strategy_name": "c99_demo",
+        "market": "TAIFEX",
+        "instrument": "TXFD6",
+        "hypothesis": "edge hypothesis",
+        "timeframe": "5m",
+        "holding_period": "intraday",
+        "frequency_class": "intraday_hft",
+        "entry_rule": "enter on governed signal",
+        "exit_rule": "exit on stop or force-flat",
+        "position_sizing": "fixed 1 lot",
+        "risk_control": {
+            "max_position": 1,
+            "max_drawdown_pts": 80,
+            "force_flat_rule": "13:25 TPE close",
+        },
+        "cost_model": {
+            "fee_bps": 0.4,
+            "tax_bps": 2.0,
+            "slippage_pts": 0.5,
+            "latency_profile": "shioaji_measured_p95",
+        },
+        "validation_plan": {
+            "data_range": "2026-01-02..2026-05-13",
+            "oos_split": "70/30 by trading day",
+            "sample_targets": {
+                "min_round_trips": 300,
+                "min_oos_trading_days": 60,
+            },
+            "required_gates": ["min_sample_size", "edge_per_round_trip"],
+            "net_edge_floor_pts": 10.0,
+        },
+    }
+
+
+def _write_governed_alpha(root: Path, alpha_id: str, spec: dict) -> None:
+    alpha_dir = root / "alphas" / alpha_id
+    (alpha_dir / "tests").mkdir(parents=True, exist_ok=True)
+    (alpha_dir / "__init__.py").write_text("", encoding="utf-8")
+    (alpha_dir / "impl.py").write_text("ALPHA_ID = " + repr(alpha_id) + "\n", encoding="utf-8")
+    (alpha_dir / "README.md").write_text(f"# {alpha_id}\n", encoding="utf-8")
+    (alpha_dir / "tests" / "test_smoke.py").write_text("def test_smoke():\n    assert True\n", encoding="utf-8")
+    (alpha_dir / "spec.yaml").write_text(yaml.safe_dump(spec, sort_keys=False), encoding="utf-8")
 
 
 def test_audit_scoped_data_paths_ignore_unrelated_datasets(monkeypatch, tmp_path: Path) -> None:
@@ -97,6 +144,529 @@ def test_audit_scoped_data_paths_reject_invalid_metadata(monkeypatch, tmp_path: 
     assert "data/interim/scoped_bad.npy" in gov["invalid_metadata_sidecars"]
     assert "fields_must_be_nonempty_list" in gov["invalid_metadata_sidecars"]["data/interim/scoped_bad.npy"]
     assert any("metadata sidecar invalid" in err for err in payload["errors"])
+
+
+def test_factory_audit_reports_fixed_strategy_spec_template_and_candidate_gaps(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "research"
+    _bootstrap_research_root(root)
+    (root / "knowledge").mkdir()
+    (root / "knowledge" / "paper_index.json").write_text("{}", encoding="utf-8")
+    template = _valid_strategy_spec()
+    template.pop("cost_model")
+    (root / "templates").mkdir(parents=True)
+    (root / "templates" / "strategy_spec.yaml").write_text(
+        yaml.safe_dump(template, sort_keys=False),
+        encoding="utf-8",
+    )
+    good_template = _valid_strategy_spec()
+    (root / "alphas" / "_templates").mkdir(parents=True)
+    (root / "alphas" / "_templates" / "spec.yaml").write_text(
+        yaml.safe_dump(good_template, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    _write_governed_alpha(root, "good_alpha", _valid_strategy_spec())
+    bad_spec = _valid_strategy_spec()
+    bad_spec.pop("entry_rule")
+    bad_spec["validation_plan"]["net_edge_floor_pts"] = 5.0
+    _write_governed_alpha(root, "bad_alpha", bad_spec)
+
+    monkeypatch.setattr(factory, "ROOT", root)
+    out = tmp_path / "audit_strategy_specs.json"
+    rc = factory.cmd_audit(argparse.Namespace(out=str(out), fail_on_warning=False, data=[]))
+
+    assert rc == 1
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    spec_audit = payload["details"]["strategy_spec_fixed_template_audit"]
+    assert "cost_model" in spec_audit["required_top_level_fields"]
+    assert spec_audit["template_missing_required"] == [
+        {
+            "path": "templates/strategy_spec.yaml",
+            "missing": ["cost_model"],
+        }
+    ]
+    assert spec_audit["candidate_invalid"] == [
+        {
+            "path": "alphas/bad_alpha/spec.yaml",
+            "errors": [
+                "missing or empty required field: 'entry_rule'",
+                "validation_plan.net_edge_floor_pts < 10.0 — goal 限制 §3 forbids relaxing the > 10 pts/trade bar",
+            ],
+        }
+    ]
+    assert "alphas/good_alpha/spec.yaml" in spec_audit["candidate_valid"]
+    assert any("strategy spec template" in error for error in payload["errors"])
+    assert any("candidate strategy spec invalid" in error for error in payload["errors"])
+
+
+def test_factory_audit_generates_research_record_from_spec_and_validation_summary(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "research"
+    _bootstrap_research_root(root)
+    (root / "knowledge").mkdir()
+    (root / "knowledge" / "paper_index.json").write_text("{}", encoding="utf-8")
+    spec = _valid_strategy_spec()
+    spec["strategy_name"] = "record_alpha"
+    _write_governed_alpha(root, "record_alpha", spec)
+
+    validation_dir = root / "experiments" / "validations" / "record_alpha"
+    validation_dir.mkdir(parents=True)
+    summary_path = validation_dir / "20260603T000000Z_summary.json"
+    summary = {
+        "candidate": "record_alpha",
+        "artifact_scope": "validation_summary",
+        "summary_path": str(summary_path),
+        "edge_floor_metric": "mean_net_edge_pts_per_trade",
+        "edge_floor_cleared": False,
+        "research_decision": {
+            "status": "failed",
+            "reason": "edge_floor_not_cleared",
+            "evidence": ["mean_net_edge_pts_per_trade"],
+            "decided_by": "unit_test_gate",
+        },
+        "hard_gate": {"drawdown_within_2x_average_monthly_net_pnl": False},
+        "splits": {
+            "full": {
+                "events": 120,
+                "trading_days": 45,
+                "mean_net_edge_pts_per_trade": 8.5,
+                "max_drawdown_net_pts": 42.0,
+                "average_monthly_net_pnl": 12.0,
+                "median_monthly_net_pnl": 11.0,
+                "worst_month_net_pnl": -5.0,
+            },
+            "out_of_sample": {
+                "events": 40,
+                "trading_days": 15,
+                "mean_net_edge_pts_per_trade": 7.0,
+                "max_drawdown_net_pts": 18.0,
+                "average_monthly_net_pnl": 9.0,
+                "median_monthly_net_pnl": 9.0,
+                "worst_month_net_pnl": -2.0,
+            },
+        },
+        "definition": {
+            "months": ["B6"],
+            "max_date": "2026-04-15",
+            "cost_pts": 8.0,
+        },
+    }
+    summary_path.write_text(json.dumps(summary), encoding="utf-8")
+
+    monkeypatch.setattr(factory, "ROOT", root)
+    out = tmp_path / "audit_research_records.json"
+    rc = factory.cmd_audit(argparse.Namespace(out=str(out), fail_on_warning=False, data=[]))
+
+    assert rc == 0
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    record_audit = payload["details"]["research_record_generation"]
+    assert record_audit["incomplete_records"] == []
+    assert record_audit["complete_records"] == [
+        {
+            "candidate": "record_alpha",
+            "spec_path": "alphas/record_alpha/spec.yaml",
+            "summary_path": "experiments/validations/record_alpha/20260603T000000Z_summary.json",
+            "strategy_name": "record_alpha",
+            "market": "TAIFEX",
+            "instrument": "TXFD6",
+            "hypothesis": "edge hypothesis",
+            "timeframe": "5m",
+            "holding_period": "intraday",
+            "entry_rule": "enter on governed signal",
+            "exit_rule": "exit on stop or force-flat",
+            "position_sizing": "fixed 1 lot",
+            "risk_control": spec["risk_control"],
+            "cost_assumptions": spec["cost_model"],
+            "validation_plan": spec["validation_plan"],
+            "data_range": "2026-01-02..2026-05-13",
+            "parameters": summary["definition"],
+            "full_results": {
+                "events": 120,
+                "trading_days": 45,
+                "mean_net_edge_pts_per_trade": 8.5,
+            },
+            "out_of_sample_results": {
+                "events": 40,
+                "trading_days": 15,
+                "mean_net_edge_pts_per_trade": 7.0,
+            },
+            "risk_metrics": {
+                "full_max_drawdown_net_pts": 42.0,
+                "full_average_monthly_net_pnl": 12.0,
+                "full_median_monthly_net_pnl": 11.0,
+                "full_worst_month_net_pnl": -5.0,
+                "out_of_sample_max_drawdown_net_pts": 18.0,
+                "out_of_sample_average_monthly_net_pnl": 9.0,
+                "out_of_sample_median_monthly_net_pnl": 9.0,
+                "out_of_sample_worst_month_net_pnl": -2.0,
+                "drawdown_within_2x_average_monthly_net_pnl": False,
+            },
+            "research_decision": summary["research_decision"],
+        }
+    ]
+
+
+def test_factory_audit_compares_research_candidates_with_uniform_metrics_and_blockers(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "research"
+    _bootstrap_research_root(root)
+    (root / "knowledge").mkdir()
+    (root / "knowledge" / "paper_index.json").write_text("{}", encoding="utf-8")
+
+    def write_candidate(
+        alpha_id: str,
+        *,
+        full_edge: float,
+        oos_edge: float,
+        full_events: int,
+        oos_days: int,
+        drawdown_gate: bool,
+        decision_status: str,
+        decision_reason: str,
+        promotion_blockers: list[str] | None = None,
+        parity_evidence: dict | None = None,
+    ) -> None:
+        spec = _valid_strategy_spec()
+        spec["strategy_name"] = alpha_id
+        spec["validation_plan"]["promotion_blockers"] = promotion_blockers or []
+        _write_governed_alpha(root, alpha_id, spec)
+        validation_dir = root / "experiments" / "validations" / alpha_id
+        validation_dir.mkdir(parents=True)
+        summary_path = validation_dir / "20260603T000000Z_summary.json"
+        summary = {
+            "candidate": alpha_id,
+            "artifact_scope": "validation_summary",
+            "summary_path": str(summary_path),
+            "edge_floor_metric": "mean_net_edge_pts_per_trade",
+            "edge_floor_cleared": full_edge > 10.0,
+            "research_decision": {
+                "status": decision_status,
+                "reason": decision_reason,
+                "evidence": ["mean_net_edge_pts_per_trade"],
+                "decided_by": "unit_test_gate",
+            },
+            "hard_gate": {"drawdown_within_2x_average_monthly_net_pnl": drawdown_gate},
+            "splits": {
+                "full": {
+                    "events": full_events,
+                    "trading_days": 90,
+                    "mean_net_edge_pts_per_trade": full_edge,
+                    "max_drawdown_net_pts": 20.0,
+                    "average_monthly_net_pnl": 20.0,
+                    "median_monthly_net_pnl": 19.0,
+                    "worst_month_net_pnl": 5.0,
+                    "drawdown_within_2x_average_monthly_net_pnl": drawdown_gate,
+                },
+                "out_of_sample": {
+                    "events": 120,
+                    "trading_days": oos_days,
+                    "mean_net_edge_pts_per_trade": oos_edge,
+                    "max_drawdown_net_pts": 12.0,
+                    "average_monthly_net_pnl": 18.0,
+                    "median_monthly_net_pnl": 17.0,
+                    "worst_month_net_pnl": 4.0,
+                    "drawdown_within_2x_average_monthly_net_pnl": drawdown_gate,
+                },
+            },
+            "definition": {"cost_pts": 8.0},
+        }
+        if parity_evidence is not None:
+            summary["parity_evidence"] = parity_evidence
+        summary_path.write_text(json.dumps(summary), encoding="utf-8")
+
+    write_candidate(
+        "candidate_keep",
+        full_edge=18.0,
+        oos_edge=12.5,
+        full_events=360,
+        oos_days=70,
+        drawdown_gate=True,
+        decision_status="promising",
+        decision_reason="unit_test_candidate",
+        parity_evidence={
+            "artifact_scope": "parity_evidence",
+            "match_pct": 96.0,
+            "threshold": 95.0,
+            "checked_dimensions": [
+                "signal_trigger_time",
+                "direction",
+                "position_size",
+                "entry",
+                "exit",
+                "session_filter",
+                "risk_filter",
+                "force_flat_rule",
+            ],
+            "mismatch_counts": {"latency_shift": 1},
+        },
+    )
+    write_candidate(
+        "candidate_kill",
+        full_edge=8.0,
+        oos_edge=6.5,
+        full_events=140,
+        oos_days=20,
+        drawdown_gate=False,
+        decision_status="failed",
+        decision_reason="unit_test_kill",
+        promotion_blockers=["no_replay_paper_live_parity_evidence_yet"],
+    )
+
+    monkeypatch.setattr(factory, "ROOT", root)
+    out = tmp_path / "audit_candidate_comparison.json"
+    rc = factory.cmd_audit(argparse.Namespace(out=str(out), fail_on_warning=False, data=[]))
+
+    assert rc == 0
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    comparison = payload["details"]["research_candidate_comparison"]
+    assert comparison["paper_live_candidates"] == ["candidate_keep"]
+    assert comparison["not_eligible"] == ["candidate_kill"]
+    assert comparison["rows"] == [
+        {
+            "candidate": "candidate_keep",
+            "strategy_name": "candidate_keep",
+            "market": "TAIFEX",
+            "instrument": "TXFD6",
+            "timeframe": "5m",
+            "holding_period": "intraday",
+            "data_range": "2026-01-02..2026-05-13",
+            "spec_path": "alphas/candidate_keep/spec.yaml",
+            "summary_path": "experiments/validations/candidate_keep/20260603T000000Z_summary.json",
+            "mean_net_edge_pts_per_trade": 18.0,
+            "out_of_sample_mean_net_edge_pts_per_trade": 12.5,
+            "edge_floor_pts": 10.0,
+            "full_events": 360,
+            "out_of_sample_trading_days": 70,
+            "min_round_trips": 300,
+            "min_oos_trading_days": 60,
+            "drawdown_within_2x_average_monthly_net_pnl": True,
+            "replay_match_pct": 96.0,
+            "parity_evidence_status": "pass",
+            "research_decision_status": "promising",
+            "research_decision_reason": "unit_test_candidate",
+            "paper_live_eligible": True,
+            "eligibility_status": "paper_live_candidate",
+            "blockers": [],
+        },
+        {
+            "candidate": "candidate_kill",
+            "strategy_name": "candidate_kill",
+            "market": "TAIFEX",
+            "instrument": "TXFD6",
+            "timeframe": "5m",
+            "holding_period": "intraday",
+            "data_range": "2026-01-02..2026-05-13",
+            "spec_path": "alphas/candidate_kill/spec.yaml",
+            "summary_path": "experiments/validations/candidate_kill/20260603T000000Z_summary.json",
+            "mean_net_edge_pts_per_trade": 8.0,
+            "out_of_sample_mean_net_edge_pts_per_trade": 6.5,
+            "edge_floor_pts": 10.0,
+            "full_events": 140,
+            "out_of_sample_trading_days": 20,
+            "min_round_trips": 300,
+            "min_oos_trading_days": 60,
+            "drawdown_within_2x_average_monthly_net_pnl": False,
+            "replay_match_pct": None,
+            "parity_evidence_status": "missing",
+            "research_decision_status": "failed",
+            "research_decision_reason": "unit_test_kill",
+            "paper_live_eligible": False,
+            "eligibility_status": "failed",
+            "blockers": [
+                "full_edge_floor_not_cleared",
+                "out_of_sample_edge_floor_not_cleared",
+                "min_round_trips_not_met",
+                "min_oos_trading_days_not_met",
+                "drawdown_gate_failed",
+                "research_decision_failed",
+                "validation_plan_promotion_blockers",
+                "parity_evidence_missing",
+            ],
+        },
+    ]
+
+
+def test_factory_audit_classifies_parity_evidence_schema_and_mismatch_categories(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "research"
+    _bootstrap_research_root(root)
+    (root / "knowledge").mkdir()
+    (root / "knowledge" / "paper_index.json").write_text("{}", encoding="utf-8")
+    spec = _valid_strategy_spec()
+    spec["strategy_name"] = "parity_invalid"
+    _write_governed_alpha(root, "parity_invalid", spec)
+
+    validation_dir = root / "experiments" / "validations" / "parity_invalid"
+    validation_dir.mkdir(parents=True)
+    summary_path = validation_dir / "20260603T000000Z_summary.json"
+    summary = {
+        "candidate": "parity_invalid",
+        "artifact_scope": "validation_summary",
+        "summary_path": str(summary_path),
+        "edge_floor_metric": "mean_net_edge_pts_per_trade",
+        "edge_floor_cleared": True,
+        "research_decision": {
+            "status": "promising",
+            "reason": "unit_test_candidate",
+            "evidence": ["mean_net_edge_pts_per_trade"],
+            "decided_by": "unit_test_gate",
+        },
+        "hard_gate": {"drawdown_within_2x_average_monthly_net_pnl": True},
+        "splits": {
+            "full": {
+                "events": 360,
+                "trading_days": 90,
+                "mean_net_edge_pts_per_trade": 18.0,
+            },
+            "out_of_sample": {
+                "events": 120,
+                "trading_days": 70,
+                "mean_net_edge_pts_per_trade": 12.5,
+            },
+        },
+        "definition": {"cost_pts": 8.0},
+        "parity_evidence": {
+            "artifact_scope": "parity_evidence",
+            "match_pct": 90.0,
+            "threshold": 95.0,
+            "checked_dimensions": [
+                "signal_trigger_time",
+                "direction",
+                "position_size",
+                "entry",
+            ],
+            "mismatch_counts": {
+                "latency_shift": 2,
+                "made_up_label": 1,
+            },
+        },
+    }
+    summary_path.write_text(json.dumps(summary), encoding="utf-8")
+
+    monkeypatch.setattr(factory, "ROOT", root)
+    out = tmp_path / "audit_parity_schema.json"
+    rc = factory.cmd_audit(argparse.Namespace(out=str(out), fail_on_warning=False, data=[]))
+
+    assert rc == 0
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    parity = payload["details"]["research_parity_evidence"]
+    assert parity["allowed_mismatch_categories"] == [
+        "data_mismatch",
+        "feature_mismatch",
+        "timestamp_alignment_error",
+        "latency_shift",
+        "session_phase_filter",
+        "risk_filter",
+        "position_limit",
+        "implementation_drift",
+        "unknown",
+    ]
+    assert parity["invalid"] == [
+        {
+            "candidate": "parity_invalid",
+            "summary_path": "experiments/validations/parity_invalid/20260603T000000Z_summary.json",
+            "status": "invalid",
+            "match_pct": 90.0,
+            "threshold": 95.0,
+            "mismatch_counts": {"latency_shift": 2, "made_up_label": 1},
+            "invalid_mismatch_categories": ["made_up_label"],
+            "missing_checks": [
+                "exit",
+                "session_filter",
+                "risk_filter",
+                "force_flat_rule",
+            ],
+            "errors": [
+                "match_pct_below_threshold",
+                "missing_required_checks",
+                "invalid_mismatch_categories",
+            ],
+        }
+    ]
+    row = payload["details"]["research_candidate_comparison"]["rows"][0]
+    assert row["parity_evidence_status"] == "invalid"
+    assert row["replay_match_pct"] == 90.0
+    assert "parity_evidence_invalid" in row["blockers"]
+
+
+def test_factory_parity_evidence_template_writes_canonical_payload(tmp_path: Path) -> None:
+    out = tmp_path / "parity_evidence.json"
+
+    rc = factory.cmd_parity_evidence_template(
+        argparse.Namespace(
+            candidate="candidate_keep",
+            summary_path="experiments/validations/candidate_keep/20260603T000000Z_summary.json",
+            match_pct=96.0,
+            threshold=95.0,
+            checked_dimension=[],
+            mismatch_count=["latency_shift=1"],
+            out=str(out),
+        )
+    )
+
+    assert rc == 0
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert payload["mode"] == "evidence"
+    assert payload["candidate"] == "candidate_keep"
+    assert payload["schema"] == "research.parity_evidence.v1"
+    assert payload["parity_evidence"] == {
+        "artifact_scope": "parity_evidence",
+        "match_pct": 96.0,
+        "threshold": 95.0,
+        "checked_dimensions": [
+            "signal_trigger_time",
+            "direction",
+            "position_size",
+            "entry",
+            "exit",
+            "session_filter",
+            "risk_filter",
+            "force_flat_rule",
+        ],
+        "mismatch_counts": {"latency_shift": 1},
+    }
+    assert payload["validation"] == {
+        "candidate": "candidate_keep",
+        "summary_path": "experiments/validations/candidate_keep/20260603T000000Z_summary.json",
+        "status": "pass",
+        "match_pct": 96.0,
+        "threshold": 95.0,
+        "mismatch_counts": {"latency_shift": 1},
+        "invalid_mismatch_categories": [],
+        "missing_checks": [],
+        "errors": [],
+    }
+
+
+def test_factory_parity_evidence_template_refuses_invalid_mismatch_category(tmp_path: Path) -> None:
+    out = tmp_path / "parity_invalid.json"
+
+    rc = factory.cmd_parity_evidence_template(
+        argparse.Namespace(
+            candidate="candidate_bad",
+            summary_path="experiments/validations/candidate_bad/20260603T000000Z_summary.json",
+            match_pct=96.0,
+            threshold=95.0,
+            checked_dimension=[],
+            mismatch_count=["made_up_label=1"],
+            out=str(out),
+        )
+    )
+
+    assert rc == 1
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert payload["validation"]["status"] == "invalid"
+    assert payload["validation"]["invalid_mismatch_categories"] == ["made_up_label"]
+    assert payload["validation"]["errors"] == ["invalid_mismatch_categories"]
 
 
 def test_factory_audit_reports_edge_runs_missing_metric_semantics(monkeypatch, tmp_path: Path) -> None:
@@ -398,6 +968,146 @@ def test_factory_audit_classifies_missing_research_decisions_by_derivability(mon
         }
     ]
     assert payload["warnings"] == []
+
+
+def test_factory_audit_indexes_latest_t1b_validation_summary(monkeypatch, tmp_path: Path) -> None:
+    root = tmp_path / "research"
+    _bootstrap_research_root(root)
+    (root / "knowledge").mkdir()
+    (root / "knowledge" / "paper_index.json").write_text("{}", encoding="utf-8")
+    validation_dir = root / "experiments" / "validations" / "t1b_volcompress_v0"
+    validation_dir.mkdir(parents=True)
+    legacy_dir = root / "experiments" / "validations" / "legacy_untraceable_v0"
+    legacy_dir.mkdir(parents=True)
+    old_summary = {
+        "candidate": "t1b_txf_volcompress_tmf",
+        "artifact_scope": "validation_summary",
+        "summary_path": str(validation_dir / "20260601T000000Z_summary.json"),
+        "edge_floor_metric": "mean_net_edge_pts_per_trade",
+        "research_decision": {
+            "status": "needs_more_sample",
+            "reason": "t1b_sample_gate:events",
+            "evidence": ["min_sample_size", "events"],
+            "decided_by": "t1b_v0_hard_gate",
+        },
+        "splits": {"full": {"mean_net_edge_pts_per_trade": 8.0}},
+    }
+    new_summary = {
+        "candidate": "t1b_txf_volcompress_tmf",
+        "artifact_scope": "validation_summary",
+        "summary_path": str(validation_dir / "20260602T000000Z_summary.json"),
+        "edge_floor_metric": "mean_net_edge_pts_per_trade",
+        "edge_floor_cleared": True,
+        "research_decision": {
+            "status": "blocked_by_audit",
+            "reason": "t1b_v0_audit_blocker:v0_latency_profile_deferred",
+            "evidence": ["v0_latency_profile_deferred", "no_replay_paper_live_parity_evidence"],
+            "decided_by": "t1b_v0_hard_gate",
+        },
+        "hard_gate": {"drawdown_within_2x_average_monthly_net_pnl": False},
+        "splits": {
+            "full": {
+                "mean_net_edge_pts_per_trade": 12.5,
+                "max_drawdown_net_pts": 31.0,
+                "average_monthly_net_pnl": 11.0,
+                "median_monthly_net_pnl": 9.0,
+                "worst_month_net_pnl": -4.0,
+                "max_single_month_net_share_of_positive": 0.64,
+                "drawdown_within_2x_average_monthly_net_pnl": False,
+            },
+            "out_of_sample": {
+                "mean_net_edge_pts_per_trade": 10.75,
+                "max_drawdown_net_pts": 8.0,
+                "average_monthly_net_pnl": 13.0,
+                "median_monthly_net_pnl": 13.0,
+                "worst_month_net_pnl": 13.0,
+                "max_single_month_net_share_of_positive": 1.0,
+                "drawdown_within_2x_average_monthly_net_pnl": True,
+            },
+        },
+    }
+    legacy_summary = {
+        "candidate": "legacy_untraceable_candidate",
+        "splits": {"full": {"events": 12}},
+    }
+    (validation_dir / "20260601T000000Z_summary.json").write_text(json.dumps(old_summary), encoding="utf-8")
+    (validation_dir / "20260602T000000Z_summary.json").write_text(json.dumps(new_summary), encoding="utf-8")
+    (legacy_dir / "20260602T000000Z_summary.json").write_text(json.dumps(legacy_summary), encoding="utf-8")
+
+    monkeypatch.setattr(factory, "ROOT", root)
+    out = tmp_path / "audit_validation_summaries.json"
+    rc = factory.cmd_audit(argparse.Namespace(out=str(out), fail_on_warning=False, data=[]))
+
+    assert rc == 0
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    summary_index = payload["details"]["validation_summary_index"]
+    assert summary_index["t1b_txf_volcompress_tmf"] == {
+        "summary_path": "experiments/validations/t1b_volcompress_v0/20260602T000000Z_summary.json",
+        "research_decision_status": "blocked_by_audit",
+        "research_decision_reason": "t1b_v0_audit_blocker:v0_latency_profile_deferred",
+        "research_decision_evidence": [
+            "v0_latency_profile_deferred",
+            "no_replay_paper_live_parity_evidence",
+        ],
+        "edge_floor_metric": "mean_net_edge_pts_per_trade",
+        "mean_net_edge_pts_per_trade": 12.5,
+        "edge_floor_cleared": True,
+        "risk_gate_drawdown_within_2x_average_monthly_net_pnl": False,
+        "full_max_drawdown_net_pts": 31.0,
+        "full_average_monthly_net_pnl": 11.0,
+        "full_median_monthly_net_pnl": 9.0,
+        "full_worst_month_net_pnl": -4.0,
+        "full_max_single_month_net_share_of_positive": 0.64,
+        "full_drawdown_within_2x_average_monthly_net_pnl": False,
+        "out_of_sample_mean_net_edge_pts_per_trade": 10.75,
+        "out_of_sample_max_drawdown_net_pts": 8.0,
+        "out_of_sample_average_monthly_net_pnl": 13.0,
+        "out_of_sample_median_monthly_net_pnl": 13.0,
+        "out_of_sample_worst_month_net_pnl": 13.0,
+        "out_of_sample_max_single_month_net_share_of_positive": 1.0,
+        "out_of_sample_drawdown_within_2x_average_monthly_net_pnl": True,
+        "traceability_missing": [],
+    }
+    assert payload["details"]["research_decision_replay"] == [
+        {
+            "candidate": "legacy_untraceable_candidate",
+            "replay_status": "legacy_untraceable",
+            "status": "",
+            "reason": "",
+            "summary_path": "experiments/validations/legacy_untraceable_v0/20260602T000000Z_summary.json",
+            "edge_floor_metric": "",
+            "mean_net_edge_pts_per_trade": None,
+            "edge_floor_cleared": False,
+            "out_of_sample_mean_net_edge_pts_per_trade": None,
+            "risk_gate_drawdown_within_2x_average_monthly_net_pnl": None,
+            "full_max_drawdown_net_pts": None,
+            "full_average_monthly_net_pnl": None,
+            "full_worst_month_net_pnl": None,
+            "traceability_missing": [
+                "artifact_scope",
+                "summary_path",
+                "research_decision",
+                "edge_floor_metric",
+                "splits.full.mean_net_edge_pts_per_trade",
+            ],
+        },
+        {
+            "candidate": "t1b_txf_volcompress_tmf",
+            "replay_status": "traceable",
+            "status": "blocked_by_audit",
+            "reason": "t1b_v0_audit_blocker:v0_latency_profile_deferred",
+            "summary_path": "experiments/validations/t1b_volcompress_v0/20260602T000000Z_summary.json",
+            "edge_floor_metric": "mean_net_edge_pts_per_trade",
+            "mean_net_edge_pts_per_trade": 12.5,
+            "edge_floor_cleared": True,
+            "out_of_sample_mean_net_edge_pts_per_trade": 10.75,
+            "risk_gate_drawdown_within_2x_average_monthly_net_pnl": False,
+            "full_max_drawdown_net_pts": 31.0,
+            "full_average_monthly_net_pnl": 11.0,
+            "full_worst_month_net_pnl": -4.0,
+            "traceability_missing": [],
+        }
+    ]
 
 
 def test_factory_backfill_research_decisions_dry_run_writes_plan_without_mutating_meta(

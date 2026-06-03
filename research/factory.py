@@ -792,6 +792,84 @@ def _audit_data_governance(
         errors.append("Data governance violation: metadata sidecar invalid for dataset(s): " + bad)
 
 
+def _audit_strategy_spec_fixed_templates(errors: list[str], details: dict[str, Any]) -> None:
+    """Audit fixed strategy spec templates and existing candidate specs."""
+    from hft_platform.alpha.strategy_spec import (
+        REQUIRED_TOP_LEVEL_FIELDS,
+        load_spec,
+        template_field_audit,
+        validate_spec,
+    )
+
+    template_paths: list[Path] = []
+    canonical_template = ROOT / "templates" / "strategy_spec.yaml"
+    if canonical_template.exists():
+        template_paths.append(canonical_template)
+    alpha_templates = ROOT / "alphas" / "_templates"
+    if alpha_templates.exists():
+        template_paths.extend(sorted(alpha_templates.glob("spec*.yaml")))
+
+    template_records: list[dict[str, Any]] = []
+    template_missing_required: list[dict[str, Any]] = []
+    parse_errors: list[dict[str, Any]] = []
+    for template_path in sorted(set(template_paths)):
+        rel_path = _rel_to_root(template_path)
+        try:
+            spec = load_spec(template_path)
+        except Exception as exc:  # noqa: BLE001 - audit should collect all failures.
+            parse_errors.append({"path": rel_path, "errors": [f"failed to load template: {exc!r}"]})
+            continue
+        present, missing, extra = template_field_audit(spec)
+        template_records.append(
+            {
+                "path": rel_path,
+                "present": present,
+                "missing": missing,
+                "extra": extra,
+            }
+        )
+        if missing:
+            template_missing_required.append({"path": rel_path, "missing": missing})
+
+    candidate_valid: list[str] = []
+    candidate_invalid: list[dict[str, Any]] = []
+    alphas_root = ROOT / "alphas"
+    candidate_paths = (
+        sorted(p for p in alphas_root.glob("*/spec.yaml") if not p.parent.name.startswith("_"))
+        if alphas_root.exists()
+        else []
+    )
+    for spec_path in candidate_paths:
+        rel_path = _rel_to_root(spec_path)
+        try:
+            spec = load_spec(spec_path)
+        except Exception as exc:  # noqa: BLE001 - audit should collect all failures.
+            candidate_invalid.append({"path": rel_path, "errors": [f"failed to load spec: {exc!r}"]})
+            continue
+        spec_errors = validate_spec(spec)
+        if spec_errors:
+            candidate_invalid.append({"path": rel_path, "errors": spec_errors})
+        else:
+            candidate_valid.append(rel_path)
+
+    details["strategy_spec_fixed_template_audit"] = {
+        "required_top_level_fields": list(REQUIRED_TOP_LEVEL_FIELDS),
+        "templates": template_records,
+        "template_missing_required": template_missing_required,
+        "candidate_valid": candidate_valid,
+        "candidate_invalid": candidate_invalid,
+        "parse_errors": parse_errors,
+    }
+    if template_missing_required or parse_errors:
+        bad = ", ".join(
+            item["path"] for item in [*template_missing_required, *parse_errors]
+        )
+        errors.append(f"strategy spec template fixed-field audit failed: {bad}")
+    if candidate_invalid:
+        bad = ", ".join(item["path"] for item in candidate_invalid)
+        errors.append(f"candidate strategy spec invalid: {bad}")
+
+
 def _audit_experiment_edge_metric_semantics(details: dict[str, Any]) -> None:
     """Audit Gate-C edge artifacts for trustworthy edge semantics.
 
@@ -910,6 +988,584 @@ def _audit_experiment_research_decisions(details: dict[str, Any]) -> None:
     }
 
 
+def _audit_validation_summary_index(details: dict[str, Any]) -> None:
+    """Index latest validation-summary artifacts by candidate for replay/search."""
+    validations_root = ROOT / "experiments" / "validations"
+    summary_paths = sorted(validations_root.glob("**/*_summary.json")) if validations_root.exists() else []
+    latest: dict[str, dict[str, Any]] = {}
+    parse_errors: list[str] = []
+
+    for summary_path in summary_paths:
+        payload = _load_json_object(summary_path)
+        rel_path = _rel_to_root(summary_path)
+        if payload is None:
+            parse_errors.append(rel_path)
+            continue
+        candidate = str(payload.get("candidate") or "").strip()
+        if not candidate:
+            continue
+        decision = payload.get("research_decision")
+        decision_map = decision if isinstance(decision, dict) else {}
+        evidence = decision_map.get("evidence")
+        evidence_list = [str(item) for item in evidence] if isinstance(evidence, list) else []
+        hard_gate = payload.get("hard_gate")
+        hard_gate_map = hard_gate if isinstance(hard_gate, dict) else {}
+        splits = payload.get("splits")
+        splits_map = splits if isinstance(splits, dict) else {}
+        full = splits_map.get("full", {})
+        full_map = full if isinstance(full, dict) else {}
+        out_sample = splits_map.get("out_of_sample", {})
+        out_sample_map = out_sample if isinstance(out_sample, dict) else {}
+        latest[candidate] = {
+            "summary_path": rel_path,
+            "research_decision_status": str(decision_map.get("status") or ""),
+            "research_decision_reason": str(decision_map.get("reason") or ""),
+            "research_decision_evidence": evidence_list,
+            "edge_floor_metric": str(payload.get("edge_floor_metric") or ""),
+            "mean_net_edge_pts_per_trade": full_map.get("mean_net_edge_pts_per_trade"),
+            "edge_floor_cleared": bool(payload.get("edge_floor_cleared")),
+            "risk_gate_drawdown_within_2x_average_monthly_net_pnl": hard_gate_map.get(
+                "drawdown_within_2x_average_monthly_net_pnl"
+            ),
+            "full_max_drawdown_net_pts": full_map.get("max_drawdown_net_pts"),
+            "full_average_monthly_net_pnl": full_map.get("average_monthly_net_pnl"),
+            "full_median_monthly_net_pnl": full_map.get("median_monthly_net_pnl"),
+            "full_worst_month_net_pnl": full_map.get("worst_month_net_pnl"),
+            "full_max_single_month_net_share_of_positive": full_map.get(
+                "max_single_month_net_share_of_positive"
+            ),
+            "full_drawdown_within_2x_average_monthly_net_pnl": full_map.get(
+                "drawdown_within_2x_average_monthly_net_pnl"
+            ),
+            "out_of_sample_mean_net_edge_pts_per_trade": out_sample_map.get("mean_net_edge_pts_per_trade"),
+            "out_of_sample_max_drawdown_net_pts": out_sample_map.get("max_drawdown_net_pts"),
+            "out_of_sample_average_monthly_net_pnl": out_sample_map.get("average_monthly_net_pnl"),
+            "out_of_sample_median_monthly_net_pnl": out_sample_map.get("median_monthly_net_pnl"),
+            "out_of_sample_worst_month_net_pnl": out_sample_map.get("worst_month_net_pnl"),
+            "out_of_sample_max_single_month_net_share_of_positive": out_sample_map.get(
+                "max_single_month_net_share_of_positive"
+            ),
+            "out_of_sample_drawdown_within_2x_average_monthly_net_pnl": out_sample_map.get(
+                "drawdown_within_2x_average_monthly_net_pnl"
+            ),
+            "traceability_missing": _validation_summary_missing_fields(payload),
+        }
+
+    details["validation_summary_index"] = latest
+    details["validation_summary_parse_errors"] = parse_errors
+
+
+def _audit_research_decision_replay(details: dict[str, Any]) -> None:
+    """Create a compact candidate-level decision table from indexed summaries."""
+    index = details.get("validation_summary_index")
+    index_map = index if isinstance(index, dict) else {}
+    replay: list[dict[str, Any]] = []
+    for candidate, row in sorted(index_map.items()):
+        row_map = row if isinstance(row, dict) else {}
+        traceability_missing = row_map.get("traceability_missing", [])
+        replay_status = "traceable" if traceability_missing == [] else "legacy_untraceable"
+        replay.append(
+            {
+                "candidate": str(candidate),
+                "replay_status": replay_status,
+                "status": row_map.get("research_decision_status"),
+                "reason": row_map.get("research_decision_reason"),
+                "summary_path": row_map.get("summary_path"),
+                "edge_floor_metric": row_map.get("edge_floor_metric"),
+                "mean_net_edge_pts_per_trade": row_map.get("mean_net_edge_pts_per_trade"),
+                "edge_floor_cleared": row_map.get("edge_floor_cleared"),
+                "out_of_sample_mean_net_edge_pts_per_trade": row_map.get(
+                    "out_of_sample_mean_net_edge_pts_per_trade"
+                ),
+                "risk_gate_drawdown_within_2x_average_monthly_net_pnl": row_map.get(
+                    "risk_gate_drawdown_within_2x_average_monthly_net_pnl"
+                ),
+                "full_max_drawdown_net_pts": row_map.get("full_max_drawdown_net_pts"),
+                "full_average_monthly_net_pnl": row_map.get("full_average_monthly_net_pnl"),
+                "full_worst_month_net_pnl": row_map.get("full_worst_month_net_pnl"),
+                "traceability_missing": traceability_missing,
+            }
+        )
+    details["research_decision_replay"] = replay
+
+
+def _audit_research_record_generation(details: dict[str, Any]) -> None:
+    """Project complete research-record rows from specs plus validation summaries."""
+    spec_index = _valid_strategy_spec_index()
+    summary_index = details.get("validation_summary_index")
+    summary_map = summary_index if isinstance(summary_index, dict) else {}
+    complete_records: list[dict[str, Any]] = []
+    incomplete_records: list[dict[str, Any]] = []
+
+    for candidate, row in sorted(summary_map.items()):
+        candidate_id = str(candidate)
+        row_map = row if isinstance(row, dict) else {}
+        missing = list(row_map.get("traceability_missing") or [])
+        spec_record = spec_index.get(candidate_id)
+        if spec_record is None:
+            incomplete_records.append(
+                {
+                    "candidate": candidate_id,
+                    "summary_path": row_map.get("summary_path"),
+                    "missing": [*missing, "strategy_spec"],
+                }
+            )
+            continue
+        summary_rel = str(row_map.get("summary_path") or "")
+        summary = _load_json_object(ROOT / summary_rel) if summary_rel else None
+        if summary is None:
+            incomplete_records.append(
+                {
+                    "candidate": candidate_id,
+                    "spec_path": spec_record["path"],
+                    "summary_path": summary_rel,
+                    "missing": [*missing, "validation_summary_loadable"],
+                }
+            )
+            continue
+        if missing:
+            incomplete_records.append(
+                {
+                    "candidate": candidate_id,
+                    "spec_path": spec_record["path"],
+                    "summary_path": summary_rel,
+                    "missing": missing,
+                }
+            )
+            continue
+
+        spec = spec_record["spec"]
+        validation_plan = spec.get("validation_plan")
+        validation_plan_map = validation_plan if isinstance(validation_plan, dict) else {}
+        splits = summary.get("splits")
+        split_map = splits if isinstance(splits, dict) else {}
+        full = split_map.get("full")
+        oos = split_map.get("out_of_sample")
+        full_map = full if isinstance(full, dict) else {}
+        oos_map = oos if isinstance(oos, dict) else {}
+        hard_gate = summary.get("hard_gate")
+        hard_gate_map = hard_gate if isinstance(hard_gate, dict) else {}
+        definition = summary.get("definition")
+        definition_map = definition if isinstance(definition, dict) else {}
+
+        complete_records.append(
+            {
+                "candidate": candidate_id,
+                "spec_path": spec_record["path"],
+                "summary_path": summary_rel,
+                "strategy_name": spec.get("strategy_name"),
+                "market": spec.get("market"),
+                "instrument": spec.get("instrument"),
+                "hypothesis": spec.get("hypothesis"),
+                "timeframe": spec.get("timeframe"),
+                "holding_period": spec.get("holding_period"),
+                "entry_rule": spec.get("entry_rule"),
+                "exit_rule": spec.get("exit_rule"),
+                "position_sizing": spec.get("position_sizing"),
+                "risk_control": spec.get("risk_control"),
+                "cost_assumptions": spec.get("cost_model"),
+                "validation_plan": validation_plan,
+                "data_range": validation_plan_map.get("data_range"),
+                "parameters": definition_map,
+                "full_results": _research_record_split_results(full_map),
+                "out_of_sample_results": _research_record_split_results(oos_map),
+                "risk_metrics": _research_record_risk_metrics(full_map, oos_map, hard_gate_map),
+                "research_decision": summary.get("research_decision"),
+            }
+        )
+
+    details["research_record_generation"] = {
+        "complete_records": complete_records,
+        "incomplete_records": incomplete_records,
+    }
+
+
+def _audit_research_parity_evidence(details: dict[str, Any]) -> None:
+    """Audit candidate-level replay/paper/live parity evidence shape."""
+    record_audit = details.get("research_record_generation")
+    record_map = record_audit if isinstance(record_audit, dict) else {}
+    records = record_map.get("complete_records")
+    record_list = records if isinstance(records, list) else []
+    complete: list[dict[str, Any]] = []
+    missing: list[dict[str, Any]] = []
+    invalid: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
+
+    for record in record_list:
+        if not isinstance(record, dict):
+            continue
+        candidate = str(record.get("candidate") or "")
+        summary_path = str(record.get("summary_path") or "")
+        summary = _load_json_object(ROOT / summary_path) if summary_path else None
+        parity = summary.get("parity_evidence") if isinstance(summary, dict) else None
+        if not isinstance(parity, dict):
+            missing.append(
+                {
+                    "candidate": candidate,
+                    "summary_path": summary_path,
+                    "status": "missing",
+                    "missing": ["parity_evidence"],
+                }
+            )
+            continue
+
+        row = _research_parity_evidence_row(candidate, summary_path, parity)
+        if row["status"] == "pass":
+            complete.append(row)
+        elif row["status"] == "fail":
+            failed.append(row)
+        else:
+            invalid.append(row)
+
+    details["research_parity_evidence"] = {
+        "required_checks": list(_RESEARCH_PARITY_REQUIRED_CHECKS),
+        "allowed_mismatch_categories": _research_parity_allowed_mismatch_categories(),
+        "complete": complete,
+        "missing": missing,
+        "invalid": invalid,
+        "failed": failed,
+    }
+
+
+_RESEARCH_PARITY_REQUIRED_CHECKS: tuple[str, ...] = (
+    "signal_trigger_time",
+    "direction",
+    "position_size",
+    "entry",
+    "exit",
+    "session_filter",
+    "risk_filter",
+    "force_flat_rule",
+)
+
+
+def _research_parity_allowed_mismatch_categories() -> list[str]:
+    from hft_platform.alpha.divergence_category import DivergenceCategory
+
+    return [category.value for category in DivergenceCategory]
+
+
+def _research_parity_evidence_row(
+    candidate: str,
+    summary_path: str,
+    parity: dict[str, Any],
+) -> dict[str, Any]:
+    match_pct = parity.get("match_pct")
+    threshold = parity.get("threshold", 95.0)
+    checked = parity.get("checked_dimensions")
+    checked_list = [str(item) for item in checked] if isinstance(checked, list) else []
+    mismatch_counts_raw = parity.get("mismatch_counts")
+    mismatch_counts = mismatch_counts_raw if isinstance(mismatch_counts_raw, dict) else {}
+    allowed = set(_research_parity_allowed_mismatch_categories())
+    invalid_categories = sorted(str(category) for category in mismatch_counts if str(category) not in allowed)
+    missing_checks = [check for check in _RESEARCH_PARITY_REQUIRED_CHECKS if check not in checked_list]
+    errors: list[str] = []
+    if parity.get("artifact_scope") != "parity_evidence":
+        errors.append("artifact_scope")
+    if not isinstance(match_pct, int | float):
+        errors.append("match_pct")
+    elif isinstance(threshold, int | float) and float(match_pct) < float(threshold):
+        errors.append("match_pct_below_threshold")
+    if not isinstance(threshold, int | float):
+        errors.append("threshold")
+    if not isinstance(checked, list):
+        errors.append("checked_dimensions")
+    elif missing_checks:
+        errors.append("missing_required_checks")
+    if not isinstance(mismatch_counts_raw, dict):
+        errors.append("mismatch_counts")
+    elif invalid_categories:
+        errors.append("invalid_mismatch_categories")
+
+    status = "pass"
+    if errors:
+        schema_error_names = {
+            "artifact_scope",
+            "match_pct",
+            "threshold",
+            "checked_dimensions",
+            "missing_required_checks",
+            "mismatch_counts",
+            "invalid_mismatch_categories",
+        }
+        status = "invalid" if any(error in schema_error_names for error in errors) else "fail"
+    return {
+        "candidate": candidate,
+        "summary_path": summary_path,
+        "status": status,
+        "match_pct": match_pct,
+        "threshold": threshold,
+        "mismatch_counts": mismatch_counts,
+        "invalid_mismatch_categories": invalid_categories,
+        "missing_checks": missing_checks,
+        "errors": errors,
+    }
+
+
+def _audit_research_candidate_comparison(details: dict[str, Any]) -> None:
+    """Build a uniform candidate comparison table from complete research records."""
+    record_audit = details.get("research_record_generation")
+    record_map = record_audit if isinstance(record_audit, dict) else {}
+    records = record_map.get("complete_records")
+    record_list = records if isinstance(records, list) else []
+    parity_by_candidate = _research_parity_evidence_by_candidate(details)
+    rows = [
+        _research_candidate_comparison_row(record, parity_by_candidate.get(str(record.get("candidate") or "")))
+        for record in record_list
+        if isinstance(record, dict)
+    ]
+    rows.sort(
+        key=lambda row: (
+            not row["paper_live_eligible"],
+            -_sortable_number(row.get("out_of_sample_mean_net_edge_pts_per_trade")),
+            -_sortable_number(row.get("mean_net_edge_pts_per_trade")),
+            str(row.get("candidate") or ""),
+        )
+    )
+    details["research_candidate_comparison"] = {
+        "rows": rows,
+        "paper_live_candidates": [row["candidate"] for row in rows if row["paper_live_eligible"]],
+        "not_eligible": [row["candidate"] for row in rows if not row["paper_live_eligible"]],
+    }
+
+
+def _research_parity_evidence_by_candidate(details: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    parity_audit = details.get("research_parity_evidence")
+    parity_map = parity_audit if isinstance(parity_audit, dict) else {}
+    by_candidate: dict[str, dict[str, Any]] = {}
+    for bucket in ("complete", "failed", "invalid", "missing"):
+        rows = parity_map.get(bucket)
+        row_list = rows if isinstance(rows, list) else []
+        for row in row_list:
+            if isinstance(row, dict):
+                by_candidate[str(row.get("candidate") or "")] = row
+    return by_candidate
+
+
+def _research_candidate_comparison_row(
+    record: dict[str, Any],
+    parity_evidence: dict[str, Any] | None,
+) -> dict[str, Any]:
+    validation_plan = record.get("validation_plan")
+    validation_plan_map = validation_plan if isinstance(validation_plan, dict) else {}
+    sample_targets = validation_plan_map.get("sample_targets")
+    sample_targets_map = sample_targets if isinstance(sample_targets, dict) else {}
+    full_results = record.get("full_results")
+    full_map = full_results if isinstance(full_results, dict) else {}
+    oos_results = record.get("out_of_sample_results")
+    oos_map = oos_results if isinstance(oos_results, dict) else {}
+    risk_metrics = record.get("risk_metrics")
+    risk_map = risk_metrics if isinstance(risk_metrics, dict) else {}
+    decision = record.get("research_decision")
+    decision_map = decision if isinstance(decision, dict) else {}
+
+    edge_floor = float(validation_plan_map.get("net_edge_floor_pts", 10.0))
+    full_edge = full_map.get("mean_net_edge_pts_per_trade")
+    oos_edge = oos_map.get("mean_net_edge_pts_per_trade")
+    full_events = full_map.get("events")
+    oos_days = oos_map.get("trading_days")
+    min_round_trips = sample_targets_map.get("min_round_trips")
+    min_oos_days = sample_targets_map.get("min_oos_trading_days")
+    drawdown_gate = risk_map.get("drawdown_within_2x_average_monthly_net_pnl")
+    decision_status = str(decision_map.get("status") or "")
+    parity_status = str(parity_evidence.get("status") if parity_evidence else "missing")
+    replay_match_pct = parity_evidence.get("match_pct") if parity_evidence else None
+    blockers = _research_candidate_blockers(
+        full_edge=full_edge,
+        oos_edge=oos_edge,
+        edge_floor=edge_floor,
+        full_events=full_events,
+        min_round_trips=min_round_trips,
+        oos_days=oos_days,
+        min_oos_days=min_oos_days,
+        drawdown_gate=drawdown_gate,
+        decision_status=decision_status,
+        promotion_blockers=validation_plan_map.get("promotion_blockers"),
+        parity_status=parity_status,
+    )
+    paper_live_eligible = not blockers
+    return {
+        "candidate": record.get("candidate"),
+        "strategy_name": record.get("strategy_name"),
+        "market": record.get("market"),
+        "instrument": record.get("instrument"),
+        "timeframe": record.get("timeframe"),
+        "holding_period": record.get("holding_period"),
+        "data_range": record.get("data_range"),
+        "spec_path": record.get("spec_path"),
+        "summary_path": record.get("summary_path"),
+        "mean_net_edge_pts_per_trade": full_edge,
+        "out_of_sample_mean_net_edge_pts_per_trade": oos_edge,
+        "edge_floor_pts": edge_floor,
+        "full_events": full_events,
+        "out_of_sample_trading_days": oos_days,
+        "min_round_trips": min_round_trips,
+        "min_oos_trading_days": min_oos_days,
+        "drawdown_within_2x_average_monthly_net_pnl": drawdown_gate,
+        "replay_match_pct": replay_match_pct,
+        "parity_evidence_status": parity_status,
+        "research_decision_status": decision_status,
+        "research_decision_reason": str(decision_map.get("reason") or ""),
+        "paper_live_eligible": paper_live_eligible,
+        "eligibility_status": (
+            "paper_live_candidate"
+            if paper_live_eligible
+            else _research_candidate_eligibility_status(blockers, decision_status)
+        ),
+        "blockers": blockers,
+    }
+
+
+def _research_candidate_blockers(
+    *,
+    full_edge: Any,
+    oos_edge: Any,
+    edge_floor: float,
+    full_events: Any,
+    min_round_trips: Any,
+    oos_days: Any,
+    min_oos_days: Any,
+    drawdown_gate: Any,
+    decision_status: str,
+    promotion_blockers: Any,
+    parity_status: str,
+) -> list[str]:
+    blockers: list[str] = []
+    if not _metric_gt(full_edge, edge_floor):
+        blockers.append("full_edge_floor_not_cleared")
+    if not _metric_gt(oos_edge, edge_floor):
+        blockers.append("out_of_sample_edge_floor_not_cleared")
+    if not _metric_at_least(full_events, min_round_trips):
+        blockers.append("min_round_trips_not_met")
+    if not _metric_at_least(oos_days, min_oos_days):
+        blockers.append("min_oos_trading_days_not_met")
+    if drawdown_gate is False:
+        blockers.append("drawdown_gate_failed")
+    if decision_status in {"failed", "needs_more_sample", "inconclusive", "blocked_by_risk", "blocked_by_audit"}:
+        blockers.append(f"research_decision_{decision_status}")
+    if isinstance(promotion_blockers, list) and promotion_blockers:
+        blockers.append("validation_plan_promotion_blockers")
+    if parity_status == "missing":
+        blockers.append("parity_evidence_missing")
+    elif parity_status != "pass":
+        blockers.append(f"parity_evidence_{parity_status}")
+    return blockers
+
+
+def _research_candidate_eligibility_status(blockers: list[str], decision_status: str) -> str:
+    if decision_status in {"failed", "needs_more_sample", "inconclusive", "blocked_by_risk", "blocked_by_audit"}:
+        return decision_status
+    if any(blocker in blockers for blocker in ("min_round_trips_not_met", "min_oos_trading_days_not_met")):
+        return "needs_more_sample"
+    if "drawdown_gate_failed" in blockers:
+        return "blocked_by_risk"
+    if any(blocker.startswith("parity_evidence_") for blocker in blockers):
+        return "blocked_by_parity"
+    if "validation_plan_promotion_blockers" in blockers:
+        return "blocked_by_audit"
+    return "not_eligible"
+
+
+def _metric_gt(value: Any, threshold: float) -> bool:
+    if not isinstance(value, int | float):
+        return False
+    return float(value) > threshold
+
+
+def _metric_at_least(value: Any, threshold: Any) -> bool:
+    if threshold is None:
+        return True
+    if not isinstance(value, int | float) or not isinstance(threshold, int | float):
+        return False
+    return float(value) >= float(threshold)
+
+
+def _sortable_number(value: Any) -> float:
+    if isinstance(value, int | float):
+        return float(value)
+    return float("-inf")
+
+
+def _valid_strategy_spec_index() -> dict[str, dict[str, Any]]:
+    from hft_platform.alpha.strategy_spec import load_spec, validate_spec
+
+    spec_index: dict[str, dict[str, Any]] = {}
+    alphas_root = ROOT / "alphas"
+    if not alphas_root.exists():
+        return spec_index
+    for spec_path in sorted(p for p in alphas_root.glob("*/spec.yaml") if not p.parent.name.startswith("_")):
+        try:
+            spec = load_spec(spec_path)
+        except Exception:  # noqa: BLE001 - audit classification is non-failing here.
+            continue
+        if validate_spec(spec):
+            continue
+        record = {"path": _rel_to_root(spec_path), "spec": spec}
+        spec_index.setdefault(spec_path.parent.name, record)
+        strategy_name = str(spec.get("strategy_name") or "").strip()
+        if strategy_name:
+            spec_index.setdefault(strategy_name, record)
+    return spec_index
+
+
+def _research_record_split_results(split: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "events": split.get("events"),
+        "trading_days": split.get("trading_days"),
+        "mean_net_edge_pts_per_trade": split.get("mean_net_edge_pts_per_trade"),
+    }
+
+
+def _research_record_risk_metrics(
+    full: dict[str, Any],
+    oos: dict[str, Any],
+    hard_gate: dict[str, Any],
+) -> dict[str, Any]:
+    metrics = {
+        "full_max_drawdown_net_pts": full.get("max_drawdown_net_pts"),
+        "full_average_monthly_net_pnl": full.get("average_monthly_net_pnl"),
+        "full_median_monthly_net_pnl": full.get("median_monthly_net_pnl"),
+        "full_worst_month_net_pnl": full.get("worst_month_net_pnl"),
+        "full_drawdown_within_2x_average_monthly_net_pnl": full.get(
+            "drawdown_within_2x_average_monthly_net_pnl"
+        ),
+        "out_of_sample_max_drawdown_net_pts": oos.get("max_drawdown_net_pts"),
+        "out_of_sample_average_monthly_net_pnl": oos.get("average_monthly_net_pnl"),
+        "out_of_sample_median_monthly_net_pnl": oos.get("median_monthly_net_pnl"),
+        "out_of_sample_worst_month_net_pnl": oos.get("worst_month_net_pnl"),
+        "out_of_sample_drawdown_within_2x_average_monthly_net_pnl": oos.get(
+            "drawdown_within_2x_average_monthly_net_pnl"
+        ),
+        "drawdown_within_2x_average_monthly_net_pnl": hard_gate.get(
+            "drawdown_within_2x_average_monthly_net_pnl"
+        ),
+    }
+    return {key: value for key, value in metrics.items() if value is not None}
+
+
+def _validation_summary_missing_fields(payload: dict[str, Any]) -> list[str]:
+    missing: list[str] = []
+    if payload.get("artifact_scope") != "validation_summary":
+        missing.append("artifact_scope")
+    if not str(payload.get("summary_path") or "").strip():
+        missing.append("summary_path")
+    decision = payload.get("research_decision")
+    if not isinstance(decision, dict):
+        missing.append("research_decision")
+    else:
+        if not str(decision.get("status") or "").strip():
+            missing.append("research_decision.status")
+        if not str(decision.get("reason") or "").strip():
+            missing.append("research_decision.reason")
+    if not str(payload.get("edge_floor_metric") or "").strip():
+        missing.append("edge_floor_metric")
+    splits = payload.get("splits")
+    full = splits.get("full") if isinstance(splits, dict) else None
+    if not isinstance(full, dict) or full.get("mean_net_edge_pts_per_trade") is None:
+        missing.append("splits.full.mean_net_edge_pts_per_trade")
+    return missing
+
+
 def cmd_backfill_research_decisions(args: argparse.Namespace) -> int:
     """Build a dry-run plan for safely backfilling replayable research decisions."""
     details: dict[str, Any] = {}
@@ -940,6 +1596,51 @@ def cmd_backfill_research_decisions(args: argparse.Namespace) -> int:
         f"mode={payload['mode']} planned={payload['planned_count']} skipped={payload['skipped_count']}"
     )
     return 0
+
+
+def cmd_parity_evidence_template(args: argparse.Namespace) -> int:
+    """Emit a canonical parity-evidence payload from explicit operator inputs."""
+    candidate = str(args.candidate)
+    summary_path = str(args.summary_path or "")
+    checked_dimensions = list(getattr(args, "checked_dimension", []) or []) or list(
+        _RESEARCH_PARITY_REQUIRED_CHECKS
+    )
+    parity_evidence = {
+        "artifact_scope": "parity_evidence",
+        "match_pct": getattr(args, "match_pct", None),
+        "threshold": getattr(args, "threshold", 95.0),
+        "checked_dimensions": checked_dimensions,
+        "mismatch_counts": _parse_parity_mismatch_counts(list(getattr(args, "mismatch_count", []) or [])),
+    }
+    validation = _research_parity_evidence_row(candidate, summary_path, parity_evidence)
+    payload = {
+        "generated_at": _now_iso(),
+        "schema": "research.parity_evidence.v1",
+        "mode": "evidence" if parity_evidence["match_pct"] is not None else "template",
+        "candidate": candidate,
+        "summary_path": summary_path,
+        "parity_evidence": parity_evidence,
+        "validation": validation,
+    }
+    out_path = Path(args.out).resolve() if getattr(args, "out", "") else ROOT / "reports" / "parity_evidence.json"
+    _write_json(out_path, payload)
+    print(f"[research.factory] parity-evidence template: {out_path}")
+    print(f"[research.factory] status={validation['status']} errors={len(validation['errors'])}")
+    return 0 if validation["status"] == "pass" else 1
+
+
+def _parse_parity_mismatch_counts(raw_counts: list[str]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in raw_counts:
+        label, sep, raw_count = str(item).partition("=")
+        category = label.strip()
+        if not category:
+            continue
+        count = 1
+        if sep:
+            count = int(raw_count.strip())
+        counts[category] = count
+    return counts
 
 
 def _load_json_object(path: Path) -> dict[str, Any] | None:
@@ -1078,8 +1779,14 @@ def cmd_audit(args: argparse.Namespace) -> int:
     _audit_paper_refs(warnings, details)
     _audit_binary_pollution(warnings, details)
     _audit_data_governance(errors, details, data_paths=list(getattr(args, "data", []) or []))
+    _audit_strategy_spec_fixed_templates(errors, details)
     _audit_experiment_edge_metric_semantics(details)
     _audit_experiment_research_decisions(details)
+    _audit_validation_summary_index(details)
+    _audit_research_decision_replay(details)
+    _audit_research_record_generation(details)
+    _audit_research_parity_evidence(details)
+    _audit_research_candidate_comparison(details)
 
     result = AuditResult(
         generated_at=_now_iso(),
@@ -1479,6 +2186,38 @@ def build_parser() -> argparse.ArgumentParser:
     )
     backfill_decisions_cmd.add_argument("--out", default="", help="Output json plan path.")
     backfill_decisions_cmd.set_defaults(func=cmd_backfill_research_decisions, apply=False)
+
+    parity_template_cmd = sub.add_parser(
+        "parity-evidence-template",
+        help="Emit canonical parity_evidence JSON from explicit replay/paper/live parity inputs.",
+    )
+    parity_template_cmd.add_argument("--candidate", required=True, help="Candidate alpha id.")
+    parity_template_cmd.add_argument(
+        "--summary-path",
+        default="",
+        help="Validation summary path this evidence belongs to.",
+    )
+    parity_template_cmd.add_argument("--match-pct", type=float, default=None, help="Replay parity match percentage.")
+    parity_template_cmd.add_argument(
+        "--threshold",
+        type=float,
+        default=95.0,
+        help="Required match percentage threshold.",
+    )
+    parity_template_cmd.add_argument(
+        "--checked-dimension",
+        action="append",
+        default=[],
+        help="Checked parity dimension; repeat for partial evidence. Defaults to all required dimensions.",
+    )
+    parity_template_cmd.add_argument(
+        "--mismatch-count",
+        action="append",
+        default=[],
+        help="Mismatch category count as category=count; repeat for multiple categories.",
+    )
+    parity_template_cmd.add_argument("--out", default="", help="Output json path.")
+    parity_template_cmd.set_defaults(func=cmd_parity_evidence_template)
 
     index_cmd = sub.add_parser("index", help="Build machine-readable alpha pipeline index.")
     index_cmd.add_argument("--out", default="", help="Output json path.")
