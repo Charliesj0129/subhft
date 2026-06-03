@@ -32,6 +32,19 @@ class ReplayParityGate:
     name = "replay_parity"
     applies_to = {"maker", "taker"}
 
+    # Goal §7 parity dimensions that live on the canonical intent only when the
+    # source intent carries them (see intent_log._OPTIONAL_PARITY_FIELDS). The
+    # production OrderIntent contract does not yet expose these, so on real
+    # streams they are absent and these dimensions go UNCHECKED. We surface that
+    # as coverage rather than letting absence read as agreement. Advisory only:
+    # failing the gate here would block every real strategy until the production
+    # contract change lands — that promotion-policy decision is not the gate's.
+    expected_parity_dimensions = (
+        "session_phase",
+        "risk_filter_active",
+        "force_flat_triggered",
+    )
+
     def evaluate(
         self,
         result: Any,
@@ -57,6 +70,13 @@ class ReplayParityGate:
         category_counts = categorize_histogram(histogram)
         dominant_category = max(category_counts, key=lambda k: category_counts[k]) if category_counts else ""
 
+        # Coverage honesty (goal §7): a field absent from BOTH streams was not
+        # checked, so a high match_pct must not be mistaken for verified
+        # session/risk/force-flat parity. Report which expected dimensions the
+        # producer never emitted.
+        observed_fields = set(getattr(report, "observed_fields", ()) or ())
+        uncovered = [f for f in self.expected_parity_dimensions if f not in observed_fields]
+
         passed = match_pct >= threshold
         metrics: dict[str, Any] = {
             "match_pct": match_pct,
@@ -64,8 +84,19 @@ class ReplayParityGate:
             "first_divergence_idx": first_div,
             "divergence_categories": category_counts,
             "dominant_divergence_category": dominant_category,
+            # Preserve the raw per-field histogram (goal §7): the category
+            # rollup above collapses field identity, so an operator can no
+            # longer see *which* intent field (price/qty/side/session_phase/...)
+            # diverged. Keep it so the per-field audit view can re-derive each
+            # field's §8 category without re-running the replay.
+            "per_field_divergences": dict(histogram),
+            # Expected §7 dimensions the producer never emitted ⇒ NOT verified
+            # by this run (advisory; does not flip `passed`).
+            "uncovered_parity_dimensions": uncovered,
         }
         suffix = f", dominant_category={dominant_category}" if dominant_category else ""
+        if uncovered:
+            suffix += f", uncovered_parity_dimensions={'/'.join(uncovered)}"
         return SubGateResult(
             name=self.name,
             passed=passed,

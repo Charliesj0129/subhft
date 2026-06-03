@@ -12,6 +12,8 @@ from hft_platform.alpha._sub_gates.replay_parity import ReplayParityGate
 class _FakeReport:
     match_pct: float
     first_divergence_idx: int | None = None
+    divergence_histogram: dict[str, int] | None = None
+    observed_fields: tuple[str, ...] = ()
 
 
 @dataclass
@@ -53,6 +55,36 @@ class TestReplayParityGate:
 
         assert out.passed is False
         assert "missing" in out.details.lower()
+
+    def test_reports_uncovered_parity_dimensions_when_producer_omits_them(self) -> None:
+        # Real OrderIntent streams carry none of the §7 fields, so the gate must
+        # flag them as uncovered rather than letting a high match_pct read as
+        # verified session/risk/force-flat parity. Advisory: passed stays True.
+        gate = ReplayParityGate()
+        report = _FakeReport(match_pct=100.0, observed_fields=("price", "qty", "side"))
+        result = _FakeResult(replay_parity_report=report)
+
+        out = gate.evaluate(result, config=None, thresholds={"replay_parity_match_pct_min": 95.0})
+
+        assert out.passed is True
+        assert out.metrics["uncovered_parity_dimensions"] == [
+            "session_phase",
+            "risk_filter_active",
+            "force_flat_triggered",
+        ]
+        assert "uncovered_parity_dimensions" in out.details
+
+    def test_no_uncovered_dimensions_when_all_present(self) -> None:
+        gate = ReplayParityGate()
+        report = _FakeReport(
+            match_pct=100.0,
+            observed_fields=("price", "session_phase", "risk_filter_active", "force_flat_triggered"),
+        )
+        result = _FakeResult(replay_parity_report=report)
+
+        out = gate.evaluate(result, config=None, thresholds={"replay_parity_match_pct_min": 95.0})
+
+        assert out.metrics["uncovered_parity_dimensions"] == []
 
     def test_applies_to_includes_maker_and_taker(self) -> None:
         gate = ReplayParityGate()
