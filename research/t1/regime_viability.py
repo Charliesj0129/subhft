@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, time, timezone
 from pathlib import Path
 from statistics import median
-from typing import Iterable, Sequence
+from typing import Iterable, Sequence, cast
 
 import numpy as np
 
@@ -676,6 +676,1271 @@ def summarize_coverage_rows(rows: Sequence[dict[str, object]]) -> dict[str, obje
     }
 
 
+# ---------------------------------------------------------------------------
+# T1-B: volatility-compression -> directional expansion
+#
+# Mechanism (frozen V0, see research/alphas/t1b_txf_volcompress_tmf/README.md):
+# slide an anchor across the day session; at each anchor compare the realized
+# vol of a compression window against the prior baseline window. When the ratio
+# is <= ``max_compression_ratio`` (a genuine "coil"), watch for the first
+# directional break out of the compression range by >= ``min_break_points``.
+# Direction is the break side; entry is the TMF executable ask/bid at the TXF
+# trigger time (reuses ``evaluate_executable_returns``). A cooldown enforces
+# no-overlap. L2 is NOT an entry input here -- only TXF mid drives the signal
+# and TMF bid/ask provides executable fills.
+#
+# NB: ``RegimeEvent.opening_range_high``/``opening_range_low`` are reused to
+# carry the *compression* range bounds, and ``realized_vol_ratio`` carries the
+# compression ratio (compression_rv / baseline_rv, < 1 for a coil -- the
+# inverse semantics of T1-A's expansion ratio).
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class VolCompressionConfig:
+    session_start_ns: int
+    session_minutes: int = 300          # 08:45-13:45 TPE day session
+    baseline_minutes: int = 30          # reference vol window
+    compression_minutes: int = 30       # coil window
+    break_window_minutes: int = 30      # break must occur within this after the coil
+    step_minutes: int = 5               # anchor slide granularity
+    max_compression_ratio: float = 0.70  # compression_rv <= 0.70 * baseline_rv
+    min_break_points: float = 8.0       # break beyond range by >= this many pts
+    cooldown_minutes: int = 60          # no overlapping entries (max hold horizon)
+    min_window_points: int = 5          # min quotes per window for a valid RV
+
+
+def detect_vol_compression_events(
+    bbo: BboFrame,
+    trades: TradeFrame,
+    *,
+    contract: str,
+    date: str,
+    config: VolCompressionConfig,
+) -> list[RegimeEvent]:
+    if len(bbo.ts_ns) < config.min_window_points * 3:
+        return []
+
+    start = config.session_start_ns
+    session_end = start + config.session_minutes * NS_PER_MINUTE
+    baseline_ns = config.baseline_minutes * NS_PER_MINUTE
+    compression_ns = config.compression_minutes * NS_PER_MINUTE
+    break_ns = config.break_window_minutes * NS_PER_MINUTE
+    step_ns = config.step_minutes * NS_PER_MINUTE
+    cooldown_ns = config.cooldown_minutes * NS_PER_MINUTE
+
+    ts = bbo.ts_ns
+    mid = bbo.mid
+    events: list[RegimeEvent] = []
+    cooldown_until = start
+    anchor = start + baseline_ns + compression_ns
+    last_anchor = session_end - break_ns
+
+    while anchor <= last_anchor:
+        if anchor < cooldown_until:
+            anchor += step_ns
+            continue
+        base_mask = (ts >= anchor - compression_ns - baseline_ns) & (ts < anchor - compression_ns)
+        comp_mask = (ts >= anchor - compression_ns) & (ts < anchor)
+        if (
+            int(np.count_nonzero(base_mask)) < config.min_window_points
+            or int(np.count_nonzero(comp_mask)) < config.min_window_points
+        ):
+            anchor += step_ns
+            continue
+
+        baseline_rv = _realized_vol(mid[base_mask])
+        compression_rv = _realized_vol(mid[comp_mask])
+        if baseline_rv <= 0.0:
+            anchor += step_ns
+            continue
+        ratio = compression_rv / baseline_rv
+        if ratio > config.max_compression_ratio:
+            anchor += step_ns
+            continue
+
+        comp_mid = mid[comp_mask]
+        range_high = float(np.max(comp_mid))
+        range_low = float(np.min(comp_mid))
+
+        break_mask = (ts >= anchor) & (ts <= anchor + break_ns)
+        if not np.any(break_mask):
+            anchor += step_ns
+            continue
+        b_ts = ts[break_mask]
+        b_mid = mid[break_mask]
+        long_break = b_mid >= range_high + config.min_break_points
+        short_break = b_mid <= range_low - config.min_break_points
+        first_long = int(np.flatnonzero(long_break)[0]) if np.any(long_break) else None
+        first_short = int(np.flatnonzero(short_break)[0]) if np.any(short_break) else None
+        if first_long is not None and (first_short is None or first_long <= first_short):
+            direction = 1
+            local = first_long
+        elif first_short is not None:
+            direction = -1
+            local = first_short
+        else:
+            anchor += step_ns
+            continue
+
+        trigger_ns = int(b_ts[local])
+        entry_ref = float(b_mid[local])
+        vwap = _trade_vwap_until(trades, trigger_ns)
+        if vwap is not None:
+            if direction == 1 and entry_ref <= vwap:
+                anchor += step_ns
+                continue
+            if direction == -1 and entry_ref >= vwap:
+                anchor += step_ns
+                continue
+
+        events.append(
+            RegimeEvent(
+                contract=contract,
+                date=date,
+                regime_type="T1-B_vol_compression_expansion",
+                trigger_time=_iso_from_ns(trigger_ns),
+                trigger_time_ns=trigger_ns,
+                direction=direction,
+                txf_entry_ref=entry_ref,
+                opening_range_high=range_high,
+                opening_range_low=range_low,
+                trade_vwap=vwap,
+                realized_vol_ratio=float(ratio),
+            )
+        )
+        cooldown_until = trigger_ns + cooldown_ns
+        anchor = max(anchor + step_ns, trigger_ns + step_ns)
+
+    return events
+
+
+def audit_vol_compression_pair(
+    *,
+    txf_path: Path,
+    tmf_path: Path,
+    session_tz_offset_hours: int = 8,
+    cost_pts: float = 8.0,
+    session_minutes: int = 300,
+    baseline_minutes: int = 30,
+    compression_minutes: int = 30,
+    break_window_minutes: int = 30,
+    step_minutes: int = 5,
+    max_compression_ratio: float = 0.70,
+    min_break_points: float = 8.0,
+    cooldown_minutes: int = 60,
+) -> list[dict[str, object]]:
+    date = _date_from_path(txf_path)
+    txf_contract = txf_path.name.split("_", 1)[0]
+    tmf_contract = tmf_path.name.split("_", 1)[0]
+    txf_bbo, txf_trades = _load_frames(txf_path)
+    tmf_bbo, _ = _load_frames(tmf_path)
+    config = VolCompressionConfig(
+        session_start_ns=_session_start_ns(date, tz_offset_hours=session_tz_offset_hours),
+        session_minutes=session_minutes,
+        baseline_minutes=baseline_minutes,
+        compression_minutes=compression_minutes,
+        break_window_minutes=break_window_minutes,
+        step_minutes=step_minutes,
+        max_compression_ratio=max_compression_ratio,
+        min_break_points=min_break_points,
+        cooldown_minutes=cooldown_minutes,
+    )
+    rows: list[dict[str, object]] = []
+    for event in detect_vol_compression_events(
+        txf_bbo,
+        txf_trades,
+        contract=txf_contract,
+        date=date,
+        config=config,
+    ):
+        try:
+            eval_row = evaluate_executable_returns(
+                tmf_bbo,
+                trigger_time_ns=event.trigger_time_ns,
+                direction=event.direction,
+            )
+        except ValueError:
+            # No TMF executable quote at/after the trigger -> not tradeable; skip.
+            continue
+        after = txf_bbo.ts_ns >= event.trigger_time_ns
+        post_mid = txf_bbo.mid[after]
+        # Stop structure = compression-range opposite side.
+        if event.direction > 0:
+            reverted = bool(np.any(post_mid <= event.opening_range_low)) if len(post_mid) else False
+        else:
+            reverted = bool(np.any(post_mid >= event.opening_range_high)) if len(post_mid) else False
+        gross = eval_row.get("return_30m")
+        net = (float(gross) - cost_pts) if gross is not None else None
+        row: dict[str, object] = {
+            "contract": f"{txf_contract}->{tmf_contract}",
+            "date": date,
+            "regime_type": event.regime_type,
+            "trigger_time": event.trigger_time,
+            "direction": event.direction,
+            "txf_entry_ref": event.txf_entry_ref,
+            "compression_range_high": event.opening_range_high,
+            "compression_range_low": event.opening_range_low,
+            "compression_ratio": event.realized_vol_ratio,
+            "trade_vwap": event.trade_vwap,
+            "stop_structure_breached": reverted,
+            "reverted_to_range": reverted,
+            "cost_pts": cost_pts,
+            "net_after_cost_30m": net,
+            "net_30m_pts": gross,
+            **eval_row,
+        }
+        rows.append(row)
+    return rows
+
+
+def _subset_scorecard(rows: Sequence[dict[str, object]]) -> dict[str, object]:
+    nets = [float(cast(float, r["net_after_cost_30m"])) for r in rows if r.get("net_after_cost_30m") is not None]
+    gross = [float(cast(float, r["net_30m_pts"])) for r in rows if r.get("net_30m_pts") is not None]
+    contracts = sorted({str(r["contract"]).split("->", 1)[0] for r in rows})
+    event_dates = sorted({str(r["date"]) for r in rows})
+    stop_breaches = sum(1 for r in rows if r.get("stop_structure_breached"))
+    remove_best_1 = sorted(nets)[:-1] if len(nets) > 1 else nets
+
+    net_by_day: dict[str, float] = {}
+    net_by_contract: dict[str, float] = {}
+    for r in rows:
+        net = r.get("net_after_cost_30m")
+        if net is None:
+            continue
+        net_f = float(cast(float, net))
+        net_by_day[str(r["date"])] = net_by_day.get(str(r["date"]), 0.0) + net_f
+        c = str(r["contract"]).split("->", 1)[0]
+        net_by_contract[c] = net_by_contract.get(c, 0.0) + net_f
+
+    total_net = sum(nets)
+    positive_day_total = sum(v for v in net_by_day.values() if v > 0)
+    max_day_net = max(net_by_day.values()) if net_by_day else 0.0
+    max_contract_net = max(net_by_contract.values()) if net_by_contract else 0.0
+    pos_days = sum(1 for v in net_by_day.values() if v > 0)
+    monthly_net: dict[str, float] = {}
+    equity = 0.0
+    peak = 0.0
+    max_drawdown = 0.0
+    for day, day_net in sorted(net_by_day.items()):
+        month = day[:7]
+        monthly_net[month] = monthly_net.get(month, 0.0) + day_net
+        equity += day_net
+        peak = max(peak, equity)
+        max_drawdown = max(max_drawdown, peak - equity)
+    monthly_values = list(monthly_net.values())
+    positive_month_total = sum(v for v in monthly_values if v > 0)
+    max_month_net = max(monthly_values) if monthly_values else 0.0
+    average_monthly_net = (sum(monthly_values) / len(monthly_values)) if monthly_values else None
+    if average_monthly_net is None:
+        drawdown_within_monthly_gate = None
+    elif average_monthly_net <= 0:
+        drawdown_within_monthly_gate = False
+    else:
+        drawdown_within_monthly_gate = bool(max_drawdown <= 2.0 * average_monthly_net)
+
+    mean_net = (sum(nets) / len(nets)) if nets else None
+    return {
+        "events": len(nets),
+        "trading_days": len(event_dates),
+        "contracts": contracts,
+        "mean_net_after_cost_30m": mean_net,
+        "mean_net_edge_pts_per_trade": mean_net,
+        "median_net_after_cost_30m": median(nets) if nets else None,
+        "median_gross_return_30m": median(gross) if gross else None,
+        "p10_net_after_cost_30m": float(np.percentile(nets, 10)) if nets else None,
+        "p05_net_after_cost_30m": float(np.percentile(nets, 5)) if nets else None,
+        "remove_best_1_median_net": median(remove_best_1) if remove_best_1 else None,
+        "stop_breach_rate": (stop_breaches / len(rows)) if rows else None,
+        "positive_day_fraction": (pos_days / len(net_by_day)) if net_by_day else None,
+        "total_net": total_net,
+        "max_single_day_net": max_day_net,
+        "max_single_day_net_share_of_positive": (
+            (max_day_net / positive_day_total) if positive_day_total > 0 else None
+        ),
+        "net_by_contract": net_by_contract,
+        "max_single_contract_net_share_of_positive": (
+            (max_contract_net / positive_day_total) if positive_day_total > 0 and max_contract_net > 0 else None
+        ),
+        "max_drawdown_net_pts": max_drawdown if net_by_day else None,
+        "monthly_net_pnl": monthly_net,
+        "average_monthly_net_pnl": average_monthly_net,
+        "median_monthly_net_pnl": median(monthly_values) if monthly_values else None,
+        "worst_month_net_pnl": min(monthly_values) if monthly_values else None,
+        "max_single_month_net_share_of_positive": (
+            (max_month_net / positive_month_total) if positive_month_total > 0 and max_month_net > 0 else None
+        ),
+        "drawdown_within_2x_average_monthly_net_pnl": drawdown_within_monthly_gate,
+    }
+
+
+def _t1b_research_decision(
+    *,
+    median_net: float | None,
+    sample_ok: bool,
+    n_events: int,
+    min_events: int,
+    audited_days: int,
+    min_trading_days: int,
+    cross_contract_complete: bool,
+    dominance_fail: bool,
+    stop_breach_fail: bool,
+    drawdown_fail: bool,
+    edge_floor_cleared: bool,
+) -> dict[str, object]:
+    if median_net is not None and median_net <= 0:
+        return {
+            "status": "failed",
+            "reason": "t1b_kill:median_net_non_positive",
+            "evidence": ["median_net_positive"],
+            "decided_by": "t1b_v0_hard_gate",
+        }
+    if not sample_ok:
+        evidence = ["min_sample_size"]
+        if n_events < min_events:
+            evidence.append("events")
+        if audited_days < min_trading_days:
+            evidence.append("trading_days")
+        if not cross_contract_complete:
+            evidence.append("cross_contract_complete")
+        return {
+            "status": "needs_more_sample",
+            "reason": "t1b_sample_gate:" + "|".join(evidence[1:]),
+            "evidence": evidence,
+            "decided_by": "t1b_v0_hard_gate",
+        }
+    if dominance_fail or stop_breach_fail or drawdown_fail:
+        evidence = []
+        if dominance_fail:
+            evidence.extend(["single_day_dominance", "single_contract_concentration"])
+        if stop_breach_fail:
+            evidence.append("stop_structure_breach")
+        if drawdown_fail:
+            evidence.append("max_drawdown_vs_average_monthly_net_pnl")
+        return {
+            "status": "blocked_by_risk",
+            "reason": "t1b_risk_gate:" + "|".join(evidence),
+            "evidence": evidence,
+            "decided_by": "t1b_v0_hard_gate",
+        }
+    if not edge_floor_cleared:
+        return {
+            "status": "failed",
+            "reason": "t1b_edge_floor_not_cleared",
+            "evidence": ["mean_net_edge_pts_per_trade"],
+            "decided_by": "t1b_v0_hard_gate",
+        }
+    evidence = [
+        "v0_latency_profile_deferred",
+        "cost_uncertainty",
+        "force_flat_residual",
+        "inventory_mtm",
+        "no_replay_paper_live_parity_evidence",
+    ]
+    return {
+        "status": "blocked_by_audit",
+        "reason": "t1b_v0_audit_blocker:" + "|".join(evidence),
+        "evidence": evidence,
+        "decided_by": "t1b_v0_hard_gate",
+    }
+
+
+def summarize_vol_compression_rows(
+    rows: Sequence[dict[str, object]],
+    *,
+    audited_dates: Sequence[str] | None = None,
+    oos_start: str | None = None,
+    edge_floor_pts: float = 10.0,
+    min_events: int = 80,
+    min_trading_days: int = 20,
+    required_contracts: Sequence[str] = ("TXFB6", "TXFC6", "TXFD6", "TXFE6"),
+    h9_stop_breach_baseline: float = 0.50,
+    max_single_day_share: float = 0.50,
+) -> dict[str, object]:
+    full = _subset_scorecard(rows)
+    splits: dict[str, object] = {"full": full}
+    if oos_start is not None:
+        in_sample = [r for r in rows if str(r["date"]) < oos_start]
+        out_sample = [r for r in rows if str(r["date"]) >= oos_start]
+        splits["in_sample"] = _subset_scorecard(in_sample)
+        splits["out_of_sample"] = _subset_scorecard(out_sample)
+
+    def _f(value: object) -> float | None:
+        return None if value is None else float(cast(float, value))
+
+    audited_unique = sorted(set(audited_dates or [str(r["date"]) for r in rows]))
+    contracts_present = {str(c) for c in cast("list[str]", full["contracts"])}
+    cross_contract_complete = set(required_contracts).issubset(contracts_present)
+
+    n_events = cast(int, full["events"])
+    mean_net_edge = _f(full["mean_net_edge_pts_per_trade"])
+    median_net = _f(full["median_net_after_cost_30m"])
+    remove_best = _f(full["remove_best_1_median_net"])
+    p10 = _f(full["p10_net_after_cost_30m"])
+    stop_breach = _f(full["stop_breach_rate"])
+    day_share = _f(full["max_single_day_net_share_of_positive"])
+    contract_share = _f(full["max_single_contract_net_share_of_positive"])
+    drawdown_within_monthly_gate = cast(
+        bool | None,
+        full["drawdown_within_2x_average_monthly_net_pnl"],
+    )
+
+    sample_ok = (
+        n_events >= min_events
+        and len(audited_unique) >= min_trading_days
+        and cross_contract_complete
+    )
+    dominance_fail = (day_share is not None and day_share > max_single_day_share) or (
+        contract_share is not None and contract_share >= 0.999
+    )
+    stop_breach_fail = stop_breach is not None and stop_breach >= h9_stop_breach_baseline
+    drawdown_fail = drawdown_within_monthly_gate is False
+    edge_floor_cleared = bool(mean_net_edge is not None and mean_net_edge > edge_floor_pts)
+
+    # A clearly negative net edge is a KILL regardless of sample size. A
+    # positive-but-undersized sample is NEEDS-MORE-DAYS -- dominance and
+    # stop-breach are only assessable once the sample clears the hard-gate
+    # floors (otherwise single-day/contract share is trivially 1.0).
+    if median_net is not None and median_net <= 0:
+        verdict = "KILL"
+    elif not sample_ok:
+        verdict = "NEEDS-MORE-DAYS"
+    elif dominance_fail or stop_breach_fail or drawdown_fail:
+        verdict = "KILL"
+    elif median_net is not None and median_net > 0:
+        verdict = "PROCEED"
+    else:
+        verdict = "NEEDS-MORE-DAYS"
+
+    research_decision = _t1b_research_decision(
+        median_net=median_net,
+        sample_ok=sample_ok,
+        n_events=n_events,
+        min_events=min_events,
+        audited_days=len(audited_unique),
+        min_trading_days=min_trading_days,
+        cross_contract_complete=cross_contract_complete,
+        dominance_fail=dominance_fail,
+        stop_breach_fail=stop_breach_fail,
+        drawdown_fail=drawdown_fail,
+        edge_floor_cleared=edge_floor_cleared,
+    )
+
+    return {
+        "track": "T1-B: TXF Volatility-Compression -> TMF Directional Expansion",
+        "candidate": "t1b_txf_volcompress_tmf",
+        "audited_trading_days": len(audited_unique),
+        "edge_floor_pts": edge_floor_pts,
+        "edge_floor_metric": "mean_net_edge_pts_per_trade",
+        "edge_floor_cleared": edge_floor_cleared,
+        "verdict": verdict,
+        "research_decision": research_decision,
+        "hard_gate": {
+            "min_events": min_events,
+            "events": n_events,
+            "events_ok": bool(n_events >= min_events),
+            "min_trading_days": min_trading_days,
+            "trading_days_ok": bool(len(audited_unique) >= min_trading_days),
+            "cross_contract_complete": bool(cross_contract_complete),
+            "required_contracts": list(required_contracts),
+            "median_net_positive": bool(median_net is not None and median_net > 0),
+            "remove_best_1_non_collapsing": (bool(remove_best >= 0) if remove_best is not None else None),
+            "p10_not_catastrophic": (bool(p10 > -3.0 * edge_floor_pts) if p10 is not None else None),
+            "no_single_day_dominance": bool(day_share is None or day_share <= max_single_day_share),
+            "no_single_contract_concentration": bool(contract_share is None or contract_share < 0.999),
+            "stop_breach_below_h9_baseline": bool(stop_breach is None or stop_breach < h9_stop_breach_baseline),
+            "drawdown_within_2x_average_monthly_net_pnl": drawdown_within_monthly_gate,
+        },
+        "splits": splits,
+    }
+
+
+def run_vol_compression_audit(args: argparse.Namespace) -> dict[str, object]:
+    raw_dir = Path(args.raw_dir)
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    rows: list[dict[str, object]] = []
+    pairs = _matching_pairs(raw_dir, args.months.split(","))
+    if args.max_date is not None:
+        pairs = [(t, m) for (t, m) in pairs if _date_from_path(t) <= args.max_date]
+    if args.min_date is not None:
+        pairs = [(t, m) for (t, m) in pairs if _date_from_path(t) >= args.min_date]
+    if args.max_pairs is not None:
+        pairs = pairs[: args.max_pairs]
+    audited_dates = sorted({_date_from_path(t) for t, _ in pairs})
+    print(f"t1b_audit_start pairs={len(pairs)} months={args.months}", file=sys.stderr, flush=True)
+    for idx, (txf_path, tmf_path) in enumerate(pairs, start=1):
+        started = time_module.monotonic()
+        before = len(rows)
+        rows.extend(
+            audit_vol_compression_pair(
+                txf_path=txf_path,
+                tmf_path=tmf_path,
+                session_tz_offset_hours=args.session_tz_offset_hours,
+                cost_pts=args.cost_pts,
+                session_minutes=args.session_minutes,
+                baseline_minutes=args.baseline_minutes,
+                compression_minutes=args.compression_minutes,
+                break_window_minutes=args.break_window_minutes,
+                step_minutes=args.step_minutes,
+                max_compression_ratio=args.max_compression_ratio,
+                min_break_points=args.min_break_points,
+                cooldown_minutes=args.cooldown_minutes,
+            )
+        )
+        elapsed = time_module.monotonic() - started
+        print(
+            f"t1b_pair_done {idx}/{len(pairs)} txf={txf_path.name} events={len(rows) - before} elapsed_s={elapsed:.2f}",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    csv_path = out_dir / f"{stamp}_vol_compression_events.csv"
+    json_path = out_dir / f"{stamp}_summary.json"
+    if rows:
+        fieldnames = list(rows[0].keys())
+        with csv_path.open("w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+    else:
+        csv_path.write_text("", encoding="utf-8")
+    summary = summarize_vol_compression_rows(
+        rows,
+        audited_dates=audited_dates,
+        oos_start=args.oos_start,
+        edge_floor_pts=args.edge_floor_pts,
+    )
+    summary["summary_path"] = str(json_path)
+    summary["csv_path"] = str(csv_path)
+    summary["artifact_scope"] = "validation_summary"
+    summary["definition"] = {
+        "l2_alpha_restriction": (
+            "L2 used only for executable bid/ask and quote sanity; entry is TXF "
+            "higher-timeframe volatility compression then directional break."
+        ),
+        "session_minutes": args.session_minutes,
+        "baseline_minutes": args.baseline_minutes,
+        "compression_minutes": args.compression_minutes,
+        "break_window_minutes": args.break_window_minutes,
+        "step_minutes": args.step_minutes,
+        "max_compression_ratio": args.max_compression_ratio,
+        "min_break_points": args.min_break_points,
+        "cooldown_minutes": args.cooldown_minutes,
+        "cost_pts": args.cost_pts,
+        "oos_start": args.oos_start,
+        "min_date": args.min_date,
+        "max_date": args.max_date,
+        "months": args.months.split(","),
+    }
+    json_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    return summary
+
+
+@dataclass(frozen=True)
+class IntradayMomentumConfig:
+    session_start_ns: int
+    session_minutes: int = 300          # 08:45-13:45 TPE day session
+    open_window_minutes: int = 30       # first window: directional signal (08:45-09:15)
+    predict_window_minutes: int = 30    # last window: trade window (13:15-13:45)
+    min_open_move_pts: float = 10.0     # |first-window return| must be >= this (TXF pts)
+    min_window_points: int = 5          # min quotes per window for a valid signal/trade
+
+
+def detect_intraday_momentum_events(
+    bbo: BboFrame,
+    trades: TradeFrame,
+    *,
+    contract: str,
+    date: str,
+    config: IntradayMomentumConfig,
+) -> list[RegimeEvent]:
+    """Market-intraday-momentum signal (Gao-Han-Li-Zhou, JFE 2018; TAIEX-adapted).
+
+    The first-window (open) TXF return predicts the last-window return with the
+    SAME sign. Backward-looking only: the trigger fires at the start of the last
+    window using information from the open window. ``min_open_move_pts`` is an
+    absolute (not cross-day percentile) magnitude filter so the rule carries no
+    look-ahead and avoids same-day distribution thresholds.
+    """
+    if len(bbo.ts_ns) < config.min_window_points * 2:
+        return []
+
+    start = config.session_start_ns
+    session_end = start + config.session_minutes * NS_PER_MINUTE
+    open_end = start + config.open_window_minutes * NS_PER_MINUTE
+    entry_ns = session_end - config.predict_window_minutes * NS_PER_MINUTE
+    if open_end > entry_ns:
+        # windows overlap -> ill-posed config for this session length
+        return []
+
+    ts = bbo.ts_ns
+    mid = bbo.mid
+
+    open_mask = (ts >= start) & (ts < open_end)
+    predict_mask = (ts >= entry_ns) & (ts <= session_end)
+    if (
+        int(np.count_nonzero(open_mask)) < config.min_window_points
+        or int(np.count_nonzero(predict_mask)) < config.min_window_points
+    ):
+        return []
+
+    open_mid = mid[open_mask]
+    open_first = float(open_mid[0])
+    open_last = float(open_mid[-1])
+    ret_open = open_last - open_first
+    if abs(ret_open) < config.min_open_move_pts:
+        return []
+    direction = 1 if ret_open > 0 else -1
+
+    open_high = float(np.max(open_mid))
+    open_low = float(np.min(open_mid))
+    open_rv = _realized_vol(open_mid)
+    move_vol_ratio = float(abs(ret_open) / open_rv) if open_rv > 0 else 0.0
+
+    entry_idx = int(np.searchsorted(ts, entry_ns, side="left"))
+    if entry_idx >= len(ts):
+        return []
+    entry_ref = float(mid[entry_idx])
+
+    # Trend-consistency guard: entry must sit on the directional side of session
+    # VWAP (long above, short below). Mirrors the T1-A/B VWAP-alignment filter.
+    vwap = _trade_vwap_until(trades, entry_ns)
+    if vwap is not None:
+        if direction == 1 and entry_ref <= vwap:
+            return []
+        if direction == -1 and entry_ref >= vwap:
+            return []
+
+    return [
+        RegimeEvent(
+            contract=contract,
+            date=date,
+            regime_type="T1-D_intraday_session_momentum",
+            trigger_time=_iso_from_ns(entry_ns),
+            trigger_time_ns=entry_ns,
+            direction=direction,
+            txf_entry_ref=entry_ref,
+            opening_range_high=open_high,
+            opening_range_low=open_low,
+            trade_vwap=vwap,
+            realized_vol_ratio=move_vol_ratio,
+        )
+    ]
+
+
+def audit_intraday_momentum_pair(
+    *,
+    txf_path: Path,
+    tmf_path: Path,
+    session_tz_offset_hours: int = 8,
+    cost_pts: float = 8.0,
+    session_minutes: int = 300,
+    open_window_minutes: int = 30,
+    predict_window_minutes: int = 30,
+    min_open_move_pts: float = 10.0,
+) -> list[dict[str, object]]:
+    date = _date_from_path(txf_path)
+    txf_contract = txf_path.name.split("_", 1)[0]
+    tmf_contract = tmf_path.name.split("_", 1)[0]
+    txf_bbo, txf_trades = _load_frames(txf_path)
+    tmf_bbo, _ = _load_frames(tmf_path)
+    config = IntradayMomentumConfig(
+        session_start_ns=_session_start_ns(date, tz_offset_hours=session_tz_offset_hours),
+        session_minutes=session_minutes,
+        open_window_minutes=open_window_minutes,
+        predict_window_minutes=predict_window_minutes,
+        min_open_move_pts=min_open_move_pts,
+    )
+    rows: list[dict[str, object]] = []
+    for event in detect_intraday_momentum_events(
+        txf_bbo,
+        txf_trades,
+        contract=txf_contract,
+        date=date,
+        config=config,
+    ):
+        try:
+            eval_row = evaluate_executable_returns(
+                tmf_bbo,
+                trigger_time_ns=event.trigger_time_ns,
+                direction=event.direction,
+            )
+        except ValueError:
+            # No TMF executable quote at/after the trigger -> not tradeable; skip.
+            continue
+        after = txf_bbo.ts_ns >= event.trigger_time_ns
+        post_mid = txf_bbo.mid[after]
+        # Stop structure = opposite side of the open-window range (full give-back
+        # of the morning directional move).
+        if event.direction > 0:
+            reverted = bool(np.any(post_mid <= event.opening_range_low)) if len(post_mid) else False
+        else:
+            reverted = bool(np.any(post_mid >= event.opening_range_high)) if len(post_mid) else False
+        gross = eval_row.get("return_30m")
+        net = (float(gross) - cost_pts) if gross is not None else None
+        row: dict[str, object] = {
+            "contract": f"{txf_contract}->{tmf_contract}",
+            "date": date,
+            "regime_type": event.regime_type,
+            "trigger_time": event.trigger_time,
+            "direction": event.direction,
+            "txf_entry_ref": event.txf_entry_ref,
+            "open_window_high": event.opening_range_high,
+            "open_window_low": event.opening_range_low,
+            "morning_move_vol_ratio": event.realized_vol_ratio,
+            "trade_vwap": event.trade_vwap,
+            "stop_structure_breached": reverted,
+            "reverted_to_open_range": reverted,
+            "cost_pts": cost_pts,
+            "net_after_cost_30m": net,
+            "net_30m_pts": gross,
+            **eval_row,
+        }
+        rows.append(row)
+    return rows
+
+
+def summarize_intraday_momentum_rows(
+    rows: Sequence[dict[str, object]],
+    *,
+    audited_dates: Sequence[str] | None = None,
+    oos_start: str | None = None,
+    edge_floor_pts: float = 10.0,
+    min_events: int = 80,
+    min_trading_days: int = 20,
+    required_contracts: Sequence[str] = ("TXFB6", "TXFC6", "TXFD6", "TXFE6"),
+    h9_stop_breach_baseline: float = 0.50,
+    max_single_day_share: float = 0.50,
+) -> dict[str, object]:
+    full = _subset_scorecard(rows)
+    splits: dict[str, object] = {"full": full}
+    if oos_start is not None:
+        in_sample = [r for r in rows if str(r["date"]) < oos_start]
+        out_sample = [r for r in rows if str(r["date"]) >= oos_start]
+        splits["in_sample"] = _subset_scorecard(in_sample)
+        splits["out_of_sample"] = _subset_scorecard(out_sample)
+
+    def _f(value: object) -> float | None:
+        return None if value is None else float(cast(float, value))
+
+    audited_unique = sorted(set(audited_dates or [str(r["date"]) for r in rows]))
+    contracts_present = {str(c) for c in cast("list[str]", full["contracts"])}
+    cross_contract_complete = set(required_contracts).issubset(contracts_present)
+
+    n_events = cast(int, full["events"])
+    mean_net_edge = _f(full["mean_net_edge_pts_per_trade"])
+    median_net = _f(full["median_net_after_cost_30m"])
+    remove_best = _f(full["remove_best_1_median_net"])
+    p10 = _f(full["p10_net_after_cost_30m"])
+    stop_breach = _f(full["stop_breach_rate"])
+    day_share = _f(full["max_single_day_net_share_of_positive"])
+    contract_share = _f(full["max_single_contract_net_share_of_positive"])
+    drawdown_within_monthly_gate = cast(
+        bool | None,
+        full["drawdown_within_2x_average_monthly_net_pnl"],
+    )
+
+    sample_ok = (
+        n_events >= min_events
+        and len(audited_unique) >= min_trading_days
+        and cross_contract_complete
+    )
+    dominance_fail = (day_share is not None and day_share > max_single_day_share) or (
+        contract_share is not None and contract_share >= 0.999
+    )
+    stop_breach_fail = stop_breach is not None and stop_breach >= h9_stop_breach_baseline
+    drawdown_fail = drawdown_within_monthly_gate is False
+    edge_floor_cleared = bool(mean_net_edge is not None and mean_net_edge > edge_floor_pts)
+
+    if median_net is not None and median_net <= 0:
+        verdict = "KILL"
+    elif not sample_ok:
+        verdict = "NEEDS-MORE-DAYS"
+    elif dominance_fail or stop_breach_fail or drawdown_fail:
+        verdict = "KILL"
+    elif median_net is not None and median_net > 0:
+        verdict = "PROCEED"
+    else:
+        verdict = "NEEDS-MORE-DAYS"
+
+    research_decision = _t1b_research_decision(
+        median_net=median_net,
+        sample_ok=sample_ok,
+        n_events=n_events,
+        min_events=min_events,
+        audited_days=len(audited_unique),
+        min_trading_days=min_trading_days,
+        cross_contract_complete=cross_contract_complete,
+        dominance_fail=dominance_fail,
+        stop_breach_fail=stop_breach_fail,
+        drawdown_fail=drawdown_fail,
+        edge_floor_cleared=edge_floor_cleared,
+    )
+
+    return {
+        "track": "T1-D: TXF Intraday Session Momentum -> TMF",
+        "candidate": "t1d_txf_intraday_momentum_tmf",
+        "audited_trading_days": len(audited_unique),
+        "edge_floor_pts": edge_floor_pts,
+        "edge_floor_metric": "mean_net_edge_pts_per_trade",
+        "edge_floor_cleared": edge_floor_cleared,
+        "verdict": verdict,
+        "research_decision": research_decision,
+        "hard_gate": {
+            "min_events": min_events,
+            "events": n_events,
+            "events_ok": bool(n_events >= min_events),
+            "min_trading_days": min_trading_days,
+            "trading_days_ok": bool(len(audited_unique) >= min_trading_days),
+            "cross_contract_complete": bool(cross_contract_complete),
+            "required_contracts": list(required_contracts),
+            "median_net_positive": bool(median_net is not None and median_net > 0),
+            "remove_best_1_non_collapsing": (bool(remove_best >= 0) if remove_best is not None else None),
+            "p10_not_catastrophic": (bool(p10 > -3.0 * edge_floor_pts) if p10 is not None else None),
+            "no_single_day_dominance": bool(day_share is None or day_share <= max_single_day_share),
+            "no_single_contract_concentration": bool(contract_share is None or contract_share < 0.999),
+            "stop_breach_below_h9_baseline": bool(stop_breach is None or stop_breach < h9_stop_breach_baseline),
+            "drawdown_within_2x_average_monthly_net_pnl": drawdown_within_monthly_gate,
+        },
+        "splits": splits,
+    }
+
+
+def run_intraday_momentum_audit(args: argparse.Namespace) -> dict[str, object]:
+    raw_dir = Path(args.raw_dir)
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    rows: list[dict[str, object]] = []
+    pairs = _matching_pairs(raw_dir, args.months.split(","))
+    if args.max_date is not None:
+        pairs = [(t, m) for (t, m) in pairs if _date_from_path(t) <= args.max_date]
+    if args.min_date is not None:
+        pairs = [(t, m) for (t, m) in pairs if _date_from_path(t) >= args.min_date]
+    if args.max_pairs is not None:
+        pairs = pairs[: args.max_pairs]
+    audited_dates = sorted({_date_from_path(t) for t, _ in pairs})
+    print(f"t1d_audit_start pairs={len(pairs)} months={args.months}", file=sys.stderr, flush=True)
+    for idx, (txf_path, tmf_path) in enumerate(pairs, start=1):
+        started = time_module.monotonic()
+        before = len(rows)
+        rows.extend(
+            audit_intraday_momentum_pair(
+                txf_path=txf_path,
+                tmf_path=tmf_path,
+                session_tz_offset_hours=args.session_tz_offset_hours,
+                cost_pts=args.cost_pts,
+                session_minutes=args.session_minutes,
+                open_window_minutes=args.open_window_minutes,
+                predict_window_minutes=args.predict_window_minutes,
+                min_open_move_pts=args.min_open_move_pts,
+            )
+        )
+        elapsed = time_module.monotonic() - started
+        print(
+            f"t1d_pair_done {idx}/{len(pairs)} txf={txf_path.name} events={len(rows) - before} elapsed_s={elapsed:.2f}",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    csv_path = out_dir / f"{stamp}_intraday_momentum_events.csv"
+    json_path = out_dir / f"{stamp}_summary.json"
+    if rows:
+        fieldnames = list(rows[0].keys())
+        with csv_path.open("w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+    else:
+        csv_path.write_text("", encoding="utf-8")
+    summary = summarize_intraday_momentum_rows(
+        rows,
+        audited_dates=audited_dates,
+        oos_start=args.oos_start,
+        edge_floor_pts=args.edge_floor_pts,
+    )
+    summary["summary_path"] = str(json_path)
+    summary["csv_path"] = str(csv_path)
+    summary["artifact_scope"] = "validation_summary"
+    summary["definition"] = {
+        "l2_alpha_restriction": (
+            "L2 used only for executable bid/ask and quote sanity; entry is the "
+            "TXF open-window directional return predicting the last-window return."
+        ),
+        "session_minutes": args.session_minutes,
+        "open_window_minutes": args.open_window_minutes,
+        "predict_window_minutes": args.predict_window_minutes,
+        "min_open_move_pts": args.min_open_move_pts,
+        "cost_pts": args.cost_pts,
+        "oos_start": args.oos_start,
+        "min_date": args.min_date,
+        "max_date": args.max_date,
+        "months": args.months.split(","),
+    }
+    json_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    return summary
+
+
+@dataclass(frozen=True)
+class OpenGapFadeConfig:
+    session_start_ns: int               # today's session start (08:45)
+    prior_session_start_ns: int         # prior available session start
+    session_minutes: int = 300          # 08:45-13:45 TPE day session
+    prior_close_window_minutes: int = 30  # average prior-session close over last N min
+    open_confirm_minutes: int = 15      # wait N min after open before entering the fade
+    min_gap_pts: float = 15.0           # outsized prior-close -> today-open gap threshold
+    stop_buffer_pts: float = 15.0       # gap-extension stop beyond today's open
+    min_window_points: int = 5
+
+
+def detect_open_gap_fade_events(
+    prior_bbo: BboFrame,
+    today_bbo: BboFrame,
+    today_trades: TradeFrame,
+    *,
+    contract: str,
+    date: str,
+    config: OpenGapFadeConfig,
+) -> list[RegimeEvent]:
+    """Open-gap overreaction fade (Asian index futures overreact to overnight
+    information; partial intraday reversal). The gap is constructed endogenously
+    from the prior available session's close and today's open -- no external EOD
+    feed. Direction = FADE (gap up -> short, gap down -> long). Backward-looking:
+    the gap is measured at the open; entry is after a confirm delay.
+    """
+    if (
+        len(prior_bbo.ts_ns) < config.min_window_points
+        or len(today_bbo.ts_ns) < config.min_window_points
+    ):
+        return []
+
+    prior_start = config.prior_session_start_ns
+    prior_end = prior_start + config.session_minutes * NS_PER_MINUTE
+    close_win = config.prior_close_window_minutes * NS_PER_MINUTE
+    prior_close_mask = (prior_bbo.ts_ns >= prior_end - close_win) & (prior_bbo.ts_ns <= prior_end)
+    if not np.any(prior_close_mask):
+        return []
+    prior_close = float(np.mean(prior_bbo.mid[prior_close_mask]))
+
+    start = config.session_start_ns
+    session_end = start + config.session_minutes * NS_PER_MINUTE
+    today_open_mask = (today_bbo.ts_ns >= start) & (today_bbo.ts_ns <= session_end)
+    if not np.any(today_open_mask):
+        return []
+    today_open = float(today_bbo.mid[np.flatnonzero(today_open_mask)[0]])
+
+    gap = today_open - prior_close
+    if abs(gap) < config.min_gap_pts:
+        return []
+    direction = -1 if gap > 0 else 1  # fade the gap
+
+    entry_ns = start + config.open_confirm_minutes * NS_PER_MINUTE
+    entry_idx = int(np.searchsorted(today_bbo.ts_ns, entry_ns, side="left"))
+    if entry_idx >= len(today_bbo.ts_ns) or int(today_bbo.ts_ns[entry_idx]) > session_end:
+        return []
+    entry_ref = float(today_bbo.mid[entry_idx])
+    vwap = _trade_vwap_until(today_trades, entry_ns)
+
+    return [
+        RegimeEvent(
+            contract=contract,
+            date=date,
+            regime_type="T1-E_open_gap_overreaction_fade",
+            trigger_time=_iso_from_ns(entry_ns),
+            trigger_time_ns=entry_ns,
+            direction=direction,
+            txf_entry_ref=entry_ref,
+            # Stop levels = today's open +/- gap-extension buffer (gap continues).
+            opening_range_high=today_open + config.stop_buffer_pts,
+            opening_range_low=today_open - config.stop_buffer_pts,
+            trade_vwap=vwap,
+            realized_vol_ratio=float(gap),  # reused field carries the signed gap (pts)
+        )
+    ]
+
+
+def audit_open_gap_fade_pair(
+    *,
+    prior_txf_path: Path,
+    today_txf_path: Path,
+    today_tmf_path: Path,
+    session_tz_offset_hours: int = 8,
+    cost_pts: float = 8.0,
+    session_minutes: int = 300,
+    prior_close_window_minutes: int = 30,
+    open_confirm_minutes: int = 15,
+    min_gap_pts: float = 15.0,
+    stop_buffer_pts: float = 15.0,
+) -> list[dict[str, object]]:
+    date = _date_from_path(today_txf_path)
+    prior_date = _date_from_path(prior_txf_path)
+    txf_contract = today_txf_path.name.split("_", 1)[0]
+    tmf_contract = today_tmf_path.name.split("_", 1)[0]
+    prior_bbo, _ = _load_frames(prior_txf_path)
+    today_bbo, today_trades = _load_frames(today_txf_path)
+    tmf_bbo, _ = _load_frames(today_tmf_path)
+    config = OpenGapFadeConfig(
+        session_start_ns=_session_start_ns(date, tz_offset_hours=session_tz_offset_hours),
+        prior_session_start_ns=_session_start_ns(prior_date, tz_offset_hours=session_tz_offset_hours),
+        session_minutes=session_minutes,
+        prior_close_window_minutes=prior_close_window_minutes,
+        open_confirm_minutes=open_confirm_minutes,
+        min_gap_pts=min_gap_pts,
+        stop_buffer_pts=stop_buffer_pts,
+    )
+    rows: list[dict[str, object]] = []
+    for event in detect_open_gap_fade_events(
+        prior_bbo,
+        today_bbo,
+        today_trades,
+        contract=txf_contract,
+        date=date,
+        config=config,
+    ):
+        try:
+            eval_row = evaluate_executable_returns(
+                tmf_bbo,
+                trigger_time_ns=event.trigger_time_ns,
+                direction=event.direction,
+            )
+        except ValueError:
+            continue
+        after = today_bbo.ts_ns >= event.trigger_time_ns
+        post_mid = today_bbo.mid[after]
+        # Stop structure = gap extends past today's open by the buffer (continuation).
+        if event.direction > 0:  # fade up (gap down): stop if price keeps falling
+            reverted = bool(np.any(post_mid <= event.opening_range_low)) if len(post_mid) else False
+        else:  # fade down (gap up): stop if price keeps rising
+            reverted = bool(np.any(post_mid >= event.opening_range_high)) if len(post_mid) else False
+        gross = eval_row.get("return_30m")
+        net = (float(gross) - cost_pts) if gross is not None else None
+        row: dict[str, object] = {
+            "contract": f"{txf_contract}->{tmf_contract}",
+            "date": date,
+            "prior_date": prior_date,
+            "regime_type": event.regime_type,
+            "trigger_time": event.trigger_time,
+            "direction": event.direction,
+            "txf_entry_ref": event.txf_entry_ref,
+            "gap_pts": event.realized_vol_ratio,
+            "gap_stop_high": event.opening_range_high,
+            "gap_stop_low": event.opening_range_low,
+            "trade_vwap": event.trade_vwap,
+            "stop_structure_breached": reverted,
+            "gap_extended_past_stop": reverted,
+            "cost_pts": cost_pts,
+            "net_after_cost_30m": net,
+            "net_30m_pts": gross,
+            **eval_row,
+        }
+        rows.append(row)
+    return rows
+
+
+def _consecutive_gap_triples(raw_dir: Path, months: Iterable[str]) -> list[tuple[Path, Path, Path]]:
+    """Yield (prior_txf, today_txf, today_tmf) for each consecutive available
+    same-contract session pair where today's TMF leg also exists."""
+    triples: list[tuple[Path, Path, Path]] = []
+    for month in months:
+        txf = f"TXF{month}"
+        tmf = f"TMF{month}"
+        txf_files = {_date_from_path(p): p for p in sorted((raw_dir / txf.lower()).glob(f"{txf}_*_l2.hftbt.npz"))}
+        tmf_files = {_date_from_path(p): p for p in sorted((raw_dir / tmf.lower()).glob(f"{tmf}_*_l2.hftbt.npz"))}
+        dates = sorted(txf_files)
+        for i in range(1, len(dates)):
+            prior_d, today_d = dates[i - 1], dates[i]
+            if today_d in tmf_files:
+                triples.append((txf_files[prior_d], txf_files[today_d], tmf_files[today_d]))
+    return triples
+
+
+def summarize_open_gap_fade_rows(
+    rows: Sequence[dict[str, object]],
+    *,
+    audited_dates: Sequence[str] | None = None,
+    oos_start: str | None = None,
+    edge_floor_pts: float = 10.0,
+    min_events: int = 80,
+    min_trading_days: int = 20,
+    required_contracts: Sequence[str] = ("TXFB6", "TXFC6", "TXFD6", "TXFE6"),
+    h9_stop_breach_baseline: float = 0.50,
+    max_single_day_share: float = 0.50,
+) -> dict[str, object]:
+    full = _subset_scorecard(rows)
+    splits: dict[str, object] = {"full": full}
+    if oos_start is not None:
+        in_sample = [r for r in rows if str(r["date"]) < oos_start]
+        out_sample = [r for r in rows if str(r["date"]) >= oos_start]
+        splits["in_sample"] = _subset_scorecard(in_sample)
+        splits["out_of_sample"] = _subset_scorecard(out_sample)
+
+    def _f(value: object) -> float | None:
+        return None if value is None else float(cast(float, value))
+
+    audited_unique = sorted(set(audited_dates or [str(r["date"]) for r in rows]))
+    contracts_present = {str(c) for c in cast("list[str]", full["contracts"])}
+    cross_contract_complete = set(required_contracts).issubset(contracts_present)
+
+    n_events = cast(int, full["events"])
+    mean_net_edge = _f(full["mean_net_edge_pts_per_trade"])
+    median_net = _f(full["median_net_after_cost_30m"])
+    remove_best = _f(full["remove_best_1_median_net"])
+    p10 = _f(full["p10_net_after_cost_30m"])
+    stop_breach = _f(full["stop_breach_rate"])
+    day_share = _f(full["max_single_day_net_share_of_positive"])
+    contract_share = _f(full["max_single_contract_net_share_of_positive"])
+    drawdown_within_monthly_gate = cast(
+        bool | None,
+        full["drawdown_within_2x_average_monthly_net_pnl"],
+    )
+
+    sample_ok = (
+        n_events >= min_events
+        and len(audited_unique) >= min_trading_days
+        and cross_contract_complete
+    )
+    dominance_fail = (day_share is not None and day_share > max_single_day_share) or (
+        contract_share is not None and contract_share >= 0.999
+    )
+    stop_breach_fail = stop_breach is not None and stop_breach >= h9_stop_breach_baseline
+    drawdown_fail = drawdown_within_monthly_gate is False
+    edge_floor_cleared = bool(mean_net_edge is not None and mean_net_edge > edge_floor_pts)
+
+    if median_net is not None and median_net <= 0:
+        verdict = "KILL"
+    elif not sample_ok:
+        verdict = "NEEDS-MORE-DAYS"
+    elif dominance_fail or stop_breach_fail or drawdown_fail:
+        verdict = "KILL"
+    elif median_net is not None and median_net > 0:
+        verdict = "PROCEED"
+    else:
+        verdict = "NEEDS-MORE-DAYS"
+
+    research_decision = _t1b_research_decision(
+        median_net=median_net,
+        sample_ok=sample_ok,
+        n_events=n_events,
+        min_events=min_events,
+        audited_days=len(audited_unique),
+        min_trading_days=min_trading_days,
+        cross_contract_complete=cross_contract_complete,
+        dominance_fail=dominance_fail,
+        stop_breach_fail=stop_breach_fail,
+        drawdown_fail=drawdown_fail,
+        edge_floor_cleared=edge_floor_cleared,
+    )
+
+    return {
+        "track": "T1-E: TXF Open-Gap Overreaction Fade -> TMF",
+        "candidate": "t1e_txf_opengap_fade_tmf",
+        "audited_trading_days": len(audited_unique),
+        "edge_floor_pts": edge_floor_pts,
+        "edge_floor_metric": "mean_net_edge_pts_per_trade",
+        "edge_floor_cleared": edge_floor_cleared,
+        "verdict": verdict,
+        "research_decision": research_decision,
+        "hard_gate": {
+            "min_events": min_events,
+            "events": n_events,
+            "events_ok": bool(n_events >= min_events),
+            "min_trading_days": min_trading_days,
+            "trading_days_ok": bool(len(audited_unique) >= min_trading_days),
+            "cross_contract_complete": bool(cross_contract_complete),
+            "required_contracts": list(required_contracts),
+            "median_net_positive": bool(median_net is not None and median_net > 0),
+            "remove_best_1_non_collapsing": (bool(remove_best >= 0) if remove_best is not None else None),
+            "p10_not_catastrophic": (bool(p10 > -3.0 * edge_floor_pts) if p10 is not None else None),
+            "no_single_day_dominance": bool(day_share is None or day_share <= max_single_day_share),
+            "no_single_contract_concentration": bool(contract_share is None or contract_share < 0.999),
+            "stop_breach_below_h9_baseline": bool(stop_breach is None or stop_breach < h9_stop_breach_baseline),
+            "drawdown_within_2x_average_monthly_net_pnl": drawdown_within_monthly_gate,
+        },
+        "splits": splits,
+    }
+
+
+def run_open_gap_fade_audit(args: argparse.Namespace) -> dict[str, object]:
+    raw_dir = Path(args.raw_dir)
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    rows: list[dict[str, object]] = []
+    triples = _consecutive_gap_triples(raw_dir, args.months.split(","))
+    if args.max_date is not None:
+        triples = [t for t in triples if _date_from_path(t[1]) <= args.max_date]
+    if args.min_date is not None:
+        triples = [t for t in triples if _date_from_path(t[1]) >= args.min_date]
+    if args.max_pairs is not None:
+        triples = triples[: args.max_pairs]
+    audited_dates = sorted({_date_from_path(t[1]) for t in triples})
+    print(f"t1e_audit_start triples={len(triples)} months={args.months}", file=sys.stderr, flush=True)
+    for idx, (prior_txf, today_txf, today_tmf) in enumerate(triples, start=1):
+        started = time_module.monotonic()
+        before = len(rows)
+        rows.extend(
+            audit_open_gap_fade_pair(
+                prior_txf_path=prior_txf,
+                today_txf_path=today_txf,
+                today_tmf_path=today_tmf,
+                session_tz_offset_hours=args.session_tz_offset_hours,
+                cost_pts=args.cost_pts,
+                session_minutes=args.session_minutes,
+                prior_close_window_minutes=args.prior_close_window_minutes,
+                open_confirm_minutes=args.open_confirm_minutes,
+                min_gap_pts=args.min_gap_pts,
+                stop_buffer_pts=args.stop_buffer_pts,
+            )
+        )
+        elapsed = time_module.monotonic() - started
+        print(
+            f"t1e_triple_done {idx}/{len(triples)} today={today_txf.name} "
+            f"events={len(rows) - before} elapsed_s={elapsed:.2f}",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    csv_path = out_dir / f"{stamp}_open_gap_fade_events.csv"
+    json_path = out_dir / f"{stamp}_summary.json"
+    if rows:
+        fieldnames = list(rows[0].keys())
+        with csv_path.open("w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+    else:
+        csv_path.write_text("", encoding="utf-8")
+    summary = summarize_open_gap_fade_rows(
+        rows,
+        audited_dates=audited_dates,
+        oos_start=args.oos_start,
+        edge_floor_pts=args.edge_floor_pts,
+    )
+    summary["summary_path"] = str(json_path)
+    summary["csv_path"] = str(csv_path)
+    summary["artifact_scope"] = "validation_summary"
+    summary["definition"] = {
+        "l2_alpha_restriction": (
+            "L2 used only for executable bid/ask and quote sanity; entry is the "
+            "endogenous prior-close -> today-open gap, faded after a confirm delay."
+        ),
+        "session_minutes": args.session_minutes,
+        "prior_close_window_minutes": args.prior_close_window_minutes,
+        "open_confirm_minutes": args.open_confirm_minutes,
+        "min_gap_pts": args.min_gap_pts,
+        "stop_buffer_pts": args.stop_buffer_pts,
+        "cost_pts": args.cost_pts,
+        "oos_start": args.oos_start,
+        "min_date": args.min_date,
+        "max_date": args.max_date,
+        "months": args.months.split(","),
+    }
+    json_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    return summary
+
+
 def run_audit(args: argparse.Namespace) -> dict[str, object]:
     raw_dir = Path(args.raw_dir)
     out_dir = Path(args.out_dir)
@@ -831,7 +2096,11 @@ def run_coverage_audit(args: argparse.Namespace) -> dict[str, object]:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run T1 opening-range regime viability audit.")
-    parser.add_argument("--mode", choices=("viability", "coverage"), default="viability")
+    parser.add_argument(
+        "--mode",
+        choices=("viability", "coverage", "vol_compression", "intraday_momentum", "open_gap_fade"),
+        default="viability",
+    )
     parser.add_argument("--raw-dir", default="research/data/raw")
     parser.add_argument("--out-dir", default="research/experiments/validations/T1_regime_viability_audit_v0")
     parser.add_argument("--months", default="B6,C6,D6,E6")
@@ -842,12 +2111,43 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-rv-ratio", type=float, default=1.25)
     parser.add_argument("--max-pairs", type=int, default=None)
     parser.add_argument("--persistence-minutes", type=int, default=5)
+    # T1-B vol-compression mode (frozen V0 defaults).
+    parser.add_argument("--session-minutes", type=int, default=300)
+    parser.add_argument("--baseline-minutes", type=int, default=30)
+    parser.add_argument("--compression-minutes", type=int, default=30)
+    parser.add_argument("--break-window-minutes", type=int, default=30)
+    parser.add_argument("--step-minutes", type=int, default=5)
+    parser.add_argument("--max-compression-ratio", type=float, default=0.70)
+    parser.add_argument("--cooldown-minutes", type=int, default=60)
+    # T1-D intraday-session-momentum mode (frozen V0 defaults).
+    parser.add_argument("--open-window-minutes", type=int, default=30)
+    parser.add_argument("--predict-window-minutes", type=int, default=30)
+    parser.add_argument("--min-open-move-pts", type=float, default=10.0)
+    # T1-E open-gap-fade mode (frozen V0 defaults).
+    parser.add_argument("--prior-close-window-minutes", type=int, default=30)
+    parser.add_argument("--open-confirm-minutes", type=int, default=15)
+    parser.add_argument("--min-gap-pts", type=float, default=15.0)
+    parser.add_argument("--stop-buffer-pts", type=float, default=15.0)
+    parser.add_argument("--cost-pts", type=float, default=8.0)
+    parser.add_argument("--edge-floor-pts", type=float, default=10.0)
+    parser.add_argument("--oos-start", default=None, help="ISO date; events on/after are out-of-sample")
+    parser.add_argument("--min-date", default=None, help="ISO date; include trading days >= this")
+    parser.add_argument("--max-date", default=None, help="ISO date; include trading days <= this")
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    summary = run_coverage_audit(args) if args.mode == "coverage" else run_audit(args)
+    if args.mode == "vol_compression":
+        summary = run_vol_compression_audit(args)
+    elif args.mode == "intraday_momentum":
+        summary = run_intraday_momentum_audit(args)
+    elif args.mode == "open_gap_fade":
+        summary = run_open_gap_fade_audit(args)
+    elif args.mode == "coverage":
+        summary = run_coverage_audit(args)
+    else:
+        summary = run_audit(args)
     print(json.dumps(summary, indent=2))
     return 0
 

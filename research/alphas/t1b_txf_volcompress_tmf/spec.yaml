@@ -1,0 +1,77 @@
+strategy_name: t1b_txf_volcompress_tmf
+market: TAIFEX
+instrument: TMF front-quarter futures, triggered by TXF front-quarter futures
+
+hypothesis: >
+  After a TXF intraday volatility compression, defined as realized
+  volatility over a 30-minute compression window falling to <= 70% of the
+  prior 30-minute baseline, the first directional break out of the
+  compression range can persist long enough for a single-leg TMF expression.
+  The edge source is higher-timeframe post-compression expansion, not L2
+  microstructure lead-lag.
+
+timeframe: 5m
+holding_period: 15m/30m/60m intraday horizons; headline V0 horizon is 30m
+frequency_class: minute
+
+entry_rule: >
+  Slide an anchor every 5 minutes through the day session. For each anchor,
+  require compression_rv / baseline_rv <= 0.70 using backward-looking TXF mid
+  prices only. Enter long on the first TXF mid >= compression_range_high + 8
+  points, or short on the first TXF mid <= compression_range_low - 8 points,
+  within the next 30 minutes. Require trade VWAP alignment when TXF trades are
+  available. TMF entry uses the executable ask for long and executable bid for
+  short at or after the TXF trigger time.
+
+exit_rule: >
+  Exit on the executable opposite TMF side at 15m, 30m, and 60m horizons for
+  V0 scoring. Record whether the post-entry TXF path touches the opposite side
+  of the compression range as stop_structure_breached. No overnight holding is
+  allowed in V0.
+
+position_sizing: fixed 1 lot per event; no scaling, pyramiding, or re-entry while cooldown is active
+
+risk_control:
+  max_position: 1
+  max_drawdown_pts: 80
+  force_flat_rule: V0 time-horizon exit only; any future live stage must inherit platform force-flat
+  cooldown_minutes: 60
+  invalid_quote_guard: require reconstructed BBO bid < ask with positive quantities
+
+cost_model:
+  fee_bps: 0.0
+  tax_bps: 0.0
+  slippage_pts: 8.0
+  latency_profile: v0_latency_deferred_not_promotion_eligible
+  round_trip_cost_pts: 8.0
+  notes: >
+    V0 deducts an 8-point conservative round-trip operating-envelope cost on
+    top of executable TMF bid/ask spread. This aggregate field is intentionally
+    promotion-blocking until Gate C replaces it with a governed latency and
+    cost profile that separately accounts for fee, tax, slippage, spread,
+    latency adverse selection, force-flat cost, and residual inventory MtM.
+
+validation_plan:
+  data_range: 2026-01-26..2026-04-15
+  oos_split: recency split; OOS begins 2026-03-26
+  sample_targets:
+    min_round_trips: 80
+    min_oos_trading_days: 20
+  required_gates:
+    - min_sample_size
+    - edge_per_round_trip
+    - cost_uncertainty
+    - inventory_mtm
+    - force_flat_residual
+    - single_day_dominance
+    - monthly_distribution
+    - replay_parity
+  net_edge_floor_pts: 10.0
+  verdicts:
+    - PROCEED
+    - KILL
+    - NEEDS-MORE-DAYS
+  promotion_blockers:
+    - v0_latency_profile_deferred
+    - no_governed_mean_net_edge_pts_per_trade_artifact_yet
+    - no_replay_paper_live_parity_evidence_yet

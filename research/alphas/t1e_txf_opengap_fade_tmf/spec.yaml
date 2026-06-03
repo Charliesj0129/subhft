@@ -1,0 +1,79 @@
+strategy_name: t1e_txf_opengap_fade_tmf
+market: TAIFEX
+instrument: TMF front-quarter futures, triggered by TXF front-quarter futures
+
+hypothesis: >
+  Taiwan index futures overreact to overnight information: a large
+  prior-session-close to today-open gap partially reverses during the day
+  session. Fade the gap (gap up -> short, gap down -> long). The edge source is
+  open-gap overreaction / partial intraday reversal, not L2 microstructure
+  lead-lag. This is the directionally opposite hypothesis to T1-D intraday
+  momentum, whose V0 KILL showed the open->close relation is reversal-signed.
+
+timeframe: 60m
+holding_period: 15m/30m/60m intraday horizons; headline V0 horizon is 30m (entry ~09:00)
+frequency_class: minute
+
+entry_rule: >
+  Construct the gap endogenously: gap = today open mid minus the mean TXF mid
+  over the prior available session's final 30 minutes (no external EOD feed).
+  Require abs(gap) >= 15 TXF points (outsized gap). Direction = FADE =
+  -sign(gap). Enter at session open + 15 minutes (confirm delay) so the open
+  print settles. TMF entry uses the executable ask for long and executable bid
+  for short at or after the confirm time.
+
+exit_rule: >
+  Exit on the executable opposite TMF side at 15m, 30m, and 60m horizons for V0
+  scoring; headline horizon is 30m. Stop structure = gap extends past today's
+  open by a 15-point buffer (continuation against the fade);
+  stop_structure_breached records when the post-entry TXF path touches it. No
+  overnight holding is allowed in V0.
+
+position_sizing: fixed 1 lot per event; one entry per contract-day; no scaling, pyramiding, or re-entry
+
+risk_control:
+  max_position: 1
+  max_drawdown_pts: 80
+  force_flat_rule: V0 time-horizon exit only; any future live stage must inherit platform force-flat
+  one_entry_per_day: true
+  gap_extension_stop_pts: 15
+  invalid_quote_guard: require reconstructed BBO bid < ask with positive quantities
+
+cost_model:
+  fee_bps: 0.0
+  tax_bps: 0.0
+  slippage_pts: 8.0
+  latency_profile: v0_latency_deferred_not_promotion_eligible
+  round_trip_cost_pts: 8.0
+  notes: >
+    V0 deducts an 8-point conservative round-trip operating-envelope cost on
+    top of executable TMF bid/ask spread. This aggregate field is intentionally
+    promotion-blocking until Gate C replaces it with a governed latency and
+    cost profile that separately accounts for fee, tax, slippage, spread,
+    latency adverse selection, force-flat cost, and residual inventory MtM.
+
+validation_plan:
+  data_range: 2026-01-26..2026-04-15
+  oos_split: recency split; OOS begins 2026-03-26
+  sample_targets:
+    min_round_trips: 80
+    min_oos_trading_days: 20
+  required_gates:
+    - min_sample_size
+    - edge_per_round_trip
+    - cost_uncertainty
+    - inventory_mtm
+    - force_flat_residual
+    - single_day_dominance
+    - monthly_distribution
+    - replay_parity
+  net_edge_floor_pts: 10.0
+  verdicts:
+    - PROCEED
+    - KILL
+    - NEEDS-MORE-DAYS
+  promotion_blockers:
+    - v0_latency_profile_deferred
+    - no_governed_mean_net_edge_pts_per_trade_artifact_yet
+    - no_replay_paper_live_parity_evidence_yet
+    - endogenous_gap_uses_day_session_boundaries_not_settlement_price
