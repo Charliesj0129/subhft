@@ -2,8 +2,51 @@
 
 from types import SimpleNamespace
 
-from hft_platform.contracts.strategy import TIF, IntentType, Side
+from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, Side
 from hft_platform.ops.session_governor import SessionPhase, TrackGate
+
+
+def test_order_intent_session_phase_defaults_none():
+    intent = OrderIntent(
+        intent_id=1, strategy_id="s1", symbol="TXFR1", intent_type=IntentType.NEW,
+        side=Side.BUY, price=170000, qty=1,
+    )
+    assert intent.session_phase is None
+
+
+def test_filter_stamps_session_phase_on_order_intent_objects():
+    # §7 groundwork: OrderIntent objects passing the phase filter are stamped
+    # with the phase they were emitted under. Filtering behaviour is unchanged.
+    from hft_platform.strategy.runner import StrategyRunner
+
+    gate = TrackGate()
+    gate.register_symbol("TXFR1", "futures_day")
+    gate.set_track_phase("futures_day", SessionPhase.OPEN)
+    intent = OrderIntent(
+        intent_id=1, strategy_id="s1", symbol="TXFR1", intent_type=IntentType.NEW,
+        side=Side.BUY, price=170000, qty=1,
+    )
+
+    result = StrategyRunner.filter_intents_by_phase([intent], gate)
+
+    assert result == [intent]
+    assert intent.session_phase == "OPEN"
+
+
+def test_filter_leaves_typed_intent_tuple_unstamped():
+    # The typed_intent_v1 tuple fast-path is immutable; stamping is a no-op and
+    # must not raise or alter the tuple (honest limitation, documented).
+    from hft_platform.strategy.runner import StrategyRunner
+
+    gate = TrackGate()
+    gate.register_symbol("TXFR1", "futures_day")
+    gate.set_track_phase("futures_day", SessionPhase.OPEN)
+    tup = ("typed_intent_v1", 1, "s1", "TXFR1", int(IntentType.NEW), int(Side.BUY),
+           1000000, 1, int(TIF.LIMIT), "", 0, 0, "", "", "", 0)
+
+    result = StrategyRunner.filter_intents_by_phase([tup], gate)
+
+    assert result == [tup]
 
 
 def test_track_gate_blocks_new_in_close_only():

@@ -138,6 +138,22 @@ def _get_symbol_net_qty(position_store: Any, symbol: str, strategy_id: str | Non
     return _total
 
 
+def _stamp_intent_session_phase(intent: Any, phase: Any) -> None:
+    """Record the session phase an intent was emitted under (§7 parity).
+
+    Observability metadata only — never alters routing/risk. Best-effort:
+    only ``OrderIntent`` objects carry a ``session_phase`` slot, so the
+    ``typed_intent_v1`` tuple fast-path (immutable) is left untouched — a
+    further reason session_phase is not yet a live-comparable parity
+    dimension. ``phase.name`` is a cached enum attribute, so this allocates
+    nothing on the order path.
+    """
+    try:
+        intent.session_phase = getattr(phase, "name", str(phase))
+    except (AttributeError, TypeError):
+        pass
+
+
 class StrategyRunner:
     __slots__ = (
         "bus",
@@ -1720,6 +1736,10 @@ class StrategyRunner:
             _intent_symbol = _typed_intent_symbol(_intent)
             _intent_type = _typed_intent_type(_intent)
             _phase = track_gate.get_phase(_intent_symbol)
+            # §7 parity groundwork: record the emitting phase on every intent
+            # the runner evaluates (observability only; does not affect the
+            # filtering decision below).
+            _stamp_intent_session_phase(_intent, _phase)
             if _phase == SessionPhase.OPEN:
                 _filtered.append(_intent)
             elif _phase == SessionPhase.CLOSE_ONLY:
