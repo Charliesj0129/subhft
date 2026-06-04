@@ -17,16 +17,24 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
-_OPTIONAL_PARITY_FIELDS: tuple[str, ...] = (
-    # Round 15: goal §7 parity checks for session filter / risk filter /
-    # force-flat consistency.  Emitted ONLY when present on the source
-    # intent so historical fixtures (which never had these attrs) hash
-    # identically — adding them unconditionally would invalidate every
-    # previously-stored canonical digest.
-    "session_phase",
-    "risk_filter_active",
-    "force_flat_triggered",
-)
+# Goal §7 optional parity fields: intentionally EMPTY (R7, 2026-06-04).
+#
+# The canonical comparison digest must stay symmetric between the replay side
+# (built here from OrderIntent objects) and the live side (projected from the
+# ``hft.order_intents`` ClickHouse table).  Earlier this listed three fields;
+# review found:
+#   * ``force_flat_triggered`` — redundant: a force-flat intent already shows
+#     up via ``intent_type == FORCE_FLAT`` in the digest.
+#   * ``risk_filter_active``   — wrong layer: risk runs AFTER the strategy emits
+#     the intent, so it is a ``RiskDecision`` property, not an OrderIntent one.
+#   * ``session_phase``        — now recorded on OrderIntent (see
+#     ``StrategyRunner.filter_intents_by_phase``) but kept OUT of the digest:
+#     the live side can't carry it until ``hft.order_intents`` gains a column,
+#     so emitting it only on the replay side would create a one-sided
+#     divergence on every record and collapse match_pct.  The replay-parity
+#     gate instead reports it as an uncovered dimension (honest: recorded but
+#     not yet live-comparable).
+_OPTIONAL_PARITY_FIELDS: tuple[str, ...] = ()
 
 
 def _intent_to_canonical(intent: Any) -> dict[str, Any]:
@@ -35,10 +43,10 @@ def _intent_to_canonical(intent: Any) -> dict[str, Any]:
     ``idempotency_key``, ``ttl_ns``, ``reason``, ``ingest_ts``,
     ``source_ts_ns``) are intentionally excluded.
 
-    The three optional parity fields (``session_phase``,
-    ``risk_filter_active``, ``force_flat_triggered``) are included only
-    when the source intent carries a non-``None`` value, keeping
-    historical hashes stable for intents that predate Round 15.
+    ``_OPTIONAL_PARITY_FIELDS`` is currently empty (see its definition for
+    why ``session_phase`` is recorded on the intent but kept out of the
+    comparison digest), so the canonical record is exactly the fixed schema
+    above — unchanged from the pre-Round-15 digest.
     """
     record: dict[str, Any] = {
         "intent_id": int(getattr(intent, "intent_id", 0)),
@@ -87,12 +95,10 @@ class _DictIntent:
     timestamp_ns: int = 0
     decision_price: int = 0
     price_type: str = "LMT"
-    # Round 15 optional parity fields (goal §7).  ``None`` is the
-    # "field absent" sentinel — it tells ``_intent_to_canonical`` to
-    # skip emitting the key so historical hashes stay stable.
+    # Mirrors OrderIntent.session_phase (§7 parity groundwork). Not emitted
+    # into the canonical digest while _OPTIONAL_PARITY_FIELDS is empty; kept
+    # so a jsonl fixture carrying the key round-trips onto the same attribute.
     session_phase: str | None = None
-    risk_filter_active: bool | None = None
-    force_flat_triggered: bool | None = None
 
 
 @dataclass

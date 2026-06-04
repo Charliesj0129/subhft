@@ -114,11 +114,11 @@ class TestAuditCliParityFields:
     def test_main_dispatches_parity_fields_subcommand(self, _isolated, capsys) -> None:
         _record(
             run_id="pf_main",
-            parity_metrics={"match_pct": 80.0, "per_field_divergences": {"force_flat_triggered": 1}},
+            parity_metrics={"match_pct": 80.0, "per_field_divergences": {"session_phase": 1}},
         )
         rc = audit_cli.main(["parity-fields", "--run-id", "pf_main"])
         assert rc == 0
         captured = capsys.readouterr().out
         assert "pf_main" in captured
-        assert "force_flat_triggered" in captured
-        assert "risk_filter" in captured
+        assert "session_phase" in captured
+        assert "session_phase_filter" in captured

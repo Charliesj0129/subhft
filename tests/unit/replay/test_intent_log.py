@@ -123,74 +123,42 @@ def test_load_from_jsonl(tmp_path: Path) -> None:
     assert loaded_extra.hash() == expected_hash
 
 
-# --- Round 15: optional parity fields (goal §7) ----------------------
+# --- §7 parity fields: R7 (2026-06-04) keeps them out of the digest ----
+#
+# The digest must stay symmetric with the live side (hft.order_intents),
+# which carries none of these columns. force_flat_triggered + risk_filter_active
+# were removed from the canonical schema entirely (covered by intent_type /
+# belongs to RiskDecision respectively); session_phase is recorded on the
+# intent but excluded from the comparison digest until a CH column exists.
 
 
-def test_optional_fields_omitted_by_default_keeps_legacy_hash() -> None:
-    """Legacy intent without session/risk/force-flat attrs must hash
-    identically before and after the Round 15 schema extension."""
-    intent = _make_intent()
-    rec = ReplayedIntentLog([intent]).canonical_records()[0]
-    # None of the new keys should leak into the canonical record.
+def test_canonical_record_is_exactly_the_fixed_12_field_shape() -> None:
+    """No §7 optional field leaks into the canonical record — the digest is
+    the fixed 12-field schema, symmetric with the ClickHouse-projected live
+    side."""
+    rec = ReplayedIntentLog([_make_intent()]).canonical_records()[0]
     for name in ("session_phase", "risk_filter_active", "force_flat_triggered"):
-        assert name not in rec, f"{name} leaked into legacy canonical record"
-    # And key count is exactly the original 12-field shape.
+        assert name not in rec, f"{name} leaked into the canonical digest"
     assert len(rec) == 12
 
 
-def test_session_phase_emitted_when_set() -> None:
-    intent = _make_intent(session_phase="cash_open")
+def test_session_phase_recorded_on_intent_but_not_in_digest() -> None:
+    """session_phase is a real attribute on the intent (groundwork) but must
+    NOT enter the comparison digest while the live side can't carry it —
+    otherwise it would create a one-sided divergence on every record."""
+    intent = _make_intent(session_phase="OPEN")
+    assert intent.session_phase == "OPEN"
     rec = ReplayedIntentLog([intent]).canonical_records()[0]
-    assert rec["session_phase"] == "cash_open"
+    assert "session_phase" not in rec
 
 
-def test_risk_filter_active_emitted_when_set() -> None:
-    intent = _make_intent(risk_filter_active=True)
-    rec = ReplayedIntentLog([intent]).canonical_records()[0]
-    assert rec["risk_filter_active"] is True
-
-
-def test_force_flat_triggered_emitted_when_set() -> None:
-    intent = _make_intent(force_flat_triggered=False)
-    rec = ReplayedIntentLog([intent]).canonical_records()[0]
-    # False is a meaningful value (the strategy explicitly recorded
-    # "force-flat did NOT fire"); must round-trip, not be skipped.
-    assert rec["force_flat_triggered"] is False
-
-
-def test_optional_field_drift_changes_hash() -> None:
-    """Two otherwise-identical intents differing only in session_phase
-    must hash differently — that's the whole point of adding the field."""
-    a = ReplayedIntentLog([_make_intent(session_phase="cash_open")])
-    b = ReplayedIntentLog([_make_intent(session_phase="cash_close")])
-    assert a.hash() != b.hash()
-
-
-def test_jsonl_round_trip_preserves_optional_fields(tmp_path: Path) -> None:
-    log = ReplayedIntentLog(
-        [
-            _make_intent(
-                session_phase="cash_open",
-                risk_filter_active=True,
-                force_flat_triggered=False,
-            )
-        ]
-    )
-    expected = log.hash()
-    canonical = log.canonical_records()
-
-    path = tmp_path / "intents.jsonl"
-    with path.open("w", encoding="utf-8") as f:
-        for rec in canonical:
-            f.write(json.dumps(rec) + "\n")
-
-    loaded = ReplayedIntentLog.from_jsonl(path)
-    assert loaded.n_intents() == 1
-    assert loaded.hash() == expected
-    rec = loaded.canonical_records()[0]
-    assert rec["session_phase"] == "cash_open"
-    assert rec["risk_filter_active"] is True
-    assert rec["force_flat_triggered"] is False
+def test_session_phase_does_not_affect_digest_hash() -> None:
+    """Because session_phase is excluded from the digest, two intents that
+    differ only in session_phase must hash identically (so a replay that
+    populates it can't spuriously diverge from a live stream that can't)."""
+    a = ReplayedIntentLog([_make_intent(session_phase="OPEN")])
+    b = ReplayedIntentLog([_make_intent(session_phase="CLOSE_ONLY")])
+    assert a.hash() == b.hash()
 
 
 def test_legacy_jsonl_fixture_still_loads_unchanged(tmp_path: Path) -> None:

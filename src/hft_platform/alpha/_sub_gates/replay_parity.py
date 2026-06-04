@@ -32,18 +32,17 @@ class ReplayParityGate:
     name = "replay_parity"
     applies_to = {"maker", "taker"}
 
-    # Goal §7 parity dimensions that live on the canonical intent only when the
-    # source intent carries them (see intent_log._OPTIONAL_PARITY_FIELDS). The
-    # production OrderIntent contract does not yet expose these, so on real
-    # streams they are absent and these dimensions go UNCHECKED. We surface that
-    # as coverage rather than letting absence read as agreement. Advisory only:
-    # failing the gate here would block every real strategy until the production
-    # contract change lands — that promotion-policy decision is not the gate's.
-    expected_parity_dimensions = (
-        "session_phase",
-        "risk_filter_active",
-        "force_flat_triggered",
-    )
+    # Goal §7 parity dimension recorded on OrderIntent but not yet in the
+    # comparison digest: the live side (hft.order_intents) has no session_phase
+    # column, so it is UNCHECKED until that migration lands. We surface that as
+    # coverage rather than letting absence read as agreement. Advisory only:
+    # failing the gate here would block every real strategy until the migration,
+    # which is a promotion-policy decision, not the gate's.
+    #
+    # ``force_flat_triggered`` is intentionally absent — it is already covered
+    # by ``intent_type == FORCE_FLAT`` in the digest. ``risk_filter_active`` is
+    # absent too — it is a RiskDecision property, outside intent-level parity.
+    expected_parity_dimensions = ("session_phase",)
 
     def evaluate(
         self,

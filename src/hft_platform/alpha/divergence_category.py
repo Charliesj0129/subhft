@@ -77,13 +77,14 @@ _FIELD_TO_CATEGORY: dict[str, DivergenceCategory] = {
     "price": DivergenceCategory.IMPLEMENTATION_DRIFT,
     "target_order_id": DivergenceCategory.IMPLEMENTATION_DRIFT,
     "price_type": DivergenceCategory.IMPLEMENTATION_DRIFT,
-    # Round 15: optional parity fields added to the canonical intent
-    # log to surface session / risk / force-flat consistency drift
-    # (goal §7).  Exact mapping (rather than prefix) keeps the contract
-    # explicit at the same status as the legacy canonical fields.
+    # §7 session-phase parity. ``session_phase`` is recorded on OrderIntent but
+    # not yet in the comparison digest (live side needs an hft.order_intents
+    # column first); the mapping is kept ready for when it is compared.
+    # ``force_flat_triggered`` was dropped (redundant — covered by
+    # ``intent_type == FORCE_FLAT``, which maps to IMPLEMENTATION_DRIFT) and
+    # ``risk_filter_active`` was dropped (a RiskDecision property, not an
+    # OrderIntent one); a stray ``risk_*`` key still routes via the prefix rule.
     "session_phase": DivergenceCategory.SESSION_PHASE_FILTER,
-    "risk_filter_active": DivergenceCategory.RISK_FILTER,
-    "force_flat_triggered": DivergenceCategory.RISK_FILTER,
 }
 
 
