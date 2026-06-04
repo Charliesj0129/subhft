@@ -75,6 +75,14 @@ class OrderIntent:
     # can prefer this over parsing ``symbol`` strings.
     contract: Optional["ContractRef"] = None
 
+    # §7 replay-parity groundwork: the session phase (OPEN/CLOSE_ONLY/
+    # FORCE_FLAT) the intent was emitted under, stamped centrally by
+    # ``StrategyRunner.filter_intents_by_phase``. Observability metadata only
+    # — never read by routing/risk. Not yet part of the live parity digest
+    # (``hft.order_intents`` would need a column); the replay-parity gate
+    # reports it as an uncovered dimension until that migration lands.
+    session_phase: Optional[str] = None
+
 
 @dataclass(slots=True)
 class RiskDecision:
