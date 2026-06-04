@@ -82,6 +82,18 @@ class PlatformDegradeController:
         except Exception:
             return None
 
+    @property
+    def manual_rearm_required_active(self) -> bool:
+        """True only when a genuine, non-auto-recoverable reason is active.
+
+        Auto-recoverable reasons (feed reconnect, queue depth, etc.) self-clear
+        via :meth:`check_auto_recovery`; they must NOT be reported as requiring
+        operator intervention. Tying the manual-rearm signal to ``reduce_only_active``
+        alone is what let a transient ``feed_reconnect_pending`` masquerade as a
+        permanent manual-rearm latch.
+        """
+        return bool(self._active_reasons - _AUTO_RECOVERABLE_REASONS)
+
     def enter_reduce_only(self, *, reason: str) -> AutonomyTransition:
         self._active_reasons.add(reason)
         if self.reduce_only_active and self.last_transition is not None:
@@ -100,6 +112,9 @@ class PlatformDegradeController:
         transition = AutonomyTransition.enter_platform_reduce_only(
             reason,
             from_mode=AutonomyMode.NORMAL if not self.reduce_only_active else AutonomyMode.PLATFORM_REDUCE_ONLY,
+            # Auto-recoverable reasons self-clear; persisting a manual-rearm flag
+            # for them is what created the self-perpetuating phantom latch.
+            manual_rearm_required=reason not in _AUTO_RECOVERABLE_REASONS,
         )
         self.reduce_only_active = True
         self.last_transition = transition
@@ -318,7 +333,7 @@ class PlatformDegradeController:
             platform_reduce_only_active.set(1 if self.reduce_only_active else 0)
         manual_rearm_required = getattr(self.metrics, "manual_rearm_required", None)
         if manual_rearm_required is not None:
-            manual_rearm_required.labels(scope="platform").set(1 if self.reduce_only_active else 0)
+            manual_rearm_required.labels(scope="platform").set(1 if self.manual_rearm_required_active else 0)
 
 
 def get_shared_platform_degrade_controller(
@@ -349,22 +364,43 @@ def get_shared_platform_degrade_controller(
 
 
 def _restore_manual_rearm_state(controller: "PlatformDegradeController") -> None:
-    """Re-enter reduce_only if a prior run persisted manual_rearm_required.
+    """Re-enter reduce_only if a prior run persisted a genuine manual-rearm latch.
 
     Bridges the docker-exec rearm CLI path: when the operator runs rearm in
     a separate process, the persistence write succeeds but the live engine's
     `_shared_controller` is not reachable. The next engine restart used to
     boot in NORMAL, silently clearing a flag the operator never confirmed.
 
-    Now bootstrap honours the persisted flag and starts latched until the
-    operator clears it — matching what the CLI claims to do.
+    Now bootstrap honours the persisted flag — but with two corrections that
+    killed the self-perpetuating phantom latch:
+
+    * It restores the ORIGINAL persisted reason rather than the opaque
+      ``restored_from_runtime_state`` sentinel, so observability stays honest
+      and auto-recovery classification is correct.
+    * If the persisted reason is auto-recoverable (stale/legacy data — the
+      reason should never have demanded manual rearm), it clears the flag
+      instead of re-latching, so the platform boots NORMAL and stops
+      re-firing ``ManualRearmRequired``.
     """
     try:
         from hft_platform.ops.manual_rearm import ManualRearmGate
 
         gate = ManualRearmGate()
-        if gate.requires_manual_rearm("platform"):
-            controller.enter_reduce_only(reason="restored_from_runtime_state")
+        if not gate.requires_manual_rearm("platform"):
+            return
+        snapshot = gate.snapshot()
+        platform = snapshot.get("platform") if isinstance(snapshot, dict) else None
+        reason = (platform or {}).get("reason") or "restored_from_runtime_state"
+        if reason in _AUTO_RECOVERABLE_REASONS:
+            logger.warning(
+                "platform_rearm_state_stale_auto_recoverable_cleared",
+                reason=reason,
+                note="auto-recoverable reason should never require manual rearm; clearing stale flag",
+            )
+            # Lock-free: we already hold _shared_controller_lock here.
+            gate.clear_platform_flag()
+            return
+        controller.enter_reduce_only(reason=reason)
     except Exception as exc:
         logger.warning("platform_rearm_state_restore_failed", error=str(exc))
 
