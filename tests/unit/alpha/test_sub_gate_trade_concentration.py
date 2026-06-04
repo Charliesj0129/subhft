@@ -117,3 +117,42 @@ class TestTradeConcentrationGate:
         gate = _gate()
         assert "maker" in gate.applies_to
         assert "taker" in gate.applies_to
+
+
+class TestLossDistributionMetrics:
+    """§5 虧損分布: distribution ACROSS losers (advisory, additive)."""
+
+    def test_loss_distribution_metrics_for_fat_tailed_losses(self) -> None:
+        # 3 wins + 4 losers; one loser (-30) dwarfs the rest (-2,-3,-4).
+        trades = [20.0, 15.0, 10.0, -2.0, -3.0, -4.0, -30.0]
+        out = _gate().evaluate(_FakeResult(trade_pnl=trades), config=None, thresholds={})
+        m = out.metrics
+        assert m["loss_count"] == 4.0
+        assert round(m["loss_rate_pct"], 1) == 57.1  # 4 / 7
+        # gross loss 39; worst 3 = 30+4+3 = 37 -> 94.9%
+        assert round(m["loss_top3_share_pct"], 1) == 94.9
+        # mean |loss| 9.75 / median 3.5 -> ~2.79 (fat tail)
+        assert m["loss_fat_tail_ratio"] > 2.0
+
+    def test_no_losers_reports_neutral_loss_distribution(self) -> None:
+        out = _gate().evaluate(
+            _FakeResult(trade_pnl=[10.0, 5.0, 3.0]), config=None, thresholds={}
+        )
+        m = out.metrics
+        assert m["loss_count"] == 0.0
+        assert m["loss_rate_pct"] == 0.0
+        assert m["loss_top3_share_pct"] == 0.0
+        assert m["loss_fat_tail_ratio"] == 1.0
+
+    def test_loss_metrics_are_advisory_and_do_not_change_pass_fail(self) -> None:
+        # Diffuse wins, small evenly-spread losers -> gate passes, and the
+        # loss-distribution metrics are present without affecting the verdict.
+        trades = [10.0, 11.0, 12.0, 9.0, 8.0, -2.0, -3.0]
+        out = _gate().evaluate(
+            _FakeResult(trade_pnl=trades),
+            config=None,
+            thresholds={"top_trade_share_max_pct": 40.0, "worst_loss_share_max_pct": 50.0},
+        )
+        assert out.passed is True
+        assert out.metrics["loss_count"] == 2.0
+        assert out.metrics["loss_fat_tail_ratio"] == 1.0  # 2.5 mean / 2.5 median
