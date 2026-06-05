@@ -72,17 +72,14 @@ class TestRestoreDoesNotPerpetuatePhantomLatch:
     def teardown_method(self) -> None:
         reset_shared_platform_degrade_controller()
 
-    def test_stale_auto_recoverable_persisted_flag_is_cleared_not_relatched(
-        self, tmp_path: Path, monkeypatch
-    ) -> None:
+    def test_stale_auto_recoverable_persisted_flag_is_cleared_not_relatched(self, tmp_path: Path, monkeypatch) -> None:
         """Exactly the production scenario: legacy/buggy persisted state holds an
         auto-recoverable reason with manual_rearm_required=true. On restart the
         controller must NOT re-latch reduce_only; it must clear the stale flag so
         the platform boots NORMAL and stops re-firing alerts."""
         state_path = tmp_path / "runtime_state.json"
         state_path.write_text(
-            '{"platform": {"manual_rearm_required": true, '
-            '"reason": "feed_reconnect_pending"}, "strategies": {}}',
+            '{"platform": {"manual_rearm_required": true, "reason": "feed_reconnect_pending"}, "strategies": {}}',
             encoding="utf-8",
         )
         monkeypatch.setattr("hft_platform.ops.manual_rearm.DEFAULT_RUNTIME_STATE_PATH", state_path)
@@ -91,15 +88,12 @@ class TestRestoreDoesNotPerpetuatePhantomLatch:
         persisted = json.loads(state_path.read_text(encoding="utf-8"))
         assert persisted["platform"]["manual_rearm_required"] is False
 
-    def test_non_recoverable_persisted_flag_relatches_with_original_reason(
-        self, tmp_path: Path, monkeypatch
-    ) -> None:
+    def test_non_recoverable_persisted_flag_relatches_with_original_reason(self, tmp_path: Path, monkeypatch) -> None:
         """A genuine operator/manual condition must survive restart and keep the
         ORIGINAL reason (not the meaningless ``restored_from_runtime_state``)."""
         state_path = tmp_path / "runtime_state.json"
         state_path.write_text(
-            '{"platform": {"manual_rearm_required": true, '
-            '"reason": "pnl_peak_drawdown"}, "strategies": {}}',
+            '{"platform": {"manual_rearm_required": true, "reason": "pnl_peak_drawdown"}, "strategies": {}}',
             encoding="utf-8",
         )
         monkeypatch.setattr("hft_platform.ops.manual_rearm.DEFAULT_RUNTIME_STATE_PATH", state_path)
@@ -109,13 +103,10 @@ class TestRestoreDoesNotPerpetuatePhantomLatch:
         assert "restored_from_runtime_state" not in ctrl._active_reasons
         assert ctrl.manual_rearm_required_active is True
 
-    def test_restored_non_recoverable_reason_blocks_auto_recovery(
-        self, tmp_path: Path, monkeypatch
-    ) -> None:
+    def test_restored_non_recoverable_reason_blocks_auto_recovery(self, tmp_path: Path, monkeypatch) -> None:
         state_path = tmp_path / "runtime_state.json"
         state_path.write_text(
-            '{"platform": {"manual_rearm_required": true, '
-            '"reason": "pnl_peak_drawdown"}, "strategies": {}}',
+            '{"platform": {"manual_rearm_required": true, "reason": "pnl_peak_drawdown"}, "strategies": {}}',
             encoding="utf-8",
         )
         monkeypatch.setattr("hft_platform.ops.manual_rearm.DEFAULT_RUNTIME_STATE_PATH", state_path)
