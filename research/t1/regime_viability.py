@@ -2335,6 +2335,407 @@ def run_expiration_v_reversal_audit(args: argparse.Namespace) -> dict[str, objec
     return summary
 
 
+# ---------------------------------------------------------------------------
+# T1-C: VWAP-trend / session-imbalance failed-reclaim continuation
+#
+# Mechanism (frozen V0, see research/alphas/t1c_txf_vwaptrend_tmf/README.md):
+# the third frozen Track-T1 candidate (see track_t1_opened_2026_05_13).  Within
+# the day session, slide an anchor; at each anchor take the cumulative session
+# trade VWAP as the fair-value reference.  A directional *session imbalance*
+# exists when the TXF mid has stayed predominantly on one side of VWAP across a
+# trailing window AND sits >= ``min_trend_pts`` away from it.  A *failed VWAP
+# reclaim* is a pullback that approached VWAP (within ``reclaim_tolerance_pts``)
+# but did NOT cross to the other side.  Enter in the TREND direction
+# (continuation): mid above VWAP -> long, below -> short.  Stop structure = VWAP
+# reclaim (price crosses back through VWAP by ``stop_buffer_pts``).  L2 is NOT an
+# entry input -- only TXF mid + trade VWAP drive the signal and TMF bid/ask
+# provides executable fills.
+#
+# NB: ``RegimeEvent.opening_range_high``/``opening_range_low`` are reused to
+# carry the VWAP-reclaim stop band (vwap +/- buffer); ``trade_vwap`` carries the
+# anchor VWAP level; ``realized_vol_ratio`` carries the signed displacement from
+# VWAP (the imbalance magnitude, pts).
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class VwapTrendConfig:
+    session_start_ns: int
+    session_minutes: int = 300           # 08:45-13:45 TPE day session
+    trend_window_minutes: int = 60       # trailing window establishing the imbalance
+    headline_horizon_minutes: int = 30   # last anchor leaves room for the 30m hold
+    min_trend_pts: float = 15.0          # mid must sit >= this far from VWAP
+    min_side_fraction: float = 0.80      # >= this fraction of the window on the trend side
+    reclaim_tolerance_pts: float = 5.0   # pullback must reach within this of VWAP, no cross
+    stop_buffer_pts: float = 15.0        # VWAP-reclaim stop band beyond VWAP
+    step_minutes: int = 5                # anchor slide granularity
+    cooldown_minutes: int = 60           # no overlapping entries (max hold horizon)
+    min_window_points: int = 5
+
+
+def detect_vwap_trend_events(
+    bbo: BboFrame,
+    trades: TradeFrame,
+    *,
+    contract: str,
+    date: str,
+    config: VwapTrendConfig,
+) -> list[RegimeEvent]:
+    """Session-imbalance failed-VWAP-reclaim continuation.  Backward-looking:
+    the imbalance and the failed reclaim are measured over a trailing window
+    that closes at the anchor, and entry is at the anchor in the trend
+    direction.  Edge source is VWAP-trend persistence, not microstructure.
+    """
+    if len(bbo.ts_ns) < config.min_window_points:
+        return []
+
+    start = config.session_start_ns
+    session_end = start + config.session_minutes * NS_PER_MINUTE
+    trend_ns = config.trend_window_minutes * NS_PER_MINUTE
+    step_ns = config.step_minutes * NS_PER_MINUTE
+    cooldown_ns = config.cooldown_minutes * NS_PER_MINUTE
+    last_anchor = session_end - config.headline_horizon_minutes * NS_PER_MINUTE
+
+    ts = bbo.ts_ns
+    mid = bbo.mid
+    events: list[RegimeEvent] = []
+    cooldown_until = start
+    anchor = start + trend_ns
+
+    while anchor <= last_anchor:
+        if anchor < cooldown_until:
+            anchor += step_ns
+            continue
+
+        vwap = _trade_vwap_until(trades, anchor)
+        if vwap is None:
+            anchor += step_ns
+            continue
+
+        entry_idx = int(np.searchsorted(ts, anchor, side="left"))
+        if entry_idx >= len(ts):
+            break
+        entry_ref = float(mid[entry_idx])
+        displacement = entry_ref - vwap
+        if abs(displacement) < config.min_trend_pts:
+            anchor += step_ns
+            continue
+        direction = 1 if displacement > 0 else -1
+
+        window_mask = (ts >= anchor - trend_ns) & (ts <= anchor)
+        if int(np.count_nonzero(window_mask)) < config.min_window_points:
+            anchor += step_ns
+            continue
+        window_mid = mid[window_mask]
+
+        signed = direction * (window_mid - vwap)  # > 0 == on the trend side of VWAP
+        side_fraction = float(np.count_nonzero(signed > 0)) / float(len(window_mid))
+        if side_fraction < config.min_side_fraction:
+            anchor += step_ns
+            continue
+
+        # Failed VWAP reclaim: a pullback that touched within tolerance of VWAP
+        # but never crossed past it onto the counter-trend side.
+        approached = bool(np.min(np.abs(window_mid - vwap)) <= config.reclaim_tolerance_pts)
+        not_crossed = bool(float(np.min(signed)) >= -config.reclaim_tolerance_pts)
+        if not (approached and not_crossed):
+            anchor += step_ns
+            continue
+
+        events.append(
+            RegimeEvent(
+                contract=contract,
+                date=date,
+                regime_type="T1-C_vwap_trend_continuation",
+                trigger_time=_iso_from_ns(anchor),
+                trigger_time_ns=anchor,
+                direction=direction,
+                txf_entry_ref=entry_ref,
+                # Stop = price reclaims VWAP (crosses back through it by the buffer).
+                opening_range_high=vwap + config.stop_buffer_pts,
+                opening_range_low=vwap - config.stop_buffer_pts,
+                trade_vwap=vwap,
+                realized_vol_ratio=float(displacement),  # signed VWAP displacement (pts)
+            )
+        )
+        cooldown_until = anchor + cooldown_ns
+        anchor += step_ns
+
+    return events
+
+
+def audit_vwap_trend_pair(
+    *,
+    txf_path: Path,
+    tmf_path: Path,
+    session_tz_offset_hours: int = 8,
+    cost_pts: float = 8.0,
+    session_minutes: int = 300,
+    trend_window_minutes: int = 60,
+    min_trend_pts: float = 15.0,
+    min_side_fraction: float = 0.80,
+    reclaim_tolerance_pts: float = 5.0,
+    stop_buffer_pts: float = 15.0,
+    step_minutes: int = 5,
+    cooldown_minutes: int = 60,
+) -> list[dict[str, object]]:
+    date = _date_from_path(txf_path)
+    txf_contract = txf_path.name.split("_", 1)[0]
+    tmf_contract = tmf_path.name.split("_", 1)[0]
+    txf_bbo, txf_trades = _load_frames(txf_path)
+    tmf_bbo, _ = _load_frames(tmf_path)
+    config = VwapTrendConfig(
+        session_start_ns=_session_start_ns(date, tz_offset_hours=session_tz_offset_hours),
+        session_minutes=session_minutes,
+        trend_window_minutes=trend_window_minutes,
+        min_trend_pts=min_trend_pts,
+        min_side_fraction=min_side_fraction,
+        reclaim_tolerance_pts=reclaim_tolerance_pts,
+        stop_buffer_pts=stop_buffer_pts,
+        step_minutes=step_minutes,
+        cooldown_minutes=cooldown_minutes,
+    )
+    rows: list[dict[str, object]] = []
+    for event in detect_vwap_trend_events(
+        txf_bbo,
+        txf_trades,
+        contract=txf_contract,
+        date=date,
+        config=config,
+    ):
+        try:
+            eval_row = evaluate_executable_returns(
+                tmf_bbo,
+                trigger_time_ns=event.trigger_time_ns,
+                direction=event.direction,
+            )
+        except ValueError:
+            # No TMF executable quote at/after the trigger -> not tradeable; skip.
+            continue
+        after = txf_bbo.ts_ns >= event.trigger_time_ns
+        post_mid = txf_bbo.mid[after]
+        # Stop structure = VWAP reclaim (price crosses back through VWAP by the buffer).
+        if event.direction > 0:  # long (mid above VWAP): stop if price reclaims downward
+            reverted = bool(np.any(post_mid <= event.opening_range_low)) if len(post_mid) else False
+        else:  # short (mid below VWAP): stop if price reclaims upward
+            reverted = bool(np.any(post_mid >= event.opening_range_high)) if len(post_mid) else False
+        gross = eval_row.get("return_30m")
+        net = (float(gross) - cost_pts) if gross is not None else None
+        row: dict[str, object] = {
+            "contract": f"{txf_contract}->{tmf_contract}",
+            "date": date,
+            "regime_type": event.regime_type,
+            "trigger_time": event.trigger_time,
+            "direction": event.direction,
+            "txf_entry_ref": event.txf_entry_ref,
+            "vwap_displacement_pts": event.realized_vol_ratio,
+            "trade_vwap": event.trade_vwap,
+            "vwap_stop_high": event.opening_range_high,
+            "vwap_stop_low": event.opening_range_low,
+            # Entry-time setup is by construction a FAILED reclaim; post-entry the
+            # stop fires iff price later RECLAIMS VWAP (continuation refuted).
+            "vwap_reclaim_failed_or_passed": "failed",
+            "stop_structure_breached": reverted,
+            "vwap_reclaimed_post_entry": reverted,
+            "cost_pts": cost_pts,
+            "net_after_cost_30m": net,
+            "net_30m_pts": gross,
+            **eval_row,
+        }
+        rows.append(row)
+    return rows
+
+
+def summarize_vwap_trend_rows(
+    rows: Sequence[dict[str, object]],
+    *,
+    audited_dates: Sequence[str] | None = None,
+    oos_start: str | None = None,
+    edge_floor_pts: float = 10.0,
+    min_events: int = 80,
+    min_trading_days: int = 20,
+    required_contracts: Sequence[str] = ("TXFB6", "TXFC6", "TXFD6", "TXFE6"),
+    h9_stop_breach_baseline: float = 0.50,
+    max_single_day_share: float = 0.50,
+) -> dict[str, object]:
+    full = _subset_scorecard(rows)
+    splits: dict[str, object] = {"full": full}
+    if oos_start is not None:
+        in_sample = [r for r in rows if str(r["date"]) < oos_start]
+        out_sample = [r for r in rows if str(r["date"]) >= oos_start]
+        splits["in_sample"] = _subset_scorecard(in_sample)
+        splits["out_of_sample"] = _subset_scorecard(out_sample)
+
+    def _f(value: object) -> float | None:
+        return None if value is None else float(cast(float, value))
+
+    audited_unique = sorted(set(audited_dates or [str(r["date"]) for r in rows]))
+    contracts_present = {str(c) for c in cast("list[str]", full["contracts"])}
+    cross_contract_complete = set(required_contracts).issubset(contracts_present)
+
+    n_events = cast(int, full["events"])
+    mean_net_edge = _f(full["mean_net_edge_pts_per_trade"])
+    median_net = _f(full["median_net_after_cost_30m"])
+    remove_best = _f(full["remove_best_1_median_net"])
+    p10 = _f(full["p10_net_after_cost_30m"])
+    stop_breach = _f(full["stop_breach_rate"])
+    day_share = _f(full["max_single_day_net_share_of_positive"])
+    contract_share = _f(full["max_single_contract_net_share_of_positive"])
+    drawdown_within_monthly_gate = cast(
+        bool | None,
+        full["drawdown_within_2x_average_monthly_net_pnl"],
+    )
+
+    sample_ok = (
+        n_events >= min_events
+        and len(audited_unique) >= min_trading_days
+        and cross_contract_complete
+    )
+    dominance_fail = (day_share is not None and day_share > max_single_day_share) or (
+        contract_share is not None and contract_share >= 0.999
+    )
+    stop_breach_fail = stop_breach is not None and stop_breach >= h9_stop_breach_baseline
+    drawdown_fail = drawdown_within_monthly_gate is False
+    edge_floor_cleared = bool(mean_net_edge is not None and mean_net_edge > edge_floor_pts)
+
+    if median_net is not None and median_net <= 0:
+        verdict = "KILL"
+    elif not sample_ok:
+        verdict = "NEEDS-MORE-DAYS"
+    elif dominance_fail or stop_breach_fail or drawdown_fail:
+        verdict = "KILL"
+    elif median_net is not None and median_net > 0:
+        verdict = "PROCEED"
+    else:
+        verdict = "NEEDS-MORE-DAYS"
+
+    research_decision = _t1b_research_decision(
+        median_net=median_net,
+        sample_ok=sample_ok,
+        n_events=n_events,
+        min_events=min_events,
+        audited_days=len(audited_unique),
+        min_trading_days=min_trading_days,
+        cross_contract_complete=cross_contract_complete,
+        dominance_fail=dominance_fail,
+        stop_breach_fail=stop_breach_fail,
+        drawdown_fail=drawdown_fail,
+        edge_floor_cleared=edge_floor_cleared,
+    )
+
+    return {
+        "track": "T1-C: TXF VWAP-Trend Session Imbalance -> TMF",
+        "candidate": "t1c_txf_vwaptrend_tmf",
+        "audited_trading_days": len(audited_unique),
+        "edge_floor_pts": edge_floor_pts,
+        "edge_floor_metric": "mean_net_edge_pts_per_trade",
+        "edge_floor_cleared": edge_floor_cleared,
+        "verdict": verdict,
+        "research_decision": research_decision,
+        "hard_gate": {
+            "min_events": min_events,
+            "events": n_events,
+            "events_ok": bool(n_events >= min_events),
+            "min_trading_days": min_trading_days,
+            "trading_days_ok": bool(len(audited_unique) >= min_trading_days),
+            "cross_contract_complete": bool(cross_contract_complete),
+            "required_contracts": list(required_contracts),
+            "median_net_positive": bool(median_net is not None and median_net > 0),
+            "remove_best_1_non_collapsing": (bool(remove_best >= 0) if remove_best is not None else None),
+            "p10_not_catastrophic": (bool(p10 > -3.0 * edge_floor_pts) if p10 is not None else None),
+            "no_single_day_dominance": bool(day_share is None or day_share <= max_single_day_share),
+            "no_single_contract_concentration": bool(contract_share is None or contract_share < 0.999),
+            "stop_breach_below_h9_baseline": bool(stop_breach is None or stop_breach < h9_stop_breach_baseline),
+            "drawdown_within_2x_average_monthly_net_pnl": drawdown_within_monthly_gate,
+        },
+        "splits": splits,
+    }
+
+
+def run_vwap_trend_audit(args: argparse.Namespace) -> dict[str, object]:
+    raw_dir = Path(args.raw_dir)
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    rows: list[dict[str, object]] = []
+    pairs = _matching_pairs(raw_dir, args.months.split(","))
+    if args.max_date is not None:
+        pairs = [(t, m) for (t, m) in pairs if _date_from_path(t) <= args.max_date]
+    if args.min_date is not None:
+        pairs = [(t, m) for (t, m) in pairs if _date_from_path(t) >= args.min_date]
+    if args.max_pairs is not None:
+        pairs = pairs[: args.max_pairs]
+    audited_dates = sorted({_date_from_path(t) for t, _ in pairs})
+    print(f"t1c_audit_start pairs={len(pairs)} months={args.months}", file=sys.stderr, flush=True)
+    for idx, (txf_path, tmf_path) in enumerate(pairs, start=1):
+        started = time_module.monotonic()
+        before = len(rows)
+        rows.extend(
+            audit_vwap_trend_pair(
+                txf_path=txf_path,
+                tmf_path=tmf_path,
+                session_tz_offset_hours=args.session_tz_offset_hours,
+                cost_pts=args.cost_pts,
+                session_minutes=args.session_minutes,
+                trend_window_minutes=args.trend_window_minutes,
+                min_trend_pts=args.min_trend_pts,
+                min_side_fraction=args.min_side_fraction,
+                reclaim_tolerance_pts=args.reclaim_tolerance_pts,
+                stop_buffer_pts=args.stop_buffer_pts,
+                step_minutes=args.step_minutes,
+                cooldown_minutes=args.cooldown_minutes,
+            )
+        )
+        elapsed = time_module.monotonic() - started
+        print(
+            f"t1c_pair_done {idx}/{len(pairs)} txf={txf_path.name} events={len(rows) - before} elapsed_s={elapsed:.2f}",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    csv_path = out_dir / f"{stamp}_vwap_trend_events.csv"
+    json_path = out_dir / f"{stamp}_summary.json"
+    if rows:
+        fieldnames = list(rows[0].keys())
+        with csv_path.open("w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+    else:
+        csv_path.write_text("", encoding="utf-8")
+    summary = summarize_vwap_trend_rows(
+        rows,
+        audited_dates=audited_dates,
+        oos_start=args.oos_start,
+        edge_floor_pts=args.edge_floor_pts,
+    )
+    summary["summary_path"] = str(json_path)
+    summary["csv_path"] = str(csv_path)
+    summary["artifact_scope"] = "validation_summary"
+    summary["definition"] = {
+        "l2_alpha_restriction": (
+            "L2 used only for executable bid/ask and quote sanity; entry is a TXF "
+            "session VWAP-trend imbalance with a failed VWAP reclaim, traded in the "
+            "trend direction (continuation)."
+        ),
+        "session_minutes": args.session_minutes,
+        "trend_window_minutes": args.trend_window_minutes,
+        "min_trend_pts": args.min_trend_pts,
+        "min_side_fraction": args.min_side_fraction,
+        "reclaim_tolerance_pts": args.reclaim_tolerance_pts,
+        "stop_buffer_pts": args.stop_buffer_pts,
+        "step_minutes": args.step_minutes,
+        "cooldown_minutes": args.cooldown_minutes,
+        "cost_pts": args.cost_pts,
+        "oos_start": args.oos_start,
+        "min_date": args.min_date,
+        "max_date": args.max_date,
+        "months": args.months.split(","),
+    }
+    json_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    return summary
+
+
 def run_audit(args: argparse.Namespace) -> dict[str, object]:
     raw_dir = Path(args.raw_dir)
     out_dir = Path(args.out_dir)
@@ -2499,6 +2900,7 @@ def build_parser() -> argparse.ArgumentParser:
             "intraday_momentum",
             "open_gap_fade",
             "expiration_v_reversal",
+            "vwap_trend",
         ),
         default="viability",
     )
@@ -2532,6 +2934,11 @@ def build_parser() -> argparse.ArgumentParser:
     # T1-F expiration-V-reversal mode (frozen V0 defaults).
     parser.add_argument("--thrust-window-minutes", type=int, default=90)
     parser.add_argument("--min-thrust-pts", type=float, default=20.0)
+    # T1-C VWAP-trend mode (frozen V0 defaults).
+    parser.add_argument("--trend-window-minutes", type=int, default=60)
+    parser.add_argument("--min-trend-pts", type=float, default=15.0)
+    parser.add_argument("--min-side-fraction", type=float, default=0.80)
+    parser.add_argument("--reclaim-tolerance-pts", type=float, default=5.0)
     parser.add_argument("--cost-pts", type=float, default=8.0)
     parser.add_argument("--edge-floor-pts", type=float, default=10.0)
     parser.add_argument("--oos-start", default=None, help="ISO date; events on/after are out-of-sample")
@@ -2550,6 +2957,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         summary = run_open_gap_fade_audit(args)
     elif args.mode == "expiration_v_reversal":
         summary = run_expiration_v_reversal_audit(args)
+    elif args.mode == "vwap_trend":
+        summary = run_vwap_trend_audit(args)
     elif args.mode == "coverage":
         summary = run_coverage_audit(args)
     else:
