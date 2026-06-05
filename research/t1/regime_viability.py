@@ -1941,6 +1941,400 @@ def run_open_gap_fade_audit(args: argparse.Namespace) -> dict[str, object]:
     return summary
 
 
+# ---------------------------------------------------------------------------
+# T1-F: expiration V-reversal (H3 from the 2026-06-03 paper x data menu)
+#
+# Mechanism (frozen V0, see research/alphas/t1f_txf_expiration_vreversal_tmf/README.md):
+# on a contract's FINAL SETTLEMENT day (3rd Wednesday), index-futures basis
+# convergence and arbitrage unwind tend to produce a directional thrust early in
+# the session followed by a partial mean-reversion (a "V" / inverted-V) into the
+# settlement.  FADE the early thrust (thrust up -> short, thrust down -> long).
+# The signal is the endogenous open->thrust-window displacement on the settlement
+# day only; L2 is used solely for executable TMF bid/ask + quote sanity.
+#
+# NOTE ON SAMPLE: this signal fires once per contract per month (one settlement
+# day each).  The V0 hard gate's >=20-trading-day / >=80-event floor is therefore
+# structurally bounded by how many monthly settlements the paired dataset spans.
+# It is the gate's job -- not the detector's -- to render NEEDS-MORE-DAYS when the
+# floor is unmet; the floor is NOT relaxed for this candidate.
+# ---------------------------------------------------------------------------
+
+# TAIFEX delivery-month letter codes: A=Jan, B=Feb, ... L=Dec.
+_TAIFEX_MONTH_CODE = "ABCDEFGHIJKL"
+
+
+def _third_wednesday(year: int, month: int) -> str:
+    """ISO date of the 3rd Wednesday of (year, month) -- TAIFEX equity-index
+    futures final settlement day."""
+    first = datetime(year, month, 1)
+    first_wed_offset = (2 - first.weekday()) % 7  # Mon=0 .. Wed=2
+    day = 1 + first_wed_offset + 14
+    return f"{year:04d}-{month:02d}-{day:02d}"
+
+
+def _settlement_date_for_month_code(month_code: str) -> str | None:
+    """Map a delivery-month code (e.g. ``D6``) to its final settlement date.
+
+    Letter -> calendar month (A=Jan), single trailing digit -> year-of-decade
+    (``6`` -> 2026).  Returns ``None`` for codes that do not parse so callers
+    can skip rather than guess.
+    """
+    if len(month_code) != 2:
+        return None
+    letter, year_digit = month_code[0].upper(), month_code[1]
+    month_idx = _TAIFEX_MONTH_CODE.find(letter)
+    if month_idx < 0 or not year_digit.isdigit():
+        return None
+    return _third_wednesday(2020 + int(year_digit), month_idx + 1)
+
+
+@dataclass(frozen=True)
+class ExpirationVReversalConfig:
+    session_start_ns: int                # settlement-day session start (08:45)
+    session_minutes: int = 285           # 08:45-13:30 TPE settlement-day session
+    thrust_window_minutes: int = 90      # measure the early directional thrust over N min
+    min_thrust_pts: float = 20.0         # outsized open -> thrust-window displacement
+    stop_buffer_pts: float = 15.0        # thrust-continuation stop beyond the thrust extreme
+    min_window_points: int = 5
+
+
+def detect_expiration_v_reversal_events(
+    today_bbo: BboFrame,
+    today_trades: TradeFrame,
+    *,
+    contract: str,
+    date: str,
+    config: ExpirationVReversalConfig,
+) -> list[RegimeEvent]:
+    """Settlement-day V-reversal fade.  Measure the open -> thrust-window
+    displacement; if it is outsized, fade it (bet the thrust partially reverts
+    into settlement).  Direction = -sign(displacement).  Backward-looking: the
+    thrust is measured over a closed early window and entry is at the window end.
+
+    This detector is generic thrust-fade logic; the *expiration* semantics come
+    from only invoking it on settlement-day data (see ``_settlement_day_pairs``).
+    """
+    if len(today_bbo.ts_ns) < config.min_window_points:
+        return []
+
+    start = config.session_start_ns
+    session_end = start + config.session_minutes * NS_PER_MINUTE
+    open_mask = (today_bbo.ts_ns >= start) & (today_bbo.ts_ns <= session_end)
+    if not np.any(open_mask):
+        return []
+    today_open = float(today_bbo.mid[np.flatnonzero(open_mask)[0]])
+
+    thrust_end_ns = start + config.thrust_window_minutes * NS_PER_MINUTE
+    window_mask = (today_bbo.ts_ns >= start) & (today_bbo.ts_ns <= thrust_end_ns)
+    if not np.any(window_mask):
+        return []
+    window_mid = today_bbo.mid[window_mask]
+
+    entry_idx = int(np.searchsorted(today_bbo.ts_ns, thrust_end_ns, side="left"))
+    if entry_idx >= len(today_bbo.ts_ns) or int(today_bbo.ts_ns[entry_idx]) > session_end:
+        return []
+    thrust_ref = float(today_bbo.mid[entry_idx])
+    displacement = thrust_ref - today_open
+    if abs(displacement) < config.min_thrust_pts:
+        return []
+    direction = -1 if displacement > 0 else 1  # fade the thrust
+
+    thrust_high = float(np.max(window_mid))
+    thrust_low = float(np.min(window_mid))
+    vwap = _trade_vwap_until(today_trades, thrust_end_ns)
+
+    return [
+        RegimeEvent(
+            contract=contract,
+            date=date,
+            regime_type="T1-F_expiration_v_reversal",
+            trigger_time=_iso_from_ns(thrust_end_ns),
+            trigger_time_ns=thrust_end_ns,
+            direction=direction,
+            txf_entry_ref=thrust_ref,
+            # Stop = thrust CONTINUES past its extreme by the buffer (no reversal).
+            opening_range_high=thrust_high + config.stop_buffer_pts,
+            opening_range_low=thrust_low - config.stop_buffer_pts,
+            trade_vwap=vwap,
+            realized_vol_ratio=float(displacement),  # signed thrust (pts)
+        )
+    ]
+
+
+def audit_expiration_v_reversal_pair(
+    *,
+    settlement_txf_path: Path,
+    settlement_tmf_path: Path,
+    session_tz_offset_hours: int = 8,
+    cost_pts: float = 8.0,
+    session_minutes: int = 285,
+    thrust_window_minutes: int = 90,
+    min_thrust_pts: float = 20.0,
+    stop_buffer_pts: float = 15.0,
+) -> list[dict[str, object]]:
+    date_str = _date_from_path(settlement_txf_path)
+    txf_contract = settlement_txf_path.name.split("_", 1)[0]
+    tmf_contract = settlement_tmf_path.name.split("_", 1)[0]
+    today_bbo, today_trades = _load_frames(settlement_txf_path)
+    tmf_bbo, _ = _load_frames(settlement_tmf_path)
+    config = ExpirationVReversalConfig(
+        session_start_ns=_session_start_ns(date_str, tz_offset_hours=session_tz_offset_hours),
+        session_minutes=session_minutes,
+        thrust_window_minutes=thrust_window_minutes,
+        min_thrust_pts=min_thrust_pts,
+        stop_buffer_pts=stop_buffer_pts,
+    )
+    rows: list[dict[str, object]] = []
+    for event in detect_expiration_v_reversal_events(
+        today_bbo,
+        today_trades,
+        contract=txf_contract,
+        date=date_str,
+        config=config,
+    ):
+        try:
+            eval_row = evaluate_executable_returns(
+                tmf_bbo,
+                trigger_time_ns=event.trigger_time_ns,
+                direction=event.direction,
+            )
+        except ValueError:
+            continue
+        after = today_bbo.ts_ns >= event.trigger_time_ns
+        post_mid = today_bbo.mid[after]
+        # Stop structure = thrust continues past its extreme (fade refuted).
+        if event.direction > 0:  # faded a down-thrust (long): stop if price keeps falling
+            breached = bool(np.any(post_mid <= event.opening_range_low)) if len(post_mid) else False
+        else:  # faded an up-thrust (short): stop if price keeps rising
+            breached = bool(np.any(post_mid >= event.opening_range_high)) if len(post_mid) else False
+        gross = eval_row.get("return_30m")
+        net = (float(gross) - cost_pts) if gross is not None else None
+        row: dict[str, object] = {
+            "contract": f"{txf_contract}->{tmf_contract}",
+            "date": date_str,
+            "settlement_date": date_str,
+            "regime_type": event.regime_type,
+            "trigger_time": event.trigger_time,
+            "direction": event.direction,
+            "txf_entry_ref": event.txf_entry_ref,
+            "thrust_pts": event.realized_vol_ratio,
+            "thrust_stop_high": event.opening_range_high,
+            "thrust_stop_low": event.opening_range_low,
+            "trade_vwap": event.trade_vwap,
+            "stop_structure_breached": breached,
+            "thrust_continued_past_stop": breached,
+            "cost_pts": cost_pts,
+            "net_after_cost_30m": net,
+            "net_30m_pts": gross,
+            **eval_row,
+        }
+        rows.append(row)
+    return rows
+
+
+def _settlement_day_pairs(raw_dir: Path, months: Iterable[str]) -> list[tuple[Path, Path]]:
+    """Yield (settlement_txf, settlement_tmf) for each delivery-month code whose
+    final settlement day (3rd Wednesday) is present in BOTH the TXF and TMF L2
+    archives.  Months whose settlement falls outside the exported data simply
+    do not appear -- the sample floor is enforced downstream, not faked here."""
+    pairs: list[tuple[Path, Path]] = []
+    for month in months:
+        settle = _settlement_date_for_month_code(month)
+        if settle is None:
+            continue
+        txf = f"TXF{month}"
+        tmf = f"TMF{month}"
+        txf_files = {_date_from_path(p): p for p in sorted((raw_dir / txf.lower()).glob(f"{txf}_*_l2.hftbt.npz"))}
+        tmf_files = {_date_from_path(p): p for p in sorted((raw_dir / tmf.lower()).glob(f"{tmf}_*_l2.hftbt.npz"))}
+        if settle in txf_files and settle in tmf_files:
+            pairs.append((txf_files[settle], tmf_files[settle]))
+    return pairs
+
+
+def summarize_expiration_v_reversal_rows(
+    rows: Sequence[dict[str, object]],
+    *,
+    audited_dates: Sequence[str] | None = None,
+    oos_start: str | None = None,
+    edge_floor_pts: float = 10.0,
+    min_events: int = 80,
+    min_trading_days: int = 20,
+    required_contracts: Sequence[str] = ("TXFB6", "TXFC6", "TXFD6", "TXFE6"),
+    h9_stop_breach_baseline: float = 0.50,
+    max_single_day_share: float = 0.50,
+) -> dict[str, object]:
+    full = _subset_scorecard(rows)
+    splits: dict[str, object] = {"full": full}
+    if oos_start is not None:
+        in_sample = [r for r in rows if str(r["date"]) < oos_start]
+        out_sample = [r for r in rows if str(r["date"]) >= oos_start]
+        splits["in_sample"] = _subset_scorecard(in_sample)
+        splits["out_of_sample"] = _subset_scorecard(out_sample)
+
+    def _f(value: object) -> float | None:
+        return None if value is None else float(cast(float, value))
+
+    audited_unique = sorted(set(audited_dates or [str(r["date"]) for r in rows]))
+    contracts_present = {str(c) for c in cast("list[str]", full["contracts"])}
+    cross_contract_complete = set(required_contracts).issubset(contracts_present)
+
+    n_events = cast(int, full["events"])
+    mean_net_edge = _f(full["mean_net_edge_pts_per_trade"])
+    median_net = _f(full["median_net_after_cost_30m"])
+    remove_best = _f(full["remove_best_1_median_net"])
+    p10 = _f(full["p10_net_after_cost_30m"])
+    stop_breach = _f(full["stop_breach_rate"])
+    day_share = _f(full["max_single_day_net_share_of_positive"])
+    contract_share = _f(full["max_single_contract_net_share_of_positive"])
+    drawdown_within_monthly_gate = cast(
+        bool | None,
+        full["drawdown_within_2x_average_monthly_net_pnl"],
+    )
+
+    sample_ok = (
+        n_events >= min_events
+        and len(audited_unique) >= min_trading_days
+        and cross_contract_complete
+    )
+    dominance_fail = (day_share is not None and day_share > max_single_day_share) or (
+        contract_share is not None and contract_share >= 0.999
+    )
+    stop_breach_fail = stop_breach is not None and stop_breach >= h9_stop_breach_baseline
+    drawdown_fail = drawdown_within_monthly_gate is False
+    edge_floor_cleared = bool(mean_net_edge is not None and mean_net_edge > edge_floor_pts)
+
+    if median_net is not None and median_net <= 0:
+        verdict = "KILL"
+    elif not sample_ok:
+        verdict = "NEEDS-MORE-DAYS"
+    elif dominance_fail or stop_breach_fail or drawdown_fail:
+        verdict = "KILL"
+    elif median_net is not None and median_net > 0:
+        verdict = "PROCEED"
+    else:
+        verdict = "NEEDS-MORE-DAYS"
+
+    research_decision = _t1b_research_decision(
+        median_net=median_net,
+        sample_ok=sample_ok,
+        n_events=n_events,
+        min_events=min_events,
+        audited_days=len(audited_unique),
+        min_trading_days=min_trading_days,
+        cross_contract_complete=cross_contract_complete,
+        dominance_fail=dominance_fail,
+        stop_breach_fail=stop_breach_fail,
+        drawdown_fail=drawdown_fail,
+        edge_floor_cleared=edge_floor_cleared,
+    )
+
+    return {
+        "track": "T1-F: TXF Expiration V-Reversal -> TMF",
+        "candidate": "t1f_txf_expiration_vreversal_tmf",
+        "audited_trading_days": len(audited_unique),
+        "settlement_days_available": sorted({str(r["date"]) for r in rows}),
+        "edge_floor_pts": edge_floor_pts,
+        "edge_floor_metric": "mean_net_edge_pts_per_trade",
+        "edge_floor_cleared": edge_floor_cleared,
+        "verdict": verdict,
+        "research_decision": research_decision,
+        "hard_gate": {
+            "min_events": min_events,
+            "events": n_events,
+            "events_ok": bool(n_events >= min_events),
+            "min_trading_days": min_trading_days,
+            "trading_days_ok": bool(len(audited_unique) >= min_trading_days),
+            "cross_contract_complete": bool(cross_contract_complete),
+            "required_contracts": list(required_contracts),
+            "median_net_positive": bool(median_net is not None and median_net > 0),
+            "remove_best_1_non_collapsing": (bool(remove_best >= 0) if remove_best is not None else None),
+            "p10_not_catastrophic": (bool(p10 > -3.0 * edge_floor_pts) if p10 is not None else None),
+            "no_single_day_dominance": bool(day_share is None or day_share <= max_single_day_share),
+            "no_single_contract_concentration": bool(contract_share is None or contract_share < 0.999),
+            "stop_breach_below_h9_baseline": bool(stop_breach is None or stop_breach < h9_stop_breach_baseline),
+            "drawdown_within_2x_average_monthly_net_pnl": drawdown_within_monthly_gate,
+        },
+        "splits": splits,
+    }
+
+
+def run_expiration_v_reversal_audit(args: argparse.Namespace) -> dict[str, object]:
+    raw_dir = Path(args.raw_dir)
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    rows: list[dict[str, object]] = []
+    pairs = _settlement_day_pairs(raw_dir, args.months.split(","))
+    if args.max_date is not None:
+        pairs = [p for p in pairs if _date_from_path(p[0]) <= args.max_date]
+    if args.min_date is not None:
+        pairs = [p for p in pairs if _date_from_path(p[0]) >= args.min_date]
+    if args.max_pairs is not None:
+        pairs = pairs[: args.max_pairs]
+    audited_dates = sorted({_date_from_path(txf) for txf, _ in pairs})
+    print(f"t1f_audit_start settlement_pairs={len(pairs)} months={args.months}", file=sys.stderr, flush=True)
+    for idx, (settlement_txf, settlement_tmf) in enumerate(pairs, start=1):
+        started = time_module.monotonic()
+        before = len(rows)
+        rows.extend(
+            audit_expiration_v_reversal_pair(
+                settlement_txf_path=settlement_txf,
+                settlement_tmf_path=settlement_tmf,
+                session_tz_offset_hours=args.session_tz_offset_hours,
+                cost_pts=args.cost_pts,
+                thrust_window_minutes=args.thrust_window_minutes,
+                min_thrust_pts=args.min_thrust_pts,
+                stop_buffer_pts=args.stop_buffer_pts,
+            )
+        )
+        elapsed = time_module.monotonic() - started
+        print(
+            f"t1f_settlement_done {idx}/{len(pairs)} day={settlement_txf.name} "
+            f"events={len(rows) - before} elapsed_s={elapsed:.2f}",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    csv_path = out_dir / f"{stamp}_expiration_v_reversal_events.csv"
+    json_path = out_dir / f"{stamp}_summary.json"
+    if rows:
+        fieldnames = list(rows[0].keys())
+        with csv_path.open("w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+    else:
+        csv_path.write_text("", encoding="utf-8")
+    summary = summarize_expiration_v_reversal_rows(
+        rows,
+        audited_dates=audited_dates,
+        oos_start=args.oos_start,
+        edge_floor_pts=args.edge_floor_pts,
+    )
+    summary["summary_path"] = str(json_path)
+    summary["csv_path"] = str(csv_path)
+    summary["artifact_scope"] = "validation_summary"
+    summary["definition"] = {
+        "l2_alpha_restriction": (
+            "L2 used only for executable bid/ask and quote sanity; entry is the "
+            "endogenous open -> thrust-window displacement on the settlement day, "
+            "faded at the thrust-window end."
+        ),
+        "settlement_day_only": True,
+        "session_minutes": 285,
+        "thrust_window_minutes": args.thrust_window_minutes,
+        "min_thrust_pts": args.min_thrust_pts,
+        "stop_buffer_pts": args.stop_buffer_pts,
+        "cost_pts": args.cost_pts,
+        "oos_start": args.oos_start,
+        "min_date": args.min_date,
+        "max_date": args.max_date,
+        "months": args.months.split(","),
+    }
+    json_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    return summary
+
+
 def run_audit(args: argparse.Namespace) -> dict[str, object]:
     raw_dir = Path(args.raw_dir)
     out_dir = Path(args.out_dir)
@@ -2098,7 +2492,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run T1 opening-range regime viability audit.")
     parser.add_argument(
         "--mode",
-        choices=("viability", "coverage", "vol_compression", "intraday_momentum", "open_gap_fade"),
+        choices=(
+            "viability",
+            "coverage",
+            "vol_compression",
+            "intraday_momentum",
+            "open_gap_fade",
+            "expiration_v_reversal",
+        ),
         default="viability",
     )
     parser.add_argument("--raw-dir", default="research/data/raw")
@@ -2128,6 +2529,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--open-confirm-minutes", type=int, default=15)
     parser.add_argument("--min-gap-pts", type=float, default=15.0)
     parser.add_argument("--stop-buffer-pts", type=float, default=15.0)
+    # T1-F expiration-V-reversal mode (frozen V0 defaults).
+    parser.add_argument("--thrust-window-minutes", type=int, default=90)
+    parser.add_argument("--min-thrust-pts", type=float, default=20.0)
     parser.add_argument("--cost-pts", type=float, default=8.0)
     parser.add_argument("--edge-floor-pts", type=float, default=10.0)
     parser.add_argument("--oos-start", default=None, help="ISO date; events on/after are out-of-sample")
@@ -2144,6 +2548,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         summary = run_intraday_momentum_audit(args)
     elif args.mode == "open_gap_fade":
         summary = run_open_gap_fade_audit(args)
+    elif args.mode == "expiration_v_reversal":
+        summary = run_expiration_v_reversal_audit(args)
     elif args.mode == "coverage":
         summary = run_coverage_audit(args)
     else:
