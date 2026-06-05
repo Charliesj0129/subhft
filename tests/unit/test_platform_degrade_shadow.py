@@ -395,16 +395,23 @@ class TestSingletonRestoresManualRearmState:
         """A prior CLI rearm sets the live engine on the wrong process; this
         run starts fresh. The singleton must read runtime_state.json and
         re-enter reduce_only so the operator's earlier latch decision is
-        honoured across restart."""
+        honoured across restart.
+
+        Uses a NON-auto-recoverable reason: a genuine manual-rearm condition.
+        The original reason is preserved (not the opaque
+        ``restored_from_runtime_state`` sentinel). See
+        ``test_platform_reduce_only_phantom_latch`` for the auto-recoverable
+        stale-flag-clearing path that fixed the 2026-06-04 phantom latch."""
         state_path = tmp_path / "runtime_state.json"
         state_path.write_text(
-            '{"platform": {"manual_rearm_required": true, "reason": "queue_depth_exceeded"}, "strategies": {}}',
+            '{"platform": {"manual_rearm_required": true, "reason": "pnl_peak_drawdown"}, "strategies": {}}',
             encoding="utf-8",
         )
         monkeypatch.setattr("hft_platform.ops.manual_rearm.DEFAULT_RUNTIME_STATE_PATH", state_path)
         ctrl = get_shared_platform_degrade_controller()
         assert ctrl.reduce_only_active is True
-        assert "restored_from_runtime_state" in ctrl._active_reasons
+        assert "pnl_peak_drawdown" in ctrl._active_reasons
+        assert "restored_from_runtime_state" not in ctrl._active_reasons
 
     def test_singleton_stays_normal_when_no_persisted_rearm(self, tmp_path, monkeypatch):
         state_path = tmp_path / "runtime_state.json"  # absent — defaults to clean

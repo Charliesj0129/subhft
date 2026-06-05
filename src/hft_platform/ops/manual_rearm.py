@@ -41,12 +41,7 @@ class ManualRearmGate:
         persisted flag.  The persistence step is unconditional so a
         cold-start process picks up the rearmed state.
         """
-        state = self._load_state()
-        platform_state = self._platform_section(state)
-        platform_state["manual_rearm_required"] = False
-        platform_state["reason"] = None
-        platform_state["rearm_requested_at"] = timebase.now_s()
-        self._write_state(state)
+        self.clear_platform_flag()
 
         # Best-effort: bridge the live controller.  We import lazily to
         # avoid a circular import (``platform_degrade`` does not depend
@@ -75,6 +70,21 @@ class ManualRearmGate:
             # Persistence above is the source of truth; swallow any
             # runtime-coupling error to keep the operator path robust.
             logger.warning("manual_rearm_ipc_error", error=str(exc))
+
+    def clear_platform_flag(self) -> None:
+        """Clear the persisted platform manual-rearm flag, lock-free.
+
+        Unlike :meth:`rearm_platform` this does NOT bridge the live controller
+        (no ``_shared_controller_lock`` acquisition), so it is safe to call from
+        within controller bootstrap — which already holds that lock — to discard
+        a stale auto-recoverable flag without deadlocking.
+        """
+        state = self._load_state()
+        platform_state = self._platform_section(state)
+        platform_state["manual_rearm_required"] = False
+        platform_state["reason"] = None
+        platform_state["rearm_requested_at"] = timebase.now_s()
+        self._write_state(state)
 
     def requires_manual_rearm(self, scope: str, *, strategy_id: str | None = None) -> bool:
         state = self._load_state()
