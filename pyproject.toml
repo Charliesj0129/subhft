@@ -7,7 +7,7 @@ dependencies = [
     "numpy>=2.2,<3",
     "pandas>=2.3,<4",
     "clickhouse-connect>=0.10,<2",
-    "structlog>=25.1,<26",
+    "structlog>=25.1,<27",
     "msgspec>=0.20,<1",
     "hftbacktest>=2.4,<3",
     "shioaji[speed]==1.3.3",  # PINNED: regression-tested 2026-06-01 (only account_balance gained additive `account` param; solace shim + sim boot verified)
