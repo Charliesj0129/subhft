@@ -139,6 +139,30 @@ def test_extract_up_statements_strips_down_section() -> None:
     assert "DROP" not in statements[0]
 
 
+def test_extract_up_statements_semicolon_inside_comment_does_not_split() -> None:
+    """A `;` inside a `--` comment must not terminate a statement.
+
+    Regression (2026-06-12): 20260504_001's header comment
+    `-- Activated by HFT_INTENT_RECORDER_ENABLED=1; otherwise table stays empty.`
+    split mid-comment, shipping `otherwise table stays empty. CREATE TABLE ...`
+    to ClickHouse (SYNTAX_ERROR) and blocking every later migration.
+    """
+    content = (
+        "-- Activated by HFT_INTENT_RECORDER_ENABLED=1; otherwise table stays empty.\n"
+        "CREATE TABLE foo (\n"
+        "    x Int64,  -- doc with semicolon; still one statement\n"
+        "    y Int64\n"
+        ") ENGINE=MergeTree ORDER BY x;\n"
+        "CREATE TABLE bar (z Int64) ENGINE=MergeTree ORDER BY z;\n"
+    )
+    statements = schema._extract_up_statements(content)
+    assert len(statements) == 2
+    assert statements[0].splitlines()[-1].strip().startswith(") ENGINE=MergeTree")
+    assert "otherwise table stays empty" in statements[0]  # comment retained, not split
+    assert statements[0].count("CREATE TABLE") == 1
+    assert statements[1].startswith("CREATE TABLE bar")
+
+
 def test_extract_up_statements_marker_must_be_at_line_start() -> None:
     """A `-- Up` substring inside a SQL comment mid-statement is NOT a marker."""
     content = "-- Up\nCREATE TABLE foo (\n    x Int64  -- Updated to wider int\n) ENGINE=MergeTree ORDER BY x;\n"

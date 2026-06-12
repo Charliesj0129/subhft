@@ -24,6 +24,10 @@ def _extract_up_statements(content: str) -> list[str]:
       * If `-- Down` exists at start-of-line, drop everything from that point on.
       * If `-- Up` exists at start-of-line, keep only what follows the *last* Up marker.
       * If no markers exist, treat the whole content as the Up section.
+      * `;` only terminates a statement OUTSIDE `--` comments (a `;` inside a
+        comment used to split the file mid-comment and ship garbage to the
+        server — e.g. 20260504_001's "ENABLED=1; otherwise table stays empty").
+        `;` inside string literals is not handled; don't use it in migrations.
       * Statements containing only `--` comment lines or whitespace are filtered
         out (ClickHouse rejects them as `Empty query`).
     """
@@ -33,14 +37,33 @@ def _extract_up_statements(content: str) -> list[str]:
     up_matches = list(_MARKER_UP_RE.finditer(content))
     if up_matches:
         content = content[up_matches[-1].end() :]
+
     out: list[str] = []
-    for raw in content.split(";"):
-        stripped = raw.strip()
-        if not stripped:
-            continue
-        has_executable = any(line.strip() and not line.strip().startswith("--") for line in stripped.splitlines())
+    buf: list[str] = []
+
+    def _flush() -> None:
+        stmt = "\n".join(buf).strip()
+        buf.clear()
+        if not stmt:
+            return
+        has_executable = any(line.strip() and not line.strip().startswith("--") for line in stmt.splitlines())
         if has_executable:
-            out.append(stripped)
+            out.append(stmt)
+
+    for line in content.splitlines():
+        code = line.split("--", 1)[0]
+        if ";" not in code:
+            buf.append(line)
+            continue
+        # Terminator line(s): the comment tail (if any) is dropped, which is
+        # harmless — it annotated the statement that just ended.
+        while ";" in code:
+            head, _, code = code.partition(";")
+            buf.append(head)
+            _flush()
+        if code.strip():
+            buf.append(code)
+    _flush()
     return out
 
 
