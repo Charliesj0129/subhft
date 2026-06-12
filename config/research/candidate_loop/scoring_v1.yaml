@@ -1,0 +1,56 @@
+# Alpha Candidate Loop v1 — scoring + hard gates (spec §13/§14, scoring_version=score_v1).
+scoring_version: score_v1
+
+# Hard gates, evaluated in order; first failure wins the primary death_reason
+# (full trace kept in gates_failed). Thresholds per spec §13.
+gates:
+  no_signal:
+    signal_std_zero_day_fraction_max: 0.5   # std≈0 on >50% of days → NO_SIGNAL
+    train_ic_tstat_abs_min: 1.0
+  sign_unstable:
+    sign_consistency_min: 0.55
+    contradiction_ic_floor: 0.01            # train/val ICs both above floor with opposite signs
+  cost_proxy_taker:
+    cost_survival_min: 0.3                  # < 0.3 → COST_KILLED (taifex_v1, FROZEN)
+  # APPROVED EXTENSION (2026-06-12): maker-aware cost view. Records pass/fail in
+  # the gate trace after the taker gate. Because the maker required-move is a
+  # LOWER BOUND on real maker cost (<= taker required-move by construction),
+  # this gate can never fail a candidate the taker gate passed at an equal
+  # threshold — it exists to (a) mark candidates dead under ANY execution
+  # (fails BOTH) and (b) surface the maker-rescuable pool (fails taker,
+  # passes maker) in failure_summary. It never relaxes the taker floor.
+  cost_proxy_maker:
+    maker_cost_survival_min: 0.3
+    q_hat_table: research/backtest/q_hat_data/txfd6_q_hat.parquet
+    # All TXF front months read the TXFD6-calibrated cells: using the
+    # calibrated table (q_hat ~0.04-0.33) is strictly more conservative than
+    # the 0.5 fallback an uncalibrated symbol key would silently hit.
+    q_hat_symbol: TXFD6
+    maker_cost_assumption_version: taifex_maker_qhat_v1
+  latency_1ms:
+    retention_min: 0.5                      # sign flip OR retention < 0.5 → LATENCY_KILLED
+  one_day_only:
+    one_day_concentration_max: 0.6
+
+# final_score (score_v1) — normalized [0,1] components, spec §10.
+# The maker view is deliberately NOT a score term (future scoring_version bump).
+score_weights:
+  predictive_score: 1.0
+  stability_score: 1.0
+  cost_survival_score: 1.0
+  latency_survival_score: 1.0
+  fragility_penalty: -1.0
+  turnover_penalty: -1.0
+  complexity_penalty: -1.0
+
+# Normalization caps for score components.
+normalization:
+  ic_tstat_cap: 4.0            # predictive_score = min(|val ic_tstat|, cap)/cap
+  cost_survival_cap: 1.0       # cost component = min(score, cap)/cap
+  turnover_cap_flips_per_day: 200.0
+  complexity_node_cap: 64
+
+promotion:
+  top_fraction: 0.01           # PROMOTED = top ceil(1% × survivors) by final_score (validation)
+  watchlist_next_decile: true
+  watchlist_ic_tstat_min: 1.5  # gate-survivors below the cut with |val tstat| >= 1.5

@@ -1,0 +1,38 @@
+# Alpha Candidate Loop v1 — evaluator config (spec §10, evaluator_version=eval_v1).
+evaluator_version: eval_v1
+primitive_version: prim_v1
+latency_config_version: lat_shift_v1
+cost_assumption_version: taifex_v1
+
+# Per-instrument tick size in points (spread_ticks denominator).
+tick_size:
+  TXFB6: 1.0
+  TXFC6: 1.0
+  TXFD6: 1.0
+  TXFE6: 1.0
+  TXFF6: 1.0
+  TXFG6: 1.0
+
+# Cost proxy (taifex_v1): sign-of-zscore with hysteresis.
+cost_proxy:
+  zscore_window: "2000_events"
+  hysteresis_sigma: 0.5
+
+# Latency label-shift stress, milliseconds. Hard gate uses 1ms only.
+latency_shifts_ms: [0, 1, 5, 10]
+
+# Horizon decay multipliers on the declared horizon.
+horizon_decay_multipliers: [0.5, 1.0, 2.0, 4.0]
+
+# Signal-bucket diagnostics.
+bucket_count: 5
+
+# Direction-clean gating for trade_imbalance candidates.
+dir_coverage_threshold: 0.95
+
+# A day contributes to stability metrics only with at least this many
+# valid (non-NaN signal AND label) rows.
+min_valid_rows_per_day: 500
+
+# NO_SIGNAL floor inputs (thresholds live in scoring_v1.yaml).
+signal_std_epsilon: 1.0e-9
