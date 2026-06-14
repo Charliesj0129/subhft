@@ -55,6 +55,7 @@ research = [
     "scikit-learn>=1.7.2",
     "statsmodels>=0.14.0",  # BDS independence test (lazy import in validation.py)
     "pyarrow>=23.0.1",  # candidate_loop artifacts + q_hat parquet (also in dev)
+    "httpx>=0.28",  # candidate_loop v1.1 governor: DeepSeek OpenAI-compatible client
 ]
 
 [project.optional-dependencies]
