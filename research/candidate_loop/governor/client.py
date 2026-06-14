@@ -86,7 +86,19 @@ class DeepSeekClient:
                 resp.raise_for_status()
                 data = resp.json()
                 return str(data["choices"][0]["message"]["content"])
-            except (httpx.HTTPError, KeyError, IndexError) as exc:
+            except httpx.HTTPStatusError as exc:
+                status = exc.response.status_code
+                # Permanent client errors (bad key, bad request) will not succeed on
+                # retry — fail closed immediately rather than burn paid API calls.
+                # 429 (rate-limit) and 5xx stay in the retry budget below.
+                if 400 <= status < 500 and status != 429:
+                    raise DeepSeekError(
+                        self.redact(f"DeepSeek request rejected (HTTP {status}); not retrying")
+                    ) from exc
+                last_exc = exc
+            except (httpx.HTTPError, KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
+                # Transient network errors and malformed 200 bodies (bad JSON or
+                # unexpected shape) become a structured, redacted DeepSeekError.
                 last_exc = exc
         raise DeepSeekError(self.redact(f"DeepSeek request failed: {last_exc}"))
 

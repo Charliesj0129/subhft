@@ -91,3 +91,44 @@ def test_retries_then_succeeds_within_bound():
     lines = client.generate_candidates(base_prompt="P", brief_body="B", n=2)
     assert len(lines) == 2
     assert calls["n"] == 2  # one retry consumed
+
+
+def test_permanent_client_error_not_retried():
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(401, json={"error": "bad key"})
+
+    client = DeepSeekClient(
+        CFG, api_key="sk-test", transport=httpx.MockTransport(handler)
+    )
+    with pytest.raises(DeepSeekError):
+        client.generate_candidates(base_prompt="P", brief_body="B", n=1)
+    assert calls["n"] == 1  # permanent 4xx: no wasted paid retries
+
+
+def test_malformed_ok_response_fails_closed():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[1, 2, 3])  # wrong shape, not a dict
+
+    client = DeepSeekClient(
+        CFG, api_key="sk-test", transport=httpx.MockTransport(handler)
+    )
+    with pytest.raises(DeepSeekError):
+        client.generate_candidates(base_prompt="P", brief_body="B", n=1)
+
+
+def test_exhausts_retry_budget_then_fails_closed():
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(500, json={"error": "down"})
+
+    client = DeepSeekClient(
+        CFG, api_key="sk-test", transport=httpx.MockTransport(handler)
+    )
+    with pytest.raises(DeepSeekError):
+        client.generate_candidates(base_prompt="P", brief_body="B", n=1)
+    assert calls["n"] == CFG.max_retries + 1  # bounded retry budget on transient 5xx
