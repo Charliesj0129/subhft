@@ -134,11 +134,18 @@ def parse_brief(text: str) -> ParsedBrief:
     if end < 0:
         raise ValueError("brief frontmatter unterminated")
     fm = yaml.safe_load(text[4:end]) or {}
+    if not isinstance(fm, dict):
+        raise ValueError("brief frontmatter must be a YAML mapping")
     body = text[end + 4 :].lstrip("\n")
+    raw_approved = fm.get("approved", False)
+    if not isinstance(raw_approved, bool):
+        raise ValueError(
+            f"brief 'approved' must be a YAML boolean (true/false), got {raw_approved!r}"
+        )
     return ParsedBrief(
         family=str(fm.get("family", "")),
         source_run_id=str(fm.get("source_run_id", "")),
-        approved=bool(fm.get("approved", False)),
+        approved=raw_approved,
         focus=str(fm.get("focus", "")),
         n_target=int(fm.get("n_target", 0)),
         signals=dict(fm.get("signals", {}) or {}),

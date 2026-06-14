@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from research.candidate_loop.governor.brief import is_approved, parse_brief, render_brief
 from research.candidate_loop.governor.signals import SteeringSignals
 
@@ -68,3 +70,22 @@ def test_brief_body_surfaces_maker_rescue_and_near_miss():
     body = parse_brief(_render()).body
     assert "maker" in body.lower()
     assert "a1" in body  # the near-miss alpha_id
+
+
+def test_quoted_string_approved_is_rejected_not_silently_true():
+    # a human quoting the value must NOT read as approved (false-approval guard)
+    text = _render().replace("approved: false", 'approved: "false"')
+    with pytest.raises(ValueError):
+        parse_brief(text)
+
+
+def test_non_boolean_approved_word_is_rejected():
+    text = _render().replace("approved: false", "approved: maybe")
+    with pytest.raises(ValueError):
+        parse_brief(text)
+
+
+def test_non_mapping_frontmatter_raises_valueerror():
+    text = "---\n- just\n- a\n- list\n---\n\n# body\n"
+    with pytest.raises(ValueError):
+        parse_brief(text)
