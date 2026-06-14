@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+import yaml
 
 from research.candidate_loop.governor.signals import (
     classify_focus,
@@ -115,3 +116,14 @@ def test_n_target_for_maps_focus_to_count():
     cfg = load_governor_config(CFG_PATH)
     assert n_target_for("amplify", cfg) == 30
     assert n_target_for("retire", cfg) == 5
+
+
+def test_load_governor_config_fails_closed_on_missing_n_target_label(tmp_path):
+    raw = yaml.safe_load(CFG_PATH.read_text())
+    del raw["focus"]["n_target"]["maintain"]
+    bad_path = tmp_path / "governor_bad.yaml"
+    bad_path.write_text(yaml.safe_dump(raw))
+    with pytest.raises(KeyError) as exc_info:
+        load_governor_config(bad_path)
+    assert "maintain" in str(exc_info.value)
+    assert str(bad_path) in str(exc_info.value)
