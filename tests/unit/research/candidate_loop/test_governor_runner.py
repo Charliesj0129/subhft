@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from research.candidate_loop.governor.runner import draft_briefs, generate_from_briefs
 from research.candidate_loop.governor.signals import load_governor_config
 
@@ -138,3 +140,111 @@ def test_generate_is_idempotent_reuses_frozen_drop(tmp_path):
     assert first.calls == 1
     assert second.calls == 0  # reused frozen drop
     assert manifest["families"]["trade_flow"]["reused"] is True
+
+
+def _summary_two() -> dict:
+    fam = {
+        "candidates": 20,
+        "survival_rate": 0.10,
+        "ic_distribution_survivors": {"p10": 0.0, "p50": 0.114, "p90": 0.2},
+        "cost_failure_rate": 0.55,
+        "maker_cost_failure_rate": 0.40,
+        "maker_rescuable_count": 2,
+        "duplicate_rate": 0.05,
+        "reduced_day_coverage_count": 7,
+        "near_misses": [],
+        "common_failure_patterns": [],
+    }
+    return {"run_id": "smoke_001", "per_family": {"microprice": dict(fam), "trade_flow": dict(fam)}}
+
+
+class _FailingClient:
+    """Succeeds on the first family, then raises (simulated mid-run API failure)."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def generate_candidates(self, *, base_prompt: str, brief_body: str, n: int) -> list[str]:
+        self.calls += 1
+        if self.calls >= 2:
+            raise RuntimeError("simulated DeepSeek failure")
+        return [json.dumps({"name": f"c_{i}", "formula": "x"}, sort_keys=True) for i in range(n)]
+
+
+def test_generate_mixed_approved_and_unapproved(tmp_path):
+    steering = tmp_path / "steering"
+    steering.mkdir()
+    summary_path = tmp_path / "fs.json"
+    summary_path.write_text(json.dumps(_summary_two()))
+    draft_briefs(summary_path=summary_path, out_dir=steering, cfg=CFG, generated_at=FIXED_TS)
+    # approve trade_flow only; leave microprice unapproved
+    tf = steering / "trade_flow.md"
+    tf.write_text(tf.read_text().replace("approved: false", "approved: true"))
+    client = _FakeClient()
+    candidates_root = tmp_path / "candidates"
+    manifest = generate_from_briefs(
+        steering_dir=steering,
+        gen_run_id="gen_001",
+        cfg=CFG,
+        client=client,
+        prompts_dir=PROMPTS,
+        candidates_root=candidates_root,
+        generated_at=FIXED_TS,
+    )
+    assert client.calls == 1
+    assert list(manifest["families"]) == ["trade_flow"]
+    assert manifest["skipped_unapproved"] == ["microprice"]
+
+
+def test_generate_rejects_family_filename_mismatch(tmp_path):
+    steering = tmp_path / "steering"
+    steering.mkdir()
+    summary_path = tmp_path / "fs.json"
+    summary_path.write_text(json.dumps(_summary()))
+    draft_briefs(summary_path=summary_path, out_dir=steering, cfg=CFG, generated_at=FIXED_TS)
+    src = steering / "trade_flow.md"
+    src.write_text(src.read_text().replace("approved: false", "approved: true"))
+    # rename so the filename stem (microprice) no longer matches the frontmatter
+    # family (trade_flow) — an approval-intent divergence that must fail closed.
+    src.rename(steering / "microprice.md")
+    client = _FakeClient()
+    with pytest.raises(ValueError):
+        generate_from_briefs(
+            steering_dir=steering,
+            gen_run_id="gen_001",
+            cfg=CFG,
+            client=client,
+            prompts_dir=PROMPTS,
+            candidates_root=tmp_path / "candidates",
+            generated_at=FIXED_TS,
+        )
+    assert client.calls == 0  # rejected before any spend
+
+
+def test_manifest_persisted_when_later_family_fails(tmp_path):
+    steering = tmp_path / "steering"
+    steering.mkdir()
+    summary_path = tmp_path / "fs.json"
+    summary_path.write_text(json.dumps(_summary_two()))
+    draft_briefs(summary_path=summary_path, out_dir=steering, cfg=CFG, generated_at=FIXED_TS)
+    for name in ("microprice.md", "trade_flow.md"):
+        p = steering / name
+        p.write_text(p.read_text().replace("approved: false", "approved: true"))
+    client = _FailingClient()
+    candidates_root = tmp_path / "candidates"
+    with pytest.raises(RuntimeError):
+        generate_from_briefs(
+            steering_dir=steering,
+            gen_run_id="gen_001",
+            cfg=CFG,
+            client=client,
+            prompts_dir=PROMPTS,
+            candidates_root=candidates_root,
+            generated_at=FIXED_TS,
+        )
+    # microprice (sorted first) succeeded and is recorded despite trade_flow failing
+    manifest = json.loads((candidates_root / "gen_001" / "governor_manifest.json").read_text())
+    assert "microprice" in manifest["families"]
+    assert "trade_flow" not in manifest["families"]
+    assert (candidates_root / "gen_001" / "_governor_raw" / "microprice.jsonl").exists()
+    assert not (candidates_root / "gen_001" / "_governor_raw" / "trade_flow.jsonl").exists()

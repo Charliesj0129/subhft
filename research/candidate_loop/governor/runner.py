@@ -5,12 +5,20 @@ enforces the per-family approval gate, freezes the non-deterministic LLM drop as
 an artifact (so re-runs reuse it instead of re-calling DeepSeek), hands it to the
 existing `generate_drop`, and records a `governor_manifest.json` provenance
 sidecar. Nothing here touches the frozen scored path.
+
+Robustness for the paid-spend gate: the raw drop and the manifest are written
+write-then-rename (atomic), so a crash mid-write can never leave a truncated
+artifact a later run would "reuse" as complete; and the manifest is persisted in
+a `finally` block, so spend already incurred for earlier families is always
+recorded even if a later family fails.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import os
+import tempfile
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -26,6 +34,26 @@ from research.candidate_loop.governor.signals import (
 
 class _Client(Protocol):
     def generate_candidates(self, *, base_prompt: str, brief_body: str, n: int) -> list[str]: ...
+
+
+def _atomic_write(path: Path, content: str) -> None:
+    """Write ``content`` to ``path`` via a temp file + rename (atomic).
+
+    Guards the frozen raw drop and the manifest against a crash mid-write that
+    would otherwise leave a truncated file a later run treats as complete.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def draft_briefs(
@@ -74,48 +102,58 @@ def generate_from_briefs(
         "skipped_unapproved": [],
     }
     raw_root = candidates_root / gen_run_id / "_governor_raw"
-    for brief_path in sorted(steering_dir.glob("*.md")):
-        text = brief_path.read_text(encoding="utf-8")
-        brief = parse_brief(text)
-        if not brief.approved:
-            manifest["skipped_unapproved"].append(brief.family)
-            continue
-        base_prompt = (prompts_dir / f"{brief.family}.md").read_text(encoding="utf-8")
-        raw_path = raw_root / f"{brief.family}.jsonl"
-        reused = raw_path.exists()
-        if reused:
-            lines = [ln for ln in raw_path.read_text(encoding="utf-8").splitlines() if ln.strip()]
-        else:
-            lines = client.generate_candidates(
-                base_prompt=base_prompt, brief_body=brief.body, n=brief.n_target
-            )
-            raw_path.parent.mkdir(parents=True, exist_ok=True)
-            raw_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        family_file = generate_drop(
-            gen_run_id=gen_run_id,
-            family=brief.family,
-            prompt_path=prompts_dir / f"{brief.family}.md",
-            from_jsonl=raw_path,
-            generation_model=cfg.model_name,
-            generated_at=generated_at,
-            candidates_root=candidates_root,
-        )
-        manifest["families"][brief.family] = {
-            "source_run_id": brief.source_run_id,
-            "steering_path": str(brief_path),
-            "steering_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
-            "focus": brief.focus,
-            "n_target": brief.n_target,
-            "model": cfg.model_name,
-            "raw_drop": str(raw_path),
-            "family_file": str(family_file),
-            "reused": reused,
-            "generated_at": generated_at,
-        }
-    manifest["skipped_unapproved"] = sorted(manifest["skipped_unapproved"])
     manifest_path = candidates_root / gen_run_id / "governor_manifest.json"
-    manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True))
+
+    def _persist() -> None:
+        manifest["skipped_unapproved"] = sorted(manifest["skipped_unapproved"])
+        _atomic_write(manifest_path, json.dumps(manifest, indent=2, sort_keys=True))
+
+    try:
+        for brief_path in sorted(steering_dir.glob("*.md")):
+            text = brief_path.read_text(encoding="utf-8")
+            brief = parse_brief(text)
+            # A human approves a specific file; its frontmatter family must match
+            # the filename, or the approval intent and the generated family could
+            # silently diverge. Fail closed on mismatch.
+            if brief.family != brief_path.stem:
+                raise ValueError(
+                    f"{brief_path}: brief family {brief.family!r} does not match "
+                    f"filename stem {brief_path.stem!r}"
+                )
+            if not brief.approved:
+                manifest["skipped_unapproved"].append(brief.family)
+                continue
+            raw_path = raw_root / f"{brief.family}.jsonl"
+            reused = raw_path.exists()
+            if not reused:
+                base_prompt = (prompts_dir / f"{brief.family}.md").read_text(encoding="utf-8")
+                lines = client.generate_candidates(
+                    base_prompt=base_prompt, brief_body=brief.body, n=brief.n_target
+                )
+                _atomic_write(raw_path, "\n".join(lines) + "\n")
+            family_file = generate_drop(
+                gen_run_id=gen_run_id,
+                family=brief.family,
+                prompt_path=prompts_dir / f"{brief.family}.md",
+                from_jsonl=raw_path,
+                generation_model=cfg.model_name,
+                generated_at=generated_at,
+                candidates_root=candidates_root,
+            )
+            manifest["families"][brief.family] = {
+                "source_run_id": brief.source_run_id,
+                "steering_path": str(brief_path),
+                "steering_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                "focus": brief.focus,
+                "n_target": brief.n_target,
+                "model": cfg.model_name,
+                "raw_drop": str(raw_path),
+                "family_file": str(family_file),
+                "reused": reused,
+                "generated_at": generated_at,
+            }
+    finally:
+        _persist()
     return manifest
 
 
