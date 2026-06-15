@@ -18,7 +18,8 @@ from hft_platform.ops.manual_rearm import ManualRearmGate
 from hft_platform.ops.platform_degrade import get_shared_platform_degrade_controller
 from hft_platform.risk.storm_guard import StormGuardState
 from hft_platform.services.bootstrap import SystemBootstrapper
-from hft_platform.services.heartbeat import DEFAULT_HEARTBEAT_PATH, write_heartbeat
+from hft_platform.services.heartbeat import DEFAULT_HEARTBEAT_PATH, heartbeat_writable, write_heartbeat
+from hft_platform.services.loop_watchdog import LoopStallWatchdog
 from hft_platform.utils.logging import configure_logging
 
 logger = get_logger("system")
@@ -168,6 +169,10 @@ class HFTSystem:
         # fire between __init__ and run()'s first tick) can do an is-None
         # check without tripping AttributeError. Assigned for real at run().
         self.loop: Optional[asyncio.AbstractEventLoop] = None
+        # In-process event-loop stall watchdog (force-exit on starvation so the
+        # container restart policy recovers a spinning/hung loop). Constructed
+        # and started in run(); referenced by stop_async() for clean teardown.
+        self._loop_watchdog: LoopStallWatchdog | None = None
         self._recorder_seen_tick = False
         self._recorder_seen_bidask = False
         self._md_record_direct = os.getenv("HFT_MD_RECORD_DIRECT", "1").lower() not in {"0", "false", "no", "off"}
@@ -525,6 +530,17 @@ class HFTSystem:
                 gc.disable()
                 _gc_disabled = True
                 logger.info("GC disabled for trading session")
+
+            # Start the event-loop stall watchdog before entering the supervisor
+            # loop. It runs on a dedicated OS thread and force-exits the process
+            # if _supervise() stops beating (loop spin/starvation) past the
+            # threshold, so the container restart policy recovers the engine in
+            # seconds. Disabled via HFT_LOOP_STALL_KILL_S<=0.
+            self._loop_watchdog = LoopStallWatchdog(
+                stall_kill_s=self._env_float("HFT_LOOP_STALL_KILL_S", 60.0, 0.0),
+                check_interval_s=self._env_float("HFT_LOOP_STALL_CHECK_S", 5.0, 0.1),
+            )
+            self._loop_watchdog.start()
 
             # Start Monitor/Supervisor Loop
             await self._supervise()
@@ -920,6 +936,23 @@ class HFTSystem:
         _heartbeat_interval_ticks = int(os.getenv("HFT_HEARTBEAT_INTERVAL_S", "30"))
         _heartbeat_tick = 0
 
+        # Fail LOUD if the file-heartbeat path is not writable. On THESHOW
+        # (2026-06-15) this write failed silently for 18h (bind-mounted dir owned
+        # by root, container ran as uid 1000), disabling the external watchdog.
+        # The in-process LoopStallWatchdog is the primary net now, but surface
+        # the misconfiguration so the external watchdog can be relied on too.
+        _hb_ok, _hb_reason = heartbeat_writable(_heartbeat_path)
+        if not _hb_ok:
+            logger.critical(
+                "heartbeat_path_not_writable",
+                path=_heartbeat_path,
+                reason=_hb_reason,
+                hint=(
+                    "external heartbeat watchdog is disabled; chown the heartbeat dir "
+                    "to the container uid or set HFT_HEARTBEAT_PATH to a writable path"
+                ),
+            )
+
         # Periodic gen-0 GC: collect short-lived cyclic refs even when full GC is disabled.
         # Gen-0 is typically <1ms and safe to run at supervisor frequency.
         _gc_gen0_interval = max(1, int(os.getenv("HFT_GC_GEN0_INTERVAL_TICKS", "10")))
@@ -942,6 +975,12 @@ class HFTSystem:
             lag_s = max(0.0, now_tick - last_tick - interval_s)
             metrics.event_loop_lag_ms.set(lag_s * 1000.0)
             last_tick = now_tick
+
+            # Liveness beat for the stall watchdog. Recorded first thing each
+            # tick: if the loop later spins/blocks, beats stop and the watchdog
+            # thread force-exits the process so the container restarts it.
+            if self._loop_watchdog is not None:
+                self._loop_watchdog.beat()
 
             # A. Update StormGuard with real metrics
             # INFRA-007: Each computation is isolated so StormGuard.update()
@@ -1380,6 +1419,11 @@ class HFTSystem:
     async def stop_async(self):
         """Async stop with proper task cleanup."""
         self.running = False
+        # Stop the stall watchdog first so an intentional, possibly slow
+        # shutdown drain below is never mistaken for a loop stall and killed.
+        _watchdog = getattr(self, "_loop_watchdog", None)
+        if _watchdog is not None:
+            _watchdog.stop()
         self.md_service.running = False
         self.exec_service.running = False
         self.risk_engine.running = False
@@ -1567,6 +1611,9 @@ class HFTSystem:
     def stop(self):
         """Synchronous stop (schedules async cleanup if loop is running)."""
         self.running = False
+        _watchdog = getattr(self, "_loop_watchdog", None)
+        if _watchdog is not None:
+            _watchdog.stop()
         self.md_service.running = False
         self.exec_service.running = False
         self.risk_engine.running = False

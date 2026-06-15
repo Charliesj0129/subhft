@@ -31,3 +31,27 @@ def write_heartbeat(path: str = DEFAULT_HEARTBEAT_PATH) -> None:
         os.utime(path, None)
     except OSError:
         logger.warning("heartbeat_write_failed", path=path, exc_info=True)
+
+
+def heartbeat_writable(path: str = DEFAULT_HEARTBEAT_PATH) -> tuple[bool, str | None]:
+    """Probe whether ``path`` can be written, without leaving a probe artifact.
+
+    Returns ``(True, None)`` when a heartbeat could be written, else
+    ``(False, reason)`` with a human-readable reason. Used at startup to turn a
+    silently-disabled file watchdog (the THESHOW 2026-06-15 failure mode, where
+    the bind-mounted heartbeat dir was owned by root and unwritable by the
+    container uid) into a loud, actionable CRITICAL log instead of an 18h gap.
+
+    The probe opens the real heartbeat path in append mode (creating it if
+    absent) so it exercises the exact permission that :func:`write_heartbeat`
+    needs, then leaves the file as-is — it never writes a separate sentinel.
+    """
+    try:
+        # Append-mode open creates the file if missing and verifies write
+        # permission on both the directory and (if pre-existing) the file,
+        # without truncating a heartbeat a live writer may already own.
+        with open(path, "a"):
+            pass
+        return True, None
+    except OSError as exc:
+        return False, f"{type(exc).__name__}: {exc}"
