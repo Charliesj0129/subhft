@@ -81,6 +81,15 @@ class TradeConcentrationGate:
         worst_passed = worst_share <= worst_max
         passed = top_passed and worst_passed
 
+        # §5 虧損分布: the worst_loss_share above only sees the single worst
+        # loss. These additive metrics describe the distribution ACROSS losing
+        # trades so the OOS audit can see whether the downside is a fat tail of
+        # a few losers (fragile on a small sample) vs broadly spread.
+        # Advisory only — they do NOT change pass/fail (no new blocking
+        # condition, so the promotion pipeline and frozen live registry are
+        # unaffected).
+        loss_dist = _loss_distribution_metrics(trade_pnl)
+
         return SubGateResult(
             name=self.name,
             passed=passed,
@@ -93,8 +102,45 @@ class TradeConcentrationGate:
                 "worst_loss_share_pct": float(worst_share),
                 "top_trade_share_max_pct": top_max,
                 "worst_loss_share_max_pct": worst_max,
+                **loss_dist,
             },
             details=(
-                f"top {top_share:.1f}% (max {top_max:.1f}%), worst-loss {worst_share:.1f}% (max {worst_max:.1f}%)"
+                f"top {top_share:.1f}% (max {top_max:.1f}%), worst-loss {worst_share:.1f}% "
+                f"(max {worst_max:.1f}%), loss_rate {loss_dist['loss_rate_pct']:.1f}%, "
+                f"top3_loss {loss_dist['loss_top3_share_pct']:.1f}%, "
+                f"loss_fat_tail {loss_dist['loss_fat_tail_ratio']:.2f}"
             ),
         )
+
+
+def _loss_distribution_metrics(trade_pnl: list[float]) -> dict[str, float]:
+    """§5 虧損分布 descriptors across losing trades (advisory).
+
+    * ``loss_count`` / ``loss_rate_pct`` — how many trades lost.
+    * ``loss_top3_share_pct`` — fraction of total gross loss from the 3 worst
+      losers; high means the downside hangs on a few tail events.
+    * ``loss_fat_tail_ratio`` — mean(|loss|) / median(|loss|); >~2 flags a
+      fat-tailed loss distribution. 1.0 when fewer than 2 losers (no shape).
+    """
+    losers = sorted((-p for p in trade_pnl if p < 0), reverse=True)  # magnitudes, desc
+    n = len(trade_pnl)
+    loss_count = len(losers)
+    if loss_count == 0:
+        return {
+            "loss_count": 0.0,
+            "loss_rate_pct": 0.0,
+            "loss_top3_share_pct": 0.0,
+            "loss_fat_tail_ratio": 1.0,
+        }
+    gross_loss = sum(losers)
+    top3_share = 100.0 * sum(losers[:3]) / gross_loss if gross_loss > 0 else 0.0
+    mean_loss = gross_loss / loss_count
+    mid = loss_count // 2
+    median_loss = losers[mid] if loss_count % 2 == 1 else (losers[mid - 1] + losers[mid]) / 2.0
+    fat_tail = mean_loss / median_loss if median_loss > 0 else 1.0
+    return {
+        "loss_count": float(loss_count),
+        "loss_rate_pct": 100.0 * loss_count / n if n else 0.0,
+        "loss_top3_share_pct": float(top3_share),
+        "loss_fat_tail_ratio": float(fat_tail),
+    }
