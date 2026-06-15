@@ -54,6 +54,7 @@ from hft_platform.feed_adapter.shioaji._infra import (
 from hft_platform.feed_adapter.shioaji._infra import (
     update_quote_pending_metrics as _update_quote_pending_metrics_impl,
 )
+from hft_platform.feed_adapter.shioaji._solace_env import log_solace_reconnect_params
 from hft_platform.feed_adapter.shioaji.limits import (
     DEFAULT_MAX_SUBSCRIPTIONS_PER_CLIENT,
     DEFAULT_MAX_SUBSCRIPTIONS_PER_CONN,
@@ -995,6 +996,9 @@ class ShioajiClient:
         contracts_cb=None,
     ):
         """Login to Shioaji broker. Delegates to SessionRuntime.login_with_retry()."""
+        # Surface the SDK's effective Solace reconnect cadence once per process
+        # (postmortem trail — see _solace_env). Best-effort, never raises.
+        log_solace_reconnect_params()
         return self._session_runtime.login_with_retry(
             api_key=api_key,
             secret_key=secret_key,
