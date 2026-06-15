@@ -979,8 +979,11 @@ class HFTSystem:
             # Liveness beat for the stall watchdog. Recorded first thing each
             # tick: if the loop later spins/blocks, beats stop and the watchdog
             # thread force-exits the process so the container restarts it.
-            if self._loop_watchdog is not None:
-                self._loop_watchdog.beat()
+            # ``getattr`` guard mirrors the shutdown paths below: partially
+            # constructed instances (tests build via ``__new__``) never set it.
+            _watchdog = getattr(self, "_loop_watchdog", None)
+            if _watchdog is not None:
+                _watchdog.beat()
 
             # A. Update StormGuard with real metrics
             # INFRA-007: Each computation is isolated so StormGuard.update()
