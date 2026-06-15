@@ -104,12 +104,62 @@ def record_crash_signature(metrics: Any, text: str | None, *, context: str) -> N
 # ---------------------------------------------------------------------------
 
 
+# Abandoned-guard-thread registry.
+#
+# A timed-out ``safe_call_with_timeout`` leaves its daemon worker thread
+# running — Python cannot kill it. If that worker is inside a spinning Shioaji
+# SDK reconnect/login (e.g. the 2026-06-15 ``451 Too Many Connections`` path),
+# it pegs a CPU core and contends the GIL, starving the asyncio event loop.
+# Without a bound, a reconnect storm leaks one spinning thread per attempt and
+# the starvation becomes permanent (process stays alive, so ``restart: always``
+# never fires). We track abandoned workers and refuse to spawn new ones past a
+# cap so the leak is bounded and fail-closed; the in-process loop-stall
+# watchdog remains the last-resort recovery for a truly wedged process.
+_abandoned_lock = threading.Lock()
+_abandoned_threads: list[tuple[str, threading.Thread, threading.Event]] = []
+
+
+def _prune_abandoned_locked() -> int:
+    """Drop workers that have since finished; return remaining live count.
+
+    Caller must hold ``_abandoned_lock``.
+    """
+    if _abandoned_threads:
+        _abandoned_threads[:] = [
+            entry for entry in _abandoned_threads if not entry[2].is_set()
+        ]
+    return len(_abandoned_threads)
+
+
+def abandoned_guard_thread_count() -> int:
+    """Return the number of timed-out SDK guard threads still running."""
+    with _abandoned_lock:
+        return _prune_abandoned_locked()
+
+
+def reset_abandoned_guard_threads() -> None:
+    """Clear the abandoned-thread registry (test/diagnostic helper).
+
+    Does not stop any still-running worker — only forgets the references.
+    """
+    with _abandoned_lock:
+        _abandoned_threads.clear()
+
+
 def safe_call_with_timeout(
     op: str,
     fn: Callable[[], Any],
     timeout_s: float,
+    *,
+    max_abandoned: int = 0,
 ) -> tuple[bool, Any | None, Exception | None, bool]:
     """Run a blocking broker SDK call with timeout in a daemon thread.
+
+    When ``max_abandoned > 0``, refuse to start a new worker if at least that
+    many previously timed-out workers are still running (fail-closed guard
+    against event-loop starvation from leaked spinning SDK threads). A refusal
+    is reported as ``(False, None, RuntimeError, True)`` so callers back off
+    exactly as they would on a timeout, without leaking another thread.
 
     Returns ``(success, result, error, timed_out)``.
     """
@@ -118,6 +168,27 @@ def safe_call_with_timeout(
             return True, fn(), None, False
         except Exception as exc:
             return False, None, exc, False
+
+    if max_abandoned > 0:
+        with _abandoned_lock:
+            live = _prune_abandoned_locked()
+            if live >= max_abandoned:
+                logger.critical(
+                    "Refusing broker SDK call: too many abandoned guard threads",
+                    op=op,
+                    abandoned=live,
+                    max_abandoned=max_abandoned,
+                )
+                return (
+                    False,
+                    None,
+                    RuntimeError(
+                        f"{op} refused: {live} abandoned SDK guard threads "
+                        f">= cap {max_abandoned} (event-loop starvation guard)"
+                    ),
+                    True,
+                )
+
     done = threading.Event()
     state: dict[str, Any] = {}
 
@@ -132,6 +203,15 @@ def safe_call_with_timeout(
     worker = threading.Thread(target=_worker, name=f"shioaji-{op}-guard", daemon=True)
     worker.start()
     if not done.wait(timeout=max(0.1, timeout_s)):
+        with _abandoned_lock:
+            _abandoned_threads.append((op, worker, done))
+            live = _prune_abandoned_locked()
+        logger.warning(
+            "Broker SDK call timed out; worker thread abandoned (cannot be killed)",
+            op=op,
+            timeout_s=round(timeout_s, 1),
+            abandoned=live,
+        )
         return False, None, TimeoutError(f"{op} timed out after {timeout_s:.1f}s"), True
     err = state.get("error")
     if err is not None:

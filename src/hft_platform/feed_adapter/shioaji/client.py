@@ -380,6 +380,16 @@ class ShioajiClient:
             self._login_retry_max = max(0, int(os.getenv("HFT_SHIOAJI_LOGIN_RETRY_MAX", "1")))
         except ValueError:
             self._login_retry_max = 1
+        # Bound on leaked (timed-out) SDK guard threads before refusing new
+        # calls fail-closed — prevents a reconnect storm from spinning up
+        # unbounded CPU-pegging threads that starve the asyncio loop. 0 disables
+        # the gate (counting still happens for observability).
+        try:
+            self._max_abandoned_guard_threads = max(
+                0, int(os.getenv("HFT_SHIOAJI_MAX_ABANDONED_GUARD_THREADS", "3"))
+            )
+        except ValueError:
+            self._max_abandoned_guard_threads = 3
         self._last_login_error: str | None = None
         self._last_reconnect_error: str | None = None
         self._api_cache: dict[str, tuple[float, Any]] = {}
@@ -658,7 +668,12 @@ class ShioajiClient:
         timeout_s: float,
     ) -> tuple[bool, Any | None, Exception | None, bool]:
         """Run blocking broker SDK call with timeout in a daemon thread."""
-        return _safe_call_with_timeout_impl(op, fn, timeout_s)
+        return _safe_call_with_timeout_impl(
+            op,
+            fn,
+            timeout_s,
+            max_abandoned=getattr(self, "_max_abandoned_guard_threads", 0),
+        )
 
     def _set_thread_alive_metric(self, thread_name: str, alive: bool) -> None:
         _set_thread_alive_metric_impl(getattr(self, "metrics", None), thread_name, alive)
