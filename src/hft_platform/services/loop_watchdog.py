@@ -80,9 +80,7 @@ class LoopStallWatchdog:
         self._stall_kill_s = float(stall_kill_s)
         self._check_interval_s = max(0.1, float(check_interval_s))
         self._clock = clock
-        self._on_stall: Callable[[float], None] = on_stall or (
-            lambda _elapsed: _hard_exit(STALL_KILL_EXIT_CODE)
-        )
+        self._on_stall: Callable[[float], None] = on_stall or (lambda _elapsed: _hard_exit(STALL_KILL_EXIT_CODE))
         self._enabled = self._stall_kill_s > 0.0
         self._last_beat = self._clock()
         self._fired = False
