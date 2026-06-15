@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from hft_platform.feed_adapter.shioaji._infra import (
+    abandoned_guard_thread_count,
     cache_get,
     cache_set,
     ensure_session_lock,
@@ -15,6 +16,7 @@ from hft_platform.feed_adapter.shioaji._infra import (
     record_api_latency,
     record_crash_signature,
     release_session_lock,
+    reset_abandoned_guard_threads,
     safe_call_with_timeout,
     sanitize_metric_label,
     set_thread_alive_metric,
@@ -193,6 +195,97 @@ class TestSafeCallWithTimeout:
         ok, result, err, timed_out = safe_call_with_timeout("op", lambda: "x", -1)
         assert ok is True
         assert result == "x"
+
+
+# ---------------------------------------------------------------------------
+# safe_call_with_timeout — abandoned-guard-thread bound
+#
+# Regression for the 2026-06-15 THESHOW 18h hang: a timed-out SDK call leaves
+# its daemon worker thread running (Python cannot kill it). If that thread is
+# inside a spinning SDK reconnect/login it pegs a core and starves the asyncio
+# loop. The wrapper must (a) track such abandoned threads, (b) refuse to spawn
+# new ones past a cap so the leak is bounded and fail-closed.
+# ---------------------------------------------------------------------------
+
+
+class TestSafeCallAbandonedGuard:
+    def _drain(self, release: threading.Event) -> None:
+        """Release blocked workers and wait until the registry prunes them."""
+        release.set()
+        for _ in range(200):
+            if abandoned_guard_thread_count() == 0:
+                return
+            time.sleep(0.01)
+
+    def test_timed_out_call_is_registered_as_abandoned(self) -> None:
+        reset_abandoned_guard_threads()
+        release = threading.Event()
+        try:
+            assert abandoned_guard_thread_count() == 0
+            ok, _, err, timed_out = safe_call_with_timeout("login", lambda: release.wait(5.0), 0.1)
+            assert ok is False
+            assert isinstance(err, TimeoutError)
+            assert timed_out is True
+            # The worker is still blocked → counted as abandoned.
+            assert abandoned_guard_thread_count() == 1
+        finally:
+            self._drain(release)
+        # Once the worker finishes, the registry prunes it.
+        assert abandoned_guard_thread_count() == 0
+
+    def test_successful_call_is_not_registered(self) -> None:
+        reset_abandoned_guard_threads()
+        ok, result, _, timed_out = safe_call_with_timeout("login", lambda: 7, 5.0)
+        assert ok is True
+        assert result == 7
+        assert timed_out is False
+        assert abandoned_guard_thread_count() == 0
+
+    def test_refuses_new_call_when_abandoned_at_cap(self) -> None:
+        reset_abandoned_guard_threads()
+        release = threading.Event()
+        entered = threading.Event()
+        try:
+            # First call times out and leaks one abandoned worker (reaches cap=1).
+            safe_call_with_timeout("login", lambda: release.wait(5.0), 0.1, max_abandoned=1)
+            assert abandoned_guard_thread_count() == 1
+
+            def _fn() -> None:
+                entered.set()
+                release.wait(5.0)
+
+            ok, _, err, timed_out = safe_call_with_timeout("login", _fn, 0.1, max_abandoned=1)
+            # Fail closed: refused WITHOUT spawning a new worker thread.
+            assert ok is False
+            assert timed_out is True
+            assert isinstance(err, RuntimeError)
+            assert not isinstance(err, TimeoutError)
+            assert entered.is_set() is False
+            # Still only the one leaked thread — the leak is bounded.
+            assert abandoned_guard_thread_count() == 1
+        finally:
+            self._drain(release)
+        assert abandoned_guard_thread_count() == 0
+
+    def test_cap_zero_disables_gate(self) -> None:
+        reset_abandoned_guard_threads()
+        release = threading.Event()
+        entered = threading.Event()
+        try:
+            # Leak one abandoned worker first.
+            safe_call_with_timeout("login", lambda: release.wait(5.0), 0.1, max_abandoned=0)
+            assert abandoned_guard_thread_count() == 1
+
+            def _fn() -> None:
+                entered.set()
+
+            # With the gate disabled (0), a new worker is still spawned and runs.
+            ok, _, _, _ = safe_call_with_timeout("login", _fn, 5.0, max_abandoned=0)
+            assert ok is True
+            assert entered.is_set() is True
+        finally:
+            self._drain(release)
+        assert abandoned_guard_thread_count() == 0
 
 
 # ---------------------------------------------------------------------------
