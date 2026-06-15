@@ -125,9 +125,7 @@ def _prune_abandoned_locked() -> int:
     Caller must hold ``_abandoned_lock``.
     """
     if _abandoned_threads:
-        _abandoned_threads[:] = [
-            entry for entry in _abandoned_threads if not entry[2].is_set()
-        ]
+        _abandoned_threads[:] = [entry for entry in _abandoned_threads if not entry[2].is_set()]
     return len(_abandoned_threads)
 
 

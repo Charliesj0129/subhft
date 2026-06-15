@@ -385,9 +385,7 @@ class ShioajiClient:
         # unbounded CPU-pegging threads that starve the asyncio loop. 0 disables
         # the gate (counting still happens for observability).
         try:
-            self._max_abandoned_guard_threads = max(
-                0, int(os.getenv("HFT_SHIOAJI_MAX_ABANDONED_GUARD_THREADS", "3"))
-            )
+            self._max_abandoned_guard_threads = max(0, int(os.getenv("HFT_SHIOAJI_MAX_ABANDONED_GUARD_THREADS", "3")))
         except ValueError:
             self._max_abandoned_guard_threads = 3
         self._last_login_error: str | None = None

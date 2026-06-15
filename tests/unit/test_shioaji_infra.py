@@ -222,9 +222,7 @@ class TestSafeCallAbandonedGuard:
         release = threading.Event()
         try:
             assert abandoned_guard_thread_count() == 0
-            ok, _, err, timed_out = safe_call_with_timeout(
-                "login", lambda: release.wait(5.0), 0.1
-            )
+            ok, _, err, timed_out = safe_call_with_timeout("login", lambda: release.wait(5.0), 0.1)
             assert ok is False
             assert isinstance(err, TimeoutError)
             assert timed_out is True
