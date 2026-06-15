@@ -135,9 +135,7 @@ class TestLossDistributionMetrics:
         assert m["loss_fat_tail_ratio"] > 2.0
 
     def test_no_losers_reports_neutral_loss_distribution(self) -> None:
-        out = _gate().evaluate(
-            _FakeResult(trade_pnl=[10.0, 5.0, 3.0]), config=None, thresholds={}
-        )
+        out = _gate().evaluate(_FakeResult(trade_pnl=[10.0, 5.0, 3.0]), config=None, thresholds={})
         m = out.metrics
         assert m["loss_count"] == 0.0
         assert m["loss_rate_pct"] == 0.0
