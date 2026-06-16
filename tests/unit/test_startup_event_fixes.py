@@ -246,6 +246,11 @@ class TestStartupFillBackfill:
 
         monkeypatch.setenv("HFT_CHECKPOINT_ENABLED", "0")
         monkeypatch.setenv("HFT_PNL_EXPORTER_ENABLED", "0")
+        # Disable the loop-stall watchdog: with the threshold <= 0 ``start()`` is
+        # a no-op (LoopStallWatchdog._enabled is False), so run() never spawns the
+        # daemon thread that would otherwise os._exit() the pytest process after
+        # the threshold — the stubbed stop_async() below never stops it.
+        monkeypatch.setenv("HFT_LOOP_STALL_KILL_S", "0")
         events: list[str] = []
 
         async def _run_backfill():
@@ -271,6 +276,9 @@ class TestStartupFillBackfill:
             _order_record_direct=True,
             _on_sighup=lambda: None,
             _on_exec=lambda *_args, **_kwargs: None,
+            # run() constructs the stall watchdog via this staticmethod; the
+            # SimpleNamespace stub must expose it the same way the real class does.
+            _env_float=HFTSystem._env_float,
             _start_service=_start_service,
             _supervise=MagicMock(return_value=asyncio.sleep(0)),
             stop_async=MagicMock(return_value=asyncio.sleep(0)),
