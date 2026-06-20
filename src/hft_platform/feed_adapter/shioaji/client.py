@@ -21,6 +21,7 @@ from structlog import get_logger
 from hft_platform.core import timebase
 from hft_platform.core.rate_limiter import RateLimiter
 from hft_platform.feed_adapter.shioaji import router as _router
+from hft_platform.feed_adapter.shioaji._compat import resolve_quote_api
 from hft_platform.feed_adapter.shioaji._infra import (
     cache_get as _cache_get_impl,
 )
@@ -214,7 +215,18 @@ def _registry_unregister(client: Any) -> None:
 def dispatch_tick_cb(*args, **kwargs):
     global _ROUTE_MISS_COUNT
     _sync_router_route_globals()
-    _router.dispatch_tick_cb(*args, **kwargs)
+    # Arity bridge: 1.5.3 v1 callbacks pass a single (data) arg; 1.3.3 passes
+    # (topic, data). The router hot path is the concrete 2-arg
+    # ``dispatch_tick_cb(topic, quote)``, so normalise here — for the 1-arg
+    # shape topic=None lets ``_extract_quote_code_from_obj`` read the code off
+    # the tick. Without this, a 1-arg call raises TypeError before the router's
+    # own try/except, disconnecting the feed on the first 1.5.3 tick.
+    if len(args) == 1 and not kwargs:
+        _router.dispatch_tick_cb(None, args[0])
+    elif len(args) >= 2:
+        _router.dispatch_tick_cb(args[0], args[1])
+    else:
+        _router.dispatch_tick_cb_compat(*args, **kwargs)
     _ROUTE_MISS_COUNT = _router._ROUTE_MISS_COUNT
 
 
@@ -1028,13 +1040,15 @@ class ShioajiClient:
             logger.error("CA activation failed", error=str(exc))
 
     def _quote_api(self):
-        api = self.api
-        if not api:
-            return None
-        quote = getattr(api, "quote", None)
-        if quote is None:
-            return None
-        return quote
+        # Dual-version chokepoint for the whole quote surface (subscribe/
+        # unsubscribe, v1 callback setters, set_event_callback). 1.5 exposes
+        # these on the top-level api; 1.3.3 only on the api.quote proxy.
+        # resolve_quote_api prefers the top-level api, so the adapter stops
+        # touching the deprecated api.quote.* shims on 1.5.3 while transparently
+        # falling back to the proxy on 1.3.3. The v0 setters (dropped in 1.5)
+        # are absent here on 1.5.3, which is exactly what _supports_quote_v0()
+        # should observe.
+        return resolve_quote_api(self.api)
 
     def subscribe_basket(self, cb: Callable[..., Any]):
         """Delegates to SubscriptionManager.subscribe_basket()."""

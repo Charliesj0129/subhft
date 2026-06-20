@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 from structlog import get_logger
 
 from hft_platform.core import timebase
+from hft_platform.feed_adapter.shioaji._compat import resolve_quote_enum
 
 if TYPE_CHECKING:
     from hft_platform.feed_adapter.shioaji.client import ShioajiClient
@@ -280,7 +281,11 @@ class ReconnectOrchestrator:
         except Exception as exc:
             logger.debug("operation_fallback", error=str(exc))
             return None
-        if not sj or not hasattr(sj.constant, "QuoteVersion"):
+        if not sj:
+            return None
+        try:
+            quote_version = resolve_quote_enum(sj, "QuoteVersion")
+        except AttributeError:
             return None
         c = self._client
         # H13: snapshot under the dedicated lock so the watchdog thread
@@ -293,9 +298,9 @@ class ReconnectOrchestrator:
             current = c._quote_version
         if current == "v0" and not c._supports_quote_v0():
             if c._supports_quote_v1():
-                return sj.constant.QuoteVersion.v1
+                return quote_version.v1
             return None
-        return sj.constant.QuoteVersion.v0 if current == "v0" else sj.constant.QuoteVersion.v1
+        return quote_version.v0 if current == "v0" else quote_version.v1
 
     def handle_quote_schema_mismatch(self, reason: str, *args: Any, **kwargs: Any) -> None:
         """Record and log quote schema mismatches."""

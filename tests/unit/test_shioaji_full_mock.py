@@ -110,13 +110,13 @@ class TestShioajiClientFull(unittest.TestCase):
 
         # Verify subscriptions
         # 2 symbols * 2 quote types = 4 subscribes
-        self.assertEqual(self.mock_api_instance.quote.subscribe.call_count, 4)
+        self.assertEqual(self.mock_api_instance.subscribe.call_count, 4)
         # Resolve against the inner module (hft_platform.feed_adapter.shioaji.client) at assert time.
         # Production quote_runtime.py:410 does a local `from hft_platform.feed_adapter.shioaji.client
         # import dispatch_tick_cb` — that picks up the freshest function each call. The shim
         # `shioaji_client.dispatch_tick_cb` is name-bound at shim-load and goes stale if any other
         # test reloads the inner module mid-suite, causing a false assert_called_with mismatch.
-        self.mock_api_instance.quote.set_on_tick_stk_v1_callback.assert_called_with(
+        self.mock_api_instance.set_on_tick_stk_v1_callback.assert_called_with(
             _shioaji_inner_client.dispatch_tick_cb
         )
 
@@ -239,7 +239,7 @@ class TestShioajiClientFull(unittest.TestCase):
         ok = self.client.resubscribe()
 
         self.assertTrue(ok)
-        self.assertGreaterEqual(self.mock_api_instance.quote.subscribe.call_count, 1)
+        self.assertGreaterEqual(self.mock_api_instance.subscribe.call_count, 1)
 
     def test_reconnect_returns_false_when_login_fails(self):
         self.client.logged_in = True
@@ -302,9 +302,13 @@ class TestShioajiClientFull(unittest.TestCase):
     def test_register_event_callback_uses_persistent_reference(self):
         ok = self.client._register_event_callback()
         self.assertTrue(ok)
-        self.mock_api_instance.quote.set_event_callback.assert_called_with(self.client._event_callback_fn)
+        self.mock_api_instance.set_event_callback.assert_called_with(self.client._event_callback_fn)
 
     def test_subscribe_symbol_returns_false_when_quote_api_missing(self):
+        # Logged-out api: no top-level subscribe surface (1.5) and no api.quote
+        # proxy (1.3.3) → resolve_quote_api returns None → subscribe fails closed.
+        del self.client.api.subscribe
+        del self.client.api.unsubscribe
         self.client.api.quote = None
         sym = {"code": "2330", "exchange": "TSE"}
         ok = self.client._subscribe_symbol(sym, MagicMock())
@@ -312,7 +316,7 @@ class TestShioajiClientFull(unittest.TestCase):
 
     def test_subscribe_symbol_records_crash_signature_metric(self):
         sym = {"code": "2330", "exchange": "TSE"}
-        self.mock_api_instance.quote.subscribe.side_effect = AttributeError(
+        self.mock_api_instance.subscribe.side_effect = AttributeError(
             "'NoneType' object has no attribute 'subscribe'"
         )
         self.client.metrics.shioaji_crash_signature_total = MagicMock()
@@ -723,7 +727,7 @@ class TestShioajiClientFull(unittest.TestCase):
                     with patch.object(self.client, "_start_session_refresh_thread"):
                         self.client.subscribe_basket(cb)
 
-        self.mock_api_instance.quote.subscribe.assert_not_called()
+        self.mock_api_instance.subscribe.assert_not_called()
         mock_retry.assert_called_once_with(cb)
 
     def test_subscribe_basket_proceeds_when_event_callback_registered(self):
@@ -740,7 +744,7 @@ class TestShioajiClientFull(unittest.TestCase):
                         self.client.subscribe_basket(cb)
 
         # 2 symbols × 2 quote types = 4 calls
-        self.assertEqual(self.mock_api_instance.quote.subscribe.call_count, 4)
+        self.assertEqual(self.mock_api_instance.subscribe.call_count, 4)
 
     def test_sub_retry_loop_skips_when_not_logged_in(self):
         """Bug 3: retry loop does not subscribe while logged_in is False."""
@@ -763,7 +767,7 @@ class TestShioajiClientFull(unittest.TestCase):
             self.client._start_sub_retry_thread(cb)
             self.client._sub_retry_thread.join(timeout=2)
 
-        self.mock_api_instance.quote.subscribe.assert_not_called()
+        self.mock_api_instance.subscribe.assert_not_called()
         self.assertEqual(len(self.client._failed_sub_symbols), 1)
 
     def test_sub_retry_loop_skips_when_event_callback_not_registered(self):
@@ -788,5 +792,5 @@ class TestShioajiClientFull(unittest.TestCase):
                 self.client._start_sub_retry_thread(cb)
                 self.client._sub_retry_thread.join(timeout=2)
 
-        self.mock_api_instance.quote.subscribe.assert_not_called()
+        self.mock_api_instance.subscribe.assert_not_called()
         self.assertEqual(len(self.client._failed_sub_symbols), 1)

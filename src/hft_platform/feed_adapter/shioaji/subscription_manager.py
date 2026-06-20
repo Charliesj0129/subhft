@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict
 from structlog import get_logger
 
 from hft_platform.core import timebase
+from hft_platform.feed_adapter.shioaji._compat import resolve_quote_enum
 from hft_platform.feed_adapter.shioaji.contracts_runtime import derive_callback_code
 
 try:
@@ -241,12 +242,13 @@ class SubscriptionManager:
         try:
             start_ns = time.perf_counter_ns()
             v = c._get_quote_version()
+            quote_type = resolve_quote_enum(sj, "QuoteType")
             if v is None:
-                quote_api.subscribe(contract, quote_type=sj.constant.QuoteType.Tick)
-                quote_api.subscribe(contract, quote_type=sj.constant.QuoteType.BidAsk)
+                quote_api.subscribe(contract, quote_type=quote_type.Tick)
+                quote_api.subscribe(contract, quote_type=quote_type.BidAsk)
             else:
-                quote_api.subscribe(contract, quote_type=sj.constant.QuoteType.Tick, version=v)
-                quote_api.subscribe(contract, quote_type=sj.constant.QuoteType.BidAsk, version=v)
+                quote_api.subscribe(contract, quote_type=quote_type.Tick, version=v)
+                quote_api.subscribe(contract, quote_type=quote_type.BidAsk, version=v)
             c._record_api_latency("subscribe", start_ns, ok=True)
             return True
         except Exception as e:
@@ -276,12 +278,13 @@ class SubscriptionManager:
         try:
             start_ns = time.perf_counter_ns()
             v = c._get_quote_version()
+            quote_type = resolve_quote_enum(sj, "QuoteType")
             if v is None:
-                quote_api.unsubscribe(contract, quote_type=sj.constant.QuoteType.Tick)
-                quote_api.unsubscribe(contract, quote_type=sj.constant.QuoteType.BidAsk)
+                quote_api.unsubscribe(contract, quote_type=quote_type.Tick)
+                quote_api.unsubscribe(contract, quote_type=quote_type.BidAsk)
             else:
-                quote_api.unsubscribe(contract, quote_type=sj.constant.QuoteType.Tick, version=v)
-                quote_api.unsubscribe(contract, quote_type=sj.constant.QuoteType.BidAsk, version=v)
+                quote_api.unsubscribe(contract, quote_type=quote_type.Tick, version=v)
+                quote_api.unsubscribe(contract, quote_type=quote_type.BidAsk, version=v)
             c._record_api_latency("unsubscribe", start_ns, ok=True)
         except Exception as e:
             c._record_api_latency("unsubscribe", start_ns, ok=False)
