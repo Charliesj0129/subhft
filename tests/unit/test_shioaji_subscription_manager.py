@@ -43,7 +43,7 @@ class TestSubscribeBasket:
         client.subscribe_basket(cb)
 
         # 2 symbols x 2 quote types = 4 subscribe calls
-        assert mock_api.quote.subscribe.call_count == 4
+        assert mock_api.subscribe.call_count == 4
         assert client.tick_callback is cb
 
     def test_subscribe_basket_skips_when_not_logged_in(self, tmp_path):
@@ -53,7 +53,7 @@ class TestSubscribeBasket:
 
         client.subscribe_basket(cb)
 
-        mock_api.quote.subscribe.assert_not_called()
+        mock_api.subscribe.assert_not_called()
 
     def test_subscribe_basket_skips_when_no_api(self, tmp_path):
         client, mock_api, _ = _make_client(tmp_path)
@@ -62,7 +62,7 @@ class TestSubscribeBasket:
 
         client.subscribe_basket(cb)
 
-        mock_api.quote.subscribe.assert_not_called()
+        mock_api.subscribe.assert_not_called()
 
     def test_subscribe_basket_delegates_to_subscription_manager(self, tmp_path):
         from hft_platform.feed_adapter.shioaji.subscription_manager import SubscriptionManager
@@ -149,7 +149,7 @@ class TestSubscribeSymbol:
         ok = client._subscribe_symbol(sym, MagicMock())
 
         assert ok is True
-        assert mock_api.quote.subscribe.call_count == 2
+        assert mock_api.subscribe.call_count == 2
 
     def test_subscribe_symbol_invalid_entry(self, tmp_path):
         client, mock_api, _ = _make_client(tmp_path)
@@ -247,12 +247,12 @@ class TestSubscribeBasketStateResetBeforeRefresh:
         client.subscribed_count = client.MAX_SUBSCRIPTIONS
         client.subscribed_codes = {"FAKE_" + str(i) for i in range(client.MAX_SUBSCRIPTIONS)}
 
-        calls_before = mock_api.quote.subscribe.call_count
+        calls_before = mock_api.subscribe.call_count
         client.subscribe_basket(cb)
 
         # Without a reset, no new subscriptions should be issued because the
         # limit guard fires immediately in subscribe_basket().
-        assert mock_api.quote.subscribe.call_count == calls_before, (
+        assert mock_api.subscribe.call_count == calls_before, (
             "Expected subscribe_basket to be blocked by MAX_SUBSCRIPTIONS guard "
             "when subscribed_count is already at max — this is the bug scenario"
         )
@@ -278,6 +278,6 @@ class TestSubscribeBasketStateResetBeforeRefresh:
         client.subscribe_basket(cb)
 
         # 2 symbols × 2 quote types (Tick + BidAsk) = 4 subscribe calls
-        assert mock_api.quote.subscribe.call_count == 4, (
+        assert mock_api.subscribe.call_count == 4, (
             "After resetting subscription state, subscribe_basket should subscribe all 2 symbols (4 API calls total)"
         )
