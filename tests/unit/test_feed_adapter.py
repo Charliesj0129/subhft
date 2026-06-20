@@ -90,7 +90,7 @@ def test_subscribe_basket(client):
     cb = MagicMock()
     client.subscribe_basket(cb)
 
-    client.api.quote.subscribe.assert_called()
+    client.api.subscribe.assert_called()
 
 
 def test_place_order_wrapper(client):
