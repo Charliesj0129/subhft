@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
 import threading
 import time
 from pathlib import Path
@@ -73,6 +74,57 @@ def _diff_should_resubscribe(diff: dict[str, Any]) -> bool:
     if "relevant_count" in diff:
         return int(diff.get("relevant_count") or 0) > 0
     return bool(diff.get("added_codes") or diff.get("removed_codes"))
+
+
+def _contract_type_counts(contracts: list[dict[str, Any]]) -> dict[str, int]:
+    counts = {"stock": 0, "future": 0, "option": 0, "index": 0, "other": 0}
+    for contract in contracts:
+        kind = str(contract.get("type", "") or "").strip().lower()
+        if kind in counts:
+            counts[kind] += 1
+        else:
+            counts["other"] += 1
+    return counts
+
+
+def _symbols_require_derivative_contracts(symbols: list[dict[str, Any]]) -> bool:
+    for sym in symbols:
+        exchange = str(sym.get("exchange", "") or "").strip().upper()
+        if exchange in {"TAIFEX", "FUT", "OPT"}:
+            return True
+    return False
+
+
+def _wait_for_contract_fetch_complete(
+    api: Any,
+    *,
+    timeout_s: float,
+    sleep_s: float = 1.0,
+    monotonic_fn: Any = time.monotonic,
+    sleep_fn: Any = time.sleep,
+) -> tuple[bool, str]:
+    """Wait until Shioaji reports that the product file fetch has completed.
+
+    Shioaji may return from ``fetch_contracts(contract_download=True)`` while
+    ``api.Contracts.status`` is still ``FetchStatus.Fetching``.  Stocks can be
+    visible before futures/options finish loading, so traversing immediately can
+    persist a stock-only or partially-loaded cache.
+    """
+    contracts = getattr(api, "Contracts", None)
+    if contracts is None:
+        return True, "missing"
+
+    deadline = monotonic_fn() + max(0.0, float(timeout_s))
+    while True:
+        status = getattr(contracts, "status", None)
+        status_text = str(status)
+        if status is None or status_text.startswith("<") or "MagicMock" in status_text:
+            return True, status_text
+        if status_text.endswith(".Fetched") or status_text == "Fetched":
+            return True, status_text
+        if monotonic_fn() >= deadline:
+            return False, status_text
+        sleep_fn(float(sleep_s))
 
 
 class StaleInstrumentError(Exception):
@@ -601,17 +653,41 @@ class ContractsRuntime:
             return
 
         codes_before: set[str] = set()
+        contracts_before: list[dict[str, Any]] = []
         try:
             cache_path = Path(self._client._contract_cache_path)
             if cache_path.exists():
                 old_cache = json.loads(cache_path.read_text(encoding="utf-8"))
-                codes_before = {str(c.get("code", "")) for c in old_cache.get("contracts", []) if c.get("code")}
+                contracts_before = [c for c in old_cache.get("contracts", []) if isinstance(c, dict)]
+                codes_before = {str(c.get("code", "")) for c in contracts_before if c.get("code")}
         except Exception as exc:
             logger.debug("operation_fallback", error=str(exc))
             pass
 
         try:
             self._client._ensure_contracts()
+            ready_timeout_s = float(os.getenv("HFT_CONTRACT_FETCH_READY_TIMEOUT_S", "60"))
+            fetch_ready, fetch_status = _wait_for_contract_fetch_complete(
+                self._client.api,
+                timeout_s=ready_timeout_s,
+            )
+            if not fetch_ready:
+                error = f"contract fetch did not reach Fetched status: {fetch_status}"
+                logger.error(
+                    "contract_refresh_fetch_not_ready",
+                    error=error,
+                    status=fetch_status,
+                    timeout_s=ready_timeout_s,
+                )
+                self.write_refresh_status(result="error", error=error)
+                try:
+                    if self._client.metrics and hasattr(self._client.metrics, "contract_refresh_total"):
+                        self._client.metrics.contract_refresh_total.labels(result="error").inc()
+                except Exception as exc:
+                    logger.debug("operation_fallback", error=str(exc))
+                self._client._contract_refresh_lock.release()
+                return
+            logger.info("Contract fetch ready", status=fetch_status)
             logger.info("Contract data refreshed from broker")
         except Exception as exc:
             logger.warning("Contract refresh fetch failed", error=str(exc))
@@ -677,6 +753,41 @@ class ContractsRuntime:
             except Exception as exc:
                 logger.debug("operation_fallback", error=str(exc))
                 pass
+
+            counts_before = _contract_type_counts(contracts_before)
+            counts_after = _contract_type_counts(raw_contracts)
+            derivatives_before = counts_before["future"] + counts_before["option"]
+            derivatives_after = counts_after["future"] + counts_after["option"]
+            configured_derivatives = _symbols_require_derivative_contracts(
+                [sym for sym in getattr(self._client, "symbols", []) if isinstance(sym, dict)]
+            )
+            logger.info(
+                "contract_refresh_contract_counts",
+                before=counts_before,
+                after=counts_after,
+                configured_derivatives=configured_derivatives,
+            )
+            if derivatives_after == 0 and (derivatives_before > 0 or configured_derivatives):
+                error = (
+                    "broker returned no derivative contracts while previous cache or configured symbols "
+                    "require derivatives"
+                )
+                try:
+                    logger.error(
+                        "contract_refresh_integrity_failed",
+                        error=error,
+                        before=counts_before,
+                        after=counts_after,
+                        configured_derivatives=configured_derivatives,
+                    )
+                    self.write_refresh_status(result="error", error=error)
+                    if self._client.metrics and hasattr(self._client.metrics, "contract_refresh_total"):
+                        self._client.metrics.contract_refresh_total.labels(result="error").inc()
+                except Exception as exc:
+                    logger.debug("operation_fallback", error=str(exc))
+                finally:
+                    self._client._contract_refresh_lock.release()
+                return
 
             write_contract_cache(raw_contracts, self._client._contract_cache_path)
 
