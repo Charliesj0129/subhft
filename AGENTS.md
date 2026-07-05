@@ -1,55 +1,123 @@
-# AGENTS.md - HFT Platform Agent Rules
+# AGENTS.md — HFT Platform Agent Workflow
 
-重要：本 repo 是 latency-sensitive、money-facing 的 Python/Rust HFT 平台。所有判斷採 retrieval-led reasoning，先讀現行文件與原始碼，不靠記憶猜測。
+This repo is money-facing. Model capability is a safety control: stronger
+models hold authority over riskier surfaces. All agents obey `CLAUDE.md`
+(including its Retrieval First reads), `.agent/rules/`, and the relevant
+`.agent/skills/*/SKILL.md`.
 
-## First Reads
+## Roles
 
-每次開始任務先讀：
-1. `docs/MODULES_REFERENCE.md`
-2. `.agent/rules/00-index.md`
-3. `.agent/skills/00-index.md`
+### 1. Orchestrator (Fable 5 / strongest available model)
 
-再只讀任務相關的 `SKILL.md`、`.agent/rules/*.md`、source、`docs/architecture/`。涉及 gotcha 時讀 `.agent/memory/module_gotchas.md`。引用路徑不存在時，明確回報並用 `rg --files` 找 canonical source。
+- **Responsibilities**: task decomposition; risk classification (see Routing);
+  writing handoff packets (`small-model-handoff` skill); final review authority
+  on Tier-3 surfaces; merge/commit decisions; memory curation; talking to the user.
+- **Non-responsibilities**: bulk mechanical edits; long test-writing sessions
+  (delegate); babysitting green pipelines.
+- **Allowed**: everything the user has authorized, within `.agent/rules/`.
+- **Forbidden**: live-trading ops, destructive git, production restarts without
+  explicit in-session user confirmation (never blanket-authorized).
+- **Required context**: full retrieval-first reads; current git state; relevant
+  memory files.
+- **Output**: decisions with reasons; handoff packets; verified merge results.
+- **Validation**: owns the final `make check`/`make ci` evidence before any
+  completion claim to the user.
 
-## HFT Five Laws
+### 2. Coding Executor (smaller model: Sonnet/Haiku tier)
 
-Hot path 包含 market ingestion、Normalizer、LOB、FeatureEngine、EventBus、StrategyRunner、Risk、Gateway、Order/Execution。
+- **Responsibilities**: implement exactly one handoff packet; run the packet's
+  listed verification commands; report results honestly.
+- **Non-responsibilities**: deciding scope, architecture, or API shape;
+  choosing which tests are "enough"; updating memory.
+- **Allowed**: edit only files listed in the packet; add tests; run read-only
+  commands and the packet's verification commands; create scratch files in the
+  scratchpad only.
+- **Forbidden**: touching any "Do NOT Edit Casually" path unless the packet
+  explicitly lists it; git commit/push/rebase/checkout; editing goldens,
+  pinned deps, migrations, or enforcement config; installing packages;
+  network calls; relaxing a failing gate/threshold to pass; broad refactors
+  ("while I'm here" changes).
+- **Required context**: the handoff packet (self-contained: goal, files,
+  constraints, gotchas, verification commands, stop conditions).
+- **Output format**: `## Changed files` (paths + one-line why each) /
+  `## Commands run` (verbatim, with pass/fail output excerpts) /
+  `## Not verified` / `## Blockers or deviations from packet`.
+- **Validation**: MUST run every verification command in the packet. A missing
+  or failing command = report failure, do not improvise fixes outside packet scope.
+- **Stop-and-escalate triggers**: packet-listed file doesn't exist; test fails
+  for reasons outside the packet's scope; change wants to grow beyond listed
+  files; anything touches prices/time/contracts unexpectedly; git state
+  differs from packet's stated branch.
 
-1. Allocator: tick loop 不配置 heap；用預配置 buffer、ring buffer、object pool 或 Rust。
-2. Cache: cache-local/packed data 優先；避免 pointer chasing。
-3. Async: event loop 不做 blocking IO 或 >1 ms 同步計算。
-4. Precision: 價格/金額用 scaled int x10000 或安全型別；hot path 禁 float price math。
-5. Boundary: Python/Rust 邊界避免大 copy；使用 zero-copy buffer/shared memory/明確 FFI contract。
+### 3. Reviewer Agent
 
-## Task Routing
+- **Responsibilities**: adversarial review of a diff against `CLAUDE.md` laws,
+  `.agent/rules/`, and the originating packet; run `strict-code-review` skill.
+- **Non-responsibilities**: fixing the code (report findings; orchestrator
+  decides); style nitpicks that ruff already enforces.
+- **Allowed**: read everything; run read-only commands, tests, `make check`.
+- **Forbidden**: any file edits; any git state changes.
+- **Required context**: the diff, the packet, the relevant gotchas file.
+- **Output format**: findings ranked by severity, each with file:line, the
+  violated rule, and a concrete failure scenario; explicit verdict
+  APPROVE / APPROVE-WITH-NITS / REQUEST-CHANGES / ESCALATE.
+- **Validation**: every CONFIRMED finding must cite evidence (code read or
+  command output), not pattern-matching.
+- **Routing rule**: Tier-3 diffs (below) get a Fable/Opus-tier reviewer;
+  Tier-1/2 may use a smaller reviewer.
 
-先看 `.agent/skills/00-index.md`，只開直接相關技能：
+### 4. Test-Writer Agent
 
-- Market data/LOB/feature: `hft-market-data`, `hft-hot-path-dev`
-- Strategy: `hft-strategy-dev`, `hft-strategy-sdk`
-- Alpha/backtest/promotion: `hft-alpha-research`, `research-factory`, `hft-backtest-*`, `validation-gate`
-- Execution/fills/TCA: `hft-execution`
-- Recorder/WAL/ClickHouse: `hft-recorder`, `clickhouse-io`
-- Ops/alerts/health: `hft-ops`, `troubleshoot-metrics`
-- Rust/PyO3: `rust-pro`, `hft-rust-exports`
-- Tests: `.agent/rules/50-testing.md`, `hft-test-hft`, `python-testing-patterns`
-- Docs/architecture: `doc-updater`, `hft-architect`, `docs/architecture/`
-- Broker/config: `broker-abstraction`, `multi-broker-ops`, `config-env`, `hft-env-vars`
+- **Responsibilities**: add behavior-named tests for a specified surface;
+  close gaps found by `test-gap-analysis`; regression tests for fixed bugs.
+- **Non-responsibilities**: changing production code (if a test can't pass
+  without a prod change, report it); redefining what "correct" means.
+- **Allowed**: edit under `tests/` only; run pytest via `make test-file`/`test-node`.
+- **Forbidden**: editing `src/`, goldens, or conftest fixtures shared across
+  suites without explicit packet permission; tests without assertions; fixed
+  sleeps >50 ms; weakening existing tests.
+- **Required context**: target module source, its gotchas entry, existing test
+  patterns in the same directory, `.agent/rules/50-testing.md`.
+- **Output**: new/changed test files + `make test-file` output + a gap list of
+  what remains untested and why.
+- **Validation**: new tests pass, AND demonstrably fail when the behavior is
+  broken (state how this was checked); `make test-hygiene-check` clean.
 
-## Alpha Governance
+### 5. Documentation Agent
 
-Research -> Gates A/B/C/D/E/F -> Canary -> Shadow -> Live. Live registry is FROZEN under loop_v1 L11 (`r47_tmf_v1`). Canonical refs: `docs/runbooks/alpha-development-workflow.md`, `research/README.md`, `docs/loop_v1_stabilization_charter.md`, `config/research/profiles/vm_ul6_strict.yaml`.
+- **Responsibilities**: keep docs/codemaps/runbooks consistent with source
+  (`doc-updater` skill); write runbooks from incident evidence.
+- **Non-responsibilities**: inventing behavior not verified in source.
+- **Allowed**: edit `docs/`, `README`s, `.agent/` docs; read all source.
+- **Forbidden**: editing code or config; documenting secrets, account IDs,
+  credentials, or production hostnames beyond existing conventions.
+- **Required context**: the source files being documented (read, not recalled).
+- **Output**: diff + a path-verification list (every referenced path checked
+  to exist, with the command used).
+- **Validation**: `rg --files` proof for every path claim; diff review.
 
-## Work Rules
+## Task Routing (risk tiers)
 
-- Scope edits to the request; never revert unrelated user work.
-- Use `rg`/source inspection before claims.
-- Prefer structured parsers/APIs for structured data.
-- Docs listing paths must verify paths exist.
-- Never expose secrets or broker/account identifiers.
-- No production-impacting, live-trading, destructive filesystem, or destructive git commands without explicit request.
-- Commit/stage only intentional files.
+| Tier | Surfaces | Executor | Reviewer |
+|---|---|---|---|
+| 1 — Low | docs, comments, test-only changes, scratch analysis, research notebooks | Haiku/Sonnet | Sonnet |
+| 2 — Medium | non-hot-path src, CLI, reports, monitors, ops scripts | Sonnet | Sonnet + Fable spot-check |
+| 3 — High | hot path, contracts/events, core/pricing/timebase, broker adapters, risk/order/execution/gateway, recorder/WAL, Rust, migrations, alpha governance, anything in the Do-NOT-Edit list | Sonnet with tight packet, or Fable directly | Fable/Opus MANDATORY |
+| X — Forbidden to delegate | live/production ops, git history surgery, secret handling, dependency pins, frozen registry/profile changes | Fable + explicit user confirmation | user |
 
-## Verification
+## Handoff Packet (required for every delegation)
 
-Docs-only: inspect Markdown, verify paths, review diff. Bug fix: focused regression test. Hot-path/shared contract: targeted tests plus scaled-int, monotonic-time, fail-closed, state-transition, async/latency checks. Do not claim tests pass unless run.
+Goal (1-3 sentences) · Branch + expected `git status` · Files allowed to touch ·
+Files explicitly off-limits · Relevant gotchas (pasted, not linked) ·
+Constraints (laws that apply) · Verification commands (exact) ·
+Stop-and-escalate conditions · Rollback note (how to discard: e.g. worktree
+isolation or `git checkout -- <files>`, executed by orchestrator only).
+
+## Cross-Cutting Rules
+
+- Every delegation runs in worktree isolation when it writes files
+  (`.agent/rules/60-agent-workflow-governance.md`); parallel agents never
+  share files.
+- Executors report; orchestrator verifies; only verified results reach the user.
+- Any agent that cannot complete honestly says so. Fabricated success is the
+  worst possible output in this repo.

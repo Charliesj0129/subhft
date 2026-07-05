@@ -79,3 +79,18 @@
 | `git-parallel` | worktrees for isolated experiments or long-running backtests |
 | `github` | GitHub CLI issue/PR operations |
 | `session-manager` | project session state management |
+
+## Agent Meta / Orchestration
+
+| Skill | When to use |
+| --- | --- |
+| `read-only-audit` | session start / unfamiliar ground / before planning any change or Tier-3 work |
+| `small-model-handoff` | orchestrator delegating implementation to a smaller-model executor |
+| `strict-code-review` | any diff before commit; mandatory for Tier-3 and executor-produced diffs |
+| `test-gap-analysis` | before test-writer delegation; after a bug reveals a coverage hole |
+| `bug-investigation` | any unexpected behavior — evidence-first root cause BEFORE fixing |
+| `memory-update` | session end / after KILL verdict, incident, decision, or delegation outcome |
+| `project-risk-check` | before Tier-2/3 work, commit/PR, or dependency/config/production changes |
+| `branch-safety-check` | before ANY git state change (checkout/merge/commit/stash/worktree/push) |
+
+Role/tier definitions live in `AGENTS.md`; memory routing lives in `.agent/memory/README.md`.
