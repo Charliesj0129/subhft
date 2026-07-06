@@ -17,5 +17,21 @@ lessons. Do NOT record: generic model claims; single anecdotes (wait for a
   registry/profiles): never delegated; Fable + explicit user confirmation.
 
 ## Observed outcomes
-(2026-07-06: none recorded yet — populate after the first pilot delegations.
-Each entry: date, tier, surface, executor model, outcome, packet lesson.)
+(Each entry: date, tier, surface, executor model, outcome, packet lesson.)
+
+### 2026-07-06 · Tier 1 · docs (MODULES_REFERENCE.md count re-verification) · Haiku 4.5 · SUCCESS
+Pilot delegation via small-model-handoff → worktree-isolated executor →
+strict-code-review. Executor corrected 17 numeric claims; every number matched
+the orchestrator's independently pre-computed ground truth; scope held (1 file,
+prose untouched, no git commands, zero escalations); ~69K tokens / 81 tool
+uses / ~3 min. Review verdict APPROVE with no diff findings.
+Packet lessons:
+- The packet's hand-typed "rows to check" enumeration omitted one row (`core`);
+  the executor correctly let the general rule ("every row with a bold count")
+  win and disclosed the extra edit. → Generate enumerations from commands, and
+  state precedence explicitly: general rule beats enumerated list.
+- Giving exact count COMMANDS (not answers) worked: deterministic for the
+  executor, still independently checkable by the reviewer. Reuse this shape for
+  any mechanical-verification task.
+- One data point only — do not generalize to Tier-2 code tasks yet; next pilot
+  should be a Tier-2 non-hot-path code+test change (Sonnet executor).

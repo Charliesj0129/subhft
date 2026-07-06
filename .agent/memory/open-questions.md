@@ -5,11 +5,14 @@ Record here: unresolved decisions with what blocks them and who decides
 answer those instead. Move resolved items to architecture-decisions.md or
 failed-attempts.md.
 
-## MODULES_REFERENCE.md package-count drift (opened 2026-07-06)
-The doc's auto-generated scan (2026-04-01) says 37 packages / ~210 files; a
-post-cleanup note (2026-04-17 era) says ~24 packages. The doc needs a
-regeneration pass. Decides: evidence (re-scan). Blocked by: nobody — just
-needs a docs task.
+## MODULES_REFERENCE.md description staleness (narrowed 2026-07-06)
+COUNTS RESOLVED 2026-07-06 (Tier-1 pilot delegation, see
+model-routing.md): true values are 23 top-level / 30 nested packages,
+372 Python files; doc corrected, both package metrics now explicit. The
+count ambiguity that caused the drift (37 vs ~24) was top-level-vs-nested.
+REMAINING: row descriptions/class lists are still from the 2026-04-01 scan
+and were NOT re-verified (comment in the doc says so). Decides: evidence
+(a per-row read pass). Blocked by: nobody — just needs a docs task.
 
 ## OrderIntent §7 parity producer fields (opened 2026-06-03)
 Live parity for session/risk/force-flat dimensions needs a producer-side
