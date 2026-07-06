@@ -37,9 +37,13 @@ check_no_active_ops() {
         err "CHERRY_PICK_HEAD exists — cherry-pick in progress (git cherry-pick --abort)"
         has_active=1
     fi
-    if [ -f "$GIT_DIR/REBASE_HEAD" ] || [ -d "$GIT_DIR/rebase-merge" ] || [ -d "$GIT_DIR/rebase-apply" ]; then
+    # Active rebase is defined by the state dirs (as git itself checks);
+    # REBASE_HEAD alone is a leftover marker from an aborted/interrupted rebase.
+    if [ -d "$GIT_DIR/rebase-merge" ] || [ -d "$GIT_DIR/rebase-apply" ]; then
         err "Rebase in progress (git rebase --abort to clear)"
         has_active=1
+    elif [ -f "$GIT_DIR/REBASE_HEAD" ]; then
+        warn "Stale REBASE_HEAD with no rebase state dirs — leftover marker, safe to remove"
     fi
     if [ -f "$GIT_DIR/BISECT_LOG" ]; then
         warn "Bisect in progress (git bisect reset to clear)"
