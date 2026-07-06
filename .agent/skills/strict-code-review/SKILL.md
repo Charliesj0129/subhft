@@ -1,18 +1,28 @@
 ---
 name: strict-code-review
-description: "Adversarial diff review against HFT laws, boundaries, failure modes, security, and tests. Use on any diff before commit; MANDATORY (Fable/Opus reviewer) for all Tier-3 diffs and all executor-produced diffs before acceptance."
+description: "Adversarial diff review against HFT laws, boundaries, failure modes, security, and tests. Use on any diff before commit; MANDATORY (orchestrator-class reviewer) for all Tier-3 diffs and all executor-produced diffs before acceptance."
 ---
 
 # Skill: strict-code-review
 
 ## When to use
-Any diff before commit; ALL Tier-3 diffs (mandatory, Fable/Opus reviewer);
-executor-produced diffs before the orchestrator accepts them.
+Any diff before commit; ALL Tier-3 diffs (mandatory, orchestrator-class
+reviewer); executor-produced diffs before the orchestrator accepts them.
 
 ## Required inputs
-The diff; the originating task/packet; branch test status.
+The diff; the originating task/packet; branch test status; for executor
+diffs: the pre-spawn snapshot and privately pre-computed ground truth.
 
 ## Procedure
+0. Executor diffs only (mandatory; the self-report is context, never evidence):
+   a. Scope-diff against the pre-spawn `git status --porcelain` + hash
+      snapshot — only allowed files changed, dirty user files untouched.
+   b. Personally re-run every packet verification command.
+   c. Break-probe new/changed tests: break the behavior, confirm they fail,
+      restore byte-exact (hash-verified).
+   d. Adjudicate every red gate: pre-existing vs introduced, with evidence.
+   e. Cross-check numeric/mechanical claims against the ground truth
+      pre-computed before spawning (`small-model-handoff` step 2).
 1. Read the packet: does the diff do exactly that — nothing more, nothing less?
 2. Laws pass (hot-path files only): per-tick allocation, float price math,
    blocking IO/event-loop compute, time source (`timebase.now_ns`), FFI copies.
@@ -34,6 +44,8 @@ Ranked findings (severity, file:line, rule violated, failure scenario) +
 verdict: APPROVE / APPROVE-WITH-NITS / REQUEST-CHANGES / ESCALATE.
 
 ## Validation checklist
+- [ ] Executor diff: Step 0 done (snapshot diff, re-run, break-probe,
+      red-gate adjudication, ground-truth cross-check)
 - [ ] Diff-vs-packet scope checked
 - [ ] All 5 passes done for applicable files
 - [ ] Each finding evidence-backed

@@ -24,7 +24,12 @@ The session's durable facts (not chat noise).
    credentials, account IDs; one-off conversational context.
 5. Keep entries <=10 lines; move long narratives to a dated topic file and
    link it.
-6. Also update `.agent/memory/current_session.md` per
+6. Promotion/retirement pass: any lesson now appearing twice in
+   `model-routing.md` → promote into the relevant SKILL.md and replace the
+   memory prose with a one-line pointer; delete lessons superseded by skill
+   text; collapse outcome entries >1 quarter old with no unique lesson into
+   the scoreboard counts.
+7. Also update `.agent/memory/current_session.md` per
    `.agent/rules/05-project-structure.md`.
 
 ## Safety rules

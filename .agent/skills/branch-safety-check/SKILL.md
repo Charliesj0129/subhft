@@ -24,12 +24,26 @@ Intended git operation; expected branch.
    no in-progress merge/rebase/cherry-pick, no conflict markers.
 4. Confirm current branch == expected branch; on the default branch, branch
    first before committing.
-5. After the operation: `make git-postcheck`; confirm status matches intent.
+5. Classify the operation and gate it:
+
+   | Class | Operations | Authority |
+   |---|---|---|
+   | Read-only | status, log, diff, show | orchestrator, freely |
+   | Local-Write | narrow-path add, commit on a feature branch, worktree create | orchestrator, after verdict SAFE |
+   | Remote-Write | push, PR creation, upstream changes | HUMAN approval, in-session, per push |
+   | Destructive | merge, rebase, reset, clean, stash-drop, branch-delete, force-anything, history edits | HUMAN approval, per operation, plan presented first |
+
+   Approval is per-operation, never blanket, never retroactive.
+6. Write the rollback command down BEFORE executing the operation.
+7. After the operation: `make git-postcheck`; confirm status matches intent;
+   report exactly what ran.
 
 ## Safety rules
 Never force-push; never push `worktree-agent-*` branches; never
 reset/clean/checkout over dirty user files; destructive git only on explicit
 user request. Stage narrowly by path — never `git add -A` in a dirty tree.
+`git add -f` only for known-ignored tracked paths (e.g. `.agent/memory/`
+files) with a stated reason. Smaller models never run git commands.
 
 ## Output format
 `## Branch` · `## Dirty-file classification` · `## Unpushed commits` ·
@@ -39,6 +53,8 @@ user request. Stage narrowly by path — never `git add -A` in a dirty tree.
 - [ ] Every dirty file classified
 - [ ] Unpushed count recorded
 - [ ] Precondition script actually run (output pasted)
+- [ ] Operation classified; Remote-Write/Destructive has in-session approval
+- [ ] Rollback command written before executing
 
 ## Example prompt
 "branch-safety-check before committing the validation-harness test files on

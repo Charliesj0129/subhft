@@ -5,6 +5,25 @@ outcomes — which delegations succeeded/failed by surface and why; packet
 lessons. Do NOT record: generic model claims; single anecdotes (wait for a
 2nd occurrence before writing a pattern).
 
+## Scoreboard (input to AGENTS.md demotion/promotion rules)
+
+| Model | Task type | Attempts | Successes | Interventions |
+|---|---|---|---|---|
+| Haiku 4.5 | docs/mechanical | 1 | 1 | 0 |
+| Sonnet | Tier-2 code+test | 1 | 1 | 1 (report nudge) |
+
+## Record schema (write after EVERY delegation, success or not)
+
+```
+### <date> · Tier <n> · <task type> · <surface> · <model> · <SUCCESS|PARTIAL|FAIL|ESCALATED>
+Interventions: <n> · Cost: <tokens/time if known> · Net win vs doing directly: <y/n/unclear>
+Lessons: <=3 bullets, only if new.
+```
+
+Update the scoreboard in the same edit. Bad-packet failures: fix the packet,
+don't demote the model. Lessons appearing twice → promote into the relevant
+SKILL.md and replace with a pointer (see `memory-update` skill).
+
 ## Tier table (authoritative copy in AGENTS.md)
 - Tier 1 (docs/comments/test-only/scratch): Haiku/Sonnet executor, Sonnet review.
 - Tier 2 (non-hot-path src, CLI, reports, ops scripts): Sonnet executor,
@@ -19,7 +38,8 @@ lessons. Do NOT record: generic model claims; single anecdotes (wait for a
 ## Observed outcomes
 (Each entry: date, tier, surface, executor model, outcome, packet lesson.)
 
-### 2026-07-06 · Tier 1 · docs (MODULES_REFERENCE.md count re-verification) · Haiku 4.5 · SUCCESS
+### 2026-07-06 · Tier 1 · docs/mechanical · MODULES_REFERENCE.md count re-verification · Haiku 4.5 · SUCCESS
+Interventions: 0 · Cost: ~69K tokens / 3 min · Net win vs doing directly: no (capability probe)
 Pilot delegation via small-model-handoff → worktree-isolated executor →
 strict-code-review. Executor corrected 17 numeric claims; every number matched
 the orchestrator's independently pre-computed ground truth; scope held (1 file,
@@ -36,7 +56,8 @@ Packet lessons:
 - One data point only — do not generalize to Tier-2 code tasks yet; next pilot
   should be a Tier-2 non-hot-path code+test change (Sonnet executor).
 
-### 2026-07-06 · Tier 2 · CLI code+test (un-skip live→sim downgrade regression test) · Sonnet · SUCCESS
+### 2026-07-06 · Tier 2 · code+test · CLI un-skip live→sim downgrade regression test · Sonnet · SUCCESS
+Interventions: 1 (report-delivery nudge) · Cost: not measured · Net win vs doing directly: unclear (capability probe)
 Real recorded debt: `test_cmd_run_downgrades_live` skipped since the
 prometheus-mock era, leaving the fail-safe live→sim credential downgrade with
 zero regression coverage. Packet prescribed an extraction-only refactor in

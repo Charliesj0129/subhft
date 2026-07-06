@@ -169,6 +169,8 @@ Coverage: repo gate is 70% (`--cov-fail-under=70`); targets for NEW code are
 - No live trading, production-impacting, destructive filesystem, or destructive
   git operations without explicit request. Live-engine cutover is always manual.
 - Role/authority boundaries and handoff format: see `AGENTS.md`.
+- Delegation routing/tiers and done definitions: `AGENTS.md`; delegation
+  outcomes ledger: `.agent/memory/model-routing.md`.
 - Read the matching `.agent/skills/*/SKILL.md` before hot-path, alpha, broker,
   config, Rust, ops, or testing work.
 
