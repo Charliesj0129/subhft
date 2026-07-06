@@ -22,6 +22,11 @@ Verified task scope (from `read-only-audit`); risk tier; target files.
    etc.) — commands the executor CAN run without prompts.
 5. Write stop-and-escalate conditions and the rollback note.
 6. Spawn in a worktree if the task writes files. One packet = one agent.
+   EXCEPTION (2026-07-06): if verification requires the built venv / test
+   suite, a fresh worktree can't run it — use main-tree execution with a
+   strict file allowlist, orchestrator before/after `git status --porcelain`
+   snapshots, and a `git checkout -- <files>` rollback (files must be clean
+   at baseline).
 7. On return: diff-review every changed file yourself; re-run verification
    yourself; never forward unverified executor claims to the user.
 
