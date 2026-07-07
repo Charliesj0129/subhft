@@ -9,7 +9,7 @@ lessons. Do NOT record: generic model claims; single anecdotes (wait for a
 
 | Model | Task type | Attempts | Successes | Interventions |
 |---|---|---|---|---|
-| Haiku 4.5 | docs/mechanical | 1 | 1 | 0 |
+| Haiku 4.5 | docs/mechanical | 2 | 2 | 0 |
 | Sonnet | Tier-2 code+test | 1 | 1 | 1 (report nudge) |
 | Sonnet | Tier-1 docs verify | 1 | 0 (1 PARTIAL) | 2 (false-positive fixes) |
 
@@ -129,3 +129,28 @@ Lessons:
 - Additive `[DRIFT: nearest-name]` marking gives a trivially reviewable diff,
   but cannot annotate a stale row that has no backtick identifier (the
   `scripts/` row) — those need a separate note, not an inline marker.
+
+### 2026-07-07 · Tier 1 · docs/mechanical · .agent/rules/40-ops.md stale runbook-path fix · Haiku 4.5 · SUCCESS
+Interventions: 0 · Cost: ~33K subagent tokens / 7 tool uses / ~37s · Net win vs doing directly: no (one-line edit; run as a capability + full-cycle probe)
+Genuine drift found by a docs-consistency scan: `.agent/rules/40-ops.md:7`
+pointed live-impacting config work at `docs/ops_change_control.md`, which does
+not exist — the runbook moved to `docs/operations/change-control.md` (confirmed
+by `docs/README.md:41` and the doc title). Packet gave the exact target path +
+read-only verification commands; orchestrator pre-computed the byte-exact
+post-edit blob hash (`055e6a69…`) as the answer key. Executor changed exactly
+line 7, scope held (1 file, 39 dirty user files byte-identical, no git, no
+touch of the `.claude/` mirror copies), all verification green. Review: blob
+hash matched the answer key exactly; APPROVE. Committed locally via the new
+`--narrow-commit` SAFE-WITH-CARE gate (commit 74d95e06; not pushed).
+Lessons:
+- Second clean Haiku docs/mechanical run (now 2/2, 0 interventions). Per the
+  AGENTS.md promotion rule this class now has its two clean successes at
+  current scope; the next probe to widen it should be harder (multi-file or
+  find-and-fix-ALL mechanical, not a single known-target replacement).
+- First end-to-end use of the `--narrow-commit` gate (added e6273d15) resolved
+  the 2026-07-07 gate/authority deadlock: staged-set==ALLOWED_PATHS with the
+  dirty tree demoted to an informational warning let the orchestrator complete
+  a real local commit and exit 0. Promote to successful-patterns on a 2nd use.
+- `.agent/` is a normal dir, but `rg` skips it without `--hidden` (dot-prefixed);
+  a drift scan of agent-rules files that omits `--hidden`/an explicit path
+  silently misses references — it hid this very drift on the first pass.
