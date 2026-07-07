@@ -10,7 +10,7 @@ lessons. Do NOT record: generic model claims; single anecdotes (wait for a
 | Model | Task type | Attempts | Successes | Interventions |
 |---|---|---|---|---|
 | Haiku 4.5 | docs/mechanical | 2 | 2 | 0 |
-| Sonnet | Tier-2 code+test | 1 | 1 | 1 (report nudge) |
+| Sonnet | Tier-2 code+test | 2 | 2 | 1 (report nudge; 0 this run) |
 | Sonnet | Tier-1 docs verify | 1 | 0 (1 PARTIAL) | 2 (false-positive fixes) |
 
 ## Record schema (write after EVERY delegation, success or not)
@@ -154,3 +154,44 @@ Lessons:
 - `.agent/` is a normal dir, but `rg` skips it without `--hidden` (dot-prefixed);
   a drift scan of agent-rules files that omits `--hidden`/an explicit path
   silently misses references — it hid this very drift on the first pass.
+
+### 2026-07-08 · Tier 2 · code+test · CLI `_safe_write` empty-dirname crash fix · Sonnet · SUCCESS
+Interventions: 0 · Cost: ~54K subagent tokens / 17 tool uses / ~86s · Net win vs doing directly: no (small ~4-line fix; run as a full-cycle capability probe)
+Real latent defect on a preferred surface: `cli/_utils.py:_safe_write` did
+`os.makedirs(os.path.dirname(path), exist_ok=True)`, which raises
+`FileNotFoundError: ''` when `path` is a bare filename (dirname == ""). The
+helper's only test coverage (`test_cli_smoke.py`) MOCKED `_safe_write`, so the
+real function was uncovered. Packet: main-tree venue, 2-file allowlist
+(src fix + new `tests/unit/test_cli_safe_write.py`), orchestrator pre-edit hash
+snapshot (965213bd) + `git checkout` rollback, defect + required behavior
+specified, escape-hatch-worded verification. Executor delivered exactly the
+minimal guard (`dirname = os.path.dirname(path); if dirname: os.makedirs(...)`,
+signature unchanged, with-dir behavior byte-identical) + 3 behavior-named
+`tmp_path`-isolated tests (bare filename via `monkeypatch.chdir`, nested-parent
+creation, existing-dir overwrite). Independent review: scope-diff showed ONLY
+the 2 files changed vs the 39-file dirty baseline (mtimes confirmed no user file
+touched); re-ran all verification (new 3 passed, smoke 5 passed, ruff
+check+format clean on both files, mypy clean 120 files, hygiene clean);
+break-probe via `git checkout` to the committed buggy version made the
+bare-filename test fail with the exact `FileNotFoundError: ''`, then cp-restored
+the fixed snapshot byte-exact (hash 39842bdc re-verified). `make format-check`
+red was entirely pre-existing (7 committed-debt files + 1 user-dirty
+`test_research_factory.py`, none an executor file) — executor correctly applied
+the escape hatch. Committed locally via `--narrow-commit` gate (commit 4388f24e,
+exit 0, staged set == 2 allowlist files; not pushed); dirty tree preserved at 39.
+Lessons:
+- Second clean Sonnet Tier-2 code+test success (now 2/2 at current scope; the
+  one historical intervention was a report-delivery nudge, not a code fix). Per
+  the AGENTS.md promotion rule this class has its two clean successes at current
+  scope — the next probe to widen it should be HARDER: multi-file (>2) or a
+  cross-module behavioral change with real callers, not another single-function
+  localized fix.
+- Running the executor SYNCHRONOUSLY (`run_in_background:false`) for one tight
+  task eliminated the prior run's idle-executor / missing-report problem — the
+  4-section report arrived with the tool result. Reserve background+nudge for
+  parallel or long-running executors.
+- Break-probe shortcut for a single-file bugfix where the pre-fix code == the
+  committed baseline: snapshot the fixed file, `git checkout -- <file>` to get
+  the buggy version for free (no hand-editing → zero transcription risk), run
+  the new test (expect fail), then cp the snapshot back and re-verify the blob
+  hash. Clean and reusable.
