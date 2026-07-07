@@ -2,12 +2,22 @@
 # check_git_preconditions.sh — Agent workflow safety pre-checks (AWG-01/03)
 #
 # Usage:
-#   scripts/check_git_preconditions.sh [--pre-merge|--post-merge|--session-start|--session-end]
+#   scripts/check_git_preconditions.sh [--pre-merge|--post-merge|--session-start|--session-end|--narrow-commit|--full]
+#
+# --narrow-commit (SAFE-WITH-CARE support, see .agent/skills/branch-safety-check):
+#   gate for a path-scoped local commit in a legitimately dirty tree. Dirty
+#   tree is a warning, not a blocker; instead the staged set must exactly
+#   match ALLOWED_PATHS (space-separated, exported by the caller). Fail-closed
+#   when ALLOWED_PATHS is unset. Repo paths contain no spaces; paths with
+#   spaces are unsupported here.
 #
 # Exit codes:
 #   0 = all checks pass
 #   1 = check failed (unsafe to proceed)
 #   2 = warning (proceed with caution)
+#   In --narrow-commit mode, warnings are informational only: the gate exits 0
+#   whenever there are zero errors (a dirty tree is expected there — staged-set
+#   equality is the enforced invariant instead). Callers gate on exit != 0.
 set -uo pipefail
 
 RED='\033[0;31m'
@@ -191,6 +201,62 @@ check_no_generated_artifacts() {
 }
 
 # ---------------------------------------------------------------------------
+# Narrow-commit gate: commits must land on a named branch (a detached-HEAD
+# commit is orphaned — unacceptable with irreplaceable local-only commits).
+# ---------------------------------------------------------------------------
+check_named_branch() {
+    if git symbolic-ref -q HEAD >/dev/null; then
+        ok "On named branch: $(git branch --show-current)"
+    else
+        err "Detached HEAD — a narrow commit requires a named branch"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Narrow-commit gate (SAFE-WITH-CARE): staged set must exactly match
+# ALLOWED_PATHS — no extra staged files, no approved-but-unstaged files.
+# ---------------------------------------------------------------------------
+check_staged_allowlist() {
+    if [ -z "${ALLOWED_PATHS:-}" ]; then
+        err "ALLOWED_PATHS not set — narrow-commit mode is fail-closed without an explicit allowlist"
+        return
+    fi
+
+    local staged
+    staged=$(git diff --cached --name-only)
+    if [ -z "$staged" ]; then
+        err "Staged set is empty — nothing to gate"
+        return
+    fi
+
+    local mismatch=0
+    local f a found
+    while IFS= read -r f; do
+        found=0
+        for a in $ALLOWED_PATHS; do
+            [ "$f" = "$a" ] && { found=1; break; }
+        done
+        if [ "$found" -eq 0 ]; then
+            err "Staged file outside ALLOWED_PATHS: $f"
+            ((mismatch++))
+        fi
+    done <<< "$staged"
+
+    for a in $ALLOWED_PATHS; do
+        found=0
+        while IFS= read -r f; do
+            [ "$f" = "$a" ] && { found=1; break; }
+        done <<< "$staged"
+        if [ "$found" -eq 0 ]; then
+            err "Approved file not staged: $a (staged set must exactly match ALLOWED_PATHS)"
+            ((mismatch++))
+        fi
+    done
+
+    [ "$mismatch" -eq 0 ] && ok "Staged set exactly matches ALLOWED_PATHS ($(echo "$staged" | wc -l) file(s))"
+}
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 MODE="${1:---pre-merge}"
@@ -232,8 +298,19 @@ case "$MODE" in
         check_branches
         check_no_conflict_markers
         ;;
+    --narrow-commit)
+        # SAFE-WITH-CARE (branch-safety-check skill): a legitimately dirty
+        # tree warns instead of blocking; the gate enforces staged-set
+        # equality with the explicit per-ceremony allowlist instead.
+        STRICT_CLEAN=0
+        check_no_active_ops
+        check_named_branch
+        check_staged_allowlist
+        check_clean_tree
+        check_no_conflict_markers
+        ;;
     *)
-        echo "Usage: $0 [--pre-merge|--post-merge|--session-start|--session-end|--full]"
+        echo "Usage: $0 [--pre-merge|--post-merge|--session-start|--session-end|--narrow-commit|--full]"
         exit 1
         ;;
 esac
@@ -242,6 +319,15 @@ echo ""
 if [ "$ERRORS" -gt 0 ]; then
     echo -e "${RED}BLOCKED${RST}: $ERRORS error(s), $WARNINGS warning(s) — resolve before proceeding"
     exit 1
+elif [ "$MODE" = "--narrow-commit" ]; then
+    # Warnings (expected dirty tree) are informational here; the gate itself
+    # passed. Exit 0 so shell workflows treat SAFE-WITH-CARE as success.
+    if [ "$WARNINGS" -gt 0 ]; then
+        echo -e "${GRN}GATE PASSED${RST} (SAFE-WITH-CARE): $WARNINGS informational warning(s) — narrow commit permitted"
+    else
+        echo -e "${GRN}ALL CLEAR${RST}: safe to proceed"
+    fi
+    exit 0
 elif [ "$WARNINGS" -gt 0 ]; then
     echo -e "${YEL}CAUTION${RST}: $WARNINGS warning(s) — proceed with awareness"
     exit 2
