@@ -11,6 +11,7 @@ lessons. Do NOT record: generic model claims; single anecdotes (wait for a
 |---|---|---|---|---|
 | Haiku 4.5 | docs/mechanical | 1 | 1 | 0 |
 | Sonnet | Tier-2 code+test | 1 | 1 | 1 (report nudge) |
+| Sonnet | Tier-1 docs verify | 1 | 0 (1 PARTIAL) | 2 (false-positive fixes) |
 
 ## Record schema (write after EVERY delegation, success or not)
 
@@ -82,3 +83,49 @@ Packet lessons:
   the packet's "make typecheck (expect clean)" was unsatisfiable on a branch
   with unrelated debt; the stop-condition ("errors in files you did not
   change") saved it. Word future packets that way from the start.
+
+### 2026-07-07 · Tier 1 · docs verify · MODULES_REFERENCE.md class/file-identifier re-verification · Sonnet · PARTIAL
+Interventions: 2 (orchestrator removed 1 false-positive marker; a 2nd false positive survived review, removed post-run by meta-evaluator) · Cost: ~148K tokens / 38 tool uses / ~13 min · Net win vs doing directly: unclear (capability probe)
+Second pilot on this doc after the 2026-07-06 Haiku count pass. Packet: verify
+every col2/col3 class & file identifier against src/, append additive
+`[DRIFT: nearest-actual]` markers, never rewrite prose or counts; main-tree
+venue, 1-file allowlist, orchestrator hash-snapshot + checkout rollback.
+Executor marked 34 tokens; 32 correct and evidence-backed — all ten "stale
+.pyc, source deleted" claims verified true; nearest-names accurate;
+case-mismatch (AlertmanagerBridge) and function-based-module (heartbeat.py,
+_renderer.py, _tui.py, facts.py) distinctions all right; correctly resolved
+`LoadGenerator`/`ShadowRunner` to load_generator.py/shadow_runner.py as PRESENT
+and `scenario_rules` as absent. Diff purely additive (18 in-place line appends
++ provenance comment), table intact (38 rows still NF=5), zero count/prose
+edits, no git commands, and it correctly flagged 2 concurrent-user files
+(shioaji session_runtime + its test) without touching them. TWO false
+positives, both live Rust `#[pyclass]` identifiers with no Python class/file —
+the SAME pattern it correctly kept for `RustPositionTracker`:
+`LobFeatureKernelV1` (rust_core/src/feature.rs, registered lib.rs:59, pulled in
+via `getattr(_rust_core, "LobFeatureKernelV1")` at feature/engine.py:32),
+caught and removed by orchestrator review; and `ShmSnapshotTable`
+(rust_core/src/shm_snapshot.rs:42, registered lib.rs:61, imported at
+ipc/shm_snapshot.py:57), MISSED by review even though the registration sits two
+lines below the lib.rs:59 line the review itself cited — caught post-run by
+meta-evaluation against hidden ground truth, removed 2026-07-07 (final 32).
+Graded PARTIAL: chain ran end-to-end with scope/git discipline intact, but
+review did not catch all errors. Orchestrator did NOT commit
+(`check_git_preconditions.sh --pre-merge` BLOCKED on the always-present dirty
+user tree — gate/authority contradiction, see open-questions); committed
+post-run by Fable via path-scoped staging with explicit user approval.
+Lessons:
+- Rust/PyO3 repos: the packet must state that identifiers defined as
+  `#[pyclass]` in rust_core and imported via `getattr(_rust_core, "Name")` are
+  PRESENT, not drift, and list the getattr seam. Sonnet applied this to one
+  such token (RustPositionTracker) but not the structurally-identical
+  LobFeatureKernelV1/ShmSnapshotTable — give the rule explicitly so it is
+  applied uniformly.
+- Pre-compute the orchestrator answer key with the SAME "present if class OR
+  file" rule handed to the executor, covering ALL definition sources
+  (rust_core included). A stricter class-only key falsely flagged
+  LoadGenerator/ShadowRunner, and a src/hft_platform-only review scope let the
+  second Rust-backed false positive through. A mismatched or under-scoped key
+  wastes review cycles and misses errors.
+- Additive `[DRIFT: nearest-name]` marking gives a trivially reviewable diff,
+  but cannot annotate a stale row that has no backtick identifier (the
+  `scripts/` row) — those need a separate note, not an inline marker.
