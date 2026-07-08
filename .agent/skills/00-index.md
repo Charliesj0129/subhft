@@ -84,6 +84,7 @@
 
 | Skill | When to use |
 | --- | --- |
+| `task-intake` | 每個自然語言任務的入口:分類 type/tier、決定委派、展開 packet/驗證/審查/記憶計畫 |
 | `read-only-audit` | session start / unfamiliar ground / before planning any change or Tier-3 work |
 | `small-model-handoff` | orchestrator delegating implementation to a smaller-model executor |
 | `strict-code-review` | any diff before commit; mandatory for Tier-3 and executor-produced diffs |

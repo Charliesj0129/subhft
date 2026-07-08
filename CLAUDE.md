@@ -162,6 +162,15 @@ Coverage: repo gate is 70% (`--cov-fail-under=70`); targets for NEW code are
 - `docker-compose.production.yml`, `docker-compose.prod.locked.yml`
 - `config/settings.py` and `.env*` (never commit; never read secrets into output)
 
+## Task Intake
+
+Every natural-language task — even one line ("fix this test", "check this
+warning", "update this stale doc") — enters the Agent System v2 workflow:
+run `.agent/skills/task-intake/SKILL.md` FIRST. It expands the request into
+classification (task type + risk tier per `AGENTS.md`), delegate-vs-direct
+routing, the handoff packet, and the validation/review/memory plans. Do not
+skip intake because a task looks small.
+
 ## Agent Rules
 
 - Scope control: change only what was asked; preserve dirty user work — some

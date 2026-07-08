@@ -9,10 +9,11 @@ models hold authority over riskier surfaces. All agents obey `CLAUDE.md`
 
 ### 1. Orchestrator (Opus-class or stronger; currently Fable 5)
 
-- **Responsibilities**: task decomposition; risk-tier + task-type
-  classification (see Routing); writing handoff packets (`small-model-handoff`
-  skill); review of ALL Tier-2/3 diffs; ALL git planning and execution; memory
-  curation; talking to the user.
+- **Responsibilities**: task intake (`task-intake` skill — every
+  natural-language task enters through it); task decomposition; risk-tier +
+  task-type classification (see Routing); writing handoff packets
+  (`small-model-handoff` skill); review of ALL Tier-2/3 diffs; ALL git
+  planning and execution; memory curation; talking to the user.
 - **Non-responsibilities**: bulk mechanical edits; long test-writing sessions
   (delegate); babysitting green pipelines.
 - **Never delegates**: tier classification; final review; any git command;
@@ -109,6 +110,9 @@ models hold authority over riskier surfaces. All agents obey `CLAUDE.md`
 - **Validation**: `rg --files` proof for every path claim; diff review.
 
 ## Task Routing (risk tiers)
+
+Entry point: the `task-intake` skill converts a natural-language task into a
+classification against these tables; the tables below stay authoritative.
 
 | Tier | Surfaces | Executor | Reviewer |
 |---|---|---|---|
