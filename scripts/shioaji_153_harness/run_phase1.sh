@@ -19,7 +19,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-HARNESS_DIR="/tmp/shioaji_1_5_3_harness"
+HARNESS_VER="${SHIOAJI_HARNESS_VERSION:-1.5.3}"
+HARNESS_DIR="/tmp/shioaji_$(printf '%s' "${HARNESS_VER}" | tr '.' '_')_harness"
 VENV="${HARNESS_DIR}/venv"
 VENV_PY="${VENV}/bin/python"
 OUT="${HARNESS_DIR}/out/phase1"
@@ -30,9 +31,9 @@ die() { printf '[phase1][FATAL] %s\n' "$*" >&2; exit 1; }
 [ -x "${VENV_PY}" ] || die "harness venv missing — run bootstrap_venv.sh first (${VENV_PY})"
 mkdir -p "${OUT}"
 
-# Confirm we are really pointed at 1.5.3 before spending time.
+# Confirm we are really pointed at the target version before spending time.
 INSTALLED_VER="$(PYTHONPATH="${REPO_ROOT}/src" "${VENV_PY}" -c 'import shioaji; print(shioaji.__version__)')"
-[ "${INSTALLED_VER}" = "1.5.3" ] || die "harness venv has shioaji ${INSTALLED_VER}, expected 1.5.3"
+[ "${INSTALLED_VER}" = "${HARNESS_VER}" ] || die "harness venv has shioaji ${INSTALLED_VER}, expected ${HARNESS_VER}"
 log "harness venv confirmed: shioaji ${INSTALLED_VER}"
 
 # --------------------------------------------------------------------------- #

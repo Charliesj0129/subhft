@@ -21,7 +21,8 @@ set +x  # never echo commands — env may hold the sim secret.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-HARNESS_DIR="/tmp/shioaji_1_5_3_harness"
+HARNESS_VER="${SHIOAJI_HARNESS_VERSION:-1.5.3}"
+HARNESS_DIR="/tmp/shioaji_$(printf '%s' "${HARNESS_VER}" | tr '.' '_')_harness"
 VENV_PY="${HARNESS_DIR}/venv/bin/python"
 
 MINUTES="30"
@@ -47,7 +48,7 @@ fi
 [ -n "${SHIOAJI_SECRET_KEY:-}" ] || die "SHIOAJI_SECRET_KEY not set (simulation creds, env only)"
 
 INSTALLED_VER="$(PYTHONPATH="${REPO_ROOT}/src" "${VENV_PY}" -c 'import shioaji; print(shioaji.__version__)')"
-[ "${INSTALLED_VER}" = "1.5.3" ] || die "harness venv has shioaji ${INSTALLED_VER}, expected 1.5.3"
+[ "${INSTALLED_VER}" = "${HARNESS_VER}" ] || die "harness venv has shioaji ${INSTALLED_VER}, expected ${HARNESS_VER}"
 log "harness venv confirmed: shioaji ${INSTALLED_VER}; sim creds present (not echoed)"
 
 # Timestamped output path (gitignored under outputs/).
@@ -71,5 +72,5 @@ PYTHONPATH="${REPO_ROOT}/src" "${VENV_PY}" "${REPO_ROOT}/scripts/latency/shioaji
 log "DONE. Evidence: ${OUT}"
 log "Draft profile: ${OUT%.json}.profile.yaml"
 log "GO/No-Go: compare P95 place/update/cancel vs baseline shioaji_sim_p95_v2026-03-04"
-log "          (36/43/47 ms); GO iff 1.5.3 P95 <= baseline x1.2 AND decimal_parity.parity_holds"
+log "          (36/43/47 ms); GO iff ${HARNESS_VER} P95 <= baseline x1.2 AND decimal_parity.parity_holds"
 log "          AND resources slopes ~0 AND fills_aborted==0."

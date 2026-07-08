@@ -14,6 +14,7 @@
 #   * Reads uv.lock (via `uv export`); never writes it.
 #
 # Usage:  bash scripts/shioaji_153_harness/bootstrap_venv.sh
+#         SHIOAJI_HARNESS_VERSION=1.5.5 bash scripts/shioaji_153_harness/bootstrap_venv.sh
 #
 # Re-runnable: pass FORCE=1 to wipe an existing harness venv first.
 set -euo pipefail
@@ -21,17 +22,20 @@ set -o noclobber
 
 # --------------------------------------------------------------------------- #
 # Paths — repo root resolved from this script; all outputs ABSOLUTE under /tmp.
+# Target SDK version is parameterized (2026-07-08 retarget to 1.5.5); each
+# version gets its own /tmp harness dir so runs never cross-contaminate.
 # --------------------------------------------------------------------------- #
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-HARNESS_DIR="/tmp/shioaji_1_5_3_harness"
+HARNESS_VER="${SHIOAJI_HARNESS_VERSION:-1.5.3}"
+HARNESS_DIR="/tmp/shioaji_$(printf '%s' "${HARNESS_VER}" | tr '.' '_')_harness"
 VENV="${HARNESS_DIR}/venv"
 REQ_LOCKED="${HARNESS_DIR}/requirements.locked.txt"
 REQ_NOSHIOAJI="${HARNESS_DIR}/requirements.no-shioaji.txt"
-FREEZE_OUT="${HARNESS_DIR}/pip-freeze.1.5.3.txt"
+FREEZE_OUT="${HARNESS_DIR}/pip-freeze.${HARNESS_VER}.txt"
 DELTA_OUT="${HARNESS_DIR}/freeze-delta.txt"
 
-SHIOAJI_TARGET="shioaji[speed]==1.5.3"
+SHIOAJI_TARGET="shioaji[speed]==${HARNESS_VER}"
 PY_VERSION="3.12"
 
 log() { printf '[bootstrap] %s\n' "$*" >&2; }
@@ -118,18 +122,22 @@ log "installing ${SHIOAJI_TARGET} on top…"
 uv pip install --python "${VENV_PY}" "${SHIOAJI_TARGET}"
 
 # --------------------------------------------------------------------------- #
-# Step 4 — smoke test: in-tree hft_platform + rust_core import, shioaji is 1.5.3.
-# PYTHONPATH points at the in-tree src; never prepend the project .venv.
+# Step 4 — smoke test: in-tree hft_platform + rust_core import, shioaji matches
+# the target version. PYTHONPATH points at the in-tree src; never prepend the
+# project .venv.
 # --------------------------------------------------------------------------- #
-log "smoke test (hft_platform.rust_core + normalizer + shioaji 1.5.3)…"
-PYTHONPATH="${REPO_ROOT}/src" "${VENV_PY}" - <<'PY'
+log "smoke test (hft_platform.rust_core + normalizer + shioaji ${HARNESS_VER})…"
+PYTHONPATH="${REPO_ROOT}/src" SHIOAJI_EXPECTED_VER="${HARNESS_VER}" "${VENV_PY}" - <<'PY'
 import importlib
+import os
+
 import hft_platform.rust_core  # in-tree compiled .so
 import hft_platform.feed_adapter.normalizer  # must NOT need the SDK
 import shioaji
 
-assert shioaji.__version__ == "1.5.3", f"expected shioaji 1.5.3, got {shioaji.__version__}"
-# Confirm the Rust-extension rewrite is actually loaded (1.5.3 ships _core.abi3.so).
+expected = os.environ["SHIOAJI_EXPECTED_VER"]
+assert shioaji.__version__ == expected, f"expected shioaji {expected}, got {shioaji.__version__}"
+# Confirm the Rust-extension rewrite is actually loaded (1.5.x ships _core.abi3.so).
 core = importlib.import_module("shioaji._core")
 print(f"OK shioaji={shioaji.__version__} _core={getattr(core, '__file__', '<builtin>')}")
 print(f"OK rust_core={hft_platform.rust_core.__file__}")
@@ -140,10 +148,10 @@ PY
 # --------------------------------------------------------------------------- #
 log "computing freeze delta vs locked set…"
 uv pip freeze --python "${VENV_PY}" > "${FREEZE_OUT}"
-python3 - "${REQ_LOCKED}" "${FREEZE_OUT}" "${DELTA_OUT}" <<'PY'
+python3 - "${REQ_LOCKED}" "${FREEZE_OUT}" "${DELTA_OUT}" "${HARNESS_VER}" <<'PY'
 import sys
 
-locked_path, freeze_path, delta_path = sys.argv[1], sys.argv[2], sys.argv[3]
+locked_path, freeze_path, delta_path, harness_ver = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 
 
 def parse_locked(path):
@@ -188,7 +196,7 @@ for name in sorted(locked):
     if name not in installed:
         removed.append((name, locked[name]))
 
-lines = ["# Freeze delta: harness venv (shioaji 1.5.3) vs repo locked set", ""]
+lines = [f"# Freeze delta: harness venv (shioaji {harness_ver}) vs repo locked set", ""]
 lines.append(f"locked packages: {len(locked)}  installed packages: {len(installed)}")
 lines.append("")
 lines.append("## Changed versions")
@@ -201,7 +209,7 @@ for name, old, new in changed:
 if not changed:
     lines.append("  (none)")
 lines.append("")
-lines.append("## Added (transitively pulled by shioaji 1.5.3)")
+lines.append(f"## Added (transitively pulled by shioaji {harness_ver})")
 for name, ver in added:
     mark = "  <-- CONFOUNDER" if name in CONFOUNDERS else ""
     if name in CONFOUNDERS:
