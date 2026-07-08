@@ -17,6 +17,13 @@ if TYPE_CHECKING:
 logger = get_logger("feed_adapter.session_runtime")
 
 
+def _is_connection_limit_error(error: str | None) -> bool:
+    if not error:
+        return False
+    normalized = error.lower()
+    return "too many connections" in normalized or "status_code=451" in normalized or "status code 451" in normalized
+
+
 @dataclass(frozen=True)
 class SessionStateSnapshot:
     logged_in: bool
@@ -157,6 +164,13 @@ class SessionRuntime:
                 c._record_api_latency("login", start_ns, ok=ok)
                 if not ok:
                     c._last_login_error = str(err) if err is not None else "unknown"
+                    if _is_connection_limit_error(c._last_login_error):
+                        logger.error(
+                            "Login rejected by broker connection limit; skipping fallback and immediate retry",
+                            attempt=attempt,
+                            error=c._last_login_error,
+                        )
+                        break
                     if login_fetch_contract and fallback_enabled:
                         logger.warning(
                             "Login failed with contract fetch; retrying without contracts",

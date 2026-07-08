@@ -136,6 +136,27 @@ class TestLoginWithRetry:
         assert client.ca_active is True
         client.api.activate_ca.assert_called_once_with(ca_path="/certs/ca.p12", ca_passwd="capass")
 
+    def test_too_many_connections_skips_no_contract_fallback(self, monkeypatch):
+        monkeypatch.setenv("SHIOAJI_API_KEY", "k")
+        monkeypatch.setenv("SHIOAJI_SECRET_KEY", "s")
+        monkeypatch.setenv("HFT_LOGIN_FETCH_CONTRACT_FALLBACK", "1")
+
+        client = make_mock_client(fetch_contract=True, _login_retry_max=2)
+        client._safe_call_with_timeout.return_value = (
+            False,
+            None,
+            "status_code=451 Too Many Connections",
+            False,
+        )
+        monkeypatch.setattr("hft_platform.feed_adapter.shioaji.session_runtime.time.sleep", MagicMock())
+
+        rt = SessionRuntime(client)
+        result = rt.login_with_retry()
+
+        assert result is False
+        assert client._safe_call_with_timeout.call_count == 1
+        assert client._last_login_error == "status_code=451 Too Many Connections"
+
 
 class TestSnapshot:
     def test_snapshot_returns_correct_values(self):
