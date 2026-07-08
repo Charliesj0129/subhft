@@ -30,6 +30,12 @@ OrderIntent change plus a future `hft.order_intents` ClickHouse migration —
 ruled blocked_by_scope. Decides: USER. Partial fix landed
 (`session_phase` stamped in runner phase filter).
 
-## shioaji 1.5.4 dependabot PR (opened ~2026-07)
-Whether to close it (superseded by the 1.5.3 migration branch) or retarget
-the migration to 1.5.4 directly. Decides: USER, after 1.5.3 harness results.
+## shioaji upgrade end-state — RESOLVED 2026-07-08: retarget to 1.5.5
+Charlie decided to retarget the held 1.5.3 dual-version migration to 1.5.5
+(dependabot #376 supersedes the old 1.5.4 question). Evidence: surface diff
+1.5.3→1.5.5 = SAFE (0 breaking; 10 timeout defaults 5000→30000 ms), so #371's
+adapter work carries over unchanged — see the retarget assessment in
+docs/runbooks/shioaji-version-diff.md. REMAINING (execution, not decision):
+re-run validation harness + soaks against 1.5.5; resolve the diverged
+`chore/shioaji-153-validation-harness` ref vs origin (#371) without
+force-push; pin change stays human-approved after harness green.

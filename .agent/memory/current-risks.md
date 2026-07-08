@@ -5,19 +5,16 @@ record: permanent invariants (project-overview.md) or resolved items (delete,
 noting resolution in the relevant lessons file). A stale register is worse
 than none.
 
-## RISK: unpushed local commits (verified 2026-07-08)
-41 commits exist only on this machine, across 4 local-only branches with no
-upstream: `docs/agent-knowledge-distillation` (current work branch — stacks
-the governor + shioaji-tooling + agent-v2 chain),
-`chore/shioaji-153-validation-harness`,
-`research-flow/edge-evidence-parity-hardening`,
-`research/replay-parity-field-set`. `main` is behind origin/main by 14.
-2026-07-08: the previously COMMIT-LESS work (scripts/shioaji_api_diff + SDK
-goldens + runbook, 06-16 session) is now committed (1a4f2d44) — disk-loss no
-longer erases it, but push approval is still owed. Treat all as irreplaceable;
-re-verify with `git log --branches --not --remotes --oneline | wc -l` at
-session start. Expires: when branches gain upstreams or are merged.
-Owner: Charlie.
+## RISK: unpushed local commits — RESOLVED 2026-07-08 (entry kept for the residual ref divergence)
+User-approved pushes created upstreams for `docs/agent-knowledge-distillation`,
+`research-flow/edge-evidence-parity-hardening`, `research/replay-parity-field-set`;
+`git log --branches --not --remotes` = 0 (every local commit is on a remote ref).
+RESIDUAL: local `chore/shioaji-153-validation-harness` diverges from origin's
+same-named branch (PR #371's older lineage) — push rejected non-fast-forward.
+Its commits ARE backed up (contained in the pushed docs/agent-knowledge-
+distillation chain). Never force-push; resolve the ref when #371 is
+retargeted to 1.5.5 or closed. `main` remains behind origin/main by 14.
+Expires: when #371 end-state is decided. Owner: Charlie.
 
 ## RISK: shioaji 1.5.3 migration in flight (since 2026-06-16)
 Pin is `shioaji==1.3.3`. 1.5.3 = full Rust `_core` rewrite; upgrade PR is
