@@ -31,9 +31,10 @@ from typing import Any
 
 from research.candidate_loop.generate import (
     DEFAULT_CANDIDATES_ROOT,
+    DEFAULT_PROMPTS_DIR,
     generate_drop,
 )
-from research.candidate_loop.runner import DEFAULT_RUNS_ROOT, RunConfig, run_batch
+from research.candidate_loop.runner import DEFAULT_CONFIG_DIR, DEFAULT_RUNS_ROOT, RunConfig, run_batch
 
 ARGMAX_STATUS_SQL = (
     "SELECT alpha_id, any(family), argMax(status, inserted_at), "
@@ -102,8 +103,7 @@ def _cmd_summarize(args: argparse.Namespace) -> int:
 
     rows = client.query(ARGMAX_STATUS_SQL, parameters={"run_id": args.batch}).result_rows
     candidate_rows = [
-        {"alpha_id": str(r[0]), "family": str(r[1]), "status": str(r[2]), "death_reason": str(r[3])}
-        for r in rows
+        {"alpha_id": str(r[0]), "family": str(r[1]), "status": str(r[2]), "death_reason": str(r[3])} for r in rows
     ]
     result_rows = fetch_result_rows(client, args.batch)
     summary = build_failure_summary(
@@ -150,6 +150,62 @@ def _cmd_replay_fallback(args: argparse.Namespace) -> int:
     return 0 if counts["failed"] == 0 else 1
 
 
+def _cmd_governor_draft(args: argparse.Namespace) -> int:
+    from research.candidate_loop.governor.runner import draft_briefs
+    from research.candidate_loop.governor.signals import load_governor_config
+
+    summary_path = Path(args.runs_root) / args.from_run / "failure_summary.json"
+    if not summary_path.exists():
+        print(f"ERROR: {summary_path} not found (run the prior batch first)", file=sys.stderr)
+        return 2
+    cfg = load_governor_config(Path(args.governor_config))
+    out_dir = Path(args.out) if args.out else Path(args.runs_root) / args.from_run / "steering"
+    paths = draft_briefs(
+        summary_path=summary_path,
+        out_dir=out_dir,
+        cfg=cfg,
+        generated_at=datetime.now(timezone.utc).isoformat(),
+    )
+    for path in paths:
+        print(f"drafted {path}  (approved: false — edit, then flip to true to authorize)")
+    return 0
+
+
+def _cmd_governor_generate(args: argparse.Namespace) -> int:
+    from research.candidate_loop.governor.client import DeepSeekClient, DeepSeekError
+    from research.candidate_loop.governor.runner import generate_from_briefs
+    from research.candidate_loop.governor.signals import load_governor_config
+
+    cfg = load_governor_config(Path(args.governor_config))
+    try:
+        client = DeepSeekClient(cfg)  # reads DEEPSEEK_API_KEY; fail-closed
+    except DeepSeekError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        raise SystemExit(2) from exc
+    try:
+        manifest = generate_from_briefs(
+            steering_dir=Path(args.steering),
+            gen_run_id=args.gen_run,
+            cfg=cfg,
+            client=client,
+            prompts_dir=Path(args.prompts_dir),
+            candidates_root=Path(args.candidates_root),
+            generated_at=datetime.now(timezone.utc).isoformat(),
+        )
+    finally:
+        client.close()
+    print(
+        json.dumps(
+            {
+                "generated": sorted(manifest["families"]),
+                "skipped_unapproved": manifest["skipped_unapproved"],
+            },
+            indent=2,
+        )
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="research.candidate_loop")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -182,11 +238,33 @@ def build_parser() -> argparse.ArgumentParser:
     replay.add_argument("--batch", required=True)
     replay.add_argument("--runs-root", default=str(DEFAULT_RUNS_ROOT))
 
+    governor = sub.add_parser("governor", help="v1.1 governor: steer next-round generation")
+    gov_sub = governor.add_subparsers(dest="gov_command", required=True)
+
+    gov_draft = gov_sub.add_parser("draft", help="draft per-family steering briefs from a prior run")
+    gov_draft.add_argument("--from-run", required=True, help="prior run id under runs-root")
+    gov_draft.add_argument("--out", default=None, help="output dir (default runs/<from-run>/steering)")
+    gov_draft.add_argument("--runs-root", default=str(DEFAULT_RUNS_ROOT))
+    gov_draft.add_argument("--governor-config", default=str(DEFAULT_CONFIG_DIR / "governor_v1.yaml"))
+
+    gov_gen = gov_sub.add_parser("generate", help="generate candidates from APPROVED briefs (DeepSeek)")
+    gov_gen.add_argument("--steering", required=True, help="dir of approved <family>.md briefs")
+    gov_gen.add_argument("--gen-run", required=True, help="generation run id (candidates/<gen-run>/)")
+    gov_gen.add_argument("--prompts-dir", default=str(DEFAULT_PROMPTS_DIR))
+    gov_gen.add_argument("--candidates-root", default=str(DEFAULT_CANDIDATES_ROOT))
+    gov_gen.add_argument("--governor-config", default=str(DEFAULT_CONFIG_DIR / "governor_v1.yaml"))
+
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "governor":
+        gov_handlers = {
+            "draft": _cmd_governor_draft,
+            "generate": _cmd_governor_generate,
+        }
+        return gov_handlers[args.gov_command](args)
     handlers = {
         "generate": _cmd_generate,
         "run": _cmd_run,
