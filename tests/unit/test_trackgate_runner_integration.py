@@ -8,8 +8,13 @@ from hft_platform.ops.session_governor import SessionPhase, TrackGate
 
 def test_order_intent_session_phase_defaults_none():
     intent = OrderIntent(
-        intent_id=1, strategy_id="s1", symbol="TXFR1", intent_type=IntentType.NEW,
-        side=Side.BUY, price=170000, qty=1,
+        intent_id=1,
+        strategy_id="s1",
+        symbol="TXFR1",
+        intent_type=IntentType.NEW,
+        side=Side.BUY,
+        price=170000,
+        qty=1,
     )
     assert intent.session_phase is None
 
@@ -23,8 +28,13 @@ def test_filter_stamps_session_phase_on_order_intent_objects():
     gate.register_symbol("TXFR1", "futures_day")
     gate.set_track_phase("futures_day", SessionPhase.OPEN)
     intent = OrderIntent(
-        intent_id=1, strategy_id="s1", symbol="TXFR1", intent_type=IntentType.NEW,
-        side=Side.BUY, price=170000, qty=1,
+        intent_id=1,
+        strategy_id="s1",
+        symbol="TXFR1",
+        intent_type=IntentType.NEW,
+        side=Side.BUY,
+        price=170000,
+        qty=1,
     )
 
     result = StrategyRunner.filter_intents_by_phase([intent], gate)
@@ -41,8 +51,24 @@ def test_filter_leaves_typed_intent_tuple_unstamped():
     gate = TrackGate()
     gate.register_symbol("TXFR1", "futures_day")
     gate.set_track_phase("futures_day", SessionPhase.OPEN)
-    tup = ("typed_intent_v1", 1, "s1", "TXFR1", int(IntentType.NEW), int(Side.BUY),
-           1000000, 1, int(TIF.LIMIT), "", 0, 0, "", "", "", 0)
+    tup = (
+        "typed_intent_v1",
+        1,
+        "s1",
+        "TXFR1",
+        int(IntentType.NEW),
+        int(Side.BUY),
+        1000000,
+        1,
+        int(TIF.LIMIT),
+        "",
+        0,
+        0,
+        "",
+        "",
+        "",
+        0,
+    )
 
     result = StrategyRunner.filter_intents_by_phase([tup], gate)
 

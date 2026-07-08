@@ -17,6 +17,7 @@ These resolvers feature-detect at call time so a single code path is correct
 on both SDKs and stops touching the deprecated surface on 1.5.3. No SDK import
 happens at module load.
 """
+
 from __future__ import annotations
 
 from typing import Any

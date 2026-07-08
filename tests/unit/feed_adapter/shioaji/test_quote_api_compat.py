@@ -13,6 +13,7 @@ These tests pin the feature-detected resolvers and the dispatch arity bridge
 using plain synthetic objects (no MagicMock), so ``hasattr`` reflects the real
 SDK shapes rather than MagicMock's auto-attribute behaviour.
 """
+
 from __future__ import annotations
 
 import types
@@ -122,9 +123,7 @@ def test_resolve_quote_api_none_when_no_subscribe_surface():
 
 def test_dispatch_tick_cb_bridges_single_arg_v1(monkeypatch):
     seen = []
-    monkeypatch.setattr(
-        client_mod._router, "dispatch_tick_cb", lambda topic, quote: seen.append((topic, quote))
-    )
+    monkeypatch.setattr(client_mod._router, "dispatch_tick_cb", lambda topic, quote: seen.append((topic, quote)))
     tick = types.SimpleNamespace(code="2330")
     client_mod.dispatch_tick_cb(tick)  # 1-arg (1.5.3 v1)
     client_mod.dispatch_tick_cb("L/TFE/TXF", tick)  # 2-arg (1.3.3)

@@ -172,9 +172,7 @@ def run(iters: int) -> dict[str, Any]:
 
     tick_ratio = results["tick_decimal"]["us_per_event"] / max(results["tick_float"]["us_per_event"], 1e-9)
     bidask_ratio = results["bidask_decimal"]["us_per_event"] / max(results["bidask_float"]["us_per_event"], 1e-9)
-    max_fallback_rate = max(
-        results["tick_decimal"]["fallback_rate"], results["bidask_decimal"]["fallback_rate"]
-    )
+    max_fallback_rate = max(results["tick_decimal"]["fallback_rate"], results["bidask_decimal"]["fallback_rate"])
     return {
         "rust_enabled": normalizer_mod._RUST_ENABLED,
         "iters": iters,
@@ -196,13 +194,9 @@ def _check(summary: dict[str, Any]) -> list[str]:
             "(Decimal is not being consumed by the Rust kernel — pervasive fallback)"
         )
     if summary["tick_decimal_vs_float_ratio"] > _RATIO_MAX:
-        failures.append(
-            f"tick decimal/float us ratio {summary['tick_decimal_vs_float_ratio']:.2f} > {_RATIO_MAX}"
-        )
+        failures.append(f"tick decimal/float us ratio {summary['tick_decimal_vs_float_ratio']:.2f} > {_RATIO_MAX}")
     if summary["bidask_decimal_vs_float_ratio"] > _RATIO_MAX:
-        failures.append(
-            f"bidask decimal/float us ratio {summary['bidask_decimal_vs_float_ratio']:.2f} > {_RATIO_MAX}"
-        )
+        failures.append(f"bidask decimal/float us ratio {summary['bidask_decimal_vs_float_ratio']:.2f} > {_RATIO_MAX}")
     return failures
 
 

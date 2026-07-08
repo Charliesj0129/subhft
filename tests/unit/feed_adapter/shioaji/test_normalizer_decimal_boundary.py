@@ -321,9 +321,7 @@ def test_bidask_one_sided_book_scales_present_side(normalizer, monkeypatch, rust
     """A one-sided (bid-only) Decimal book keeps the present side scaled and
     leaves the missing side empty — no crash, no float leakage."""
     monkeypatch.setattr(normalizer_mod, "_RUST_ENABLED", rust_enabled)
-    event = normalizer.normalize_bidask(
-        _bidask_dict("2330", [Decimal("580.0"), Decimal("579.5")], [1, 2], [], [])
-    )
+    event = normalizer.normalize_bidask(_bidask_dict("2330", [Decimal("580.0"), Decimal("579.5")], [1, 2], [], []))
     assert isinstance(event, BidAskEvent)
     assert _levels(event, "bid") == [[5800000, 1], [5795000, 2]]
     assert list(event.asks) == []
@@ -363,9 +361,7 @@ def test_no_float_leaks_into_scaled_prices(normalizer):
     tick = normalizer.normalize_tick(_tick_dict("2330", Decimal("123.4567")))
     assert isinstance(tick, TickEvent)
     assert type(tick.price) is int
-    book = normalizer.normalize_bidask(
-        _bidask_dict("2330", [Decimal("123.4567")], [1], [Decimal("123.4600")], [1])
-    )
+    book = normalizer.normalize_bidask(_bidask_dict("2330", [Decimal("123.4567")], [1], [Decimal("123.4600")], [1]))
     assert isinstance(book, BidAskEvent)
     for p, _v in list(book.bids) + list(book.asks):
         assert not math.isnan(float(p))
