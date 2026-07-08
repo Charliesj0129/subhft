@@ -317,6 +317,7 @@ class SystemBootstrapper:
             queue_depth_threshold=_env_int("HFT_PLATFORM_REDUCE_ONLY_QUEUE_DEPTH", 5000, min_value=1),
             rss_threshold_mb=_env_int("HFT_PLATFORM_REDUCE_ONLY_RSS_MB", 3072, min_value=1),
             wal_backlog_files_threshold=_env_int("HFT_PLATFORM_REDUCE_ONLY_WAL_BACKLOG_FILES", 200, min_value=1),
+            recorder_data_loss_boot_grace_s=_env_float("HFT_RECORDER_DATA_LOSS_BOOT_GRACE_S", 60.0, min_value=0.0),
         )
         return inputs
 

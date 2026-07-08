@@ -158,6 +158,66 @@ class TestLoginWithRetry:
         assert client._last_login_error == "status_code=451 Too Many Connections"
 
 
+class TestLoginConnectionLimitBackoff:
+    """Durable fix for the restart session-race (2026-06-21/22): when the broker
+    rejects login on connection limit (451 while the previous session's slots
+    release), login() backs off and retries instead of failing startup into a
+    container crash-loop that keeps re-consuming broker sessions."""
+
+    _CONNLIMIT = "status_code=451 Too Many Connections"
+
+    def _rt_with_error(self, error: str | None) -> SessionRuntime:
+        client = make_mock_client()
+        client._last_login_error = error
+        return SessionRuntime(client)
+
+    def test_connlimit_failure_backs_off_then_retries(self, monkeypatch):
+        sleep_mock = MagicMock()
+        monkeypatch.setattr("hft_platform.feed_adapter.shioaji.session_runtime.time.sleep", sleep_mock)
+        rt = self._rt_with_error(self._CONNLIMIT)
+        with patch.object(SessionRuntime, "login_with_retry", side_effect=[False, True]) as lwr:
+            assert rt.login(api_key="k", secret_key="s") is True
+            assert lwr.call_count == 2
+        sleep_mock.assert_called_once_with(75.0)
+
+    def test_non_connlimit_failure_fails_without_backoff(self, monkeypatch):
+        sleep_mock = MagicMock()
+        monkeypatch.setattr("hft_platform.feed_adapter.shioaji.session_runtime.time.sleep", sleep_mock)
+        rt = self._rt_with_error("invalid credentials")
+        with patch.object(SessionRuntime, "login_with_retry", side_effect=[False]) as lwr:
+            assert rt.login() is False
+            assert lwr.call_count == 1
+        sleep_mock.assert_not_called()
+
+    def test_connlimit_retries_exhausted_fail_closed(self, monkeypatch):
+        sleep_mock = MagicMock()
+        monkeypatch.setattr("hft_platform.feed_adapter.shioaji.session_runtime.time.sleep", sleep_mock)
+        rt = self._rt_with_error(self._CONNLIMIT)
+        with patch.object(SessionRuntime, "login_with_retry", side_effect=[False, False, False]) as lwr:
+            assert rt.login() is False
+            assert lwr.call_count == 3  # initial + default 2 backoff retries
+        assert sleep_mock.call_count == 2
+
+    def test_backoff_disabled_with_zero_retries(self, monkeypatch):
+        monkeypatch.setenv("HFT_LOGIN_CONNLIMIT_RETRIES", "0")
+        sleep_mock = MagicMock()
+        monkeypatch.setattr("hft_platform.feed_adapter.shioaji.session_runtime.time.sleep", sleep_mock)
+        rt = self._rt_with_error(self._CONNLIMIT)
+        with patch.object(SessionRuntime, "login_with_retry", side_effect=[False]) as lwr:
+            assert rt.login() is False
+            assert lwr.call_count == 1
+        sleep_mock.assert_not_called()
+
+    def test_backoff_seconds_env_override(self, monkeypatch):
+        monkeypatch.setenv("HFT_LOGIN_CONNLIMIT_BACKOFF_S", "5")
+        sleep_mock = MagicMock()
+        monkeypatch.setattr("hft_platform.feed_adapter.shioaji.session_runtime.time.sleep", sleep_mock)
+        rt = self._rt_with_error(self._CONNLIMIT)
+        with patch.object(SessionRuntime, "login_with_retry", side_effect=[False, True]):
+            assert rt.login() is True
+        sleep_mock.assert_called_once_with(5.0)
+
+
 class TestSnapshot:
     def test_snapshot_returns_correct_values(self):
         client = make_mock_client(
