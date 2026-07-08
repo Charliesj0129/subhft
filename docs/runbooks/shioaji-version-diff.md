@@ -319,6 +319,24 @@ soaks against 1.5.5 before any pin change. The local
 `chore/shioaji-153-validation-harness` branch diverges from origin's (PR
 #371) lineage — resolve the ref when retargeting; never force-push.
 
+**Harness re-run vs 1.5.5 (2026-07-08, offline Phase 0/1)**: scripts
+parameterized via `SHIOAJI_HARNESS_VERSION` (commit 6280d4b8);
+`SHIOAJI_HARNESS_VERSION=1.5.5 bash scripts/shioaji_153_harness/bootstrap_venv.sh`
+then `run_phase1.sh`:
+
+- Phase 0 GREEN — `shioaji==1.5.5` with `_core.abi3.so` loaded alongside the
+  in-tree `rust_core`; freeze delta clean (no numpy/pydantic/protobuf
+  divergence; uvloop pulled transitively, as with 1.5.3).
+- Phase 1 PASS — 560 adapter unit tests incl. the surface golden vs the
+  committed `surface_1.5.5.json`; Decimal→scaled-int boundary bench ratio
+  1.61 (≤ 3.0 bound), rust fallback rate 0; perf-regression gate
+  `failures: []` vs `perf_baselines.json`. Artifacts:
+  `/tmp/shioaji_1_5_5_harness/out/phase1/` (throwaway).
+
+STILL OWED before any pin change (human-approved): Phase 2 sim soak vs
+1.5.5 (needs sim creds + market window) and the prod-host checks that were
+owed for 1.5.3.
+
 ## Appendix: regenerate
 
 ```

@@ -16,12 +16,14 @@ distillation chain). Never force-push; resolve the ref when #371 is
 retargeted to 1.5.5 or closed. `main` remains behind origin/main by 14.
 Expires: when #371 end-state is decided. Owner: Charlie.
 
-## RISK: shioaji 1.5.3 migration in flight (since 2026-06-16)
-Pin is `shioaji==1.3.3`. 1.5.3 = full Rust `_core` rewrite; upgrade PR is
-HELD pending adapter validation (live + Docker checks owed). A 1.5.4
-dependabot PR decision is also pending. Do NOT bump the pin or merge SDK
-PRs without `make shioaji-guard` green + the validation harness.
-Expires: when the upgrade PR lands or is closed. Owner: Charlie.
+## RISK: shioaji 1.5.x migration in flight (since 2026-06-16; retargeted to 1.5.5 on 2026-07-08)
+Pin is `shioaji==1.3.3`. 1.5.x = full Rust `_core` rewrite; migration
+retargeted to 1.5.5 (1.5.3→1.5.5 surface diff SAFE — see the runbook).
+Do NOT bump the pin or merge SDK PRs without `make shioaji-guard` green +
+the validation harness (Phase 0/1 vs 1.5.5 run locally 2026-07-08; sim soak
++ prod checks still owed). Dependabot #376 and draft #371 recommendations
+pending user decision (close both; fresh PR from current lineage).
+Expires: when the migration lands or is abandoned. Owner: Charlie.
 
 ## RISK: production engine order mode is SIM (since 2026-06-15)
 After a reconnect CPU-spin incident, the production engine was restarted in
@@ -29,13 +31,17 @@ SIM order mode — it is NOT live trading. Do not assume live; do not flip
 modes without explicit user request.
 Expires: when the user re-enables live mode. Owner: Charlie.
 
-## RISK: production restart procedure is non-obvious
+## RISK: production restart procedure is non-obvious (code fix landed 2026-07-08, prod deploy owed)
 `docker compose restart` and immediate auto-restart race the broker's
 session release → engine comes up logged-out/unsubscribed while
-FeedState=CONNECTED masks it. Only safe sequence: stop → wait 60s → start,
-then verify login/subscription metrics (see failed-attempts.md). A durable
-code fix (boot grace-period for recorder_data_loss; restart backoff) is owed.
-Expires: when the durable fix lands. Owner: Charlie.
+FeedState=CONNECTED masks it. Only safe sequence on the CURRENT prod build:
+stop → wait 60s → start, then verify login/subscription metrics (see
+failed-attempts.md). Durable fix committed 433be777 (recorder_data_loss boot
+grace HFT_RECORDER_DATA_LOSS_BOOT_GRACE_S=60; 451 login backoff
+HFT_LOGIN_CONNLIMIT_RETRIES=2 x HFT_LOGIN_CONNLIMIT_BACKOFF_S=75; transition
+reason labels) but prod still runs build ff0b4994 — manual procedure stays
+mandatory until a user-approved deploy.
+Expires: when the fix is deployed to prod. Owner: Charlie.
 
 ## RISK: prometheus_client pinned <0.25
 0.25.0 corrupts MutexValue (TypeError on /metrics). Do not "upgrade to fix
