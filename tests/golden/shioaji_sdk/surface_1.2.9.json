@@ -1,0 +1,6184 @@
+{
+  "capture": {
+    "pydantic_runtime": "2",
+    "python": "3.12",
+    "tool_version": "1.0.0"
+  },
+  "compiled": {
+    "shioaji._core": {
+      "_error": "ModuleNotFoundError",
+      "_present": false
+    },
+    "shioaji.backend.constant": {
+      "_present": true,
+      "classes": {},
+      "module_attrs": [
+        "MarketType",
+        "SecurityType"
+      ],
+      "nm_symbols": {
+        "_present": true,
+        "_signal": "coarse",
+        "count": 2,
+        "symbols": [
+          "PyInit_constant",
+          "__pyx_module_is_main_constant"
+        ]
+      }
+    },
+    "shioaji.backend.error": {
+      "_present": true,
+      "classes": {},
+      "module_attrs": [
+        "RequestSolaceConfigError",
+        "ServerError"
+      ],
+      "nm_symbols": {
+        "_present": true,
+        "_signal": "coarse",
+        "count": 2,
+        "symbols": [
+          "PyInit_error",
+          "__pyx_module_is_main_error"
+        ]
+      }
+    },
+    "shioaji.backend.solace.api": {
+      "_present": true,
+      "classes": {
+        "SolClient": {
+          "_present": true,
+          "methods": {
+            "event_callback_wrap": {
+              "_present": true,
+              "param_count": 5,
+              "params": [
+                {
+                  "annotation": null,
+                  "default": "<empty>",
+                  "kind": "POSITIONAL_OR_KEYWORD",
+                  "name": "self"
+                },
+                {
+                  "annotation": "int",
+                  "default": "<empty>",
+                  "kind": "POSITIONAL_OR_KEYWORD",
+                  "name": "resp_code"
+                },
+                {
+                  "annotation": "int",
+                  "default": "<empty>",
+                  "kind": "POSITIONAL_OR_KEYWORD",
+                  "name": "event_code"
+                },
+                {
+                  "annotation": "str",
+                  "default": "<empty>",
+                  "kind": "POSITIONAL_OR_KEYWORD",
+                  "name": "info"
+                },
+                {
+                  "annotation": "str",
+                  "default": "<empty>",
+                  "kind": "POSITIONAL_OR_KEYWORD",
+                  "name": "event_str_from_code"
+                }
+              ],
+              "returns": null,
+              "signature": "(self, resp_code: int, event_code: int, info: str, event_str_from_code: str)"
+            },
+            "msg_callback_wrap": {
+              "_present": true,
+              "param_count": 3,
+              "params": [
+                {
+                  "annotation": null,
+                  "default": "<empty>",
+                  "kind": "POSITIONAL_OR_KEYWORD",
+                  "name": "self"
+                },
+                {
+                  "annotation": "str",
+                  "default": "<empty>",
+                  "kind": "POSITIONAL_OR_KEYWORD",
+                  "name": "topic"
+                },
+                {
+                  "annotation": "Dict[Any, Any]",
+                  "default": "<empty>",
+                  "kind": "POSITIONAL_OR_KEYWORD",
+                  "name": "msg"
+                }
+              ],
+              "returns": null,
+              "signature": "(self, topic: str, msg: Dict[Any, Any])"
+            },
+            "onreply_callback_wrap": {
+              "_present": true,
+              "param_count": 4,
+              "params": [
+                {
+                  "annotation": null,
+                  "default": "<empty>",
+                  "kind": "POSITIONAL_OR_KEYWORD",
+                  "name": "self"
+                },
+                {
+                  "annotation": "str",
+                  "default": "<empty>",
+                  "kind": "POSITIONAL_OR_KEYWORD",
+                  "name": "topic"
+                },
+                {
+                  "annotation": "str",
+                  "default": "<empty>",
+                  "kind": "POSITIONAL_OR_KEYWORD",
+                  "name": "corrid"
+                },
+                {
+                  "annotation": "Dict[Any, Any]",
+                  "default": "<empty>",
+                  "kind": "POSITIONAL_OR_KEYWORD",
+                  "name": "reply"
+                }
+              ],
+              "returns": null,
+              "signature": "(self, topic: str, corrid: str, reply: Dict[Any, Any])"
+            },
+            "p2p_callback_wrap": {
+              "_present": true,
+              "param_count": 3,
+              "params": [
+                {
+                  "annotation": null,
+                  "default": "<empty>",
+                  "kind": "POSITIONAL_OR_KEYWORD",
+                  "name": "self"
+                },
+                {
+                  "annotation": "str",
+                  "default": "<empty>",
+                  "kind": "POSITIONAL_OR_KEYWORD",
+                  "name": "topic"
+                },
+                {
+                  "annotation": "Dict[Any, Any]",
+                  "default": "<empty>",
+                  "kind": "POSITIONAL_OR_KEYWORD",
+                  "name": "body"
+                }
+              ],
+              "returns": "None",
+              "signature": "(self, topic: str, body: Dict[Any, Any]) -> None"
+            },
+            "reply_callback_wrap": {
+              "_present": true,
+              "param_count": 4,
+              "params": [
+                {
+                  "annotation": null,
+                  "default": "<empty>",
+                  "kind": "POSITIONAL_OR_KEYWORD",
+                  "name": "self"
+                },
+                {
+                  "annotation": "str",
+                  "default": "<empty>",
+                  "kind": "POSITIONAL_OR_KEYWORD",
+                  "name": "topic"
+                },
+                {
+                  "annotation": "Dict[Any, Any]",
+                  "default": "<empty>",
+                  "kind": "POSITIONAL_OR_KEYWORD",
+                  "name": "header"
+                },
+                {
+                  "annotation": "Dict[Any, Any]",
+                  "default": "<empty>",
+                  "kind": "POSITIONAL_OR_KEYWORD",
+                  "name": "body"
+                }
+              ],
+              "returns": "Tuple[int, Dict[Any, Any]]",
+              "signature": "(self, topic: str, header: Dict[Any, Any], body: Dict[Any, Any]) -> Tuple[int, Dict[Any, Any]]"
+            },
+            "session_down_callback_wrap": {
+              "_present": true,
+              "param_count": 1,
+              "params": [
+                {
+                  "annotation": null,
+                  "default": "<empty>",
+                  "kind": "POSITIONAL_OR_KEYWORD",
+                  "name": "self"
+                }
+              ],
+              "returns": null,
+              "signature": "(self)"
+            },
+            "subscribe": {
+              "_present": true,
+              "param_count": 2,
+              "params": [
+                {
+                  "annotation": null,
+                  "default": "<empty>",
+                  "kind": "POSITIONAL_OR_KEYWORD",
+                  "name": "self"
+                },
+                {
+                  "annotation": "str",
+                  "default": "<empty>",
+                  "kind": "POSITIONAL_OR_KEYWORD",
+                  "name": "topic"
+                }
+              ],
+              "returns": null,
+              "signature": "(self, topic: str)"
+            },
+            "unsubscribe": {
+              "_present": true,
+              "param_count": 2,
+              "params": [
+                {
+                  "annotation": null,
+                  "default": "<empty>",
+                  "kind": "POSITIONAL_OR_KEYWORD",
+                  "name": "self"
+                },
+                {
+                  "annotation": "str",
+                  "default": "<empty>",
+                  "kind": "POSITIONAL_OR_KEYWORD",
+                  "name": "topic"
+                }
+              ],
+              "returns": null,
+              "signature": "(self, topic: str)"
+            }
+          }
+        }
+      },
+      "module_attrs": [
+        "Account",
+        "AccountBalance",
+        "AccountType",
+        "Base58Encoder",
+        "BaseContract",
+        "BidAskFOPv1",
+        "BidAskSTKv1",
+        "CASign",
+        "CaError",
+        "ComboContract",
+        "ComboStatus",
+        "ComboTrade",
+        "Contract",
+        "Contracts",
+        "CreditEnquire",
+        "DailyQuotes",
+        "EarmarkStockDetail",
+        "EarmarkStocksDetail",
+        "EarmarkStocksDetailResponse",
+        "EarmarkingOrder",
+        "EarmarkingOrderResp",
+        "ErrorResponse",
+        "Exchange",
+        "FetchStatus",
+        "Future",
+        "FutureAccount",
+        "FuturePosition",
+        "FuturePositionDetail",
+        "FutureProfitDetail",
+        "FutureProfitLoss",
+        "FutureProfitLossSummary",
+        "Index",
+        "Kbars",
+        "Margin",
+        "Notice",
+        "Option",
+        "Order",
+        "OrderDealRecords",
+        "OrderState",
+        "OrderStatus",
+        "Path",
+        "ProfitLossSummaryTotal",
+        "ProfitLossTotal",
+        "Punish",
+        "QuoteSTKv1",
+        "QuoteType",
+        "QuoteVersion",
+        "ReserveEarmarkingResponse",
+        "ReserveOrder",
+        "ReserveOrderResp",
+        "ReserveStockDetail",
+        "ReserveStockResponse",
+        "ReserveStockSummary",
+        "ReserveStocksDetail",
+        "ReserveStocksDetailResponse",
+        "ReserveStocksSummary",
+        "ReserveStocksSummaryResponse",
+        "ScannerCountLimit",
+        "ScannerItem",
+        "ScannerType",
+        "SecurityType",
+        "Settlement",
+        "SettlementV1",
+        "ShortStockSource",
+        "SigningKey",
+        "Snapshot",
+        "SolClient",
+        "SolaceAPI",
+        "Status",
+        "Stock",
+        "StockAccount",
+        "StockPosition",
+        "StockPositionDetail",
+        "StockProfitDetail",
+        "StockProfitLoss",
+        "StockProfitLossSummary",
+        "StrictInt",
+        "TickFOPv1",
+        "TickSTKv1",
+        "Ticks",
+        "TicksQueryType",
+        "TimeoutError",
+        "TokenError",
+        "TraceLog",
+        "Trade",
+        "Unit",
+        "UpdateContract",
+        "UsageStatus",
+        "base58",
+        "check_account_signed",
+        "check_contract_file_time2update",
+        "conint",
+        "contract2topic",
+        "convert_ts",
+        "datetime",
+        "dump_contracts_file",
+        "get_contracts_filename",
+        "get_product_contracts",
+        "hashlib",
+        "intraday_odd_quo_convert",
+        "intraday_odd_tic_convert",
+        "ipaddress",
+        "load_contracts_file",
+        "log",
+        "logger",
+        "login_check",
+        "msgpack",
+        "new_contracts",
+        "partial",
+        "pyrsca",
+        "raise_resp_error",
+        "time",
+        "typing"
+      ],
+      "nm_symbols": {
+        "_present": true,
+        "_signal": "coarse",
+        "count": 2,
+        "symbols": [
+          "PyInit_api",
+          "__pyx_module_is_main_api"
+        ]
+      }
+    },
+    "shioaji.backend.solace.bidask": {
+      "_present": true,
+      "classes": {},
+      "module_attrs": [
+        "Any",
+        "BidAskBase",
+        "BidAskFOPv1",
+        "BidAskSTKv1",
+        "Decimal",
+        "Dict",
+        "List",
+        "datetime_parser",
+        "dt"
+      ],
+      "nm_symbols": {
+        "_present": true,
+        "_signal": "coarse",
+        "count": 2,
+        "symbols": [
+          "PyInit_bidask",
+          "__pyx_module_is_main_bidask"
+        ]
+      }
+    },
+    "shioaji.backend.solace.quote": {
+      "_present": true,
+      "classes": {},
+      "module_attrs": [
+        "Any",
+        "Contract",
+        "Decimal",
+        "Dict",
+        "Exchange",
+        "Future",
+        "Index",
+        "List",
+        "Option",
+        "QuoteBase",
+        "QuoteSTKv1",
+        "QuoteType",
+        "QuoteVersion",
+        "SecurityType",
+        "Stock",
+        "contract2topic",
+        "datetime_parser",
+        "dt",
+        "v1contract2topic"
+      ],
+      "nm_symbols": {
+        "_present": true,
+        "_signal": "coarse",
+        "count": 2,
+        "symbols": [
+          "PyInit_quote",
+          "__pyx_module_is_main_quote"
+        ]
+      }
+    },
+    "shioaji.backend.solace.tick": {
+      "_present": true,
+      "classes": {},
+      "module_attrs": [
+        "Decimal",
+        "TickBase",
+        "TickFOPv1",
+        "TickSTKv1",
+        "datetime_parser",
+        "dt",
+        "typing"
+      ],
+      "nm_symbols": {
+        "_present": true,
+        "_signal": "coarse",
+        "count": 2,
+        "symbols": [
+          "PyInit_tick",
+          "__pyx_module_is_main_tick"
+        ]
+      }
+    },
+    "shioaji.backend.solace.utils": {
+      "_present": true,
+      "classes": {},
+      "module_attrs": [
+        "Account",
+        "AccountNotSignError",
+        "Base58Encoder",
+        "BaseModel",
+        "ConfigParser",
+        "Contracts",
+        "FetchStatus",
+        "FileLock",
+        "MagicMock",
+        "Path",
+        "SPEED_OPTIONAL_WARN",
+        "ScannerCountLimit",
+        "StreamFutureContracts",
+        "StreamIndexContracts",
+        "StreamOptionContracts",
+        "StreamStockContracts",
+        "b64validation",
+        "base58",
+        "check_account_signed",
+        "check_contract_file_time2update",
+        "check_permission",
+        "ciso8601",
+        "conint",
+        "convert_ts",
+        "datetime",
+        "datetime_parser",
+        "dump_contracts_file",
+        "get_contracts_filename",
+        "get_public_ip",
+        "intraday_odd_quo_convert",
+        "intraday_odd_tic_convert",
+        "ipaddress",
+        "load_contracts_file",
+        "logger",
+        "login_check",
+        "mockca",
+        "new_contracts",
+        "os",
+        "pickle",
+        "read_config",
+        "requests",
+        "time",
+        "typing"
+      ],
+      "nm_symbols": {
+        "_present": true,
+        "_signal": "coarse",
+        "count": 2,
+        "symbols": [
+          "PyInit_utils",
+          "__pyx_module_is_main_utils"
+        ]
+      }
+    },
+    "shioaji.backend.utils": {
+      "_present": true,
+      "classes": {},
+      "module_attrs": [
+        "Base58Encoder",
+        "Box",
+        "PrivateKey",
+        "PublicKey",
+        "SolaceAPI",
+        "config",
+        "create_solace",
+        "functools",
+        "log",
+        "msgpack",
+        "on_event",
+        "on_quote",
+        "request_solace_config",
+        "signature",
+        "time",
+        "urllib"
+      ],
+      "nm_symbols": {
+        "_present": true,
+        "_signal": "coarse",
+        "count": 2,
+        "symbols": [
+          "PyInit_utils",
+          "__pyx_module_is_main_utils"
+        ]
+      }
+    }
+  },
+  "config": {
+    "_present": true,
+    "defaults": {
+      "SOL_CONNECT_TIMEOUT_MS": {
+        "env_var": "SOL_CONNECT_TIMEOUT_MS",
+        "type": "int",
+        "value": 3000
+      },
+      "SOL_KEEP_ALIVE_LIMIT": {
+        "env_var": "SOL_KEEP_ALIVE_LIMIT",
+        "type": "int",
+        "value": 3
+      },
+      "SOL_KEEP_ALIVE_MS": {
+        "env_var": "SOL_KEEP_ALIVE_MS",
+        "type": "int",
+        "value": 3000
+      },
+      "SOL_RECONNECT_RETRIES": {
+        "env_var": "SOL_RECONNECT_RETRIES",
+        "type": "int",
+        "value": 10
+      },
+      "SOL_RECONNECT_RETRY_WAIT": {
+        "env_var": "SOL_RECONNECT_RETRY_WAIT",
+        "type": "int",
+        "value": 3000
+      }
+    },
+    "module": "shioaji.config"
+  },
+  "constants": {
+    "AccountType": {
+      "_present": true,
+      "members": {
+        "Future": "F",
+        "H": "H",
+        "Stock": "S"
+      },
+      "source": "shioaji.account"
+    },
+    "Action": {
+      "_present": true,
+      "members": {
+        "Buy": "Buy",
+        "Sell": "Sell"
+      },
+      "source": "shioaji.constant"
+    },
+    "ChangeType": {
+      "_present": true,
+      "members": {
+        "Down": "Down",
+        "LimitDown": "LimitDown",
+        "LimitUp": "LimitUp",
+        "Unchanged": "Unchanged",
+        "Up": "Up"
+      },
+      "source": "shioaji.constant"
+    },
+    "Currency": {
+      "_present": true,
+      "members": {
+        "AUD": "AUD",
+        "CAD": "CAD",
+        "CHF": "CHF",
+        "CNY": "CNY",
+        "EUR": "EUR",
+        "GBP": "GBP",
+        "HKD": "HKD",
+        "IDR": "IDR",
+        "JPY": "JPY",
+        "KRW": "KRW",
+        "MYR": "MYR",
+        "NZD": "NZD",
+        "PHP": "PHP",
+        "SEK": "SEK",
+        "SGD": "SGD",
+        "THB": "THB",
+        "TWD": "TWD",
+        "USD": "USD",
+        "VND": "VND",
+        "ZAR": "ZAR"
+      },
+      "source": "shioaji.constant"
+    },
+    "DayTrade": {
+      "_present": true,
+      "members": {
+        "No": "No",
+        "OnlyBuy": "OnlyBuy",
+        "Yes": "Yes"
+      },
+      "source": "shioaji.constant"
+    },
+    "Exchange": {
+      "_present": true,
+      "members": {
+        "OES": "OES",
+        "OTC": "OTC",
+        "TAIFEX": "TAIFEX",
+        "TSE": "TSE"
+      },
+      "source": "shioaji"
+    },
+    "FetchStatus": {
+      "_present": true,
+      "members": {
+        "Fetched": "Fetched",
+        "Fetching": "Fetching",
+        "Unfetch": "Unfetch"
+      },
+      "source": "shioaji.contracts"
+    },
+    "FuturesOCType": {
+      "_present": true,
+      "members": {
+        "Auto": "Auto",
+        "Cover": "Cover",
+        "DayTrade": "DayTrade",
+        "New": "New"
+      },
+      "source": "shioaji.constant"
+    },
+    "FuturesPriceType": {
+      "_present": true,
+      "members": {
+        "LMT": "LMT",
+        "MKP": "MKP",
+        "MKT": "MKT"
+      },
+      "source": "shioaji.constant"
+    },
+    "OptionRight": {
+      "_present": true,
+      "members": {
+        "Call": "C",
+        "No": "",
+        "Put": "P"
+      },
+      "source": "shioaji.constant"
+    },
+    "OrderState": {
+      "_present": true,
+      "members": {
+        "FuturesDeal": "FDEAL",
+        "FuturesOrder": "FORDER",
+        "StockDeal": "SDEAL",
+        "StockOrder": "SORDER"
+      },
+      "source": "shioaji.constant"
+    },
+    "OrderType": {
+      "_present": true,
+      "members": {
+        "FOK": "FOK",
+        "IOC": "IOC",
+        "ROD": "ROD"
+      },
+      "source": "shioaji.constant"
+    },
+    "QuoteType": {
+      "_present": true,
+      "members": {
+        "BidAsk": "bidask",
+        "Quote": "quote",
+        "Tick": "tick"
+      },
+      "source": "shioaji.constant"
+    },
+    "QuoteVersion": {
+      "_present": true,
+      "members": {
+        "v1": "v1"
+      },
+      "source": "shioaji.constant"
+    },
+    "ScannerType": {
+      "_present": true,
+      "members": {
+        "AmountRank": "AmountRank",
+        "ChangePercentRank": "ChangePercentRank",
+        "ChangePriceRank": "ChangePriceRank",
+        "DayRangeRank": "DayRangeRank",
+        "TickCountRank": "TickCountRank",
+        "VolumeRank": "VolumeRank"
+      },
+      "source": "shioaji.constant"
+    },
+    "SecurityType": {
+      "_present": true,
+      "members": {
+        "Future": "FUT",
+        "Index": "IND",
+        "Option": "OPT",
+        "Stock": "STK"
+      },
+      "source": "shioaji.constant"
+    },
+    "Status": {
+      "_present": true,
+      "members": {
+        "Cancelled": "Cancelled",
+        "Failed": "Failed",
+        "Filled": "Filled",
+        "Inactive": "Inactive",
+        "PartFilled": "PartFilled",
+        "PendingSubmit": "PendingSubmit",
+        "PreSubmitted": "PreSubmitted",
+        "Submitted": "Submitted"
+      },
+      "source": "shioaji.constant"
+    },
+    "StockOrderCond": {
+      "_present": true,
+      "members": {
+        "Cash": "Cash",
+        "MarginTrading": "MarginTrading",
+        "ShortSelling": "ShortSelling"
+      },
+      "source": "shioaji.constant"
+    },
+    "StockOrderLot": {
+      "_present": true,
+      "members": {
+        "BlockTrade": "BlockTrade",
+        "Common": "Common",
+        "Fixing": "Fixing",
+        "IntradayOdd": "IntradayOdd",
+        "Odd": "Odd"
+      },
+      "source": "shioaji.constant"
+    },
+    "StockPriceType": {
+      "_present": true,
+      "members": {
+        "LMT": "LMT",
+        "MKT": "MKT"
+      },
+      "source": "shioaji.constant"
+    },
+    "TickType": {
+      "_present": true,
+      "members": {
+        "Buy": "Buy",
+        "No": "None",
+        "Sell": "Sell"
+      },
+      "source": "shioaji.constant"
+    },
+    "TicksQueryType": {
+      "_present": true,
+      "members": {
+        "AllDay": "AllDay",
+        "LastCount": "LastCount",
+        "RangeTime": "RangeTime"
+      },
+      "source": "shioaji.constant"
+    },
+    "TradeType": {
+      "_present": true,
+      "members": {
+        "Common": "Common",
+        "DayTrade": "DayTrade"
+      },
+      "source": "shioaji.constant"
+    },
+    "Unit": {
+      "_present": true,
+      "members": {
+        "Common": "Common",
+        "Share": "Share"
+      },
+      "source": "shioaji.constant"
+    }
+  },
+  "dist": {
+    "_present": true,
+    "metadata_version": "1.2.9",
+    "name": "shioaji",
+    "requires": [
+      "base58",
+      "based58>=0.1.1; extra == \"speed\"",
+      "ciso8601>=2.1.3; extra == \"speed\"",
+      "filelock<4.0.0,>=3.4.1",
+      "importlib-metadata",
+      "loguru<=0.7.3,>=0.6.0",
+      "pydantic<=2.12.3,>=1.0.0",
+      "pynacl>=1.3.0",
+      "pyrsca",
+      "pysolace>=0.9.53",
+      "requests",
+      "sentry-sdk>=1.5.12",
+      "typing-extensions",
+      "xxhash"
+    ],
+    "version": "1.2.9"
+  },
+  "exceptions": {
+    "AccountError": {
+      "_present": true,
+      "bases": [
+        "Exception"
+      ],
+      "source": "shioaji.error"
+    },
+    "AccountNotProvideError": {
+      "_present": true,
+      "bases": [
+        "ValueError"
+      ],
+      "source": "shioaji.error"
+    },
+    "AccountNotSignError": {
+      "_present": true,
+      "bases": [
+        "AccountError"
+      ],
+      "source": "shioaji.error"
+    },
+    "BaseError": {
+      "_present": true,
+      "bases": [
+        "Exception"
+      ],
+      "source": "shioaji.error"
+    },
+    "CaError": {
+      "_present": true,
+      "bases": [
+        "ValueError"
+      ],
+      "source": "shioaji.error"
+    },
+    "ContractError": {
+      "_present": true,
+      "bases": [
+        "Exception"
+      ],
+      "source": "shioaji.error"
+    },
+    "SystemMaintenance": {
+      "_present": true,
+      "bases": [
+        "BaseError"
+      ],
+      "source": "shioaji.error"
+    },
+    "TargetContractNotExistError": {
+      "_present": true,
+      "bases": [
+        "ContractError"
+      ],
+      "source": "shioaji.error"
+    },
+    "TimeoutError": {
+      "_present": true,
+      "bases": [
+        "BaseError"
+      ],
+      "source": "shioaji.error"
+    },
+    "TokenError": {
+      "_present": true,
+      "bases": [
+        "BaseError"
+      ],
+      "source": "shioaji.error"
+    }
+  },
+  "methods": {
+    "Quote": {
+      "_present": true,
+      "members": {
+        "set_on_bidask_fop_v1_callback": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "Callable[[Exchange, BidAskFOPv1], None]",
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "func"
+            },
+            {
+              "annotation": "bool",
+              "default": false,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "bind"
+            }
+          ],
+          "returns": "None",
+          "signature": "(self, func: Callable[[Exchange, BidAskFOPv1], None], bind: bool = False) -> None"
+        },
+        "set_on_bidask_stk_v1_callback": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "Callable[[Exchange, BidAskSTKv1], None]",
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "func"
+            },
+            {
+              "annotation": "bool",
+              "default": false,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "bind"
+            }
+          ],
+          "returns": "None",
+          "signature": "(self, func: Callable[[Exchange, BidAskSTKv1], None], bind: bool = False) -> None"
+        },
+        "set_on_quote_stk_v1_callback": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "Callable[[Exchange, QuoteSTKv1], None]",
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "func"
+            },
+            {
+              "annotation": "bool",
+              "default": false,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "bind"
+            }
+          ],
+          "returns": "None",
+          "signature": "(self, func: Callable[[Exchange, QuoteSTKv1], None], bind: bool = False) -> None"
+        },
+        "set_on_tick_fop_v1_callback": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "Callable[[Exchange, TickFOPv1], None]",
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "func"
+            },
+            {
+              "annotation": "bool",
+              "default": false,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "bind"
+            }
+          ],
+          "returns": "None",
+          "signature": "(self, func: Callable[[Exchange, TickFOPv1], None], bind: bool = False) -> None"
+        },
+        "set_on_tick_stk_v1_callback": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "Callable[[Exchange, TickSTKv1], None]",
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "func"
+            },
+            {
+              "annotation": "bool",
+              "default": false,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "bind"
+            }
+          ],
+          "returns": "None",
+          "signature": "(self, func: Callable[[Exchange, TickSTKv1], None], bind: bool = False) -> None"
+        },
+        "subscribe": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "Contract",
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "contract"
+            },
+            {
+              "annotation": "QuoteType",
+              "default": "QuoteType.Tick",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "quote_type"
+            },
+            {
+              "annotation": "bool",
+              "default": false,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "intraday_odd"
+            },
+            {
+              "annotation": "QuoteVersion",
+              "default": "QuoteVersion.v1",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "version"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, contract: Contract, quote_type: QuoteType = QuoteType.Tick, intraday_odd: bool = False, version: QuoteVersion = QuoteVersion.v1)"
+        },
+        "unsubscribe": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "Contract",
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "contract"
+            },
+            {
+              "annotation": "QuoteType",
+              "default": "QuoteType.Tick",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "quote_type"
+            },
+            {
+              "annotation": "bool",
+              "default": false,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "intraday_odd"
+            },
+            {
+              "annotation": "QuoteVersion",
+              "default": "QuoteVersion.v1",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "version"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, contract: Contract, quote_type: QuoteType = QuoteType.Tick, intraday_odd: bool = False, version: QuoteVersion = QuoteVersion.v1)"
+        }
+      },
+      "source": "shioaji.shioaji"
+    },
+    "Shioaji": {
+      "_present": true,
+      "members": {
+        "account_balance": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "int",
+              "default": 5000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": "Callable[[AccountBalance], None]",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": "AccountBalance",
+          "signature": "(self, timeout: int = 5000, cb: Callable[[AccountBalance], None] = None) -> AccountBalance"
+        },
+        "activate_ca": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "str",
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "ca_path"
+            },
+            {
+              "annotation": "str",
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "ca_passwd"
+            },
+            {
+              "annotation": "str",
+              "default": "",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "person_id"
+            },
+            {
+              "annotation": "int",
+              "default": 0,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "store"
+            }
+          ],
+          "returns": "bool",
+          "signature": "(self, ca_path: str, ca_passwd: str, person_id: str = , store: int = 0) -> bool"
+        },
+        "cancel_comboorder": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "ComboTrade",
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "combotrade"
+            },
+            {
+              "annotation": "int",
+              "default": 5000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": "Callable[[ComboTrade], None]",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": "ComboTrade",
+          "signature": "(self, combotrade: ComboTrade, timeout: int = 5000, cb: Callable[[ComboTrade], None] = None) -> ComboTrade"
+        },
+        "cancel_order": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "Trade",
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "trade"
+            },
+            {
+              "annotation": "int",
+              "default": 5000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": "Callable[[Trade], None]",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": "Trade",
+          "signature": "(self, trade: Trade, timeout: int = 5000, cb: Callable[[Trade], None] = None) -> Trade"
+        },
+        "credit_enquires": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "list[Stock]",
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "contracts"
+            },
+            {
+              "annotation": "int",
+              "default": 30000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": "Callable[[CreditEnquire], None]",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": "list[CreditEnquire]",
+          "signature": "(self, contracts: list[Stock], timeout: int = 30000, cb: Callable[[CreditEnquire], None] = None) -> list[CreditEnquire]"
+        },
+        "daily_quotes": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "date",
+              "default": "<date>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "date"
+            },
+            {
+              "annotation": "bool",
+              "default": true,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "exclude"
+            },
+            {
+              "annotation": "int",
+              "default": 5000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": "Callable[[DailyQuotes], None]",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": "DailyQuotes",
+          "signature": "(self, date: date = <date>, exclude: bool = True, timeout: int = 5000, cb: Callable[[DailyQuotes], None] = None) -> DailyQuotes"
+        },
+        "earmarking_detail": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "Account",
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "account"
+            },
+            {
+              "annotation": "int",
+              "default": 5000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": "Callable[[EarmarkStocksDetailResponse], None]",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": "EarmarkStocksDetailResponse",
+          "signature": "(self, account: Account, timeout: int = 5000, cb: Callable[[EarmarkStocksDetailResponse], None] = None) -> EarmarkStocksDetailResponse"
+        },
+        "fetch_contracts": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "bool",
+              "default": false,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "contract_download"
+            },
+            {
+              "annotation": "int",
+              "default": 0,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "contracts_timeout"
+            },
+            {
+              "annotation": "Callable[[], None]",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "contracts_cb"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, contract_download: bool = False, contracts_timeout: int = 0, contracts_cb: Callable[[], None] = None)"
+        },
+        "get_ca_expiretime": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "str",
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "person_id"
+            }
+          ],
+          "returns": "datetime",
+          "signature": "(self, person_id: str) -> datetime"
+        },
+        "kbars": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "BaseContract",
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "contract"
+            },
+            {
+              "annotation": "str",
+              "default": "<date>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "start"
+            },
+            {
+              "annotation": "str",
+              "default": "<date>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "end"
+            },
+            {
+              "annotation": "int",
+              "default": 30000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": "Callable[[Kbars], None]",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": "Kbars",
+          "signature": "(self, contract: BaseContract, start: str = <date>, end: str = <date>, timeout: int = 30000, cb: Callable[[Kbars], None] = None) -> Kbars"
+        },
+        "list_accounts": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            }
+          ],
+          "returns": "list[Account]",
+          "signature": "(self) -> list[Account]"
+        },
+        "list_combotrades": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            }
+          ],
+          "returns": "list[ComboTrade]",
+          "signature": "(self) -> list[ComboTrade]"
+        },
+        "list_position_detail": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "Account",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "account"
+            },
+            {
+              "annotation": "int",
+              "default": 0,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "detail_id"
+            },
+            {
+              "annotation": "int",
+              "default": 5000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": "Callable[[list[Union[FuturePositionDetail, StockPositionDetail]]], None]",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": "list[Union[FuturePositionDetail, StockPositionDetail]]",
+          "signature": "(self, account: Account = None, detail_id: int = 0, timeout: int = 5000, cb: Callable[[list[Union[FuturePositionDetail, StockPositionDetail]]], None] = None) -> list[Union[FuturePositionDetail, StockPositionDetail]]"
+        },
+        "list_positions": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "Account",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "account"
+            },
+            {
+              "annotation": "Unit",
+              "default": "Unit.Common",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "unit"
+            },
+            {
+              "annotation": "int",
+              "default": 5000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": "Callable[[list[Union[FuturePosition, StockPosition]]], None]",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": "list[Union[FuturePosition, StockPosition]]",
+          "signature": "(self, account: Account = None, unit: Unit = Unit.Common, timeout: int = 5000, cb: Callable[[list[Union[FuturePosition, StockPosition]]], None] = None) -> list[Union[FuturePosition, StockPosition]]"
+        },
+        "list_profit_loss": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "Account",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "account"
+            },
+            {
+              "annotation": "str",
+              "default": "",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "begin_date"
+            },
+            {
+              "annotation": "str",
+              "default": "",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "end_date"
+            },
+            {
+              "annotation": "Unit",
+              "default": "Unit.Common",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "unit"
+            },
+            {
+              "annotation": "int",
+              "default": 5000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": "Callable[[list[Union[FutureProfitLoss, StockProfitLoss]]], None]",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": "list[Union[FutureProfitLoss, StockProfitLoss]]",
+          "signature": "(self, account: Account = None, begin_date: str = , end_date: str = , unit: Unit = Unit.Common, timeout: int = 5000, cb: Callable[[list[Union[FutureProfitLoss, StockProfitLoss]]], None] = None) -> list[Union[FutureProfitLoss, StockProfitLoss]]"
+        },
+        "list_profit_loss_detail": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "Account",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "account"
+            },
+            {
+              "annotation": "int",
+              "default": 0,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "detail_id"
+            },
+            {
+              "annotation": "Unit",
+              "default": "Unit.Common",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "unit"
+            },
+            {
+              "annotation": "int",
+              "default": 5000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": "Callable[[list[Union[FutureProfitDetail, StockProfitDetail]]], None]",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": "list[Union[FutureProfitDetail, StockProfitDetail]]",
+          "signature": "(self, account: Account = None, detail_id: int = 0, unit: Unit = Unit.Common, timeout: int = 5000, cb: Callable[[list[Union[FutureProfitDetail, StockProfitDetail]]], None] = None) -> list[Union[FutureProfitDetail, StockProfitDetail]]"
+        },
+        "list_profit_loss_summary": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "Account",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "account"
+            },
+            {
+              "annotation": "str",
+              "default": "",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "begin_date"
+            },
+            {
+              "annotation": "str",
+              "default": "",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "end_date"
+            },
+            {
+              "annotation": "int",
+              "default": 5000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": "Callable[[list[Union[FutureProfitLossSummary, StockProfitLossSummary]]], None]",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": "list[Union[FutureProfitLossSummary, StockProfitLossSummary]]",
+          "signature": "(self, account: Account = None, begin_date: str = , end_date: str = , timeout: int = 5000, cb: Callable[[list[Union[FutureProfitLossSummary, StockProfitLossSummary]]], None] = None) -> list[Union[FutureProfitLossSummary, StockProfitLossSummary]]"
+        },
+        "list_settlements": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "Account",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "account"
+            },
+            {
+              "annotation": "int",
+              "default": 5000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": "Callable[[list[Settlement]], None]",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": "list[Settlement]",
+          "signature": "(self, account: Account = None, timeout: int = 5000, cb: Callable[[list[Settlement]], None] = None) -> list[Settlement]"
+        },
+        "list_trades": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            }
+          ],
+          "returns": "list[Trade]",
+          "signature": "(self) -> list[Trade]"
+        },
+        "login": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "str",
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "api_key"
+            },
+            {
+              "annotation": "str",
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "secret_key"
+            },
+            {
+              "annotation": "bool",
+              "default": true,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "fetch_contract"
+            },
+            {
+              "annotation": "int",
+              "default": 0,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "contracts_timeout"
+            },
+            {
+              "annotation": "Callable[[], None]",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "contracts_cb"
+            },
+            {
+              "annotation": "bool",
+              "default": true,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "subscribe_trade"
+            },
+            {
+              "annotation": "int",
+              "default": 30000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "receive_window"
+            }
+          ],
+          "returns": "list[Account]",
+          "signature": "(self, api_key: str, secret_key: str, fetch_contract: bool = True, contracts_timeout: int = 0, contracts_cb: Callable[[], None] = None, subscribe_trade: bool = True, receive_window: int = 30000) -> list[Account]"
+        },
+        "logout": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            }
+          ],
+          "returns": "bool",
+          "signature": "(self) -> bool"
+        },
+        "margin": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "Account",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "account"
+            },
+            {
+              "annotation": "int",
+              "default": 5000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": "Callable[[Margin], None]",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": "Margin",
+          "signature": "(self, account: Account = None, timeout: int = 5000, cb: Callable[[Margin], None] = None) -> Margin"
+        },
+        "notice": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "int",
+              "default": 5000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": "Callable[[Notice], None]",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": "Notice",
+          "signature": "(self, timeout: int = 5000, cb: Callable[[Notice], None] = None) -> Notice"
+        },
+        "on_bidask_fop_v1": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "bool",
+              "default": false,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "bind"
+            }
+          ],
+          "returns": "Callable[[Exchange, BidAskFOPv1], None]",
+          "signature": "(self, bind: bool = False) -> Callable[[Exchange, BidAskFOPv1], None]"
+        },
+        "on_bidask_stk_v1": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "bool",
+              "default": false,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "bind"
+            }
+          ],
+          "returns": "Callable[[Exchange, BidAskSTKv1], None]",
+          "signature": "(self, bind: bool = False) -> Callable[[Exchange, BidAskSTKv1], None]"
+        },
+        "on_event": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "Callable[[int, int, str, str], None]",
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "func"
+            }
+          ],
+          "returns": "Callable[[int, int, str, str], None]",
+          "signature": "(self, func: Callable[[int, int, str, str], None]) -> Callable[[int, int, str, str], None]"
+        },
+        "on_quote": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "Callable[[str, dict], None]",
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "func"
+            }
+          ],
+          "returns": "Callable[[str, dict], None]",
+          "signature": "(self, func: Callable[[str, dict], None]) -> Callable[[str, dict], None]"
+        },
+        "on_quote_stk_v1": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "bool",
+              "default": false,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "bind"
+            }
+          ],
+          "returns": "Callable[[Exchange, QuoteSTKv1], None]",
+          "signature": "(self, bind: bool = False) -> Callable[[Exchange, QuoteSTKv1], None]"
+        },
+        "on_session_down": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "Callable[[], None]",
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "func"
+            }
+          ],
+          "returns": "Callable[[], None]",
+          "signature": "(self, func: Callable[[], None]) -> Callable[[], None]"
+        },
+        "on_tick_fop_v1": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "bool",
+              "default": false,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "bind"
+            }
+          ],
+          "returns": "Callable[[Exchange, TickFOPv1], None]",
+          "signature": "(self, bind: bool = False) -> Callable[[Exchange, TickFOPv1], None]"
+        },
+        "on_tick_stk_v1": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "bool",
+              "default": false,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "bind"
+            }
+          ],
+          "returns": "Callable[[Exchange, TickSTKv1], None]",
+          "signature": "(self, bind: bool = False) -> Callable[[Exchange, TickSTKv1], None]"
+        },
+        "order_deal_records": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "Account",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "account"
+            },
+            {
+              "annotation": "int",
+              "default": 5000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": "Callable[[OrderDealRecords], None]",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": "list[OrderDealRecords]",
+          "signature": "(self, account: Account = None, timeout: int = 5000, cb: Callable[[OrderDealRecords], None] = None) -> list[OrderDealRecords]"
+        },
+        "place_comboorder": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "ComboContract",
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "combo_contract"
+            },
+            {
+              "annotation": "ComboOrder",
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "order"
+            },
+            {
+              "annotation": "int",
+              "default": 5000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": "Callable[[ComboTrade], None]",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": "ComboTrade",
+          "signature": "(self, combo_contract: ComboContract, order: ComboOrder, timeout: int = 5000, cb: Callable[[ComboTrade], None] = None) -> ComboTrade"
+        },
+        "place_order": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "Contract",
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "contract"
+            },
+            {
+              "annotation": "Order",
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "order"
+            },
+            {
+              "annotation": "int",
+              "default": 5000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": "Callable[[Trade], None]",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": "Trade",
+          "signature": "(self, contract: Contract, order: Order, timeout: int = 5000, cb: Callable[[Trade], None] = None) -> Trade"
+        },
+        "punish": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "int",
+              "default": 5000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": "Callable[[Punish], None]",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": "Punish",
+          "signature": "(self, timeout: int = 5000, cb: Callable[[Punish], None] = None) -> Punish"
+        },
+        "reserve_earmarking": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "Account",
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "account"
+            },
+            {
+              "annotation": "Contract",
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "contract"
+            },
+            {
+              "annotation": "int",
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "share"
+            },
+            {
+              "annotation": "float",
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "price"
+            },
+            {
+              "annotation": "int",
+              "default": 5000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": "Callable[[ReserveEarmarkingResponse], None]",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": "ReserveEarmarkingResponse",
+          "signature": "(self, account: Account, contract: Contract, share: int, price: float, timeout: int = 5000, cb: Callable[[ReserveEarmarkingResponse], None] = None) -> ReserveEarmarkingResponse"
+        },
+        "reserve_stock": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "Account",
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "account"
+            },
+            {
+              "annotation": "Contract",
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "contract"
+            },
+            {
+              "annotation": "int",
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "share"
+            },
+            {
+              "annotation": "int",
+              "default": 5000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": "Callable[[ReserveStockResponse], None]",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": "ReserveStockResponse",
+          "signature": "(self, account: Account, contract: Contract, share: int, timeout: int = 5000, cb: Callable[[ReserveStockResponse], None] = None) -> ReserveStockResponse"
+        },
+        "scanners": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "ScannerType",
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "scanner_type"
+            },
+            {
+              "annotation": "bool",
+              "default": true,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "ascending"
+            },
+            {
+              "annotation": "str",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "date"
+            },
+            {
+              "annotation": "int[ge=1,le=200]",
+              "default": 100,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "count"
+            },
+            {
+              "annotation": "int",
+              "default": 30000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": "Callable[[list[ScannerItem]], None]",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": "list[ScannerItem]",
+          "signature": "(self, scanner_type: ScannerType, ascending: bool = True, date: str = None, count: int[ge=1,le=200] = 100, timeout: int = 30000, cb: Callable[[list[ScannerItem]], None] = None) -> list[ScannerItem]"
+        },
+        "set_context": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "Any",
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "context"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, context: Any)"
+        },
+        "set_default_account": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "account"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, account)"
+        },
+        "set_order_callback": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "Callable[[OrderState, dict], None]",
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "func"
+            }
+          ],
+          "returns": "None",
+          "signature": "(self, func: Callable[[OrderState, dict], None]) -> None"
+        },
+        "set_session_down_callback": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "Callable[[], None]",
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "func"
+            }
+          ],
+          "returns": "None",
+          "signature": "(self, func: Callable[[], None]) -> None"
+        },
+        "settlements": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "Account",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "account"
+            },
+            {
+              "annotation": "int",
+              "default": 5000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": "Callable[[list[SettlementV1]], None]",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": "list[Settlement]",
+          "signature": "(self, account: Account = None, timeout: int = 5000, cb: Callable[[list[SettlementV1]], None] = None) -> list[Settlement]"
+        },
+        "short_stock_sources": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "list[Stock]",
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "contracts"
+            },
+            {
+              "annotation": "int",
+              "default": 5000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": "Callable[[ShortStockSource], None]",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": "list[ShortStockSource]",
+          "signature": "(self, contracts: list[Stock], timeout: int = 5000, cb: Callable[[ShortStockSource], None] = None) -> list[ShortStockSource]"
+        },
+        "snapshots": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "list[Union[Future, Index, Option, Stock]]",
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "contracts"
+            },
+            {
+              "annotation": "int",
+              "default": 30000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": "Callable[[Snapshot], None]",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": "list[Snapshot]",
+          "signature": "(self, contracts: list[Union[Future, Index, Option, Stock]], timeout: int = 30000, cb: Callable[[Snapshot], None] = None) -> list[Snapshot]"
+        },
+        "stock_reserve_detail": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "Account",
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "account"
+            },
+            {
+              "annotation": "int",
+              "default": 5000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": "Callable[[ReserveStocksDetailResponse], None]",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": "ReserveStocksDetailResponse",
+          "signature": "(self, account: Account, timeout: int = 5000, cb: Callable[[ReserveStocksDetailResponse], None] = None) -> ReserveStocksDetailResponse"
+        },
+        "stock_reserve_summary": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "Account",
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "account"
+            },
+            {
+              "annotation": "int",
+              "default": 5000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": "Callable[[ReserveStocksSummaryResponse], None]",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": "ReserveStocksSummaryResponse",
+          "signature": "(self, account: Account, timeout: int = 5000, cb: Callable[[ReserveStocksSummaryResponse], None] = None) -> ReserveStocksSummaryResponse"
+        },
+        "subscribe": {
+          "_present": false
+        },
+        "subscribe_trade": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "Account",
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "account"
+            }
+          ],
+          "returns": "bool",
+          "signature": "(self, account: Account) -> bool"
+        },
+        "ticks": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "BaseContract",
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "contract"
+            },
+            {
+              "annotation": "str",
+              "default": "<date>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "date"
+            },
+            {
+              "annotation": "TicksQueryType",
+              "default": "TicksQueryType.AllDay",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "query_type"
+            },
+            {
+              "annotation": "Union[str, time]",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "time_start"
+            },
+            {
+              "annotation": "Union[str, time]",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "time_end"
+            },
+            {
+              "annotation": "int",
+              "default": 0,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "last_cnt"
+            },
+            {
+              "annotation": "int",
+              "default": 30000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": "Callable[[Ticks], None]",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": "Ticks",
+          "signature": "(self, contract: BaseContract, date: str = <date>, query_type: TicksQueryType = TicksQueryType.AllDay, time_start: Union[str, time] = None, time_end: Union[str, time] = None, last_cnt: int = 0, timeout: int = 30000, cb: Callable[[Ticks], None] = None) -> Ticks"
+        },
+        "trading_limits": {
+          "_present": false
+        },
+        "unsubscribe": {
+          "_present": false
+        },
+        "unsubscribe_trade": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "Account",
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "account"
+            }
+          ],
+          "returns": "bool",
+          "signature": "(self, account: Account) -> bool"
+        },
+        "update_combostatus": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "Account",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "account"
+            },
+            {
+              "annotation": "int",
+              "default": 5000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": "Callable[[list[ComboTrade]], None]",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, account: Account = None, timeout: int = 5000, cb: Callable[[list[ComboTrade]], None] = None)"
+        },
+        "update_order": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "Trade",
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "trade"
+            },
+            {
+              "annotation": "Union[float, int[strict]]",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "price"
+            },
+            {
+              "annotation": "int",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "qty"
+            },
+            {
+              "annotation": "int",
+              "default": 5000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": "Callable[[Trade], None]",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": "Trade",
+          "signature": "(self, trade: Trade, price: Union[float, int[strict]] = None, qty: int = None, timeout: int = 5000, cb: Callable[[Trade], None] = None) -> Trade"
+        },
+        "update_price": {
+          "_present": false
+        },
+        "update_qty": {
+          "_present": false
+        },
+        "update_status": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "Account",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "account"
+            },
+            {
+              "annotation": "Trade",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "trade"
+            },
+            {
+              "annotation": "int",
+              "default": 5000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": "Callable[[list[Trade]], None]",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, account: Account = None, trade: Trade = None, timeout: int = 5000, cb: Callable[[list[Trade]], None] = None)"
+        },
+        "usage": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "self"
+            },
+            {
+              "annotation": "int",
+              "default": 5000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": "Callable[[UsageStatus], None]",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": "UsageStatus",
+          "signature": "(self, timeout: int = 5000, cb: Callable[[UsageStatus], None] = None) -> UsageStatus"
+        }
+      },
+      "source": "shioaji"
+    }
+  },
+  "models": {
+    "Account": {
+      "_present": true,
+      "bases": [
+        "shioaji.account.BaseAccount"
+      ],
+      "fields": {
+        "account_id": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "str"
+        },
+        "account_type": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "AccountType"
+        },
+        "broker_id": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "str"
+        },
+        "person_id": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "str"
+        },
+        "signed": {
+          "default": false,
+          "has_default": true,
+          "required": false,
+          "type": "bool"
+        },
+        "username": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        }
+      },
+      "kind": "pydantic2",
+      "source": "shioaji"
+    },
+    "AccountBalance": {
+      "_present": true,
+      "bases": [
+        "shioaji.position.LazyModel"
+      ],
+      "fields": {
+        "acc_balance": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "date": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "str"
+        },
+        "errmsg": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "str"
+        },
+        "status": {
+          "default": "FetchStatus.Unfetch",
+          "has_default": true,
+          "required": false,
+          "type": "FetchStatus"
+        }
+      },
+      "kind": "pydantic2",
+      "source": "shioaji.position"
+    },
+    "BaseOrder": {
+      "_present": true,
+      "bases": [
+        "shioaji.base.BaseModelV20"
+      ],
+      "fields": {
+        "account": {
+          "default": null,
+          "has_default": true,
+          "required": false,
+          "type": "Account"
+        },
+        "action": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Action"
+        },
+        "ca": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "custom_field": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str[max_length=6]"
+        },
+        "id": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "ordno": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "price": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Union[float, int[strict]]"
+        },
+        "quantity": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int[gt=0]"
+        },
+        "seqno": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        }
+      },
+      "kind": "pydantic2",
+      "source": "shioaji.order"
+    },
+    "BidAskFOPv1": {
+      "_present": true,
+      "bases": [
+        "builtins.object"
+      ],
+      "fields": {
+        "ask_price": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "list[Decimal]"
+        },
+        "ask_total_vol": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "ask_volume": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "list[int]"
+        },
+        "bid_price": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "list[Decimal]"
+        },
+        "bid_total_vol": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "bid_volume": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "list[int]"
+        },
+        "code": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "str"
+        },
+        "datetime": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "datetime"
+        },
+        "diff_ask_vol": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "list[int]"
+        },
+        "diff_bid_vol": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "list[int]"
+        },
+        "first_derived_ask_price": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Decimal"
+        },
+        "first_derived_ask_vol": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "first_derived_bid_price": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Decimal"
+        },
+        "first_derived_bid_vol": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "simtrade": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "bool"
+        },
+        "underlying_price": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Decimal"
+        }
+      },
+      "kind": "annotated",
+      "source": "shioaji"
+    },
+    "BidAskSTKv1": {
+      "_present": true,
+      "bases": [
+        "builtins.object"
+      ],
+      "fields": {
+        "ask_price": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "list[Decimal]"
+        },
+        "ask_volume": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "list[int]"
+        },
+        "bid_price": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "list[Decimal]"
+        },
+        "bid_volume": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "list[int]"
+        },
+        "code": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "str"
+        },
+        "datetime": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "datetime"
+        },
+        "diff_ask_vol": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "list[int]"
+        },
+        "diff_bid_vol": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "list[int]"
+        },
+        "intraday_odd": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "bool"
+        },
+        "simtrade": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "bool"
+        },
+        "suspend": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "bool"
+        }
+      },
+      "kind": "annotated",
+      "source": "shioaji"
+    },
+    "ComboContract": {
+      "_present": true,
+      "bases": [
+        "shioaji.base.BaseModelV20"
+      ],
+      "fields": {
+        "legs": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "list[ComboBase]"
+        }
+      },
+      "kind": "pydantic2",
+      "source": "shioaji.order"
+    },
+    "ComboOrder": {
+      "_present": true,
+      "bases": [
+        "shioaji.order.FuturesOrder"
+      ],
+      "fields": {
+        "account": {
+          "default": null,
+          "has_default": true,
+          "required": false,
+          "type": "Account"
+        },
+        "action": {
+          "default": "Action.Sell",
+          "has_default": true,
+          "required": false,
+          "type": "Action"
+        },
+        "ca": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "custom_field": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str[max_length=6]"
+        },
+        "id": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "octype": {
+          "default": "FuturesOCType.Auto",
+          "has_default": true,
+          "required": false,
+          "type": "FuturesOCType"
+        },
+        "order_type": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "OrderType"
+        },
+        "ordno": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "price": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Union[float, int[strict]]"
+        },
+        "price_type": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "FuturesPriceType"
+        },
+        "quantity": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int[gt=0]"
+        },
+        "seqno": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        }
+      },
+      "kind": "pydantic2",
+      "source": "shioaji.order"
+    },
+    "Contract": {
+      "_present": true,
+      "bases": [
+        "shioaji.contracts.BaseContract"
+      ],
+      "fields": {
+        "category": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "code": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "str"
+        },
+        "currency": {
+          "default": "Currency.TWD",
+          "has_default": true,
+          "required": false,
+          "type": "Currency"
+        },
+        "day_trade": {
+          "default": "DayTrade.No",
+          "has_default": true,
+          "required": false,
+          "type": "DayTrade"
+        },
+        "delivery_date": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "delivery_month": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "exchange": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Exchange"
+        },
+        "limit_down": {
+          "default": 0.0,
+          "has_default": true,
+          "required": false,
+          "type": "float"
+        },
+        "limit_up": {
+          "default": 0.0,
+          "has_default": true,
+          "required": false,
+          "type": "float"
+        },
+        "margin_trading_balance": {
+          "default": 0,
+          "has_default": true,
+          "required": false,
+          "type": "int"
+        },
+        "multiplier": {
+          "default": 0,
+          "has_default": true,
+          "required": false,
+          "type": "int"
+        },
+        "name": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "option_right": {
+          "default": "OptionRight.No",
+          "has_default": true,
+          "required": false,
+          "type": "OptionRight"
+        },
+        "reference": {
+          "default": 0.0,
+          "has_default": true,
+          "required": false,
+          "type": "float"
+        },
+        "security_type": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "SecurityType"
+        },
+        "short_selling_balance": {
+          "default": 0,
+          "has_default": true,
+          "required": false,
+          "type": "int"
+        },
+        "strike_price": {
+          "default": 0,
+          "has_default": true,
+          "required": false,
+          "type": "Union[float, int[strict]]"
+        },
+        "symbol": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "target_code": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "underlying_code": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "underlying_kind": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "unit": {
+          "default": 0,
+          "has_default": true,
+          "required": false,
+          "type": "Union[float, int[strict]]"
+        },
+        "update_date": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        }
+      },
+      "kind": "pydantic2",
+      "source": "shioaji.order"
+    },
+    "Contracts": {
+      "_present": true,
+      "bases": [
+        "shioaji.base.BaseModelV20",
+        "shioaji.contracts.BaseIterContracts"
+      ],
+      "fields": {
+        "Futures": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "StreamFutureContracts"
+        },
+        "Indexs": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "StreamIndexContracts"
+        },
+        "Options": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "StreamOptionContracts"
+        },
+        "Stocks": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "StreamStockContracts"
+        },
+        "status": {
+          "default": "FetchStatus.Unfetch",
+          "has_default": true,
+          "required": false,
+          "type": "FetchStatus"
+        }
+      },
+      "kind": "pydantic2",
+      "source": "shioaji.contracts"
+    },
+    "CreditEnquire": {
+      "_present": true,
+      "bases": [
+        "shioaji.base.BaseModelV20"
+      ],
+      "fields": {
+        "margin_unit": {
+          "default": 0,
+          "has_default": true,
+          "required": false,
+          "type": "int"
+        },
+        "short_unit": {
+          "default": 0,
+          "has_default": true,
+          "required": false,
+          "type": "int"
+        },
+        "stock_id": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "system": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "update_time": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        }
+      },
+      "kind": "pydantic2",
+      "source": "shioaji.data"
+    },
+    "DailyQuotes": {
+      "_present": true,
+      "bases": [
+        "shioaji.base.BaseModelV20"
+      ],
+      "fields": {
+        "Amount": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "list[int]"
+        },
+        "Close": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "list[float]"
+        },
+        "Code": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "list[str]"
+        },
+        "Date": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "list[date]"
+        },
+        "High": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "list[float]"
+        },
+        "Low": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "list[float]"
+        },
+        "Open": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "list[float]"
+        },
+        "Transaction": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "list[int]"
+        },
+        "Volume": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "list[int]"
+        }
+      },
+      "kind": "pydantic2",
+      "source": "shioaji.data"
+    },
+    "Deal": {
+      "_present": true,
+      "bases": [
+        "shioaji.base.BaseModelV20"
+      ],
+      "fields": {
+        "price": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Union[float, int[strict]]"
+        },
+        "quantity": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "seq": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "str"
+        },
+        "ts": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        }
+      },
+      "kind": "pydantic2",
+      "source": "shioaji.order"
+    },
+    "Future": {
+      "_present": true,
+      "bases": [
+        "shioaji.contracts.Contract"
+      ],
+      "fields": {
+        "category": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "code": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "str"
+        },
+        "currency": {
+          "default": "Currency.TWD",
+          "has_default": true,
+          "required": false,
+          "type": "Currency"
+        },
+        "day_trade": {
+          "default": "DayTrade.No",
+          "has_default": true,
+          "required": false,
+          "type": "DayTrade"
+        },
+        "delivery_date": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "delivery_month": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "exchange": {
+          "default": "Exchange.TAIFEX",
+          "has_default": true,
+          "required": false,
+          "type": "Exchange"
+        },
+        "limit_down": {
+          "default": 0.0,
+          "has_default": true,
+          "required": false,
+          "type": "float"
+        },
+        "limit_up": {
+          "default": 0.0,
+          "has_default": true,
+          "required": false,
+          "type": "float"
+        },
+        "margin_trading_balance": {
+          "default": 0,
+          "has_default": true,
+          "required": false,
+          "type": "int"
+        },
+        "multiplier": {
+          "default": 0,
+          "has_default": true,
+          "required": false,
+          "type": "int"
+        },
+        "name": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "option_right": {
+          "default": "OptionRight.No",
+          "has_default": true,
+          "required": false,
+          "type": "OptionRight"
+        },
+        "reference": {
+          "default": 0.0,
+          "has_default": true,
+          "required": false,
+          "type": "float"
+        },
+        "security_type": {
+          "default": "SecurityType.Future",
+          "has_default": true,
+          "required": false,
+          "type": "SecurityType"
+        },
+        "short_selling_balance": {
+          "default": 0,
+          "has_default": true,
+          "required": false,
+          "type": "int"
+        },
+        "strike_price": {
+          "default": 0,
+          "has_default": true,
+          "required": false,
+          "type": "Union[float, int[strict]]"
+        },
+        "symbol": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "target_code": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "underlying_code": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "underlying_kind": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "unit": {
+          "default": 0,
+          "has_default": true,
+          "required": false,
+          "type": "Union[float, int[strict]]"
+        },
+        "update_date": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        }
+      },
+      "kind": "pydantic2",
+      "source": "shioaji.contracts"
+    },
+    "FutureAccount": {
+      "_present": true,
+      "bases": [
+        "shioaji.account.Account"
+      ],
+      "fields": {
+        "account_id": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "str"
+        },
+        "account_type": {
+          "default": "AccountType.Future",
+          "has_default": true,
+          "required": false,
+          "type": "AccountType"
+        },
+        "broker_id": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "str"
+        },
+        "person_id": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "str"
+        },
+        "signed": {
+          "default": false,
+          "has_default": true,
+          "required": false,
+          "type": "bool"
+        },
+        "username": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        }
+      },
+      "kind": "pydantic2",
+      "source": "shioaji.account"
+    },
+    "FuturePosition": {
+      "_present": true,
+      "bases": [
+        "shioaji.position.Position"
+      ],
+      "fields": {
+        "code": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "str"
+        },
+        "direction": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Action"
+        },
+        "id": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "last_price": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "pnl": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "price": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "quantity": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        }
+      },
+      "kind": "pydantic2",
+      "source": "shioaji.position"
+    },
+    "FuturesOrder": {
+      "_present": true,
+      "bases": [
+        "shioaji.order.BaseOrder"
+      ],
+      "fields": {
+        "account": {
+          "default": null,
+          "has_default": true,
+          "required": false,
+          "type": "Account"
+        },
+        "action": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Action"
+        },
+        "ca": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "custom_field": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str[max_length=6]"
+        },
+        "id": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "octype": {
+          "default": "FuturesOCType.Auto",
+          "has_default": true,
+          "required": false,
+          "type": "FuturesOCType"
+        },
+        "order_type": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "OrderType"
+        },
+        "ordno": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "price": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Union[float, int[strict]]"
+        },
+        "price_type": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "FuturesPriceType"
+        },
+        "quantity": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int[gt=0]"
+        },
+        "seqno": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        }
+      },
+      "kind": "pydantic2",
+      "source": "shioaji.order"
+    },
+    "Index": {
+      "_present": true,
+      "bases": [
+        "shioaji.contracts.Contract"
+      ],
+      "fields": {
+        "category": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "code": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "str"
+        },
+        "currency": {
+          "default": "Currency.TWD",
+          "has_default": true,
+          "required": false,
+          "type": "Currency"
+        },
+        "day_trade": {
+          "default": "DayTrade.No",
+          "has_default": true,
+          "required": false,
+          "type": "DayTrade"
+        },
+        "delivery_date": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "delivery_month": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "exchange": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Exchange"
+        },
+        "limit_down": {
+          "default": 0.0,
+          "has_default": true,
+          "required": false,
+          "type": "float"
+        },
+        "limit_up": {
+          "default": 0.0,
+          "has_default": true,
+          "required": false,
+          "type": "float"
+        },
+        "margin_trading_balance": {
+          "default": 0,
+          "has_default": true,
+          "required": false,
+          "type": "int"
+        },
+        "multiplier": {
+          "default": 0,
+          "has_default": true,
+          "required": false,
+          "type": "int"
+        },
+        "name": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "option_right": {
+          "default": "OptionRight.No",
+          "has_default": true,
+          "required": false,
+          "type": "OptionRight"
+        },
+        "reference": {
+          "default": 0.0,
+          "has_default": true,
+          "required": false,
+          "type": "float"
+        },
+        "security_type": {
+          "default": "SecurityType.Index",
+          "has_default": true,
+          "required": false,
+          "type": "SecurityType"
+        },
+        "short_selling_balance": {
+          "default": 0,
+          "has_default": true,
+          "required": false,
+          "type": "int"
+        },
+        "strike_price": {
+          "default": 0,
+          "has_default": true,
+          "required": false,
+          "type": "Union[float, int[strict]]"
+        },
+        "symbol": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "target_code": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "underlying_code": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "underlying_kind": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "unit": {
+          "default": 0,
+          "has_default": true,
+          "required": false,
+          "type": "Union[float, int[strict]]"
+        },
+        "update_date": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        }
+      },
+      "kind": "pydantic2",
+      "source": "shioaji.contracts"
+    },
+    "Kbars": {
+      "_present": true,
+      "bases": [
+        "shioaji.base.BaseModelV20"
+      ],
+      "fields": {
+        "Amount": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "list[float]"
+        },
+        "Close": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "list[float]"
+        },
+        "High": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "list[float]"
+        },
+        "Low": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "list[float]"
+        },
+        "Open": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "list[float]"
+        },
+        "Volume": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "list[int]"
+        },
+        "ts": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "list[int]"
+        }
+      },
+      "kind": "pydantic2",
+      "source": "shioaji.data"
+    },
+    "Margin": {
+      "_present": true,
+      "bases": [
+        "shioaji.position.LazyModel"
+      ],
+      "fields": {
+        "available_margin": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "collateral_amount": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "deposit_withdrawal": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "equity": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "equity_amount": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "fee": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "future_open_position": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "future_settle_profitloss": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "initial_margin": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "maintenance_margin": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "margin_call": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "option_open_position": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "option_openbuy_market_value": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "option_opensell_market_value": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "option_settle_profitloss": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "order_margin_premium": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "plus_margin": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "plus_margin_indicator": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "risk_indicator": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "royalty_revenue_expenditure": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "security_collateral_amount": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "status": {
+          "default": "FetchStatus.Unfetch",
+          "has_default": true,
+          "required": false,
+          "type": "FetchStatus"
+        },
+        "tax": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "today_balance": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "today_future_open_position": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "yesterday_balance": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        }
+      },
+      "kind": "pydantic2",
+      "source": "shioaji.position"
+    },
+    "Option": {
+      "_present": true,
+      "bases": [
+        "shioaji.contracts.Contract"
+      ],
+      "fields": {
+        "category": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "code": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "str"
+        },
+        "currency": {
+          "default": "Currency.TWD",
+          "has_default": true,
+          "required": false,
+          "type": "Currency"
+        },
+        "day_trade": {
+          "default": "DayTrade.No",
+          "has_default": true,
+          "required": false,
+          "type": "DayTrade"
+        },
+        "delivery_date": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "delivery_month": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "exchange": {
+          "default": "Exchange.TAIFEX",
+          "has_default": true,
+          "required": false,
+          "type": "Exchange"
+        },
+        "limit_down": {
+          "default": 0.0,
+          "has_default": true,
+          "required": false,
+          "type": "float"
+        },
+        "limit_up": {
+          "default": 0.0,
+          "has_default": true,
+          "required": false,
+          "type": "float"
+        },
+        "margin_trading_balance": {
+          "default": 0,
+          "has_default": true,
+          "required": false,
+          "type": "int"
+        },
+        "multiplier": {
+          "default": 0,
+          "has_default": true,
+          "required": false,
+          "type": "int"
+        },
+        "name": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "option_right": {
+          "default": "OptionRight.No",
+          "has_default": true,
+          "required": false,
+          "type": "OptionRight"
+        },
+        "reference": {
+          "default": 0.0,
+          "has_default": true,
+          "required": false,
+          "type": "float"
+        },
+        "security_type": {
+          "default": "SecurityType.Option",
+          "has_default": true,
+          "required": false,
+          "type": "SecurityType"
+        },
+        "short_selling_balance": {
+          "default": 0,
+          "has_default": true,
+          "required": false,
+          "type": "int"
+        },
+        "strike_price": {
+          "default": 0,
+          "has_default": true,
+          "required": false,
+          "type": "Union[float, int[strict]]"
+        },
+        "symbol": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "target_code": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "underlying_code": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "underlying_kind": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "unit": {
+          "default": 0,
+          "has_default": true,
+          "required": false,
+          "type": "Union[float, int[strict]]"
+        },
+        "update_date": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        }
+      },
+      "kind": "pydantic2",
+      "source": "shioaji.contracts"
+    },
+    "Order": {
+      "_present": true,
+      "bases": [
+        "shioaji.order.FuturesOrder",
+        "shioaji.order.StockOrder"
+      ],
+      "fields": {
+        "account": {
+          "default": null,
+          "has_default": true,
+          "required": false,
+          "type": "Account"
+        },
+        "action": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Action"
+        },
+        "ca": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "custom_field": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str[max_length=6]"
+        },
+        "daytrade_short": {
+          "default": false,
+          "has_default": true,
+          "required": false,
+          "type": "bool"
+        },
+        "id": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "octype": {
+          "default": "FuturesOCType.Auto",
+          "has_default": true,
+          "required": false,
+          "type": "FuturesOCType"
+        },
+        "order_cond": {
+          "default": "StockOrderCond.Cash",
+          "has_default": true,
+          "required": false,
+          "type": "StockOrderCond"
+        },
+        "order_lot": {
+          "default": "StockOrderLot.Common",
+          "has_default": true,
+          "required": false,
+          "type": "StockOrderLot"
+        },
+        "order_type": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "OrderType"
+        },
+        "ordno": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "price": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Union[float, int[strict]]"
+        },
+        "price_type": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Union[FuturesPriceType, StockPriceType]"
+        },
+        "quantity": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int[gt=0]"
+        },
+        "seqno": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        }
+      },
+      "kind": "pydantic2",
+      "source": "shioaji"
+    },
+    "OrderStatus": {
+      "_present": true,
+      "bases": [
+        "shioaji.base.BaseModelV20"
+      ],
+      "fields": {
+        "cancel_quantity": {
+          "default": 0,
+          "has_default": true,
+          "required": false,
+          "type": "int"
+        },
+        "deal_quantity": {
+          "default": 0,
+          "has_default": true,
+          "required": false,
+          "type": "int"
+        },
+        "deals": {
+          "default": null,
+          "has_default": true,
+          "required": false,
+          "type": "list[Deal]"
+        },
+        "id": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "modified_price": {
+          "default": 0,
+          "has_default": true,
+          "required": false,
+          "type": "Union[float, int[strict]]"
+        },
+        "modified_time": {
+          "default": null,
+          "has_default": true,
+          "required": false,
+          "type": "Optional[datetime]"
+        },
+        "msg": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "order_datetime": {
+          "default": null,
+          "has_default": true,
+          "required": false,
+          "type": "Optional[datetime]"
+        },
+        "order_quantity": {
+          "default": 0,
+          "has_default": true,
+          "required": false,
+          "type": "int"
+        },
+        "status": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Status"
+        },
+        "status_code": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "web_id": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        }
+      },
+      "kind": "pydantic2",
+      "source": "shioaji.order"
+    },
+    "Position": {
+      "_present": true,
+      "bases": [
+        "shioaji.base.BaseModelV20"
+      ],
+      "fields": {
+        "code": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "str"
+        },
+        "direction": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Action"
+        },
+        "id": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "last_price": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "pnl": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "price": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "quantity": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        }
+      },
+      "kind": "pydantic2",
+      "source": "shioaji.position"
+    },
+    "PositionDetail": {
+      "_present": true,
+      "bases": [
+        "shioaji.base.BaseModelV20"
+      ],
+      "fields": {
+        "code": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "str"
+        },
+        "currency": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Currency"
+        },
+        "date": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "str"
+        },
+        "direction": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Action"
+        },
+        "dseq": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "str"
+        },
+        "fee": {
+          "default": 0,
+          "has_default": true,
+          "required": false,
+          "type": "Union[float, int]"
+        },
+        "last_price": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "pnl": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "price": {
+          "default": 0,
+          "has_default": true,
+          "required": false,
+          "type": "float"
+        },
+        "quantity": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        }
+      },
+      "kind": "pydantic2",
+      "source": "shioaji.position"
+    },
+    "ProfitLoss": {
+      "_present": true,
+      "bases": [
+        "shioaji.base.BaseModelV20"
+      ],
+      "fields": {
+        "code": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "str"
+        },
+        "date": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "str"
+        },
+        "id": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "pnl": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "quantity": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        }
+      },
+      "kind": "pydantic2",
+      "source": "shioaji.position"
+    },
+    "QuoteFOPv1": {
+      "_present": false
+    },
+    "QuoteSTKv1": {
+      "_present": true,
+      "bases": [
+        "builtins.object"
+      ],
+      "fields": {
+        "amount": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Decimal"
+        },
+        "ask_price": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "list[Decimal]"
+        },
+        "ask_side_total_cnt": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "ask_side_total_vol": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "ask_volume": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "list[int]"
+        },
+        "avail_borrowing": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "avg_price": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Decimal"
+        },
+        "bid_price": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "list[Decimal]"
+        },
+        "bid_side_total_cnt": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "bid_side_total_vol": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "bid_volume": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "list[int]"
+        },
+        "chg_type": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "close": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Decimal"
+        },
+        "closing_oddlot_amount": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Decimal"
+        },
+        "closing_oddlot_ask_price": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Decimal"
+        },
+        "closing_oddlot_bid_price": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Decimal"
+        },
+        "closing_oddlot_close": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Decimal"
+        },
+        "closing_oddlot_shares": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "code": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "str"
+        },
+        "datetime": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "datetime"
+        },
+        "diff_ask_vol": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "list[int]"
+        },
+        "diff_bid_vol": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "list[int]"
+        },
+        "fixed_trade_amount": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Decimal"
+        },
+        "fixed_trade_vol": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "high": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Decimal"
+        },
+        "low": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Decimal"
+        },
+        "open": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Decimal"
+        },
+        "pct_chg": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Decimal"
+        },
+        "price_chg": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Decimal"
+        },
+        "simtrade": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "bool"
+        },
+        "suspend": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "bool"
+        },
+        "tick_type": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "total_amount": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Decimal"
+        },
+        "total_volume": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "volume": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        }
+      },
+      "kind": "annotated",
+      "source": "shioaji"
+    },
+    "ScannerItem": {
+      "_present": true,
+      "bases": [
+        "shioaji.base.BaseModelV20"
+      ],
+      "fields": {
+        "amount": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "ask_orders": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "ask_volumes": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "average_price": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "bid_orders": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "bid_volumes": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "buy_price": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "buy_volume": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "change_price": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "change_type": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "close": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "code": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "str"
+        },
+        "date": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "str"
+        },
+        "high": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "low": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "name": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "str"
+        },
+        "open": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "price_range": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "rank_value": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Union[float, int]"
+        },
+        "sell_price": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "sell_volume": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "tick_type": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "total_amount": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "total_volume": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "ts": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "volume": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "volume_ratio": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "yesterday_volume": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        }
+      },
+      "kind": "pydantic2",
+      "source": "shioaji.data"
+    },
+    "Settlement": {
+      "_present": true,
+      "bases": [
+        "shioaji.position.LazyModel"
+      ],
+      "fields": {
+        "status": {
+          "default": "FetchStatus.Unfetch",
+          "has_default": true,
+          "required": false,
+          "type": "FetchStatus"
+        },
+        "t1_day": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "str"
+        },
+        "t1_money": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "t2_day": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "str"
+        },
+        "t2_money": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "t_day": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "str"
+        },
+        "t_money": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        }
+      },
+      "kind": "pydantic2",
+      "source": "shioaji.position"
+    },
+    "Snapshot": {
+      "_present": true,
+      "bases": [
+        "shioaji.base.BaseModelV20"
+      ],
+      "fields": {
+        "amount": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "average_price": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "buy_price": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "buy_volume": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "change_price": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "change_rate": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "change_type": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "ChangeType"
+        },
+        "close": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "code": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "str"
+        },
+        "exchange": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "str"
+        },
+        "high": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "low": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "open": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "sell_price": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "sell_volume": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "tick_type": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "TickType"
+        },
+        "total_amount": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "total_volume": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "ts": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "volume": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "volume_ratio": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "yesterday_volume": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        }
+      },
+      "kind": "pydantic2",
+      "source": "shioaji.data"
+    },
+    "Stock": {
+      "_present": true,
+      "bases": [
+        "shioaji.contracts.Contract"
+      ],
+      "fields": {
+        "category": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "code": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "str"
+        },
+        "currency": {
+          "default": "Currency.TWD",
+          "has_default": true,
+          "required": false,
+          "type": "Currency"
+        },
+        "day_trade": {
+          "default": "DayTrade.No",
+          "has_default": true,
+          "required": false,
+          "type": "DayTrade"
+        },
+        "delivery_date": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "delivery_month": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "exchange": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Exchange"
+        },
+        "limit_down": {
+          "default": 0.0,
+          "has_default": true,
+          "required": false,
+          "type": "float"
+        },
+        "limit_up": {
+          "default": 0.0,
+          "has_default": true,
+          "required": false,
+          "type": "float"
+        },
+        "margin_trading_balance": {
+          "default": 0,
+          "has_default": true,
+          "required": false,
+          "type": "int"
+        },
+        "multiplier": {
+          "default": 0,
+          "has_default": true,
+          "required": false,
+          "type": "int"
+        },
+        "name": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "option_right": {
+          "default": "OptionRight.No",
+          "has_default": true,
+          "required": false,
+          "type": "OptionRight"
+        },
+        "reference": {
+          "default": 0.0,
+          "has_default": true,
+          "required": false,
+          "type": "float"
+        },
+        "security_type": {
+          "default": "SecurityType.Stock",
+          "has_default": true,
+          "required": false,
+          "type": "SecurityType"
+        },
+        "short_selling_balance": {
+          "default": 0,
+          "has_default": true,
+          "required": false,
+          "type": "int"
+        },
+        "strike_price": {
+          "default": 0,
+          "has_default": true,
+          "required": false,
+          "type": "Union[float, int[strict]]"
+        },
+        "symbol": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "target_code": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "underlying_code": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "underlying_kind": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "unit": {
+          "default": 0,
+          "has_default": true,
+          "required": false,
+          "type": "Union[float, int[strict]]"
+        },
+        "update_date": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        }
+      },
+      "kind": "pydantic2",
+      "source": "shioaji.contracts"
+    },
+    "StockAccount": {
+      "_present": true,
+      "bases": [
+        "shioaji.account.Account"
+      ],
+      "fields": {
+        "account_id": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "str"
+        },
+        "account_type": {
+          "default": "AccountType.Stock",
+          "has_default": true,
+          "required": false,
+          "type": "AccountType"
+        },
+        "broker_id": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "str"
+        },
+        "person_id": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "str"
+        },
+        "signed": {
+          "default": false,
+          "has_default": true,
+          "required": false,
+          "type": "bool"
+        },
+        "username": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        }
+      },
+      "kind": "pydantic2",
+      "source": "shioaji.account"
+    },
+    "StockOrder": {
+      "_present": true,
+      "bases": [
+        "shioaji.order.BaseOrder"
+      ],
+      "fields": {
+        "account": {
+          "default": null,
+          "has_default": true,
+          "required": false,
+          "type": "Account"
+        },
+        "action": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Action"
+        },
+        "ca": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "custom_field": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str[max_length=6]"
+        },
+        "daytrade_short": {
+          "default": false,
+          "has_default": true,
+          "required": false,
+          "type": "bool"
+        },
+        "id": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "order_cond": {
+          "default": "StockOrderCond.Cash",
+          "has_default": true,
+          "required": false,
+          "type": "StockOrderCond"
+        },
+        "order_lot": {
+          "default": "StockOrderLot.Common",
+          "has_default": true,
+          "required": false,
+          "type": "StockOrderLot"
+        },
+        "order_type": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "OrderType"
+        },
+        "ordno": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        },
+        "price": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Union[float, int[strict]]"
+        },
+        "price_type": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "StockPriceType"
+        },
+        "quantity": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int[gt=0]"
+        },
+        "seqno": {
+          "default": "",
+          "has_default": true,
+          "required": false,
+          "type": "str"
+        }
+      },
+      "kind": "pydantic2",
+      "source": "shioaji.order"
+    },
+    "StockPosition": {
+      "_present": true,
+      "bases": [
+        "shioaji.position.Position"
+      ],
+      "fields": {
+        "code": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "str"
+        },
+        "collateral": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "cond": {
+          "default": "StockOrderCond.Cash",
+          "has_default": true,
+          "required": false,
+          "type": "StockOrderCond"
+        },
+        "direction": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Action"
+        },
+        "id": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "interest": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "last_price": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "margin_purchase_amount": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "pnl": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "price": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "float"
+        },
+        "quantity": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "short_sale_margin": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "yd_quantity": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        }
+      },
+      "kind": "pydantic2",
+      "source": "shioaji.position"
+    },
+    "TickFOPv1": {
+      "_present": true,
+      "bases": [
+        "builtins.object"
+      ],
+      "fields": {
+        "amount": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Decimal"
+        },
+        "ask_side_total_vol": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "avg_price": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Decimal"
+        },
+        "bid_side_total_vol": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "chg_type": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "close": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Decimal"
+        },
+        "code": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "str"
+        },
+        "datetime": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "datetime"
+        },
+        "high": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Decimal"
+        },
+        "low": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Decimal"
+        },
+        "open": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Decimal"
+        },
+        "pct_chg": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Decimal"
+        },
+        "price_chg": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Decimal"
+        },
+        "simtrade": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "bool"
+        },
+        "tick_type": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "total_amount": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Decimal"
+        },
+        "total_volume": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "underlying_price": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Decimal"
+        },
+        "volume": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        }
+      },
+      "kind": "annotated",
+      "source": "shioaji"
+    },
+    "TickSTKv1": {
+      "_present": true,
+      "bases": [
+        "builtins.object"
+      ],
+      "fields": {
+        "amount": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Decimal"
+        },
+        "ask_side_total_cnt": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "ask_side_total_vol": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "avg_price": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Decimal"
+        },
+        "bid_side_total_cnt": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "bid_side_total_vol": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "chg_type": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "close": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Decimal"
+        },
+        "closing_oddlot_shares": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "code": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "str"
+        },
+        "datetime": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "datetime"
+        },
+        "fixed_trade_vol": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "high": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Decimal"
+        },
+        "intraday_odd": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "bool"
+        },
+        "low": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Decimal"
+        },
+        "open": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Decimal"
+        },
+        "pct_chg": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Decimal"
+        },
+        "price_chg": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Decimal"
+        },
+        "simtrade": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "bool"
+        },
+        "suspend": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "bool"
+        },
+        "tick_type": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "total_amount": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Decimal"
+        },
+        "total_volume": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        },
+        "volume": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "int"
+        }
+      },
+      "kind": "annotated",
+      "source": "shioaji"
+    },
+    "Ticks": {
+      "_present": true,
+      "bases": [
+        "shioaji.base.BaseModelV20"
+      ],
+      "fields": {
+        "ask_price": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "list[float]"
+        },
+        "ask_volume": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "list[int]"
+        },
+        "bid_price": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "list[float]"
+        },
+        "bid_volume": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "list[int]"
+        },
+        "close": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "list[float]"
+        },
+        "tick_type": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "list[int]"
+        },
+        "ts": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "list[int]"
+        },
+        "volume": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "list[int]"
+        }
+      },
+      "kind": "pydantic2",
+      "source": "shioaji.data"
+    },
+    "Trade": {
+      "_present": true,
+      "bases": [
+        "shioaji.base.BaseModelV20"
+      ],
+      "fields": {
+        "contract": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Contract"
+        },
+        "order": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "Union[FuturesOrder, Order, StockOrder]"
+        },
+        "status": {
+          "default": null,
+          "has_default": false,
+          "required": true,
+          "type": "OrderStatus"
+        }
+      },
+      "kind": "pydantic2",
+      "source": "shioaji.order"
+    },
+    "TradingLimits": {
+      "_present": false
+    },
+    "UsageStatus": {
+      "_present": true,
+      "bases": [
+        "shioaji.base.BaseModelV20"
+      ],
+      "fields": {
+        "bytes": {
+          "default": 0,
+          "has_default": true,
+          "required": false,
+          "type": "int"
+        },
+        "connections": {
+          "default": 0,
+          "has_default": true,
+          "required": false,
+          "type": "int"
+        },
+        "limit_bytes": {
+          "default": 0,
+          "has_default": true,
+          "required": false,
+          "type": "int"
+        },
+        "remaining_bytes": {
+          "default": 0,
+          "has_default": true,
+          "required": false,
+          "type": "int"
+        }
+      },
+      "kind": "pydantic2",
+      "source": "shioaji.data"
+    }
+  },
+  "package_layout": {
+    "_present": true,
+    "is_compiled": false,
+    "submodules": {
+      "shioaji._core": false,
+      "shioaji.backend": true,
+      "shioaji.backend.solace.api": true,
+      "shioaji.config": true,
+      "shioaji.constant": true,
+      "shioaji.main": false,
+      "shioaji.order": true,
+      "shioaji.shioaji": true
+    },
+    "top_level_export_count": 28,
+    "top_level_exports": [
+      "Account",
+      "BidAskFOPv1",
+      "BidAskSTKv1",
+      "Exchange",
+      "Order",
+      "QuoteSTKv1",
+      "Shioaji",
+      "TickFOPv1",
+      "TickSTKv1",
+      "account",
+      "backend",
+      "base",
+      "common",
+      "config",
+      "constant",
+      "contracts",
+      "data",
+      "error",
+      "main",
+      "on_event",
+      "on_quote",
+      "order",
+      "orderprops",
+      "position",
+      "reserve",
+      "shioaji",
+      "stream_data_type",
+      "utils"
+    ]
+  },
+  "schema_version": 2,
+  "snapshot_sha256": "8710c435c2088db97648948d8b94576295471eaf1eb133a495859902df92c0a2"
+}
