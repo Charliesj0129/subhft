@@ -2,41 +2,43 @@
 
 ## Last Updated
 
-- **Date**: 2026-02-24
-- **Session**: Context engineering overhaul + skills folder cleanup
+- **Date**: 2026-07-08
+- **Session**: Unfinished-work sweep via Agent System v2 (task-intake per item)
 
 ## Current Goal
 
-Optimize AI context engineering to reduce token waste when agents interact with the codebase.
+Process every outstanding-work item found by the 2026-07-08 repo review, one
+item at a time through task-intake, with verification per blast radius.
 
 ## Status
 
-- [x] Deep-read entire project source code (22 Python subpackages + Rust core)
-- [x] Rewrote `CLAUDE.md` with system identity, runtime planes, data contracts, config chain, alpha governance, Rust boundary, env vars
-- [x] Fixed `AGENTS.md` (removed broken refs, updated tech stack, added pointers)
-- [x] Deleted fictional `README_AI.md`
-- [x] Refactored `docs/ARCHITECTURE.md` into index pointing to canonical source
-- [x] Fixed 14 double-nested skill folders
-- [x] Updated `00-index.md` with organized 60-skill inventory
-- [x] Writing comprehensive agent memory with code-level knowledge
+- [x] Full unfinished-work inventory (git exposure, PRs, ops debts, research
+      threads, agent-system follow-ups)
+- [x] Committed previously COMMIT-LESS shioaji surface-diff tooling + SDK
+      goldens + runbook + Makefile targets (1a4f2d44; 17 guard tests green)
+- [x] Committed task-intake Agent System v2 wiring (CLAUDE.md/AGENTS.md/skills
+      index/SKILL.md, cf32f5b1; all referenced paths verified)
+- [x] Committed governor v1.1 plan/spec + refinement-loop goal doc (1119e6da)
+- [x] Governor CLI `draft`/`generate` wired + fail-closed CLI tests
+      (483f7cba; TDD red→green; 354-test candidate_loop suite green)
+- [x] Memory updates (current-risks 41-commit count, model-routing ledger)
 
 ## Blockers
 
-None.
+- Push/PR decisions, .gitignore hunk, session_runtime 451-guard commit,
+  PR #371/#376 next steps, prod back-to-live: all await Charlie (see
+  current-risks.md and open-questions.md).
 
 ## Next Steps
 
-- Continue enriching module-level docs with code-specific patterns and gotchas
-- Update `current-architecture.md` as new features land
+- Charlie to decide push approval for the 4 local-only branches (41 commits).
+- Sonnet Tier-2 widening probe still owed (governor CLI probe was
+  blocked-by-harness, see model-routing.md 2026-07-08 entry).
+- User-owned in-flight research work (T1-F re-expand, T1-G/H/I/J, factory.py
+  +2.2k lines) intentionally untouched.
 
 ## Context
 
-- Key files modified:
-  - `CLAUDE.md` (rewrite)
-  - `AGENTS.md` (fix)
-  - `README_AI.md` (deleted)
-  - `docs/ARCHITECTURE.md` (refactored)
-  - `.agent/skills/00-index.md` (rewrite)
-  - `.agent/skills/*/SKILL.md` (14 un-nested)
-  - `.agent/memory/current_session.md` (updated)
-  - `.agent/memory/codebase_map.md` (created)
+- Branch: `docs/agent-knowledge-distillation`; 41 local-only commits across
+  4 branches; `main` behind origin by 14.
+- Working tree keeps ~30 dirty user research files — preserve them.

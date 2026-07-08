@@ -195,3 +195,23 @@ Lessons:
   the buggy version for free (no hand-editing → zero transcription risk), run
   the new test (expect fail), then cp the snapshot back and re-verify the blob
   hash. Clean and reusable.
+
+### 2026-07-08 · Tier 2 · code+test · governor CLI wiring (plan Task 5) · Sonnet → orchestrator-direct · BLOCKED-BY-HARNESS (not a model failure)
+Interventions: n/a (executor never got to edit) · Cost: 2 spawns ≈120K subagent tokens wasted
+Intended as the class's harder widening probe (cross-module CLI wiring vs
+prior single-function fixes). Both Sonnet spawns were blocked: the SESSION was
+still in plan mode and subagents inherit it as system-enforced — packet-level
+"EXECUTE mode" wording and Agent-tool `mode: acceptEdits` did NOT override it.
+Both executors behaved correctly (read-only pre-flight, wrote a plan, stopped;
+zero unauthorized edits) — so this records NO failure against Sonnet Tier-2
+code+test (scoreboard unchanged at 2/2; widening probe still owed).
+Orchestrator implemented directly per plan Task 5: TDD red
+("invalid choice: 'governor'") → green (3 new + 8 existing = 11 passed; full
+candidate_loop suite 354 passed; ruff check+format clean). Commit 483f7cba via
+--narrow-commit (staged set == 2 files; 32-file dirty user tree preserved).
+Lessons:
+- Check session permission mode BEFORE spawning executors: in plan mode,
+  subagents are read-only regardless of packet wording or Agent-tool mode
+  param. Exit plan mode first, then delegate.
+- A blocked-by-harness outcome must not demote the class; record it separately
+  from capability failures.

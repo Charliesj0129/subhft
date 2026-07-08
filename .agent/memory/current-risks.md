@@ -5,14 +5,19 @@ record: permanent invariants (project-overview.md) or resolved items (delete,
 noting resolution in the relevant lessons file). A stale register is worse
 than none.
 
-## RISK: unpushed local commits (verified 2026-07-06)
-25 commits exist only on this machine, across 3 local-only branches with no
-upstream: `chore/shioaji-153-validation-harness`,
+## RISK: unpushed local commits (verified 2026-07-08)
+41 commits exist only on this machine, across 4 local-only branches with no
+upstream: `docs/agent-knowledge-distillation` (current work branch — stacks
+the governor + shioaji-tooling + agent-v2 chain),
+`chore/shioaji-153-validation-harness`,
 `research-flow/edge-evidence-parity-hardening`,
 `research/replay-parity-field-set`. `main` is behind origin/main by 14.
-Treat these commits as irreplaceable; re-verify with
-`git log --branches --not --remotes --oneline | wc -l` at session start.
-Expires: when branches gain upstreams or are merged. Owner: Charlie.
+2026-07-08: the previously COMMIT-LESS work (scripts/shioaji_api_diff + SDK
+goldens + runbook, 06-16 session) is now committed (1a4f2d44) — disk-loss no
+longer erases it, but push approval is still owed. Treat all as irreplaceable;
+re-verify with `git log --branches --not --remotes --oneline | wc -l` at
+session start. Expires: when branches gain upstreams or are merged.
+Owner: Charlie.
 
 ## RISK: shioaji 1.5.3 migration in flight (since 2026-06-16)
 Pin is `shioaji==1.3.3`. 1.5.3 = full Rust `_core` rewrite; upgrade PR is
