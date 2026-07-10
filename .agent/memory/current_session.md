@@ -32,8 +32,9 @@
 
 ## Context
 
-- Branch: `docs/agent-knowledge-distillation` (upstream exists; 19 commits
-  ahead of origin after the wrap-up commit — push awaits approval).
+- Branch: `docs/agent-knowledge-distillation` (synced with origin — the
+  full institutionalization batch pushed 2026-07-11 with Charlie's
+  approval).
 - Working tree: 7 M research files + `.claude/settings.json` +
   `.understand-anything/` are Charlie's concurrent work — preserve
   byte-identical. The untracked research validation/test backlog was

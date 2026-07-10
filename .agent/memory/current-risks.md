@@ -18,8 +18,8 @@ Expires: when #371 end-state is decided. Owner: Charlie.
 
 ## RISK: commits accumulate unpushed between approved pushes (standing; tooling landed 2026-07-11)
 Push is a per-operation human approval, so new local commits sit on one disk
-until the next approved push (19 ahead on docs/agent-knowledge-distillation
-after the 2026-07-11 institutionalization wrap-up). Mitigation tooling: `make git-bundle-backup DEST=<dir>`
+until the next approved push (institutionalization batch pushed with
+Charlie's approval 2026-07-11; branch synced at that point). Mitigation tooling: `make git-bundle-backup DEST=<dir>`
 (`scripts/git_bundle_backup.py` — fail-closed: dest required + outside repo,
 all refs, verified, covers HEAD, never overwrites). FIRST RUN BLOCKED until
 Charlie approves a destination; record each run (date + dest + bundle name)
