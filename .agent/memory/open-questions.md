@@ -24,6 +24,13 @@ curation choice, not a mechanical pass);
 row (references a src/hft_platform/scripts dir that does not exist; no backtick
 token there to annotate). Decides: USER.
 
+## git-bundle backup destination (opened 2026-07-11)
+Institutionalization #11 tooling landed (`make git-bundle-backup DEST=...`,
+commit 1a973302) but the FIRST RUN is blocked: the destination must be an
+existing directory outside the repo that Charlie controls (second disk /
+mount — never a synced or public location). One-time approval, then runs
+record themselves in current-risks.md. Decides: USER.
+
 ## OrderIntent §7 parity producer fields (opened 2026-06-03)
 Live parity for session/risk/force-flat dimensions needs a producer-side
 OrderIntent change plus a future `hft.order_intents` ClickHouse migration —

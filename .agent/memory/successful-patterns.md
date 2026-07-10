@@ -22,6 +22,13 @@ venvs (`make shioaji-surface`), builds a human runbook (`make shioaji-diff` →
 (`make shioaji-guard`) fails on silent surface drift. Reuse this pattern for
 any pinned-SDK upgrade.
 
+## Gate exit codes must be read directly, never through a pipe (confirmed 2026-05-25, 2026-07-11)
+`cmd | tail`/`| tee` returns the LAST command's exit code — a red gate sails
+through `&&`. 2026-05-25: CK sync counts (PIPESTATUS fix); 2026-07-11:
+`make agent-docs-check 2>&1 | tail -1 && git commit` landed 7d3b2475 with the
+gate red (fixed in ba646cef). Recipe: run the gate bare as its own `&&` link,
+or check `${PIPESTATUS[0]}` when a pipe is unavoidable.
+
 ## Guarded ClickHouse access for analysis (standing)
 `make ch-query-guard-check` / `ch-query-guard-run` — read-only policy,
 memory/time/result limits, evidence artifacts. Use instead of raw clients

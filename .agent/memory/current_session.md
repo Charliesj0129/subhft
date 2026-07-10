@@ -2,47 +2,38 @@
 
 ## Last Updated
 
-- **Date**: 2026-07-10 (third wave)
-- **Session**: "全部啟動" — activate ALL wave-2+ institutionalization points
-  (#3, #5, #7–#15) from the approved 15-point spec
-  (`docs/superpowers/specs/2026-07-10-agent-system-institutionalization-design.md`).
-
-## Resumable block (task-intake §8 — delete when the activation completes)
-
-- **Done units**: #3 governance change control (ba5b0247); #5 delegation
-  archive (99c9b0c0); #7 checkpoint/resume (dc7d958c); #8 golden intake
-  tasks (be745886); #9 commit-work validation matrix (ae933463);
-  #10a verdict cadence (fe62fbe4); #10b research evidence backlog
-  (ea5cfeed, 61 files); #11 bundle tooling (1a973302, first run blocked on
-  destination); #12 branch-per-theme rule + registry (this commit).
-- **Next step**: #13 wrap-up checklist (memory-update skill), #14 dual-memory
-  division of labor (memory/README.md), #15 quarterly meta-audit, spec
-  rollout update (mark points DONE + fix stale no-remote/37-unpushed
-  evidence), memory + final report.
-- **Verification state**: `make agent-docs-check` green after every commit so
-  far; every commit passed `--narrow-commit` with staged-set == allowlist;
-  #10b: 131 research tests green (3.63s); #11: 5 tests + ruff + mypy green;
-  `make check` / `make ci` not yet run (planned: once, at the end).
-- **Standing constraints**: no push (human-approved per op); #11 first bundle
-  needs a destination from Charlie; research M-files stay byte-identical.
+- **Date**: 2026-07-11
+- **Session**: "全部啟動" activation COMPLETE — all 15 institutionalization
+  points from
+  `docs/superpowers/specs/2026-07-10-agent-system-institutionalization-design.md`
+  are landed; the spec's rollout table carries every commit hash.
 
 ## Status
 
-- [x] Wave 1 (same day, earlier session): spec ddce6a24 + #1 manifest
-      b898352b + #2 agent-docs gate 0aafd55e + #4 ROI-debt 7ad864b1 +
-      #6 probes 93ddfb47.
-- [ ] Wave 2+ activation in flight (see resumable block).
+- [x] Wave 1 (2026-07-10): spec ddce6a24 + #1 b898352b + #2 0aafd55e +
+      #4 7ad864b1 + #6 93ddfb47.
+- [x] Wave 2+ (2026-07-10/11): #3 ba5b0247, #5 99c9b0c0, #7 dc7d958c,
+      #8 be745886, #9 ae933463, #10 fe62fbe4+ea5cfeed, #11 1a973302,
+      #12 7d3b2475+ba646cef, #13 707b07fc, #14 4a613b88, #15 c4261c67.
+- Verification: every commit through the `--narrow-commit` gate
+  (staged-set == allowlist); `make agent-docs-check` green at each landing
+  (one late catch: 7d3b2475 shipped red because a pipe masked the exit
+  code — fixed same session in ba646cef); #10b 131 research tests green;
+  #11 5 behavior tests + ruff + mypy green. NOT run: `make check` /
+  `make ci` (docs/skills/memory + one standalone script blast radius;
+  lint/typecheck/tests ran per-file where code changed).
 
 ## Blockers
 
-- #11 first bundle run: destination decision (Charlie).
+- #11 first bundle run: destination decision (Charlie) — see
+  open-questions.md.
 - Unchanged from 07-08: #371/#376 close decisions, prod deploy of 433be777,
   prod back-to-live.
 
 ## Context
 
-- Branch: `docs/agent-knowledge-distillation` (upstream exists; 14 commits
-  ahead of origin as of the #12 commit — push awaits approval).
+- Branch: `docs/agent-knowledge-distillation` (upstream exists; 19 commits
+  ahead of origin after the wrap-up commit — push awaits approval).
 - Working tree: 7 M research files + `.claude/settings.json` +
   `.understand-anything/` are Charlie's concurrent work — preserve
   byte-identical. The untracked research validation/test backlog was

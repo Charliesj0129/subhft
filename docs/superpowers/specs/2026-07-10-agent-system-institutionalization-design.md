@@ -176,7 +176,15 @@ Each point below: **Evidence → Institution → Deliverable → Acceptance**.
 | Wave | Points | Status |
 |---|---|---|
 | 1 | #1 (b898352b), #2 (0aafd55e), #4 (7ad864b1), #6 (93ddfb47), this spec | DONE 2026-07-10 |
-| 2+ | #3, #5, #7, #8, #9, #10, #11, #12, #13, #14, #15 | Each activates on Charlie's explicit instruction; #11 additionally needs a backup destination decision |
+| 2+ | #3 (ba5b0247), #5 (99c9b0c0), #7 (dc7d958c), #8 (be745886), #9 (ae933463), #10 (fe62fbe4 cadence + ea5cfeed backlog), #11 (1a973302 tooling only), #12 (7d3b2475 + ba646cef), #13 (707b07fc), #14 (4a613b88), #15 (c4261c67) | DONE 2026-07-10/11 on Charlie's "全部啟動"; #11 first bundle run still blocked on a backup destination decision |
+
+Evidence correction (2026-07-11): §11's "no remote / ~37 unpushed commits"
+was true at drafting but stale at activation — `origin`
+(github.com/Charliesj0129/subhft) exists and user-approved pushes on
+2026-07-08 left every local commit on a remote ref (see
+`.agent/memory/current-risks.md`). The point's rationale is now the
+narrower standing gap: commits accumulating between per-operation approved
+pushes. The tooling still landed; only the urgency changed.
 
 Wave-1 verification evidence lives in the session record: gate runs
 (staged-set == allowlist, exit 0 each), 10 passing behavior tests, live
