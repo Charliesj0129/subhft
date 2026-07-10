@@ -42,6 +42,41 @@ SKILL.md and replace with a pointer (see `memory-update` skill).
 - Tier X (live/prod ops, git surgery, secrets, dependency pins, frozen
   registry/profiles): never delegated; Fable + explicit user confirmation.
 
+## Next probes (pre-registered — run as written, then convert to a ledger entry)
+
+Discipline borrowed from research pre-registration: entry conditions, success
+criteria, and failure handling are written BEFORE the probe runs and are not
+adjusted afterward to flatter an outcome. A probe that cannot run as written
+is re-registered, not bent.
+
+### P1 · Haiku 4.5 · docs/mechanical · widen single-known-target → multi-file find-and-fix-ALL
+- Why owed: class is 2/2 clean at single-known-target scope (2026-07-06,
+  2026-07-07); the AGENTS.md widening rule requires one harder probe before
+  the class's validated scope grows.
+- Entry: a REAL (not manufactured) mechanical task spanning >=2 files, or a
+  find-and-fix-ALL sweep where the executor must enumerate targets itself from
+  a pasted command; Tier-1 surfaces only.
+- Success: every target found (orchestrator holds a privately pre-computed
+  target list as the answer key); zero scope drift; zero interventions;
+  report contract honored.
+- Failure handling: one failure → packet lesson only, scope unchanged; second
+  failure at this scope → demote the class (Haiku→Sonnet) per AGENTS.md until
+  a deliberately re-run probe passes. Bad-packet failures never demote.
+
+### P2 · Sonnet · Tier-2 code+test · widen <=2-file single-function → multi-file / cross-module
+- Why owed: class is 2/2 clean at <=2-file single-function scope (2026-07-06,
+  2026-07-08); the intended harder probe (governor CLI wiring, 2026-07-08)
+  ended BLOCKED-BY-HARNESS (plan mode), so the widening probe is still unrun.
+- Entry: a REAL Tier-2 change touching >=3 files or crossing a module boundary
+  with real callers; non-hot-path; session verified NOT in plan mode before
+  spawn; full 12-field packet; break-probe validation planned at intake.
+- Success: behavior lands with focused tests; break-probe fails on the buggy
+  baseline and passes after; zero unauthorized files touched; at most one
+  intervention and it is not a code fix.
+- Failure handling: same two-failure demotion rule (Sonnet→orchestrator for
+  this class); BLOCKED-BY-HARNESS records separately and never counts against
+  the class.
+
 ## Observed outcomes
 (Each entry: date, tier, surface, executor model, outcome, packet lesson.)
 
