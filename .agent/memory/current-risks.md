@@ -16,6 +16,16 @@ distillation chain). Never force-push; resolve the ref when #371 is
 retargeted to 1.5.5 or closed. `main` remains behind origin/main by 14.
 Expires: when #371 end-state is decided. Owner: Charlie.
 
+## RISK: commits accumulate unpushed between approved pushes (standing; tooling landed 2026-07-11)
+Push is a per-operation human approval, so new local commits sit on one disk
+until the next approved push (12 ahead on docs/agent-knowledge-distillation
+as of 2026-07-11). Mitigation tooling: `make git-bundle-backup DEST=<dir>`
+(`scripts/git_bundle_backup.py` — fail-closed: dest required + outside repo,
+all refs, verified, covers HEAD, never overwrites). FIRST RUN BLOCKED until
+Charlie approves a destination; record each run (date + dest + bundle name)
+below this line.
+Expires: when a remote-backup/push-cadence decision lands. Owner: Charlie.
+
 ## RISK: shioaji 1.5.x migration in flight (since 2026-06-16; retargeted to 1.5.5 on 2026-07-08)
 Pin is `shioaji==1.3.3`. 1.5.x = full Rust `_core` rewrite; migration
 retargeted to 1.5.5 (1.5.3→1.5.5 surface diff SAFE — see the runbook).

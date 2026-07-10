@@ -133,6 +133,10 @@ git-session-check: ## Full git hygiene check (worktrees, branches, stash, confli
 agent-docs-check: ## Verify agent governing docs match the tree (paths, skill index, memory table)
 	$(PY) scripts/check_agent_docs.py
 
+git-bundle-backup: ## Verified git bundle backup to DEST (existing dir OUTSIDE the repo; required)
+	@test -n "$(DEST)" || { echo "DEST=<existing dir outside the repo> is required"; exit 2; }
+	$(PY) scripts/git_bundle_backup.py --dest "$(DEST)"
+
 check: lint typecheck discipline dependency-boundary test-hygiene-check agent-docs-check ## Run all code quality checks
 
 # ============================================================================
