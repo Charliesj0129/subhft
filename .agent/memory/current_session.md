@@ -19,9 +19,9 @@
   (staged-set == allowlist); `make agent-docs-check` green at each landing
   (one late catch: 7d3b2475 shipped red because a pipe masked the exit
   code — fixed same session in ba646cef); #10b 131 research tests green;
-  #11 5 behavior tests + ruff + mypy green. NOT run: `make check` /
-  `make ci` (docs/skills/memory + one standalone script blast radius;
-  lint/typecheck/tests ran per-file where code changed).
+  #11 5 behavior tests + ruff + mypy green; `make check` exit=0 after the
+  wrap-up commit (lint, typecheck, discipline, dependency-boundary,
+  test-hygiene, agent-docs). NOT run: `make ci` (no merge in this session).
 
 ## Blockers
 
