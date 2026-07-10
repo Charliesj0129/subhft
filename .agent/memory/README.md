@@ -17,6 +17,7 @@ IDs. Entries <=10 lines; long narratives go to a dated topic file, linked.
 | `failed-attempts.md` | Refuted approaches + research KILL index — do not re-walk | Immediately after any refuted approach |
 | `successful-patterns.md` | Recipes confirmed >=2 times | On second confirmation; promote mature ones into a rule/skill |
 | `current_session.md` | Session state handoff (existing convention) | Session end / "save" / "wrap up" |
+| `delegations/` (dir) | Verbatim packet + executor report + review verdict per delegation, one file `YYYY-MM-DD-<slug>.md` (see its README) | With every new `model-routing.md` ledger entry, which links it |
 
 What does NOT belong here: anything derivable from code, git history, or
 CLAUDE.md; one-off conversational context; secrets of any kind.

@@ -120,9 +120,11 @@ and anything destructive stay human-approved per operation.
 
 ### 10. Memory update plan
 After EVERY delegation (success or not): ledger entry + scoreboard update in
-`.agent/memory/model-routing.md` (schema there); route other durable lessons
-per `memory-update`. Commit the ledger through the same narrow gate when
-committing task work.
+`.agent/memory/model-routing.md` (schema there), PLUS the archive file the
+schema's Archive field points to — packet + executor report + review verdict,
+verbatim, at `.agent/memory/delegations/` (see its README). Route other
+durable lessons per `memory-update`. Commit the ledger and archive through
+the same narrow gate when committing task work.
 
 ### 11. Report to user
 Final message: what changed; commands run with output excerpts; checks NOT
@@ -157,7 +159,8 @@ execution, then the §11 report.
 - [ ] Cheapest capable model assigned to each subagent
 - [ ] Evidence artifacts saved before spawn
 - [ ] Validation + review plans written at intake
-- [ ] Ledger updated (incl. net-win) after the delegation
+- [ ] Ledger updated (incl. net-win) + delegation archive file written after
+      the delegation
 - [ ] User report lists checks NOT run
 
 ## Example prompt

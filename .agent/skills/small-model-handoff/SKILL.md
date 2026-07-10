@@ -47,7 +47,10 @@ Verified task scope (from `read-only-audit`); risk tier; task type; target files
 6. On return: review per `strict-code-review` Step 0 (scope-diff, personal
    re-run, break-probe, red-gate adjudication, ground-truth cross-check);
    never forward unverified executor claims to the user.
-7. Record the outcome in `.agent/memory/model-routing.md` (schema there).
+7. Record the outcome in `.agent/memory/model-routing.md` (schema there) and
+   archive the packet + executor report + review verdict verbatim at
+   `.agent/memory/delegations/` (one file per delegation; the ledger entry
+   links it).
 
 ## Short packet template (Tier-1 / very small Tier-2)
 ```

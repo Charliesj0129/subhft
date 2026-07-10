@@ -24,6 +24,7 @@ exists to raise this column: delegate only when a trigger fires.
 ### <date> · Tier <n> · <task type> · <surface> · <model> · <SUCCESS|PARTIAL|FAIL|ESCALATED>
 Interventions: <n> · Cost: <tokens/time if known>
 ROI: net-win <yes|no|unclear> · realized-saving <cheaper-model|parallelism|context-isolation|long-running-labor|review-separation|none> · would-delegate-again <y/n>
+Archive: .agent/memory/delegations/<YYYY-MM-DD>-<slug>.md (packet + executor report + review verdict, verbatim)
 Lessons: <=3 bullets, only if new.
 ```
 
