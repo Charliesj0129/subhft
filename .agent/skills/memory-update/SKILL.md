@@ -29,20 +29,50 @@ The session's durable facts (not chat noise).
    memory prose with a one-line pointer; delete lessons superseded by skill
    text; collapse outcome entries >1 quarter old with no unique lesson into
    the scoreboard counts.
-7. Also update `.agent/memory/current_session.md` per
-   `.agent/rules/05-project-structure.md`.
+7. Session-ending invocation ("save" / "wrap up" / session end): run the
+   full §Session wrap-up checklist below, in order.
+
+## Session wrap-up (ordered checklist — run top to bottom)
+
+Replaces the prose convention "update current_session.md at session end";
+a wrap-up that skips a step states which and why.
+
+1. [ ] `current_session.md`: refresh Last Updated / Status / Blockers /
+       Context; update the branch registry (`.agent/rules/30-git.md`
+       §Branch discipline); refresh the resumable block of any task that
+       outlives this session (task-intake §8); delete blocks of completed
+       tasks.
+2. [ ] Lessons routing: run Procedure steps 1–6 on every durable fact from
+       the session.
+3. [ ] `current-risks.md`: add new active risks (owner + expiry condition);
+       delete resolved ones, noting resolution in the relevant lessons file.
+4. [ ] `open-questions.md`: add newly blocked decisions; move resolved ones
+       out, citing where the answer landed.
+5. [ ] Uncommitted agent-system sweep (same-session commit rule):
+       `git status --short -- CLAUDE.md AGENTS.md .agent/` — any modified
+       governance file needs its `docs(agents):` narrow-gate commit +
+       `.agent/CHANGELOG.md` line before the session ends (hand the commit
+       to the commit-work skill; this skill writes only memory files).
+       Agent-system debt does not cross sessions.
+6. [ ] Dual-memory cross-check: apply `.agent/memory/README.md` §Division
+       of labor — shareable lessons found only in private memory move to
+       repo memory; user preferences found in repo memory move to private.
 
 ## Safety rules
 Memory files are the only files this skill may write. Never store secrets.
+(Wrap-up step 5 detects governance debt but delegates the commit to the
+commit-work skill.)
 
 ## Output format
-List of files updated with one-line summary of each change.
+List of files updated with one-line summary of each change. For a wrap-up:
+the checklist with each step ticked or explicitly skipped-with-reason.
 
 ## Validation checklist
 - [ ] No duplicates created
 - [ ] Dates absolute
 - [ ] No secrets
 - [ ] Wrong/stale entries corrected, not appended-around
+- [ ] Session-ending runs: all 6 wrap-up steps ticked or skip-justified
 
 ## Example prompt
 "memory-update: capture today's shioaji 1.5.3 golden-guard findings and the
