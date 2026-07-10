@@ -41,14 +41,33 @@ RISKIEST file it must touch. Intake hints for common phrasings:
 Announce the classification to the user BEFORE work: type, tier, executor
 model, delegate-vs-direct. This is the user's chance to veto cheaply.
 
-### 3. Decide delegate vs direct
-Check the class's scoreboard in `.agent/memory/model-routing.md` first:
-- Class validated at this scope → delegate per the tier table.
-- Task exceeds the class's validated scope (e.g. >3 files, cross-module)
-  → shrink it, run it directly, or flag to the user that this is a widening
-  probe. Never widen a class silently.
-- Two prior failures of the class/model pair → route per the demotion rule.
-- Trivial (<~10 min direct, packet would cost more) → direct is fine; say so.
+### 3. Route by ROI — direct / delegate / fan-out / stop
+Delegation is NOT free: a subagent starts cold (re-derives context the
+orchestrator already holds) and its output must still be independently
+reviewed, so for small serial tasks delegation costs MORE than doing it
+directly (see the net-win column in `.agent/memory/model-routing.md`). Default
+is DIRECT; delegation must pay for itself. Pick exactly one route, record WHY:
+
+- **direct** — orchestrator does it. Required for small / single-file /
+  low-risk tasks where the orchestrator already has enough context, and ALWAYS
+  for Tier-X, review, and git. MUST log a one-line `direct reason`.
+- **delegate** — one subagent, one concern. Only if a trigger fires:
+  - a large read-only exploration whose full context should stay OUT of the
+    orchestrator (saving: context isolation),
+  - bulk same-shape mechanical edits large enough to amortize packet+review
+    (saving: cheaper model),
+  - long-running test-writing / repeated fixes / batch validation
+    (saving: long-running labor),
+  - work needing independent / adversarial review (saving: review separation).
+- **fan-out** — 3+ independent sub-tasks runnable in parallel
+  (saving: parallelism).
+- **stop** — blocked on a user decision, Tier-X confirmation, or missing input.
+
+If no delegate/fan-out trigger fires, the answer is direct — do not manufacture
+a packet for a task cheaper done directly. Consult the class's scoreboard in
+`.agent/memory/model-routing.md`; never widen a class's validated scope
+silently. Two prior failures of the class/model pair → route per the demotion
+rule.
 
 ### 4. Evidence before spawn (mandatory for any delegation)
 Save to the scratchpad BEFORE spawning: baseline `git status --porcelain`;
@@ -56,17 +75,29 @@ pre-edit blob hashes of every allowlisted file; privately-computed expected
 results / answer key. Claims without artifacts are graded attested-only.
 
 ### 5. Handoff packet
-Author per `small-model-handoff` (canonical template, venue decision,
-escape-hatch verification wording, explicit ALLOWED FILES). Executors never
-run git. One packet = one agent = one concern.
+Author per `small-model-handoff` — short packet for Tier-1 / very small Tier-2,
+full 12-field packet for high-risk or multi-file (that skill decides the size).
+Venue decision, escape-hatch verification wording, explicit ALLOWED FILES.
+Executors never run git. One packet = one agent = one concern.
 
 ### 6. Spawn mechanics
-Agent tool, `subagent_type: general-purpose`; `model: haiku` (Tier-1
-mechanical) or `model: sonnet` (Tier-2). For a single bounded task use
-`run_in_background: false` — a backgrounded executor's plain-text final
-report is INVISIBLE outside its session. If backgrounding for parallelism,
-the packet must require report delivery via SendMessage, and review never
-blocks on the self-report.
+FIRST verify the session is NOT in plan mode — subagents inherit it as
+system-enforced read-only and burn tokens on a plan they cannot execute
+(model-routing 2026-07-08 BLOCKED-BY-HARNESS: ~120K tokens wasted). If in plan
+mode, exit it before spawning, or tell the user.
+
+Agent tool, `subagent_type: general-purpose` (or `Explore` for pure read-only
+fan-out). Assign the CHEAPEST capable model — this is where 降本 actually comes
+from, not from spawning itself:
+- `model: haiku` — docs, counting, path verification, simple mechanical edits.
+- `model: sonnet` — bounded code+test, test writing, read-only investigation,
+  medium mechanical edits.
+- Opus/orchestrator keeps orchestration, routing, review, git, and final
+  acceptance — never delegated.
+For a single bounded task use `run_in_background: false` — a backgrounded
+executor's plain-text final report is INVISIBLE outside its session. If
+backgrounding for parallelism, the packet must require report delivery via
+SendMessage, and review never blocks on the self-report.
 
 ### 7. Validation plan (written at intake, not after the fact)
 State before spawning: which commands prove the change; the break-probe for
@@ -106,17 +137,27 @@ user before proceeding. Preserve every dirty file you did not create.
 
 ## Output format
 An intake block announced before execution:
-`## Task` (restated, with done condition) · `## Classification`
-(type / tier / model / delegate?) · `## Plan` (packet summary, validation,
-review, memory) — then execution, then the §11 report.
+`## Task` (restated, with done condition) ·
+`## Classification` (type / tier) ·
+`## Routing` — one of {direct, delegate, fan-out, stop} + ROI reason; if
+delegate/fan-out, the expected cost-saving type (cheaper model / parallelism /
+context isolation / long-running labor); if direct, the `direct reason`
+(small / single-file / low-risk / already-have-context) ·
+`## Plan` (packet summary if delegating, validation, review, memory) — then
+execution, then the §11 report.
 
 ## Validation checklist
 - [ ] Task restated with an observable done condition
-- [ ] Type + tier + model announced before any work
+- [ ] Type + tier announced before any work
+- [ ] Routing decided (direct / delegate / fan-out / stop) with an ROI reason
+- [ ] direct route carries a logged `direct reason`; delegate/fan-out names the
+      expected cost-saving type
 - [ ] Scoreboard consulted for the class's validated scope
+- [ ] Session confirmed NOT in plan mode before any spawn
+- [ ] Cheapest capable model assigned to each subagent
 - [ ] Evidence artifacts saved before spawn
 - [ ] Validation + review plans written at intake
-- [ ] Ledger updated after the delegation
+- [ ] Ledger updated (incl. net-win) after the delegation
 - [ ] User report lists checks NOT run
 
 ## Example prompt

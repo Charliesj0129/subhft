@@ -7,11 +7,12 @@ models hold authority over riskier surfaces. All agents obey `CLAUDE.md`
 
 ## Roles
 
-### 1. Orchestrator (Opus-class or stronger; currently Fable 5)
+### 1. Orchestrator (Opus-class or stronger)
 
 - **Responsibilities**: task intake (`task-intake` skill — every
   natural-language task enters through it); task decomposition; risk-tier +
-  task-type classification (see Routing); writing handoff packets
+  task-type classification (see Routing); ROI-first routing
+  (direct/delegate/fan-out/stop with a logged reason); writing handoff packets
   (`small-model-handoff` skill); review of ALL Tier-2/3 diffs; ALL git
   planning and execution; memory curation; talking to the user.
 - **Non-responsibilities**: bulk mechanical edits; long test-writing sessions
@@ -138,6 +139,11 @@ classification against these tables; the tables below stay authoritative.
 | Push, merge, rebase, reset, clean, stash-drop, force-anything, branch-delete; live/prod ops; pins; frozen profiles; golden regen; `.gitignore` | Human approval, per operation |
 | Secrets | Never handled in any model output |
 
+The "or orchestrator directly" options above are ROI defaults, not free
+choices: per `## ROI-First Delegation`, direct is the default for small /
+low-risk work (log a `direct reason`); delegate/fan-out only when a trigger
+fires.
+
 Routing updates from outcomes (scoreboard in `.agent/memory/model-routing.md`):
 
 - One failure → record it and fix the packet; bad-packet failures never demote
@@ -146,6 +152,41 @@ Routing updates from outcomes (scoreboard in `.agent/memory/model-routing.md`):
   (Haiku→Sonnet, Sonnet→Orchestrator) until a deliberately re-run probe passes.
 - Widening a class's scope requires two clean successes at current scope plus
   one harder probe.
+
+## ROI-First Delegation
+
+Delegation must pay for itself. A subagent starts cold and its output is
+re-reviewed by the orchestrator, so for small serial tasks delegation costs
+MORE than doing it directly (see the net-win column in
+`.agent/memory/model-routing.md`). Route by ROI, not by reflex.
+
+**Default is direct.** A task is done directly — with a logged one-line
+`direct reason` — when it is small / single-file / low-risk and the
+orchestrator already holds enough context, and always for Tier-X, review, and
+git.
+
+**Consider a subagent only when an ROI trigger fires:**
+- 3+ independent sub-tasks runnable in parallel → **fan-out** (saving: parallelism)
+- large read-only exploration whose full context should stay out of the
+  orchestrator → **delegate** (saving: context isolation)
+- bulk same-shape mechanical edits large enough to amortize packet+review →
+  **delegate** (saving: cheaper model)
+- long-running test-writing / repeated fixes / batch validation → **delegate**
+  (saving: long-running labor)
+- work needing independent or adversarial review → **delegate** (saving: review
+  separation)
+
+**Model assignment (cheapest capable — this is where cost actually drops):**
+
+| Work | Model |
+|---|---|
+| docs, counting, path verification, simple mechanical edits | Haiku |
+| bounded code+test, test writing, read-only investigation, medium mechanical | Sonnet |
+| orchestration, routing, review, git control, final acceptance | Opus (never delegated) |
+
+Every task's intake announces one of {direct, delegate, fan-out, stop}, its ROI
+reason, and — if delegating — the expected cost-saving type. Record the
+realized net win in `.agent/memory/model-routing.md` after each delegation.
 
 ## Done Definitions (acceptance by task type)
 

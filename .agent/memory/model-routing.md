@@ -7,17 +7,23 @@ lessons. Do NOT record: generic model claims; single anecdotes (wait for a
 
 ## Scoreboard (input to AGENTS.md demotion/promotion rules)
 
-| Model | Task type | Attempts | Successes | Interventions |
-|---|---|---|---|---|
-| Haiku 4.5 | docs/mechanical | 2 | 2 | 0 |
-| Sonnet | Tier-2 code+test | 2 | 2 | 1 (report nudge; 0 this run) |
-| Sonnet | Tier-1 docs verify | 1 | 0 (1 PARTIAL) | 2 (false-positive fixes) |
+| Model | Task type | Attempts | Successes | Interventions | Net-win |
+|---|---|---|---|---|---|
+| Haiku 4.5 | docs/mechanical | 2 | 2 | 0 | 0/2 (capability probes) |
+| Sonnet | Tier-2 code+test | 2 | 2 | 1 (report nudge; 0 this run) | 0/2 (capability probes) |
+| Sonnet | Tier-1 docs verify | 1 | 0 (1 PARTIAL) | 2 (false-positive fixes) | 0/1 |
+| Sonnet | Tier-2 alpha-research (append-only research/) | 2 | 2 | 0 (1 review-caught narrative overclaim, no code fix needed) | 2/2 (context-isolation, parallelism) |
+
+Net-win = delegations that were cheaper/faster than doing it directly (not
+capability probes). ROI-first routing (AGENTS.md `## ROI-First Delegation`)
+exists to raise this column: delegate only when a trigger fires.
 
 ## Record schema (write after EVERY delegation, success or not)
 
 ```
 ### <date> · Tier <n> · <task type> · <surface> · <model> · <SUCCESS|PARTIAL|FAIL|ESCALATED>
-Interventions: <n> · Cost: <tokens/time if known> · Net win vs doing directly: <y/n/unclear>
+Interventions: <n> · Cost: <tokens/time if known>
+ROI: net-win <yes|no|unclear> · realized-saving <cheaper-model|parallelism|context-isolation|long-running-labor|review-separation|none> · would-delegate-again <y/n>
 Lessons: <=3 bullets, only if new.
 ```
 
@@ -215,3 +221,89 @@ Lessons:
   param. Exit plan mode first, then delegate.
 - A blocked-by-harness outcome must not demote the class; record it separately
   from capability failures.
+
+### 2026-07-10 · Tier 2 · alpha-research code+test · T1-G normal_2_5×extreme_low_imbalance_reversal×30m sub-cell OOS-extension rescue attempt · Sonnet · SUCCESS
+Interventions: 0 code fixes; 1 review-caught narrative overclaim (see Lessons) ·
+Cost: 1 background spawn, single pass, no escalation
+ROI: net-win yes · realized-saving context-isolation (650-line diagnostic.py +
+2 sibling pipelines the orchestrator had not read this session, parallel with
+an unrelated second delegation) · would-delegate-again yes
+Packet: append-only allowlist (new JSON outputs via existing frozen CLIs'
+--months/--in-path/--out-path flags, one new small analysis script, one new
+test file), main-tree venue (research/data/ gitignored, worktree would lack
+raw L2), explicit instruction that a data-starved null finding is a complete
+valid answer, not something to force. Executor's own first step correctly
+traced the plan's cited "N=17 IS / N=2-4 OOS" claim to its exact JSON source
+before touching anything.
+Independent orchestrator re-verification (script re-run, pytest re-run, mypy
+re-run, git-status diff against pre-spawn file listing) matched the self-
+report on every substantive number: target cell stuck at N=20 full-sample /
+N=2 OOS-dated after exhausting every available contract-month; G6 contributed
+zero decision rows (TMFG6 only 6 dates on disk, TXFG6 1-424 ticks/day, below
+the pipeline's own min_ticks_per_window=20 gate); rescue rule mechanically
+returns "RESCUED" but the executor correctly flagged this as a threshold
+artifact (no N-floor on the OOS stage) and reported the honest verdict as
+still-data-starved rather than taking the rule's literal output at face value.
+Zero off-limits files touched (diagnostic.py/regime_review.py/etc. untouched;
+only ran via their existing CLIs).
+Lessons:
+- One overclaim survived self-report but not orchestrator re-verification: the
+  executor said the new D6/E6/F6/G6 diagnostic run was "byte-for-byte
+  identical" to the prior D6/E6/F6 run. It was not — 17 more decision rows
+  appeared (589->606, TXFF6 200->217) because more F6 raw data had landed on
+  disk since the prior run, not because of G6 (which genuinely added 0 rows,
+  that part was correct). The orchestrator's independent JSON diff caught
+  this; it did not change the target-cell verdict (confirmed identical: N=20,
+  mean 27.55 across all three iteration files) but is a reminder that
+  "identical" claims about large JSON artifacts need a real diff, not a
+  by-inspection read, before they're forwarded to the user.
+
+### 2026-07-10 · Tier 2 · alpha-research code+test · of_vwap_dev_luxalgo vwap_fade bear/high-vol regime OOS test · Sonnet · SUCCESS
+Interventions: 0 · Cost: 1 background spawn, single pass (ran the confirmatory
+script 3x itself for stability, ~110s on the slowest run due to unrelated
+host CPU contention from a live production process — noted, not a bug)
+ROI: net-win yes · realized-saving context-isolation (indicator.py +
+of_vwap_backtest.py + of_vwap_qa_backtest.py the orchestrator had not read
+this session, run in parallel with the unrelated T1-G delegation above) ·
+would-delegate-again yes
+Packet: append-only allowlist, main-tree venue (research/data/ gitignored),
+explicit genuineness-guard requirement (must not force a "bear"/"high-vol"
+label onto data that isn't actually bearish/volatile — a null finding is a
+complete valid answer). Executor built the guard as a real statistical check
+(bottom-quartile actually negative, top-quartile actually >=1.25x median),
+with two of its 11 tests specifically asserting the guard refuses to mislabel
+all-bullish/flat-dispersion synthetic data.
+Independent orchestrator re-verification (script re-run x1 with byte-identical
+output vs the self-report, pytest re-run, cross-check of every reported
+number against the existing of_vwap_qa_5m_day.json baseline via direct JSON
+read, mypy-scope claim checked against pyproject.toml's [tool.mypy] files
+list) matched the self-report exactly on every number — zero discrepancies,
+unlike the T1-G delegation above. git status / file-listing diff confirmed no
+off-limits file touched.
+Substantive finding (see [[of_vwap_dev_luxalgo_backtest_2026_06_09]] for
+full detail): a genuine bear regime exists in this data (previously assumed
+absent across this whole research program) but the candidate's edge is
+regime-specific to the bull tape it was found in — flips to -49pt/trade in
+the bear window, no robust standalone edge in high-vol either. This was the
+program's last live, unrefuted lead; now closed.
+Lessons:
+- Second consecutive clean parallel alpha-research delegation (now 2/2 at
+  this scope, one with zero discrepancies, one with a caught-but-non-fatal
+  narrative overclaim) — the packet shape (append-only allowlist + main-tree
+  venue for gitignored data + explicit "a null finding is a valid complete
+  answer" instruction + reuse-existing-frozen-functions-verbatim) is working
+  and worth reusing as the template for future alpha-research delegations
+  rather than re-deriving packet structure each time.
+- Running two independent, unrelated alpha-research delegations in parallel
+  (this one + the T1-G sub-cell rescue) cost no extra orchestrator overhead
+  beyond writing two packets instead of one, and both landed clean — parallel
+  dispatch is the right default when the tracks are genuinely independent,
+  not just running them serially through the same context.
+- Executor correctly distinguished a rule's mechanical output ("RESCUED") from
+  its statistical meaning (N=2 on the confirming stage) and reported the
+  latter as the real verdict — this is the behavior CLAUDE.md's honest-
+  progress-reporting rule asks for, and it happened without being explicitly
+  re-prompted for it (the packet asked for it once, generically). Worth
+  keeping this framing in future packets for the same class of task ("a
+  rule passing is not the same as a rule being meaningful — report which one
+  you're claiming").

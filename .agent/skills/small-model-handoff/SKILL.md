@@ -9,6 +9,17 @@ description: "Orchestrator prepares a self-contained delegation packet for a sma
 Orchestrator delegating implementation work to a Sonnet/Haiku executor.
 Never for Tier-X tasks (see `AGENTS.md` routing tables).
 
+## Packet size (choose before filling)
+- **Short packet** — Tier-1, or a very small Tier-2 change (single file,
+  <= ~30 changed lines, no design choice): the short template below. No
+  pre-computed answer key required beyond the verification commands; review is
+  a scope-diff + command re-run, not a full break-probe.
+- **Full 12-field packet** — high-risk (Tier-3 / Do-NOT-Edit paths) OR
+  multi-file OR any design choice: the full template below + orchestrator-class
+  review.
+A short packet that turns out multi-file or high-risk → STOP and upgrade to
+full; never shrink the packet to dodge review.
+
 ## Required inputs
 Verified task scope (from `read-only-audit`); risk tier; task type; target files.
 
@@ -26,15 +37,34 @@ Verified task scope (from `read-only-audit`); risk tier; task type; target files
      can't run it): main tree, with a strict file allowlist, orchestrator
      before/after `git status --porcelain` + hash snapshots, and a
      `git checkout -- <files>` rollback (files must be clean at baseline).
-4. Fill the template below completely — every field, no links the executor
-   can't follow. Paste only the gotchas that apply; keep the whole packet
-   <= ~150 lines. One packet = one agent = one concern.
+4. Choose packet size (see "## Packet size"): short for Tier-1 / very small
+   Tier-2, full for high-risk or multi-file. Fill the chosen template
+   completely — every field, no links the executor can't follow. Paste only
+   the gotchas that apply; keep the full packet <= ~150 lines. One packet =
+   one agent = one concern.
 5. Spawn. Do not block on the executor's self-report — when the work lands,
    begin independent review from your own snapshots.
 6. On return: review per `strict-code-review` Step 0 (scope-diff, personal
    re-run, break-probe, red-gate adjudication, ground-truth cross-check);
    never forward unverified executor claims to the user.
 7. Record the outcome in `.agent/memory/model-routing.md` (schema there).
+
+## Short packet template (Tier-1 / very small Tier-2)
+```
+GOAL: <1-2 sentences> · TIER: 1 or small-2 · MODEL: <Haiku/Sonnet>
+ALLOWED FILE(S): <exact path(s)>
+CONSTRAINTS: <the 1-2 laws that apply to these files>
+VERIFICATION (run every command; paste output):
+- <command> — expect clean IN FILES YOU CHANGED; failures in files you did not
+  change = stop and report, do not fix
+STOP AND ESCALATE if: a listed file doesn't exist; the change wants to grow
+beyond ALLOWED FILE(S) (multi-file or a design choice → upgrade to full);
+anything red outside your scope; git state differs from baseline.
+REPORT (final message): ## Changed files / ## Commands run / ## Not verified /
+## Blockers. NO git commands. NO edits outside ALLOWED FILE(S).
+```
+Review of a short packet = scope-diff + independent command re-run (no full
+break-probe or pre-computed answer key required).
 
 ## Packet template (fill every field)
 ```
@@ -82,6 +112,7 @@ Packet must be self-contained — executor gets no implicit context.
 The filled template above, as a single message.
 
 ## Validation checklist
+- [ ] Packet size chosen (short vs full) and matches tier + file count
 - [ ] Tier + task type stated; Tier-3 has orchestrator-class review planned
 - [ ] Ground truth pre-computed privately before spawning
 - [ ] Venue decided and stated (worktree vs main tree + controls)
