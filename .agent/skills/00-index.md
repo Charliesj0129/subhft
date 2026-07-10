@@ -91,6 +91,7 @@
 | `test-gap-analysis` | before test-writer delegation; after a bug reveals a coverage hole |
 | `bug-investigation` | any unexpected behavior — evidence-first root cause BEFORE fixing |
 | `memory-update` | session end / after KILL verdict, incident, decision, or delegation outcome |
+| `agent-meta-audit` | quarterly or every ~10 delegations: audit the agent system itself → report to `.agent/reports/` + ≤3 actions |
 | `project-risk-check` | before Tier-2/3 work, commit/PR, or dependency/config/production changes |
 | `branch-safety-check` | before ANY git state change (checkout/merge/commit/stash/worktree/push) |
 

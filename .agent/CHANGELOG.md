@@ -8,6 +8,7 @@ The entry for the change being committed carries no hash (unknown at write
 time); recover it from `git log` by date + files. History before 2026-07-06
 (pre-v2) lives in git log only.
 
+- 2026-07-11 · skills/agent-meta-audit (new), skills/00-index.md · #15 periodic meta-audit: quarterly or every ~10 delegations, audit scoreboard trends / intervention rate / stale skills / gate failures → dated report in .agent/reports/ with ≤3 owner-assigned actions
 - 2026-07-11 · memory-update skill · #13 executable session wrap-up: 6-step ordered checklist (current_session → lessons → risks → open-questions → uncommitted agent-system sweep → dual-memory cross-check); skips must be justified (4a613b88 = #14 it builds on)
 - 2026-07-11 · memory/README.md · #14 dual-memory division of labor: repo memory = model-agnostic project facts; orchestrator private memory = user prefs + cross-session context; wrap-up cross-checks both for strays
 - 2026-07-11 · 30-git.md · fix #12 false positive: branch name in backticks read as a path claim by agent-docs-check; branch names in governing docs stay un-backticked (7d3b2475 shipped with the gate red — caught same session)
