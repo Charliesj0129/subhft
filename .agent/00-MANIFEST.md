@@ -38,6 +38,7 @@ A new `.agent/` subdirectory requires a row here at creation time.
 | `pixiu/` | untracked | ARCHIVE-CANDIDATE | dead framework: registries plus runtime reports/logs (token/scan histories) |
 | `logs/` | untracked | ARCHIVE-CANDIDATE | runtime log output (`pixiu.log`); does not belong in a knowledge base |
 | `project_context.json` | untracked | DEPRECATED | ECC-generation project descriptor; zero references |
+| `agent-docs-known-drift.txt` | tracked (force-added) | ACTIVE | ratchet baseline for `scripts/check_agent_docs.py` (`make agent-docs-check`) |
 
 ## Method
 

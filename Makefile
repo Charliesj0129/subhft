@@ -130,7 +130,10 @@ git-postcheck: ## Verify git state after merge/rebase (no conflict markers)
 git-session-check: ## Full git hygiene check (worktrees, branches, stash, conflicts)
 	bash scripts/check_git_preconditions.sh --full
 
-check: lint typecheck discipline dependency-boundary test-hygiene-check ## Run all code quality checks
+agent-docs-check: ## Verify agent governing docs match the tree (paths, skill index, memory table)
+	$(PY) scripts/check_agent_docs.py
+
+check: lint typecheck discipline dependency-boundary test-hygiene-check agent-docs-check ## Run all code quality checks
 
 # ============================================================================
 # Benchmarks
