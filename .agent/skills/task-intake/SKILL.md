@@ -175,6 +175,9 @@ execution, then the §12 report.
 - [ ] User report lists checks NOT run
 
 ## Example prompt
-"Fix this skipped CLI test" → intake announces: code+test, Tier 2, Sonnet,
-delegate; packet per `small-model-handoff`; break-probe validation;
-`--narrow-commit` gate; `model-routing.md` ledger entry.
+"Fix this skipped CLI test" → intake announces: code+test, Tier 2; route
+direct (direct reason: single file, low risk, context already held) — or
+Sonnet delegate only when an ROI trigger fires (e.g. long-running batch);
+break-probe validation; `--narrow-commit` gate; ledger entry if delegated.
+Routing regressions for this and 7 more cases:
+`.agent/evals/golden-intake-tasks.md`.

@@ -1,5 +1,17 @@
 # Eval Harness Index
 
+## Golden intake tasks (ACTIVE — governance regression)
+
+[golden-intake-tasks.md](golden-intake-tasks.md) — 8 pinned task→routing
+cases, run after any routing-relevant governance change (see that file for
+procedure). This is the live purpose of `.agent/evals/` since 2026-07-10
+(institutionalization #8).
+
+## Component evals (legacy)
+
+The component eval definitions below are the 2026-02/03 generation —
+historical reference, not maintained (see `.agent/00-MANIFEST.md`).
+
 Evaluation definitions for hot-path components. Each eval contains:
 
 - **Capability**: Functional requirements that must be satisfied.

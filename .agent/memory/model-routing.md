@@ -81,6 +81,13 @@ is re-registered, not bent.
 ## Observed outcomes
 (Each entry: date, tier, surface, executor model, outcome, packet lesson.)
 
+### 2026-07-10 · governance · golden-intake baseline run · 8/8 PASS
+First run at creation of `.agent/evals/golden-intake-tasks.md` (#8): all 8
+cases consistent with AGENTS.md + task-intake AFTER fixing the task-intake
+example prompt, which still said "Tier 2 → Sonnet, delegate" from before
+ROI-first landed — exactly the drift class these cases exist to catch.
+Next run: after any routing-relevant governance change, before its commit.
+
 ### 2026-07-06 · Tier 1 · docs/mechanical · MODULES_REFERENCE.md count re-verification · Haiku 4.5 · SUCCESS
 Interventions: 0 · Cost: ~69K tokens / 3 min · Net win vs doing directly: no (capability probe)
 Pilot delegation via small-model-handoff → worktree-isolated executor →

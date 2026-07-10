@@ -33,7 +33,7 @@ A new `.agent/` subdirectory requires a row here at creation time.
 | `contexts/` | 3 files | DEPRECATED | ECC-generation context presets; zero references from v2 docs |
 | `extensions/` | untracked | DEPRECATED | single ECC-generation file (`opus-advanced.md`); zero references |
 | `mcp/` | untracked | DEPRECATED | MCP server config unreferenced by v2 docs; confirm no external tooling reads it before archiving |
-| `evals/` | 4 tracked / 8 on disk | DEPRECATED (repurpose planned) | stale module-eval specs; slated to become golden intake-task cases per proposal #8 |
+| `evals/` | 5 tracked / 9 on disk | ACTIVE (golden intake cases) | `golden-intake-tasks.md` = routing regression cases run after routing-relevant governance changes (#8); legacy 2026-02/03 module-eval specs retained as historical reference |
 | `teams/alpha-research/` | 9 tracked | DEPRECATED (evidence retained) | team framework unused since candidate-loop v1 became research mainline (2026-06-12); `rounds/` artifacts are research evidence — append-only, never rewrite |
 | `workflows/` | 1 tracked / 7 on disk | DEPRECATED | `opsx-*` are ECC-generation; `multi-broker-setup.md` is tracked but unreferenced — promote into a skill if still wanted, else archive |
 | `pixiu/` | untracked | ARCHIVE-CANDIDATE | dead framework: registries plus runtime reports/logs (token/scan histories) |
