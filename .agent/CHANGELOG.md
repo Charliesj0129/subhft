@@ -8,6 +8,7 @@ The entry for the change being committed carries no hash (unknown at write
 time); recover it from `git log` by date + files. History before 2026-07-06
 (pre-v2) lives in git log only.
 
+- 2026-07-10 · research-factory skill, agent-docs-known-drift.txt · #10 verdict evidence commit cadence (every verdict → immediate narrow-gate alpha: commit of its evidence); fixed the stale .agent/agents/* roles table — ratchet baseline shrinks 16→12
 - 2026-07-10 · commit-work skill · #9 validation matrix as fill-in artifact: blast-radius row ticked before every commit; "Checks NOT run" mandatory in every commit report
 - 2026-07-10 · evals/golden-intake-tasks.md (new), evals/00-index.md, 00-MANIFEST.md, task-intake example · #8 golden intake tasks: 8 pinned routing cases run after routing-relevant governance changes; fixed the task-intake example that still said "delegate by default" (pre-ROI drift the cases exist to catch)
 - 2026-07-10 · task-intake skill (new §8), memory/current_session.md · #7 checkpoint/resume: tasks expected to outlive a context window maintain a resumable block in current_session.md after each verifiable unit (dc7d958c)

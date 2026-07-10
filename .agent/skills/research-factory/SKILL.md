@@ -1,4 +1,3 @@
-<!-- REVIEW-2026-04-17: unreferenced by rules/workflows/teams/agents. Confirm or delete. -->
 ---
 name: research-factory
 description: Use when running the alpha research pipeline end-to-end, from paper intake through live promotion. Covers the 8-stage factory workflow, gate validation, artifact policy, and factory commands.
@@ -138,12 +137,15 @@ make research-triage ALPHA=<id> OWNER=<owner> DATA='<path.npy>' ARGS='--skip-gat
 
 ## Roles (Execution Contract)
 
-| Role | Agent File | Responsibility |
+Roles map onto Agent System v2 (`AGENTS.md` §Roles); the legacy
+`.agent/agents/` generation is DEPRECATED (see `.agent/00-MANIFEST.md`).
+
+| Role | v2 equivalent | Responsibility |
 | --- | --- | --- |
-| planner | `.agent/agents/planner/` | Implementation planning, paper intake coordination |
-| architect | `.agent/agents/architect/` | System design, Rust migration, runtime integration |
-| refactor-cleaner | `.agent/agents/refactor-cleaner/` | Dead code cleanup, alpha package hygiene |
-| code-reviewer | `.agent/agents/code-reviewer/` | Code review, statistical validation interpretation |
+| planner | Orchestrator | Implementation planning, paper intake coordination |
+| architect | Orchestrator, or Sonnet under a tight packet | System design, Rust migration, runtime integration |
+| refactor-cleaner | Coding Executor (Sonnet) | Dead code cleanup, alpha package hygiene |
+| code-reviewer | Reviewer Agent | Code review, statistical validation interpretation |
 
 ## Skills (Execution Contract)
 
@@ -224,6 +226,24 @@ make research-check-paper-governance ALPHA=<id> ARGS='--strict --out outputs/pap
 4. Generated artifacts go to `research/experiments/` or `outputs/`, never into `research/alphas/`.
 5. Promotion is config-driven and reversible (canary + rollback).
 6. No direct production enable from research-only artifacts.
+
+## Verdict Evidence Commit Cadence
+
+Every verdict (KILL / NEEDS-MORE-DAYS / RESCUED / INCONCLUSIVE / PROMOTED)
+triggers an immediate narrow-gate commit of that candidate's evidence in the
+same session the verdict is reached — the commit is part of the verdict, not
+housekeeping after it. A verdict whose evidence exists on only one disk is
+not "recorded".
+
+1. Scope: the candidate's `research/experiments/validations/` subtree (new
+   files only — artifacts are append-only, never mutated) plus its matching
+   `tests/unit/research/` test files.
+2. Stage untracked evidence only; never stage modified files that belong to
+   concurrent user work. `__pycache__`/`.pyc` stay ignored.
+3. Gate: `ALLOWED_PATHS="<files enumerated from git status --porcelain>" bash
+   scripts/check_git_preconditions.sh --narrow-commit`; commit type `alpha:`.
+4. Verdicts are faithful — never relax pre-registered floors or gates in the
+   committed artifacts to improve an outcome's look.
 
 ## Post-Promotion Integration
 

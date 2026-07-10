@@ -19,8 +19,4 @@ path config/alerts/rules.yaml
 path config/base/strategies.yaml
 path src/hft_platform/rust_core
 path src/rust_core/src/lib.rs
-path .agent/agents/planner/
-path .agent/agents/architect/
-path .agent/agents/refactor-cleaner/
-path .agent/agents/code-reviewer/
 path .agent/memory/codebase_map.md
