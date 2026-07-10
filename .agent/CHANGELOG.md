@@ -8,7 +8,8 @@ The entry for the change being committed carries no hash (unknown at write
 time); recover it from `git log` by date + files. History before 2026-07-06
 (pre-v2) lives in git log only.
 
-- 2026-07-10 · memory/delegations/ (new), memory/README.md, model-routing.md, task-intake + small-model-handoff skills · #5 delegation archive: packet + executor report + review verdict stored verbatim per delegation, linked from the ledger
+- 2026-07-10 · task-intake skill (new §8), memory/current_session.md · #7 checkpoint/resume: tasks expected to outlive a context window maintain a resumable block in current_session.md after each verifiable unit
+- 2026-07-10 · memory/delegations/ (new), memory/README.md, model-routing.md, task-intake + small-model-handoff skills · #5 delegation archive: packet + executor report + review verdict stored verbatim per delegation, linked from the ledger (99c9b0c0)
 - 2026-07-10 · 60-agent-workflow-governance.md, CHANGELOG.md, templates/ADR_TEMPLATE.md, 00-MANIFEST.md · institutionalization #3: governance change control — CHANGELOG entry + ADR requirement for authority/tier changes (ba5b0247)
 - 2026-07-10 · docs/superpowers/specs/2026-07-10-agent-system-institutionalization-design.md · 15-point institutionalization spec approved, wave 1 implemented same day (ddce6a24)
 - 2026-07-10 · scripts/check_agent_docs.py, Makefile, .agent/agent-docs-known-drift.txt, tests · #2 agent-docs consistency gate wired into `make check` (0aafd55e)

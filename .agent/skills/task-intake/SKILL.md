@@ -106,19 +106,28 @@ baseline → run new test expecting the exact failure → restore snapshot →
 re-verify blob hash); how pre-existing red gates will be adjudicated
 (re-run against the baseline; failures must pre-date the change).
 
-### 8. Review
+### 8. Checkpoint long tasks (resume without re-derivation)
+If the task is expected to outlive one context window (multi-wave plan, >3
+verifiable units, or known compaction risk), maintain a resumable block in
+`.agent/memory/current_session.md`, updated in place after EACH verifiable
+unit: done units (with commit hashes), the exact next step, and verification
+state (commands already green vs still owed). A fresh session must be able to
+resume from the block alone, without re-deriving decisions from the
+transcript. Delete the block when the task completes.
+
+### 9. Review
 Per `strict-code-review` Step 0: scope-diff vs the baseline snapshot,
 personal re-run of every verification command, break-probe, red-gate
 adjudication, ground-truth cross-check. The executor self-report is context,
 never evidence.
 
-### 9. Git (only after review passes, only if a commit is in scope)
+### 10. Git (only after review passes, only if a commit is in scope)
 `branch-safety-check` skill, then
 `ALLOWED_PATHS="<task files>" bash scripts/check_git_preconditions.sh
 --narrow-commit`; commit only on exit 0. Local commits only — push, merge,
 and anything destructive stay human-approved per operation.
 
-### 10. Memory update plan
+### 11. Memory update plan
 After EVERY delegation (success or not): ledger entry + scoreboard update in
 `.agent/memory/model-routing.md` (schema there), PLUS the archive file the
 schema's Archive field points to — packet + executor report + review verdict,
@@ -126,7 +135,7 @@ verbatim, at `.agent/memory/delegations/` (see its README). Route other
 durable lessons per `memory-update`. Commit the ledger and archive through
 the same narrow gate when committing task work.
 
-### 11. Report to user
+### 12. Report to user
 Final message: what changed; commands run with output excerpts; checks NOT
 run; delegation outcome (model, interventions count); commit hash or "not
 committed". If running as a subagent, deliver via SendMessage.
@@ -146,7 +155,7 @@ delegate/fan-out, the expected cost-saving type (cheaper model / parallelism /
 context isolation / long-running labor); if direct, the `direct reason`
 (small / single-file / low-risk / already-have-context) ·
 `## Plan` (packet summary if delegating, validation, review, memory) — then
-execution, then the §11 report.
+execution, then the §12 report.
 
 ## Validation checklist
 - [ ] Task restated with an observable done condition
@@ -159,6 +168,8 @@ execution, then the §11 report.
 - [ ] Cheapest capable model assigned to each subagent
 - [ ] Evidence artifacts saved before spawn
 - [ ] Validation + review plans written at intake
+- [ ] Long task (>1 context window expected)? checkpoint block maintained in
+      `.agent/memory/current_session.md` per §8
 - [ ] Ledger updated (incl. net-win) + delegation archive file written after
       the delegation
 - [ ] User report lists checks NOT run

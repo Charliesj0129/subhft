@@ -2,50 +2,45 @@
 
 ## Last Updated
 
-- **Date**: 2026-07-08 (second wave)
-- **Session**: "全跑" — run all owed execution items + triage/merge all open PRs
+- **Date**: 2026-07-10 (third wave)
+- **Session**: "全部啟動" — activate ALL wave-2+ institutionalization points
+  (#3, #5, #7–#15) from the approved 15-point spec
+  (`docs/superpowers/specs/2026-07-10-agent-system-institutionalization-design.md`).
 
-## Current Goal
+## Resumable block (task-intake §8 — delete when the activation completes)
 
-Execute every runnable owed item (full CI, 1.5.5 harness, session-race
-durable fix) and settle the open-PR queue (merge safe, recommend on the rest).
+- **Done units**: #3 governance change control (ba5b0247); #5 delegation
+  archive (99c9b0c0); #7 checkpoint/resume (this commit).
+- **Next step**: #8 golden intake tasks (`.agent/evals/golden-intake-tasks.md`),
+  then #9 commit-work validation matrix, #10a research-factory verdict
+  cadence, #10b research evidence backlog commit (untracked-only; NEVER the
+  7 M-files — Charlie's concurrent work), #11 bundle tooling (NO first run —
+  destination undecided), #12 branch registry, #13 wrap-up checklist,
+  #14 dual-memory rules, #15 meta-audit, spec rollout update, memory + report.
+- **Verification state**: `make agent-docs-check` green after every commit so
+  far; every commit passed `--narrow-commit` with staged-set == allowlist;
+  `make check` / `make ci` not yet run (planned: once, at the end).
+- **Standing constraints**: no push (human-approved per op); #11 first bundle
+  needs a destination from Charlie; research M-files stay byte-identical.
 
 ## Status
 
-- [x] First wave (same day): 9 commits 1a4f2d44..631c3452 — surface-diff
-      tooling, task-intake wiring, governor CLI, 451 guard, .gitignore,
-      1.5.5 retarget artifacts, memory; pushes approved, unpushed=0.
-- [x] PRs #372/#373/#374 (Actions bumps) MERGED (squash) after verifying all
-      pinned SHAs against official tags; the shared "Code Quality Checks" red
-      is benign (dependabot bodies lack PR-template sections; non-required).
-- [x] PR #371/#376: NOT merged (unsafe); recommendation = close both (origin
-      #371 commits are patch-equivalent to the pushed docs-chain per
-      git cherry; #376 is a bare pin bump with red tests). Awaiting Charlie.
-- [x] make ci debt: 7 committed-debt files ruff-formatted (f2a321b3);
-      lint/typecheck/boundary/hygiene all green; format-check red only on
-      user-dirty test_research_factory.py (left alone).
-- [x] Session-race durable fix committed 433be777: recorder_data_loss boot
-      grace (HFT_RECORDER_DATA_LOSS_BOOT_GRACE_S=60 via bootstrap),
-      451 login backoff (HFT_LOGIN_CONNLIMIT_RETRIES=2 × 75s), transition
-      reason-label fix. 12 new tests, break-probe verified, guard green.
-      NOT deployed — prod procedure unchanged until manual rollout.
-- [x] Harness scripts parameterized (SHIOAJI_HARNESS_VERSION); 1.5.5 Phase 0
-      bootstrap GREEN (_core.abi3.so confirmed; freeze delta clean).
-- [ ] Full-suite coverage run + 1.5.5 Phase 1 (in flight this session).
+- [x] Wave 1 (same day, earlier session): spec ddce6a24 + #1 manifest
+      b898352b + #2 agent-docs gate 0aafd55e + #4 ROI-debt 7ad864b1 +
+      #6 probes 93ddfb47.
+- [ ] Wave 2+ activation in flight (see resumable block).
 
 ## Blockers
 
-- #371/#376 close decisions, stale origin harness-branch deletion, prod
-  deploy of 433be777, prod back-to-live: all await Charlie.
-
-## Next Steps
-
-- After Phase 1: commit harness parameterization; record 1.5.5 Phase 0/1
-  verdict in the runbook if green.
-- Sim soak (Phase 2) vs 1.5.5 still owed (needs sim creds + market hours).
-- Sonnet Tier-2 widening probe still owed.
+- #11 first bundle run: destination decision (Charlie).
+- Unchanged from 07-08: #371/#376 close decisions, prod deploy of 433be777,
+  prod back-to-live.
 
 ## Context
 
-- Branch: `docs/agent-knowledge-distillation` (pushed; upstream current as of
-  first wave). Working tree keeps ~27 dirty user research files — preserve.
+- Branch: `docs/agent-knowledge-distillation` (upstream exists; 7 commits
+  ahead of origin as of this block — push awaits approval).
+- Working tree: 7 M research files + `.claude/settings.json` +
+  `.understand-anything/` are Charlie's concurrent work — preserve
+  byte-identical. The 13 untracked validation dirs + 17 untracked research
+  test files are session-output debt being committed by #10b.
