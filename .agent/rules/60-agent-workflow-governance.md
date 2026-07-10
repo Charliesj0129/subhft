@@ -15,3 +15,10 @@ Conflict protocol: inspect each conflict; never blindly accept ours/theirs. If c
 Remote safety: verify branch and target before push; never force-push main/master; do not push ephemeral worktree branches.
 
 Session hygiene: prune/cleanup agent-created worktrees, keep stash count small, delete merged local task branches when appropriate, leave `git status --short` clean or intentional.
+
+Governance change control:
+
+- Governing docs: `CLAUDE.md`, `AGENTS.md`, `.agent/rules/`, `.agent/skills/`, `.agent/evals/`, `.agent/templates/`, `.agent/00-MANIFEST.md`.
+- Every governing-doc change commits as `docs(agents):` in the same session that makes it (never left dirty overnight), with a one-line entry in `.agent/CHANGELOG.md` (date / files / why) in the same commit.
+- Changes that alter role authority, tier boundaries, or routing rules additionally require an ADR from `.agent/templates/ADR_TEMPLATE.md`, committed alongside.
+- `make agent-docs-check` must pass before the commit.

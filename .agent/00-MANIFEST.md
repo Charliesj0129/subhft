@@ -23,7 +23,8 @@ A new `.agent/` subdirectory requires a row here at creation time.
 | `rules/ecc/` | subset of above | DEPRECATED | ECC-generation rule set duplicating v2 rules; absent from `rules/00-index.md` |
 | `skills/` | 84 files | ACTIVE | v2 procedures; indexed by `skills/00-index.md` |
 | `memory/` | 12 files (force-added; dir is gitignored) | ACTIVE | v2 ledgers; routing table in `memory/README.md` |
-| `templates/` | untracked | ACTIVE | `ADR_TEMPLATE.md` — used by governance change-control (institutionalization proposal #3) |
+| `templates/` | 1 tracked (force-added) | ACTIVE | `ADR_TEMPLATE.md` — required by governance change control for authority/tier changes (`rules/60-agent-workflow-governance.md`) |
+| `CHANGELOG.md` | tracked (force-added) | ACTIVE | one-line-per-change governance history; updated in every `docs(agents):` commit |
 | `reports/` | untracked | ACTIVE (destination) | target directory for periodic meta-audit reports (proposal #15); existing 2026-03 files are historical evidence |
 | `library/` | 5 tracked / 17 on disk | ACTIVE (with known drift) | reference shelf (broker/API/architecture docs); at least one skill reference points to a missing file (`library/design-review-artifacts.md` cited by `hft-architect`) — to be caught by the agent-docs checker (proposal #2) |
 | `hooks/` | untracked | ACTIVE (`verify_health.sh` only) | `verify_health.sh` is called by the `healthcheck` skill; `ecc_hooks.json` is ECC-generation and DEPRECATED (not wired into `.claude/settings.json`) |
