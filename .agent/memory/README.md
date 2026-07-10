@@ -22,4 +22,22 @@ IDs. Entries <=10 lines; long narratives go to a dated topic file, linked.
 What does NOT belong here: anything derivable from code, git history, or
 CLAUDE.md; one-off conversational context; secrets of any kind.
 
+## Division of labor: repo memory vs orchestrator private memory
+
+Two memory systems coexist and have already diverged once (ROI records in
+repo, session state in private). Each fact lives in exactly one:
+
+- **Repo `.agent/memory/` (committed, model-agnostic)**: anything a DIFFERENT
+  agent or model working this repo would need — delegation outcomes and
+  routing evidence, research verdicts and refuted approaches, gotchas, risks,
+  open questions, session handoff state. Committed skill/rule EXAMPLE text
+  stays public-literature-only; real findings belong in these memory files.
+- **Orchestrator private memory (per-user, outside the repo)**: who the user
+  is, preferences and feedback on how to work, cross-session conversational
+  context, pointers to private artifacts. Project facts another agent would
+  need do NOT stay there — they move here.
+- **Wrap-up cross-check**: once at session end (memory-update skill
+  §Session wrap-up), scan both for strays — shareable lessons found only in
+  private memory move here; user preferences found here move to private.
+
 Maintained via the `memory-update` skill (`.agent/skills/memory-update/SKILL.md`).

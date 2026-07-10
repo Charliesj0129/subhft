@@ -8,6 +8,7 @@ The entry for the change being committed carries no hash (unknown at write
 time); recover it from `git log` by date + files. History before 2026-07-06
 (pre-v2) lives in git log only.
 
+- 2026-07-11 · memory/README.md · #14 dual-memory division of labor: repo memory = model-agnostic project facts; orchestrator private memory = user prefs + cross-session context; wrap-up cross-checks both for strays
 - 2026-07-11 · 30-git.md · fix #12 false positive: branch name in backticks read as a path claim by agent-docs-check; branch names in governing docs stay un-backticked (7d3b2475 shipped with the gate red — caught same session)
 - 2026-07-11 · 30-git.md, memory/current_session.md · #12 branch-per-theme discipline: one branch = one theme, registry (purpose + expected lifetime) lives in current_session.md; the mixed-theme distillation branch is grandfathered as the rule's evidence
 - 2026-07-10 · research-factory skill, agent-docs-known-drift.txt · #10 verdict evidence commit cadence (every verdict → immediate narrow-gate alpha: commit of its evidence); fixed the stale .agent/agents/* roles table — ratchet baseline shrinks 16→12
