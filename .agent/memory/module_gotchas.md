@@ -116,3 +116,12 @@
 - **Account Object**: `sdk.login()` returns an `accounts` wrapper whose primary account is usually `accounts.data[0]`, not the wrapper itself.
 - **Response Unwrapping**: Many SDK calls return wrapped payloads. Use `_unwrap_list()` / `_unwrap_scalar()` helpers rather than reaching through response objects ad hoc.
 - **GOTCHA**: Dependency metadata uses `fubon-neo` while the import name is `fubon_neo`; this mismatch is easy to miss during packaging/debugging.
+
+## research L2 bridge / hftbacktest data (fixed 2026-05-23)
+
+- **Event-bit semantics**: hftbacktest TRADE/DEPTH event-bit constants were once
+  redefined locally with the two values SWAPPED — every "trade" was a depth
+  update and vice versa (silent, plausible-looking data). Import event
+  constants from hftbacktest; never redefine them. Fixed 2026-05-23 (102 tests).
+- **trade_direction epoch**: recorded only from 2026-03-31 onward; earlier
+  contract months are 100% direction-zero by construction, not by market.

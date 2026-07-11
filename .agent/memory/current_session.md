@@ -3,10 +3,13 @@
 ## Last Updated
 
 - **Date**: 2026-07-11
-- **Session**: "全部啟動" activation COMPLETE — all 15 institutionalization
-  points from
-  `docs/superpowers/specs/2026-07-10-agent-system-institutionalization-design.md`
-  are landed; the spec's rollout table carries every commit hash.
+- **Session**: project cleanup (user-approved scope) — dead `.agent/`
+  generations removed per manifest audit (tag pre-cleanup-2026-07-11),
+  three branches/worktrees retired (#360 MERGED, #371/#376 CLOSED —
+  verified via gh), orchestrator private memory pruned to
+  development-relevant entries. Prior session: "全部啟動" activation
+  COMPLETE — all 15 institutionalization points landed; the spec's rollout
+  table carries every commit hash.
 
 ## Status
 
@@ -27,14 +30,14 @@
 
 - #11 first bundle run: destination decision (Charlie) — see
   open-questions.md.
-- Unchanged from 07-08: #371/#376 close decisions, prod deploy of 433be777,
-  prod back-to-live.
+- Unchanged from 07-08: prod deploy of 433be777, prod back-to-live.
+  (#371/#376 close decisions RESOLVED — both CLOSED on GitHub, verified
+  2026-07-11; fresh SDK PR still owed when the 1.5.5 migration resumes.)
 
 ## Context
 
-- Branch: `docs/agent-knowledge-distillation` (synced with origin — the
-  full institutionalization batch pushed 2026-07-11 with Charlie's
-  approval).
+- Branch: `docs/agent-knowledge-distillation` (ahead of origin by the
+  2026-07-11 cleanup commits; push awaits per-operation approval).
 - Working tree: 7 M research files + `.claude/settings.json` +
   `.understand-anything/` are Charlie's concurrent work — preserve
   byte-identical. The untracked research validation/test backlog was
@@ -46,10 +49,13 @@ One branch = one theme; update this table when creating or retiring a branch.
 
 | Branch | Theme / purpose | Expected lifetime |
 |---|---|---|
-| `docs/agent-knowledge-distillation` | Agent System v2 + institutionalization waves. Pre-rule commits also carry shioaji/ops/research work — grandfathered; that mix is the evidence that created this rule | until rollout merges; new themes branch fresh from here on |
-| `chore/shioaji-153-validation-harness` | shioaji 1.5.x validation lineage; diverged from origin same-name (PR #371's older lineage) — never force-push | until #371 end-state (see current-risks.md) |
+| `docs/agent-knowledge-distillation` | Agent System v2 + institutionalization waves + governed cleanup. Pre-rule commits also carry shioaji/ops/research work — grandfathered; that mix is the evidence that created this rule | until rollout merges; new themes branch fresh from here on |
 | `research-flow/edge-evidence-parity-hardening` | edge-evidence/§7 parity hardening (pushed, synced) | until merged or superseded |
 | `research/replay-parity-field-set` | `OrderIntent.session_phase` §7 groundwork (pushed, synced) | until merged or superseded |
-| `fix/platform-reduce-only-phantom-latch` | phantom reduce-only latch fix (worktree; PR #360 deployed) | retire after PR closure confirmed |
-| `worktree-agent-a6f3b09645464cf0d` | ephemeral agent worktree (benchmark baseline) | clean up; never push |
 | `main` | default branch (behind origin/main by 17) | permanent |
+
+Retired 2026-07-11 (user-approved; every tip verified contained in remote
+refs before deletion): `worktree-agent-a6f3b09645464cf0d` (tip 98c609af,
+worktree removed), `fix/platform-reduce-only-phantom-latch` (tip e7c8cc97,
+PR #360 MERGED, worktree removed), `chore/shioaji-153-validation-harness`
+(tip e3a0c200, #371 CLOSED).

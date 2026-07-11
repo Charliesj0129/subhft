@@ -5,17 +5,6 @@ record: permanent invariants (project-overview.md) or resolved items (delete,
 noting resolution in the relevant lessons file). A stale register is worse
 than none.
 
-## RISK: unpushed local commits — RESOLVED 2026-07-08 (entry kept for the residual ref divergence)
-User-approved pushes created upstreams for `docs/agent-knowledge-distillation`,
-`research-flow/edge-evidence-parity-hardening`, `research/replay-parity-field-set`;
-`git log --branches --not --remotes` = 0 (every local commit is on a remote ref).
-RESIDUAL: local `chore/shioaji-153-validation-harness` diverges from origin's
-same-named branch (PR #371's older lineage) — push rejected non-fast-forward.
-Its commits ARE backed up (contained in the pushed docs/agent-knowledge-
-distillation chain). Never force-push; resolve the ref when #371 is
-retargeted to 1.5.5 or closed. `main` remains behind origin/main by 14.
-Expires: when #371 end-state is decided. Owner: Charlie.
-
 ## RISK: commits accumulate unpushed between approved pushes (standing; tooling landed 2026-07-11)
 Push is a per-operation human approval, so new local commits sit on one disk
 until the next approved push (institutionalization batch pushed with
@@ -31,8 +20,9 @@ Pin is `shioaji==1.3.3`. 1.5.x = full Rust `_core` rewrite; migration
 retargeted to 1.5.5 (1.5.3→1.5.5 surface diff SAFE — see the runbook).
 Do NOT bump the pin or merge SDK PRs without `make shioaji-guard` green +
 the validation harness (Phase 0/1 vs 1.5.5 run locally 2026-07-08; sim soak
-+ prod checks still owed). Dependabot #376 and draft #371 recommendations
-pending user decision (close both; fresh PR from current lineage).
++ prod checks still owed). #371 and #376 both CLOSED on GitHub (verified
+2026-07-11); the diverged local harness branch was retired the same day.
+A fresh SDK PR from the current lineage is owed when the migration resumes.
 Expires: when the migration lands or is abandoned. Owner: Charlie.
 
 ## RISK: production engine order mode is SIM (since 2026-06-15)

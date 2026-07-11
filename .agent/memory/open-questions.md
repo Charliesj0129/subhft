@@ -43,6 +43,12 @@ Charlie decided to retarget the held 1.5.3 dual-version migration to 1.5.5
 1.5.3→1.5.5 = SAFE (0 breaking; 10 timeout defaults 5000→30000 ms), so #371's
 adapter work carries over unchanged — see the retarget assessment in
 docs/runbooks/shioaji-version-diff.md. REMAINING (execution, not decision):
-re-run validation harness + soaks against 1.5.5; resolve the diverged
-`chore/shioaji-153-validation-harness` ref vs origin (#371) without
-force-push; pin change stays human-approved after harness green.
+re-run validation harness + soaks against 1.5.5; pin change stays
+human-approved after harness green. The diverged local
+chore/shioaji-153-validation-harness ref was retired 2026-07-11 (#371 and
+#376 both CLOSED on GitHub; all its commits contained in pushed refs).
+
+## Old-PC `.hft-runtime` heartbeat PermissionError (opened 2026-06-03, carried 2026-07-11)
+Minor ops debt from the old-PC upgrade: heartbeat file writes fail with
+PermissionError until `.hft-runtime` is chown'd 1000:1000 on the host.
+One-line host fix, needs hands on the box. Decides: USER (host access).
