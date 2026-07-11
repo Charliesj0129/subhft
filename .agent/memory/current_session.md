@@ -13,7 +13,16 @@
   dir merged into `arxiv_papers/`, all 13 stashes exported to
   `~/hft_stash_archive/2026-07-11/` then dropped, local main ff-synced to
   origin. Tags kept (archive/* prune deferred until after the first #11
-  bundle run). Prior session: "全部啟動" activation COMPLETE — all 15
+  bundle run). Rollout merge (same day, user-requested): docs/
+  agent-knowledge-distillation merged into main via merge commit a1e2d0f2
+  (+ uv.lock specifier fixup 68c42cf3). Convergence commits landed first on
+  the branch: b655a2db (Charlie's in-flight research-factory work set,
+  approved; includes force-added research/data_pipeline.py) and cf40f68b
+  (6 manifest-referenced evidence artifacts force-added from gitignored
+  outputs// docs-artifacts paths). 2 conflicts in the §7 replay-parity gate
+  resolved to the branch side (blob-verified strict successor of main's
+  PR #365). make ci exit 0 on the merged tree BEFORE main advanced.
+  Prior session: "全部啟動" activation COMPLETE — all 15
   institutionalization points landed.
 
 ## Status
@@ -30,6 +39,13 @@
   #11 5 behavior tests + ruff + mypy green; `make check` exit=0 after the
   wrap-up commit (lint, typecheck, discipline, dependency-boundary,
   test-hygiene, agent-docs). NOT run: `make ci` (no merge in this session).
+- Rollout-merge CI (2026-07-11): `make ci` exit 0 — 14071 passed /
+  19 skipped, coverage 87.77% — on the merge tree in a CLEAN worktree
+  (fresh uv sync + maturin), which surfaced 3 fresh-clone-only defects the
+  dirty primary worktree masked: an unformatted committed test file, the
+  half-committed paper-index alias set, and gitignored-but-imported
+  research/data_pipeline.py + 6 evidence artifacts. All fixed on-branch
+  before the merge landed.
 
 ## Blockers
 
@@ -41,12 +57,14 @@
 
 ## Context
 
-- Branch: `docs/agent-knowledge-distillation` (ahead of origin by the
-  2026-07-11 cleanup commits; push awaits per-operation approval).
-- Working tree: 7 M research files + `.claude/settings.json` +
-  `.understand-anything/` are Charlie's concurrent work — preserve
-  byte-identical. The untracked research validation/test backlog was
-  committed by #10b (ea5cfeed).
+- Branch: `docs/agent-knowledge-distillation` — MERGED into main
+  2026-07-11 (a1e2d0f2); main + branch pushed to origin same day with
+  approval. Primary worktree stays checked out on the docs branch; switch
+  to main is Charlie's call.
+- Working tree: `.claude/settings.json` + `.understand-anything/`
+  (untracked) are Charlie's concurrent work — preserve byte-identical.
+  The formerly-dirty 7 research files were committed with approval in
+  b655a2db as part of the convergence.
 
 ## Branch registry (rule: `.agent/rules/30-git.md` §Branch discipline)
 
@@ -54,10 +72,10 @@ One branch = one theme; update this table when creating or retiring a branch.
 
 | Branch | Theme / purpose | Expected lifetime |
 |---|---|---|
-| `docs/agent-knowledge-distillation` | Agent System v2 + institutionalization waves + governed cleanup. Pre-rule commits also carry shioaji/ops/research work — grandfathered; that mix is the evidence that created this rule | until rollout merges; new themes branch fresh from here on |
+| `docs/agent-knowledge-distillation` | Agent System v2 + institutionalization waves + governed cleanup. Pre-rule commits also carry shioaji/ops/research work — grandfathered; that mix is the evidence that created this rule | MERGED to main 2026-07-11 (a1e2d0f2); retire once Charlie switches the primary worktree to main |
 | `research-flow/edge-evidence-parity-hardening` | edge-evidence/§7 parity hardening (pushed, synced) | until merged or superseded |
 | `research/replay-parity-field-set` | `OrderIntent.session_phase` §7 groundwork (pushed, synced) | until merged or superseded |
-| `main` | default branch (ff-synced to origin/main 2026-07-11) | permanent |
+| `main` | default branch (rollout merge a1e2d0f2 landed 2026-07-11) | permanent |
 
 Retired 2026-07-11 (user-approved; every tip verified contained in remote
 refs before deletion): `worktree-agent-a6f3b09645464cf0d` (tip 98c609af,
