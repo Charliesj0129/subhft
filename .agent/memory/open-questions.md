@@ -30,6 +30,9 @@ commit 1a973302) but the FIRST RUN is blocked: the destination must be an
 existing directory outside the repo that Charlie controls (second disk /
 mount — never a synced or public location). One-time approval, then runs
 record themselves in current-risks.md. Decides: USER.
+Downstream (user decision 2026-07-11 round-2 cleanup): the 12 `archive/*`
+tags each hold unpushed lineages (1–1917 commits) and stay untouched until
+the first bundle run captures all refs; prune them in a later round.
 
 ## OrderIntent §7 parity producer fields (opened 2026-06-03)
 Live parity for session/risk/force-flat dimensions needs a producer-side

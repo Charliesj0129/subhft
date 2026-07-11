@@ -3,13 +3,18 @@
 ## Last Updated
 
 - **Date**: 2026-07-11
-- **Session**: project cleanup (user-approved scope) — dead `.agent/`
-  generations removed per manifest audit (tag pre-cleanup-2026-07-11),
-  three branches/worktrees retired (#360 MERGED, #371/#376 CLOSED —
-  verified via gh), orchestrator private memory pruned to
-  development-relevant entries. Prior session: "全部啟動" activation
-  COMPLETE — all 15 institutionalization points landed; the spec's rollout
-  table carries every commit hash.
+- **Session**: project cleanup rounds 1+2 (user-approved scope).
+  Round 1: dead `.agent/` generations removed per manifest audit (tag
+  pre-cleanup-2026-07-11), three branches/worktrees retired (#360 MERGED,
+  #371/#376 CLOSED — verified via gh), orchestrator private memory pruned.
+  Round 2 (larger scope): `.claude/commands/` residue (31 files), legacy
+  `rust_strategy` crate, 8 orphaned scripts (audit in commit 304a1e63's
+  message), specs/ relocation, untracked root junk (~30MB), arxiv literal
+  dir merged into `arxiv_papers/`, all 13 stashes exported to
+  `~/hft_stash_archive/2026-07-11/` then dropped, local main ff-synced to
+  origin. Tags kept (archive/* prune deferred until after the first #11
+  bundle run). Prior session: "全部啟動" activation COMPLETE — all 15
+  institutionalization points landed.
 
 ## Status
 
@@ -52,7 +57,7 @@ One branch = one theme; update this table when creating or retiring a branch.
 | `docs/agent-knowledge-distillation` | Agent System v2 + institutionalization waves + governed cleanup. Pre-rule commits also carry shioaji/ops/research work — grandfathered; that mix is the evidence that created this rule | until rollout merges; new themes branch fresh from here on |
 | `research-flow/edge-evidence-parity-hardening` | edge-evidence/§7 parity hardening (pushed, synced) | until merged or superseded |
 | `research/replay-parity-field-set` | `OrderIntent.session_phase` §7 groundwork (pushed, synced) | until merged or superseded |
-| `main` | default branch (behind origin/main by 17) | permanent |
+| `main` | default branch (ff-synced to origin/main 2026-07-11) | permanent |
 
 Retired 2026-07-11 (user-approved; every tip verified contained in remote
 refs before deletion): `worktree-agent-a6f3b09645464cf0d` (tip 98c609af,
