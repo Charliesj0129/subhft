@@ -15,31 +15,36 @@ human landing here. Labels:
 
 A new `.agent/` subdirectory requires a row here at creation time.
 
-## Inventory (audited 2026-07-10)
+## Inventory (audited 2026-07-10; DEPRECATED/ARCHIVE-CANDIDATE entries removed 2026-07-11 — see §Removed)
 
 | Path | Tracked | Status | Judgement |
 |---|---|---|---|
-| `rules/` | 27 files | ACTIVE | v2 guardrails; indexed by `rules/00-index.md`; mandatory reads per `CLAUDE.md` |
-| `rules/ecc/` | subset of above | DEPRECATED | ECC-generation rule set duplicating v2 rules; absent from `rules/00-index.md` |
+| `rules/` | tracked | ACTIVE | v2 guardrails; indexed by `rules/00-index.md`; mandatory reads per `CLAUDE.md` |
 | `skills/` | 84 files | ACTIVE | v2 procedures; indexed by `skills/00-index.md` |
 | `memory/` | 12 files (force-added; dir is gitignored) | ACTIVE | v2 ledgers; routing table in `memory/README.md` |
 | `templates/` | 1 tracked (force-added) | ACTIVE | `ADR_TEMPLATE.md` — required by governance change control for authority/tier changes (`rules/60-agent-workflow-governance.md`) |
 | `CHANGELOG.md` | tracked (force-added) | ACTIVE | one-line-per-change governance history; updated in every `docs(agents):` commit |
 | `reports/` | untracked | ACTIVE (destination) | target directory for periodic meta-audit reports (proposal #15); existing 2026-03 files are historical evidence |
 | `library/` | 5 tracked / 17 on disk | ACTIVE (with known drift) | reference shelf (broker/API/architecture docs); at least one skill reference points to a missing file (`library/design-review-artifacts.md` cited by `hft-architect`) — to be caught by the agent-docs checker (proposal #2) |
-| `hooks/` | untracked | ACTIVE (`verify_health.sh` only) | `verify_health.sh` is called by the `healthcheck` skill; `ecc_hooks.json` is ECC-generation and DEPRECATED (not wired into `.claude/settings.json`) |
-| `agents/` | untracked | DEPRECATED | role definitions superseded by `AGENTS.md` §Roles; sole remaining reference (`research-factory` skill table) cites paths that do not exist as written |
-| `commands/` | untracked | DEPRECATED | ECC-generation command library (28 files); zero references from v2 docs |
-| `contexts/` | 3 files | DEPRECATED | ECC-generation context presets; zero references from v2 docs |
-| `extensions/` | untracked | DEPRECATED | single ECC-generation file (`opus-advanced.md`); zero references |
-| `mcp/` | untracked | DEPRECATED | MCP server config unreferenced by v2 docs; confirm no external tooling reads it before archiving |
+| `hooks/` | untracked | ACTIVE | `verify_health.sh` (called by the `healthcheck` skill) + `README.md` |
 | `evals/` | 5 tracked / 9 on disk | ACTIVE (golden intake cases) | `golden-intake-tasks.md` = routing regression cases run after routing-relevant governance changes (#8); legacy 2026-02/03 module-eval specs retained as historical reference |
-| `teams/alpha-research/` | 9 tracked | DEPRECATED (evidence retained) | team framework unused since candidate-loop v1 became research mainline (2026-06-12); `rounds/` artifacts are research evidence — append-only, never rewrite |
-| `workflows/` | 1 tracked / 7 on disk | DEPRECATED | `opsx-*` are ECC-generation; `multi-broker-setup.md` is tracked but unreferenced — promote into a skill if still wanted, else archive |
-| `pixiu/` | untracked | ARCHIVE-CANDIDATE | dead framework: registries plus runtime reports/logs (token/scan histories) |
-| `logs/` | untracked | ARCHIVE-CANDIDATE | runtime log output (`pixiu.log`); does not belong in a knowledge base |
-| `project_context.json` | untracked | DEPRECATED | ECC-generation project descriptor; zero references |
+| `teams/alpha-research/rounds/` | untracked | EVIDENCE | research round artifacts (R56) — append-only, never rewrite; the surrounding team framework was removed 2026-07-11 |
 | `agent-docs-known-drift.txt` | tracked (force-added) | ACTIVE | ratchet baseline for `scripts/check_agent_docs.py` (`make agent-docs-check`) |
+
+## Removed (2026-07-11, user-approved cleanup)
+
+Deleted after the 2026-07-10 audit above confirmed zero live references; tag
+`pre-cleanup-2026-07-11` marks the pre-deletion state, tracked files remain
+recoverable from git history (commit hash recoverable from `git log` by this
+date). Untracked entries had no git history and are gone permanently — that
+trade-off was explicitly approved.
+
+- `rules/ecc/` (tracked, 16 files) — ECC-generation rule set
+- `contexts/` (tracked, 3 files) — ECC-generation context presets
+- `workflows/` (1 tracked + opsx-* on disk) — ECC-generation workflows
+- `teams/alpha-research/` framework (tracked 9 + untracked role/hook strays; `rounds/` evidence kept)
+- `agents/`, `commands/`, `pixiu/`, `logs/`, `mcp/`, `extensions/`, `project_context.json`, `hooks/ecc_hooks.json` (all untracked)
+- `.claude/commands/alpha-research.md` (tracked) — drove the removed team framework
 
 ## Method
 

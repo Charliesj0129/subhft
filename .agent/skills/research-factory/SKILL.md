@@ -138,7 +138,7 @@ make research-triage ALPHA=<id> OWNER=<owner> DATA='<path.npy>' ARGS='--skip-gat
 ## Roles (Execution Contract)
 
 Roles map onto Agent System v2 (`AGENTS.md` §Roles); the legacy
-`.agent/agents/` generation is DEPRECATED (see `.agent/00-MANIFEST.md`).
+agents generation was removed 2026-07-11 (see `.agent/00-MANIFEST.md` §Removed).
 
 | Role | v2 equivalent | Responsibility |
 | --- | --- | --- |

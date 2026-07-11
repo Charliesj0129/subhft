@@ -38,8 +38,8 @@ contract and profile semantics, the canonical source is
 | 7   | Paper Trade            | `experiments/promotions/`  | `code-reviewer` | Gate-E paper-trade `make` targets   | min 5 shadow sessions (Gate E `min_shadow_sessions=5`) |
 | 8   | Live (Rust)            | `rust_core/src/`           | `architect`     | `rust_feature_engineering`          | profile Python baseline before porting |
 
-Roles map to agent definitions under `.agent/agents/` (`planner.md`, `architect.md`,
-`code-reviewer.md`, `refactor-cleaner.md`). Skills are under `.agent/skills/<name>/SKILL.md`.
+Roles map onto Agent System v2 (`AGENTS.md` §Roles; the legacy agents
+generation was removed 2026-07-11). Skills are under `.agent/skills/<name>/SKILL.md`.
 
 ### Stage-4 engine selection (automatic, via `manifest.yaml`)
 
