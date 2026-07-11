@@ -64,6 +64,7 @@ ALLOWED_ROOT_DIRS: set[str] = {
     "archive",
     "backtest",
     "calibration",  # research.calibration package (audit.py, cli.py, replay.py …)
+    "candidate_loop",  # research.candidate_loop package — governed candidate generation loop (tracked, tested)
     "combinatorial",
     "data",
     "data_pipeline",  # research.data_pipeline package — canonical L2+tick export contract
@@ -128,6 +129,18 @@ CORE_TOOL_FILES: set[str] = {
     "paper_autofill.py",
     "paper_prototype.py",
     "paper_trade.py",
+    # pdq causal sweep tools — import targets of tests/unit/research/test_pdq_*.py;
+    # converge-tools must NOT move them to legacy/ or those imports break.
+    "pdq_causal_day_session_only.py",
+    "pdq_causal_supertrend_grid_search.py",
+    "pdq_causal_supertrend_grid_search_uncapped.py",
+    "pdq_causal_supertrend_grid_search_v2.py",
+    "pdq_causal_timeframe_sweep.py",
+    "pdq_causal_uncapped_exit.py",
+    "pdq_causal_walkforward.py",
+    "pdq_opportunity_standalone_validation.py",
+    "pdq_supertrend_exit_search.py",
+    "pdq_supertrend_signal_lopez_validation.py",
     "prepare_governed_data.py",
     "regime_alpha.py",
     "render_promotion_report.py",
