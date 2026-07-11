@@ -157,9 +157,7 @@ def test_pair_audit_deducts_round_trip_cost_from_gross_return(tmp_path):
     # executable exit path; TXF never extends past the thrust-high stop (no breach).
     np.savez(
         today_tmf,
-        data=_session_array(
-            "2026-04-15", [(90, 17040.0), (95, 17035.0), (105, 17028.0), (120, 17020.0)]
-        ),
+        data=_session_array("2026-04-15", [(90, 17040.0), (95, 17035.0), (105, 17028.0), (120, 17020.0)]),
     )
 
     rows = audit_expiration_v_reversal_pair(
@@ -174,8 +172,72 @@ def test_pair_audit_deducts_round_trip_cost_from_gross_return(tmp_path):
     assert row["settlement_date"] == "2026-04-15"
     assert row["net_30m_pts"] is not None
     assert row["net_after_cost_30m"] == row["net_30m_pts"] - 8.0
+    assert row["time_exit_net_after_cost_30m"] == row["net_after_cost_30m"]
+    assert row["stop_exit_net_after_cost_30m"] == row["net_after_cost_30m"]
+    assert row["stop_exit_reason"] == "time_30m"
     assert row["cost_pts"] == 8.0
     assert row["stop_structure_breached"] is False
+    assert row["active_30m_stop_breached"] is False
+    assert row["full_session_stop_structure_breached"] is False
+
+
+def test_pair_audit_uses_first_executable_stop_exit_inside_active_horizon(tmp_path):
+    today_txf = tmp_path / "TXFD6_2026-04-15_l2.hftbt.npz"
+    today_tmf = tmp_path / "TMFD6_2026-04-15_l2.hftbt.npz"
+    np.savez(
+        today_txf,
+        data=_session_array(
+            "2026-04-15",
+            [(0, 17000.0), (30, 17015.0), (60, 17030.0), (90, 17040.0), (95, 17060.0), (120, 17000.0)],
+        ),
+    )
+    np.savez(
+        today_tmf,
+        data=_session_array("2026-04-15", [(90, 17040.0), (95, 17062.0), (120, 17000.0)]),
+    )
+
+    row = audit_expiration_v_reversal_pair(
+        settlement_txf_path=today_txf,
+        settlement_tmf_path=today_tmf,
+        cost_pts=8.0,
+    )[0]
+
+    assert row["time_exit_net_after_cost_30m"] > 0
+    assert row["active_30m_stop_breached"] is True
+    assert row["full_session_stop_structure_breached"] is True
+    assert row["stop_structure_breached"] is True
+    assert row["stop_exit_reason"] == "thrust_continuation_stop"
+    assert row["stop_trigger_time_ns"] == session_ns("2026-04-15", 95)
+    assert row["stop_exit_net_after_cost_30m"] < 0
+
+
+def test_pair_audit_does_not_apply_stop_after_30_minute_position_is_closed(tmp_path):
+    today_txf = tmp_path / "TXFD6_2026-04-15_l2.hftbt.npz"
+    today_tmf = tmp_path / "TMFD6_2026-04-15_l2.hftbt.npz"
+    np.savez(
+        today_txf,
+        data=_session_array(
+            "2026-04-15",
+            [(0, 17000.0), (30, 17015.0), (60, 17030.0), (90, 17040.0), (120, 17020.0), (180, 17060.0)],
+        ),
+    )
+    np.savez(
+        today_tmf,
+        data=_session_array("2026-04-15", [(90, 17040.0), (120, 17020.0), (180, 17060.0)]),
+    )
+
+    row = audit_expiration_v_reversal_pair(
+        settlement_txf_path=today_txf,
+        settlement_tmf_path=today_tmf,
+        cost_pts=8.0,
+    )[0]
+
+    assert row["full_session_stop_structure_breached"] is True
+    assert row["active_30m_stop_breached"] is False
+    assert row["stop_structure_breached"] is False
+    assert row["stop_trigger_time_ns"] is None
+    assert row["stop_exit_reason"] == "time_30m"
+    assert row["stop_exit_net_after_cost_30m"] == row["time_exit_net_after_cost_30m"]
 
 
 def test_settlement_day_pairs_only_yields_the_settlement_day(tmp_path):
@@ -241,15 +303,19 @@ def test_summarizer_needs_more_days_on_sparse_settlements():
             "contract": "TXFC6->TMFC6",
             "date": "2026-03-18",
             "net_after_cost_30m": 65.0,
+            "stop_exit_net_after_cost_30m": -15.0,
             "net_30m_pts": 73.0,
             "stop_structure_breached": False,
+            "full_session_stop_structure_breached": True,
         },
         {
             "contract": "TXFD6->TMFD6",
             "date": "2026-04-15",
             "net_after_cost_30m": 25.0,
+            "stop_exit_net_after_cost_30m": 25.0,
             "net_30m_pts": 33.0,
             "stop_structure_breached": False,
+            "full_session_stop_structure_breached": False,
         },
     ]
     summary = summarize_expiration_v_reversal_rows(rows)
@@ -260,6 +326,64 @@ def test_summarizer_needs_more_days_on_sparse_settlements():
     assert summary["hard_gate"]["trading_days_ok"] is False
     assert summary["hard_gate"]["cross_contract_complete"] is False
     assert summary["research_decision"]["status"] == "needs_more_sample"
+    assert summary["splits"]["full"]["mean_stop_exit_net_after_cost_30m"] == 5.0
+    assert summary["splits"]["full"]["full_session_stop_breach_rate"] == 0.5
+    assert summary["metric_contract"]["canonical_risk_controlled_metric"] == "stop_exit_net_after_cost_30m"
+    assert summary["metric_contract"]["legacy_time_exit_metric"] == "net_after_cost_30m"
+    assert summary["risk_controlled_edge_floor_cleared"] is False
+
+
+def _passing_sample_rows(stop_exit_net: float) -> list[dict[str, object]]:
+    # Four positive settlements over four contracts / four days / four months:
+    # clears the sample, dominance, stop-breach and drawdown gates so the verdict
+    # turns purely on the canonical risk-controlled (stop-exit) edge.
+    return [
+        {
+            "contract": f"TXF{code}6->TMF{code}6",
+            "date": date,
+            "net_after_cost_30m": 20.0,
+            "stop_exit_net_after_cost_30m": stop_exit_net,
+            "net_30m_pts": 28.0,
+            "stop_structure_breached": False,
+            "full_session_stop_structure_breached": False,
+        }
+        for code, date in [
+            ("B", "2026-02-18"),
+            ("C", "2026-03-18"),
+            ("D", "2026-04-15"),
+            ("E", "2026-05-20"),
+        ]
+    ]
+
+
+def test_summarizer_kills_when_canonical_risk_controlled_edge_below_floor():
+    # Legacy time-exit edge clears the floor (mean net 20 > 10) but the canonical
+    # stop-exit edge does not (mean 5 < 10): the candidate must NOT proceed on the
+    # legacy metric alone.
+    summary = summarize_expiration_v_reversal_rows(
+        _passing_sample_rows(stop_exit_net=5.0),
+        min_events=4,
+        min_trading_days=4,
+        required_contracts=(),
+    )
+
+    assert summary["edge_floor_cleared"] is True
+    assert summary["risk_controlled_edge_floor_cleared"] is False
+    assert summary["verdict"] == "KILL"
+    assert summary["research_decision"]["status"] == "failed"
+    assert summary["research_decision"]["reason"] == "t1f_risk_controlled_edge_floor_not_cleared"
+
+
+def test_summarizer_proceeds_only_when_canonical_risk_controlled_edge_clears():
+    summary = summarize_expiration_v_reversal_rows(
+        _passing_sample_rows(stop_exit_net=25.0),
+        min_events=4,
+        min_trading_days=4,
+        required_contracts=(),
+    )
+
+    assert summary["risk_controlled_edge_floor_cleared"] is True
+    assert summary["verdict"] == "PROCEED"
 
 
 def test_t1f_candidate_has_governed_fixed_spec():

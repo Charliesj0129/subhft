@@ -896,10 +896,19 @@ def audit_vol_compression_pair(
 
 def _subset_scorecard(rows: Sequence[dict[str, object]]) -> dict[str, object]:
     nets = [float(cast(float, r["net_after_cost_30m"])) for r in rows if r.get("net_after_cost_30m") is not None]
+    stop_exit_nets = [
+        float(cast(float, r["stop_exit_net_after_cost_30m"]))
+        for r in rows
+        if r.get("stop_exit_net_after_cost_30m") is not None
+    ]
     gross = [float(cast(float, r["net_30m_pts"])) for r in rows if r.get("net_30m_pts") is not None]
     contracts = sorted({str(r["contract"]).split("->", 1)[0] for r in rows})
     event_dates = sorted({str(r["date"]) for r in rows})
     stop_breaches = sum(1 for r in rows if r.get("stop_structure_breached"))
+    full_session_stop_rows = [r for r in rows if "full_session_stop_structure_breached" in r]
+    full_session_stop_breaches = sum(
+        1 for r in full_session_stop_rows if r.get("full_session_stop_structure_breached")
+    )
     remove_best_1 = sorted(nets)[:-1] if len(nets) > 1 else nets
 
     net_by_day: dict[str, float] = {}
@@ -947,11 +956,23 @@ def _subset_scorecard(rows: Sequence[dict[str, object]]) -> dict[str, object]:
         "mean_net_after_cost_30m": mean_net,
         "mean_net_edge_pts_per_trade": mean_net,
         "median_net_after_cost_30m": median(nets) if nets else None,
+        "mean_stop_exit_net_after_cost_30m": (
+            (sum(stop_exit_nets) / len(stop_exit_nets)) if stop_exit_nets else None
+        ),
+        "median_stop_exit_net_after_cost_30m": median(stop_exit_nets) if stop_exit_nets else None,
+        "positive_stop_exit_fraction": (
+            (sum(1 for net in stop_exit_nets if net > 0) / len(stop_exit_nets)) if stop_exit_nets else None
+        ),
         "median_gross_return_30m": median(gross) if gross else None,
         "p10_net_after_cost_30m": float(np.percentile(nets, 10)) if nets else None,
         "p05_net_after_cost_30m": float(np.percentile(nets, 5)) if nets else None,
         "remove_best_1_median_net": median(remove_best_1) if remove_best_1 else None,
         "stop_breach_rate": (stop_breaches / len(rows)) if rows else None,
+        "full_session_stop_breach_rate": (
+            (full_session_stop_breaches / len(full_session_stop_rows))
+            if full_session_stop_rows
+            else None
+        ),
         "positive_day_fraction": (pos_days / len(net_by_day)) if net_by_day else None,
         "total_net": total_net,
         "max_single_day_net": max_day_net,
@@ -987,6 +1008,7 @@ def _t1b_research_decision(
     stop_breach_fail: bool,
     drawdown_fail: bool,
     edge_floor_cleared: bool,
+    risk_controlled_edge_floor_cleared: bool | None = None,
 ) -> dict[str, object]:
     if median_net is not None and median_net <= 0:
         return {
@@ -1021,6 +1043,18 @@ def _t1b_research_decision(
             "status": "blocked_by_risk",
             "reason": "t1b_risk_gate:" + "|".join(evidence),
             "evidence": evidence,
+            "decided_by": "t1b_v0_hard_gate",
+        }
+    # Canonical risk-controlled metric gate (T1-F): when a caller declares a
+    # risk-controlled (stop-exit) edge as its canonical metric, that metric must
+    # clear the floor before the candidate can be research-eligible — otherwise
+    # a candidate failing its declared canonical metric could still pass on the
+    # legacy time-exit edge alone.  Other tracks pass None and skip this gate.
+    if risk_controlled_edge_floor_cleared is False:
+        return {
+            "status": "failed",
+            "reason": "t1f_risk_controlled_edge_floor_not_cleared",
+            "evidence": ["stop_exit_net_after_cost_30m"],
             "decided_by": "t1b_v0_hard_gate",
         }
     if not edge_floor_cleared:
@@ -2100,15 +2134,49 @@ def audit_expiration_v_reversal_pair(
             )
         except ValueError:
             continue
+        active_end_ns = event.trigger_time_ns + 30 * NS_PER_MINUTE
         after = today_bbo.ts_ns >= event.trigger_time_ns
+        active = after & (today_bbo.ts_ns <= active_end_ns)
         post_mid = today_bbo.mid[after]
+        active_mid = today_bbo.mid[active]
+        active_ts = today_bbo.ts_ns[active]
         # Stop structure = thrust continues past its extreme (fade refuted).
         if event.direction > 0:  # faded a down-thrust (long): stop if price keeps falling
-            breached = bool(np.any(post_mid <= event.opening_range_low)) if len(post_mid) else False
+            full_session_breached = (
+                bool(np.any(post_mid <= event.opening_range_low)) if len(post_mid) else False
+            )
+            active_crossings = np.flatnonzero(active_mid <= event.opening_range_low)
         else:  # faded an up-thrust (short): stop if price keeps rising
-            breached = bool(np.any(post_mid >= event.opening_range_high)) if len(post_mid) else False
+            full_session_breached = (
+                bool(np.any(post_mid >= event.opening_range_high)) if len(post_mid) else False
+            )
+            active_crossings = np.flatnonzero(active_mid >= event.opening_range_high)
+        active_stop_breached = bool(len(active_crossings))
+        stop_trigger_time_ns = (
+            int(active_ts[int(active_crossings[0])]) if active_stop_breached else None
+        )
         gross = eval_row.get("return_30m")
-        net = (float(gross) - cost_pts) if gross is not None else None
+        time_exit_net = (float(gross) - cost_pts) if gross is not None else None
+        stop_exit_gross = gross
+        stop_exit_net = time_exit_net
+        stop_exit_reason = "time_30m"
+        stop_exit_time_ns = None
+        stop_exit_price = None
+        if stop_trigger_time_ns is not None:
+            stop_exit_idx = int(np.searchsorted(tmf_bbo.ts_ns, stop_trigger_time_ns, side="left"))
+            if stop_exit_idx < len(tmf_bbo.ts_ns) and int(tmf_bbo.ts_ns[stop_exit_idx]) <= active_end_ns:
+                stop_exit_time_ns = int(tmf_bbo.ts_ns[stop_exit_idx])
+                stop_exit_price = float(
+                    tmf_bbo.bid[stop_exit_idx] if event.direction > 0 else tmf_bbo.ask[stop_exit_idx]
+                )
+                entry = float(cast(float, eval_row["tmf_executable_entry"]))
+                stop_exit_gross = (stop_exit_price - entry) * event.direction
+                stop_exit_net = stop_exit_gross - cost_pts
+                stop_exit_reason = "thrust_continuation_stop"
+            else:
+                stop_exit_gross = None
+                stop_exit_net = None
+                stop_exit_reason = "stop_no_executable_quote"
         row: dict[str, object] = {
             "contract": f"{txf_contract}->{tmf_contract}",
             "date": date_str,
@@ -2121,10 +2189,23 @@ def audit_expiration_v_reversal_pair(
             "thrust_stop_high": event.opening_range_high,
             "thrust_stop_low": event.opening_range_low,
             "trade_vwap": event.trade_vwap,
-            "stop_structure_breached": breached,
-            "thrust_continued_past_stop": breached,
+            "stop_structure_breached": active_stop_breached,
+            "active_30m_stop_breached": active_stop_breached,
+            "full_session_stop_structure_breached": full_session_breached,
+            "thrust_continued_past_stop": active_stop_breached,
+            "stop_trigger_time": (
+                _iso_from_ns(stop_trigger_time_ns) if stop_trigger_time_ns is not None else None
+            ),
+            "stop_trigger_time_ns": stop_trigger_time_ns,
+            "stop_exit_time": _iso_from_ns(stop_exit_time_ns) if stop_exit_time_ns is not None else None,
+            "stop_exit_time_ns": stop_exit_time_ns,
+            "stop_exit_price": stop_exit_price,
+            "stop_exit_reason": stop_exit_reason,
+            "stop_exit_gross_30m": stop_exit_gross,
+            "stop_exit_net_after_cost_30m": stop_exit_net,
             "cost_pts": cost_pts,
-            "net_after_cost_30m": net,
+            "net_after_cost_30m": time_exit_net,
+            "time_exit_net_after_cost_30m": time_exit_net,
             "net_30m_pts": gross,
             **eval_row,
         }
@@ -2180,6 +2261,7 @@ def summarize_expiration_v_reversal_rows(
 
     n_events = cast(int, full["events"])
     mean_net_edge = _f(full["mean_net_edge_pts_per_trade"])
+    mean_stop_exit_edge = _f(full["mean_stop_exit_net_after_cost_30m"])
     median_net = _f(full["median_net_after_cost_30m"])
     remove_best = _f(full["remove_best_1_median_net"])
     p10 = _f(full["p10_net_after_cost_30m"])
@@ -2202,14 +2284,25 @@ def summarize_expiration_v_reversal_rows(
     stop_breach_fail = stop_breach is not None and stop_breach >= h9_stop_breach_baseline
     drawdown_fail = drawdown_within_monthly_gate is False
     edge_floor_cleared = bool(mean_net_edge is not None and mean_net_edge > edge_floor_pts)
+    risk_controlled_edge_floor_cleared = bool(
+        mean_stop_exit_edge is not None and mean_stop_exit_edge > edge_floor_pts
+    )
+    # The canonical metric for this track is the risk-controlled (stop-exit)
+    # edge.  A computable stop-exit edge below the floor is an outright failure;
+    # an uncomputable one cannot support a PROCEED claim (falls through to
+    # NEEDS-MORE-DAYS).  This stops a candidate from proceeding on the legacy
+    # time-exit edge alone while failing its declared canonical metric.
+    risk_controlled_edge_floor_below = (
+        mean_stop_exit_edge is not None and mean_stop_exit_edge <= edge_floor_pts
+    )
 
     if median_net is not None and median_net <= 0:
         verdict = "KILL"
     elif not sample_ok:
         verdict = "NEEDS-MORE-DAYS"
-    elif dominance_fail or stop_breach_fail or drawdown_fail:
+    elif dominance_fail or stop_breach_fail or drawdown_fail or risk_controlled_edge_floor_below:
         verdict = "KILL"
-    elif median_net is not None and median_net > 0:
+    elif median_net is not None and median_net > 0 and risk_controlled_edge_floor_cleared:
         verdict = "PROCEED"
     else:
         verdict = "NEEDS-MORE-DAYS"
@@ -2226,6 +2319,7 @@ def summarize_expiration_v_reversal_rows(
         stop_breach_fail=stop_breach_fail,
         drawdown_fail=drawdown_fail,
         edge_floor_cleared=edge_floor_cleared,
+        risk_controlled_edge_floor_cleared=risk_controlled_edge_floor_cleared,
     )
 
     return {
@@ -2236,6 +2330,18 @@ def summarize_expiration_v_reversal_rows(
         "edge_floor_pts": edge_floor_pts,
         "edge_floor_metric": "mean_net_edge_pts_per_trade",
         "edge_floor_cleared": edge_floor_cleared,
+        "risk_controlled_edge_floor_cleared": risk_controlled_edge_floor_cleared,
+        "metric_contract": {
+            "legacy_time_exit_metric": "net_after_cost_30m",
+            "legacy_time_exit_alias": "time_exit_net_after_cost_30m",
+            "canonical_risk_controlled_metric": "stop_exit_net_after_cost_30m",
+            "verdict_basis": "risk_controlled_canonical_with_legacy_compatibility",
+            "promotion_interpretation": (
+                "The risk-controlled (stop-exit) edge is the canonical gate for the verdict and "
+                "research eligibility; the legacy time-exit median is retained only for historical "
+                "artifact compatibility and cannot promote a candidate on its own."
+            ),
+        },
         "verdict": verdict,
         "research_decision": research_decision,
         "hard_gate": {
@@ -2247,6 +2353,7 @@ def summarize_expiration_v_reversal_rows(
             "cross_contract_complete": bool(cross_contract_complete),
             "required_contracts": list(required_contracts),
             "median_net_positive": bool(median_net is not None and median_net > 0),
+            "risk_controlled_mean_edge_above_floor": risk_controlled_edge_floor_cleared,
             "remove_best_1_non_collapsing": (bool(remove_best >= 0) if remove_best is not None else None),
             "p10_not_catastrophic": (bool(p10 > -3.0 * edge_floor_pts) if p10 is not None else None),
             "no_single_day_dominance": bool(day_share is None or day_share <= max_single_day_share),
@@ -2325,6 +2432,9 @@ def run_expiration_v_reversal_audit(args: argparse.Namespace) -> dict[str, objec
         "thrust_window_minutes": args.thrust_window_minutes,
         "min_thrust_pts": args.min_thrust_pts,
         "stop_buffer_pts": args.stop_buffer_pts,
+        "active_stop_horizon_minutes": 30,
+        "time_exit_metric": "time_exit_net_after_cost_30m",
+        "risk_controlled_metric": "stop_exit_net_after_cost_30m",
         "cost_pts": args.cost_pts,
         "oos_start": args.oos_start,
         "min_date": args.min_date,

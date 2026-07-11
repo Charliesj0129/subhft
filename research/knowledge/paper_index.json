@@ -1112,14 +1112,29 @@
     "title": "rl execution optimization"
   },
   "108": {
-    "alphas": [],
+    "alphas": [
+      "c74_txf_tmf_basis_mean_reversion"
+    ],
+    "aliases": [
+      "Fanelli 2023 futures-basis microstructure (cited in DA T2)",
+      "Fanelli_2023_futures_basis_microstructure",
+      "2023 Fanelli-Fontana-Rotondi HMM stat-arb crude oil futures"
+    ],
+    "arxiv_id": "2309.00875",
+    "authors": "Viviana Fanelli, Claudio Fontana, Francesco Rotondi",
+    "doi": "10.48550/arXiv.2309.00875",
     "note_file": "research/knowledge/notes/108_hmm_stat_arb_oil.md",
     "ref": "108",
+    "source_url": "https://arxiv.org/abs/2309.00875",
     "status": "reviewed",
     "tags": [
-      "stat_arb"
+      "stat_arb",
+      "futures_basis",
+      "cointegration",
+      "hmm"
     ],
-    "title": "hmm stat arb oil"
+    "title": "A hidden Markov model for statistical arbitrage in international crude oil futures markets",
+    "year": 2023
   },
   "109": {
     "alphas": [],
@@ -1827,6 +1842,97 @@
     ],
     "title": "The micro-price: a high-frequency estimator of future prices",
     "year": 2018
+  },
+  "154": {
+    "alphas": [
+      "c32b_tob_survival_refresh_regime_gate_rescue"
+    ],
+    "aliases": [
+      "2017 Moallemi-Yuan Queue value on LOB",
+      "2017_Moallemi_Yuan_queue_value_LOB"
+    ],
+    "authors": "Ciamac C. Moallemi, Kai Yuan",
+    "doi": "10.2139/ssrn.2996221",
+    "journal": "Columbia Business School Research Paper No. 17-70",
+    "ref": "154",
+    "source_url": "https://business.columbia.edu/faculty/research/model-queue-position-valuation-limit-order-book",
+    "status": "reviewed",
+    "tags": [
+      "queue_position",
+      "order_value",
+      "limit_order_book"
+    ],
+    "title": "A model for queue position valuation in a limit order book",
+    "year": 2017
+  },
+  "155": {
+    "alphas": [
+      "c32b_tob_survival_refresh_regime_gate_rescue"
+    ],
+    "aliases": [
+      "2014 Maglaras multi-class LOB with heterogeneous agents",
+      "2014_Maglaras_multi_class_LOB",
+      "2021 Maglaras-Moallemi-Zheng fragmented LOB queues"
+    ],
+    "authors": "Costis Maglaras, Ciamac C. Moallemi, Hua Zheng",
+    "doi": "10.1287/opre.2020.1989",
+    "journal": "Operations Research 69(4), 1324-1348",
+    "ref": "155",
+    "source_url": "https://pubsonline.informs.org/doi/abs/10.1287/opre.2020.1989",
+    "ssrn_doi": "10.2139/ssrn.2403884",
+    "status": "reviewed",
+    "tags": [
+      "fragmented_lob",
+      "queueing_dynamics",
+      "heterogeneous_agents"
+    ],
+    "title": "Queueing Dynamics and State Space Collapse in Fragmented Limit Order Book Markets",
+    "year": 2021
+  },
+  "156": {
+    "alphas": [
+      "c32b_tob_survival_refresh_regime_gate_rescue"
+    ],
+    "aliases": [
+      "1995 Biais-Hillion-Spatt LOB",
+      "1995_Biais_Hillion_Spatt_LOB"
+    ],
+    "authors": "Bruno Biais, Pierre Hillion, Chester S. Spatt",
+    "doi": "10.1111/j.1540-6261.1995.tb05192.x",
+    "journal": "The Journal of Finance 50(5), 1655-1689",
+    "ref": "156",
+    "source_url": "https://papers.ssrn.com/sol3/papers.cfm?abstract_id=5586",
+    "status": "reviewed",
+    "tags": [
+      "limit_order_book",
+      "order_flow",
+      "paris_bourse"
+    ],
+    "title": "An Empirical Analysis of the Limit Order Book and the Order Flow in the Paris Bourse",
+    "year": 1995
+  },
+  "157": {
+    "alphas": [
+      "c32b_tob_survival_refresh_regime_gate_rescue"
+    ],
+    "aliases": [
+      "2014 Stoikov-Waeber Optimal asset liquidation",
+      "2014_Stoikov_Waeber_optimal_liquidation",
+      "2012 Stoikov-Waeber Optimal asset liquidation"
+    ],
+    "authors": "Sasha Stoikov, Rolf Waeber",
+    "doi": "10.2139/ssrn.2113827",
+    "journal": "SSRN working paper",
+    "ref": "157",
+    "source_url": "https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2113827",
+    "status": "reviewed",
+    "tags": [
+      "optimal_liquidation",
+      "limit_order_book",
+      "latency"
+    ],
+    "title": "Optimal Asset Liquidation Using Limit Order Book Information",
+    "year": 2012
   },
   "depth_slope_ref": {
     "alphas": [
