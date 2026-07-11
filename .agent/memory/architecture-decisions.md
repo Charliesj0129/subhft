@@ -27,3 +27,17 @@ Decision: hold the SDK pin; 1.5.3 is a full Rust `_core.abi3.so` rewrite
 changed). Migration proceeds via the surface-diff tool + golden guard
 (`scripts/shioaji_api_diff/`, `make shioaji-guard`) on a dedicated branch.
 Revisit-trigger: adapter rewrite validated end-to-end (see current-risks.md).
+
+## Research modules imported by tracked code must be tracked (2026-07-12)
+Decision: any research module a tracked file imports — including dynamic
+`load_module(<file path>)` targets, which import-statement analysis cannot
+see — is committed (`git add -f` past the blanket research/* gitignore).
+Landed: 18 modules (pdq tools incl. tsi15 BASE_TOOL, p2_exec_predictor,
+regime_lab/snapshot_builder); data_pipeline became the package the audit
+canon already declared; candidate_loop + pdq tools allowlisted in
+factory.py; ci.yml research-audit-strict continue-on-error removed (audit
+0 errors / 0 warnings in a clean worktree). Skill-referenced local data
+dirs got .gitkeep skeletons instead of data commits.
+Rejected: converge-tools move of pdq files to legacy/ (breaks committed
+test imports); loosening the agent-docs drift baseline (ratchet).
+Revisit-trigger: archiving the pdq lane — move tools + tests together.

@@ -5,24 +5,35 @@ Record here: unresolved decisions with what blocks them and who decides
 answer those instead. Move resolved items to architecture-decisions.md or
 failed-attempts.md.
 
-## 30 research modules imported by tracked files but not in git (opened 2026-07-11)
-Found during the rollout-merge CI: the blanket research/-star gitignore plus
-forgotten force-adds left ~30 modules disk-only while tracked files import
-them — 19 alphas dot impl modules, 9 tools.pdq_causal-star sweep tools,
-tools/__init__, tools.regime_lab.snapshot_builder (importers: committed
-tests under tests/unit/research/ and research tooling). Fresh clones break
-on those imports; local runs mask it. data_pipeline.py + 6 evidence
-artifacts were force-added during the merge (b655a2db, cf40f68b) because
-the merged change set needed them; the rest await a deliberate sweep.
-Re-derive the list: compare git grep of research imports against
-git ls-files research/. Decides: USER (commit-vs-restructure per module —
-some may be deliberately local).
-Related pre-existing debt (tolerated: ci workflow marks research-audit-strict
-continue-on-error): the factory root-layout audit expects data_pipeline as a
-package directory (allowlist comment: canonical L2+tick export contract) but
-the implementation is a root module file, and candidate_loop was never added
-to ALLOWED_ROOT_DIRS — both flagged by make research-audit-strict on main
-and branch alike. Restructure is Charlie's layout decision.
+## Disk-only research modules — RESOLVED 2026-07-12 (fix batch, user-ordered)
+The sweep ran: every module tracked CODE imports is now committed
+(18 modules incl. dynamic load_module targets; see
+architecture-decisions.md "Research modules imported by tracked code").
+The "19 alphas.*.impl" importers turned out to be research/archive/**
+snapshots of killed alphas referencing deliberately-deleted impls —
+harmless, left as-is. REMAINDER (decides: USER): 7 untracked non-core
+scripts at research/tools root (pdq_full_routing_audit,
+pdq_liquidity_recovery_exit_audit, pdq_supertrend_backtest,
+pdq_supertrend_ga_search, pdq_supertrend_gate_ga_search, pdq_visual_atlas,
+pdq_wrongway_decomposition) — imported by nothing tracked, but they trip
+make research-audit-strict LOCALLY on the primary machine (clean clones
+green); commit-into-CORE_TOOL_FILES / move-to-legacy / delete is Charlie's
+call. Markdown-plan-referenced modules (t1_regime_partition trio,
+tools/fixtures) stay untracked deliberately.
+
+## Scheduled-CI red + deploy.yml startup failure (opened 2026-07-12)
+Nightly scheduled CI on main fails in 3 jobs (push runs green):
+(a) Security Scan at "Secret scanning (gitleaks)" — generic-api-key hits
+in tests/docs (test_credential_scrubber.py, test_order_adapter_dedup.py,
+runbooks, plan docs); look like placeholder keys needing a reviewed
+.gitleaks.toml allowlist, but each finding needs eyes before allowlisting.
+(b) Recorder CK + WAL Drills (schedule-only job) fails in the CE2/CE3
+drill step — uninvestigated. (c) Benchmark Darwin Gate regression check
+fails on schedule, passes on push — likely runner variance/baseline.
+Separately .github/workflows/deploy.yml ends "failure" with ZERO jobs in
+~0s on every main push (startup_failure; its workflow_run/environment
+config never starts). Decides: USER (security adjudication for (a),
+investigation priority for (b)-(d)).
 
 ## MODULES_REFERENCE.md description staleness (narrowed 2026-07-07)
 COUNTS RESOLVED 2026-07-06; CLASS/FILE IDENTIFIERS RESOLVED 2026-07-07

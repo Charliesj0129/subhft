@@ -2,8 +2,22 @@
 
 ## Last Updated
 
-- **Date**: 2026-07-11
-- **Session**: project cleanup rounds 1+2 (user-approved scope).
+- **Date**: 2026-07-12
+- **Session**: post-merge fix batch (user-ordered "修復這些" on the merge
+  report's unfixed findings). Five local commits on main, UNPUSHED (push
+  needs per-operation approval): aa62cff6 (17 disk-only research modules
+  imported by tracked code), 1a4c26e8 (data_pipeline -> package,
+  candidate_loop + 10 pdq tools allowlisted in factory.py audit),
+  c9036b1a (.gitkeep skeletons for skill-referenced local dirs — fixes
+  the 13 fresh-clone agent-docs-check errors), 82aab8a9 (canary-deploy
+  uses `uv run`; ci.yml research-audit-strict continue-on-error removed),
+  a833d4a0 (pdq_tsi15_decomposition_audit — dynamic load_module BASE_TOOL,
+  invisible to import analysis). Clean-worktree evidence at a833d4a0:
+  research-audit-strict 0 errors/0 warnings, agent-docs-check 0 errors,
+  tests/unit/research 695 passed / 1 skipped. CodeQL on the 07-11 push:
+  success. New findings recorded in open-questions.md: scheduled-CI red
+  (gitleaks/recorder-drills/benchmark) + deploy.yml zero-jobs failure.
+- **Prior session (2026-07-11)**: project cleanup rounds 1+2 (user-approved scope).
   Round 1: dead `.agent/` generations removed per manifest audit (tag
   pre-cleanup-2026-07-11), three branches/worktrees retired (#360 MERGED,
   #371/#376 CLOSED — verified via gh), orchestrator private memory pruned.
@@ -59,8 +73,8 @@
 
 - Branch: `docs/agent-knowledge-distillation` — MERGED into main
   2026-07-11 (a1e2d0f2); main + branch pushed to origin same day with
-  approval. Primary worktree stays checked out on the docs branch; switch
-  to main is Charlie's call.
+  approval. Primary worktree switched to main at the end of the merge
+  session; the docs branch is retirable on Charlie's explicit request.
 - Working tree: `.claude/settings.json` + `.understand-anything/`
   (untracked) are Charlie's concurrent work — preserve byte-identical.
   The formerly-dirty 7 research files were committed with approval in
@@ -72,7 +86,7 @@ One branch = one theme; update this table when creating or retiring a branch.
 
 | Branch | Theme / purpose | Expected lifetime |
 |---|---|---|
-| `docs/agent-knowledge-distillation` | Agent System v2 + institutionalization waves + governed cleanup. Pre-rule commits also carry shioaji/ops/research work — grandfathered; that mix is the evidence that created this rule | MERGED to main 2026-07-11 (a1e2d0f2); retire once Charlie switches the primary worktree to main |
+| `docs/agent-knowledge-distillation` | Agent System v2 + institutionalization waves + governed cleanup. Pre-rule commits also carry shioaji/ops/research work — grandfathered; that mix is the evidence that created this rule | MERGED to main 2026-07-11 (a1e2d0f2); primary worktree on main since then — retirable on explicit request |
 | `research-flow/edge-evidence-parity-hardening` | edge-evidence/§7 parity hardening (pushed, synced) | until merged or superseded |
 | `research/replay-parity-field-set` | `OrderIntent.session_phase` §7 groundwork (pushed, synced) | until merged or superseded |
 | `main` | default branch (rollout merge a1e2d0f2 landed 2026-07-11) | permanent |
