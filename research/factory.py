@@ -141,6 +141,7 @@ CORE_TOOL_FILES: set[str] = {
     "pdq_opportunity_standalone_validation.py",
     "pdq_supertrend_exit_search.py",
     "pdq_supertrend_signal_lopez_validation.py",
+    "pdq_tsi15_decomposition_audit.py",  # BASE_TOOL loaded by file path from the pdq causal tools above
     "prepare_governed_data.py",
     "regime_alpha.py",
     "render_promotion_report.py",
