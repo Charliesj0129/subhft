@@ -1,0 +1,22 @@
+# Known-drift baseline for scripts/check_agent_docs.py — a RATCHET:
+# fix a reference, remove its line. Never add a line to make CI pass without
+# a written reason. Format: "<check-id> <subject>" (see the checker docstring).
+# Snapshot: 2026-07-10 first run (22 findings / 16 unique subjects).
+
+# -- Intentionally local-only (never committed by design; may be absent on disk)
+path config/settings.py
+
+# -- Example/placeholder paths inside skill walkthroughs (not real files)
+path src/hft_platform/strategies/my_strategy.py
+path src/core/new_logic.py
+
+# -- Genuine drift: stale references awaiting fix (correct target noted)
+path config/env/replay/main.yaml
+path docs/CODEMAPS/structure.md
+path docs/ARCHITECTURE.md
+path .agent/library/design-review-artifacts.md
+path config/alerts/rules.yaml
+path config/base/strategies.yaml
+path src/hft_platform/rust_core
+path src/rust_core/src/lib.rs
+path .agent/memory/codebase_map.md

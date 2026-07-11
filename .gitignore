@@ -230,8 +230,6 @@ notebooks/.ipynb_checkpoints
 # Agent prompts (local only) — but rules/ is tracked so auto-loaded rules work across machines
 /.agent/*
 !/.agent/rules/
-!/.agent/contexts/
-!/.agent/contexts/*.md
 !/.agent/skills/
 !/.agent/skills/00-index.md
 !/.agent/skills/*/
@@ -269,6 +267,17 @@ research/__pycache__/
 research/alphas/_kill_ledger.jsonl
 research/alphas/_cluster_assignments.json
 
+# Alpha candidate loop v1: the package itself must be whitelisted because
+# `research/*` (line 92) ignores everything not explicitly re-included.
+# Generated outputs stay ignored (re-runnable; CH is the durable record):
+# runs/ holds failure_summary + _results_fallback.jsonl, candidates/ holds
+# generated JSONL batches, artifacts/ holds panel caches + Parquet trees —
+# the committed fixture lives in research/candidate_loop/fixtures/.
+!research/candidate_loop/
+research/candidate_loop/runs/
+research/candidate_loop/candidates/
+research/candidate_loop/artifacts/
+
 # Round 8 sub-gate audit jsonl: per-run traceability mirror of Gate-C
 # blocking decisions. Off-repo for the same reason as the kill ledger.
 research/audit/sub_gate_runs.jsonl
@@ -278,3 +287,8 @@ research/audit/sub_gate_runs.jsonl
 # `research/*` (line 92) otherwise blocks new files under research/archive/.
 !research/archive/
 !research/archive/_kill_summary_*.jsonl
+
+# Local ClickHouse data backups (raw BBO/tick JSONL exports, multi-hundred-MB).
+# These are re-derivable from ClickHouse and carry proprietary market data —
+# never commit them (15-security / 70-research-data). Keep local only.
+backups/

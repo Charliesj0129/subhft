@@ -17,6 +17,27 @@ if TYPE_CHECKING:
 logger = get_logger("feed_adapter.session_runtime")
 
 
+def _is_connection_limit_error(error: str | None) -> bool:
+    if not error:
+        return False
+    normalized = error.lower()
+    return "too many connections" in normalized or "status_code=451" in normalized or "status code 451" in normalized
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
 @dataclass(frozen=True)
 class SessionStateSnapshot:
     logged_in: bool
@@ -95,8 +116,32 @@ class SessionRuntime:
     # ------------------------------------------------------------------ #
 
     def login(self, *args, **kwargs) -> bool:
-        """Public entrypoint — calls login_with_retry."""
-        return self.login_with_retry(*args, **kwargs)
+        """Public entrypoint — login_with_retry plus a bounded backoff-retry
+        when the broker rejects on connection limit (451).
+
+        After an engine restart the broker can hold the previous session's
+        slots for ~60s; failing startup immediately turns into a container
+        crash-loop that keeps re-consuming sessions. Waiting out the release
+        window makes restart-in-place safe. Runs on the startup/reconnect
+        thread, never on the event loop, so the blocking sleep is acceptable.
+        """
+        if self.login_with_retry(*args, **kwargs):
+            return True
+        max_retries = _env_int("HFT_LOGIN_CONNLIMIT_RETRIES", 2)
+        backoff_s = _env_float("HFT_LOGIN_CONNLIMIT_BACKOFF_S", 75.0)
+        for retry in range(1, max_retries + 1):
+            if not _is_connection_limit_error(getattr(self._client, "_last_login_error", None)):
+                break
+            logger.warning(
+                "login_connection_limit_backoff",
+                sleep_s=backoff_s,
+                retry=retry,
+                max_retries=max_retries,
+            )
+            time.sleep(backoff_s)
+            if self.login_with_retry(*args, **kwargs):
+                return True
+        return False
 
     def login_with_retry(
         self,
@@ -157,6 +202,13 @@ class SessionRuntime:
                 c._record_api_latency("login", start_ns, ok=ok)
                 if not ok:
                     c._last_login_error = str(err) if err is not None else "unknown"
+                    if _is_connection_limit_error(c._last_login_error):
+                        logger.error(
+                            "Login rejected by broker connection limit; skipping fallback and immediate retry",
+                            attempt=attempt,
+                            error=c._last_login_error,
+                        )
+                        break
                     if login_fetch_contract and fallback_enabled:
                         logger.warning(
                             "Login failed with contract fetch; retrying without contracts",

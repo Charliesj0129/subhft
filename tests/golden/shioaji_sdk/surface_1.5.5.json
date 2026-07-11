@@ -1,0 +1,4267 @@
+{
+  "capture": {
+    "pydantic_runtime": "none",
+    "python": "3.12",
+    "tool_version": "1.0.0"
+  },
+  "compiled": {
+    "shioaji._core": {
+      "_present": true,
+      "classes": {},
+      "module_attrs": [
+        "Account",
+        "AccountBalance",
+        "AccountDict",
+        "AccountNotProvideError",
+        "AccountNotSignError",
+        "AccountType",
+        "Action",
+        "AuthError",
+        "BadRequestError",
+        "BaseContract",
+        "BidAskFOPv1",
+        "BidAskFOPv1Core",
+        "BidAskFOPv1Receiver",
+        "BidAskSTKv1",
+        "BidAskSTKv1Core",
+        "BidAskSTKv1Receiver",
+        "CaError",
+        "CaExpiredError",
+        "CaPasswordError",
+        "CallPut",
+        "ChangeType",
+        "ComboBase",
+        "ComboContract",
+        "ComboOrder",
+        "ComboStatus",
+        "ComboTrade",
+        "ComboType",
+        "Contract",
+        "ContractAction",
+        "ContractCategory",
+        "ContractGroup",
+        "ContractUpdateEvent",
+        "ContractUpdateSecurityType",
+        "Contracts",
+        "CreditEnquire",
+        "Currency",
+        "DailyQuotes",
+        "DayTrade",
+        "Deal",
+        "DecodeError",
+        "DictKeysIter",
+        "EarmarkStockDetail",
+        "EarmarkStocksDetail",
+        "EarmarkStocksDetailResponse",
+        "EarmarkingOrderResp",
+        "EventOrderStatusDict",
+        "Exchange",
+        "FetchStatus",
+        "Future",
+        "FuturePosition",
+        "FuturePositionDetail",
+        "FutureProfitDetail",
+        "FutureProfitLoss",
+        "FutureProfitLossSummary",
+        "FuturesContractDict",
+        "FuturesOCType",
+        "FuturesOrder",
+        "FuturesOrderDetailDict",
+        "FuturesPriceType",
+        "Index",
+        "KBars",
+        "Margin",
+        "MarketType",
+        "Notice",
+        "OpType",
+        "OperationDict",
+        "Option",
+        "OptionRight",
+        "Order",
+        "OrderEventDict",
+        "OrderEventReceiver",
+        "OrderResult",
+        "OrderState",
+        "OrderStatus",
+        "OrderStatusInfo",
+        "OrderType",
+        "PriceType",
+        "ProfitLossSummaryTotal",
+        "ProfitLossTotal",
+        "Punish",
+        "PyBenchmarkResult",
+        "PyContractBenchmark",
+        "QuoteFOPv1",
+        "QuoteFOPv1Core",
+        "QuoteSTKv1",
+        "QuoteSTKv1Core",
+        "QuoteType",
+        "QuoteVersion",
+        "ReserveEarmarkingResponse",
+        "ReserveOrderResp",
+        "ReserveStockDetail",
+        "ReserveStockResponse",
+        "ReserveStockSummary",
+        "ReserveStocksDetail",
+        "ReserveStocksDetailResponse",
+        "ReserveStocksSummary",
+        "ReserveStocksSummaryResponse",
+        "ResponseError",
+        "ResponseMsgError",
+        "ResponseRecvError",
+        "ScannerItem",
+        "ScannerType",
+        "SecurityType",
+        "ServerError",
+        "Settlement",
+        "SettlementV1",
+        "Shioaji",
+        "ShioajiAsync",
+        "ShioajiConnectionError",
+        "ShioajiError",
+        "ShioajiPermissionError",
+        "ShioajiTimeoutError",
+        "ShioajiTypeError",
+        "ShioajiValueError",
+        "ShortStockSource",
+        "Snapshot",
+        "Stock",
+        "StockContractDict",
+        "StockOrder",
+        "StockOrderCond",
+        "StockOrderDetailDict",
+        "StockOrderLot",
+        "StockPosition",
+        "StockPositionDetail",
+        "StockPriceType",
+        "StockProfitDetail",
+        "StockProfitLoss",
+        "StockProfitLossSummary",
+        "SubscribeError",
+        "SystemMaintenance",
+        "TickFOPv1",
+        "TickFOPv1Core",
+        "TickFOPv1Receiver",
+        "TickSTKv1",
+        "TickSTKv1Core",
+        "TickSTKv1Receiver",
+        "TickType",
+        "Ticks",
+        "TicksQueryType",
+        "TokenError",
+        "Trade",
+        "TradeType",
+        "TradingLimits",
+        "Unit",
+        "UnsubscribeError",
+        "UsageOut",
+        "ValidationError",
+        "Watchlist",
+        "get_version",
+        "hello_from_bin"
+      ],
+      "nm_symbols": {
+        "_present": true,
+        "_signal": "coarse",
+        "count": 2,
+        "symbols": [
+          "PyInit__core",
+          "PyInit_pyo3_async_runtimes"
+        ]
+      }
+    },
+    "shioaji.backend.constant": {
+      "_error": "ModuleNotFoundError",
+      "_present": false
+    },
+    "shioaji.backend.error": {
+      "_error": "ModuleNotFoundError",
+      "_present": false
+    },
+    "shioaji.backend.solace.api": {
+      "_error": "ModuleNotFoundError",
+      "_present": false
+    },
+    "shioaji.backend.solace.bidask": {
+      "_error": "ModuleNotFoundError",
+      "_present": false
+    },
+    "shioaji.backend.solace.quote": {
+      "_error": "ModuleNotFoundError",
+      "_present": false
+    },
+    "shioaji.backend.solace.tick": {
+      "_error": "ModuleNotFoundError",
+      "_present": false
+    },
+    "shioaji.backend.solace.utils": {
+      "_error": "ModuleNotFoundError",
+      "_present": false
+    },
+    "shioaji.backend.utils": {
+      "_error": "ModuleNotFoundError",
+      "_present": false
+    }
+  },
+  "config": {
+    "_present": false,
+    "defaults": {
+      "SOL_CONNECT_TIMEOUT_MS": {
+        "_present": false
+      },
+      "SOL_KEEP_ALIVE_LIMIT": {
+        "_present": false
+      },
+      "SOL_KEEP_ALIVE_MS": {
+        "_present": false
+      },
+      "SOL_RECONNECT_RETRIES": {
+        "_present": false
+      },
+      "SOL_RECONNECT_RETRY_WAIT": {
+        "_present": false
+      }
+    },
+    "module": "shioaji"
+  },
+  "constants": {
+    "AccountType": {
+      "_present": true,
+      "members": {
+        "Future": "F",
+        "Intl": "H",
+        "Stock": "S"
+      },
+      "source": "shioaji"
+    },
+    "Action": {
+      "_present": true,
+      "members": {
+        "Buy": "Buy",
+        "Sell": "Sell"
+      },
+      "source": "shioaji"
+    },
+    "ChangeType": {
+      "_present": true,
+      "members": {
+        "Dowm": "Dowm",
+        "Down": "Down",
+        "LimitDown": "LimitDown",
+        "LimitUp": "LimitUp",
+        "Unchanged": "Unchanged",
+        "Up": "Up"
+      },
+      "source": "shioaji"
+    },
+    "Currency": {
+      "_present": true,
+      "members": {
+        "AUD": "AUD",
+        "CAD": "CAD",
+        "CHF": "CHF",
+        "CNY": "CNY",
+        "EUR": "EUR",
+        "GBP": "GBP",
+        "HKD": "HKD",
+        "IDR": "IDR",
+        "JPY": "JPY",
+        "KRW": "KRW",
+        "MYR": "MYR",
+        "NZD": "NZD",
+        "PHP": "PHP",
+        "SEK": "SEK",
+        "SGD": "SGD",
+        "THB": "THB",
+        "TWD": "TWD",
+        "USD": "USD",
+        "VND": "VND",
+        "ZAR": "ZAR"
+      },
+      "source": "shioaji"
+    },
+    "DayTrade": {
+      "_present": true,
+      "members": {
+        "No": "No",
+        "OnlyBuy": "OnlyBuy",
+        "Yes": "Yes"
+      },
+      "source": "shioaji"
+    },
+    "Exchange": {
+      "_present": true,
+      "members": {
+        "OES": "OES",
+        "OTC": "OTC",
+        "TAIFEX": "TAIFEX",
+        "TIM": "TIM",
+        "TSE": "TSE"
+      },
+      "source": "shioaji"
+    },
+    "FetchStatus": {
+      "_present": true,
+      "members": {
+        "Fetched": "Fetched",
+        "Fetching": "Fetching",
+        "Unfetch": "Unfetch"
+      },
+      "source": "shioaji"
+    },
+    "FuturesOCType": {
+      "_present": true,
+      "members": {
+        "Auto": "Auto",
+        "Cover": "Cover",
+        "DayTrade": "DayTrade",
+        "New": "New"
+      },
+      "source": "shioaji"
+    },
+    "FuturesPriceType": {
+      "_present": true,
+      "members": {
+        "LMT": "LMT",
+        "MKP": "MKP",
+        "MKT": "MKT"
+      },
+      "source": "shioaji"
+    },
+    "OptionRight": {
+      "_present": true,
+      "members": {
+        "Call": "C",
+        "No": "",
+        "Put": "P"
+      },
+      "source": "shioaji"
+    },
+    "OrderState": {
+      "_present": true,
+      "members": {
+        "FuturesDeal": "FDEAL",
+        "FuturesOrder": "FORDER",
+        "StockDeal": "SDEAL",
+        "StockOrder": "SORDER"
+      },
+      "source": "shioaji"
+    },
+    "OrderType": {
+      "_present": true,
+      "members": {
+        "FOK": "FOK",
+        "IOC": "IOC",
+        "ROD": "ROD"
+      },
+      "source": "shioaji"
+    },
+    "QuoteType": {
+      "_present": true,
+      "members": {
+        "BidAsk": "bid_ask",
+        "Quote": "quote",
+        "Tick": "tick"
+      },
+      "source": "shioaji"
+    },
+    "QuoteVersion": {
+      "_present": true,
+      "members": {
+        "v1": "v1"
+      },
+      "source": "shioaji"
+    },
+    "ScannerType": {
+      "_present": true,
+      "members": {
+        "AmountRank": "AmountRank",
+        "ChangePercentRank": "ChangePercentRank",
+        "ChangePriceRank": "ChangePriceRank",
+        "DayRangeRank": "DayRangeRank",
+        "TickCountRank": "TickCountRank",
+        "VolumeRank": "VolumeRank"
+      },
+      "source": "shioaji"
+    },
+    "SecurityType": {
+      "_present": true,
+      "members": {
+        "Future": "FUT",
+        "Index": "IND",
+        "Option": "OPT",
+        "Stock": "STK"
+      },
+      "source": "shioaji"
+    },
+    "Status": {
+      "_present": true,
+      "members": {
+        "Cancelled": "Cancelled",
+        "Failed": "Failed",
+        "Filled": "Filled",
+        "Inactive": "Inactive",
+        "PartFilled": "PartFilled",
+        "PendingSubmit": "PendingSubmit",
+        "PreSubmitted": "PreSubmitted",
+        "Submitted": "Submitted"
+      },
+      "source": "shioaji"
+    },
+    "StockOrderCond": {
+      "_present": true,
+      "members": {
+        "Cash": "Cash",
+        "Emerging": "Emerging",
+        "MarginTrading": "MarginTrading",
+        "Netting": "Netting",
+        "ShortSelling": "ShortSelling"
+      },
+      "source": "shioaji"
+    },
+    "StockOrderLot": {
+      "_present": true,
+      "members": {
+        "BlockTrade": "BlockTrade",
+        "Common": "Common",
+        "Fixing": "Fixing",
+        "IntradayOdd": "IntradayOdd",
+        "Odd": "Odd"
+      },
+      "source": "shioaji"
+    },
+    "StockPriceType": {
+      "_present": true,
+      "members": {
+        "LMT": "LMT",
+        "MKT": "MKT"
+      },
+      "source": "shioaji"
+    },
+    "TickType": {
+      "_present": true,
+      "members": {
+        "Buy": "Buy",
+        "No": "None",
+        "Sell": "Sell"
+      },
+      "source": "shioaji"
+    },
+    "TicksQueryType": {
+      "_present": true,
+      "members": {
+        "AllDay": "AllDay",
+        "LastCount": "LastCount",
+        "RangeTime": "RangeTime"
+      },
+      "source": "shioaji"
+    },
+    "TradeType": {
+      "_present": true,
+      "members": {
+        "Common": "Common",
+        "DayTrade": "DayTrade"
+      },
+      "source": "shioaji"
+    },
+    "Unit": {
+      "_present": true,
+      "members": {
+        "Common": "Common",
+        "Share": "Share"
+      },
+      "source": "shioaji"
+    }
+  },
+  "dist": {
+    "_present": true,
+    "metadata_version": "1.5.5",
+    "name": "shioaji",
+    "requires": [
+      "pytest-cov>=4.0.0 ; extra == 'test'",
+      "pytest>=7.0.0 ; extra == 'test'",
+      "uvloop>=0.18.0 ; sys_platform != 'win32' and extra == 'speed'"
+    ],
+    "version": "1.5.5"
+  },
+  "exceptions": {
+    "AccountError": {
+      "_present": false
+    },
+    "AccountNotProvideError": {
+      "_present": true,
+      "bases": [
+        "ShioajiError",
+        "ValueError"
+      ],
+      "source": "shioaji.error"
+    },
+    "AccountNotSignError": {
+      "_present": true,
+      "bases": [
+        "ShioajiError"
+      ],
+      "source": "shioaji.error"
+    },
+    "BaseError": {
+      "_present": false
+    },
+    "CaError": {
+      "_present": true,
+      "bases": [
+        "ShioajiError"
+      ],
+      "source": "shioaji.error"
+    },
+    "ContractError": {
+      "_present": false
+    },
+    "SystemMaintenance": {
+      "_present": true,
+      "bases": [
+        "ShioajiError"
+      ],
+      "source": "shioaji.error"
+    },
+    "TargetContractNotExistError": {
+      "_present": false
+    },
+    "TimeoutError": {
+      "_present": false
+    },
+    "TokenError": {
+      "_present": true,
+      "bases": [
+        "AuthError"
+      ],
+      "source": "shioaji.error"
+    }
+  },
+  "methods": {
+    "Quote": {
+      "_present": false
+    },
+    "Shioaji": {
+      "_present": true,
+      "members": {
+        "Order": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "action"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "price"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "quantity"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "price_type"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "order_type"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "order_lot"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "order_cond"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "octype"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "daytrade_short"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "custom_field"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "account"
+            }
+          ],
+          "returns": null,
+          "signature": "(action, price, quantity, price_type, order_type, order_lot = None, order_cond = None, octype = None, daytrade_short = None, custom_field = None, account = None)"
+        },
+        "account_balance": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "account"
+            },
+            {
+              "annotation": null,
+              "default": 30000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, account = None, timeout = 30000, cb = None)"
+        },
+        "activate_ca": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "ca_path"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "ca_passwd"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "person_id"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, ca_path, ca_passwd, person_id = None)"
+        },
+        "cancel_comboorder": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "combo_trade"
+            },
+            {
+              "annotation": null,
+              "default": 30000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, combo_trade, timeout = 30000, cb = None)"
+        },
+        "cancel_order": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "trade"
+            },
+            {
+              "annotation": null,
+              "default": 30000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, trade, timeout = 30000, cb = None)"
+        },
+        "clear_contract_event_callback": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            }
+          ],
+          "returns": null,
+          "signature": "(self)"
+        },
+        "clear_event_callback": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            }
+          ],
+          "returns": null,
+          "signature": "(self)"
+        },
+        "clear_on_bidask_fop_v1_callback": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            }
+          ],
+          "returns": null,
+          "signature": "(self)"
+        },
+        "clear_on_bidask_stk_v1_callback": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            }
+          ],
+          "returns": null,
+          "signature": "(self)"
+        },
+        "clear_on_quote_callback": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            }
+          ],
+          "returns": null,
+          "signature": "(self)"
+        },
+        "clear_on_quote_fop_v1_callback": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            }
+          ],
+          "returns": null,
+          "signature": "(self)"
+        },
+        "clear_on_quote_stk_v1_callback": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            }
+          ],
+          "returns": null,
+          "signature": "(self)"
+        },
+        "clear_on_tick_fop_v1_callback": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            }
+          ],
+          "returns": null,
+          "signature": "(self)"
+        },
+        "clear_on_tick_stk_v1_callback": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            }
+          ],
+          "returns": null,
+          "signature": "(self)"
+        },
+        "clear_order_callback": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            }
+          ],
+          "returns": null,
+          "signature": "(self)"
+        },
+        "clear_session_down_callback": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            }
+          ],
+          "returns": null,
+          "signature": "(self)"
+        },
+        "create_watchlist": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "name"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "contracts"
+            },
+            {
+              "annotation": null,
+              "default": 30000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, name, contracts = None, timeout = 30000, cb = None)"
+        },
+        "credit_enquires": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "contracts"
+            },
+            {
+              "annotation": null,
+              "default": 30000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, contracts, timeout = 30000, cb = None)"
+        },
+        "daily_quotes": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "date"
+            },
+            {
+              "annotation": null,
+              "default": true,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "exclude"
+            },
+            {
+              "annotation": null,
+              "default": 30000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, date = None, exclude = True, timeout = 30000, cb = None)"
+        },
+        "delete_watchlist": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "group_id"
+            },
+            {
+              "annotation": null,
+              "default": 30000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, group_id, timeout = 30000, cb = None)"
+        },
+        "earmarking_detail": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "account"
+            },
+            {
+              "annotation": null,
+              "default": 30000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, account = None, timeout = 30000, cb = None)"
+        },
+        "fetch_contracts": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": false,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "contract_download"
+            },
+            {
+              "annotation": null,
+              "default": 30000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "contracts_timeout"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "contracts_cb"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, contract_download = False, contracts_timeout = 30000, contracts_cb = None)"
+        },
+        "fetch_watchlists": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": 30000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, timeout = 30000, cb = None)"
+        },
+        "get_bidask_fop_v1_receiver": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            }
+          ],
+          "returns": null,
+          "signature": "(self)"
+        },
+        "get_bidask_stk_v1_receiver": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            }
+          ],
+          "returns": null,
+          "signature": "(self)"
+        },
+        "get_ca_expiretime": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "person_id"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, person_id)"
+        },
+        "get_order_event_receiver": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            }
+          ],
+          "returns": null,
+          "signature": "(self)"
+        },
+        "get_tick_fop_v1_receiver": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            }
+          ],
+          "returns": null,
+          "signature": "(self)"
+        },
+        "get_tick_stk_v1_receiver": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            }
+          ],
+          "returns": null,
+          "signature": "(self)"
+        },
+        "get_watchlist": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "group_id"
+            },
+            {
+              "annotation": null,
+              "default": 30000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, group_id, timeout = 30000, cb = None)"
+        },
+        "kbars": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "contract"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "start"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "end"
+            },
+            {
+              "annotation": null,
+              "default": 30000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, contract, start = None, end = None, timeout = 30000, cb = None)"
+        },
+        "list_accounts": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            }
+          ],
+          "returns": null,
+          "signature": "(self)"
+        },
+        "list_combotrades": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            }
+          ],
+          "returns": null,
+          "signature": "(self)"
+        },
+        "list_position_detail": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "account"
+            },
+            {
+              "annotation": null,
+              "default": 0,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "detail_id"
+            },
+            {
+              "annotation": null,
+              "default": 30000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, account = None, detail_id = 0, timeout = 30000, cb = None)"
+        },
+        "list_positions": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "account"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "unit"
+            },
+            {
+              "annotation": null,
+              "default": 30000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, account = None, unit = None, timeout = 30000, cb = None)"
+        },
+        "list_profit_loss": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "account"
+            },
+            {
+              "annotation": null,
+              "default": "",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "begin_date"
+            },
+            {
+              "annotation": null,
+              "default": "",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "end_date"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "unit"
+            },
+            {
+              "annotation": null,
+              "default": 30000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, account = None, begin_date = , end_date = , unit = None, timeout = 30000, cb = None)"
+        },
+        "list_profit_loss_detail": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "account"
+            },
+            {
+              "annotation": null,
+              "default": 0,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "detail_id"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "unit"
+            },
+            {
+              "annotation": null,
+              "default": 30000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, account = None, detail_id = 0, unit = None, timeout = 30000, cb = None)"
+        },
+        "list_profit_loss_summary": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "account"
+            },
+            {
+              "annotation": null,
+              "default": "",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "begin_date"
+            },
+            {
+              "annotation": null,
+              "default": "",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "end_date"
+            },
+            {
+              "annotation": null,
+              "default": 30000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, account = None, begin_date = , end_date = , timeout = 30000, cb = None)"
+        },
+        "list_settlements": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "account"
+            },
+            {
+              "annotation": null,
+              "default": 30000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, account = None, timeout = 30000, cb = None)"
+        },
+        "list_trades": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            }
+          ],
+          "returns": null,
+          "signature": "(self)"
+        },
+        "login": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "api_key"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "secret_key"
+            },
+            {
+              "annotation": null,
+              "default": true,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "fetch_contract"
+            },
+            {
+              "annotation": null,
+              "default": 0,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "contracts_timeout"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "contracts_cb"
+            },
+            {
+              "annotation": null,
+              "default": true,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "subscribe_trade"
+            },
+            {
+              "annotation": null,
+              "default": 30000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "receive_window"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, api_key, secret_key, fetch_contract = True, contracts_timeout = 0, contracts_cb = None, subscribe_trade = True, receive_window = 30000)"
+        },
+        "logout": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            }
+          ],
+          "returns": null,
+          "signature": "(self)"
+        },
+        "margin": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "account"
+            },
+            {
+              "annotation": null,
+              "default": 30000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, account = None, timeout = 30000, cb = None)"
+        },
+        "notice": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": 30000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, timeout = 30000, cb = None)"
+        },
+        "on_bidask_fop_v1": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": false,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "bind"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, bind = False)"
+        },
+        "on_bidask_stk_v1": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": false,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "bind"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, bind = False)"
+        },
+        "on_event": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "callback"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, callback = None)"
+        },
+        "on_order": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "callback"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, callback = None)"
+        },
+        "on_quote": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "callback"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, callback = None)"
+        },
+        "on_quote_fop_v1": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": false,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "bind"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, bind = False)"
+        },
+        "on_quote_stk_v1": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": false,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "bind"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, bind = False)"
+        },
+        "on_session_down": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "callback"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, callback = None)"
+        },
+        "on_tick_fop_v1": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": false,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "bind"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, bind = False)"
+        },
+        "on_tick_stk_v1": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": false,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "bind"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, bind = False)"
+        },
+        "order_deal_records": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "account"
+            },
+            {
+              "annotation": null,
+              "default": 30000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, account = None, timeout = 30000, cb = None)"
+        },
+        "place_comboorder": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "combo_contract"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "order"
+            },
+            {
+              "annotation": null,
+              "default": 30000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, combo_contract, order, timeout = 30000, cb = None)"
+        },
+        "place_order": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "contract"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "order"
+            },
+            {
+              "annotation": null,
+              "default": 30000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, contract, order, timeout = 30000, cb = None)"
+        },
+        "punish": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": 30000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, timeout = 30000, cb = None)"
+        },
+        "reserve_earmarking": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "contract"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "share"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "price"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "account"
+            },
+            {
+              "annotation": null,
+              "default": 30000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, contract, share, price, account = None, timeout = 30000, cb = None)"
+        },
+        "reserve_stock": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "contract"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "share"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "account"
+            },
+            {
+              "annotation": null,
+              "default": 30000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, contract, share, account = None, timeout = 30000, cb = None)"
+        },
+        "scanners": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "scanner_type"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "date"
+            },
+            {
+              "annotation": null,
+              "default": true,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "ascending"
+            },
+            {
+              "annotation": null,
+              "default": 100,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "count"
+            },
+            {
+              "annotation": null,
+              "default": 30000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, scanner_type, date = None, ascending = True, count = 100, timeout = 30000, cb = None)"
+        },
+        "set_context": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "context"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, context)"
+        },
+        "set_contract_event_callback": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "callback"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, callback)"
+        },
+        "set_default_account": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "account"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, account)"
+        },
+        "set_event_callback": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "callback"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, callback)"
+        },
+        "set_on_bidask_fop_v1_callback": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "callback"
+            },
+            {
+              "annotation": null,
+              "default": false,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "bind"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, callback, bind = False)"
+        },
+        "set_on_bidask_stk_v1_callback": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "callback"
+            },
+            {
+              "annotation": null,
+              "default": false,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "bind"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, callback, bind = False)"
+        },
+        "set_on_quote_callback": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "callback"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, callback)"
+        },
+        "set_on_quote_fop_v1_callback": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "callback"
+            },
+            {
+              "annotation": null,
+              "default": false,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "bind"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, callback, bind = False)"
+        },
+        "set_on_quote_stk_v1_callback": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "callback"
+            },
+            {
+              "annotation": null,
+              "default": false,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "bind"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, callback, bind = False)"
+        },
+        "set_on_tick_fop_v1_callback": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "callback"
+            },
+            {
+              "annotation": null,
+              "default": false,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "bind"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, callback, bind = False)"
+        },
+        "set_on_tick_stk_v1_callback": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "callback"
+            },
+            {
+              "annotation": null,
+              "default": false,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "bind"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, callback, bind = False)"
+        },
+        "set_order_callback": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "callback"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, callback)"
+        },
+        "set_session_down_callback": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "callback"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, callback)"
+        },
+        "settlements": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "account"
+            },
+            {
+              "annotation": null,
+              "default": 30000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, account = None, timeout = 30000, cb = None)"
+        },
+        "short_stock_sources": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "contracts"
+            },
+            {
+              "annotation": null,
+              "default": 30000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, contracts, timeout = 30000, cb = None)"
+        },
+        "snapshots": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "contracts"
+            },
+            {
+              "annotation": null,
+              "default": 30000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, contracts, timeout = 30000, cb = None)"
+        },
+        "stock_reserve_detail": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "account"
+            },
+            {
+              "annotation": null,
+              "default": 30000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, account = None, timeout = 30000, cb = None)"
+        },
+        "stock_reserve_summary": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "account"
+            },
+            {
+              "annotation": null,
+              "default": 30000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, account = None, timeout = 30000, cb = None)"
+        },
+        "subscribe": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "contract"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "quote_type"
+            },
+            {
+              "annotation": null,
+              "default": false,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "intraday_odd"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "version"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, contract, quote_type = None, intraday_odd = False, version = None)"
+        },
+        "subscribe_trade": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "account"
+            },
+            {
+              "annotation": null,
+              "default": 30000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, account, timeout = 30000)"
+        },
+        "sync_watchlist": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "group_id"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "contracts"
+            },
+            {
+              "annotation": null,
+              "default": 30000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, group_id, contracts, timeout = 30000, cb = None)"
+        },
+        "ticks": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "contract"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "date"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "query_type"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "time_start"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "time_end"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "last_cnt"
+            },
+            {
+              "annotation": null,
+              "default": 30000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, contract, date = None, query_type = None, time_start = None, time_end = None, last_cnt = None, timeout = 30000, cb = None)"
+        },
+        "trading_limits": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "account"
+            },
+            {
+              "annotation": null,
+              "default": 30000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, account = None, timeout = 30000, cb = None)"
+        },
+        "unsubscribe": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "contract"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "quote_type"
+            },
+            {
+              "annotation": null,
+              "default": false,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "intraday_odd"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "version"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, contract, quote_type = None, intraday_odd = False, version = None)"
+        },
+        "unsubscribe_trade": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "account"
+            },
+            {
+              "annotation": null,
+              "default": 30000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, account, timeout = 30000)"
+        },
+        "update_combostatus": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "account"
+            },
+            {
+              "annotation": null,
+              "default": 30000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, account = None, timeout = 30000, cb = None)"
+        },
+        "update_order": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "trade"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "price"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "qty"
+            },
+            {
+              "annotation": null,
+              "default": 30000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, trade, price = None, qty = None, timeout = 30000, cb = None)"
+        },
+        "update_price": {
+          "_present": false
+        },
+        "update_qty": {
+          "_present": false
+        },
+        "update_status": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "account"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "KEYWORD_ONLY",
+              "name": "trade"
+            },
+            {
+              "annotation": null,
+              "default": 30000,
+              "kind": "KEYWORD_ONLY",
+              "name": "timeout"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "KEYWORD_ONLY",
+              "name": "cb"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, account = None, trade = None, timeout = 30000, cb = None)"
+        },
+        "usage": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": 30000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, timeout = 30000, cb = None)"
+        },
+        "watchlist_add_contract": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "group_id"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "contracts"
+            },
+            {
+              "annotation": null,
+              "default": 30000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, group_id, contracts, timeout = 30000, cb = None)"
+        },
+        "watchlist_delete_contract": {
+          "_present": true,
+          "kind": "method",
+          "params": [
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_ONLY",
+              "name": "self"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "group_id"
+            },
+            {
+              "annotation": null,
+              "default": "<empty>",
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "contracts"
+            },
+            {
+              "annotation": null,
+              "default": 30000,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": null,
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "cb"
+            }
+          ],
+          "returns": null,
+          "signature": "(self, group_id, contracts, timeout = 30000, cb = None)"
+        }
+      },
+      "source": "shioaji"
+    }
+  },
+  "models": {
+    "Account": {
+      "_present": true,
+      "attributes": [
+        "account_id",
+        "account_type",
+        "broker_id",
+        "person_id",
+        "signed",
+        "username"
+      ],
+      "bases": [
+        "builtins.object"
+      ],
+      "fields": {},
+      "kind": "compiled",
+      "source": "shioaji"
+    },
+    "AccountBalance": {
+      "_present": true,
+      "attributes": [
+        "acc_balance",
+        "date",
+        "errmsg",
+        "status"
+      ],
+      "bases": [
+        "builtins.object"
+      ],
+      "fields": {},
+      "kind": "compiled",
+      "source": "shioaji"
+    },
+    "BaseOrder": {
+      "_present": false
+    },
+    "BidAskFOPv1": {
+      "_present": true,
+      "attributes": [
+        "ask_price",
+        "ask_total_vol",
+        "ask_vol_sum",
+        "ask_volume",
+        "bid_price",
+        "bid_total_vol",
+        "bid_vol_sum",
+        "bid_volume",
+        "code",
+        "date",
+        "datetime",
+        "diff_ask_vol",
+        "diff_bid_vol",
+        "exchange",
+        "first_derived_ask_price",
+        "first_derived_ask_vol",
+        "first_derived_ask_volume",
+        "first_derived_bid_price",
+        "first_derived_bid_vol",
+        "first_derived_bid_volume",
+        "simtrade",
+        "target_kind_price",
+        "time",
+        "underlying_price"
+      ],
+      "bases": [
+        "builtins.object"
+      ],
+      "fields": {},
+      "kind": "compiled",
+      "source": "shioaji"
+    },
+    "BidAskSTKv1": {
+      "_present": true,
+      "attributes": [
+        "ask_price",
+        "ask_volume",
+        "bid_price",
+        "bid_volume",
+        "code",
+        "date",
+        "datetime",
+        "diff_ask_vol",
+        "diff_bid_vol",
+        "exchange",
+        "intraday_odd",
+        "simtrade",
+        "suspend",
+        "time"
+      ],
+      "bases": [
+        "builtins.object"
+      ],
+      "fields": {},
+      "kind": "compiled",
+      "source": "shioaji"
+    },
+    "ComboContract": {
+      "_present": true,
+      "attributes": [
+        "legs"
+      ],
+      "bases": [
+        "builtins.object"
+      ],
+      "fields": {},
+      "kind": "compiled",
+      "source": "shioaji"
+    },
+    "ComboOrder": {
+      "_present": true,
+      "attributes": [
+        "account",
+        "action",
+        "combo_type",
+        "custom_field",
+        "octype",
+        "order_type",
+        "price",
+        "price_type",
+        "quantity"
+      ],
+      "bases": [
+        "builtins.object"
+      ],
+      "fields": {},
+      "kind": "compiled",
+      "source": "shioaji"
+    },
+    "Contract": {
+      "_present": true,
+      "attributes": [
+        "category",
+        "code",
+        "currency",
+        "day_trade",
+        "delivery_date",
+        "delivery_month",
+        "exchange",
+        "limit_down",
+        "limit_up",
+        "margin_trading_balance",
+        "multiplier",
+        "name",
+        "option_right",
+        "reference",
+        "security_type",
+        "short_selling_balance",
+        "strike_price",
+        "symbol",
+        "target_code",
+        "underlying_code",
+        "underlying_kind",
+        "unit",
+        "update_date"
+      ],
+      "bases": [
+        "builtins.object"
+      ],
+      "fields": {},
+      "kind": "compiled",
+      "source": "shioaji"
+    },
+    "Contracts": {
+      "_present": true,
+      "attributes": [
+        "Futures",
+        "Indexs",
+        "Options",
+        "Stocks",
+        "futures",
+        "indexs",
+        "options",
+        "status",
+        "stocks"
+      ],
+      "bases": [
+        "builtins.object"
+      ],
+      "fields": {},
+      "kind": "compiled",
+      "source": "shioaji"
+    },
+    "CreditEnquire": {
+      "_present": true,
+      "attributes": [
+        "margin_loan_ratio",
+        "margin_unit",
+        "short_margin_ratio",
+        "short_unit",
+        "stock_id",
+        "system",
+        "update_time"
+      ],
+      "bases": [
+        "builtins.object"
+      ],
+      "fields": {},
+      "kind": "compiled",
+      "source": "shioaji"
+    },
+    "DailyQuotes": {
+      "_present": true,
+      "attributes": [
+        "Amount",
+        "Close",
+        "Code",
+        "Date",
+        "High",
+        "Low",
+        "Open",
+        "Transaction",
+        "Volume"
+      ],
+      "bases": [
+        "builtins.object"
+      ],
+      "fields": {},
+      "kind": "compiled",
+      "source": "shioaji"
+    },
+    "Deal": {
+      "_present": true,
+      "attributes": [
+        "datetime",
+        "price",
+        "quantity",
+        "seq",
+        "ts"
+      ],
+      "bases": [
+        "builtins.object"
+      ],
+      "fields": {},
+      "kind": "compiled",
+      "source": "shioaji"
+    },
+    "Future": {
+      "_present": true,
+      "attributes": [
+        "category",
+        "code",
+        "currency",
+        "day_trade",
+        "delivery_date",
+        "delivery_month",
+        "exchange",
+        "limit_down",
+        "limit_up",
+        "margin_trading_balance",
+        "multiplier",
+        "name",
+        "option_right",
+        "reference",
+        "security_type",
+        "short_selling_balance",
+        "strike_price",
+        "symbol",
+        "target_code",
+        "underlying_code",
+        "underlying_kind",
+        "unit",
+        "update_date"
+      ],
+      "bases": [
+        "builtins.object"
+      ],
+      "fields": {},
+      "kind": "compiled",
+      "source": "shioaji"
+    },
+    "FutureAccount": {
+      "_present": true,
+      "attributes": [
+        "account_id",
+        "account_type",
+        "broker_id",
+        "person_id",
+        "signed",
+        "username"
+      ],
+      "bases": [
+        "builtins.object"
+      ],
+      "fields": {},
+      "kind": "compiled",
+      "source": "shioaji.account"
+    },
+    "FuturePosition": {
+      "_present": true,
+      "attributes": [
+        "code",
+        "direction",
+        "id",
+        "last_price",
+        "pnl",
+        "price",
+        "quantity"
+      ],
+      "bases": [
+        "builtins.object"
+      ],
+      "fields": {},
+      "kind": "compiled",
+      "source": "shioaji"
+    },
+    "FuturesOrder": {
+      "_present": true,
+      "attributes": [
+        "account",
+        "action",
+        "custom_field",
+        "octype",
+        "order_type",
+        "price",
+        "price_type",
+        "quantity"
+      ],
+      "bases": [
+        "builtins.object"
+      ],
+      "fields": {},
+      "kind": "compiled",
+      "source": "shioaji"
+    },
+    "Index": {
+      "_present": true,
+      "attributes": [
+        "category",
+        "code",
+        "currency",
+        "day_trade",
+        "delivery_date",
+        "delivery_month",
+        "exchange",
+        "limit_down",
+        "limit_up",
+        "margin_trading_balance",
+        "multiplier",
+        "name",
+        "option_right",
+        "reference",
+        "security_type",
+        "short_selling_balance",
+        "strike_price",
+        "symbol",
+        "target_code",
+        "underlying_code",
+        "underlying_kind",
+        "unit",
+        "update_date"
+      ],
+      "bases": [
+        "builtins.object"
+      ],
+      "fields": {},
+      "kind": "compiled",
+      "source": "shioaji"
+    },
+    "Kbars": {
+      "_present": true,
+      "attributes": [
+        "Amount",
+        "Close",
+        "High",
+        "Low",
+        "Open",
+        "Volume",
+        "ts"
+      ],
+      "bases": [
+        "builtins.object"
+      ],
+      "fields": {},
+      "kind": "compiled",
+      "source": "shioaji"
+    },
+    "Margin": {
+      "_present": true,
+      "attributes": [
+        "available_margin",
+        "collateral_amount",
+        "deposit_withdrawal",
+        "equity",
+        "equity_amount",
+        "fee",
+        "future_open_position",
+        "future_settle_profitloss",
+        "initial_margin",
+        "maintenance_margin",
+        "margin_call",
+        "option_open_position",
+        "option_openbuy_market_value",
+        "option_opensell_market_value",
+        "option_settle_profitloss",
+        "order_margin_premium",
+        "plus_margin",
+        "plus_margin_indicator",
+        "risk_indicator",
+        "royalty_revenue_expenditure",
+        "security_collateral_amount",
+        "status",
+        "tax",
+        "today_balance",
+        "today_future_open_position",
+        "yesterday_balance"
+      ],
+      "bases": [
+        "builtins.object"
+      ],
+      "fields": {},
+      "kind": "compiled",
+      "source": "shioaji"
+    },
+    "Option": {
+      "_present": true,
+      "attributes": [
+        "category",
+        "code",
+        "currency",
+        "day_trade",
+        "delivery_date",
+        "delivery_month",
+        "exchange",
+        "limit_down",
+        "limit_up",
+        "margin_trading_balance",
+        "multiplier",
+        "name",
+        "option_right",
+        "reference",
+        "security_type",
+        "short_selling_balance",
+        "strike_price",
+        "symbol",
+        "target_code",
+        "underlying_code",
+        "underlying_kind",
+        "unit",
+        "update_date"
+      ],
+      "bases": [
+        "builtins.object"
+      ],
+      "fields": {},
+      "kind": "compiled",
+      "source": "shioaji"
+    },
+    "Order": {
+      "_present": true,
+      "attributes": [
+        "account",
+        "action",
+        "custom_field",
+        "daytrade_short",
+        "octype",
+        "order_cond",
+        "order_lot",
+        "order_type",
+        "price",
+        "price_type",
+        "quantity"
+      ],
+      "bases": [
+        "builtins.object"
+      ],
+      "fields": {},
+      "kind": "compiled",
+      "source": "shioaji"
+    },
+    "OrderStatus": {
+      "_present": true,
+      "attributes": [
+        "Cancelled",
+        "Failed",
+        "Filled",
+        "Inactive",
+        "PartFilled",
+        "PendingSubmit",
+        "PreSubmitted",
+        "Submitted",
+        "value"
+      ],
+      "bases": [
+        "builtins.object"
+      ],
+      "fields": {},
+      "kind": "compiled",
+      "source": "shioaji"
+    },
+    "Position": {
+      "_present": false
+    },
+    "PositionDetail": {
+      "_present": false
+    },
+    "ProfitLoss": {
+      "_present": false
+    },
+    "QuoteFOPv1": {
+      "_present": true,
+      "attributes": [
+        "amount",
+        "amount_sum",
+        "ask_price",
+        "ask_side_total_cnt",
+        "ask_side_total_vol",
+        "ask_volume",
+        "avg_price",
+        "bid_price",
+        "bid_side_total_cnt",
+        "bid_side_total_vol",
+        "bid_volume",
+        "chg_type",
+        "close",
+        "code",
+        "date",
+        "datetime",
+        "diff_ask_vol",
+        "diff_bid_vol",
+        "diff_price",
+        "diff_rate",
+        "diff_type",
+        "exchange",
+        "first_derived_ask_price",
+        "first_derived_ask_vol",
+        "first_derived_ask_volume",
+        "first_derived_bid_price",
+        "first_derived_bid_vol",
+        "first_derived_bid_volume",
+        "high",
+        "low",
+        "open",
+        "pct_chg",
+        "price_chg",
+        "simtrade",
+        "target_kind_price",
+        "tick_type",
+        "time",
+        "total_amount",
+        "total_volume",
+        "trade_ask_cnt",
+        "trade_ask_vol_sum",
+        "trade_bid_cnt",
+        "trade_bid_vol_sum",
+        "underlying_price",
+        "vol_sum",
+        "volume"
+      ],
+      "bases": [
+        "builtins.object"
+      ],
+      "fields": {},
+      "kind": "compiled",
+      "source": "shioaji"
+    },
+    "QuoteSTKv1": {
+      "_present": true,
+      "attributes": [
+        "amount",
+        "amount_sum",
+        "ask_price",
+        "ask_side_total_cnt",
+        "ask_side_total_vol",
+        "ask_volume",
+        "avail_borrowing",
+        "avg_price",
+        "bid_price",
+        "bid_side_total_cnt",
+        "bid_side_total_vol",
+        "bid_volume",
+        "chg_type",
+        "close",
+        "closing_oddlot_amount",
+        "closing_oddlot_ask_price",
+        "closing_oddlot_bid_price",
+        "closing_oddlot_close",
+        "closing_oddlot_shares",
+        "code",
+        "date",
+        "datetime",
+        "diff_ask_vol",
+        "diff_bid_vol",
+        "diff_price",
+        "diff_rate",
+        "diff_type",
+        "exchange",
+        "fixed_trade_amount",
+        "fixed_trade_vol",
+        "fixed_trade_volume",
+        "high",
+        "low",
+        "open",
+        "pct_chg",
+        "price_chg",
+        "simtrade",
+        "suspend",
+        "tick_type",
+        "time",
+        "total_amount",
+        "total_volume",
+        "trade_ask_cnt",
+        "trade_ask_vol_sum",
+        "trade_bid_cnt",
+        "trade_bid_vol_sum",
+        "vol_sum",
+        "volume"
+      ],
+      "bases": [
+        "builtins.object"
+      ],
+      "fields": {},
+      "kind": "compiled",
+      "source": "shioaji"
+    },
+    "ScannerItem": {
+      "_present": true,
+      "attributes": [
+        "amount",
+        "ask_orders",
+        "ask_volumes",
+        "average_price",
+        "bid_orders",
+        "bid_volumes",
+        "buy_price",
+        "buy_volume",
+        "change_price",
+        "change_type",
+        "close",
+        "code",
+        "date",
+        "high",
+        "low",
+        "name",
+        "open",
+        "price_range",
+        "rank_value",
+        "sell_price",
+        "sell_volume",
+        "tick_type",
+        "total_amount",
+        "total_volume",
+        "ts",
+        "volume",
+        "volume_ratio",
+        "yesterday_volume"
+      ],
+      "bases": [
+        "builtins.object"
+      ],
+      "fields": {},
+      "kind": "compiled",
+      "source": "shioaji"
+    },
+    "Settlement": {
+      "_present": true,
+      "attributes": [
+        "status",
+        "t1_day",
+        "t1_money",
+        "t2_day",
+        "t2_money",
+        "t_day",
+        "t_money"
+      ],
+      "bases": [
+        "builtins.object"
+      ],
+      "fields": {},
+      "kind": "compiled",
+      "source": "shioaji"
+    },
+    "Snapshot": {
+      "_present": true,
+      "attributes": [
+        "amount",
+        "average_price",
+        "buy_price",
+        "buy_volume",
+        "change_price",
+        "change_rate",
+        "change_type",
+        "close",
+        "code",
+        "exchange",
+        "high",
+        "low",
+        "open",
+        "sell_price",
+        "sell_volume",
+        "tick_type",
+        "total_amount",
+        "total_volume",
+        "ts",
+        "volume",
+        "volume_ratio",
+        "yesterday_volume"
+      ],
+      "bases": [
+        "builtins.object"
+      ],
+      "fields": {},
+      "kind": "compiled",
+      "source": "shioaji"
+    },
+    "Stock": {
+      "_present": true,
+      "attributes": [
+        "category",
+        "code",
+        "currency",
+        "day_trade",
+        "delivery_date",
+        "delivery_month",
+        "exchange",
+        "limit_down",
+        "limit_up",
+        "margin_trading_balance",
+        "multiplier",
+        "name",
+        "option_right",
+        "reference",
+        "security_type",
+        "short_selling_balance",
+        "strike_price",
+        "symbol",
+        "target_code",
+        "underlying_code",
+        "underlying_kind",
+        "unit",
+        "update_date"
+      ],
+      "bases": [
+        "builtins.object"
+      ],
+      "fields": {},
+      "kind": "compiled",
+      "source": "shioaji"
+    },
+    "StockAccount": {
+      "_present": true,
+      "attributes": [
+        "account_id",
+        "account_type",
+        "broker_id",
+        "person_id",
+        "signed",
+        "username"
+      ],
+      "bases": [
+        "builtins.object"
+      ],
+      "fields": {},
+      "kind": "compiled",
+      "source": "shioaji.account"
+    },
+    "StockOrder": {
+      "_present": true,
+      "attributes": [
+        "account",
+        "action",
+        "custom_field",
+        "daytrade_short",
+        "order_cond",
+        "order_lot",
+        "order_type",
+        "price",
+        "price_type",
+        "quantity"
+      ],
+      "bases": [
+        "builtins.object"
+      ],
+      "fields": {},
+      "kind": "compiled",
+      "source": "shioaji"
+    },
+    "StockPosition": {
+      "_present": true,
+      "attributes": [
+        "code",
+        "collateral",
+        "cond",
+        "direction",
+        "id",
+        "interest",
+        "last_price",
+        "margin_purchase_amount",
+        "pnl",
+        "price",
+        "quantity",
+        "short_sale_margin",
+        "yd_quantity"
+      ],
+      "bases": [
+        "builtins.object"
+      ],
+      "fields": {},
+      "kind": "compiled",
+      "source": "shioaji"
+    },
+    "TickFOPv1": {
+      "_present": true,
+      "attributes": [
+        "amount",
+        "amount_sum",
+        "ask_side_total_vol",
+        "avg_price",
+        "bid_side_total_vol",
+        "chg_type",
+        "close",
+        "code",
+        "date",
+        "datetime",
+        "diff_price",
+        "diff_rate",
+        "diff_type",
+        "exchange",
+        "high",
+        "low",
+        "open",
+        "pct_chg",
+        "price_chg",
+        "simtrade",
+        "target_kind_price",
+        "tick_type",
+        "time",
+        "total_amount",
+        "total_volume",
+        "trade_ask_vol_sum",
+        "trade_bid_vol_sum",
+        "underlying_price",
+        "vol_sum",
+        "volume"
+      ],
+      "bases": [
+        "builtins.object"
+      ],
+      "fields": {},
+      "kind": "compiled",
+      "source": "shioaji"
+    },
+    "TickSTKv1": {
+      "_present": true,
+      "attributes": [
+        "amount",
+        "amount_sum",
+        "ask_side_total_cnt",
+        "ask_side_total_vol",
+        "avg_price",
+        "bid_side_total_cnt",
+        "bid_side_total_vol",
+        "chg_type",
+        "close",
+        "closing_oddlot_amount",
+        "closing_oddlot_ask_price",
+        "closing_oddlot_bid_price",
+        "closing_oddlot_close",
+        "closing_oddlot_shares",
+        "code",
+        "date",
+        "datetime",
+        "diff_price",
+        "diff_rate",
+        "diff_type",
+        "exchange",
+        "fixed_trade_amount",
+        "fixed_trade_vol",
+        "fixed_trade_volume",
+        "high",
+        "intraday_odd",
+        "low",
+        "open",
+        "pct_chg",
+        "price_chg",
+        "simtrade",
+        "suspend",
+        "tick_type",
+        "time",
+        "total_amount",
+        "total_volume",
+        "trade_ask_cnt",
+        "trade_ask_vol_sum",
+        "trade_bid_cnt",
+        "trade_bid_vol_sum",
+        "vol_sum",
+        "volume"
+      ],
+      "bases": [
+        "builtins.object"
+      ],
+      "fields": {},
+      "kind": "compiled",
+      "source": "shioaji"
+    },
+    "Ticks": {
+      "_present": true,
+      "attributes": [
+        "ask_price",
+        "ask_volume",
+        "bid_price",
+        "bid_volume",
+        "close",
+        "tick_type",
+        "ts",
+        "volume"
+      ],
+      "bases": [
+        "builtins.object"
+      ],
+      "fields": {},
+      "kind": "compiled",
+      "source": "shioaji"
+    },
+    "Trade": {
+      "_present": true,
+      "attributes": [
+        "contract",
+        "order",
+        "status"
+      ],
+      "bases": [
+        "builtins.object"
+      ],
+      "fields": {},
+      "kind": "compiled",
+      "source": "shioaji"
+    },
+    "TradingLimits": {
+      "_present": true,
+      "attributes": [
+        "margin_available",
+        "margin_limit",
+        "margin_used",
+        "short_available",
+        "short_limit",
+        "short_used",
+        "status",
+        "trading_available",
+        "trading_limit",
+        "trading_used"
+      ],
+      "bases": [
+        "builtins.object"
+      ],
+      "fields": {},
+      "kind": "compiled",
+      "source": "shioaji"
+    },
+    "UsageStatus": {
+      "_present": true,
+      "attributes": [
+        "bytes",
+        "connections",
+        "limit_bytes",
+        "remaining_bytes"
+      ],
+      "bases": [
+        "builtins.object"
+      ],
+      "fields": {},
+      "kind": "compiled",
+      "source": "shioaji"
+    }
+  },
+  "package_layout": {
+    "_present": true,
+    "is_compiled": true,
+    "submodules": {
+      "shioaji._core": true,
+      "shioaji.backend": false,
+      "shioaji.backend.solace.api": false,
+      "shioaji.config": false,
+      "shioaji.constant": true,
+      "shioaji.main": false,
+      "shioaji.order": true,
+      "shioaji.shioaji": false
+    },
+    "top_level_export_count": 149,
+    "top_level_exports": [
+      "Account",
+      "AccountBalance",
+      "AccountDict",
+      "AccountNotProvideError",
+      "AccountNotSignError",
+      "AccountType",
+      "Action",
+      "AuthError",
+      "BadRequestError",
+      "BaseContract",
+      "BidAskFOPv1",
+      "BidAskFOPv1Core",
+      "BidAskFOPv1Optimized",
+      "BidAskFOPv1Receiver",
+      "BidAskSTKv1",
+      "BidAskSTKv1Core",
+      "BidAskSTKv1Optimized",
+      "BidAskSTKv1Receiver",
+      "CaError",
+      "CaExpiredError",
+      "CaPasswordError",
+      "CallPut",
+      "ChangeType",
+      "ComboBase",
+      "ComboContract",
+      "ComboOrder",
+      "ComboStatus",
+      "ComboTrade",
+      "ComboType",
+      "Contract",
+      "ContractAction",
+      "ContractCategory",
+      "ContractUpdateEvent",
+      "ContractUpdateSecurityType",
+      "Contracts",
+      "CreditEnquire",
+      "Currency",
+      "DailyQuotes",
+      "DayTrade",
+      "Deal",
+      "DecodeError",
+      "EarmarkStockDetail",
+      "EarmarkStocksDetail",
+      "EarmarkStocksDetailResponse",
+      "EarmarkingOrderResp",
+      "EventOrderStatusDict",
+      "Exchange",
+      "FetchStatus",
+      "Future",
+      "FuturePosition",
+      "FuturePositionDetail",
+      "FutureProfitDetail",
+      "FutureProfitLoss",
+      "FutureProfitLossSummary",
+      "FuturesContractDict",
+      "FuturesOCType",
+      "FuturesOrder",
+      "FuturesOrderDetailDict",
+      "FuturesPriceType",
+      "Index",
+      "KBars",
+      "Margin",
+      "MarketType",
+      "Notice",
+      "OpType",
+      "OperationDict",
+      "Option",
+      "OptionRight",
+      "Order",
+      "OrderEventDict",
+      "OrderEventReceiver",
+      "OrderResult",
+      "OrderState",
+      "OrderStatus",
+      "OrderStatusInfo",
+      "OrderType",
+      "PriceType",
+      "ProfitLossSummaryTotal",
+      "ProfitLossTotal",
+      "Punish",
+      "QuoteFOPv1",
+      "QuoteSTKv1",
+      "QuoteType",
+      "QuoteVersion",
+      "ReserveEarmarkingResponse",
+      "ReserveOrderResp",
+      "ReserveStockDetail",
+      "ReserveStockResponse",
+      "ReserveStockSummary",
+      "ReserveStocksDetail",
+      "ReserveStocksDetailResponse",
+      "ReserveStocksSummary",
+      "ReserveStocksSummaryResponse",
+      "ResponseError",
+      "ResponseMsgError",
+      "ResponseRecvError",
+      "ScannerItem",
+      "ScannerType",
+      "SecurityType",
+      "ServerError",
+      "Settlement",
+      "SettlementV1",
+      "Shioaji",
+      "ShioajiAsync",
+      "ShioajiConnectionError",
+      "ShioajiError",
+      "ShioajiPermissionError",
+      "ShioajiTimeoutError",
+      "ShioajiTypeError",
+      "ShioajiValueError",
+      "ShortStockSource",
+      "Snapshot",
+      "Stock",
+      "StockContractDict",
+      "StockOrder",
+      "StockOrderCond",
+      "StockOrderDetailDict",
+      "StockOrderLot",
+      "StockPosition",
+      "StockPositionDetail",
+      "StockPriceType",
+      "StockProfitDetail",
+      "StockProfitLoss",
+      "StockProfitLossSummary",
+      "SubscribeError",
+      "SystemMaintenance",
+      "TickFOPv1",
+      "TickFOPv1Core",
+      "TickFOPv1Optimized",
+      "TickFOPv1Receiver",
+      "TickSTKv1",
+      "TickSTKv1Core",
+      "TickSTKv1Optimized",
+      "TickSTKv1Receiver",
+      "TickType",
+      "Ticks",
+      "TicksQueryType",
+      "TokenError",
+      "Trade",
+      "TradeType",
+      "TradingLimits",
+      "Unit",
+      "UnsubscribeError",
+      "UsageOut",
+      "ValidationError",
+      "Watchlist",
+      "constant",
+      "hello_from_bin",
+      "order"
+    ]
+  },
+  "schema_version": 2,
+  "snapshot_sha256": "ebf16e0068f575571100bfc4ac17002f855a82e887cb9a6c29959228cac16e30"
+}

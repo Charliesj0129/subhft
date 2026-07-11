@@ -60,11 +60,7 @@ def cmd_run(args: argparse.Namespace) -> None:
 
     _enforce_loop_trace_policy(settings)
 
-    downgraded = None
-    if settings.get("mode") == "live" and not detect_live_credentials():
-        downgraded = "sim"
-        settings["mode"] = "sim"
-        logger.warning("No Shioaji credentials found, downgrading to sim mode")
+    downgraded = _apply_live_downgrade_fallback(settings)
 
     summary = summarize_settings(settings, downgraded_mode=downgraded)
     print(f"[hft run] {summary}")
@@ -116,6 +112,19 @@ def cmd_run(args: argparse.Namespace) -> None:
         asyncio.run(system.run())
     except KeyboardInterrupt:
         print("Interrupted, shutting down...")
+
+
+def _apply_live_downgrade_fallback(settings: Dict[str, Any]) -> str | None:
+    """Fail-safe gate: force ``mode`` to ``sim`` when ``live`` has no credentials.
+
+    Mutates ``settings`` in place and returns ``"sim"`` when the downgrade
+    fired, else ``None``.
+    """
+    if settings.get("mode") == "live" and not detect_live_credentials():
+        settings["mode"] = "sim"
+        logger.warning("No Shioaji credentials found, downgrading to sim mode")
+        return "sim"
+    return None
 
 
 def _resolve_default_mode() -> str:

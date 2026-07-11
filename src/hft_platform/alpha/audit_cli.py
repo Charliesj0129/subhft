@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Iterable
 
 from hft_platform.alpha import sub_gate_audit
+from hft_platform.alpha.divergence_category import classify_field
 
 
 def _pick_row(
@@ -1694,6 +1695,75 @@ def divergence(
     return "\n".join(out)
 
 
+def parity_fields(
+    run_id: str | None = None,
+    *,
+    strategy_type: str | None = None,
+    profile: str | None = None,
+) -> str:
+    """Per-FIELD replay-parity breakdown (goal §7).
+
+    The ``divergence`` view rolls divergences up to §8 *categories*, which
+    hides *which* intent field disagreed between backtest and replay. Goal §7
+    requires checking signal time / direction / size / entry / exit / session
+    filter / risk filter / force-flat individually. This view reads the raw
+    ``per_field_divergences`` histogram each ``replay_parity`` row now records
+    and tabulates ``field | divergences | §8 category`` so an operator can see
+    exactly which intent field drifted, sorted by divergence count.
+
+    Filters (AND-combined): ``run_id`` (exact), ``strategy_type``, ``profile``.
+    Rows logged before per-field capture are reported as a legacy note rather
+    than silently shown as clean.
+    """
+    rows = sub_gate_audit.read_runs(run_id=run_id)
+    if strategy_type is not None:
+        rows = [r for r in rows if r.get("strategy_type") == strategy_type]
+    if profile is not None:
+        rows = [r for r in rows if r.get("profile_name") == profile]
+
+    body: list[tuple[str, ...]] = []
+    legacy_rows: list[str] = []
+    for row in rows:
+        entry = _replay_parity_entry(row)
+        if entry is None:
+            continue
+        metrics = entry.get("metrics") or {}
+        rid = str(row.get("run_id", ""))[:24]
+        strat = str(row.get("strategy_name", ""))[:24]
+        per_field = metrics.get("per_field_divergences")
+        if not isinstance(per_field, dict):
+            legacy_rows.append(rid or "(unknown)")
+            continue
+        if not per_field:
+            body.append((rid, strat, "(none — full parity)", "0", ""))
+            continue
+        for field, count in sorted(per_field.items(), key=lambda kv: (-int(kv[1]), str(kv[0]))):
+            category = classify_field(str(field)).value
+            body.append((rid, strat, str(field), str(int(count)), category))
+
+    if not body and not legacy_rows:
+        return "no replay_parity rows match filter."
+
+    out: list[str] = []
+    if body:
+        headers = ("run_id", "strategy", "field", "divergences", "category")
+        widths = [max(len(h), max(len(b[i]) for b in body)) for i, h in enumerate(headers)]
+
+        def _fmt(cells: tuple[str, ...]) -> str:
+            return "  ".join(c.ljust(widths[i]) for i, c in enumerate(cells))
+
+        out.append(_fmt(headers))
+        out.append(_fmt(tuple("-" * w for w in widths)))
+        out.extend(_fmt(c) for c in body)
+        out.append(f"({len(body)} field row{'s' if len(body) != 1 else ''})")
+    if legacy_rows:
+        out.append(
+            f"note: {len(legacy_rows)} row(s) predate per-field capture "
+            f"(no per_field_divergences): {', '.join(sorted(set(legacy_rows)))}"
+        )
+    return "\n".join(out)
+
+
 _EXPORT_COLUMNS: tuple[str, ...] = (
     "run_id",
     "strategy_name",
@@ -2496,6 +2566,14 @@ def main(argv: list[str] | None = None) -> int:
         help="Only rows where the replay_parity sub-gate failed.",
     )
 
+    pf_p = sub.add_parser(
+        "parity-fields",
+        help="Per-field replay-parity breakdown (which intent field diverged).",
+    )
+    pf_p.add_argument("--run-id", default=None, help="Restrict to one run_id.")
+    pf_p.add_argument("--strategy-type", choices=("maker", "taker"), default=None)
+    pf_p.add_argument("--profile", default=None)
+
     exp_p = sub.add_parser("export", help="Export audit rows as CSV or Markdown.")
     exp_p.add_argument("--fmt", choices=("csv", "md"), default="csv")
     exp_p.add_argument("--strategy-type", choices=("maker", "taker"), default=None)
@@ -2690,6 +2768,12 @@ def main(argv: list[str] | None = None) -> int:
             profile=args.profile,
             category=args.category,
             only_failed=args.only_failed,
+        )
+    elif args.cmd == "parity-fields":
+        out = parity_fields(
+            args.run_id,
+            strategy_type=args.strategy_type,
+            profile=args.profile,
         )
     elif args.cmd == "export":
         out = export(

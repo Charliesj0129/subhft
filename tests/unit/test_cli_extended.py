@@ -319,59 +319,37 @@ def test_cmd_run_replay_exits(monkeypatch, capsys):
     assert "--mode replay requires --session" in err
 
 
-@pytest.mark.skip(reason="requires full prometheus_client sub-module mock; tracks as known fragile test")
-def test_cmd_run_downgrades_live(monkeypatch, capsys):
-    monkeypatch.setattr(
-        "hft_platform.cli._run.load_settings", lambda *_a, **_k: ({"mode": "live", "prometheus_port": 9091}, {})
-    )
+def test_apply_live_downgrade_fallback_downgrades_live_without_credentials(monkeypatch, capsys):
     monkeypatch.setattr("hft_platform.cli._run.detect_live_credentials", lambda: False)
-    monkeypatch.setattr("hft_platform.cli._run.summarize_settings", lambda *_a, **_k: "summary")
+    settings = {"mode": "live", "prometheus_port": 9091}
 
-    import types as _types
+    downgraded = cli._run._apply_live_downgrade_fallback(settings)
 
-    class DummySystem:
-        def __init__(self, *_a, **_k):
-            pass
+    assert downgraded == "sim"
+    assert settings["mode"] == "sim"
+    assert "downgrading to sim mode" in capsys.readouterr().out
 
-        async def run(self):
-            return None
 
-    dummy_main = _types.SimpleNamespace(HFTSystem=DummySystem)
-    monkeypatch.setitem(sys.modules, "hft_platform.main", dummy_main)
+def test_apply_live_downgrade_fallback_keeps_live_with_credentials(monkeypatch, capsys):
+    monkeypatch.setattr("hft_platform.cli._run.detect_live_credentials", lambda: True)
+    settings = {"mode": "live", "prometheus_port": 9091}
 
-    def _run(coro):
-        coro.close()
+    downgraded = cli._run._apply_live_downgrade_fallback(settings)
 
-    monkeypatch.setattr("hft_platform.cli._run.asyncio", types.SimpleNamespace(run=_run))
-    # Build a stub that satisfies all prometheus_client imports the CLI may trigger
-    _fake_metric = lambda *a, **k: _types.SimpleNamespace(
-        labels=lambda **_: _types.SimpleNamespace(inc=lambda *_: None, set=lambda *_: None, observe=lambda *_: None),
-        inc=lambda *_: None,
-        set=lambda *_: None,
-        observe=lambda *_: None,
-    )
-    _prom_stub = _types.SimpleNamespace(
-        start_http_server=lambda *_a, **_k: None,
-        REGISTRY=_types.SimpleNamespace(unregister=lambda *_: None),
-        Counter=_fake_metric,
-        Gauge=_fake_metric,
-        Histogram=_fake_metric,
-        Summary=_fake_metric,
-        CollectorRegistry=type("CollectorRegistry", (), {}),
-    )
-    monkeypatch.setitem(sys.modules, "prometheus_client", _prom_stub)
+    assert downgraded is None
+    assert settings["mode"] == "live"
+    assert capsys.readouterr().out == ""
 
-    args = Namespace(
-        mode="live",
-        mode_flag=None,
-        symbols=None,
-        strategy=None,
-        strategy_module=None,
-        strategy_class=None,
-    )
-    cli.cmd_run(args)
-    out = capsys.readouterr().out
-    assert "downgrading to sim mode" in out
+
+def test_apply_live_downgrade_fallback_ignores_sim_mode(monkeypatch, capsys):
+    monkeypatch.setattr("hft_platform.cli._run.detect_live_credentials", lambda: False)
+    settings = {"mode": "sim", "prometheus_port": 9091}
+
+    downgraded = cli._run._apply_live_downgrade_fallback(settings)
+
+    assert downgraded is None
+    assert settings["mode"] == "sim"
+    assert capsys.readouterr().out == ""
 
 
 def test_cmd_symbols_build_with_warnings(monkeypatch, capsys, tmp_path):

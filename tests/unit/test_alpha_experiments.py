@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import numpy as np
@@ -26,6 +27,154 @@ def test_experiment_tracker_log_and_list(tmp_path: Path):
     assert len(rows) == 1
     assert rows[0].run_id == "run-1"
     assert rows[0].alpha_id == "ofi_mc"
+
+
+def test_experiment_tracker_stamps_edge_metric_semantics(tmp_path: Path):
+    from research.registry.schemas import Scorecard
+
+    tracker = ExperimentTracker(base_dir=tmp_path / "experiments")
+    advisory = [
+        {
+            "name": "edge_per_round_trip",
+            "passed": True,
+            "metrics": {
+                "mean_net_edge_pts_per_trade": 12.5,
+                "n_trips": 300.0,
+                "total_net_pts": 3750.0,
+                "threshold_pts": 10.0,
+            },
+            "details": "mean_net_edge=12.50 pts/trade",
+        }
+    ]
+
+    meta_path = tracker.log_run(
+        run_id="run-edge",
+        alpha_id="edge_alpha",
+        config_hash="cfg-edge",
+        data_paths=["research/data/processed/edge_alpha/day.npy"],
+        metrics={"sharpe_oos": 1.4},
+        gate_status={"gate_c": True},
+        scorecard_payload={"sharpe_oos": 1.4},
+        backtest_report_payload={
+            "gate": "Gate C",
+            "passed": True,
+            "details": {"sub_gates_advisory": advisory},
+        },
+    )
+
+    scorecard = json.loads((meta_path.parent / "scorecard.json").read_text())
+    report = json.loads((meta_path.parent / "backtest_report.json").read_text())
+
+    semantics = scorecard["edge_metric_semantics"]
+    assert semantics["metric"] == "mean_net_edge_pts_per_trade"
+    assert semantics["source_gate"] == "edge_per_round_trip"
+    assert semantics["denominator"] == "completed_fifo_round_trips"
+    assert semantics["costs_included"] is True
+    assert semantics["residual_mtm_included"] is True
+    assert semantics["force_flat_policy"] == "session_end_force_flat_last_mid"
+    assert semantics["floor_operator"] == ">"
+    assert semantics["floor_pts"] == 10.0
+    assert report["details"]["edge_metric_semantics"] == semantics
+    assert Scorecard.from_dict({"edge_metric_semantics": semantics}).edge_metric_semantics == semantics
+    # Only the source gate ran here, so the label must NOT claim validation: the
+    # six supporting gates are recorded as absent and ``validated`` is False.
+    assert semantics["validated"] is False
+    assert semantics["supporting_gates_status"]["edge_per_round_trip"] == "pass"
+    assert semantics["supporting_gates_status"]["inventory_mtm"] == "absent"
+
+
+_SUPPORTING_EDGE_GATES = (
+    "inventory_mtm",
+    "cost_uncertainty",
+    "force_flat_residual",
+    "min_sample_size",
+    "single_day_dominance",
+    "monthly_distribution",
+)
+
+
+def _edge_advisory(passed_by_gate: dict[str, bool]) -> list[dict[str, object]]:
+    """Build a sub_gates_advisory list: source edge gate plus supporting gates."""
+    advisory: list[dict[str, object]] = [
+        {
+            "name": "edge_per_round_trip",
+            "passed": passed_by_gate.get("edge_per_round_trip", True),
+            "metrics": {
+                "mean_net_edge_pts_per_trade": 12.5,
+                "n_trips": 300.0,
+                "total_net_pts": 3750.0,
+                "threshold_pts": 10.0,
+            },
+            "details": "mean_net_edge=12.50 pts/trade",
+        }
+    ]
+    for gate in _SUPPORTING_EDGE_GATES:
+        if gate in passed_by_gate:
+            advisory.append({"name": gate, "passed": passed_by_gate[gate], "metrics": {}})
+    return advisory
+
+
+def test_edge_metric_semantics_validated_when_all_supporting_gates_pass(tmp_path: Path):
+    tracker = ExperimentTracker(base_dir=tmp_path / "experiments")
+    all_pass = {gate: True for gate in ("edge_per_round_trip", *_SUPPORTING_EDGE_GATES)}
+    meta_path = tracker.log_run(
+        run_id="run-edge-validated",
+        alpha_id="edge_alpha",
+        config_hash="cfg-validated",
+        data_paths=["research/data/processed/edge_alpha/day.npy"],
+        metrics={"mean_net_edge_pts_per_trade": 12.5},
+        gate_status={"gate_c": True},
+        scorecard_payload={"sharpe_oos": 1.4},
+        backtest_report_payload={
+            "gate": "Gate C",
+            "passed": True,
+            "details": {"sub_gates_advisory": _edge_advisory(all_pass)},
+        },
+    )
+
+    scorecard = json.loads((meta_path.parent / "scorecard.json").read_text())
+    semantics = scorecard["edge_metric_semantics"]
+    assert semantics["validated"] is True
+    assert all(status == "pass" for status in semantics["supporting_gates_status"].values())
+
+    # A fully-validated edge is the only one allowed onto the trustworthy board.
+    best = tracker.best_by_metric("mean_net_edge_pts_per_trade", n=5)
+    assert [row["run_id"] for row in best] == ["run-edge-validated"]
+    assert best[0]["edge_metric_semantics_status"] == "complete"
+
+
+def test_edge_metric_semantics_unvalidated_when_supporting_gate_fails(tmp_path: Path):
+    tracker = ExperimentTracker(base_dir=tmp_path / "experiments")
+    gates = {gate: True for gate in ("edge_per_round_trip", *_SUPPORTING_EDGE_GATES)}
+    gates["inventory_mtm"] = False  # residual-propped edge: supporting gate fails
+    meta_path = tracker.log_run(
+        run_id="run-edge-unvalidated",
+        alpha_id="edge_alpha",
+        config_hash="cfg-unvalidated",
+        data_paths=["research/data/processed/edge_alpha/day.npy"],
+        metrics={"mean_net_edge_pts_per_trade": 12.5},
+        gate_status={"gate_c": False},
+        scorecard_payload={"sharpe_oos": 1.4},
+        backtest_report_payload={
+            "gate": "Gate C",
+            "passed": False,
+            "details": {"sub_gates_advisory": _edge_advisory(gates)},
+        },
+    )
+
+    scorecard = json.loads((meta_path.parent / "scorecard.json").read_text())
+    semantics = scorecard["edge_metric_semantics"]
+    assert semantics["validated"] is False
+    assert semantics["supporting_gates_status"]["inventory_mtm"] == "fail"
+
+    [row] = tracker.list_runs()
+    [compared] = tracker.compare([row.run_id])
+    assert compared["edge_metric_semantics_status"] == "gates_unvalidated"
+    assert compared["edge_metric_semantics_failing_gates"] == ["inventory_mtm"]
+
+    # An edge above the floor but with a failed supporting gate must NOT surface
+    # as a trustworthy candidate.
+    assert tracker.best_by_metric("mean_net_edge_pts_per_trade", n=5) == []
 
 
 def test_experiment_tracker_compare_and_best(tmp_path: Path):
@@ -61,6 +210,314 @@ def test_experiment_tracker_compare_and_best(tmp_path: Path):
     best = tracker.best_by_metric("sharpe_oos", n=1)
     assert len(best) == 1
     assert best[0]["run_id"] == "run-b"
+
+
+def test_explicit_keep_downgraded_when_edge_unvalidated(tmp_path: Path):
+    # Goal §3: an explicit keep may not override an unvalidated edge. Under a
+    # non-strict profile inventory_mtm can fail as advisory while blocking passes.
+    tracker = ExperimentTracker(base_dir=tmp_path / "experiments")
+    gates = {gate: True for gate in ("edge_per_round_trip", *_SUPPORTING_EDGE_GATES)}
+    gates["inventory_mtm"] = False
+    meta_path = tracker.log_run(
+        run_id="run-keep-blocked",
+        alpha_id="edge_alpha",
+        config_hash="cfg-keep-blocked",
+        data_paths=["d.npy"],
+        metrics={"mean_net_edge_pts_per_trade": 12.5},
+        gate_status={"gate_c": True},
+        scorecard_payload={},
+        backtest_report_payload={
+            "gate": "Gate C",
+            "passed": True,
+            "details": {"sub_gates_advisory": _edge_advisory(gates)},
+        },
+        research_decision={
+            "status": "keep",
+            "reason": "researcher_keep",
+            "evidence": ["manual_review"],
+            "decided_by": "researcher",
+        },
+    )
+
+    decision = json.loads(meta_path.read_text())["research_decision"]
+    assert decision["status"] == "blocked_by_audit"
+    assert decision["reason"] == "edge_metric_unvalidated:inventory_mtm"
+    assert decision["decided_by"] == "edge_validation_guard"
+    assert "inventory_mtm" in decision["evidence"]
+
+
+def test_auto_keep_preserved_when_edge_validated(tmp_path: Path):
+    tracker = ExperimentTracker(base_dir=tmp_path / "experiments")
+    advisory = _edge_advisory({gate: True for gate in ("edge_per_round_trip", *_SUPPORTING_EDGE_GATES)})
+    meta_path = tracker.log_run(
+        run_id="run-keep-validated",
+        alpha_id="edge_alpha",
+        config_hash="cfg-keep-validated",
+        data_paths=["d.npy"],
+        metrics={"mean_net_edge_pts_per_trade": 12.5},
+        gate_status={"gate_c": True},
+        scorecard_payload={},
+        backtest_report_payload={
+            "gate": "Gate C",
+            "passed": True,
+            "details": {
+                "sub_gates_blocking": {"passed": True, "triage_status": "passed"},
+                "sub_gates_advisory": advisory,
+            },
+        },
+    )
+
+    decision = json.loads(meta_path.read_text())["research_decision"]
+    assert decision["status"] == "keep"
+    assert decision["reason"] == "gate_c_blocking_passed"
+
+
+def test_experiment_tracker_logs_replayable_research_decision(tmp_path: Path):
+    tracker = ExperimentTracker(base_dir=tmp_path / "experiments")
+    meta_path = tracker.log_run(
+        run_id="run-sample-gated",
+        alpha_id="edge_alpha",
+        config_hash="cfg-sample",
+        data_paths=["research/data/processed/edge_alpha/oos.npy"],
+        metrics={"mean_net_edge_pts_per_trade": 12.5},
+        gate_status={"gate_c": False},
+        scorecard_payload={},
+        backtest_report_payload={},
+        research_decision={
+            "status": "needs_more_sample",
+            "reason": "oos_trading_days_below_minimum",
+            "evidence": ["min_sample_size", "oos_day_count"],
+            "decided_by": "gate_c",
+        },
+    )
+
+    meta = json.loads(meta_path.read_text())
+    assert meta["research_decision"] == {
+        "status": "needs_more_sample",
+        "reason": "oos_trading_days_below_minimum",
+        "evidence": ["min_sample_size", "oos_day_count"],
+        "decided_by": "gate_c",
+    }
+
+    [row] = tracker.list_runs()
+    assert row.research_decision["status"] == "needs_more_sample"
+
+    compared = tracker.compare(["run-sample-gated"])
+    assert compared == [
+        {
+            "run_id": "run-sample-gated",
+            "alpha_id": "edge_alpha",
+            "config_hash": "cfg-sample",
+            "timestamp": row.timestamp,
+            "mean_net_edge_pts_per_trade": 12.5,
+            "research_decision_status": "needs_more_sample",
+            "research_decision_reason": "oos_trading_days_below_minimum",
+            "research_decision_evidence": ["min_sample_size", "oos_day_count"],
+            "research_decision": meta["research_decision"],
+        }
+    ]
+
+
+def test_experiment_tracker_derives_research_decision_from_gate_c_blocking_sample(tmp_path: Path):
+    tracker = ExperimentTracker(base_dir=tmp_path / "experiments")
+    meta_path = tracker.log_run(
+        run_id="run-auto-sample-gated",
+        alpha_id="edge_alpha",
+        config_hash="cfg-auto-sample",
+        data_paths=["research/data/processed/edge_alpha/oos.npy"],
+        metrics={"mean_net_edge_pts_per_trade": 12.5},
+        gate_status={"gate_c": False},
+        scorecard_payload={},
+        backtest_report_payload={
+            "gate": "Gate C",
+            "passed": False,
+            "details": {
+                "sub_gates_blocking": {
+                    "passed": False,
+                    "triage_status": "sample_needs_more_sample",
+                    "triage_reasons": ["min_sample_size"],
+                    "failing": [
+                        {
+                            "name": "min_sample_size",
+                            "metrics": {"sample_adequacy_label": "needs_more_sample"},
+                        }
+                    ],
+                }
+            },
+        },
+    )
+
+    meta = json.loads(meta_path.read_text())
+    assert meta["research_decision"] == {
+        "status": "needs_more_sample",
+        "reason": "gate_c_sample_needs_more_sample",
+        "evidence": ["min_sample_size"],
+        "decided_by": "gate_c",
+    }
+
+    [row] = tracker.list_runs()
+    compared = tracker.compare(["run-auto-sample-gated"])
+    assert compared == [
+        {
+            "run_id": "run-auto-sample-gated",
+            "alpha_id": "edge_alpha",
+            "config_hash": "cfg-auto-sample",
+            "timestamp": row.timestamp,
+            "mean_net_edge_pts_per_trade": 12.5,
+            "research_decision_status": "needs_more_sample",
+            "research_decision_reason": "gate_c_sample_needs_more_sample",
+            "research_decision_evidence": ["min_sample_size"],
+            "research_decision": meta["research_decision"],
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("gate_name", "expected_status", "expected_reason"),
+    [
+        ("replay_parity", "blocked_by_parity", "gate_c_parity_blocker:replay_parity"),
+        ("monthly_distribution", "blocked_by_risk", "gate_c_risk_blocker:monthly_distribution"),
+        ("cost_uncertainty", "blocked_by_audit", "gate_c_audit_blocker:cost_uncertainty"),
+        ("inventory_mtm", "blocked_by_audit", "gate_c_audit_blocker:inventory_mtm"),
+        ("edge_per_round_trip", "failed", "gate_c_blocking_failed:edge_per_round_trip"),
+    ],
+)
+def test_experiment_tracker_derives_research_decision_from_gate_c_killed_blockers(
+    tmp_path: Path,
+    gate_name: str,
+    expected_status: str,
+    expected_reason: str,
+):
+    tracker = ExperimentTracker(base_dir=tmp_path / "experiments")
+    run_id = f"run-auto-killed-{gate_name}"
+    meta_path = tracker.log_run(
+        run_id=run_id,
+        alpha_id="edge_alpha",
+        config_hash="cfg-auto-killed",
+        data_paths=["research/data/processed/edge_alpha/oos.npy"],
+        metrics={},
+        gate_status={"gate_c": False},
+        scorecard_payload={},
+        backtest_report_payload={
+            "gate": "Gate C",
+            "passed": False,
+            "details": {
+                "sub_gates_blocking": {
+                    "passed": False,
+                    "triage_status": "killed",
+                    "triage_reasons": [gate_name],
+                    "failing": [{"name": gate_name, "passed": False, "metrics": {}, "details": "strict fail"}],
+                }
+            },
+        },
+    )
+
+    meta = json.loads(meta_path.read_text())
+    assert meta["research_decision"] == {
+        "status": expected_status,
+        "reason": expected_reason,
+        "evidence": [gate_name],
+        "decided_by": "gate_c",
+    }
+
+    [compared] = tracker.compare([run_id])
+    assert compared["research_decision_status"] == expected_status
+    assert compared["research_decision_reason"] == expected_reason
+    assert compared["research_decision_evidence"] == [gate_name]
+
+
+def test_experiment_tracker_compare_marks_legacy_edge_semantics(tmp_path: Path):
+    tracker = ExperimentTracker(base_dir=tmp_path / "experiments")
+    advisory = _edge_advisory({gate: True for gate in ("edge_per_round_trip", *_SUPPORTING_EDGE_GATES)})
+    tracker.log_run(
+        run_id="run-complete-edge",
+        alpha_id="edge_alpha",
+        config_hash="complete",
+        data_paths=["d1.npy"],
+        metrics={"mean_net_edge_pts_per_trade": 12.5},
+        gate_status={"gate_c": True},
+        scorecard_payload={},
+        backtest_report_payload={"details": {"sub_gates_advisory": advisory}},
+    )
+
+    legacy_dir = tracker.runs_dir / "run-legacy-edge"
+    legacy_dir.mkdir(parents=True)
+    (legacy_dir / "scorecard.json").write_text(json.dumps({}), encoding="utf-8")
+    (legacy_dir / "backtest_report.json").write_text(
+        json.dumps({"details": {"sub_gates_advisory": advisory}}),
+        encoding="utf-8",
+    )
+    (legacy_dir / "meta.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run-legacy-edge",
+                "alpha_id": "edge_alpha",
+                "config_hash": "legacy",
+                "timestamp": "2026-06-02T00:00:00+00:00",
+                "data_paths": ["d2.npy"],
+                "metrics": {"mean_net_edge_pts_per_trade": 12.5},
+                "gate_status": {"gate_c": True},
+                "scorecard_path": str(legacy_dir / "scorecard.json"),
+                "backtest_report_path": str(legacy_dir / "backtest_report.json"),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    compared = tracker.compare(["run-complete-edge", "run-legacy-edge"])
+    by_run = {row["run_id"]: row for row in compared}
+
+    assert by_run["run-complete-edge"]["edge_metric_semantics_status"] == "complete"
+    assert by_run["run-legacy-edge"]["edge_metric_semantics_status"] == "legacy_missing"
+    assert by_run["run-legacy-edge"]["edge_metric_semantics_missing"] == [
+        "scorecard.edge_metric_semantics",
+        "report.edge_metric_semantics",
+    ]
+
+
+def test_experiment_tracker_best_by_edge_metric_requires_semantics(tmp_path: Path):
+    tracker = ExperimentTracker(base_dir=tmp_path / "experiments")
+    advisory = _edge_advisory({gate: True for gate in ("edge_per_round_trip", *_SUPPORTING_EDGE_GATES)})
+    tracker.log_run(
+        run_id="run-complete-edge",
+        alpha_id="edge_alpha",
+        config_hash="complete",
+        data_paths=["d1.npy"],
+        metrics={"mean_net_edge_pts_per_trade": 12.5},
+        gate_status={"gate_c": True},
+        scorecard_payload={},
+        backtest_report_payload={"details": {"sub_gates_advisory": advisory}},
+    )
+
+    legacy_dir = tracker.runs_dir / "run-legacy-edge"
+    legacy_dir.mkdir(parents=True)
+    (legacy_dir / "scorecard.json").write_text(json.dumps({}), encoding="utf-8")
+    (legacy_dir / "backtest_report.json").write_text(
+        json.dumps({"details": {"sub_gates_advisory": advisory}}),
+        encoding="utf-8",
+    )
+    (legacy_dir / "meta.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run-legacy-edge",
+                "alpha_id": "edge_alpha",
+                "config_hash": "legacy",
+                "timestamp": "2026-06-02T00:00:00+00:00",
+                "data_paths": ["d2.npy"],
+                "metrics": {"mean_net_edge_pts_per_trade": 50.0},
+                "gate_status": {"gate_c": True},
+                "scorecard_path": str(legacy_dir / "scorecard.json"),
+                "backtest_report_path": str(legacy_dir / "backtest_report.json"),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    best = tracker.best_by_metric("mean_net_edge_pts_per_trade", n=5)
+
+    assert [row["run_id"] for row in best] == ["run-complete-edge"]
+    assert best[0]["value"] == 12.5
+    assert best[0]["edge_metric_semantics_status"] == "complete"
 
 
 def test_experiment_tracker_latest_equity_and_proxy_returns(tmp_path: Path):

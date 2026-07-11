@@ -1,0 +1,26 @@
+# Alpha Candidate Loop v1.1 — governor (steering brief derivation + DeepSeek client).
+# The governor lives UPSTREAM of the frozen loop: it never changes gates, scoring,
+# schema, frozen versions, or the >10pt floor. These knobs only affect how many
+# candidates are requested per family and the brief prose — never eligibility.
+governor_version: gov_v1
+
+model:
+  name: deepseek-chat            # OpenAI-compatible; exact SKU is a config string
+  base_url: https://api.deepseek.com
+  max_tokens: 8192
+  timeout_seconds: 120.0
+  max_retries: 2
+  temperature: 0.7
+
+# Deterministic focus classification (signals.classify_focus). Priority order:
+# amplify > retire > deprioritize > maintain. Labels only set n_target + prose.
+focus:
+  amplify_survival_min: 0.15       # survival_rate >= this → amplify
+  amplify_ic_p50_min: 0.05         # survivor median IC >= this → amplify
+  deprioritize_survival_max: 0.05  # survival_rate <= this (and no rescue) → deprioritize
+  near_miss_margin_abs_max: 0.10   # a single-gate failure within this of passing is "cheap to flip"
+  n_target:
+    amplify: 30
+    maintain: 20
+    deprioritize: 10
+    retire: 5

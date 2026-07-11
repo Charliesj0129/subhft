@@ -1,9 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from structlog import get_logger
+
 from hft_platform.core import timebase
+
+logger = get_logger("platform_inputs")
 
 
 def _metric_sample_value(metric: Any, sample_name: str, labels: dict[str, str] | None = None) -> float | None:
@@ -53,6 +57,12 @@ class PlatformDegradeInputs:
     rss_threshold_mb: int = 2048
     wal_backlog_files_threshold: int = 200
     rss_reader: Callable[[], int] = _read_rss_bytes
+    # Boot grace-period for the recorder_data_loss HALT reason: a transient
+    # DATA_LOSS probe within this many seconds of construction is suppressed
+    # (2026-06-18 boot-latch incident). 0.0 = disabled (immediate latch).
+    recorder_data_loss_boot_grace_s: float = 0.0
+    _boot_ts_s: float = field(default_factory=timebase.now_s)
+    _boot_grace_log_emitted: bool = False
 
     def configure_thresholds(
         self,
@@ -63,6 +73,7 @@ class PlatformDegradeInputs:
         queue_depth_threshold: int,
         rss_threshold_mb: int,
         wal_backlog_files_threshold: int,
+        recorder_data_loss_boot_grace_s: float = 0.0,
     ) -> None:
         self.feed_gap_threshold_s = float(feed_gap_threshold_s)
         self.reconnect_pending_threshold_s = float(reconnect_pending_threshold_s)
@@ -70,6 +81,7 @@ class PlatformDegradeInputs:
         self.queue_depth_threshold = int(queue_depth_threshold)
         self.rss_threshold_mb = int(rss_threshold_mb)
         self.wal_backlog_files_threshold = int(wal_backlog_files_threshold)
+        self.recorder_data_loss_boot_grace_s = float(recorder_data_loss_boot_grace_s)
 
     def bind_runtime_probes(
         self,
@@ -128,14 +140,24 @@ class PlatformDegradeInputs:
             if wal_backlog_files is not None and wal_backlog_files >= self.wal_backlog_files_threshold:
                 reasons.append("wal_backlog_unhealthy")
 
-        recorder_state = self._recorder_state()
-        if recorder_state == "DATA_LOSS":
-            reasons.append("recorder_data_loss")
-        elif recorder_state in {"DEGRADED", "CRITICAL"}:
-            reasons.append("clickhouse_unhealthy")
+        recorder_reason = self._recorder_reason()
+        if recorder_reason is not None:
+            reasons.append(recorder_reason)
 
         # Preserve first-cause ordering while preventing duplicates.
         return list(dict.fromkeys(reasons))
+
+    def _recorder_reason(self) -> str | None:
+        recorder_state = self._recorder_state()
+        if recorder_state == "DATA_LOSS":
+            # recorder_data_loss is non-auto-recoverable (latches until manual
+            # rearm), so a transient boot-time probe must not emit it.
+            if self._within_data_loss_boot_grace():
+                return None
+            return "recorder_data_loss"
+        if recorder_state in {"DEGRADED", "CRITICAL"}:
+            return "clickhouse_unhealthy"
+        return None
 
     def _feed_gap_s(self) -> float:
         # Prefer active-symbol-aware gap when md_service exposes it; falls back
@@ -207,6 +229,22 @@ class PlatformDegradeInputs:
         if self.metrics is None:
             return None
         return _metric_sample_value(self.metrics.wal_backlog_files, "wal_backlog_files")
+
+    def _within_data_loss_boot_grace(self) -> bool:
+        grace_s = self.recorder_data_loss_boot_grace_s
+        if grace_s <= 0.0:
+            return False
+        elapsed_s = timebase.now_s() - self._boot_ts_s
+        if elapsed_s >= grace_s:
+            return False
+        if not self._boot_grace_log_emitted:
+            self._boot_grace_log_emitted = True
+            logger.warning(
+                "recorder_data_loss_suppressed_boot_grace",
+                elapsed_s=round(elapsed_s, 1),
+                grace_s=grace_s,
+            )
+        return True
 
     def _recorder_state(self) -> str:
         health_fn = getattr(self.recorder, "get_health", None)

@@ -1,0 +1,79 @@
+# Alpha Candidate Loop v1 — split definition (spec §5/§7).
+# Explicit (day, symbol) pairs: front-month TXF per day, chosen as the
+# earliest-expiry contract WITH L2 NPZ data that day (expiry = 3rd Wednesday).
+# NOTE 2026-02-23/24 map to TXFD6 because TXFC6 has no exported NPZ those days.
+# Contiguous 60/20/20 day-count split over the 67-day 2026-01-26..2026-06-04 span.
+# data_version stamps the NPZ inventory generation; bump on re-export.
+split_definition_version: split_v1
+data_version: txf_l2_2026H1_v1
+splits:
+  train:
+    - {day: "2026-01-26", symbol: TXFB6}
+    - {day: "2026-01-27", symbol: TXFB6}
+    - {day: "2026-01-28", symbol: TXFB6}
+    - {day: "2026-01-29", symbol: TXFB6}
+    - {day: "2026-01-30", symbol: TXFB6}
+    - {day: "2026-02-03", symbol: TXFB6}
+    - {day: "2026-02-04", symbol: TXFB6}
+    - {day: "2026-02-05", symbol: TXFB6}
+    - {day: "2026-02-06", symbol: TXFB6}
+    - {day: "2026-02-23", symbol: TXFD6}
+    - {day: "2026-02-24", symbol: TXFD6}
+    - {day: "2026-02-25", symbol: TXFC6}
+    - {day: "2026-02-26", symbol: TXFC6}
+    - {day: "2026-03-03", symbol: TXFC6}
+    - {day: "2026-03-04", symbol: TXFC6}
+    - {day: "2026-03-05", symbol: TXFC6}
+    - {day: "2026-03-06", symbol: TXFC6}
+    - {day: "2026-03-09", symbol: TXFC6}
+    - {day: "2026-03-10", symbol: TXFC6}
+    - {day: "2026-03-11", symbol: TXFC6}
+    - {day: "2026-03-12", symbol: TXFC6}
+    - {day: "2026-03-13", symbol: TXFC6}
+    - {day: "2026-03-16", symbol: TXFC6}
+    - {day: "2026-03-17", symbol: TXFC6}
+    - {day: "2026-03-18", symbol: TXFC6}
+    - {day: "2026-03-19", symbol: TXFD6}
+    - {day: "2026-03-20", symbol: TXFD6}
+    - {day: "2026-03-23", symbol: TXFD6}
+    - {day: "2026-03-24", symbol: TXFD6}
+    - {day: "2026-03-26", symbol: TXFD6}
+    - {day: "2026-03-27", symbol: TXFD6}
+    - {day: "2026-03-30", symbol: TXFD6}
+    - {day: "2026-03-31", symbol: TXFD6}
+    - {day: "2026-04-01", symbol: TXFD6}
+    - {day: "2026-04-02", symbol: TXFD6}
+    - {day: "2026-04-07", symbol: TXFD6}
+    - {day: "2026-04-08", symbol: TXFD6}
+    - {day: "2026-04-09", symbol: TXFD6}
+    - {day: "2026-04-10", symbol: TXFD6}
+    - {day: "2026-04-13", symbol: TXFD6}
+  validation:
+    - {day: "2026-04-14", symbol: TXFD6}
+    - {day: "2026-04-15", symbol: TXFD6}
+    - {day: "2026-04-16", symbol: TXFE6}
+    - {day: "2026-04-17", symbol: TXFE6}
+    - {day: "2026-04-20", symbol: TXFE6}
+    - {day: "2026-04-21", symbol: TXFE6}
+    - {day: "2026-04-22", symbol: TXFE6}
+    - {day: "2026-04-24", symbol: TXFE6}
+    - {day: "2026-04-27", symbol: TXFE6}
+    - {day: "2026-04-28", symbol: TXFE6}
+    - {day: "2026-04-29", symbol: TXFE6}
+    - {day: "2026-04-30", symbol: TXFE6}
+    - {day: "2026-05-04", symbol: TXFE6}
+    - {day: "2026-05-05", symbol: TXFE6}
+  test:
+    - {day: "2026-05-06", symbol: TXFE6}
+    - {day: "2026-05-07", symbol: TXFE6}
+    - {day: "2026-05-08", symbol: TXFE6}
+    - {day: "2026-05-13", symbol: TXFE6}
+    - {day: "2026-05-14", symbol: TXFE6}
+    - {day: "2026-05-15", symbol: TXFE6}
+    - {day: "2026-05-18", symbol: TXFE6}
+    - {day: "2026-05-19", symbol: TXFE6}
+    - {day: "2026-05-20", symbol: TXFE6}
+    - {day: "2026-06-01", symbol: TXFF6}
+    - {day: "2026-06-02", symbol: TXFF6}
+    - {day: "2026-06-03", symbol: TXFF6}
+    - {day: "2026-06-04", symbol: TXFF6}

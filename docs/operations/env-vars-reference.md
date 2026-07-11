@@ -233,6 +233,7 @@ Shadow deployment note:
 |---|---|---|---|
 | `HFT_PLATFORM_AUTO_RECOVERY_ENABLED` | `1` | `1` = feed 相關 reduce-only 觸發清除後自動恢復 | 保守環境可設 `0` 維持純手動 |
 | `HFT_PLATFORM_AUTO_RECOVERY_COOLDOWN_S` | `60` | 所有觸發條件清除後等待秒數，確認穩定才恢復 | 過短可能造成 flapping |
+| `HFT_RECORDER_DATA_LOSS_BOOT_GRACE_S` | `60` | 開機後此秒數內暫不 latch `recorder_data_loss`（2026-06-18 boot-latch 事故：開機瞬態 DATA_LOSS 誤觸永久 reduce-only/HALT） | `0` = 停用（回到立即 latch）；真實 data loss 超過窗口仍會 latch |
 | `HFT_PLATFORM_REDUCE_ONLY_FEED_GAP_S` | `600` | Active-symbol-aware feed-gap 觸發 `feed_reconnect_unhealthy` 的秒數門檻；2026-04 由 120s 提升為 600s，配合 800 標的訂閱宇宙與 illiquid 期權容忍度 | 視訂閱集流動性調整；過低易在 night session 誤觸發 |
 
 重點：
@@ -257,6 +258,8 @@ Shadow deployment note:
 | `HFT_RECONNECT_COOLDOWN` | `60` | 重連冷卻秒數 | 避免頻繁重連 |
 | `HFT_RECONNECT_BACKOFF_S` | `5` | 初始重連退避延遲（秒） | 指數退避起始值 |
 | `HFT_RECONNECT_BACKOFF_MAX_S` | `120` | 最大重連退避延遲（秒） | 封頂避免過長等待 |
+| `HFT_LOGIN_CONNLIMIT_RETRIES` | `2` | broker 連線數上限（451）拒絕登入時的退避重試次數；0 = 停用（立即 fail-closed） | 重啟競態（session 未釋放）的耐受度；見 2026-06-21/22 failed-attempts |
+| `HFT_LOGIN_CONNLIMIT_BACKOFF_S` | `75` | 每次 451 退避重試前等待秒數（等 broker 釋放前一 session 的槽位） | 需大於 broker session 釋放窗口（約 60s） |
 | `HFT_QUOTE_FLAP_THRESHOLD` | `5` | 報價閃爍偵測：窗口內最大閃爍次數 | 超過則暫停訂閱 |
 | `HFT_QUOTE_FLAP_WINDOW_S` | `60` | 報價閃爍偵測窗口（秒） | 配合 threshold |
 | `HFT_QUOTE_FLAP_COOLDOWN_S` | `300` | 報價閃爍冷卻（秒） | 冷卻後自動重新訂閱 |

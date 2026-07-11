@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from hft_platform.config.symbols import write_contract_cache, write_symbols_yaml
@@ -181,6 +183,95 @@ def test_refresh_diff_logged(tmp_path: Path):
     assert "contracts_after" in diff
     assert "added_count" in diff
     assert "removed_count" in diff
+
+
+def test_refresh_rejects_stock_only_cache_when_previous_cache_has_derivatives(tmp_path: Path):
+    """A transient broker stock-only contract surface must not overwrite derivatives."""
+    cache_path = tmp_path / "contracts.json"
+    old_contracts = [
+        {"code": "2330", "exchange": "TSE", "type": "stock"},
+        {"code": "TXFF6", "exchange": "TAIFEX", "type": "future", "root": "TXF"},
+    ]
+    cache_path.write_text(json.dumps({"cache_version": 7, "contracts": old_contracts}), encoding="utf-8")
+
+    from hft_platform.feed_adapter.shioaji_client import ShioajiClient
+
+    with patch.object(ShioajiClient, "__init__", lambda self, *a, **kw: None):
+        client = ShioajiClient.__new__(ShioajiClient)
+        client._contract_cache_path = str(cache_path)
+        client._contract_refresh_status_path = str(tmp_path / "contract_refresh_status.json")
+        client._contract_refresh_running = True
+        client._contract_refresh_thread = None
+        client._contract_refresh_lock = threading.Lock()
+        client._contract_refresh_version = 0
+        client._contract_refresh_last_diff = {}
+        client._contract_refresh_resubscribe_policy = "diff"
+        client._contract_refresh_s = 3600.0
+        client.api = MagicMock()
+        client.metrics = None
+        client.config_path = str(tmp_path / "symbols.yaml")
+        client.logged_in = True
+        client.subscribed_codes = {"TXFF6"}
+        client.symbols = [{"code": "TXFF6", "exchange": "TAIFEX"}]
+        client._resubscribe_all = MagicMock()
+
+        client.api.Contracts.Stocks.TSE = [SimpleNamespace(code="2330", symbol="2330", name="TSMC")]
+        client.api.Contracts.Stocks.OTC = []
+        client.api.Contracts.Futures.keys.return_value = []
+        client.api.Contracts.Options.keys.return_value = []
+
+        with patch.object(client, "_ensure_contracts", return_value=True):
+            with patch.object(client, "_load_config") as load_config:
+                import structlog.testing
+
+                with structlog.testing.capture_logs() as logs:
+                    client._refresh_contracts_and_symbols()
+
+    data = json.loads(cache_path.read_text(encoding="utf-8"))
+    assert data["contracts"] == old_contracts
+    assert client._resubscribe_all.call_count == 0
+    assert load_config.call_count == 0
+    assert any(entry.get("event") == "contract_refresh_integrity_failed" for entry in logs)
+
+    status = json.loads((tmp_path / "contract_refresh_status.json").read_text(encoding="utf-8"))
+    assert status["result"] == "error"
+
+
+def test_contract_fetch_waits_until_shioaji_status_fetched():
+    """Shioaji fetch_contracts returns before the product file is fully loaded."""
+    from hft_platform.feed_adapter.shioaji.contracts_runtime import _wait_for_contract_fetch_complete
+
+    class Contracts:
+        def __init__(self) -> None:
+            self.statuses = ["FetchStatus.Fetching", "FetchStatus.Fetched"]
+
+        @property
+        def status(self) -> str:
+            if len(self.statuses) > 1:
+                return self.statuses.pop(0)
+            return self.statuses[0]
+
+    now = [0.0]
+    sleeps: list[float] = []
+
+    def monotonic() -> float:
+        return now[0]
+
+    def sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        now[0] += seconds
+
+    ok, status = _wait_for_contract_fetch_complete(
+        SimpleNamespace(Contracts=Contracts()),
+        timeout_s=5.0,
+        sleep_s=1.0,
+        monotonic_fn=monotonic,
+        sleep_fn=sleep,
+    )
+
+    assert ok is True
+    assert status == "FetchStatus.Fetched"
+    assert sleeps == [1.0]
 
 
 def test_contract_refresh_status_snapshot_written(tmp_path: Path):

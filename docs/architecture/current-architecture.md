@@ -26,7 +26,6 @@ Companion cluster backlog: `.agent/library/cluster-evolution-backlog.md`.
 3. Shared acceleration and infra
 
 - Rust extension: `rust_core` (PyO3) consumed by runtime hot paths.
-- Optional Rust strategy crate: `rust` (`rust_strategy`).
 - Storage/ops: ClickHouse, WAL, Prometheus/Grafana/Alertmanager, optional Redis.
 
 ## 2. Runtime Trading Planes
@@ -220,12 +219,7 @@ Status:
 - alpha classes and `AlphaStrategy`
 - shared memory ring buffer (`ShmRingBuffer`)
 
-2. `rust_strategy` crate (`rust/`)
-
-- exports `RLStrategy` and `RLParams`
-- currently no active Python runtime callsite under `src/hft_platform/*`
-
-3. Python call sites currently using Rust paths
+2. Python call sites currently using Rust paths
 
 - `src/hft_platform/feed_adapter/normalizer.py`
 - `src/hft_platform/feed_adapter/lob_engine.py`

@@ -3,7 +3,7 @@ from __future__ import annotations
 import warnings as _warnings_mod
 from dataclasses import asdict, dataclass, field
 from enum import Enum
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Mapping, Protocol, runtime_checkable
 
 # ---------------------------------------------------------------------------
 # SOP governance — canonical role and skill name registries.
@@ -39,6 +39,61 @@ VALID_SKILLS: frozenset[str] = frozenset(
 )
 
 DEFAULT_LATENCY_PROFILE = "sim_p95_v2026-02-26"
+
+EDGE_METRIC_SEMANTICS_SCHEMA = "edge_metric_semantics.v1"
+
+EDGE_METRIC_SOURCE_GATE = "edge_per_round_trip"
+EDGE_METRIC_SUPPORTING_GATES: tuple[str, ...] = (
+    "inventory_mtm",
+    "cost_uncertainty",
+    "force_flat_residual",
+    "min_sample_size",
+    "single_day_dominance",
+    "monthly_distribution",
+)
+
+
+def edge_metric_semantics(
+    supporting_gates_status: Mapping[str, str] | None = None,
+    validated: bool | None = None,
+) -> dict[str, Any]:
+    """Canonical semantics for goal §5 net edge artifacts.
+
+    Keep this small and machine-readable: experiment artifacts use it to
+    prove that ``mean_net_edge_pts_per_trade`` is a strict, cost-adjusted
+    completed-round-trip metric rather than a per-fill or open-inventory
+    average.
+
+    The descriptive fields are static. When the caller supplies
+    ``supporting_gates_status`` (a ``{gate_name: "pass" | "fail" | "absent"}``
+    map covering the source gate plus every supporting gate) and ``validated``,
+    they are embedded so the label carries *evidence* the supporting gates
+    actually passed rather than merely *listing* the gates that should run.
+    Without that evidence the label is descriptive only and downstream
+    leaderboards must not treat the edge as trustworthy.
+    """
+
+    semantics: dict[str, Any] = {
+        "schema": EDGE_METRIC_SEMANTICS_SCHEMA,
+        "metric": "mean_net_edge_pts_per_trade",
+        "source_gate": EDGE_METRIC_SOURCE_GATE,
+        "unit": "points_per_completed_round_trip",
+        "denominator": "completed_fifo_round_trips",
+        "numerator": "net_pnl_pts_after_costs",
+        "floor_pts": 10.0,
+        "floor_operator": ">",
+        "costs_included": True,
+        "residual_mtm_included": True,
+        "force_flat_policy": "session_end_force_flat_last_mid",
+        "supporting_gates": list(EDGE_METRIC_SUPPORTING_GATES),
+    }
+    if supporting_gates_status is not None:
+        semantics["supporting_gates_status"] = {
+            str(gate): str(status) for gate, status in supporting_gates_status.items()
+        }
+    if validated is not None:
+        semantics["validated"] = bool(validated)
+    return semantics
 
 
 class AlphaStatus(str, Enum):
@@ -248,6 +303,7 @@ class Scorecard:
     generator_script: str | None = None
     data_ul: int | None = None
     regime_ic: dict[str, float] = field(default_factory=dict)
+    edge_metric_semantics: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -280,6 +336,7 @@ class Scorecard:
             generator_script=str(data["generator_script"]) if data.get("generator_script") else None,
             data_ul=_to_optional_int(data.get("data_ul")),
             regime_ic={k: float(v) for k, v in dict(data.get("regime_ic", {})).items()},
+            edge_metric_semantics=_to_str_key_mapping(data.get("edge_metric_semantics")),
         )
 
 
@@ -299,6 +356,12 @@ def _to_optional_int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _to_str_key_mapping(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        return {}
+    return {str(k): v for k, v in value.items()}
 
 
 @runtime_checkable

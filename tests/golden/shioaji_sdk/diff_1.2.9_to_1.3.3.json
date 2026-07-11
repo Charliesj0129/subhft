@@ -1,0 +1,857 @@
+{
+  "changes": [
+    {
+      "after": {
+        "annotation": "bool",
+        "default": false,
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "bind"
+      },
+      "before": null,
+      "classification": "ADDITIVE",
+      "cls": "Quote",
+      "kind": "param_added",
+      "method": "set_on_quote_fop_v1_callback",
+      "param": "bind",
+      "platform_used": false,
+      "qualname": "Quote.set_on_quote_fop_v1_callback(bind)",
+      "remediation": "",
+      "required": false,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": "Account",
+        "default": null,
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "account"
+      },
+      "before": null,
+      "classification": "ADDITIVE",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "account_balance",
+      "param": "account",
+      "platform_used": false,
+      "qualname": "Shioaji.account_balance(account)",
+      "remediation": "",
+      "required": false,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": "Callable[[Watchlist], None]",
+        "default": null,
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "cb"
+      },
+      "before": null,
+      "classification": "ADDITIVE",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "create_watchlist",
+      "param": "cb",
+      "platform_used": false,
+      "qualname": "Shioaji.create_watchlist(cb)",
+      "remediation": "",
+      "required": false,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": "list[Contract]",
+        "default": null,
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "contracts"
+      },
+      "before": null,
+      "classification": "ADDITIVE",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "create_watchlist",
+      "param": "contracts",
+      "platform_used": false,
+      "qualname": "Shioaji.create_watchlist(contracts)",
+      "remediation": "",
+      "required": false,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": "int",
+        "default": 5000,
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "timeout"
+      },
+      "before": null,
+      "classification": "ADDITIVE",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "create_watchlist",
+      "param": "timeout",
+      "platform_used": false,
+      "qualname": "Shioaji.create_watchlist(timeout)",
+      "remediation": "",
+      "required": false,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": "Callable[[Watchlist], None]",
+        "default": null,
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "cb"
+      },
+      "before": null,
+      "classification": "ADDITIVE",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "delete_watchlist",
+      "param": "cb",
+      "platform_used": false,
+      "qualname": "Shioaji.delete_watchlist(cb)",
+      "remediation": "",
+      "required": false,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": "int",
+        "default": 5000,
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "timeout"
+      },
+      "before": null,
+      "classification": "ADDITIVE",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "delete_watchlist",
+      "param": "timeout",
+      "platform_used": false,
+      "qualname": "Shioaji.delete_watchlist(timeout)",
+      "remediation": "",
+      "required": false,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": "Callable[[list[Watchlist]], None]",
+        "default": null,
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "cb"
+      },
+      "before": null,
+      "classification": "ADDITIVE",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "fetch_watchlists",
+      "param": "cb",
+      "platform_used": false,
+      "qualname": "Shioaji.fetch_watchlists(cb)",
+      "remediation": "",
+      "required": false,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": "int",
+        "default": 5000,
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "timeout"
+      },
+      "before": null,
+      "classification": "ADDITIVE",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "fetch_watchlists",
+      "param": "timeout",
+      "platform_used": false,
+      "qualname": "Shioaji.fetch_watchlists(timeout)",
+      "remediation": "",
+      "required": false,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": "Callable[[Watchlist], None]",
+        "default": null,
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "cb"
+      },
+      "before": null,
+      "classification": "ADDITIVE",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "get_watchlist",
+      "param": "cb",
+      "platform_used": false,
+      "qualname": "Shioaji.get_watchlist(cb)",
+      "remediation": "",
+      "required": false,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": "int",
+        "default": 5000,
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "timeout"
+      },
+      "before": null,
+      "classification": "ADDITIVE",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "get_watchlist",
+      "param": "timeout",
+      "platform_used": false,
+      "qualname": "Shioaji.get_watchlist(timeout)",
+      "remediation": "",
+      "required": false,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": "bool",
+        "default": false,
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "bind"
+      },
+      "before": null,
+      "classification": "ADDITIVE",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "on_quote_fop_v1",
+      "param": "bind",
+      "platform_used": false,
+      "qualname": "Shioaji.on_quote_fop_v1(bind)",
+      "remediation": "",
+      "required": false,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": "Callable[[Watchlist], None]",
+        "default": null,
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "cb"
+      },
+      "before": null,
+      "classification": "ADDITIVE",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "sync_watchlist",
+      "param": "cb",
+      "platform_used": false,
+      "qualname": "Shioaji.sync_watchlist(cb)",
+      "remediation": "",
+      "required": false,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": "int",
+        "default": 5000,
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "timeout"
+      },
+      "before": null,
+      "classification": "ADDITIVE",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "sync_watchlist",
+      "param": "timeout",
+      "platform_used": false,
+      "qualname": "Shioaji.sync_watchlist(timeout)",
+      "remediation": "",
+      "required": false,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": "present",
+      "before": "absent",
+      "classification": "ADDITIVE",
+      "cls": "Shioaji",
+      "kind": "method_added",
+      "method": "trading_limits",
+      "platform_used": false,
+      "qualname": "Shioaji.trading_limits",
+      "remediation": "",
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": "Callable[[Watchlist], None]",
+        "default": null,
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "cb"
+      },
+      "before": null,
+      "classification": "ADDITIVE",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "watchlist_add_contract",
+      "param": "cb",
+      "platform_used": false,
+      "qualname": "Shioaji.watchlist_add_contract(cb)",
+      "remediation": "",
+      "required": false,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": "int",
+        "default": 5000,
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "timeout"
+      },
+      "before": null,
+      "classification": "ADDITIVE",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "watchlist_add_contract",
+      "param": "timeout",
+      "platform_used": false,
+      "qualname": "Shioaji.watchlist_add_contract(timeout)",
+      "remediation": "",
+      "required": false,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": "Callable[[Watchlist], None]",
+        "default": null,
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "cb"
+      },
+      "before": null,
+      "classification": "ADDITIVE",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "watchlist_delete_contract",
+      "param": "cb",
+      "platform_used": false,
+      "qualname": "Shioaji.watchlist_delete_contract(cb)",
+      "remediation": "",
+      "required": false,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": "int",
+        "default": 5000,
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "timeout"
+      },
+      "before": null,
+      "classification": "ADDITIVE",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "watchlist_delete_contract",
+      "param": "timeout",
+      "platform_used": false,
+      "qualname": "Shioaji.watchlist_delete_contract(timeout)",
+      "remediation": "",
+      "required": false,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "default": 0,
+        "has_default": true,
+        "required": false,
+        "type": "int"
+      },
+      "before": null,
+      "classification": "ADDITIVE",
+      "kind": "field_added",
+      "model": "CreditEnquire",
+      "platform_used": false,
+      "qualname": "CreditEnquire.margin_loan_ratio",
+      "remediation": "",
+      "section": "model",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "default": 0,
+        "has_default": true,
+        "required": false,
+        "type": "int"
+      },
+      "before": null,
+      "classification": "ADDITIVE",
+      "kind": "field_added",
+      "model": "CreditEnquire",
+      "platform_used": false,
+      "qualname": "CreditEnquire.short_margin_ratio",
+      "remediation": "",
+      "section": "model",
+      "shimmable": false
+    },
+    {
+      "after": "present",
+      "before": "absent",
+      "classification": "ADDITIVE",
+      "kind": "model_added",
+      "model": "QuoteFOPv1",
+      "platform_used": false,
+      "qualname": "QuoteFOPv1",
+      "remediation": "",
+      "section": "model",
+      "shimmable": false
+    },
+    {
+      "after": "present",
+      "before": "absent",
+      "classification": "ADDITIVE",
+      "kind": "model_added",
+      "model": "TradingLimits",
+      "platform_used": false,
+      "qualname": "TradingLimits",
+      "remediation": "",
+      "section": "model",
+      "shimmable": false
+    },
+    {
+      "after": [
+        "QuoteFOPv1",
+        "TradingLimits",
+        "Watchlist"
+      ],
+      "before": [],
+      "classification": "INFORMATIONAL",
+      "kind": "compiled_attrs_changed",
+      "platform_used": false,
+      "qualname": "shioaji.backend.solace.api.module_attrs",
+      "remediation": "",
+      "section": "compiled",
+      "shimmable": false
+    },
+    {
+      "after": [
+        "QuoteFOPv1"
+      ],
+      "before": [],
+      "classification": "INFORMATIONAL",
+      "kind": "compiled_attrs_changed",
+      "platform_used": false,
+      "qualname": "shioaji.backend.solace.quote.module_attrs",
+      "remediation": "",
+      "section": "compiled",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": "Callable[[Exchange, QuoteFOPv1], None]",
+        "default": "<empty>",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "func"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Quote",
+      "kind": "param_added",
+      "method": "set_on_quote_fop_v1_callback",
+      "param": "func",
+      "platform_used": false,
+      "qualname": "Quote.set_on_quote_fop_v1_callback(func)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "self"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Quote",
+      "kind": "param_added",
+      "method": "set_on_quote_fop_v1_callback",
+      "param": "self",
+      "platform_used": false,
+      "qualname": "Quote.set_on_quote_fop_v1_callback(self)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": "str",
+        "default": "<empty>",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "name"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "create_watchlist",
+      "param": "name",
+      "platform_used": false,
+      "qualname": "Shioaji.create_watchlist(name)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "self"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "create_watchlist",
+      "param": "self",
+      "platform_used": false,
+      "qualname": "Shioaji.create_watchlist(self)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": "str",
+        "default": "<empty>",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "group_id"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "delete_watchlist",
+      "param": "group_id",
+      "platform_used": false,
+      "qualname": "Shioaji.delete_watchlist(group_id)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "self"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "delete_watchlist",
+      "param": "self",
+      "platform_used": false,
+      "qualname": "Shioaji.delete_watchlist(self)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "self"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "fetch_watchlists",
+      "param": "self",
+      "platform_used": false,
+      "qualname": "Shioaji.fetch_watchlists(self)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": "str",
+        "default": "<empty>",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "group_id"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "get_watchlist",
+      "param": "group_id",
+      "platform_used": false,
+      "qualname": "Shioaji.get_watchlist(group_id)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "self"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "get_watchlist",
+      "param": "self",
+      "platform_used": false,
+      "qualname": "Shioaji.get_watchlist(self)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "self"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "on_quote_fop_v1",
+      "param": "self",
+      "platform_used": false,
+      "qualname": "Shioaji.on_quote_fop_v1(self)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": "list[Contract]",
+        "default": "<empty>",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "contracts"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "sync_watchlist",
+      "param": "contracts",
+      "platform_used": false,
+      "qualname": "Shioaji.sync_watchlist(contracts)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": "str",
+        "default": "<empty>",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "group_id"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "sync_watchlist",
+      "param": "group_id",
+      "platform_used": false,
+      "qualname": "Shioaji.sync_watchlist(group_id)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "self"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "sync_watchlist",
+      "param": "self",
+      "platform_used": false,
+      "qualname": "Shioaji.sync_watchlist(self)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": "list[Contract]",
+        "default": "<empty>",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "contracts"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "watchlist_add_contract",
+      "param": "contracts",
+      "platform_used": false,
+      "qualname": "Shioaji.watchlist_add_contract(contracts)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": "str",
+        "default": "<empty>",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "group_id"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "watchlist_add_contract",
+      "param": "group_id",
+      "platform_used": false,
+      "qualname": "Shioaji.watchlist_add_contract(group_id)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "self"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "watchlist_add_contract",
+      "param": "self",
+      "platform_used": false,
+      "qualname": "Shioaji.watchlist_add_contract(self)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": "list[Contract]",
+        "default": "<empty>",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "contracts"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "watchlist_delete_contract",
+      "param": "contracts",
+      "platform_used": false,
+      "qualname": "Shioaji.watchlist_delete_contract(contracts)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": "str",
+        "default": "<empty>",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "group_id"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "watchlist_delete_contract",
+      "param": "group_id",
+      "platform_used": false,
+      "qualname": "Shioaji.watchlist_delete_contract(group_id)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "self"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "watchlist_delete_contract",
+      "param": "self",
+      "platform_used": false,
+      "qualname": "Shioaji.watchlist_delete_contract(self)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    }
+  ],
+  "counts": {
+    "additive": 23,
+    "behavioral": 0,
+    "benign": 19,
+    "breaking_other": 0,
+    "breaking_platform": 0,
+    "informational": 2
+  },
+  "from": "1.2.9",
+  "from_sha256": "8710c435c2088db97648948d8b94576295471eaf1eb133a495859902df92c0a2",
+  "generated_by": "scripts/shioaji_api_diff",
+  "to": "1.3.3",
+  "to_sha256": "87d24a751cf8fb8d49045380bac90c9e3bf09492bfbbaef5be4ca0f9c2c4c7e0",
+  "verdict": "SAFE"
+}

@@ -44,12 +44,28 @@ Make commits that are easy to review and safe to ship:
      - footer (BREAKING CHANGE) if needed
    - Prefer an editor for multi-line messages: `git commit -v`
    - Use `references/commit-message-template.md` if helpful.
-7) Run the smallest relevant verification
-   - Run the repo's fastest meaningful check (unit tests, lint, or build) before moving on.
-8) Repeat for the next commit until the working tree is clean
+7) Fill in the blast-radius validation row (required — not prose, a filled row)
+   Name which row the staged change is, tick its checks BEFORE committing
+   (source: CLAUDE.md §Validation Requirements). A commit spanning rows takes
+   the strictest applicable row.
+
+   | Row | Required before commit |
+   |---|---|
+   | docs-only | every referenced path exists (`rg --files`); diff review; `make agent-docs-check` if agent docs touched |
+   | bug fix | focused regression test that fails before / passes after (break-probe) |
+   | code+test (non-hot-path) | focused tests green; ruff/format clean; mypy clean in changed files |
+   | hot path / shared contract | targeted tests PLUS scaled-int, monotonic-time, fail-closed, state-transition checks; benchmark if latency-relevant |
+   | broker/adapter | protocol conformance tests + `make shioaji-guard` |
+   | research evidence | verdict artifacts append-only; `alpha:` type; pre-registered floors untouched |
+   | merge-level | `make check` minimum; `make ci` for merge confidence |
+
+8) Repeat for the next commit until the working tree is clean (or intentionally dirty)
 
 ## Deliverable
 Provide:
 - the final commit message(s)
 - a short summary per commit (what/why)
 - the commands used to stage/review (at minimum: `git diff --cached`, plus any tests run)
+- the blast-radius row used per commit, and — MANDATORY, never omitted — an
+  explicit **"Checks NOT run"** list (empty is stated as "none"); a commit
+  report without it is incomplete

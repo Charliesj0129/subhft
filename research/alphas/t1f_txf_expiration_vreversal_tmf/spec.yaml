@@ -1,0 +1,82 @@
+strategy_name: t1f_txf_expiration_vreversal_tmf
+market: TAIFEX
+instrument: TMF front-quarter futures, triggered by TXF front-quarter futures
+
+hypothesis: >
+  On a contract's final settlement day (3rd Wednesday), index-futures basis
+  convergence and arbitrage unwinding tend to drive a directional thrust early
+  in the session that partially mean-reverts (a "V" / inverted-V) into the
+  settlement. Fade the early thrust (thrust up -> short, thrust down -> long).
+  The edge source is settlement-day overreaction / partial reversal, not L2
+  microstructure lead-lag, and not a continuation signal (T1-D intraday
+  momentum KILL showed open->close is reversal-signed). This is H3 from the
+  2026-06-03 paper x data menu.
+
+timeframe: 60m
+holding_period: 15m/30m/60m intraday horizons; headline V0 horizon is 30m (entry ~10:15)
+frequency_class: minute
+
+entry_rule: >
+  Settlement day ONLY. Construct the thrust endogenously: displacement = TXF mid
+  at the thrust-window end (open + 90 minutes) minus the session-open mid.
+  Require abs(displacement) >= 20 TXF points (outsized early thrust). Direction
+  = FADE = -sign(displacement). Enter at the thrust-window end (~10:15). TMF
+  entry uses the executable ask for long and executable bid for short at or
+  after the entry time.
+
+exit_rule: >
+  Exit on the executable opposite TMF side at 15m, 30m, and 60m horizons for V0
+  scoring; headline horizon is 30m. Stop structure = thrust extends past its
+  in-window extreme by a 15-point buffer (continuation against the fade, i.e. no
+  reversal); stop_structure_breached records when the post-entry TXF path
+  touches it. No holding past the settlement-day close (13:30) is allowed in V0.
+
+position_sizing: fixed 1 lot per event; one entry per settlement day; no scaling, pyramiding, or re-entry
+
+risk_control:
+  max_position: 1
+  max_drawdown_pts: 80
+  force_flat_rule: V0 time-horizon exit only; any future live stage must inherit platform force-flat
+  one_entry_per_settlement_day: true
+  thrust_continuation_stop_pts: 15
+  invalid_quote_guard: require reconstructed BBO bid < ask with positive quantities
+
+cost_model:
+  fee_bps: 0.0
+  tax_bps: 0.0
+  slippage_pts: 8.0
+  latency_profile: v0_latency_deferred_not_promotion_eligible
+  round_trip_cost_pts: 8.0
+  notes: >
+    V0 deducts an 8-point conservative round-trip operating-envelope cost on
+    top of executable TMF bid/ask spread. This aggregate field is intentionally
+    promotion-blocking until Gate C replaces it with a governed latency and
+    cost profile that separately accounts for fee, tax, slippage, spread,
+    latency adverse selection, force-flat cost, and residual inventory MtM.
+
+validation_plan:
+  data_range: 2026-01-26..2026-04-15
+  oos_split: recency split; OOS begins 2026-04-01
+  sample_targets:
+    min_round_trips: 80
+    min_oos_trading_days: 20
+  required_gates:
+    - min_sample_size
+    - edge_per_round_trip
+    - cost_uncertainty
+    - inventory_mtm
+    - force_flat_residual
+    - single_day_dominance
+    - monthly_distribution
+    - replay_parity
+  net_edge_floor_pts: 10.0
+  verdicts:
+    - PROCEED
+    - KILL
+    - NEEDS-MORE-DAYS
+  promotion_blockers:
+    - v0_latency_profile_deferred
+    - no_governed_mean_net_edge_pts_per_trade_artifact_yet
+    - no_replay_paper_live_parity_evidence_yet
+    - structural_sample_blocker_one_settlement_per_contract_month
+    - thrust_window_and_min_thrust_not_walk_forward_calibrated

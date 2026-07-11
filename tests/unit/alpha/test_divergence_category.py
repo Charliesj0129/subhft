@@ -102,27 +102,24 @@ class TestClassifyField:
             "timestamp_us",
             "decision_price",
             "price_type",
-            # Round 15 optional parity fields (goal §7).  Emitted only
-            # when the source intent carries a non-None value — but if
-            # they ever do appear in a histogram, they must classify
-            # rather than slip into UNKNOWN.
-            "session_phase",
-            "risk_filter_active",
-            "force_flat_triggered",
+            # R7 (2026-06-04): the three optional §7 fields are no longer
+            # emitted into the digest (_OPTIONAL_PARITY_FIELDS is empty), so
+            # they are not asserted here. session_phase keeps a ready mapping
+            # for when a future hft.order_intents column makes it comparable.
         }
         for field in known:
             assert classify_field(field) is not DivergenceCategory.UNKNOWN, (
                 f"{field!r} fell into UNKNOWN — update mapping"
             )
 
-    def test_round15_parity_fields_route_to_correct_category(self) -> None:
-        # Direct exact-match assertion (Round 15 adds these to
-        # _FIELD_TO_CATEGORY).  The Round-14 prefix table would also
-        # route them, but the contract is explicit at exact-match
-        # status, so guard against accidental demotion.
+    def test_session_phase_routes_to_session_phase_filter(self) -> None:
+        # R7: session_phase keeps an explicit exact mapping (ready for when it
+        # becomes comparable). risk_filter_active no longer has an exact entry
+        # but still routes via the ``risk_`` prefix. force_flat_triggered was
+        # dropped entirely — force-flat parity is covered by intent_type.
         assert classify_field("session_phase") is DivergenceCategory.SESSION_PHASE_FILTER
         assert classify_field("risk_filter_active") is DivergenceCategory.RISK_FILTER
-        assert classify_field("force_flat_triggered") is DivergenceCategory.RISK_FILTER
+        assert classify_field("force_flat_triggered") is DivergenceCategory.UNKNOWN
 
 
 class TestCategorizeHistogram:

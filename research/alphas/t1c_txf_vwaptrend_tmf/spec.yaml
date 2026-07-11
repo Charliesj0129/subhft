@@ -1,0 +1,83 @@
+strategy_name: t1c_txf_vwaptrend_tmf
+market: TAIFEX
+instrument: TMF front-quarter futures, triggered by TXF front-quarter futures
+
+hypothesis: >
+  Within the day session a directional VWAP-trend / session imbalance persists:
+  when the TXF mid has stayed predominantly on one side of the cumulative session
+  trade VWAP and a pullback toward VWAP FAILS to reclaim it (does not cross to the
+  other side), the trend continues. Trade in the trend direction (mid above VWAP
+  -> long, below -> short). The edge source is session-VWAP-trend persistence /
+  failed-reclaim continuation, not L2 microstructure lead-lag and not mean
+  reversion. This is the third frozen Track-T1 candidate (track_t1_opened
+  2026-05-13: "VWAP trend / session imbalance / failed VWAP reclaim").
+
+timeframe: 60m
+holding_period: 15m/30m/60m intraday horizons; headline V0 horizon is 30m
+frequency_class: minute
+
+entry_rule: >
+  Slide an anchor across the 08:45-13:45 day session (5-minute step). At each
+  anchor take the cumulative session trade VWAP as the fair-value reference and
+  the TXF mid as the price. Require: (1) abs(mid - VWAP) >= 15 TXF points
+  (displaced), (2) >= 80% of the trailing 60-minute window mids on the trend side
+  of VWAP (persistent imbalance), (3) a failed reclaim = the window touched within
+  5 points of VWAP but never crossed past it onto the counter-trend side.
+  Direction = sign(mid - VWAP) (continuation). Enter at the anchor. TMF entry uses
+  the executable ask for long and executable bid for short at or after the anchor.
+  A 60-minute cooldown enforces no overlapping entries.
+
+exit_rule: >
+  Exit on the executable opposite TMF side at 15m, 30m, and 60m horizons for V0
+  scoring; headline horizon is 30m. Stop structure = VWAP reclaim: price crosses
+  back through the anchor VWAP by a 15-point buffer (continuation thesis refuted);
+  stop_structure_breached records when the post-entry TXF path touches it.
+
+position_sizing: fixed 1 lot per event; no scaling, pyramiding, or re-entry within cooldown
+
+risk_control:
+  max_position: 1
+  max_drawdown_pts: 80
+  force_flat_rule: V0 time-horizon exit only; any future live stage must inherit platform force-flat
+  no_overlap_cooldown_minutes: 60
+  vwap_reclaim_stop_pts: 15
+  invalid_quote_guard: require reconstructed BBO bid < ask with positive quantities
+
+cost_model:
+  fee_bps: 0.0
+  tax_bps: 0.0
+  slippage_pts: 8.0
+  latency_profile: v0_latency_deferred_not_promotion_eligible
+  round_trip_cost_pts: 8.0
+  notes: >
+    V0 deducts an 8-point conservative round-trip operating-envelope cost on
+    top of executable TMF bid/ask spread. This aggregate field is intentionally
+    promotion-blocking until Gate C replaces it with a governed latency and
+    cost profile that separately accounts for fee, tax, slippage, spread,
+    latency adverse selection, force-flat cost, and residual inventory MtM.
+
+validation_plan:
+  data_range: 2026-01-26..2026-05-08
+  oos_split: recency split; OOS begins 2026-04-01
+  sample_targets:
+    min_round_trips: 80
+    min_oos_trading_days: 20
+  required_gates:
+    - min_sample_size
+    - edge_per_round_trip
+    - cost_uncertainty
+    - inventory_mtm
+    - force_flat_residual
+    - single_day_dominance
+    - monthly_distribution
+    - replay_parity
+  net_edge_floor_pts: 10.0
+  verdicts:
+    - PROCEED
+    - KILL
+    - NEEDS-MORE-DAYS
+  promotion_blockers:
+    - v0_latency_profile_deferred
+    - no_governed_mean_net_edge_pts_per_trade_artifact_yet
+    - no_replay_paper_live_parity_evidence_yet
+    - trend_window_min_trend_side_fraction_and_reclaim_tolerance_not_walk_forward_calibrated

@@ -132,3 +132,15 @@ class TestAutonomyTransitionMetricLabels:
             to_mode="STRATEGY_QUARANTINED",
             reason="strategy_exception",
         )
+
+
+class TestIncidentReasonCodesAreKnown:
+    """Regression for the 2026-06-18 boot-latch incident: the transition metric
+    recorded reason="unknown" while structured logs carried the real reason,
+    because these first-class reasons were missing from the allowlist."""
+
+    def test_recorder_data_loss_is_a_known_reason_code(self) -> None:
+        assert _reason_code_for_metrics("recorder_data_loss") == "recorder_data_loss"
+
+    def test_restored_from_runtime_state_is_a_known_reason_code(self) -> None:
+        assert _reason_code_for_metrics("restored_from_runtime_state") == "restored_from_runtime_state"

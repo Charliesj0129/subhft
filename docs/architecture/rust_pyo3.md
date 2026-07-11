@@ -77,10 +77,6 @@ Scope: Actual boundary between Python runtime and Rust extensions in this reposi
 **Record Mapping / Backtest / Time Utilities**:
 - Additional functions from `record_mapper.rs`, `backtest_kernels.rs`, `timeutil.rs`
 
-### 1.2 `rust_strategy` (from `rust/src/lib.rs`)
-- Classes: `RLStrategy`, `RLParams`
-- Note: no active import under `src/hft_platform/*` in current codebase
-
 ## 2. Python Call Sites (Current)
 
 1. **Market data normalization path**
@@ -142,15 +138,9 @@ Scope: Actual boundary between Python runtime and Rust extensions in this reposi
 uv run maturin develop --manifest-path rust_core/Cargo.toml
 ```
 
-2. Build `rust_strategy`
-```bash
-uv run maturin develop --manifest-path rust/Cargo.toml
-```
-
-3. Quick verification
+2. Quick verification
 ```bash
 python -c "import hft_platform.rust_core as rc; print(hasattr(rc, 'FastRingBuffer'))"
-python -c "import rust_strategy as rs; print(hasattr(rs, 'RLStrategy'))"
 ```
 
 ## 5. Boundary Rules for This Repo

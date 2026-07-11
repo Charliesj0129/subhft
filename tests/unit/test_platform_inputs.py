@@ -19,6 +19,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from hft_platform.core import timebase
 from hft_platform.ops.platform_inputs import (
     PlatformDegradeInputs,
     _metric_sample_value,
@@ -604,6 +605,52 @@ class TestReduceOnlyReasons:
             tb.now_s.return_value = self._now()
             reasons = inp.reduce_only_reasons()
         assert len(reasons) == len(set(reasons))
+
+
+class TestRecorderDataLossBootGrace:
+    """Boot grace-period for recorder_data_loss (2026-06-18 incident): a
+    transient DATA_LOSS probe seconds after engine boot must not latch the
+    non-auto-recoverable reduce-only/HALT reason. Real data loss still latches
+    once the grace window elapses. The library default (0.0) preserves the
+    original immediate-latch behavior; production opts in via bootstrap."""
+
+    def test_default_zero_grace_latches_immediately(self) -> None:
+        inp = _make_inputs(recorder_state="DATA_LOSS")
+        assert inp.recorder_data_loss_boot_grace_s == 0.0
+        assert "recorder_data_loss" in inp.reduce_only_reasons()
+
+    def test_data_loss_suppressed_within_boot_grace(self) -> None:
+        inp = _make_inputs(recorder_state="DATA_LOSS")
+        inp.recorder_data_loss_boot_grace_s = 60.0  # _boot_ts_s is fresh
+        reasons = inp.reduce_only_reasons()
+        assert "recorder_data_loss" not in reasons
+        assert "clickhouse_unhealthy" not in reasons
+
+    def test_data_loss_latches_after_grace_expires(self) -> None:
+        inp = _make_inputs(recorder_state="DATA_LOSS")
+        inp.recorder_data_loss_boot_grace_s = 60.0
+        inp._boot_ts_s = timebase.now_s() - 61.0
+        assert "recorder_data_loss" in inp.reduce_only_reasons()
+
+    def test_degraded_state_not_affected_by_grace(self) -> None:
+        # Grace applies only to the DATA_LOSS HALT reason; clickhouse_unhealthy
+        # stays immediate (it is auto-recoverable, so no latch risk).
+        inp = _make_inputs(recorder_state="DEGRADED")
+        inp.recorder_data_loss_boot_grace_s = 60.0
+        assert "clickhouse_unhealthy" in inp.reduce_only_reasons()
+
+    def test_configure_thresholds_wires_boot_grace(self) -> None:
+        inp = _make_inputs()
+        inp.configure_thresholds(
+            feed_gap_threshold_s=30.0,
+            reconnect_pending_threshold_s=10.0,
+            reconnect_flap_budget=3,
+            queue_depth_threshold=1000,
+            rss_threshold_mb=512,
+            wal_backlog_files_threshold=50,
+            recorder_data_loss_boot_grace_s=45.0,
+        )
+        assert inp.recorder_data_loss_boot_grace_s == 45.0
 
 
 # ---------------------------------------------------------------------------

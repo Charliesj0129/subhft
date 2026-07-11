@@ -13,7 +13,9 @@ reached" critical log.
 
 from __future__ import annotations
 
+import json
 import os
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from hft_platform.feed_adapter.shioaji.client import ShioajiClient
@@ -52,6 +54,13 @@ def _refresh(client):
     return a fabricated wide universe (simulating the 478-vs-shard mismatch),
     and observes whether ``write_symbols_yaml`` is invoked.
     """
+    cache = Path(client.config_path).with_name("contracts.json")
+    cache.write_text(
+        json.dumps({"cache_version": 1, "contracts": [{"code": "2330", "exchange": "TSE", "type": "stock"}]}),
+        encoding="utf-8",
+    )
+    client._contract_cache_path = str(cache)
+
     rebuilt = [{"code": f"FAKE{i}", "exchange": "TSE", "product_type": "stock"} for i in range(50)]
     build_result = MagicMock(symbols=rebuilt, errors=[])
 

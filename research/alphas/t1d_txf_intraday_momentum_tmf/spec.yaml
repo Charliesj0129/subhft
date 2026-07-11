@@ -1,0 +1,77 @@
+strategy_name: t1d_txf_intraday_momentum_tmf
+market: TAIFEX
+instrument: TMF front-quarter futures, triggered by TXF front-quarter futures
+
+hypothesis: >
+  The TXF return over the first 30-minute window of the day session
+  (08:45-09:15) predicts the last 30-minute window return (13:15-13:45) with
+  the same sign: directional positioning established early in the session
+  re-asserts into the close. The edge source is session-structure intraday
+  momentum (Gao, Han, Li, Zhou, JFE 2018), not L2 microstructure lead-lag.
+
+timeframe: 60m
+holding_period: 15m/30m/60m intraday horizons; headline V0 horizon is 30m (entry 13:15, exit 13:45)
+frequency_class: minute
+
+entry_rule: >
+  Compute ret_open = TXF mid at the open-window close minus TXF mid at session
+  open over 08:45-09:15. Require abs(ret_open) >= 10 TXF points using
+  backward-looking mid prices only (an absolute magnitude filter, not a
+  cross-day percentile, so no look-ahead). Direction = sign(ret_open). At
+  13:15, require entry aligned with session trade VWAP (long: TXF entry_ref >
+  VWAP; short: entry_ref < VWAP) when TXF trades are available. TMF entry uses
+  the executable ask for long and executable bid for short at or after 13:15.
+
+exit_rule: >
+  Exit on the executable opposite TMF side at 15m, 30m, and 60m horizons for
+  V0 scoring; the 30m horizon is session close (13:45). Record whether the
+  post-entry TXF path touches the opposite side of the open-window range
+  (a full give-back of the morning move) as stop_structure_breached. No
+  overnight holding is allowed in V0.
+
+position_sizing: fixed 1 lot per event; one entry per contract-day; no scaling, pyramiding, or re-entry
+
+risk_control:
+  max_position: 1
+  max_drawdown_pts: 80
+  force_flat_rule: V0 time-horizon exit only; any future live stage must inherit platform force-flat
+  one_entry_per_day: true
+  invalid_quote_guard: require reconstructed BBO bid < ask with positive quantities
+
+cost_model:
+  fee_bps: 0.0
+  tax_bps: 0.0
+  slippage_pts: 8.0
+  latency_profile: v0_latency_deferred_not_promotion_eligible
+  round_trip_cost_pts: 8.0
+  notes: >
+    V0 deducts an 8-point conservative round-trip operating-envelope cost on
+    top of executable TMF bid/ask spread. This aggregate field is intentionally
+    promotion-blocking until Gate C replaces it with a governed latency and
+    cost profile that separately accounts for fee, tax, slippage, spread,
+    latency adverse selection, force-flat cost, and residual inventory MtM.
+
+validation_plan:
+  data_range: 2026-01-26..2026-04-15
+  oos_split: recency split; OOS begins 2026-03-26
+  sample_targets:
+    min_round_trips: 80
+    min_oos_trading_days: 20
+  required_gates:
+    - min_sample_size
+    - edge_per_round_trip
+    - cost_uncertainty
+    - inventory_mtm
+    - force_flat_residual
+    - single_day_dominance
+    - monthly_distribution
+    - replay_parity
+  net_edge_floor_pts: 10.0
+  verdicts:
+    - PROCEED
+    - KILL
+    - NEEDS-MORE-DAYS
+  promotion_blockers:
+    - v0_latency_profile_deferred
+    - no_governed_mean_net_edge_pts_per_trade_artifact_yet
+    - no_replay_paper_live_parity_evidence_yet

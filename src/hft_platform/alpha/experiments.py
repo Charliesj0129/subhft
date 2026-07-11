@@ -11,7 +11,7 @@ Each run is stored as a directory under ``base_dir/runs/<run_id>/`` containing:
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -26,6 +26,45 @@ logger = get_logger("alpha.experiments")
 
 DEFAULT_PAPER_SESSION_MINUTES = 60
 LEGACY_ZERO_DURATION_FALLBACK_SECONDS = DEFAULT_PAPER_SESSION_MINUTES * 60
+EDGE_METRIC_NAME = "mean_net_edge_pts_per_trade"
+RESEARCH_DECISION_STATUSES = frozenset(
+    {
+        "keep",
+        "failed",
+        "kill",
+        "promising",
+        "needs_more_sample",
+        "inconclusive",
+        "blocked_by_parity",
+        "blocked_by_risk",
+        "blocked_by_audit",
+    }
+)
+GATE_C_SAMPLE_TRIAGE_STATUSES = frozenset(
+    {
+        "sample_promising",
+        "sample_needs_more_sample",
+        "sample_inconclusive",
+    }
+)
+GATE_C_FAILURE_DECISION_BY_NAME = {
+    "replay_parity": "blocked_by_parity",
+    "monthly_distribution": "blocked_by_risk",
+    "trade_concentration": "blocked_by_risk",
+    "max_drawdown": "blocked_by_risk",
+    "data_ul": "blocked_by_audit",
+    "spec_provenance": "blocked_by_audit",
+    "cost_model": "blocked_by_audit",
+    "cost_uncertainty": "blocked_by_audit",
+    "edge_metric_semantics": "blocked_by_audit",
+    "inventory_mtm": "blocked_by_audit",
+}
+GATE_C_FAILURE_DECISION_PRECEDENCE = (
+    "blocked_by_audit",
+    "blocked_by_parity",
+    "blocked_by_risk",
+    "failed",
+)
 
 
 @dataclass(frozen=True)
@@ -41,6 +80,7 @@ class ExperimentRun:
     backtest_report_path: str
     signals_path: str | None = None
     equity_path: str | None = None
+    research_decision: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -91,11 +131,16 @@ class ExperimentTracker:
         gate_status: dict[str, bool],
         scorecard_payload: dict[str, Any],
         backtest_report_payload: dict[str, Any],
+        research_decision: dict[str, Any] | None = None,
         signals: np.ndarray | None = None,
         equity: np.ndarray | None = None,
     ) -> Path:
         run_dir = self.runs_dir / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
+        scorecard_payload, backtest_report_payload = _stamp_edge_metric_semantics(
+            scorecard_payload,
+            backtest_report_payload,
+        )
 
         scorecard_path = run_dir / "scorecard.json"
         backtest_report_path = run_dir / "backtest_report.json"
@@ -111,6 +156,13 @@ class ExperimentTracker:
             equity_path = run_dir / "equity.npy"
             np.save(equity_path, np.asarray(equity, dtype=np.float64))
 
+        effective_research_decision = research_decision
+        if effective_research_decision is None:
+            effective_research_decision = _derive_research_decision(backtest_report_payload)
+        effective_research_decision = _guard_keep_requires_validated_edge(
+            effective_research_decision,
+            backtest_report_payload,
+        )
         meta = ExperimentRun(
             run_id=run_id,
             alpha_id=alpha_id,
@@ -123,6 +175,7 @@ class ExperimentTracker:
             backtest_report_path=str(backtest_report_path),
             signals_path=(str(signals_path) if signals_path else None),
             equity_path=(str(equity_path) if equity_path else None),
+            research_decision=_normalize_research_decision(effective_research_decision),
         )
         meta_path = run_dir / "meta.json"
         meta_path.write_text(json.dumps(meta.to_dict(), indent=2, sort_keys=True))
@@ -134,7 +187,7 @@ class ExperimentTracker:
             try:
                 payload = json.loads(meta_path.read_text())
                 row = _from_dict(payload)
-            except (OSError, ValueError, KeyError) as exc:
+            except (OSError, TypeError, ValueError, KeyError) as exc:
                 logger.warning("experiments.list_runs: skipping corrupt meta", path=str(meta_path), error=str(exc))
                 continue
             if alpha_id and row.alpha_id != alpha_id:
@@ -149,15 +202,16 @@ class ExperimentTracker:
         for row in self.list_runs():
             if row.run_id not in target:
                 continue
-            out.append(
-                {
-                    "run_id": row.run_id,
-                    "alpha_id": row.alpha_id,
-                    "config_hash": row.config_hash,
-                    "timestamp": row.timestamp,
-                    **row.metrics,
-                }
-            )
+            item = {
+                "run_id": row.run_id,
+                "alpha_id": row.alpha_id,
+                "config_hash": row.config_hash,
+                "timestamp": row.timestamp,
+                **row.metrics,
+            }
+            item.update(_edge_metric_semantics_compare_fields(row))
+            item.update(_research_decision_compare_fields(row))
+            out.append(item)
         return sorted(out, key=lambda item: run_ids.index(item["run_id"])) if out else []
 
     def best_by_metric(
@@ -172,16 +226,19 @@ class ExperimentTracker:
             value = row.metrics.get(metric)
             if value is None:
                 continue
-            scored.append(
-                {
-                    "run_id": row.run_id,
-                    "alpha_id": row.alpha_id,
-                    "metric": metric,
-                    "value": float(value),
-                    "timestamp": row.timestamp,
-                    "config_hash": row.config_hash,
-                }
-            )
+            edge_fields = _edge_metric_semantics_compare_fields(row) if metric == EDGE_METRIC_NAME else {}
+            if metric == EDGE_METRIC_NAME and edge_fields.get("edge_metric_semantics_status") != "complete":
+                continue
+            item = {
+                "run_id": row.run_id,
+                "alpha_id": row.alpha_id,
+                "metric": metric,
+                "value": float(value),
+                "timestamp": row.timestamp,
+                "config_hash": row.config_hash,
+            }
+            item.update(edge_fields)
+            scored.append(item)
         scored.sort(key=lambda item: item["value"], reverse=True)
         return scored[: max(1, n)]
 
@@ -406,7 +463,206 @@ def _from_dict(payload: dict[str, Any]) -> ExperimentRun:
         backtest_report_path=str(payload.get("backtest_report_path", "")),
         signals_path=str(payload["signals_path"]) if payload.get("signals_path") else None,
         equity_path=str(payload["equity_path"]) if payload.get("equity_path") else None,
+        research_decision=_normalize_research_decision(payload.get("research_decision")),
     )
+
+
+def _normalize_research_decision(payload: Any) -> dict[str, Any]:
+    if payload is None:
+        return {}
+    if not isinstance(payload, dict):
+        raise TypeError("research_decision must be a mapping")
+
+    decision = dict(payload)
+    status = str(decision.get("status", "")).strip()
+    if not status:
+        return {}
+    if status not in RESEARCH_DECISION_STATUSES:
+        raise ValueError(f"research_decision.status must be one of {sorted(RESEARCH_DECISION_STATUSES)}")
+
+    reason = str(decision.get("reason", "")).strip()
+    if not reason:
+        raise ValueError("research_decision.reason must be non-empty")
+
+    evidence_raw = decision.get("evidence", ())
+    if evidence_raw is None:
+        evidence_raw = ()
+    if isinstance(evidence_raw, str):
+        evidence_raw = (evidence_raw,)
+    if not isinstance(evidence_raw, list | tuple):
+        raise TypeError("research_decision.evidence must be a string or list of strings")
+
+    decision["status"] = status
+    decision["reason"] = reason
+    decision["evidence"] = [str(item) for item in evidence_raw if str(item)]
+    if decision.get("decided_by") is not None:
+        decision["decided_by"] = str(decision["decided_by"])
+    return decision
+
+
+def _guard_keep_requires_validated_edge(
+    decision: dict[str, Any] | None,
+    backtest_report_payload: Any,
+) -> dict[str, Any] | None:
+    """Enforce goal §3: a ``keep`` may not stand on an unvalidated edge.
+
+    Applies to both explicit and auto-derived decisions. When the (already
+    stamped) report carries an ``edge_per_round_trip`` metric whose semantics
+    label is not validated — e.g. a non-strict profile let ``inventory_mtm`` or
+    ``single_day_dominance`` fail as advisory while blocking gates passed — the
+    keep is downgraded to ``blocked_by_audit`` so an unvalidated edge can never
+    be silently retained. Non-edge alphas and validated edges pass through
+    unchanged.
+    """
+    if not isinstance(decision, dict):
+        return decision
+    if str(decision.get("status", "")).strip() != "keep":
+        return decision
+    if not _has_edge_round_trip_metric(backtest_report_payload):
+        return decision
+
+    validated, failing_gates = _edge_metric_semantics_validation(backtest_report_payload)
+    if validated:
+        return decision
+
+    suffix = "|".join(failing_gates) if failing_gates else "unstamped"
+    evidence = _dedupe_nonempty([*failing_gates, *(str(e) for e in decision.get("evidence", ()) or ())])
+    return {
+        "status": "blocked_by_audit",
+        "reason": f"edge_metric_unvalidated:{suffix}",
+        "evidence": evidence,
+        "decided_by": "edge_validation_guard",
+    }
+
+
+def derive_research_decision_from_gate_c_report(backtest_report_payload: Any) -> dict[str, Any]:
+    """Derive the same replayable research decision ``log_run`` would store."""
+    decision = _derive_research_decision(backtest_report_payload)
+    guarded = _guard_keep_requires_validated_edge(decision, backtest_report_payload)
+    return _normalize_research_decision(guarded)
+
+
+def _derive_research_decision(backtest_report_payload: Any) -> dict[str, Any]:
+    blocking = _gate_c_blocking_payload(backtest_report_payload)
+    if blocking is None:
+        return {}
+
+    triage_status = str(blocking.get("triage_status", "")).strip()
+    evidence = _gate_c_blocking_evidence(blocking)
+    if triage_status in GATE_C_SAMPLE_TRIAGE_STATUSES:
+        status = triage_status.removeprefix("sample_")
+        return {
+            "status": status,
+            "reason": f"gate_c_{triage_status}",
+            "evidence": evidence,
+            "decided_by": "gate_c",
+        }
+
+    if triage_status == "passed" or blocking.get("passed") is True:
+        return {
+            "status": "keep",
+            "reason": "gate_c_blocking_passed",
+            "evidence": evidence,
+            "decided_by": "gate_c",
+        }
+
+    if triage_status == "killed" or blocking.get("passed") is False:
+        failure_names = _gate_c_blocking_names(blocking)
+        status = _gate_c_failure_status(failure_names)
+        return {
+            "status": status,
+            "reason": _gate_c_failure_reason(status, failure_names),
+            "evidence": evidence or failure_names,
+            "decided_by": "gate_c",
+        }
+
+    return {}
+
+
+def _gate_c_blocking_payload(backtest_report_payload: Any) -> dict[str, Any] | None:
+    if not isinstance(backtest_report_payload, dict):
+        return None
+    details = backtest_report_payload.get("details")
+    if isinstance(details, dict) and isinstance(details.get("sub_gates_blocking"), dict):
+        return details["sub_gates_blocking"]
+    blocking = backtest_report_payload.get("sub_gates_blocking")
+    return blocking if isinstance(blocking, dict) else None
+
+
+def _gate_c_blocking_evidence(blocking: dict[str, Any]) -> list[str]:
+    evidence: list[str] = []
+    for raw in blocking.get("triage_reasons", ()) or ():
+        evidence.append(str(raw))
+    for name in _gate_c_blocking_names(blocking):
+        evidence.append(name)
+    return _dedupe_nonempty(evidence)
+
+
+def _gate_c_blocking_names(blocking: dict[str, Any]) -> list[str]:
+    names: list[str] = []
+    for raw in blocking.get("names", ()) or ():
+        names.append(str(raw))
+
+    failing = blocking.get("failing", ())
+    if isinstance(failing, list | tuple):
+        for entry in failing:
+            if isinstance(entry, dict):
+                names.append(str(entry.get("name", "")))
+            else:
+                names.append(str(entry))
+    return _dedupe_nonempty(names)
+
+
+def _gate_c_failure_status(failure_names: list[str]) -> str:
+    statuses = {_gate_c_failure_status_for_name(name) for name in failure_names}
+    if not statuses:
+        statuses = {"failed"}
+    for status in GATE_C_FAILURE_DECISION_PRECEDENCE:
+        if status in statuses:
+            return status
+    return "failed"
+
+
+def _gate_c_failure_status_for_name(name: str) -> str:
+    normalized = str(name).strip().lower()
+    if normalized.endswith(":missing"):
+        return "blocked_by_audit"
+    return GATE_C_FAILURE_DECISION_BY_NAME.get(normalized, "failed")
+
+
+def _gate_c_failure_reason(status: str, failure_names: list[str]) -> str:
+    suffix = "|".join(failure_names) if failure_names else "unknown"
+    if status == "blocked_by_audit":
+        return f"gate_c_audit_blocker:{suffix}"
+    if status == "blocked_by_parity":
+        return f"gate_c_parity_blocker:{suffix}"
+    if status == "blocked_by_risk":
+        return f"gate_c_risk_blocker:{suffix}"
+    return f"gate_c_blocking_failed:{suffix}"
+
+
+def _dedupe_nonempty(values: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        normalized = str(value).strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        out.append(normalized)
+    return out
+
+
+def _research_decision_compare_fields(row: ExperimentRun) -> dict[str, Any]:
+    decision = row.research_decision
+    if not decision:
+        return {}
+    return {
+        "research_decision_status": decision["status"],
+        "research_decision_reason": decision["reason"],
+        "research_decision_evidence": list(decision.get("evidence", ())),
+        "research_decision": dict(decision),
+    }
 
 
 def _load_numpy(path_str: str) -> np.ndarray | None:
@@ -419,6 +675,164 @@ def _load_numpy(path_str: str) -> np.ndarray | None:
         logger.warning("experiments._load_numpy: failed to load", path=str(path), error=str(exc))
         return None
     return np.asarray(arr, dtype=np.float64)
+
+
+def _stamp_edge_metric_semantics(
+    scorecard_payload: dict[str, Any],
+    backtest_report_payload: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    scorecard = dict(scorecard_payload)
+    report = dict(backtest_report_payload)
+    if not _has_edge_round_trip_metric(report):
+        return scorecard, report
+
+    from research.registry.schemas import (
+        EDGE_METRIC_SOURCE_GATE,
+        EDGE_METRIC_SUPPORTING_GATES,
+        edge_metric_semantics,
+    )
+
+    gate_passed = _collect_sub_gate_pass_status(report)
+    supporting_gates_status: dict[str, str] = {}
+    for gate in (EDGE_METRIC_SOURCE_GATE, *EDGE_METRIC_SUPPORTING_GATES):
+        observed = gate_passed.get(gate)
+        if observed is None:
+            supporting_gates_status[gate] = "absent"
+        else:
+            supporting_gates_status[gate] = "pass" if observed else "fail"
+    validated = all(status == "pass" for status in supporting_gates_status.values())
+
+    semantics = edge_metric_semantics(
+        supporting_gates_status=supporting_gates_status,
+        validated=validated,
+    )
+    scorecard["edge_metric_semantics"] = semantics
+
+    details = report.get("details")
+    if isinstance(details, dict):
+        details_out = dict(details)
+        details_out["edge_metric_semantics"] = semantics
+        report["details"] = details_out
+    else:
+        report["edge_metric_semantics"] = semantics
+    return scorecard, report
+
+
+def _edge_metric_semantics_compare_fields(row: ExperimentRun) -> dict[str, Any]:
+    report = _load_json_object(row.backtest_report_path)
+    if not _has_edge_round_trip_metric(report):
+        return {}
+
+    scorecard = _load_json_object(row.scorecard_path)
+    missing: list[str] = []
+    if not _has_edge_metric_semantics(scorecard):
+        missing.append("scorecard.edge_metric_semantics")
+    if not _has_edge_metric_semantics(report):
+        missing.append("report.edge_metric_semantics")
+
+    if missing:
+        return {
+            "edge_metric_semantics_status": "legacy_missing",
+            "edge_metric_semantics_missing": missing,
+        }
+
+    validated, failing_gates = _edge_metric_semantics_validation(scorecard)
+    if not validated:
+        return {
+            "edge_metric_semantics_status": "gates_unvalidated",
+            "edge_metric_semantics_failing_gates": failing_gates,
+        }
+    return {"edge_metric_semantics_status": "complete"}
+
+
+def _load_json_object(path_str: str) -> dict[str, Any] | None:
+    if not path_str:
+        return None
+    try:
+        payload = json.loads(Path(path_str).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _has_edge_round_trip_metric(value: Any) -> bool:
+    if isinstance(value, dict):
+        if value.get("name") == "edge_per_round_trip":
+            metrics = value.get("metrics")
+            return isinstance(metrics, dict) and EDGE_METRIC_NAME in metrics
+        return any(_has_edge_round_trip_metric(v) for v in value.values())
+    if isinstance(value, list | tuple):
+        return any(_has_edge_round_trip_metric(v) for v in value)
+    return False
+
+
+def _has_edge_metric_semantics(value: Any) -> bool:
+    return _find_edge_metric_semantics(value) is not None
+
+
+def _find_edge_metric_semantics(value: Any) -> dict[str, Any] | None:
+    if isinstance(value, dict):
+        semantics = value.get("edge_metric_semantics")
+        if isinstance(semantics, dict) and (
+            semantics.get("schema") == "edge_metric_semantics.v1"
+            and semantics.get("metric") == EDGE_METRIC_NAME
+            and semantics.get("source_gate") == "edge_per_round_trip"
+        ):
+            return semantics
+        for v in value.values():
+            found = _find_edge_metric_semantics(v)
+            if found is not None:
+                return found
+        return None
+    if isinstance(value, list | tuple):
+        for v in value:
+            found = _find_edge_metric_semantics(v)
+            if found is not None:
+                return found
+    return None
+
+
+def _edge_metric_semantics_validation(value: Any) -> tuple[bool, list[str]]:
+    """Return ``(validated, failing_gates)`` from a stamped semantics label.
+
+    A label is trustworthy only when it carries ``validated is True`` *and* its
+    ``supporting_gates_status`` shows every gate as ``"pass"``. Legacy labels
+    stamped before evidence was recorded (no ``validated`` key) are treated as
+    unvalidated — an un-evidenced claim is not proof.
+    """
+    semantics = _find_edge_metric_semantics(value)
+    if semantics is None:
+        return False, []
+    status_map = semantics.get("supporting_gates_status")
+    failing: list[str] = []
+    if isinstance(status_map, dict):
+        failing = sorted(str(gate) for gate, status in status_map.items() if str(status) != "pass")
+    return semantics.get("validated") is True, failing
+
+
+def _collect_sub_gate_pass_status(value: Any) -> dict[str, bool]:
+    """Map ``{sub_gate_name: passed}`` across a report's ``sub_gates_*`` entries.
+
+    Walks the whole payload so it is robust to advisory vs blocking nesting.
+    Only entries carrying both a string ``name`` and a boolean ``passed`` count,
+    so the Gate-C root ``{"passed": True}`` (no ``name``) is ignored.
+    """
+    out: dict[str, bool] = {}
+
+    def _walk(node: Any) -> None:
+        if isinstance(node, dict):
+            name = node.get("name")
+            passed = node.get("passed")
+            if isinstance(name, str) and isinstance(passed, bool):
+                out[name] = passed
+            for v in node.values():
+                _walk(v)
+        elif isinstance(node, list | tuple):
+            for v in node:
+                _walk(v)
+
+    _walk(value)
+    return out
 
 
 def _paper_session_from_dict(payload: dict[str, Any], *, alpha_id: str) -> PaperTradeSession:

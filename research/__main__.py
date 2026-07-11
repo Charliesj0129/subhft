@@ -47,6 +47,7 @@ _PAPER_CMDS = frozenset({"fetch-paper", "search-papers"})
 _PAPER_PROTO_CMD = "paper-to-prototype"
 _PAPER_TRADE_CMDS = frozenset({"record-paper", "summarize-paper", "check-paper-governance"})
 _DATA_GOV_CMDS = frozenset({"stamp-data-meta", "validate-data-meta"})
+_DATA_PIPELINE_CMD = "data-pipeline"
 _MAINT_CMDS = frozenset({"audit-note-citations", "backfill-note-citations", "triage-pyspy"})
 _BATCH_CMDS = frozenset({"batch-search"})
 _HYPOTHESIS_CMD = "hypothesis-queue"
@@ -64,6 +65,7 @@ Paper-trade: record-paper --alpha-id <id> | summarize-paper --alpha-id <id> |
              check-paper-governance --alpha-id <id>
 Batch:    batch-search <queries> | hypothesis-queue {ingest|list|top} | auto-scaffold
 Data-governance: stamp-data-meta <data> | validate-data-meta <data>
+Data-pipeline: data-pipeline {export-l2-ticks|validate}
 Maintenance: audit-note-citations | backfill-note-citations | triage-pyspy
 
 Run 'python -m research <command> --help' for per-command help.
@@ -113,6 +115,12 @@ def main() -> int:
         from research.tools.data_governance import main as _data_gov_main
 
         return int(_data_gov_main())
+
+    if cmd == _DATA_PIPELINE_CMD:
+        sys.argv.pop(1)
+        from research.data_pipeline import main as _data_pipeline_main
+
+        return int(_data_pipeline_main())
 
     if cmd in _MAINT_CMDS:
         from research.tools.maintenance import main as _maint_main

@@ -4,7 +4,9 @@ import os
 
 
 def _safe_write(path: str, content: str) -> None:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    dirname = os.path.dirname(path)
+    if dirname:
+        os.makedirs(dirname, exist_ok=True)
     with open(path, "w") as f:
         f.write(content)
 

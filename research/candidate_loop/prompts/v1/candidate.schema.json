@@ -1,0 +1,120 @@
+{
+  "$defs": {
+    "Candidate": {
+      "additionalProperties": false,
+      "properties": {
+        "cost_risk": {
+          "default": "",
+          "type": "string"
+        },
+        "expected_sign": {
+          "type": "string"
+        },
+        "falsification_tests": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "family": {
+          "type": "string"
+        },
+        "features": {
+          "items": {
+            "$ref": "#/$defs/Feature"
+          },
+          "type": "array"
+        },
+        "horizon": {
+          "type": "string"
+        },
+        "hypothesis": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "latency_risk": {
+          "default": "",
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "proposed_new_primitives": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ProposedPrimitive"
+          },
+          "type": "array"
+        },
+        "regime_filter": {
+          "default": "",
+          "type": "string"
+        },
+        "signal_formula": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "family",
+        "hypothesis",
+        "features",
+        "signal_formula",
+        "label",
+        "horizon",
+        "expected_sign"
+      ],
+      "title": "Candidate",
+      "type": "object"
+    },
+    "Feature": {
+      "additionalProperties": false,
+      "properties": {
+        "formula": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "formula"
+      ],
+      "title": "Feature",
+      "type": "object"
+    },
+    "ProposedPrimitive": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "not_executable_in_v1": {
+          "default": true,
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "required_data": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "reason"
+      ],
+      "title": "ProposedPrimitive",
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/Candidate"
+}
