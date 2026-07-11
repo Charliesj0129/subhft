@@ -3,7 +3,8 @@
 Two integration tests on the post-Slice-B promotion pipeline:
 
 1. ``test_dod_b1_post_b_pnl_below_cost_floor`` — given the post-B baseline
-   artifact (captured by ``scripts/capture_post_b_baseline.py`` against the
+   artifact (captured by the one-shot capture_post_b_baseline.py script,
+   removed 2026-07-11 — see git history — against the
    live ClickHouse-backed simulator), assert that R47/TMFD6/31d's PnL under
    the MtM-aware ``MakerEngine`` and calibrated ``QHatTable`` collapses to or
    below the maker cost floor. This was the central credibility claim of the
