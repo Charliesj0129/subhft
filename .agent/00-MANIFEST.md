@@ -45,6 +45,7 @@ trade-off was explicitly approved.
 - `teams/alpha-research/` framework (tracked 9 + untracked role/hook strays; `rounds/` evidence kept)
 - `agents/`, `commands/`, `pixiu/`, `logs/`, `mcp/`, `extensions/`, `project_context.json`, `hooks/ecc_hooks.json` (all untracked)
 - `.claude/commands/alpha-research.md` (tracked) — drove the removed team framework
+- `.claude/commands/` remainder (tracked, 31 files; round 2 same day) — 29 symlinks left dangling by the `commands/` deletion above + 2 ECC-generation team commands (`code-review-team.md`, `debug-team.md`) that drove the removed framework
 
 ## Method
 

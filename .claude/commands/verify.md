@@ -1,1 +1,0 @@
-/home/charlie/hft_platform/.agent/commands/verify.md
