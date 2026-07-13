@@ -5,35 +5,40 @@ Record here: unresolved decisions with what blocks them and who decides
 answer those instead. Move resolved items to architecture-decisions.md or
 failed-attempts.md.
 
-## Disk-only research modules — RESOLVED 2026-07-12 (fix batch, user-ordered)
+## Disk-only research modules — RESOLVED 2026-07-12/13 (fix batch, user-ordered)
 The sweep ran: every module tracked CODE imports is now committed
 (18 modules incl. dynamic load_module targets; see
 architecture-decisions.md "Research modules imported by tracked code").
 The "19 alphas.*.impl" importers turned out to be research/archive/**
 snapshots of killed alphas referencing deliberately-deleted impls —
-harmless, left as-is. REMAINDER (decides: USER): 7 untracked non-core
-scripts at research/tools root (pdq_full_routing_audit,
-pdq_liquidity_recovery_exit_audit, pdq_supertrend_backtest,
-pdq_supertrend_ga_search, pdq_supertrend_gate_ga_search, pdq_visual_atlas,
-pdq_wrongway_decomposition) — imported by nothing tracked, but they trip
-make research-audit-strict LOCALLY on the primary machine (clean clones
-green); commit-into-CORE_TOOL_FILES / move-to-legacy / delete is Charlie's
-call. Markdown-plan-referenced modules (t1_regime_partition trio,
+harmless, left as-is. REMAINDER RESOLVED 2026-07-13: user picked
+move-to-legacy for the 7 untracked non-core tools-root scripts;
+`python -m research.factory converge-tools` moved them to
+research/tools/legacy/ and local research-audit-strict is 0/0.
+Markdown-plan-referenced modules (t1_regime_partition trio,
 tools/fixtures) stay untracked deliberately.
 
-## Scheduled-CI red + deploy.yml startup failure (opened 2026-07-12)
-Nightly scheduled CI on main fails in 3 jobs (push runs green):
-(a) Security Scan at "Secret scanning (gitleaks)" — generic-api-key hits
-in tests/docs (test_credential_scrubber.py, test_order_adapter_dedup.py,
-runbooks, plan docs); look like placeholder keys needing a reviewed
-.gitleaks.toml allowlist, but each finding needs eyes before allowlisting.
-(b) Recorder CK + WAL Drills (schedule-only job) fails in the CE2/CE3
-drill step — uninvestigated. (c) Benchmark Darwin Gate regression check
-fails on schedule, passes on push — likely runner variance/baseline.
-Separately .github/workflows/deploy.yml ends "failure" with ZERO jobs in
-~0s on every main push (startup_failure; its workflow_run/environment
-config never starts). Decides: USER (security adjudication for (a),
-investigation priority for (b)-(d)).
+## Scheduled-CI red + deploy.yml startup failure — RESOLVED 2026-07-13 (user-ordered fix)
+All four legs closed (commits 4242c7b0 / 46521afe / f86bf944 / 4a1d73d6):
+(a) gitleaks — six findings adjudicated one-by-one, all placeholders/
+identifiers, allowlisted by exact value; full-history scan 'no leaks
+found'. (b) Recorder drills — two defects: stale replay-safety spec
+asserting pre-588ebfbf skip behavior (now asserts the quarantine
+contract; verify-ce3 8 passed) + summary-step here-docs with indented
+terminators. (c) Benchmark Darwin Gate — self-resolved by its baseline
+auto-update commit (dc98d877); no change needed. (d) deploy.yml —
+secrets context in step-level `if:` made the file unparseable
+(startup_failure, zero jobs); replaced with guard-step output + boolean
+dry_run fixes.
+
+## Production environment protection not configured (opened 2026-07-13)
+deploy.yml's production job relies on a required-reviewer rule
+(Settings → Environments → production) that does NOT exist server-side;
+the agent's API creation attempt was permission-denied. Until configured,
+deploy.yml auto-builds/pushes GHCR images on main CI success but cannot
+touch any host: NO DEPLOY_*/STAGING_* secrets exist (verified 2026-07-13
+via API, names only). Configure the environment BEFORE ever adding
+deploy secrets. Decides: USER (one click, repo admin).
 
 ## MODULES_REFERENCE.md description staleness (narrowed 2026-07-07)
 COUNTS RESOLVED 2026-07-06; CLASS/FILE IDENTIFIERS RESOLVED 2026-07-07

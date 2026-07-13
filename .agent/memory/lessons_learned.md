@@ -136,3 +136,9 @@
 2. When wiring a new aggregated sub-call into an existing Gate function, place the call BEFORE the `passed = ...` consumer line, not after. Tests that bypass the full Gate function (calling `_invoke_sub_gates` directly) will not catch the order-of-statements bug; ruff F821 will. (We hit this exact bug in Slice A `_gate_c.py`; unit/integration tests stayed green because they call `_invoke_sub_gates` directly, but `ruff check` flagged unbound `maker_blocking`/`taker_blocking`.)
 3. Sub-gate `name` strings are snake_case (`min_sample_size`, not `MinSampleSize`); profile YAML must match the canonical `.name` attribute exactly.
 **Commits**: `6f9ef772` (plan) → `69758563` (CI sweep). Branch `slice-a/promotion-gate-hardening`, 19 commits.
+
+## [PROCESS] Gate exit codes must never be read through a pipe (2026-07)
+
+**Context**: `bash scripts/check_git_preconditions.sh --narrow-commit | tail -2 && git commit ...` committed straight through a BLOCKED gate: `&&` saw `tail`'s exit 0, not the gate's exit 1. Same failure mode as the 2026-07-10 agent-docs gate incident (7d3b2475 shipped red) — the lesson existed in private memory and was still repeated.
+**Fix**: Run the gate bare and branch on `$?`, or redirect to a log file (`gate ... > gate.log 2>&1; gate=$?`) when output must be captured. Undo any commit that slipped through (`git reset --soft HEAD^`) and re-run the gate before recommitting.
+**Rule**: A gate's exit code is the gate. Any pipeline segment after it (tail, tee, grep) replaces that exit code under `&&`/`if` unless you use `PIPESTATUS[0]` — so don't pipe gates at all.
