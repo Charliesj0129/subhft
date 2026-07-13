@@ -20,4 +20,12 @@ useDefault = true
 description = "Snake_case threshold-key identifiers in alpha-gate docstrings are YAML config keys, not credentials."
 regexes = [
     '''cost_uncertainty_p95_lower_bound_min_pts''',
+    # Fixture/example values flagged by the scheduled full-history scan
+    # (generic-api-key). Each entry is an exact fake value, reviewed 2026-07-13;
+    # a real credential can never equal these strings.
+    '''orphan-test-key-001''',                    # tests/unit/test_order_adapter_dedup.py idempotency-key fixture
+    '''sk-test-12345678''',                       # planted fake for code-review benchmarks (docs/agent-teams, docs/superpowers plans)
+    '''eyJhbGciOiJIUzI1NiJ9''',                   # bare JWT header {"alg":"HS256"} — scrubber test vector, no payload/signature
+    '''abcdef1234567890abcdef1234567890''',       # docs/runbooks/alerting-setup.md example integration key
+    '''depth_imbalance_ema8_ppm''',               # feature-key identifier in deleted research/alphas/lob_shape/impl.py (history-only hit)
 ]
