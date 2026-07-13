@@ -33,13 +33,14 @@ def _write_market_file(path, seq: int, ts_suffix: int):
     return fpath
 
 
-def test_replay_strict_ordering_skips_out_of_order_file(tmp_path):
+def test_replay_strict_ordering_quarantines_out_of_order_file(tmp_path):
     wal_dir = tmp_path / "wal"
     archive_dir = tmp_path / "archive"
     wal_dir.mkdir()
     archive_dir.mkdir()
     newer = _write_market_file(wal_dir, seq=2, ts_suffix=200)
     older = _write_market_file(wal_dir, seq=1, ts_suffix=100)
+    older_content = older.read_text(encoding="utf-8")
 
     loader = WALLoaderService(wal_dir=str(wal_dir), archive_dir=str(archive_dir))
     loader._strict_order = True
@@ -47,9 +48,14 @@ def test_replay_strict_ordering_skips_out_of_order_file(tmp_path):
     loader.insert_batch = types.MethodType(lambda self, table, rows: True, loader)
 
     assert loader._process_single_file(str(newer), force=True) is True
-    # Out-of-order older file should be skipped in strict mode.
+    # Strict mode must quarantine an out-of-order file to wal/corrupt/ with its
+    # data intact — leaving it in wal_dir would be skipped-forever data loss,
+    # and it must never be inserted (return False) or deleted.
     assert loader._process_single_file(str(older), force=True) is False
-    assert older.exists()
+    assert not older.exists()
+    quarantined = wal_dir / "corrupt" / older.name
+    assert quarantined.exists()
+    assert quarantined.read_text(encoding="utf-8") == older_content
     assert (archive_dir / newer.name).exists()
 
 
