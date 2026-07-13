@@ -34,7 +34,10 @@ by the median current/baseline ratio (runner shift cancels), plus a
 artifact (1.40x shift → PASS). (d) deploy.yml —
 secrets context in step-level `if:` made the file unparseable
 (startup_failure, zero jobs); replaced with guard-step output + boolean
-dry_run fixes.
+dry_run fixes. Follow-on (same day): the first real executions surfaced
+two dormant defects — mixed-case GHCR image name (bfe255d9) and a trivy
+gate red on 35 unfixable debian-12 base CVEs (70845b3d,
+ignore-unfixed:true). CD — Deploy run 29239980470 SUCCESS end-to-end.
 
 ## Production environment protection not configured (opened 2026-07-13)
 deploy.yml's production job relies on a required-reviewer rule

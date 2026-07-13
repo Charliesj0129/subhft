@@ -21,6 +21,17 @@
   local research-audit-strict now 0 errors / 0 warnings.
   docs/agent-knowledge-distillation RETIRED (tip cf40f68b verified in
   origin/main, deleted local + origin on explicit request).
+  CD — Deploy end-to-end (follow-on): once CI turned green the workflow
+  executed for real for the first time and surfaced two dormant defects,
+  fixed one-at-a-time with a run between: bfe255d9 (github.repository
+  preserves owner case, OCI names must be lowercase — IMAGE_NAME
+  lowercased via GITHUB_ENV in both jobs; after this the image built and
+  PUSHED to GHCR for the first time) and 70845b3d (trivy gate red on 35
+  HIGH/CRITICAL debian-12.14 base CVEs, ALL with no fixed version —
+  ignore-unfixed:true keeps the fixable-CVE signal; note the step order
+  is push-then-scan, the gate never blocked publishing). Evidence: CD —
+  Deploy run 29239980470 SUCCESS — full chain push → CI → build → GHCR
+  push → trivy → no-op deploy steps is green.
   OWED (Charlie, one click): production environment required-reviewer
   rule (Settings → Environments) — API creation attempt was
   permission-denied; until configured, deploy.yml builds/pushes images
