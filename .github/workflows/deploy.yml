@@ -208,6 +208,10 @@ jobs:
           format: "table"
           exit-code: "1"
           severity: "HIGH,CRITICAL"
+          # The debian 12 base carries HIGH/CRITICAL CVEs with no fixed
+          # version (status affected/fix_deferred/will_not_fix) — nothing to
+          # act on, and the gate re-arms the moment Debian ships a fix.
+          ignore-unfixed: true
 
       - name: Guard — check deploy secrets
         # `secrets` is not a valid context in step-level `if:` (the workflow
