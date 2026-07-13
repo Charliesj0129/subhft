@@ -25,8 +25,13 @@ identifiers, allowlisted by exact value; full-history scan 'no leaks
 found'. (b) Recorder drills — two defects: stale replay-safety spec
 asserting pre-588ebfbf skip behavior (now asserts the quarantine
 contract; verify-ce3 8 passed) + summary-step here-docs with indented
-terminators. (c) Benchmark Darwin Gate — self-resolved by its baseline
-auto-update commit (dc98d877); no change needed. (d) deploy.yml —
+terminators. (c) Benchmark Darwin Gate — NOT self-resolved after all:
+the baseline auto-update on green pushes is a one-way runner-speed
+ratchet (all 6 benchmarks '+26-52%' in lockstep on the next two pushes
+with zero hot-path changes). Fixed in 2aa48ef3: comparisons normalized
+by the median current/baseline ratio (runner shift cancels), plus a
++200% unnormalized catastrophic cap; validated against the real failed
+artifact (1.40x shift → PASS). (d) deploy.yml —
 secrets context in step-level `if:` made the file unparseable
 (startup_failure, zero jobs); replaced with guard-step output + boolean
 dry_run fixes.

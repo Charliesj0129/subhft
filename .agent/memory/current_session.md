@@ -11,9 +11,11 @@
   quarantine contract; verify-ce3 8 passed — was red since 2026-04-27),
   f86bf944 (recorder drill summary here-docs de-indented; bash needs the
   terminator at column 0), 4a1d73d6 (deploy.yml parseable again: guard
-  output replaces secrets-in-step-if; boolean dry_run comparisons).
-  Benchmark Darwin Gate needed no fix — its baseline auto-update commit
-  dc98d877 already turned the 07-12 schedule green. The 7 untracked
+  output replaces secrets-in-step-if; boolean dry_run comparisons),
+  2aa48ef3 (Darwin Gate comparisons normalized by median runner-speed
+  ratio + catastrophic cap — the baseline auto-update had turned into a
+  one-way speed ratchet failing both pushes; validated on the real
+  failed artifact, 1.40x shift → PASS). The 7 untracked
   tools-root pdq scripts moved to research/tools/legacy via
   `python -m research.factory converge-tools` (user picked legacy);
   local research-audit-strict now 0 errors / 0 warnings.
