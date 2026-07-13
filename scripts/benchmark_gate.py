@@ -1,7 +1,20 @@
 """Darwin Gate — Benchmark regression checker.
 
-Compares current benchmark results against a baseline and fails
-if any benchmark regresses beyond the configured threshold.
+Compares current benchmark results against a baseline and fails if any
+benchmark regresses beyond the configured threshold.
+
+CI runs baseline and current on different shared runners whose speeds
+differ by tens of percent, so raw mean-vs-mean comparison is noise-dominated
+(observed: all six benchmarks "regressing" 26-52% in lockstep with zero code
+changes). The gate therefore normalizes each benchmark's current/baseline
+ratio by the median ratio across all benchmarks: a runner-wide speed shift
+moves every ratio equally and cancels out, while a genuine regression in one
+code path stands out against the rest. A separate unnormalized catastrophic
+threshold still catches a uniform real slowdown that median normalization
+would otherwise absorb (at the cost of tolerating anything below it when ALL
+benchmarks regress together — with per-path regressions that is runner noise
+far more often than code). Relative detection needs >=2 benchmarks; with a
+single benchmark only the catastrophic threshold applies.
 
 Usage:
     python scripts/benchmark_gate.py \
@@ -16,8 +29,10 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from statistics import median
 
-REGRESSION_THRESHOLD = 0.10  # 10% default
+REGRESSION_THRESHOLD = 0.10  # 10% default, on runner-speed-normalized change
+CATASTROPHIC_THRESHOLD = 2.0  # +200% raw change fails even if uniform across benchmarks
 
 
 def load_benchmarks(path: Path) -> dict[str, float]:
@@ -37,22 +52,36 @@ def check_regressions(
     baseline: dict[str, float],
     current: dict[str, float],
     threshold: float,
-) -> list[tuple[str, float, float, float]]:
-    """Return list of (name, baseline_mean, current_mean, pct_change) for regressions."""
-    regressions: list[tuple[str, float, float, float]] = []
+    catastrophic_threshold: float = CATASTROPHIC_THRESHOLD,
+) -> tuple[list[tuple[str, float, float, float, float]], float]:
+    """Compare runner-speed-normalized changes against the threshold.
+
+    Returns (regressions, speed_factor) where speed_factor is the median
+    current/baseline ratio (the runner-speed shift between the two runs) and
+    each regression is (name, baseline_mean, current_mean, normalized_change,
+    raw_change). A benchmark regresses when its normalized change exceeds
+    `threshold` or its raw change exceeds `catastrophic_threshold`.
+    """
+    ratios: dict[str, float] = {}
     for name, base_mean in baseline.items():
-        if name not in current:
+        if name not in current or base_mean <= 0:
             continue
-        curr_mean = current[name]
-        if base_mean <= 0:
-            continue
-        pct_change = (curr_mean - base_mean) / base_mean
-        if pct_change > threshold:
-            regressions.append((name, base_mean, curr_mean, pct_change))
-    return regressions
+        ratios[name] = current[name] / base_mean
+
+    if not ratios:
+        return [], 1.0
+
+    speed_factor = median(ratios.values())
+    regressions: list[tuple[str, float, float, float, float]] = []
+    for name, ratio in ratios.items():
+        normalized_change = ratio / speed_factor - 1.0
+        raw_change = ratio - 1.0
+        if normalized_change > threshold or raw_change > catastrophic_threshold:
+            regressions.append((name, baseline[name], current[name], normalized_change, raw_change))
+    return regressions, speed_factor
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Darwin Gate — Benchmark regression checker")
     parser.add_argument("--baseline", type=Path, required=True, help="Path to baseline benchmark JSON")
     parser.add_argument("--current", type=Path, required=True, help="Path to current benchmark JSON")
@@ -60,9 +89,15 @@ def main() -> int:
         "--threshold",
         type=float,
         default=REGRESSION_THRESHOLD,
-        help=f"Regression threshold (default: {REGRESSION_THRESHOLD})",
+        help=f"Regression threshold on normalized change (default: {REGRESSION_THRESHOLD})",
     )
-    args = parser.parse_args()
+    parser.add_argument(
+        "--catastrophic-threshold",
+        type=float,
+        default=CATASTROPHIC_THRESHOLD,
+        help=f"Raw-change threshold that fails even runner-wide slowdowns (default: {CATASTROPHIC_THRESHOLD})",
+    )
+    args = parser.parse_args(argv)
 
     if not args.baseline.exists():
         print(f"[Darwin Gate] Baseline not found: {args.baseline} — skipping regression check")
@@ -83,17 +118,21 @@ def main() -> int:
         print("[Darwin Gate] No benchmarks in current results — skipping regression check")
         return 0
 
-    regressions = check_regressions(baseline, current, args.threshold)
+    regressions, speed_factor = check_regressions(baseline, current, args.threshold, args.catastrophic_threshold)
 
     # Summary
     matched = sum(1 for name in baseline if name in current)
     print(f"[Darwin Gate] Compared {matched} benchmarks (threshold: {args.threshold:.0%})")
+    print(f"[Darwin Gate] Runner speed factor vs baseline: {speed_factor:.2f}x (normalized out)")
 
     if regressions:
         print(f"\n[Darwin Gate] FAILED — {len(regressions)} regression(s) detected:\n")
-        for name, base_mean, curr_mean, pct in regressions:
+        for name, base_mean, curr_mean, normalized, raw in regressions:
             print(f"  {name}")
-            print(f"    baseline: {base_mean:.6f}s  current: {curr_mean:.6f}s  change: +{pct:.1%}")
+            print(
+                f"    baseline: {base_mean:.6f}s  current: {curr_mean:.6f}s  "
+                f"normalized: +{normalized:.1%}  raw: +{raw:.1%}"
+            )
             print()
         return 1
 
