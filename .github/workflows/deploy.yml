@@ -168,7 +168,7 @@ jobs:
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3
 
       - name: Build and push Docker image
-        if: inputs.dry_run != 'true'
+        if: inputs.dry_run != true
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
         with:
           context: .
@@ -183,7 +183,7 @@ jobs:
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
 
       - name: Build only (dry run)
-        if: inputs.dry_run == 'true'
+        if: inputs.dry_run == true
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
         with:
           context: .
@@ -191,7 +191,7 @@ jobs:
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.sha.outputs.sha }}
 
       - name: Scan Docker image for vulnerabilities
-        if: inputs.dry_run != 'true'
+        if: inputs.dry_run != true
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
           image-ref: "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.sha.outputs.sha }}"
@@ -200,7 +200,11 @@ jobs:
           severity: "HIGH,CRITICAL"
 
       - name: Guard — check deploy secrets
-        if: inputs.dry_run != 'true'
+        # `secrets` is not a valid context in step-level `if:` (the workflow
+        # fails validation before any job starts), so this guard exports an
+        # output the SSH steps key on instead.
+        id: deploy_guard
+        if: inputs.dry_run != true
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
@@ -210,11 +214,13 @@ jobs:
           if [ -z "$DEPLOY_HOST" ] || [ -z "$DEPLOY_USER" ] || [ -z "$DEPLOY_KEY" ]; then
             echo "::warning::Deploy secrets not configured. Skipping SSH deploy."
             echo "Image pushed to: $DEPLOY_IMAGE"
-            exit 0
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Deploy to production host
-        if: inputs.dry_run != 'true' && secrets.DEPLOY_HOST != ''
+        if: inputs.dry_run != true && steps.deploy_guard.outputs.configured == 'true'
         uses: ./.github/actions/ssh-deploy
         with:
           ssh-key: ${{ secrets.DEPLOY_KEY }}
@@ -227,7 +233,7 @@ jobs:
             curl -sf http://localhost:9090/metrics > /dev/null
 
       - name: Health check
-        if: inputs.dry_run != 'true' && secrets.DEPLOY_HOST != ''
+        if: inputs.dry_run != true && steps.deploy_guard.outputs.configured == 'true'
         uses: ./.github/actions/ssh-deploy
         with:
           ssh-key: ${{ secrets.DEPLOY_KEY }}
@@ -241,7 +247,7 @@ jobs:
             echo "::error::Health check failed after 3 attempts" && exit 1
 
       - name: Rollback on failure
-        if: failure() && inputs.dry_run != 'true' && secrets.DEPLOY_HOST != ''
+        if: failure() && inputs.dry_run != true && steps.deploy_guard.outputs.configured == 'true'
         uses: ./.github/actions/ssh-deploy
         with:
           ssh-key: ${{ secrets.DEPLOY_KEY }}
