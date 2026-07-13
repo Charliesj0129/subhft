@@ -698,59 +698,61 @@ jobs:
             echo "- Ran CE2-08/09 and CE3-03/04/07 integration/spec drills (see artifact \`gateway-wal-hardening-drills\`)." >> $GITHUB_STEP_SUMMARY
           fi
           if [ -f risk_perf_gate.json ]; then
+            # here-doc body/terminator sit at the script's left margin: bash
+            # needs the terminator at column 0 and Python needs unindented code
             python - <<'PY' >> $GITHUB_STEP_SUMMARY
-            import json
-            from pathlib import Path
-            payload = json.loads(Path("risk_perf_gate.json").read_text())
-            r = payload.get("results", {})
-            print("")
-            print("### Risk/Gateway Heavy Drill (JSON Artifact)")
-            for key in [
-                "gateway_process_envelope_obj_us_per_call",
-                "gateway_process_envelope_typed_us_per_call",
-                "risk_gateway_typed_vs_obj_ratio",
-                "risk_create_command_from_typed_us_per_call",
-                "risk_evaluate_typed_frame_us_per_call",
-            ]:
-                if key in r:
-                    print(f"- `{key}`: {r[key]:.4f}")
-            fails = payload.get("failures", [])
-            print(f"- `failures`: {len(fails)}")
-            PY
+          import json
+          from pathlib import Path
+          payload = json.loads(Path("risk_perf_gate.json").read_text())
+          r = payload.get("results", {})
+          print("")
+          print("### Risk/Gateway Heavy Drill (JSON Artifact)")
+          for key in [
+              "gateway_process_envelope_obj_us_per_call",
+              "gateway_process_envelope_typed_us_per_call",
+              "risk_gateway_typed_vs_obj_ratio",
+              "risk_create_command_from_typed_us_per_call",
+              "risk_evaluate_typed_frame_us_per_call",
+          ]:
+              if key in r:
+                  print(f"- `{key}`: {r[key]:.4f}")
+          fails = payload.get("failures", [])
+          print(f"- `failures`: {len(fails)}")
+          PY
           fi
           if [ -f feature_perf_gate.json ]; then
             python - <<'PY' >> $GITHUB_STEP_SUMMARY
-            import json
-            from pathlib import Path
-            payload = json.loads(Path("feature_perf_gate.json").read_text())
-            r = payload.get("results", {})
-            print("")
-            print("### Feature Plane Rust Drill (JSON Artifact)")
-            for key in [
-                "feature_engine_lob_update_us_per_event",
-                "feature_engine_lob_update_rust_us_per_event",
-                "feature_engine_python_vs_rust_parity_mismatch_rate",
-                "feature_engine_parity_mismatch_rate",
-            ]:
-                if key in r:
-                    print(f"- `{key}`: {r[key]:.6f}")
-            fails = payload.get("failures", [])
-            print(f"- `failures`: {len(fails)}")
-            PY
+          import json
+          from pathlib import Path
+          payload = json.loads(Path("feature_perf_gate.json").read_text())
+          r = payload.get("results", {})
+          print("")
+          print("### Feature Plane Rust Drill (JSON Artifact)")
+          for key in [
+              "feature_engine_lob_update_us_per_event",
+              "feature_engine_lob_update_rust_us_per_event",
+              "feature_engine_python_vs_rust_parity_mismatch_rate",
+              "feature_engine_parity_mismatch_rate",
+          ]:
+              if key in r:
+                  print(f"- `{key}`: {r[key]:.6f}")
+          fails = payload.get("failures", [])
+          print(f"- `failures`: {len(fails)}")
+          PY
           fi
           if [ -f research_feature_benchmark_matrix.json ]; then
             python - <<'PY' >> $GITHUB_STEP_SUMMARY
-            import json
-            from pathlib import Path
-            payload = json.loads(Path("research_feature_benchmark_matrix.json").read_text())
-            print("")
-            print("### Research Wrapper Matrix (Artifact)")
-            for name, result in payload.items():
-                rc = result.get("returncode")
-                j = result.get("json") or {}
-                failures = (j.get("failures") or []) if isinstance(j, dict) else []
-                print(f"- `{name}`: returncode={rc}, failures={len(failures)}")
-            PY
+          import json
+          from pathlib import Path
+          payload = json.loads(Path("research_feature_benchmark_matrix.json").read_text())
+          print("")
+          print("### Research Wrapper Matrix (Artifact)")
+          for name, result in payload.items():
+              rc = result.get("returncode")
+              j = result.get("json") or {}
+              failures = (j.get("failures") or []) if isinstance(j, dict) else []
+              print(f"- `{name}`: returncode={rc}, failures={len(failures)}")
+          PY
           fi
           if [ -f diagnostics_timeline.md ]; then
             echo "" >> $GITHUB_STEP_SUMMARY
