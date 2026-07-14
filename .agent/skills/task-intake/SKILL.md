@@ -86,12 +86,19 @@ system-enforced read-only and burn tokens on a plan they cannot execute
 (model-routing 2026-07-08 BLOCKED-BY-HARNESS: ~120K tokens wasted). If in plan
 mode, exit it before spawning, or tell the user.
 
-Agent tool, `subagent_type: general-purpose` (or `Explore` for pure read-only
-fan-out). Assign the CHEAPEST capable model — this is where 降本 actually comes
-from, not from spawning itself:
+Agent tool. `subagent_type` binds the role contract (AGENTS.md §Harness
+Bindings): hft-executor for implementation packets, hft-test-writer for
+test-writing packets, hft-reviewer for independent review (tool-enforced
+read-only, no Edit/Write), hft-docs for Tier-1 docs/mechanical. `Explore`
+stays for pure read-only fan-out; `general-purpose` only when no role fits.
+Assign the CHEAPEST capable model — this is where 降本 actually comes from,
+not from spawning itself. The role definitions carry the defaults (hft-docs
+= haiku; hft-executor / hft-test-writer = sonnet; hft-reviewer inherits
+orchestrator-class for Tier-3); override per-spawn with `model:` only per
+the AGENTS.md model table:
 - `model: haiku` — docs, counting, path verification, simple mechanical edits.
 - `model: sonnet` — bounded code+test, test writing, read-only investigation,
-  medium mechanical edits.
+  medium mechanical edits; hft-reviewer on Tier-1/2 diffs.
 - Opus/orchestrator keeps orchestration, routing, review, git, and final
   acceptance — never delegated.
 For a single bounded task use `run_in_background: false` — a backgrounded

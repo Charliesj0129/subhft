@@ -1,0 +1,38 @@
+{
+  "enabledPlugins": {},
+  "permissions": {
+    "ask": [
+      "Edit(src/hft_platform/contracts/**)",
+      "Edit(src/hft_platform/events.py)",
+      "Edit(src/hft_platform/core/timebase.py)",
+      "Edit(src/hft_platform/core/pricing.py)",
+      "Edit(src/hft_platform/migrations/clickhouse/**)",
+      "Edit(config/symbols.yaml)",
+      "Edit(config/base/brokers/**)",
+      "Edit(config/research/profiles/vm_ul6_strict.yaml)",
+      "Edit(research/experiments/**)",
+      "Edit(tests/golden/**)",
+      "Edit(.importlinter)",
+      "Edit(scripts/check_discipline.py)",
+      "Edit(docker-compose.production.yml)",
+      "Edit(docker-compose.prod.locked.yml)",
+      "Edit(pyproject.toml)",
+      "Edit(.gitignore)",
+      "Bash(git push:*)",
+      "Bash(git merge:*)",
+      "Bash(git rebase:*)",
+      "Bash(git reset:*)",
+      "Bash(git clean:*)",
+      "Bash(git stash drop:*)",
+      "Bash(git stash clear:*)",
+      "Bash(git branch -D:*)",
+      "Bash(git commit --amend:*)"
+    ],
+    "deny": [
+      "Read(.env*)",
+      "Edit(.env*)",
+      "Read(config/settings.py)",
+      "Edit(config/settings.py)"
+    ]
+  }
+}

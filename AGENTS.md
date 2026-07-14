@@ -110,6 +110,26 @@ models hold authority over riskier surfaces. All agents obey `CLAUDE.md`
   to exist, with the command used).
 - **Validation**: `rg --files` proof for every path claim; diff review.
 
+## Harness Bindings (Claude Code)
+
+The four delegated roles above are bound to subagent definitions under
+.claude/agents/ so their boundaries are tool-enforced, not prompt-enforced
+(meta-audit 2026-07-14 action 2). This changes no authority, tier, or
+routing rule — this file stays the source of truth; the definitions are
+condensed bindings of the role contracts.
+
+| Role | subagent_type | Default model | Tool enforcement |
+|---|---|---|---|
+| Coding Executor | hft-executor | sonnet | edit+bash; cannot spawn agents |
+| Reviewer | hft-reviewer | inherit (orchestrator-class; pass model: sonnet for Tier-1/2 diffs) | read-only: no Edit/Write tools |
+| Test-Writer | hft-test-writer | sonnet | edit+bash; tests/ scope by contract |
+| Documentation | hft-docs | haiku | edit+bash; docs scope by contract |
+
+Harness guardrails in .claude/settings.json back the same contracts for
+EVERY session in this repo, orchestrator included: Do-NOT-Edit paths and
+destructive/remote git prompt for per-operation confirmation (ask rules);
+secrets surfaces (.env*, config/settings.py) are denied outright.
+
 ## Task Routing (risk tiers)
 
 Entry point: the `task-intake` skill converts a natural-language task into a
