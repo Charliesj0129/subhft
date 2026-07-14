@@ -87,6 +87,7 @@
 | `task-intake` | 每個自然語言任務的入口:分類 type/tier、決定委派、展開 packet/驗證/審查/記憶計畫 |
 | `read-only-audit` | session start / unfamiliar ground / before planning any change or Tier-3 work |
 | `small-model-handoff` | orchestrator delegating implementation to a smaller-model executor |
+| `pipeline-implement` | AFTER task-intake decides delegate (Tier-1/2 code+test): packet -> hft-executor -> hft-reviewer -> narrow commit |
 | `strict-code-review` | any diff before commit; mandatory for Tier-3 and executor-produced diffs |
 | `test-gap-analysis` | before test-writer delegation; after a bug reveals a coverage hole |
 | `bug-investigation` | any unexpected behavior — evidence-first root cause BEFORE fixing |

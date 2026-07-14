@@ -91,6 +91,9 @@ Bindings): hft-executor for implementation packets, hft-test-writer for
 test-writing packets, hft-reviewer for independent review (tool-enforced
 read-only, no Edit/Write), hft-docs for Tier-1 docs/mechanical. `Explore`
 stays for pure read-only fan-out; `general-purpose` only when no role fits.
+When the decision is delegate for Tier-1/2 code+test work, run the stages
+via `pipeline-implement` (packet -> execute -> review -> land -> ledger);
+the pipeline defines HOW a delegation runs, never IF.
 Assign the CHEAPEST capable model — this is where 降本 actually comes from,
 not from spawning itself. The role definitions carry the defaults (hft-docs
 = haiku; hft-executor / hft-test-writer = sonnet; hft-reviewer inherits
