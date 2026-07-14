@@ -130,6 +130,17 @@ EVERY session in this repo, orchestrator included: Do-NOT-Edit paths and
 destructive/remote git prompt for per-operation confirmation (ask rules);
 secrets surfaces (.env*, config/settings.py) are denied outright.
 
+Hook enforcement floor (v3 W1, 2026-07-14): four hooks under .claude/hooks/
+lower the same contracts to the tool-interception layer — scope_guard
+(PreToolUse Edit/Write: during a delegation window, writes outside the packet
+allowlist are denied; fail-closed), git_guard (PreToolUse Bash: subagents'
+non-read-only git denied; fail-closed), discipline_feedback (PostToolUse:
+check_discipline on the edited platform file; advisory), commit_audit
+(PostToolUse: HEAD vs the declared allowlist marker; advisory). Hooks add no
+new policy — they enforce rules this file already states. Subagent detection:
+hook input carries agent_type for subagent tool calls (probe 2026-07-14).
+Spec: docs/superpowers/specs/2026-07-14-agent-system-v3-design.md.
+
 ## Task Routing (risk tiers)
 
 Entry point: the `task-intake` skill converts a natural-language task into a

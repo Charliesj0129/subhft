@@ -59,6 +59,12 @@ Make commits that are easy to review and safe to ship:
    | research evidence | verdict artifacts append-only; `alpha:` type; pre-registered floors untouched |
    | merge-level | `make check` minimum; `make ci` for merge confidence |
 
+   When committing through the narrow gate (`ALLOWED_PATHS=... --narrow-commit`),
+   mirror the same allowlist into .agent/runtime/commit-allowlist.json (transient
+   runtime marker, exists only around the commit) before
+   `git commit` — the commit_audit hook (v3 W1) re-checks HEAD against it after
+   the commit; delete the marker once the commit lands.
+
 8) Repeat for the next commit until the working tree is clean (or intentionally dirty)
 
 ## Deliverable

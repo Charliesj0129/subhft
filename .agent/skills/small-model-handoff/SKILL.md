@@ -42,7 +42,11 @@ Verified task scope (from `read-only-audit`); risk tier; task type; target files
    completely — every field, no links the executor can't follow. Paste only
    the gotchas that apply; keep the full packet <= ~150 lines. One packet =
    one agent = one concern.
-5. Spawn. Do not block on the executor's self-report — when the work lands,
+5. Spawn. First write .agent/runtime/active-packet.json (transient runtime
+   marker: `{"id": "<slug>", "allowed": [<ALLOWED FILES>], "orchestrator_bypass": true}`)
+   so the scope_guard hook (v3 W1) tool-enforces ALLOWED FILES; delete the
+   marker when the delegation lands (a stale marker blocks later work).
+   Do not block on the executor's self-report — when the work lands,
    begin independent review from your own snapshots.
 6. On return: review per `strict-code-review` Step 0 (scope-diff, personal
    re-run, break-probe, red-gate adjudication, ground-truth cross-check);
