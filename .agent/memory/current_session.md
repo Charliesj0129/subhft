@@ -2,8 +2,39 @@
 
 ## Last Updated
 
-- **Date**: 2026-07-13
-- **Session**: scheduled-CI fix batch (user-ordered: push / legacy /
+- **Date**: 2026-07-14
+- **Session**: agent-capability uplift (提升專案 agent 能力; plan-approved,
+  3 workstreams, all local commits on main, NOT pushed).
+  A: first agent-meta-audit report at
+  .agent/reports/agent-meta-audit-2026-07-14.md (commit 3bd15c41) — 3
+  actions, all executed this session. B (action 2): harness bindings
+  (commit 696729c8) — .claude/agents/ hft-executor / hft-reviewer
+  (read-only tools) / hft-test-writer / hft-docs + .claude/settings.json
+  ask-rules (Do-NOT-Edit paths, destructive git) + deny-rules (.env*,
+  config/settings.py) + AGENTS.md Harness Bindings section + task-intake
+  §6; golden-intake 8/8 PASS. C (actions 1+3): twice-rule promotion into
+  small-model-handoff (independent review packets) + strict-code-review
+  (identical-claims need real diff) + read-only-audit step 2 external
+  gate health.
+  FINDING from the new gate-health step's first run: nightly scheduled CI
+  red 5/5 nights (07-09→07-13); after the 07-13 fix batch the surviving
+  red leg is make perf-gate-feature-rust (feature_engine_parity_mismatch
+  _rate 1.0 in one leg ×3 reps, run 29280356169) plus stale_event_skipped
+  spam with age_ms ≈ 1.78e12 (epoch-zero timestamps vs wall clock in the
+  drill). NOT touched — Tier-3-adjacent, out of session scope; Charlie
+  decides.
+  OWED: (1) hft-reviewer smoke spawn — agent defs register at session
+  start, run early NEXT session (meta-audit action 2 done-condition);
+  (2) ledger lesson pointer-swap in model-routing.md deferred: file
+  carries the shioaji session's uncommitted 2026-07-13 entry, must not
+  be staged (golden-intake 8/8 line appended there, also unstaged, rides
+  with that pending commit); (3) meta-audit carried findings: P1/P2
+  widening probes still owed on next REAL matching tasks; trivy
+  push-then-scan ordering decision = Charlie.
+  Branch-per-theme deliberately deviated (commits on main): concurrent
+  dirty shioaji-1.5.6 tree + harness reads .claude/ from the working
+  tree; documented in the session report.
+- **Prior session (2026-07-13)**: scheduled-CI fix batch (user-ordered: push / legacy /
   修復 scheduled-CI / retire docs branch). Fix commits on main, PUSHED
   with approval: 4242c7b0 (gitleaks allowlist — six placeholder values,
   each reviewed at source; full-history scan now 'no leaks found'),

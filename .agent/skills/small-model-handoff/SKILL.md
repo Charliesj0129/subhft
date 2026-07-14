@@ -107,6 +107,28 @@ REPORT (deliver as your final message even if you finish early or stall):
 NO git commands of any kind. NO edits outside ALLOWED FILES.
 ```
 
+## Independent review packets (promoted 2026-07-14; twice-rule)
+
+Delegated review is a packet too, with three extra hard rules — from two
+delivery failures (ledger 2026-07-06: idle background executor needed a
+SendMessage nudge; 2026-07-13: ~734K tokens, no verdict, recorded FAIL):
+
+1. **Diff-scoped, never repo-scoped.** The packet names the exact diff
+   (commit hash / `git diff` range) and a SMALL enumerated set of governing
+   rules to read. No broad "review the plan/repo" mandates; no large
+   inherited context.
+2. **Delivery is part of the contract.** Single bounded review →
+   `run_in_background: false` so the report arrives with the tool result.
+   Background only for parallelism, and then the packet requires delivery
+   via SendMessage plus a hard tool/budget cap; the packet states that a
+   verdict is mandatory BEFORE budget exhaustion (cut checks, not the verdict).
+3. **Silence = FAIL, never approval.** No verdict delivered → ledger records
+   FAIL and the orchestrator performs the review directly; the delegation is
+   not evidence.
+
+Spawn reviews via the hft-reviewer binding (tool-enforced read-only,
+AGENTS.md §Harness Bindings).
+
 ## Safety rules
 Never include secrets/credentials in a packet. Never delegate git operations.
 Packet must be self-contained — executor gets no implicit context.

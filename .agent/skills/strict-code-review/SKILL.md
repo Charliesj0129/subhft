@@ -23,6 +23,11 @@ diffs: the pre-spawn snapshot and privately pre-computed ground truth.
    d. Adjudicate every red gate: pre-existing vs introduced, with evidence.
    e. Cross-check numeric/mechanical claims against the ground truth
       pre-computed before spawning (`small-model-handoff` step 2).
+   f. Any claim of "identical / byte-for-byte / unchanged" between artifacts
+      (files, JSON outputs, run results) is accepted only with a real diff
+      command + its output — never a by-inspection read. (Promoted
+      2026-07-14 per the twice-rule: 2026-07-07 and 2026-07-10 ledger
+      entries, two overclaims caught only by an independent diff.)
 1. Read the packet: does the diff do exactly that — nothing more, nothing less?
 2. Laws pass (hot-path files only): per-tick allocation, float price math,
    blocking IO/event-loop compute, time source (`timebase.now_ns`), FFI copies.
@@ -46,6 +51,7 @@ verdict: APPROVE / APPROVE-WITH-NITS / REQUEST-CHANGES / ESCALATE.
 ## Validation checklist
 - [ ] Executor diff: Step 0 done (snapshot diff, re-run, break-probe,
       red-gate adjudication, ground-truth cross-check)
+- [ ] Every "identical/unchanged" claim backed by a real diff command
 - [ ] Diff-vs-packet scope checked
 - [ ] All 5 passes done for applicable files
 - [ ] Each finding evidence-backed
