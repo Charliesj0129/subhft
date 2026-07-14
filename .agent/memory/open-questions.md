@@ -98,3 +98,13 @@ chore/shioaji-153-validation-harness ref was retired 2026-07-11 (#371 and
 Minor ops debt from the old-PC upgrade: heartbeat file writes fail with
 PermissionError until `.hft-runtime` is chown'd 1000:1000 on the host.
 One-line host fix, needs hands on the box. Decides: USER (host access).
+
+## Routine host scheduling (v3 W3) — Charlie decision
+Opened: 2026-07-14. R1-R4 unattended routines are committed (ed374559) but
+NOT scheduled — host scheduler install is a per-operation human approval
+(ADR 002). Options: (a) WSL crontab
+`30 7 * * * /home/charlie/hft_platform/scripts/agent_routines/run_routine.sh R1-nightly-ci-triage`
+(needs WSL running at 07:30), or (b) Windows Task Scheduler invoking
+`wsl.exe -e bash -lc "..."`. Prerequisite either way (also human-approved):
+one-time `git worktree add ~/hft_routines_wt main`. Until decided, routines
+are runnable manually via the same runner command.

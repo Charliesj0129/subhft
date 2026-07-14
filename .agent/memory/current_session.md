@@ -2,8 +2,47 @@
 
 ## Last Updated
 
-- **Date**: 2026-07-14
-- **Session**: agent-capability uplift (提升專案 agent 能力; plan-approved,
+- **Date**: 2026-07-14 (second session)
+- **Session**: Agent System v3 design + implementation (設計此專案的agent
+  system; brainstormed → spec approved section-by-section → plan approved →
+  executed same session). 7 local commits on main, NOT pushed:
+  adf923f7 (v3 design spec — layered evolution; L4 research-factory DEFERRED),
+  1e8619d1 (W1 hook enforcement floor: scope_guard + git_guard fail-closed,
+  discipline_feedback + commit_audit advisory; 12 tests),
+  7ddf9088 (W1 governance: AGENTS.md hooks paragraph + runtime-marker lines
+  in commit-work/small-model-handoff),
+  ee9cbfb0 (hooks hardened per first hft-reviewer REQUEST-CHANGES: F1 quoted
+  -text false-denials, F2 marker self-rewrite, F3 git -C/-c, F4 scratchpad
+  traversal, F6 prefix siblings; 23 tests total),
+  d05d2a55 (W2 pipeline-implement skill + task-intake §6 pointer + delegation
+  archive), ed374559 (W3 unattended read-only routines R1-R4 + runner +
+  ADR 002 + rule 65).
+  KEY HARNESS FACTS (probe 2026-07-14): hook stdin JSON carries agent_type/
+  agent_id on subagent tool calls (main session: absent); session_id is SHARED
+  main↔subagent; settings.json hooks HOT-LOAD mid-session (unlike agent defs,
+  which register at session start only).
+  Reviewer smoke (owed from session 1) DONE and exceeded: hft-reviewer
+  delivered sync REQUEST-CHANGES with 8 real findings (2 HIGH) — ledger entry
+  + archive 2026-07-14-w1-hooks-review.md. Golden intake 8/8 PASS re-run
+  after the §6 pipeline pointer (both runs recorded in model-routing.md,
+  UNSTAGED — file still carries the shioaji session's pending entry).
+  Verification: make check exit 0 (direct read, no pipe); agent-docs-check
+  0 errors at every wave; hooks live-fire verified in-session (scope_guard
+  block, git_guard block, commit_audit quiet path). NOT run: make ci (no
+  src/hft_platform changes; tests+scripts+governance only).
+  OWED / Charlie decision points: (1) host scheduling install for routines —
+  crontab `30 7 * * * .../run_routine.sh R1-nightly-ci-triage` or Windows
+  Task Scheduler→wsl.exe, plus one-time `git worktree add ~/hft_routines_wt
+  main` (both human-approved ops, NOT performed); (2) P-implement full first
+  run on the next real Tier-1/2 delegate task (review stage already exercised
+  for real); (3) push of the 7 commits; (4) L4 research-factory activation
+  (design in spec only); (5) ledger pointer-swap + these two ledger entries
+  ride with model-routing.md's pending user commit; (6) P-research-fanout /
+  P-test-harden pipelines wait for two clean P-implement runs.
+  Branch-per-theme deliberately deviated again (commits on main): hooks and
+  .claude/ must sit in the working tree to be live + concurrent dirty shioaji
+  work; documented in each commit message.
+- **Prior session (2026-07-14, first)**: agent-capability uplift (提升專案 agent 能力; plan-approved,
   3 workstreams, all local commits on main, NOT pushed).
   A: first agent-meta-audit report at
   .agent/reports/agent-meta-audit-2026-07-14.md (commit 3bd15c41) — 3

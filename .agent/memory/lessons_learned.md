@@ -142,3 +142,34 @@
 **Context**: `bash scripts/check_git_preconditions.sh --narrow-commit | tail -2 && git commit ...` committed straight through a BLOCKED gate: `&&` saw `tail`'s exit 0, not the gate's exit 1. Same failure mode as the 2026-07-10 agent-docs gate incident (7d3b2475 shipped red) — the lesson existed in private memory and was still repeated.
 **Fix**: Run the gate bare and branch on `$?`, or redirect to a log file (`gate ... > gate.log 2>&1; gate=$?`) when output must be captured. Undo any commit that slipped through (`git reset --soft HEAD^`) and re-run the gate before recommitting.
 **Rule**: A gate's exit code is the gate. Any pipeline segment after it (tail, tee, grep) replaces that exit code under `&&`/`if` unless you use `PIPESTATUS[0]` — so don't pipe gates at all.
+
+## [HARNESS] Claude Code hooks hot-load; agent defs do not (2026-07-14)
+
+**Context**: v3 W1 hook probe. Planned "live-fire owed next session" like the
+.claude/agents/ defs (which register at session start only) — but a probe hook
+added to .claude/settings.json mid-session fired on the SAME session's next
+tool call.
+**Facts** (probe evidence, hook stdin JSON): subagent tool calls carry
+`agent_type` (e.g. "hft-docs") + `agent_id`; main-session calls carry neither;
+`session_id` is SHARED between a session and its subagents (session-identity
+comparison cannot discriminate). `permission_mode`, `tool_use_id`, `effort`,
+`prompt_id`, `transcript_path`, `cwd` also present.
+**Rule**: settings.json hook changes are testable immediately in-session;
+.claude/agents/ changes still need a fresh session. When a harness behavior
+matters, probe it (log the event JSON) — don't assume from docs or analogy.
+
+## [PROCESS] Enforcement code needs adversarial review more than feature code (2026-07-14)
+
+**Context**: First hft-reviewer run on the W1 hooks commit returned
+REQUEST-CHANGES with 8 findings, 2 HIGH: a text-scanning git guard that
+false-denied any command MENTIONING git (it blocked the reviewer's own greps
+3 times, live), and a scope guard that auto-allowed the guarded subagent to
+rewrite the guard's own marker file. Author-written tests all passed — they
+tested intent, not bypasses (marker self-rewrite, /tmp/claude-x/../ traversal,
+prefix siblings).
+**Rule**: (1) Guards parse command POSITIONS (shell segments), never scan
+command text. (2) A guard's control files are excluded from what the guarded
+party may touch — check the bypass direction explicitly. (3) Normalize paths
+before any prefix-based allow. (4) Route every new guard/gate through
+independent adversarial review before relying on it; its failure mode is
+silent false confidence.
