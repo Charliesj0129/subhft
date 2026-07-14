@@ -16,6 +16,7 @@ Read only the file needed for the task. These rules are compact guardrails; cano
 | `50-testing.md` | Coverage, naming, HFT test focus |
 | `55-enforcement.md` | Pre-commit, discipline, CI gates |
 | `60-agent-workflow-governance.md` | Git-state safety and multi-agent coordination |
+| `65-unattended-autonomy.md` | Unattended routines: read-only default, whitelist escalation, runner contract |
 | `70-research-data.md` | ClickHouse research data and export contract |
 
 Related: `.agent/memory/`, `.agent/skills/00-index.md`, `docs/MODULES_REFERENCE.md`, `docs/architecture/`, `docs/runbooks/alpha-development-workflow.md`.

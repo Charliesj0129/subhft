@@ -130,6 +130,15 @@ EVERY session in this repo, orchestrator included: Do-NOT-Edit paths and
 destructive/remote git prompt for per-operation confirmation (ask rules);
 secrets surfaces (.env*, config/settings.py) are denied outright.
 
+Unattended routines (v3 W3, 2026-07-14; ADR docs/adr/002): scheduled headless
+agents are read-only by default — the runner
+scripts/agent_routines/run_routine.sh is the only entry point, refuses any
+routine with write_scope other than none, tool-disallows Edit/Write, and runs
+only in a dedicated worktree. Escalating a routine's write access is an
+authority change: new ADR + CHANGELOG first. Registry: .agent/routines/;
+rules: .agent/rules/65-unattended-autonomy.md. Routines suggest; interactive
+sessions fix.
+
 Hook enforcement floor (v3 W1, 2026-07-14): four hooks under .claude/hooks/
 lower the same contracts to the tool-interception layer — scope_guard
 (PreToolUse Edit/Write: during a delegation window, writes outside the packet
