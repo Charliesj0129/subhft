@@ -25,6 +25,7 @@ def _make_mock_system(
 
     system = MagicMock()
     system.running = running
+    system.order_mode = "sim"
 
     sg = MagicMock()
     sg.state = StormGuardState(storm_state)
@@ -78,6 +79,52 @@ class TestHealthServerReadiness:
         assert status == "ready"
         assert checks["system_running"] is True
         assert checks["storm_guard"] == "NORMAL"
+
+    def test_quote_only_ready_without_order_broker_login(self) -> None:
+        system = _make_mock_system()
+        system.order_mode = "disabled"
+        system.order_client.logged_in = False
+        server = HealthServer(system=system)
+
+        status, checks = server._check_readiness()
+
+        assert status == "ready"
+        assert checks["orders_enabled"] is False
+        assert checks["broker_login"]["md_client"] is True
+        assert checks["broker_login"]["order_client"] == "disabled"
+        assert "broker_not_logged_in" not in checks["unavailable_reasons"]
+
+    def test_quote_only_ignores_dead_strat_and_order_tasks(self) -> None:
+        """G2 regression: quote-only mode never starts strat/order/risk tasks
+        (system.py gates them behind orders_enabled), so critical_tasks must
+        not include them — otherwise readiness would report every quote-only
+        deploy as unavailable due to critical_tasks_dead:strat,order."""
+        system = _make_mock_system()
+        system.order_mode = "disabled"
+        system.order_client.logged_in = False
+        for name in ("strat", "order", "risk"):
+            del system.tasks[name]
+        server = HealthServer(system=system)
+
+        status, checks = server._check_readiness()
+
+        assert status == "ready"
+        assert checks["tasks"] == {"md": True, "recorder": True}
+        assert "critical_tasks_dead:strat,order" not in checks["unavailable_reasons"]
+        assert not any(r.startswith("critical_tasks_dead") for r in checks["unavailable_reasons"])
+
+    def test_quote_only_unavailable_until_all_pool_subscriptions_complete(self) -> None:
+        system = _make_mock_system()
+        system.order_mode = "disabled"
+        system.order_client.logged_in = False
+        system.md_client.subscriptions_complete = False
+        server = HealthServer(system=system)
+
+        status, checks = server._check_readiness()
+
+        assert status == "unavailable"
+        assert checks["subscriptions_complete"] is False
+        assert "subscriptions_incomplete" in checks["unavailable_reasons"]
 
     def test_unavailable_when_system_not_running(self) -> None:
         system = _make_mock_system(running=False)

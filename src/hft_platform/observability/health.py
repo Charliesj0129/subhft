@@ -115,14 +115,23 @@ class HealthServer:
         # 2. Broker login
         md_client = getattr(self._system, "md_client", None)
         order_client = getattr(self._system, "order_client", None)
+        order_mode = getattr(self._system, "order_mode", "sim")
+        orders_enabled = order_mode != "disabled"
+        checks["orders_enabled"] = orders_enabled
         md_logged_in = getattr(md_client, "logged_in", False) if md_client else False
         order_logged_in = getattr(order_client, "logged_in", False) if order_client else False
         checks["broker_login"] = {
             "md_client": md_logged_in,
-            "order_client": order_logged_in,
+            "order_client": order_logged_in if orders_enabled else "disabled",
         }
-        if not (md_logged_in and order_logged_in):
+        if not md_logged_in or (orders_enabled and not order_logged_in):
             unavailable_reasons.append("broker_not_logged_in")
+
+        subscriptions_complete = getattr(md_client, "subscriptions_complete", None) if md_client else None
+        if isinstance(subscriptions_complete, bool):
+            checks["subscriptions_complete"] = subscriptions_complete
+            if not subscriptions_complete:
+                unavailable_reasons.append("subscriptions_incomplete")
 
         # 3. StormGuard
         storm_guard = getattr(self._system, "storm_guard", None)
@@ -140,11 +149,13 @@ class HealthServer:
 
         # 4. Critical tasks alive
         tasks: dict[str, Any] = getattr(self._system, "tasks", {})
-        critical_tasks = ["md", "strat", "order", "recorder"]
-        if os.getenv("HFT_GATEWAY_ENABLED", "0") == "1":
-            critical_tasks.append("gateway")
-        else:
-            critical_tasks.append("risk")
+        critical_tasks = ["md", "recorder"]
+        if orders_enabled:
+            critical_tasks.extend(("strat", "order"))
+            if os.getenv("HFT_GATEWAY_ENABLED", "0") == "1":
+                critical_tasks.append("gateway")
+            else:
+                critical_tasks.append("risk")
         tasks_alive: dict[str, bool] = {}
         for name in critical_tasks:
             task = tasks.get(name)
@@ -227,7 +238,7 @@ class HealthServer:
         # 9. Order path: task alive AND broker connected
         order_task = tasks.get("order")
         order_alive = order_task is not None and not order_task.done()
-        if not order_alive or not order_logged_in:
+        if orders_enabled and (not order_alive or not order_logged_in):
             if "critical_tasks_dead:order" not in str(unavailable_reasons):
                 # Only add if not already captured by critical task check
                 if not order_alive and "order" not in dead_tasks:

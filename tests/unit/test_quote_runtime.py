@@ -315,3 +315,50 @@ class TestSubRetryCapacityAwareness:
 
         assert client._subscribe_symbol.call_count >= 1
         assert client._sub_retry_running is False
+
+
+class _ExchangeLikeStr(str):
+    """Spoofs Shioaji 1.5.6's ``builtins.Exchange`` tick-callback arg:
+    isinstance(x, str) is True (Exchange subclasses str) but the ``in``
+    operator raises TypeError because Exchange does not implement
+    __contains__/__iter__ the way a real str does."""
+
+    def __contains__(self, item: object) -> bool:
+        raise TypeError("argument of type 'Exchange' is not iterable")
+
+
+class TestValidateQuoteSchemaExchangeSpoof:
+    """G3 regression (2026-07-15): the v0-topic-string branch of
+    validate_quote_schema used ``isinstance(first, str)``, which is True for
+    a real Shioaji 1.5.6 Exchange object passed as the first v1 tick-callback
+    arg. The subsequent ``"/" in first`` then raised TypeError, crashing
+    callback dispatch. Must use ``type(first) is str`` (exact type check)
+    instead."""
+
+    def _make_runtime(self) -> "QuoteRuntime":
+        import unittest.mock as mock
+
+        from hft_platform.feed_adapter.shioaji.quote_runtime import QuoteRuntime
+
+        client = mock.MagicMock()
+        client._quote_schema_guard = True
+        client._quote_version = "v1"
+        client._quote_schema_guard_strict = False
+        return QuoteRuntime(client)
+
+    def test_exchange_like_first_arg_does_not_raise(self) -> None:
+        runtime = self._make_runtime()
+        exchange = _ExchangeLikeStr("TAIFEX")
+        payload = {"code": "TXFC0", "bid_price": 1.0}
+
+        ok, reason = runtime.validate_quote_schema(exchange, payload)
+
+        assert (ok, reason) == (True, "dict_payload")
+
+    def test_exchange_like_first_arg_would_have_raised_typeerror_pre_fix(self) -> None:
+        """Documents the exact crash mechanism the fix avoids."""
+        exchange = _ExchangeLikeStr("TAIFEX")
+        assert isinstance(exchange, str)
+        assert type(exchange) is not str
+        with pytest.raises(TypeError):
+            _ = "/" in exchange

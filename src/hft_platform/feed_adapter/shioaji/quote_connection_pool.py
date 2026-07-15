@@ -343,18 +343,19 @@ class QuoteConnectionPool:
     def create_facades(self) -> None:
         """Create a ShioajiClientFacade and FacadeSlot for each connection group.
 
-        Only the first facade fetches the full contract universe (~55k contracts).
-        Subsequent facades skip contract download to prevent 3x memory duplication.
+        Every facade loads contracts because Shioaji resolves subscriptions
+        against the Contracts registry owned by that authenticated session.
         """
         self._clients = []
         self._slots = []
         for group_id in range(self._num_conns):
             per_conn_cfg = dict(self._config)
+            per_conn_cfg["activate_ca"] = False
+            # Shioaji 1.5.6 resolves quote subscriptions through each session's
+            # own Contracts registry; skipping it produced a 90/0/0/0 pool.
+            per_conn_cfg["fetch_contract"] = "1"
             per_conn_cfg["session_lock_suffix"] = f"_conn{group_id}"
             per_conn_cfg["max_subscriptions"] = _clamp_max_subscriptions(per_conn_cfg)
-            # Only first facade downloads contracts; others skip to save ~27MB each
-            if group_id > 0:
-                per_conn_cfg["fetch_contract"] = "0"
             facade = ShioajiClientFacade(
                 config_path=self._shard_paths[group_id],
                 shioaji_config=per_conn_cfg,
@@ -402,7 +403,7 @@ class QuoteConnectionPool:
 
     def login(self, *args: Any, **kwargs: Any) -> bool:
         self.login_all()
-        return self.partial_login
+        return self.logged_in
 
     @staticmethod
     def _make_callback_wrapper(slot: FacadeSlot, original_cb: Callable[..., Any]) -> Callable[..., Any]:
@@ -701,6 +702,12 @@ class QuoteConnectionPool:
     @property
     def subscribed_count(self) -> int:
         return sum(getattr(c, "subscribed_count", 0) for c in self._clients)
+
+    @property
+    def subscriptions_complete(self) -> bool:
+        """Return true only when every configured symbol is subscribed."""
+        expected_codes = {str(sym["code"]) for sym in self._all_symbols if sym.get("code")}
+        return self.logged_in and expected_codes.issubset(self.subscribed_codes)
 
     @property
     def mode(self) -> str:

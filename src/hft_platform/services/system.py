@@ -17,7 +17,7 @@ from hft_platform.ops.evidence import get_shared_autonomy_evidence_writer
 from hft_platform.ops.manual_rearm import ManualRearmGate
 from hft_platform.ops.platform_degrade import get_shared_platform_degrade_controller
 from hft_platform.risk.storm_guard import StormGuardState
-from hft_platform.services.bootstrap import SystemBootstrapper
+from hft_platform.services.bootstrap import SystemBootstrapper, resolve_order_mode
 from hft_platform.services.heartbeat import DEFAULT_HEARTBEAT_PATH, heartbeat_writable, write_heartbeat
 from hft_platform.services.loop_watchdog import LoopStallWatchdog
 from hft_platform.utils.logging import configure_logging
@@ -181,6 +181,7 @@ class HFTSystem:
 
         self.bootstrapper = SystemBootstrapper(self.settings)
         self.registry = self.bootstrapper.build()
+        self.order_mode = resolve_order_mode()
 
         self.bus = self.registry.bus
         self.raw_queue = self.registry.raw_queue
@@ -359,34 +360,56 @@ class HFTSystem:
             manual_rearm_required=False,
         )
 
-        # Login order_client (separate Shioaji session for execution).
-        # md_client logs in via MarketDataService._connect_sequence(), but
-        # order_client needs its own login for contract resolution + order callbacks.
         try:
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, self.order_client.login)
-            logger.info("order_client logged in", contracts_ready=getattr(self.order_client, "contracts_ready", "N/A"))
-        except Exception as exc:
-            logger.error("order_client login failed — orders will be unavailable", error=str(exc))
+            # Keep liveness observable while broker login or recovery blocks.
+            self._start_service("health_server", self.health_server.run())
 
-        # Hooks for Shioaji
-        self.order_client.set_execution_callbacks(
-            on_order=lambda state, payload: self._on_exec("order", {"state": state, "payload": payload}),
-            on_deal=lambda payload: self._on_exec("deal", {"payload": payload}),
-        )
+            order_mode = getattr(self, "order_mode", None)
+            if order_mode is None:
+                order_mode = resolve_order_mode()
+                self.order_mode = order_mode
+            orders_enabled = order_mode != "disabled"
 
-        try:
-            # Opt-in: start SessionGovernor before market services
-            if self.session_governor is not None:
+            # Login order_client (separate Shioaji session for execution).
+            # md_client logs in via MarketDataService._connect_sequence(), but
+            # order_client needs its own login for contract resolution + callbacks.
+            if orders_enabled:
+                login_ok = False
+                try:
+                    loop = asyncio.get_running_loop()
+                    login_ok = await loop.run_in_executor(None, self.order_client.login)
+                except Exception as exc:
+                    logger.error("order_client login failed — orders will be unavailable", error=str(exc))
+
+                if login_ok is True:
+                    logger.info(
+                        "order_client logged in",
+                        contracts_ready=getattr(self.order_client, "contracts_ready", "N/A"),
+                    )
+                    self.order_client.set_execution_callbacks(
+                        on_order=lambda state, payload: self._on_exec("order", {"state": state, "payload": payload}),
+                        on_deal=lambda payload: self._on_exec("deal", {"payload": payload}),
+                    )
+                else:
+                    logger.error("order_client login returned false — orders are unavailable", order_mode=order_mode)
+                    if order_mode == "live":
+                        logger.critical("live_order_login_failed_startup_blocked")
+                        return
+            else:
+                logger.warning("order_path_disabled_quote_only")
+
+            # Order governance is unnecessary in quote-only mode and can invoke
+            # flatten/recovery paths, so keep it outside the quote runtime.
+            if orders_enabled and self.session_governor is not None:
                 await self.session_governor.start()
                 logger.info("SessionGovernor started")
 
             # Opt-in: start AutonomyMonitor via supervisor (so crashes are detected/restarted)
-            if self.autonomy_monitor is not None:
+            if orders_enabled and self.autonomy_monitor is not None:
                 self._start_service("autonomy_monitor", self.autonomy_monitor.run())
 
             # Bug 27 (2026-04-17): start PositionStuckMonitor (alert-only observability).
-            if self.position_stuck_monitor is not None:
+            if orders_enabled and self.position_stuck_monitor is not None:
                 self._start_service("position_stuck_monitor", self.position_stuck_monitor.run())
 
             # Start Services
@@ -403,7 +426,7 @@ class HFTSystem:
             # snapshot. Fills arriving during recover() pile up in
             # raw_exec_queue (bounded, with overflow buffer) and are consumed
             # only after the canonical baseline is loaded.
-            if os.getenv("HFT_STARTUP_RECON_ENABLED", "1") == "1" and self.startup_verifier:
+            if orders_enabled and os.getenv("HFT_STARTUP_RECON_ENABLED", "1") == "1" and self.startup_verifier:
                 try:
                     recovery = await self.startup_verifier.recover(
                         account_id=self.registry.account_id or self.registry.broker_id,
@@ -425,7 +448,11 @@ class HFTSystem:
                     logger.critical("Position recovery failed", error=str(exc))
                     return
 
-            if os.getenv("HFT_STARTUP_RECON_ENABLED", "1") == "1" and self.startup_fill_reconciler is not None:
+            if (
+                orders_enabled
+                and os.getenv("HFT_STARTUP_RECON_ENABLED", "1") == "1"
+                and self.startup_fill_reconciler is not None
+            ):
                 try:
                     fill_backfill = await self.startup_fill_reconciler.run()
                     logger.info(
@@ -439,25 +466,31 @@ class HFTSystem:
                 except Exception as exc:
                     logger.warning("Startup fill reconciliation failed", error=str(exc))
 
-            self._start_service("exec_router", self.exec_service.run())
-            # CE-M2: start GatewayService when enabled; otherwise start RiskEngine standalone
-            if self.gateway_service is not None:
-                self._start_service("gateway", self.gateway_service.run())
+            if orders_enabled:
+                self._start_service("exec_router", self.exec_service.run())
+                # CE-M2: start GatewayService when enabled; otherwise start RiskEngine standalone
+                if self.gateway_service is not None:
+                    self._start_service("gateway", self.gateway_service.run())
+                else:
+                    self._start_service("risk", self.risk_engine.run())
+                self._start_service("order", self.order_adapter.run())
+                self._start_service("exec_gateway", self.execution_gateway.run())
+
+                # ── Checkpoint Writer (after recovery, before trading) ──
+                if os.getenv("HFT_CHECKPOINT_ENABLED", "1") == "1" and self.checkpoint_writer:
+                    self._start_service("checkpoint_writer", self.checkpoint_writer.run())
+
+                self._start_service("recon", self.recon_service.run())
+                # Pass saved pre-MD cursor so StrategyRunner replays events published during startup
+                self.strategy_runner.set_start_cursor(pre_md_cursor)
+                self._start_service("strat", self.strategy_runner.run())
+                if (
+                    hasattr(self.strategy_runner, "_rejection_queue")
+                    and self.strategy_runner._rejection_queue is not None
+                ):
+                    self._start_service("rejection_consumer", self.strategy_runner._run_rejection_consumer())
             else:
-                self._start_service("risk", self.risk_engine.run())
-            self._start_service("order", self.order_adapter.run())
-            self._start_service("exec_gateway", self.execution_gateway.run())
-
-            # ── Checkpoint Writer (after recovery, before trading) ──
-            if os.getenv("HFT_CHECKPOINT_ENABLED", "1") == "1" and self.checkpoint_writer:
-                self._start_service("checkpoint_writer", self.checkpoint_writer.run())
-
-            self._start_service("recon", self.recon_service.run())
-            # Pass saved pre-MD cursor so StrategyRunner replays events published during startup
-            self.strategy_runner.set_start_cursor(pre_md_cursor)
-            self._start_service("strat", self.strategy_runner.run())
-            if hasattr(self.strategy_runner, "_rejection_queue") and self.strategy_runner._rejection_queue is not None:
-                self._start_service("rejection_consumer", self.strategy_runner._run_rejection_consumer())
+                logger.info("quote_only_service_plane_active", services=["health_server", "recorder", "md"])
 
             # Start AuditWriter flush tasks (singleton, lazy-created by RiskEngine/StormGuard)
             try:
@@ -515,15 +548,17 @@ class HFTSystem:
                 )
             else:
                 self._start_service("recorder_bridge", self._recorder_bridge())
-            if os.getenv("HFT_PNL_EXPORTER_ENABLED", "1").lower() not in {"0", "false", "no", "off"}:
+            if orders_enabled and os.getenv("HFT_PNL_EXPORTER_ENABLED", "1").lower() not in {
+                "0",
+                "false",
+                "no",
+                "off",
+            }:
                 self._start_service("pnl_exporter", self._pnl_snapshot_exporter())
 
             # WU-11: Session hooks
-            if self.session_hook_manager.enabled:
+            if orders_enabled and self.session_hook_manager.enabled:
                 self._start_service("session_hooks", self.session_hook_manager.run())
-
-            # WU-17: Structured health endpoint
-            self._start_service("health_server", self.health_server.run())
 
             # Disable GC during active trading (HFT Core Law 1: Allocator Law)
             if os.getenv("HFT_GC_DISABLE_TRADING", "0").strip().lower() in {"1", "true", "yes", "on"}:
@@ -729,27 +764,32 @@ class HFTSystem:
         position_stuck_monitor = getattr(self, "position_stuck_monitor", None)
         services: list[tuple[str, str, Any]] = [
             ("md", "MarketDataService", self.md_service.run),
-            ("exec_router", "ExecutionRouter", self.exec_service.run),
-            ("order", "OrderAdapter", self.order_adapter.run),
-            ("exec_gateway", "ExecutionGateway", self.execution_gateway.run),
-            ("recon", "ReconciliationService", self.recon_service.run),
-            ("strat", "StrategyRunner", self.strategy_runner.run),
             ("recorder", "RecorderService", self.recorder.run),
             *(
                 [("recorder_bridge", "RecorderBridge", self._recorder_bridge)]
                 if not (self._md_record_direct and self._fill_record_direct and self._order_record_direct)
                 else []
             ),
-            ("pnl_exporter", "PnLSnapshotExporter", self._pnl_snapshot_exporter),
         ]
-        if self.gateway_service is not None:
-            services.append(("gateway", "GatewayService", self.gateway_service.run))
-        else:
-            services.append(("risk", "RiskEngine", self.risk_engine.run))
-        if self.autonomy_monitor is not None:
-            services.append(("autonomy_monitor", "AutonomyMonitor", self.autonomy_monitor.run))
-        if position_stuck_monitor is not None:
-            services.append(("position_stuck_monitor", "PositionStuckMonitor", position_stuck_monitor.run))
+        if getattr(self, "order_mode", "sim") != "disabled":
+            services.extend(
+                (
+                    ("exec_router", "ExecutionRouter", self.exec_service.run),
+                    ("order", "OrderAdapter", self.order_adapter.run),
+                    ("exec_gateway", "ExecutionGateway", self.execution_gateway.run),
+                    ("recon", "ReconciliationService", self.recon_service.run),
+                    ("strat", "StrategyRunner", self.strategy_runner.run),
+                    ("pnl_exporter", "PnLSnapshotExporter", self._pnl_snapshot_exporter),
+                )
+            )
+            if self.gateway_service is not None:
+                services.append(("gateway", "GatewayService", self.gateway_service.run))
+            else:
+                services.append(("risk", "RiskEngine", self.risk_engine.run))
+            if self.autonomy_monitor is not None:
+                services.append(("autonomy_monitor", "AutonomyMonitor", self.autonomy_monitor.run))
+            if position_stuck_monitor is not None:
+                services.append(("position_stuck_monitor", "PositionStuckMonitor", position_stuck_monitor.run))
         return services
 
     def _reset_restart_backoff_if_healthy(self, name: str, task: asyncio.Task[Any] | None) -> None:

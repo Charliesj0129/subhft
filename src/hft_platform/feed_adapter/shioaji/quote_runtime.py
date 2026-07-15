@@ -348,7 +348,8 @@ class QuoteRuntime:
         if args:
             first = args[0]
             # v0-style callbacks typically begin with a topic string.
-            if isinstance(first, str) and ("/" in first or ":" in first):
+            # Shioaji 1.5.6 Exchange passes isinstance(str) but is not iterable.
+            if type(first) is str and ("/" in first or ":" in first):
                 return False, "topic_string_arg_v0_shape"
 
         payload = None

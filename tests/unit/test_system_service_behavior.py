@@ -93,6 +93,7 @@ def _make_system():
             sys_obj.session_hook_manager = MagicMock()
             sys_obj.session_hook_manager.enabled = False
             sys_obj.health_server = MagicMock()
+            sys_obj.health_server.run = AsyncMock()
             sys_obj.autonomy_monitor = None
             sys_obj.checkpoint_writer = None
             sys_obj.daily_report_service = None
@@ -325,6 +326,127 @@ async def test_run_early_exception_does_not_trip_gc_cleanup():
         await HFTSystem.run(sys_obj)
 
     sys_obj.stop_async.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_run_starts_health_before_live_order_login_and_stops_on_false(monkeypatch):
+    monkeypatch.setenv("HFT_ORDER_MODE", "live")
+    sys_obj = _make_system()
+    events = []
+
+    async def _health_run():
+        return None
+
+    def _start_service(name, coro):
+        events.append(name)
+        coro.close()
+
+    def _login():
+        events.append("order_login")
+        return False
+
+    sys_obj.health_server.run = _health_run
+    sys_obj._start_service = _start_service
+    sys_obj.order_client.login.side_effect = _login
+    sys_obj.stop_async = AsyncMock()
+
+    from hft_platform.services.system import HFTSystem
+
+    await HFTSystem.run(sys_obj)
+
+    assert events == ["health_server", "order_login"]
+    sys_obj.order_client.set_execution_callbacks.assert_not_called()
+    sys_obj.stop_async.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_run_disabled_order_mode_skips_order_startup_work(monkeypatch):
+    monkeypatch.setenv("HFT_ORDER_MODE", "disabled")
+    sys_obj = _make_system()
+
+    async def _health_run():
+        return None
+
+    def _start_service(_name, coro):
+        coro.close()
+
+    sys_obj.health_server.run = _health_run
+    sys_obj._start_service = _start_service
+    # G2/R8 fix: session_governor is now itself skipped in disabled mode, so
+    # it can no longer double as the "stop run() after broker startup" hook —
+    # patch _supervise directly to stop right before the supervisor loop.
+    sys_obj.session_governor = SimpleNamespace(start=AsyncMock())
+    sys_obj.startup_verifier = AsyncMock()
+    sys_obj.startup_fill_reconciler = AsyncMock()
+    sys_obj.stop_async = AsyncMock()
+    sys_obj._supervise = AsyncMock(side_effect=RuntimeError("stop after broker startup"))
+
+    from hft_platform.services.system import HFTSystem
+
+    with pytest.raises(RuntimeError, match="stop after broker startup"):
+        await HFTSystem.run(sys_obj)
+
+    sys_obj.order_client.login.assert_not_called()
+    sys_obj.order_client.set_execution_callbacks.assert_not_called()
+    sys_obj.startup_verifier.recover.assert_not_called()
+    sys_obj.startup_fill_reconciler.run.assert_not_called()
+    sys_obj.session_governor.start.assert_not_called()
+    sys_obj.stop_async.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_run_disabled_order_mode_never_starts_order_risk_strategy_plane(monkeypatch):
+    """G2/R8 regression (2026-07-15): a candidate deploy tarball gated the
+    order/risk/strategy/session-governor service plane behind orders_enabled;
+    git's working tree did not, so HFT_ORDER_MODE=disabled would still run
+    the full order plane in the background (SessionGovernor can invoke
+    flatten/recovery paths) even though order-submission calls were blocked
+    at the facade layer. Assert exactly which services start in quote-only
+    mode — the crash-fix files alone are not sufficient reconciliation."""
+    monkeypatch.setenv("HFT_ORDER_MODE", "disabled")
+    sys_obj = _make_system()
+    started: list[str] = []
+
+    async def _health_run():
+        return None
+
+    def _start_service(name, coro):
+        started.append(name)
+        coro.close()
+
+    sys_obj.health_server.run = _health_run
+    sys_obj._start_service = _start_service
+    sys_obj.session_governor = SimpleNamespace(start=AsyncMock())
+    sys_obj.autonomy_monitor = MagicMock()
+    sys_obj.position_stuck_monitor = MagicMock()
+    sys_obj.startup_verifier = AsyncMock()
+    sys_obj.startup_fill_reconciler = AsyncMock()
+    sys_obj.stop_async = AsyncMock()
+    sys_obj._supervise = AsyncMock(side_effect=RuntimeError("stop before supervisor loop"))
+
+    from hft_platform.services.system import HFTSystem
+
+    with pytest.raises(RuntimeError, match="stop before supervisor loop"):
+        await HFTSystem.run(sys_obj)
+
+    assert started == ["health_server", "recorder", "md"]
+    for forbidden in (
+        "exec_router",
+        "gateway",
+        "risk",
+        "order",
+        "exec_gateway",
+        "checkpoint_writer",
+        "recon",
+        "strat",
+        "rejection_consumer",
+        "pnl_exporter",
+        "session_hooks",
+        "autonomy_monitor",
+        "position_stuck_monitor",
+    ):
+        assert forbidden not in started
+    sys_obj.session_governor.start.assert_not_called()
 
 
 def test_iter_supervised_services_no_gateway():

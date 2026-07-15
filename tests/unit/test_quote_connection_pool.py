@@ -137,6 +137,39 @@ class TestQuoteConnectionPoolLifecycle:
             call_kwargs = MockFacade.call_args_list[0][1]
             assert call_kwargs["shioaji_config"]["session_lock_suffix"] == "_conn0"
 
+    def test_create_facades_forces_ca_off_for_every_quote_connection(self, tmp_path):
+        symbols = [
+            {"code": "TXFC0", "exchange": "TAIFEX", "group": 0},
+            {"code": "2330", "exchange": "TSE", "group": 1},
+        ]
+        pool = self._make_pool_with_symbols(tmp_path, symbols, 2)
+        pool._config["activate_ca"] = True
+
+        with mock.patch("hft_platform.feed_adapter.shioaji.quote_connection_pool.ShioajiClientFacade") as facade_cls:
+            facade_cls.return_value = mock.MagicMock()
+            pool.create_facades()
+
+        assert facade_cls.call_count == 2
+        assert all(call.kwargs["shioaji_config"]["activate_ca"] is False for call in facade_cls.call_args_list)
+
+    def test_create_facades_fetches_contracts_on_every_connection(self, tmp_path):
+        """Shioaji 1.5.6 resolves quote subscriptions via each session's own
+        Contracts registry; skipping fetch on non-first facades produced a
+        90/0/0/0 subscribed pool in production."""
+        symbols = [
+            {"code": "TXFC0", "exchange": "TAIFEX", "group": 0},
+            {"code": "2330", "exchange": "TSE", "group": 1},
+            {"code": "2317", "exchange": "TSE", "group": 2},
+        ]
+        pool = self._make_pool_with_symbols(tmp_path, symbols, 3)
+
+        with mock.patch("hft_platform.feed_adapter.shioaji.quote_connection_pool.ShioajiClientFacade") as facade_cls:
+            facade_cls.return_value = mock.MagicMock()
+            pool.create_facades()
+
+        assert facade_cls.call_count == 3
+        assert all(call.kwargs["shioaji_config"]["fetch_contract"] == "1" for call in facade_cls.call_args_list)
+
     def test_login_all_calls_each_facade(self, tmp_path):
         symbols = [
             {"code": "TXFC0", "exchange": "TAIFEX", "group": 0},
@@ -174,6 +207,21 @@ class TestQuoteConnectionPoolLifecycle:
         pool.login_all()
         assert pool.partial_login is True
         assert pool.logged_in is False
+
+    def test_login_returns_false_when_any_facade_login_fails(self, tmp_path):
+        symbols = [
+            {"code": "TXFC0", "exchange": "TAIFEX", "group": 0},
+            {"code": "2330", "exchange": "TSE", "group": 1},
+        ]
+        pool = self._make_pool_with_symbols(tmp_path, symbols, 2)
+        facade0 = mock.MagicMock(logged_in=True)
+        facade0.login.return_value = True
+        facade1 = mock.MagicMock(logged_in=False)
+        facade1.login.return_value = False
+        pool._clients = [facade0, facade1]
+        pool._login_interval_s = 0
+
+        assert pool.login() is False
 
     def test_subscribe_basket_calls_each_logged_in_facade(self, tmp_path):
         symbols = [
@@ -244,6 +292,19 @@ class TestQuoteConnectionPoolProperties:
         f0.subscribed_count, f1.subscribed_count = 20, 150
         pool._clients = [f0, f1]
         assert pool.subscribed_count == 170
+
+    def test_subscriptions_complete_requires_every_configured_symbol(self, tmp_path):
+        pool = self._make_pool(tmp_path)
+        f0, f1 = mock.MagicMock(), mock.MagicMock()
+        f0.logged_in = f1.logged_in = True
+        f0.subscribed_codes = {"TXFC0"}
+        f1.subscribed_codes = set()
+        pool._clients = [f0, f1]
+
+        assert pool.subscriptions_complete is False
+
+        f1.subscribed_codes = {"2330"}
+        assert pool.subscriptions_complete is True
 
     def test_mode_from_first_client(self, tmp_path):
         pool = self._make_pool(tmp_path)
