@@ -39,6 +39,16 @@ logger = get_logger("bootstrap")
 _VALID_BROKERS = frozenset({"shioaji", "fubon"})
 _VALID_RUNTIME_ROLES = frozenset({"engine", "maintenance", "monitor", "wal_loader"})
 _FEED_ALLOWED_ROLES = frozenset({"engine"})
+_ORDER_MODE_ALIASES = {
+    "sim": "sim",
+    "simulation": "sim",
+    "paper": "sim",
+    "live": "live",
+    "real": "live",
+    "disabled": "disabled",
+}
+_LEGACY_SIM_TRUE = frozenset({"1", "true", "yes", "on", "sim"})
+_LEGACY_SIM_FALSE = frozenset({"0", "false", "no", "off", "live", "real"})
 
 
 def _env_float(name: str, default: float, min_value: float) -> float:
@@ -175,6 +185,40 @@ class _RoleGuardedNoopClient:
         self.close(logout=logout)
 
 
+def resolve_order_mode() -> str:
+    """Return the canonical order mode or refuse an ambiguous configuration."""
+    configured_mode = os.getenv("HFT_ORDER_MODE")
+    if configured_mode is None:
+        legacy_simulation = os.getenv("HFT_ORDER_SIMULATION")
+        if legacy_simulation is None:
+            raw = "sim"
+        else:
+            legacy_value = legacy_simulation.strip().lower()
+            if legacy_value in _LEGACY_SIM_TRUE:
+                raw = "sim"
+            elif legacy_value in _LEGACY_SIM_FALSE:
+                raw = "live"
+            else:
+                raise SystemExit(
+                    f"Unsupported HFT_ORDER_SIMULATION={legacy_simulation!r}; expected an explicit boolean"
+                )
+            os.environ["HFT_ORDER_MODE"] = raw
+            logger.warning(
+                "normalized_legacy_order_simulation",
+                legacy_value=legacy_simulation,
+                normalized=raw,
+            )
+    else:
+        raw = configured_mode.strip().lower()
+    mode = _ORDER_MODE_ALIASES.get(raw)
+    if mode is None:
+        raise SystemExit(f"Unsupported HFT_ORDER_MODE={raw!r}; expected sim, live, or disabled")
+    if raw != mode:
+        os.environ["HFT_ORDER_MODE"] = mode
+        logger.warning("normalized_order_mode", original=raw, normalized=mode)
+    return mode
+
+
 def validate_order_mode_safety() -> None:
     """Reject dangerous mode combinations and log warnings for live trading."""
     hft_mode = os.getenv("HFT_MODE", "sim").strip().lower()
@@ -183,12 +227,9 @@ def validate_order_mode_safety() -> None:
         hft_mode = "live"
         os.environ["HFT_MODE"] = "live"
         logger.warning("normalized_mode", original="real", normalized="live")
-    order_mode = os.getenv("HFT_ORDER_MODE", "sim").strip().lower()
-    if order_mode == "real":
-        order_mode = "live"
-        os.environ["HFT_ORDER_MODE"] = "live"
+    order_mode = resolve_order_mode()
 
-    if order_mode in {"live", "real"}:
+    if order_mode == "live":
         if hft_mode not in {"real", "live"}:
             logger.critical(
                 "FATAL: HFT_ORDER_MODE=live requires HFT_MODE=real or live",
@@ -582,14 +623,12 @@ class SystemBootstrapper:
         base_shioaji_cfg: dict[str, Any],
         broker_id: str,
     ) -> tuple[Any, Any]:
+        order_mode = resolve_order_mode()
+        quote_cfg = dict(base_shioaji_cfg)
+        quote_cfg["activate_ca"] = False
         order_cfg = dict(base_shioaji_cfg)
-        order_mode = os.getenv("HFT_ORDER_MODE", "").strip().lower()
-        order_sim_flag = os.getenv("HFT_ORDER_SIMULATION")
         order_no_ca = os.getenv("HFT_ORDER_NO_CA", "0").lower() in {"1", "true", "yes", "on"}
-        if order_mode:
-            order_cfg["simulation"] = order_mode in {"sim", "simulation", "paper"}
-        elif order_sim_flag is not None:
-            order_cfg["simulation"] = order_sim_flag.lower() in {"1", "true", "yes", "on", "sim"}
+        order_cfg["simulation"] = order_mode == "sim"
         if order_no_ca or order_cfg.get("simulation") is True:
             order_cfg["activate_ca"] = False
 
@@ -601,7 +640,10 @@ class SystemBootstrapper:
             from hft_platform.feed_adapter.fubon.facade import FubonClientFacade  # lazy import
 
             logger.info("Instantiating Fubon broker clients", broker_id=broker_id)
-            return FubonClientFacade(symbols_path, base_shioaji_cfg), FubonClientFacade(symbols_path, order_cfg)
+            fubon_md_client = FubonClientFacade(symbols_path, base_shioaji_cfg)
+            if order_mode == "disabled":
+                return fubon_md_client, _RoleGuardedNoopClient("order_disabled")
+            return fubon_md_client, FubonClientFacade(symbols_path, order_cfg)
 
         # Default: shioaji
         from hft_platform.feed_adapter.shioaji.facade import ShioajiClientFacade  # lazy import
@@ -610,8 +652,10 @@ class SystemBootstrapper:
         if num_conns > 1:
             from hft_platform.feed_adapter.shioaji.quote_connection_pool import QuoteConnectionPool
 
-            pool = QuoteConnectionPool(symbols_path, base_shioaji_cfg, num_conns)
+            pool = QuoteConnectionPool(symbols_path, quote_cfg, num_conns)
             pool.create_facades()
+            if order_mode == "disabled":
+                return pool, _RoleGuardedNoopClient("order_disabled")
             # Order client needs the full symbol list for contract resolution
             # but does NOT subscribe to quotes, so the per-connection subscription
             # limit does not apply.  Temporarily raise it for the order facade
@@ -621,7 +665,10 @@ class SystemBootstrapper:
             order_cfg = dict(order_cfg)
             order_cfg["max_subscriptions"] = num_conns * DEFAULT_MAX_SUBSCRIPTIONS_PER_CONN
             return pool, ShioajiClientFacade(symbols_path, order_cfg)
-        return ShioajiClientFacade(symbols_path, base_shioaji_cfg), ShioajiClientFacade(symbols_path, order_cfg)
+        shioaji_md_client = ShioajiClientFacade(symbols_path, quote_cfg)
+        if order_mode == "disabled":
+            return shioaji_md_client, _RoleGuardedNoopClient("order_disabled")
+        return shioaji_md_client, ShioajiClientFacade(symbols_path, order_cfg)
 
     def build(self) -> ServiceRegistry:
         role = self._get_runtime_role()

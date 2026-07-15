@@ -296,11 +296,14 @@ class ReconnectOrchestrator:
                 current = c._quote_version
         else:
             current = c._quote_version
-        if current == "v0" and not c._supports_quote_v0():
+        if current == "v0":
+            v0 = getattr(quote_version, "v0", None)
+            if v0 is not None and c._supports_quote_v0():
+                return v0
             if c._supports_quote_v1():
-                return quote_version.v1
+                return getattr(quote_version, "v1", None)
             return None
-        return quote_version.v0 if current == "v0" else quote_version.v1
+        return getattr(quote_version, "v1", None)
 
     def handle_quote_schema_mismatch(self, reason: str, *args: Any, **kwargs: Any) -> None:
         """Record and log quote schema mismatches."""

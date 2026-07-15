@@ -63,6 +63,47 @@ class TestBuildBrokerClientsSelection:
             )
             assert mock_facade.call_count == 2
 
+    def test_shioaji_quote_only_builds_no_order_facade_and_disables_quote_ca(
+        self, bootstrapper: SystemBootstrapper, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("HFT_ORDER_MODE", "disabled")
+        monkeypatch.setenv("HFT_QUOTE_CONNECTIONS", "1")
+
+        with patch("hft_platform.feed_adapter.shioaji.facade.ShioajiClientFacade") as mock_facade:
+            mock_facade.return_value = MagicMock()
+            md, order = bootstrapper._build_broker_clients(
+                role="engine",
+                symbols_path="config/symbols.yaml",
+                base_shioaji_cfg={"activate_ca": True},
+                broker_id="shioaji",
+            )
+
+        assert md is mock_facade.return_value
+        assert mock_facade.call_count == 1
+        assert mock_facade.call_args.args[1]["activate_ca"] is False
+        assert order.runtime_role == "order_disabled"
+        assert order.login() is False
+
+    def test_shioaji_pool_receives_ca_disabled_quote_config(
+        self, bootstrapper: SystemBootstrapper, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("HFT_ORDER_MODE", "disabled")
+        monkeypatch.setenv("HFT_QUOTE_CONNECTIONS", "4")
+
+        with patch("hft_platform.feed_adapter.shioaji.quote_connection_pool.QuoteConnectionPool") as pool_cls:
+            pool = pool_cls.return_value
+            md, order = bootstrapper._build_broker_clients(
+                role="engine",
+                symbols_path="config/symbols.yaml",
+                base_shioaji_cfg={"activate_ca": True},
+                broker_id="shioaji",
+            )
+
+        assert md is pool
+        assert pool_cls.call_args.args[1]["activate_ca"] is False
+        pool.create_facades.assert_called_once_with()
+        assert order.runtime_role == "order_disabled"
+
     def test_fubon_path_lazy_imports_fubon_facade(self, bootstrapper: SystemBootstrapper) -> None:
         """broker_id='fubon' lazy-imports and instantiates FubonClientFacade."""
         mock_fubon_facade_cls = MagicMock()

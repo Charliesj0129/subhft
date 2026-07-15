@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, PropertyMock
 
 from hft_platform.feed_adapter.shioaji.account_gateway import AccountGateway
 
@@ -296,6 +296,15 @@ class TestGetPositionsDecoupled:
     def test_last_positions_error_initial_none(self) -> None:
         gw = AccountGateway(_make_positions_client())
         assert gw.last_positions_error is None
+
+    def test_not_logged_in_returns_none_without_reading_account_properties(self) -> None:
+        client = _make_positions_client()
+        client.logged_in = False
+        type(client.api).stock_account = PropertyMock(side_effect=RuntimeError("not authenticated"))
+        gw = AccountGateway(client)
+
+        assert gw.get_positions() is None
+        assert gw.last_positions_error == "not authenticated"
 
     def test_futopt_fails_stock_succeeds_returns_stock_positions(self) -> None:
         client = _make_positions_client()

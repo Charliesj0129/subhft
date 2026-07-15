@@ -24,6 +24,7 @@ class TestMarketDataServiceExtended(unittest.IsolatedAsyncioTestCase):
         self.bus = MagicMock(spec=RingBufferBus)
         self.raw_queue = asyncio.Queue()
         self.client = MagicMock()
+        self.client.login.return_value = True
         self.service = MarketDataService(self.bus, self.raw_queue, self.client)
 
     async def asyncTearDown(self):
@@ -63,6 +64,15 @@ class TestMarketDataServiceExtended(unittest.IsolatedAsyncioTestCase):
         self.client.login.side_effect = RuntimeError("boom")
         await self.service._connect_sequence()
         self.assertEqual(self.service.state, FeedState.DISCONNECTED)
+
+    async def test_connect_sequence_false_login_stops_before_subscription(self):
+        self.client.login.return_value = False
+
+        await self.service._connect_sequence()
+
+        self.assertEqual(self.service.state, FeedState.DISCONNECTED)
+        self.client.validate_symbols.assert_not_called()
+        self.client.subscribe_basket.assert_not_called()
 
     async def test_publish_no_publish_fn(self):
         service = MarketDataService(object(), self.raw_queue, self.client)

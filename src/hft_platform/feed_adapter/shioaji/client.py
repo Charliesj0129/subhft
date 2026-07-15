@@ -216,12 +216,12 @@ def _registry_unregister(client: Any) -> None:
 def dispatch_tick_cb(*args, **kwargs):
     global _ROUTE_MISS_COUNT
     _sync_router_route_globals()
-    # Arity bridge: 1.5.3 v1 callbacks pass a single (data) arg; 1.3.3 passes
+    # Arity bridge: 1.5.x v1 callbacks pass a single (data) arg; 1.3.3 passes
     # (topic, data). The router hot path is the concrete 2-arg
     # ``dispatch_tick_cb(topic, quote)``, so normalise here — for the 1-arg
     # shape topic=None lets ``_extract_quote_code_from_obj`` read the code off
     # the tick. Without this, a 1-arg call raises TypeError before the router's
-    # own try/except, disconnecting the feed on the first 1.5.3 tick.
+    # own try/except, disconnecting the feed on the first 1.5.x tick.
     if len(args) == 1 and not kwargs:
         _router.dispatch_tick_cb(None, args[0])
     elif len(args) >= 2:
@@ -1008,8 +1008,8 @@ class ShioajiClient:
         contracts_cb=None,
     ):
         """Login to Shioaji broker. Delegates to SessionRuntime.login_with_retry()."""
-        # Surface the SDK's effective Solace reconnect cadence once per process
-        # (postmortem trail — see _solace_env). Best-effort, never raises.
+        # Surface legacy SDK Solace reconnect settings when available. Shioaji
+        # 1.5.x uses a native messaging core, so this is a no-op there.
         log_solace_reconnect_params()
         return self._session_runtime.login_with_retry(
             api_key=api_key,
@@ -1061,9 +1061,9 @@ class ShioajiClient:
         # unsubscribe, v1 callback setters, set_event_callback). 1.5 exposes
         # these on the top-level api; 1.3.3 only on the api.quote proxy.
         # resolve_quote_api prefers the top-level api, so the adapter stops
-        # touching the deprecated api.quote.* shims on 1.5.3 while transparently
+        # touching the deprecated api.quote.* shims on 1.5.x while transparently
         # falling back to the proxy on 1.3.3. The v0 setters (dropped in 1.5)
-        # are absent here on 1.5.3, which is exactly what _supports_quote_v0()
+        # are absent here on 1.5.x, which is exactly what _supports_quote_v0()
         # should observe.
         return resolve_quote_api(self.api)
 

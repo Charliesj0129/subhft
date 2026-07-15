@@ -21,6 +21,7 @@ class TestMarketDataService(unittest.IsolatedAsyncioTestCase):
         self.bus = MagicMock(spec=RingBufferBus)
         self.raw_queue = asyncio.Queue()
         self.client = MagicMock()
+        self.client.login.return_value = True
         self.service = MarketDataService(self.bus, self.raw_queue, self.client)
 
     async def asyncTearDown(self):

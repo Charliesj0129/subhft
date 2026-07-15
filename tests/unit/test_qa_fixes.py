@@ -33,6 +33,10 @@ def test_shioaji_client_mode(tmp_path):
     assert hasattr(c, "mode")
     assert c.mode in ["real", "simulation"]
 
-    # Check get_positions doesn't crash
+    # An installed SDK creates a real client, but account access before login
+    # must fail closed instead of leaking Shioaji's AuthError.
     pos = c.get_positions()
-    assert isinstance(pos, list)
+    if c.mode == "simulation":
+        assert pos == []
+    else:
+        assert pos is None

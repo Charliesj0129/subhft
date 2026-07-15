@@ -1,20 +1,20 @@
 """Dual-version Shioaji compatibility resolvers.
 
-The adapter must run on both the pinned 1.3.3 SDK (current production) and the
-held 1.5.3 upgrade (PR #367). Between those releases the quote API moved:
+The adapter must run on both the legacy 1.3.3 SDK and the target 1.5.6 SDK.
+Across the 1.5.x line the quote API moved:
 
 * enums ``QuoteType`` / ``QuoteVersion`` moved from ``sj.constant.*`` to
-  top-level ``sj.*`` (the ``sj.constant`` shim survives in 1.5.3 only as a
+  top-level ``sj.*`` (the ``sj.constant`` shim survives in 1.5.x only as a
   ``DeprecationWarning``);
 * ``subscribe`` / ``unsubscribe`` / the v1 quote-callback setters /
   ``set_event_callback`` moved from the ``api.quote`` proxy to the top-level
-  ``api`` (the proxy survives in 1.5.3 only as a ``DeprecationWarning``);
-* the v0 quote-callback setters were removed entirely in 1.5.3 (the adapter
+  ``api`` (the proxy survives in 1.5.x only as a ``DeprecationWarning``);
+* the v0 quote-callback setters were removed from the 1.5.x API (the adapter
   already feature-detects v0 vs v1, so the resolver lets that probe report
   "unsupported" truthfully).
 
 These resolvers feature-detect at call time so a single code path is correct
-on both SDKs and stops touching the deprecated surface on 1.5.3. No SDK import
+on both SDKs and stops touching the deprecated surface on 1.5.x. No SDK import
 happens at module load.
 """
 
@@ -47,7 +47,7 @@ def resolve_quote_api(api: Any) -> Any | None:
     1.5 exposes these on the top-level ``api``; 1.3.3 only on the ``api.quote``
     proxy. Preferring the top-level ``api`` when it carries ``subscribe`` /
     ``unsubscribe`` migrates the whole quote surface off the deprecated proxy
-    on 1.5.3 in one place, while transparently falling back to the proxy on
+    on 1.5.x in one place, while transparently falling back to the proxy on
     1.3.3. Returns ``None`` when no usable quote surface is available (e.g.
     not logged in), so callers fail closed instead of dispatching onto a stub.
     """

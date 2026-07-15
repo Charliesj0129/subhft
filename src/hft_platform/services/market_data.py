@@ -1109,7 +1109,9 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
     async def _connect_sequence(self) -> None:
         try:
             self._set_state(FeedState.CONNECTING)
-            await self._call_client(self.client.login)
+            login_ok = await self._call_client(self.client.login)
+            if login_ok is not True:
+                raise RuntimeError("broker login returned false")
             await self._call_client(self.client.validate_symbols)
 
             self._set_state(FeedState.SNAPSHOTTING)

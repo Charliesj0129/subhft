@@ -11,6 +11,7 @@ import os
 import tempfile
 import threading
 import time
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -259,6 +260,21 @@ class TestGetQuoteVersion:
         with patch.dict("sys.modules", {"shioaji": None}):
             result = orch.get_quote_version()
             assert result is None
+
+    def test_missing_v0_enum_falls_back_to_v1(self):
+        """Shioaji 1.5.6 removed QuoteVersion.v0 even on mixed mock surfaces."""
+        quote_version = SimpleNamespace(v1="v1")
+        sdk = SimpleNamespace(QuoteVersion=quote_version)
+        client = SimpleNamespace(
+            _quote_version="v0",
+            _quote_version_lock=threading.Lock(),
+            _supports_quote_v0=lambda: True,
+            _supports_quote_v1=lambda: True,
+        )
+        orch = ReconnectOrchestrator(client)  # type: ignore[arg-type]
+
+        with patch.dict("sys.modules", {"shioaji": sdk}):
+            assert orch.get_quote_version() == "v1"
 
 
 class TestRequestReconnectViaPolicy:

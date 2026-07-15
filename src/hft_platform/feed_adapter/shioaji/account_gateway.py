@@ -50,11 +50,15 @@ class AccountGateway:
         a healthy futopt portfolio and tripping the reduce-only safety latch
         for the trading lane. They are now queried separately: if at least one
         succeeds, its positions are returned (others logged as warnings on
-        ``last_positions_error``). Returns None only when BOTH fail.
+        ``last_positions_error``). Returns None when the client is not
+        authenticated or when both account queries fail.
         """
         if self._client.mode == "simulation":
             self._last_positions_error = None
             return []
+        if not self._client.logged_in:
+            self._last_positions_error = "not authenticated"
+            return None
         cached = self._client._cache_get("positions")
         if cached is not None:
             return cached
