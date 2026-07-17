@@ -978,27 +978,35 @@ def build_parser() -> argparse.ArgumentParser:
     # `make research` / `make research-triage` now shell out to. Argument
     # spec is borrowed verbatim from `research.pipeline._add_common_run_args`
     # so any new arg landed there is automatically exposed here.
-    from research.pipeline import _add_common_run_args as _research_add_common_run_args
+    # `research/` is dev-only and not shipped in production images/mounts;
+    # the whole CLI must stay usable there (ops commands like
+    # `hft ops rearm-platform` run in-container), so the pipeline commands
+    # are registered only when the package is importable.
+    try:
+        from research.pipeline import _add_common_run_args as _research_add_common_run_args
+    except ImportError:
+        _research_add_common_run_args = None
 
-    alpha_pipeline = alpha_sub.add_parser(
-        "pipeline",
-        help="Canonical research pipeline orchestrator (mirrors `make research`).",
-    )
-    alpha_pipeline_sub = alpha_pipeline.add_subparsers(dest="alpha_pipeline_cmd", required=True)
+    if _research_add_common_run_args is not None:
+        alpha_pipeline = alpha_sub.add_parser(
+            "pipeline",
+            help="Canonical research pipeline orchestrator (mirrors `make research`).",
+        )
+        alpha_pipeline_sub = alpha_pipeline.add_subparsers(dest="alpha_pipeline_cmd", required=True)
 
-    alpha_pipeline_run = alpha_pipeline_sub.add_parser(
-        "run",
-        help="Strict SOP: optimize preflight → validate → promote → index (non-bypassable).",
-    )
-    _research_add_common_run_args(alpha_pipeline_run, strict=True)
-    alpha_pipeline_run.set_defaults(func=cmd_alpha_pipeline_run)
+        alpha_pipeline_run = alpha_pipeline_sub.add_parser(
+            "run",
+            help="Strict SOP: optimize preflight → validate → promote → index (non-bypassable).",
+        )
+        _research_add_common_run_args(alpha_pipeline_run, strict=True)
+        alpha_pipeline_run.set_defaults(func=cmd_alpha_pipeline_run)
 
-    alpha_pipeline_triage = alpha_pipeline_sub.add_parser(
-        "triage",
-        help="Internal debug mode (requires HFT_RESEARCH_ALLOW_TRIAGE=1); outputs non-promotable.",
-    )
-    _research_add_common_run_args(alpha_pipeline_triage, strict=False)
-    alpha_pipeline_triage.set_defaults(func=cmd_alpha_pipeline_triage)
+        alpha_pipeline_triage = alpha_pipeline_sub.add_parser(
+            "triage",
+            help="Internal debug mode (requires HFT_RESEARCH_ALLOW_TRIAGE=1); outputs non-promotable.",
+        )
+        _research_add_common_run_args(alpha_pipeline_triage, strict=False)
+        alpha_pipeline_triage.set_defaults(func=cmd_alpha_pipeline_triage)
 
     # ── TCA ─────────────────────────────────────────────────────────────
     tca = sub.add_parser("tca", help="Transaction Cost Analysis utilities")

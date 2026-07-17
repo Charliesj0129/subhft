@@ -11,6 +11,8 @@ from typing import Any
 
 from structlog import get_logger
 
+from hft_platform.feed_adapter.shioaji._compat import iter_contract_category
+
 logger = get_logger("feed_adapter.contract_fetcher")
 
 try:
@@ -100,21 +102,13 @@ def fetch_all_contracts() -> list[dict[str, Any]]:
         except Exception as exc:
             logger.warning("contract_fetch_failed", label=label, error=str(exc))
     try:
-        for root in api.Contracts.Futures.keys():
-            try:
-                for c in api.Contracts.Futures[root]:
-                    contracts.append(_normalize_contract(c, "FUT", "future"))
-            except Exception as exc:
-                logger.warning("futures_root_fetch_failed", root=root, error=str(exc))
+        for c in iter_contract_category(api.Contracts.Futures):
+            contracts.append(_normalize_contract(c, "FUT", "future"))
     except Exception as exc:
-        logger.warning("futures_keys_failed", error=str(exc))
+        logger.warning("futures_fetch_failed", error=str(exc))
     try:
-        for root in api.Contracts.Options.keys():
-            try:
-                for c in api.Contracts.Options[root]:
-                    contracts.append(_normalize_contract(c, "OPT", "option"))
-            except Exception as exc:
-                logger.warning("options_root_fetch_failed", root=root, error=str(exc))
+        for c in iter_contract_category(api.Contracts.Options):
+            contracts.append(_normalize_contract(c, "OPT", "option"))
     except Exception as exc:
-        logger.warning("options_keys_failed", error=str(exc))
+        logger.warning("options_fetch_failed", error=str(exc))
     return contracts

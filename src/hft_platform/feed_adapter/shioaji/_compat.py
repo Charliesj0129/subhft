@@ -20,6 +20,7 @@ happens at module load.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Any
 
 
@@ -59,3 +60,54 @@ def resolve_quote_api(api: Any) -> Any | None:
     if quote is not None and hasattr(quote, "subscribe") and hasattr(quote, "unsubscribe"):
         return quote
     return None
+
+
+def iter_contract_category(category: Any) -> Iterator[Any]:
+    """Yield leaf contract objects from a ``Contracts.<Futures|Options|Stocks>``
+    category across SDK generations.
+
+    1.3.3 categories are pydantic dict-likes: ``.keys()`` yields root groups
+    (``TXF``, ``TXO``, ...) and ``category[root]`` iterates that group's
+    contracts. The 1.5.x Rust core drops the dict protocol (``.keys()`` raises
+    ``ContractCategory 'FUT' has no group 'keys'``) and instead iterates flat,
+    yielding contract objects directly (official 1.5.6 CONTRACTS.md pattern:
+    ``[c for c in api.Contracts.Futures]``).
+    """
+    try:
+        roots = list(category.keys())
+    except Exception:
+        roots = None
+    if roots is not None:
+        for root in roots:
+            yield from category[root]
+        return
+    for item in category:
+        if hasattr(item, "code"):
+            yield item
+        else:
+            yield from item
+
+
+def contract_category_groups(category: Any) -> dict[str, list[Any]]:
+    """Return ``{root: [contracts...]}`` for a contract category across SDK
+    generations (see :func:`iter_contract_category` for the version split).
+
+    On 1.5.x the flat contract stream is regrouped by each contract's
+    ``category`` attribute (``TXF`` / ``TXO`` / ...); contracts without one
+    land under ``""`` so callers can decide whether to skip them.
+    """
+    try:
+        roots = list(category.keys())
+    except Exception:
+        roots = None
+    if roots is not None:
+        return {str(root): list(category[root]) for root in roots}
+    groups: dict[str, list[Any]] = {}
+    for item in category:
+        if hasattr(item, "code"):
+            groups.setdefault(str(getattr(item, "category", "") or ""), []).append(item)
+        else:
+            items = list(item)
+            root = str(getattr(items[0], "category", "") or "") if items else ""
+            groups.setdefault(root, []).extend(items)
+    return groups

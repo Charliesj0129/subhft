@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 from structlog import get_logger
 
 from hft_platform.core import timebase
+from hft_platform.feed_adapter.shioaji._compat import iter_contract_category
 
 logger = get_logger("feed_adapter.contracts_runtime")
 
@@ -740,16 +741,14 @@ class ContractsRuntime:
                 logger.debug("operation_fallback", error=str(exc))
                 pass
             try:
-                for root in self._client.api.Contracts.Futures.keys():
-                    for c in self._client.api.Contracts.Futures[root]:
-                        raw_contracts.append(_normalize(c, "TAIFEX", "future"))
+                for c in iter_contract_category(self._client.api.Contracts.Futures):
+                    raw_contracts.append(_normalize(c, "TAIFEX", "future"))
             except Exception as exc:
                 logger.debug("operation_fallback", error=str(exc))
                 pass
             try:
-                for root in self._client.api.Contracts.Options.keys():
-                    for c in self._client.api.Contracts.Options[root]:
-                        raw_contracts.append(_normalize(c, "TAIFEX", "option"))
+                for c in iter_contract_category(self._client.api.Contracts.Options):
+                    raw_contracts.append(_normalize(c, "TAIFEX", "option"))
             except Exception as exc:
                 logger.debug("operation_fallback", error=str(exc))
                 pass

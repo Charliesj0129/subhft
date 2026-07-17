@@ -28,6 +28,7 @@ from hft_platform.contracts.family_resolver import (
 )
 from hft_platform.contracts.ref import FutureRef
 from hft_platform.core import timebase
+from hft_platform.feed_adapter.shioaji._compat import contract_category_groups
 
 logger = get_logger("feed_adapter.shioaji.family_populator")
 
@@ -75,23 +76,14 @@ def _extract_futures(
     if futures is None:
         return {}, {}
     try:
-        roots = list(futures.keys())
+        groups = contract_category_groups(futures)
     except Exception as exc:  # noqa: BLE001
         logger.debug("shioaji_family_populator_roots_failed", error=str(exc))
         return {}, {}
 
     out: dict[str, list[FutureRef]] = {}
     native_hints: dict[str, object] = {}
-    for root in roots:
-        try:
-            contract_list = list(futures[root])
-        except Exception as exc:  # noqa: BLE001
-            logger.debug(
-                "shioaji_family_populator_root_iter_failed",
-                root=str(root),
-                error=str(exc),
-            )
-            continue
+    for root, contract_list in groups.items():
         refs: list[FutureRef] = []
         for contract in contract_list:
             code = str(getattr(contract, "code", "") or "")
