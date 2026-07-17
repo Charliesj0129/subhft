@@ -114,11 +114,12 @@
 - `HFT_GATEWAY_LEADER_LEASE_PATH`
 - `HFT_GATEWAY_LEADER_LEASE_REFRESH_S`
 - `HFT_GATEWAY_METRICS`
-- `HFT_ORDER_MODE=sim|live`
+- `HFT_ORDER_MODE=sim|live|disabled`
 - `HFT_ORDER_SHADOW_MODE=0|1`
 
 Shadow caveat:
 - `HFT_ORDER_MODE=sim` 只代表不送 live broker order。
+- `HFT_ORDER_MODE=disabled` 是純行情模式：不建立 broker 下單 session、不啟用 CA，readiness 只要求行情登入與完整訂閱。
 - 要讓 `ShadowOrderSink` 攔截並記錄 shadow order，還需要 `HFT_ORDER_SHADOW_MODE=1`。
 - 若同時開 `HFT_GATEWAY_ENABLED=1`，intent 會先進 gateway path；目前運行上應先確認 gateway/risk 路徑不會在到達 shadow intercept 前就拒單。
 

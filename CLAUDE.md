@@ -14,9 +14,12 @@ gates; research artifacts NEVER directly enable live trading.
 - Data: ClickHouse (durable store + WAL fallback), Redis (live state)
 - Obs: Prometheus, Grafana, Alertmanager, Telegram bot
 - Key libs: msgspec, structlog, orjson, numpy, hftbacktest, numba
-- Pinned (do NOT bump without explicit approval): `shioaji==1.3.3`
-  (1.5.3 = full Rust `_core` rewrite; migration in progress, see
-  `docs/runbooks/shioaji-version-diff.md`), `prometheus_client<0.25`
+- Pinned (do NOT bump without explicit approval): `shioaji==1.5.6`
+  (bumped from 1.3.3 2026-07-15, commit cd280dbc; 1.5.x = full Rust `_core`
+  rewrite — see `docs/runbooks/shioaji-version-diff.md`. Repo pin and the
+  actual production runtime can still diverge: verify the live engine
+  process's own `pyproject.toml`/version before treating the repo pin as
+  proof of what's deployed), `prometheus_client<0.25`
   (0.25 corrupts MutexValue on /metrics)
 
 ## Architecture Overview

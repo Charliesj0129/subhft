@@ -1,0 +1,38 @@
+{
+  "changes": [
+    {
+      "after": {
+        "annotation": null,
+        "default": false,
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "force_refresh"
+      },
+      "before": null,
+      "classification": "ADDITIVE",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "login",
+      "param": "force_refresh",
+      "platform_used": false,
+      "qualname": "Shioaji.login(force_refresh)",
+      "remediation": "",
+      "required": false,
+      "section": "method",
+      "shimmable": false
+    }
+  ],
+  "counts": {
+    "additive": 1,
+    "behavioral": 0,
+    "benign": 0,
+    "breaking_other": 0,
+    "breaking_platform": 0,
+    "informational": 0
+  },
+  "from": "1.5.5",
+  "from_sha256": "ebf16e0068f575571100bfc4ac17002f855a82e887cb9a6c29959228cac16e30",
+  "generated_by": "scripts/shioaji_api_diff",
+  "to": "1.5.6",
+  "to_sha256": "71bef72c3c536c8beeedb659e319cad7a02b26abd7436c5a08084c1144f6441c",
+  "verdict": "SAFE"
+}

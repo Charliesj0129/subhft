@@ -83,13 +83,13 @@ test-node: ## Run one pytest node without repository-wide coverage gate
 	uv run pytest --no-cov $(NODE) -q
 
 shioaji-surface: ## Capture shioaji API surfaces across versions in throwaway /tmp venvs
-	$(PY) -m scripts.shioaji_api_diff orchestrate --versions 1.2.9 1.3.3 1.5.3 --jobs 3
+	$(PY) -m scripts.shioaji_api_diff orchestrate --versions 1.2.9 1.3.3 1.5.3 1.5.5 1.5.6 --jobs 5
 
 shioaji-surface-regen: ## Recapture the CURRENTLY-installed shioaji surface into its golden
 	$(PY) -m scripts.shioaji_api_diff guard-regen
 
 shioaji-diff: ## Build machine diffs + the human runbook (docs/runbooks/shioaji-version-diff.md)
-	$(PY) -m scripts.shioaji_api_diff report --versions 1.2.9 1.3.3 1.5.3
+	$(PY) -m scripts.shioaji_api_diff report --versions 1.2.9 1.3.3 1.5.3 1.5.5 1.5.6
 
 shioaji-guard: ## Run only the shioaji surface regression guard (no coverage gate)
 	uv run pytest --no-cov tests/unit/feed_adapter/shioaji/test_sdk_surface_golden.py -q
@@ -289,10 +289,12 @@ render-incident-timeline-md: ## Render incident timeline markdown from nightly_t
 security-audit: ## Dependency security scan with pip-audit fallback to pip check
 	@set -e; \
 	if uv run python -c "import pip_audit" >/dev/null 2>&1; then \
-		uv run python -m pip_audit --progress-spinner off | tee audit-output.txt; \
+		rc=0; uv run python -m pip_audit --progress-spinner off > audit-output.txt || rc=$$?; \
+		cat audit-output.txt; exit $$rc; \
 	else \
-		echo "pip-audit unavailable; fallback to pip check" | tee audit-output.txt; \
-		uv run python -m pip check | tee -a audit-output.txt; \
+		echo "pip-audit unavailable; fallback to pip check" > audit-output.txt; \
+		rc=0; uv run python -m pip check >> audit-output.txt || rc=$$?; \
+		cat audit-output.txt; exit $$rc; \
 	fi
 
 latency-audit: ## Validate alpha scorecards declare latency profile + pass Gate D 80% tolerance

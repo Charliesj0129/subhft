@@ -197,7 +197,7 @@ Base YAML (config/base/main.yaml)
 | `HFT_FEATURE_SHADOW_ABS_TOL` | `0` | parity 絕對容忍誤差 | Rust/Python 漂移調查時調整 |
 | `HFT_FEATURE_METRICS_SAMPLE_EVERY` | `policy-dependent` | feature metrics 採樣週期（minimal=16, balanced=4, debug=1） | debug 可設 1 |
 | `HFT_FEATURE_LATENCY_SAMPLE_EVERY` | `policy-dependent` | feature latency 採樣週期（minimal=16, balanced=4, debug=1） | debug 可設 1 |
-| `HFT_ORDER_MODE` | — | 下單模式：`sim` / `live`（覆蓋 shioaji.simulation） | — |
+| `HFT_ORDER_MODE` | `sim` | 下單模式：`sim` / `live` / `disabled`；`disabled` 為純行情且不建立下單 session | `live` 仍受 `HFT_MODE` 與 `HFT_LIVE_CONFIRM` 雙重鎖保護 |
 | `HFT_ORDER_SHADOW_MODE` | `0` | `1` = 啟用 ShadowOrderSink，攔截 NEW/CANCEL/AMEND 並記錄 shadow order | shadow rollout 必須設 `1`；`HFT_ORDER_MODE=sim` 單獨不足以保證 shadow persistence |
 | `HFT_ORDER_SIMULATION` | — | `1` = 模擬模式（舊版相容） | 優先使用 `HFT_ORDER_MODE` |
 | `HFT_ORDER_NO_CA` | `0` | `1` = 停用 CA 認證（sim 環境） | — |
