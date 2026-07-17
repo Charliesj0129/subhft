@@ -112,8 +112,11 @@ ENV PIP_DEFAULT_TIMEOUT=600
 RUN pip install --no-cache-dir --timeout 600 --retries 10 -r requirements.txt
 # Install Rust extension wheel (fast-path helpers)
 RUN pip install --no-cache-dir /tmp/wheels/*.whl
-# Install optional bot dependencies (Telegram Bot interactive service)
-RUN pip install --no-cache-dir "python-telegram-bot[job-queue]>=21.0" "matplotlib>=3.8"
+# Install optional bot + monitor dependencies (Telegram Bot interactive service;
+# rich backs hft_platform.monitor imports pulled in by the engine's redis live
+# publisher — requirements.txt is generated from project.dependencies only, so
+# optional groups must be baked here explicitly).
+RUN pip install --no-cache-dir "python-telegram-bot[job-queue]>=21.0" "matplotlib>=3.8" "rich>=13.0"
 
 # Create directories for data/wal and set permissions
 RUN mkdir -p .wal data && chown -R hftuser:hftuser /app
