@@ -479,3 +479,78 @@ flood of "Exchange timestamp in future" warnings. Parity is unaffected (clamps
 to `now_ns`, emits a valid TickEvent). A real callback carries a real `datetime`
 and does not trip this. Driver left untouched (do not edit a running soak); a
 one-line fix (`time.time_ns()` + real `datetime`) is a follow-up nicety only.
+
+## Runtime validation 2026-07-17→19 (old host, 1.5.6 image deploy) — GO with annotations
+
+Scope: first true-1.5.6 deployment to the production box — quote-only gates,
+in-container SIM soak, aborted real-RTT probe, and phase-2 full-engine SIM
+cutback. Evidence bundle (host):
+`deploy-staging/shioaji156-third-attempt-20260717T045731Z/`.
+
+**Deploy-model finding (07-17, retraction):** the morning "1.5.6 validated"
+stage-5/6 PASS actually ran the rollback image (`c79974da41d9`, shioaji
+**1.3.3**) — bind-mount deploys replace `/app/src` only; the SDK lives in image
+site-packages. `build_info{git_sha}` was truthful, not stale. Any SDK claim
+must be verified via the engine interpreter
+(`docker exec hft-engine python -c "import shioaji; print(shioaji.__version__)"`).
+
+**Image lineage:** v4 build from c68fa480 → rich regression (1.5.6 dep tree
+dropped transitive `rich`; the Dockerfile bakes only `project.dependencies`) →
+fix bfa46e1d bakes optional groups → **v4.1
+`hft-platform:shioaji156-quote-only-v41-20260717T152320Z` (08b0482c21f1)**;
+`latest` retagged to v4.1 at acceptance 2026-07-19; rollback anchor unchanged
+(`c79974da41d9`).
+
+**Quote-only re-gate on v4 (true 1.5.6):** stage-5 PASS (4/4 login, 296/296
+subs in ~2 min, readyz ready, storm NORMAL); stage-6 PASS (10-min soak: subs
+held 11/11 samples, 0 conflicts/drops, loop lag 3.5–5.1 ms, 0 errors).
+
+**In-container SIM soak (07-17 23:14, 30 min, 1337 cycles):** place P95
+34.9 ms (beats the 1.5.3 GO baseline 36.7), update 53.2 / cancel 52.6
+(+15–19% vs day-session baseline; 1.24×/1.12× vs the 36/43/47 profile —
+cross-machine, 2-CPU co-tenant confound), ack P95 1390.6 ms; decimal parity
+19369/19369; resources flat; fills_aborted=0. Far better than the
+same-clock-hour 1.5.3 evening run (158/140/147). GO with annotations.
+
+**Real RTT probe (07-18, ABORTED):** 305/305 real far-price TMFH6 orders
+broker-REJECTED (status=Failed); ordno never populates on rejected orders, so
+`submitted_ack` ≈ its 2.0 s spin-timeout (void) and cancel was never attempted
+(probe design: "leave for later sweep"). Emergency sweep verified the account
+clean: 0 resting, 0 fills. Reject-reason query skipped per Charlie
+(2026-07-19); the probe's latency numbers are void. `v2026-04-24_measured`
+stays the live-RTT reference.
+
+**Phase-2 full-engine SIM (07-19) — first order-path gap of the quote-only
+migration:** boot crash-loop at `HFTSystem` construction:
+`facade.get_default_account_id` → `shioaji.AuthError: Not authenticated`. The
+1.5.x Rust core turns `stock_account`/`futopt_account` into **properties that
+raise AuthError pre-login** (1.3.3: plain `None`); neither
+`getattr(..., default)` nor `hasattr` swallows it. Fix **3b1c10c8** routes all
+account-attribute access through `_compat.resolve_trading_account`
+(order/account gateways included — the same pattern would have raised in
+logged-out reconnect windows). Regression tests fail-before/pass-after.
+
+**Broker session budget (07-19):** full engine = 1 order client (separate
+since e7505036, 2026-04-27; sim env in SIM order mode) + N quote-pool conns.
+With `.env` `HFT_QUOTE_CONNECTIONS=4`, the 5th login hit 451 persistently
+(Sinopac cap 5; exactly one unidentified lingering broker-side session; all
+harness tools logout; the crash-loops died pre-login). Accepted with inline
+`HFT_QUOTE_CONNECTIONS=3` (subs 99/99/98, under the 120/conn cap): 4/4
+logins, readyz **ready** (md+order true, subscriptions_complete), 10-min
+watch flat (mem 284→272 MiB, no new errors, 0 restarts). 433be777's 451
+backoff (75 s × 2) observed working in prod for the first time.
+
+**Still owed (Monday 2026-07-21):** pre-market pool=4 retry (lingering session
+should be reaped by then); day-session full-universe data-flow confirmation;
+pool-shape decision before any live cutover (live = 5 real sessions = cap,
+zero headroom). Deferred follow-ups: monitor/__init__ lazy-import (rich
+chain), shm_publisher ascii bug, /app/outputs not host-mounted (rearm state +
+evidence are container-local), probe reject-reason query, deprecated
+1.3.3-style API names in probe/soak scripts (1.5.6 DeprecationWarnings).
+
+**Operator trap (standing):** host `.env` still has `HFT_ORDER_MODE=live` +
+`HFT_QUOTE_CONNECTIONS=4`; a plain `docker compose up -d` (no inline
+overrides) now boots **v4.1 in LIVE order mode** with a possibly-degraded 4th
+pool conn. The running container was started with inline
+`HFT_ORDER_MODE=sim HFT_QUOTE_CONNECTIONS=3`. Back-to-live stays a manual
+Charlie decision.

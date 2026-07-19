@@ -15,33 +15,40 @@ Charlie approves a destination; record each run (date + dest + bundle name)
 below this line.
 Expires: when a remote-backup/push-cadence decision lands. Owner: Charlie.
 
-## RISK: shioaji 1.5.x migration in flight (since 2026-06-16; retargeted to 1.5.5 on 2026-07-08)
-Pin is `shioaji==1.3.3`. 1.5.x = full Rust `_core` rewrite; migration
-retargeted to 1.5.5 (1.5.3→1.5.5 surface diff SAFE — see the runbook).
-Do NOT bump the pin or merge SDK PRs without `make shioaji-guard` green +
-the validation harness (Phase 0/1 vs 1.5.5 run locally 2026-07-08; sim soak
-+ prod checks still owed). #371 and #376 both CLOSED on GitHub (verified
-2026-07-11); the diverged local harness branch was retired the same day.
-A fresh SDK PR from the current lineage is owed when the migration resumes.
-Expires: when the migration lands or is abandoned. Owner: Charlie.
+## RISK: shioaji 1.5.6 deployed to old host in SIM only; live order path unproven (since 2026-07-19)
+Pin is `shioaji==1.5.6` (cd280dbc, 2026-07-15). Old-host deploy accepted
+2026-07-19 on image v4.1 (`latest` retagged; rollback anchor `c79974da41d9`
+= 1.3.3): quote-only gates + 30-min SIM soak + full-engine SIM readyz-ready.
+Required fix 3b1c10c8 (1.5.6 account properties raise AuthError pre-login).
+NOT yet proven: live (non-sim) order path — the 07-18 real RTT probe was
+aborted with 305/305 broker rejections (reason query skipped); Monday
+day-session full-universe data flow; pool=4 session fit (see session-budget
+risk). See runbook "Runtime validation 2026-07-17→19".
+Expires: Monday confirmation + a validated live order round-trip. Owner: Charlie.
 
 ## RISK: production engine order mode is SIM (since 2026-06-15)
 After a reconnect CPU-spin incident, the production engine was restarted in
 SIM order mode — it is NOT live trading. Do not assume live; do not flip
 modes without explicit user request.
+TRAP (added 2026-07-19): host `.env` still says `HFT_ORDER_MODE=live`; the
+SIM posture exists ONLY as an inline env override on the running container
+(currently also `HFT_QUOTE_CONNECTIONS=3`). A plain `docker compose up -d`
+without overrides boots LIVE order mode on 1.5.6 (`latest`=v4.1).
 Expires: when the user re-enables live mode. Owner: Charlie.
 
-## RISK: production restart procedure is non-obvious (code fix landed 2026-07-08, prod deploy owed)
-`docker compose restart` and immediate auto-restart race the broker's
-session release → engine comes up logged-out/unsubscribed while
-FeedState=CONNECTED masks it. Only safe sequence on the CURRENT prod build:
-stop → wait 60s → start, then verify login/subscription metrics (see
-failed-attempts.md). Durable fix committed 433be777 (recorder_data_loss boot
-grace HFT_RECORDER_DATA_LOSS_BOOT_GRACE_S=60; 451 login backoff
-HFT_LOGIN_CONNLIMIT_RETRIES=2 x HFT_LOGIN_CONNLIMIT_BACKOFF_S=75; transition
-reason labels) but prod still runs build ff0b4994 — manual procedure stays
-mandatory until a user-approved deploy.
-Expires: when the fix is deployed to prod. Owner: Charlie.
+## RISK: broker session budget at zero headroom + one lingering session (since 2026-07-19)
+Full engine on current code = 1 order client (separate since e7505036,
+2026-04-27) + N quote-pool conns. Sinopac cap = 5. With pool=4 the 5th login
+451'd persistently on 2026-07-19 — exactly one unidentified broker-side
+session lingers (all harness tools logout; crash-loops die pre-login).
+Mitigation: engine runs with inline `HFT_QUOTE_CONNECTIONS=3` (subs 99/99/98,
+under the 120/conn cap). Monday pre-market: retry pool=4; if it fits, restore
+production shape. Standing constraint: live order mode = 5 real sessions =
+cap — any probe/tool login requires the engine stopped.
+Note: restart-procedure fix 433be777 (stop→60s→start races; 451 backoff
+75s×2) is now DEPLOYED and observed working (v4.1, REVISION bfa46e1d);
+stop→60s+→start discipline stays best practice.
+Expires: lingering session identified/reaped + pool shape decided. Owner: Charlie.
 
 ## RISK: prometheus_client pinned <0.25
 0.25.0 corrupts MutexValue (TypeError on /metrics). Do not "upgrade to fix
