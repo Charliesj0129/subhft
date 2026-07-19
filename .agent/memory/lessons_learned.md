@@ -173,3 +173,31 @@ party may touch — check the bypass direction explicitly. (3) Normalize paths
 before any prefix-based allow. (4) Route every new guard/gate through
 independent adversarial review before relying on it; its failure mode is
 silent false confidence.
+
+## [OPS] Production-host Tailscale node keys expire — disable expiry, or lose remote access with no fallback (2026-07-19)
+
+**Context**: THESHOW (old host, production engine) became unreachable
+mid-operations: local Windows Tailscale was logged out AND the old host's
+node key had expired ("peer's node key has expired"). The old host is
+Tailscale-ONLY — a full /24 LAN sweep found no SSH path, and on-site action
+looked required. Disabling key expiry for the node in the admin console
+revived it without re-auth (tailscaled was still running with its old key).
+**Rule**: (1) Every production node gets "Disable key expiry" in the
+Tailscale admin console the day it is provisioned — an expiry mid-incident
+or mid-market is unrecoverable remotely. (2) When a peer is unreachable,
+`tailscale ping` distinguishes peer-side key expiry from local auth issues;
+check BOTH ends before assuming one. (3) Try admin-console disable-key-expiry
+BEFORE traveling to the machine — it can revive an expired-but-running node.
+
+## [OPS] `sed -i` on a single-file Docker bind mount silently detaches the container's view (2026-07-19)
+
+**Context**: Patched `config/monitoring/prometheus.yml` (single-file bind
+mount) on THESHOW with `sed -i`, then SIGHUP'd prometheus — reload "worked"
+but the container still served the OLD config. `sed -i` writes a new file
+and renames it, so the host path gets a NEW inode while the bind mount stays
+attached to the old one; every later in-place write is invisible too.
+**Rule**: After replacing a single-file bind-mounted file (sed -i, mv, rename
+— anything that swaps the inode), a SIGHUP/reload is a no-op; the container
+must be RESTARTED to re-resolve the mount. Verify by reading the config back
+through the app's own API (e.g. Prometheus /api/v1/targets scrapeUrl), never
+by reading the host file.

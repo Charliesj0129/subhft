@@ -554,3 +554,45 @@ overrides) now boots **v4.1 in LIVE order mode** with a possibly-degraded 4th
 pool conn. The running container was started with inline
 `HFT_ORDER_MODE=sim HFT_QUOTE_CONNECTIONS=3`. Back-to-live stays a manual
 Charlie decision.
+
+## Follow-up 2026-07-19 evening (session ea9503c1 continued)
+
+**Connectivity incident (root-caused + fixed):** THESHOW became unreachable
+because BOTH Tailscale ends had auth problems — the local Windows node was
+logged out (re-login by Charlie) and the old host's node key had EXPIRED
+("peer's node key has expired"; node `charl-ab350m-gaming-3`). Charlie
+disabled key expiry for the old host in the Tailscale admin console and the
+node revived without on-site action (tailscaled was still running). Key
+expiry is now DISABLED for the production node — this failure mode is
+retired. LAN fallback was ruled out: full /24 sweep found no SSH host; the
+old PC is Tailscale-only. Stale node `kaito` (offline 113 d) marked for
+console removal.
+
+**pool=4 restored (12:56Z stop→95 s→recreate, weekend, no market):**
+`HFT_ORDER_MODE=sim HFT_QUOTE_CONNECTIONS=4` on v4.1 — **5/5 logins, all
+attempt=1, zero 451** (the lingering broker-side session was reaped ~31 h
+after the 07-18 probe). readyz ready, orders_enabled true (boot latch did
+NOT re-latch; no rearm needed), subs 296 = 74×4, log error count 0 (no lease
+conflict — expired during the 95 s gap), 0 restarts. Evidence:
+`pool4-retry-*` in the host bundle. Production pool shape is back; Monday
+pre-market retry is no longer needed — remaining Monday item is the
+day-session full-universe data-flow confirmation.
+
+**Observability stack restored (down since 2026-07-14, exit codes 0/137/143,
+host RAM fine — not OOM):** prometheus, alertmanager, loki, promtail,
+node-exporter, then hft-bot + hft-monitor after the engine settled. NOTE:
+compose recreated hft-bot/hft-monitor onto `hft-platform:latest` = **v4.1**
+(previously 1.3.3 anchor image) — intended consequence of the latest retag;
+bfa46e1d's rich>=13 bake was exactly for this. Both healthy 1 min+; watch
+them Monday.
+
+**Prometheus node-exporter target fix (pre-existing misconfig):**
+node-exporter runs `network_mode: host` while prometheus is on
+`subhft_default`, so scrape target `node-exporter:9100` could never resolve.
+Host-drift fix applied on THESHOW: `config/monitoring/prometheus.yml` target
+→ `172.18.0.1:9100` (bridge gateway; backup
+`prometheus.yml.bak-20260719T131444Z`). Gotcha hit on the way: `sed -i` on a
+single-file bind mount replaces the inode — the container keeps the old
+file; SIGHUP reload is a no-op. A container restart re-resolves the mount.
+All 4 targets up (clickhouse, hft-engine, loki, node). Repo-side portable
+fix (extra_hosts host-gateway) left as a follow-up via change-control.

@@ -22,8 +22,9 @@ Pin is `shioaji==1.5.6` (cd280dbc, 2026-07-15). Old-host deploy accepted
 Required fix 3b1c10c8 (1.5.6 account properties raise AuthError pre-login).
 NOT yet proven: live (non-sim) order path — the 07-18 real RTT probe was
 aborted with 305/305 broker rejections (reason query skipped); Monday
-day-session full-universe data flow; pool=4 session fit (see session-budget
-risk). See runbook "Runtime validation 2026-07-17→19".
+day-session full-universe data flow. pool=4 session fit PROVEN 2026-07-19
+evening (5/5 logins, zero 451). See runbook "Runtime validation
+2026-07-17→19" + its evening follow-up.
 Expires: Monday confirmation + a validated live order round-trip. Owner: Charlie.
 
 ## RISK: production engine order mode is SIM (since 2026-06-15)
@@ -31,24 +32,23 @@ After a reconnect CPU-spin incident, the production engine was restarted in
 SIM order mode — it is NOT live trading. Do not assume live; do not flip
 modes without explicit user request.
 TRAP (added 2026-07-19): host `.env` still says `HFT_ORDER_MODE=live`; the
-SIM posture exists ONLY as an inline env override on the running container
-(currently also `HFT_QUOTE_CONNECTIONS=3`). A plain `docker compose up -d`
-without overrides boots LIVE order mode on 1.5.6 (`latest`=v4.1).
+SIM posture exists ONLY as an inline env override on the running container.
+A plain `docker compose up -d` without overrides boots LIVE order mode on
+1.5.6 (`latest`=v4.1). Durable fix (flip .env to sim; Charlie-run, backup +
+rollback prepared) pending as of 2026-07-19 evening.
 Expires: when the user re-enables live mode. Owner: Charlie.
 
-## RISK: broker session budget at zero headroom + one lingering session (since 2026-07-19)
+## RISK: broker session budget at zero headroom (since 2026-07-19)
 Full engine on current code = 1 order client (separate since e7505036,
-2026-04-27) + N quote-pool conns. Sinopac cap = 5. With pool=4 the 5th login
-451'd persistently on 2026-07-19 — exactly one unidentified broker-side
-session lingers (all harness tools logout; crash-loops die pre-login).
-Mitigation: engine runs with inline `HFT_QUOTE_CONNECTIONS=3` (subs 99/99/98,
-under the 120/conn cap). Monday pre-market: retry pool=4; if it fits, restore
-production shape. Standing constraint: live order mode = 5 real sessions =
-cap — any probe/tool login requires the engine stopped.
-Note: restart-procedure fix 433be777 (stop→60s→start races; 451 backoff
-75s×2) is now DEPLOYED and observed working (v4.1, REVISION bfa46e1d);
-stop→60s+→start discipline stays best practice.
-Expires: lingering session identified/reaped + pool shape decided. Owner: Charlie.
+2026-04-27) + N quote-pool conns. Sinopac cap = 5. Production shape pool=4
+RESTORED 2026-07-19 evening (5/5 logins, zero 451; the 07-18/19 lingering
+session was reaped broker-side ~31 h after the probe). Standing constraint:
+full engine = 5 real sessions = cap, ZERO headroom — any probe/tool login
+requires the engine stopped first; a lingering session (e.g. after an
+aborted probe) blocks the engine's own 5th login until broker-side reaping.
+Restart discipline: stop→60s+→start (433be777's 451 backoff deployed and
+observed working on v4.1).
+Expires: if Sinopac raises the cap or the pool shape is redesigned. Owner: Charlie.
 
 ## RISK: prometheus_client pinned <0.25
 0.25.0 corrupts MutexValue (TypeError on /metrics). Do not "upgrade to fix
