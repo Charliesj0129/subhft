@@ -596,3 +596,10 @@ single-file bind mount replaces the inode — the container keeps the old
 file; SIGHUP reload is a no-op. A container restart re-resolves the mount.
 All 4 targets up (clickhouse, hft-engine, loki, node). Repo-side portable
 fix (extra_hosts host-gateway) left as a follow-up via change-control.
+
+**Operator trap RESOLVED (later same evening):** Charlie flipped host `.env`
+to `HFT_ORDER_MODE=sim` (backup `.env.bak-<ts>` kept on host; independently
+verified via `docker compose config` interpolating sim). Plain
+`docker compose up -d` now boots SIM order mode with pool=4 — the safe
+default. Back-to-live = Charlie edits `.env` (or explicit inline override);
+manual gate preserved.

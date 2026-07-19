@@ -31,11 +31,11 @@ Expires: Monday confirmation + a validated live order round-trip. Owner: Charlie
 After a reconnect CPU-spin incident, the production engine was restarted in
 SIM order mode — it is NOT live trading. Do not assume live; do not flip
 modes without explicit user request.
-TRAP (added 2026-07-19): host `.env` still says `HFT_ORDER_MODE=live`; the
-SIM posture exists ONLY as an inline env override on the running container.
-A plain `docker compose up -d` without overrides boots LIVE order mode on
-1.5.6 (`latest`=v4.1). Durable fix (flip .env to sim; Charlie-run, backup +
-rollback prepared) pending as of 2026-07-19 evening.
+TRAP RESOLVED 2026-07-19 evening: host `.env` flipped to
+`HFT_ORDER_MODE=sim` (Charlie-run, backup `.env.bak-*` kept; verified via
+`docker compose config` = sim). A plain `docker compose up -d` now boots SIM
+— back-to-live requires Charlie editing `.env` (or explicit inline override),
+which is the intended manual gate.
 Expires: when the user re-enables live mode. Owner: Charlie.
 
 ## RISK: broker session budget at zero headroom (since 2026-07-19)
