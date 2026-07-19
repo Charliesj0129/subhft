@@ -111,3 +111,25 @@ def contract_category_groups(category: Any) -> dict[str, list[Any]]:
             root = str(getattr(items[0], "category", "") or "") if items else ""
             groups.setdefault(root, []).extend(items)
     return groups
+
+
+def resolve_trading_account(api: Any, attr: str) -> Any | None:
+    """Return ``api.<attr>`` (``stock_account`` / ``futopt_account``) or ``None``.
+
+    1.3.3 exposes the default-account attributes as plain values that are
+    simply ``None`` before login. The 1.5.x Rust core turns them into
+    properties that raise ``AuthError: Not authenticated`` until a session
+    exists — an exception that neither ``getattr(..., default)`` nor
+    ``hasattr`` swallows (``AuthError`` is not an ``AttributeError``), so the
+    1.3.3-era guards crash at ``HFTSystem`` construction and in logged-out
+    reconnect windows. Mapping any raising accessor to ``None`` restores the
+    1.3.3 "no account available yet" semantics on both SDKs. The broad catch
+    is deliberate: the exception type lives at different import paths across
+    SDK generations, and this resolver's only contract is "account or None".
+    """
+    if api is None:
+        return None
+    try:
+        return getattr(api, attr, None)
+    except Exception:
+        return None

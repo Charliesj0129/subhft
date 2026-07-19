@@ -307,3 +307,42 @@ class TestUpdateOrder:
     def test_update_no_price_no_qty_returns_none(self, gateway: OrderGateway) -> None:
         result = gateway.update_order(MagicMock())
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# 1.5.6 pre-login account property regression (full-engine boot crash 2026-07-19)
+# ---------------------------------------------------------------------------
+
+
+class _FakeAuthError(Exception):
+    """Stand-in for shioaji.AuthError — deliberately NOT an AttributeError."""
+
+
+class _PreLoginApi:
+    """Mimics the 1.5.6 Rust core before login: account properties raise."""
+
+    @property
+    def stock_account(self) -> None:
+        raise _FakeAuthError("Not authenticated")
+
+    @property
+    def futopt_account(self) -> None:
+        raise _FakeAuthError("Not authenticated")
+
+
+class TestResolveAccountPreLogin:
+    def test_resolve_account_returns_none_when_account_properties_raise(self) -> None:
+        client = MagicMock()
+        client.api = _PreLoginApi()
+        gw = OrderGateway(client)
+        assert gw._resolve_account("future", None) is None
+        assert gw._resolve_account("stock", None) is None
+        assert gw._resolve_account("future", "futopt") is None
+        assert gw._resolve_account("stock", "stock") is None
+
+    def test_resolve_account_still_returns_explicit_account_object(self) -> None:
+        client = MagicMock()
+        client.api = _PreLoginApi()
+        gw = OrderGateway(client)
+        acct = object()
+        assert gw._resolve_account("future", acct) is acct

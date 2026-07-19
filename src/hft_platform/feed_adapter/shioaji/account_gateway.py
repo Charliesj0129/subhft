@@ -5,6 +5,8 @@ from typing import TYPE_CHECKING, Any
 
 from structlog import get_logger
 
+from hft_platform.feed_adapter.shioaji._compat import resolve_trading_account
+
 if TYPE_CHECKING:
     from hft_platform.feed_adapter.shioaji.client import ShioajiClient
 
@@ -70,17 +72,19 @@ class AccountGateway:
         errors: list[str] = []
         queried_any = False
 
-        if hasattr(self._client.api, "stock_account") and self._client.api.stock_account is not None:
+        stock_acct = resolve_trading_account(self._client.api, "stock_account")
+        if stock_acct is not None:
             queried_any = True
             try:
-                positions.extend(self._client.api.list_positions(self._client.api.stock_account))
+                positions.extend(self._client.api.list_positions(stock_acct))
             except Exception as exc:
                 errors.append(f"stock: {exc!s}")
 
-        if hasattr(self._client.api, "futopt_account") and self._client.api.futopt_account is not None:
+        futopt_acct = resolve_trading_account(self._client.api, "futopt_account")
+        if futopt_acct is not None:
             queried_any = True
             try:
-                positions.extend(self._client.api.list_positions(self._client.api.futopt_account))
+                positions.extend(self._client.api.list_positions(futopt_acct))
             except Exception as exc:
                 errors.append(f"futopt: {exc!s}")
 
@@ -177,8 +181,8 @@ class AccountGateway:
             if not self._client._rate_limit_api("margin"):
                 return cached or {}
             acct = account
-            if acct is None and hasattr(self._client.api, "futopt_account"):
-                acct = self._client.api.futopt_account
+            if acct is None:
+                acct = resolve_trading_account(self._client.api, "futopt_account")
             result = self._client.api.margin(acct)
             self._client._record_api_latency("margin", start_ns, ok=True)
             self._client._cache_set("margin", self._client._margin_cache_ttl_s, result)
@@ -199,8 +203,8 @@ class AccountGateway:
             if not self._client._rate_limit_api("position_detail"):
                 return cached or []
             acct = account
-            if acct is None and hasattr(self._client.api, "stock_account"):
-                acct = self._client.api.stock_account
+            if acct is None:
+                acct = resolve_trading_account(self._client.api, "stock_account")
             if acct is not None:
                 result = self._client.api.list_position_detail(acct)
             else:
@@ -225,8 +229,8 @@ class AccountGateway:
             if not self._client._rate_limit_api("profit_loss"):
                 return cached or []
             acct = account
-            if acct is None and hasattr(self._client.api, "stock_account"):
-                acct = self._client.api.stock_account
+            if acct is None:
+                acct = resolve_trading_account(self._client.api, "stock_account")
             if acct is not None:
                 result = self._client.api.list_profit_loss(acct, begin_date=begin_date, end_date=end_date)
             else:
@@ -251,8 +255,8 @@ class AccountGateway:
             if not self._client._rate_limit_api("trading_limits"):
                 return cached or {}
             acct = account
-            if acct is None and hasattr(self._client.api, "stock_account"):
-                acct = self._client.api.stock_account
+            if acct is None:
+                acct = resolve_trading_account(self._client.api, "stock_account")
             if acct is not None:
                 result = self._client.api.trading_limits(acct)
             else:
@@ -277,8 +281,8 @@ class AccountGateway:
             if not self._client._rate_limit_api("settlements"):
                 return cached or []
             acct = account
-            if acct is None and hasattr(self._client.api, "stock_account"):
-                acct = self._client.api.stock_account
+            if acct is None:
+                acct = resolve_trading_account(self._client.api, "stock_account")
             if acct is not None:
                 result = self._client.api.settlements(acct)
             else:
@@ -309,8 +313,8 @@ class AccountGateway:
             if not self._client._rate_limit_api("profit_loss_summary"):
                 return cached or []
             acct = account
-            if acct is None and hasattr(self._client.api, "stock_account"):
-                acct = self._client.api.stock_account
+            if acct is None:
+                acct = resolve_trading_account(self._client.api, "stock_account")
             if acct is not None:
                 result = self._client.api.list_profit_loss_summary(
                     acct,
@@ -348,8 +352,8 @@ class AccountGateway:
             if not self._client._rate_limit_api("profit_loss_detail"):
                 return cached or []
             acct = account
-            if acct is None and hasattr(self._client.api, "stock_account"):
-                acct = self._client.api.stock_account
+            if acct is None:
+                acct = resolve_trading_account(self._client.api, "stock_account")
             kwargs: dict[str, Any] = {"detail_id": detail_id}
             if unit is not None:
                 kwargs["unit"] = unit

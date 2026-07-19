@@ -77,3 +77,55 @@ def test_facade_explicit_delegation_without_getattr(tmp_path):
             assert facade.place_order("2330", "TSE", "Buy", 100.0, 1, "ROD", "Regular") == {"seq_no": "S1"}
             mock_reconnect.assert_called_once_with(reason="unit", force=True)
             mock_place.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# 1.5.6 pre-login account property regression (full-engine boot crash 2026-07-19)
+# ---------------------------------------------------------------------------
+
+
+class _FakeAuthError(Exception):
+    """Stand-in for shioaji.AuthError — deliberately NOT an AttributeError."""
+
+
+class _PreLoginApi:
+    """Mimics the 1.5.6 Rust core before login: account properties raise."""
+
+    @property
+    def stock_account(self) -> None:
+        raise _FakeAuthError("Not authenticated")
+
+    @property
+    def futopt_account(self) -> None:
+        raise _FakeAuthError("Not authenticated")
+
+
+def test_get_default_account_id_returns_empty_when_account_properties_raise(tmp_path):
+    """1.5.6 raises AuthError on account attributes before login; HFTSystem
+    construction must get "" back instead of a crash-looped boot."""
+    cfg = tmp_path / "symbols.yaml"
+    cfg.write_text("symbols:\n  - code: '2330'\n    exchange: 'TSE'\n")
+
+    with patch("hft_platform.feed_adapter.shioaji_client.sj") as mock_sj:
+        mock_sj.Shioaji.return_value = MagicMock()
+        facade = ShioajiClientFacade(str(cfg), {})
+        facade._client.api = _PreLoginApi()
+
+        assert facade.get_default_account_id() == ""
+
+
+def test_get_default_account_id_prefers_futopt_account(tmp_path):
+    from types import SimpleNamespace
+
+    cfg = tmp_path / "symbols.yaml"
+    cfg.write_text("symbols:\n  - code: '2330'\n    exchange: 'TSE'\n")
+
+    with patch("hft_platform.feed_adapter.shioaji_client.sj") as mock_sj:
+        mock_sj.Shioaji.return_value = MagicMock()
+        facade = ShioajiClientFacade(str(cfg), {})
+        facade._client.api = SimpleNamespace(
+            futopt_account=SimpleNamespace(account_id="FUT001"),
+            stock_account=SimpleNamespace(account_id="STOCK001"),
+        )
+
+        assert facade.get_default_account_id() == "FUT001"

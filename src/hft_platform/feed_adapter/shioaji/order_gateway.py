@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 from structlog import get_logger
 
 from hft_platform.core import timebase
+from hft_platform.feed_adapter.shioaji._compat import resolve_trading_account
 
 if TYPE_CHECKING:
     from hft_platform.feed_adapter.shioaji.client import ShioajiClient
@@ -246,19 +247,20 @@ class OrderGateway:
             raise
 
     def _resolve_account(self, product_type: str, account: Any | None) -> Any | None:
+        api = self._client.api
         if account is not None:
             if isinstance(account, str):
-                if account == "stock" and hasattr(self._client.api, "stock_account"):
-                    return self._client.api.stock_account
-                if account in {"futopt", "future", "option"} and hasattr(self._client.api, "futopt_account"):
-                    return self._client.api.futopt_account
+                if account == "stock":
+                    return resolve_trading_account(api, "stock_account")
+                if account in {"futopt", "future", "option"}:
+                    return resolve_trading_account(api, "futopt_account")
             return account
-        if not self._client.api:
+        if not api:
             return None
-        if product_type in {"stock", "stk"} and hasattr(self._client.api, "stock_account"):
-            return self._client.api.stock_account
-        if product_type in {"future", "futures", "option", "options"} and hasattr(self._client.api, "futopt_account"):
-            return self._client.api.futopt_account
+        if product_type in {"stock", "stk"}:
+            return resolve_trading_account(api, "stock_account")
+        if product_type in {"future", "futures", "option", "options"}:
+            return resolve_trading_account(api, "futopt_account")
         return None
 
     def _map_stock_price_type(self, price_type: str | None) -> Any:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from hft_platform.feed_adapter.shioaji._compat import resolve_trading_account
 from hft_platform.feed_adapter.shioaji.account_gateway import AccountGateway
 from hft_platform.feed_adapter.shioaji.client import ShioajiClient
 from hft_platform.feed_adapter.shioaji.contracts_runtime import ContractsRuntime
@@ -238,7 +239,7 @@ class ShioajiClientFacade:
         if api is None:
             return ""
         for attr in ("futopt_account", "stock_account"):
-            acct = getattr(api, attr, None)
+            acct = resolve_trading_account(api, attr)
             if acct is not None:
                 acct_id = getattr(acct, "account_id", None) or str(acct)
                 if acct_id:

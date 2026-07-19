@@ -321,3 +321,38 @@ class TestGetPositionsDecoupled:
         assert result == stock_pos
         assert gw.last_positions_error is not None
         assert "futopt" in gw.last_positions_error.lower()
+
+
+# ---------------------------------------------------------------------------
+# 1.5.6 pre-login account property regression (full-engine boot crash 2026-07-19)
+# ---------------------------------------------------------------------------
+
+
+class _FakeAuthError(Exception):
+    """Stand-in for shioaji.AuthError — deliberately NOT an AttributeError."""
+
+
+class _PreLoginApi:
+    """Mimics the 1.5.6 Rust core before login: account properties raise."""
+
+    @property
+    def stock_account(self) -> None:
+        raise _FakeAuthError("Not authenticated")
+
+    @property
+    def futopt_account(self) -> None:
+        raise _FakeAuthError("Not authenticated")
+
+
+class TestAccountPropertiesRaisePreLogin:
+    def test_get_positions_treats_raising_accounts_as_unavailable(self) -> None:
+        client = _make_client()
+        client.api = _PreLoginApi()
+        gw = AccountGateway(client)
+        assert gw.get_positions() == []
+
+    def test_get_margin_returns_empty_when_account_property_raises(self) -> None:
+        client = _make_client()
+        client.api = _PreLoginApi()
+        gw = AccountGateway(client)
+        assert gw.get_margin() == {}
