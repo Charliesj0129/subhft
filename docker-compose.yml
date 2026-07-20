@@ -180,6 +180,8 @@ services:
       # Compose-list-replace reason. Pairs with services/heartbeat.py
       # writer at /var/run/hft/heartbeat and ops/check-heartbeat.sh on host.
       - ./.hft-runtime:/var/run/hft
+      # Backup mount: BackupManager._cleanup_old_backups walks Path(/backups); without this mount cleanup silently no-ops (root cause of unbounded daily backup growth, 2026-05-19).
+      - ${CH_BACKUP_PATH:-./backups/clickhouse}:/backups
     deploy:
       resources:
         limits:

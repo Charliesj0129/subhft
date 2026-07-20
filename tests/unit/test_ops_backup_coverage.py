@@ -268,19 +268,25 @@ def test_verify_backup_passes_when_path_missing(tmp_path: Path) -> None:
         assert client.query.called
 
 
-def test_verify_backup_raises_when_empty(tmp_path: Path) -> None:
+def test_verify_backup_passes_when_dir_visible_but_empty(tmp_path: Path) -> None:
+    """A dir that exists but shows 0 visible bytes must NOT fail verification.
+
+    ClickHouse's own system.backups status is authoritative; a 0-byte read
+    from this process is indistinguishable from a cross-container UID/
+    permission mismatch that silently hides files during rglob (the real
+    2026-07 production incident), so it can only be logged, never raised on.
+    """
     mgr = BackupManager(backup_dir=str(tmp_path), retain_days=7, ch_host="localhost")
     client = _mock_client()
     query_result = MagicMock()
     query_result.result_rows = [("BACKUP_CREATED", "")]
     client.query.return_value = query_result
 
-    # Create the directory but leave it empty
+    # Create the directory but leave it empty (or, in production, unreadable)
     (tmp_path / "daily_20260329").mkdir()
 
     with _patch_client(mgr, client):
-        with pytest.raises(BackupError, match="empty"):
-            mgr._verify_backup("daily_20260329")
+        mgr._verify_backup("daily_20260329")  # should not raise
 
 
 def test_verify_backup_success(tmp_path: Path) -> None:

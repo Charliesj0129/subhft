@@ -166,16 +166,19 @@ class BackupManager:
         if status != "BACKUP_CREATED":
             raise BackupError(f"Backup '{backup_name}' status is '{status}': {error}")
 
-        # Filesystem verification — only if backup dir is accessible from this process
-        # (skipped when running in hft-engine container; CK stores backups in its own volume)
-        backup_path = Path(self._backup_dir) / backup_name
-        if backup_path.exists():
-            size = sum(f.stat().st_size for f in backup_path.rglob("*") if f.is_file())
-            if size == 0:
-                raise BackupError(f"Backup directory is empty: {backup_path}")
-            logger.info("Backup verified", backup_name=backup_name, size_bytes=size)
-        else:
-            logger.info("Backup verified via system.backups (filesystem not accessible)", backup_name=backup_name)
+        # system.backups status is the authoritative success signal from
+        # ClickHouse itself. The filesystem size check below is best-effort
+        # observability only — the ClickHouse container (backup writer) and
+        # this process (hft-engine container) can run as different UIDs, so
+        # a partially-unreadable directory tree silently under-counts to 0
+        # (pathlib's rglob skips unreadable subdirs without raising) rather
+        # than reflecting a real empty/failed backup. Never fail on this.
+        try:
+            backup_path = Path(self._backup_dir) / backup_name
+            size = self._backup_size_bytes(backup_name) if backup_path.exists() else 0
+            logger.info("Backup verified", backup_name=backup_name, status=status, visible_size_bytes=size)
+        except OSError:
+            logger.info("Backup verified via system.backups (filesystem check skipped)", backup_name=backup_name)
 
     def _cleanup_old_backups(self) -> None:
         """Remove backups older than retain_days based on directory name parsing."""
