@@ -10,7 +10,7 @@ dependencies = [
     "structlog>=25.1,<27",
     "msgspec>=0.20,<1",
     "hftbacktest>=2.4,<3",
-    "shioaji[speed]==1.5.6",  # PINNED: surface + offline harness verified 2026-07-13
+    "shioaji[speed]==1.7.0",  # PINNED: surface + offline harness verified 2026-07-13
     "prometheus_client>=0.23,<0.25",  # PINNED: 0.25.0 causes MutexValue._lock corruption (TypeError on /metrics)
     "psutil>=7.1,<8",
     "PyYAML>=6.0,<7",
@@ -59,7 +59,7 @@ research = [
 ]
 
 [project.optional-dependencies]
-shioaji-broker = ["shioaji[speed]==1.5.6"]  # Shioaji (SinoPac) broker SDK
+shioaji-broker = ["shioaji[speed]==1.7.0"]  # Shioaji (SinoPac) broker SDK
 fubon = ["fubon-neo>=2.2.7"]  # Fubon broker SDK (not on PyPI; install from Fubon's index)
 monitor = ["rich>=13.0"]  # Signal monitor TUI (rich.live + rich.table)
 bot = ["python-telegram-bot[job-queue]>=21.0"]  # Telegram Bot interactive service
