@@ -86,6 +86,7 @@ class ShioajiClientConfig:
     reconnect_timeout_s: float = 45.0
     reconnect_subscribe_timeout_s: float = 30.0
     login_retry_max: int = 1
+    reconnect_stagger_timeout_s: float = 60.0
 
     # --- API cache ---
     api_cache_max_size: int = 1000
@@ -245,6 +246,7 @@ def load_shioaji_config(
         reconnect_backoff_max_s=_env_float("HFT_RECONNECT_BACKOFF_MAX_S", 600.0),
         login_timeout_s=_env_float("HFT_SHIOAJI_LOGIN_TIMEOUT_S", 20.0),
         reconnect_timeout_s=_env_float("HFT_SHIOAJI_RECONNECT_TIMEOUT_S", 45.0),
+        reconnect_stagger_timeout_s=_env_float("HFT_RECONNECT_STAGGER_TIMEOUT_S", 60.0),
         reconnect_subscribe_timeout_s=_env_float("HFT_SHIOAJI_RECONNECT_SUBSCRIBE_TIMEOUT_S", 30.0),
         login_retry_max=_env_int("HFT_SHIOAJI_LOGIN_RETRY_MAX", 1, min_val=0),
         api_cache_max_size=_env_int("HFT_API_CACHE_MAX_SIZE", 1000),

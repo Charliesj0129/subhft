@@ -517,6 +517,9 @@ class ShioajiClient:
         self._session_refresh_jitter_frac = float(os.getenv("HFT_SESSION_REFRESH_JITTER_FRAC", "0.15"))
         self._session_refresh_stagger_gap_s = float(os.getenv("HFT_SESSION_REFRESH_STAGGER_S", "5.0"))
         self._session_refresh_stagger_timeout_s = float(os.getenv("HFT_SESSION_REFRESH_STAGGER_TIMEOUT_S", "120.0"))
+        # Reconnects share the same slot but wait less for it: feed recovery is
+        # time-critical, so proceeding unserialised beats not reconnecting.
+        self._reconnect_stagger_timeout_s = float(os.getenv("HFT_RECONNECT_STAGGER_TIMEOUT_S", "60.0"))
 
         # Market open grace period (C4)
         self._market_open_grace_s = float(os.getenv("HFT_MARKET_OPEN_GRACE_S", "60"))  # 60 seconds

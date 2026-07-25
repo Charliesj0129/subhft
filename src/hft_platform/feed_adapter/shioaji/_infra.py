@@ -8,6 +8,7 @@ across submodules.
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 from pathlib import Path
@@ -428,6 +429,58 @@ def rate_limit_api(limiter: Any, op: str, *, category: str = "default") -> bool:
 
 _LOGIN_SLOT_LOCK = threading.Lock()
 _login_slot_last_release_s: float = 0.0
+
+
+# ---------------------------------------------------------------------------
+# Broker error scrubbing
+# ---------------------------------------------------------------------------
+#
+# Broker error payloads are echoed into container logs verbatim. Shioaji's login
+# rejections quote back the submitted identity and the connecting host, so a 451
+# storm writes the operator's TW national ID and the host's public IP into the
+# log stream once per retry. Redact at the boundary where the error is captured,
+# so every downstream log line, metric label and status field inherits it.
+
+# TW national / ARC ID: one letter, 1|2 (or A-D for the newer ARC format), 8 digits.
+_PERSON_ID_RE = re.compile(r"\b[A-Za-z][12A-Da-d]\d{8}\b")
+_IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+# key=value / "key": "value" / key: value forms for credential-ish keys.
+_CRED_KV_RE = re.compile(
+    r"(?i)\b(person_id|personid|api_key|apikey|secret_key|secretkey|ca_passwd|password|token)\b"
+    # Optional closing quote so the JSON form `"api_key": "..."` matches too.
+    r"([\"']?\s*[:=]\s*)"
+    r"(\"[^\"]*\"|'[^']*'|[^\s,;)}\]]+)"
+)
+
+
+def scrub_broker_error(text: Any) -> str:
+    """Redact identity and credential material from a broker error payload.
+
+    Always returns a string — callers feed this straight into ``str(err)``
+    positions, and a scrubber that raises would take out the error path it is
+    meant to make safe.
+    """
+    try:
+        value = text if isinstance(text, str) else str(text)
+    except Exception:  # pragma: no cover - a __str__ that raises must not win
+        return "<unprintable error>"
+    value = _CRED_KV_RE.sub(r"\1\2<redacted>", value)
+    value = _PERSON_ID_RE.sub("<redacted-id>", value)
+    return _IPV4_RE.sub("<redacted-ip>", value)
+
+
+def client_float(client: Any, name: str, default: float) -> float:
+    """Read a numeric tuning attribute off the client, falling back on anything else.
+
+    A plain ``getattr(..., default)`` is not enough: the attribute may exist but
+    hold a non-numeric value (an unparsed env string, or a mock in tests), and
+    these call sites run on background threads where a ``TypeError`` would kill
+    session refreshes or reconnects silently for the rest of the process's life.
+    """
+    value = getattr(client, name, default)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return default
+    return float(value)
 
 
 def refresh_sleep_s(base_s: float, jitter_frac: float, rand: Callable[[], float]) -> float:

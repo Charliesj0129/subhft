@@ -23,6 +23,7 @@ from hft_platform.feed_adapter.shioaji._infra import (
     reset_login_slot_for_tests,
     safe_call_with_timeout,
     sanitize_metric_label,
+    scrub_broker_error,
     set_thread_alive_metric,
     update_quote_pending_metrics,
 )
@@ -563,3 +564,51 @@ class TestLoginSlot:
         finally:
             may_release.set()
             t.join(timeout=5.0)
+
+
+class TestScrubBrokerError:
+    """Broker error payloads echo back identity and host — they reach the logs."""
+
+    def test_tw_national_id_is_redacted(self) -> None:
+        out = scrub_broker_error("login failed for A123456789")
+        assert "A123456789" not in out
+        assert "<redacted-id>" in out
+
+    def test_arc_style_id_is_redacted(self) -> None:
+        out = scrub_broker_error("subject=AC12345678 rejected")
+        assert "AC12345678" not in out
+
+    def test_source_ip_is_redacted(self) -> None:
+        out = scrub_broker_error("connection from 203.0.113.47 refused")
+        assert "203.0.113.47" not in out
+        assert "<redacted-ip>" in out
+
+    def test_credential_key_values_are_redacted(self) -> None:
+        out = scrub_broker_error('{"person_id": "A123456789", "api_key": "abcd1234"}')
+        assert "A123456789" not in out
+        assert "abcd1234" not in out
+
+    def test_secret_key_equals_form_is_redacted(self) -> None:
+        out = scrub_broker_error("secret_key=s3cr3tvalue&x=1")
+        assert "s3cr3tvalue" not in out
+
+    def test_error_code_and_detail_survive_scrubbing(self) -> None:
+        """The scrub must not destroy the diagnostic content it wraps."""
+        out = scrub_broker_error("login: code: 451, detail: Too Many Connections.")
+        assert "451" in out
+        assert "Too Many Connections" in out
+
+    def test_accepts_exception_objects(self) -> None:
+        out = scrub_broker_error(RuntimeError("host 10.0.0.1 rejected A123456789"))
+        assert "10.0.0.1" not in out
+        assert "A123456789" not in out
+
+    def test_unprintable_object_does_not_raise(self) -> None:
+        class Boom:
+            def __str__(self) -> str:
+                raise ValueError("nope")
+
+        assert scrub_broker_error(Boom()) == "<unprintable error>"
+
+    def test_plain_message_passes_through_unchanged(self) -> None:
+        assert scrub_broker_error("contracts timeout") == "contracts timeout"

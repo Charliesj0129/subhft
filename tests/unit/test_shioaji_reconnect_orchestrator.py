@@ -303,3 +303,114 @@ class TestRequestReconnectViaPolicy:
         client.tick_callback = None
         result = orch.request_reconnect_via_policy("fallback", force=True)
         assert result is True
+
+
+class TestReconnectLoginSlot:
+    """Cross-facade serialisation (2026-06-21 thundering-herd 451 incident).
+
+    ``_reconnect_lock`` only guards a single facade; the pool has four, and all
+    four reconnecting at once is what exhausted the account's session slots.
+    """
+
+    def test_reconnect_holds_login_slot_across_logout_and_login(self, client):
+        orch = ReconnectOrchestrator(client)
+        client._last_reconnect_ts = 0.0
+        client.tick_callback = None
+        events: list[str] = []
+
+        def _login():
+            events.append("login")
+            client.logged_in = True
+            return True
+
+        client.login = _login
+        client.api.logout.side_effect = lambda: events.append("logout")
+
+        with (
+            patch(
+                "hft_platform.feed_adapter.shioaji.reconnect_orchestrator.acquire_login_slot",
+                side_effect=lambda **_: events.append("acquire") or True,
+            ),
+            patch(
+                "hft_platform.feed_adapter.shioaji.reconnect_orchestrator.release_login_slot",
+                side_effect=lambda: events.append("release"),
+            ),
+        ):
+            assert orch.reconnect(reason="test", force=True) is True
+
+        assert events == ["acquire", "logout", "login", "release"]
+
+    def test_reconnect_releases_login_slot_when_login_fails(self, client):
+        """A failed login must not strand the slot and block the other facades."""
+        orch = ReconnectOrchestrator(client)
+        client._last_reconnect_ts = 0.0
+        client.login = MagicMock(return_value=False)
+        client.logged_in = False
+
+        with (
+            patch(
+                "hft_platform.feed_adapter.shioaji.reconnect_orchestrator.acquire_login_slot",
+                return_value=True,
+            ),
+            patch("hft_platform.feed_adapter.shioaji.reconnect_orchestrator.release_login_slot") as mock_release,
+        ):
+            assert orch.reconnect(reason="test", force=True) is False
+
+        mock_release.assert_called_once()
+
+    def test_reconnect_releases_login_slot_when_recreate_api_fails(self, client):
+        """The hard-reconnect early return is inside the slot's scope too."""
+        orch = ReconnectOrchestrator(client)
+        orch._consecutive_failures = 99  # force the hard-reconnect branch
+        client._last_reconnect_ts = 0.0
+        client.recreate_api = MagicMock(return_value=False)
+
+        with (
+            patch(
+                "hft_platform.feed_adapter.shioaji.reconnect_orchestrator.acquire_login_slot",
+                return_value=True,
+            ),
+            patch("hft_platform.feed_adapter.shioaji.reconnect_orchestrator.release_login_slot") as mock_release,
+        ):
+            assert orch.reconnect(reason="test", force=True) is False
+
+        mock_release.assert_called_once()
+        assert client._last_reconnect_error == "recreate_api_failed"
+
+    def test_reconnect_proceeds_unserialised_when_slot_times_out(self, client):
+        """Never skip a reconnect because the slot was busy — feed recovery wins."""
+        orch = ReconnectOrchestrator(client)
+        client._last_reconnect_ts = 0.0
+        client.tick_callback = None
+        client.login = _make_mock_login(client)
+
+        with (
+            patch(
+                "hft_platform.feed_adapter.shioaji.reconnect_orchestrator.acquire_login_slot",
+                return_value=False,
+            ),
+            patch("hft_platform.feed_adapter.shioaji.reconnect_orchestrator.release_login_slot") as mock_release,
+        ):
+            assert orch.reconnect(reason="test", force=True) is True
+
+        # Releasing a slot we never held would free another facade's.
+        mock_release.assert_not_called()
+
+    def test_reconnect_uses_shorter_slot_timeout_than_session_refresh(self, client):
+        orch = ReconnectOrchestrator(client)
+        client._last_reconnect_ts = 0.0
+        client.tick_callback = None
+        client.login = _make_mock_login(client)
+
+        with (
+            patch(
+                "hft_platform.feed_adapter.shioaji.reconnect_orchestrator.acquire_login_slot",
+                return_value=True,
+            ) as mock_acquire,
+            patch("hft_platform.feed_adapter.shioaji.reconnect_orchestrator.release_login_slot"),
+        ):
+            orch.reconnect(reason="test", force=True)
+
+        kwargs = mock_acquire.call_args.kwargs
+        assert kwargs["timeout_s"] == 60.0
+        assert kwargs["timeout_s"] < client._session_refresh_stagger_timeout_s

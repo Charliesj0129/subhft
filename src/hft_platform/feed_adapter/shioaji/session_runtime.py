@@ -13,8 +13,10 @@ from structlog import get_logger
 from hft_platform.core import timebase
 from hft_platform.feed_adapter.shioaji._infra import (
     acquire_login_slot,
+    client_float,
     refresh_sleep_s,
     release_login_slot,
+    scrub_broker_error,
 )
 
 if TYPE_CHECKING:
@@ -35,20 +37,6 @@ def _env_float(name: str, default: float) -> float:
         return float(os.getenv(name, default))
     except (TypeError, ValueError):
         return default
-
-
-def _client_float(client: Any, name: str, default: float) -> float:
-    """Read a numeric tuning attribute off the client, falling back on anything else.
-
-    A plain ``getattr(..., default)`` is not enough: the attribute may exist but
-    hold a non-numeric value (an unparsed env string, or a mock in tests), and
-    this runs on the session-refresh thread where a ``TypeError`` would kill
-    refreshes silently for the rest of the process's life.
-    """
-    value = getattr(client, name, default)
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return default
-    return float(value)
 
 
 def _env_int(name: str, default: int) -> int:
@@ -221,7 +209,7 @@ class SessionRuntime:
                 )
                 c._record_api_latency("login", start_ns, ok=ok)
                 if not ok:
-                    c._last_login_error = str(err) if err is not None else "unknown"
+                    c._last_login_error = scrub_broker_error(err) if err is not None else "unknown"
                     if _is_connection_limit_error(c._last_login_error):
                         logger.error(
                             "Login rejected by broker connection limit; skipping fallback and immediate retry",
@@ -253,7 +241,7 @@ class SessionRuntime:
                             # running, leaving contracts_ready=False permanently.
                             ok = True
                         else:
-                            c._last_login_error = str(err_fb) if err_fb is not None else "unknown"
+                            c._last_login_error = scrub_broker_error(err_fb) if err_fb is not None else "unknown"
                             logger.error(
                                 "Login fallback (no-contract) failed",
                                 attempt=attempt,
@@ -309,7 +297,7 @@ class SessionRuntime:
                                 logger.info("CA activated")
                             except Exception as exc:
                                 c._record_api_latency("activate_ca", start_ns, ok=False)
-                                logger.error("CA activation failed", error=str(exc))
+                                logger.error("CA activation failed", error=scrub_broker_error(exc))
                     c.logged_in = True
                     c._last_session_refresh_ts = timebase.now_s()
                     c._release_session_lock()
@@ -386,7 +374,7 @@ class SessionRuntime:
                     time.sleep(
                         refresh_sleep_s(
                             c._session_refresh_check_interval_s,
-                            _client_float(c, "_session_refresh_jitter_frac", 0.15),
+                            client_float(c, "_session_refresh_jitter_frac", 0.15),
                             random.random,
                         )
                     )
@@ -462,8 +450,8 @@ class SessionRuntime:
         # A timeout returns False and we refresh anyway — a stale session is a
         # worse failure than a 451 the retry path already recognises.
         slot_held = acquire_login_slot(
-            min_gap_s=_client_float(c, "_session_refresh_stagger_gap_s", 5.0),
-            timeout_s=_client_float(c, "_session_refresh_stagger_timeout_s", 120.0),
+            min_gap_s=client_float(c, "_session_refresh_stagger_gap_s", 5.0),
+            timeout_s=client_float(c, "_session_refresh_stagger_timeout_s", 120.0),
             metrics=c.metrics,
         )
         try:
@@ -473,7 +461,7 @@ class SessionRuntime:
                 try:
                     c.api.logout()
                 except Exception as exc:
-                    logger.warning("Session refresh logout failed", error=str(exc))
+                    logger.warning("Session refresh logout failed", error=scrub_broker_error(exc))
 
                 c.logged_in = False
                 c._callbacks_registered = False
@@ -523,7 +511,7 @@ class SessionRuntime:
                 logger.error("Session refresh failed: login unsuccessful")
                 return False
         except Exception as exc:
-            logger.error("Session refresh failed", error=str(exc))
+            logger.error("Session refresh failed", error=scrub_broker_error(exc))
             if c.metrics:
                 c.metrics.session_refresh_total.labels(result="error").inc()
             return False

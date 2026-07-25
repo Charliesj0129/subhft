@@ -115,6 +115,26 @@ groups:
         summary: "Shioaji pending quote state stalled"
         description: "pending_quote_resubscribe age > 300s for more than 5m during trading hours. The age gauge counts up continuously from the last session close, so this rule is gated on market_trading_hours_active (calendar-aware, holidays included) — without that gate it fired every weekend and holiday."
 
+  - alert: QuoteFacadeLoggedOut
+    expr: (count(hft_quote_conn_logged_in) - sum(hft_quote_conn_logged_in)) > 0 and on() market_trading_hours_active == 1
+    for: 5m
+    labels:
+        severity: warning
+    annotations:
+        summary: "A quote facade is logged out during trading hours"
+        description: "At least one quote connection reports hft_quote_conn_logged_in=0 while the market is open. FeedState stays CONNECTED as long as any facade is up, so a partially logged-out pool silently loses whatever symbols that facade carried. Expressed as count-minus-sum so it adapts to the configured pool size instead of hardcoding 4."
+        runbook_url: "docs/runbooks/feed-reconnect.md"
+
+  - alert: QuotePoolFullyUnsubscribed
+    expr: sum(hft_quote_conn_subscribed_count) == 0 and on() market_trading_hours_active == 1
+    for: 2m
+    labels:
+        severity: critical
+    annotations:
+        summary: "Quote pool holds zero subscriptions during trading hours"
+        description: "Every quote connection reports subscribed_count=0 while the market is open — the engine is connected but receiving nothing. FeedState=CONNECTED does not catch this."
+        runbook_url: "docs/runbooks/feed-reconnect.md"
+
   - alert: ShioajiLoginFailuresDetected
     expr: increase(shioaji_login_fail_total[10m]) > 0
     for: 0s
