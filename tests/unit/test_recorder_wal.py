@@ -251,3 +251,40 @@ def test_wal_batch_writer_stop_clears_on_success(tmp_path: Path, monkeypatch):
             assert writer._buffer == {}
     finally:
         writer._timer_running = False
+
+
+# ---------------------------------------------------------------------------
+# disk_pressure_level ownership
+# ---------------------------------------------------------------------------
+
+
+def test_disk_pressure_level_not_clobbered_by_free_space_writer(tmp_path: Path):
+    """WAL writers must not write disk_pressure_level — DiskPressureMonitor owns it.
+
+    Both writers used to set it to 2-or-0 from a free-space check on every WAL
+    write, overwriting the monitor's 0-3 WAL-size level. On 2026-07-24 that made
+    the gauge read 0.0 while the monitor was CRITICAL, so WALDiskPressureCritical
+    flapped and HALT was never visible in Prometheus at all.
+    """
+    writer = WALWriter(str(tmp_path))
+    metrics = MagicMock()
+    writer._metrics = metrics
+
+    writer._set_disk_pressure_metrics(123.0, True, "wal_sync")
+
+    metrics.disk_pressure_level.set.assert_not_called()
+    metrics.wal_disk_circuit_breaker_active.labels.assert_called_once_with(writer="wal_sync")
+    metrics.wal_disk_circuit_breaker_active.labels.return_value.set.assert_called_once_with(1)
+    metrics.wal_disk_available_mb.set.assert_called_once_with(123.0)
+
+
+def test_batch_writer_disk_pressure_level_not_clobbered_by_free_space_writer():
+    """Same ownership rule for WALBatchWriter's free-space reporter."""
+    fake_self = MagicMock()
+    fake_self._metrics = MagicMock()
+
+    WALBatchWriter._set_disk_pressure_metrics(fake_self, 456.0, False)
+
+    fake_self._metrics.disk_pressure_level.set.assert_not_called()
+    fake_self._metrics.wal_disk_circuit_breaker_active.labels.assert_called_once_with(writer="wal_batch")
+    fake_self._metrics.wal_disk_circuit_breaker_active.labels.return_value.set.assert_called_once_with(0)

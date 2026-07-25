@@ -285,6 +285,11 @@ def test_manifest_load_removes_stuck_entries(tmp_path):
     loader._manifest_enabled = True
     loader._manifest_path = str(manifest_path)
 
+    # Saving prunes entries whose file is gone from both wal_dir and archive_dir,
+    # so the surviving names must actually exist somewhere.
+    (archive_dir / "other_2.jsonl").write_text("{}\n")
+    (archive_dir / "new_3.jsonl").write_text("{}\n")
+
     loader._load_manifest()
 
     assert "market_data_1.jsonl" not in loader._manifest

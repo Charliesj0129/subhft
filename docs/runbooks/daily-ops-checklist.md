@@ -155,7 +155,29 @@
   docker compose down
   ```
 - [ ] **Evidence pack**:
-  Verify `outputs/production_rollout/autonomy/<YYYYMMDD>/` contains `state_timeline.jsonl`, `platform_degrade.json`, `strategy_quarantine.json`, and `manual_rearm_requirements.md`.
+  Verify the autonomy evidence dir contains `state_timeline.jsonl`,
+  `platform_degrade.json`, `strategy_quarantine.json`, and
+  `manual_rearm_requirements.md`.
+
+  **Read it inside the container, not on the host.** `outputs/` is *not*
+  bind-mounted, and the engine's CWD is `/app`, so the live state lives in the
+  container's writable layer:
+  ```bash
+  docker compose exec hft-engine ls /app/outputs/production_rollout/autonomy/$(date +%Y%m%d)/
+  docker compose exec hft-engine cat /app/outputs/production_rollout/autonomy/runtime_state.json
+  ```
+  A host-side `outputs/production_rollout/autonomy/runtime_state.json` is *not*
+  engine state — anything run from the deployment root with a relative default
+  path (a stray `pytest`, or `hft ops autonomy-status` on the host) writes there.
+  On 2026-07-08 a host test run left `reason="test_reason"` plus phantom
+  `strat1`/`strat_a` latches in `/home/charl/subhft`, which then showed up as
+  real operator-facing state. Treat any such file as an artifact and move it aside.
+
+  Because the evidence lives in the writable layer, `docker compose up -d`
+  / `--force-recreate` **destroys it**. Rescue first:
+  ```bash
+  docker cp hft-engine:/app/outputs/production_rollout/autonomy ./outputs/autonomy_container_$(date +%Y%m%d)
+  ```
 
 ---
 
@@ -165,3 +187,53 @@
 - [ ] Review Grafana dashboard for multi-day trends.
 - [ ] Update contract expiry dates for next week.
 - [ ] Rotate API credentials if policy requires.
+
+---
+
+## Weekend → Monday Reopen Checklist
+
+Run over the weekend, before the first session of the week. A latched autonomy
+state or a WAL condition left over from Friday will not clear on its own.
+
+### Saturday/Sunday — clear anything latched
+
+- [ ] **No critical alerts other than known weekend false positives**:
+  ```bash
+  curl -s localhost:9093/api/v2/alerts | python3 -c 'import sys,json;[print(a["labels"]["alertname"], a["status"]["state"]) for a in json.load(sys.stdin)]'
+  ```
+  `ShioajiPendingQuoteStall` fires every weekend and clears at Monday's open —
+  `shioaji_quote_pending_age_seconds` simply counts up from the last night-session
+  close, and the rule has no session/holiday awareness. Anything else is real.
+- [ ] **Autonomy not latched**:
+  ```bash
+  curl -s localhost:9090/metrics | grep -E 'autonomy_mode|manual_rearm_required|platform_reduce_only_active'
+  ```
+  Expect `autonomy_mode{scope="platform"} 0.0` and `manual_rearm_required 0.0`.
+  Non-zero means a latch survives; `recorder_data_loss` in particular is
+  non-auto-recoverable and re-latches across restarts — follow
+  `WALDiskPressureCritical.md`.
+- [ ] **WAL root clean** (top-level files are what the pressure monitor counts):
+  ```bash
+  find .wal -maxdepth 1 -type f -printf '%s\t%p\n' | sort -rn | head
+  ls .wal/*.jsonl 2>/dev/null | wc -l    # pending backlog, expect 0 when idle
+  curl -s localhost:9090/metrics | grep -E 'disk_pressure_level|wal_disk_available_mb'
+  ```
+- [ ] **No dropped rows last session**:
+  ```bash
+  docker compose logs hft-engine --since 72h | grep -i 'WALFirstWriter HALT'
+  ```
+- [ ] **11/11 containers healthy**: `docker compose ps`
+- [ ] Session-refresh errors reviewed — repeated `code: 451, detail: Too Many
+  Connections` means quote facades are re-logging in unserialized; note it, it
+  degrades reconnects rather than blocking the open.
+
+### Monday pre-open
+
+- [ ] 08:30 CST — `shioaji_quote_pending_age_seconds` drops to ~0 as sessions refresh.
+- [ ] 09:00 CST — ingestion live; compare the running row rate against a recent
+  healthy day (~6.5–7.2 M rows/day at a 296-symbol universe):
+  ```bash
+  docker exec clickhouse clickhouse-client --query "SELECT count(), uniqExact(symbol) FROM hft.market_data WHERE toDate(fromUnixTimestamp64Nano(ingest_ts),'Asia/Taipei') = today()"
+  ```
+- [ ] First 30 minutes — no `WALFirstWriter HALT`, no new criticals, event-loop lag
+  within budget.

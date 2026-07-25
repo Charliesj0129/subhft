@@ -19,11 +19,13 @@ from hft_platform.recorder._loader_wal import (
     extract_file_ts,
     get_new_files,
     load_manifest,
+    manifest_sidecar_dir,
     mark_processed,
     parse_batch_table_name,
     parse_table_from_filename,
     process_files,
     process_single_file,
+    prune_manifest,
     save_manifest,
 )
 
@@ -202,9 +204,18 @@ class TestLoadManifest:
         assert svc._manifest == set()
 
 
+def _make_archived(svc, *filenames: str) -> None:
+    """Place files in the archive dir so pruning keeps their manifest entries."""
+    os.makedirs(svc.archive_dir, exist_ok=True)
+    for fname in filenames:
+        with open(os.path.join(svc.archive_dir, fname), "w") as f:
+            f.write("{}\n")
+
+
 class TestSaveManifest:
     def test_saves_and_reloads(self, tmp_path):
         svc = _make_svc(tmp_path)
+        _make_archived(svc, "file_a.jsonl", "file_b.jsonl")
         svc._manifest = {"file_a.jsonl", "file_b.jsonl"}
         save_manifest(svc)
         assert os.path.exists(svc._manifest_path)
@@ -213,13 +224,90 @@ class TestSaveManifest:
 
     def test_creates_backup_of_existing_manifest(self, tmp_path):
         svc = _make_svc(tmp_path)
+        _make_archived(svc, "new.jsonl")
         with open(svc._manifest_path, "w") as f:
             f.write("old.jsonl\n")
         svc._manifest = {"new.jsonl"}
         save_manifest(svc)
-        bak = svc._manifest_path + ".bak"
+        bak = os.path.join(manifest_sidecar_dir(svc._manifest_path), "manifest.txt.bak")
         assert os.path.exists(bak)
         assert "old.jsonl" in open(bak).read()
+
+    def test_manifest_prunes_entries_for_files_no_longer_present(self, tmp_path):
+        """Entries whose file is gone from both WAL and archive dirs are dropped.
+
+        Regression: production manifest reached 4,595,589 lines / 165 MB because
+        archived files were retention-deleted while their names stayed forever.
+        """
+        svc = _make_svc(tmp_path)
+        os.makedirs(svc.wal_dir, exist_ok=True)
+        os.makedirs(svc.archive_dir, exist_ok=True)
+        svc._manifest = {f"retention_deleted_{i}.jsonl" for i in range(100)}
+
+        save_manifest(svc)
+
+        assert svc._manifest == set()
+        assert open(svc._manifest_path).read().strip() == ""
+
+    def test_manifest_prunes_keeps_entries_still_in_archive_dir(self, tmp_path):
+        """Archived-but-not-yet-deleted entries must survive pruning."""
+        svc = _make_svc(tmp_path)
+        os.makedirs(svc.wal_dir, exist_ok=True)
+        _make_archived(svc, "archived.jsonl")
+        pending = _make_wal_file(svc.wal_dir, "pending.jsonl", '{"a":1}\n')
+        assert os.path.exists(pending)
+        svc._manifest = {"archived.jsonl", "pending.jsonl", "vanished.jsonl"}
+
+        save_manifest(svc)
+
+        assert svc._manifest == {"archived.jsonl", "pending.jsonl"}
+
+    def test_manifest_backup_and_tempfile_land_outside_wal_root_scan(self, tmp_path):
+        """Sidecars must not be counted by DiskPressureMonitor._wal_dir_size_mb.
+
+        That function sums only maxdepth-1 regular files in the WAL root. A
+        165 MB manifest plus its equally large .bak and temp copies living there
+        pushed the sum past the 500 MB HALT threshold on 2026-07-24 and made
+        WALFirstWriter drop live market_data rows with 125 GB of disk free.
+        """
+        svc = _make_svc(tmp_path)
+        os.makedirs(svc.wal_dir, exist_ok=True)
+        svc._manifest_path = os.path.join(svc.wal_dir, "manifest.txt")
+        _make_archived(svc, "a.jsonl")
+        svc._manifest = {"a.jsonl"}
+
+        save_manifest(svc)  # creates the manifest
+        svc._manifest = {"a.jsonl"}
+        save_manifest(svc)  # second save is the one that writes a .bak
+
+        root_files = sorted(f for f in os.listdir(svc.wal_dir) if os.path.isfile(os.path.join(svc.wal_dir, f)))
+        assert root_files == ["manifest.txt"]
+        sidecar = manifest_sidecar_dir(svc._manifest_path)
+        assert os.path.exists(os.path.join(sidecar, "manifest.txt.bak"))
+
+    def test_save_removes_legacy_sidecar_left_in_wal_root(self, tmp_path):
+        """A pre-fix manifest.txt.bak beside the manifest is reclaimed on save."""
+        svc = _make_svc(tmp_path)
+        os.makedirs(svc.wal_dir, exist_ok=True)
+        svc._manifest_path = os.path.join(svc.wal_dir, "manifest.txt")
+        legacy_bak = svc._manifest_path + ".bak"
+        with open(legacy_bak, "w") as f:
+            f.write("stale.jsonl\n" * 1000)
+        _make_archived(svc, "a.jsonl")
+        svc._manifest = {"a.jsonl"}
+
+        save_manifest(svc)
+
+        assert not os.path.exists(legacy_bak)
+
+    def test_prune_skipped_when_wal_dir_unreadable(self, tmp_path):
+        """Never prune blind: an unlistable WAL dir must leave the manifest intact."""
+        svc = _make_svc(tmp_path)
+        svc.wal_dir = str(tmp_path / "does_not_exist")
+        svc._manifest = {"keep_me.jsonl"}
+
+        assert prune_manifest(svc) == 0
+        assert svc._manifest == {"keep_me.jsonl"}
 
     def test_empty_manifest_saves_empty_file(self, tmp_path):
         svc = _make_svc(tmp_path)

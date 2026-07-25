@@ -24,6 +24,57 @@ from hft_platform.recorder._loader_common import (
 # ---------------------------------------------------------------------------
 
 
+def manifest_sidecar_dir(manifest_path: str) -> str:
+    """Directory holding manifest sidecars (``.bak`` copy and temp files).
+
+    Deliberately a *subdirectory* of the manifest's own directory:
+    ``DiskPressureMonitor._wal_dir_size_mb`` sums only maxdepth-1 regular files
+    in the WAL root, so sidecars parked one level down are never mistaken for
+    pending WAL data. On 2026-07-24 a 165 MB ``manifest.txt`` plus its equally
+    large ``.bak`` and temp copies pushed that sum past the 500 MB HALT
+    threshold, and ``WALFirstWriter`` dropped live ``market_data`` rows while
+    125 GB of disk was still free.
+    """
+    return os.path.join(os.path.dirname(manifest_path) or ".", "manifest.d")
+
+
+def prune_manifest(svc: Any) -> int:
+    """Drop manifest entries whose file is gone from both WAL and archive dirs.
+
+    The manifest's only job is to stop ``get_new_files`` re-processing files
+    still sitting in ``wal_dir`` (it computes ``listdir(wal_dir) - manifest``),
+    so an entry naming a file present in neither ``wal_dir`` nor ``archive_dir``
+    cannot suppress anything and is pure dead weight. Without pruning the
+    manifest grows without bound: processed files are archived and then deleted
+    after ``HFT_ARCHIVE_RETENTION_DAYS``, but their names used to stay in the
+    manifest forever (4,595,589 lines / 165 MB on production).
+
+    ``hft._wal_dedup`` backstops replay idempotency, so pruning cannot cause
+    duplicate rows even if a pruned file were somehow to reappear.
+
+    Returns the number of entries removed.
+    """
+    try:
+        live = {f for f in os.listdir(svc.wal_dir) if f.endswith(".jsonl")}
+    except OSError:
+        return 0  # cannot enumerate WAL dir -> never prune blind
+    archive_dir = getattr(svc, "archive_dir", None)
+    if archive_dir and os.path.isdir(archive_dir):
+        try:
+            # Archiving preserves the basename (shutil.move into archive_dir),
+            # so archived entries must survive pruning until retention deletes them.
+            live |= {f for f in os.listdir(archive_dir) if f.endswith(".jsonl")}
+        except OSError:
+            return 0
+    with svc._manifest_lock:
+        before = len(svc._manifest)
+        svc._manifest &= live
+        removed = before - len(svc._manifest)
+    if removed:
+        logger.info("Pruned WAL manifest", removed=removed, remaining=before - removed)
+    return removed
+
+
 def load_manifest(svc: Any) -> None:
     """Load processed file manifest from disk.
 
@@ -62,22 +113,40 @@ def save_manifest(svc: Any) -> None:
     Uses temp file + fsync + rename to prevent corruption on crash.
     """
     manifest_dir = os.path.dirname(svc._manifest_path) or "."
+    sidecar_dir = manifest_sidecar_dir(svc._manifest_path)
     try:
         os.makedirs(manifest_dir, exist_ok=True)
+        os.makedirs(sidecar_dir, exist_ok=True)
+        # Reclaim the pre-2026-07-25 sidecar that used to live beside the
+        # manifest; left in place it keeps inflating _wal_dir_size_mb after
+        # deploy. Nothing reads it -- it is write-only insurance.
+        legacy_bak = svc._manifest_path + ".bak"
+        if os.path.exists(legacy_bak):
+            try:
+                os.unlink(legacy_bak)
+                logger.info("Removed legacy manifest sidecar from WAL root", path=legacy_bak)
+            except OSError as exc:
+                logger.warning("Could not remove legacy manifest sidecar", path=legacy_bak, error=str(exc))
+        prune_manifest(svc)
         if os.path.exists(svc._manifest_path):
-            bak_path = svc._manifest_path + ".bak"
+            bak_path = os.path.join(sidecar_dir, os.path.basename(svc._manifest_path) + ".bak")
             try:
                 shutil.copy2(svc._manifest_path, bak_path)
             except OSError:
                 pass
-        fd, tmp_path = tempfile.mkstemp(suffix=".tmp", dir=manifest_dir)
+        # Snapshot under the lock: mark_processed can add entries concurrently,
+        # and iterating a mutating set raises RuntimeError.
+        with svc._manifest_lock:
+            entries = sorted(svc._manifest)
+        # Same-filesystem subdirectory, so the rename below stays atomic.
+        fd, tmp_path = tempfile.mkstemp(suffix=".tmp", dir=sidecar_dir)
         # M2 (2026-04-25): finally-cleanup. Manifest writer is the most likely
         # source of the 8 orphan tmp*.tmp files seen in production /app/.wal/
         # because it runs on the loader thread which can be killed on
         # SIGTERM during the rare-window between fsync and rename.
         try:
             with os.fdopen(fd, "w") as f:
-                for fname in sorted(svc._manifest):
+                for fname in entries:
                     f.write(fname + "\n")
                 f.flush()
                 os.fsync(f.fileno())

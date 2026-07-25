@@ -72,6 +72,31 @@ def test_hook_called_on_transition():
         assert any(new >= DiskPressureLevel.WARN for _, new in transitions)
 
 
+def test_wal_dir_size_ignores_manifest_sidecar_subdirectory():
+    """Manifest sidecars parked in a subdirectory must not register as WAL pressure.
+
+    Regression for 2026-07-24: manifest.txt + manifest.txt.bak sitting in the WAL
+    root summed to 315 MB (496 MB mid-save), crossed the 500 MB HALT threshold,
+    and made WALFirstWriter drop live market_data rows while 125 GB was free.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        mon = _make_monitor(warn_mb=1, critical_mb=2, halt_mb=3, tmpdir=tmpdir)
+
+        sidecar = os.path.join(tmpdir, "manifest.d")
+        os.makedirs(sidecar)
+        for name in ("manifest.txt.bak", "tmp_abc.tmp"):
+            with open(os.path.join(sidecar, name), "wb") as f:
+                f.write(b"x" * (4 * 1024 * 1024))  # 4 MB each — past halt_mb if counted
+
+        assert mon._wal_dir_size_mb() < 1.0
+        assert mon._compute_level(mon._wal_dir_size_mb()) == DiskPressureLevel.OK
+
+        # A real pending WAL batch in the root still counts.
+        with open(os.path.join(tmpdir, "batch_1.jsonl"), "wb") as f:
+            f.write(b"x" * (4 * 1024 * 1024))
+        assert mon._compute_level(mon._wal_dir_size_mb()) == DiskPressureLevel.HALT
+
+
 def test_topic_policy_default():
     mon = _make_monitor()
     assert mon.get_topic_policy("market_data") == "write"

@@ -469,7 +469,8 @@ groups:
         description: "ClickHouse heartbeat failed for >2m. Engine may be falling back to WAL-only writes."
         runbook_url: "docs/runbooks/ClickHouseConnectionDown.md"
 
-  # WAL disk pressure
+  # WAL disk pressure — WAL directory size (DiskPressureMonitor is the only writer
+  # of disk_pressure_level; WAL writers report free space separately below)
   - alert: WALDiskPressureCritical
     expr: disk_pressure_level >= 2
     for: 30s
@@ -478,6 +479,19 @@ groups:
     annotations:
         summary: "WAL disk pressure critical"
         description: "WAL disk pressure at CRITICAL or HALT level. Data may be dropped."
+        runbook_url: "docs/runbooks/WALDiskPressureCritical.md"
+
+  # WAL free-space circuit breaker — distinct from the size-based level above.
+  # Previously invisible: the WAL writers signalled free-space pressure by
+  # overwriting disk_pressure_level, which clobbered DiskPressureMonitor's value.
+  - alert: WALDiskCircuitBreakerActive
+    expr: max(wal_disk_circuit_breaker_active) > 0
+    for: 1m
+    labels:
+        severity: critical
+    annotations:
+        summary: "WAL writer free-space circuit breaker tripped"
+        description: "A WAL writer tripped its free-space circuit breaker (HFT_WAL_DISK_MIN_MB). Check wal_disk_available_mb — this is free disk, not WAL directory size."
         runbook_url: "docs/runbooks/WALDiskPressureCritical.md"
 
   # Pipeline dual-fault (CH + WAL both failed)

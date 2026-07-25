@@ -185,6 +185,32 @@ def make_bidask_event(**overrides) -> BidAskEvent:
     return BidAskEvent(**defaults)
 
 
+@pytest.fixture(autouse=True)
+def _isolate_autonomy_state_paths(tmp_path, monkeypatch):
+    """Keep autonomy state and evidence writes inside the test's tmp dir.
+
+    ``manual_rearm.DEFAULT_RUNTIME_STATE_PATH`` and
+    ``evidence.DEFAULT_AUTONOMY_EVIDENCE_DIR`` are CWD-relative, so any test that
+    builds a real ``PlatformDegradeController``/``ManualRearmGate`` without an
+    explicit ``state_path`` writes ``outputs/production_rollout/autonomy/`` under
+    whatever directory pytest was launched from. On 2026-07-08 a test run on the
+    production host left ``reason="test_reason"`` plus phantom ``strat1``/
+    ``strat_a`` latches in ``/home/charl/subhft``, where ``hft ops
+    autonomy-status`` then reported them as real operator-facing state.
+    """
+    from hft_platform.ops import evidence as _evidence
+    from hft_platform.ops import manual_rearm as _manual_rearm
+
+    base = tmp_path / "autonomy_state"
+    monkeypatch.setattr(_manual_rearm, "DEFAULT_RUNTIME_STATE_PATH", base / "runtime_state.json")
+    monkeypatch.setattr(_evidence, "DEFAULT_AUTONOMY_EVIDENCE_DIR", base)
+    _evidence.reset_shared_autonomy_evidence_writer()
+    try:
+        yield
+    finally:
+        _evidence.reset_shared_autonomy_evidence_writer()
+
+
 @pytest.fixture()
 def mock_metrics() -> MagicMock:
     """Return a MagicMock that can stand in for MetricsRegistry."""
