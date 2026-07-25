@@ -135,6 +135,14 @@ docker compose exec hft-engine hft ops autonomy-status
 docker compose exec hft-engine hft ops rearm-platform   # only if still latched
 ```
 
+Why re-arm must come **before** the restart: `docker compose exec` starts a *new*
+process inside the container, so the CLI cannot reach the running engine's live
+controller. It says so and degrades gracefully —
+`manual_rearm_ipc_unreachable … "Persisted to runtime_state.json but live
+controller not in this process. Restart hft-engine to apply."` — writing
+`manual_rearm_required: false` to the state file only. Re-arming *after* the
+restart therefore needs a second restart to take effect (observed 2026-07-26).
+
 Dropping an empty manifest is safe: `get_new_files` returns
 `listdir(wal_dir) - manifest`, so with no pending `.jsonl` files an empty manifest
 re-processes nothing, and `hft._wal_dedup` makes replay idempotent regardless.
