@@ -107,13 +107,13 @@ groups:
         runbook_url: "docs/runbooks/ShioajiWatchdogThreadDown.md"
 
   - alert: ShioajiPendingQuoteStall
-    expr: shioaji_quote_pending_age_seconds > 300
+    expr: shioaji_quote_pending_age_seconds > 300 and on() market_trading_hours_active == 1
     for: 5m
     labels:
         severity: warning
     annotations:
         summary: "Shioaji pending quote state stalled"
-        description: "pending_quote_resubscribe age > 300s for more than 5m."
+        description: "pending_quote_resubscribe age > 300s for more than 5m during trading hours. The age gauge counts up continuously from the last session close, so this rule is gated on market_trading_hours_active (calendar-aware, holidays included) — without that gate it fired every weekend and holiday."
 
   - alert: ShioajiLoginFailuresDetected
     expr: increase(shioaji_login_fail_total[10m]) > 0

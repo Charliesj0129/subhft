@@ -510,6 +510,14 @@ class ShioajiClient:
         # Post-refresh health check (O5)
         self._session_refresh_verify_timeout_s = float(os.getenv("HFT_SESSION_REFRESH_VERIFY_TIMEOUT_S", "10.0"))
 
+        # Cross-facade refresh staggering (2026-07-24 "451 Too Many Connections").
+        # Each facade refreshes on its own thread; without jitter their fixed
+        # check intervals stay phase-aligned from pool start-up and every facade
+        # re-logs-in within the same few hundred ms.
+        self._session_refresh_jitter_frac = float(os.getenv("HFT_SESSION_REFRESH_JITTER_FRAC", "0.15"))
+        self._session_refresh_stagger_gap_s = float(os.getenv("HFT_SESSION_REFRESH_STAGGER_S", "5.0"))
+        self._session_refresh_stagger_timeout_s = float(os.getenv("HFT_SESSION_REFRESH_STAGGER_TIMEOUT_S", "120.0"))
+
         # Market open grace period (C4)
         self._market_open_grace_s = float(os.getenv("HFT_MARKET_OPEN_GRACE_S", "60"))  # 60 seconds
         self._market_open_grace_active = False

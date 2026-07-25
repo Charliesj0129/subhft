@@ -91,6 +91,49 @@ docker compose down hft-engine
 docker compose up -d hft-engine
 ```
 
+### `code: 451, detail: Too Many Connections` during session refresh
+
+Symptom, seen on THESHOW 2026-07-24/25: several facades log
+`Session refresh: logging out` within a few hundred milliseconds of each other,
+then one or more report
+
+```
+login: ... code: 451, detail: Too Many Connections.
+Login retries exhausted
+Session refresh failed: login unsuccessful
+```
+
+Cause: every quote facade runs its own session-refresh thread, and the pool
+starts them together, so their fixed `HFT_SESSION_REFRESH_CHECK_S` sleeps stay
+phase-aligned forever. The broker counts concurrent connections and rejects the
+losers. On a holiday/weekend the holiday-aware branch refreshes hourly, so this
+repeats every hour.
+
+Fixed 2026-07-25 by two independent defences:
+
+- **Jitter** — each facade's wake-up is scaled by ±`HFT_SESSION_REFRESH_JITTER_FRAC`
+  (default `0.15`), so arrivals spread out instead of staying in lockstep.
+- **Login slot** — a process-wide slot serialises the logout→login window and
+  spaces consecutive logins by `HFT_SESSION_REFRESH_STAGGER_S` (default `5`
+  seconds). If it cannot be taken within `HFT_SESSION_REFRESH_STAGGER_TIMEOUT_S`
+  (default `120`), the refresh proceeds anyway and
+  `shioaji_login_slot_timeouts_total` increments — a stale session is a worse
+  failure than a 451 the retry path already recognises.
+
+Check whether the fix is deployed:
+
+```bash
+curl -s localhost:9090/metrics | grep shioaji_login_slot_timeouts_total
+# absent  -> engine predates the fix
+# present -> deployed; a rising counter means the slot is contended for >120s,
+#            which points at a genuinely slow login, not at staggering
+docker compose logs hft-engine --since 24h | grep 'Staggering broker login'
+```
+
+The slot only spans a single process. Two engine containers sharing one broker
+account can still collide — that is what `shioaji_session_lock_conflicts_total`
+and the `.state` session lock are for.
+
 ## Rollback
 
 No configuration rollback needed. If reconnect parameters were changed:

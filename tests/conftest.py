@@ -211,6 +211,24 @@ def _isolate_autonomy_state_paths(tmp_path, monkeypatch):
         _evidence.reset_shared_autonomy_evidence_writer()
 
 
+@pytest.fixture(autouse=True)
+def _reset_broker_login_slot():
+    """Clear the process-wide broker login slot between tests.
+
+    ``_infra`` keeps the last login-release timestamp in module state so facades
+    can space their re-logins. Without a reset, one test's release makes the next
+    test's ``acquire_login_slot`` sleep out the remaining gap — a real multi-second
+    stall that looks like flakiness rather than the shared state it is.
+    """
+    from hft_platform.feed_adapter.shioaji import _infra as _shioaji_infra
+
+    _shioaji_infra.reset_login_slot_for_tests()
+    try:
+        yield
+    finally:
+        _shioaji_infra.reset_login_slot_for_tests()
+
+
 @pytest.fixture()
 def mock_metrics() -> MagicMock:
     """Return a MagicMock that can stand in for MetricsRegistry."""

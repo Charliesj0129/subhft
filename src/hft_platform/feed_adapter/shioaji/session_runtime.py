@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+import random
 import threading
 import time
 from dataclasses import dataclass
@@ -10,6 +11,11 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 from structlog import get_logger
 
 from hft_platform.core import timebase
+from hft_platform.feed_adapter.shioaji._infra import (
+    acquire_login_slot,
+    refresh_sleep_s,
+    release_login_slot,
+)
 
 if TYPE_CHECKING:
     from hft_platform.feed_adapter.shioaji.client import ShioajiClient
@@ -29,6 +35,20 @@ def _env_float(name: str, default: float) -> float:
         return float(os.getenv(name, default))
     except (TypeError, ValueError):
         return default
+
+
+def _client_float(client: Any, name: str, default: float) -> float:
+    """Read a numeric tuning attribute off the client, falling back on anything else.
+
+    A plain ``getattr(..., default)`` is not enough: the attribute may exist but
+    hold a non-numeric value (an unparsed env string, or a mock in tests), and
+    this runs on the session-refresh thread where a ``TypeError`` would kill
+    refreshes silently for the rest of the process's life.
+    """
+    value = getattr(client, name, default)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return default
+    return float(value)
 
 
 def _env_int(name: str, default: int) -> int:
@@ -361,7 +381,15 @@ class SessionRuntime:
 
             while c.api and c.logged_in and c._session_refresh_running:
                 try:
-                    time.sleep(c._session_refresh_check_interval_s)
+                    # Jitter each wake-up so facades brought up together by the
+                    # pool do not stay phase-aligned and re-login in lockstep.
+                    time.sleep(
+                        refresh_sleep_s(
+                            c._session_refresh_check_interval_s,
+                            _client_float(c, "_session_refresh_jitter_frac", 0.15),
+                            random.random,
+                        )
+                    )
                     if not c._session_refresh_running:
                         break
 
@@ -428,19 +456,37 @@ class SessionRuntime:
         if not c.api:
             return False
 
+        # Hold the process-wide login slot across the whole logout/login cycle:
+        # the broker counts concurrent connections, so two facades overlapping
+        # here is what produced "code: 451, detail: Too Many Connections".
+        # A timeout returns False and we refresh anyway — a stale session is a
+        # worse failure than a 451 the retry path already recognises.
+        slot_held = acquire_login_slot(
+            min_gap_s=_client_float(c, "_session_refresh_stagger_gap_s", 5.0),
+            timeout_s=_client_float(c, "_session_refresh_stagger_timeout_s", 120.0),
+            metrics=c.metrics,
+        )
         try:
-            logger.info("Session refresh: logging out")
-            start_ns = time.perf_counter_ns()
             try:
-                c.api.logout()
-            except Exception as exc:
-                logger.warning("Session refresh logout failed", error=str(exc))
+                logger.info("Session refresh: logging out", serialised=slot_held)
+                start_ns = time.perf_counter_ns()
+                try:
+                    c.api.logout()
+                except Exception as exc:
+                    logger.warning("Session refresh logout failed", error=str(exc))
 
-            c.logged_in = False
-            c._callbacks_registered = False
+                c.logged_in = False
+                c._callbacks_registered = False
 
-            logger.info("Session refresh: logging in")
-            self.login_with_retry()
+                logger.info("Session refresh: logging in")
+                self.login_with_retry()
+            finally:
+                # Released as soon as the connection is (re)established — the
+                # resubscribe and quote-verification below no longer contend for
+                # a broker connection slot, so holding it there would serialise
+                # the whole pool behind one facade's 10 s verify timeout.
+                if slot_held:
+                    release_login_slot()
 
             if c.logged_in:
                 c._last_session_refresh_ts = timebase.now_s()

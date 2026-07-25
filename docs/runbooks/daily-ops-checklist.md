@@ -201,9 +201,12 @@ state or a WAL condition left over from Friday will not clear on its own.
   ```bash
   curl -s localhost:9093/api/v2/alerts | python3 -c 'import sys,json;[print(a["labels"]["alertname"], a["status"]["state"]) for a in json.load(sys.stdin)]'
   ```
-  `ShioajiPendingQuoteStall` fires every weekend and clears at Monday's open —
+  `ShioajiPendingQuoteStall` used to fire every weekend and clear at Monday's open:
   `shioaji_quote_pending_age_seconds` simply counts up from the last night-session
-  close, and the rule has no session/holiday awareness. Anything else is real.
+  close. Since 2026-07-25 the rule is gated on `market_trading_hours_active == 1`
+  (calendar-aware, holidays included), so outside session hours it stays quiet and
+  **any** firing alert here is real. If you still see it on a weekend, the deployed
+  `rules.yaml` predates that gate — compare against the repo copy.
 - [ ] **Autonomy not latched**:
   ```bash
   curl -s localhost:9090/metrics | grep -E 'autonomy_mode|manual_rearm_required|platform_reduce_only_active'

@@ -98,18 +98,36 @@ on boot, so a plain restart **re-latches** reduce-only. Full sequence:
 ```bash
 cd /home/charl/subhft
 
-# 1. Rescue container-only state. outputs/ is NOT bind-mounted and the engine's
-#    CWD is /app, so this evidence exists only in the writable layer.
+# 1. Rescue container-only state. On a host that predates the outputs/ bind
+#    mount, the engine's CWD is /app and this evidence exists ONLY in the
+#    writable layer, which any recreate destroys.
 docker cp hft-engine:/app/outputs ./outputs/container_rescue_$(date +%Y%m%d)
 docker cp hft-engine:/app/shioaji.log ./outputs/container_rescue_$(date +%Y%m%d)/shioaji.log
 
 # 2. Move aside any misleading HOST-side state file (see daily-ops-checklist).
+#    MANDATORY before enabling the outputs/ bind mount: once mounted, the engine
+#    reads this file as real state, and the 2026-07-08 test artifact carries
+#    reason="test_reason" plus phantom strat1/strat_a manual-rearm latches.
 [ -f outputs/production_rollout/autonomy/runtime_state.json ] && \
   mv outputs/production_rollout/autonomy/runtime_state.json \
      outputs/production_rollout/autonomy/runtime_state.json.stale-$(date +%Y%m%d)
 
-# 3. Recreate so the new env applies. Recreation starts a fresh writable layer,
-#    so the persisted latch file is gone and the platform boots NORMAL.
+# 3a. Preferred — deploy the code fix by restart. src/ IS bind-mounted, so the
+#     running code is the host working tree, not the baked image: no rebuild, and
+#     a restart preserves the writable layer.
+#     Retire the bloated manifest while the loader is DOWN — a running loader
+#     rewrites the whole in-memory set on its next save, so moving the files
+#     under it achieves nothing.
+docker compose stop wal-loader
+mkdir -p ~/wal_manifest_archive_$(date +%Y%m%d)
+mv .wal/manifest.txt .wal/manifest.txt.bak ~/wal_manifest_archive_$(date +%Y%m%d)/ 2>/dev/null
+docker compose exec hft-engine hft ops rearm-platform    # clear the persisted latch FIRST
+docker compose restart hft-engine
+docker compose start wal-loader
+
+# 3b. Only if the env var (HFT_WAL_MANIFEST_PATH) or a compose change must apply:
+#     env is fixed at container CREATION, so `restart` cannot pick it up. This
+#     recreates and discards the writable layer — step 1 is not optional here.
 docker compose up -d hft-engine wal-loader
 
 # 4. Confirm; only if the latch survived, clear it explicitly and restart once.
@@ -117,8 +135,9 @@ docker compose exec hft-engine hft ops autonomy-status
 docker compose exec hft-engine hft ops rearm-platform   # only if still latched
 ```
 
-Note `src/` **is** bind-mounted, so the running code is the host working tree,
-not the baked image — a code fix needs no image rebuild, only a restart.
+Dropping an empty manifest is safe: `get_new_files` returns
+`listdir(wal_dir) - manifest`, so with no pending `.jsonl` files an empty manifest
+re-processes nothing, and `hft._wal_dedup` makes replay idempotent regardless.
 
 ## Verification
 

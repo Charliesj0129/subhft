@@ -9,14 +9,18 @@ from unittest.mock import MagicMock
 
 from hft_platform.feed_adapter.shioaji._infra import (
     abandoned_guard_thread_count,
+    acquire_login_slot,
     cache_get,
     cache_set,
     ensure_session_lock,
     rate_limit_api,
     record_api_latency,
     record_crash_signature,
+    refresh_sleep_s,
+    release_login_slot,
     release_session_lock,
     reset_abandoned_guard_threads,
+    reset_login_slot_for_tests,
     safe_call_with_timeout,
     sanitize_metric_label,
     set_thread_alive_metric,
@@ -425,3 +429,137 @@ class TestRateLimitApi:
         limiter.check.return_value = False
         assert rate_limit_api(limiter, "positions") is False
         limiter.record.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# refresh_sleep_s / login slot (2026-07-24 "451 Too Many Connections")
+# ---------------------------------------------------------------------------
+
+
+class TestRefreshSleepJitter:
+    def test_lowest_random_draw_shortens_interval_by_jitter_fraction(self) -> None:
+        assert refresh_sleep_s(3600.0, 0.15, lambda: 0.0) == 3060.0
+
+    def test_highest_random_draw_lengthens_interval_by_jitter_fraction(self) -> None:
+        # random.random() is [0, 1), so 1.0 is the open bound: the +15% edge.
+        assert refresh_sleep_s(3600.0, 0.15, lambda: 1.0) == 4140.0
+
+    def test_midpoint_draw_leaves_interval_unchanged(self) -> None:
+        assert refresh_sleep_s(3600.0, 0.15, lambda: 0.5) == 3600.0
+
+    def test_zero_jitter_returns_base_unchanged(self) -> None:
+        assert refresh_sleep_s(3600.0, 0.0, lambda: 0.0) == 3600.0
+
+    def test_jitter_above_one_is_clamped_so_sleep_never_negative(self) -> None:
+        assert refresh_sleep_s(3600.0, 5.0, lambda: 0.0) == 0.0
+
+    def test_non_positive_base_is_returned_unchanged(self) -> None:
+        assert refresh_sleep_s(0.0, 0.15, lambda: 0.0) == 0.0
+
+
+class TestLoginSlot:
+    def test_second_acquirer_waits_until_first_releases(self) -> None:
+        reset_login_slot_for_tests()
+        order: list[str] = []
+        released = threading.Event()
+
+        def _second() -> None:
+            assert acquire_login_slot(min_gap_s=0.0, timeout_s=5.0) is True
+            order.append("second-acquired")
+            release_login_slot()
+
+        assert acquire_login_slot(min_gap_s=0.0, timeout_s=5.0) is True
+        order.append("first-acquired")
+        t = threading.Thread(target=_second)
+        t.start()
+        # Give the contender a chance to block on the slot rather than sleeping
+        # a fixed interval and hoping: it must not get in while we hold it.
+        t.join(timeout=0.2)
+        assert order == ["first-acquired"]
+        order.append("first-released")
+        release_login_slot()
+        released.set()
+        t.join(timeout=5.0)
+        assert t.is_alive() is False
+        assert order == ["first-acquired", "first-released", "second-acquired"]
+
+    def test_minimum_gap_is_waited_out_after_previous_login(self) -> None:
+        reset_login_slot_for_tests()
+        slept: list[float] = []
+        now = [1000.0]
+
+        assert acquire_login_slot(min_gap_s=5.0, timeout_s=5.0, clock=lambda: now[0]) is True
+        release_login_slot(clock=lambda: now[0])
+
+        now[0] = 1002.0  # only 2s since the previous login released
+        assert (
+            acquire_login_slot(
+                min_gap_s=5.0,
+                timeout_s=5.0,
+                clock=lambda: now[0],
+                sleep=slept.append,
+            )
+            is True
+        )
+        release_login_slot(clock=lambda: now[0])
+        assert slept == [3.0]
+
+    def test_no_wait_when_gap_already_elapsed(self) -> None:
+        reset_login_slot_for_tests()
+        slept: list[float] = []
+        now = [1000.0]
+
+        assert acquire_login_slot(min_gap_s=5.0, timeout_s=5.0, clock=lambda: now[0]) is True
+        release_login_slot(clock=lambda: now[0])
+
+        now[0] = 1100.0
+        assert acquire_login_slot(min_gap_s=5.0, timeout_s=5.0, clock=lambda: now[0], sleep=slept.append) is True
+        release_login_slot(clock=lambda: now[0])
+        assert slept == []
+
+    def test_timeout_returns_false_and_counts_metric(self) -> None:
+        reset_login_slot_for_tests()
+        metrics = SimpleNamespace(shioaji_login_slot_timeouts_total=MagicMock())
+        holder_ready = threading.Event()
+        may_release = threading.Event()
+
+        def _holder() -> None:
+            acquire_login_slot(min_gap_s=0.0, timeout_s=5.0)
+            holder_ready.set()
+            may_release.wait(timeout=5.0)
+            release_login_slot()
+
+        t = threading.Thread(target=_holder)
+        t.start()
+        assert holder_ready.wait(timeout=5.0) is True
+        try:
+            assert acquire_login_slot(min_gap_s=0.0, timeout_s=0.05, metrics=metrics) is False
+            metrics.shioaji_login_slot_timeouts_total.inc.assert_called_once()
+        finally:
+            may_release.set()
+            t.join(timeout=5.0)
+
+    def test_release_without_hold_does_not_raise(self) -> None:
+        reset_login_slot_for_tests()
+        release_login_slot()  # must not raise even though nothing was acquired
+
+    def test_missing_metric_attribute_does_not_break_timeout_path(self) -> None:
+        reset_login_slot_for_tests()
+        holder_ready = threading.Event()
+        may_release = threading.Event()
+
+        def _holder() -> None:
+            acquire_login_slot(min_gap_s=0.0, timeout_s=5.0)
+            holder_ready.set()
+            may_release.wait(timeout=5.0)
+            release_login_slot()
+
+        t = threading.Thread(target=_holder)
+        t.start()
+        assert holder_ready.wait(timeout=5.0) is True
+        try:
+            # Registry without the counter (older deployment) must still work.
+            assert acquire_login_slot(min_gap_s=0.0, timeout_s=0.05, metrics=SimpleNamespace()) is False
+        finally:
+            may_release.set()
+            t.join(timeout=5.0)

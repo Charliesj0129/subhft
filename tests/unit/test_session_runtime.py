@@ -288,3 +288,107 @@ def test_snapshot_returns_correct_fields():
     assert snap.reconnect_backoff_s == 30.0
     assert snap.last_login_error == "timeout"
     assert snap.last_reconnect_error is None
+
+
+# ------------------------------------------------------------------ #
+# Cross-facade login staggering (2026-07-24 "451 Too Many Connections")
+# ------------------------------------------------------------------ #
+
+
+def _refresh_client() -> MagicMock:
+    client = MagicMock()
+    client.api = MagicMock()
+    client.tick_callback = None
+    client.metrics = MagicMock()
+    client.metrics.session_refresh_total.labels.return_value = MagicMock()
+    return client
+
+
+def test_session_refresh_holds_login_slot_across_logout_and_login():
+    """The slot must span logout->login: that whole window holds a connection."""
+    client = _refresh_client()
+    client.api.logout.side_effect = lambda: events.append("logout")
+    events: list[str] = []
+
+    runtime = SessionRuntime(client)
+
+    with (
+        patch(
+            "hft_platform.feed_adapter.shioaji.session_runtime.acquire_login_slot",
+            side_effect=lambda **_: events.append("acquire") or True,
+        ),
+        patch(
+            "hft_platform.feed_adapter.shioaji.session_runtime.release_login_slot",
+            side_effect=lambda: events.append("release"),
+        ),
+        patch.object(SessionRuntime, "login_with_retry", side_effect=lambda: events.append("login")),
+    ):
+        runtime.do_session_refresh()
+
+    assert events == ["acquire", "logout", "login", "release"]
+
+
+def test_session_refresh_releases_login_slot_when_login_raises():
+    """A raising login must not strand the slot and wedge every other facade."""
+    client = _refresh_client()
+    runtime = SessionRuntime(client)
+
+    with (
+        patch(
+            "hft_platform.feed_adapter.shioaji.session_runtime.acquire_login_slot",
+            return_value=True,
+        ),
+        patch("hft_platform.feed_adapter.shioaji.session_runtime.release_login_slot") as mock_release,
+        patch.object(SessionRuntime, "login_with_retry", side_effect=RuntimeError("login blew up")),
+    ):
+        assert runtime.do_session_refresh() is False
+
+    mock_release.assert_called_once()
+
+
+def test_session_refresh_proceeds_unserialised_when_slot_times_out():
+    """Timing out on the slot must still refresh — a stale session is worse."""
+    client = _refresh_client()
+    runtime = SessionRuntime(client)
+
+    def _login() -> bool:
+        # do_session_refresh clears logged_in before logging in; a real login
+        # sets it back, so the mock has to as well or the refresh reads as failed.
+        client.logged_in = True
+        return True
+
+    with (
+        patch(
+            "hft_platform.feed_adapter.shioaji.session_runtime.acquire_login_slot",
+            return_value=False,
+        ),
+        patch("hft_platform.feed_adapter.shioaji.session_runtime.release_login_slot") as mock_release,
+        patch.object(SessionRuntime, "login_with_retry", side_effect=_login) as mock_login,
+    ):
+        assert runtime.do_session_refresh() is True
+
+    mock_login.assert_called_once()
+    client.api.logout.assert_called_once()
+    # Never release a slot we do not hold: that would free another facade's.
+    mock_release.assert_not_called()
+
+
+def test_session_refresh_passes_configured_stagger_settings_to_slot():
+    client = _refresh_client()
+    client._session_refresh_stagger_gap_s = 7.5
+    client._session_refresh_stagger_timeout_s = 90.0
+    runtime = SessionRuntime(client)
+
+    with (
+        patch(
+            "hft_platform.feed_adapter.shioaji.session_runtime.acquire_login_slot",
+            return_value=True,
+        ) as mock_acquire,
+        patch("hft_platform.feed_adapter.shioaji.session_runtime.release_login_slot"),
+        patch.object(SessionRuntime, "login_with_retry", return_value=True),
+    ):
+        runtime.do_session_refresh()
+
+    kwargs = mock_acquire.call_args.kwargs
+    assert kwargs["min_gap_s"] == 7.5
+    assert kwargs["timeout_s"] == 90.0
