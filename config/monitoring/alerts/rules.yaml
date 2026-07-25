@@ -135,6 +135,26 @@ groups:
         description: "Every quote connection reports subscribed_count=0 while the market is open — the engine is connected but receiving nothing. FeedState=CONNECTED does not catch this."
         runbook_url: "docs/runbooks/feed-reconnect.md"
 
+  - alert: QuoteFacadeDataStalled
+    expr: hft_quote_conn_last_data_age_s > 300 and on() market_trading_hours_active == 1
+    for: 5m
+    labels:
+        severity: critical
+    annotations:
+        summary: "A quote facade has delivered no data for >5m during trading hours"
+        description: "Per-connection liveness. FeedGapCritical only sees rate(feed_events_total), which stays healthy while any facade still ticks, and hft_quote_conn_subscribed_count reports the CONFIGURED symbol count so it stays at 74 even for a dead facade. This gauge is the only signal that catches a facade which is logged in but silent. Measured 2026-07-22..26: healthy facades sit at p95 < 1s during trading hours, so 300s has no observed false-positive."
+        runbook_url: "docs/runbooks/feed-reconnect.md"
+
+  - alert: ShioajiSessionRefreshThreadDown
+    expr: max_over_time(shioaji_thread_alive{thread="session_refresh"}[5m]) < 1
+    for: 10m
+    labels:
+        severity: critical
+    annotations:
+        summary: "Shioaji session refresh thread is dead"
+        description: "The preventive session-refresh thread exited. It owns re-login after a failed refresh, so once it is gone the facade cannot recover on its own. Deliberately NOT gated on market_trading_hours_active: the thread dying while the market is shut is exactly the case that stranded a facade for 24h on 2026-07-25, and it must be fixed before the next open."
+        runbook_url: "docs/runbooks/feed-reconnect.md"
+
   - alert: ShioajiLoginFailuresDetected
     expr: increase(shioaji_login_fail_total[10m]) > 0
     for: 0s

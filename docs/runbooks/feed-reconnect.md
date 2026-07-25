@@ -134,6 +134,46 @@ The slot only spans a single process. Two engine containers sharing one broker
 account can still collide — that is what `shioaji_session_lock_conflicts_total`
 and the `.state` session lock are for.
 
+### A facade stays logged out for hours after one failed refresh
+
+Symptom: one `conn_id` sits at `hft_quote_conn_logged_in=0` and its
+`hft_quote_conn_last_data_age_s` climbs without bound, while
+`FeedState` still reports `CONNECTED` and no alert fires.
+
+Cause (root-caused on THESHOW 2026-07-25, one facade dark for 24 h across a
+whole night session): `_refresh_loop` had `c.logged_in` in its `while`
+condition. A refresh logs out and then logs back in, so a login failure — the
+451 above — leaves `logged_in` False, the loop condition goes false, and the
+**thread exits permanently**. `do_session_refresh()`'s return value was
+discarded, so nothing noticed. Recovery then depended entirely on the reconnect
+orchestrator's schedule (`HFT_RECONNECT_DAYS`, `HFT_RECONNECT_HOURS*`); outside
+those windows — weekends, and the Friday night session that runs past midnight
+into Saturday — the facade was simply abandoned until the next process restart.
+
+Why nothing alerted:
+
+| Signal | Why it missed this |
+|---|---|
+| `FeedGapCritical` | `rate(feed_events_total)` is pool-wide; the other 3 facades kept it non-zero |
+| `hft_quote_conn_subscribed_count` | reports the *configured* symbol count, so a dead facade still shows 74 |
+| `ShioajiLoginFailuresDetected` | `increase(...[10m])`, so it self-resolved 10 min in while the outage ran 24 h |
+| `shioaji_thread_alive{thread="session_refresh"}` | went to 0 correctly — but had no alert on it |
+
+Fixed 2026-07-26: the loop no longer treats `logged_in` as a termination
+condition and re-drives `do_session_refresh()` (which restores login,
+callbacks, subscriptions and the watchdog) on each hourly wake-up until the
+facade is back, counting recoveries as `session_refresh_total{result="recovered"}`.
+Retry cadence is the hourly check interval and every attempt still takes the
+login slot, so recovery cannot re-create the storm. Alerts
+`QuoteFacadeDataStalled` and `ShioajiSessionRefreshThreadDown` now cover the
+gap — both verified against this incident's data.
+
+```bash
+# is the fix deployed?
+curl -s localhost:9090/metrics | grep 'session_refresh_total.*recovered'
+docker compose logs hft-engine --since 24h | grep -E 'found facade logged out|Facade recovered'
+```
+
 ## Rollback
 
 No configuration rollback needed. If reconnect parameters were changed:

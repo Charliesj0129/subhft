@@ -367,7 +367,16 @@ class SessionRuntime:
                 c._set_thread_alive_metric("session_refresh", False)
                 return
 
-            while c.api and c.logged_in and c._session_refresh_running:
+            # `c.logged_in` is deliberately NOT part of this condition. A
+            # refresh that logs out and then fails to log back in (broker
+            # "code: 451, Too Many Connections", transient network) leaves it
+            # False, so having it here terminated the thread on the first
+            # failure and abandoned the facade until some unrelated path
+            # happened to restart it. On 2026-07-25 that stranded 1 of 4 quote
+            # facades for 24 h, silently dropping its 74 symbols through an
+            # entire night session while FeedState stayed CONNECTED.
+            relogin_attempts = 0
+            while c.api and c._session_refresh_running:
                 try:
                     # Jitter each wake-up so facades brought up together by the
                     # pool do not stay phase-aligned and re-login in lockstep.
@@ -381,6 +390,29 @@ class SessionRuntime:
                     if not c._session_refresh_running:
                         break
 
+                    if not c.logged_in:
+                        # Recovery path. do_session_refresh() rebuilds the whole
+                        # facade (login -> callbacks -> resubscribe -> watchdog)
+                        # and already serialises on the process-wide login slot,
+                        # so retrying here cannot re-create the login storm that
+                        # caused the logout. Cadence is the hourly check
+                        # interval, which is far below any broker rate limit.
+                        relogin_attempts += 1
+                        logger.warning(
+                            "Session refresh thread found facade logged out; retrying login",
+                            attempt=relogin_attempts,
+                        )
+                        if self.do_session_refresh():
+                            logger.info(
+                                "Facade recovered after logged-out gap",
+                                attempts=relogin_attempts,
+                            )
+                            if c.metrics:
+                                c.metrics.session_refresh_total.labels(result="recovered").inc()
+                            relogin_attempts = 0
+                        continue
+
+                    relogin_attempts = 0
                     now = timebase.now_s()
                     now_dt = dt.datetime.fromtimestamp(timebase.now_s(), tz=calendar._tz)
 

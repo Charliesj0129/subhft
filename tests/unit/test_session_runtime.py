@@ -269,6 +269,95 @@ def test_start_session_refresh_thread_starts_thread():
 
 
 # ------------------------------------------------------------------ #
+# Refresh-loop survival (regression: 2026-07-25 stranded facade)
+# ------------------------------------------------------------------ #
+
+
+def _capture_refresh_loop(client) -> object:
+    """Start the refresh thread with Thread mocked out, return the loop body."""
+    runtime = SessionRuntime(client)
+    with patch("hft_platform.feed_adapter.shioaji.session_runtime.threading.Thread") as mock_thread_cls:
+        runtime.start_session_refresh_thread()
+    return runtime, mock_thread_cls.call_args.kwargs["target"]
+
+
+def _loop_client(*, logged_in: bool, iterations: int) -> MagicMock:
+    """Client whose refresh loop stops itself after `iterations` wake-ups."""
+    client = MagicMock()
+    client.api = MagicMock()
+    client.logged_in = logged_in
+    client._session_refresh_running = False
+    client._session_refresh_interval_s = 86400
+    client._session_refresh_check_interval_s = 3600
+    client._session_refresh_jitter_frac = 0.0
+    client._session_refresh_holiday_aware = False
+    client._last_session_refresh_ts = 0.0
+    client._sleep_calls = 0
+
+    def _sleep(_seconds: float) -> None:
+        client._sleep_calls += 1
+        if client._sleep_calls >= iterations:
+            client._session_refresh_running = False
+
+    client._fake_sleep = _sleep
+    return client
+
+
+def test_refresh_loop_retries_login_when_facade_logged_out():
+    """A failed refresh must not end the thread — it used to, stranding the facade.
+
+    Before the fix `c.logged_in` sat in the while-condition, so a facade that
+    failed to log back in was abandoned until the process restarted.
+    """
+    client = _loop_client(logged_in=False, iterations=2)
+    _runtime, loop = _capture_refresh_loop(client)
+
+    def _recover() -> bool:
+        client.logged_in = True
+        return True
+
+    with (
+        patch("hft_platform.feed_adapter.shioaji.session_runtime.time.sleep", client._fake_sleep),
+        patch.object(SessionRuntime, "do_session_refresh", side_effect=_recover) as mock_refresh,
+    ):
+        loop()
+
+    assert mock_refresh.call_count == 1
+    assert client.logged_in is True
+    client.metrics.session_refresh_total.labels.assert_any_call(result="recovered")
+
+
+def test_refresh_loop_keeps_retrying_while_relogin_keeps_failing():
+    client = _loop_client(logged_in=False, iterations=3)
+    _runtime, loop = _capture_refresh_loop(client)
+
+    with (
+        patch("hft_platform.feed_adapter.shioaji.session_runtime.time.sleep", client._fake_sleep),
+        patch.object(SessionRuntime, "do_session_refresh", return_value=False) as mock_refresh,
+    ):
+        loop()
+
+    # Two wake-ups do work; the third observes the cleared stop flag and breaks.
+    assert mock_refresh.call_count == 2
+    assert client.logged_in is False
+
+
+def test_refresh_loop_exits_when_stop_flag_cleared():
+    client = _loop_client(logged_in=True, iterations=1)
+    _runtime, loop = _capture_refresh_loop(client)
+
+    with (
+        patch("hft_platform.feed_adapter.shioaji.session_runtime.time.sleep", client._fake_sleep),
+        patch.object(SessionRuntime, "do_session_refresh") as mock_refresh,
+    ):
+        loop()
+
+    mock_refresh.assert_not_called()
+    assert client._session_refresh_running is False
+    client._set_thread_alive_metric.assert_any_call("session_refresh", False)
+
+
+# ------------------------------------------------------------------ #
 # Snapshot helper
 # ------------------------------------------------------------------ #
 
