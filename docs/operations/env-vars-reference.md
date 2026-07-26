@@ -134,6 +134,7 @@ Base YAML (config/base/main.yaml)
 | `HFT_WAL_DEDUP_ENABLED` | `0` | `1` = 啟用 replay 去重護欄 | 僅在 replay 重複問題時啟用 |
 | `HFT_WAL_STRICT_ORDER` | `0` | `1` = 強制時序排序寫入 | 啟用後吞吐量降低 |
 | `HFT_WAL_USE_MANIFEST` | `1` | `0` = 停用 manifest 追蹤 | 不建議停用 |
+| `HFT_WAL_MANIFEST_PATH` | `<wal_dir>/manifest.txt` | manifest 檔位置 | **設到 `.wal/` 之外**（例：`/app/.state/wal_manifest.txt`）。預設放在 `.wal/` 根目錄，而 §6.6 的磁碟壓力監測會把 manifest 自身的體積算成 WAL 壓力 — 2026-07-24 假 HALT 事故的成因 |
 | `HFT_LOADER_ASYNC` | `1` | `0` = 同步模式（除錯用） | — |
 | `HFT_WAL_BATCH_MAX_ROWS` | `5000` | WAL replay 每批 rows 上限（writer path） | 小資源主機可下調 |
 
@@ -155,6 +156,15 @@ Base YAML (config/base/main.yaml)
 |---|---|---|---|
 | `HFT_WAL_DISK_MIN_MB` | `500` | WAL 可用磁碟低於此值時觸發壓力保護 | 緊急排障可暫降至 100 |
 | `HFT_WAL_DISK_PRESSURE_POLICY` | `drop` | `drop`=拒寫保護資料安全；`warn`=只告警 | 生產建議維持 `drop` |
+| `HFT_WAL_WARN_MB` | `100` | `DiskPressureMonitor` WARN 閾值：`.wal/` 根目錄（maxdepth 1）總量（MB） | — |
+| `HFT_WAL_CRITICAL_MB` | `300` | 同上，CRITICAL 閾值 | — |
+| `HFT_WAL_HALT_MB` | `500` | 同上，HALT 閾值。**達到即開始丟棄 rows**，並 latch `recorder_data_loss` → PLATFORM_REDUCE_ONLY（非自動復原） | 除非確知磁碟更大，否則不要調高來「消除告警」——那等於拿掉資料保護 |
+
+> **不要和 §6.4 的 `HFT_WAL_SIZE_WARNING_MB` / `HFT_WAL_SIZE_CRITICAL_MB` 搞混。**
+> 名稱幾乎一樣，消費者卻不同：`HFT_WAL_SIZE_*` 由 wal-loader（`recorder/loader.py`）
+> 用於 backlog 告警；本節這三個由引擎的 `DiskPressureMonitor`
+> （`recorder/disk_monitor.py`）使用，是唯一會真的**丟行情資料**的那組。調錯那組
+> 不會有任何效果，而且問題會照舊發生。
 
 **Runbook 參考**: [recorder-wal-disk-pressure](../runbooks/recorder-wal-disk-pressure.md), [Section 13 — WAL 磁碟滿](../runbooks.md#13-wal-磁碟滿diskpressurelevel--3)
 
@@ -172,6 +182,22 @@ Base YAML (config/base/main.yaml)
 | `HFT_API_MAX_INFLIGHT` | `16` | 下單 API 同時 in-flight 上限 | API 延遲升高時下調 |
 | `HFT_API_QUEUE_MAX` | `1024` | 下單 API 佇列上限 | 佇列爆滿時排查風控/下單耗時 |
 | `HFT_CONTRACT_REFRESH_RESUBSCRIBE_POLICY` | `diff` | contract refresh 後重訂閱策略：`none`/`diff`/`all` | 預設 `diff` 確保 rollover 日自動轉訂新月合約；遇 broker 回傳異常合約清單（runbook Mode 2）時臨時改 `none` |
+| `HFT_QUOTE_CONNECTIONS` | `1` | Quote 連線池的 facade 數量；符號宇宙依此切分成各自的 shard | 生產（THESHOW）為 `4`。每個 facade 有自己的 session-refresh 執行緒與 watchdog，所以此值同時決定下列 §7.1 各旋鈕要序列化幾個登入 |
+
+### 7.1 Session Refresh / 重新登入（Shioaji）
+
+適用於每個 quote facade 各自的 session-refresh 執行緒。**會登入 broker**，所以這些
+旋鈕直接決定會不會踩到 `code: 451, Too Many Connections`。
+
+| 變數 | 預設值 | 用途 | 調整建議 |
+|---|---|---|---|
+| `HFT_SESSION_REFRESH_JITTER_FRAC` | `0.15` | 每個 facade 的檢查睡眠乘上 ±此比例，避免多個 facade 永遠同相醒來 | 設 `0` 會讓各 facade 回到鎖步，就是 2026-07-24 451 風暴的成因 |
+| `HFT_SESSION_REFRESH_STAGGER_S` | `5.0` | 全行程登入槽（login slot）強制的連續登入最小間隔（秒） | 觀測到的實際登入延遲約 2 s；調到低於該值等於取消序列化保護 |
+| `HFT_SESSION_REFRESH_STAGGER_TIMEOUT_S` | `120.0` | 取不到登入槽的等待上限（秒）。逾時後仍照常 refresh，並累加 `shioaji_login_slot_timeouts_total` | 刻意設計成 fail-open：過期的 session 比一次 451 更糟，而 451 重試路徑已能處理 |
+| `HFT_SESSION_RELOGIN_POLL_S` | `60` | facade 處於登出狀態時，重新登入的輪詢間隔（秒） | 檢查間隔本身是寫死的 3600 s；此旋鈕存在的理由，是讓已登出的 facade 不必等滿一小時才嘗試第一次復原 |
+| `HFT_SESSION_RELOGIN_BACKOFF_S` | `60` | 重新登入失敗後的起始退避（秒），每次失敗加倍，上限為 3600 s 的檢查間隔 | 每次嘗試都會經過同一個登入槽，因此縮短此值不會造成登入風暴 |
+
+**Runbook 參考**: [feed-reconnect](../runbooks/feed-reconnect.md)
 
 **Runbook 參考**: [Section 1 — Feed Gap](../runbooks.md#1-feed-gap--無行情), [Section 2 — Shioaji API latency](../runbooks.md#2-shioaji-api-latency-激增), [Section 14 — Quote Schema 不符](../runbooks.md#14-quote-schema-不符version-mismatch), [shioaji-contract-refresh-operations](../runbooks/shioaji-contract-refresh-operations.md)
 

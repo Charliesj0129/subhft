@@ -104,10 +104,12 @@ Session refresh failed: login unsuccessful
 ```
 
 Cause: every quote facade runs its own session-refresh thread, and the pool
-starts them together, so their fixed `HFT_SESSION_REFRESH_CHECK_S` sleeps stay
-phase-aligned forever. The broker counts concurrent connections and rejects the
-losers. On a holiday/weekend the holiday-aware branch refreshes hourly, so this
-repeats every hour.
+starts them together, so their check sleeps stay phase-aligned forever. That
+interval is a hardcoded `3600.0` s (`client.py`,
+`_session_refresh_check_interval_s`) — there is **no** env var for it, so it
+cannot be de-synchronised by configuration. The broker counts concurrent
+connections and rejects the losers. On a holiday/weekend the holiday-aware
+branch refreshes hourly, so this repeats every hour.
 
 Fixed 2026-07-25 by two independent defences:
 
