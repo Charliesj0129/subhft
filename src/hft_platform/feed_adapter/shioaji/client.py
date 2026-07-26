@@ -698,7 +698,14 @@ class ShioajiClient:
         )
 
     def _set_thread_alive_metric(self, thread_name: str, alive: bool) -> None:
-        _set_thread_alive_metric_impl(getattr(self, "metrics", None), thread_name, alive)
+        # conn_id is injected by QuoteConnectionPool onto each pooled client;
+        # standalone clients keep the placeholder.
+        _set_thread_alive_metric_impl(
+            getattr(self, "metrics", None),
+            thread_name,
+            alive,
+            str(getattr(self, "conn_id", "-")),
+        )
 
     def _update_quote_pending_metrics(self) -> None:
         self._quote_pending_stall_reported = _update_quote_pending_metrics_impl(

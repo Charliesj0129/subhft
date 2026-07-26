@@ -1201,7 +1201,11 @@ class MetricsRegistry:
         self.shioaji_thread_alive = Gauge(
             _pn("shioaji_thread_alive"),
             "Shioaji runtime thread liveness (1=alive, 0=down)",
-            ["thread"],
+            # conn_id matters: a quote pool runs one client per connection, and
+            # without it all facades share a single series where the last writer
+            # wins. A facade whose refresh thread had died then read as alive
+            # again as soon as any other facade restarted its own.
+            ["thread", "conn_id"],
         )
         self.shioaji_quote_pending_age_seconds = Gauge(
             _pn("shioaji_quote_pending_age_seconds"),

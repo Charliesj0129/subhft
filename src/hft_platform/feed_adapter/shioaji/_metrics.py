@@ -99,9 +99,9 @@ class ShioajiMetricsBridge:
     # Thread liveness
     # ------------------------------------------------------------------
 
-    def thread_alive(self, thread: str) -> Any:
-        """``shioaji_thread_alive.labels(thread=thread)``."""
-        return self._child("shioaji_thread_alive", thread=thread)
+    def thread_alive(self, thread: str, conn_id: str = "-") -> Any:
+        """``shioaji_thread_alive.labels(thread=thread, conn_id=conn_id)``."""
+        return self._child("shioaji_thread_alive", thread=thread, conn_id=conn_id)
 
     # ------------------------------------------------------------------
     # Quote pending / stall

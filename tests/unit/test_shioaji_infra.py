@@ -307,8 +307,17 @@ class TestSetThreadAliveMetric:
         gauge = MagicMock()
         metrics = SimpleNamespace(shioaji_thread_alive=gauge)
         set_thread_alive_metric(metrics, "session_refresh", True)
-        gauge.labels.assert_called_with(thread="session_refresh")
+        gauge.labels.assert_called_with(thread="session_refresh", conn_id="-")
         gauge.labels().set.assert_called_with(1)
+
+    def test_pooled_facades_get_separate_series(self) -> None:
+        """Without conn_id all facades share one series and the last writer wins."""
+        gauge = MagicMock()
+        metrics = SimpleNamespace(shioaji_thread_alive=gauge)
+        set_thread_alive_metric(metrics, "session_refresh", False, conn_id="3")
+        set_thread_alive_metric(metrics, "session_refresh", True, conn_id="0")
+        assert gauge.labels.call_args_list[0].kwargs == {"thread": "session_refresh", "conn_id": "3"}
+        assert gauge.labels.call_args_list[1].kwargs == {"thread": "session_refresh", "conn_id": "0"}
 
     def test_sets_zero_when_dead(self) -> None:
         gauge = MagicMock()

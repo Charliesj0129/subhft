@@ -223,12 +223,16 @@ def safe_call_with_timeout(
 # ---------------------------------------------------------------------------
 
 
-def set_thread_alive_metric(metrics: Any, thread_name: str, alive: bool) -> None:
-    """Set the ``shioaji_thread_alive`` gauge for *thread_name*."""
+def set_thread_alive_metric(metrics: Any, thread_name: str, alive: bool, conn_id: str = "-") -> None:
+    """Set the ``shioaji_thread_alive`` gauge for *thread_name*.
+
+    ``conn_id`` keeps pooled facades on separate series. Standalone clients have
+    no connection identity and pass the default.
+    """
     if not metrics or not hasattr(metrics, "shioaji_thread_alive"):
         return
     try:
-        metrics.shioaji_thread_alive.labels(thread=thread_name).set(1 if alive else 0)
+        metrics.shioaji_thread_alive.labels(thread=thread_name, conn_id=conn_id).set(1 if alive else 0)
     except Exception as exc:
         logger.debug("operation_fallback", error=str(exc))
         return
