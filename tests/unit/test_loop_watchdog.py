@@ -121,3 +121,35 @@ class TestHeartbeatWritable:
         # The probe must not clobber/leave a stale heartbeat that a real write
         # would otherwise own; the directory probe is the contract.
         assert not (tmp_path / ".hb_probe").exists()
+
+
+class TestPytestProcessIsProtected:
+    """The suite must never be able to force-exit itself.
+
+    ``HFTSystem.run()`` builds a real watchdog from ``HFT_LOOP_STALL_KILL_S``
+    whose default ``on_stall`` is ``os._exit(70)``. A test that starts ``run()``
+    and never reaches the ``stop_async()`` that stops it leaks a daemon thread
+    which kills *pytest* ~60 s later — no summary, no failing test name, and the
+    exit blamed on whatever unrelated test was running at the time (CI,
+    2026-07-26). ``tests/conftest.py::_disarm_loop_stall_watchdog`` closes that
+    off globally; these assert the guard is actually in force.
+    """
+
+    def test_stall_kill_env_is_disabled_for_every_test(self) -> None:
+        import os
+
+        assert float(os.environ["HFT_LOOP_STALL_KILL_S"]) <= 0.0
+
+    def test_watchdog_built_from_test_env_never_starts_a_thread(self) -> None:
+        import os
+        import threading
+
+        wd = LoopStallWatchdog(stall_kill_s=float(os.environ["HFT_LOOP_STALL_KILL_S"]))
+        assert wd.enabled is False
+
+        before = {t.name for t in threading.enumerate()}
+        wd.start()
+        try:
+            assert {t.name for t in threading.enumerate()} - before == set()
+        finally:
+            wd.stop()

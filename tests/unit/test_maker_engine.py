@@ -2,6 +2,7 @@
 
 import pytest
 
+from research.backtest import maker_engine
 from research.backtest.cost_models import TAIFEXCost
 from research.backtest.fill_models import QueueDepletionFill
 from research.backtest.maker_engine import (
@@ -19,7 +20,16 @@ def test_maker_engine_properties():
     assert engine.fill_model_name == "QueueDepletion(qf=0.5)"
 
 
-def test_ck_health_check_raises_on_failure():
+def test_ck_health_check_raises_on_failure(monkeypatch):
+    # The behaviour under test is the error *wrapping*, not the network. Letting
+    # this reach a real resolver made it a >10 s test whenever the machine was
+    # busy (it timed out under a parallel run on 2026-07-26), and it would fail
+    # outright on a resolver that answers wildcard NXDOMAIN with an address.
+    def _refuse(*_args, **_kwargs):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(maker_engine.requests, "post", _refuse)
+
     source = ClickHouseSource(host="invalid-host-xyz", port=1)
     with pytest.raises(ConnectionError, match="ClickHouse"):
         source.health_check()
