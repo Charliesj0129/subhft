@@ -25,9 +25,10 @@ from hft_platform.feed_adapter.shioaji.pool_health import (
 )
 
 try:
-    from prometheus_client import Gauge
+    from prometheus_client import Counter, Gauge
 except ImportError:
     Gauge = None  # type: ignore[assignment, misc]
+    Counter = None  # type: ignore[assignment, misc]
 
 try:
     from hft_platform.feed_adapter.shioaji.facade import ShioajiClientFacade
@@ -48,13 +49,31 @@ _METRIC_CONN_STATE = None
 # up themselves. This gauge does the rollup at source.
 _METRIC_POOL_DEGRADED = None
 _METRIC_POOL_DEGRADED_FRACTION = None
+# Every per-connection gauge above is written from update_metrics() and nowhere
+# else, and its caller swallows exceptions (services/system.py). A throwing
+# publisher therefore freezes all of them at their last value, and a frozen
+# hft_quote_conn_last_data_age_s below the alert threshold means
+# QuoteFacadeDataStalled — the only per-shard signal — silently stops firing.
+# These counters make the publisher's own liveness observable.
+_METRIC_PUBLISHED = None
+_METRIC_PUBLISH_ERRORS = None
 
 
 def _ensure_metrics() -> None:
     global _METRIC_SUBSCRIBED, _METRIC_LOGGED_IN, _METRIC_LAST_DATA_AGE, _METRIC_CONN_STATE
     global _METRIC_POOL_DEGRADED, _METRIC_POOL_DEGRADED_FRACTION
+    global _METRIC_PUBLISHED, _METRIC_PUBLISH_ERRORS
     if Gauge is None or _METRIC_SUBSCRIBED is not None:
         return
+    if Counter is not None:
+        _METRIC_PUBLISHED = Counter(
+            "hft_quote_pool_metrics_published_total",
+            "Successful QuoteConnectionPool.update_metrics() publishes",
+        )
+        _METRIC_PUBLISH_ERRORS = Counter(
+            "hft_quote_pool_metrics_publish_errors_total",
+            "QuoteConnectionPool.update_metrics() publishes that raised",
+        )
     _METRIC_SUBSCRIBED = Gauge(
         "hft_quote_conn_subscribed_count",
         "Subscribed symbol count per quote connection",
@@ -240,6 +259,7 @@ class QuoteConnectionPool:
         # P1-d: pool-degraded alert state
         "_pool_degraded_since_mono",
         "_pool_degraded_alerted",
+        "_metrics_publish_failed",
         "_pool_degraded_alert_after_s",
     )
 
@@ -272,6 +292,7 @@ class QuoteConnectionPool:
         # configurable via HFT_QUOTE_POOL_DEGRADED_ALERT_AFTER_S.
         self._pool_degraded_since_mono: float = 0.0
         self._pool_degraded_alerted: bool = False
+        self._metrics_publish_failed: bool = False
         self._pool_degraded_alert_after_s = float(os.getenv("HFT_QUOTE_POOL_DEGRADED_ALERT_AFTER_S", "300"))
         # Remember the canonical input path so the auto-refresh writer can
         # detect (and refuse) self-clobber when an operator misconfigures
@@ -797,6 +818,31 @@ class QuoteConnectionPool:
         }
 
     def update_metrics(self) -> None:
+        """Publish per-connection metrics, counting our own success/failure.
+
+        The caller (``services/system.py``) treats this as best-effort and
+        swallows exceptions, so without these counters a publisher that throws
+        every tick would freeze every per-connection gauge at its last value
+        with nothing to show for it — including the gauge
+        ``QuoteFacadeDataStalled`` reads.
+        """
+        try:
+            self._publish_metrics()
+        except Exception as exc:
+            if _METRIC_PUBLISH_ERRORS is not None:
+                _METRIC_PUBLISH_ERRORS.inc()
+            if not self._metrics_publish_failed:
+                # Log the transition only; this runs on every metrics tick.
+                self._metrics_publish_failed = True
+                logger.error("quote_pool_metrics_publish_failed", error=str(exc))
+            return
+        if self._metrics_publish_failed:
+            self._metrics_publish_failed = False
+            logger.info("quote_pool_metrics_publish_recovered")
+        if _METRIC_PUBLISHED is not None:
+            _METRIC_PUBLISHED.inc()
+
+    def _publish_metrics(self) -> None:
         """Push per-connection metrics to Prometheus gauges.
 
         Also computes the P1-d pool-degraded rollup: if >50% of slots are

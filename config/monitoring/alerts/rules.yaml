@@ -142,7 +142,17 @@ groups:
         severity: critical
     annotations:
         summary: "A quote facade has delivered no data for >5m during trading hours"
-        description: "Per-connection liveness. FeedGapCritical only sees rate(feed_events_total), which stays healthy while any facade still ticks, and hft_quote_conn_subscribed_count reports the CONFIGURED symbol count so it stays at 74 even for a dead facade. This gauge is the only signal that catches a facade which is logged in but silent. Measured 2026-07-22..26: healthy facades sit at p95 < 1s during trading hours, so 300s has no observed false-positive."
+        description: "Per-connection liveness. FeedGapCritical only sees rate(feed_events_total), which stays healthy while any facade still ticks, and hft_quote_conn_subscribed_count holds len(subscribed_codes) from the last successful subscribe, which simply persists across a logout — so it stays at 74 even for a dead facade. This gauge is the only signal that catches a facade which is logged in but silent. Measured 2026-07-22..26: healthy facades sit at p95 < 1s during trading hours, so 300s has no observed false-positive. It is only as good as its publisher — see QuotePoolMetricsPublisherStalled."
+        runbook_url: "docs/runbooks/feed-reconnect.md"
+
+  - alert: QuotePoolMetricsPublisherStalled
+    expr: rate(hft_quote_pool_metrics_published_total[5m]) == 0 and on() market_trading_hours_active == 1
+    for: 5m
+    labels:
+        severity: critical
+    annotations:
+        summary: "Per-connection quote metrics are no longer being published"
+        description: "QuoteConnectionPool.update_metrics() is the sole writer of hft_quote_conn_{logged_in,last_data_age_s,subscribed_count,state}. If it stops, those gauges freeze at their last value rather than going stale-absent, so a frozen last_data_age_s below 300 silently disables QuoteFacadeDataStalled — the detector fails exactly the way the 2026-07-25 facade did. This rule watches the detector itself."
         runbook_url: "docs/runbooks/feed-reconnect.md"
 
   - alert: ShioajiSessionRefreshThreadDown

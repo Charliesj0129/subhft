@@ -155,23 +155,52 @@ Why nothing alerted:
 | Signal | Why it missed this |
 |---|---|
 | `FeedGapCritical` | `rate(feed_events_total)` is pool-wide; the other 3 facades kept it non-zero |
-| `hft_quote_conn_subscribed_count` | reports the *configured* symbol count, so a dead facade still shows 74 |
+| `hft_quote_conn_subscribed_count` | holds `len(subscribed_codes)` from the last successful subscribe, which survives a logout — so a dead facade still shows 74 |
 | `ShioajiLoginFailuresDetected` | `increase(...[10m])`, so it self-resolved 10 min in while the outage ran 24 h |
 | `shioaji_thread_alive{thread="session_refresh"}` | went to 0 correctly — but had no alert on it |
 
 Fixed 2026-07-26: the loop no longer treats `logged_in` as a termination
 condition and re-drives `do_session_refresh()` (which restores login,
-callbacks, subscriptions and the watchdog) on each hourly wake-up until the
-facade is back, counting recoveries as `session_refresh_total{result="recovered"}`.
-Retry cadence is the hourly check interval and every attempt still takes the
-login slot, so recovery cannot re-create the storm. Alerts
-`QuoteFacadeDataStalled` and `ShioajiSessionRefreshThreadDown` now cover the
-gap — both verified against this incident's data.
+callbacks, subscriptions and the watchdog) until the facade is back, counting
+recoveries as `session_refresh_total{result="recovered"}`. It polls every
+`HFT_SESSION_RELOGIN_POLL_S` (60 s) so a logout is noticed in a minute rather
+than up to an hour, and retries on a backoff from
+`HFT_SESSION_RELOGIN_BACKOFF_S` (60 s) doubling to the hourly check interval.
+Every attempt still takes the process-wide login slot, so recovery cannot
+re-create the storm. The preventive-refresh schedule itself is unchanged — it
+is still evaluated once per check interval.
+
+**The quote watchdog had the identical defect** (`while c.api and c.logged_in`)
+and is fixed the same way, because `do_session_refresh` clears `logged_in`
+before re-logging in and only restarts the watchdog from inside `if
+c.logged_in:`. Until 2026-07-26 a failed refresh therefore killed *both* of a
+facade's threads at once, which is why nothing local recovered `conn_id=3`.
+
+Alerts `QuoteFacadeDataStalled` and `ShioajiSessionRefreshThreadDown` cover the
+gap — both verified against this incident's data. Note that
+`shioaji_thread_alive` is labelled by `conn_id`; before that label existed all
+four pooled facades shared one series on a last-writer-wins basis, which also
+made the older `ShioajiWatchdogThreadDown` unreliable.
 
 ```bash
 # is the fix deployed?
 curl -s localhost:9090/metrics | grep 'session_refresh_total.*recovered'
+curl -s localhost:9090/metrics | grep '^shioaji_thread_alive'   # expect one series per conn_id
 docker compose logs hft-engine --since 24h | grep -E 'found facade logged out|Facade recovered'
+```
+
+### The per-facade gauges themselves stop updating
+
+`hft_quote_conn_{logged_in,last_data_age_s,subscribed_count,state}` are written
+only by `QuoteConnectionPool.update_metrics()`, from the metrics loop in
+`services/system.py`. If that publisher throws it does **not** make the gauges
+go absent — they freeze at their last value, and a frozen `last_data_age_s`
+below 300 silently disables `QuoteFacadeDataStalled`, the only per-shard
+liveness alert. `QuotePoolMetricsPublisherStalled` watches for this.
+
+```bash
+curl -s localhost:9090/metrics | grep hft_quote_pool_metrics_   # published_total must climb
+docker compose logs hft-engine --since 1h | grep -E 'quote_pool_metrics_publish_failed|pool_metrics_update_failed'
 ```
 
 ## Rollback

@@ -375,28 +375,36 @@ class SessionRuntime:
             # happened to restart it. On 2026-07-25 that stranded 1 of 4 quote
             # facades for 24 h, silently dropping its 74 symbols through an
             # entire night session while FeedState stayed CONNECTED.
+            check_interval_s = client_float(c, "_session_refresh_check_interval_s", 3600.0)
+            base_backoff_s = client_float(c, "_session_relogin_backoff_s", 60.0)
+            poll_s = min(client_float(c, "_session_relogin_poll_s", 60.0), check_interval_s)
+            jitter_frac = client_float(c, "_session_refresh_jitter_frac", 0.15)
+
             relogin_attempts = 0
+            relogin_backoff_s = 0.0
+            relogin_next_ts = 0.0
+            # Start the schedule clock a full interval out so the poll quantum
+            # cannot pull the first refresh evaluation forward.
+            next_schedule_ts = timebase.now_s() + check_interval_s
+
             while c.api and c._session_refresh_running:
                 try:
                     # Jitter each wake-up so facades brought up together by the
                     # pool do not stay phase-aligned and re-login in lockstep.
-                    time.sleep(
-                        refresh_sleep_s(
-                            c._session_refresh_check_interval_s,
-                            client_float(c, "_session_refresh_jitter_frac", 0.15),
-                            random.random,
-                        )
-                    )
+                    time.sleep(refresh_sleep_s(poll_s, jitter_frac, random.random))
                     if not c._session_refresh_running:
                         break
+
+                    now = timebase.now_s()
 
                     if not c.logged_in:
                         # Recovery path. do_session_refresh() rebuilds the whole
                         # facade (login -> callbacks -> resubscribe -> watchdog)
                         # and already serialises on the process-wide login slot,
                         # so retrying here cannot re-create the login storm that
-                        # caused the logout. Cadence is the hourly check
-                        # interval, which is far below any broker rate limit.
+                        # caused the logout.
+                        if now < relogin_next_ts:
+                            continue
                         relogin_attempts += 1
                         logger.warning(
                             "Session refresh thread found facade logged out; retrying login",
@@ -410,10 +418,26 @@ class SessionRuntime:
                             if c.metrics:
                                 c.metrics.session_refresh_total.labels(result="recovered").inc()
                             relogin_attempts = 0
+                            relogin_backoff_s = 0.0
+                            relogin_next_ts = 0.0
+                        else:
+                            relogin_backoff_s = min(
+                                relogin_backoff_s * 2.0 if relogin_backoff_s else base_backoff_s,
+                                check_interval_s,
+                            )
+                            relogin_next_ts = timebase.now_s() + relogin_backoff_s
                         continue
 
                     relogin_attempts = 0
-                    now = timebase.now_s()
+                    relogin_backoff_s = 0.0
+                    relogin_next_ts = 0.0
+
+                    # Everything below is the preventive-refresh schedule, which
+                    # still runs once per check interval regardless of poll rate.
+                    if now < next_schedule_ts:
+                        continue
+                    next_schedule_ts = now + check_interval_s
+
                     now_dt = dt.datetime.fromtimestamp(timebase.now_s(), tz=calendar._tz)
 
                     # Skip refresh during active trading hours

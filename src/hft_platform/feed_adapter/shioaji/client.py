@@ -498,6 +498,14 @@ class ShioajiClient:
         self._session_refresh_thread: threading.Thread | None = None
         self._session_refresh_running = False
         self._session_refresh_check_interval_s = 3600.0  # Check every hour
+        # The refresh thread also owns re-login after a failed refresh, and an
+        # hourly poll meant a logged-out facade stayed dark for up to an hour
+        # before anything even noticed. Poll cheaply, evaluate the (unchanged)
+        # refresh schedule at the check interval. Retry backoff starts here and
+        # doubles, capped at the check interval; every attempt goes through the
+        # process-wide login slot, so a 60 s floor cannot re-create a 451 storm.
+        self._session_relogin_poll_s = float(os.getenv("HFT_SESSION_RELOGIN_POLL_S", "60"))
+        self._session_relogin_backoff_s = float(os.getenv("HFT_SESSION_RELOGIN_BACKOFF_S", "60"))
 
         # Holiday-aware session refresh (O4)
         self._session_refresh_holiday_aware = os.getenv("HFT_SESSION_REFRESH_HOLIDAY_AWARE", "1").strip().lower() in {
