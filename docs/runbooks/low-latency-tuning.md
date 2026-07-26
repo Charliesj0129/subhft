@@ -49,7 +49,15 @@ docker compose logs --since=5m hft-engine | rg -i "error|Traceback|MEMORY_LIMIT_
 - 確保主機與容器時區一致（`Asia/Taipei`）。
 
 ## 7) 版本更新
+
+本節適用於**新建或自用的調校主機**。
+
+對既有生產主機（THESHOW）**不適用**：該主機工作樹永久分岔且帶有只存在於本機的
+手動編輯，`git pull` 會毀掉它們；`up -d --build` 會 recreate 容器並丟掉
+`/app/outputs`。生產發布一律依 `docs/runbooks/deployment.md`。
+
 ```bash
+# 僅限調校/開發主機
 git pull
 docker compose up -d --build hft-engine
 ```

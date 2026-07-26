@@ -1,6 +1,8 @@
 # Ops
 
-Docker basics: `docker compose up -d --build`, `docker compose ps`, `docker compose logs -f hft-engine`. `make docker-clean` deletes volumes and ClickHouse data.
+Docker basics (**local stacks only**): `docker compose up -d --build`, `docker compose ps`, `docker compose logs -f hft-engine`. `make docker-clean` deletes volumes and ClickHouse data.
+
+Deploying to the production host is a different procedure with different commands — `up -d` there destroys the engine's writable layer. Follow `41-deployment.md` / `docs/runbooks/deployment.md`, never the local commands above.
 
 Ports: engine metrics 9090, ClickHouse 8123/9000, Redis 6379, Prometheus 9091, Grafana 3000, Alertmanager 9093.
 

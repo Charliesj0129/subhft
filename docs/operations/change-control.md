@@ -2,6 +2,10 @@
 
 定義基礎變更管控流程，避免線上風險。
 
+> 本文件管的是**變更的紀錄與證據**（變更單、drift、release channel、稽核產物）。
+> 實際**怎麼把變更送上生產主機**，見 `docs/runbooks/deployment.md`（Deploy Laws
+> D1–D10）。兩者互補：先過本文件的變更單與 gate，再依 runbook 的部署分級執行。
+
 ## Scope
 - `docker-compose.yml` / `docker-compose.production.yml`
 - `config/` 下會影響 live 行為的變更
@@ -12,8 +16,13 @@
 1. 建立變更單：`what / why / risk / rollback`。
 2. 至少一位 reviewer 確認。
 3. 先在 `sim` 或 staging 驗證。
-4. 驗證指標：feed、queue、risk reject、recorder、/metrics scrape。
-5. 若異常，5 分鐘內執行 rollback。
+4. 判定**部署分級**（runbook D5）：A 程式碼／B 監控規則／C env·compose·image。
+   分級決定機制、是否重啟引擎、以及可寫層風險。
+5. 事前寫下具名 pass criteria 並取得重啟前 baseline（runbook D9）。
+   驗證面向：feed、queue、risk reject、recorder、/metrics scrape。
+6. 若異常，5 分鐘內執行 rollback（backup 依 runbook D4 事前備妥）。
+7. 部署後補上 `~/deploy_ledger.tsv` 一行（runbook D10）——
+   下一次變更的 drift 比對以此為基準。
 
 ## WS-D 自動化（2026-03-05）
 
@@ -142,12 +151,22 @@ make wal-manifest-tmp-cleanup MIN_AGE_SECONDS=300
 - `outputs/wal_dlq/cleanup_tmp/*.json|*.md`
 
 ## 最小驗證證據
+
+以下是**下限**，不是完整驗證。生產部署另須跑完 runbook D9 的
+verification floor（451 計數、error/critical log、每個 facade 的訂閱數與
+thread liveness），並帶上該次變更專屬的指標。
+
 - `docker compose ps`
 - `docker compose logs --tail=200 hft-engine`
 - `curl -fsS http://localhost:9090/metrics | head`
 - `uv run hft recorder status`
 
+`docker compose ps` 顯示 healthy **不構成**部署已驗證。
+
 ## Rollback
 - 保留上一版 image/tag。
-- 保留前一版 `.env`/config 備份。
-- 回滾後重新執行最小驗證證據。
+- 保留前一版 `.env`/config 備份（生產主機依 runbook D4 存於
+  `~/deploy_backup_<UTC-date>/<batch>/`，含 `MD5SUMS.txt`）。
+- 回滾後重新執行與部署時**同一組** pass criteria——未驗證的 rollback
+  等於第二次未測試的變更。
+- 演練：`make rollback-drill`（`scripts/rollback_drill.py`）。

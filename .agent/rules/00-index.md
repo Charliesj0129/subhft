@@ -13,6 +13,7 @@ Read only the file needed for the task. These rules are compact guardrails; cano
 | `26-multi-broker-governance.md` | Broker protocol, isolation, latency, credentials |
 | `30-git.md` | Commit and git hygiene |
 | `40-ops.md` | Docker, services, live config changes |
+| `41-deployment.md` | Production deploy laws D1–D10, deploy classes, verification floor |
 | `50-testing.md` | Coverage, naming, HFT test focus |
 | `55-enforcement.md` | Pre-commit, discipline, CI gates |
 | `60-agent-workflow-governance.md` | Git-state safety and multi-agent coordination |

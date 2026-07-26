@@ -72,7 +72,19 @@ FORMAT Vertical"
 
 ## Deploy Steps
 
+This changes compose env, so it is a **Class C** deploy
+(`docs/runbooks/deployment.md` D5): `up -d` recreates `hft-engine` and
+**destroys its writable layer**, which holds `/app/outputs` (autonomy
+evidence — not bind-mounted). Rescue it first and verify the copy:
+
 ```bash
+docker exec hft-engine sh -c 'find /app/outputs -type f | wc -l'
+docker cp hft-engine:/app/outputs ./outputs_container_$(date -u +%Y%m%dT%H%M%SZ)
+find ./outputs_container_* -type f | wc -l      # must match
+
+# D4 — back up the compose file before editing it (it carries live edits)
+cp -p docker-compose.yml ~/deploy_backup_$(date -u +%Y%m%d)/
+
 docker compose pull redis
 docker compose up -d --force-recreate redis clickhouse hft-engine wal-loader hft-monitor
 ```
@@ -131,12 +143,16 @@ FORMAT Vertical"
 ## Rollback
 
 1. Revert tuning commit in Git and push.
-2. Remote:
+2. Remote — **not** `git pull`; the host worktree is divergent and carries
+   live edits to `docker-compose.yml` (D2). Restore the backed-up compose file
+   taken in Deploy Steps, then recreate:
 
 ```bash
-git pull --ff-only
+cp -p ~/deploy_backup_<date>/docker-compose.yml docker-compose.yml
 docker compose up -d --force-recreate redis clickhouse hft-engine wal-loader hft-monitor
 ```
+
+3. Restore any rescued `/app/outputs` content that downstream tooling needs.
 
 ## Appendix A: Incident Record (2026-03-03)
 
