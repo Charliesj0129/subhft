@@ -362,6 +362,11 @@ async def test_run_starts_health_before_live_order_login_and_stops_on_false(monk
 @pytest.mark.asyncio
 async def test_run_disabled_order_mode_skips_order_startup_work(monkeypatch):
     monkeypatch.setenv("HFT_ORDER_MODE", "disabled")
+    # stop_async is mocked below, so it never reaches the real watchdog.stop();
+    # without disabling the watchdog here, run() starts a real LoopStallWatchdog
+    # thread that outlives this test and force-exits the whole pytest process
+    # with os._exit(70) ~60s later (see loop_watchdog.py, STALL_KILL_EXIT_CODE).
+    monkeypatch.setenv("HFT_LOOP_STALL_KILL_S", "0")
     sys_obj = _make_system()
 
     async def _health_run():
@@ -404,6 +409,11 @@ async def test_run_disabled_order_mode_never_starts_order_risk_strategy_plane(mo
     at the facade layer. Assert exactly which services start in quote-only
     mode — the crash-fix files alone are not sufficient reconciliation."""
     monkeypatch.setenv("HFT_ORDER_MODE", "disabled")
+    # stop_async is mocked below, so it never reaches the real watchdog.stop();
+    # without disabling the watchdog here, run() starts a real LoopStallWatchdog
+    # thread that outlives this test and force-exits the whole pytest process
+    # with os._exit(70) ~60s later (see loop_watchdog.py, STALL_KILL_EXIT_CODE).
+    monkeypatch.setenv("HFT_LOOP_STALL_KILL_S", "0")
     sys_obj = _make_system()
     started: list[str] = []
 
