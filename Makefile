@@ -266,7 +266,7 @@ test-clickhouse-writer-smoke: ## Smoke test ClickHouse writer roundtrip path
 	uv run pytest tests/system/test_clickhouse_writer.py::test_clickhouse_writer_roundtrip --no-cov -q
 
 perf-gate-default: ## Lightweight perf regression gate for default CI profile
-	uv run python tests/benchmark/perf_regression_gate.py --runs 1 --json risk_perf_gate.json
+	uv run python tests/benchmark/perf_regression_gate.py --runs 3 --json risk_perf_gate.json
 
 perf-gate-recorder-io: ## Nightly perf gate: recorder I/O heavy drills
 	uv run python tests/benchmark/perf_regression_gate.py --runs 1 --include-recorder-io --json recorder_perf_gate.json
