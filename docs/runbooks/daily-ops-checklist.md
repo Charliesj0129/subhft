@@ -226,13 +226,34 @@ state or a WAL condition left over from Friday will not clear on its own.
   docker compose logs hft-engine --since 72h | grep -i 'WALFirstWriter HALT'
   ```
 - [ ] **11/11 containers healthy**: `docker compose ps`
+- [ ] **Every quote facade alive** — not just the pool as a whole. Aggregate
+  health is misleading here: `FeedState` reports CONNECTED while any one facade
+  is up, `rate(feed_events_total)` stays non-zero while any one facade ticks,
+  and `hft_quote_conn_subscribed_count` reports the *configured* symbol count,
+  so a dead facade still shows its full 74.
+  ```bash
+  curl -s localhost:9090/metrics | grep -E 'hft_quote_conn_logged_in|hft_quote_conn_last_data_age_s|shioaji_thread_alive'
+  ```
+  Expect every `conn_id` at `logged_in=1` and `shioaji_thread_alive{thread="session_refresh"}=1`.
+  A facade logged out **while the market is shut is normal** — the reconnect
+  orchestrator only runs inside `HFT_RECONNECT_DAYS`/`HFT_RECONNECT_HOURS*`. What
+  is *not* normal is the refresh thread being dead, because that is what used to
+  make the state permanent (see `feed-reconnect.md`). Since 2026-07-26,
+  `ShioajiSessionRefreshThreadDown` alerts on exactly this, ungated, and
+  `QuoteFacadeDataStalled` covers per-facade silence during session hours.
 - [ ] Session-refresh errors reviewed — repeated `code: 451, detail: Too Many
-  Connections` means quote facades are re-logging in unserialized; note it, it
-  degrades reconnects rather than blocking the open.
+  Connections` means quote facades are re-logging in unserialized. Since the
+  login slot deployed (2026-07-26) this should be rare; check
+  `shioaji_login_slot_timeouts_total` and any
+  `session_refresh_total{result="recovered"}` increments, which mean a facade
+  failed a refresh and the loop pulled it back.
 
 ### Monday pre-open
 
 - [ ] 08:30 CST — `shioaji_quote_pending_age_seconds` drops to ~0 as sessions refresh.
+- [ ] 08:45 CST +5 min — every `hft_quote_conn_last_data_age_s` back under a few
+  seconds. Healthy facades sit at p95 < 1 s during session hours; anything in the
+  hundreds means that facade did not come back with the others.
 - [ ] 09:00 CST — ingestion live; compare the running row rate against a recent
   healthy day (~6.5–7.2 M rows/day at a 296-symbol universe):
   ```bash
