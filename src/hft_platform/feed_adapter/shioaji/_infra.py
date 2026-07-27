@@ -8,6 +8,7 @@ across submodules.
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 from pathlib import Path
@@ -222,12 +223,16 @@ def safe_call_with_timeout(
 # ---------------------------------------------------------------------------
 
 
-def set_thread_alive_metric(metrics: Any, thread_name: str, alive: bool) -> None:
-    """Set the ``shioaji_thread_alive`` gauge for *thread_name*."""
+def set_thread_alive_metric(metrics: Any, thread_name: str, alive: bool, conn_id: str = "-") -> None:
+    """Set the ``shioaji_thread_alive`` gauge for *thread_name*.
+
+    ``conn_id`` keeps pooled facades on separate series. Standalone clients have
+    no connection identity and pass the default.
+    """
     if not metrics or not hasattr(metrics, "shioaji_thread_alive"):
         return
     try:
-        metrics.shioaji_thread_alive.labels(thread=thread_name).set(1 if alive else 0)
+        metrics.shioaji_thread_alive.labels(thread=thread_name, conn_id=conn_id).set(1 if alive else 0)
     except Exception as exc:
         logger.debug("operation_fallback", error=str(exc))
         return
@@ -410,3 +415,160 @@ def rate_limit_api(limiter: Any, op: str, *, category: str = "default") -> bool:
         return False
     limiter.record()
     return True
+
+
+# ---------------------------------------------------------------------------
+# Broker login staggering (2026-07-24 "451 Too Many Connections" incident)
+# ---------------------------------------------------------------------------
+#
+# Every quote facade runs its own session-refresh thread.  The pool brings them
+# up together, so their fixed-interval sleeps stay phase-aligned and all of them
+# log out and back in within a few hundred milliseconds of each other.  Shioaji
+# answers the later ones with ``code: 451, detail: Too Many Connections.``, the
+# retries are exhausted, and the refresh is reported as failed.
+#
+# Two independent defences, because either alone is insufficient: jitter spreads
+# the *arrivals* (cheap, no coordination), and the login slot serialises whatever
+# still overlaps (authoritative, but only within this process).
+
+_LOGIN_SLOT_LOCK = threading.Lock()
+_login_slot_last_release_s: float = 0.0
+
+
+# ---------------------------------------------------------------------------
+# Broker error scrubbing
+# ---------------------------------------------------------------------------
+#
+# Broker error payloads are echoed into container logs verbatim. Shioaji's login
+# rejections quote back the submitted identity and the connecting host, so a 451
+# storm writes the operator's TW national ID and the host's public IP into the
+# log stream once per retry. Redact at the boundary where the error is captured,
+# so every downstream log line, metric label and status field inherits it.
+
+# TW national / ARC ID: one letter, 1|2 (or A-D for the newer ARC format), 8 digits.
+_PERSON_ID_RE = re.compile(r"\b[A-Za-z][12A-Da-d]\d{8}\b")
+_IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+# key=value / "key": "value" / key: value forms for credential-ish keys.
+_CRED_KV_RE = re.compile(
+    r"(?i)\b(person_id|personid|api_key|apikey|secret_key|secretkey|ca_passwd|password|token)\b"
+    # Optional closing quote so the JSON form `"api_key": "..."` matches too.
+    r"([\"']?\s*[:=]\s*)"
+    r"(\"[^\"]*\"|'[^']*'|[^\s,;)}\]]+)"
+)
+
+
+def scrub_broker_error(text: Any) -> str:
+    """Redact identity and credential material from a broker error payload.
+
+    Always returns a string — callers feed this straight into ``str(err)``
+    positions, and a scrubber that raises would take out the error path it is
+    meant to make safe.
+    """
+    try:
+        value = text if isinstance(text, str) else str(text)
+    except Exception:  # pragma: no cover - a __str__ that raises must not win
+        return "<unprintable error>"
+    value = _CRED_KV_RE.sub(r"\1\2<redacted>", value)
+    value = _PERSON_ID_RE.sub("<redacted-id>", value)
+    return _IPV4_RE.sub("<redacted-ip>", value)
+
+
+def client_float(client: Any, name: str, default: float) -> float:
+    """Read a numeric tuning attribute off the client, falling back on anything else.
+
+    A plain ``getattr(..., default)`` is not enough: the attribute may exist but
+    hold a non-numeric value (an unparsed env string, or a mock in tests), and
+    these call sites run on background threads where a ``TypeError`` would kill
+    session refreshes or reconnects silently for the rest of the process's life.
+    """
+    value = getattr(client, name, default)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return default
+    return float(value)
+
+
+def refresh_sleep_s(base_s: float, jitter_frac: float, rand: Callable[[], float]) -> float:
+    """Return ``base_s`` scaled by +/-``jitter_frac``, so per-facade phases diverge.
+
+    ``rand`` supplies a value in ``[0.0, 1.0)`` (normally ``random.random``) and is
+    injectable so tests stay deterministic.  A non-positive ``base_s`` or
+    ``jitter_frac`` disables jittering and returns ``base_s`` unchanged; the result
+    is never negative.
+    """
+    if base_s <= 0.0 or jitter_frac <= 0.0:
+        return base_s
+    frac = min(1.0, jitter_frac)
+    offset = (rand() * 2.0 - 1.0) * frac
+    return max(0.0, base_s * (1.0 + offset))
+
+
+def acquire_login_slot(
+    *,
+    min_gap_s: float,
+    timeout_s: float,
+    metrics: Any = None,
+    clock: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> bool:
+    """Serialise broker logins process-wide and space them by ``min_gap_s``.
+
+    Blocks until no other facade holds the slot (up to ``timeout_s``), then waits
+    out whatever remains of ``min_gap_s`` since the previous holder released.
+
+    Returns ``True`` when the slot is held — the caller MUST then call
+    :func:`release_login_slot`.  Returns ``False`` on timeout, in which case the
+    caller proceeds unserialised: a session that never refreshes is worse than one
+    that risks a 451, and the caller must NOT release a slot it does not hold.
+    """
+    global _login_slot_last_release_s
+
+    if not _LOGIN_SLOT_LOCK.acquire(timeout=timeout_s if timeout_s > 0 else -1):
+        logger.warning(
+            "Broker login slot timed out; proceeding unserialised",
+            timeout_s=timeout_s,
+        )
+        _inc_metric(metrics, "shioaji_login_slot_timeouts_total")
+        return False
+
+    wait_s = min_gap_s - (clock() - _login_slot_last_release_s)
+    if wait_s > 0.0:
+        logger.info("Staggering broker login", wait_s=round(wait_s, 2))
+        sleep(wait_s)
+    return True
+
+
+def release_login_slot(*, clock: Callable[[], float] = time.monotonic) -> None:
+    """Release the login slot and start the inter-login gap timer."""
+    global _login_slot_last_release_s
+
+    _login_slot_last_release_s = clock()
+    try:
+        _LOGIN_SLOT_LOCK.release()
+    except RuntimeError:
+        # Already released — never let bookkeeping kill a refresh thread.
+        logger.debug("Login slot released twice")
+
+
+def reset_login_slot_for_tests() -> None:
+    """Drop the inter-login gap so tests do not inherit each other's timing."""
+    global _login_slot_last_release_s
+
+    _login_slot_last_release_s = 0.0
+    if _LOGIN_SLOT_LOCK.locked():
+        try:
+            _LOGIN_SLOT_LOCK.release()
+        except RuntimeError:
+            pass
+
+
+def _inc_metric(metrics: Any, name: str) -> None:
+    """Increment a counter if the registry exposes it; never raise."""
+    if metrics is None:
+        return
+    counter = getattr(metrics, name, None)
+    if counter is None:
+        return
+    try:
+        counter.inc()
+    except Exception as exc:  # pragma: no cover - metrics must never break login
+        logger.debug("operation_fallback", error=str(exc))

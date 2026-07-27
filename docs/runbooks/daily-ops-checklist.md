@@ -155,7 +155,29 @@
   docker compose down
   ```
 - [ ] **Evidence pack**:
-  Verify `outputs/production_rollout/autonomy/<YYYYMMDD>/` contains `state_timeline.jsonl`, `platform_degrade.json`, `strategy_quarantine.json`, and `manual_rearm_requirements.md`.
+  Verify the autonomy evidence dir contains `state_timeline.jsonl`,
+  `platform_degrade.json`, `strategy_quarantine.json`, and
+  `manual_rearm_requirements.md`.
+
+  **Read it inside the container, not on the host.** `outputs/` is *not*
+  bind-mounted, and the engine's CWD is `/app`, so the live state lives in the
+  container's writable layer:
+  ```bash
+  docker compose exec hft-engine ls /app/outputs/production_rollout/autonomy/$(date +%Y%m%d)/
+  docker compose exec hft-engine cat /app/outputs/production_rollout/autonomy/runtime_state.json
+  ```
+  A host-side `outputs/production_rollout/autonomy/runtime_state.json` is *not*
+  engine state — anything run from the deployment root with a relative default
+  path (a stray `pytest`, or `hft ops autonomy-status` on the host) writes there.
+  On 2026-07-08 a host test run left `reason="test_reason"` plus phantom
+  `strat1`/`strat_a` latches in `/home/charl/subhft`, which then showed up as
+  real operator-facing state. Treat any such file as an artifact and move it aside.
+
+  Because the evidence lives in the writable layer, `docker compose up -d`
+  / `--force-recreate` **destroys it**. Rescue first:
+  ```bash
+  docker cp hft-engine:/app/outputs/production_rollout/autonomy ./outputs/autonomy_container_$(date +%Y%m%d)
+  ```
 
 ---
 
@@ -165,3 +187,77 @@
 - [ ] Review Grafana dashboard for multi-day trends.
 - [ ] Update contract expiry dates for next week.
 - [ ] Rotate API credentials if policy requires.
+
+---
+
+## Weekend → Monday Reopen Checklist
+
+Run over the weekend, before the first session of the week. A latched autonomy
+state or a WAL condition left over from Friday will not clear on its own.
+
+### Saturday/Sunday — clear anything latched
+
+- [ ] **No critical alerts other than known weekend false positives**:
+  ```bash
+  curl -s localhost:9093/api/v2/alerts | python3 -c 'import sys,json;[print(a["labels"]["alertname"], a["status"]["state"]) for a in json.load(sys.stdin)]'
+  ```
+  `ShioajiPendingQuoteStall` used to fire every weekend and clear at Monday's open:
+  `shioaji_quote_pending_age_seconds` simply counts up from the last night-session
+  close. Since 2026-07-25 the rule is gated on `market_trading_hours_active == 1`
+  (calendar-aware, holidays included), so outside session hours it stays quiet and
+  **any** firing alert here is real. If you still see it on a weekend, the deployed
+  `rules.yaml` predates that gate — compare against the repo copy.
+- [ ] **Autonomy not latched**:
+  ```bash
+  curl -s localhost:9090/metrics | grep -E 'autonomy_mode|manual_rearm_required|platform_reduce_only_active'
+  ```
+  Expect `autonomy_mode{scope="platform"} 0.0` and `manual_rearm_required 0.0`.
+  Non-zero means a latch survives; `recorder_data_loss` in particular is
+  non-auto-recoverable and re-latches across restarts — follow
+  `WALDiskPressureCritical.md`.
+- [ ] **WAL root clean** (top-level files are what the pressure monitor counts):
+  ```bash
+  find .wal -maxdepth 1 -type f -printf '%s\t%p\n' | sort -rn | head
+  ls .wal/*.jsonl 2>/dev/null | wc -l    # pending backlog, expect 0 when idle
+  curl -s localhost:9090/metrics | grep -E 'disk_pressure_level|wal_disk_available_mb'
+  ```
+- [ ] **No dropped rows last session**:
+  ```bash
+  docker compose logs hft-engine --since 72h | grep -i 'WALFirstWriter HALT'
+  ```
+- [ ] **11/11 containers healthy**: `docker compose ps`
+- [ ] **Every quote facade alive** — not just the pool as a whole. Aggregate
+  health is misleading here: `FeedState` reports CONNECTED while any one facade
+  is up, `rate(feed_events_total)` stays non-zero while any one facade ticks,
+  and `hft_quote_conn_subscribed_count` reports the *configured* symbol count,
+  so a dead facade still shows its full 74.
+  ```bash
+  curl -s localhost:9090/metrics | grep -E 'hft_quote_conn_logged_in|hft_quote_conn_last_data_age_s|shioaji_thread_alive'
+  ```
+  Expect every `conn_id` at `logged_in=1` and `shioaji_thread_alive{thread="session_refresh"}=1`.
+  A facade logged out **while the market is shut is normal** — the reconnect
+  orchestrator only runs inside `HFT_RECONNECT_DAYS`/`HFT_RECONNECT_HOURS*`. What
+  is *not* normal is the refresh thread being dead, because that is what used to
+  make the state permanent (see `feed-reconnect.md`). Since 2026-07-26,
+  `ShioajiSessionRefreshThreadDown` alerts on exactly this, ungated, and
+  `QuoteFacadeDataStalled` covers per-facade silence during session hours.
+- [ ] Session-refresh errors reviewed — repeated `code: 451, detail: Too Many
+  Connections` means quote facades are re-logging in unserialized. Since the
+  login slot deployed (2026-07-26) this should be rare; check
+  `shioaji_login_slot_timeouts_total` and any
+  `session_refresh_total{result="recovered"}` increments, which mean a facade
+  failed a refresh and the loop pulled it back.
+
+### Monday pre-open
+
+- [ ] 08:30 CST — `shioaji_quote_pending_age_seconds` drops to ~0 as sessions refresh.
+- [ ] 08:45 CST +5 min — every `hft_quote_conn_last_data_age_s` back under a few
+  seconds. Healthy facades sit at p95 < 1 s during session hours; anything in the
+  hundreds means that facade did not come back with the others.
+- [ ] 09:00 CST — ingestion live; compare the running row rate against a recent
+  healthy day (~6.5–7.2 M rows/day at a 296-symbol universe):
+  ```bash
+  docker exec clickhouse clickhouse-client --query "SELECT count(), uniqExact(symbol) FROM hft.market_data WHERE toDate(fromUnixTimestamp64Nano(ingest_ts),'Asia/Taipei') = today()"
+  ```
+- [ ] First 30 minutes — no `WALFirstWriter HALT`, no new criticals, event-loop lag
+  within budget.

@@ -185,6 +185,88 @@ def make_bidask_event(**overrides) -> BidAskEvent:
     return BidAskEvent(**defaults)
 
 
+@pytest.fixture(autouse=True)
+def _isolate_autonomy_state_paths(tmp_path, monkeypatch):
+    """Keep autonomy state and evidence writes inside the test's tmp dir.
+
+    ``manual_rearm.DEFAULT_RUNTIME_STATE_PATH`` and
+    ``evidence.DEFAULT_AUTONOMY_EVIDENCE_DIR`` are CWD-relative, so any test that
+    builds a real ``PlatformDegradeController``/``ManualRearmGate`` without an
+    explicit ``state_path`` writes ``outputs/production_rollout/autonomy/`` under
+    whatever directory pytest was launched from. On 2026-07-08 a test run on the
+    production host left ``reason="test_reason"`` plus phantom ``strat1``/
+    ``strat_a`` latches in ``/home/charl/subhft``, where ``hft ops
+    autonomy-status`` then reported them as real operator-facing state.
+    """
+    from hft_platform.ops import evidence as _evidence
+    from hft_platform.ops import manual_rearm as _manual_rearm
+
+    base = tmp_path / "autonomy_state"
+    monkeypatch.setattr(_manual_rearm, "DEFAULT_RUNTIME_STATE_PATH", base / "runtime_state.json")
+    monkeypatch.setattr(_evidence, "DEFAULT_AUTONOMY_EVIDENCE_DIR", base)
+    _evidence.reset_shared_autonomy_evidence_writer()
+    try:
+        yield
+    finally:
+        _evidence.reset_shared_autonomy_evidence_writer()
+
+
+@pytest.fixture(autouse=True)
+def _disarm_loop_stall_watchdog(monkeypatch):
+    """Never let a test start a watchdog that can ``os._exit`` the test process.
+
+    ``HFTSystem.run()`` starts a real :class:`LoopStallWatchdog` on a daemon OS
+    thread (``services/system.py``, threshold ``HFT_LOOP_STALL_KILL_S``, default
+    60 s). Its production ``on_stall`` is ``os._exit(70)`` — by design, so a
+    starved live engine dies and the container restarts it.
+
+    Any test that calls ``run()`` without reaching the ``stop_async()`` that
+    stops the watchdog (e.g. because ``stop_async`` is mocked) leaks that thread.
+    It outlives the test, and ~60 s later force-exits **pytest itself**: the run
+    dies mid-collection with exit 70, no summary line, no failing test name, and
+    the blame lands on whichever unrelated test happened to be executing. That
+    is exactly how CI failed on 2026-07-26 with 14k passing tests and zero F/E.
+
+    Disabling it globally is safe: ``stall_kill_s <= 0`` short-circuits
+    ``check_once`` and ``start()``, and the watchdog's own tests
+    (``tests/unit/test_loop_watchdog.py``) construct it directly with an explicit
+    threshold and an injected ``on_stall``, so they never read this env var.
+    """
+    monkeypatch.setenv("HFT_LOOP_STALL_KILL_S", "0")
+
+
+@pytest.fixture(autouse=True)
+def _reset_broker_login_slot(monkeypatch):
+    """Clear the process-wide broker login slot between tests.
+
+    ``_infra`` keeps the last login-release timestamp in module state so facades
+    can space their re-logins. Without a reset, one test's release makes the next
+    test's ``acquire_login_slot`` sleep out the remaining gap — a real multi-second
+    stall that looks like flakiness rather than the shared state it is.
+
+    The reset only covers *between* tests. The default 5 s gap
+    (``HFT_SESSION_REFRESH_STAGGER_S``) still bites *within* a test that logs in
+    more than once: the second and later acquisitions each ``time.sleep`` the full
+    gap. ``test_reconnect_chaos_three_consecutive_login_timeouts_backoff_reaches_cap``
+    reconnects three times and so burned 10 real seconds, blowing CI's
+    ``--timeout=10`` even though nothing was wrong with the code under test.
+    Zeroing the gap keeps the serialisation semantics (the lock still orders
+    logins) while removing the wall-clock pacing, which is broker-protection
+    behaviour, not logic any unit test should pay for. Tests that assert on the
+    pacing set the interval explicitly — see
+    ``test_session_refresh_passes_configured_stagger_settings_to_slot``.
+    """
+    monkeypatch.setenv("HFT_SESSION_REFRESH_STAGGER_S", "0")
+
+    from hft_platform.feed_adapter.shioaji import _infra as _shioaji_infra
+
+    _shioaji_infra.reset_login_slot_for_tests()
+    try:
+        yield
+    finally:
+        _shioaji_infra.reset_login_slot_for_tests()
+
+
 @pytest.fixture()
 def mock_metrics() -> MagicMock:
     """Return a MagicMock that can stand in for MetricsRegistry."""

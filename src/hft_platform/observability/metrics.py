@@ -232,6 +232,7 @@ class MetricsRegistry:
                 _pn("shioaji_quote_pending_age_seconds"),
                 _pn("shioaji_quote_pending_stall_total"),
                 _pn("shioaji_session_lock_conflicts_total"),
+                _pn("shioaji_login_slot_timeouts_total"),
                 _pn("feed_session_conflict_total"),
                 _pn("feed_session_lease_ops_total"),
                 _pn("feed_first_quote_total"),
@@ -1200,7 +1201,11 @@ class MetricsRegistry:
         self.shioaji_thread_alive = Gauge(
             _pn("shioaji_thread_alive"),
             "Shioaji runtime thread liveness (1=alive, 0=down)",
-            ["thread"],
+            # conn_id matters: a quote pool runs one client per connection, and
+            # without it all facades share a single series where the last writer
+            # wins. A facade whose refresh thread had died then read as alive
+            # again as soon as any other facade restarted its own.
+            ["thread", "conn_id"],
         )
         self.shioaji_quote_pending_age_seconds = Gauge(
             _pn("shioaji_quote_pending_age_seconds"),
@@ -1214,6 +1219,10 @@ class MetricsRegistry:
         self.shioaji_session_lock_conflicts_total = Counter(
             _pn("shioaji_session_lock_conflicts_total"),
             "Detected potential multi-runtime broker session lock conflicts",
+        )
+        self.shioaji_login_slot_timeouts_total = Counter(
+            _pn("shioaji_login_slot_timeouts_total"),
+            "Session refresh proceeded without the login slot after waiting out its timeout",
         )
         self.feed_session_conflict_total = Counter(
             _pn("feed_session_conflict_total"),

@@ -66,8 +66,12 @@ class WALWriter:
         try:
             if avail_mb is not None:
                 self._metrics.wal_disk_available_mb.set(float(avail_mb))
+            # disk_pressure_level belongs to DiskPressureMonitor alone. This
+            # writer used to clobber it with a free-space verdict (0 or 2),
+            # which hid the monitor's real CRITICAL/HALT state from Prometheus
+            # on 2026-07-24. Free-space pressure is reported by
+            # wal_disk_circuit_breaker_active + wal_disk_available_mb instead.
             self._metrics.wal_disk_circuit_breaker_active.labels(writer=writer).set(1 if active else 0)
-            self._metrics.disk_pressure_level.set(2 if active else 0)
         except Exception as exc:
             logger.debug("operation_fallback", error=str(exc))
             return
@@ -307,8 +311,9 @@ class WALBatchWriter:
         try:
             if avail_mb is not None:
                 self._metrics.wal_disk_available_mb.set(float(avail_mb))
+            # See WALWriter._set_disk_pressure_metrics: disk_pressure_level is
+            # owned exclusively by DiskPressureMonitor.
             self._metrics.wal_disk_circuit_breaker_active.labels(writer="wal_batch").set(1 if active else 0)
-            self._metrics.disk_pressure_level.set(2 if active else 0)
         except Exception as exc:
             logger.debug("operation_fallback", error=str(exc))
             return

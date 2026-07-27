@@ -86,6 +86,7 @@ class ShioajiClientConfig:
     reconnect_timeout_s: float = 45.0
     reconnect_subscribe_timeout_s: float = 30.0
     login_retry_max: int = 1
+    reconnect_stagger_timeout_s: float = 60.0
 
     # --- API cache ---
     api_cache_max_size: int = 1000
@@ -132,6 +133,11 @@ class ShioajiClientConfig:
     session_refresh_check_interval_s: float = 3600.0
     session_refresh_holiday_aware: bool = True
     session_refresh_verify_timeout_s: float = 10.0
+    # Cross-facade staggering: jitter spreads the refresh wake-ups, the gap
+    # spaces whatever still overlaps once the login slot serialises them.
+    session_refresh_jitter_frac: float = 0.15
+    session_refresh_stagger_gap_s: float = 5.0
+    session_refresh_stagger_timeout_s: float = 120.0
 
     # --- Market open ---
     market_open_grace_s: float = 60.0
@@ -240,6 +246,7 @@ def load_shioaji_config(
         reconnect_backoff_max_s=_env_float("HFT_RECONNECT_BACKOFF_MAX_S", 600.0),
         login_timeout_s=_env_float("HFT_SHIOAJI_LOGIN_TIMEOUT_S", 20.0),
         reconnect_timeout_s=_env_float("HFT_SHIOAJI_RECONNECT_TIMEOUT_S", 45.0),
+        reconnect_stagger_timeout_s=_env_float("HFT_RECONNECT_STAGGER_TIMEOUT_S", 60.0),
         reconnect_subscribe_timeout_s=_env_float("HFT_SHIOAJI_RECONNECT_SUBSCRIBE_TIMEOUT_S", 30.0),
         login_retry_max=_env_int("HFT_SHIOAJI_LOGIN_RETRY_MAX", 1, min_val=0),
         api_cache_max_size=_env_int("HFT_API_CACHE_MAX_SIZE", 1000),
@@ -271,6 +278,9 @@ def load_shioaji_config(
         session_refresh_interval_s=_env_float("HFT_SESSION_REFRESH_S", 86400.0),
         session_refresh_holiday_aware=_env_bool("HFT_SESSION_REFRESH_HOLIDAY_AWARE", "1"),
         session_refresh_verify_timeout_s=_env_float("HFT_SESSION_REFRESH_VERIFY_TIMEOUT_S", 10.0),
+        session_refresh_jitter_frac=_env_float("HFT_SESSION_REFRESH_JITTER_FRAC", 0.15),
+        session_refresh_stagger_gap_s=_env_float("HFT_SESSION_REFRESH_STAGGER_S", 5.0),
+        session_refresh_stagger_timeout_s=_env_float("HFT_SESSION_REFRESH_STAGGER_TIMEOUT_S", 120.0),
         market_open_grace_s=_env_float("HFT_MARKET_OPEN_GRACE_S", 60.0),
         contract_retry_s=_env_float("HFT_CONTRACT_RETRY_S", 60.0),
         contract_refresh_s=_env_float("HFT_CONTRACT_REFRESH_S", 86400.0),

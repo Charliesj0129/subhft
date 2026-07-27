@@ -20,6 +20,12 @@ from structlog import get_logger
 
 from hft_platform.core import timebase
 from hft_platform.feed_adapter.shioaji._compat import resolve_quote_enum
+from hft_platform.feed_adapter.shioaji._infra import (
+    acquire_login_slot,
+    client_float,
+    release_login_slot,
+    scrub_broker_error,
+)
 
 if TYPE_CHECKING:
     from hft_platform.feed_adapter.shioaji.client import ShioajiClient
@@ -67,42 +73,66 @@ class ReconnectOrchestrator:
             return False
         if not c._reconnect_lock.acquire(blocking=False):
             return False
+        # ``_reconnect_lock`` only guards THIS facade. The 2026-06-21 incident was
+        # all four quote facades reconnecting at once: each logs out and back in
+        # with no wait for the broker's server-side session release, so the pool
+        # transiently needs more sessions than the account allows and every facade
+        # gets 451. The process-wide login slot serialises them and enforces the
+        # release gap. Shorter timeout than a scheduled refresh — feed recovery is
+        # time-critical, and proceeding unserialised beats not reconnecting.
+        slot_held = acquire_login_slot(
+            min_gap_s=client_float(c, "_session_refresh_stagger_gap_s", 5.0),
+            timeout_s=client_float(c, "_reconnect_stagger_timeout_s", 60.0),
+            metrics=c.metrics,
+        )
         try:
             c._last_reconnect_ts = now
             c._last_reconnect_error = None
 
-            # Hard reconnect: recreate API object after repeated failures
-            hard_threshold = int(os.getenv("HFT_HARD_RECONNECT_THRESHOLD", "3"))
-            if self._consecutive_failures >= hard_threshold:
-                logger.warning(
-                    "hard_reconnect_triggered",
-                    reason=reason,
-                    consecutive_failures=self._consecutive_failures,
-                )
-                if c.recreate_api():
-                    self._consecutive_failures = 0
+            try:
+                # Hard reconnect: recreate API object after repeated failures
+                hard_threshold = int(os.getenv("HFT_HARD_RECONNECT_THRESHOLD", "3"))
+                if self._consecutive_failures >= hard_threshold:
+                    logger.warning(
+                        "hard_reconnect_triggered",
+                        reason=reason,
+                        consecutive_failures=self._consecutive_failures,
+                    )
+                    if c.recreate_api():
+                        self._consecutive_failures = 0
+                    else:
+                        c._last_reconnect_error = "recreate_api_failed"
+                        return False
                 else:
-                    c._last_reconnect_error = "recreate_api_failed"
-                    return False
-            else:
-                logger.warning("Reconnecting Shioaji", reason=reason, force=force)
-                ok_logout, _, err_logout, _ = c._safe_call_with_timeout(
-                    "logout",
-                    lambda: c.api.logout(),
-                    c._reconnect_timeout_s,
-                )
-                if not ok_logout:
-                    logger.warning("Logout failed during reconnect", error=str(err_logout))
+                    logger.warning(
+                        "Reconnecting Shioaji",
+                        reason=reason,
+                        force=force,
+                        serialised=slot_held,
+                    )
+                    ok_logout, _, err_logout, _ = c._safe_call_with_timeout(
+                        "logout",
+                        lambda: c.api.logout(),
+                        c._reconnect_timeout_s,
+                    )
+                    if not ok_logout:
+                        logger.warning("Logout failed during reconnect", error=scrub_broker_error(err_logout))
 
-                c.logged_in = False
-                c._callbacks_registered = False
-                c._clear_quote_pending()
-                # D2: in-place clear (don't rebind — preserves identity).
-                c.subscribed_codes.clear()
-                c.subscribed_count = 0
-                c._refresh_quote_routes()
+                    c.logged_in = False
+                    c._callbacks_registered = False
+                    c._clear_quote_pending()
+                    # D2: in-place clear (don't rebind — preserves identity).
+                    c.subscribed_codes.clear()
+                    c.subscribed_count = 0
+                    c._refresh_quote_routes()
 
-            login_ok = bool(c.login())
+                login_ok = bool(c.login())
+            finally:
+                # Released once the connection exists: subscribe_basket below no
+                # longer holds a *login* slot, so one facade's subscribe timeout
+                # cannot stall the rest of the pool's recovery.
+                if slot_held:
+                    release_login_slot()
             if not login_ok or not c.logged_in:
                 c._last_reconnect_error = c._last_login_error or "login_failed"
                 if c.metrics:
@@ -127,7 +157,9 @@ class ReconnectOrchestrator:
                         )
                         if not ok_sub:
                             subscribe_ok = False
-                            c._last_reconnect_error = str(err_sub) if err_sub is not None else "subscribe_failed"
+                            c._last_reconnect_error = (
+                                scrub_broker_error(err_sub) if err_sub is not None else "subscribe_failed"
+                            )
                             if c.metrics and timed_out_sub:
                                 try:
                                     c.metrics.feed_reconnect_timeout_total.labels(reason="subscribe").inc()
@@ -141,8 +173,8 @@ class ReconnectOrchestrator:
                             )
                 except Exception as exc:
                     subscribe_ok = False
-                    c._last_reconnect_error = str(exc)
-                    logger.error("Callback/subscribe failed after reconnect login", error=str(exc))
+                    c._last_reconnect_error = scrub_broker_error(exc)
+                    logger.error("Callback/subscribe failed after reconnect login", error=c._last_reconnect_error)
 
             ok = c.logged_in and subscribe_ok
             if c.metrics:
@@ -157,8 +189,8 @@ class ReconnectOrchestrator:
             return False
         except Exception as exc:
             self._consecutive_failures += 1
-            c._last_reconnect_error = str(exc)
-            logger.error("Reconnect failed unexpectedly", reason=reason, error=str(exc))
+            c._last_reconnect_error = scrub_broker_error(exc)
+            logger.error("Reconnect failed unexpectedly", reason=reason, error=c._last_reconnect_error)
             if c.metrics:
                 c.metrics.feed_reconnect_total.labels(result="exception").inc()
                 try:

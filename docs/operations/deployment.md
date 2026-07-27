@@ -1,6 +1,12 @@
-# HFT Platform 部署指南
+# HFT Platform 部署指南（堆疊建置）
 
-本文件覆蓋本機、Docker Compose、Swarm 與 Live 啟動重點。
+本文件覆蓋**從零建立一套堆疊**：本機、Docker Compose、Swarm、券商與雲端。
+
+> **這份文件不是生產部署程序。**
+> 對既有生產主機（THESHOW）發布變更，一律依 `docs/runbooks/deployment.md`
+> 的 Deploy Laws D1–D10。兩者的指令**刻意不同**：本文件的 `up -d --build`
+> 在生產主機上會 recreate 容器並摧毀引擎的可寫層。本文件與 runbook 衝突時，
+> **runbook 優先**。
 
 ## 1. 部署模式總覽
 
@@ -151,12 +157,27 @@ sudo ./ops.sh setup
 ```
 
 ## 8. 版本更新流程
+
+### 8.1 本機 / 開發堆疊
+
 ```bash
 git pull
 docker compose up -d --build hft-engine
 ```
 
-### 8.1 受控變更（建議用於 production）
+### 8.2 生產主機（THESHOW）——**不要用上面那段**
+
+生產主機的工作樹是**永久分岔**的：它帶著只存在於該主機的手動編輯
+（`rules.yaml`、`prometheus.yml`、`symbols.yaml`、`docker-compose.yml`、
+`ops/backup.py`）。在該主機上執行 `git pull` 或 `git reset --hard`
+會不可逆地毀掉這些編輯；`up -d --build` 則會 recreate 容器、丟掉可寫層裡的
+`/app/outputs`（autonomy 證據，**沒有** bind mount）。
+
+生產發布是**針對性檔案複製**，且因為 `src/` 是 bind mount，程式碼變更只需
+`docker compose restart`，不需要重建 image。完整程序、部署分級、驗證與
+rollback 見 `docs/runbooks/deployment.md`。
+
+### 8.3 受控變更證據工具（適用於兩者）
 
 ```bash
 # 1) pre-sync 產物（備份 + rollback + manifest）
@@ -165,8 +186,10 @@ make deploy-pre-sync-template CHANGE_ID=CHG-YYYYMMDD-XX
 # 2) drift check（部署前）
 make deploy-drift-check BASELINE=outputs/deploy_guard/snapshots/<baseline>.json
 
-# 3) 部署
-docker compose up -d --build hft-engine
+# 3) 部署 —— 依環境選擇機制：
+#    本機/開發： docker compose up -d --build hft-engine
+#    生產主機：  依 docs/runbooks/deployment.md 的部署分級
+#               （Class A 程式碼 = scp + docker compose restart hft-engine）
 
 # 4) drift check（部署後）
 make deploy-drift-check BASELINE=outputs/deploy_guard/snapshots/<baseline>.json
@@ -194,9 +217,11 @@ make wal-dlq-replay MAX_FILES=50
 ```
 
 ## 9. 相關文件
-- `docs/runbooks.md`
-- `docs/troubleshooting.md`
-- `docs/hft_low_latency_runbook.md`
+- `docs/runbooks/deployment.md` —— **生產部署程序（SoT）**：Deploy Laws、分級、驗證、rollback
+- `docs/operations/change-control.md` —— 變更單與證據工具
+- `docs/runbooks/README.md` —— runbook 索引
+- `docs/operations/troubleshooting.md`
+- `docs/runbooks/low-latency-tuning.md`
 
 ## 10. Azure Deployment ☁️
 If you plan to run the stack on Azure, you can follow these standardized steps:

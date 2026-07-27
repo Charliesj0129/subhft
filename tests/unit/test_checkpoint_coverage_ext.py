@@ -145,22 +145,24 @@ class TestRunLoopExceptionHandling:
 
         call_count = 0
 
+        # Stop on the second call rather than after a wall-clock delay. The old
+        # version slept 0.15 s and asserted `call_count >= 2`, betting that a
+        # 0.005 s loop got scheduled at least twice in that window — a bet the
+        # event loop loses whenever the machine is loaded (it failed under a
+        # parallel run on 2026-07-26). Counting the calls tests the same
+        # behaviour ("the loop survives a raising snapshot") with no clock in it.
         def failing_snapshot():
             nonlocal call_count
             call_count += 1
             if call_count == 1:
                 raise RuntimeError("simulated write failure")
+            writer.running = False
             return {}
 
         # Use the store's snapshot method to cause write_checkpoint to fail
         store.snapshot_positions = failing_snapshot
 
-        async def stop_after():
-            await asyncio.sleep(0.15)
-            writer.running = False
-
-        asyncio.create_task(stop_after())
-        await writer.run()
+        await asyncio.wait_for(writer.run(), timeout=5.0)
 
         # Should have survived the exception and eventually stopped
         assert writer.running is False

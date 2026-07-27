@@ -1122,8 +1122,13 @@ class HFTSystem:
             if _update_pool_metrics is not None:
                 try:
                     _update_pool_metrics()
-                except Exception:
-                    pass  # best-effort observability
+                except Exception as e:
+                    # QuoteConnectionPool.update_metrics() already counts and
+                    # logs its own failures (hft_quote_pool_metrics_*_total),
+                    # so reaching here means the pool object itself is broken.
+                    # Still non-fatal, but it must not be invisible: these
+                    # gauges are the only per-facade liveness signal there is.
+                    logger.warning("pool_metrics_update_failed", error=str(e))
 
             # Kill-switch file check (async to avoid blocking event loop)
             kill_switch_path = os.getenv("HFT_KILL_SWITCH_PATH", ".runtime/kill_switch")

@@ -35,7 +35,5 @@ def test_build_parser_registers_alpha_pipeline_when_research_present() -> None:
     from hft_platform.cli import _parser as parser_mod
 
     parser = parser_mod.build_parser()
-    args = parser.parse_args(
-        ["alpha", "pipeline", "triage", "--alpha-id", "x", "--owner", "y", "--data", "z"]
-    )
+    args = parser.parse_args(["alpha", "pipeline", "triage", "--alpha-id", "x", "--owner", "y", "--data", "z"])
     assert args.alpha_pipeline_cmd == "triage"

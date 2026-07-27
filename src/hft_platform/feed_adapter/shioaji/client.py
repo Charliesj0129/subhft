@@ -498,6 +498,14 @@ class ShioajiClient:
         self._session_refresh_thread: threading.Thread | None = None
         self._session_refresh_running = False
         self._session_refresh_check_interval_s = 3600.0  # Check every hour
+        # The refresh thread also owns re-login after a failed refresh, and an
+        # hourly poll meant a logged-out facade stayed dark for up to an hour
+        # before anything even noticed. Poll cheaply, evaluate the (unchanged)
+        # refresh schedule at the check interval. Retry backoff starts here and
+        # doubles, capped at the check interval; every attempt goes through the
+        # process-wide login slot, so a 60 s floor cannot re-create a 451 storm.
+        self._session_relogin_poll_s = float(os.getenv("HFT_SESSION_RELOGIN_POLL_S", "60"))
+        self._session_relogin_backoff_s = float(os.getenv("HFT_SESSION_RELOGIN_BACKOFF_S", "60"))
 
         # Holiday-aware session refresh (O4)
         self._session_refresh_holiday_aware = os.getenv("HFT_SESSION_REFRESH_HOLIDAY_AWARE", "1").strip().lower() in {
@@ -509,6 +517,17 @@ class ShioajiClient:
 
         # Post-refresh health check (O5)
         self._session_refresh_verify_timeout_s = float(os.getenv("HFT_SESSION_REFRESH_VERIFY_TIMEOUT_S", "10.0"))
+
+        # Cross-facade refresh staggering (2026-07-24 "451 Too Many Connections").
+        # Each facade refreshes on its own thread; without jitter their fixed
+        # check intervals stay phase-aligned from pool start-up and every facade
+        # re-logs-in within the same few hundred ms.
+        self._session_refresh_jitter_frac = float(os.getenv("HFT_SESSION_REFRESH_JITTER_FRAC", "0.15"))
+        self._session_refresh_stagger_gap_s = float(os.getenv("HFT_SESSION_REFRESH_STAGGER_S", "5.0"))
+        self._session_refresh_stagger_timeout_s = float(os.getenv("HFT_SESSION_REFRESH_STAGGER_TIMEOUT_S", "120.0"))
+        # Reconnects share the same slot but wait less for it: feed recovery is
+        # time-critical, so proceeding unserialised beats not reconnecting.
+        self._reconnect_stagger_timeout_s = float(os.getenv("HFT_RECONNECT_STAGGER_TIMEOUT_S", "60.0"))
 
         # Market open grace period (C4)
         self._market_open_grace_s = float(os.getenv("HFT_MARKET_OPEN_GRACE_S", "60"))  # 60 seconds
@@ -687,7 +706,14 @@ class ShioajiClient:
         )
 
     def _set_thread_alive_metric(self, thread_name: str, alive: bool) -> None:
-        _set_thread_alive_metric_impl(getattr(self, "metrics", None), thread_name, alive)
+        # conn_id is injected by QuoteConnectionPool onto each pooled client;
+        # standalone clients keep the placeholder.
+        _set_thread_alive_metric_impl(
+            getattr(self, "metrics", None),
+            thread_name,
+            alive,
+            str(getattr(self, "conn_id", "-")),
+        )
 
     def _update_quote_pending_metrics(self) -> None:
         self._quote_pending_stall_reported = _update_quote_pending_metrics_impl(

@@ -5,6 +5,9 @@
 | Workflow | Runbook |
 |----------|---------|
 | Alpha development (canonical, end-to-end) | [alpha-development-workflow.md](alpha-development-workflow.md) |
+| **Production deploy (canonical — Deploy Laws D1–D10)** | [deployment.md](deployment.md) |
+| Live-trading activation (`HFT_ORDER_MODE=live` red line) | [live-trading-activation-sop.md](live-trading-activation-sop.md) |
+| Daily pre-open / post-close checks | [daily-ops-checklist.md](daily-ops-checklist.md) |
 
 ## Alert → Runbook
 

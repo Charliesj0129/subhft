@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 import threading
+import time
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -106,12 +107,25 @@ def _make_fill(
 # add another DIFFERENT key.  Each individual mutation can land between
 # two `__next__` calls of an unprotected `for k in dict.items()` loop in
 # the reader — CPython detects size-change deltas and raises RuntimeError.
+#
+# Both the writer and its readers are bounded by ``_RACE_BUDGET_S`` as well as
+# by ``iterations``. The iteration count alone is a bet on how fast the machine
+# is: at 50 000 rounds these loops ran ~2 s idle but blew the 10 s pytest
+# timeout under a parallel run (2026-07-26). A race test only needs *many
+# interleavings*, and a wall-clock budget delivers those on any machine while
+# being incapable of timing the suite out. The iteration cap stays as the
+# early-exit for fast machines.
+_RACE_BUDGET_S = 2.0
+
+
 def _writer_loop(
     store: PositionStore,
     stop: threading.Event,
     iterations: int = 50000,
+    deadline: float | None = None,
 ) -> list[BaseException]:
     errors: list[BaseException] = []
+    deadline = time.monotonic() + _RACE_BUDGET_S if deadline is None else deadline
     try:
         # Pre-fill working set so reader iteration is non-trivial.
         with store._fill_lock:
@@ -120,7 +134,7 @@ def _writer_loop(
                 store.positions[key0] = Position("acct1", "strat1", f"WS{j}", net_qty=1)
         counter = 1000
         for _ in range(iterations):
-            if stop.is_set():
+            if stop.is_set() or time.monotonic() >= deadline:
                 break
             try:
                 # One mutation per acquire so reader has many windows to

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+import random
 import threading
 import time
 from dataclasses import dataclass
@@ -10,6 +11,13 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 from structlog import get_logger
 
 from hft_platform.core import timebase
+from hft_platform.feed_adapter.shioaji._infra import (
+    acquire_login_slot,
+    client_float,
+    refresh_sleep_s,
+    release_login_slot,
+    scrub_broker_error,
+)
 
 if TYPE_CHECKING:
     from hft_platform.feed_adapter.shioaji.client import ShioajiClient
@@ -201,7 +209,7 @@ class SessionRuntime:
                 )
                 c._record_api_latency("login", start_ns, ok=ok)
                 if not ok:
-                    c._last_login_error = str(err) if err is not None else "unknown"
+                    c._last_login_error = scrub_broker_error(err) if err is not None else "unknown"
                     if _is_connection_limit_error(c._last_login_error):
                         logger.error(
                             "Login rejected by broker connection limit; skipping fallback and immediate retry",
@@ -233,7 +241,7 @@ class SessionRuntime:
                             # running, leaving contracts_ready=False permanently.
                             ok = True
                         else:
-                            c._last_login_error = str(err_fb) if err_fb is not None else "unknown"
+                            c._last_login_error = scrub_broker_error(err_fb) if err_fb is not None else "unknown"
                             logger.error(
                                 "Login fallback (no-contract) failed",
                                 attempt=attempt,
@@ -289,7 +297,7 @@ class SessionRuntime:
                                 logger.info("CA activated")
                             except Exception as exc:
                                 c._record_api_latency("activate_ca", start_ns, ok=False)
-                                logger.error("CA activation failed", error=str(exc))
+                                logger.error("CA activation failed", error=scrub_broker_error(exc))
                     c.logged_in = True
                     c._last_session_refresh_ts = timebase.now_s()
                     c._release_session_lock()
@@ -359,13 +367,77 @@ class SessionRuntime:
                 c._set_thread_alive_metric("session_refresh", False)
                 return
 
-            while c.api and c.logged_in and c._session_refresh_running:
+            # `c.logged_in` is deliberately NOT part of this condition. A
+            # refresh that logs out and then fails to log back in (broker
+            # "code: 451, Too Many Connections", transient network) leaves it
+            # False, so having it here terminated the thread on the first
+            # failure and abandoned the facade until some unrelated path
+            # happened to restart it. On 2026-07-25 that stranded 1 of 4 quote
+            # facades for 24 h, silently dropping its 74 symbols through an
+            # entire night session while FeedState stayed CONNECTED.
+            check_interval_s = client_float(c, "_session_refresh_check_interval_s", 3600.0)
+            base_backoff_s = client_float(c, "_session_relogin_backoff_s", 60.0)
+            poll_s = min(client_float(c, "_session_relogin_poll_s", 60.0), check_interval_s)
+            jitter_frac = client_float(c, "_session_refresh_jitter_frac", 0.15)
+
+            relogin_attempts = 0
+            relogin_backoff_s = 0.0
+            relogin_next_ts = 0.0
+            # Start the schedule clock a full interval out so the poll quantum
+            # cannot pull the first refresh evaluation forward.
+            next_schedule_ts = timebase.now_s() + check_interval_s
+
+            while c.api and c._session_refresh_running:
                 try:
-                    time.sleep(c._session_refresh_check_interval_s)
+                    # Jitter each wake-up so facades brought up together by the
+                    # pool do not stay phase-aligned and re-login in lockstep.
+                    time.sleep(refresh_sleep_s(poll_s, jitter_frac, random.random))
                     if not c._session_refresh_running:
                         break
 
                     now = timebase.now_s()
+
+                    if not c.logged_in:
+                        # Recovery path. do_session_refresh() rebuilds the whole
+                        # facade (login -> callbacks -> resubscribe -> watchdog)
+                        # and already serialises on the process-wide login slot,
+                        # so retrying here cannot re-create the login storm that
+                        # caused the logout.
+                        if now < relogin_next_ts:
+                            continue
+                        relogin_attempts += 1
+                        logger.warning(
+                            "Session refresh thread found facade logged out; retrying login",
+                            attempt=relogin_attempts,
+                        )
+                        if self.do_session_refresh():
+                            logger.info(
+                                "Facade recovered after logged-out gap",
+                                attempts=relogin_attempts,
+                            )
+                            if c.metrics:
+                                c.metrics.session_refresh_total.labels(result="recovered").inc()
+                            relogin_attempts = 0
+                            relogin_backoff_s = 0.0
+                            relogin_next_ts = 0.0
+                        else:
+                            relogin_backoff_s = min(
+                                relogin_backoff_s * 2.0 if relogin_backoff_s else base_backoff_s,
+                                check_interval_s,
+                            )
+                            relogin_next_ts = timebase.now_s() + relogin_backoff_s
+                        continue
+
+                    relogin_attempts = 0
+                    relogin_backoff_s = 0.0
+                    relogin_next_ts = 0.0
+
+                    # Everything below is the preventive-refresh schedule, which
+                    # still runs once per check interval regardless of poll rate.
+                    if now < next_schedule_ts:
+                        continue
+                    next_schedule_ts = now + check_interval_s
+
                     now_dt = dt.datetime.fromtimestamp(timebase.now_s(), tz=calendar._tz)
 
                     # Skip refresh during active trading hours
@@ -428,19 +500,37 @@ class SessionRuntime:
         if not c.api:
             return False
 
+        # Hold the process-wide login slot across the whole logout/login cycle:
+        # the broker counts concurrent connections, so two facades overlapping
+        # here is what produced "code: 451, detail: Too Many Connections".
+        # A timeout returns False and we refresh anyway — a stale session is a
+        # worse failure than a 451 the retry path already recognises.
+        slot_held = acquire_login_slot(
+            min_gap_s=client_float(c, "_session_refresh_stagger_gap_s", 5.0),
+            timeout_s=client_float(c, "_session_refresh_stagger_timeout_s", 120.0),
+            metrics=c.metrics,
+        )
         try:
-            logger.info("Session refresh: logging out")
-            start_ns = time.perf_counter_ns()
             try:
-                c.api.logout()
-            except Exception as exc:
-                logger.warning("Session refresh logout failed", error=str(exc))
+                logger.info("Session refresh: logging out", serialised=slot_held)
+                start_ns = time.perf_counter_ns()
+                try:
+                    c.api.logout()
+                except Exception as exc:
+                    logger.warning("Session refresh logout failed", error=scrub_broker_error(exc))
 
-            c.logged_in = False
-            c._callbacks_registered = False
+                c.logged_in = False
+                c._callbacks_registered = False
 
-            logger.info("Session refresh: logging in")
-            self.login_with_retry()
+                logger.info("Session refresh: logging in")
+                self.login_with_retry()
+            finally:
+                # Released as soon as the connection is (re)established — the
+                # resubscribe and quote-verification below no longer contend for
+                # a broker connection slot, so holding it there would serialise
+                # the whole pool behind one facade's 10 s verify timeout.
+                if slot_held:
+                    release_login_slot()
 
             if c.logged_in:
                 c._last_session_refresh_ts = timebase.now_s()
@@ -477,7 +567,7 @@ class SessionRuntime:
                 logger.error("Session refresh failed: login unsuccessful")
                 return False
         except Exception as exc:
-            logger.error("Session refresh failed", error=str(exc))
+            logger.error("Session refresh failed", error=scrub_broker_error(exc))
             if c.metrics:
                 c.metrics.session_refresh_total.labels(result="error").inc()
             return False

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from hft_platform.feed_adapter.shioaji.session_runtime import (
     SessionRuntime,
@@ -269,6 +272,201 @@ def test_start_session_refresh_thread_starts_thread():
 
 
 # ------------------------------------------------------------------ #
+# Refresh-loop survival (regression: 2026-07-25 stranded facade)
+# ------------------------------------------------------------------ #
+
+
+def _capture_refresh_loop(client) -> object:
+    """Start the refresh thread with Thread mocked out, return the loop body."""
+    runtime = SessionRuntime(client)
+    with patch("hft_platform.feed_adapter.shioaji.session_runtime.threading.Thread") as mock_thread_cls:
+        runtime.start_session_refresh_thread()
+    return runtime, mock_thread_cls.call_args.kwargs["target"]
+
+
+def _loop_client(*, logged_in: bool, iterations: int) -> MagicMock:
+    """Client whose refresh loop stops itself after `iterations` wake-ups.
+
+    ``_fake_sleep`` also advances ``_now``, so the re-login backoff (which gates
+    on wall-clock) behaves the way it does in production instead of collapsing
+    to "every wake-up retries".
+    """
+    client = MagicMock()
+    client.api = MagicMock()
+    client.logged_in = logged_in
+    client._session_refresh_running = False
+    client._session_refresh_interval_s = 86400
+    client._session_refresh_check_interval_s = 3600
+    client._session_refresh_jitter_frac = 0.0
+    client._session_relogin_poll_s = 60.0
+    client._session_relogin_backoff_s = 60.0
+    client._session_refresh_holiday_aware = False
+    client._last_session_refresh_ts = 0.0
+    client._sleep_calls = 0
+    client._now = 0.0
+    client._sleep_durations = []
+
+    def _sleep(seconds: float) -> None:
+        client._sleep_calls += 1
+        client._sleep_durations.append(seconds)
+        client._now += seconds
+        if client._sleep_calls >= iterations:
+            client._session_refresh_running = False
+
+    client._fake_sleep = _sleep
+    return client
+
+
+@contextmanager
+def _run_loop(client):
+    """Patch sleep + clock for the captured refresh loop."""
+    with (
+        patch("hft_platform.feed_adapter.shioaji.session_runtime.time.sleep", client._fake_sleep),
+        patch(
+            "hft_platform.feed_adapter.shioaji.session_runtime.timebase.now_s",
+            side_effect=lambda: client._now,
+        ),
+    ):
+        yield
+
+
+def test_refresh_loop_retries_login_when_facade_logged_out():
+    """A failed refresh must not end the thread — it used to, stranding the facade.
+
+    Before the fix `c.logged_in` sat in the while-condition, so a facade that
+    failed to log back in was abandoned until the process restarted.
+    """
+    client = _loop_client(logged_in=False, iterations=2)
+    _runtime, loop = _capture_refresh_loop(client)
+
+    def _recover() -> bool:
+        client.logged_in = True
+        return True
+
+    with (
+        _run_loop(client),
+        patch.object(SessionRuntime, "do_session_refresh", side_effect=_recover) as mock_refresh,
+    ):
+        loop()
+
+    assert mock_refresh.call_count == 1
+    assert client.logged_in is True
+    client.metrics.session_refresh_total.labels.assert_any_call(result="recovered")
+
+
+def test_refresh_loop_keeps_retrying_while_relogin_keeps_failing():
+    client = _loop_client(logged_in=False, iterations=3)
+    _runtime, loop = _capture_refresh_loop(client)
+
+    with (
+        _run_loop(client),
+        patch.object(SessionRuntime, "do_session_refresh", return_value=False) as mock_refresh,
+    ):
+        loop()
+
+    # Wake-ups at t=60 and t=120 each clear the backoff gate (60s then 120s);
+    # the third observes the cleared stop flag and breaks.
+    assert mock_refresh.call_count == 2
+    assert client.logged_in is False
+
+
+def test_refresh_loop_exits_when_stop_flag_cleared():
+    client = _loop_client(logged_in=True, iterations=1)
+    _runtime, loop = _capture_refresh_loop(client)
+
+    with (
+        _run_loop(client),
+        patch.object(SessionRuntime, "do_session_refresh") as mock_refresh,
+    ):
+        loop()
+
+    mock_refresh.assert_not_called()
+    assert client._session_refresh_running is False
+    client._set_thread_alive_metric.assert_any_call("session_refresh", False)
+
+
+def test_relogin_retry_backs_off_from_seconds_not_the_check_interval():
+    """A logged-out facade must not wait the full hourly check interval.
+
+    The recovery branch originally slept ``_session_refresh_check_interval_s``
+    (3600s) before its first retry, so a facade that lost its session during a
+    session stayed dark for up to an hour carrying its whole symbol shard.
+    """
+    client = _loop_client(logged_in=False, iterations=1)
+    _runtime, loop = _capture_refresh_loop(client)
+
+    with (
+        _run_loop(client),
+        patch.object(SessionRuntime, "do_session_refresh", return_value=False),
+    ):
+        loop()
+
+    assert client._sleep_durations == [60.0]
+    assert max(client._sleep_durations) < client._session_refresh_check_interval_s
+
+
+def test_relogin_backoff_caps_at_check_interval():
+    """Doubling must stop at the check interval, never run away past it."""
+    client = _loop_client(logged_in=False, iterations=400)
+    _runtime, loop = _capture_refresh_loop(client)
+
+    attempt_times: list[float] = []
+
+    def _fail() -> bool:
+        attempt_times.append(client._now)
+        return False
+
+    with (
+        _run_loop(client),
+        patch.object(SessionRuntime, "do_session_refresh", side_effect=_fail),
+    ):
+        loop()
+
+    gaps = [b - a for a, b in zip(attempt_times, attempt_times[1:])]
+    assert gaps[0] == pytest.approx(60.0)
+    assert max(gaps) <= client._session_refresh_check_interval_s
+    # Late gaps have saturated at the cap rather than continuing to double.
+    assert gaps[-1] == pytest.approx(client._session_refresh_check_interval_s)
+
+
+def test_relogin_backoff_resets_after_successful_recovery():
+    """A recovered facade that logs out again retries from the base delay."""
+    client = _loop_client(logged_in=False, iterations=6)
+    _runtime, loop = _capture_refresh_loop(client)
+
+    attempt_times: list[float] = []
+    outcomes = [False, False, True]
+
+    def _refresh() -> bool:
+        attempt_times.append(client._now)
+        ok = outcomes.pop(0) if outcomes else False
+        client.logged_in = ok
+        return ok
+
+    # The facade loses its session again shortly after recovering.
+    base_sleep = client._fake_sleep
+
+    def _sleep(seconds: float) -> None:
+        base_sleep(seconds)
+        if client._now >= 300.0:
+            client.logged_in = False
+
+    client._fake_sleep = _sleep
+
+    with (
+        _run_loop(client),
+        patch.object(SessionRuntime, "do_session_refresh", side_effect=_refresh),
+    ):
+        loop()
+
+    assert attempt_times == [60.0, 120.0, 240.0, 300.0]
+    # Backoff had grown to 120s before the success at t=240; afterwards the
+    # next logged-out wake-up retries at the base poll instead of waiting 240s.
+    assert attempt_times[2] - attempt_times[1] == 120.0
+    assert attempt_times[3] - attempt_times[2] == 60.0
+
+
+# ------------------------------------------------------------------ #
 # Snapshot helper
 # ------------------------------------------------------------------ #
 
@@ -288,3 +486,107 @@ def test_snapshot_returns_correct_fields():
     assert snap.reconnect_backoff_s == 30.0
     assert snap.last_login_error == "timeout"
     assert snap.last_reconnect_error is None
+
+
+# ------------------------------------------------------------------ #
+# Cross-facade login staggering (2026-07-24 "451 Too Many Connections")
+# ------------------------------------------------------------------ #
+
+
+def _refresh_client() -> MagicMock:
+    client = MagicMock()
+    client.api = MagicMock()
+    client.tick_callback = None
+    client.metrics = MagicMock()
+    client.metrics.session_refresh_total.labels.return_value = MagicMock()
+    return client
+
+
+def test_session_refresh_holds_login_slot_across_logout_and_login():
+    """The slot must span logout->login: that whole window holds a connection."""
+    client = _refresh_client()
+    client.api.logout.side_effect = lambda: events.append("logout")
+    events: list[str] = []
+
+    runtime = SessionRuntime(client)
+
+    with (
+        patch(
+            "hft_platform.feed_adapter.shioaji.session_runtime.acquire_login_slot",
+            side_effect=lambda **_: events.append("acquire") or True,
+        ),
+        patch(
+            "hft_platform.feed_adapter.shioaji.session_runtime.release_login_slot",
+            side_effect=lambda: events.append("release"),
+        ),
+        patch.object(SessionRuntime, "login_with_retry", side_effect=lambda: events.append("login")),
+    ):
+        runtime.do_session_refresh()
+
+    assert events == ["acquire", "logout", "login", "release"]
+
+
+def test_session_refresh_releases_login_slot_when_login_raises():
+    """A raising login must not strand the slot and wedge every other facade."""
+    client = _refresh_client()
+    runtime = SessionRuntime(client)
+
+    with (
+        patch(
+            "hft_platform.feed_adapter.shioaji.session_runtime.acquire_login_slot",
+            return_value=True,
+        ),
+        patch("hft_platform.feed_adapter.shioaji.session_runtime.release_login_slot") as mock_release,
+        patch.object(SessionRuntime, "login_with_retry", side_effect=RuntimeError("login blew up")),
+    ):
+        assert runtime.do_session_refresh() is False
+
+    mock_release.assert_called_once()
+
+
+def test_session_refresh_proceeds_unserialised_when_slot_times_out():
+    """Timing out on the slot must still refresh — a stale session is worse."""
+    client = _refresh_client()
+    runtime = SessionRuntime(client)
+
+    def _login() -> bool:
+        # do_session_refresh clears logged_in before logging in; a real login
+        # sets it back, so the mock has to as well or the refresh reads as failed.
+        client.logged_in = True
+        return True
+
+    with (
+        patch(
+            "hft_platform.feed_adapter.shioaji.session_runtime.acquire_login_slot",
+            return_value=False,
+        ),
+        patch("hft_platform.feed_adapter.shioaji.session_runtime.release_login_slot") as mock_release,
+        patch.object(SessionRuntime, "login_with_retry", side_effect=_login) as mock_login,
+    ):
+        assert runtime.do_session_refresh() is True
+
+    mock_login.assert_called_once()
+    client.api.logout.assert_called_once()
+    # Never release a slot we do not hold: that would free another facade's.
+    mock_release.assert_not_called()
+
+
+def test_session_refresh_passes_configured_stagger_settings_to_slot():
+    client = _refresh_client()
+    client._session_refresh_stagger_gap_s = 7.5
+    client._session_refresh_stagger_timeout_s = 90.0
+    runtime = SessionRuntime(client)
+
+    with (
+        patch(
+            "hft_platform.feed_adapter.shioaji.session_runtime.acquire_login_slot",
+            return_value=True,
+        ) as mock_acquire,
+        patch("hft_platform.feed_adapter.shioaji.session_runtime.release_login_slot"),
+        patch.object(SessionRuntime, "login_with_retry", return_value=True),
+    ):
+        runtime.do_session_refresh()
+
+    kwargs = mock_acquire.call_args.kwargs
+    assert kwargs["min_gap_s"] == 7.5
+    assert kwargs["timeout_s"] == 90.0

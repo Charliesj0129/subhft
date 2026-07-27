@@ -182,6 +182,20 @@ services:
       - ./.hft-runtime:/var/run/hft
       # Backup mount: BackupManager._cleanup_old_backups walks Path(/backups); without this mount cleanup silently no-ops (root cause of unbounded daily backup growth, 2026-05-19).
       - ${CH_BACKUP_PATH:-./backups/clickhouse}:/backups
+      # Autonomy evidence + persisted re-arm state. The engine's CWD is /app, so
+      # without this mount they live in the container's writable layer and any
+      # `up -d`/`--force-recreate` destroys them — on 2026-07-25 six days of
+      # evidence (20260719–20260724) had to be rescued with `docker cp` before a
+      # recreate could be considered.
+      #
+      # BEFORE ENABLING THIS ON AN EXISTING HOST: check the host-side
+      # outputs/production_rollout/autonomy/runtime_state.json. A stray host-side
+      # `pytest`/`hft ops` run writes that CWD-relative path, and once mounted the
+      # engine reads it as real state — a 2026-07-08 test artifact on THESHOW held
+      # reason="test_reason" plus phantom strat1/strat_a manual-rearm latches.
+      # Move any such file aside first, then `docker cp` the container's real copy
+      # into place. See docs/runbooks/WALDiskPressureCritical.md.
+      - ./outputs:/app/outputs
     deploy:
       resources:
         limits:

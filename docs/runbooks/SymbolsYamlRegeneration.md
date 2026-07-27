@@ -49,8 +49,23 @@ git add config/symbols.yaml
 git commit -m "chore(symbols): regenerate config/symbols.yaml after contract roll"
 git push
 
-# On the deploy host:
-ssh ops@<host> 'cd /home/charl/subhft && git pull && docker compose restart hft-engine'
+# On the deploy host: DO NOT `git pull`.
+# The host worktree is permanently divergent and its config/symbols.yaml is
+# operator-canonical — a pull silently reverts it. This is a Class A deploy;
+# follow docs/runbooks/deployment.md (Deploy Laws D3/D4/D6).
+
+# 1. D3 — see what the host copy actually contains before overwriting it:
+scp charl@100.91.176.126:/home/charl/subhft/config/symbols.yaml /tmp/host_symbols.yaml
+diff -u /tmp/host_symbols.yaml config/symbols.yaml     # review EVERY line that differs
+
+# 2. D4 — back it up on the host:
+ssh charl@100.91.176.126 'cd /home/charl/subhft && \
+  mkdir -p ~/deploy_backup_$(date -u +%Y%m%d)/symbols && \
+  cp -p config/symbols.yaml ~/deploy_backup_$(date -u +%Y%m%d)/symbols/'
+
+# 3. Copy and restart (D6 — `restart`, never `up -d`):
+scp config/symbols.yaml charl@100.91.176.126:/home/charl/subhft/config/symbols.yaml
+ssh charl@100.91.176.126 'cd /home/charl/subhft && docker compose restart hft-engine'
 ```
 
 ## Verification

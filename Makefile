@@ -28,11 +28,15 @@ feature-parity: build-rust ## Run cross-path feature parity gate (Python/Rust/hf
 # Testing
 # ============================================================================
 
+# Sharded across cores (see test-unit-ci for why). -q rather than -v: with
+# workers interleaving output, per-test lines arrive out of order and are more
+# noise than signal — use `make test-file` / `make test-node` when you want to
+# watch an individual test.
 test: ## Run unit tests
-	uv run pytest tests/unit -v --tb=short
+	uv run pytest tests/unit -q --tb=short -n auto --dist worksteal
 
 test-all: ## Run all tests (unit + integration)
-	uv run pytest tests/ -v --tb=short
+	uv run pytest tests/ -q --tb=short -n auto --dist worksteal
 
 test-integration: ## Run integration tests only
 	uv run pytest tests/integration -v --tb=short -m "not slow" --no-cov
@@ -47,7 +51,7 @@ test-collect: ## Verify all tests can be collected (no import errors)
 	uv run pytest tests/unit --collect-only -q
 
 coverage: ## Run tests with coverage (70% minimum)
-	uv run pytest tests/unit --cov-fail-under=70
+	uv run pytest tests/unit --cov-fail-under=70 -q -n auto --dist worksteal
 
 coverage-html: ## Generate HTML coverage report
 	uv run pytest tests/unit --cov-report=html:htmlcov
@@ -236,8 +240,15 @@ ci: format-check lint typecheck dependency-boundary test-hygiene-check coverage 
 .PHONY: research-feature-benchmark-matrix render-research-promotion-report security-audit
 .PHONY: render-incident-timeline-json render-incident-timeline-md
 
+# -n auto --dist worksteal: the unit suite is ~14.4k tests and was the whole CI
+# critical path at ~20 min wall / 34 s setup. Sharding it across the runner's
+# cores takes it to ~3 min with identical coverage (87.9%), because the work is
+# CPU-bound and process-isolated. worksteal (not the default loadscheduling)
+# keeps every worker busy to the end instead of leaving one shard straggling.
+# pytest-cov combines the per-worker data files itself, so the branch and
+# domain coverage gates below are unaffected.
 test-unit-ci: ## Run unit tests in CI mode and emit coverage.xml
-	uv run pytest tests/unit -q --cov=src/hft_platform --cov-report=term-missing --cov-report=xml --timeout=10 -p no:hypothesis -p no:faulthandler
+	uv run pytest tests/unit -q -n auto --dist worksteal --cov=src/hft_platform --cov-report=term-missing --cov-report=xml --timeout=10 -p no:hypothesis -p no:faulthandler
 
 coverage-branch-gate: ## Enforce minimum coverage threshold from latest unit-test run
 	uv run coverage report --fail-under=70
@@ -255,7 +266,7 @@ test-clickhouse-writer-smoke: ## Smoke test ClickHouse writer roundtrip path
 	uv run pytest tests/system/test_clickhouse_writer.py::test_clickhouse_writer_roundtrip --no-cov -q
 
 perf-gate-default: ## Lightweight perf regression gate for default CI profile
-	uv run python tests/benchmark/perf_regression_gate.py --runs 1 --json risk_perf_gate.json
+	uv run python tests/benchmark/perf_regression_gate.py --runs 3 --json risk_perf_gate.json
 
 perf-gate-recorder-io: ## Nightly perf gate: recorder I/O heavy drills
 	uv run python tests/benchmark/perf_regression_gate.py --runs 1 --include-recorder-io --json recorder_perf_gate.json

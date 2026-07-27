@@ -91,6 +91,120 @@ docker compose down hft-engine
 docker compose up -d hft-engine
 ```
 
+### `code: 451, detail: Too Many Connections` during session refresh
+
+Symptom, seen on THESHOW 2026-07-24/25: several facades log
+`Session refresh: logging out` within a few hundred milliseconds of each other,
+then one or more report
+
+```
+login: ... code: 451, detail: Too Many Connections.
+Login retries exhausted
+Session refresh failed: login unsuccessful
+```
+
+Cause: every quote facade runs its own session-refresh thread, and the pool
+starts them together, so their check sleeps stay phase-aligned forever. That
+interval is a hardcoded `3600.0` s (`client.py`,
+`_session_refresh_check_interval_s`) — there is **no** env var for it, so it
+cannot be de-synchronised by configuration. The broker counts concurrent
+connections and rejects the losers. On a holiday/weekend the holiday-aware
+branch refreshes hourly, so this repeats every hour.
+
+Fixed 2026-07-25 by two independent defences:
+
+- **Jitter** — each facade's wake-up is scaled by ±`HFT_SESSION_REFRESH_JITTER_FRAC`
+  (default `0.15`), so arrivals spread out instead of staying in lockstep.
+- **Login slot** — a process-wide slot serialises the logout→login window and
+  spaces consecutive logins by `HFT_SESSION_REFRESH_STAGGER_S` (default `5`
+  seconds). If it cannot be taken within `HFT_SESSION_REFRESH_STAGGER_TIMEOUT_S`
+  (default `120`), the refresh proceeds anyway and
+  `shioaji_login_slot_timeouts_total` increments — a stale session is a worse
+  failure than a 451 the retry path already recognises.
+
+Check whether the fix is deployed:
+
+```bash
+curl -s localhost:9090/metrics | grep shioaji_login_slot_timeouts_total
+# absent  -> engine predates the fix
+# present -> deployed; a rising counter means the slot is contended for >120s,
+#            which points at a genuinely slow login, not at staggering
+docker compose logs hft-engine --since 24h | grep 'Staggering broker login'
+```
+
+The slot only spans a single process. Two engine containers sharing one broker
+account can still collide — that is what `shioaji_session_lock_conflicts_total`
+and the `.state` session lock are for.
+
+### A facade stays logged out for hours after one failed refresh
+
+Symptom: one `conn_id` sits at `hft_quote_conn_logged_in=0` and its
+`hft_quote_conn_last_data_age_s` climbs without bound, while
+`FeedState` still reports `CONNECTED` and no alert fires.
+
+Cause (root-caused on THESHOW 2026-07-25, one facade dark for 24 h across a
+whole night session): `_refresh_loop` had `c.logged_in` in its `while`
+condition. A refresh logs out and then logs back in, so a login failure — the
+451 above — leaves `logged_in` False, the loop condition goes false, and the
+**thread exits permanently**. `do_session_refresh()`'s return value was
+discarded, so nothing noticed. Recovery then depended entirely on the reconnect
+orchestrator's schedule (`HFT_RECONNECT_DAYS`, `HFT_RECONNECT_HOURS*`); outside
+those windows — weekends, and the Friday night session that runs past midnight
+into Saturday — the facade was simply abandoned until the next process restart.
+
+Why nothing alerted:
+
+| Signal | Why it missed this |
+|---|---|
+| `FeedGapCritical` | `rate(feed_events_total)` is pool-wide; the other 3 facades kept it non-zero |
+| `hft_quote_conn_subscribed_count` | holds `len(subscribed_codes)` from the last successful subscribe, which survives a logout — so a dead facade still shows 74 |
+| `ShioajiLoginFailuresDetected` | `increase(...[10m])`, so it self-resolved 10 min in while the outage ran 24 h |
+| `shioaji_thread_alive{thread="session_refresh"}` | went to 0 correctly — but had no alert on it |
+
+Fixed 2026-07-26: the loop no longer treats `logged_in` as a termination
+condition and re-drives `do_session_refresh()` (which restores login,
+callbacks, subscriptions and the watchdog) until the facade is back, counting
+recoveries as `session_refresh_total{result="recovered"}`. It polls every
+`HFT_SESSION_RELOGIN_POLL_S` (60 s) so a logout is noticed in a minute rather
+than up to an hour, and retries on a backoff from
+`HFT_SESSION_RELOGIN_BACKOFF_S` (60 s) doubling to the hourly check interval.
+Every attempt still takes the process-wide login slot, so recovery cannot
+re-create the storm. The preventive-refresh schedule itself is unchanged — it
+is still evaluated once per check interval.
+
+**The quote watchdog had the identical defect** (`while c.api and c.logged_in`)
+and is fixed the same way, because `do_session_refresh` clears `logged_in`
+before re-logging in and only restarts the watchdog from inside `if
+c.logged_in:`. Until 2026-07-26 a failed refresh therefore killed *both* of a
+facade's threads at once, which is why nothing local recovered `conn_id=3`.
+
+Alerts `QuoteFacadeDataStalled` and `ShioajiSessionRefreshThreadDown` cover the
+gap — both verified against this incident's data. Note that
+`shioaji_thread_alive` is labelled by `conn_id`; before that label existed all
+four pooled facades shared one series on a last-writer-wins basis, which also
+made the older `ShioajiWatchdogThreadDown` unreliable.
+
+```bash
+# is the fix deployed?
+curl -s localhost:9090/metrics | grep 'session_refresh_total.*recovered'
+curl -s localhost:9090/metrics | grep '^shioaji_thread_alive'   # expect one series per conn_id
+docker compose logs hft-engine --since 24h | grep -E 'found facade logged out|Facade recovered'
+```
+
+### The per-facade gauges themselves stop updating
+
+`hft_quote_conn_{logged_in,last_data_age_s,subscribed_count,state}` are written
+only by `QuoteConnectionPool.update_metrics()`, from the metrics loop in
+`services/system.py`. If that publisher throws it does **not** make the gauges
+go absent — they freeze at their last value, and a frozen `last_data_age_s`
+below 300 silently disables `QuoteFacadeDataStalled`, the only per-shard
+liveness alert. `QuotePoolMetricsPublisherStalled` watches for this.
+
+```bash
+curl -s localhost:9090/metrics | grep hft_quote_pool_metrics_   # published_total must climb
+docker compose logs hft-engine --since 1h | grep -E 'quote_pool_metrics_publish_failed|pool_metrics_update_failed'
+```
+
 ## Rollback
 
 No configuration rollback needed. If reconnect parameters were changed:

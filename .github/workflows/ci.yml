@@ -239,7 +239,6 @@ jobs:
     name: Rust Build & Lint
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    needs: lint
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
 
@@ -279,7 +278,6 @@ jobs:
     name: 🔬 Type Check
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    needs: lint
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
       - uses: ./.github/actions/setup-python-uv
@@ -294,7 +292,6 @@ jobs:
     name: Dependency Boundary
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: lint
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
 
@@ -313,7 +310,6 @@ jobs:
     name: 🚫 Forced Promotions Out of Live Config
     runs-on: ubuntu-latest
     timeout-minutes: 2
-    needs: lint
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
 
@@ -346,7 +342,15 @@ jobs:
     name: 🧪 Tests & Coverage
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: [typecheck, rust, dependency-boundary]
+    # Deliberately depends on nothing. It used to sit behind
+    # lint → [typecheck, rust, dependency-boundary], none of which it consumes:
+    # it builds its own Rust extension via ./.github/actions/setup-rust, so those
+    # edges were pure sequencing. They cost ~4.5 min of critical path on every
+    # run, and worse, they made a lint failure *skip* the tests entirely. On
+    # 2026-07-26 a stale `ruff format` diff had kept lint red on main for days,
+    # so the unit suite had silently not run at all — long enough for an
+    # os._exit(70) watchdog leak to accumulate undetected. A test gate that
+    # disappears when an unrelated gate fails is not a gate.
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
       - uses: ./.github/actions/setup-python-uv
@@ -767,7 +771,6 @@ jobs:
     name: 🔒 Security Scan
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    needs: lint
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:

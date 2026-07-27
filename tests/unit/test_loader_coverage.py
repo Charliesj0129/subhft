@@ -29,6 +29,7 @@ from hft_platform.recorder._loader_wal import (
     extract_file_ts,
     get_new_files,
     load_manifest,
+    manifest_sidecar_dir,
     mark_processed,
     parse_batch_table_name,
     parse_table_from_filename,
@@ -197,7 +198,15 @@ class TestManifest:
         load_manifest(svc)
         assert "stuck.jsonl" not in svc._manifest
 
+    def _archive(self, svc, *names: str) -> None:
+        """Entries survive save_manifest only while their file still exists."""
+        os.makedirs(svc.archive_dir, exist_ok=True)
+        for name in names:
+            with open(os.path.join(svc.archive_dir, name), "w") as f:
+                f.write("{}\n")
+
     def test_save_manifest(self, svc):
+        self._archive(svc, "a.jsonl", "b.jsonl")
         svc._manifest = {"a.jsonl", "b.jsonl"}
         save_manifest(svc)
         assert os.path.exists(svc._manifest_path)
@@ -207,11 +216,17 @@ class TestManifest:
         assert "b.jsonl" in content
 
     def test_save_manifest_with_existing_backup(self, svc):
+        self._archive(svc, "a.jsonl", "b.jsonl")
         svc._manifest = {"a.jsonl"}
         save_manifest(svc)
         svc._manifest = {"a.jsonl", "b.jsonl"}
         save_manifest(svc)  # Should create backup
-        assert os.path.exists(svc._manifest_path + ".bak")
+        # Sidecars live in manifest.d/ so DiskPressureMonitor cannot count them.
+        bak = os.path.join(
+            manifest_sidecar_dir(svc._manifest_path),
+            os.path.basename(svc._manifest_path) + ".bak",
+        )
+        assert os.path.exists(bak)
 
 
 # ---------------------------------------------------------------------------

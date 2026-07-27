@@ -509,9 +509,32 @@ class QuoteRuntime:
         )
 
         def _watch() -> None:
+            # `c.logged_in` is deliberately NOT the loop condition. A session
+            # refresh clears it before re-logging in (session_runtime.py), and
+            # the 5 s watchdog interval is shorter than the ~6 s login, so this
+            # thread reliably woke inside that window and exited. It is only
+            # restarted from inside `if c.logged_in:` on the refresh path, so a
+            # failed re-login left the facade with no stall detection at all —
+            # the same way its session-refresh thread was lost on 2026-07-25,
+            # when one facade went silent for 24 h carrying 74 symbols.
+            was_logged_out = False
             try:
-                while c.api and c.logged_in:
+                while c.api and c._quote_watchdog_running:
                     time.sleep(c._quote_watchdog_interval_s)
+                    if not c._quote_watchdog_running:
+                        break
+                    if not c.logged_in:
+                        # Re-login belongs to the session-refresh thread. Stall
+                        # detection here would only queue resubscribes that
+                        # cannot succeed while the facade has no session.
+                        was_logged_out = True
+                        continue
+                    if was_logged_out:
+                        # The refresh path has just re-subscribed. Do not count
+                        # the logged-out gap as a quote stall.
+                        was_logged_out = False
+                        c._last_quote_data_ts = timebase.now_s()
+                        continue
                     c._update_quote_pending_metrics()
                     last = c._last_quote_data_ts
                     if last <= 0:

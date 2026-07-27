@@ -107,13 +107,63 @@ groups:
         runbook_url: "docs/runbooks/ShioajiWatchdogThreadDown.md"
 
   - alert: ShioajiPendingQuoteStall
-    expr: shioaji_quote_pending_age_seconds > 300
+    expr: shioaji_quote_pending_age_seconds > 300 and on() market_trading_hours_active == 1
     for: 5m
     labels:
         severity: warning
     annotations:
         summary: "Shioaji pending quote state stalled"
-        description: "pending_quote_resubscribe age > 300s for more than 5m."
+        description: "pending_quote_resubscribe age > 300s for more than 5m during trading hours. The age gauge counts up continuously from the last session close, so this rule is gated on market_trading_hours_active (calendar-aware, holidays included) — without that gate it fired every weekend and holiday."
+
+  - alert: QuoteFacadeLoggedOut
+    expr: (count(hft_quote_conn_logged_in) - sum(hft_quote_conn_logged_in)) > 0 and on() market_trading_hours_active == 1
+    for: 5m
+    labels:
+        severity: warning
+    annotations:
+        summary: "A quote facade is logged out during trading hours"
+        description: "At least one quote connection reports hft_quote_conn_logged_in=0 while the market is open. FeedState stays CONNECTED as long as any facade is up, so a partially logged-out pool silently loses whatever symbols that facade carried. Expressed as count-minus-sum so it adapts to the configured pool size instead of hardcoding 4."
+        runbook_url: "docs/runbooks/feed-reconnect.md"
+
+  - alert: QuotePoolFullyUnsubscribed
+    expr: sum(hft_quote_conn_subscribed_count) == 0 and on() market_trading_hours_active == 1
+    for: 2m
+    labels:
+        severity: critical
+    annotations:
+        summary: "Quote pool holds zero subscriptions during trading hours"
+        description: "Every quote connection reports subscribed_count=0 while the market is open — the engine is connected but receiving nothing. FeedState=CONNECTED does not catch this."
+        runbook_url: "docs/runbooks/feed-reconnect.md"
+
+  - alert: QuoteFacadeDataStalled
+    expr: hft_quote_conn_last_data_age_s > 300 and on() market_trading_hours_active == 1
+    for: 5m
+    labels:
+        severity: critical
+    annotations:
+        summary: "A quote facade has delivered no data for >5m during trading hours"
+        description: "Per-connection liveness. FeedGapCritical only sees rate(feed_events_total), which stays healthy while any facade still ticks, and hft_quote_conn_subscribed_count holds len(subscribed_codes) from the last successful subscribe, which simply persists across a logout — so it stays at 74 even for a dead facade. This gauge is the only signal that catches a facade which is logged in but silent. Measured 2026-07-22..26: healthy facades sit at p95 < 1s during trading hours, so 300s has no observed false-positive. It is only as good as its publisher — see QuotePoolMetricsPublisherStalled."
+        runbook_url: "docs/runbooks/feed-reconnect.md"
+
+  - alert: QuotePoolMetricsPublisherStalled
+    expr: rate(hft_quote_pool_metrics_published_total[5m]) == 0 and on() market_trading_hours_active == 1
+    for: 5m
+    labels:
+        severity: critical
+    annotations:
+        summary: "Per-connection quote metrics are no longer being published"
+        description: "QuoteConnectionPool.update_metrics() is the sole writer of hft_quote_conn_{logged_in,last_data_age_s,subscribed_count,state}. If it stops, those gauges freeze at their last value rather than going stale-absent, so a frozen last_data_age_s below 300 silently disables QuoteFacadeDataStalled — the detector fails exactly the way the 2026-07-25 facade did. This rule watches the detector itself."
+        runbook_url: "docs/runbooks/feed-reconnect.md"
+
+  - alert: ShioajiSessionRefreshThreadDown
+    expr: max_over_time(shioaji_thread_alive{thread="session_refresh"}[5m]) < 1
+    for: 10m
+    labels:
+        severity: critical
+    annotations:
+        summary: "Shioaji session refresh thread is dead"
+        description: "The preventive session-refresh thread exited. It owns re-login after a failed refresh, so once it is gone the facade cannot recover on its own. Deliberately NOT gated on market_trading_hours_active: the thread dying while the market is shut is exactly the case that stranded a facade for 24h on 2026-07-25, and it must be fixed before the next open."
+        runbook_url: "docs/runbooks/feed-reconnect.md"
 
   - alert: ShioajiLoginFailuresDetected
     expr: increase(shioaji_login_fail_total[10m]) > 0
@@ -469,7 +519,8 @@ groups:
         description: "ClickHouse heartbeat failed for >2m. Engine may be falling back to WAL-only writes."
         runbook_url: "docs/runbooks/ClickHouseConnectionDown.md"
 
-  # WAL disk pressure
+  # WAL disk pressure — WAL directory size (DiskPressureMonitor is the only writer
+  # of disk_pressure_level; WAL writers report free space separately below)
   - alert: WALDiskPressureCritical
     expr: disk_pressure_level >= 2
     for: 30s
@@ -478,6 +529,19 @@ groups:
     annotations:
         summary: "WAL disk pressure critical"
         description: "WAL disk pressure at CRITICAL or HALT level. Data may be dropped."
+        runbook_url: "docs/runbooks/WALDiskPressureCritical.md"
+
+  # WAL free-space circuit breaker — distinct from the size-based level above.
+  # Previously invisible: the WAL writers signalled free-space pressure by
+  # overwriting disk_pressure_level, which clobbered DiskPressureMonitor's value.
+  - alert: WALDiskCircuitBreakerActive
+    expr: max(wal_disk_circuit_breaker_active) > 0
+    for: 1m
+    labels:
+        severity: critical
+    annotations:
+        summary: "WAL writer free-space circuit breaker tripped"
+        description: "A WAL writer tripped its free-space circuit breaker (HFT_WAL_DISK_MIN_MB). Check wal_disk_available_mb — this is free disk, not WAL directory size."
         runbook_url: "docs/runbooks/WALDiskPressureCritical.md"
 
   # Pipeline dual-fault (CH + WAL both failed)

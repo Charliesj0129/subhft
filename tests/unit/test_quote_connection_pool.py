@@ -355,6 +355,51 @@ class TestQuoteConnectionPoolMetrics:
         pool.update_metrics()
         assert pool._clients[0].subscribed_count == 15
 
+    def test_publisher_counts_failures_without_raising(self, tmp_path):
+        """A throwing publisher must stay non-fatal but stop being invisible.
+
+        Every per-connection gauge is written here and nowhere else, and the
+        caller swallows exceptions. Without a counter, a publisher that throws
+        every tick freezes hft_quote_conn_last_data_age_s at its last value —
+        and a frozen value under the threshold silently disables
+        QuoteFacadeDataStalled, the only per-shard liveness alert there is.
+        """
+        from hft_platform.feed_adapter.shioaji import quote_connection_pool as qcp
+
+        symbols = [{"code": "TXFC0", "exchange": "TAIFEX", "group": 0}]
+        sym_path = tmp_path / "symbols.yaml"
+        sym_path.write_text(yaml.safe_dump({"symbols": symbols}))
+        pool = qcp.QuoteConnectionPool(str(sym_path), {}, num_conns=1)
+
+        class _ExplodingSlots:
+            def __len__(self):
+                return 1
+
+            def __iter__(self):
+                raise RuntimeError("boom")
+
+        published = mock.MagicMock()
+        errors = mock.MagicMock()
+        pool._slots = _ExplodingSlots()
+
+        with (
+            mock.patch.object(qcp, "_METRIC_PUBLISHED", published),
+            mock.patch.object(qcp, "_METRIC_PUBLISH_ERRORS", errors),
+        ):
+            pool.update_metrics()  # must not raise
+            pool.update_metrics()
+
+            assert errors.inc.call_count == 2
+            published.inc.assert_not_called()
+            assert pool._metrics_publish_failed is True
+
+            # Recovery is counted again and the failure state clears.
+            pool._slots = []
+            pool.update_metrics()
+
+        assert published.inc.call_count == 1
+        assert pool._metrics_publish_failed is False
+
 
 class TestQuoteConnectionPoolDuckTypeMethods:
     """Test duck-type methods: reconnect, resubscribe, fetch_snapshots, reload_symbols."""

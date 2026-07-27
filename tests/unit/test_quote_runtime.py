@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import dataclasses
 import threading
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from hft_platform.feed_adapter.shioaji.quote_runtime import (
     QuoteEventHandler,
     QuotePendingState,
+    QuoteRuntime,
     QuoteRuntimeSnapshot,
 )
 
@@ -362,3 +364,126 @@ class TestValidateQuoteSchemaExchangeSpoof:
         assert type(exchange) is not str
         with pytest.raises(TypeError):
             _ = "/" in exchange
+
+
+# ------------------------------------------------------------------ #
+# Watchdog survival (regression: 2026-07-25 stranded facade)
+# ------------------------------------------------------------------ #
+
+
+def _watchdog_client(*, logged_in: bool, iterations: int) -> MagicMock:
+    """Client whose watchdog loop stops itself after `iterations` wake-ups."""
+    client = MagicMock()
+    client.api = MagicMock()
+    client.logged_in = logged_in
+    client._quote_watchdog_running = False
+    client._quote_watchdog_interval_s = 5.0
+    client._quote_no_data_s = 30.0
+    client._last_quote_data_ts = 0.0
+    client._quote_version = "v1"
+    client._quote_version_mode = "v1"
+    client._quote_version_strict = True
+    client._is_market_open_grace_period.return_value = False
+    client._allow_quote_recovery.return_value = False
+    client.tick_callback = None
+    client._sleep_calls = 0
+
+    def _sleep(_seconds: float) -> None:
+        client._sleep_calls += 1
+        if client._sleep_calls >= iterations:
+            client._quote_watchdog_running = False
+
+    client._fake_sleep = _sleep
+    return client
+
+
+def _capture_watchdog(client) -> object:
+    """Start the watchdog with Thread mocked out, return the loop body."""
+    runtime = QuoteRuntime(client)
+    with patch("hft_platform.feed_adapter.shioaji.quote_runtime.threading.Thread") as mock_thread_cls:
+        runtime.start_quote_watchdog()
+    return mock_thread_cls.call_args.kwargs["target"]
+
+
+def test_quote_watchdog_survives_facade_logout():
+    """A logged-out facade must not kill the watchdog thread.
+
+    ``do_session_refresh`` clears ``logged_in`` before re-logging in, and the
+    5s watchdog interval is shorter than a ~6s login, so ``while c.logged_in``
+    reliably terminated this thread. It is only restarted from inside
+    ``if c.logged_in:``, so a failed re-login left the facade with no stall
+    detection at all — half of the 2026-07-25 24h outage.
+    """
+    client = _watchdog_client(logged_in=False, iterations=3)
+    watch = _capture_watchdog(client)
+
+    with patch("hft_platform.feed_adapter.shioaji.quote_runtime.time.sleep", client._fake_sleep):
+        watch()
+
+    # It kept looping while logged out instead of exiting on the first check.
+    assert client._sleep_calls == 3
+    client._update_quote_pending_metrics.assert_not_called()
+
+
+def test_quote_watchdog_skips_stall_checks_while_logged_out():
+    """No stall detection or recovery may run against a session-less facade."""
+    client = _watchdog_client(logged_in=False, iterations=2)
+    client._last_quote_data_ts = 1.0
+    watch = _capture_watchdog(client)
+
+    with patch("hft_platform.feed_adapter.shioaji.quote_runtime.time.sleep", client._fake_sleep):
+        watch()
+
+    client._allow_quote_recovery.assert_not_called()
+    client._mark_quote_pending.assert_not_called()
+
+
+def test_quote_watchdog_does_not_report_the_logged_out_gap_as_a_stall():
+    """Recovery re-subscribes; the dark period must not count as a quote stall."""
+    client = _watchdog_client(logged_in=False, iterations=3)
+    client._last_quote_data_ts = 1.0
+    watch = _capture_watchdog(client)
+
+    def _sleep(seconds: float) -> None:
+        client._fake_sleep(seconds)
+        if client._sleep_calls >= 2:
+            # Re-login lands after the watchdog has already seen it logged out.
+            client.logged_in = True
+
+    with (
+        patch("hft_platform.feed_adapter.shioaji.quote_runtime.time.sleep", _sleep),
+        patch("hft_platform.feed_adapter.shioaji.quote_runtime.timebase.now_s", return_value=9999.0),
+    ):
+        watch()
+
+    assert client._last_quote_data_ts == 9999.0
+    client._allow_quote_recovery.assert_not_called()
+
+
+def test_quote_watchdog_stops_on_the_running_flag():
+    """Shutdown still works: clearing the flag ends the loop and drops the gauge."""
+    client = _watchdog_client(logged_in=True, iterations=1)
+    watch = _capture_watchdog(client)
+
+    with patch("hft_platform.feed_adapter.shioaji.quote_runtime.time.sleep", client._fake_sleep):
+        watch()
+
+    assert client._quote_watchdog_running is False
+    client._set_thread_alive_metric.assert_any_call("quote_watchdog", False)
+
+
+def test_quote_watchdog_not_duplicated_when_refresh_restarts_it():
+    """``_start_quote_watchdog`` on the refresh path is a no-op while one runs.
+
+    With the thread now surviving a logout, ``do_session_refresh``'s call must
+    not spawn a second watchdog for the same facade.
+    """
+    client = _watchdog_client(logged_in=True, iterations=1)
+    runtime = QuoteRuntime(client)
+
+    with patch("hft_platform.feed_adapter.shioaji.quote_runtime.threading.Thread") as mock_thread_cls:
+        runtime.start_quote_watchdog()
+        assert client._quote_watchdog_running is True
+        runtime.start_quote_watchdog()
+
+    assert mock_thread_cls.call_count == 1
