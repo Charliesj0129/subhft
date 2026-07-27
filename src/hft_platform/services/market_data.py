@@ -1924,42 +1924,10 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         self._last_rollover_seen_date = now_dt.date()
         return True
 
-    def _within_reconnect_window(self) -> bool:
-        if not self.reconnect_days and not self.reconnect_hours and not self.reconnect_hours_2:
-            return True
-        now = dt.datetime.fromtimestamp(timebase.now_s(), tz=self._reconnect_tzinfo)
-        if os.getenv("HFT_RECONNECT_USE_CALENDAR", "1").lower() not in {"0", "false", "no", "off"}:
-            try:
-                from hft_platform.core.market_calendar import get_calendar
-
-                calendar = get_calendar()
-                if calendar.available and calendar.days_until_trading(now.date()) > 1:
-                    return False
-            except Exception:
-                pass
-        weekday = now.strftime("%a").lower()
-        if self.reconnect_days and weekday not in self.reconnect_days:
-            return False
-
-        windows = [w for w in (self.reconnect_hours, self.reconnect_hours_2) if w]
-        if not windows:
-            return True
-        for window in windows:
-            try:
-                start_str, end_str = window.split("-", 1)
-                start = dt.time.fromisoformat(start_str)
-                end = dt.time.fromisoformat(end_str)
-                now_t = now.timetz().replace(tzinfo=None)
-                if start <= end:
-                    if start <= now_t <= end:
-                        return True
-                else:
-                    if now_t >= start or now_t <= end:
-                        return True
-            except Exception as exc:
-                logger.debug("operation_fallback", error=str(exc))
-                continue
-        return False
+    # ``_within_reconnect_window`` intentionally lives only in
+    # ``MarketDataReconnectMixin`` (``_md_reconnect.py``). A byte-equivalent copy
+    # used to shadow it here; a duplicate is where a fix goes to be silently
+    # ignored, so the mixin is now the single implementation.
 
     def _mark_pending_reconnect(self, gap: float, reason: str | None = None) -> None:
         reason_label = reason or "heartbeat_gap"
