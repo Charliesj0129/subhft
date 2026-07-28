@@ -207,6 +207,119 @@ class TestWithinReconnectWindow:
 
 
 # ---------------------------------------------------------------------------
+# Cross-midnight session ownership (THESHOW Monday reconnect storm, 2026-07-27)
+#
+# THESHOW runs HFT_RECONNECT_HOURS_2=14:55-05:05 with days mon..fri. On Monday
+# 00:00-05:05 the tail matched on wall-clock alone, but the session that owns it
+# would have opened Sunday 15:00 — and Sunday is not a trading day. The facade
+# health monitor therefore reconnected for five hours into a closed market,
+# producing ~350 broker logins rejected with "code: 451, Too Many Connections".
+# ---------------------------------------------------------------------------
+
+
+class _FakeCalendar:
+    """Stand-in for MarketCalendar with an explicit trading-day set."""
+
+    def __init__(self, trading_days: set[dt.date], available: bool = True) -> None:
+        self._trading_days = trading_days
+        self.available = available
+
+    def is_trading_day(self, date: dt.date) -> bool:
+        return date in self._trading_days
+
+    def days_until_trading(self, date: dt.date) -> int:
+        for offset in range(0, 8):
+            if (date + dt.timedelta(days=offset)) in self._trading_days:
+                return offset
+        return 1
+
+
+# 2026-07-27 is the Monday whose small hours triggered the production storm.
+_MON = dt.date(2026, 7, 27)
+_TUE = dt.date(2026, 7, 28)
+_TRADING_WEEK = {_MON, _TUE, dt.date(2026, 7, 29), dt.date(2026, 7, 30), dt.date(2026, 7, 31)}
+
+
+class TestCrossMidnightSessionOwnership:
+    @pytest.fixture
+    def md_theshow(self, md: _FakeMD) -> _FakeMD:
+        """A service configured exactly as THESHOW's .env has it."""
+        md.reconnect_days = {"mon", "tue", "wed", "thu", "fri"}
+        md.reconnect_hours = "08:30-13:35"
+        md.reconnect_hours_2 = "14:55-05:05"
+        return md
+
+    def _check(self, md: _FakeMD, when: dt.datetime, calendar: _FakeCalendar) -> bool:
+        with (
+            patch("hft_platform.services._md_reconnect.timebase") as tb,
+            patch("hft_platform.core.market_calendar.get_calendar", return_value=calendar),
+            patch.dict("os.environ", {"HFT_RECONNECT_USE_CALENDAR": "1"}),
+        ):
+            tb.now_s.return_value = when.timestamp()
+            return md._within_reconnect_window()
+
+    def test_window_closed_on_monday_small_hours_when_sunday_not_trading(self, md_theshow: _FakeMD) -> None:
+        # Monday 02:00: inside 14:55-05:05 by the clock, but Sunday never opened.
+        when = dt.datetime(2026, 7, 27, 2, 0, tzinfo=dt.timezone.utc)
+        assert self._check(md_theshow, when, _FakeCalendar(_TRADING_WEEK)) is False
+
+    def test_window_open_on_tuesday_small_hours_after_monday_session(self, md_theshow: _FakeMD) -> None:
+        # Tuesday 02:00: the night session opened Monday 15:00 and is genuinely live.
+        when = dt.datetime(2026, 7, 28, 2, 0, tzinfo=dt.timezone.utc)
+        assert self._check(md_theshow, when, _FakeCalendar(_TRADING_WEEK)) is True
+
+    def test_window_open_on_monday_evening_leg(self, md_theshow: _FakeMD) -> None:
+        # Monday 16:00 is the evening leg of the same window — never gated.
+        when = dt.datetime(2026, 7, 27, 16, 0, tzinfo=dt.timezone.utc)
+        assert self._check(md_theshow, when, _FakeCalendar(_TRADING_WEEK)) is True
+
+    def test_window_open_during_configured_day_window(self, md_theshow: _FakeMD) -> None:
+        # The non-wrapping day window must not be touched by the ownership check.
+        when = dt.datetime(2026, 7, 27, 9, 0, tzinfo=dt.timezone.utc)
+        assert self._check(md_theshow, when, _FakeCalendar(_TRADING_WEEK)) is True
+
+    def test_window_closed_on_first_trading_day_after_a_holiday(self, md_theshow: _FakeMD) -> None:
+        # Monday trades but Friday..Sunday were a holiday block: no session owns
+        # Monday's small hours. days_until_trading(Monday) == 0, so the pre-existing
+        # holiday guard cannot catch this on its own.
+        when = dt.datetime(2026, 7, 27, 3, 30, tzinfo=dt.timezone.utc)
+        calendar = _FakeCalendar({_MON, _TUE})
+        assert self._check(md_theshow, when, calendar) is False
+
+    def test_window_fails_open_when_calendar_unavailable(self, md_theshow: _FakeMD) -> None:
+        when = dt.datetime(2026, 7, 27, 2, 0, tzinfo=dt.timezone.utc)
+        calendar = _FakeCalendar(_TRADING_WEEK, available=False)
+        assert self._check(md_theshow, when, calendar) is True
+
+    def test_window_fails_open_when_calendar_raises(self, md_theshow: _FakeMD) -> None:
+        when = dt.datetime(2026, 7, 27, 2, 0, tzinfo=dt.timezone.utc)
+        boom = MagicMock(side_effect=RuntimeError("calendar down"))
+        with (
+            patch("hft_platform.services._md_reconnect.timebase") as tb,
+            patch("hft_platform.core.market_calendar.get_calendar", boom),
+            patch.dict("os.environ", {"HFT_RECONNECT_USE_CALENDAR": "1"}),
+        ):
+            tb.now_s.return_value = when.timestamp()
+            assert md_theshow._within_reconnect_window() is True
+
+    def test_window_fails_open_when_calendar_disabled(self, md_theshow: _FakeMD) -> None:
+        when = dt.datetime(2026, 7, 27, 2, 0, tzinfo=dt.timezone.utc)
+        with (
+            patch("hft_platform.services._md_reconnect.timebase") as tb,
+            patch.dict("os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}),
+        ):
+            tb.now_s.return_value = when.timestamp()
+            assert md_theshow._within_reconnect_window() is True
+
+    def test_market_data_service_uses_the_mixin_implementation(self) -> None:
+        """A shadowing copy in market_data.py is where this fix goes to die."""
+        from hft_platform.services.market_data import MarketDataService
+
+        assert "_within_reconnect_window" not in vars(MarketDataService)
+        assert MarketDataService._within_reconnect_window is MarketDataReconnectMixin._within_reconnect_window
+
+
+# ---------------------------------------------------------------------------
 # _attempt_resubscribe
 # ---------------------------------------------------------------------------
 

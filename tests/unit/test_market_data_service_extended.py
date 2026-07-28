@@ -464,8 +464,11 @@ class TestMarketDataServiceExtended(unittest.IsolatedAsyncioTestCase):
         self.service.reconnect_hours_2 = ""
         self.service._reconnect_tzinfo = tz_cst
         now = dt.datetime(2026, 2, 3, 10, 0, tzinfo=tz_cst)
+        # ``_within_reconnect_window`` lives in the mixin module, so the clock must
+        # be frozen there — patching market_data.timebase silently uses the real
+        # clock, which makes this test pass or fail by time of day.
         with (
-            patch("hft_platform.services.market_data.timebase") as mock_tb,
+            patch("hft_platform.services._md_reconnect.timebase") as mock_tb,
             patch.dict(os.environ, {"HFT_RECONNECT_USE_CALENDAR": "0"}),
         ):
             mock_tb.now_s.return_value = now.timestamp()
@@ -480,13 +483,13 @@ class TestMarketDataServiceExtended(unittest.IsolatedAsyncioTestCase):
         late = dt.datetime(2026, 2, 3, 23, 0, tzinfo=tz_cst)
         early = dt.datetime(2026, 2, 4, 1, 0, tzinfo=tz_cst)
         with (
-            patch("hft_platform.services.market_data.timebase") as mock_tb,
+            patch("hft_platform.services._md_reconnect.timebase") as mock_tb,
             patch.dict(os.environ, {"HFT_RECONNECT_USE_CALENDAR": "0"}),
         ):
             mock_tb.now_s.return_value = late.timestamp()
             self.assertTrue(self.service._within_reconnect_window())
         with (
-            patch("hft_platform.services.market_data.timebase") as mock_tb,
+            patch("hft_platform.services._md_reconnect.timebase") as mock_tb,
             patch.dict(os.environ, {"HFT_RECONNECT_USE_CALENDAR": "0"}),
         ):
             mock_tb.now_s.return_value = early.timestamp()

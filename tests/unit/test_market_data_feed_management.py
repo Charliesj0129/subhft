@@ -191,7 +191,9 @@ class TestReconnectWindow:
         svc.reconnect_hours_2 = ""
         monkeypatch.setenv("HFT_RECONNECT_USE_CALENDAR", "0")
         frozen_ts = frozen_now.timestamp()
-        with patch("hft_platform.services.market_data.timebase") as mock_tb:
+        # _within_reconnect_window lives in the mixin module, so the clock must be
+        # frozen there — patching market_data.timebase silently uses the real clock.
+        with patch("hft_platform.services._md_reconnect.timebase") as mock_tb:
             mock_tb.now_s.return_value = frozen_ts
             assert svc._within_reconnect_window() is True
 
@@ -207,7 +209,7 @@ class TestReconnectWindow:
         svc.reconnect_hours = f"{start}-{end}"
         monkeypatch.setenv("HFT_RECONNECT_USE_CALENDAR", "0")
         frozen_ts = frozen_now.timestamp()
-        with patch("hft_platform.services.market_data.timebase") as mock_tb:
+        with patch("hft_platform.services._md_reconnect.timebase") as mock_tb:
             mock_tb.now_s.return_value = frozen_ts
             assert svc._within_reconnect_window() is True
 

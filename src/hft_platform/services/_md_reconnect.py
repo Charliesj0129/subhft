@@ -25,6 +25,39 @@ logger = get_logger("service.market_data")
 _WATCHDOG_EXCLUDE_PREFIXES: tuple[str, ...] = ("TXO", "MXO", "TEO", "TFO")
 
 
+def _calendar_enabled() -> bool:
+    return os.getenv("HFT_RECONNECT_USE_CALENDAR", "1").lower() not in {"0", "false", "no", "off"}
+
+
+def _night_session_owner_traded(day: dt.date) -> bool:
+    """Return True if the night session covering *day*'s small hours ever opened.
+
+    A cross-midnight reconnect window (e.g. ``14:55-05:05``) matches both the
+    evening leg and the following morning's tail. The tail belongs to a session
+    that opened at 15:00 on ``day - 1``, so it is only real when ``day - 1`` was
+    a trading day — the same rule as
+    ``MarketCalendar._is_futures_night_session``. Without this check the tail
+    matches on pure wall-clock and the facade health monitor reconnects for five
+    hours into a market that never opened (every Monday, and the first trading
+    day after each holiday).
+
+    Fails **open** when the calendar is disabled, unavailable, or raises, so a
+    calendar outage can never suppress reconnects during a real session.
+    """
+    if not _calendar_enabled():
+        return True
+    try:
+        from hft_platform.core.market_calendar import get_calendar
+
+        calendar = get_calendar()
+        if not calendar.available:
+            return True
+        return bool(calendar.is_trading_day(day - dt.timedelta(days=1)))
+    except Exception as exc:
+        logger.debug("operation_fallback", error=str(exc))
+        return True
+
+
 class MarketDataReconnectMixin:
     """Reconnection / rollover / watchdog methods for ``MarketDataService``."""
 
@@ -59,7 +92,7 @@ class MarketDataReconnectMixin:
             return True
         tz = getattr(self, "_reconnect_tzinfo", dt.timezone.utc)
         now = dt.datetime.fromtimestamp(timebase.now_s(), tz=tz)
-        if os.getenv("HFT_RECONNECT_USE_CALENDAR", "1").lower() not in {"0", "false", "no", "off"}:
+        if _calendar_enabled():
             try:
                 from hft_platform.core.market_calendar import get_calendar
 
@@ -85,9 +118,15 @@ class MarketDataReconnectMixin:
                     if start <= now_t <= end:
                         return True
                 else:
-                    if now_t >= start or now_t <= end:
+                    # Cross-midnight window: the evening leg is unconditional, but
+                    # the after-midnight tail only counts if the session that owns
+                    # it actually opened yesterday.
+                    if now_t >= start:
                         return True
-            except Exception:
+                    if now_t <= end and _night_session_owner_traded(now.date()):
+                        return True
+            except Exception as exc:
+                logger.debug("operation_fallback", error=str(exc))
                 continue
         return False
 

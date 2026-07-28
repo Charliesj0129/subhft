@@ -1086,7 +1086,9 @@ def test_within_reconnect_window_inside_hours():
 
     # Monday 10:30 UTC — inside window
     fake_ts = dt.datetime(2025, 1, 6, 10, 30, 0, tzinfo=dt.timezone.utc).timestamp()
-    with patch("hft_platform.services.market_data.timebase") as mock_tb:
+    # ``_within_reconnect_window`` lives in the mixin module, so the clock must be
+    # frozen there — patching market_data.timebase silently uses the real clock.
+    with patch("hft_platform.services._md_reconnect.timebase") as mock_tb:
         mock_tb.now_s.return_value = fake_ts
         with patch.dict(os.environ, {"HFT_RECONNECT_USE_CALENDAR": "0"}):
             result = svc._within_reconnect_window()
@@ -1105,7 +1107,7 @@ def test_within_reconnect_window_outside_hours():
 
     # Monday 15:30 UTC — outside window
     fake_ts = dt.datetime(2025, 1, 6, 15, 30, 0, tzinfo=dt.timezone.utc).timestamp()
-    with patch("hft_platform.services.market_data.timebase") as mock_tb:
+    with patch("hft_platform.services._md_reconnect.timebase") as mock_tb:
         mock_tb.now_s.return_value = fake_ts
         with patch.dict(os.environ, {"HFT_RECONNECT_USE_CALENDAR": "0"}):
             result = svc._within_reconnect_window()
