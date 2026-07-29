@@ -33,6 +33,7 @@ TICK_DATE_TO = "2026-07-24"
 TICK_TIMEFRAMES_MINUTES: tuple[int, ...] = (60, 120, 240, 1440)
 TICK_SUPPORTED_TIMEFRAMES_MINUTES: tuple[int, ...] = (2, *TICK_TIMEFRAMES_MINUTES)
 TICK_ROOTS: tuple[str, ...] = ("TXF", "TMF")
+MAX_DAILY_UNKNOWN_AGGRESSOR_RATIO = 0.05
 
 
 class TickDatasetGovernanceError(RuntimeError):
@@ -102,6 +103,31 @@ class TickBarDataset:
         aggressor_sum = self.buy_tick_count + self.sell_tick_count + self.unknown_tick_count
         if not np.allclose(aggressor_sum, self.trade_tick_count):
             raise TickDatasetGovernanceError("buy+sell+unknown tick counts must equal trade_tick_count")
+        offenders: list[str] = []
+        groups = sorted(
+            {
+                (str(root), int(timeframe), str(day))
+                for root, timeframe, day in zip(
+                    self.root,
+                    self.timeframe_min,
+                    self.trading_day,
+                    strict=True,
+                )
+            }
+        )
+        for root, timeframe, day in groups:
+            mask = (self.root == root) & (self.timeframe_min == timeframe) & (self.trading_day == day)
+            total = float(np.sum(self.trade_tick_count[mask]))
+            unknown = float(np.sum(self.unknown_tick_count[mask]))
+            ratio = unknown / total if total > 0.0 else 1.0
+            if ratio > MAX_DAILY_UNKNOWN_AGGRESSOR_RATIO:
+                offenders.append(f"{root}/{timeframe}m/{day}={ratio:.2%}")
+        if offenders:
+            preview = ", ".join(offenders[:10])
+            suffix = f" (+{len(offenders) - 10} more)" if len(offenders) > 10 else ""
+            raise TickDatasetGovernanceError(
+                f"unknown aggressor ratio exceeds {MAX_DAILY_UNKNOWN_AGGRESSOR_RATIO:.0%}: {preview}{suffix}"
+            )
         keys = {
             (str(root), int(timeframe), int(timestamp))
             for root, timeframe, timestamp in zip(self.root, self.timeframe_min, self.ts_ns, strict=True)

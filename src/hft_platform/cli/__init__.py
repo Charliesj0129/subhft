@@ -28,6 +28,7 @@ from ._alpha import (  # noqa: F401
     cmd_alpha_experiments_compare,
     cmd_alpha_experiments_list,
     cmd_alpha_list,
+    cmd_alpha_mine_campaign,
     cmd_alpha_mine_init,
     cmd_alpha_mine_promote,
     cmd_alpha_mine_run,

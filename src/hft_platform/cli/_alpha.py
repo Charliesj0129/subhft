@@ -5,8 +5,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import subprocess
 import sys
+import tempfile
 from importlib import import_module
 from pathlib import Path
 from typing import Any
@@ -288,6 +290,7 @@ def cmd_alpha_mine_run(args: argparse.Namespace) -> None:
     try:
         from research.combinatorial.smma_dataset import DatasetGovernanceError
         from research.combinatorial.smma_runner import RunConfig, RunIntegrityError, run_mining
+        from research.combinatorial.tick_dataset import TickDatasetGovernanceError
 
         config = RunConfig(
             run_dir=Path(args.run_dir),
@@ -300,9 +303,11 @@ def cmd_alpha_mine_run(args: argparse.Namespace) -> None:
             smma_lengths=tuple(int(value) for value in args.smma_lengths),
             posthoc_diagnostic=bool(args.posthoc_diagnostic),
             resume=bool(args.resume),
+            unlock_final_holdout=bool(getattr(args, "unlock_final_holdout", False)),
+            dataset_cache_dir=(Path(args.dataset_cache_dir) if getattr(args, "dataset_cache_dir", None) else None),
         )
         report = run_mining(config)
-    except (DatasetGovernanceError, RunIntegrityError, ValueError, OSError) as exc:
+    except (DatasetGovernanceError, TickDatasetGovernanceError, RunIntegrityError, ValueError, OSError) as exc:
         print(f"[hft alpha mine run] {exc}", file=sys.stderr)
         sys.exit(2)
     print(json.dumps(report, indent=2, sort_keys=True))
@@ -318,6 +323,116 @@ def cmd_alpha_mine_status(args: argparse.Namespace) -> None:
         print(f"[hft alpha mine status] {exc}", file=sys.stderr)
         sys.exit(2)
     print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def _write_alpha_mining_campaign_report(
+    campaign_dir: Path,
+    campaign_id: str,
+    outcomes: list[dict[str, Any]],
+) -> dict[str, Any]:
+    payload = {
+        "schema": "alpha_mining_campaign.v1",
+        "campaign_id": campaign_id,
+        "screen_only": True,
+        "posthoc_diagnostic": True,
+        "final_holdout_unlocked": False,
+        "legs": list(outcomes),
+    }
+    payload["campaign_hash"] = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    report_path = campaign_dir / "campaign_report.json"
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        dir=campaign_dir,
+        suffix=".json",
+        delete=False,
+        encoding="utf-8",
+    ) as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+        temporary = Path(handle.name)
+    temporary.replace(report_path)
+    return payload
+
+
+def cmd_alpha_mine_campaign(args: argparse.Namespace) -> None:
+    """Run the six governed family/timeframe legs with resumable per-leg artifacts."""
+    try:
+        from research.combinatorial.smma_dataset import DatasetGovernanceError
+        from research.combinatorial.smma_runner import RunConfig, RunIntegrityError, run_mining
+        from research.combinatorial.tick_dataset import TickDatasetGovernanceError
+
+        run_root = Path(args.run_root).resolve()
+        campaign_id = str(args.campaign_id)
+        if not campaign_id or Path(campaign_id).name != campaign_id:
+            raise ValueError("campaign-id must be one filesystem-safe path component")
+        if run_root in {Path("/"), Path.home().resolve(), Path.cwd().resolve()}:
+            raise ValueError("run-root must be a dedicated artifact parent, not a broad filesystem root")
+        campaign_dir = run_root / campaign_id
+        campaign_dir.mkdir(parents=True, exist_ok=True)
+        legs = [
+            (family, label, timeframes)
+            for family in ("bidask", "kbar", "tick")
+            for label, timeframes in (("2m", (2,)), ("h1h2h4", (60, 120, 240)))
+        ]
+        outcomes: list[dict[str, Any]] = []
+        for family, label, timeframes in legs:
+            leg_name = f"{family}-{label}-{campaign_id}"
+            leg_dir = campaign_dir / leg_name
+            config = RunConfig(
+                run_dir=leg_dir,
+                family=family,
+                wall_time_hours=float(args.wall_time_hours),
+                max_candidates=int(args.max_candidates),
+                workers=int(args.workers),
+                seeds=tuple(int(seed) for seed in args.seeds),
+                timeframes_minutes=timeframes,
+                posthoc_diagnostic=True,
+                resume=bool(args.resume) and (leg_dir / "run_manifest.json").exists(),
+                unlock_final_holdout=False,
+                dataset_cache_dir=campaign_dir / "dataset_cache",
+            )
+            try:
+                report = run_mining(config)
+                outcomes.append(
+                    {
+                        "leg": leg_name,
+                        "run_dir": str(config.run_dir),
+                        "status": "complete",
+                        "verdict": report.get("verdict"),
+                        "report_hash": report.get("report_hash"),
+                    }
+                )
+            except (
+                DatasetGovernanceError,
+                TickDatasetGovernanceError,
+                RunIntegrityError,
+                ValueError,
+                OSError,
+            ) as exc:
+                outcomes.append(
+                    {
+                        "leg": leg_name,
+                        "run_dir": str(config.run_dir),
+                        "status": "failed",
+                        "error_type": type(exc).__name__,
+                        "error": str(exc),
+                    }
+                )
+            payload = _write_alpha_mining_campaign_report(
+                campaign_dir,
+                campaign_id,
+                outcomes,
+            )
+    except (ValueError, OSError) as exc:
+        print(f"[hft alpha mine campaign] {exc}", file=sys.stderr)
+        sys.exit(2)
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    if any(outcome["status"] == "failed" for outcome in outcomes):
+        sys.exit(2)
 
 
 def cmd_alpha_list(args: argparse.Namespace) -> None:
