@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import subprocess
 import sys
@@ -151,6 +152,174 @@ def _parse_param_grid(raw: str | None) -> dict[str, list[Any]]:
     return grid
 
 
+def cmd_alpha_mine_init(args: argparse.Namespace) -> None:
+    """SubHFT Alpha Mining v2 Phase 1: build and write a partition manifest.
+
+    Loads a session-id column from the data file and splits it into
+    Discovery/Selection/Locked-validation/Final-holdout partitions
+    (contiguous in time order, with an embargo gap at each boundary), then
+    writes the immutable ``partition_manifest.json``. Locked-validation and
+    final-holdout stay unreadable until a candidate is frozen — see
+    ``DatasetPartitionManager.get_rows`` / ``freeze_candidate``.
+    """
+    try:
+        np = import_module("numpy")
+        partitioning = import_module("research.combinatorial.partitioning")
+    except Exception as exc:
+        print(f"Failed to import partitioning module: {exc}")
+        sys.exit(1)
+
+    source = np.load(args.data, allow_pickle=False)
+    try:
+        if isinstance(source, np.lib.npyio.NpzFile):
+            if "data" in source:
+                arr = np.asarray(source["data"])
+            else:
+                first_key = source.files[0] if source.files else None
+                if first_key is None:
+                    raise ValueError("Empty NPZ file")
+                arr = np.asarray(source[first_key])
+        else:
+            arr = np.asarray(source)
+    finally:
+        if isinstance(source, np.lib.npyio.NpzFile):
+            source.close()
+
+    if not arr.dtype.names:
+        print("--data must be a structured array with named fields (--session-field requires one)")
+        sys.exit(2)
+    if args.session_field not in arr.dtype.names:
+        print(f"Session field not found in data: {args.session_field}")
+        sys.exit(2)
+
+    dataset_fingerprint = hashlib.sha256(np.ascontiguousarray(arr).tobytes()[:4096]).hexdigest()
+    session_ids = arr[args.session_field].tolist()
+
+    ratios = {
+        "discovery": float(args.discovery_ratio),
+        "selection": float(args.selection_ratio),
+        "locked_validation": float(args.locked_ratio),
+        "final_holdout": float(args.holdout_ratio),
+    }
+
+    try:
+        manager = partitioning.DatasetPartitionManager(
+            session_ids=session_ids,
+            dataset_fingerprint=dataset_fingerprint,
+            embargo_rows=int(args.embargo_rows),
+            manifest_dir=args.out_dir,
+            ratios=ratios,
+            random_seed=int(args.seed),
+        )
+    except partitioning.PartitionConfigError as exc:
+        print(f"Invalid partition configuration: {exc}")
+        sys.exit(2)
+
+    symbols = [s.strip() for s in str(args.symbols or "").split(",") if s.strip()]
+    manifest_path = manager.write_manifest(
+        Path(args.out_dir) / "partition_manifest.json",
+        symbols=symbols,
+    )
+
+    payload: dict[str, Any] = {
+        "partition_manifest_path": manifest_path,
+        "manifest_hash": manager.manifest_hash,
+        "dataset_fingerprint": dataset_fingerprint,
+        "partitions": manager.partition_summary(),
+    }
+
+    if args.out:
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+    print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def cmd_alpha_mine_promote(args: argparse.Namespace) -> None:
+    """SubHFT Alpha Mining v2 Phase 4: scaffold a ``research/alphas/<id>/`` package
+    from a GP-discovered expression -- the intake path into the existing,
+    unmodified Gate A/B/C alpha-governance pipeline (``research/combinatorial/
+    promote.py``). Stops at ``status=DRAFT``; no gate runs automatically, same
+    boundary ``hft alpha scaffold`` already has.
+    """
+    try:
+        from research.combinatorial.promote import promote_candidate, promote_from_results
+    except Exception as exc:
+        print(f"Failed to import alpha promote module: {exc}")
+        sys.exit(1)
+
+    expression = getattr(args, "expression", None)
+    from_results = getattr(args, "from_results", None)
+    if bool(expression) == bool(from_results):
+        print("Exactly one of --expression or --from-results is required")
+        sys.exit(2)
+
+    common_kwargs: dict[str, Any] = {
+        "alpha_id": args.alpha_id,
+        "owner": args.owner,
+        "strategy_type": args.strategy_type,
+        "instrument": args.instrument,
+        "force": bool(args.force),
+    }
+
+    try:
+        if expression:
+            alpha_dir = promote_candidate(expression, **common_kwargs)
+        else:
+            rank = getattr(args, "rank", None)
+            if rank is None:
+                print("--rank is required with --from-results")
+                sys.exit(2)
+            alpha_dir = promote_from_results(str(from_results), int(rank), **common_kwargs)
+    except FileExistsError as exc:
+        print(f"[hft alpha mine promote] {exc}")
+        sys.exit(2)
+    except (ValueError, SyntaxError, IndexError, FileNotFoundError, KeyError) as exc:
+        print(f"[hft alpha mine promote] {exc}")
+        sys.exit(2)
+
+    print(f"Promoted GP candidate to: {alpha_dir}")
+    print("[INFO] Status: DRAFT -- no live registry entry yet.")
+    print(f"  Next: review {alpha_dir}/manifest.yaml, then `hft alpha validate --alpha-id {args.alpha_id} ...`")
+
+
+def cmd_alpha_mine_run(args: argparse.Namespace) -> None:
+    """Run or resume the bounded SMMA mining workflow."""
+    try:
+        from research.combinatorial.smma_dataset import DatasetGovernanceError
+        from research.combinatorial.smma_runner import RunConfig, RunIntegrityError, run_mining
+
+        config = RunConfig(
+            run_dir=Path(args.run_dir),
+            family=str(args.family),
+            wall_time_hours=float(args.wall_time_hours),
+            max_candidates=int(args.max_candidates),
+            workers=int(args.workers),
+            seeds=tuple(int(seed) for seed in args.seeds),
+            timeframes_minutes=tuple(int(value) for value in args.timeframes_minutes),
+            smma_lengths=tuple(int(value) for value in args.smma_lengths),
+            posthoc_diagnostic=bool(args.posthoc_diagnostic),
+            resume=bool(args.resume),
+        )
+        report = run_mining(config)
+    except (DatasetGovernanceError, RunIntegrityError, ValueError, OSError) as exc:
+        print(f"[hft alpha mine run] {exc}", file=sys.stderr)
+        sys.exit(2)
+    print(json.dumps(report, indent=2, sort_keys=True))
+
+
+def cmd_alpha_mine_status(args: argparse.Namespace) -> None:
+    """Inspect manifest/checkpoint/heartbeat without changing a mining run."""
+    try:
+        from research.combinatorial.smma_runner import RunIntegrityError, mining_status
+
+        payload = mining_status(args.run_dir)
+    except (RunIntegrityError, ValueError, OSError, json.JSONDecodeError) as exc:
+        print(f"[hft alpha mine status] {exc}", file=sys.stderr)
+        sys.exit(2)
+    print(json.dumps(payload, indent=2, sort_keys=True))
+
+
 def cmd_alpha_list(args: argparse.Namespace) -> None:
     try:
         from research.registry.alpha_registry import AlphaRegistry
@@ -225,6 +394,38 @@ def cmd_alpha_screen(args: argparse.Namespace) -> None:
     triage during research; use ``hft alpha validate --profile strict``
     when an artifact must be eligible for Gate D.
     """
+    try:
+        from research.combinatorial.smma_screen import (
+            SMMAScreenError,
+            is_smma_screen_package,
+            run_smma_screen,
+        )
+    except (ImportError, AttributeError) as exc:
+        print(f"Failed to import SMMA screen adapter: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        if is_smma_screen_package(args.alpha_id):
+            if len(args.data) != 1:
+                raise SMMAScreenError("SMMA screen requires exactly one governed dataset")
+            summary = run_smma_screen(
+                alpha_id=str(args.alpha_id),
+                data_path=str(args.data[0]),
+                experiments_dir=str(getattr(args, "experiments_dir", "research/experiments")),
+                skip_gate_b_tests=bool(getattr(args, "skip_gate_b_tests", False)),
+            )
+            if args.out:
+                out_path = Path(args.out)
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                out_path.write_text(json.dumps(summary, indent=2, sort_keys=True))
+            print(json.dumps(summary, indent=2, sort_keys=True))
+            if not summary["passed"]:
+                sys.exit(2)
+            return
+    except (SMMAScreenError, ValueError, OSError, json.JSONDecodeError) as exc:
+        print(f"[hft alpha screen smma] {exc}", file=sys.stderr)
+        sys.exit(2)
+
     try:
         from hft_platform.alpha.validation import ValidationConfig, run_alpha_validation
     except Exception as exc:
