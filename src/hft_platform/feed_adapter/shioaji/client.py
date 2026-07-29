@@ -23,10 +23,16 @@ from hft_platform.core.rate_limiter import RateLimiter
 from hft_platform.feed_adapter.shioaji import router as _router
 from hft_platform.feed_adapter.shioaji._compat import resolve_quote_api
 from hft_platform.feed_adapter.shioaji._infra import (
+    InflightGuard as _InflightGuard,
+)
+from hft_platform.feed_adapter.shioaji._infra import (
     cache_get as _cache_get_impl,
 )
 from hft_platform.feed_adapter.shioaji._infra import (
     cache_set as _cache_set_impl,
+)
+from hft_platform.feed_adapter.shioaji._infra import (
+    client_float,
 )
 from hft_platform.feed_adapter.shioaji._infra import (
     ensure_session_lock as _ensure_session_lock_impl,
@@ -387,6 +393,11 @@ class ShioajiClient:
         self._reconnect_backoff_s = float(os.getenv("HFT_RECONNECT_BACKOFF_S", "30"))
         self._reconnect_backoff_max_s = float(os.getenv("HFT_RECONNECT_BACKOFF_MAX_S", "120"))
         self._login_timeout_s = float(os.getenv("HFT_SHIOAJI_LOGIN_TIMEOUT_S", "20"))
+        # A contract-fetching login carries the contract download on top of the
+        # handshake, so it gets its own, longer budget; the no-contract fallback
+        # keeps the tight one.
+        self._login_contract_timeout_s = float(os.getenv("HFT_SHIOAJI_LOGIN_CONTRACT_TIMEOUT_S", "60"))
+        self._sdk_busy_grace_s = float(os.getenv("HFT_SHIOAJI_SDK_BUSY_GRACE_S", "2"))
         self._reconnect_timeout_s = float(os.getenv("HFT_SHIOAJI_RECONNECT_TIMEOUT_S", "45"))
         self._reconnect_subscribe_timeout_s = float(os.getenv("HFT_SHIOAJI_RECONNECT_SUBSCRIBE_TIMEOUT_S", "30"))
         try:
@@ -401,6 +412,11 @@ class ShioajiClient:
             self._max_abandoned_guard_threads = max(0, int(os.getenv("HFT_SHIOAJI_MAX_ABANDONED_GUARD_THREADS", "3")))
         except ValueError:
             self._max_abandoned_guard_threads = 3
+        # Per-client re-entry guard. The bound above is process-wide; this one
+        # answers the different question "is *this* SDK object still occupied by
+        # an abandoned worker?", which is what shioaji 1.5.x's Rust ``_core``
+        # rejects with ``Already borrowed``.
+        self._sdk_inflight = _InflightGuard()
         self._last_login_error: str | None = None
         self._last_reconnect_error: str | None = None
         self._api_cache: dict[str, tuple[float, Any]] = {}
@@ -703,6 +719,8 @@ class ShioajiClient:
             fn,
             timeout_s,
             max_abandoned=getattr(self, "_max_abandoned_guard_threads", 0),
+            inflight=getattr(self, "_sdk_inflight", None),
+            busy_grace_s=client_float(self, "_sdk_busy_grace_s", 2.0),
         )
 
     def _set_thread_alive_metric(self, thread_name: str, alive: bool) -> None:

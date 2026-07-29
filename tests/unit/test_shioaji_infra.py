@@ -8,6 +8,8 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from hft_platform.feed_adapter.shioaji._infra import (
+    InflightGuard,
+    SDKBusyError,
     abandoned_guard_thread_count,
     acquire_login_slot,
     cache_get,
@@ -621,3 +623,126 @@ class TestScrubBrokerError:
 
     def test_plain_message_passes_through_unchanged(self) -> None:
         assert scrub_broker_error("contracts timeout") == "contracts timeout"
+
+
+# ---------------------------------------------------------------------------
+# safe_call_with_timeout — per-client in-flight guard
+#
+# Regression for the daily 08:30 CST "Already borrowed" cascade on THESHOW: the
+# contract-fetching login exceeded its 20 s budget, its worker was abandoned
+# *inside* shioaji 1.5.x's Rust `_core`, and the immediate no-contract fallback
+# re-entered the same object. PyO3's borrow check rejected it in under 3 ms, the
+# retry ladder burned its attempts, and the forced reconnects escalated into
+# broker `451 Too Many Connections`. The guard must make that re-entry
+# impossible while still letting nested calls through.
+# ---------------------------------------------------------------------------
+
+
+class TestSafeCallInflightGuard:
+    @staticmethod
+    def _drain(release: threading.Event, guard: InflightGuard) -> None:
+        release.set()
+        for _ in range(200):
+            if guard.live_count() == 0:
+                return
+            time.sleep(0.01)
+
+    def test_sdk_call_refused_while_previous_worker_still_abandoned(self) -> None:
+        guard = InflightGuard()
+        release = threading.Event()
+        try:
+            ok, _, err, timed_out = safe_call_with_timeout("login", lambda: release.wait(5.0), 0.1, inflight=guard)
+            assert ok is False
+            assert isinstance(err, TimeoutError)
+            assert guard.live_count() == 1
+
+            # The second call must not even enter the SDK.
+            entered = threading.Event()
+
+            def _would_reenter() -> None:  # pragma: no cover — must never run
+                entered.set()
+
+            ok2, _, err2, timed_out2 = safe_call_with_timeout(
+                "login_fallback", _would_reenter, 5.0, inflight=guard, busy_grace_s=0.0
+            )
+            assert ok2 is False
+            assert isinstance(err2, SDKBusyError)
+            assert err2.blocking_op == "login"
+            # Reported as timed out so existing backoff paths apply unchanged.
+            assert timed_out2 is True
+            assert entered.is_set() is False
+        finally:
+            self._drain(release, guard)
+
+    def test_sdk_call_proceeds_once_abandoned_worker_finishes(self) -> None:
+        guard = InflightGuard()
+        release = threading.Event()
+        ok, _, _, _ = safe_call_with_timeout("login", lambda: release.wait(5.0), 0.1, inflight=guard)
+        assert ok is False
+        self._drain(release, guard)
+        assert guard.live_count() == 0
+
+        ok2, result, err2, timed_out2 = safe_call_with_timeout("login", lambda: "connected", 5.0, inflight=guard)
+        assert ok2 is True
+        assert result == "connected"
+        assert err2 is None
+        assert timed_out2 is False
+
+    def test_sdk_busy_grace_waits_for_worker_before_refusing(self) -> None:
+        """A call arriving just as the SDK frees up must not be refused."""
+        guard = InflightGuard()
+        release = threading.Event()
+        ok, _, _, _ = safe_call_with_timeout("login", lambda: release.wait(5.0), 0.1, inflight=guard)
+        assert ok is False
+        assert guard.live_count() == 1
+
+        # Free the SDK shortly after the next call starts waiting on the grace.
+        threading.Timer(0.05, release.set).start()
+        ok2, result, err2, _ = safe_call_with_timeout(
+            "login", lambda: "connected", 5.0, inflight=guard, busy_grace_s=3.0
+        )
+        assert ok2 is True
+        assert result == "connected"
+        assert err2 is None
+
+    def test_nested_sdk_calls_are_not_blocked_by_their_own_parent(self) -> None:
+        """`reconnect_force` wraps logout/subscribe in further guarded calls.
+
+        A mutex would deadlock here; the guard latches only on a *timed-out*
+        worker, so a healthy parent never blocks its own children.
+        """
+        guard = InflightGuard()
+        inner_results: list[bool] = []
+
+        def _outer() -> str:
+            ok_inner, _, _, _ = safe_call_with_timeout("logout", lambda: None, 5.0, inflight=guard)
+            inner_results.append(ok_inner)
+            ok_inner2, _, _, _ = safe_call_with_timeout("subscribe_basket", lambda: None, 5.0, inflight=guard)
+            inner_results.append(ok_inner2)
+            return "done"
+
+        ok, result, err, timed_out = safe_call_with_timeout("reconnect_force", _outer, 5.0, inflight=guard)
+        assert ok is True
+        assert result == "done"
+        assert err is None
+        assert timed_out is False
+        assert inner_results == [True, True]
+
+    def test_guard_without_inflight_registry_keeps_previous_behaviour(self) -> None:
+        """Callers that pass no guard are unaffected (standalone clients)."""
+        reset_abandoned_guard_threads()
+        release = threading.Event()
+        try:
+            ok, _, err, _ = safe_call_with_timeout("login", lambda: release.wait(5.0), 0.1)
+            assert ok is False
+            assert isinstance(err, TimeoutError)
+            # No SDKBusyError path without a guard: a second call still enters.
+            ok2, result, _, _ = safe_call_with_timeout("login", lambda: 5, 5.0)
+            assert ok2 is True
+            assert result == 5
+        finally:
+            release.set()
+            for _ in range(200):
+                if abandoned_guard_thread_count() == 0:
+                    break
+                time.sleep(0.01)

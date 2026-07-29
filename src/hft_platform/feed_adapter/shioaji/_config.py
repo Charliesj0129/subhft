@@ -83,6 +83,14 @@ class ShioajiClientConfig:
     reconnect_backoff_s: float = 30.0
     reconnect_backoff_max_s: float = 600.0
     login_timeout_s: float = 20.0
+    # A login that fetches contracts needs materially longer than one that does
+    # not: ``contracts_timeout`` alone is 10 s, on top of the login handshake and
+    # the contract download/parse. At 20 s the morning contract-fetching login
+    # timed out every single trading day, abandoning a worker inside the SDK.
+    login_contract_timeout_s: float = 60.0
+    # Grace period to let an abandoned worker leave the SDK before refusing a
+    # new call outright.
+    sdk_busy_grace_s: float = 2.0
     reconnect_timeout_s: float = 45.0
     reconnect_subscribe_timeout_s: float = 30.0
     login_retry_max: int = 1
@@ -245,6 +253,8 @@ def load_shioaji_config(
         reconnect_backoff_s=_env_float("HFT_RECONNECT_BACKOFF_S", 30.0),
         reconnect_backoff_max_s=_env_float("HFT_RECONNECT_BACKOFF_MAX_S", 600.0),
         login_timeout_s=_env_float("HFT_SHIOAJI_LOGIN_TIMEOUT_S", 20.0),
+        login_contract_timeout_s=_env_float("HFT_SHIOAJI_LOGIN_CONTRACT_TIMEOUT_S", 60.0),
+        sdk_busy_grace_s=_env_float("HFT_SHIOAJI_SDK_BUSY_GRACE_S", 2.0),
         reconnect_timeout_s=_env_float("HFT_SHIOAJI_RECONNECT_TIMEOUT_S", 45.0),
         reconnect_stagger_timeout_s=_env_float("HFT_RECONNECT_STAGGER_TIMEOUT_S", 60.0),
         reconnect_subscribe_timeout_s=_env_float("HFT_SHIOAJI_RECONNECT_SUBSCRIBE_TIMEOUT_S", 30.0),
