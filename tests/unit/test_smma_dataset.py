@@ -9,6 +9,7 @@ from research.combinatorial.smma_dataset import (
     DatasetGovernanceError,
     _bar_query,
     _guard_query,
+    _metadata_hash,
     load_governed_dataset,
     rows_to_bar_dataset,
     save_governed_dataset,
@@ -136,6 +137,25 @@ def test_dataset_sidecar_detects_metadata_tamper(tmp_path) -> None:
     sidecar.write_text(json.dumps(payload))
     with pytest.raises(DatasetGovernanceError, match="sidecar fingerprint mismatch"):
         load_governed_dataset(path)
+
+
+def test_legacy_v1_dataset_remains_readable_for_status_compatibility(tmp_path) -> None:
+    dataset = rows_to_bar_dataset(_causal_rows())
+    path = tmp_path / "dataset.npz"
+    _output, sidecar = save_governed_dataset(
+        path,
+        dataset,
+        query_evidence=[{"query_sha256": "abc", "guard_overall": "pass"}],
+        code_fingerprint="code",
+    )
+    payload = json.loads(sidecar.read_text())
+    payload.pop("metadata_hash")
+    payload["schema"] = "smma_taifex_bars.v1"
+    payload["schema_version"] = 1
+    payload["metadata_hash"] = _metadata_hash(payload)
+    sidecar.write_text(json.dumps(payload))
+
+    assert len(load_governed_dataset(path)) == len(dataset)
 
 
 def test_dataset_query_guard_blocks_mutation() -> None:
