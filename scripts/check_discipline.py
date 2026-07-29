@@ -427,8 +427,17 @@ _MONEY_DOMAIN_PARTS = frozenset({"contracts", "order", "execution", "risk"})
 _HFT_P004_EXEMPT_FILES = frozenset({"stress_test.py"})
 
 
+# Suffixes marking a dimensionless quantity. Law 4 governs money *magnitudes*;
+# a ratio or percentage of two money values carries no currency unit, so it has
+# no scaled-int representation to demand (e.g. cost_sensitivity_ratio =
+# signal_magnitude / min_profitable_spread).
+_DIMENSIONLESS_SUFFIXES: tuple[str, ...] = ("_ratio", "_pct")
+
+
 def _is_money_field_name(name: str) -> bool:
     lower = name.lower()
+    if lower.endswith(_DIMENSIONLESS_SUFFIXES):
+        return False
     for pattern in _MONEY_FIELD_PATTERNS:
         if (
             lower == pattern
