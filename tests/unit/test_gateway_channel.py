@@ -104,7 +104,11 @@ async def test_channel_qsize():
 @pytest.mark.asyncio
 async def test_channel_ttl_expired_routes_to_dlq():
     """Envelope older than TTL is skipped to DLQ; next valid envelope returned."""
-    ch = LocalIntentChannel(maxsize=10, ttl_ms=1)  # 1ms TTL
+    # ttl_ms must exceed the scheduling latency between submit_nowait() and
+    # receive_raw()'s age check, or the *fresh* envelope expires too and
+    # receive() blocks forever. Under xdist that gap exceeds 1 ms. The stale
+    # envelope below uses enqueued_ns=0, so it expires at any TTL.
+    ch = LocalIntentChannel(maxsize=10, ttl_ms=5000)
 
     intent_old = _make_intent(1, "old")
     env_old = IntentEnvelope(
