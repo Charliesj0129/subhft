@@ -12,6 +12,11 @@ from structlog import get_logger
 
 from hft_platform.core import timebase
 from hft_platform.feed_adapter.shioaji._compat import iter_contract_category
+from hft_platform.feed_adapter.shioaji._infra import (
+    acquire_login_slot,
+    client_float,
+    release_login_slot,
+)
 
 logger = get_logger("feed_adapter.contracts_runtime")
 
@@ -94,6 +99,20 @@ def _symbols_require_derivative_contracts(symbols: list[dict[str, Any]]) -> bool
         if exchange in {"TAIFEX", "FUT", "OPT"}:
             return True
     return False
+
+
+def _read_contract_status(api: Any) -> str:
+    """Return ``api.Contracts.status`` as text, or ``"missing"`` when absent.
+
+    Read *before* a fetch so the caller can tell a fresh ``Fetched`` from one
+    left over by an earlier fetch: ``_wait_for_contract_fetch_complete`` accepts
+    any ``Fetched`` it sees, so a fetch that aborted in microseconds used to
+    read as an instant success against the login-time status.
+    """
+    contracts = getattr(api, "Contracts", None)
+    if contracts is None:
+        return "missing"
+    return str(getattr(contracts, "status", None))
 
 
 def _wait_for_contract_fetch_complete(
@@ -666,7 +685,38 @@ class ContractsRuntime:
             pass
 
         try:
-            self._client._ensure_contracts()
+            status_before = _read_contract_status(self._client.api)
+            # Serialise the pooled facades' fetches. shioaji 1.5.x's Rust
+            # ``_core`` demands exclusive access for ``fetch_contracts`` and
+            # aborts with "exclusive access lost (concurrent API call started)"
+            # when a second facade enters while the first is inside — which is
+            # exactly what four facades on the same hourly timer did. Reuses the
+            # login slot rather than a second primitive: both serialise
+            # heavyweight SDK entries process-wide, and a fetch racing a login
+            # loses the same way. ``False`` means the slot timed out; proceed
+            # unserialised (a never-refreshing cache is worse) and do NOT
+            # release a slot we do not hold.
+            slot_held = acquire_login_slot(
+                min_gap_s=client_float(self._client, "_contract_fetch_stagger_gap_s", 2.0),
+                timeout_s=client_float(self._client, "_contract_fetch_stagger_timeout_s", 300.0),
+                metrics=getattr(self._client, "metrics", None),
+            )
+            try:
+                fetch_ok = self._client._ensure_contracts()
+            finally:
+                if slot_held:
+                    release_login_slot()
+            if not fetch_ok:
+                error = "contract fetch call failed"
+                logger.error("contract_refresh_fetch_failed", error=error, status_before=status_before)
+                self.write_refresh_status(result="fetch_failed", error=error)
+                try:
+                    if self._client.metrics and hasattr(self._client.metrics, "contract_refresh_total"):
+                        self._client.metrics.contract_refresh_total.labels(result="fetch_failed").inc()
+                except Exception as exc:
+                    logger.debug("operation_fallback", error=str(exc))
+                self._client._contract_refresh_lock.release()
+                return
             ready_timeout_s = float(os.getenv("HFT_CONTRACT_FETCH_READY_TIMEOUT_S", "60"))
             fetch_ready, fetch_status = _wait_for_contract_fetch_complete(
                 self._client.api,
@@ -688,7 +738,16 @@ class ContractsRuntime:
                     logger.debug("operation_fallback", error=str(exc))
                 self._client._contract_refresh_lock.release()
                 return
-            logger.info("Contract fetch ready", status=fetch_status)
+            # ``Fetched`` that was already ``Fetched`` before the call is not
+            # proof of anything: it is the status the login-time fetch left
+            # behind. Say so instead of implying the broker was re-read.
+            status_assumed = fetch_status == status_before and fetch_status.endswith("Fetched")
+            logger.info(
+                "Contract fetch ready",
+                status=fetch_status,
+                status_before=status_before,
+                status_assumed=status_assumed,
+            )
             logger.info("Contract data refreshed from broker")
         except Exception as exc:
             logger.warning("Contract refresh fetch failed", error=str(exc))
@@ -789,6 +848,11 @@ class ContractsRuntime:
                 return
 
             write_contract_cache(raw_contracts, self._client._contract_cache_path)
+            try:
+                if self._client.metrics and hasattr(self._client.metrics, "contract_cache_last_success_ts"):
+                    self._client.metrics.contract_cache_last_success_ts.set(timebase.now_s())
+            except Exception as exc:
+                logger.debug("operation_fallback", error=str(exc))
 
             codes_after = {str(c.get("code", "")) for c in raw_contracts if c.get("code")}
             self._client._contract_refresh_version += 1

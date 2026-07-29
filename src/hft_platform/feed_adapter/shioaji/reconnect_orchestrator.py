@@ -283,6 +283,8 @@ class ReconnectOrchestrator:
         """Return True if currently within TAIFEX futures/options trading hours.
 
         Covers day session (08:45-13:45) and night session (15:00-05:00).
+        Both windows are half-open: the closing instant is already outside the
+        session, matching ``MarketCalendar``.
         """
         try:
             from hft_platform.core.market_calendar import get_calendar
@@ -296,10 +298,12 @@ class ReconnectOrchestrator:
             now_dt = dt.datetime.fromtimestamp(timebase.now_s(), tz=dt.timezone(dt.timedelta(hours=8)))
             if now_dt.weekday() >= 5:
                 return False
-            minute = now_dt.hour * 60 + now_dt.minute
-            # Day: 08:45-13:45, Night: 15:00-05:00 (next day)
-            day_session = (8 * 60 + 45) <= minute <= (13 * 60 + 45)
-            night_session = minute >= (15 * 60) or minute <= (5 * 60)
+            second = now_dt.hour * 3600 + now_dt.minute * 60 + now_dt.second
+            # Day: [08:45, 13:45), Night: [15:00, 05:00) — closes are exclusive
+            # so the closing minute is not read as an open market (which is what
+            # made the quote watchdog force a relogin at every session close).
+            day_session = (8 * 3600 + 45 * 60) <= second < (13 * 3600 + 45 * 60)
+            night_session = second >= (15 * 3600) or second < (5 * 3600)
             return day_session or night_session
 
     # ------------------------------------------------------------------ #

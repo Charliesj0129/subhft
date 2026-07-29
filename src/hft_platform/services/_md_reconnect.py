@@ -25,6 +25,23 @@ logger = get_logger("service.market_data")
 _WATCHDOG_EXCLUDE_PREFIXES: tuple[str, ...] = ("TXO", "MXO", "TEO", "TFO")
 
 
+def _prefix_gap_threshold(symbol: str, prefix_defaults: dict[str, float]) -> float | None:
+    """Longest-prefix lookup of a product-root gap threshold, or None.
+
+    Longest match wins so a more specific root always beats a shorter one that
+    happens to be its prefix.
+    """
+    if not prefix_defaults:
+        return None
+    best_prefix = ""
+    best_value: float | None = None
+    for prefix, value in prefix_defaults.items():
+        if symbol.startswith(prefix) and len(prefix) > len(best_prefix):
+            best_prefix = prefix
+            best_value = value
+    return best_value
+
+
 def _calendar_enabled() -> bool:
     return os.getenv("HFT_RECONNECT_USE_CALENDAR", "1").lower() not in {"0", "false", "no", "off"}
 
@@ -321,16 +338,30 @@ class MarketDataReconnectMixin:
         sparse trading is normal for them. The per-symbol override map
         (``_symbol_gap_threshold_overrides``) lets ops set higher floors
         for known-low-liquidity symbols without weakening front-month gates.
+
+        Exact overrides key on a full symbol, which rolls every quarter
+        (``EXFH6`` → ``EXFJ6``), so a hand-set override silently expires and the
+        noise comes back — which is how ~2700 warnings/day for one structurally
+        illiquid contract went unfixed. Product-root defaults
+        (``_symbol_gap_threshold_prefix_defaults``) survive the roll. Resolution
+        order is exact override → longest matching root → global threshold; an
+        exact override always wins so ops keep the last word.
         """
         global_threshold = getattr(self, "_symbol_gap_threshold_s", 6.0)
         if self._is_market_open_grace_period():
             global_threshold = max(global_threshold, getattr(self, "_market_open_grace_gap_threshold_s", 30.0))
         overrides: dict[str, float] = getattr(self, "_symbol_gap_threshold_overrides", {}) or {}
+        prefix_defaults: dict[str, float] = getattr(self, "_symbol_gap_threshold_prefix_defaults", {}) or {}
         stale: list[tuple[str, float]] = []
         for symbol, last_ts in active_snapshot.items():
             if any(symbol.startswith(p) for p in _WATCHDOG_EXCLUDE_PREFIXES):
                 continue
-            threshold = overrides.get(symbol, global_threshold)
+            threshold = overrides.get(symbol)
+            if threshold is None:
+                prefix_threshold = _prefix_gap_threshold(symbol, prefix_defaults)
+                # ``max`` so the market-open grace period can only ever relax a
+                # root default, never tighten one.
+                threshold = global_threshold if prefix_threshold is None else max(prefix_threshold, global_threshold)
             gap = now - last_ts
             if gap > threshold:
                 stale.append((symbol, gap))

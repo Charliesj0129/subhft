@@ -551,12 +551,12 @@ def test_is_trading_hours_stock_explicit():
 
 
 def test_is_trading_hours_future_day_session_boundaries():
-    """Futures day session: 08:45–13:45 on a trading day."""
+    """Futures day session is half-open [08:45:00, 13:45:00) on a trading day."""
     cal = _make_cal_forced_trading_day(True)
     tz = cal._tz
 
     assert cal.is_trading_hours(dt.datetime(2026, 3, 10, 8, 45, tzinfo=tz), product_type="future") is True
-    assert cal.is_trading_hours(dt.datetime(2026, 3, 10, 13, 45, tzinfo=tz), product_type="future") is True
+    assert cal.is_trading_hours(dt.datetime(2026, 3, 10, 13, 45, tzinfo=tz), product_type="future") is False
     assert cal.is_trading_hours(dt.datetime(2026, 3, 10, 8, 44, tzinfo=tz), product_type="future") is False
     assert cal.is_trading_hours(dt.datetime(2026, 3, 10, 13, 46, tzinfo=tz), product_type="future") is False
 
@@ -609,9 +609,13 @@ def test_is_trading_hours_future_night_session_early_morning():
     ts = dt.datetime(2026, 3, 11, 4, 0, tzinfo=tz)
     assert cal.is_trading_hours(ts, product_type="future") is True
 
-    # Boundary at exactly 05:00
+    # 04:59:59 – still inside the session
+    ts_last = dt.datetime(2026, 3, 11, 4, 59, 59, tzinfo=tz)
+    assert cal.is_trading_hours(ts_last, product_type="future") is True
+
+    # Boundary at exactly 05:00 – the close is exclusive
     ts_boundary = dt.datetime(2026, 3, 11, 5, 0, tzinfo=tz)
-    assert cal.is_trading_hours(ts_boundary, product_type="future") is True
+    assert cal.is_trading_hours(ts_boundary, product_type="future") is False
 
     # 05:01 – outside session
     ts_after = dt.datetime(2026, 3, 11, 5, 1, tzinfo=tz)
