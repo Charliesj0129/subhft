@@ -33,6 +33,7 @@ from hft_platform.feed_adapter.shioaji._infra import (
 )
 from hft_platform.feed_adapter.shioaji._infra import (
     client_float,
+    scrub_broker_error,
 )
 from hft_platform.feed_adapter.shioaji._infra import (
     ensure_session_lock as _ensure_session_lock_impl,
@@ -398,6 +399,12 @@ class ShioajiClient:
         # keeps the tight one.
         self._login_contract_timeout_s = float(os.getenv("HFT_SHIOAJI_LOGIN_CONTRACT_TIMEOUT_S", "60"))
         self._sdk_busy_grace_s = float(os.getenv("HFT_SHIOAJI_SDK_BUSY_GRACE_S", "2"))
+        # Contract fetches demand exclusive access in shioaji 1.5.x, so the
+        # pooled facades take the shared login slot for them too. The timeout is
+        # generous because four sequential fetches at up to
+        # ``_login_contract_timeout_s`` each must fit inside it.
+        self._contract_fetch_stagger_gap_s = float(os.getenv("HFT_SHIOAJI_CONTRACT_FETCH_GAP_S", "2"))
+        self._contract_fetch_stagger_timeout_s = float(os.getenv("HFT_SHIOAJI_CONTRACT_FETCH_SLOT_TIMEOUT_S", "300"))
         self._reconnect_timeout_s = float(os.getenv("HFT_SHIOAJI_RECONNECT_TIMEOUT_S", "45"))
         self._reconnect_subscribe_timeout_s = float(os.getenv("HFT_SHIOAJI_RECONNECT_SUBSCRIBE_TIMEOUT_S", "30"))
         try:
@@ -1073,16 +1080,36 @@ class ShioajiClient:
         return self.api is not None and hasattr(self.api, "Contracts")
 
     def _ensure_contracts(self) -> bool:
-        """Fetch contracts explicitly. Returns True if contracts are available after the call."""
+        """Fetch contracts explicitly. Returns True only if the fetch itself succeeded.
+
+        Two bugs used to hide every failure here:
+
+        1. ``api.fetch_contracts`` was called directly, bypassing
+           :meth:`_safe_call_with_timeout` and therefore the ``InflightGuard``.
+           With four pooled facades refreshing on the same hourly schedule they
+           entered the SDK's Rust ``_core`` within a few hundred ms of each
+           other and it aborted them with "exclusive access lost".
+        2. The return value was ``contracts_ready``, which is
+           ``hasattr(api, "Contracts")`` — always True once logged in. So a
+           fetch that failed in 17 µs still reported success, and the hourly
+           refresh logged "Contract data refreshed from broker" every time
+           while the cache never changed.
+
+        A failed fetch now returns False so callers can report it honestly.
+        """
         if not self.api or not hasattr(self.api, "fetch_contracts"):
             return self.contracts_ready
+        api = self.api
         start_ns = time.perf_counter_ns()
-        try:
-            self.api.fetch_contracts(contract_download=True)
-            self._record_api_latency("fetch_contracts", start_ns, ok=True)
-        except Exception as exc:
-            self._record_api_latency("fetch_contracts", start_ns, ok=False)
-            logger.warning("Contract fetch failed", error=str(exc))
+        ok, _result, error, _timed_out = self._safe_call_with_timeout(
+            "fetch_contracts",
+            lambda: api.fetch_contracts(contract_download=True),
+            client_float(self, "_login_contract_timeout_s", 60.0),
+        )
+        self._record_api_latency("fetch_contracts", start_ns, ok=ok)
+        if not ok:
+            logger.warning("Contract fetch failed", error=scrub_broker_error(str(error) if error else "timeout"))
+            return False
         return self.contracts_ready
 
     def _maybe_activate_ca(self) -> None:

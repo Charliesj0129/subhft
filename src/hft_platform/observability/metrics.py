@@ -249,6 +249,7 @@ class MetricsRegistry:
                 _pn("feature_profile_compat_failures_total"),
                 _pn("contract_refresh_total"),
                 _pn("contract_refresh_symbols_changed_total"),
+                _pn("contract_cache_last_success_ts"),
                 _pn("autonomy_mode"),
                 _pn("autonomy_transitions_total"),
                 _pn("strategy_quarantine_active"),
@@ -1345,7 +1346,18 @@ class MetricsRegistry:
         self.contract_refresh_total = Counter(
             _pn("contract_refresh_total"),
             "Contract refresh operations",
-            ["result"],  # ok|error|skipped_locked
+            ["result"],  # ok|error|fetch_failed|skipped_locked
+        )
+        # Freshness of the contract cache. ``contract_refresh_total{result="ok"}``
+        # alone cannot show a stuck cache: it counts attempts that reached the
+        # end of the routine, which for a long time included every fetch that
+        # had silently failed. This timestamp only moves when contracts were
+        # actually rewritten, so ``time() - <gauge>`` is a truthful age.
+        # Follows the ``backup_last_success_ts`` pattern — a timestamp rather
+        # than a self-ageing gauge, so no ticker is needed to keep it honest.
+        self.contract_cache_last_success_ts = Gauge(
+            _pn("contract_cache_last_success_ts"),
+            "Unix timestamp of the last contract cache write from a verified broker fetch",
         )
         self.contract_refresh_symbols_changed_total = Counter(
             _pn("contract_refresh_symbols_changed_total"),

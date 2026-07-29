@@ -2,10 +2,14 @@
 
 Provides trading day and hours checks for Taiwan market (XTAI).
 
-Product-type session windows (TST = UTC+8):
+Product-type session windows (TST = UTC+8), all half-open ``[open, close)``:
   stock:          09:00–13:30  (TWSE day session)
   future/option:  08:45–13:45  (TAIFEX day session)
                   15:00–05:00  (TAIFEX night session, crosses midnight)
+
+The closing instant is outside the session: 13:45:00 and 05:00:00 are already
+"closed". Comparisons are made at second granularity so the closing minute is
+not mistaken for an open market.
 """
 
 from __future__ import annotations
@@ -171,27 +175,53 @@ class MarketCalendar:
             return date.weekday() < 5
 
     # ------------------------------------------------------------------ #
-    # TAIFEX session boundaries (minutes from midnight, TST)             #
-    # Day session:   08:45–13:45                                         #
-    # Night session: 15:00–(next day)05:00  (cross-midnight)             #
+    # Session boundaries (minutes from midnight, TST)                    #
+    # TWSE day:            09:00–13:30                                   #
+    # TAIFEX day session:  08:45–13:45                                   #
+    # TAIFEX night:        15:00–(next day)05:00  (cross-midnight)       #
     # ------------------------------------------------------------------ #
     _FUT_DAY_OPEN_MIN: int = 8 * 60 + 45  # 08:45
     _FUT_DAY_CLOSE_MIN: int = 13 * 60 + 45  # 13:45
     _FUT_NIGHT_OPEN_MIN: int = 15 * 60  # 15:00
     _FUT_NIGHT_CLOSE_MIN: int = 5 * 60  # 05:00 (next calendar day)
+    _TWSE_OPEN_MIN: int = 9 * 60  # 09:00
+    _TWSE_CLOSE_MIN: int = 13 * 60 + 30  # 13:30
+
+    # Second-granularity forms, derived so the minute constants above stay the
+    # single readable source of truth.
+    #
+    # The OPEN bound is inclusive and the CLOSE bound is EXCLUSIVE.  Comparing
+    # at minute granularity with an inclusive close made the entire closing
+    # minute (13:45:00–13:45:59, 05:00:00–05:00:59) read as "trading hours"
+    # after the feed had already gone quiet, which is long enough for the
+    # 15 s quote watchdog to declare the feed dead and force a relogin on
+    # every facade at every session close.  13:45:30 is not trading hours.
+    _FUT_DAY_OPEN_SEC: int = _FUT_DAY_OPEN_MIN * 60
+    _FUT_DAY_CLOSE_SEC: int = _FUT_DAY_CLOSE_MIN * 60
+    _FUT_NIGHT_OPEN_SEC: int = _FUT_NIGHT_OPEN_MIN * 60
+    _FUT_NIGHT_CLOSE_SEC: int = _FUT_NIGHT_CLOSE_MIN * 60
+    _TWSE_OPEN_SEC: int = _TWSE_OPEN_MIN * 60
+    _TWSE_CLOSE_SEC: int = _TWSE_CLOSE_MIN * 60
+
+    @staticmethod
+    def _seconds_of_day(ts: dt.datetime) -> int:
+        """Seconds elapsed since local midnight, truncated to whole seconds."""
+        return ts.hour * 3600 + ts.minute * 60 + ts.second
 
     def _is_futures_night_session(self, ts: dt.datetime) -> bool:
         """Return True if *ts* falls inside the TAIFEX night session.
 
         Night session: 15:00 on a trading day → 05:00 the following calendar day.
         Cross-midnight logic:
-          • 15:00–23:59  → today must be a trading day
-          • 00:00–05:00  → yesterday must be a trading day
+          • 15:00:00–23:59:59  → today must be a trading day
+          • 00:00:00–04:59:59  → yesterday must be a trading day
+
+        05:00:00 itself is the close and is therefore outside the session.
         """
-        current_min = ts.hour * 60 + ts.minute
-        if current_min >= self._FUT_NIGHT_OPEN_MIN:
+        current_s = self._seconds_of_day(ts)
+        if current_s >= self._FUT_NIGHT_OPEN_SEC:
             return self.is_trading_day(ts.date())
-        if current_min <= self._FUT_NIGHT_CLOSE_MIN:
+        if current_s < self._FUT_NIGHT_CLOSE_SEC:
             return self.is_trading_day(ts.date() - dt.timedelta(days=1))
         return False
 
@@ -211,6 +241,9 @@ class MarketCalendar:
                           windows are used: 08:45–13:45 day and 15:00–05:00
                           night session.
 
+        Every window is half-open ``[open, close)``: the opening instant is
+        inside the session and the closing instant is already outside it.
+
         Returns:
             True if within the relevant trading session.
         """
@@ -225,8 +258,8 @@ class MarketCalendar:
             return False
 
         if not self._cal:
-            current = ts.hour * 60 + ts.minute
-            return 9 * 60 <= current <= 13 * 60 + 30
+            current_s = self._seconds_of_day(ts)
+            return self._TWSE_OPEN_SEC <= current_s < self._TWSE_CLOSE_SEC
 
         try:
             import pandas as pd
@@ -234,16 +267,16 @@ class MarketCalendar:
             session = pd.Timestamp(ts.date())
             open_time = self._cal.session_open(session)
             close_time = self._cal.session_close(session)
-            return open_time <= pd.Timestamp(ts) <= close_time
+            return open_time <= pd.Timestamp(ts) < close_time
         except Exception as exc:
             logger.debug("is_trading_hours check failed", ts=str(ts), error=str(exc))
             return False
 
     def _is_futures_trading_hours(self, ts: dt.datetime) -> bool:
         """Return True if *ts* is within any TAIFEX session (day or night)."""
-        current_min = ts.hour * 60 + ts.minute
-        # Day session: 08:45–13:45 on a trading day
-        if self._FUT_DAY_OPEN_MIN <= current_min <= self._FUT_DAY_CLOSE_MIN and self.is_trading_day(ts.date()):
+        current_s = self._seconds_of_day(ts)
+        # Day session: 08:45:00 (inclusive) – 13:45:00 (exclusive) on a trading day
+        if self._FUT_DAY_OPEN_SEC <= current_s < self._FUT_DAY_CLOSE_SEC and self.is_trading_day(ts.date()):
             return True
         # Night session: 15:00–(next day)05:00
         return self._is_futures_night_session(ts)

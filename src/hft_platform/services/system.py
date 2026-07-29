@@ -59,6 +59,10 @@ def _audit_persistence_writer_for_recorder(recorder: Any) -> Any | None:
 
 
 class HFTSystem:
+    # Latched reference instrument for the drift-burst detector (see
+    # ``_drift_burst_book``). Empty until the first book with a valid mid.
+    _drift_burst_symbol: str
+
     # -- Typed helpers to replace hasattr probes ----------------------------------
 
     @staticmethod
@@ -160,6 +164,40 @@ class HFTSystem:
         """Set the ``running`` attribute on *service* if it exists."""
         if hasattr(service, "running"):
             service.running = value
+
+    def _drift_burst_book(self, lob_engine: Any) -> Any | None:
+        """Return the book of the latched drift-burst reference instrument.
+
+        The drift-burst detector accumulates log-returns of a single price
+        series. Feeding it a rotating symbol makes its t-statistic measure the
+        jump between two contracts, which is how a platform-wide toxicity HALT
+        ended up being driven by dict iteration order: ``lob_engine.books``
+        evicts stale symbols, so the "first" entry changed over time.
+
+        The latch is held for as long as the instrument still quotes; when it
+        is evicted or goes bid-less a new one is picked and the change is
+        logged, so the escalation is always attributable to a named symbol.
+        """
+        books = getattr(lob_engine, "books", None)
+        if not books:
+            return None
+
+        current = getattr(self, "_drift_burst_symbol", "")
+        if current:
+            book = books.get(current)
+            if book is not None and book.mid_price_x2 > 0:
+                return book
+
+        for symbol, book in books.items():
+            if book.mid_price_x2 > 0:
+                logger.info(
+                    "drift_burst_reference_symbol_changed",
+                    previous=current or None,
+                    symbol=symbol,
+                )
+                self._drift_burst_symbol = symbol
+                return book
+        return None
 
     def __init__(self, settings: Optional[Dict[str, Any]] = None):
         configure_logging()
@@ -266,6 +304,7 @@ class HFTSystem:
 
         self._halt_log_mono: float = 0.0  # rate-limit HALT log to avoid spam
         self._halt_checkpoint_written: bool = False  # write checkpoint once on HALT entry
+        self._drift_burst_symbol = ""
         self._mtm_calculator = None
         try:
             from hft_platform.execution.mtm import MarkToMarketCalculator
@@ -1090,20 +1129,27 @@ class HFTSystem:
                 logger.warning("StormGuard update call failed", error=str(e))
 
             # 4b. Update StormGuard with LOB-derived drift-burst toxicity.
+            #
+            # The detector holds ONE instrument's return window, so it has to be
+            # fed one instrument. This used to take whatever came first out of
+            # ``lob_engine.books`` — a plain dict that evicts on TTL, so "first"
+            # silently rotated between contracts and the drift t-statistic ended
+            # up measuring the price gap between them (observed: the same
+            # detector logging spreads of 3.75 and 48.45 points). The reference
+            # symbol is now latched and only re-picked when it goes away.
             try:
                 if hasattr(self.storm_guard, "update_with_lob"):
                     lob_engine = getattr(self.md_service, "lob", None)
                     if lob_engine is not None:
-                        for _sym, book in lob_engine.books.items():
-                            if book.mid_price_x2 > 0:
-                                self.storm_guard.update_with_lob(
-                                    mid_price_x2=book.mid_price_x2,
-                                    spread_scaled=book.spread,
-                                    imbalance=book.imbalance,
-                                    ts=timebase.now_ns(),
-                                    symbol=_sym,
-                                )
-                                break
+                        book = self._drift_burst_book(lob_engine)
+                        if book is not None:
+                            self.storm_guard.update_with_lob(
+                                mid_price_x2=book.mid_price_x2,
+                                spread_scaled=book.spread,
+                                imbalance=book.imbalance,
+                                ts=timebase.now_ns(),
+                                symbol=getattr(self, "_drift_burst_symbol", ""),
+                            )
             except Exception as e:
                 logger.warning("StormGuard LOB drift-burst update failed", error=str(e))
 

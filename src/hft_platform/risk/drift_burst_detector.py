@@ -107,6 +107,7 @@ class DriftBurstDetector:
         "_toxicity_score",
         "_last_burst",
         "_drift_sum",
+        "_symbol",
     )
 
     def __init__(
@@ -149,6 +150,7 @@ class DriftBurstDetector:
         self._toxicity_score: float = 0.0
         self._last_burst: BurstEvent | None = None
         self._drift_sum: float = 0.0
+        self._symbol: str = ""
 
     def evaluate(
         self,
@@ -156,6 +158,7 @@ class DriftBurstDetector:
         spread_scaled: int = 0,
         imbalance: float = 0.0,
         ts: int = 0,
+        symbol: str = "",
     ) -> ToxicityResult:
         """Evaluate drift-burst on new LOB update.
 
@@ -166,12 +169,27 @@ class DriftBurstDetector:
             spread_scaled: best_ask - best_bid (scaled int x10000).
             imbalance: LOB imbalance ratio [-1, 1].
             ts: Timestamp in nanoseconds.
+            symbol: Instrument this update belongs to. The ring buffer holds
+                log-returns of ONE price series; feeding it a second instrument
+                makes the t-statistic measure the gap between two contracts
+                rather than drift in either. When the symbol changes the
+                detector resets rather than mixing the series.
 
         Returns:
             ToxicityResult(burst_detected, toxicity_score, burst_event).
             toxicity_score is in [0, 1], suitable for StormGuard threshold comparison.
         """
         burst_event: BurstEvent | None = None
+
+        # Symbol change → the accumulated window belongs to a different
+        # instrument and is meaningless here. Production fed this detector
+        # whichever symbol happened to iterate first out of a TTL-evicting
+        # dict, so the window silently interleaved contracts whose spreads
+        # differed by more than 10x — 405 "bursts" in 24 h, none attributable.
+        if symbol and symbol != self._symbol:
+            if self._symbol:
+                self.reset()
+            self._symbol = symbol
 
         # Bug 20 (2026-04-17): Session-boundary stale-state guard. A long gap
         # (e.g. 13:45 day close → 15:00 night open = 75 min) leaves _last_mid_x2
@@ -302,6 +320,7 @@ class DriftBurstDetector:
 
             logger.info(
                 "drift_burst_detected",
+                symbol=self._symbol,
                 direction=direction,
                 t_stat=f"{self._t_statistic:.3f}",
                 magnitude=f"{abs_t:.3f}",

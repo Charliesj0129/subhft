@@ -432,6 +432,18 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         self._symbol_gap_threshold_overrides: dict[str, float] = _parse_symbol_gap_overrides(
             os.getenv("HFT_SYMBOL_GAP_THRESHOLD_OVERRIDES", "")
         )
+        # Product-root defaults, applied when no exact override matches. Unlike
+        # the exact map these survive the quarterly roll, which is why the
+        # EXFH6 noise (~2700 warnings/day at a 6.1-6.4 s gap against a 6 s
+        # threshold) kept coming back. Only structurally slow *roots* belong
+        # here: the index futures TXF/MXF/TMF stay on the strict global
+        # threshold at every month, front or far, so a real front-month gap is
+        # still caught. Options are excluded from the watchdog entirely
+        # (``_WATCHDOG_EXCLUDE_PREFIXES``) and need no entry.
+        self._symbol_gap_threshold_prefix_defaults: dict[str, float] = {
+            "EXF": 30.0,  # TAIFEX electronics sector futures
+            "FXF": 30.0,  # TAIFEX finance sector futures
+        }
         self._watchdog_interval_s = float(os.getenv("HFT_WATCHDOG_INTERVAL_S", "1.0"))
         self._symbol_gap_min_stale_count = max(1, int(os.getenv("HFT_SYMBOL_GAP_MIN_STALE_COUNT", "5")))
         self._symbol_gap_min_active_symbols = max(1, int(os.getenv("HFT_SYMBOL_GAP_MIN_ACTIVE_SYMBOLS", "24")))

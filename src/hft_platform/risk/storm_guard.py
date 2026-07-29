@@ -444,7 +444,9 @@ class StormGuard:
             spread_scaled: best_ask - best_bid (scaled int x10000).
             imbalance: LOB imbalance ratio [-1, 1].
             ts: Timestamp in nanoseconds.
-            symbol: Symbol driving this LOB update (for observability only).
+            symbol: Instrument driving this LOB update. Passed into the
+                detector, which holds one instrument's return window — a
+                changed symbol resets it rather than mixing price series.
 
         Returns:
             Current StormGuardState after potential escalation.
@@ -469,7 +471,7 @@ class StormGuard:
         if detector is None:
             return self.state
 
-        result = detector.evaluate(mid_price_x2, spread_scaled, imbalance, ts)
+        result = detector.evaluate(mid_price_x2, spread_scaled, imbalance, ts, symbol)
 
         # Determine escalation target from toxicity signal.
         # Only escalate, never de-escalate (additive safety).

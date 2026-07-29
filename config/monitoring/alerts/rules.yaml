@@ -72,6 +72,40 @@ groups:
           offline (make rebuild-symbols-yaml) and restart the engine.
         runbook_url: "docs/runbooks/SymbolsYamlRegeneration.md"
 
+  # Contract cache staleness (2026-07-29). The hourly refresh reported
+  # result="ok" on every cycle while every fetch was in fact being aborted by
+  # the SDK's exclusive-access guard, so the cache never changed and no signal
+  # showed it. `contract_cache_last_success_ts` only moves on a cache write
+  # that followed a fetch which actually returned, making it the one honest
+  # freshness signal. The `> 0` gate keeps the alert quiet before the first
+  # successful refresh of a fresh process.
+  - alert: ContractCacheStale
+    expr: contract_cache_last_success_ts < (time() - 10800) and contract_cache_last_success_ts > 0
+    for: 30m
+    labels:
+        severity: warning
+    annotations:
+        summary: "Contract cache has not been refreshed for >3h"
+        description: |
+          Last successful contract cache write was {{ $value | humanizeTimestamp }},
+          against an hourly refresh cadence. Contracts are only as fresh as that
+          write, so a roll landing now would not be picked up. Check for
+          contract_refresh_total{result="fetch_failed"} and for
+          "Contract fetch failed" in the engine log.
+
+  - alert: ContractRefreshFetchFailing
+    expr: increase(contract_refresh_total{result="fetch_failed"}[3h]) >= 3
+    for: 0s
+    labels:
+        severity: warning
+    annotations:
+        summary: "Contract refresh fetch is failing repeatedly"
+        description: |
+          {{ $value }} contract fetches failed in the last 3h. Most likely the
+          pooled facades are contending for the SDK's exclusive access; check
+          that the fetch is taking the shared login slot and that no other SDK
+          call is holding it.
+
   - alert: FeedReconnectFailureRatioHigh
     expr: |
       (
