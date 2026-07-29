@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Mapping, Sequence
 
 import numpy as np
@@ -16,6 +16,9 @@ from research.backtest.cost_models import load_cost_profile
 SPLIT_ORDER: tuple[str, ...] = ("discovery", "selection", "locked_validation", "final_holdout")
 SPLIT_RATIOS: tuple[float, ...] = (0.50, 0.25, 0.15, 0.10)
 MIN_DAYS_FOR_PROMOTION = 100
+THRESHOLD_QUANTILES: tuple[float, ...] = (0.50, 0.70, 0.85, 0.95)
+MINIMUM_EDGE_POINTS: Mapping[str, float] = {"TXF": 1.0, "TMF": 5.0}
+STRICT_EDGE_TARGET_POINTS: Mapping[str, float] = {"TXF": 10.0, "TMF": 10.0}
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +56,7 @@ class KillMetrics:
     strict_edge_gap: float
     passed: bool
     reasons: tuple[str, ...]
+    clustered_sharpe: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +68,12 @@ class LockedMetrics:
     walk_forward_positive_fraction: float
     walk_forward_sharpes: tuple[float, ...]
     passed: bool
+    walk_forward_active_folds: int = 0
+    deflated_sharpe_trials_effective: int = 1
+    deflated_sharpe_trials_raw: int = 1
+    gate_results: dict[str, bool] = field(default_factory=dict)
+    effective_gate_count: int = 0
+    failure_reasons: tuple[str, ...] = ()
 
 
 def build_split_plan(trading_days: Sequence[str] | np.ndarray) -> SplitPlan:
@@ -188,6 +198,24 @@ def spearman_ic(signal: Sequence[float] | np.ndarray, target: Sequence[float] | 
     return value if np.isfinite(value) else 0.0
 
 
+def resolve_quantile_threshold(
+    signal: Sequence[float] | np.ndarray,
+    *,
+    direction: int,
+    quantile: float,
+) -> float:
+    """Resolve an absolute entry cut from finite discovery-only directed signals."""
+    if direction not in (-1, 1):
+        raise ValueError("direction must be -1 or 1")
+    if not (0.0 < float(quantile) < 1.0):
+        raise ValueError("quantile must be in (0, 1)")
+    directed = np.asarray(signal, dtype=np.float64).reshape(-1) * float(direction)
+    finite = directed[np.isfinite(directed)]
+    if finite.size == 0:
+        raise ValueError("cannot resolve a quantile threshold from an empty signal")
+    return float(np.quantile(finite, float(quantile), method="higher"))
+
+
 def simulate_next_bar_execution(
     *,
     signal: Sequence[float] | np.ndarray,
@@ -277,14 +305,18 @@ def simulate_next_bar_execution(
 def evaluate_recent_kill_criteria(
     *,
     signal: Sequence[float] | np.ndarray,
+    direction: int,
     target_returns: Sequence[float] | np.ndarray,
     execution: ExecutionResult,
     root: str,
     nonoverlap_step: int,
+    trading_days: Sequence[str] | np.ndarray | None = None,
     recent_fraction: float = 0.25,
 ) -> KillMetrics:
     """Apply the preregistered recent-quarter IC and net-edge kills."""
-    signal_arr = np.asarray(signal, dtype=np.float64).reshape(-1)
+    if direction not in (-1, 1):
+        raise ValueError("direction must be -1 or 1")
+    signal_arr = np.asarray(signal, dtype=np.float64).reshape(-1) * float(direction)
     target = np.asarray(target_returns, dtype=np.float64).reshape(-1)
     count = min(signal_arr.size, target.size)
     if not (0.0 < float(recent_fraction) <= 1.0):
@@ -297,7 +329,9 @@ def evaluate_recent_kill_criteria(
     stride = max(1, int(nonoverlap_step))
     nonoverlap_ic = spearman_ic(recent_signal[::stride], recent_target[::stride])
     overlap_ratio = abs(raw_ic) / max(abs(nonoverlap_ic), 1e-12)
-    minimum_edge = 1.0 if root == "TXF" else 5.0
+    if root not in MINIMUM_EDGE_POINTS:
+        raise ValueError(f"unsupported root for edge thresholds: {root!r}")
+    minimum_edge = MINIMUM_EDGE_POINTS[root]
     reasons: list[str] = []
     if detrended_ic <= 0.01:
         reasons.append("detrended_ic")
@@ -305,8 +339,13 @@ def evaluate_recent_kill_criteria(
         reasons.append("raw_ic_inflation")
     if overlap_ratio > 3.0:
         reasons.append("overlap_inflation")
-    if execution.net_edge <= minimum_edge:
+    if execution.trade_pnl.size == 0:
+        reasons.append("no_trades")
+    elif execution.net_edge <= minimum_edge:
         reasons.append("net_edge")
+    daily_sharpe = (
+        clustered_execution_sharpe(execution, trading_days) if trading_days is not None else execution.net_sharpe
+    )
     return KillMetrics(
         raw_ic=raw_ic,
         detrended_ic=detrended_ic,
@@ -315,9 +354,10 @@ def evaluate_recent_kill_criteria(
         net_edge=execution.net_edge,
         net_sharpe=execution.net_sharpe,
         turnover=execution.turnover,
-        strict_edge_gap=float(10.0 - execution.net_edge),
+        strict_edge_gap=float(STRICT_EDGE_TARGET_POINTS[root] - execution.net_edge),
         passed=not reasons,
         reasons=tuple(reasons),
+        clustered_sharpe=daily_sharpe,
     )
 
 
@@ -350,6 +390,68 @@ def block_bootstrap_mean(
         sampled = np.concatenate([array[start : start + width] for start in starts])[: array.size]
         means[index] = float(np.mean(sampled))
     return float(np.quantile(means, 0.05)), float(np.mean(means <= 0.0))
+
+
+def cluster_bootstrap_mean(
+    values: Sequence[float] | np.ndarray,
+    clusters: Sequence[str] | np.ndarray,
+    *,
+    samples: int = 2_000,
+    seed: int,
+) -> tuple[float, float]:
+    """Bootstrap whole trading-day/session clusters, retaining intracluster dependence."""
+    array = np.asarray(values, dtype=np.float64).reshape(-1)
+    cluster_array = np.asarray(clusters).astype("<U32").reshape(-1)
+    if array.size != cluster_array.size:
+        raise ValueError("values and clusters must have identical lengths")
+    valid = np.isfinite(array)
+    array = array[valid]
+    cluster_array = cluster_array[valid]
+    ordered = tuple(dict.fromkeys(str(value) for value in cluster_array))
+    if array.size < 2 or len(ordered) < 2:
+        return 0.0, 1.0
+    grouped = [array[cluster_array == cluster] for cluster in ordered]
+    rng = np.random.default_rng(int(seed))
+    means = np.empty(max(1, int(samples)), dtype=np.float64)
+    for index in range(means.size):
+        selected = rng.integers(0, len(grouped), size=len(grouped))
+        sample = np.concatenate([grouped[item] for item in selected])
+        means[index] = float(np.mean(sample))
+    return float(np.quantile(means, 0.05)), float(np.mean(means <= 0.0))
+
+
+def clustered_execution_sharpe(
+    execution: ExecutionResult,
+    trading_days: Sequence[str] | np.ndarray,
+) -> float:
+    """Sharpe of daily clustered PnL, on the same scale used by locked DSR."""
+    days = np.asarray(trading_days).astype("<U10").reshape(-1)
+    if (
+        len(
+            {
+                execution.trade_pnl.size,
+                execution.entry_indices.size,
+                execution.exit_indices.size,
+            }
+        )
+        != 1
+    ):
+        raise ValueError("trade pnl and entry/exit indices must have identical lengths")
+    if np.any(execution.entry_indices < 0) or np.any(execution.entry_indices >= days.size):
+        raise ValueError("execution entry index is outside the trading-day array")
+    trade_days = days[execution.entry_indices]
+    ordered_days = tuple(dict.fromkeys(str(value) for value in trade_days))
+    daily_pnl = np.asarray(
+        [np.sum(execution.trade_pnl[trade_days == day]) for day in ordered_days],
+        dtype=np.float64,
+    )
+    if daily_pnl.size < 2:
+        return 0.0
+    standard_deviation = float(np.std(daily_pnl, ddof=1))
+    mean = float(np.mean(daily_pnl))
+    if standard_deviation > 1e-12:
+        return mean / standard_deviation
+    return 0.0
 
 
 def permutation_pvalue(
@@ -389,32 +491,107 @@ def benjamini_hochberg(pvalues: Sequence[float], q: float = 0.10) -> np.ndarray:
     return mask
 
 
-def deflated_sharpe(sharpe: float, *, trials: int, observations: int) -> float:
-    """Conservative normal approximation to the deflated-Sharpe probability."""
-    if observations < 2 or trials < 1 or not np.isfinite(sharpe):
+def effective_test_count(signals: Sequence[Sequence[float]] | np.ndarray) -> int:
+    """Li-Ji effective count from the correlation eigenvalues of test signals."""
+    matrix = np.asarray(signals, dtype=np.float64)
+    if matrix.ndim == 1:
+        matrix = matrix.reshape(1, -1)
+    if matrix.ndim != 2 or matrix.shape[0] < 1:
+        raise ValueError("signals must be a non-empty tests-by-observations matrix")
+    usable: list[np.ndarray] = []
+    for row in matrix:
+        finite = np.isfinite(row)
+        if int(np.count_nonzero(finite)) < 2:
+            continue
+        filled = row.copy()
+        filled[~finite] = float(np.mean(filled[finite]))
+        deviation = filled - float(np.mean(filled))
+        scale = float(np.std(deviation, ddof=1))
+        if scale > 1e-12:
+            usable.append(deviation / scale)
+    if not usable:
+        return 1
+    standardized = np.vstack(usable)
+    singular_values = np.linalg.svd(standardized, compute_uv=False)
+    eigenvalues = np.square(singular_values) / max(1, standardized.shape[1] - 1)
+    eigenvalues = np.clip(eigenvalues, 0.0, None)
+    nearest_integer = np.rint(eigenvalues)
+    eigenvalues = np.where(
+        np.isclose(eigenvalues, nearest_integer, rtol=1e-10, atol=1e-12),
+        nearest_integer,
+        eigenvalues,
+    )
+    contributions = (eigenvalues >= 1.0).astype(np.float64) + (eigenvalues - np.floor(eigenvalues))
+    estimate = int(math.ceil(float(np.sum(contributions)) - 1e-12))
+    return max(1, min(standardized.shape[0], estimate))
+
+
+def deflated_sharpe(
+    sharpe: float,
+    *,
+    effective_trials: int,
+    observations: int,
+    trial_sharpe_std: float,
+    skewness: float = 0.0,
+    kurtosis: float = 3.0,
+) -> float:
+    """Bailey/López de Prado DSR probability using an effective test count."""
+    if observations < 2 or effective_trials < 1 or not np.isfinite(sharpe) or not np.isfinite(trial_sharpe_std):
         return 0.0
-    expected_max = float(norm.ppf(1.0 - (1.0 / max(2.0, float(trials)))))
-    standard_error = math.sqrt(max(1e-12, (1.0 + (0.5 * sharpe * sharpe)) / (observations - 1)))
+    trials = max(1.0, float(effective_trials))
+    if trials <= 1.0 or trial_sharpe_std <= 1e-12:
+        expected_max = 0.0
+    else:
+        euler_gamma = 0.5772156649015329
+        expected_max = float(trial_sharpe_std) * (
+            (1.0 - euler_gamma) * norm.ppf(1.0 - (1.0 / trials))
+            + euler_gamma * norm.ppf(1.0 - (1.0 / (trials * math.e)))
+        )
+    variance_term = 1.0 - float(skewness) * float(sharpe) + ((float(kurtosis) - 1.0) / 4.0) * float(sharpe) ** 2
+    standard_error = math.sqrt(max(1e-12, variance_term / (observations - 1)))
     return float(norm.cdf((sharpe - expected_max) / standard_error))
 
 
 def purged_walk_forward_sharpes(
     trade_pnl: Sequence[float] | np.ndarray,
     *,
+    entry_indices: Sequence[int] | np.ndarray | None = None,
+    exit_indices: Sequence[int] | np.ndarray | None = None,
+    trading_days: Sequence[str] | np.ndarray | None = None,
+    validation_days: Sequence[str] | None = None,
     folds: int = 5,
-    purge: int = 1,
 ) -> tuple[float, ...]:
-    """Five contiguous OOS folds with a purge at each boundary."""
+    """Calendar folds that purge trades whose labels cross a fold boundary."""
     values = np.asarray(trade_pnl, dtype=np.float64).reshape(-1)
-    if values.size < folds:
-        return tuple(0.0 for _ in range(folds))
-    fold_indices = np.array_split(np.arange(values.size), folds)
+    if entry_indices is None or exit_indices is None or trading_days is None:
+        fold_indices = np.array_split(np.arange(values.size), folds)
+        return tuple(
+            (
+                float(np.mean(values[indices]) / np.std(values[indices], ddof=1))
+                if indices.size >= 2 and float(np.std(values[indices], ddof=1)) > 1e-12
+                else math.nan
+            )
+            for indices in fold_indices
+        )
+    entries = np.asarray(entry_indices, dtype=np.int64).reshape(-1)
+    exits = np.asarray(exit_indices, dtype=np.int64).reshape(-1)
+    days = np.asarray(trading_days).astype("<U10").reshape(-1)
+    if len({values.size, entries.size, exits.size}) != 1:
+        raise ValueError("trade pnl and entry/exit indices must have identical lengths")
+    if np.any(entries < 0) or np.any(exits < entries) or np.any(exits >= days.size):
+        raise ValueError("trade entry/exit indices are outside the trading-day array")
+    ordered_days = (
+        tuple(validation_days) if validation_days is not None else tuple(dict.fromkeys(str(day) for day in days))
+    )
+    fold_days = np.array_split(np.asarray(ordered_days, dtype="<U10"), folds)
     sharpes: list[float] = []
-    for indices in fold_indices:
-        trimmed = indices[int(purge) :] if indices.size > purge else np.asarray([], dtype=np.int64)
-        view = values[trimmed]
+    for current_days in fold_days:
+        entry_days = days[entries]
+        exit_days = days[exits]
+        in_fold = np.isin(entry_days, current_days) & np.isin(exit_days, current_days)
+        view = values[in_fold]
         if view.size < 2 or float(np.std(view, ddof=1)) <= 1e-12:
-            sharpes.append(0.0)
+            sharpes.append(math.nan)
         else:
             sharpes.append(float(np.mean(view) / np.std(view, ddof=1)))
     return tuple(sharpes)
@@ -426,18 +603,88 @@ def locked_validation(
     target_returns: Sequence[float] | np.ndarray,
     execution: ExecutionResult,
     actual_trials: int,
+    effective_trials: int | None = None,
+    trial_sharpe_std: float = 1.0,
+    trading_days: Sequence[str] | np.ndarray | None = None,
+    validation_days: Sequence[str] | None = None,
     seed: int,
 ) -> LockedMetrics:
-    lower, bootstrap_p = block_bootstrap_mean(execution.trade_pnl, samples=2_000, seed=seed)
+    if trading_days is None:
+        trade_clusters = np.arange(execution.trade_pnl.size).astype("<U32")
+        lower, bootstrap_p = block_bootstrap_mean(execution.trade_pnl, samples=2_000, seed=seed)
+        dsr_values = execution.trade_pnl
+    else:
+        day_array = np.asarray(trading_days).astype("<U10").reshape(-1)
+        if (
+            len(
+                {
+                    execution.trade_pnl.size,
+                    execution.entry_indices.size,
+                    execution.exit_indices.size,
+                }
+            )
+            != 1
+        ):
+            raise ValueError("trade pnl and entry/exit indices must have identical lengths")
+        if np.any(execution.entry_indices < 0) or np.any(execution.entry_indices >= day_array.size):
+            raise ValueError("execution entry index is outside the trading-day array")
+        trade_clusters = day_array[execution.entry_indices]
+        lower, bootstrap_p = cluster_bootstrap_mean(
+            execution.trade_pnl,
+            trade_clusters,
+            samples=2_000,
+            seed=seed,
+        )
+        ordered_clusters = tuple(dict.fromkeys(str(value) for value in trade_clusters))
+        dsr_values = np.asarray(
+            [np.sum(execution.trade_pnl[trade_clusters == cluster]) for cluster in ordered_clusters],
+            dtype=np.float64,
+        )
     perm_p = permutation_pvalue(signal, target_returns, samples=2_000, seed=seed + 1)
-    fold_sharpes = purged_walk_forward_sharpes(execution.trade_pnl, folds=5, purge=1)
-    positive_fraction = float(np.mean(np.asarray(fold_sharpes) > 0.0))
-    dsr = deflated_sharpe(
-        execution.net_sharpe,
-        trials=max(1, int(actual_trials)),
-        observations=int(execution.trade_pnl.size),
+    fold_sharpes = purged_walk_forward_sharpes(
+        execution.trade_pnl,
+        entry_indices=execution.entry_indices if trading_days is not None else None,
+        exit_indices=execution.exit_indices if trading_days is not None else None,
+        trading_days=trading_days,
+        validation_days=validation_days,
+        folds=5,
     )
-    passed = bool(lower > 0.0 and bootstrap_p <= 0.10 and perm_p <= 0.10 and dsr >= 0.50 and positive_fraction >= 0.60)
+    finite_folds = np.asarray(fold_sharpes, dtype=np.float64)
+    finite_folds = finite_folds[np.isfinite(finite_folds)]
+    active_folds = int(finite_folds.size)
+    positive_fraction = float(np.mean(finite_folds > 0.0)) if active_folds else 0.0
+    dsr_standard_deviation = float(np.std(dsr_values, ddof=1)) if dsr_values.size > 1 else 0.0
+    if dsr_values.size > 1 and dsr_standard_deviation > 1e-12:
+        dsr_sharpe = float(np.mean(dsr_values) / dsr_standard_deviation)
+        centered = dsr_values - float(np.mean(dsr_values))
+        standard_deviation = float(np.std(dsr_values, ddof=0))
+        skewness = float(np.mean(centered**3) / standard_deviation**3)
+        kurtosis = float(np.mean(centered**4) / standard_deviation**4)
+    else:
+        dsr_sharpe = 0.0
+        skewness = 0.0
+        kurtosis = 3.0
+    effective = max(1, min(int(actual_trials), int(effective_trials or actual_trials)))
+    dsr = deflated_sharpe(
+        dsr_sharpe,
+        effective_trials=effective,
+        observations=int(dsr_values.size),
+        trial_sharpe_std=float(trial_sharpe_std),
+        skewness=skewness,
+        kurtosis=kurtosis,
+    )
+    gate_results = {
+        "cluster_bootstrap": bool(lower > 0.0 and bootstrap_p <= 0.10),
+        "permutation": bool(perm_p <= 0.10),
+        "deflated_sharpe": bool(dsr >= 0.50),
+        "walk_forward": bool(active_folds >= 3 and positive_fraction >= 0.60),
+    }
+    failure_reasons = tuple(
+        ("insufficient_trade_activity" if name == "walk_forward" and active_folds < 3 else name)
+        for name, passed in gate_results.items()
+        if not passed
+    )
+    passed = all(gate_results.values())
     return LockedMetrics(
         bootstrap_lower_95=lower,
         bootstrap_pvalue=bootstrap_p,
@@ -446,6 +693,12 @@ def locked_validation(
         walk_forward_positive_fraction=positive_fraction,
         walk_forward_sharpes=fold_sharpes,
         passed=passed,
+        walk_forward_active_folds=active_folds,
+        deflated_sharpe_trials_effective=effective,
+        deflated_sharpe_trials_raw=max(1, int(actual_trials)),
+        gate_results=gate_results,
+        effective_gate_count=len(gate_results),
+        failure_reasons=failure_reasons,
     )
 
 

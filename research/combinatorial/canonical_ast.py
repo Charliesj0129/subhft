@@ -196,7 +196,7 @@ def _collect_role_positions(node: Node, role: str, out: dict[str, list[Node]]) -
         arg_roles = OPERATOR_ARG_ROLES.get(node.op)
         if arg_roles is None:
             raise ValueError(f"No arg-role definition for operator: {node.op}")
-        for child, child_role in zip(node.args, arg_roles[: len(node.args)]):
+        for child, child_role in zip(node.args, arg_roles[: len(node.args)], strict=True):
             _collect_role_positions(child, child_role, out)
 
 

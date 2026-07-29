@@ -21,10 +21,12 @@ from research.combinatorial.smma_runner import (
     RunConfig,
     RunIntegrityError,
     SplitUnlockGuard,
+    _evaluate_candidate,
     _exact_horizon_inputs,
     _timestamp_signal_correlation,
     _with_integrity_hash,
     code_fingerprint,
+    enumerate_candidates,
     evaluate_robustness_slices,
     mining_status,
     resource_decision,
@@ -241,6 +243,12 @@ def test_run_config_enforces_frozen_resource_caps(tmp_path) -> None:
         RunConfig(run_dir=tmp_path, seeds=(1, 1, 2)).validate()
     with pytest.raises(ValueError, match="strictly increasing"):
         RunConfig(run_dir=tmp_path, smma_lengths=(1, 3, 2)).validate()
+    with pytest.raises(ValueError, match="truthful screen adapter"):
+        RunConfig(
+            run_dir=tmp_path,
+            family="tick",
+            unlock_final_holdout=True,
+        ).validate()
 
 
 def test_two_minute_run_requires_only_two_minute_and_daily_dataset(tmp_path) -> None:
@@ -254,6 +262,86 @@ def test_two_minute_run_requires_only_two_minute_and_daily_dataset(tmp_path) -> 
     )
 
     assert run._required_dataset_timeframes() == (2, 1440)
+
+
+def test_dataset_cache_reuses_identical_bidask_and_kbar_exports(monkeypatch, tmp_path) -> None:
+    import research.combinatorial.smma_runner as runner
+
+    exports: list[dict[str, object]] = []
+    original_bidask = runner.FAMILY_REGISTRY["bidask"]
+    original_kbar = runner.FAMILY_REGISTRY["kbar"]
+
+    def fake_export(path, **kwargs):
+        exports.append(dict(kwargs))
+        return save_governed_dataset(
+            path,
+            _dataset(),
+            query_evidence=[{"query_sha256": "test", "guard_overall": "pass"}],
+            code_fingerprint=str(kwargs["code_fingerprint"]),
+            requested_date_from=str(kwargs["date_from"]),
+            requested_date_to=str(kwargs["date_to"]),
+        )
+
+    monkeypatch.setitem(
+        runner.FAMILY_REGISTRY,
+        "bidask",
+        runner.FamilyAdapter(
+            build_features=original_bidask.build_features,
+            build_features_for_expression=original_bidask.build_features_for_expression,
+            evaluate_expression=original_bidask.evaluate_expression,
+            dataset=runner.FamilyDatasetConfig(
+                date_from=original_bidask.dataset.date_from,
+                date_to=original_bidask.dataset.date_to,
+                roots=original_bidask.dataset.roots,
+                export=fake_export,
+                load=original_bidask.dataset.load,
+            ),
+        ),
+    )
+    monkeypatch.setitem(
+        runner.FAMILY_REGISTRY,
+        "kbar",
+        runner.FamilyAdapter(
+            build_features=original_kbar.build_features,
+            build_features_for_expression=original_kbar.build_features_for_expression,
+            evaluate_expression=original_kbar.evaluate_expression,
+            dataset=runner.FamilyDatasetConfig(
+                date_from=original_kbar.dataset.date_from,
+                date_to=original_kbar.dataset.date_to,
+                roots=original_kbar.dataset.roots,
+                export=fake_export,
+                load=original_kbar.dataset.load,
+            ),
+        ),
+    )
+    cache = tmp_path / "cache"
+    bidask = MiningRun(
+        RunConfig(
+            run_dir=tmp_path / "bidask",
+            family="bidask",
+            seeds=(1, 2, 3),
+            dataset_cache_dir=cache,
+        )
+    )
+    kbar = MiningRun(
+        RunConfig(
+            run_dir=tmp_path / "kbar",
+            family="kbar",
+            seeds=(1, 2, 3),
+            dataset_cache_dir=cache,
+        )
+    )
+    bidask.run_dir.mkdir()
+    kbar.run_dir.mkdir()
+
+    bidask._load_or_export_dataset()
+    kbar._load_or_export_dataset()
+
+    assert len(exports) == 1
+    assert exports[0]["date_from"] == "2026-01-27"
+    assert exports[0]["date_to"] == "2026-07-25"
+    assert bidask._dataset_cache_evidence["hit"] is False
+    assert kbar._dataset_cache_evidence["hit"] is True
 
 
 def test_two_minute_horizon_uses_thirty_bar_target_without_projection() -> None:
@@ -344,6 +432,128 @@ def test_group_context_prefilters_unavailable_features_before_gp_generation(
     assert captured["feature_names"] == ("usable",)
     assert expressions == ["usable"]
     assert len(candidates) == 24
+    assert {candidate.threshold_quantile for candidate in candidates} == {0.50, 0.70, 0.85, 0.95}
+    assert all(candidate.family == "smma" for candidate in candidates)
+
+
+def test_candidate_id_uses_family_and_quantile_not_resolved_cut() -> None:
+    first = enumerate_candidates(
+        family="bidask",
+        root="TXF",
+        timeframe_min=60,
+        expressions=["usable"],
+        signals={"usable": np.asarray([0.0, 1.0, 2.0, 3.0])},
+        discovery_mask=np.asarray([True, True, True, False]),
+        seed=1,
+    )
+    second = enumerate_candidates(
+        family="bidask",
+        root="TXF",
+        timeframe_min=60,
+        expressions=["usable"],
+        signals={"usable": np.asarray([0.0, 10.0, 20.0, 30.0])},
+        discovery_mask=np.asarray([True, True, True, False]),
+        seed=1,
+    )
+    other_family = enumerate_candidates(
+        family="kbar",
+        root="TXF",
+        timeframe_min=60,
+        expressions=["usable"],
+        signals={"usable": np.asarray([0.0, 1.0, 2.0, 3.0])},
+        discovery_mask=np.asarray([True, True, True, False]),
+        seed=1,
+    )
+
+    assert [candidate.candidate_id for candidate in first] == [candidate.candidate_id for candidate in second]
+    assert [candidate.threshold for candidate in first] != [candidate.threshold for candidate in second]
+    assert first[0].candidate_id != other_family[0].candidate_id
+
+
+def test_quantile_cut_is_resolved_on_discovery_split_only() -> None:
+    discovery_mask = np.asarray([True, True, True, False])
+    first = enumerate_candidates(
+        family="bidask",
+        root="TXF",
+        timeframe_min=60,
+        expressions=["usable"],
+        signals={"usable": np.asarray([0.0, 1.0, 2.0, 1_000.0])},
+        discovery_mask=discovery_mask,
+        seed=1,
+    )
+    second = enumerate_candidates(
+        family="bidask",
+        root="TXF",
+        timeframe_min=60,
+        expressions=["usable"],
+        signals={"usable": np.asarray([0.0, 1.0, 2.0, -1_000.0])},
+        discovery_mask=discovery_mask,
+        seed=1,
+    )
+
+    assert [candidate.threshold for candidate in first] == [candidate.threshold for candidate in second]
+
+
+def test_signal_that_never_crosses_its_cut_skips_execution(monkeypatch) -> None:
+    bars = _dataset(days=20)
+    candidate = Candidate(
+        candidate_id="never-crosses",
+        root="TXF",
+        timeframe_min=60,
+        expression="constant",
+        horizon="1h",
+        direction=1,
+        threshold=1.0,
+        seed=1,
+        complexity=1,
+        threshold_quantile=0.95,
+    )
+
+    def execution_must_not_run(**_kwargs):
+        raise AssertionError("full execution scan should have been skipped")
+
+    monkeypatch.setattr(
+        "research.combinatorial.smma_runner.simulate_next_bar_execution",
+        execution_must_not_run,
+    )
+    result = _evaluate_candidate(
+        candidate,
+        dataset=bars,
+        bars=bars,
+        signal=np.ones(len(bars)),
+        split_name="discovery",
+        split_labels=np.full(len(bars), "discovery"),
+    )
+
+    assert result.failure_reason.endswith("no_trades")
+
+
+def test_selection_clustered_sharpe_uses_full_trading_day_axis() -> None:
+    bars = _dataset(days=30)
+    split_labels = np.full(len(bars), "discovery", dtype="<U18")
+    split_labels[len(bars) // 2 :] = "selection"
+    candidate = Candidate(
+        candidate_id="selection-index-axis",
+        root="TXF",
+        timeframe_min=60,
+        expression="trend",
+        horizon="1h",
+        direction=1,
+        threshold=-10.0,
+        seed=1,
+        complexity=1,
+    )
+
+    result = _evaluate_candidate(
+        candidate,
+        dataset=bars,
+        bars=bars,
+        signal=np.linspace(-1.0, 1.0, len(bars)),
+        split_name="selection",
+        split_labels=split_labels,
+    )
+
+    assert np.isfinite(result.kill.clustered_sharpe)
 
 
 def test_hash_chain_ledger_detects_tamper(tmp_path) -> None:
@@ -356,6 +566,31 @@ def test_hash_chain_ledger_detects_tamper(tmp_path) -> None:
     path.write_text(json.dumps(row) + "\n")
     with pytest.raises(RunIntegrityError, match="hash chain mismatch"):
         HashChainLedger(path)
+
+
+def test_resume_restores_frozen_effective_trial_count_evidence(tmp_path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_dataset(run_dir)
+    run = MiningRun(RunConfig(run_dir=run_dir, seeds=(1, 2, 3)))
+    payload = _with_integrity_hash(
+        {
+            "schema": "alpha_mining_search_space.v1",
+            "code_fingerprint": run._code_fingerprint,
+            "dataset_fingerprint": run._dataset_fingerprint(),
+            "effective_trial_counts_by_group": {"TXF/60": 7, "TMF/60": 5},
+            "expression_supply_by_group": {
+                "TXF/60": {"requested": 10, "valid": 9},
+            },
+        },
+        "search_space_hash",
+    )
+    (run_dir / "search_space.json").write_text(json.dumps(payload))
+
+    run._restore_search_space_evidence()
+
+    assert run._effective_trial_counts == {"TXF/60": 7, "TMF/60": 5}
+    assert run._expression_supply == {"TXF/60": {"requested": 10, "valid": 9}}
 
 
 def test_restart_recovers_passing_trial_after_last_checkpoint(tmp_path) -> None:
@@ -782,6 +1017,8 @@ def test_parser_accepts_frozen_smma_run_and_status_contract() -> None:
     assert run_args.timeframes_minutes == [2]
     assert run_args.smma_lengths == [1, 2, 3, 5, 8, 13, 21, 34, 55]
     assert run_args.posthoc_diagnostic is True
+    assert run_args.unlock_final_holdout is False
+    assert run_args.dataset_cache_dir is None
     status_args = cli.build_parser().parse_args(
         ["alpha", "mine", "status", "--run-dir", "research/experiments/runs/smma_test"]
     )
@@ -830,6 +1067,8 @@ def test_cmd_run_passes_frozen_contract_to_runner(monkeypatch, capsys, tmp_path)
     assert captured["config"].timeframes_minutes == (2,)
     assert captured["config"].smma_lengths == (1, 2, 3, 5, 8, 13, 21, 34, 55)
     assert captured["config"].posthoc_diagnostic is True
+    assert captured["config"].unlock_final_holdout is False
+    assert captured["config"].dataset_cache_dir is None
     assert json.loads(capsys.readouterr().out)["screen_only"] is True
 
 
@@ -869,7 +1108,13 @@ def test_bounded_run_writes_kill_report_when_first_hypothesis_fails(monkeypatch,
     assert status["run_manifest"]["smma_lengths"] == [3, 5, 7, 10, 14, 21, 34, 55]
     assert status["run_manifest"]["robustness_timeframes_minutes"] == [1440]
     assert status["run_manifest"]["posthoc_diagnostic"] is False
-    assert status["run_manifest"]["final_holdout_claim_eligible"] is True
+    assert status["run_manifest"]["final_holdout_claim_eligible"] is False
+    assert status["run_manifest"]["final_holdout_unlocked"] is False
+    assert status["run_manifest"]["edge_thresholds"]["TXF"]["minimum_edge_nwd"] == 200.0
+    assert status["run_manifest"]["dataset_date_from"] == "2026-03-19"
+    assert status["run_manifest"]["dataset_date_to"] == "2026-07-24"
+    assert report["funnel"]["discovery"]["killed"] == 1
+    assert report["gate_failure_histogram"]
 
 
 def test_final_survivor_records_day_only_and_daily_robustness() -> None:

@@ -12,6 +12,7 @@ import sys
 import tempfile
 import threading
 import time
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
@@ -22,6 +23,7 @@ from typing import Any, Iterator, Mapping, Sequence
 import numpy as np
 
 from hft_platform.core import timebase
+from research.backtest.cost_models import load_cost_profile
 from research.combinatorial.bidask import build_bidask_family_features
 from research.combinatorial.expression_eval import evaluate_family_expression
 from research.combinatorial.expression_lang import compile_expression
@@ -45,23 +47,27 @@ from research.combinatorial.smma_dataset import (
 )
 from research.combinatorial.smma_validation import (
     MIN_DAYS_FOR_PROMOTION,
+    MINIMUM_EDGE_POINTS,
+    STRICT_EDGE_TARGET_POINTS,
+    THRESHOLD_QUANTILES,
+    ExecutionResult,
     KillMetrics,
     LockedMetrics,
     benjamini_hochberg,
     build_split_plan,
     candidate_rank_key,
+    effective_test_count,
     evaluate_recent_kill_criteria,
     forward_returns,
     forward_target_indices,
     locked_validation,
     metrics_to_dict,
     monotonic_horizon_pollution,
+    resolve_quantile_threshold,
     simulate_next_bar_execution,
 )
 from research.combinatorial.tick import build_tick_family_features
 from research.combinatorial.tick_dataset import (
-    TICK_DATE_FROM,
-    TICK_DATE_TO,
     TICK_ROOTS,
     TickBarDataset,
     export_clickhouse_tick_dataset,
@@ -76,8 +82,8 @@ from research.combinatorial.tick_dataset import (
 # simulation) only ever touches fields both dataclasses share.
 GovernedBars = BarDataset | TickBarDataset
 
-RUN_SCHEMA = "smma_mining_run.v1"
-CHECKPOINT_SCHEMA = "smma_mining_checkpoint.v1"
+RUN_SCHEMA = "alpha_mining_run.v2"
+CHECKPOINT_SCHEMA = "alpha_mining_checkpoint.v2"
 PRIMARY_TIMEFRAMES_MINUTES: tuple[int, ...] = (60, 120, 240)
 SUPPORTED_PRIMARY_TIMEFRAMES_MINUTES: tuple[int, ...] = (2, *PRIMARY_TIMEFRAMES_MINUTES)
 DEFAULT_SEEDS: tuple[int, ...] = (20260726, 20260727, 20260728)
@@ -107,6 +113,8 @@ _CODE_FILES: tuple[str, ...] = (
     "research/combinatorial/expression_lang.py",
     "research/combinatorial/gp_alpha_adapter.py",
     "research/combinatorial/operator_library.py",
+    "research/combinatorial/ledger.py",
+    "research/combinatorial/partitioning.py",
     "research/combinatorial/promote.py",
     "research/backtest/cost_models.py",
     "config/research/cost_profiles.yaml",
@@ -247,8 +255,8 @@ FAMILY_REGISTRY: dict[str, FamilyAdapter] = {
         build_features_for_expression=_bidask_build_features_for_expression,
         evaluate_expression=evaluate_family_expression,
         dataset=FamilyDatasetConfig(
-            date_from=DATE_FROM,
-            date_to=DATE_TO,
+            date_from="2026-01-27",
+            date_to="2026-07-25",
             roots=ROOTS,
             export=export_clickhouse_dataset,
             load=load_governed_dataset,
@@ -259,8 +267,8 @@ FAMILY_REGISTRY: dict[str, FamilyAdapter] = {
         build_features_for_expression=_kbar_build_features_for_expression,
         evaluate_expression=evaluate_family_expression,
         dataset=FamilyDatasetConfig(
-            date_from=DATE_FROM,
-            date_to=DATE_TO,
+            date_from="2026-01-27",
+            date_to="2026-07-25",
             roots=ROOTS,
             export=export_clickhouse_dataset,
             load=load_governed_dataset,
@@ -271,8 +279,8 @@ FAMILY_REGISTRY: dict[str, FamilyAdapter] = {
         build_features_for_expression=_tick_build_features_for_expression,
         evaluate_expression=evaluate_family_expression,
         dataset=FamilyDatasetConfig(
-            date_from=TICK_DATE_FROM,
-            date_to=TICK_DATE_TO,
+            date_from="2026-04-03",
+            date_to="2026-07-25",
             roots=TICK_ROOTS,
             export=export_clickhouse_tick_dataset,
             load=load_governed_tick_dataset,
@@ -293,6 +301,8 @@ class RunConfig:
     smma_lengths: tuple[int, ...] = SMMA_LENGTHS
     posthoc_diagnostic: bool = False
     resume: bool = False
+    unlock_final_holdout: bool = False
+    dataset_cache_dir: Path | None = None
 
     def validate(self) -> None:
         if self.family not in FAMILY_REGISTRY:
@@ -315,6 +325,8 @@ class RunConfig:
             raise ValueError("timeframes_minutes must be distinct supported primary values")
         if self.family == "smma":
             normalize_smma_lengths(self.smma_lengths)
+        if self.unlock_final_holdout and self.family != "smma":
+            raise ValueError("final holdout cannot be unlocked for a family without a truthful screen adapter")
 
 
 @dataclass(frozen=True, slots=True)
@@ -328,6 +340,8 @@ class Candidate:
     threshold: float
     seed: int
     complexity: int
+    family: str = "smma"
+    threshold_quantile: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -357,6 +371,7 @@ class CandidateResult:
         locked_payload = dict(locked_raw) if isinstance(locked_raw, Mapping) else None
         if locked_payload is not None:
             locked_payload["walk_forward_sharpes"] = tuple(locked_payload.get("walk_forward_sharpes", ()))
+            locked_payload["failure_reasons"] = tuple(locked_payload.get("failure_reasons", ()))
         return cls(
             candidate=Candidate(**dict(payload["candidate"])),
             kill=KillMetrics(**kill_payload),
@@ -560,9 +575,12 @@ def _candidate_id(payload: Mapping[str, Any]) -> str:
 
 def enumerate_candidates(
     *,
+    family: str,
     root: str,
     timeframe_min: int,
     expressions: Sequence[str],
+    signals: Mapping[str, np.ndarray],
+    discovery_mask: np.ndarray,
     seed: int,
 ) -> list[Candidate]:
     candidates: list[Candidate] = []
@@ -570,15 +588,20 @@ def enumerate_candidates(
         complexity = compile_expression(expression, max_depth=3).max_depth
         for horizon in ("1h", "4h", "session"):
             for direction in (1, -1):
-                for threshold in (0.0, 0.5, 1.0, 1.5):
+                for threshold_quantile in THRESHOLD_QUANTILES:
+                    threshold = resolve_quantile_threshold(
+                        np.asarray(signals[expression])[discovery_mask],
+                        direction=direction,
+                        quantile=threshold_quantile,
+                    )
                     identity = {
-                        "family": "smma",
+                        "family": family,
                         "root": root,
                         "timeframe_min": timeframe_min,
                         "expression": expression,
                         "horizon": horizon,
                         "direction": direction,
-                        "threshold": threshold,
+                        "threshold_quantile": threshold_quantile,
                     }
                     candidates.append(
                         Candidate(
@@ -591,9 +614,40 @@ def enumerate_candidates(
                             threshold=threshold,
                             seed=int(seed),
                             complexity=complexity,
+                            family=family,
+                            threshold_quantile=threshold_quantile,
                         )
                     )
     return candidates
+
+
+def _effective_trigger_test_count(
+    *,
+    candidates: Sequence[Candidate],
+    signals: Mapping[str, np.ndarray],
+    discovery_mask: np.ndarray,
+    trading_days: np.ndarray,
+) -> int:
+    """Estimate independent tested trigger rules from discovery-day activation profiles."""
+    discovery_days = np.asarray(trading_days)[discovery_mask]
+    ordered_days = tuple(dict.fromkeys(str(value) for value in discovery_days))
+    profiles: list[np.ndarray] = []
+    for candidate in candidates:
+        if candidate.horizon != "1h":
+            continue
+        directed = np.asarray(signals[candidate.expression])[discovery_mask] * float(candidate.direction)
+        active = np.isfinite(directed) & (directed > candidate.threshold)
+        profiles.append(
+            np.asarray(
+                [np.mean(active[discovery_days == day]) for day in ordered_days],
+                dtype=np.float64,
+            )
+        )
+    if not profiles:
+        return 1
+    activation_effective = effective_test_count(np.vstack(profiles))
+    horizon_count = len({candidate.horizon for candidate in candidates})
+    return max(1, min(len(candidates), activation_effective * max(1, horizon_count)))
 
 
 def _profile_for_root(root: str) -> str:
@@ -696,29 +750,42 @@ def _evaluate_candidate(
     recent_start = int(split_indices.size * (1.0 - float(evaluation_fraction)))
     recent_indices = split_indices[recent_start:]
     masked_signal[recent_indices] = signal[recent_indices]
-    execution = simulate_next_bar_execution(
-        signal=masked_signal,
-        direction=candidate.direction,
-        threshold=candidate.threshold,
-        target_indices=targets,
-        bid_open=bars.bid_open,
-        ask_open=bars.ask_open,
-        bid_close=bars.bid_close,
-        ask_close=bars.ask_close,
-        reset_mask=bars.reset,
-        instrument_profile=_profile_for_root(candidate.root),
-    )
+    directed = masked_signal * float(candidate.direction)
+    if np.any(np.isfinite(directed) & (directed > candidate.threshold)):
+        execution = simulate_next_bar_execution(
+            signal=masked_signal,
+            direction=candidate.direction,
+            threshold=candidate.threshold,
+            target_indices=targets,
+            bid_open=bars.bid_open,
+            ask_open=bars.ask_open,
+            bid_close=bars.bid_close,
+            ask_close=bars.ask_close,
+            reset_mask=bars.reset,
+            instrument_profile=_profile_for_root(candidate.root),
+        )
+    else:
+        execution = ExecutionResult(
+            trade_pnl=np.asarray([], dtype=np.float64),
+            entry_indices=np.asarray([], dtype=np.int64),
+            exit_indices=np.asarray([], dtype=np.int64),
+            net_edge=0.0,
+            net_sharpe=0.0,
+            turnover=0.0,
+        )
     horizon_step = (
         1
         if candidate.horizon == "session"
         else max(1, int(np.ceil((60 if candidate.horizon == "1h" else 240) / target_timeframe_min)))
     )
     kill = evaluate_recent_kill_criteria(
-        signal=masked_signal[split_mask] * float(candidate.direction),
+        signal=masked_signal[split_mask],
+        direction=candidate.direction,
         target_returns=target_returns[split_mask],
         execution=execution,
         root=candidate.root,
         nonoverlap_step=horizon_step,
+        trading_days=bars.trading_day,
         recent_fraction=evaluation_fraction,
     )
     return CandidateResult(
@@ -922,6 +989,9 @@ class MiningRun:
         self._active_checkpoint_state: dict[str, Any] = {}
         self._terminal_stop_reason: str | None = None
         self._deadline_epoch_s: float | None = None
+        self._effective_trial_counts: dict[str, int] = {}
+        self._expression_supply: dict[str, dict[str, int]] = {}
+        self._dataset_cache_evidence: dict[str, Any] = {"enabled": False, "hit": False}
         self._code_fingerprint = code_fingerprint()
 
     @property
@@ -934,11 +1004,43 @@ class MiningRun:
         if not self.dataset_path.exists():
             if self.config.resume:
                 raise RunIntegrityError("resume requested but governed dataset is missing")
-            family_dataset.export(
-                self.dataset_path,
-                code_fingerprint=self._code_fingerprint,
-                timeframes_minutes=self._required_dataset_timeframes(),
-            )
+            export_arguments = {
+                "code_fingerprint": self._code_fingerprint,
+                "date_from": family_dataset.date_from,
+                "date_to": family_dataset.date_to,
+                "timeframes_minutes": self._required_dataset_timeframes(),
+            }
+            if self.config.dataset_cache_dir is None:
+                family_dataset.export(self.dataset_path, **export_arguments)
+            else:
+                cache_dir = Path(self.config.dataset_cache_dir).resolve()
+                cache_dir.mkdir(parents=True, exist_ok=True)
+                cache_key = _canonical_hash(
+                    {
+                        "dataset_kind": "tick" if self.config.family == "tick" else "bar",
+                        "date_from": family_dataset.date_from,
+                        "date_to": family_dataset.date_to,
+                        "roots": family_dataset.roots,
+                        "timeframes_minutes": self._required_dataset_timeframes(),
+                        "code_fingerprint": self._code_fingerprint,
+                    }
+                )
+                cached_dataset = cache_dir / f"{cache_key}.npz"
+                cached_sidecar = Path(str(cached_dataset) + ".meta.json")
+                if cached_dataset.exists() != cached_sidecar.exists():
+                    raise RunIntegrityError(f"incomplete dataset cache entry: {cache_key}")
+                cache_hit = cached_dataset.exists() and cached_sidecar.exists()
+                if cache_hit:
+                    family_dataset.load(cached_dataset)
+                else:
+                    family_dataset.export(cached_dataset, **export_arguments)
+                shutil.copy2(cached_dataset, self.dataset_path)
+                shutil.copy2(cached_sidecar, Path(str(self.dataset_path) + ".meta.json"))
+                self._dataset_cache_evidence = {
+                    "enabled": True,
+                    "hit": cache_hit,
+                    "cache_key": cache_key,
+                }
         dataset = family_dataset.load(self.dataset_path)
         sidecar = json.loads(Path(str(self.dataset_path) + ".meta.json").read_text(encoding="utf-8"))
         if sidecar.get("code_fingerprint") != self._code_fingerprint:
@@ -991,6 +1093,28 @@ class MiningRun:
 
     def _manifest_identity(self, dataset: GovernedBars) -> dict[str, Any]:
         global_plan = build_split_plan(dataset.trading_day)
+        trading_day_count = len(set(str(value) for value in dataset.trading_day))
+        warnings: list[str] = []
+        if trading_day_count < MIN_DAYS_FOR_PROMOTION:
+            warnings.append(
+                f"only {trading_day_count} trading days; achievable verdict is capped below promotion "
+                f"until {MIN_DAYS_FOR_PROMOTION} days"
+            )
+        edge_thresholds: dict[str, dict[str, float | str]] = {}
+        for root in FAMILY_REGISTRY[self.config.family].dataset.roots:
+            profile_name = _profile_for_root(root)
+            profile = load_cost_profile(profile_name)
+            minimum_points = float(MINIMUM_EDGE_POINTS[root])
+            strict_points = float(STRICT_EDGE_TARGET_POINTS[root])
+            edge_thresholds[root] = {
+                "cost_profile": profile_name,
+                "minimum_edge_points": minimum_points,
+                "minimum_edge_nwd": minimum_points * profile.point_value_nwd,
+                "minimum_edge_rt_cost_multiple": minimum_points / profile.rt_cost_pts,
+                "strict_edge_target_points": strict_points,
+                "strict_edge_target_nwd": strict_points * profile.point_value_nwd,
+                "strict_edge_rt_cost_multiple": strict_points / profile.rt_cost_pts,
+            }
         return {
             "schema": RUN_SCHEMA,
             "family": self.config.family,
@@ -999,20 +1123,34 @@ class MiningRun:
             "workers": int(self.config.workers),
             "seeds": list(self.config.seeds),
             "dataset_fingerprint": self._dataset_fingerprint(),
+            "dataset_date_from": FAMILY_REGISTRY[self.config.family].dataset.date_from,
+            "dataset_date_to": FAMILY_REGISTRY[self.config.family].dataset.date_to,
             "code_fingerprint": self._code_fingerprint,
             "split_hash": global_plan.split_hash,
             "split_assignments": dict(global_plan.assignments),
             "roots": list(FAMILY_REGISTRY[self.config.family].dataset.roots),
             "timeframes_minutes": list(self.config.timeframes_minutes),
             "dataset_timeframes_minutes": list(self._required_dataset_timeframes()),
+            "trading_day_count": trading_day_count,
+            "achievable_verdict_ceiling": (
+                "NEEDS_MORE_DAYS" if trading_day_count < MIN_DAYS_FOR_PROMOTION else "SCREEN_ONLY"
+            ),
+            "startup_warnings": warnings,
+            "edge_thresholds": edge_thresholds,
+            "cost_profile_resolution": (
+                "canonical D6 root profile is used; per-contract roll-aware costs are not enabled "
+                "pending complete frozen profiles"
+            ),
             "smma_lengths": list(self.config.smma_lengths),
             "robustness_timeframes_minutes": [1440],
             "horizons": ["1h", "4h", "session"],
-            "thresholds": [0.0, 0.5, 1.0, 1.5],
+            "threshold_quantiles": list(THRESHOLD_QUANTILES),
             "directions": [1, -1],
             "screen_only": True,
             "posthoc_diagnostic": bool(self.config.posthoc_diagnostic),
-            "final_holdout_claim_eligible": not self.config.posthoc_diagnostic,
+            "final_holdout_unlocked": bool(self.config.unlock_final_holdout),
+            "final_holdout_claim_eligible": bool(self.config.unlock_final_holdout)
+            and not self.config.posthoc_diagnostic,
         }
 
     def _ensure_manifest(self, dataset: GovernedBars, resource_policy: Mapping[str, Any]) -> dict[str, Any]:
@@ -1068,7 +1206,7 @@ class MiningRun:
                 return
             heartbeat = _with_integrity_hash(
                 {
-                    "schema": "smma_mining_heartbeat.v1",
+                    "schema": "alpha_mining_heartbeat.v2",
                     "stage": stage,
                     "recorded_at": datetime.now(UTC).isoformat(),
                     "trials": self._ledger.unique_candidates,
@@ -1188,11 +1326,24 @@ class MiningRun:
                 if len(valid_expressions) >= expression_limit:
                     break
         candidates = enumerate_candidates(
+            family=self.config.family,
             root=root,
             timeframe_min=timeframe,
             expressions=valid_expressions,
+            signals=signals,
+            discovery_mask=plan.mask("discovery"),
             seed=seed,
         )
+        self._effective_trial_counts[f"{root}/{timeframe}"] = _effective_trigger_test_count(
+            candidates=candidates,
+            signals=signals,
+            discovery_mask=plan.mask("discovery"),
+            trading_days=bars.trading_day,
+        )
+        self._expression_supply[f"{root}/{timeframe}"] = {
+            "requested": int(expression_limit),
+            "valid": len(valid_expressions),
+        }
         return bars, plan.labels, signals, valid_expressions, candidates
 
     def _discover(self, dataset: GovernedBars, restored: Sequence[CandidateResult]) -> list[CandidateResult]:
@@ -1269,6 +1420,21 @@ class MiningRun:
                             break
                     if stop_reason:
                         break
+        search_space = _with_integrity_hash(
+            {
+                "schema": "alpha_mining_search_space.v1",
+                "family": self.config.family,
+                "code_fingerprint": self._code_fingerprint,
+                "dataset_fingerprint": self._dataset_fingerprint(),
+                "effective_trial_counts_by_group": dict(sorted(self._effective_trial_counts.items())),
+                "effective_trials_total": max(1, sum(self._effective_trial_counts.values())),
+                "expression_supply_by_group": dict(sorted(self._expression_supply.items())),
+                "raw_trials_evaluated": self._ledger.unique_candidates,
+                "estimator": "Li-Ji eigenvalue count over discovery-day trigger activation profiles",
+            },
+            "search_space_hash",
+        )
+        _atomic_json(self.run_dir / "search_space.json", search_space)
         pollution_groups: dict[tuple[Any, ...], dict[str, CandidateResult]] = {}
         discovery_results = [_result_from_kill_ledger_row(row) for row in self._ledger.rows(stage="discovery")]
         for result in discovery_results:
@@ -1397,6 +1563,7 @@ class MiningRun:
         selection: Sequence[CandidateResult],
         restored: Sequence[CandidateResult] = (),
     ) -> list[CandidateResult]:
+        self._restore_search_space_evidence()
         selection_ids = {item.candidate.candidate_id for item in selection}
         if len(selection_ids) != len(selection):
             raise RunIntegrityError("selection checkpoint contains duplicate candidates")
@@ -1409,6 +1576,20 @@ class MiningRun:
             )
         locked_results: list[CandidateResult] = []
         pvalues: list[float] = []
+        actual_trials = max(1, self._ledger.unique_candidates)
+        effective_trials = max(
+            1,
+            min(actual_trials, sum(self._effective_trial_counts.values()) or actual_trials),
+        )
+        discovery_sharpes = np.asarray(
+            [
+                float(row.get("metrics", {}).get("clustered_sharpe", 0.0))
+                for row in self._ledger.rows(stage="discovery")
+                if np.isfinite(float(row.get("metrics", {}).get("clustered_sharpe", 0.0)))
+            ],
+            dtype=np.float64,
+        )
+        trial_sharpe_std = float(np.std(discovery_sharpes, ddof=1)) if discovery_sharpes.size > 1 else 0.0
 
         def checkpoint_state() -> dict[str, Any]:
             return {
@@ -1470,7 +1651,11 @@ class MiningRun:
                     signal=evaluation_signal[mask] * float(candidate.direction),
                     target_returns=target_returns[mask],
                     execution=execution,
-                    actual_trials=max(1, self._ledger.unique_candidates),
+                    actual_trials=actual_trials,
+                    effective_trials=effective_trials,
+                    trial_sharpe_std=trial_sharpe_std,
+                    trading_days=evaluation_bars.trading_day,
+                    validation_days=tuple(dict.fromkeys(str(day) for day in evaluation_bars.trading_day[mask])),
                     seed=self.config.seeds[index % len(self.config.seeds)],
                 )
                 result = CandidateResult(
@@ -1527,6 +1712,38 @@ class MiningRun:
             force=True,
         )
         return final_frozen
+
+    def _restore_search_space_evidence(self) -> None:
+        if self._effective_trial_counts:
+            return
+        path = self.run_dir / "search_space.json"
+        if not path.exists():
+            return
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        _verify_integrity_hash(payload, "search_space_hash", artifact="search space")
+        if (
+            payload.get("schema") != "alpha_mining_search_space.v1"
+            or payload.get("code_fingerprint") != self._code_fingerprint
+            or payload.get("dataset_fingerprint") != self._dataset_fingerprint()
+        ):
+            raise RunIntegrityError("search-space evidence fingerprint mismatch")
+        counts = payload.get("effective_trial_counts_by_group")
+        if not isinstance(counts, Mapping) or not counts:
+            raise RunIntegrityError("search-space evidence has no effective trial counts")
+        restored = {str(key): int(value) for key, value in counts.items()}
+        if any(value < 1 for value in restored.values()):
+            raise RunIntegrityError("search-space effective trial count must be positive")
+        self._effective_trial_counts = restored
+        supply = payload.get("expression_supply_by_group")
+        if isinstance(supply, Mapping):
+            self._expression_supply = {
+                str(key): {
+                    "requested": int(dict(value).get("requested", 0)),
+                    "valid": int(dict(value).get("valid", 0)),
+                }
+                for key, value in supply.items()
+                if isinstance(value, Mapping)
+            }
 
     def _final(self, dataset: GovernedBars, frozen: Sequence[CandidateResult]) -> list[CandidateResult]:
         results: list[CandidateResult] = []
@@ -1591,6 +1808,10 @@ class MiningRun:
 
         from research.combinatorial.promote import promote_smma_candidate
 
+        if self.config.family != "smma":
+            raise RunIntegrityError(
+                f"screen adapter for family {self.config.family!r} is not implemented; refusing to mislabel it as SMMA"
+            )
         outcomes: list[dict[str, Any]] = []
         evidence_dir = self.run_dir / "screen_evidence"
         for result in survivors:
@@ -1599,7 +1820,7 @@ class MiningRun:
                 self._terminal_stop_reason = stop_reason
                 break
             candidate = result.candidate
-            alpha_id = f"smma_{candidate.root.lower()}_{candidate.candidate_id[:12]}"
+            alpha_id = f"{candidate.family}_{candidate.root.lower()}_{candidate.candidate_id[:12]}"
             evidence_path = evidence_dir / f"{candidate.candidate_id}.json"
             if evidence_path.exists():
                 cached = json.loads(evidence_path.read_text(encoding="utf-8"))
@@ -1635,7 +1856,7 @@ class MiningRun:
                 metadata = manifest.get("experiment_metadata", {})
                 if (
                     manifest.get("formula") != candidate.expression
-                    or metadata.get("family") != "smma"
+                    or metadata.get("family") != candidate.family
                     or metadata.get("candidate_spec") != asdict(candidate)
                     or metadata.get("screen_only_required") is not True
                 ):
@@ -1815,7 +2036,10 @@ class MiningRun:
         policy = apply_resource_policy()
         dataset = self._load_or_export_dataset()
         self._validate_frozen_dataset_scope(dataset)
-        manifest = self._ensure_manifest(dataset, policy)
+        manifest = self._ensure_manifest(
+            dataset,
+            {**policy, "dataset_cache": dict(self._dataset_cache_evidence)},
+        )
         with self._heartbeat_monitor():
             return self._run_stages(dataset, manifest)
 
@@ -1902,8 +2126,9 @@ class MiningRun:
                 "KILL",
                 f"mining stopped during locked validation: {self._terminal_stop_reason}",
             )
-        if not frozen:
-            return self._finish(manifest, dataset, [], [], "KILL", "all candidates killed by locked validation")
+        locked_terminal = self._locked_terminal_report(manifest, dataset, frozen)
+        if locked_terminal is not None:
+            return locked_terminal
         final = self._final(dataset, frozen)
         if self._terminal_stop_reason is not None:
             return self._finish(
@@ -1937,6 +2162,74 @@ class MiningRun:
             reason = ""
         return self._finish(manifest, dataset, final, screens, verdict, reason, robustness=robustness)
 
+    def _locked_terminal_report(
+        self,
+        manifest: Mapping[str, Any],
+        dataset: GovernedBars,
+        frozen: Sequence[CandidateResult],
+    ) -> dict[str, Any] | None:
+        if not frozen:
+            return self._finish(
+                manifest,
+                dataset,
+                [],
+                [],
+                "KILL",
+                "all candidates killed by locked validation",
+            )
+        if not self.config.unlock_final_holdout:
+            return self._finish(
+                manifest,
+                dataset,
+                frozen,
+                [],
+                "LOCKED_DIAGNOSTIC",
+                "locked validation completed; final holdout remains locked pending explicit approval",
+            )
+        return None
+
+    def _funnel_evidence(self) -> tuple[dict[str, dict[str, int]], dict[str, int], list[dict[str, Any]]]:
+        stages: dict[str, Counter[str]] = {}
+        failures: Counter[str] = Counter()
+        near_misses: list[tuple[tuple[float, float, float], dict[str, Any]]] = []
+        for row in self._ledger.rows():
+            stage = str(row.get("stage", "unknown"))
+            status = str(row.get("status", "unknown"))
+            stages.setdefault(stage, Counter())[status] += 1
+            if status != "killed":
+                continue
+            reasons = [value for value in str(row.get("failure_reason", "")).split(",") if value]
+            metrics = row.get("metrics")
+            metric_values = dict(metrics) if isinstance(metrics, Mapping) else {}
+            locked_reasons = metric_values.get("failure_reasons", ())
+            if isinstance(locked_reasons, Sequence) and not isinstance(locked_reasons, str):
+                reasons.extend(str(value) for value in locked_reasons)
+            for value in set(reasons):
+                failures[value] += 1
+            rank = (
+                float(metric_values.get("deflated_sharpe", 0.0)),
+                float(metric_values.get("detrended_ic", 0.0)),
+                float(metric_values.get("net_edge", 0.0)),
+            )
+            near_misses.append(
+                (
+                    rank,
+                    {
+                        "candidate_id": str(row.get("candidate_id", "")),
+                        "stage": stage,
+                        "failure_reasons": sorted(set(reasons)),
+                        "rank_metrics": {
+                            "deflated_sharpe": rank[0],
+                            "detrended_ic": rank[1],
+                            "net_edge": rank[2],
+                        },
+                    },
+                )
+            )
+        funnel = {stage: dict(sorted(counts.items())) for stage, counts in sorted(stages.items())}
+        ranked = [payload for _rank, payload in sorted(near_misses, key=lambda item: item[0], reverse=True)[:20]]
+        return funnel, dict(sorted(failures.items())), ranked
+
     def _finish(
         self,
         manifest: Mapping[str, Any],
@@ -1948,22 +2241,33 @@ class MiningRun:
         *,
         robustness: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
+        funnel, gate_failures, near_misses = self._funnel_evidence()
         report = _with_integrity_hash(
             {
-                "schema": "smma_mining_report.v1",
+                "schema": "alpha_mining_report.v2",
                 "verdict": verdict,
                 "reason": reason,
                 "screen_only": True,
                 "promotion_eligible": False,
                 "posthoc_diagnostic": bool(self.config.posthoc_diagnostic),
-                "final_holdout_claim_eligible": not self.config.posthoc_diagnostic,
+                "final_holdout_unlocked": bool(self.config.unlock_final_holdout),
+                "final_holdout_claim_eligible": bool(self.config.unlock_final_holdout)
+                and not self.config.posthoc_diagnostic,
                 "run_manifest_hash": str(manifest["manifest_hash"]),
                 "trading_day_count": len(set(str(value) for value in dataset.trading_day)),
                 "minimum_days_for_promotion": MIN_DAYS_FOR_PROMOTION,
                 "unique_hypotheses": self._ledger.unique_candidates,
                 "survivors": [item.to_dict() for item in survivors],
+                "survivor_stage": (
+                    survivors[0].stage if survivors and len({item.stage for item in survivors}) == 1 else ""
+                ),
                 "screens": [dict(item) for item in screens],
                 "robustness_slices": dict(robustness or {}),
+                "funnel": funnel,
+                "gate_failure_histogram": gate_failures,
+                "near_misses": near_misses,
+                "effective_trial_counts_by_group": dict(sorted(self._effective_trial_counts.items())),
+                "expression_supply_by_group": dict(sorted(self._expression_supply.items())),
                 "completed_at": datetime.now(UTC).isoformat(),
             },
             "report_hash",

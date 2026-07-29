@@ -18,6 +18,7 @@ from ._alpha import (
     cmd_alpha_experiments_list,
     cmd_alpha_kill,
     cmd_alpha_list,
+    cmd_alpha_mine_campaign,
     cmd_alpha_mine_init,
     cmd_alpha_mine_promote,
     cmd_alpha_mine_run,
@@ -471,6 +472,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     mine_run.add_argument("--family", choices=["smma", "bidask", "kbar", "tick"], required=True)
     mine_run.add_argument("--run-dir", required=True, help="Immutable run artifact directory")
+    mine_run.add_argument(
+        "--dataset-cache-dir",
+        help="Optional content-addressed governed-dataset cache (validated before reuse)",
+    )
     mine_run.add_argument("--wall-time-hours", type=float, default=72.0)
     mine_run.add_argument("--max-candidates", type=int, default=20_000)
     mine_run.add_argument("--workers", type=int, default=12)
@@ -503,12 +508,36 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Mark results as post-hoc screen-only diagnostics with no fresh-holdout claim",
     )
+    mine_run.add_argument(
+        "--unlock-final-holdout",
+        action="store_true",
+        help="Explicitly unlock final holdout after locked validation; requires research-owner approval",
+    )
     mine_run.add_argument("--resume", action="store_true")
     mine_run.set_defaults(func=cmd_alpha_mine_run)
 
     mine_status = alpha_mine_sub.add_parser("status", help="Read mining manifest/checkpoint/heartbeat status")
     mine_status.add_argument("--run-dir", required=True)
     mine_status.set_defaults(func=cmd_alpha_mine_status)
+
+    mine_campaign = alpha_mine_sub.add_parser(
+        "campaign",
+        help="Run/resume the six diagnostic family/timeframe legs without unlocking final holdout",
+    )
+    mine_campaign.add_argument("--run-root", required=True, help="Parent directory for campaign artifacts")
+    mine_campaign.add_argument("--campaign-id", required=True, help="Filesystem-safe immutable campaign id")
+    mine_campaign.add_argument("--wall-time-hours", type=float, default=12.0)
+    mine_campaign.add_argument("--max-candidates", type=int, default=20_000)
+    mine_campaign.add_argument("--workers", type=int, default=12)
+    mine_campaign.add_argument(
+        "--seeds",
+        type=int,
+        nargs=3,
+        default=[20260726, 20260727, 20260728],
+        metavar=("SEED1", "SEED2", "SEED3"),
+    )
+    mine_campaign.add_argument("--resume", action="store_true")
+    mine_campaign.set_defaults(func=cmd_alpha_mine_campaign)
 
     mine_promote = alpha_mine_sub.add_parser(
         "promote", help="Scaffold a research/alphas/<id>/ package from a GP-discovered expression"

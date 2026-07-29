@@ -30,7 +30,7 @@ def _row(
 ) -> tuple[object, ...]:
     price = 100.0 + (ts / 1_000_000_000_000)
     buy = trade_ticks // 2
-    sell = trade_ticks - buy - 1
+    sell = trade_ticks - buy
     unknown = trade_ticks - buy - sell
     return (
         root,
@@ -145,6 +145,50 @@ def test_tick_dataset_validate_rejects_aggressor_counts_that_do_not_sum_to_trade
     )
     with pytest.raises(TickDatasetGovernanceError, match="must equal trade_tick_count"):
         tampered.validate()
+
+
+def test_tick_export_is_rejected_when_trade_direction_is_degenerate() -> None:
+    dataset = rows_to_tick_bar_dataset(_causal_rows())
+    degenerate = TickBarDataset(
+        **{
+            field: (
+                np.zeros(len(dataset), dtype=np.float64)
+                if field in {"buy_tick_count", "sell_tick_count"}
+                else (
+                    np.asarray(dataset.trade_tick_count, dtype=np.float64)
+                    if field == "unknown_tick_count"
+                    else np.asarray(getattr(dataset, field))
+                )
+            )
+            for field in dataset.__dataclass_fields__
+        }
+    )
+
+    with pytest.raises(TickDatasetGovernanceError, match="unknown aggressor ratio"):
+        degenerate.validate()
+
+
+def test_tick_export_accepts_a_day_just_under_unknown_tick_threshold() -> None:
+    dataset = rows_to_tick_bar_dataset(_causal_rows())
+    trade = np.asarray(dataset.trade_tick_count, dtype=np.float64)
+    unknown = trade * 0.049
+    accepted = TickBarDataset(
+        **{
+            field: (
+                trade - unknown
+                if field == "buy_tick_count"
+                else (
+                    np.zeros(len(dataset), dtype=np.float64)
+                    if field == "sell_tick_count"
+                    else (unknown if field == "unknown_tick_count" else np.asarray(getattr(dataset, field)))
+                )
+            )
+            for field in dataset.__dataclass_fields__
+        }
+    )
+
+    accepted.validate()
+    assert len(accepted) == len(dataset)
 
 
 def test_tick_dataset_validate_rejects_bars_with_no_trade_ticks() -> None:

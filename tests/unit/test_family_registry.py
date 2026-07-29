@@ -22,10 +22,9 @@ from research.combinatorial.smma_runner import (
 )
 from research.combinatorial.tick import build_tick_family_features
 from research.combinatorial.tick_dataset import (
-    TICK_DATE_FROM,
-    TICK_DATE_TO,
     TICK_ROOTS,
     TickBarDataset,
+    TickDatasetGovernanceError,
     save_governed_tick_dataset,
 )
 
@@ -74,7 +73,7 @@ def _tick_bars(days: int = 30) -> TickBarDataset:
     session_close[1::2] = True
     buy = 30.0 + index % 5
     sell = 25.0 + index % 3
-    unknown = 5.0 + index % 2
+    unknown = 1.0 + (index % 2) * 0.25
     return TickBarDataset(
         root=np.full(count, "TXF", dtype="<U3"),
         timeframe_min=np.full(count, 60, dtype=np.int16),
@@ -192,8 +191,13 @@ def test_kbar_registry_adapter_reproduces_the_direct_builder_bit_for_bit() -> No
         np.testing.assert_array_equal(adapted[name], values, err_msg=name)
 
 
-def test_kbar_family_reuses_the_smma_governed_bar_dataset_scope() -> None:
-    assert FAMILY_REGISTRY["kbar"].dataset == FAMILY_REGISTRY["smma"].dataset
+def test_kbar_family_reuses_smma_dataset_io_with_its_wider_window() -> None:
+    kbar_dataset = FAMILY_REGISTRY["kbar"].dataset
+    smma_dataset = FAMILY_REGISTRY["smma"].dataset
+    assert (kbar_dataset.date_from, kbar_dataset.date_to) == ("2026-01-27", "2026-07-25")
+    assert kbar_dataset.export is smma_dataset.export
+    assert kbar_dataset.load is smma_dataset.load
+    assert kbar_dataset.roots == smma_dataset.roots
 
 
 def test_kbar_bounded_run_writes_a_screen_only_report(monkeypatch, tmp_path) -> None:
@@ -239,10 +243,12 @@ def test_tick_registry_adapter_reproduces_the_direct_builder_bit_for_bit() -> No
 
 def test_tick_family_dataset_scope_is_the_tick_contract_not_the_smma_one() -> None:
     tick_dataset = FAMILY_REGISTRY["tick"].dataset
-    assert (tick_dataset.date_from, tick_dataset.date_to) == (TICK_DATE_FROM, TICK_DATE_TO)
+    assert (tick_dataset.date_from, tick_dataset.date_to) == ("2026-04-03", "2026-07-25")
     assert tick_dataset.roots == TICK_ROOTS
     assert tick_dataset.load is not FAMILY_REGISTRY["smma"].dataset.load
-    assert FAMILY_REGISTRY["bidask"].dataset == FAMILY_REGISTRY["smma"].dataset
+    bidask_dataset = FAMILY_REGISTRY["bidask"].dataset
+    assert (bidask_dataset.date_from, bidask_dataset.date_to) == ("2026-01-27", "2026-07-25")
+    assert bidask_dataset.load is FAMILY_REGISTRY["smma"].dataset.load
 
 
 def test_new_family_modules_are_covered_by_the_resume_code_fingerprint() -> None:
@@ -253,6 +259,8 @@ def test_new_family_modules_are_covered_by_the_resume_code_fingerprint() -> None
         "research/combinatorial/tick.py",
         "research/combinatorial/tick_dataset.py",
         "research/combinatorial/expression_eval.py",
+        "research/combinatorial/ledger.py",
+        "research/combinatorial/partitioning.py",
     }.issubset(covered)
 
 
@@ -347,6 +355,87 @@ def test_parser_rejects_an_unregistered_family() -> None:
         cli.build_parser().parse_args(
             ["alpha", "mine", "run", "--family", "nonsense", "--run-dir", "research/experiments/runs/x"]
         )
+
+
+def test_campaign_parser_and_driver_supervise_all_six_locked_diagnostic_legs(
+    monkeypatch,
+    capsys,
+    tmp_path,
+) -> None:
+    captured: list[RunConfig] = []
+
+    def fake_run(config: RunConfig) -> dict[str, object]:
+        captured.append(config)
+        return {"verdict": "KILL", "report_hash": f"hash-{len(captured)}"}
+
+    monkeypatch.setattr(runner, "run_mining", fake_run)
+    args = cli.build_parser().parse_args(
+        [
+            "alpha",
+            "mine",
+            "campaign",
+            "--run-root",
+            str(tmp_path),
+            "--campaign-id",
+            "campaign-test",
+            "--max-candidates",
+            "10",
+            "--workers",
+            "1",
+        ]
+    )
+
+    assert args.func is cli.cmd_alpha_mine_campaign
+    cli.cmd_alpha_mine_campaign(args)
+    payload = json.loads(capsys.readouterr().out)
+
+    assert len(captured) == 6
+    assert {(config.family, config.timeframes_minutes) for config in captured} == {
+        ("bidask", (2,)),
+        ("bidask", (60, 120, 240)),
+        ("kbar", (2,)),
+        ("kbar", (60, 120, 240)),
+        ("tick", (2,)),
+        ("tick", (60, 120, 240)),
+    }
+    assert all(config.posthoc_diagnostic for config in captured)
+    assert all(not config.unlock_final_holdout for config in captured)
+    assert len(payload["legs"]) == 6
+    assert (tmp_path / "campaign-test" / "campaign_report.json").exists()
+
+
+def test_campaign_records_dataset_governance_failures_and_exits_nonzero(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setattr(
+        runner,
+        "run_mining",
+        lambda _config: (_ for _ in ()).throw(TickDatasetGovernanceError("bad aggressor labels")),
+    )
+    args = cli.build_parser().parse_args(
+        [
+            "alpha",
+            "mine",
+            "campaign",
+            "--run-root",
+            str(tmp_path),
+            "--campaign-id",
+            "failed-campaign",
+            "--max-candidates",
+            "10",
+            "--workers",
+            "1",
+        ]
+    )
+
+    with pytest.raises(SystemExit, match="2"):
+        cli.cmd_alpha_mine_campaign(args)
+
+    payload = json.loads((tmp_path / "failed-campaign" / "campaign_report.json").read_text())
+    assert len(payload["legs"]) == 6
+    assert all(leg["status"] == "failed" for leg in payload["legs"])
+    assert all(leg["error_type"] == "TickDatasetGovernanceError" for leg in payload["legs"])
 
 
 @pytest.mark.parametrize("family", ["bidask", "kbar", "tick"])
