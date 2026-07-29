@@ -106,6 +106,28 @@ def test_test_file_is_exempt() -> None:
     assert vs == []
 
 
+def test_money_token_field_with_ratio_suffix_is_not_flagged() -> None:
+    # A ratio of two money values is dimensionless, so Law 4 does not apply.
+    src = "class A:\n    cost_sensitivity_ratio: float | None = None\n"
+    vs = _scan(src, "src/hft_platform/contracts/alpha.py")
+    assert vs == []
+
+
+def test_money_token_field_with_pct_suffix_is_not_flagged() -> None:
+    src = "class A:\n    fee_drag_pct: float = 0.0\n"
+    vs = _scan(src, "src/hft_platform/contracts/alpha.py")
+    assert vs == []
+
+
+def test_dimensionless_suffix_exclusion_is_anchored_at_the_end_of_the_name() -> None:
+    # 'ratio' appearing anywhere other than the suffix must not disable the rule:
+    # ratio_adjusted_price is still a price.
+    src = "class O:\n    ratio_adjusted_price: float = 0.0\n"
+    vs = _scan(src, "src/hft_platform/order/intent.py")
+    assert len(vs) == 1
+    assert vs[0].rule_id == "HFT-P004"
+
+
 def test_money_field_typed_as_str_is_not_flagged() -> None:
     src = "class Q:\n    price: str = '0'\n"
     vs = _scan(src, "src/hft_platform/contracts/order.py")
