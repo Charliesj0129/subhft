@@ -590,3 +590,117 @@ def test_session_refresh_passes_configured_stagger_settings_to_slot():
     kwargs = mock_acquire.call_args.kwargs
     assert kwargs["min_gap_s"] == 7.5
     assert kwargs["timeout_s"] == 90.0
+
+
+# ------------------------------------------------------------------ #
+# Contract-aware login timeout, SDK-busy backoff, bounded failure label
+#
+# Regression for the daily 08:30 CST cascade on THESHOW: the contract-fetching
+# login exceeded a 20 s budget, its worker was abandoned inside shioaji 1.5.x's
+# Rust `_core`, and the immediate fallback re-entered the same object and failed
+# with "Already borrowed" in under 3 ms — burning the retry ladder and escalating
+# into broker 451s.
+# ------------------------------------------------------------------ #
+
+
+def _login_client(**overrides):
+    client = MagicMock()
+    client.api = MagicMock()
+    client._login_retry_max = 1
+    client._login_timeout_s = 20.0
+    client._login_contract_timeout_s = 60.0
+    client.fetch_contract = True
+    client.subscribe_trade = True
+    client.activate_ca = False
+    client._last_login_error = None
+    client.metrics = None
+    for key, value in overrides.items():
+        setattr(client, key, value)
+    return client
+
+
+def test_login_uses_contract_timeout_when_fetching_contracts():
+    client = _login_client()
+    client._safe_call_with_timeout.return_value = (True, None, None, False)
+
+    assert SessionRuntime(client).login_with_retry(api_key="k", secret_key="s") is True
+
+    op, _fn, timeout_s = client._safe_call_with_timeout.call_args[0]
+    assert op == "login"
+    assert timeout_s == 60.0
+
+
+def test_login_uses_tight_timeout_when_not_fetching_contracts():
+    """A quote-only login does no contract work, so it keeps the short budget."""
+    client = _login_client(fetch_contract=False)
+    client._safe_call_with_timeout.return_value = (True, None, None, False)
+
+    assert SessionRuntime(client).login_with_retry(api_key="k", secret_key="s") is True
+
+    _op, _fn, timeout_s = client._safe_call_with_timeout.call_args[0]
+    assert timeout_s == 20.0
+
+
+def test_login_contract_timeout_never_below_the_base_timeout():
+    """A misconfigured contract budget must not shorten the login."""
+    client = _login_client(_login_timeout_s=45.0, _login_contract_timeout_s=10.0)
+    client._safe_call_with_timeout.return_value = (True, None, None, False)
+
+    SessionRuntime(client).login_with_retry(api_key="k", secret_key="s")
+
+    _op, _fn, timeout_s = client._safe_call_with_timeout.call_args[0]
+    assert timeout_s == 45.0
+
+
+def test_login_skips_fallback_and_backs_off_when_sdk_busy():
+    """SDKBusyError must not trigger the no-contract fallback or a retry.
+
+    Both would re-enter the same SDK object and fail instantly with
+    "Already borrowed", which is exactly how one slow login turned into 451s.
+    """
+    from hft_platform.feed_adapter.shioaji._infra import SDKBusyError
+
+    client = _login_client()
+    client._safe_call_with_timeout.return_value = (
+        False,
+        None,
+        SDKBusyError("login", "login"),
+        True,
+    )
+
+    assert SessionRuntime(client).login_with_retry(api_key="k", secret_key="s") is False
+
+    ops = [call[0][0] for call in client._safe_call_with_timeout.call_args_list]
+    assert ops == ["login"], f"expected a single attempt, got {ops}"
+    assert client.logged_in is not True
+
+
+def test_login_failure_reason_label_stays_bounded_across_distinct_errors():
+    """Raw broker errors carry a per-request id; the label must not."""
+    from hft_platform.feed_adapter.shioaji.session_runtime import classify_login_failure
+
+    reasons = {
+        classify_login_failure("login: request #P2P/v:host/AAA/PYAPI/x/0728/1/LOGINING/_ code: 451, detail: Too Many Connections."),
+        classify_login_failure("login: request #P2P/v:host/BBB/PYAPI/y/0729/2/LOGINING/_ code: 451, detail: Too Many Connections."),
+    }
+    assert reasons == {"connection_limit"}
+
+    assert classify_login_failure("Already borrowed") == "sdk_busy"
+    assert classify_login_failure("login timed out after 20.0s") == "timeout"
+    assert classify_login_failure(None) == "unknown"
+    assert classify_login_failure("something else entirely") == "other"
+
+
+def test_login_failure_metric_uses_the_bounded_reason():
+    client = _login_client(_login_retry_max=0)
+    client.metrics = MagicMock()
+    client._safe_call_with_timeout.return_value = (
+        False,
+        None,
+        RuntimeError("login: request #P2P/v:host/AAA/0729/9/LOGINING/_ code: 451, detail: Too Many Connections."),
+        False,
+    )
+
+    assert SessionRuntime(client).login_with_retry(api_key="k", secret_key="s") is False
+
+    client.metrics.shioaji_login_fail_total.labels.assert_called_once_with(reason="connection_limit")

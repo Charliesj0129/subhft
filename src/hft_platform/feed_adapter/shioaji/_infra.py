@@ -120,6 +120,81 @@ _abandoned_lock = threading.Lock()
 _abandoned_threads: list[tuple[str, threading.Thread, threading.Event]] = []
 
 
+class SDKBusyError(RuntimeError):
+    """A broker SDK call was refused because the SDK object is still occupied.
+
+    Raised (returned, really — see ``safe_call_with_timeout``) when a *previous*
+    call on the same client timed out and its abandoned worker is still inside
+    the SDK. Distinct from a timeout so callers can back off without retrying
+    into an object that is guaranteed to reject them.
+    """
+
+    def __init__(self, op: str, blocking_op: str) -> None:
+        super().__init__(f"{op} refused: SDK still occupied by an abandoned {blocking_op!r} worker")
+        self.op = op
+        self.blocking_op = blocking_op
+
+
+class InflightGuard:
+    """Per-client registry of abandoned SDK workers still inside the SDK.
+
+    Timing a call out and abandoning its worker is deliberate — a Python thread
+    cannot be killed (see the module-level registry above). The missing half was
+    that nothing stopped the *next* call from entering the same SDK object while
+    the abandoned worker was still in it. Shioaji 1.5.x's Rust ``_core`` holds a
+    borrow across the call, so the re-entry fails instantly with
+    ``Already borrowed`` — observed daily in production at the 08:30 CST
+    contract-fetching login, where it burned the retry ladder and escalated into
+    ``451 Too Many Connections``.
+
+    This is intentionally **not** a mutex. It latches only on a previously
+    *timed-out* worker, so nested calls (``reconnect_force`` wraps ``logout`` and
+    ``subscribe_basket`` in further guarded calls) never block on their own
+    parent — a lock would deadlock there.
+    """
+
+    __slots__ = ("_lock", "_entries")
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._entries: list[tuple[str, threading.Event]] = []
+
+    def _prune_locked(self) -> None:
+        if self._entries:
+            self._entries[:] = [entry for entry in self._entries if not entry[1].is_set()]
+
+    def record_abandoned(self, op: str, done: threading.Event) -> None:
+        """Register a worker that timed out and is still running."""
+        with self._lock:
+            self._prune_locked()
+            self._entries.append((op, done))
+
+    def live_count(self) -> int:
+        """Number of abandoned workers still inside the SDK."""
+        with self._lock:
+            self._prune_locked()
+            return len(self._entries)
+
+    def blocking_op(self, grace_s: float) -> str | None:
+        """Return the op still occupying the SDK, or ``None`` if it is free.
+
+        Waits up to *grace_s* for the oldest abandoned worker to finish, so a
+        call that arrives just as the SDK frees up is not refused needlessly.
+        """
+        with self._lock:
+            self._prune_locked()
+            if not self._entries:
+                return None
+            op, done = self._entries[0]
+        if grace_s > 0:
+            done.wait(timeout=grace_s)
+        with self._lock:
+            self._prune_locked()
+            if not self._entries:
+                return None
+            return self._entries[0][0]
+
+
 def _prune_abandoned_locked() -> int:
     """Drop workers that have since finished; return remaining live count.
 
@@ -151,6 +226,8 @@ def safe_call_with_timeout(
     timeout_s: float,
     *,
     max_abandoned: int = 0,
+    inflight: InflightGuard | None = None,
+    busy_grace_s: float = 0.0,
 ) -> tuple[bool, Any | None, Exception | None, bool]:
     """Run a blocking broker SDK call with timeout in a daemon thread.
 
@@ -160,6 +237,12 @@ def safe_call_with_timeout(
     is reported as ``(False, None, RuntimeError, True)`` so callers back off
     exactly as they would on a timeout, without leaking another thread.
 
+    When ``inflight`` is supplied, refuse to enter the SDK at all while a
+    previously timed-out worker *of that same client* is still inside it —
+    re-entry would fail instantly with ``Already borrowed`` under shioaji
+    1.5.x's Rust ``_core``. Refusal is likewise reported as timed-out so the
+    existing backoff paths apply unchanged.
+
     Returns ``(success, result, error, timed_out)``.
     """
     if timeout_s <= 0:
@@ -167,6 +250,17 @@ def safe_call_with_timeout(
             return True, fn(), None, False
         except Exception as exc:
             return False, None, exc, False
+
+    if inflight is not None:
+        occupied_by = inflight.blocking_op(busy_grace_s)
+        if occupied_by is not None:
+            logger.warning(
+                "Broker SDK call refused: previous call's worker still inside the SDK",
+                op=op,
+                blocking_op=occupied_by,
+                grace_s=round(busy_grace_s, 1),
+            )
+            return False, None, SDKBusyError(op, occupied_by), True
 
     if max_abandoned > 0:
         with _abandoned_lock:
@@ -205,6 +299,10 @@ def safe_call_with_timeout(
         with _abandoned_lock:
             _abandoned_threads.append((op, worker, done))
             live = _prune_abandoned_locked()
+        if inflight is not None:
+            # The worker is still inside this client's SDK object; block
+            # re-entry until it actually returns.
+            inflight.record_abandoned(op, done)
         logger.warning(
             "Broker SDK call timed out; worker thread abandoned (cannot be killed)",
             op=op,

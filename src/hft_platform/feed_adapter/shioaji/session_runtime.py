@@ -12,6 +12,7 @@ from structlog import get_logger
 
 from hft_platform.core import timebase
 from hft_platform.feed_adapter.shioaji._infra import (
+    SDKBusyError,
     acquire_login_slot,
     client_float,
     refresh_sleep_s,
@@ -30,6 +31,50 @@ def _is_connection_limit_error(error: str | None) -> bool:
         return False
     normalized = error.lower()
     return "too many connections" in normalized or "status_code=451" in normalized or "status code 451" in normalized
+
+
+#: Bounded label values for ``shioaji_login_fail_total{reason=...}``.
+#: The broker's error strings embed a per-request routing id, so feeding them to
+#: a Prometheus label mints a new series per failure — cardinality that explodes
+#: exactly when the system is already failing, and which also publishes broker
+#: session identifiers into ``/metrics``. Classify instead of pasting.
+_LOGIN_FAILURE_REASONS = ("connection_limit", "sdk_busy", "timeout", "auth", "network", "unknown", "other")
+
+
+def classify_login_failure(error: str | None) -> str:
+    """Map a raw broker login error onto a bounded reason label."""
+    if not error:
+        return "unknown"
+    normalized = error.lower()
+    if _is_connection_limit_error(normalized):
+        return "connection_limit"
+    if "already borrowed" in normalized or "sdk still occupied" in normalized:
+        return "sdk_busy"
+    if "timed out" in normalized or "timeout" in normalized:
+        return "timeout"
+    auth_tokens = ("unauthorized", "forbidden", "invalid api", "authentication", "401", "403")
+    if any(token in normalized for token in auth_tokens):
+        return "auth"
+    if any(token in normalized for token in ("connection", "network", "unreachable", "refused", "reset", "dns")):
+        return "network"
+    return "other"
+
+
+def _login_timeout_for(c: Any, *, fetch_contract: bool) -> float:
+    """Return the login timeout budget for this attempt.
+
+    Fetching contracts adds the contract download and parse on top of the login
+    handshake — ``contracts_timeout`` alone defaults to 10 s — so it gets a
+    separate, longer budget. The no-contract fallback does none of that work and
+    keeps the tight ``login_timeout_s``, so a genuinely wedged login is still
+    caught quickly.
+    """
+    if not fetch_contract:
+        return client_float(c, "_login_timeout_s", 20.0)
+    return max(
+        client_float(c, "_login_timeout_s", 20.0),
+        client_float(c, "_login_contract_timeout_s", 60.0),
+    )
 
 
 def _env_float(name: str, default: float) -> float:
@@ -205,11 +250,23 @@ class SessionRuntime:
                 ok, _, err, timed_out = c._safe_call_with_timeout(
                     "login",
                     lambda: _do_login(login_fetch_contract),
-                    c._login_timeout_s,
+                    _login_timeout_for(c, fetch_contract=login_fetch_contract),
                 )
                 c._record_api_latency("login", start_ns, ok=ok)
                 if not ok:
                     c._last_login_error = scrub_broker_error(err) if err is not None else "unknown"
+                    if isinstance(err, SDKBusyError):
+                        # A previous call's worker is still inside the SDK. Both
+                        # the fallback and an immediate retry would re-enter the
+                        # same object and fail instantly with "Already borrowed",
+                        # burning attempts and driving the reconnect path into
+                        # broker 451s. Back off and let the caller reschedule.
+                        logger.warning(
+                            "Login deferred: broker SDK still occupied by an earlier call",
+                            attempt=attempt,
+                            blocking_op=err.blocking_op,
+                        )
+                        break
                     if _is_connection_limit_error(c._last_login_error):
                         logger.error(
                             "Login rejected by broker connection limit; skipping fallback and immediate retry",
@@ -228,7 +285,7 @@ class SessionRuntime:
                         ok_fb, _, err_fb, timed_out_fb = c._safe_call_with_timeout(
                             "login_fallback",
                             lambda: _do_login(False),
-                            c._login_timeout_s,
+                            _login_timeout_for(c, fetch_contract=False),
                         )
                         c._record_api_latency("login", start_ns, ok=ok_fb)
                         if ok_fb:
@@ -315,8 +372,7 @@ class SessionRuntime:
 
             logger.error("Login retries exhausted", attempts=attempts_total, error=c._last_login_error)
             if c.metrics and hasattr(c.metrics, "shioaji_login_fail_total"):
-                reason = c._sanitize_metric_label(c._last_login_error or "unknown", fallback="unknown")
-                c.metrics.shioaji_login_fail_total.labels(reason=reason).inc()
+                c.metrics.shioaji_login_fail_total.labels(reason=classify_login_failure(c._last_login_error)).inc()
             c._release_session_lock()
             return False
 
