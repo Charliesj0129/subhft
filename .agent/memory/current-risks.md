@@ -13,6 +13,11 @@ Charlie's approval 2026-07-11; branch synced at that point). Mitigation tooling:
 all refs, verified, covers HEAD, never overwrites). FIRST RUN BLOCKED until
 Charlie approves a destination; record each run (date + dest + bundle name)
 below this line.
+- 2026-07-29: `/home/charlie/backups/hft_platform/hft_platform-20260729T091332Z-c8642fa16354.bundle`
+  verified all refs and covered pre-correction HEAD; campaign/source snapshots were also checksum-copied to
+  `/home/charlie/backups/hft_platform/alpha-mining-20260729/`.
+- 2026-07-29: `/home/charlie/backups/hft_platform/hft-alpha-mining-correction-clean-20260729T091928Z-1e5c158b06a4.bundle`
+  verified all refs and covered correction commit `1e5c158b`.
 Expires: when a remote-backup/push-cadence decision lands. Owner: Charlie.
 
 ## RISK: shioaji 1.5.6 deployed to old host in SIM only; live order path unproven (since 2026-07-19)
