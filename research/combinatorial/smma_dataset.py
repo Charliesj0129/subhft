@@ -13,16 +13,24 @@ import json
 import os
 import tempfile
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 
 from hft_platform.infra.ch_client import get_ch_client
+from research.combinatorial.taifex_trading_dates import (
+    FullSessionEligibility,
+    TradingDateWindow,
+    build_trading_date_window,
+    clickhouse_trading_day_expression,
+    full_session_eligibility,
+)
 
 CH_PRICE_SCALE = 1_000_000.0
-DATASET_SCHEMA = "smma_taifex_bars.v1"
+DATASET_SCHEMA = "smma_taifex_bars.v2"
+LEGACY_DATASET_SCHEMAS: frozenset[str] = frozenset({"smma_taifex_bars.v1"})
 DATE_FROM = "2026-03-19"
 DATE_TO = "2026-07-24"
 TIMEFRAMES_MINUTES: tuple[int, ...] = (60, 120, 240, 1440)
@@ -151,13 +159,19 @@ def _guard_query(query: str) -> dict[str, Any]:
     }
 
 
-def _bar_query(timeframe_min: int, *, date_from: str, date_to: str) -> str:
+def _bar_query(
+    timeframe_min: int,
+    *,
+    date_from: str,
+    date_to: str,
+    trading_window: TradingDateWindow | None = None,
+) -> str:
     if timeframe_min not in SUPPORTED_TIMEFRAMES_MINUTES:
         raise ValueError(f"unsupported timeframe: {timeframe_min}")
     row_limit = _query_row_limit(timeframe_min)
-    start = date.fromisoformat(date_from)
-    end_exclusive = date.fromisoformat(date_to) + timedelta(days=1)
+    window = trading_window or build_trading_date_window(date_from, date_to)
     event_time_expression = "fromUnixTimestamp64Nano(exch_ts, 'Asia/Taipei')"
+    trading_day_expression = clickhouse_trading_day_expression(event_time_expression, window)
     night_session_predicate = f"toHour({event_time_expression}) >= 15 OR toHour({event_time_expression}) < 6"
     session_expression = (
         "'full'"
@@ -187,17 +201,13 @@ def _bar_query(timeframe_min: int, *, date_from: str, date_to: str) -> str:
     )
     return f"""
 WITH
-    toDateTime64('{start.isoformat()} 00:00:00', 9, 'Asia/Taipei') AS range_start,
-    toDateTime64('{end_exclusive.isoformat()} 00:00:00', 9, 'Asia/Taipei') AS range_end,
+    toDateTime64('{window.query_wall_time_from}', 9, 'Asia/Taipei') AS range_start,
+    toDateTime64('{window.query_wall_time_to}', 9, 'Asia/Taipei') AS range_end,
     base AS (
         SELECT
             multiIf(match(symbol, '^TXF[A-L][0-9]$'), 'TXF', 'TMF') AS root,
             symbol AS contract,
-            if(
-                toHour(fromUnixTimestamp64Nano(exch_ts, 'Asia/Taipei')) >= 15,
-                toDate(fromUnixTimestamp64Nano(exch_ts, 'Asia/Taipei')) + 1,
-                toDate(fromUnixTimestamp64Nano(exch_ts, 'Asia/Taipei'))
-            ) AS trading_day,
+            {trading_day_expression} AS trading_day,
             {session_expression} AS session,
             {bucket_expression} AS bucket,
             type,
@@ -279,6 +289,7 @@ SELECT
             AND bid_qty > 0 AND ask_qty > 0
     ) AS ask_qty_close
 FROM base
+WHERE trading_day != toDate('1970-01-01')
 GROUP BY root, contract, trading_day, session, bucket
 HAVING countIf(type = 'Tick' AND price_scaled > 0) > 0
    AND countIf(
@@ -384,6 +395,8 @@ def _align_common_trading_days(dataset: BarDataset) -> BarDataset:
 
 def rows_to_bar_dataset(
     rows_by_timeframe: Mapping[int, Sequence[Sequence[Any]]],
+    *,
+    align_common: bool = True,
 ) -> BarDataset:
     """Apply causal front-month selection and discontinuity resets."""
     records: list[tuple[Any, ...]] = []
@@ -471,7 +484,36 @@ def rows_to_bar_dataset(
         session_close=np.asarray(columns[20], dtype=np.bool_),
     )
     dataset.validate()
-    return _align_common_trading_days(dataset)
+    return _align_common_trading_days(dataset) if align_common else dataset
+
+
+def _restrict_to_full_sessions(
+    dataset: BarDataset,
+    window: TradingDateWindow,
+    *,
+    expected_timeframes: Sequence[int] | None = None,
+) -> tuple[BarDataset, FullSessionEligibility]:
+    required_timeframes = (
+        tuple(int(value) for value in np.unique(dataset.timeframe_min))
+        if expected_timeframes is None
+        else tuple(int(value) for value in expected_timeframes)
+    )
+    eligibility = full_session_eligibility(
+        root=dataset.root,
+        timeframe_min=dataset.timeframe_min,
+        trading_day=dataset.trading_day,
+        session=dataset.session,
+        expected_trading_dates=window.expected_trading_dates,
+        roots=ROOTS,
+        required_timeframes=required_timeframes,
+    )
+    if not eligibility.eligible_trading_dates:
+        raise DatasetGovernanceError("no requested trading date has complete TXF/TMF day and night sessions")
+    indices = np.flatnonzero(np.isin(dataset.trading_day, eligibility.eligible_trading_dates))
+    restricted = BarDataset(
+        **{field: np.asarray(getattr(dataset, field))[indices] for field in dataset.__dataclass_fields__}
+    )
+    return _align_common_trading_days(restricted), eligibility
 
 
 def _content_hash(path: Path) -> str:
@@ -487,20 +529,6 @@ def _metadata_hash(payload: Mapping[str, Any]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def _missing_weekdays(days: Iterable[str]) -> list[str]:
-    observed = sorted({date.fromisoformat(value) for value in days})
-    if not observed:
-        return []
-    missing: list[str] = []
-    current = observed[0]
-    observed_set = set(observed)
-    while current <= observed[-1]:
-        if current.weekday() < 5 and current not in observed_set:
-            missing.append(current.isoformat())
-        current += timedelta(days=1)
-    return missing
-
-
 def save_governed_dataset(
     path: str | Path,
     dataset: BarDataset,
@@ -509,6 +537,8 @@ def save_governed_dataset(
     code_fingerprint: str,
     requested_date_from: str | None = None,
     requested_date_to: str | None = None,
+    trading_window: TradingDateWindow | None = None,
+    eligibility: FullSessionEligibility | None = None,
 ) -> tuple[Path, Path]:
     """Atomically write the NPZ and its complete governance sidecar."""
     dataset.validate()
@@ -523,6 +553,12 @@ def save_governed_dataset(
     temp_path.replace(output)
     content_hash = _content_hash(output)
     days = [str(value) for value in np.unique(dataset.trading_day)]
+    requested_from = requested_date_from or min(days)
+    requested_to = requested_date_to or max(days)
+    window = trading_window or build_trading_date_window(requested_from, requested_to)
+    eligible_dates = tuple(days) if eligibility is None else eligibility.eligible_trading_dates
+    missing_dates = () if eligibility is None else eligibility.missing_expected_trading_dates
+    excluded_dates = () if eligibility is None else eligibility.excluded_partial_trading_dates
     payload = {
         "schema": DATASET_SCHEMA,
         "source": "hft.market_data",
@@ -540,10 +576,21 @@ def save_governed_dataset(
         "fields": list(dataset.__dataclass_fields__),
         "date_from": min(days),
         "date_to": max(days),
-        "requested_date_from": requested_date_from or min(days),
-        "requested_date_to": requested_date_to or max(days),
-        "trading_day_count": len(days),
-        "missing_weekdays_observed_range": _missing_weekdays(days),
+        "requested_date_from": requested_from,
+        "requested_date_to": requested_to,
+        "requested_trading_date_from": requested_from,
+        "requested_trading_date_to": requested_to,
+        "calendar_name": window.calendar_name,
+        "calendar_package_version": window.calendar_package_version,
+        "calendar_mapping_hash": window.calendar_mapping_hash,
+        "query_wall_time_from": window.query_wall_time_from,
+        "query_wall_time_to": window.query_wall_time_to,
+        "warmup_trading_date": window.warmup_trading_date,
+        "expected_trading_dates": list(window.expected_trading_dates),
+        "eligible_trading_dates": list(eligible_dates),
+        "missing_expected_trading_dates": list(missing_dates),
+        "excluded_partial_trading_dates": list(excluded_dates),
+        "trading_day_count": len(eligible_dates),
         "price_scale_source": 1_000_000,
         "price_scale_output": 1,
         "timezone": "Asia/Taipei",
@@ -559,7 +606,8 @@ def save_governed_dataset(
         "content_sha256": content_hash,
         "data_fingerprint": content_hash,
         "data_ul": 5,
-        "schema_version": 1,
+        "schema_version": 2,
+        "governance_complete": eligibility is not None,
     }
     payload["metadata_hash"] = _metadata_hash(payload)
     sidecar = Path(str(output) + ".meta.json")
@@ -589,7 +637,7 @@ def load_governed_dataset(path: str | Path) -> BarDataset:
     expected_metadata_hash = str(payload.pop("metadata_hash", ""))
     if not expected_metadata_hash or _metadata_hash(payload) != expected_metadata_hash:
         raise DatasetGovernanceError("dataset sidecar fingerprint mismatch")
-    if payload.get("schema") != DATASET_SCHEMA:
+    if payload.get("schema") not in {DATASET_SCHEMA, *LEGACY_DATASET_SCHEMAS}:
         raise DatasetGovernanceError("dataset sidecar schema mismatch")
     actual_hash = _content_hash(source)
     if payload.get("content_sha256") != actual_hash:
@@ -622,6 +670,9 @@ def export_clickhouse_dataset(
         or not set(requested_timeframes).issubset(set(SUPPORTED_TIMEFRAMES_MINUTES))
     ):
         raise ValueError("timeframes_minutes must be distinct supported values")
+    if 60 not in requested_timeframes:
+        raise ValueError("timeframes_minutes must include 60 for full-session eligibility")
+    trading_window = build_trading_date_window(date_from, date_to)
     try:
         query_client = client if client is not None else get_ch_client()
     except Exception as exc:
@@ -629,7 +680,12 @@ def export_clickhouse_dataset(
     rows_by_timeframe: dict[int, Sequence[Sequence[Any]]] = {}
     evidence: list[dict[str, Any]] = []
     for timeframe in requested_timeframes:
-        query = _bar_query(timeframe, date_from=date_from, date_to=date_to)
+        query = _bar_query(
+            timeframe,
+            date_from=date_from,
+            date_to=date_to,
+            trading_window=trading_window,
+        )
         query_evidence = _guard_query(query)
         row_limit = _query_row_limit(timeframe)
         try:
@@ -654,7 +710,12 @@ def export_clickhouse_dataset(
         query_evidence.update({"timeframe_min": timeframe, "result_rows": len(rows)})
         evidence.append(query_evidence)
         rows_by_timeframe[timeframe] = rows
-    dataset = rows_to_bar_dataset(rows_by_timeframe)
+    selected = rows_to_bar_dataset(rows_by_timeframe, align_common=False)
+    dataset, eligibility = _restrict_to_full_sessions(
+        selected,
+        trading_window,
+        expected_timeframes=requested_timeframes,
+    )
     return save_governed_dataset(
         path,
         dataset,
@@ -662,4 +723,6 @@ def export_clickhouse_dataset(
         code_fingerprint=code_fingerprint,
         requested_date_from=date_from,
         requested_date_to=date_to,
+        trading_window=trading_window,
+        eligibility=eligibility,
     )

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from research.combinatorial.smma_validation import (
     ExecutionResult,
+    activation_mask,
     benjamini_hochberg,
     block_bootstrap_mean,
     build_split_plan,
@@ -52,6 +54,32 @@ def test_execution_crosses_bid_ask_on_next_bar_and_charges_profile_cost() -> Non
     assert result.entry_indices.tolist() == [1]
     assert result.exit_indices.tolist() == [3]
     assert result.trade_pnl.tolist() == [3.0]  # 108 close bid - 102 open ask - 3 point RT profile
+
+
+def test_execution_uses_entry_contract_profile_and_fails_on_unknown_contract() -> None:
+    kwargs = {
+        "signal": np.asarray([1.0, 0.0, 0.0]),
+        "direction": 1,
+        "threshold": 1.0,
+        "target_indices": np.asarray([2, -1, -1]),
+        "bid_open": np.asarray([99.0, 100.0, 101.0]),
+        "ask_open": np.asarray([101.0, 102.0, 103.0]),
+        "bid_close": np.asarray([100.0, 103.0, 108.0]),
+        "ask_close": np.asarray([102.0, 105.0, 110.0]),
+        "reset_mask": np.zeros(3, dtype=bool),
+        "cost_mode": "per_contract",
+    }
+    result = simulate_next_bar_execution(
+        **kwargs,
+        contracts=np.asarray(["TXFD6", "TXFD6", "TXFD6"]),
+    )
+    assert result.trade_pnl.tolist() == [3.0]
+
+    with pytest.raises(KeyError, match="TXFG6"):
+        simulate_next_bar_execution(
+            **kwargs,
+            contracts=np.asarray(["TXFG6", "TXFG6", "TXFG6"]),
+        )
 
 
 def test_short_execution_sells_bid_and_covers_ask() -> None:
@@ -119,10 +147,26 @@ def test_recent_kill_rejects_constant_or_trend_contaminated_signal() -> None:
 def test_quantile_threshold_makes_a_micro_scale_feature_tradeable() -> None:
     signal = np.asarray([0.0001, 0.0002, 0.0003, 0.0004])
 
-    cut = resolve_quantile_threshold(signal, direction=1, quantile=0.50)
+    resolution = resolve_quantile_threshold(signal, direction=1, quantile=0.50)
 
-    assert cut == 0.0003
-    assert np.count_nonzero(signal > cut) == 1
+    assert resolution.cut == 0.0003
+    assert resolution.comparator == ">="
+    assert resolution.active_count == 2
+    assert np.count_nonzero(activation_mask(signal, direction=1, threshold=resolution.cut)) == 2
+
+
+def test_quantile_equality_activates_a_discrete_sign_feature() -> None:
+    signal = np.asarray([-1.0, 0.0, 1.0, 1.0])
+    resolution = resolve_quantile_threshold(signal, direction=1, quantile=0.70)
+
+    assert resolution.cut == 1.0
+    assert resolution.tie_count == 2
+    assert activation_mask(signal, direction=1, threshold=resolution.cut).tolist() == [
+        False,
+        False,
+        True,
+        True,
+    ]
 
 
 def test_negatively_predictive_signal_survives_ic_when_traded_short() -> None:
@@ -170,7 +214,7 @@ def test_zero_trade_candidate_has_distinct_failure_reason() -> None:
         nonoverlap_step=1,
     )
 
-    assert "no_trades" in metrics.reasons
+    assert "no_executable_trades" in metrics.reasons
     assert "net_edge" not in metrics.reasons
 
 

@@ -19,6 +19,7 @@ MIN_DAYS_FOR_PROMOTION = 100
 THRESHOLD_QUANTILES: tuple[float, ...] = (0.50, 0.70, 0.85, 0.95)
 MINIMUM_EDGE_POINTS: Mapping[str, float] = {"TXF": 1.0, "TMF": 5.0}
 STRICT_EDGE_TARGET_POINTS: Mapping[str, float] = {"TXF": 10.0, "TMF": 10.0}
+ENTRY_RULE_VERSION = "quantile_gte_v2"
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +43,21 @@ class ExecutionResult:
     net_edge: float
     net_sharpe: float
     turnover: float
+
+
+@dataclass(frozen=True, slots=True)
+class ThresholdResolution:
+    """Discovery-only evidence for one frozen quantile entry cut."""
+
+    cut: float
+    quantile: float
+    comparator: str
+    finite_count: int
+    distinct_count: int
+    below_count: int
+    tie_count: int
+    active_count: int
+    active_rate: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,7 +219,7 @@ def resolve_quantile_threshold(
     *,
     direction: int,
     quantile: float,
-) -> float:
+) -> ThresholdResolution:
     """Resolve an absolute entry cut from finite discovery-only directed signals."""
     if direction not in (-1, 1):
         raise ValueError("direction must be -1 or 1")
@@ -213,7 +229,35 @@ def resolve_quantile_threshold(
     finite = directed[np.isfinite(directed)]
     if finite.size == 0:
         raise ValueError("cannot resolve a quantile threshold from an empty signal")
-    return float(np.quantile(finite, float(quantile), method="higher"))
+    cut = float(np.quantile(finite, float(quantile), method="higher"))
+    active = finite >= cut
+    tie_count = int(np.count_nonzero(finite == cut))
+    active_count = int(np.count_nonzero(active))
+    return ThresholdResolution(
+        cut=cut,
+        quantile=float(quantile),
+        comparator=">=",
+        finite_count=int(finite.size),
+        distinct_count=int(np.unique(finite).size),
+        below_count=int(np.count_nonzero(finite < cut)),
+        tie_count=tie_count,
+        active_count=active_count,
+        active_rate=float(active_count / finite.size),
+    )
+
+
+def activation_mask(
+    signal: Sequence[float] | np.ndarray,
+    *,
+    direction: int,
+    threshold: float,
+) -> np.ndarray:
+    """Apply the single governed entry comparator used by every mining path."""
+
+    if direction not in (-1, 1):
+        raise ValueError("direction must be -1 or 1")
+    directed = np.asarray(signal, dtype=np.float64).reshape(-1) * float(direction)
+    return np.isfinite(directed) & (directed >= float(threshold))
 
 
 def simulate_next_bar_execution(
@@ -227,7 +271,9 @@ def simulate_next_bar_execution(
     bid_close: Sequence[float] | np.ndarray,
     ask_close: Sequence[float] | np.ndarray,
     reset_mask: Sequence[bool] | np.ndarray,
-    instrument_profile: str,
+    instrument_profile: str | None = None,
+    contracts: Sequence[str] | np.ndarray | None = None,
+    cost_mode: str = "root_proxy",
 ) -> ExecutionResult:
     """One-position taker simulation using next-open entry and target-close BBO."""
     if direction not in (-1, 1):
@@ -239,6 +285,13 @@ def simulate_next_bar_execution(
     exit_bids = np.asarray(bid_close, dtype=np.float64).reshape(-1)
     exit_asks = np.asarray(ask_close, dtype=np.float64).reshape(-1)
     resets = np.asarray(reset_mask, dtype=np.bool_).reshape(-1)
+    contract_values = None if contracts is None else np.asarray(contracts).astype("<U16").reshape(-1)
+    if cost_mode not in {"per_contract", "root_proxy"}:
+        raise ValueError("cost_mode must be 'per_contract' or 'root_proxy'")
+    if cost_mode == "per_contract" and contract_values is None:
+        raise ValueError("per_contract cost mode requires a contract value for every bar")
+    if cost_mode == "root_proxy" and not instrument_profile:
+        raise ValueError("root_proxy cost mode requires instrument_profile")
     if (
         len(
             {
@@ -249,21 +302,30 @@ def simulate_next_bar_execution(
                 exit_bids.size,
                 exit_asks.size,
                 resets.size,
+                *(() if contract_values is None else (contract_values.size,)),
             }
         )
         != 1
     ):
         raise ValueError("execution inputs must have identical lengths")
-    cost = load_cost_profile(instrument_profile).rt_cost_pts
+    active = activation_mask(signal_arr, direction=direction, threshold=threshold)
+    proxy_cost = load_cost_profile(str(instrument_profile)).rt_cost_pts if cost_mode == "root_proxy" else None
+    contract_costs = (
+        {
+            contract: load_cost_profile(contract).rt_cost_pts
+            for contract in sorted(str(value) for value in np.unique(contract_values))
+        }
+        if contract_values is not None and cost_mode == "per_contract"
+        else {}
+    )
     pnl: list[float] = []
     entries: list[int] = []
     exits: list[int] = []
     next_free = 0
     for decision in range(signal_arr.size - 1):
-        if decision < next_free or not np.isfinite(signal_arr[decision]):
+        if decision < next_free:
             continue
-        directed_signal = signal_arr[decision] * float(direction)
-        if directed_signal <= float(threshold):
+        if not active[decision]:
             continue
         entry = decision + 1
         intended_exit = int(targets[decision])
@@ -284,6 +346,12 @@ def simulate_next_bar_execution(
             gross = exit_bids[exit_index] - entry_asks[entry]
         else:
             gross = entry_bids[entry] - exit_asks[exit_index]
+        if proxy_cost is not None:
+            cost = float(proxy_cost)
+        else:
+            if contract_values is None:
+                raise RuntimeError("per-contract execution lost its validated contract array")
+            cost = contract_costs[str(contract_values[entry])]
         pnl.append(float(gross - cost))
         entries.append(entry)
         exits.append(exit_index)
@@ -312,6 +380,7 @@ def evaluate_recent_kill_criteria(
     nonoverlap_step: int,
     trading_days: Sequence[str] | np.ndarray | None = None,
     recent_fraction: float = 0.25,
+    trade_activity_reason: str | None = None,
 ) -> KillMetrics:
     """Apply the preregistered recent-quarter IC and net-edge kills."""
     if direction not in (-1, 1):
@@ -340,7 +409,7 @@ def evaluate_recent_kill_criteria(
     if overlap_ratio > 3.0:
         reasons.append("overlap_inflation")
     if execution.trade_pnl.size == 0:
-        reasons.append("no_trades")
+        reasons.append(trade_activity_reason or "no_executable_trades")
     elif execution.net_edge <= minimum_edge:
         reasons.append("net_edge")
     daily_sharpe = (
@@ -412,7 +481,7 @@ def cluster_bootstrap_mean(
         return 0.0, 1.0
     grouped = [array[cluster_array == cluster] for cluster in ordered]
     rng = np.random.default_rng(int(seed))
-    means = np.empty(max(1, int(samples)), dtype=np.float64)
+    means: np.ndarray = np.empty(max(1, int(samples)), dtype=np.float64)
     for index in range(means.size):
         selected = rng.integers(0, len(grouped), size=len(grouped))
         sample = np.concatenate([grouped[item] for item in selected])
@@ -610,7 +679,7 @@ def locked_validation(
     seed: int,
 ) -> LockedMetrics:
     if trading_days is None:
-        trade_clusters = np.arange(execution.trade_pnl.size).astype("<U32")
+        trade_clusters: np.ndarray = np.arange(execution.trade_pnl.size).astype("<U32")
         lower, bootstrap_p = block_bootstrap_mean(execution.trade_pnl, samples=2_000, seed=seed)
         dsr_values = execution.trade_pnl
     else:

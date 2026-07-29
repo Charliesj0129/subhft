@@ -509,6 +509,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Mark results as post-hoc screen-only diagnostics with no fresh-holdout claim",
     )
     mine_run.add_argument(
+        "--cost-mode",
+        choices=["per_contract", "root_proxy"],
+        default="per_contract",
+        help="Use entry-contract costs; root_proxy is permitted only with --posthoc-diagnostic",
+    )
+    mine_run.add_argument(
         "--unlock-final-holdout",
         action="store_true",
         help="Explicitly unlock final holdout after locked validation; requires research-owner approval",
@@ -528,6 +534,8 @@ def build_parser() -> argparse.ArgumentParser:
     mine_campaign.add_argument("--campaign-id", required=True, help="Filesystem-safe immutable campaign id")
     mine_campaign.add_argument("--wall-time-hours", type=float, default=12.0)
     mine_campaign.add_argument("--max-candidates", type=int, default=20_000)
+    mine_campaign.add_argument("--diagnostic-max-candidates", type=int, default=200)
+    mine_campaign.add_argument("--diagnostic-wall-time-hours", type=float, default=1.0)
     mine_campaign.add_argument("--workers", type=int, default=12)
     mine_campaign.add_argument(
         "--seeds",

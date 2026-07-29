@@ -6,11 +6,13 @@ from typing import Any
 import numpy as np
 import pytest
 
+from research.combinatorial.taifex_trading_dates import build_trading_date_window
 from research.combinatorial.tick_dataset import (
     TICK_DATASET_SCHEMA,
     TickBarDataset,
     TickDatasetGovernanceError,
     _guard_query,
+    _restrict_to_full_sessions,
     _tick_bar_query,
     export_clickhouse_tick_dataset,
     load_governed_tick_dataset,
@@ -70,6 +72,48 @@ def _causal_rows() -> dict[int, list[tuple[object, ...]]]:
             rows.append(_row("TXF", "TXFA6", day, base + offset, ticks_a))
             rows.append(_row("TXF", "TXFB6", day, base + offset, ticks_b))
     return {60: rows}
+
+
+def _complete_export_rows(*, degenerate_warmup: bool = False) -> list[tuple[object, ...]]:
+    rows: list[tuple[object, ...]] = []
+    trading_days = ("2026-06-30", "2026-07-01", "2026-07-02", "2026-07-03", "2026-07-06")
+    for day_index, day in enumerate(trading_days):
+        for root in ("TXF", "TMF"):
+            contract = f"{root}D6"
+            base = (day_index + 1) * 100_000_000_000_000
+            for offset in range(14):
+                row = _row(
+                    root,
+                    contract,
+                    day,
+                    base + offset * 3_600_000_000_000,
+                    100,
+                    session="night",
+                )
+                if degenerate_warmup and day == "2026-06-30":
+                    mutable = list(row)
+                    mutable[15] = 0
+                    mutable[16] = 0
+                    mutable[17] = 100
+                    row = tuple(mutable)
+                rows.append(row)
+            for offset in range(5):
+                row = _row(
+                    root,
+                    contract,
+                    day,
+                    base + (14 + offset) * 3_600_000_000_000,
+                    100,
+                    session="day",
+                )
+                if degenerate_warmup and day == "2026-06-30":
+                    mutable = list(row)
+                    mutable[15] = 0
+                    mutable[16] = 0
+                    mutable[17] = 100
+                    row = tuple(mutable)
+                rows.append(row)
+    return rows
 
 
 class _FakeResult:
@@ -322,7 +366,7 @@ def test_tick_bar_query_rejects_unsupported_timeframe() -> None:
 
 
 def test_tick_export_runs_readonly_bounded_queries_and_writes_query_evidence(tmp_path) -> None:
-    client = _FakeClient(_causal_rows()[60])
+    client = _FakeClient(_complete_export_rows(degenerate_warmup=True))
     path = tmp_path / "dataset.npz"
 
     _output, sidecar = export_clickhouse_tick_dataset(
@@ -343,8 +387,40 @@ def test_tick_export_runs_readonly_bounded_queries_and_writes_query_evidence(tmp
     assert payload["requested_date_from"] == "2026-07-01"
     assert payload["requested_date_to"] == "2026-07-06"
     assert payload["query_evidence"][0]["timeframe_min"] == 60
-    assert payload["query_evidence"][0]["result_rows"] == len(_causal_rows()[60])
+    assert payload["query_evidence"][0]["result_rows"] == len(_complete_export_rows())
+    assert payload["schema_version"] == 2
+    assert payload["governance_complete"] is True
+    assert payload["eligible_trading_dates"] == [
+        "2026-07-01",
+        "2026-07-02",
+        "2026-07-03",
+        "2026-07-06",
+    ]
     assert load_governed_tick_dataset(path) is not None
+
+
+def test_partial_sixty_minute_day_is_excluded_from_every_timeframe() -> None:
+    rows = _complete_export_rows()
+    partial = [
+        row
+        for row in rows
+        if not (row[0] == "TMF" and row[2] == "2026-07-03" and row[3] == "night" and int(row[4]) == 400_000_000_000_000)
+    ]
+    daily = [
+        _row(root, f"{root}D6", day, (index + 1) * 100_000_000_000_000, 100, session="full")
+        for index, day in enumerate(("2026-06-30", "2026-07-01", "2026-07-02", "2026-07-03", "2026-07-06"))
+        for root in ("TXF", "TMF")
+    ]
+    selected = rows_to_tick_bar_dataset({60: partial, 1440: daily}, align_common=False)
+
+    restricted, evidence = _restrict_to_full_sessions(
+        selected,
+        build_trading_date_window("2026-07-01", "2026-07-06"),
+    )
+
+    assert "2026-07-03" not in set(restricted.trading_day)
+    assert set(restricted.timeframe_min) == {60, 1440}
+    assert evidence.excluded_partial_trading_dates[0]["trading_date"] == "2026-07-03"
 
 
 def test_tick_export_rejects_duplicate_or_unsupported_timeframes(tmp_path) -> None:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from argparse import Namespace
-from dataclasses import asdict, fields
+from dataclasses import asdict, fields, replace
 from types import SimpleNamespace
 
 import numpy as np
@@ -249,9 +249,16 @@ def test_run_config_enforces_frozen_resource_caps(tmp_path) -> None:
             family="tick",
             unlock_final_holdout=True,
         ).validate()
+    with pytest.raises(ValueError, match="posthoc diagnostic"):
+        RunConfig(run_dir=tmp_path, cost_mode="root_proxy").validate()
+    RunConfig(
+        run_dir=tmp_path,
+        posthoc_diagnostic=True,
+        cost_mode="root_proxy",
+    ).validate()
 
 
-def test_two_minute_run_requires_only_two_minute_and_daily_dataset(tmp_path) -> None:
+def test_two_minute_run_also_requires_sixty_minute_completeness_evidence(tmp_path) -> None:
     run = MiningRun(
         RunConfig(
             run_dir=tmp_path / "run",
@@ -261,7 +268,7 @@ def test_two_minute_run_requires_only_two_minute_and_daily_dataset(tmp_path) -> 
         )
     )
 
-    assert run._required_dataset_timeframes() == (2, 1440)
+    assert run._required_dataset_timeframes() == (2, 60, 1440)
 
 
 def test_dataset_cache_reuses_identical_bidask_and_kbar_exports(monkeypatch, tmp_path) -> None:
@@ -339,9 +346,33 @@ def test_dataset_cache_reuses_identical_bidask_and_kbar_exports(monkeypatch, tmp
 
     assert len(exports) == 1
     assert exports[0]["date_from"] == "2026-01-27"
-    assert exports[0]["date_to"] == "2026-07-25"
+    assert exports[0]["date_to"] == "2026-07-24"
     assert bidask._dataset_cache_evidence["hit"] is False
     assert kbar._dataset_cache_evidence["hit"] is True
+
+    original_window = runner.build_trading_date_window("2026-01-27", "2026-07-24")
+    monkeypatch.setattr(
+        runner,
+        "build_trading_date_window",
+        lambda _date_from, _date_to: replace(
+            original_window,
+            calendar_mapping_hash="changed-official-calendar-mapping",
+        ),
+    )
+    changed_calendar = MiningRun(
+        RunConfig(
+            run_dir=tmp_path / "changed-calendar",
+            family="kbar",
+            seeds=(1, 2, 3),
+            dataset_cache_dir=cache,
+        )
+    )
+    changed_calendar.run_dir.mkdir()
+
+    changed_calendar._load_or_export_dataset()
+
+    assert len(exports) == 2
+    assert changed_calendar._dataset_cache_evidence["hit"] is False
 
 
 def test_two_minute_horizon_uses_thirty_bar_target_without_projection() -> None:
@@ -470,6 +501,23 @@ def test_candidate_id_uses_family_and_quantile_not_resolved_cut() -> None:
     assert first[0].candidate_id != other_family[0].candidate_id
 
 
+def test_exact_resolved_cut_duplicates_reference_the_lowest_quantile_candidate() -> None:
+    candidates = enumerate_candidates(
+        family="kbar",
+        root="TXF",
+        timeframe_min=60,
+        expressions=["discrete"],
+        signals={"discrete": np.ones(20)},
+        discovery_mask=np.ones(20, dtype=bool),
+        seed=1,
+    )
+    first_group = [candidate for candidate in candidates if candidate.horizon == "1h" and candidate.direction == 1]
+
+    assert first_group[0].duplicate_of is None
+    assert all(candidate.duplicate_of == first_group[0].candidate_id for candidate in first_group[1:])
+    assert len({candidate.candidate_id for candidate in first_group}) == 4
+
+
 def test_quantile_cut_is_resolved_on_discovery_split_only() -> None:
     discovery_mask = np.asarray([True, True, True, False])
     first = enumerate_candidates(
@@ -503,7 +551,7 @@ def test_signal_that_never_crosses_its_cut_skips_execution(monkeypatch) -> None:
         expression="constant",
         horizon="1h",
         direction=1,
-        threshold=1.0,
+        threshold=1.1,
         seed=1,
         complexity=1,
         threshold_quantile=0.95,
@@ -525,7 +573,7 @@ def test_signal_that_never_crosses_its_cut_skips_execution(monkeypatch) -> None:
         split_labels=np.full(len(bars), "discovery"),
     )
 
-    assert result.failure_reason.endswith("no_trades")
+    assert result.failure_reason.endswith("insufficient_trigger_activity")
 
 
 def test_selection_clustered_sharpe_uses_full_trading_day_axis() -> None:
@@ -575,7 +623,7 @@ def test_resume_restores_frozen_effective_trial_count_evidence(tmp_path) -> None
     run = MiningRun(RunConfig(run_dir=run_dir, seeds=(1, 2, 3)))
     payload = _with_integrity_hash(
         {
-            "schema": "alpha_mining_search_space.v1",
+            "schema": "alpha_mining_search_space.v2",
             "code_fingerprint": run._code_fingerprint,
             "dataset_fingerprint": run._dataset_fingerprint(),
             "effective_trial_counts_by_group": {"TXF/60": 7, "TMF/60": 5},
@@ -871,6 +919,19 @@ def test_discovery_trend_pollution_uses_killed_horizon_metrics(tmp_path) -> None
         )
 
     assert run._discover(_dataset(), []) == []
+    disposition = run._ledger.rows(stage="post_discovery")
+    assert len(disposition) == 1
+    assert disposition[0]["status"] == "filtered_monotonic_horizon"
+    assert disposition[0]["disposition_reason"] == "monotonic_horizon_pollution"
+
+
+def test_missing_contract_profile_is_visible_to_full_run_preflight(tmp_path) -> None:
+    run = MiningRun(RunConfig(run_dir=tmp_path / "run", seeds=(1, 2, 3)))
+
+    coverage = run._cost_profile_coverage(_dataset())
+
+    assert coverage["complete"] is False
+    assert coverage["missing_contracts"] == ["TXFG6"]
 
 
 def test_resume_manifest_mismatch_fails_closed(tmp_path) -> None:
@@ -908,7 +969,7 @@ def test_run_rejects_dataset_outside_frozen_instrument_scope(tmp_path) -> None:
     )
     run = MiningRun(RunConfig(run_dir=run_dir, max_candidates=1, seeds=(1, 2, 3)))
     dataset = run._load_or_export_dataset()
-    with pytest.raises(RunIntegrityError, match="both TXF and TMF"):
+    with pytest.raises(RunIntegrityError, match="complete governed dataset schema v2"):
         run._validate_frozen_dataset_scope(dataset)
 
 
@@ -962,6 +1023,94 @@ def test_signal_correlation_aligns_different_timeframes_by_timestamp() -> None:
         sparse_ts.astype(float),
     )
     assert correlation == pytest.approx(1.0)
+
+
+def test_selection_dispositions_are_idempotent_and_funnel_conserves(tmp_path) -> None:
+    run = MiningRun(RunConfig(run_dir=tmp_path / "run", seeds=(1, 2, 3)))
+    kept = Candidate(
+        candidate_id="kept",
+        root="TXF",
+        timeframe_min=60,
+        expression="kept",
+        horizon="1h",
+        direction=1,
+        threshold=0.0,
+        seed=1,
+        complexity=1,
+    )
+    correlated = Candidate(
+        candidate_id="correlated",
+        root="TXF",
+        timeframe_min=60,
+        expression="correlated",
+        horizon="1h",
+        direction=1,
+        threshold=0.0,
+        seed=1,
+        complexity=1,
+    )
+    capped = Candidate(
+        candidate_id="capped",
+        root="TXF",
+        timeframe_min=60,
+        expression="capped",
+        horizon="1h",
+        direction=1,
+        threshold=0.0,
+        seed=1,
+        complexity=1,
+    )
+    for candidate in (correlated, capped):
+        run._ledger.append(
+            {
+                "candidate_id": candidate.candidate_id,
+                "stage": "discovery",
+                "status": "passed",
+            }
+        )
+        run._ledger.append(
+            {
+                "candidate_id": candidate.candidate_id,
+                "stage": "post_discovery",
+                "status": "advanced",
+            }
+        )
+    timestamps = np.arange(10, dtype=np.int64)
+    signal = np.arange(10, dtype=np.float64)
+    selection_rows = {}
+
+    assert run._record_selection_disposition(
+        candidate=correlated,
+        selection_ts=timestamps,
+        selection_signal=signal,
+        signals_kept=[(timestamps, signal, kept.candidate_id)],
+        selected_for_root=1,
+        selection_rows=selection_rows,
+    )
+    assert run._record_selection_disposition(
+        candidate=correlated,
+        selection_ts=timestamps,
+        selection_signal=signal,
+        signals_kept=[(timestamps, signal, kept.candidate_id)],
+        selected_for_root=1,
+        selection_rows=selection_rows,
+    )
+    assert run._record_selection_disposition(
+        candidate=capped,
+        selection_ts=timestamps,
+        selection_signal=-signal,
+        signals_kept=[],
+        selected_for_root=10,
+        selection_rows=selection_rows,
+    )
+
+    assert len(run._ledger.rows(stage="selection")) == 2
+    _funnel, _failures, dispositions, conservation, _near = run._funnel_evidence()
+    assert dispositions["selection"] == {
+        "correlation_deduplicated": 1,
+        "rank_capped": 1,
+    }
+    assert conservation["selection_conserved"] is True
 
 
 def test_status_reads_artifacts_without_mutation(tmp_path) -> None:
@@ -1019,6 +1168,7 @@ def test_parser_accepts_frozen_smma_run_and_status_contract() -> None:
     assert run_args.posthoc_diagnostic is True
     assert run_args.unlock_final_holdout is False
     assert run_args.dataset_cache_dir is None
+    assert run_args.cost_mode == "per_contract"
     status_args = cli.build_parser().parse_args(
         ["alpha", "mine", "status", "--run-dir", "research/experiments/runs/smma_test"]
     )
@@ -1069,7 +1219,74 @@ def test_cmd_run_passes_frozen_contract_to_runner(monkeypatch, capsys, tmp_path)
     assert captured["config"].posthoc_diagnostic is True
     assert captured["config"].unlock_final_holdout is False
     assert captured["config"].dataset_cache_dir is None
+    assert captured["config"].cost_mode == "per_contract"
     assert json.loads(capsys.readouterr().out)["screen_only"] is True
+
+
+@pytest.mark.parametrize(
+    ("eligible_days", "coverage_complete", "expected_mode", "expected_cap", "expected_cost_mode"),
+    [
+        (80, False, "bounded_diagnostic", 200, "root_proxy"),
+        (120, True, "full", 20_000, "per_contract"),
+    ],
+)
+def test_campaign_stages_each_leg_by_data_and_cost_eligibility(
+    monkeypatch,
+    capsys,
+    tmp_path,
+    eligible_days,
+    coverage_complete,
+    expected_mode,
+    expected_cap,
+    expected_cost_mode,
+) -> None:
+    import research.combinatorial.smma_runner as runner
+
+    captured: list[RunConfig] = []
+
+    def fake_load(self):
+        sidecar = self.dataset_path.with_suffix(".npz.meta.json")
+        sidecar.parent.mkdir(parents=True, exist_ok=True)
+        sidecar.write_text(json.dumps({"trading_day_count": eligible_days}))
+        return _dataset()
+
+    def fake_run(config):
+        captured.append(config)
+        return {
+            "verdict": "KILL",
+            "report_hash": f"hash-{len(captured)}",
+            "cost_claim_eligible": config.cost_mode == "per_contract",
+        }
+
+    coverage = {
+        "observed_contracts": ["TXFG6"],
+        "profiled_contracts": ["TXFG6"] if coverage_complete else [],
+        "missing_contracts": [] if coverage_complete else ["TXFG6"],
+        "complete": coverage_complete,
+    }
+    monkeypatch.setattr(MiningRun, "_load_or_export_dataset", fake_load)
+    monkeypatch.setattr(MiningRun, "_validate_frozen_dataset_scope", lambda _self, _dataset: None)
+    monkeypatch.setattr(MiningRun, "_cost_profile_coverage", staticmethod(lambda _dataset: coverage))
+    monkeypatch.setattr(runner, "run_mining", fake_run)
+    args = Namespace(
+        run_root=str(tmp_path / "campaigns"),
+        campaign_id=f"campaign-{eligible_days}",
+        wall_time_hours=12.0,
+        max_candidates=20_000,
+        diagnostic_max_candidates=200,
+        diagnostic_wall_time_hours=1.0,
+        workers=2,
+        seeds=[1, 2, 3],
+        resume=False,
+    )
+
+    cli.cmd_alpha_mine_campaign(args)
+
+    report = json.loads(capsys.readouterr().out)
+    assert len(captured) == 6
+    assert {leg["mode"] for leg in report["legs"]} == {expected_mode}
+    assert {config.max_candidates for config in captured} == {expected_cap}
+    assert {config.cost_mode for config in captured} == {expected_cost_mode}
 
 
 def test_bounded_run_writes_kill_report_when_first_hypothesis_fails(monkeypatch, tmp_path) -> None:
@@ -1078,6 +1295,7 @@ def test_bounded_run_writes_kill_report_when_first_hypothesis_fails(monkeypatch,
     run_dir = tmp_path / "run"
     run_dir.mkdir()
     dataset = _dataset()
+    dataset.contract[:] = "TXFD6"
     dataset.reset[:] = False
     dataset.reset[0] = True
     save_governed_dataset(

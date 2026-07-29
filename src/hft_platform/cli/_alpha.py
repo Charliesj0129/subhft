@@ -305,6 +305,7 @@ def cmd_alpha_mine_run(args: argparse.Namespace) -> None:
             resume=bool(args.resume),
             unlock_final_holdout=bool(getattr(args, "unlock_final_holdout", False)),
             dataset_cache_dir=(Path(args.dataset_cache_dir) if getattr(args, "dataset_cache_dir", None) else None),
+            cost_mode=str(getattr(args, "cost_mode", "per_contract")),
         )
         report = run_mining(config)
     except (DatasetGovernanceError, TickDatasetGovernanceError, RunIntegrityError, ValueError, OSError) as exc:
@@ -331,10 +332,10 @@ def _write_alpha_mining_campaign_report(
     outcomes: list[dict[str, Any]],
 ) -> dict[str, Any]:
     payload = {
-        "schema": "alpha_mining_campaign.v1",
+        "schema": "alpha_mining_campaign.v2",
         "campaign_id": campaign_id,
         "screen_only": True,
-        "posthoc_diagnostic": True,
+        "eligibility_policy": "full_when_100_days_and_cost_profiles_complete_else_bounded_diagnostic",
         "final_holdout_unlocked": False,
         "legs": list(outcomes),
     }
@@ -362,7 +363,13 @@ def cmd_alpha_mine_campaign(args: argparse.Namespace) -> None:
     """Run the six governed family/timeframe legs with resumable per-leg artifacts."""
     try:
         from research.combinatorial.smma_dataset import DatasetGovernanceError
-        from research.combinatorial.smma_runner import RunConfig, RunIntegrityError, run_mining
+        from research.combinatorial.smma_runner import (
+            MIN_DAYS_FOR_PROMOTION,
+            MiningRun,
+            RunConfig,
+            RunIntegrityError,
+            run_mining,
+        )
         from research.combinatorial.tick_dataset import TickDatasetGovernanceError
 
         run_root = Path(args.run_root).resolve()
@@ -382,28 +389,74 @@ def cmd_alpha_mine_campaign(args: argparse.Namespace) -> None:
         for family, label, timeframes in legs:
             leg_name = f"{family}-{label}-{campaign_id}"
             leg_dir = campaign_dir / leg_name
-            config = RunConfig(
-                run_dir=leg_dir,
-                family=family,
-                wall_time_hours=float(args.wall_time_hours),
-                max_candidates=int(args.max_candidates),
-                workers=int(args.workers),
-                seeds=tuple(int(seed) for seed in args.seeds),
-                timeframes_minutes=timeframes,
-                posthoc_diagnostic=True,
-                resume=bool(args.resume) and (leg_dir / "run_manifest.json").exists(),
-                unlock_final_holdout=False,
-                dataset_cache_dir=campaign_dir / "dataset_cache",
-            )
             try:
+                preflight_config = RunConfig(
+                    run_dir=leg_dir,
+                    family=family,
+                    wall_time_hours=min(float(args.wall_time_hours), float(args.diagnostic_wall_time_hours)),
+                    max_candidates=min(int(args.max_candidates), int(args.diagnostic_max_candidates)),
+                    workers=int(args.workers),
+                    seeds=tuple(int(seed) for seed in args.seeds),
+                    timeframes_minutes=timeframes,
+                    posthoc_diagnostic=True,
+                    resume=False,
+                    unlock_final_holdout=False,
+                    dataset_cache_dir=campaign_dir / "dataset_cache",
+                    cost_mode="root_proxy",
+                )
+                preflight = MiningRun(preflight_config)
+                preflight.run_dir.mkdir(parents=True, exist_ok=True)
+                dataset = preflight._load_or_export_dataset()
+                preflight._validate_frozen_dataset_scope(dataset)
+                sidecar = json.loads(Path(str(preflight.dataset_path) + ".meta.json").read_text(encoding="utf-8"))
+                eligible_days = int(sidecar["trading_day_count"])
+                cost_coverage = preflight._cost_profile_coverage(dataset)
+                full_eligible = eligible_days >= MIN_DAYS_FOR_PROMOTION and bool(cost_coverage["complete"])
+                mode = "full" if full_eligible else "bounded_diagnostic"
+                eligibility_reasons: list[str] = []
+                if eligible_days < MIN_DAYS_FOR_PROMOTION:
+                    eligibility_reasons.append(f"eligible_trading_days={eligible_days}<{MIN_DAYS_FOR_PROMOTION}")
+                if not cost_coverage["complete"]:
+                    eligibility_reasons.append(f"missing_cost_profiles={cost_coverage['missing_contracts']}")
+                config = RunConfig(
+                    run_dir=leg_dir,
+                    family=family,
+                    wall_time_hours=(
+                        float(args.wall_time_hours)
+                        if full_eligible
+                        else min(float(args.wall_time_hours), float(args.diagnostic_wall_time_hours))
+                    ),
+                    max_candidates=(
+                        int(args.max_candidates)
+                        if full_eligible
+                        else min(int(args.max_candidates), int(args.diagnostic_max_candidates))
+                    ),
+                    workers=int(args.workers),
+                    seeds=tuple(int(seed) for seed in args.seeds),
+                    timeframes_minutes=timeframes,
+                    posthoc_diagnostic=not full_eligible,
+                    resume=bool(args.resume) and (leg_dir / "run_manifest.json").exists(),
+                    unlock_final_holdout=False,
+                    dataset_cache_dir=campaign_dir / "dataset_cache",
+                    cost_mode="per_contract" if full_eligible else "root_proxy",
+                )
                 report = run_mining(config)
                 outcomes.append(
                     {
                         "leg": leg_name,
-                        "run_dir": str(config.run_dir),
+                        "run_dir": str(leg_dir),
                         "status": "complete",
                         "verdict": report.get("verdict"),
                         "report_hash": report.get("report_hash"),
+                        "mode": mode,
+                        "eligible_trading_days": eligible_days,
+                        "minimum_days_for_full_run": MIN_DAYS_FOR_PROMOTION,
+                        "cost_profile_coverage": cost_coverage,
+                        "eligibility_reasons": eligibility_reasons,
+                        "candidate_cap": config.max_candidates,
+                        "wall_time_hours": config.wall_time_hours,
+                        "cost_mode": config.cost_mode,
+                        "cost_claim_eligible": report.get("cost_claim_eligible", False),
                     }
                 )
             except (
@@ -416,7 +469,7 @@ def cmd_alpha_mine_campaign(args: argparse.Namespace) -> None:
                 outcomes.append(
                     {
                         "leg": leg_name,
-                        "run_dir": str(config.run_dir),
+                        "run_dir": str(leg_dir),
                         "status": "failed",
                         "error_type": type(exc).__name__,
                         "error": str(exc),

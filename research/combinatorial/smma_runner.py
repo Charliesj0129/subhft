@@ -38,6 +38,7 @@ from research.combinatorial.smma import (
     validate_stationary_signal,
 )
 from research.combinatorial.smma_dataset import (
+    DATASET_SCHEMA,
     DATE_FROM,
     DATE_TO,
     ROOTS,
@@ -46,6 +47,7 @@ from research.combinatorial.smma_dataset import (
     load_governed_dataset,
 )
 from research.combinatorial.smma_validation import (
+    ENTRY_RULE_VERSION,
     MIN_DAYS_FOR_PROMOTION,
     MINIMUM_EDGE_POINTS,
     STRICT_EDGE_TARGET_POINTS,
@@ -53,6 +55,8 @@ from research.combinatorial.smma_validation import (
     ExecutionResult,
     KillMetrics,
     LockedMetrics,
+    ThresholdResolution,
+    activation_mask,
     benjamini_hochberg,
     build_split_plan,
     candidate_rank_key,
@@ -66,8 +70,10 @@ from research.combinatorial.smma_validation import (
     resolve_quantile_threshold,
     simulate_next_bar_execution,
 )
+from research.combinatorial.taifex_trading_dates import build_trading_date_window
 from research.combinatorial.tick import build_tick_family_features
 from research.combinatorial.tick_dataset import (
+    TICK_DATASET_SCHEMA,
     TICK_ROOTS,
     TickBarDataset,
     export_clickhouse_tick_dataset,
@@ -82,8 +88,8 @@ from research.combinatorial.tick_dataset import (
 # simulation) only ever touches fields both dataclasses share.
 GovernedBars = BarDataset | TickBarDataset
 
-RUN_SCHEMA = "alpha_mining_run.v2"
-CHECKPOINT_SCHEMA = "alpha_mining_checkpoint.v2"
+RUN_SCHEMA = "alpha_mining_run.v3"
+CHECKPOINT_SCHEMA = "alpha_mining_checkpoint.v3"
 PRIMARY_TIMEFRAMES_MINUTES: tuple[int, ...] = (60, 120, 240)
 SUPPORTED_PRIMARY_TIMEFRAMES_MINUTES: tuple[int, ...] = (2, *PRIMARY_TIMEFRAMES_MINUTES)
 DEFAULT_SEEDS: tuple[int, ...] = (20260726, 20260727, 20260728)
@@ -108,6 +114,7 @@ _CODE_FILES: tuple[str, ...] = (
     "research/combinatorial/kbar.py",
     "research/combinatorial/tick.py",
     "research/combinatorial/tick_dataset.py",
+    "research/combinatorial/taifex_trading_dates.py",
     "research/combinatorial/expression_eval.py",
     "research/combinatorial/canonical_ast.py",
     "research/combinatorial/expression_lang.py",
@@ -256,7 +263,7 @@ FAMILY_REGISTRY: dict[str, FamilyAdapter] = {
         evaluate_expression=evaluate_family_expression,
         dataset=FamilyDatasetConfig(
             date_from="2026-01-27",
-            date_to="2026-07-25",
+            date_to="2026-07-24",
             roots=ROOTS,
             export=export_clickhouse_dataset,
             load=load_governed_dataset,
@@ -268,7 +275,7 @@ FAMILY_REGISTRY: dict[str, FamilyAdapter] = {
         evaluate_expression=evaluate_family_expression,
         dataset=FamilyDatasetConfig(
             date_from="2026-01-27",
-            date_to="2026-07-25",
+            date_to="2026-07-24",
             roots=ROOTS,
             export=export_clickhouse_dataset,
             load=load_governed_dataset,
@@ -279,8 +286,8 @@ FAMILY_REGISTRY: dict[str, FamilyAdapter] = {
         build_features_for_expression=_tick_build_features_for_expression,
         evaluate_expression=evaluate_family_expression,
         dataset=FamilyDatasetConfig(
-            date_from="2026-04-03",
-            date_to="2026-07-25",
+            date_from="2026-04-07",
+            date_to="2026-07-24",
             roots=TICK_ROOTS,
             export=export_clickhouse_tick_dataset,
             load=load_governed_tick_dataset,
@@ -303,6 +310,7 @@ class RunConfig:
     resume: bool = False
     unlock_final_holdout: bool = False
     dataset_cache_dir: Path | None = None
+    cost_mode: str = "per_contract"
 
     def validate(self) -> None:
         if self.family not in FAMILY_REGISTRY:
@@ -327,6 +335,10 @@ class RunConfig:
             normalize_smma_lengths(self.smma_lengths)
         if self.unlock_final_holdout and self.family != "smma":
             raise ValueError("final holdout cannot be unlocked for a family without a truthful screen adapter")
+        if self.cost_mode not in {"per_contract", "root_proxy"}:
+            raise ValueError("cost_mode must be 'per_contract' or 'root_proxy'")
+        if self.cost_mode == "root_proxy" and not self.posthoc_diagnostic:
+            raise ValueError("root_proxy cost mode is allowed only for an explicit posthoc diagnostic")
 
 
 @dataclass(frozen=True, slots=True)
@@ -342,6 +354,9 @@ class Candidate:
     complexity: int
     family: str = "smma"
     threshold_quantile: float | None = None
+    entry_rule_version: str = ENTRY_RULE_VERSION
+    threshold_resolution: ThresholdResolution | None = None
+    duplicate_of: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -372,8 +387,12 @@ class CandidateResult:
         if locked_payload is not None:
             locked_payload["walk_forward_sharpes"] = tuple(locked_payload.get("walk_forward_sharpes", ()))
             locked_payload["failure_reasons"] = tuple(locked_payload.get("failure_reasons", ()))
+        candidate_payload = dict(payload["candidate"])
+        resolution_payload = candidate_payload.get("threshold_resolution")
+        if isinstance(resolution_payload, Mapping):
+            candidate_payload["threshold_resolution"] = ThresholdResolution(**dict(resolution_payload))
         return cls(
-            candidate=Candidate(**dict(payload["candidate"])),
+            candidate=Candidate(**candidate_payload),
             kill=KillMetrics(**kill_payload),
             locked=LockedMetrics(**locked_payload) if locked_payload is not None else None,
             stage=str(payload["stage"]),
@@ -389,8 +408,12 @@ def _result_from_kill_ledger_row(
 ) -> CandidateResult:
     metrics = dict(row["metrics"])
     metrics["reasons"] = tuple(metrics.get("reasons", ()))
+    candidate_payload = dict(row["candidate"])
+    resolution_payload = candidate_payload.get("threshold_resolution")
+    if isinstance(resolution_payload, Mapping):
+        candidate_payload["threshold_resolution"] = ThresholdResolution(**dict(resolution_payload))
     return CandidateResult(
-        candidate=Candidate(**dict(row["candidate"])),
+        candidate=Candidate(**candidate_payload),
         kill=KillMetrics(**metrics),
         locked=locked,
         stage=str(row["stage"]),
@@ -588,8 +611,9 @@ def enumerate_candidates(
         complexity = compile_expression(expression, max_depth=3).max_depth
         for horizon in ("1h", "4h", "session"):
             for direction in (1, -1):
+                canonical_by_cut: dict[str, str] = {}
                 for threshold_quantile in THRESHOLD_QUANTILES:
-                    threshold = resolve_quantile_threshold(
+                    resolution = resolve_quantile_threshold(
                         np.asarray(signals[expression])[discovery_mask],
                         direction=direction,
                         quantile=threshold_quantile,
@@ -602,20 +626,27 @@ def enumerate_candidates(
                         "horizon": horizon,
                         "direction": direction,
                         "threshold_quantile": threshold_quantile,
+                        "entry_rule_version": ENTRY_RULE_VERSION,
                     }
+                    candidate_id = _candidate_id(identity)
+                    cut_key = float(resolution.cut).hex()
+                    duplicate_of = canonical_by_cut.setdefault(cut_key, candidate_id)
                     candidates.append(
                         Candidate(
-                            candidate_id=_candidate_id(identity),
+                            candidate_id=candidate_id,
                             root=root,
                             timeframe_min=timeframe_min,
                             expression=expression,
                             horizon=horizon,
                             direction=direction,
-                            threshold=threshold,
+                            threshold=resolution.cut,
                             seed=int(seed),
                             complexity=complexity,
                             family=family,
                             threshold_quantile=threshold_quantile,
+                            entry_rule_version=ENTRY_RULE_VERSION,
+                            threshold_resolution=resolution,
+                            duplicate_of=duplicate_of if duplicate_of != candidate_id else None,
                         )
                     )
     return candidates
@@ -633,10 +664,13 @@ def _effective_trigger_test_count(
     ordered_days = tuple(dict.fromkeys(str(value) for value in discovery_days))
     profiles: list[np.ndarray] = []
     for candidate in candidates:
-        if candidate.horizon != "1h":
+        if candidate.horizon != "1h" or candidate.duplicate_of is not None:
             continue
-        directed = np.asarray(signals[candidate.expression])[discovery_mask] * float(candidate.direction)
-        active = np.isfinite(directed) & (directed > candidate.threshold)
+        active = activation_mask(
+            np.asarray(signals[candidate.expression])[discovery_mask],
+            direction=candidate.direction,
+            threshold=candidate.threshold,
+        )
         profiles.append(
             np.asarray(
                 [np.mean(active[discovery_days == day]) for day in ordered_days],
@@ -726,6 +760,7 @@ def _evaluate_candidate(
     split_name: str,
     split_labels: np.ndarray,
     evaluation_fraction: float = 1.0,
+    cost_mode: str = "root_proxy",
 ) -> CandidateResult:
     bars, signal, split_labels, target_timeframe_min = _exact_horizon_inputs(
         dataset=dataset,
@@ -750,8 +785,12 @@ def _evaluate_candidate(
     recent_start = int(split_indices.size * (1.0 - float(evaluation_fraction)))
     recent_indices = split_indices[recent_start:]
     masked_signal[recent_indices] = signal[recent_indices]
-    directed = masked_signal * float(candidate.direction)
-    if np.any(np.isfinite(directed) & (directed > candidate.threshold)):
+    active = activation_mask(
+        masked_signal,
+        direction=candidate.direction,
+        threshold=candidate.threshold,
+    )
+    if np.any(active):
         execution = simulate_next_bar_execution(
             signal=masked_signal,
             direction=candidate.direction,
@@ -763,6 +802,8 @@ def _evaluate_candidate(
             ask_close=bars.ask_close,
             reset_mask=bars.reset,
             instrument_profile=_profile_for_root(candidate.root),
+            contracts=bars.contract,
+            cost_mode=cost_mode,
         )
     else:
         execution = ExecutionResult(
@@ -787,6 +828,7 @@ def _evaluate_candidate(
         nonoverlap_step=horizon_step,
         trading_days=bars.trading_day,
         recent_fraction=evaluation_fraction,
+        trade_activity_reason="no_executable_trades" if np.any(active) else "insufficient_trigger_activity",
     )
     return CandidateResult(
         candidate=candidate,
@@ -850,6 +892,7 @@ def evaluate_robustness_slices(
     *,
     evaluation_scope: str = "final_holdout",
     family: str = "smma",
+    cost_mode: str = "root_proxy",
 ) -> dict[str, Any]:
     """Evaluate preregistered day-only and daily sensitivity slices."""
     if evaluation_scope not in {"final_holdout", "pre_final_screen"}:
@@ -870,6 +913,11 @@ def evaluate_robustness_slices(
         threshold=candidate.threshold,
         seed=candidate.seed,
         complexity=candidate.complexity,
+        family=candidate.family,
+        threshold_quantile=candidate.threshold_quantile,
+        entry_rule_version=candidate.entry_rule_version,
+        threshold_resolution=candidate.threshold_resolution,
+        duplicate_of=candidate.duplicate_of,
     )
     slices["daily_sensitivity"] = (daily, daily_candidate)
 
@@ -892,6 +940,7 @@ def evaluate_robustness_slices(
             signal=signal,
             split_name=split_name,
             split_labels=split_labels,
+            cost_mode=cost_mode,
         )
         evidence[name] = {
             "root": slice_candidate.root,
@@ -1015,11 +1064,19 @@ class MiningRun:
             else:
                 cache_dir = Path(self.config.dataset_cache_dir).resolve()
                 cache_dir.mkdir(parents=True, exist_ok=True)
+                trading_window = build_trading_date_window(
+                    family_dataset.date_from,
+                    family_dataset.date_to,
+                )
                 cache_key = _canonical_hash(
                     {
                         "dataset_kind": "tick" if self.config.family == "tick" else "bar",
+                        "dataset_schema": (TICK_DATASET_SCHEMA if self.config.family == "tick" else DATASET_SCHEMA),
                         "date_from": family_dataset.date_from,
                         "date_to": family_dataset.date_to,
+                        "calendar_name": trading_window.calendar_name,
+                        "calendar_package_version": trading_window.calendar_package_version,
+                        "calendar_mapping_hash": trading_window.calendar_mapping_hash,
                         "roots": family_dataset.roots,
                         "timeframes_minutes": self._required_dataset_timeframes(),
                         "code_fingerprint": self._code_fingerprint,
@@ -1053,14 +1110,28 @@ class MiningRun:
 
     def _required_dataset_timeframes(self) -> tuple[int, ...]:
         required = {int(value) for value in self.config.timeframes_minutes}
-        required.add(1440)
-        if any(value in {120, 240} for value in required):
-            required.add(60)
+        required.update((60, 1440))
         return tuple(sorted(required))
 
     def _validate_frozen_dataset_scope(self, dataset: GovernedBars) -> None:
         family_dataset = FAMILY_REGISTRY[self.config.family].dataset
         sidecar = json.loads(Path(str(self.dataset_path) + ".meta.json").read_text(encoding="utf-8"))
+        if int(sidecar.get("schema_version", 0)) < 2 or sidecar.get("governance_complete") is not True:
+            raise RunIntegrityError("new mining runs require a complete governed dataset schema v2 export")
+        required_governance_fields = {
+            "calendar_name",
+            "calendar_package_version",
+            "calendar_mapping_hash",
+            "expected_trading_dates",
+            "eligible_trading_dates",
+            "missing_expected_trading_dates",
+            "excluded_partial_trading_dates",
+            "query_wall_time_from",
+            "query_wall_time_to",
+        }
+        missing_fields = required_governance_fields - set(sidecar)
+        if missing_fields:
+            raise RunIntegrityError(f"governed dataset v2 evidence is incomplete: {sorted(missing_fields)}")
         if (
             sidecar.get("requested_date_from") != family_dataset.date_from
             or sidecar.get("requested_date_to") != family_dataset.date_to
@@ -1085,14 +1156,42 @@ class MiningRun:
         if guarded_timeframes != required_timeframes:
             raise RunIntegrityError("governed dataset query evidence is incomplete")
         expected_days = set(str(value) for value in np.unique(dataset.trading_day))
+        eligible_days = {str(value) for value in sidecar["eligible_trading_dates"]}
+        if expected_days != eligible_days or int(sidecar.get("trading_day_count", -1)) != len(eligible_days):
+            raise RunIntegrityError("dataset rows do not match sidecar eligible trading dates")
         for root in family_dataset.roots:
             for timeframe in self._required_dataset_timeframes():
                 group_days = set(str(value) for value in np.unique(dataset.group(root, timeframe).trading_day))
                 if group_days != expected_days:
                     raise RunIntegrityError(f"governed dataset trading-day coverage differs for {root}/{timeframe}m")
+        coverage = self._cost_profile_coverage(dataset)
+        if self.config.cost_mode == "per_contract" and coverage["missing_contracts"]:
+            raise RunIntegrityError(
+                f"per-contract cost preflight failed; missing frozen profiles: {coverage['missing_contracts']}"
+            )
+
+    @staticmethod
+    def _cost_profile_coverage(dataset: GovernedBars) -> dict[str, Any]:
+        observed = sorted(str(value) for value in np.unique(dataset.contract))
+        available: list[str] = []
+        missing: list[str] = []
+        for contract in observed:
+            try:
+                load_cost_profile(contract)
+            except KeyError:
+                missing.append(contract)
+            else:
+                available.append(contract)
+        return {
+            "observed_contracts": observed,
+            "profiled_contracts": available,
+            "missing_contracts": missing,
+            "complete": not missing,
+        }
 
     def _manifest_identity(self, dataset: GovernedBars) -> dict[str, Any]:
         global_plan = build_split_plan(dataset.trading_day)
+        dataset_sidecar = json.loads(Path(str(self.dataset_path) + ".meta.json").read_text(encoding="utf-8"))
         trading_day_count = len(set(str(value) for value in dataset.trading_day))
         warnings: list[str] = []
         if trading_day_count < MIN_DAYS_FOR_PROMOTION:
@@ -1101,6 +1200,7 @@ class MiningRun:
                 f"until {MIN_DAYS_FOR_PROMOTION} days"
             )
         edge_thresholds: dict[str, dict[str, float | str]] = {}
+        cost_coverage = self._cost_profile_coverage(dataset)
         for root in FAMILY_REGISTRY[self.config.family].dataset.roots:
             profile_name = _profile_for_root(root)
             profile = load_cost_profile(profile_name)
@@ -1125,6 +1225,16 @@ class MiningRun:
             "dataset_fingerprint": self._dataset_fingerprint(),
             "dataset_date_from": FAMILY_REGISTRY[self.config.family].dataset.date_from,
             "dataset_date_to": FAMILY_REGISTRY[self.config.family].dataset.date_to,
+            "dataset_governance": {
+                "schema": dataset_sidecar.get("schema"),
+                "calendar_name": dataset_sidecar.get("calendar_name"),
+                "calendar_package_version": dataset_sidecar.get("calendar_package_version"),
+                "calendar_mapping_hash": dataset_sidecar.get("calendar_mapping_hash"),
+                "expected_trading_day_count": len(dataset_sidecar.get("expected_trading_dates", ())),
+                "eligible_trading_day_count": len(dataset_sidecar.get("eligible_trading_dates", ())),
+                "missing_expected_trading_dates": dataset_sidecar.get("missing_expected_trading_dates", ()),
+                "excluded_partial_trading_dates": dataset_sidecar.get("excluded_partial_trading_dates", ()),
+            },
             "code_fingerprint": self._code_fingerprint,
             "split_hash": global_plan.split_hash,
             "split_assignments": dict(global_plan.assignments),
@@ -1137,14 +1247,24 @@ class MiningRun:
             ),
             "startup_warnings": warnings,
             "edge_thresholds": edge_thresholds,
+            "cost_mode": self.config.cost_mode,
+            "cost_profile_coverage": cost_coverage,
+            "cost_claim_eligible": bool(
+                self.config.cost_mode == "per_contract"
+                and cost_coverage["complete"]
+                and not self.config.posthoc_diagnostic
+            ),
             "cost_profile_resolution": (
-                "canonical D6 root profile is used; per-contract roll-aware costs are not enabled "
-                "pending complete frozen profiles"
+                "entry-contract profile"
+                if self.config.cost_mode == "per_contract"
+                else "canonical D6 root proxy; diagnostic only and cost-claim-ineligible"
             ),
             "smma_lengths": list(self.config.smma_lengths),
             "robustness_timeframes_minutes": [1440],
             "horizons": ["1h", "4h", "session"],
             "threshold_quantiles": list(THRESHOLD_QUANTILES),
+            "entry_rule_version": ENTRY_RULE_VERSION,
+            "entry_comparator": ">=",
             "directions": [1, -1],
             "screen_only": True,
             "posthoc_diagnostic": bool(self.config.posthoc_diagnostic),
@@ -1346,6 +1466,111 @@ class MiningRun:
         }
         return bars, plan.labels, signals, valid_expressions, candidates
 
+    def _finalize_discovery(self, passing: Sequence[CandidateResult]) -> list[CandidateResult]:
+        discovery_rows = self._ledger.rows(stage="discovery")
+        search_space = _with_integrity_hash(
+            {
+                "schema": "alpha_mining_search_space.v2",
+                "family": self.config.family,
+                "code_fingerprint": self._code_fingerprint,
+                "dataset_fingerprint": self._dataset_fingerprint(),
+                "effective_trial_counts_by_group": dict(sorted(self._effective_trial_counts.items())),
+                "effective_trials_total": max(1, sum(self._effective_trial_counts.values())),
+                "expression_supply_by_group": dict(sorted(self._expression_supply.items())),
+                "hypotheses_considered": len(discovery_rows),
+                "raw_trials_evaluated": sum(row.get("status") in {"passed", "killed"} for row in discovery_rows),
+                "exact_cut_duplicates": sum(row.get("status") == "deduplicated" for row in discovery_rows),
+                "entry_rule_version": ENTRY_RULE_VERSION,
+                "entry_comparator": ">=",
+                "estimator": "Li-Ji eigenvalue count over discovery-day trigger activation profiles",
+            },
+            "search_space_hash",
+        )
+        _atomic_json(self.run_dir / "search_space.json", search_space)
+        pollution_groups: dict[tuple[Any, ...], dict[str, CandidateResult]] = {}
+        discovery_results = [
+            _result_from_kill_ledger_row(row) for row in discovery_rows if row.get("status") in {"passed", "killed"}
+        ]
+        for result in discovery_results:
+            candidate = result.candidate
+            key = (
+                candidate.root,
+                candidate.timeframe_min,
+                candidate.expression,
+                candidate.direction,
+                candidate.threshold,
+            )
+            pollution_groups.setdefault(key, {})[candidate.horizon] = result
+        polluted = {
+            result.candidate.candidate_id
+            for metrics in pollution_groups.values()
+            if monotonic_horizon_pollution({name: item.kill for name, item in metrics.items()})
+            for result in metrics.values()
+        }
+        passing_by_id = {result.candidate.candidate_id: result for result in passing}
+        filtered = [result for result in passing_by_id.values() if result.candidate.candidate_id not in polluted]
+        per_root: list[CandidateResult] = []
+        advanced_ids: set[str] = set()
+        ranks: dict[str, int] = {}
+        for root in self._family_roots:
+            all_ranked = sorted(
+                (item for item in filtered if item.candidate.root == root),
+                key=_result_sort_key,
+            )
+            ranks.update({item.candidate.candidate_id: index for index, item in enumerate(all_ranked, start=1)})
+            ranked = all_ranked[:100]
+            per_root.extend(ranked)
+            advanced_ids.update(item.candidate.candidate_id for item in ranked)
+        pollution_evidence = {
+            item.candidate.candidate_id: {
+                name: metrics_to_dict(horizon_result.kill)
+                for name, horizon_result in pollution_groups[
+                    (
+                        item.candidate.root,
+                        item.candidate.timeframe_min,
+                        item.candidate.expression,
+                        item.candidate.direction,
+                        item.candidate.threshold,
+                    )
+                ].items()
+            }
+            for item in passing_by_id.values()
+            if item.candidate.candidate_id in polluted
+        }
+        for candidate_id, result in sorted(passing_by_id.items()):
+            if candidate_id in polluted:
+                status = "filtered_monotonic_horizon"
+                reason = "monotonic_horizon_pollution"
+                evidence: Mapping[str, Any] = {"horizon_metrics": pollution_evidence[candidate_id]}
+            elif candidate_id in advanced_ids:
+                status = "advanced"
+                reason = ""
+                evidence = {"root_rank": ranks[candidate_id], "root_cap": 100}
+            else:
+                status = "rank_capped"
+                reason = "post_discovery_root_rank_cap"
+                evidence = {"root_rank": ranks[candidate_id], "root_cap": 100}
+            self._ledger.append(
+                {
+                    "candidate_id": candidate_id,
+                    "stage": "post_discovery",
+                    "status": status,
+                    "candidate": asdict(result.candidate),
+                    "disposition_reason": reason,
+                    "evidence": dict(evidence),
+                    "recorded_at_ns": timebase.now_ns(),
+                }
+            )
+        post_discovery_ids = {str(row["candidate_id"]) for row in self._ledger.rows(stage="post_discovery")}
+        if post_discovery_ids != set(passing_by_id):
+            raise RunIntegrityError("post-discovery dispositions do not conserve discovery passes")
+        self._checkpoint(
+            stage="discovery_complete",
+            state={"discovery_passed": [item.to_dict() for item in per_root]},
+            force=True,
+        )
+        return per_root
+
     def _discover(self, dataset: GovernedBars, restored: Sequence[CandidateResult]) -> list[CandidateResult]:
         passing_by_id = {item.candidate.candidate_id: item for item in restored}
         for row in self._ledger.rows(stage="discovery"):
@@ -1388,13 +1613,43 @@ class MiningRun:
                     split_name="discovery",
                     split_labels=labels,
                     evaluation_fraction=0.25,
+                    cost_mode=self.config.cost_mode,
                 )
 
             batch_size = max(1, self.config.workers * 2)
             with ThreadPoolExecutor(max_workers=self.config.workers) as executor:
                 for batch_start in range(0, len(remaining), batch_size):
                     batch = remaining[batch_start : batch_start + batch_size]
-                    for result in executor.map(evaluate, batch, chunksize=1):
+                    evaluated_batch = [candidate for candidate in batch if candidate.duplicate_of is None]
+                    results_by_id = {
+                        result.candidate.candidate_id: result
+                        for result in executor.map(evaluate, evaluated_batch, chunksize=1)
+                    }
+                    for candidate in batch:
+                        if candidate.duplicate_of is not None:
+                            self._ledger.append(
+                                {
+                                    "candidate_id": candidate.candidate_id,
+                                    "stage": "discovery",
+                                    "status": "deduplicated",
+                                    "candidate": asdict(candidate),
+                                    "failure_reason": "exact_resolved_cut_duplicate",
+                                    "reference_candidate_id": candidate.duplicate_of,
+                                    "threshold_resolution": (
+                                        asdict(candidate.threshold_resolution)
+                                        if candidate.threshold_resolution is not None
+                                        else None
+                                    ),
+                                    "recorded_at_ns": timebase.now_ns(),
+                                }
+                            )
+                            self._heartbeat(stage="discovery")
+                            self._checkpoint(
+                                stage="discovery",
+                                state={"discovery_passed": [item.to_dict() for item in passing]},
+                            )
+                            continue
+                        result = results_by_id[candidate.candidate_id]
                         self._ledger.append(
                             {
                                 "candidate_id": result.candidate.candidate_id,
@@ -1402,6 +1657,11 @@ class MiningRun:
                                 "status": result.status,
                                 "candidate": asdict(result.candidate),
                                 "metrics": metrics_to_dict(result.kill),
+                                "threshold_resolution": (
+                                    asdict(result.candidate.threshold_resolution)
+                                    if result.candidate.threshold_resolution is not None
+                                    else None
+                                ),
                                 "failure_reason": result.failure_reason,
                                 "recorded_at_ns": timebase.now_ns(),
                             }
@@ -1420,53 +1680,83 @@ class MiningRun:
                             break
                     if stop_reason:
                         break
-        search_space = _with_integrity_hash(
-            {
-                "schema": "alpha_mining_search_space.v1",
-                "family": self.config.family,
-                "code_fingerprint": self._code_fingerprint,
-                "dataset_fingerprint": self._dataset_fingerprint(),
-                "effective_trial_counts_by_group": dict(sorted(self._effective_trial_counts.items())),
-                "effective_trials_total": max(1, sum(self._effective_trial_counts.values())),
-                "expression_supply_by_group": dict(sorted(self._expression_supply.items())),
-                "raw_trials_evaluated": self._ledger.unique_candidates,
-                "estimator": "Li-Ji eigenvalue count over discovery-day trigger activation profiles",
-            },
-            "search_space_hash",
-        )
-        _atomic_json(self.run_dir / "search_space.json", search_space)
-        pollution_groups: dict[tuple[Any, ...], dict[str, CandidateResult]] = {}
-        discovery_results = [_result_from_kill_ledger_row(row) for row in self._ledger.rows(stage="discovery")]
-        for result in discovery_results:
-            candidate = result.candidate
-            key = (
-                candidate.root,
-                candidate.timeframe_min,
-                candidate.expression,
-                candidate.direction,
-                candidate.threshold,
+        return self._finalize_discovery(passing)
+
+    def _record_selection_disposition(
+        self,
+        *,
+        candidate: Candidate,
+        selection_ts: np.ndarray,
+        selection_signal: np.ndarray,
+        signals_kept: Sequence[tuple[np.ndarray, np.ndarray, str]],
+        selected_for_root: int,
+        selection_rows: dict[str, dict[str, Any]],
+    ) -> bool:
+        prior_row = selection_rows.get(candidate.candidate_id)
+        if prior_row is not None and prior_row.get("status") in {
+            "correlation_deduplicated",
+            "rank_capped",
+        }:
+            return True
+        if prior_row is not None:
+            return False
+        if selected_for_root >= 10:
+            payload = {
+                "candidate_id": candidate.candidate_id,
+                "stage": "selection",
+                "status": "rank_capped",
+                "candidate": asdict(candidate),
+                "disposition_reason": "selection_root_pass_cap",
+                "evidence": {"root_pass_cap": 10},
+                "recorded_at_ns": timebase.now_ns(),
+            }
+            self._ledger.append(payload)
+            selection_rows[candidate.candidate_id] = payload
+            return True
+        correlations = [
+            (
+                _timestamp_signal_correlation(selection_ts, selection_signal, kept_ts, kept_signal),
+                kept_id,
             )
-            pollution_groups.setdefault(key, {})[candidate.horizon] = result
-        polluted = {
-            result.candidate.candidate_id
-            for metrics in pollution_groups.values()
-            if monotonic_horizon_pollution({name: item.kill for name, item in metrics.items()})
-            for result in metrics.values()
+            for kept_ts, kept_signal, kept_id in signals_kept
+        ]
+        correlated = max(correlations, default=(0.0, ""))
+        if correlated[0] <= 0.5:
+            return False
+        payload = {
+            "candidate_id": candidate.candidate_id,
+            "stage": "selection",
+            "status": "correlation_deduplicated",
+            "candidate": asdict(candidate),
+            "disposition_reason": "selection_signal_correlation",
+            "reference_candidate_id": correlated[1],
+            "evidence": {"absolute_correlation": correlated[0], "maximum_allowed": 0.5},
+            "recorded_at_ns": timebase.now_ns(),
         }
-        filtered = [result for result in passing if result.candidate.candidate_id not in polluted]
-        per_root: list[CandidateResult] = []
-        for root in self._family_roots:
-            ranked = sorted(
-                (item for item in filtered if item.candidate.root == root),
-                key=_result_sort_key,
-            )[:100]
-            per_root.extend(ranked)
-        self._checkpoint(
-            stage="discovery_complete",
-            state={"discovery_passed": [item.to_dict() for item in per_root]},
-            force=True,
-        )
-        return per_root
+        self._ledger.append(payload)
+        selection_rows[candidate.candidate_id] = payload
+        return True
+
+    def _restore_selection_rows(
+        self,
+        discovery_ids: set[str],
+        restored: Sequence[CandidateResult],
+    ) -> tuple[dict[str, dict[str, Any]], dict[str, CandidateResult]]:
+        selection_rows = {str(row["candidate_id"]): row for row in self._ledger.rows(stage="selection")}
+        recorded = {
+            candidate_id: _result_from_kill_ledger_row(row)
+            for candidate_id, row in selection_rows.items()
+            if row.get("status") in {"passed", "killed"}
+        }
+        if not set(selection_rows).issubset(discovery_ids):
+            raise RunIntegrityError("selection ledger contains a candidate outside the frozen discovery set")
+        for item in restored:
+            if item.candidate.candidate_id not in discovery_ids:
+                raise RunIntegrityError("selection checkpoint contains a candidate outside the frozen discovery set")
+            prior = recorded.setdefault(item.candidate.candidate_id, item)
+            if prior.to_dict() != item.to_dict():
+                raise RunIntegrityError("selection checkpoint/ledger result mismatch")
+        return selection_rows, recorded
 
     def _selection(
         self,
@@ -1477,17 +1767,7 @@ class MiningRun:
         discovery_ids = {item.candidate.candidate_id for item in discovery}
         if len(discovery_ids) != len(discovery):
             raise RunIntegrityError("discovery checkpoint contains duplicate candidates")
-        recorded = {
-            str(row["candidate_id"]): _result_from_kill_ledger_row(row) for row in self._ledger.rows(stage="selection")
-        }
-        if not set(recorded).issubset(discovery_ids):
-            raise RunIntegrityError("selection ledger contains a candidate outside the frozen discovery set")
-        for item in restored:
-            if item.candidate.candidate_id not in discovery_ids:
-                raise RunIntegrityError("selection checkpoint contains a candidate outside the frozen discovery set")
-            prior = recorded.setdefault(item.candidate.candidate_id, item)
-            if prior.to_dict() != item.to_dict():
-                raise RunIntegrityError("selection checkpoint/ledger result mismatch")
+        selection_rows, recorded = self._restore_selection_rows(discovery_ids, restored)
         selected: list[CandidateResult] = []
 
         def checkpoint_state() -> dict[str, Any]:
@@ -1499,7 +1779,7 @@ class MiningRun:
         self._checkpoint(stage="selection", state=checkpoint_state())
         for root in self._family_roots:
             root_results = sorted((item for item in discovery if item.candidate.root == root), key=_result_sort_key)
-            signals_kept: list[tuple[np.ndarray, np.ndarray]] = []
+            signals_kept: list[tuple[np.ndarray, np.ndarray, str]] = []
             for result in root_results:
                 stop_reason = self._stop_reason(include_candidate_cap=False)
                 if stop_reason is not None:
@@ -1514,9 +1794,13 @@ class MiningRun:
                 selection_mask = plan.mask("selection")
                 selection_signal = signal[selection_mask]
                 selection_ts = bars.ts_ns[selection_mask]
-                if any(
-                    _timestamp_signal_correlation(selection_ts, selection_signal, kept_ts, kept_signal) > 0.5
-                    for kept_ts, kept_signal in signals_kept
+                if self._record_selection_disposition(
+                    candidate=candidate,
+                    selection_ts=selection_ts,
+                    selection_signal=selection_signal,
+                    signals_kept=signals_kept,
+                    selected_for_root=len([item for item in selected if item.candidate.root == root]),
+                    selection_rows=selection_rows,
                 ):
                     self._checkpoint(stage="selection", state=checkpoint_state())
                     continue
@@ -1529,6 +1813,7 @@ class MiningRun:
                         signal=signal,
                         split_name="selection",
                         split_labels=plan.labels,
+                        cost_mode=self.config.cost_mode,
                     )
                     self._ledger.append(
                         {
@@ -1541,15 +1826,18 @@ class MiningRun:
                             "recorded_at_ns": timebase.now_ns(),
                         }
                     )
+                    selection_rows[candidate.candidate_id] = self._ledger.rows(stage="selection")[-1]
                 elif evaluated.candidate != candidate:
                     raise RunIntegrityError("selection ledger candidate mismatch")
                 if evaluated.kill.passed:
                     selected.append(evaluated)
-                    signals_kept.append((selection_ts, selection_signal))
+                    signals_kept.append((selection_ts, selection_signal, candidate.candidate_id))
                     self._unlocks.freeze_locked(candidate.candidate_id)
                 self._checkpoint(stage="selection", state=checkpoint_state())
-                if len([item for item in selected if item.candidate.root == root]) >= 10:
-                    break
+        if self._terminal_stop_reason is None:
+            selection_ids = {str(row["candidate_id"]) for row in self._ledger.rows(stage="selection")}
+            if selection_ids != discovery_ids:
+                raise RunIntegrityError("selection dispositions do not conserve post-discovery advances")
         self._checkpoint(
             stage="selection_complete",
             state={"selection_passed": [item.to_dict() for item in selected]},
@@ -1646,6 +1934,8 @@ class MiningRun:
                     ask_close=evaluation_bars.ask_close,
                     reset_mask=evaluation_bars.reset,
                     instrument_profile=_profile_for_root(candidate.root),
+                    contracts=evaluation_bars.contract,
+                    cost_mode=self.config.cost_mode,
                 )
                 locked = locked_validation(
                     signal=evaluation_signal[mask] * float(candidate.direction),
@@ -1722,7 +2012,7 @@ class MiningRun:
         payload = json.loads(path.read_text(encoding="utf-8"))
         _verify_integrity_hash(payload, "search_space_hash", artifact="search space")
         if (
-            payload.get("schema") != "alpha_mining_search_space.v1"
+            payload.get("schema") != "alpha_mining_search_space.v2"
             or payload.get("code_fingerprint") != self._code_fingerprint
             or payload.get("dataset_fingerprint") != self._dataset_fingerprint()
         ):
@@ -1779,6 +2069,7 @@ class MiningRun:
                 signal=signal,
                 split_name="final_holdout",
                 split_labels=plan.labels,
+                cost_mode=self.config.cost_mode,
             )
             self._ledger.append(
                 {
@@ -1990,7 +2281,12 @@ class MiningRun:
                 if not isinstance(slices, Mapping):
                     raise RunIntegrityError("robustness evidence is incomplete")
             else:
-                slices = evaluate_robustness_slices(dataset, result, family=self.config.family)
+                slices = evaluate_robustness_slices(
+                    dataset,
+                    result,
+                    family=self.config.family,
+                    cost_mode=self.config.cost_mode,
+                )
                 _atomic_json(
                     path,
                     _with_integrity_hash(
@@ -2066,6 +2362,7 @@ class MiningRun:
         manifest: Mapping[str, Any],
     ) -> dict[str, Any]:
         checkpoint = self._load_checkpoint() if self.config.resume else {}
+        self._restore_search_space_evidence()
         raw_state = checkpoint.get("state")
         state: Mapping[str, Any] = raw_state if isinstance(raw_state, Mapping) else {}
         stage = str(checkpoint.get("stage", ""))
@@ -2115,7 +2412,7 @@ class MiningRun:
                     f"mining stopped during selection: {self._terminal_stop_reason}",
                 )
             if not selection:
-                return self._finish(manifest, dataset, [], [], "KILL", "all candidates killed by selection")
+                return self._finish(manifest, dataset, [], [], "KILL", "no candidates survived selection")
             frozen = self._locked(dataset, selection, locked_evaluated)
         if self._terminal_stop_reason is not None:
             return self._finish(
@@ -2188,14 +2485,25 @@ class MiningRun:
             )
         return None
 
-    def _funnel_evidence(self) -> tuple[dict[str, dict[str, int]], dict[str, int], list[dict[str, Any]]]:
+    def _funnel_evidence(
+        self,
+    ) -> tuple[
+        dict[str, dict[str, int]],
+        dict[str, int],
+        dict[str, dict[str, int]],
+        dict[str, Any],
+        list[dict[str, Any]],
+    ]:
         stages: dict[str, Counter[str]] = {}
         failures: Counter[str] = Counter()
+        dispositions: dict[str, Counter[str]] = {}
         near_misses: list[tuple[tuple[float, float, float], dict[str, Any]]] = []
         for row in self._ledger.rows():
             stage = str(row.get("stage", "unknown"))
             status = str(row.get("status", "unknown"))
             stages.setdefault(stage, Counter())[status] += 1
+            if status not in {"passed", "killed"}:
+                dispositions.setdefault(stage, Counter())[status] += 1
             if status != "killed":
                 continue
             reasons = [value for value in str(row.get("failure_reason", "")).split(",") if value]
@@ -2227,8 +2535,25 @@ class MiningRun:
                 )
             )
         funnel = {stage: dict(sorted(counts.items())) for stage, counts in sorted(stages.items())}
+        disposition_counts = {stage: dict(sorted(counts.items())) for stage, counts in sorted(dispositions.items())}
+        discovery_passed = stages.get("discovery", Counter()).get("passed", 0)
+        post_discovery_total = sum(stages.get("post_discovery", Counter()).values())
+        post_discovery_advanced = stages.get("post_discovery", Counter()).get("advanced", 0)
+        selection_total = sum(stages.get("selection", Counter()).values())
+        conservation = {
+            "discovery_passed": discovery_passed,
+            "post_discovery_dispositions": post_discovery_total,
+            "post_discovery_conserved": discovery_passed == post_discovery_total,
+            "post_discovery_advanced": post_discovery_advanced,
+            "selection_dispositions": selection_total,
+            "selection_conserved": post_discovery_advanced == selection_total,
+        }
+        if not conservation["post_discovery_conserved"]:
+            raise RunIntegrityError("report funnel does not conserve discovery passes")
+        if self._terminal_stop_reason is None and not conservation["selection_conserved"]:
+            raise RunIntegrityError("report funnel does not conserve selection dispositions")
         ranked = [payload for _rank, payload in sorted(near_misses, key=lambda item: item[0], reverse=True)[:20]]
-        return funnel, dict(sorted(failures.items())), ranked
+        return funnel, dict(sorted(failures.items())), disposition_counts, conservation, ranked
 
     def _finish(
         self,
@@ -2241,15 +2566,17 @@ class MiningRun:
         *,
         robustness: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        funnel, gate_failures, near_misses = self._funnel_evidence()
+        funnel, gate_failures, dispositions, conservation, near_misses = self._funnel_evidence()
         report = _with_integrity_hash(
             {
-                "schema": "alpha_mining_report.v2",
+                "schema": "alpha_mining_report.v3",
                 "verdict": verdict,
                 "reason": reason,
                 "screen_only": True,
                 "promotion_eligible": False,
                 "posthoc_diagnostic": bool(self.config.posthoc_diagnostic),
+                "cost_mode": self.config.cost_mode,
+                "cost_claim_eligible": bool(manifest.get("cost_claim_eligible", False)),
                 "final_holdout_unlocked": bool(self.config.unlock_final_holdout),
                 "final_holdout_claim_eligible": bool(self.config.unlock_final_holdout)
                 and not self.config.posthoc_diagnostic,
@@ -2257,6 +2584,9 @@ class MiningRun:
                 "trading_day_count": len(set(str(value) for value in dataset.trading_day)),
                 "minimum_days_for_promotion": MIN_DAYS_FOR_PROMOTION,
                 "unique_hypotheses": self._ledger.unique_candidates,
+                "evaluated_hypotheses": sum(
+                    row.get("status") in {"passed", "killed"} for row in self._ledger.rows(stage="discovery")
+                ),
                 "survivors": [item.to_dict() for item in survivors],
                 "survivor_stage": (
                     survivors[0].stage if survivors and len({item.stage for item in survivors}) == 1 else ""
@@ -2265,6 +2595,8 @@ class MiningRun:
                 "robustness_slices": dict(robustness or {}),
                 "funnel": funnel,
                 "gate_failure_histogram": gate_failures,
+                "non_gate_dispositions": dispositions,
+                "stage_conservation": conservation,
                 "near_misses": near_misses,
                 "effective_trial_counts_by_group": dict(sorted(self._effective_trial_counts.items())),
                 "expression_supply_by_group": dict(sorted(self._expression_supply.items())),

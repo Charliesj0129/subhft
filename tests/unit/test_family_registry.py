@@ -101,6 +101,24 @@ def _tick_bars(days: int = 30) -> TickBarDataset:
     )
 
 
+def _stub_campaign_preflight(monkeypatch) -> None:
+    def fake_load(self):
+        sidecar = self.dataset_path.with_suffix(".npz.meta.json")
+        sidecar.parent.mkdir(parents=True, exist_ok=True)
+        sidecar.write_text(json.dumps({"trading_day_count": 80}))
+        return _bars()
+
+    coverage = {
+        "observed_contracts": ["TXFG6"],
+        "profiled_contracts": [],
+        "missing_contracts": ["TXFG6"],
+        "complete": False,
+    }
+    monkeypatch.setattr(MiningRun, "_load_or_export_dataset", fake_load)
+    monkeypatch.setattr(MiningRun, "_validate_frozen_dataset_scope", lambda _self, _dataset: None)
+    monkeypatch.setattr(MiningRun, "_cost_profile_coverage", staticmethod(lambda _dataset: coverage))
+
+
 def test_family_registry_exposes_exactly_the_four_supported_families() -> None:
     assert sorted(FAMILY_REGISTRY) == ["bidask", "kbar", "smma", "tick"]
 
@@ -194,7 +212,7 @@ def test_kbar_registry_adapter_reproduces_the_direct_builder_bit_for_bit() -> No
 def test_kbar_family_reuses_smma_dataset_io_with_its_wider_window() -> None:
     kbar_dataset = FAMILY_REGISTRY["kbar"].dataset
     smma_dataset = FAMILY_REGISTRY["smma"].dataset
-    assert (kbar_dataset.date_from, kbar_dataset.date_to) == ("2026-01-27", "2026-07-25")
+    assert (kbar_dataset.date_from, kbar_dataset.date_to) == ("2026-01-27", "2026-07-24")
     assert kbar_dataset.export is smma_dataset.export
     assert kbar_dataset.load is smma_dataset.load
     assert kbar_dataset.roots == smma_dataset.roots
@@ -212,7 +230,17 @@ def test_kbar_bounded_run_writes_a_screen_only_report(monkeypatch, tmp_path) -> 
     monkeypatch.setattr(runner, "apply_resource_policy", lambda: {"test": True})
     monkeypatch.setattr(MiningRun, "_validate_frozen_dataset_scope", lambda _self, _dataset: None)
 
-    report = MiningRun(RunConfig(run_dir=run_dir, family="kbar", max_candidates=1, workers=1, seeds=(1, 2, 3))).run()
+    report = MiningRun(
+        RunConfig(
+            run_dir=run_dir,
+            family="kbar",
+            max_candidates=1,
+            workers=1,
+            seeds=(1, 2, 3),
+            posthoc_diagnostic=True,
+            cost_mode="root_proxy",
+        )
+    ).run()
 
     assert report["screen_only"] is True
     assert report["unique_hypotheses"] == 1
@@ -243,11 +271,11 @@ def test_tick_registry_adapter_reproduces_the_direct_builder_bit_for_bit() -> No
 
 def test_tick_family_dataset_scope_is_the_tick_contract_not_the_smma_one() -> None:
     tick_dataset = FAMILY_REGISTRY["tick"].dataset
-    assert (tick_dataset.date_from, tick_dataset.date_to) == ("2026-04-03", "2026-07-25")
+    assert (tick_dataset.date_from, tick_dataset.date_to) == ("2026-04-07", "2026-07-24")
     assert tick_dataset.roots == TICK_ROOTS
     assert tick_dataset.load is not FAMILY_REGISTRY["smma"].dataset.load
     bidask_dataset = FAMILY_REGISTRY["bidask"].dataset
-    assert (bidask_dataset.date_from, bidask_dataset.date_to) == ("2026-01-27", "2026-07-25")
+    assert (bidask_dataset.date_from, bidask_dataset.date_to) == ("2026-01-27", "2026-07-24")
     assert bidask_dataset.load is FAMILY_REGISTRY["smma"].dataset.load
 
 
@@ -258,6 +286,7 @@ def test_new_family_modules_are_covered_by_the_resume_code_fingerprint() -> None
         "research/combinatorial/kbar.py",
         "research/combinatorial/tick.py",
         "research/combinatorial/tick_dataset.py",
+        "research/combinatorial/taifex_trading_dates.py",
         "research/combinatorial/expression_eval.py",
         "research/combinatorial/ledger.py",
         "research/combinatorial/partitioning.py",
@@ -296,7 +325,17 @@ def test_bidask_bounded_run_writes_a_screen_only_report(monkeypatch, tmp_path) -
     monkeypatch.setattr(runner, "apply_resource_policy", lambda: {"test": True})
     monkeypatch.setattr(MiningRun, "_validate_frozen_dataset_scope", lambda _self, _dataset: None)
 
-    report = MiningRun(RunConfig(run_dir=run_dir, family="bidask", max_candidates=1, workers=1, seeds=(1, 2, 3))).run()
+    report = MiningRun(
+        RunConfig(
+            run_dir=run_dir,
+            family="bidask",
+            max_candidates=1,
+            workers=1,
+            seeds=(1, 2, 3),
+            posthoc_diagnostic=True,
+            cost_mode="root_proxy",
+        )
+    ).run()
 
     assert report["screen_only"] is True
     assert report["unique_hypotheses"] == 1
@@ -368,6 +407,7 @@ def test_campaign_parser_and_driver_supervise_all_six_locked_diagnostic_legs(
         captured.append(config)
         return {"verdict": "KILL", "report_hash": f"hash-{len(captured)}"}
 
+    _stub_campaign_preflight(monkeypatch)
     monkeypatch.setattr(runner, "run_mining", fake_run)
     args = cli.build_parser().parse_args(
         [
@@ -408,6 +448,7 @@ def test_campaign_records_dataset_governance_failures_and_exits_nonzero(
     monkeypatch,
     tmp_path,
 ) -> None:
+    _stub_campaign_preflight(monkeypatch)
     monkeypatch.setattr(
         runner,
         "run_mining",
