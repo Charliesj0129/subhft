@@ -651,9 +651,7 @@ class TestSafeCallInflightGuard:
         guard = InflightGuard()
         release = threading.Event()
         try:
-            ok, _, err, timed_out = safe_call_with_timeout(
-                "login", lambda: release.wait(5.0), 0.1, inflight=guard
-            )
+            ok, _, err, timed_out = safe_call_with_timeout("login", lambda: release.wait(5.0), 0.1, inflight=guard)
             assert ok is False
             assert isinstance(err, TimeoutError)
             assert guard.live_count() == 1
@@ -684,9 +682,7 @@ class TestSafeCallInflightGuard:
         self._drain(release, guard)
         assert guard.live_count() == 0
 
-        ok2, result, err2, timed_out2 = safe_call_with_timeout(
-            "login", lambda: "connected", 5.0, inflight=guard
-        )
+        ok2, result, err2, timed_out2 = safe_call_with_timeout("login", lambda: "connected", 5.0, inflight=guard)
         assert ok2 is True
         assert result == "connected"
         assert err2 is None
@@ -721,9 +717,7 @@ class TestSafeCallInflightGuard:
         def _outer() -> str:
             ok_inner, _, _, _ = safe_call_with_timeout("logout", lambda: None, 5.0, inflight=guard)
             inner_results.append(ok_inner)
-            ok_inner2, _, _, _ = safe_call_with_timeout(
-                "subscribe_basket", lambda: None, 5.0, inflight=guard
-            )
+            ok_inner2, _, _, _ = safe_call_with_timeout("subscribe_basket", lambda: None, 5.0, inflight=guard)
             inner_results.append(ok_inner2)
             return "done"
 

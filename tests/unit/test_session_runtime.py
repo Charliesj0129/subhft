@@ -680,8 +680,12 @@ def test_login_failure_reason_label_stays_bounded_across_distinct_errors():
     from hft_platform.feed_adapter.shioaji.session_runtime import classify_login_failure
 
     reasons = {
-        classify_login_failure("login: request #P2P/v:host/AAA/PYAPI/x/0728/1/LOGINING/_ code: 451, detail: Too Many Connections."),
-        classify_login_failure("login: request #P2P/v:host/BBB/PYAPI/y/0729/2/LOGINING/_ code: 451, detail: Too Many Connections."),
+        classify_login_failure(
+            "login: request #P2P/v:host/AAA/PYAPI/x/0728/1/LOGINING/_ code: 451, detail: Too Many Connections."
+        ),
+        classify_login_failure(
+            "login: request #P2P/v:host/BBB/PYAPI/y/0729/2/LOGINING/_ code: 451, detail: Too Many Connections."
+        ),
     }
     assert reasons == {"connection_limit"}
 
