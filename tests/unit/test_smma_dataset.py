@@ -168,6 +168,10 @@ def test_bar_query_casts_datetime_bucket_before_nanosecond_conversion() -> None:
     assert "toUnixTimestamp64Nano(toDateTime64(bucket, 9, 'Asia/Taipei'))" in query
     assert "toDateTime64('1970-01-01 08:45:00', 9, 'Asia/Taipei')" in query
     assert "toDateTime64('1970-01-01 15:00:00', 9, 'Asia/Taipei')" in query
+    assert "< 825" in query
+    assert "< 300" in query
+    assert "subtractSeconds(" in query
+    assert "toHour(fromUnixTimestamp64Nano(exch_ts, 'Asia/Taipei')) < 6" not in query
 
 
 def test_two_minute_query_is_guarded_and_has_nontruncating_result_cap() -> None:

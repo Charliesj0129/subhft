@@ -6,6 +6,8 @@ import numpy as np
 
 from research.combinatorial.taifex_trading_dates import (
     build_trading_date_window,
+    clickhouse_taifex_bucket_timestamp,
+    clickhouse_taifex_session_predicates,
     full_session_eligibility,
     official_trading_date,
 )
@@ -23,6 +25,33 @@ def test_holiday_eve_night_maps_to_next_open_xtai_session() -> None:
 
     assert official_trading_date(datetime(2026, 4, 2, 15, 0), window) == "2026-04-07"
     assert all(datetime.fromisoformat(value).weekday() < 5 for value in window.expected_trading_dates)
+
+
+def test_out_of_session_times_do_not_become_trading_bars() -> None:
+    window = build_trading_date_window("2026-07-24", "2026-07-27")
+
+    assert official_trading_date(datetime(2026, 7, 24, 7, 45), window) is None
+    assert official_trading_date(datetime(2026, 7, 24, 8, 45), window) == "2026-07-24"
+    assert official_trading_date(datetime(2026, 7, 24, 13, 45), window) == "2026-07-24"
+    assert official_trading_date(datetime(2026, 7, 24, 13, 45, 1), window) is None
+    assert official_trading_date(datetime(2026, 7, 24, 14, 45), window) is None
+    assert official_trading_date(datetime(2026, 7, 25, 5, 0), window) == "2026-07-27"
+    assert official_trading_date(datetime(2026, 7, 25, 5, 0, 1), window) is None
+
+
+def test_clickhouse_session_contract_excludes_off_hours_and_rebuckets_closing_prints() -> None:
+    expression = "event_time"
+    day, night = clickhouse_taifex_session_predicates(expression)
+    bucket = clickhouse_taifex_bucket_timestamp(expression)
+
+    assert ">= 525" in day
+    assert "< 825" in day
+    assert "= 825 AND toSecond(event_time) = 0" in day
+    assert ">= 900" in night
+    assert "< 300" in night
+    assert "= 300 AND toSecond(event_time) = 0" in night
+    assert "IN (825, 300)" in bucket
+    assert "subtractSeconds(event_time, 1)" in bucket
 
 
 def test_full_session_eligibility_requires_both_roots_and_exposes_partial_counts() -> None:

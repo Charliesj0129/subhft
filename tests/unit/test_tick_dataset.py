@@ -340,6 +340,10 @@ def test_tick_bar_query_aggregates_aggressor_split_and_passes_the_guard() -> Non
     assert "trade_direction = 0) AS unknown_tick_count" in query
     assert "sumIf(volume, type = 'Tick' AND price_scaled > 0 AND trade_direction = 1) AS buy_tick_volume" in query
     assert "toUnixTimestamp64Nano(toDateTime64(bucket, 9, 'Asia/Taipei'))" in query
+    assert "< 825" in query
+    assert "< 300" in query
+    assert "subtractSeconds(" in query
+    assert "toHour(fromUnixTimestamp64Nano(exch_ts, 'Asia/Taipei')) < 6" not in query
     assert _guard_query(query)["guard_overall"] == "pass"
 
 

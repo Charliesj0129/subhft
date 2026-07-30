@@ -29,6 +29,8 @@ from research.combinatorial.taifex_trading_dates import (
     FullSessionEligibility,
     TradingDateWindow,
     build_trading_date_window,
+    clickhouse_taifex_bucket_timestamp,
+    clickhouse_taifex_session_predicates,
     clickhouse_trading_day_expression,
     full_session_eligibility,
 )
@@ -184,7 +186,8 @@ def _tick_bar_query(
     window = trading_window or build_trading_date_window(date_from, date_to)
     event_time_expression = "fromUnixTimestamp64Nano(exch_ts, 'Asia/Taipei')"
     trading_day_expression = clickhouse_trading_day_expression(event_time_expression, window)
-    night_session_predicate = f"toHour({event_time_expression}) >= 15 OR toHour({event_time_expression}) < 6"
+    _day_session_predicate, night_session_predicate = clickhouse_taifex_session_predicates(event_time_expression)
+    bucket_timestamp = clickhouse_taifex_bucket_timestamp(event_time_expression)
     session_expression = (
         "'full'"
         if timeframe_min == 1440
@@ -200,12 +203,12 @@ def _tick_bar_query(
         else f"""if(
             {night_session_predicate},
             toStartOfInterval(
-                {event_time_expression},
+                {bucket_timestamp},
                 INTERVAL {timeframe_min} MINUTE,
                 toDateTime64('1970-01-01 15:00:00', 9, 'Asia/Taipei')
             ),
             toStartOfInterval(
-                {event_time_expression},
+                {bucket_timestamp},
                 INTERVAL {timeframe_min} MINUTE,
                 toDateTime64('1970-01-01 08:45:00', 9, 'Asia/Taipei')
             )
