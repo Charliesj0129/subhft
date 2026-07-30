@@ -675,6 +675,78 @@ def test_login_skips_fallback_and_backs_off_when_sdk_busy():
     assert client.logged_in is not True
 
 
+def test_login_skips_fallback_when_the_sdk_itself_reports_already_borrowed():
+    """The busy signal also arrives as a plain SDK error, not only SDKBusyError.
+
+    The InflightGuard only knows about workers *we* abandoned. On 2026-07-30
+    04:12 CST all four facades' solace sessions dropped at once, the SDK went
+    busy inside its own reconnect, and ``Already borrowed`` came straight back
+    from ``_core``. Only ``SDKBusyError`` was handled, so the ladder drove the
+    no-contract fallback and both retries into the same busy object: 165 instant
+    failures and 6 exhausted ladders in 90 s off one network blip.
+    """
+    client = _login_client()
+    client._safe_call_with_timeout.return_value = (
+        False,
+        None,
+        RuntimeError("Already borrowed"),
+        False,
+    )
+
+    assert SessionRuntime(client).login_with_retry(api_key="k", secret_key="s") is False
+
+    ops = [call[0][0] for call in client._safe_call_with_timeout.call_args_list]
+    assert ops == ["login"], f"expected one attempt and no fallback, got {ops}"
+
+
+def test_login_still_falls_back_for_a_failure_that_is_not_sdk_busy():
+    """The busy check must not swallow ordinary failures the fallback can fix."""
+    client = _login_client()
+    client._safe_call_with_timeout.return_value = (
+        False,
+        None,
+        RuntimeError("login: contract download stalled"),
+        True,
+    )
+
+    assert SessionRuntime(client).login_with_retry(api_key="k", secret_key="s") is False
+
+    ops = [call[0][0] for call in client._safe_call_with_timeout.call_args_list]
+    assert "login_fallback" in ops, f"expected the no-contract fallback to run, got {ops}"
+
+
+def test_login_records_contract_freshness_when_login_fetched_contracts():
+    """A successful contract-fetching login is the only real freshness signal.
+
+    ``fetch_contracts`` on a logged-in facade fails 100% of the time on shioaji
+    1.5.6, so ``contract_cache_last_success_ts`` sat at 0.0 forever and a
+    staleness alert could never fire.
+    """
+    gauge = MagicMock()
+    metrics = MagicMock()
+    metrics.contract_cache_last_success_ts = gauge
+    client = _login_client(metrics=metrics)
+    client._safe_call_with_timeout.return_value = (True, None, None, False)
+
+    assert SessionRuntime(client).login_with_retry(api_key="k", secret_key="s") is True
+
+    assert gauge.set.call_count == 1
+    assert gauge.set.call_args[0][0] > 0
+
+
+def test_login_does_not_record_contract_freshness_for_a_quote_only_connection():
+    """A quote-only login fetches no contracts, so it must not claim freshness."""
+    gauge = MagicMock()
+    metrics = MagicMock()
+    metrics.contract_cache_last_success_ts = gauge
+    client = _login_client(fetch_contract=False, metrics=metrics)
+    client._safe_call_with_timeout.return_value = (True, None, None, False)
+
+    assert SessionRuntime(client).login_with_retry(api_key="k", secret_key="s") is True
+
+    gauge.set.assert_not_called()
+
+
 def test_login_failure_reason_label_stays_bounded_across_distinct_errors():
     """Raw broker errors carry a per-request id; the label must not."""
     from hft_platform.feed_adapter.shioaji.session_runtime import classify_login_failure

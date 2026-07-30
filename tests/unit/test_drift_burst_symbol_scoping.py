@@ -99,6 +99,84 @@ def test_drift_burst_book_returns_none_when_books_are_empty():
 
 
 # --------------------------------------------------------------------------- #
+# Reference-symbol *selection* (the latch fixed rotation, not choice)          #
+# --------------------------------------------------------------------------- #
+
+
+def test_drift_burst_reference_prefers_the_tightest_spread_over_dict_order():
+    """Latching held one symbol, but it was still whichever iterated first.
+
+    In production that was ``EXFH6`` — a far-month contract quoting a 48-point
+    spread — so the thinnest book on the system drove a platform-wide toxicity
+    gate and ~346 bursts a day.
+    """
+    system = _system()
+    lob = SimpleNamespace(
+        books={
+            "EXFH6": _book(200_000_00, spread=487_500),  # 48.75 pt, first in dict
+            "TXFH6": _book(200_000_00, spread=10_000),  # 1 pt, front month
+        }
+    )
+
+    assert system._drift_burst_book(lob) is lob.books["TXFH6"]
+    assert system._drift_burst_symbol == "TXFH6"
+
+
+def test_drift_burst_reference_compares_spread_relative_to_price():
+    """A cheap contract's small absolute spread is not automatically tighter."""
+    system = _system()
+    lob = SimpleNamespace(
+        books={
+            "CHEAP": _book(1_000_00, spread=500),  # 0.5% of mid
+            "RICH": _book(200_000_00, spread=20_000),  # 0.1% of mid
+        }
+    )
+
+    assert system._drift_burst_book(lob) is lob.books["RICH"]
+    assert system._drift_burst_symbol == "RICH"
+
+
+def test_drift_burst_reference_does_not_treat_a_locked_book_as_most_liquid():
+    """A zero spread is a locked or half-built book, not a liquidity win."""
+    system = _system()
+    lob = SimpleNamespace(
+        books={
+            "LOCKED": _book(200_000_00, spread=0),
+            "TXFH6": _book(200_000_00, spread=10_000),
+        }
+    )
+
+    assert system._drift_burst_book(lob) is lob.books["TXFH6"]
+
+
+def test_drift_burst_reference_falls_back_when_every_book_is_locked():
+    """Returning None here would silently disable the toxicity gate entirely."""
+    system = _system()
+    lob = SimpleNamespace(
+        books={
+            "AXFH6": _book(200_000_00, spread=0),
+            "BXFH6": _book(199_000_00, spread=0),
+        }
+    )
+
+    assert system._drift_burst_book(lob) is lob.books["AXFH6"]
+    assert system._drift_burst_symbol == "AXFH6"
+
+
+def test_drift_burst_reference_log_carries_the_chosen_spread():
+    """The spread is what makes a bad reference choice visible in the logs."""
+    system = _system()
+    lob = SimpleNamespace(books={"TXFH6": _book(200_000_00, spread=10_000)})
+
+    with structlog.testing.capture_logs() as logs:
+        system._drift_burst_book(lob)
+
+    events = [e for e in logs if e.get("event") == "drift_burst_reference_symbol_changed"]
+    assert events
+    assert events[0]["spread_scaled"] == 10_000
+
+
+# --------------------------------------------------------------------------- #
 # Detector symbol scoping                                                      #
 # --------------------------------------------------------------------------- #
 
