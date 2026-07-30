@@ -22,6 +22,10 @@ CALENDAR_NAME = "XTAI"
 CALENDAR_PACKAGE = "exchange-calendars"
 QUERY_START_TIME = time(15, 0)
 QUERY_END_TIME = time(14, 0)
+DAY_SESSION_OPEN_MINUTE = 8 * 60 + 45
+DAY_SESSION_CLOSE_MINUTE = 13 * 60 + 45
+NIGHT_SESSION_OPEN_MINUTE = 15 * 60
+NIGHT_SESSION_CLOSE_MINUTE = 5 * 60
 
 
 class TradingDateGovernanceError(RuntimeError):
@@ -133,11 +137,12 @@ def build_trading_date_window(date_from: str, date_to: str) -> TradingDateWindow
 def clickhouse_trading_day_expression(event_time_expression: str, window: TradingDateWindow) -> str:
     """Return a deterministic ClickHouse expression for official trading dates."""
 
+    day_session_predicate, night_session_predicate = clickhouse_taifex_session_predicates(event_time_expression)
     open_dates = ", ".join(f"'{source}'" for source, _target in window.night_open_date_mapping)
     trading_dates = ", ".join(f"'{target}'" for _source, target in window.night_open_date_mapping)
     day_dates = ", ".join(f"'{value}'" for value in (window.warmup_trading_date, *window.expected_trading_dates))
     return f"""multiIf(
-        toHour({event_time_expression}) >= 15 OR toHour({event_time_expression}) < 6,
+        {night_session_predicate},
         toDate(transform(
             toString(if(
                 toHour({event_time_expression}) >= 15,
@@ -148,19 +153,58 @@ def clickhouse_trading_day_expression(event_time_expression: str, window: Tradin
             [{trading_dates}],
             '1970-01-01'
         )),
-        has([{day_dates}], toString(toDate({event_time_expression}))),
+        {day_session_predicate}
+            AND has([{day_dates}], toString(toDate({event_time_expression}))),
         toDate({event_time_expression}),
         toDate('1970-01-01')
     )"""
+
+
+def clickhouse_taifex_session_predicates(event_time_expression: str) -> tuple[str, str]:
+    """Return exact TAIFEX day/night predicates for a Taipei-local timestamp."""
+
+    minute_of_day = f"(toHour({event_time_expression}) * 60 + toMinute({event_time_expression}))"
+    second = f"toSecond({event_time_expression})"
+    day = f"""(
+        {minute_of_day} >= {DAY_SESSION_OPEN_MINUTE}
+        AND (
+            {minute_of_day} < {DAY_SESSION_CLOSE_MINUTE}
+            OR ({minute_of_day} = {DAY_SESSION_CLOSE_MINUTE} AND {second} = 0)
+        )
+    )"""
+    night = f"""(
+        {minute_of_day} >= {NIGHT_SESSION_OPEN_MINUTE}
+        OR {minute_of_day} < {NIGHT_SESSION_CLOSE_MINUTE}
+        OR ({minute_of_day} = {NIGHT_SESSION_CLOSE_MINUTE} AND {second} = 0)
+    )"""
+    return day, night
+
+
+def clickhouse_taifex_bucket_timestamp(event_time_expression: str) -> str:
+    """Keep closing prints in the final interval instead of a phantom bar."""
+
+    minute_of_day = f"(toHour({event_time_expression}) * 60 + toMinute({event_time_expression}))"
+    at_close = (
+        f"({minute_of_day} IN ({DAY_SESSION_CLOSE_MINUTE}, {NIGHT_SESSION_CLOSE_MINUTE}) "
+        f"AND toSecond({event_time_expression}) = 0)"
+    )
+    return f"if({at_close}, subtractSeconds({event_time_expression}, 1), {event_time_expression})"
 
 
 def official_trading_date(wall_time: datetime, window: TradingDateWindow) -> str | None:
     """Map a Taipei-naive wall time to its official trading date for tests/audits."""
 
     wall_date = wall_time.date()
-    if wall_time.hour >= 15 or wall_time.hour < 6:
+    seconds = wall_time.hour * 3600 + wall_time.minute * 60 + wall_time.second + wall_time.microsecond / 1_000_000
+    night_open = NIGHT_SESSION_OPEN_MINUTE * 60
+    night_close_exclusive = NIGHT_SESSION_CLOSE_MINUTE * 60 + 1
+    day_open = DAY_SESSION_OPEN_MINUTE * 60
+    day_close_exclusive = DAY_SESSION_CLOSE_MINUTE * 60 + 1
+    if seconds >= night_open or seconds < night_close_exclusive:
         open_date = wall_date if wall_time.hour >= 15 else wall_date - timedelta(days=1)
         return dict(window.night_open_date_mapping).get(open_date.isoformat())
+    if not (day_open <= seconds < day_close_exclusive):
+        return None
     value = wall_date.isoformat()
     allowed = {window.warmup_trading_date, *window.expected_trading_dates}
     return value if value in allowed else None
