@@ -344,6 +344,10 @@ def test_tick_bar_query_aggregates_aggressor_split_and_passes_the_guard() -> Non
     assert "< 300" in query
     assert "subtractSeconds(" in query
     assert "toHour(fromUnixTimestamp64Nano(exch_ts, 'Asia/Taipei')) < 6" not in query
+    assert "PREWHERE symbol IN (" in query
+    assert "exch_ts >= toUnixTimestamp64Nano(range_start)" in query
+    assert "exch_ts < toUnixTimestamp64Nano(range_end)" in query
+    assert "match(symbol" not in query
     assert _guard_query(query)["guard_overall"] == "pass"
 
 
@@ -379,7 +383,7 @@ def test_tick_export_runs_readonly_bounded_queries_and_writes_query_evidence(tmp
         client=client,
         date_from="2026-07-01",
         date_to="2026-07-06",
-        timeframes_minutes=(60,),
+        timeframes_minutes=(60, 120, 240, 1440),
     )
 
     assert len(client.queries) == 1
@@ -392,6 +396,10 @@ def test_tick_export_runs_readonly_bounded_queries_and_writes_query_evidence(tmp
     assert payload["requested_date_to"] == "2026-07-06"
     assert payload["query_evidence"][0]["timeframe_min"] == 60
     assert payload["query_evidence"][0]["result_rows"] == len(_complete_export_rows())
+    assert payload["query_evidence"][0]["derived"] is False
+    assert [item["timeframe_min"] for item in payload["query_evidence"]] == [60, 120, 240, 1440]
+    assert all(item["derived_from_timeframe_min"] == 60 for item in payload["query_evidence"][1:])
+    assert all(item["derivation"] == "causal_bar_reaggregation.v1" for item in payload["query_evidence"][1:])
     assert payload["schema_version"] == 2
     assert payload["governance_complete"] is True
     assert payload["eligible_trading_dates"] == [
@@ -400,7 +408,7 @@ def test_tick_export_runs_readonly_bounded_queries_and_writes_query_evidence(tmp
         "2026-07-03",
         "2026-07-06",
     ]
-    assert load_governed_tick_dataset(path) is not None
+    assert set(load_governed_tick_dataset(path).timeframe_min) == {60, 120, 240, 1440}
 
 
 def test_partial_sixty_minute_day_is_excluded_from_every_timeframe() -> None:

@@ -26,13 +26,16 @@ import numpy as np
 
 from hft_platform.infra.ch_client import get_ch_client
 from research.combinatorial.taifex_trading_dates import (
+    BarAggregationLayout,
     FullSessionEligibility,
     TradingDateWindow,
     build_trading_date_window,
     clickhouse_taifex_bucket_timestamp,
+    clickhouse_taifex_contract_predicate,
     clickhouse_taifex_session_predicates,
     clickhouse_trading_day_expression,
     full_session_eligibility,
+    reaggregate_taifex_bar_rows,
 )
 
 CH_PRICE_SCALE = 1_000_000.0
@@ -44,6 +47,15 @@ TICK_TIMEFRAMES_MINUTES: tuple[int, ...] = (60, 120, 240, 1440)
 TICK_SUPPORTED_TIMEFRAMES_MINUTES: tuple[int, ...] = (2, *TICK_TIMEFRAMES_MINUTES)
 TICK_ROOTS: tuple[str, ...] = ("TXF", "TMF")
 MAX_DAILY_UNKNOWN_AGGRESSOR_RATIO = 0.05
+_TICK_AGGREGATION_LAYOUT = BarAggregationLayout(
+    open_index=5,
+    high_index=6,
+    low_index=7,
+    close_index=8,
+    sum_indices=(13, 14, 15, 16, 17, 18, 19),
+    first_indices=(9, 10),
+    last_indices=(11, 12),
+)
 
 
 class TickDatasetGovernanceError(RuntimeError):
@@ -188,6 +200,7 @@ def _tick_bar_query(
     trading_day_expression = clickhouse_trading_day_expression(event_time_expression, window)
     _day_session_predicate, night_session_predicate = clickhouse_taifex_session_predicates(event_time_expression)
     bucket_timestamp = clickhouse_taifex_bucket_timestamp(event_time_expression)
+    contract_predicate = clickhouse_taifex_contract_predicate()
     session_expression = (
         "'full'"
         if timeframe_min == 1440
@@ -220,7 +233,7 @@ WITH
     toDateTime64('{window.query_wall_time_to}', 9, 'Asia/Taipei') AS range_end,
     base AS (
         SELECT
-            multiIf(match(symbol, '^TXF[A-L][0-9]$'), 'TXF', 'TMF') AS root,
+            if(startsWith(symbol, 'TXF'), 'TXF', 'TMF') AS root,
             symbol AS contract,
             {trading_day_expression} AS trading_day,
             {session_expression} AS session,
@@ -237,12 +250,11 @@ WITH
             if(length(bids_vol) > 0, bids_vol[1], 0) AS bid_qty,
             if(length(asks_vol) > 0, asks_vol[1], 0) AS ask_qty
         FROM hft.market_data
+        PREWHERE {contract_predicate}
+          AND exch_ts >= toUnixTimestamp64Nano(range_start)
+          AND exch_ts < toUnixTimestamp64Nano(range_end)
         WHERE ingest_ts >= toUnixTimestamp64Nano(range_start)
           AND ingest_ts < toUnixTimestamp64Nano(range_end)
-          AND (
-            match(symbol, '^TXF[A-L][0-9]$')
-            OR match(symbol, '^TMF[A-L][0-9]$')
-          )
           AND type IN ('Tick', 'BidAsk')
     )
 SELECT
@@ -676,41 +688,59 @@ def export_clickhouse_tick_dataset(
         raise TickDatasetGovernanceError(
             f"ClickHouse client initialization failed: {type(exc).__name__}: {exc}"
         ) from exc
-    rows_by_timeframe: dict[int, Sequence[Sequence[Any]]] = {}
+    base_timeframe = min(timeframe for timeframe in requested_timeframes if timeframe != 1440)
+    query = _tick_bar_query(
+        base_timeframe,
+        date_from=date_from,
+        date_to=date_to,
+        trading_window=trading_window,
+    )
+    base_evidence = _guard_query(query)
+    row_limit = _query_row_limit(base_timeframe)
+    try:
+        result = query_client.query(
+            query,
+            settings={
+                "readonly": 1,
+                "max_memory_usage": 2_147_483_648,
+                "max_threads": 2,
+                "max_execution_time": 300,
+                "max_result_rows": row_limit,
+                "result_overflow_mode": "throw",
+            },
+        )
+    except Exception as exc:
+        raise TickDatasetGovernanceError(
+            f"guarded ClickHouse tick export failed for {base_timeframe}m: {type(exc).__name__}: {exc}"
+        ) from exc
+    base_rows = list(result.result_rows)
+    if len(base_rows) >= row_limit:
+        raise TickDatasetGovernanceError(
+            f"{base_timeframe}m tick export reached row limit; refusing possible truncation"
+        )
+    rows_by_timeframe: dict[int, Sequence[Sequence[Any]]] = {base_timeframe: base_rows}
+    for timeframe in requested_timeframes:
+        if timeframe == base_timeframe:
+            continue
+        rows_by_timeframe[timeframe] = reaggregate_taifex_bar_rows(
+            base_rows,
+            source_timeframe_min=base_timeframe,
+            target_timeframe_min=timeframe,
+            layout=_TICK_AGGREGATION_LAYOUT,
+        )
     evidence: list[dict[str, Any]] = []
     for timeframe in requested_timeframes:
-        query = _tick_bar_query(
-            timeframe,
-            date_from=date_from,
-            date_to=date_to,
-            trading_window=trading_window,
+        derived = timeframe != base_timeframe
+        evidence.append(
+            {
+                **base_evidence,
+                "timeframe_min": timeframe,
+                "result_rows": len(rows_by_timeframe[timeframe]),
+                "derived": derived,
+                "derived_from_timeframe_min": base_timeframe if derived else None,
+                "derivation": "causal_bar_reaggregation.v1" if derived else None,
+            }
         )
-        query_evidence = _guard_query(query)
-        row_limit = _query_row_limit(timeframe)
-        try:
-            result = query_client.query(
-                query,
-                settings={
-                    "readonly": 1,
-                    "max_memory_usage": 2_147_483_648,
-                    "max_threads": 2,
-                    "max_execution_time": 300,
-                    "max_result_rows": row_limit,
-                    "result_overflow_mode": "throw",
-                },
-            )
-        except Exception as exc:
-            raise TickDatasetGovernanceError(
-                f"guarded ClickHouse tick export failed for {timeframe}m: {type(exc).__name__}: {exc}"
-            ) from exc
-        rows = list(result.result_rows)
-        if len(rows) >= row_limit:
-            raise TickDatasetGovernanceError(
-                f"{timeframe}m tick export reached row limit; refusing possible truncation"
-            )
-        query_evidence.update({"timeframe_min": timeframe, "result_rows": len(rows)})
-        evidence.append(query_evidence)
-        rows_by_timeframe[timeframe] = rows
     selected = rows_to_tick_bar_dataset(rows_by_timeframe, align_common=False, validate=False)
     dataset, eligibility = _restrict_to_full_sessions(
         selected,

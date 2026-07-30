@@ -11,9 +11,11 @@ from __future__ import annotations
 import hashlib
 import importlib.metadata
 import json
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Any, Sequence
+from zoneinfo import ZoneInfo
 
 import exchange_calendars as xcals
 import numpy as np
@@ -26,6 +28,8 @@ DAY_SESSION_OPEN_MINUTE = 8 * 60 + 45
 DAY_SESSION_CLOSE_MINUTE = 13 * 60 + 45
 NIGHT_SESSION_OPEN_MINUTE = 15 * 60
 NIGHT_SESSION_CLOSE_MINUTE = 5 * 60
+TAIFEX_FUTURES_ROOTS: tuple[str, ...] = ("TMF", "TXF")
+TAIFEX_FUTURES_MONTH_CODES = "ABCDEFGHIJKL"
 
 
 class TradingDateGovernanceError(RuntimeError):
@@ -64,6 +68,19 @@ class FullSessionEligibility:
     eligible_trading_dates: tuple[str, ...]
     missing_expected_trading_dates: tuple[str, ...]
     excluded_partial_trading_dates: tuple[dict[str, Any], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class BarAggregationLayout:
+    """Column indexes needed to causally combine already-aggregated bars."""
+
+    open_index: int
+    high_index: int
+    low_index: int
+    close_index: int
+    sum_indices: tuple[int, ...]
+    first_indices: tuple[int, ...]
+    last_indices: tuple[int, ...]
 
 
 def _iso_session(value: object) -> str:
@@ -189,6 +206,86 @@ def clickhouse_taifex_bucket_timestamp(event_time_expression: str) -> str:
         f"AND toSecond({event_time_expression}) = 0)"
     )
     return f"if({at_close}, subtractSeconds({event_time_expression}, 1), {event_time_expression})"
+
+
+def clickhouse_taifex_contract_predicate(symbol_expression: str = "symbol") -> str:
+    """Return an indexable exact-symbol predicate for TAIFEX futures contracts."""
+
+    symbols = (
+        f"'{root}{month}{year}'"
+        for root in TAIFEX_FUTURES_ROOTS
+        for month in TAIFEX_FUTURES_MONTH_CODES
+        for year in range(10)
+    )
+    return f"{symbol_expression} IN ({', '.join(symbols)})"
+
+
+def reaggregate_taifex_bar_rows(
+    rows: Sequence[Sequence[Any]],
+    *,
+    source_timeframe_min: int,
+    target_timeframe_min: int,
+    layout: BarAggregationLayout,
+) -> list[tuple[Any, ...]]:
+    """Derive a coarser TAIFEX bar lane without rescanning raw events."""
+
+    source = int(source_timeframe_min)
+    target = int(target_timeframe_min)
+    if source < 1 or target <= source or target % source != 0:
+        raise ValueError("target timeframe must be a larger integer multiple of source timeframe")
+    highest_index = max(
+        layout.open_index,
+        layout.high_index,
+        layout.low_index,
+        layout.close_index,
+        *layout.sum_indices,
+        *layout.first_indices,
+        *layout.last_indices,
+    )
+    taipei = ZoneInfo("Asia/Taipei")
+    day_origin_ns = int(datetime(1970, 1, 1, 8, 45, tzinfo=taipei).timestamp() * 1_000_000_000)
+    night_origin_ns = int(datetime(1970, 1, 1, 15, 0, tzinfo=taipei).timestamp() * 1_000_000_000)
+    target_ns = target * 60 * 1_000_000_000
+    groups: dict[tuple[str, str, str, str, int], list[Sequence[Any]]] = defaultdict(list)
+    for row in rows:
+        if len(row) <= highest_index:
+            raise ValueError("bar row does not satisfy the aggregation layout")
+        root, contract, trading_day, session = map(str, row[:4])
+        timestamp = int(row[4])
+        if target == 1440:
+            target_session = "full"
+            target_bucket = int(datetime.fromisoformat(trading_day).replace(tzinfo=taipei).timestamp() * 1_000_000_000)
+        else:
+            if session == "day":
+                origin = day_origin_ns
+            elif session == "night":
+                origin = night_origin_ns
+            else:
+                raise ValueError(f"cannot intraday-reaggregate session {session!r}")
+            target_session = session
+            target_bucket = origin + ((timestamp - origin) // target_ns) * target_ns
+        groups[(root, contract, trading_day, target_session, target_bucket)].append(row)
+
+    aggregated: list[tuple[Any, ...]] = []
+    for key, grouped_rows in groups.items():
+        ordered = sorted(grouped_rows, key=lambda row: int(row[4]))
+        first, last = ordered[0], ordered[-1]
+        output = list(first)
+        output[3] = key[3]
+        output[4] = key[4]
+        output[layout.open_index] = first[layout.open_index]
+        output[layout.high_index] = max(row[layout.high_index] for row in ordered)
+        output[layout.low_index] = min(row[layout.low_index] for row in ordered)
+        output[layout.close_index] = last[layout.close_index]
+        for index in layout.sum_indices:
+            output[index] = sum(row[index] for row in ordered)
+        for index in layout.first_indices:
+            output[index] = first[index]
+        for index in layout.last_indices:
+            output[index] = last[index]
+        aggregated.append(tuple(output))
+    aggregated.sort(key=lambda row: (str(row[0]), str(row[2]), str(row[3]), int(row[4]), str(row[1])))
+    return aggregated
 
 
 def official_trading_date(wall_time: datetime, window: TradingDateWindow) -> str | None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 import numpy as np
 import pytest
@@ -10,19 +11,28 @@ from research.combinatorial.smma_dataset import (
     _bar_query,
     _guard_query,
     _metadata_hash,
+    export_clickhouse_dataset,
     load_governed_dataset,
     rows_to_bar_dataset,
     save_governed_dataset,
 )
 
 
-def _row(root: str, contract: str, day: str, ts: int, volume: int) -> tuple[object, ...]:
+def _row(
+    root: str,
+    contract: str,
+    day: str,
+    ts: int,
+    volume: int,
+    *,
+    session: str = "day",
+) -> tuple[object, ...]:
     price = 100.0 + (ts / 1_000_000_000_000)
     return (
         root,
         contract,
         day,
-        "day",
+        session,
         ts,
         price,
         price + 1.0,
@@ -54,6 +64,55 @@ def _causal_rows() -> dict[int, list[tuple[object, ...]]]:
             rows.append(_row("TXF", "TXFA6", day, base + offset, volume_a))
             rows.append(_row("TXF", "TXFB6", day, base + offset, volume_b))
     return {60: rows}
+
+
+def _complete_export_rows() -> list[tuple[object, ...]]:
+    rows: list[tuple[object, ...]] = []
+    trading_days = ("2026-06-30", "2026-07-01", "2026-07-02", "2026-07-03", "2026-07-06")
+    for day_index, day in enumerate(trading_days):
+        for root in ("TXF", "TMF"):
+            contract = f"{root}D6"
+            base = (day_index + 1) * 100_000_000_000_000
+            for offset in range(14):
+                rows.append(
+                    _row(
+                        root,
+                        contract,
+                        day,
+                        base + offset * 3_600_000_000_000,
+                        100,
+                        session="night",
+                    )
+                )
+            for offset in range(5):
+                rows.append(
+                    _row(
+                        root,
+                        contract,
+                        day,
+                        base + (14 + offset) * 3_600_000_000_000,
+                        100,
+                        session="day",
+                    )
+                )
+    return rows
+
+
+class _FakeResult:
+    def __init__(self, rows: list[tuple[object, ...]]) -> None:
+        self.result_rows = rows
+
+
+class _FakeClient:
+    def __init__(self, rows: list[tuple[object, ...]]) -> None:
+        self._rows = rows
+        self.settings: list[dict[str, Any]] = []
+        self.queries: list[str] = []
+
+    def query(self, query: str, settings: dict[str, Any] | None = None) -> _FakeResult:
+        self.queries.append(query)
+        self.settings.append(dict(settings or {}))
+        return _FakeResult(self._rows)
 
 
 def test_dataset_front_contract_uses_previous_day_volume_and_resets_on_roll() -> None:
@@ -172,6 +231,10 @@ def test_bar_query_casts_datetime_bucket_before_nanosecond_conversion() -> None:
     assert "< 300" in query
     assert "subtractSeconds(" in query
     assert "toHour(fromUnixTimestamp64Nano(exch_ts, 'Asia/Taipei')) < 6" not in query
+    assert "PREWHERE symbol IN (" in query
+    assert "exch_ts >= toUnixTimestamp64Nano(range_start)" in query
+    assert "exch_ts < toUnixTimestamp64Nano(range_end)" in query
+    assert "match(symbol" not in query
 
 
 def test_two_minute_query_is_guarded_and_has_nontruncating_result_cap() -> None:
@@ -195,3 +258,41 @@ def test_daily_query_aggregates_full_trading_day() -> None:
     assert "toStartOfDay(toDateTime(trading_day, 'Asia/Taipei')) AS bucket" in query
     assert "INTERVAL 1440 MINUTE" not in query
     assert _guard_query(query)["guard_overall"] == "pass"
+
+
+def test_bar_export_queries_once_and_records_causal_derivation_evidence(tmp_path) -> None:
+    client = _FakeClient(_complete_export_rows())
+    path = tmp_path / "dataset.npz"
+
+    _output, sidecar = export_clickhouse_dataset(
+        path,
+        code_fingerprint="code",
+        client=client,
+        date_from="2026-07-01",
+        date_to="2026-07-06",
+        timeframes_minutes=(60, 120, 240, 1440),
+    )
+
+    assert len(client.queries) == 1
+    assert client.settings == [
+        {
+            "readonly": 1,
+            "max_memory_usage": 2_147_483_648,
+            "max_threads": 2,
+            "max_execution_time": 300,
+            "max_result_rows": 100_000,
+            "result_overflow_mode": "throw",
+        }
+    ]
+    payload = json.loads(sidecar.read_text())
+    assert [item["timeframe_min"] for item in payload["query_evidence"]] == [60, 120, 240, 1440]
+    assert payload["query_evidence"][0]["derived"] is False
+    assert all(item["derived_from_timeframe_min"] == 60 for item in payload["query_evidence"][1:])
+    assert all(item["derivation"] == "causal_bar_reaggregation.v1" for item in payload["query_evidence"][1:])
+    assert payload["eligible_trading_dates"] == [
+        "2026-07-01",
+        "2026-07-02",
+        "2026-07-03",
+        "2026-07-06",
+    ]
+    assert set(load_governed_dataset(path).timeframe_min) == {60, 120, 240, 1440}
