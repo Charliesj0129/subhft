@@ -5,11 +5,14 @@ from datetime import datetime
 import numpy as np
 
 from research.combinatorial.taifex_trading_dates import (
+    BarAggregationLayout,
     build_trading_date_window,
     clickhouse_taifex_bucket_timestamp,
+    clickhouse_taifex_contract_predicate,
     clickhouse_taifex_session_predicates,
     full_session_eligibility,
     official_trading_date,
+    reaggregate_taifex_bar_rows,
 )
 
 
@@ -52,6 +55,58 @@ def test_clickhouse_session_contract_excludes_off_hours_and_rebuckets_closing_pr
     assert "= 300 AND toSecond(event_time) = 0" in night
     assert "IN (825, 300)" in bucket
     assert "subtractSeconds(event_time, 1)" in bucket
+
+
+def test_clickhouse_contract_predicate_is_exact_and_primary_key_indexable() -> None:
+    predicate = clickhouse_taifex_contract_predicate()
+
+    assert predicate.startswith("symbol IN (")
+    assert "'TXFA0'" in predicate
+    assert "'TXFL9'" in predicate
+    assert "'TMFA0'" in predicate
+    assert "'TMFL9'" in predicate
+    assert "match(" not in predicate
+
+
+def test_coarser_bar_reaggregation_preserves_causal_ohlc_and_additive_fields() -> None:
+    hour_ns = 3_600_000_000_000
+    origin_ns = int(datetime(2026, 7, 1, 15, 0).timestamp() * 1_000_000_000)
+    rows = [
+        ("TXF", "TXFG6", "2026-07-02", "night", origin_ns, 100.0, 103.0, 99.0, 102.0, 10, 99.5, 102.5),
+        (
+            "TXF",
+            "TXFG6",
+            "2026-07-02",
+            "night",
+            origin_ns + hour_ns,
+            102.0,
+            105.0,
+            101.0,
+            104.0,
+            20,
+            101.5,
+            104.5,
+        ),
+    ]
+    layout = BarAggregationLayout(
+        open_index=5,
+        high_index=6,
+        low_index=7,
+        close_index=8,
+        sum_indices=(9,),
+        first_indices=(10,),
+        last_indices=(11,),
+    )
+
+    result = reaggregate_taifex_bar_rows(
+        rows,
+        source_timeframe_min=60,
+        target_timeframe_min=120,
+        layout=layout,
+    )
+
+    assert len(result) == 1
+    assert result[0][5:12] == (100.0, 105.0, 99.0, 104.0, 30, 99.5, 104.5)
 
 
 def test_full_session_eligibility_requires_both_roots_and_exposes_partial_counts() -> None:
