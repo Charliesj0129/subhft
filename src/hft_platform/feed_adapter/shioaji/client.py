@@ -576,6 +576,11 @@ class ShioajiClient:
         self._contract_refresh_thread: threading.Thread | None = None
         self._contract_refresh_lock = threading.Lock()
         self._contract_refresh_version = 0
+        # Wall-clock seconds of the last broker ``SYS/CONTRACT`` announcement,
+        # 0.0 until one arrives. Written from a broker callback thread and read
+        # for diagnostics only; a float assignment is atomic under the GIL, so no
+        # lock is warranted for a once-a-day event.
+        self._contract_update_last_event_s: float = 0.0
         self._contract_refresh_last_diff: dict[str, Any] = {}
         self._contract_refresh_last_status: dict[str, Any] = {}
         self._contract_refresh_status_path = os.getenv(
