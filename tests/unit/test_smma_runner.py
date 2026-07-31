@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from argparse import Namespace
 from dataclasses import asdict, fields, replace
 from types import SimpleNamespace
@@ -11,6 +12,7 @@ import pytest
 import hft_platform.cli as cli
 from research.combinatorial.smma_dataset import BarDataset, save_governed_dataset
 from research.combinatorial.smma_runner import (
+    DISCOVERY_NUMERIC_THREAD_ENV,
     OUTPUT_STOP_BYTES,
     RSS_PAUSE_BYTES,
     RSS_STOP_BYTES,
@@ -21,7 +23,9 @@ from research.combinatorial.smma_runner import (
     RunConfig,
     RunIntegrityError,
     SplitUnlockGuard,
+    _discovery_process_pool,
     _evaluate_candidate,
+    _evaluate_discovery_worker,
     _exact_horizon_inputs,
     _timestamp_signal_correlation,
     _with_integrity_hash,
@@ -574,6 +578,56 @@ def test_signal_that_never_crosses_its_cut_skips_execution(monkeypatch) -> None:
     )
 
     assert result.failure_reason.endswith("insufficient_trigger_activity")
+
+
+def test_process_discovery_matches_single_process_candidate_results() -> None:
+    bars = _dataset(days=20)
+    labels = np.full(len(bars), "discovery")
+    signals = {"trend": np.linspace(-1.0, 1.0, len(bars))}
+    candidates = [
+        Candidate(
+            candidate_id=f"candidate-{direction}",
+            root="TXF",
+            timeframe_min=60,
+            expression="trend",
+            horizon="1h",
+            direction=direction,
+            threshold=0.25,
+            seed=1,
+            complexity=1,
+        )
+        for direction in (1, -1)
+    ]
+    expected = [
+        _evaluate_candidate(
+            candidate,
+            dataset=bars,
+            bars=bars,
+            signal=signals[candidate.expression],
+            split_name="discovery",
+            split_labels=labels,
+            evaluation_fraction=0.25,
+            cost_mode="per_contract",
+        ).to_dict()
+        for candidate in candidates
+    ]
+
+    prior_thread_env = {name: os.environ.get(name) for name in DISCOVERY_NUMERIC_THREAD_ENV}
+    with _discovery_process_pool(
+        workers=2,
+        dataset=bars,
+        bars=bars,
+        signals=signals,
+        labels=labels,
+        cost_mode="per_contract",
+        has_work=True,
+    ) as executor:
+        assert executor is not None
+        assert {os.environ[name] for name in DISCOVERY_NUMERIC_THREAD_ENV} == {"1"}
+        actual = [result.to_dict() for result in executor.map(_evaluate_discovery_worker, candidates)]
+
+    assert actual == expected
+    assert {name: os.environ.get(name) for name in DISCOVERY_NUMERIC_THREAD_ENV} == prior_thread_env
 
 
 def test_selection_clustered_sharpe_uses_full_trading_day_axis() -> None:
@@ -1346,6 +1400,8 @@ def test_bounded_run_writes_kill_report_when_first_hypothesis_fails(monkeypatch,
     assert status["run_manifest"]["smma_lengths"] == [3, 5, 7, 10, 14, 21, 34, 55]
     assert status["run_manifest"]["robustness_timeframes_minutes"] == [1440]
     assert status["run_manifest"]["posthoc_diagnostic"] is False
+    assert status["run_manifest"]["discovery_executor"] == "single_process"
+    assert status["run_manifest"]["discovery_worker_numeric_threads"] is None
     assert status["run_manifest"]["final_holdout_claim_eligible"] is False
     assert status["run_manifest"]["final_holdout_unlocked"] is False
     assert status["run_manifest"]["edge_thresholds"]["TXF"]["minimum_edge_nwd"] == 200.0
