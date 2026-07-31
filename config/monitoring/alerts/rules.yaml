@@ -72,39 +72,65 @@ groups:
           offline (make rebuild-symbols-yaml) and restart the engine.
         runbook_url: "docs/runbooks/SymbolsYamlRegeneration.md"
 
-  # Contract cache staleness (2026-07-29). The hourly refresh reported
-  # result="ok" on every cycle while every fetch was in fact being aborted by
-  # the SDK's exclusive-access guard, so the cache never changed and no signal
-  # showed it. `contract_cache_last_success_ts` only moves on a cache write
-  # that followed a fetch which actually returned, making it the one honest
-  # freshness signal. The `> 0` gate keeps the alert quiet before the first
-  # successful refresh of a fresh process.
+  # Contract freshness (rewritten 2026-07-31 against measured behaviour; the
+  # 2026-07-29 originals were authored on a model that field data disproved and
+  # were never deployed — see the "Contract freshness alerts" section of
+  # docs/runbooks/shioaji-contract-refresh-operations.md).
+  #
+  # `contract_cache_last_success_ts` is written by the *login-time* contract
+  # load, not by the hourly poll: shioaji 1.5.x `fetch_contracts` needs sole
+  # ownership of the inner client, which our 74 permanently-registered
+  # subscriptions never release, so the poll fails 100% of the time by
+  # construction. The gauge therefore tracks login cadence, and logins cluster
+  # at session boundaries. Measured on THESHOW over 24 h: gaps of 6.01 h
+  # (22:58 CST restart -> 05:00 CST night close) and 3.43 h (05:00 -> 08:30
+  # CST). The worst *legitimate* case is a restart at night-session open with
+  # no relogin until the 05:00 CST close — about 14 h, entirely inside trading
+  # hours. 18 h is that worst case plus margin; anything shorter alerts on
+  # normal overnight operation.
   - alert: ContractCacheStale
-    expr: contract_cache_last_success_ts < (time() - 10800) and contract_cache_last_success_ts > 0
+    expr: contract_cache_last_success_ts > 0 and contract_cache_last_success_ts < (time() - 64800) and on() market_trading_hours_active == 1
     for: 30m
     labels:
         severity: warning
     annotations:
-        summary: "Contract cache has not been refreshed for >3h"
+        summary: "Contracts have not been reloaded for >18h during trading hours"
         description: |
-          Last successful contract cache write was {{ $value | humanizeTimestamp }},
-          against an hourly refresh cadence. Contracts are only as fresh as that
-          write, so a roll landing now would not be picked up. Check for
-          contract_refresh_total{result="fetch_failed"} and for
-          "Contract fetch failed" in the engine log.
+          Last contract load was {{ $value | humanizeTimestamp }}. Contracts are
+          only ever as fresh as the last login, so this means no facade has
+          logged in across a session boundary it should have crossed. Check
+          hft_quote_conn_logged_in and the reconnect windows
+          (HFT_RECONNECT_HOURS / HFT_RECONNECT_HOURS_2); a stranded facade that
+          never relogs in is the usual cause, not the contract path itself.
+          The `> 0` gate keeps this quiet before a fresh process's first login.
 
-  - alert: ContractRefreshFetchFailing
-    expr: increase(contract_refresh_total{result="fetch_failed"}[3h]) >= 3
-    for: 0s
+  # The real staleness condition, and the reason the poll was never needed: the
+  # broker announces contract changes on APISUB/V1/SYS/CONTRACT, and
+  # `contract_update_last_event_ts` records when it last did. If the broker has
+  # said contracts changed more recently than we last loaded them, we are
+  # provably stale — no cadence assumption required.
+  #
+  # NOTE (2026-07-31): no announcement has been observed yet, so this alert is
+  # unproven in the field and its FIRST firing is as much information as
+  # incident. It is still open whether the SDK refreshes its own cache on this
+  # event or merely notifies; if it self-refreshes, api.Contracts is already
+  # current and this fires benignly. Confirm against api.Contracts before
+  # treating a first firing as a fault, and record the answer in the runbook.
+  - alert: ContractsStaleVsBrokerAnnouncement
+    expr: contract_update_last_event_ts > 0 and contract_update_last_event_ts > contract_cache_last_success_ts
+    for: 15m
     labels:
         severity: warning
     annotations:
-        summary: "Contract refresh fetch is failing repeatedly"
+        summary: "Broker announced a contract change after our last contract load"
         description: |
-          {{ $value }} contract fetches failed in the last 3h. Most likely the
-          pooled facades are contending for the SDK's exclusive access; check
-          that the fetch is taking the shared login slot and that no other SDK
-          call is holding it.
+          The broker announced a contract change at
+          {{ $value | humanizeTimestamp }}, which is later than our last
+          contract load. Check contract_update_events_total{action,security_type}
+          — action="force" means the broker considers the change mandatory,
+          action="check" means it expects the client to compare check_file_ts.
+          Remediation today is an engine restart, which reloads contracts at
+          login; the hourly poll cannot do it.
 
   - alert: FeedReconnectFailureRatioHigh
     expr: |

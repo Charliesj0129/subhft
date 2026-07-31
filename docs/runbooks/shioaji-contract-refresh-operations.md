@@ -103,6 +103,67 @@ docker compose restart hft-engine
 
 ---
 
+## Contract freshness alerts（2026-07-31 重寫）
+
+### 前提：hourly poll 結構性失效，不是可修的 bug
+
+shioaji 1.5.x 的 `fetch_contracts` 需要 inner client 的**獨佔所有權**（Arc
+strong_count 1）。我們的 facade 全程持有 74 個已註冊訂閱，永遠不釋放，所以
+**每小時的 poll 100% 失敗**（THESHOW 實測：24 h 內 100/100 失敗，重啟後 11 h
+內 44/44）。這不是競爭問題 —— `fb71b840` 把四個 facade 用 2 s 錯開之後失敗率
+完全沒變，那正是「跨 facade 競爭」假設被證偽的證據。
+
+因此：
+
+- `contract_cache_last_success_ts` 實際上由**登入時**的合約載入寫入，不是由
+  poll 寫入。它追蹤的是**登入節奏**，不是 refresh 節奏。
+- 合約的新鮮度上限 = 最後一次登入。
+
+### 為什麼舊的兩條規則不能直接部署
+
+兩條規則寫於 2026-07-29，從未部署。用實測資料檢查後都不成立：
+
+| 原規則 | 問題 |
+|---|---|
+| `ContractCacheStale` 門檻 3 h | 登入集中在盤別交界。THESHOW 實測合法間隔為 **6.01 h**（22:58 CST 重啟 → 05:00 CST 夜盤收）與 3.43 h。最壞的**合法**情況是夜盤開盤重啟後到 05:00 才重登，約 14 h，且全程在交易時段內。3 h 門檻每晚誤報約 3 h。 |
+| `ContractRefreshFetchFailing` `increase(...[3h]) >= 3` | 每小時 4 個 facade 失敗 = 每 3 h 12 次，**永遠成立**。部署等於製造一條永久燃燒的告警，而且它的 description 指向已被證偽的「facade 競爭」處置方向。 |
+
+### 現行規則
+
+**`ContractCacheStale`** — 門檻改為 **18 h**（14 h 最壞合法情況 + 餘裕），並加上
+`market_trading_hours_active == 1`。它現在偵測的是「某個 facade 跨過盤別交界卻
+沒有重新登入」，也就是 stranded facade，不是合約路徑本身的問題。查
+`hft_quote_conn_logged_in` 與 `HFT_RECONNECT_HOURS` / `HFT_RECONNECT_HOURS_2`。
+
+**`ContractsStaleVsBrokerAnnouncement`** — 取代 `ContractRefreshFetchFailing`。
+Broker 會在 `APISUB/V1/SYS/CONTRACT` 主動推播合約異動，
+`contract_update_last_event_ts` 記錄最後一次推播時間。若它**晚於**最後一次載入，
+我們就是可證明地過期了 —— 不需要任何節奏假設。
+
+`ContractRefreshFetchFailing` 已刪除：對一個結構上不可能成功的呼叫告警沒有意義。
+
+### 尚未證實的部分（重要）
+
+推播訂閱**已由 broker 確認**：登入後每個 facade 都會出現
+
+```
+Response Code: 200 | Event Code: 16 | Info: APISUB/V1/SYS/CONTRACT | Event: Subscribe or Unsubscribe ok
+```
+
+但截至 2026-07-31 **尚未收到任何一次實際推播**，`contract_update_last_event_ts`
+仍為 `0.0`。所以 `ContractsStaleVsBrokerAnnouncement` 在現場未經驗證，**它的第一
+次觸發資訊價值大於故障價值**：
+
+- 先確認 `api.Contracts` 是否其實已經是最新（SDK 可能自己刷新快取）。若是，這條
+  告警是良性的，且代表 poll 本來就是多餘的。
+- 看 `contract_update_events_total{action}`：`force` 代表 broker 認定必須更新；
+  `check` 代表 broker 期望 client 自己比對 `check_file_ts`。
+- 把答案寫回這一節，並據此決定是否需要真正的重載策略。
+
+目前唯一的補救手段是重啟引擎（登入時會重載合約）；poll 做不到這件事。
+
+---
+
 ## 快取完整性
 
 - 快取檔案：`config/contracts.json`
