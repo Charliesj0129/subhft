@@ -330,12 +330,16 @@ def _write_alpha_mining_campaign_report(
     campaign_dir: Path,
     campaign_id: str,
     outcomes: list[dict[str, Any]],
+    minimum_days_for_promotion: int,
 ) -> dict[str, Any]:
     payload = {
-        "schema": "alpha_mining_campaign.v2",
+        "schema": "alpha_mining_campaign.v3",
         "campaign_id": campaign_id,
         "screen_only": True,
-        "eligibility_policy": "full_when_100_days_and_cost_profiles_complete_else_bounded_diagnostic",
+        "execution_policy": "full_per_contract_when_cost_profiles_complete_else_bounded_root_proxy_diagnostic",
+        "promotion_policy": (
+            f"minimum_{minimum_days_for_promotion}_eligible_trading_days; independent_of_search_breadth"
+        ),
         "final_holdout_unlocked": False,
         "legs": list(outcomes),
     }
@@ -411,34 +415,38 @@ def cmd_alpha_mine_campaign(args: argparse.Namespace) -> None:
                 sidecar = json.loads(Path(str(preflight.dataset_path) + ".meta.json").read_text(encoding="utf-8"))
                 eligible_days = int(sidecar["trading_day_count"])
                 cost_coverage = preflight._cost_profile_coverage(dataset)
-                full_eligible = eligible_days >= MIN_DAYS_FOR_PROMOTION and bool(cost_coverage["complete"])
-                mode = "full" if full_eligible else "bounded_diagnostic"
+                full_search_eligible = bool(cost_coverage["complete"])
+                promotion_day_count_eligible = eligible_days >= MIN_DAYS_FOR_PROMOTION
+                if full_search_eligible:
+                    mode = "full" if promotion_day_count_eligible else "full_needs_more_days"
+                else:
+                    mode = "bounded_diagnostic"
                 eligibility_reasons: list[str] = []
-                if eligible_days < MIN_DAYS_FOR_PROMOTION:
+                if not promotion_day_count_eligible:
                     eligibility_reasons.append(f"eligible_trading_days={eligible_days}<{MIN_DAYS_FOR_PROMOTION}")
-                if not cost_coverage["complete"]:
+                if not full_search_eligible:
                     eligibility_reasons.append(f"missing_cost_profiles={cost_coverage['missing_contracts']}")
                 config = RunConfig(
                     run_dir=leg_dir,
                     family=family,
                     wall_time_hours=(
                         float(args.wall_time_hours)
-                        if full_eligible
+                        if full_search_eligible
                         else min(float(args.wall_time_hours), float(args.diagnostic_wall_time_hours))
                     ),
                     max_candidates=(
                         int(args.max_candidates)
-                        if full_eligible
+                        if full_search_eligible
                         else min(int(args.max_candidates), int(args.diagnostic_max_candidates))
                     ),
                     workers=int(args.workers),
                     seeds=tuple(int(seed) for seed in args.seeds),
                     timeframes_minutes=timeframes,
-                    posthoc_diagnostic=not full_eligible,
+                    posthoc_diagnostic=not full_search_eligible,
                     resume=bool(args.resume) and (leg_dir / "run_manifest.json").exists(),
                     unlock_final_holdout=False,
                     dataset_cache_dir=campaign_dir / "dataset_cache",
-                    cost_mode="per_contract" if full_eligible else "root_proxy",
+                    cost_mode="per_contract" if full_search_eligible else "root_proxy",
                 )
                 report = run_mining(config)
                 outcomes.append(
@@ -450,7 +458,9 @@ def cmd_alpha_mine_campaign(args: argparse.Namespace) -> None:
                         "report_hash": report.get("report_hash"),
                         "mode": mode,
                         "eligible_trading_days": eligible_days,
-                        "minimum_days_for_full_run": MIN_DAYS_FOR_PROMOTION,
+                        "minimum_days_for_promotion": MIN_DAYS_FOR_PROMOTION,
+                        "promotion_day_count_eligible": promotion_day_count_eligible,
+                        "full_search_eligible": full_search_eligible,
                         "cost_profile_coverage": cost_coverage,
                         "eligibility_reasons": eligibility_reasons,
                         "candidate_cap": config.max_candidates,
@@ -479,6 +489,7 @@ def cmd_alpha_mine_campaign(args: argparse.Namespace) -> None:
                 campaign_dir,
                 campaign_id,
                 outcomes,
+                MIN_DAYS_FOR_PROMOTION,
             )
     except (ValueError, OSError) as exc:
         print(f"[hft alpha mine campaign] {exc}", file=sys.stderr)
