@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import time as _real_time
 from contextlib import contextmanager
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from hft_platform.feed_adapter.shioaji import session_runtime as session_runtime_mod
 from hft_platform.feed_adapter.shioaji.session_runtime import (
     SessionRuntime,
     SessionStateSnapshot,
@@ -319,9 +322,26 @@ def _loop_client(*, logged_in: bool, iterations: int) -> MagicMock:
 
 @contextmanager
 def _run_loop(client):
-    """Patch sleep + clock for the captured refresh loop."""
+    """Patch sleep + clock for the captured refresh loop.
+
+    The obvious spelling — ``patch("...session_runtime.time.sleep", ...)`` —
+    is a trap: ``session_runtime.time`` *is* the stdlib ``time`` module, so that
+    patch replaces ``time.sleep`` for the **whole process**. Any background
+    thread another test left running then lands in ``_fake_sleep``, burning this
+    client's wake-up budget with its own short sleeps while barely advancing the
+    simulated clock. Under xdist that truncated the backoff ladder before it
+    reached its cap (CI saw a final gap of 1920 s instead of 3600 s) while the
+    test passed in isolation every time.
+
+    Rebinding the module's ``time`` *name* to a stub keeps the fake clock inside
+    this module, where it belongs.
+    """
+    stub_time = SimpleNamespace(
+        sleep=client._fake_sleep,
+        perf_counter_ns=_real_time.perf_counter_ns,
+    )
     with (
-        patch("hft_platform.feed_adapter.shioaji.session_runtime.time.sleep", client._fake_sleep),
+        patch.object(session_runtime_mod, "time", stub_time),
         patch(
             "hft_platform.feed_adapter.shioaji.session_runtime.timebase.now_s",
             side_effect=lambda: client._now,
@@ -427,6 +447,29 @@ def test_relogin_backoff_caps_at_check_interval():
     assert max(gaps) <= client._session_refresh_check_interval_s
     # Late gaps have saturated at the cap rather than continuing to double.
     assert gaps[-1] == pytest.approx(client._session_refresh_check_interval_s)
+
+
+def test_refresh_loop_clock_stub_does_not_leak_into_the_global_time_module():
+    """The loop's fake clock must not replace ``time.sleep`` process-wide.
+
+    ``session_runtime.time`` is the stdlib module object, so patching
+    ``session_runtime.time.sleep`` mutates it for every thread in the process.
+    A background thread left running by an earlier test then consumes this
+    client's wake-up budget, which is how ``test_relogin_backoff_caps_at_check_interval``
+    passed alone and failed under xdist. Assert the isolation directly rather
+    than trusting it.
+    """
+    client = _loop_client(logged_in=False, iterations=1)
+    real_sleep = _real_time.sleep
+
+    with _run_loop(client):
+        assert _real_time.sleep is real_sleep
+        # A foreign thread's sleep must not be attributed to this client.
+        _real_time.sleep(0)
+        assert client._sleep_calls == 0
+        assert session_runtime_mod.time.sleep is client._fake_sleep
+
+    assert _real_time.sleep is real_sleep
 
 
 def test_relogin_backoff_resets_after_successful_recovery():
