@@ -403,12 +403,12 @@ def test_campaign_parser_and_driver_supervise_all_six_locked_diagnostic_legs(
 ) -> None:
     captured: list[RunConfig] = []
 
-    def fake_run(config: RunConfig) -> dict[str, object]:
-        captured.append(config)
+    def fake_run(self: MiningRun) -> dict[str, object]:
+        captured.append(self.config)
         return {"verdict": "KILL", "report_hash": f"hash-{len(captured)}"}
 
     _stub_campaign_preflight(monkeypatch)
-    monkeypatch.setattr(runner, "run_mining", fake_run)
+    monkeypatch.setattr(MiningRun, "run", fake_run)
     args = cli.build_parser().parse_args(
         [
             "alpha",
@@ -450,9 +450,9 @@ def test_campaign_records_dataset_governance_failures_and_exits_nonzero(
 ) -> None:
     _stub_campaign_preflight(monkeypatch)
     monkeypatch.setattr(
-        runner,
-        "run_mining",
-        lambda _config: (_ for _ in ()).throw(TickDatasetGovernanceError("bad aggressor labels")),
+        MiningRun,
+        "run",
+        lambda _self: (_ for _ in ()).throw(TickDatasetGovernanceError("bad aggressor labels")),
     )
     args = cli.build_parser().parse_args(
         [
