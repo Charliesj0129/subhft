@@ -1225,13 +1225,22 @@ def test_cmd_run_passes_frozen_contract_to_runner(monkeypatch, capsys, tmp_path)
 
 
 @pytest.mark.parametrize(
-    ("eligible_days", "coverage_complete", "expected_mode", "expected_cap", "expected_cost_mode"),
+    (
+        "eligible_days",
+        "coverage_complete",
+        "expected_mode",
+        "expected_cap",
+        "expected_cost_mode",
+        "expected_posthoc",
+    ),
     [
-        (80, False, "bounded_diagnostic", 200, "root_proxy"),
-        (120, True, "full", 20_000, "per_contract"),
+        (80, False, "bounded_diagnostic", 200, "root_proxy", True),
+        (80, True, "full_needs_more_days", 20_000, "per_contract", False),
+        (120, False, "bounded_diagnostic", 200, "root_proxy", True),
+        (120, True, "full", 20_000, "per_contract", False),
     ],
 )
-def test_campaign_stages_each_leg_by_data_and_cost_eligibility(
+def test_campaign_separates_full_search_from_promotion_day_eligibility(
     monkeypatch,
     capsys,
     tmp_path,
@@ -1240,6 +1249,7 @@ def test_campaign_stages_each_leg_by_data_and_cost_eligibility(
     expected_mode,
     expected_cap,
     expected_cost_mode,
+    expected_posthoc,
 ) -> None:
     import research.combinatorial.smma_runner as runner
 
@@ -1285,9 +1295,18 @@ def test_campaign_stages_each_leg_by_data_and_cost_eligibility(
 
     report = json.loads(capsys.readouterr().out)
     assert len(captured) == 6
+    assert report["schema"] == "alpha_mining_campaign.v3"
+    assert report["execution_policy"] == (
+        "full_per_contract_when_cost_profiles_complete_else_bounded_root_proxy_diagnostic"
+    )
+    assert report["promotion_policy"] == "minimum_100_eligible_trading_days; independent_of_search_breadth"
     assert {leg["mode"] for leg in report["legs"]} == {expected_mode}
+    assert {leg["full_search_eligible"] for leg in report["legs"]} == {coverage_complete}
+    assert {leg["promotion_day_count_eligible"] for leg in report["legs"]} == {eligible_days >= 100}
+    assert {leg["minimum_days_for_promotion"] for leg in report["legs"]} == {100}
     assert {config.max_candidates for config in captured} == {expected_cap}
     assert {config.cost_mode for config in captured} == {expected_cost_mode}
+    assert {config.posthoc_diagnostic for config in captured} == {expected_posthoc}
 
 
 def test_bounded_run_writes_kill_report_when_first_hypothesis_fails(monkeypatch, tmp_path) -> None:
