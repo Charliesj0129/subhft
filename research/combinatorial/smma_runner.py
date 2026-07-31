@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import multiprocessing
 import os
 import resource
 import shutil
@@ -13,7 +14,7 @@ import tempfile
 import threading
 import time
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -96,6 +97,13 @@ DEFAULT_SEEDS: tuple[int, ...] = (20260726, 20260727, 20260728)
 MAX_WALL_TIME_HOURS = 72.0
 MAX_CANDIDATES = 20_000
 MAX_WORKERS = 12
+DISCOVERY_PROCESS_START_METHOD = "forkserver"
+DISCOVERY_NUMERIC_THREAD_ENV = (
+    "OPENBLAS_NUM_THREADS",
+    "OMP_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+)
 CHECKPOINT_TRIALS = 250
 CHECKPOINT_SECONDS = 300.0
 HEARTBEAT_SECONDS = 60.0
@@ -839,6 +847,86 @@ def _evaluate_candidate(
     )
 
 
+_DISCOVERY_WORKER_CONTEXT: (
+    tuple[
+        GovernedBars,
+        GovernedBars,
+        Mapping[str, np.ndarray],
+        np.ndarray,
+        str,
+    ]
+    | None
+) = None
+
+
+def _initialize_discovery_worker(
+    dataset: GovernedBars,
+    bars: GovernedBars,
+    signals: Mapping[str, np.ndarray],
+    labels: np.ndarray,
+    cost_mode: str,
+) -> None:
+    """Freeze one group's read-only inputs in each discovery worker."""
+    global _DISCOVERY_WORKER_CONTEXT
+    _DISCOVERY_WORKER_CONTEXT = (dataset, bars, signals, labels, cost_mode)
+
+
+def _evaluate_discovery_worker(candidate: Candidate) -> CandidateResult:
+    """Evaluate one candidate without sending group arrays with every task."""
+    if _DISCOVERY_WORKER_CONTEXT is None:
+        raise RuntimeError("discovery worker context was not initialized")
+    dataset, bars, signals, labels, cost_mode = _DISCOVERY_WORKER_CONTEXT
+    return _evaluate_candidate(
+        candidate,
+        dataset=dataset,
+        bars=bars,
+        signal=signals[candidate.expression],
+        split_name="discovery",
+        split_labels=labels,
+        evaluation_fraction=0.25,
+        cost_mode=cost_mode,
+    )
+
+
+@contextmanager
+def _single_threaded_discovery_worker_environment() -> Iterator[None]:
+    """Prevent each process worker from creating its own native thread pool."""
+    prior = {name: os.environ.get(name) for name in DISCOVERY_NUMERIC_THREAD_ENV}
+    os.environ.update(dict.fromkeys(DISCOVERY_NUMERIC_THREAD_ENV, "1"))
+    try:
+        yield
+    finally:
+        for name, value in prior.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
+@contextmanager
+def _discovery_process_pool(
+    *,
+    workers: int,
+    dataset: GovernedBars,
+    bars: GovernedBars,
+    signals: Mapping[str, np.ndarray],
+    labels: np.ndarray,
+    cost_mode: str,
+    has_work: bool,
+) -> Iterator[ProcessPoolExecutor | None]:
+    if workers <= 1 or not has_work:
+        yield None
+        return
+    with _single_threaded_discovery_worker_environment():
+        with ProcessPoolExecutor(
+            max_workers=workers,
+            mp_context=multiprocessing.get_context(DISCOVERY_PROCESS_START_METHOD),
+            initializer=_initialize_discovery_worker,
+            initargs=(dataset, bars, signals, labels, cost_mode),
+        ) as executor:
+            yield executor
+
+
 def _result_sort_key(result: CandidateResult) -> tuple[float, float, float, float, int, str]:
     return (
         -result.kill.net_edge,
@@ -1221,6 +1309,10 @@ class MiningRun:
             "wall_time_hours": float(self.config.wall_time_hours),
             "max_candidates": int(self.config.max_candidates),
             "workers": int(self.config.workers),
+            "discovery_executor": (
+                "single_process" if self.config.workers == 1 else f"process_pool:{DISCOVERY_PROCESS_START_METHOD}"
+            ),
+            "discovery_worker_numeric_threads": 1 if self.config.workers > 1 else None,
             "seeds": list(self.config.seeds),
             "dataset_fingerprint": self._dataset_fingerprint(),
             "dataset_date_from": FAMILY_REGISTRY[self.config.family].dataset.date_from,
@@ -1617,14 +1709,28 @@ class MiningRun:
                 )
 
             batch_size = max(1, self.config.workers * 2)
-            with ThreadPoolExecutor(max_workers=self.config.workers) as executor:
+            with _discovery_process_pool(
+                workers=self.config.workers,
+                dataset=dataset,
+                bars=bars,
+                signals=signals,
+                labels=labels,
+                cost_mode=self.config.cost_mode,
+                has_work=any(candidate.duplicate_of is None for candidate in remaining),
+            ) as executor:
                 for batch_start in range(0, len(remaining), batch_size):
                     batch = remaining[batch_start : batch_start + batch_size]
                     evaluated_batch = [candidate for candidate in batch if candidate.duplicate_of is None]
-                    results_by_id = {
-                        result.candidate.candidate_id: result
-                        for result in executor.map(evaluate, evaluated_batch, chunksize=1)
-                    }
+                    evaluated_results = (
+                        (evaluate(candidate) for candidate in evaluated_batch)
+                        if executor is None
+                        else executor.map(
+                            _evaluate_discovery_worker,
+                            evaluated_batch,
+                            chunksize=1,
+                        )
+                    )
+                    results_by_id = {result.candidate.candidate_id: result for result in evaluated_results}
                     for candidate in batch:
                         if candidate.duplicate_of is not None:
                             self._ledger.append(
