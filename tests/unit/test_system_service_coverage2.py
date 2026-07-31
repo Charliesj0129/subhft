@@ -1627,7 +1627,17 @@ class TestSuperviseFacadeHealth:
         mock_client.check_facade_health.assert_called()
 
     @pytest.mark.asyncio
-    async def test_facade_health_check_skipped_outside_window(self):
+    async def test_facade_health_check_runs_regardless_of_reconnect_window(self):
+        """The supervisor no longer gates on HFT_RECONNECT_HOURS.
+
+        That wall-clock window was the wrong predicate in both directions: its
+        night leg ran to 05:05 against an 05:00 close (producing the 2026-07-31
+        relogin storm) and its day leg stopped at 13:35, leaving the last ten
+        minutes of the day session unchecked. The FSM now always runs so
+        degraded/recovered transitions stay observable, and
+        ``QuoteConnectionPool.reconnect_allowed`` decides from MarketCalendar
+        whether a reconnect may actually be *scheduled*.
+        """
         sys_obj = _make_stub()
         sys_obj.running = True
         sys_obj.storm_guard.state = StormGuardState.NORMAL
@@ -1658,7 +1668,7 @@ class TestSuperviseFacadeHealth:
                                 with patch("hft_platform.services.system.write_heartbeat"):
                                     await sys_obj._supervise()
 
-        mock_client.check_facade_health.assert_not_called()
+        mock_client.check_facade_health.assert_called()
 
 
 # ===========================================================================

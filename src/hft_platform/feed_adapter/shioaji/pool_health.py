@@ -57,6 +57,22 @@ def get_healthy_feed_gap_s(slots: list[FacadeSlot]) -> float:
     return max_gap
 
 
+# Heartbeat interval for the "reconnect suppressed" log. Long enough that an
+# overnight shutdown costs a few hundred lines rather than a few hundred
+# thousand, short enough that suppression is still visibly *active* rather than
+# a single line logged hours ago.
+_SUPPRESS_LOG_INTERVAL_S = 300.0
+
+
+def _should_log_suppression(slot: FacadeSlot, now: float) -> bool:
+    """Return True at most once per ``_SUPPRESS_LOG_INTERVAL_S`` per slot."""
+    last = slot._suppress_logged_mono
+    if last != 0.0 and (now - last) < _SUPPRESS_LOG_INTERVAL_S:
+        return False
+    slot._suppress_logged_mono = now
+    return True
+
+
 def check_facade_health(
     slots: list[FacadeSlot],
     *,
@@ -125,6 +141,7 @@ def check_facade_health(
                 # Feed recovered.
                 slot.state = FacadeState.CONNECTED
                 slot.degraded_since_mono = None
+                slot._suppress_logged_mono = 0.0
                 log.info("facade_recovered", conn_id=slot.conn_id, feed_gap_s=round(gap, 3))
             else:
                 # Still degraded — check whether we have been degraded long enough
@@ -134,12 +151,14 @@ def check_facade_health(
                     degraded_duration = now - degraded_since
                     if degraded_duration > reconnect_trigger_s:
                         if suppress_reconnect:
-                            log.info(
-                                "facade_reconnect_suppressed",
-                                conn_id=slot.conn_id,
-                                degraded_duration_s=round(degraded_duration, 3),
-                            )
+                            if _should_log_suppression(slot, now):
+                                log.info(
+                                    "facade_reconnect_suppressed",
+                                    conn_id=slot.conn_id,
+                                    degraded_duration_s=round(degraded_duration, 3),
+                                )
                         else:
+                            slot._suppress_logged_mono = 0.0
                             log.warning(
                                 "facade_reconnect_triggered",
                                 conn_id=slot.conn_id,

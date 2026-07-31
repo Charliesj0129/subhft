@@ -1057,3 +1057,91 @@ class TestQuoteConnectionPoolDegradedRollup:
         clock["now"] = 1003.0
         pool.update_metrics()
         assert mock_logger.critical.call_count == 1, "CRITICAL log must be emitted exactly once until recovery"
+
+
+class TestReconnectAllowedSessionBoundaries:
+    """``reconnect_allowed`` gates facade reconnects on MarketCalendar.
+
+    Regression for the 2026-07-31 night-close relogin storm: the supervisor used
+    to gate this on HFT_RECONNECT_HOURS, whose night leg ran to 05:05 against an
+    05:00 close (5 min of reconnecting into a shut market — 23 relogins, 4x 451)
+    and whose day leg stopped at 13:35, leaving the last 10 minutes of the day
+    session unchecked.
+    """
+
+    @staticmethod
+    def _pool(tmp_path):
+        from hft_platform.feed_adapter.shioaji.quote_connection_pool import QuoteConnectionPool
+
+        sym_path = tmp_path / "symbols.yaml"
+        sym_path.write_text(yaml.safe_dump({"symbols": []}))
+        return QuoteConnectionPool(str(sym_path), {}, num_conns=1)
+
+    @staticmethod
+    def _at(pool, hh, mm, ss=0):
+        """Evaluate reconnect_allowed at a wall-clock time on a trading day."""
+        import datetime as dt
+
+        from hft_platform.core.market_calendar import get_calendar
+
+        tz = get_calendar()._tz
+        moment = dt.datetime(2026, 7, 31, hh, mm, ss, tzinfo=tz)  # Friday
+        with mock.patch(
+            "hft_platform.core.timebase.now_s",
+            return_value=moment.timestamp(),
+        ):
+            return pool.reconnect_allowed()
+
+    @pytest.mark.parametrize(
+        ("hh", "mm", "ss", "expected"),
+        [
+            (8, 30, 0, True),  # pre-open warmup preserved (was 08:30 env start)
+            (8, 44, 59, True),  # still warmup
+            (8, 45, 0, True),  # day open
+            (13, 44, 59, True),  # last second of day session — old gate was blind here
+            (13, 45, 0, False),  # exclusive close
+            (13, 50, 0, False),  # old env gate also off, but for the wrong reason
+            (14, 44, 0, False),  # too early for the night warmup
+            (14, 45, 0, True),  # night pre-open warmup
+            (15, 0, 0, True),  # night open
+            (4, 59, 59, True),  # last second of night session
+            (5, 0, 0, False),  # night close — storm started here
+            (5, 0, 20, False),  # first observed facade_reconnect_triggered
+            (5, 4, 59, False),  # last one, before the env window expired at 05:05
+        ],
+    )
+    def test_reconnect_allowed_matches_session_boundaries(self, tmp_path, hh, mm, ss, expected):
+        pool = self._pool(tmp_path)
+        assert self._at(pool, hh, mm, ss) is expected
+
+    def test_reconnect_allowed_fails_open_when_calendar_unavailable(self, tmp_path):
+        """A calendar failure must not strand a dead facade during a session."""
+        pool = self._pool(tmp_path)
+        with mock.patch(
+            "hft_platform.core.market_calendar.get_calendar",
+            side_effect=RuntimeError("calendar down"),
+        ):
+            assert pool.reconnect_allowed() is True
+
+    def test_check_facade_health_suppresses_scheduling_after_the_close(self, tmp_path):
+        """End-to-end: at 05:00:20 the pool must not schedule any reconnect."""
+        import time as _t
+
+        from hft_platform.feed_adapter.shioaji.facade_slot import FacadeSlot, FacadeState
+        from hft_platform.feed_adapter.shioaji.quote_connection_pool import QuoteConnectionPool
+
+        pool = self._pool(tmp_path)
+        slot = FacadeSlot(conn_id="conn-0", facade=mock.MagicMock())
+        slot.state = FacadeState.DEGRADED
+        slot.last_data_mono = _t.monotonic() - 300.0
+        slot.degraded_since_mono = _t.monotonic() - 60.0
+        pool._slots = [slot]
+
+        # __slots__ makes instance-level patching read-only — patch the class.
+        with mock.patch.object(QuoteConnectionPool, "_schedule_reconnect") as sched:
+            with mock.patch.object(QuoteConnectionPool, "reconnect_allowed", return_value=False):
+                pool.check_facade_health()
+            sched.assert_not_called()
+            with mock.patch.object(QuoteConnectionPool, "reconnect_allowed", return_value=True):
+                pool.check_facade_health()
+            sched.assert_called_once_with("conn-0")

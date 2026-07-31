@@ -7,6 +7,7 @@ callback function, funneling data into a single raw_queue.
 
 from __future__ import annotations
 
+import datetime as dt
 import os
 import shutil
 import tempfile
@@ -17,6 +18,7 @@ from typing import Any, Callable
 import yaml
 from structlog import get_logger
 
+from hft_platform.core import timebase
 from hft_platform.feed_adapter.shioaji.facade_slot import FacadeSlot, FacadeState
 from hft_platform.feed_adapter.shioaji.limits import DEFAULT_MAX_SUBSCRIPTIONS_PER_CONN
 from hft_platform.feed_adapter.shioaji.pool_health import (
@@ -253,6 +255,7 @@ class QuoteConnectionPool:
         "_feature_engine",
         "_degraded_threshold_s",
         "_reconnect_trigger_s",
+        "_reconnect_pre_open_lead_s",
         "_per_facade_timeout_s",
         "_user_callback",
         "_symbols_input_path",
@@ -285,6 +288,10 @@ class QuoteConnectionPool:
         self._feature_engine: Any = None
         self._degraded_threshold_s = float(os.getenv("HFT_FACADE_DEGRADED_THRESHOLD_S", "10"))
         self._reconnect_trigger_s = float(os.getenv("HFT_FACADE_RECONNECT_TRIGGER_S", "10"))
+        # Pre-open lead for facade reconnects — see ``reconnect_allowed``.
+        # Default 15 min matches the lead the old HFT_RECONNECT_HOURS day window
+        # provided (08:30 for an 08:45 open).
+        self._reconnect_pre_open_lead_s = float(os.getenv("HFT_FACADE_RECONNECT_PRE_OPEN_LEAD_S", "900"))
         self._user_callback: Callable[..., Any] | None = None
         self._per_facade_timeout_s = float(os.getenv("HFT_PER_FACADE_TIMEOUT_S", "15"))
         # P1-d: alert when >50%% of conns have been non-CONNECTED for >Ns.
@@ -551,7 +558,41 @@ class QuoteConnectionPool:
             degraded_threshold_s=self._degraded_threshold_s,
             reconnect_trigger_s=self._reconnect_trigger_s,
             schedule_fn=self._schedule_reconnect,
+            suppress_reconnect=not self.reconnect_allowed(),
         )
+
+    def reconnect_allowed(self) -> bool:
+        """Return True when a facade reconnect could plausibly succeed.
+
+        A facade reconnect is driven by *absence of market data*, so outside a
+        session it can never succeed: the feed gap that triggered it does not
+        close, the slot re-degrades, and the loop reschedules until something
+        external stops it. On 2026-07-31 that cost 23 relogins and 4 broker
+        ``451`` rejections in the five minutes after the 05:00 night close.
+
+        The window is ``[next_open - lead, close)``, derived from
+        ``MarketCalendar`` rather than a wall-clock env range, expressed as
+        "open now, or open ``lead`` seconds from now". The lead preserves the
+        pre-open warmup that ``HFT_RECONNECT_HOURS`` used to provide by starting
+        early (08:30 for an 08:45 open), while the calendar's exclusive close
+        stops the window from running past the bell.
+
+        Fail-open: if the calendar cannot answer, allow the reconnect. Leaving a
+        genuinely dead facade unrecovered during a live session is far worse
+        than a futile relogin outside one.
+        """
+        try:
+            from hft_platform.core.market_calendar import get_calendar
+
+            calendar = get_calendar()
+            now_dt = dt.datetime.fromtimestamp(timebase.now_s(), tz=calendar._tz)
+            if calendar.is_trading_hours(now_dt, product_type="future"):
+                return True
+            ahead = now_dt + dt.timedelta(seconds=self._reconnect_pre_open_lead_s)
+            return bool(calendar.is_trading_hours(ahead, product_type="future"))
+        except Exception as exc:
+            logger.debug("operation_fallback", error=str(exc))
+            return True
 
     def _apply_pending_resets(self) -> None:
         """Apply deferred warmup resets on the event loop thread.

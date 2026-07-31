@@ -1294,16 +1294,19 @@ class HFTSystem:
 
             # Update Metrics — offload blocking psutil calls off the event loop
             await loop.run_in_executor(None, metrics.update_system_metrics)
-            # Per-facade health check (QuoteConnectionPool isolation)
-            # Gate on reconnect window — outside trading hours, facade feed gaps
-            # are expected and reconnect attempts will always fail, causing a
-            # DEGRADED→DISCONNECTED→reconnect loop that ultimately triggers
-            # auto-recovery exit and Docker restart cycling.
+            # Per-facade health check (QuoteConnectionPool isolation).
+            # Outside a session, facade feed gaps are expected and a reconnect
+            # can never close them, so the pool suppresses *scheduling* while
+            # still running the FSM — degraded/recovered transitions stay
+            # visible. Suppression is decided inside the pool from
+            # MarketCalendar (QuoteConnectionPool.reconnect_allowed), not from
+            # the HFT_RECONNECT_HOURS wall-clock window this used to gate on:
+            # that window's night leg ran to 05:05 against an 05:00 close and
+            # produced a 5-minute relogin storm, while its day leg stopped at
+            # 13:35 and left the last 10 minutes of the day session unchecked.
             client = getattr(self.md_service, "client", None)
             if client is not None and hasattr(client, "check_facade_health"):
-                within_fn = getattr(self.md_service, "within_reconnect_window", None)
-                if within_fn is None or within_fn():
-                    client.check_facade_health()
+                client.check_facade_health()
             if metrics:
                 exec_task = self.tasks.get("exec_router")
                 gateway_task = self.tasks.get("exec_gateway")
