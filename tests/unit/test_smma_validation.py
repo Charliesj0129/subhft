@@ -75,10 +75,10 @@ def test_execution_uses_entry_contract_profile_and_fails_on_unknown_contract() -
     )
     assert result.trade_pnl.tolist() == [3.0]
 
-    with pytest.raises(KeyError, match="TXFG6"):
+    with pytest.raises(KeyError, match="TXFZ9"):
         simulate_next_bar_execution(
             **kwargs,
-            contracts=np.asarray(["TXFG6", "TXFG6", "TXFG6"]),
+            contracts=np.asarray(["TXFZ9", "TXFZ9", "TXFZ9"]),
         )
 
 

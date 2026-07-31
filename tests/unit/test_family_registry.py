@@ -212,7 +212,7 @@ def test_kbar_registry_adapter_reproduces_the_direct_builder_bit_for_bit() -> No
 def test_kbar_family_reuses_smma_dataset_io_with_its_wider_window() -> None:
     kbar_dataset = FAMILY_REGISTRY["kbar"].dataset
     smma_dataset = FAMILY_REGISTRY["smma"].dataset
-    assert (kbar_dataset.date_from, kbar_dataset.date_to) == ("2026-01-27", "2026-07-24")
+    assert (kbar_dataset.date_from, kbar_dataset.date_to) == ("2026-01-27", "2026-07-29")
     assert kbar_dataset.export is smma_dataset.export
     assert kbar_dataset.load is smma_dataset.load
     assert kbar_dataset.roots == smma_dataset.roots
@@ -271,11 +271,11 @@ def test_tick_registry_adapter_reproduces_the_direct_builder_bit_for_bit() -> No
 
 def test_tick_family_dataset_scope_is_the_tick_contract_not_the_smma_one() -> None:
     tick_dataset = FAMILY_REGISTRY["tick"].dataset
-    assert (tick_dataset.date_from, tick_dataset.date_to) == ("2026-04-07", "2026-07-24")
+    assert (tick_dataset.date_from, tick_dataset.date_to) == ("2026-04-07", "2026-07-29")
     assert tick_dataset.roots == TICK_ROOTS
     assert tick_dataset.load is not FAMILY_REGISTRY["smma"].dataset.load
     bidask_dataset = FAMILY_REGISTRY["bidask"].dataset
-    assert (bidask_dataset.date_from, bidask_dataset.date_to) == ("2026-01-27", "2026-07-24")
+    assert (bidask_dataset.date_from, bidask_dataset.date_to) == ("2026-01-27", "2026-07-29")
     assert bidask_dataset.load is FAMILY_REGISTRY["smma"].dataset.load
 
 

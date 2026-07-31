@@ -1,15 +1,15 @@
 # Local ClickHouse `hft.market_data` corpus — provenance and TTL divergence
 
-Status: current as of 2026-07-25. Applies to the **local/research** ClickHouse
+Status: current as of 2026-07-31. Applies to the **local/research** ClickHouse
 container only, not the production host.
 
 ## Why this file exists
 
-Two things happened on 2026-07-25 that a future reader must not have to
-re-derive:
+Two corpus changes that a future reader must not have to re-derive:
 
 1. The local corpus was extended with production data pulled off THESHOW
-   (`charl-AB350M-Gaming-3`), so the local table now spans 2026-01-26 → 2026-07-25.
+   (`charl-AB350M-Gaming-3`), and later received a verified closed-partition
+   repair through UTC partition 20260729.
 2. The local table's 6-month TTL was **removed**, because it was hours away from
    starting to delete the oldest month. Local ClickHouse is the only remaining
    regeneration source for research data (the L2 NPZ corpus was deleted on
@@ -19,9 +19,9 @@ re-derive:
 
 | Property | Value |
 |---|---|
-| Range (Asia/Taipei) | 2026-01-26 → 2026-07-25 |
-| Rows | 877,326,445 |
-| On disk | 20.56 GiB, 158 active parts |
+| Range (Asia/Taipei wall date) | 2026-01-26 → 2026-07-30 |
+| Rows | 903,498,775 |
+| On disk | 21.26 GiB, 162 active parts |
 | Engine | `MergeTree`, `PARTITION BY toYYYYMMDD(toDateTime(ingest_ts/1000000000))` (**UTC**), `ORDER BY (symbol, exch_ts, ingest_ts)` |
 | TTL | **none** (see below) |
 | Price scale | **×1,000,000** raw — the live platform scale is ×10,000; conversions must be explicit (`.agent/rules/70-research-data.md`) |
@@ -64,10 +64,11 @@ Consequences to remember:
 ## The 2026-07-25 pull from THESHOW
 
 Source: THESHOW production ClickHouse, both sides on 25.12.3.21. Read-only on the
-remote; nothing was written to the production host. Script:
-`scratchpad/pull_theshow_market_data.sh` (per-partition `FORMAT Native` over SSH
-with `pigz`, verified by `count()` + `sum(cityHash64(symbol, exch_ts, ingest_ts,
-price_scaled, volume, seq_no))` on both sides before and after each partition).
+remote; nothing was written to the production host. The one-off scratch script
+was not retained. The transfer used per-partition `FORMAT Native` over SSH with
+`pigz`, verified by `count()` +
+`sum(cityHash64(symbol, exch_ts, ingest_ts, price_scaled, volume, seq_no))` on
+both sides before and after each partition.
 
 - **Transferred: 19 partitions / 95,461,225 rows**, all hash-verified.
 - **Skipped: 6 partitions** (`20260605`, `20260608`–`20260612`, 47,080,325 rows)
@@ -81,8 +82,37 @@ have the same 18 columns), so the transfer named all columns explicitly on both
 the `SELECT` and the `INSERT`. Any future Native transfer must do the same.
 
 The pull captured everything the remote held as of 2026-07-25 17:29 CST. The
-night session had already closed, so nothing was in flight — but **Monday
-2026-07-27 onwards will need another pull**.
+night session had already closed, so nothing was in flight.
+
+## The 2026-07-31 closed-partition repair
+
+Only UTC ingest partitions that were absent locally and did not overlap the
+active local WAL were copied. Remote ClickHouse remained read-only. Data first
+landed in a separate local staging table; every partition had to match the
+remote count, symbol count, and content hash before it was inserted into
+`hft.market_data`.
+
+| UTC ingest partition | Rows | Symbols | Content hash |
+|---|---:|---:|---:|
+| 20260727 | 7,064,800 | 296 | 11097430841529907375 |
+| 20260728 | 8,268,651 | 296 | 16208870874059515396 |
+| 20260729 | 10,838,879 | 296 | 9099460484293833097 |
+
+The repair added **26,172,330 rows**. Post-merge verification matched all three
+remote fingerprints exactly, after which the staging table was dropped.
+Partitions `20260730` and `20260731` were deliberately not copied because they
+overlapped an active local WAL and could duplicate rows in this plain
+`MergeTree`. The Asia/Taipei wall-date range reaches 2026-07-30 because UTC
+partition 20260729 includes early 2026-07-30 local timestamps; that does not
+make the 2026-07-30 trading session complete.
+
+A fresh governed preflight over the repaired window (ending 2026-07-29)
+accepted 60 eligible bidask/kbar trading days and 43 eligible tick trading
+days, up from 58 and 41 in the prior campaign. Trading date 2026-07-27 remained
+excluded because the TMF night session was incomplete; only 2026-07-28 and
+2026-07-29 added eligible evidence. All contracts observed by the repaired
+exports had frozen cost-profile coverage, but every family remains below the
+100-day full-run floor.
 
 ## Coverage — real holes, not transfer failures
 

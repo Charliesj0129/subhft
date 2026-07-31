@@ -346,11 +346,11 @@ def test_dataset_cache_reuses_identical_bidask_and_kbar_exports(monkeypatch, tmp
 
     assert len(exports) == 1
     assert exports[0]["date_from"] == "2026-01-27"
-    assert exports[0]["date_to"] == "2026-07-24"
+    assert exports[0]["date_to"] == "2026-07-29"
     assert bidask._dataset_cache_evidence["hit"] is False
     assert kbar._dataset_cache_evidence["hit"] is True
 
-    original_window = runner.build_trading_date_window("2026-01-27", "2026-07-24")
+    original_window = runner.build_trading_date_window("2026-01-27", "2026-07-29")
     monkeypatch.setattr(
         runner,
         "build_trading_date_window",
@@ -925,13 +925,14 @@ def test_discovery_trend_pollution_uses_killed_horizon_metrics(tmp_path) -> None
     assert disposition[0]["disposition_reason"] == "monotonic_horizon_pollution"
 
 
-def test_missing_contract_profile_is_visible_to_full_run_preflight(tmp_path) -> None:
+def test_governed_contract_profile_is_visible_to_full_run_preflight(tmp_path) -> None:
     run = MiningRun(RunConfig(run_dir=tmp_path / "run", seeds=(1, 2, 3)))
 
     coverage = run._cost_profile_coverage(_dataset())
 
-    assert coverage["complete"] is False
-    assert coverage["missing_contracts"] == ["TXFG6"]
+    assert coverage["complete"] is True
+    assert coverage["profiled_contracts"] == ["TXFG6"]
+    assert coverage["missing_contracts"] == []
 
 
 def test_resume_manifest_mismatch_fails_closed(tmp_path) -> None:
