@@ -372,7 +372,6 @@ def cmd_alpha_mine_campaign(args: argparse.Namespace) -> None:
             MiningRun,
             RunConfig,
             RunIntegrityError,
-            run_mining,
         )
         from research.combinatorial.tick_dataset import TickDatasetGovernanceError
 
@@ -448,7 +447,9 @@ def cmd_alpha_mine_campaign(args: argparse.Namespace) -> None:
                     dataset_cache_dir=campaign_dir / "dataset_cache",
                     cost_mode="per_contract" if full_search_eligible else "root_proxy",
                 )
-                report = run_mining(config)
+                mining_run = MiningRun(config)
+                mining_run._dataset_cache_evidence = dict(preflight._dataset_cache_evidence)
+                report = mining_run.run()
                 outcomes.append(
                     {
                         "leg": leg_name,

@@ -1305,8 +1305,6 @@ def test_campaign_separates_full_search_from_promotion_day_eligibility(
     expected_cost_mode,
     expected_posthoc,
 ) -> None:
-    import research.combinatorial.smma_runner as runner
-
     captured: list[RunConfig] = []
 
     def fake_load(self):
@@ -1315,12 +1313,12 @@ def test_campaign_separates_full_search_from_promotion_day_eligibility(
         sidecar.write_text(json.dumps({"trading_day_count": eligible_days}))
         return _dataset()
 
-    def fake_run(config):
-        captured.append(config)
+    def fake_run(self):
+        captured.append(self.config)
         return {
             "verdict": "KILL",
             "report_hash": f"hash-{len(captured)}",
-            "cost_claim_eligible": config.cost_mode == "per_contract",
+            "cost_claim_eligible": self.config.cost_mode == "per_contract",
         }
 
     coverage = {
@@ -1332,7 +1330,7 @@ def test_campaign_separates_full_search_from_promotion_day_eligibility(
     monkeypatch.setattr(MiningRun, "_load_or_export_dataset", fake_load)
     monkeypatch.setattr(MiningRun, "_validate_frozen_dataset_scope", lambda _self, _dataset: None)
     monkeypatch.setattr(MiningRun, "_cost_profile_coverage", staticmethod(lambda _dataset: coverage))
-    monkeypatch.setattr(runner, "run_mining", fake_run)
+    monkeypatch.setattr(MiningRun, "run", fake_run)
     args = Namespace(
         run_root=str(tmp_path / "campaigns"),
         campaign_id=f"campaign-{eligible_days}",
@@ -1361,6 +1359,65 @@ def test_campaign_separates_full_search_from_promotion_day_eligibility(
     assert {config.max_candidates for config in captured} == {expected_cap}
     assert {config.cost_mode for config in captured} == {expected_cost_mode}
     assert {config.posthoc_diagnostic for config in captured} == {expected_posthoc}
+
+
+def test_campaign_preserves_preflight_dataset_cache_evidence(
+    monkeypatch,
+    capsys,
+    tmp_path,
+) -> None:
+    captured: list[tuple[str, dict[str, object]]] = []
+
+    def fake_load(self):
+        evidence = {
+            "enabled": True,
+            "hit": self.config.family == "kbar",
+            "cache_key": f"cache-{self.config.family}-{self.config.timeframes_minutes}",
+        }
+        self._dataset_cache_evidence = evidence
+        sidecar = self.dataset_path.with_suffix(".npz.meta.json")
+        sidecar.parent.mkdir(parents=True, exist_ok=True)
+        sidecar.write_text(json.dumps({"trading_day_count": 120}))
+        return _dataset()
+
+    def fake_run(self):
+        captured.append((self.config.family, dict(self._dataset_cache_evidence)))
+        return {
+            "verdict": "KILL",
+            "report_hash": f"hash-{len(captured)}",
+            "cost_claim_eligible": True,
+        }
+
+    coverage = {
+        "observed_contracts": ["TXFG6"],
+        "profiled_contracts": ["TXFG6"],
+        "missing_contracts": [],
+        "complete": True,
+    }
+    monkeypatch.setattr(MiningRun, "_load_or_export_dataset", fake_load)
+    monkeypatch.setattr(MiningRun, "_validate_frozen_dataset_scope", lambda _self, _dataset: None)
+    monkeypatch.setattr(MiningRun, "_cost_profile_coverage", staticmethod(lambda _dataset: coverage))
+    monkeypatch.setattr(MiningRun, "run", fake_run)
+    args = Namespace(
+        run_root=str(tmp_path / "campaigns"),
+        campaign_id="cache-evidence",
+        wall_time_hours=12.0,
+        max_candidates=20_000,
+        diagnostic_max_candidates=200,
+        diagnostic_wall_time_hours=1.0,
+        workers=2,
+        seeds=[1, 2, 3],
+        resume=False,
+    )
+
+    cli.cmd_alpha_mine_campaign(args)
+
+    assert len(captured) == 6
+    for family, evidence in captured:
+        assert evidence["enabled"] is True
+        assert evidence["hit"] is (family == "kbar")
+        assert str(evidence["cache_key"]).startswith(f"cache-{family}-")
+    assert len(json.loads(capsys.readouterr().out)["legs"]) == 6
 
 
 def test_bounded_run_writes_kill_report_when_first_hypothesis_fails(monkeypatch, tmp_path) -> None:
