@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import datetime as dt
 import json
-import os
 import threading
 import time
 from pathlib import Path
@@ -127,47 +126,13 @@ def _symbols_require_derivative_contracts(symbols: list[dict[str, Any]]) -> bool
 def _read_contract_status(api: Any) -> str:
     """Return ``api.Contracts.status`` as text, or ``"missing"`` when absent.
 
-    Read *before* a fetch so the caller can tell a fresh ``Fetched`` from one
-    left over by an earlier fetch: ``_wait_for_contract_fetch_complete`` accepts
-    any ``Fetched`` it sees, so a fetch that aborted in microseconds used to
-    read as an instant success against the login-time status.
+    Reported when the refresh re-reads the SDK's contract store, so the log says
+    which load it is serialising rather than implying a broker round-trip.
     """
     contracts = getattr(api, "Contracts", None)
     if contracts is None:
         return "missing"
     return str(getattr(contracts, "status", None))
-
-
-def _wait_for_contract_fetch_complete(
-    api: Any,
-    *,
-    timeout_s: float,
-    sleep_s: float = 1.0,
-    monotonic_fn: Any = time.monotonic,
-    sleep_fn: Any = time.sleep,
-) -> tuple[bool, str]:
-    """Wait until Shioaji reports that the product file fetch has completed.
-
-    Shioaji may return from ``fetch_contracts(contract_download=True)`` while
-    ``api.Contracts.status`` is still ``FetchStatus.Fetching``.  Stocks can be
-    visible before futures/options finish loading, so traversing immediately can
-    persist a stock-only or partially-loaded cache.
-    """
-    contracts = getattr(api, "Contracts", None)
-    if contracts is None:
-        return True, "missing"
-
-    deadline = monotonic_fn() + max(0.0, float(timeout_s))
-    while True:
-        status = getattr(contracts, "status", None)
-        status_text = str(status)
-        if status is None or status_text.startswith("<") or "MagicMock" in status_text:
-            return True, status_text
-        if status_text.endswith(".Fetched") or status_text == "Fetched":
-            return True, status_text
-        if monotonic_fn() >= deadline:
-            return False, status_text
-        sleep_fn(float(sleep_s))
 
 
 class StaleInstrumentError(Exception):
@@ -707,82 +672,27 @@ class ContractsRuntime:
             logger.debug("operation_fallback", error=str(exc))
             pass
 
-        try:
-            status_before = _read_contract_status(self._client.api)
-            # Serialise the pooled facades' fetches. shioaji 1.5.x's Rust
-            # ``_core`` demands exclusive access for ``fetch_contracts`` and
-            # aborts with "exclusive access lost (concurrent API call started)"
-            # when a second facade enters while the first is inside — which is
-            # exactly what four facades on the same hourly timer did. Reuses the
-            # login slot rather than a second primitive: both serialise
-            # heavyweight SDK entries process-wide, and a fetch racing a login
-            # loses the same way. ``False`` means the slot timed out; proceed
-            # unserialised (a never-refreshing cache is worse) and do NOT
-            # release a slot we do not hold.
-            slot_held = acquire_login_slot(
-                min_gap_s=client_float(self._client, "_contract_fetch_stagger_gap_s", 2.0),
-                timeout_s=client_float(self._client, "_contract_fetch_stagger_timeout_s", 300.0),
-                metrics=getattr(self._client, "metrics", None),
-            )
-            try:
-                fetch_ok = self._client._ensure_contracts()
-            finally:
-                if slot_held:
-                    release_login_slot()
-            if not fetch_ok:
-                error = "contract fetch call failed"
-                logger.error("contract_refresh_fetch_failed", error=error, status_before=status_before)
-                self.write_refresh_status(result="fetch_failed", error=error)
-                try:
-                    if self._client.metrics and hasattr(self._client.metrics, "contract_refresh_total"):
-                        self._client.metrics.contract_refresh_total.labels(result="fetch_failed").inc()
-                except Exception as exc:
-                    logger.debug("operation_fallback", error=str(exc))
-                self._client._contract_refresh_lock.release()
-                return
-            ready_timeout_s = float(os.getenv("HFT_CONTRACT_FETCH_READY_TIMEOUT_S", "60"))
-            fetch_ready, fetch_status = _wait_for_contract_fetch_complete(
-                self._client.api,
-                timeout_s=ready_timeout_s,
-            )
-            if not fetch_ready:
-                error = f"contract fetch did not reach Fetched status: {fetch_status}"
-                logger.error(
-                    "contract_refresh_fetch_not_ready",
-                    error=error,
-                    status=fetch_status,
-                    timeout_s=ready_timeout_s,
-                )
-                self.write_refresh_status(result="error", error=error)
-                try:
-                    if self._client.metrics and hasattr(self._client.metrics, "contract_refresh_total"):
-                        self._client.metrics.contract_refresh_total.labels(result="error").inc()
-                except Exception as exc:
-                    logger.debug("operation_fallback", error=str(exc))
-                self._client._contract_refresh_lock.release()
-                return
-            # ``Fetched`` that was already ``Fetched`` before the call is not
-            # proof of anything: it is the status the login-time fetch left
-            # behind. Say so instead of implying the broker was re-read.
-            status_assumed = fetch_status == status_before and fetch_status.endswith("Fetched")
-            logger.info(
-                "Contract fetch ready",
-                status=fetch_status,
-                status_before=status_before,
-                status_assumed=status_assumed,
-            )
-            logger.info("Contract data refreshed from broker")
-        except Exception as exc:
-            logger.warning("Contract refresh fetch failed", error=str(exc))
-            self.write_refresh_status(result="error", error=str(exc))
-            try:
-                if self._client.metrics and hasattr(self._client.metrics, "contract_refresh_total"):
-                    self._client.metrics.contract_refresh_total.labels(result="error").inc()
-            except Exception as exc:
-                logger.debug("operation_fallback", error=str(exc))
-                pass
-            self._client._contract_refresh_lock.release()
-            return
+        # There is deliberately no broker fetch here any more.
+        #
+        # ``fetch_contracts`` needs sole ownership of shioaji 1.5.6's Rust
+        # ``_core`` client, and this facade's ~74 live subscriptions hold
+        # references for the entire session, so the call cannot succeed while we
+        # are subscribed. Measured on THESHOW over 24 h: 96 attempts, 96
+        # ``fetch_failed``, zero ``ok`` — the poll was pure noise, and it emitted
+        # an ERROR line per facade per hour for a call that is unimplementable by
+        # construction. Contracts are loaded by *login*, which on this platform
+        # happens roughly every 1.6 h per facade, i.e. more often than this hourly
+        # poll could have refreshed them even if it worked. Broker-announced
+        # changes now arrive as ``SYS/CONTRACT`` pushes via
+        # ``register_contract_event_callback`` instead of being polled for.
+        #
+        # What remains is still worth doing: re-read what the SDK currently
+        # holds, rebuild the on-disk cache from it, and diff so a rollover that
+        # login picked up still drives resubscription.
+        logger.info(
+            "contract_refresh_reading_sdk_contracts",
+            status=_read_contract_status(self._client.api),
+        )
 
         try:
             from hft_platform.config.symbols import (
@@ -814,26 +724,42 @@ class ContractsRuntime:
                 }
                 return {k: v for k, v in payload.items() if v is not None}
 
+            # Serialise the pooled facades. Walking the SDK's contract store is a
+            # read, not a fetch, but four facades entering it on the same hourly
+            # timer is the same process-wide contention that made concurrent
+            # fetches abort. Reuse the login slot rather than add a second
+            # primitive. ``False`` means the slot timed out: proceed
+            # unserialised (a never-rebuilt cache is worse) and do NOT release a
+            # slot we do not hold.
+            slot_held = acquire_login_slot(
+                min_gap_s=client_float(self._client, "_contract_fetch_stagger_gap_s", 2.0),
+                timeout_s=client_float(self._client, "_contract_fetch_stagger_timeout_s", 300.0),
+                metrics=getattr(self._client, "metrics", None),
+            )
             try:
-                for c in self._client.api.Contracts.Stocks.TSE:
-                    raw_contracts.append(_normalize(c, "TSE", "stock"))
-                for c in self._client.api.Contracts.Stocks.OTC:
-                    raw_contracts.append(_normalize(c, "OTC", "stock"))
-            except Exception as exc:
-                logger.debug("operation_fallback", error=str(exc))
-                pass
-            try:
-                for c in iter_contract_category(self._client.api.Contracts.Futures):
-                    raw_contracts.append(_normalize(c, "TAIFEX", "future"))
-            except Exception as exc:
-                logger.debug("operation_fallback", error=str(exc))
-                pass
-            try:
-                for c in iter_contract_category(self._client.api.Contracts.Options):
-                    raw_contracts.append(_normalize(c, "TAIFEX", "option"))
-            except Exception as exc:
-                logger.debug("operation_fallback", error=str(exc))
-                pass
+                try:
+                    for c in self._client.api.Contracts.Stocks.TSE:
+                        raw_contracts.append(_normalize(c, "TSE", "stock"))
+                    for c in self._client.api.Contracts.Stocks.OTC:
+                        raw_contracts.append(_normalize(c, "OTC", "stock"))
+                except Exception as exc:
+                    logger.debug("operation_fallback", error=str(exc))
+                    pass
+                try:
+                    for c in iter_contract_category(self._client.api.Contracts.Futures):
+                        raw_contracts.append(_normalize(c, "TAIFEX", "future"))
+                except Exception as exc:
+                    logger.debug("operation_fallback", error=str(exc))
+                    pass
+                try:
+                    for c in iter_contract_category(self._client.api.Contracts.Options):
+                        raw_contracts.append(_normalize(c, "TAIFEX", "option"))
+                except Exception as exc:
+                    logger.debug("operation_fallback", error=str(exc))
+                    pass
+            finally:
+                if slot_held:
+                    release_login_slot()
 
             counts_before = _contract_type_counts(contracts_before)
             counts_after = _contract_type_counts(raw_contracts)
@@ -871,11 +797,14 @@ class ContractsRuntime:
                 return
 
             write_contract_cache(raw_contracts, self._client._contract_cache_path)
-            try:
-                if self._client.metrics and hasattr(self._client.metrics, "contract_cache_last_success_ts"):
-                    self._client.metrics.contract_cache_last_success_ts.set(timebase.now_s())
-            except Exception as exc:
-                logger.debug("operation_fallback", error=str(exc))
+            # ``contract_cache_last_success_ts`` is deliberately NOT advanced
+            # here. It means "when did we last load contracts *from the broker*",
+            # and this routine no longer talks to the broker — it re-serialises
+            # what login already loaded. Stamping it here would make
+            # ``ContractsStaleVsBrokerAnnouncement`` clear itself within an hour
+            # of every announcement without anything having been re-read, which
+            # is exactly the kind of self-satisfying metric this alert exists to
+            # avoid. Login stamps it (``session_runtime``); nothing else should.
 
             codes_after = {str(c.get("code", "")) for c in raw_contracts if c.get("code")}
             self._client._contract_refresh_version += 1
@@ -1148,19 +1077,41 @@ class ContractsRuntime:
         api = self._client.api
         if api is None:
             logger.warning("Contract event callback deferred; api unavailable")
+            self._set_contract_callback_registered(False)
             return False
         setter = getattr(api, "set_contract_event_callback", None)
         if setter is None:
             # Older/other SDK builds simply do not expose it.
             logger.info("contract_event_callback_unsupported")
+            self._set_contract_callback_registered(False)
             return False
         try:
             setter(self._on_contract_update_event)
         except Exception as exc:
             logger.warning("Failed contract event callback registration", error=str(exc))
+            self._set_contract_callback_registered(False)
             return False
         logger.info("Contract event callback registered")
+        self._set_contract_callback_registered(True)
         return True
+
+    def _set_contract_callback_registered(self, registered: bool) -> None:
+        """Publish whether the push callback is live.
+
+        Registration success was log-only, which means "registered but the
+        broker has been silent" and "never registered at all" looked identical
+        on the metrics plane — both are ``contract_update_last_event_ts == 0``.
+        An alert cannot be written against a distinction that only exists in the
+        logs, so publish it.
+        """
+        try:
+            metrics = getattr(self._client, "metrics", None)
+            gauge = getattr(metrics, "contract_event_callback_registered", None) if metrics else None
+            if gauge is not None:
+                conn_id = str(getattr(self._client, "conn_id", "-"))
+                gauge.labels(conn_id=conn_id).set(1 if registered else 0)
+        except Exception as exc:
+            logger.debug("operation_fallback", error=str(exc))
 
     def start_contract_refresh_thread(self) -> None:
         if self._client._contract_refresh_running:

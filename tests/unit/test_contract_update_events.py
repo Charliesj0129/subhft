@@ -83,6 +83,45 @@ def test_contract_event_registration_deferred_without_an_api():
     assert _runtime(None).register_contract_event_callback() is False
 
 
+def test_registration_gauge_distinguishes_unregistered_from_silent():
+    """Log-only registration made two different failures look identical.
+
+    ``contract_update_last_event_ts == 0`` means either "registered, broker
+    quiet" or "never registered" — and with the hourly poll removed, the second
+    is blindness. The gauge is what an alert can be written against.
+    """
+    metrics = SimpleNamespace(contract_event_callback_registered=MagicMock())
+    runtime = _runtime(_Api(), metrics)
+
+    assert runtime.register_contract_event_callback() is True
+    metrics.contract_event_callback_registered.labels.assert_called_once_with(conn_id="-")
+    metrics.contract_event_callback_registered.labels.return_value.set.assert_called_once_with(1)
+
+
+def test_registration_gauge_reads_zero_when_the_broker_rejects_the_setter():
+    class _Rejecting:
+        def set_contract_event_callback(self, cb: Any) -> None:
+            raise RuntimeError("Already borrowed")
+
+    metrics = SimpleNamespace(contract_event_callback_registered=MagicMock())
+    runtime = _runtime(_Rejecting(), metrics)
+
+    assert runtime.register_contract_event_callback() is False
+    metrics.contract_event_callback_registered.labels.return_value.set.assert_called_once_with(0)
+
+
+def test_registration_gauge_is_labelled_per_facade():
+    """Four pooled facades share one process; an unlabelled gauge would be
+    last-writer-wins and one healthy facade would mask a blind one."""
+    metrics = SimpleNamespace(contract_event_callback_registered=MagicMock())
+    client = SimpleNamespace(api=_Api(), metrics=metrics, _contract_update_last_event_s=0.0, conn_id=2)
+    runtime = ContractsRuntime(client)  # type: ignore[arg-type]
+
+    runtime.register_contract_event_callback()
+
+    metrics.contract_event_callback_registered.labels.assert_called_once_with(conn_id="2")
+
+
 # --------------------------------------------------------------------------- #
 # Handler behaviour                                                            #
 # --------------------------------------------------------------------------- #

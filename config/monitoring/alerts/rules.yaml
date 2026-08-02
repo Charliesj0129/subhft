@@ -116,8 +116,15 @@ groups:
   # event or merely notifies; if it self-refreshes, api.Contracts is already
   # current and this fires benignly. Confirm against api.Contracts before
   # treating a first firing as a fault, and record the answer in the runbook.
+  #
+  # The `registered` gate (added 2026-08-02) matters more than it looks: this
+  # rule's silence is only evidence if the push callback is actually attached.
+  # Before contract_event_callback_registered existed, "registered and the
+  # broker is quiet" and "registration failed at startup" were the same
+  # observation (last_event_ts == 0), and the alert would have stayed green
+  # through the second. ContractEventCallbackUnregistered below covers that.
   - alert: ContractsStaleVsBrokerAnnouncement
-    expr: contract_update_last_event_ts > 0 and contract_update_last_event_ts > contract_cache_last_success_ts
+    expr: contract_update_last_event_ts > 0 and contract_update_last_event_ts > contract_cache_last_success_ts and on() (max(contract_event_callback_registered) == 1)
     for: 15m
     labels:
         severity: warning
@@ -131,6 +138,30 @@ groups:
           action="check" means it expects the client to compare check_file_ts.
           Remediation today is an engine restart, which reloads contracts at
           login; the hourly poll cannot do it.
+
+  # The push callback is now the ONLY contract-change signal this platform has:
+  # the hourly fetch_contracts poll was removed 2026-08-02 because it could not
+  # succeed on a subscribed facade (96/96 failures over 24 h). A facade whose
+  # registration failed is therefore blind, and it fails quietly — registration
+  # errors are logged and non-fatal by design, because contracts still load at
+  # login. `< 4` rather than `== 0`: one blind facade out of four is still a
+  # gap, and the series is per-conn_id.
+  - alert: ContractEventCallbackUnregistered
+    expr: count(contract_event_callback_registered == 1) < 4
+    for: 10m
+    labels:
+        severity: warning
+    annotations:
+        summary: "A facade is not registered for broker contract-change pushes"
+        description: |
+          Only {{ $value }} of 4 facades have the SYS/CONTRACT push callback
+          registered. Registration happens once per facade when its contract
+          refresh thread starts and is non-fatal on failure, so this can persist
+          silently. With the hourly poll removed, an unregistered facade has no
+          way to learn that contracts changed between logins. Grep the engine
+          log for "Failed contract event callback registration" and
+          "contract_event_callback_unsupported"; the latter means the SDK build
+          does not expose set_contract_event_callback at all.
 
   - alert: FeedReconnectFailureRatioHigh
     expr: |

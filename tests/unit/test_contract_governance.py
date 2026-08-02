@@ -237,43 +237,6 @@ def test_refresh_rejects_stock_only_cache_when_previous_cache_has_derivatives(tm
     assert status["result"] == "error"
 
 
-def test_contract_fetch_waits_until_shioaji_status_fetched():
-    """Shioaji fetch_contracts returns before the product file is fully loaded."""
-    from hft_platform.feed_adapter.shioaji.contracts_runtime import _wait_for_contract_fetch_complete
-
-    class Contracts:
-        def __init__(self) -> None:
-            self.statuses = ["FetchStatus.Fetching", "FetchStatus.Fetched"]
-
-        @property
-        def status(self) -> str:
-            if len(self.statuses) > 1:
-                return self.statuses.pop(0)
-            return self.statuses[0]
-
-    now = [0.0]
-    sleeps: list[float] = []
-
-    def monotonic() -> float:
-        return now[0]
-
-    def sleep(seconds: float) -> None:
-        sleeps.append(seconds)
-        now[0] += seconds
-
-    ok, status = _wait_for_contract_fetch_complete(
-        SimpleNamespace(Contracts=Contracts()),
-        timeout_s=5.0,
-        sleep_s=1.0,
-        monotonic_fn=monotonic,
-        sleep_fn=sleep,
-    )
-
-    assert ok is True
-    assert status == "FetchStatus.Fetched"
-    assert sleeps == [1.0]
-
-
 def test_contract_refresh_status_snapshot_written(tmp_path: Path):
     import threading
 
