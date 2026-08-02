@@ -2238,6 +2238,132 @@ def test_selection_dispositions_are_idempotent_and_funnel_conserves(tmp_path) ->
     assert conservation["selection_conserved"] is True
 
 
+def test_selection_builds_each_group_and_expression_once(monkeypatch, tmp_path) -> None:
+    import research.combinatorial.smma_runner as runner
+
+    base = _dataset()
+    coarse = BarDataset(
+        **{
+            field.name: (
+                np.full(len(base), 120, dtype=np.int16)
+                if field.name == "timeframe_min"
+                else np.asarray(getattr(base, field.name)).copy()
+            )
+            for field in fields(base)
+        }
+    )
+    bars = BarDataset(
+        **{
+            field.name: np.concatenate((np.asarray(getattr(base, field.name)), np.asarray(getattr(coarse, field.name))))
+            for field in fields(base)
+        }
+    )
+    calls: dict[str, list[object]] = {"features": [], "expressions": []}
+    adapter = runner.FAMILY_REGISTRY["smma"]
+
+    def build_features(group_bars, _config):
+        timeframe = int(group_bars.timeframe_min[0])
+        calls["features"].append((str(group_bars.root[0]), timeframe))
+        count = len(group_bars)
+        return {
+            "x": (
+                np.arange(count, dtype=np.float64)
+                if timeframe == 60
+                else np.where(np.arange(count) % 2 == 0, -1.0, 1.0)
+            ),
+            "y": np.sin(np.arange(count, dtype=np.float64) * 1.7),
+            "timeframe": np.full(count, timeframe, dtype=np.float64),
+        }
+
+    def evaluate_expression(expression, features, _reset):
+        calls["expressions"].append((int(features["timeframe"][0]), expression))
+        return features[expression]
+
+    monkeypatch.setitem(
+        runner.FAMILY_REGISTRY,
+        "smma",
+        replace(
+            adapter,
+            build_features=build_features,
+            evaluate_expression=evaluate_expression,
+            dataset=replace(adapter.dataset, roots=("TXF",)),
+        ),
+    )
+    kill = KillMetrics(0.03, 0.03, 0.03, 1.0, 2.0, 1.0, 0.1, 8.0, True, ())
+    killed = KillMetrics(0.0, 0.0, 0.0, 1.0, -1.0, 0.0, 0.1, 11.0, False, ("net_edge",))
+    discovery = [
+        CandidateResult(
+            candidate=Candidate(
+                candidate_id=candidate_id,
+                root="TXF",
+                timeframe_min=timeframe,
+                expression=expression,
+                horizon=horizon,
+                direction=1,
+                threshold=0.0,
+                seed=1,
+                complexity=1,
+            ),
+            kill=kill,
+            stage="discovery",
+            status="passed",
+        )
+        for candidate_id, timeframe, expression, horizon in (
+            ("a", 60, "x", "1h"),
+            ("b", 60, "x", "4h"),
+            ("c", 60, "y", "1h"),
+            ("d", 120, "x", "1h"),
+            ("e", 120, "x", "4h"),
+        )
+    ]
+
+    def pass_selection(candidate, **_kwargs):
+        metrics = killed if candidate.candidate_id == "c" else kill
+        return CandidateResult(
+            candidate=candidate,
+            kill=metrics,
+            stage="selection",
+            status="passed" if metrics.passed else "killed",
+            failure_reason="" if metrics.passed else "net_edge",
+        )
+
+    monkeypatch.setattr(runner, "_evaluate_candidate", pass_selection)
+    monkeypatch.setattr(runner.timebase, "now_ns", lambda: 123456789)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_dataset(run_dir)
+    run = MiningRun(RunConfig(run_dir=run_dir, seeds=(1, 2, 3)))
+
+    selected = run._selection(bars, discovery)
+
+    assert calls == {
+        "features": [("TXF", 60), ("TXF", 120)],
+        "expressions": [(60, "x"), (60, "y"), (120, "x")],
+    }
+    assert [item.candidate.candidate_id for item in selected] == ["a", "d"]
+    assert [row["status"] for row in run._ledger.rows(stage="selection")] == [
+        "passed",
+        "correlation_deduplicated",
+        "killed",
+        "passed",
+        "correlation_deduplicated",
+    ]
+    assert {row["stage"] for row in run._unlocks._ledger.rows()} == {"freeze_locked"}
+
+    resumed_dir = tmp_path / "resumed"
+    resumed_dir.mkdir()
+    _write_dataset(resumed_dir)
+    partial_run = MiningRun(RunConfig(run_dir=resumed_dir, seeds=(1, 2, 3)))
+    partial_selected = partial_run._selection(bars, discovery[:3])
+    resumed_run = MiningRun(RunConfig(run_dir=resumed_dir, seeds=(1, 2, 3), resume=True))
+    resumed_selected = resumed_run._selection(bars, discovery, partial_selected)
+
+    assert [item.to_dict() for item in resumed_selected] == [item.to_dict() for item in selected]
+    assert (resumed_dir / "trials.jsonl").read_bytes() == (run_dir / "trials.jsonl").read_bytes()
+    assert (resumed_dir / "split_access.jsonl").read_bytes() == (run_dir / "split_access.jsonl").read_bytes()
+    assert {row["stage"] for row in resumed_run._unlocks._ledger.rows()} == {"freeze_locked"}
+
+
 def test_adaptive_terminal_stop_writes_kill_report_with_explicit_incomplete_conservation(tmp_path) -> None:
     run_dir = tmp_path / "run"
     run_dir.mkdir()

@@ -260,6 +260,18 @@ class FamilyAdapter:
     dataset: FamilyDatasetConfig
 
 
+@dataclass(slots=True)
+class _SelectionGroupContext:
+    """Selection-stage data cached only for one root/timeframe group."""
+
+    bars: GovernedBars
+    split_labels: np.ndarray
+    selection_mask: np.ndarray
+    selection_ts: np.ndarray
+    features: Mapping[str, np.ndarray]
+    signals: dict[str, tuple[np.ndarray, np.ndarray]]
+
+
 FAMILY_REGISTRY: dict[str, FamilyAdapter] = {
     "smma": FamilyAdapter(
         build_features=_smma_build_features,
@@ -2621,6 +2633,8 @@ class MiningRun:
             raise RunIntegrityError("discovery checkpoint contains duplicate candidates")
         selection_rows, recorded = self._restore_selection_rows(discovery_ids, restored)
         selected: list[CandidateResult] = []
+        adapter = FAMILY_REGISTRY[self.config.family]
+        group_contexts: dict[tuple[str, int], _SelectionGroupContext] = {}
 
         def checkpoint_state() -> dict[str, Any]:
             return {
@@ -2638,17 +2652,35 @@ class MiningRun:
                     self._terminal_stop_reason = stop_reason
                     break
                 candidate = result.candidate
-                bars = dataset.group(root, candidate.timeframe_min)
-                plan = build_split_plan(bars.trading_day)
-                adapter = FAMILY_REGISTRY[self.config.family]
-                features = adapter.build_features(bars, self.config)
-                signal = adapter.evaluate_expression(candidate.expression, features, bars.reset)
-                selection_mask = plan.mask("selection")
-                selection_signal = signal[selection_mask]
-                selection_ts = bars.ts_ns[selection_mask]
+                group_key = (root, candidate.timeframe_min)
+                context = group_contexts.get(group_key)
+                if context is None:
+                    bars = dataset.group(*group_key)
+                    plan = build_split_plan(bars.trading_day)
+                    selection_mask = plan.mask("selection")
+                    context = _SelectionGroupContext(
+                        bars=bars,
+                        split_labels=plan.labels,
+                        selection_mask=selection_mask,
+                        selection_ts=bars.ts_ns[selection_mask],
+                        features=adapter.build_features(bars, self.config),
+                        signals={},
+                    )
+                    group_contexts[group_key] = context
+                if candidate.expression not in context.signals:
+                    full_signal = adapter.evaluate_expression(
+                        candidate.expression,
+                        context.features,
+                        context.bars.reset,
+                    )
+                    context.signals[candidate.expression] = (
+                        full_signal,
+                        full_signal[context.selection_mask],
+                    )
+                signal, selection_signal = context.signals[candidate.expression]
                 if self._record_selection_disposition(
                     candidate=candidate,
-                    selection_ts=selection_ts,
+                    selection_ts=context.selection_ts,
                     selection_signal=selection_signal,
                     signals_kept=signals_kept,
                     selected_for_root=len([item for item in selected if item.candidate.root == root]),
@@ -2661,10 +2693,10 @@ class MiningRun:
                     evaluated = _evaluate_candidate(
                         candidate,
                         dataset=dataset,
-                        bars=bars,
+                        bars=context.bars,
                         signal=signal,
                         split_name="selection",
-                        split_labels=plan.labels,
+                        split_labels=context.split_labels,
                         cost_mode=self.config.cost_mode,
                     )
                     self._ledger.append(
@@ -2683,7 +2715,7 @@ class MiningRun:
                     raise RunIntegrityError("selection ledger candidate mismatch")
                 if evaluated.kill.passed:
                     selected.append(evaluated)
-                    signals_kept.append((selection_ts, selection_signal, candidate.candidate_id))
+                    signals_kept.append((context.selection_ts, selection_signal, candidate.candidate_id))
                     self._unlocks.freeze_locked(candidate.candidate_id)
                 self._checkpoint(stage="selection", state=checkpoint_state())
         if self._terminal_stop_reason is None:
