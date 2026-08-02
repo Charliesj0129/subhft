@@ -2,6 +2,14 @@
 
 ## Last Updated
 
+- **Date**: 2026-08-02 (active resumable task)
+- **Task**: Alpha Mining v3 Wave 0 — locked-validation correction and harness controls; Tier-3, orchestrator-owned.
+- **Branch/worktree**: `alpha/mining-v3-validation-wave0-20260802` at `/tmp/hft-alpha-mining-v3-wave0`, based on `28f37adb`; primary worktree remains untouched.
+- **Completed unit**: session/day block permutation with frozen 10-informative-block floor; evaluation-grid feature provenance embargo; finite-family history metadata; recursive SMMA fail-closed warning; 20-positive/100-null controls wired fail-closed before campaign legs; JSON-normalized resumable control artifact.
+- **Evidence**: pre-change focused baseline 94 passed; final scoped suite 197 passed in 14.97s; production controls 20/20 positive and 0/100 null survivors at 2,000 resamples; all four break probes failed under the injected defect and passed after exact restoration; `make check` passed; `make ci` passed with 14,533 passed / 20 skipped / 87.75% coverage; 65-candidate immutable offline replay completed at 199 resamples with 0 old/new survivors and unchanged split-access hashes; two independent Tier-3 reviews APPROVE-WITH-NITS.
+- **Landing**: Wave 0 implementation and regressions landed locally as `5b8ef487`; no push was performed.
+- **Next**: archive the Wave 0 review evidence, then begin the preregistered Wave 1 adaptive-search pilot on a new branch. No campaign launch in Wave 0.
+- **Do not touch**: existing `research/experiments/runs/**`, frozen profiles/registry, final holdout, or dirty primary worktree.
 - **Date**: 2026-07-14 (second session)
 - **Session**: Agent System v3 design + implementation (設計此專案的agent
   system; brainstormed → spec approved section-by-section → plan approved →
@@ -190,6 +198,7 @@ One branch = one theme; update this table when creating or retiring a branch.
 
 | Branch | Theme / purpose | Expected lifetime |
 |---|---|---|
+| `alpha/mining-v3-validation-wave0-20260802` | Alpha Mining v3 locked-validation corrections + harness controls | until Wave 0 is reviewed and landed |
 | `research-flow/edge-evidence-parity-hardening` | edge-evidence/§7 parity hardening (pushed, synced) | until merged or superseded |
 | `research/replay-parity-field-set` | `OrderIntent.session_phase` §7 groundwork (pushed, synced) | until merged or superseded |
 | `main` | default branch (rollout merge a1e2d0f2 landed 2026-07-11) | permanent |

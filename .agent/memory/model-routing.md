@@ -13,6 +13,8 @@ lessons. Do NOT record: generic model claims; single anecdotes (wait for a
 | Sonnet | Tier-2 code+test | 2 | 2 | 1 (report nudge; 0 this run) | 0/2 (capability probes) |
 | Sonnet | Tier-1 docs verify | 1 | 0 (1 PARTIAL) | 2 (false-positive fixes) | 0/1 |
 | Sonnet | Tier-2 alpha-research (append-only research/) | 2 | 2 | 0 (1 review-caught narrative overclaim, no code fix needed) | 2/2 (context-isolation, parallelism) |
+| Orchestrator-class inherit | Tier-3 alpha-governance read-only review | 2 | 2 | 2 (status/return nudges; 0 review fixes) | 2/2 (review-separation) |
+| Orchestrator-class inherit | Tier-3 artifact replay investigation | 1 | 1 | 0 | 1/1 (parallelism, context-isolation) |
 
 Net-win = delegations that were cheaper/faster than doing it directly (not
 capability probes). ROI-first routing (AGENTS.md `## ROI-First Delegation`)
@@ -350,3 +352,25 @@ Lessons:
   keeping this framing in future packets for the same class of task ("a
   rule passing is not the same as a rule being meaningful — report which one
   you're claiming").
+
+### 2026-08-02 · Tier 3 · alpha-governance review · Validation-v3 statistics/provenance · Orchestrator-class inherit · SUCCESS
+Interventions: 1 status nudge · Cost: parallel review during implementation
+ROI: net-win yes · realized-saving review-separation · would-delegate-again yes
+Archive: .agent/memory/delegations/2026-08-02-alpha-v3-wave0-stats-review.md
+Lessons:
+- The reviewer found three executable fail-open defects (JSON tuple/list resume drift, insufficient permutation activity, and an evidence-free exact-history API path) before landing; all received behavior-named regressions.
+- For a new statistical activity floor, freeze and record the evidence definition before observing alpha outcomes; here ten informative exchangeable blocks is tied to the five-fold harness geometry and all-NaN blocks do not count.
+
+### 2026-08-02 · Tier 3 · alpha-governance review · independent final Wave-0 diff · Orchestrator-class inherit · SUCCESS
+Interventions: 1 interrupt/return nudge · Cost: parallel independent review
+ROI: net-win yes · realized-saving review-separation · would-delegate-again yes
+Archive: .agent/memory/delegations/2026-08-02-alpha-v3-wave0-final-review.md
+Lessons:
+- The second review independently converged on the same three corrected defects and found no remaining Tier-3 blocker; contract/regime permutation strata remains a monitored assumption, not a confirmed defect.
+
+### 2026-08-02 · Tier 3 · artifact replay investigation · immutable v2.1 locked evidence · Orchestrator-class inherit · SUCCESS
+Interventions: 0 · Cost: ~18s replay plus isolated artifact-reading context
+ROI: net-win yes · realized-saving parallelism, context-isolation · would-delegate-again yes
+Archive: .agent/memory/delegations/2026-08-02-alpha-v3-wave0-offline-replay.md
+Lessons:
+- Replaying 65 locked rows from immutable governed datasets gave exact feature-history evidence for all 65 while leaving all six split-access hashes unchanged; bounded replay remains diagnostic harness evidence, never an alpha conclusion.
