@@ -250,6 +250,8 @@ class MetricsRegistry:
                 _pn("contract_refresh_total"),
                 _pn("contract_refresh_symbols_changed_total"),
                 _pn("contract_cache_last_success_ts"),
+                _pn("contract_update_events_total"),
+                _pn("contract_update_last_event_ts"),
                 _pn("autonomy_mode"),
                 _pn("autonomy_transitions_total"),
                 _pn("strategy_quarantine_active"),
@@ -1363,6 +1365,25 @@ class MetricsRegistry:
             _pn("contract_refresh_symbols_changed_total"),
             "Symbol changes detected after contract refresh",
             ["change"],  # added|removed|same
+        )
+        # Broker-pushed contract-change announcements (shioaji ``SYS/CONTRACT``).
+        # The hourly ``fetch_contracts`` poll cannot work on a subscribed facade
+        # (it needs sole ownership of the SDK's inner client, which our 74
+        # always-registered subscriptions never release), so this counter is the
+        # only evidence of *when* contracts actually change. Labels are bounded
+        # to the SDK's declared enum variants — see ``classify_contract_event``.
+        self.contract_update_events_total = Counter(
+            _pn("contract_update_events_total"),
+            "Contract-change events pushed by the broker over SYS/CONTRACT",
+            ["action", "security_type"],  # force|check|other x all|ind|stk|fut|opt|other
+        )
+        # Unix timestamp of the last such announcement. Distinct from
+        # ``contract_cache_last_success_ts`` (when we last *loaded* contracts):
+        # this is when the broker last said they *changed*. A gap between the
+        # two is the actual staleness signal.
+        self.contract_update_last_event_ts = Gauge(
+            _pn("contract_update_last_event_ts"),
+            "Unix timestamp of the last broker contract-change announcement",
         )
 
         # ── Backup Metrics ──────────────────────────────────────────

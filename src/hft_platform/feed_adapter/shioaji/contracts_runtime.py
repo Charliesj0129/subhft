@@ -31,6 +31,29 @@ if TYPE_CHECKING:
 # Month number → TAIFEX month letter (A=Jan .. L=Dec)
 _MONTH_LETTERS = "ABCDEFGHIJKL"
 
+#: Bounded label values for ``contract_update_events_total``. The SDK declares
+#: ``ContractAction`` = FORCE|CHECK and ``ContractUpdateSecurityType`` =
+#: ALL|IND|STK|FUT|OPT (``_core.pyi:116-126``), but these arrive as foreign enum
+#: objects whose ``str()`` we do not control, and a future SDK may add variants.
+#: Anything unrecognised collapses to ``other`` rather than minting a new
+#: Prometheus series — same discipline as ``classify_login_failure``.
+_CONTRACT_EVENT_ACTIONS = frozenset({"force", "check"})
+_CONTRACT_EVENT_SECURITY_TYPES = frozenset({"all", "ind", "stk", "fut", "opt"})
+
+
+def _classify_contract_event_field(value: Any, allowed: frozenset[str]) -> str:
+    """Map an SDK enum (or anything else) onto a bounded lowercase label.
+
+    The enums stringify as ``ContractAction.FORCE`` / ``ContractUpdateSecurityType.FUT``
+    depending on SDK version, so take the trailing dotted segment and only accept
+    it if it is a known variant.
+    """
+    if value is None:
+        return "unknown"
+    raw = getattr(value, "name", None) or str(value)
+    token = str(raw).rsplit(".", 1)[-1].strip().lower()
+    return token if token in allowed else "other"
+
 
 def _compute_diff_payload(
     *,
@@ -1071,9 +1094,80 @@ class ContractsRuntime:
         self._client.alias_to_actual.update(alias_map)
         return alias_map
 
+    def _on_contract_update_event(self, event: Any) -> None:
+        """Broker-thread handler for ``SYS/CONTRACT`` announcements.
+
+        Runs on a shioaji callback thread, so it must stay cheap and must never
+        raise back into the SDK — an exception crossing the PyO3 boundary is how
+        callback threads die silently. It deliberately does **not** trigger a
+        fetch: ``fetch_contracts`` cannot succeed on a subscribed facade, and
+        re-entering the SDK from its own callback thread is precisely the
+        ``Already borrowed`` re-entry that caused the 04:12 CST cascade. Record
+        only; acting on the event is a separate decision.
+        """
+        try:
+            action = _classify_contract_event_field(getattr(event, "action", None), _CONTRACT_EVENT_ACTIONS)
+            security_type = _classify_contract_event_field(
+                getattr(event, "security_type", None), _CONTRACT_EVENT_SECURITY_TYPES
+            )
+            check_file_ts = getattr(event, "check_file_ts", None)
+            now_s = timebase.now_s()
+            self._client._contract_update_last_event_s = now_s
+            logger.info(
+                "contract_update_event",
+                action=action,
+                security_type=security_type,
+                check_file_ts=(float(check_file_ts) if isinstance(check_file_ts, (int, float)) else None),
+            )
+            metrics = getattr(self._client, "metrics", None)
+            if metrics is not None:
+                counter = getattr(metrics, "contract_update_events_total", None)
+                if counter is not None:
+                    counter.labels(action=action, security_type=security_type).inc()
+                gauge = getattr(metrics, "contract_update_last_event_ts", None)
+                if gauge is not None:
+                    gauge.set(now_s)
+        except Exception as exc:  # never let a callback kill the SDK's thread
+            logger.warning("contract_update_event_handler_failed", error=str(exc))
+
+    def register_contract_event_callback(self) -> bool:
+        """Subscribe to the broker's contract-change announcements.
+
+        shioaji 1.5.x pushes ``SYS/CONTRACT`` events (solace topic
+        ``APISUB/V1/SYS/CONTRACT``) carrying ``action`` (FORCE|CHECK),
+        ``security_type`` and ``check_file_ts``. This platform had never used the
+        API, and instead polled ``fetch_contracts`` hourly — a call that needs
+        sole ownership of the SDK's inner client and therefore fails 100% of the
+        time on a facade holding 74 subscriptions. The push signal is the one
+        that actually works, so register for it even while the reaction is still
+        being decided: without it there is no evidence of *when* contracts change.
+
+        Registration failure is logged and reported, never fatal — contracts
+        still load at login.
+        """
+        api = self._client.api
+        if api is None:
+            logger.warning("Contract event callback deferred; api unavailable")
+            return False
+        setter = getattr(api, "set_contract_event_callback", None)
+        if setter is None:
+            # Older/other SDK builds simply do not expose it.
+            logger.info("contract_event_callback_unsupported")
+            return False
+        try:
+            setter(self._on_contract_update_event)
+        except Exception as exc:
+            logger.warning("Failed contract event callback registration", error=str(exc))
+            return False
+        logger.info("Contract event callback registered")
+        return True
+
     def start_contract_refresh_thread(self) -> None:
         if self._client._contract_refresh_running:
             return
+        # Register before the poll loop starts. The poll is known-broken on a
+        # subscribed facade; this callback is the only working freshness signal.
+        self.register_contract_event_callback()
         self._client._contract_refresh_running = True
         self._client._set_thread_alive_metric("contract_refresh", True)
         self.write_refresh_status(result="thread_started")

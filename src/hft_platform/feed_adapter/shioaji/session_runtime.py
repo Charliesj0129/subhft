@@ -255,16 +255,28 @@ class SessionRuntime:
                 c._record_api_latency("login", start_ns, ok=ok)
                 if not ok:
                     c._last_login_error = scrub_broker_error(err) if err is not None else "unknown"
-                    if isinstance(err, SDKBusyError):
-                        # A previous call's worker is still inside the SDK. Both
-                        # the fallback and an immediate retry would re-enter the
-                        # same object and fail instantly with "Already borrowed",
-                        # burning attempts and driving the reconnect path into
-                        # broker 451s. Back off and let the caller reschedule.
+                    # Two independent sources of "the SDK is busy, come back
+                    # later", and both must skip the fallback and the ladder:
+                    #
+                    #   SDKBusyError  - the InflightGuard knows a worker *we*
+                    #                   abandoned is still inside the SDK.
+                    #   "sdk_busy"    - the SDK itself refused re-entry. The
+                    #                   guard cannot see this one: the borrow is
+                    #                   held by shioaji's own internals, not by
+                    #                   an abandoned call of ours.
+                    #
+                    # Only the first was handled, so the second fell through to
+                    # the no-contract fallback and both retries — all re-entering
+                    # the same busy object and failing instantly. Observed
+                    # 2026-07-30 04:12 CST: every facade's solace session dropped
+                    # at once, the SDK went busy inside its own reconnect, and the
+                    # ladder turned one network blip into 165 "Already borrowed"
+                    # failures and 6 exhausted ladders in 90 s.
+                    if isinstance(err, SDKBusyError) or classify_login_failure(c._last_login_error) == "sdk_busy":
                         logger.warning(
                             "Login deferred: broker SDK still occupied by an earlier call",
                             attempt=attempt,
-                            blocking_op=err.blocking_op,
+                            blocking_op=getattr(err, "blocking_op", None),
                         )
                         break
                     if _is_connection_limit_error(c._last_login_error):
@@ -315,6 +327,27 @@ class SessionRuntime:
 
                 if ok:
                     logger.info("Login successful (API Key)", attempt=attempt)
+                    if login_fetch_contract:
+                        # The only contract load on this platform that actually
+                        # works. ``fetch_contracts`` on a logged-in facade fails
+                        # 100% of the time on shioaji 1.5.6 — its Rust ``_core``
+                        # wants exclusive ownership and our 74 live
+                        # subscriptions hold references for the whole session —
+                        # so the hourly refresh never writes the cache and
+                        # ``contract_cache_last_success_ts`` sat at 0.0 forever,
+                        # which in turn made a staleness alert unable to fire.
+                        # Login-time freshness is real freshness; record it.
+                        #
+                        # Deliberately keyed on ``login_fetch_contract``, NOT on
+                        # ``contracts_ready`` — the latter is
+                        # ``hasattr(api, "Contracts")``, always True once logged
+                        # in, and trusting it is the original bug.
+                        try:
+                            gauge = getattr(c.metrics, "contract_cache_last_success_ts", None) if c.metrics else None
+                            if gauge is not None:
+                                gauge.set(timebase.now_s())
+                        except Exception as exc:  # a metric must never break login
+                            logger.debug("operation_fallback", error=str(exc))
                     if not login_fetch_contract and c.fetch_contract:
                         c._ensure_contracts()
                     # Verify contracts regardless of which login path was used.

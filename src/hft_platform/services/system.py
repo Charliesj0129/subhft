@@ -188,16 +188,53 @@ class HFTSystem:
             if book is not None and book.mid_price_x2 > 0:
                 return book
 
+        # Pick the most liquid book rather than the first one the dict happens
+        # to yield. Latching fixed the *rotation* but not the *choice*: in
+        # production it latched EXFH6 — a far-month contract quoting a
+        # 48-point spread — and drove ~346 platform-wide toxicity bursts a day
+        # off the thinnest book on the system. Relative spread is the cheapest
+        # liquidity proxy the book already carries, so this needs no extra
+        # state, config, or symbol list that would go stale on a roll.
+        fallback_symbol = ""
+        fallback_book: Any | None = None
+        best_symbol = ""
+        best_book: Any | None = None
+        best_spread = 0
+        best_mid_x2 = 0
         for symbol, book in books.items():
-            if book.mid_price_x2 > 0:
-                logger.info(
-                    "drift_burst_reference_symbol_changed",
-                    previous=current or None,
-                    symbol=symbol,
-                )
-                self._drift_burst_symbol = symbol
-                return book
-        return None
+            mid_x2 = int(book.mid_price_x2)
+            if mid_x2 <= 0:
+                continue
+            if fallback_book is None:
+                fallback_symbol, fallback_book = symbol, book
+            spread = int(book.spread)
+            # A non-positive spread is a locked or half-built book, not a
+            # liquidity win — it must not outrank every real two-sided quote.
+            if spread <= 0:
+                continue
+            # spread/mid compared by cross-multiplication: integer arithmetic
+            # only, per core law 4 (no float price math). The x2 factor in
+            # mid_price_x2 appears on both sides and cancels.
+            if best_book is None or spread * best_mid_x2 < best_spread * mid_x2:
+                best_symbol, best_book, best_spread, best_mid_x2 = symbol, book, spread, mid_x2
+
+        if best_book is not None:
+            chosen_symbol, chosen_book, chosen_spread = best_symbol, best_book, best_spread
+        elif fallback_book is not None:
+            # Every book is locked/one-sided. Feeding the detector nothing would
+            # silently disable the toxicity gate, so keep the old behaviour.
+            chosen_symbol, chosen_book, chosen_spread = fallback_symbol, fallback_book, 0
+        else:
+            return None
+
+        logger.info(
+            "drift_burst_reference_symbol_changed",
+            previous=current or None,
+            symbol=chosen_symbol,
+            spread_scaled=chosen_spread,
+        )
+        self._drift_burst_symbol = chosen_symbol
+        return chosen_book
 
     def __init__(self, settings: Optional[Dict[str, Any]] = None):
         configure_logging()

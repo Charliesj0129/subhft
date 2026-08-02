@@ -17,6 +17,37 @@ def _build_client(tmp_path):
     return client, patcher
 
 
+def test_contract_refresh_startup_registers_the_broker_contract_event_callback(tmp_path):
+    """The push signal must be wired up wherever the (broken) poll is started.
+
+    ``fetch_contracts`` cannot succeed on a facade holding live subscriptions, so
+    the broker's ``SYS/CONTRACT`` announcement is the only working evidence that
+    contracts changed. Registering it alongside the poll loop means every code
+    path that starts contract maintenance gets it.
+    """
+    client, patcher = _build_client(tmp_path)
+    try:
+        client._contract_refresh_s = 3600.0
+
+        def _sleep_once(_):
+            client._contract_refresh_running = False
+
+        with (
+            patch.object(type(client._contracts_runtime), "is_contract_cache_stale", return_value=False),
+            patch.object(type(client._contracts_runtime), "refresh_contracts_and_symbols"),
+            patch("hft_platform.feed_adapter.shioaji.contracts_runtime.time.sleep", side_effect=_sleep_once),
+        ):
+            client._start_contract_refresh_thread()
+            thread = client._contract_refresh_thread
+            if thread is not None:
+                thread.join(timeout=2.0)
+
+        client.api.set_contract_event_callback.assert_called_once()
+    finally:
+        client.close()
+        patcher.stop()
+
+
 def test_contract_refresh_thread_triggers_immediate_refresh_when_stale(tmp_path):
     client, patcher = _build_client(tmp_path)
     try:
