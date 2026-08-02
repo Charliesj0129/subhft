@@ -374,3 +374,24 @@ ROI: net-win yes · realized-saving parallelism, context-isolation · would-dele
 Archive: .agent/memory/delegations/2026-08-02-alpha-v3-wave0-offline-replay.md
 Lessons:
 - Replaying 65 locked rows from immutable governed datasets gave exact feature-history evidence for all 65 while leaving all six split-access hashes unchanged; bounded replay remains diagnostic harness evidence, never an alpha conclusion.
+
+### 2026-08-02 · Tier 3 · alpha-governance review · Wave 1 adaptive-search final diff · Orchestrator-class inherit · SUCCESS
+Interventions: iterative re-review after implementation fixes · Cost: parallel adversarial review
+ROI: net-win yes · realized-saving review-separation · would-delegate-again yes
+Archive: .agent/memory/delegations/2026-08-02-alpha-v3-wave1-final-review.md
+Lessons:
+- Per-row proposal ownership, ledger/search-space cross-hashes, terminal-resume evidence, and blind-v1 compatibility all needed explicit fail-closed checks beyond aggregate conservation.
+
+### 2026-08-02 · Tier 3 · test-gap analysis · Wave 1 adaptive invariants · Orchestrator-class inherit · SUCCESS
+Interventions: one initial REQUEST-CHANGES followed by a clean re-audit · Cost: parallel coverage mapping
+ROI: net-win yes · realized-saving test-analysis separation · would-delegate-again yes
+Archive: .agent/memory/delegations/2026-08-02-alpha-v3-wave1-test-gap.md
+Lessons:
+- Crash-style partial-G1 resume, later-split mutation, worker-count equivalence, exact unused-tail conservation, and independent lineage/union tamper tests caught gaps that happy-path unit tests did not cover.
+
+### 2026-08-02 · Tier 3 · scale design · Wave 2 semantic-equivalence sequence · Orchestrator-class inherit · SUCCESS
+Interventions: 0 · Cost: one bounded read-only design pass
+ROI: net-win yes · realized-saving context-isolation · would-delegate-again yes
+Archive: .agent/memory/delegations/2026-08-02-alpha-v3-wave2-scale-design.md
+Lessons:
+- Profiled bottlenecks justify reversible quantile/selection/target/RSS patches before 20k; 100k/1M remain blocked on bounded memory and campaign-level multiplicity rather than an invented speed target.

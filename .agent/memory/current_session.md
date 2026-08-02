@@ -3,12 +3,13 @@
 ## Last Updated
 
 - **Date**: 2026-08-02 (active resumable task)
-- **Task**: Alpha Mining v3 Wave 0 — locked-validation correction and harness controls; Tier-3, orchestrator-owned.
-- **Branch/worktree**: `alpha/mining-v3-validation-wave0-20260802` at `/tmp/hft-alpha-mining-v3-wave0`, based on `28f37adb`; primary worktree remains untouched.
-- **Completed unit**: session/day block permutation with frozen 10-informative-block floor; evaluation-grid feature provenance embargo; finite-family history metadata; recursive SMMA fail-closed warning; 20-positive/100-null controls wired fail-closed before campaign legs; JSON-normalized resumable control artifact.
-- **Evidence**: pre-change focused baseline 94 passed; final scoped suite 197 passed in 14.97s; production controls 20/20 positive and 0/100 null survivors at 2,000 resamples; all four break probes failed under the injected defect and passed after exact restoration; `make check` passed; `make ci` passed with 14,533 passed / 20 skipped / 87.75% coverage; 65-candidate immutable offline replay completed at 199 resamples with 0 old/new survivors and unchanged split-access hashes; two independent Tier-3 reviews APPROVE-WITH-NITS.
-- **Landing**: Wave 0 implementation and regressions landed locally as `5b8ef487`; no push was performed.
-- **Next**: archive the Wave 0 review evidence, then begin the preregistered Wave 1 adaptive-search pilot on a new branch. No campaign launch in Wave 0.
+- **Task**: Alpha Mining v3 all-phase implementation; Tier-3, orchestrator-owned. Wave 0 validation controls and Wave 1 governed adaptive-search pilot are locally landed; Wave 2 scale work is next.
+- **Branch/worktree**: `alpha/mining-v3-adaptive-wave1-20260802` at `/tmp/hft-alpha-mining-v3-wave1`, clean at `5d1c3d06`, based on Wave 0 `abfd7ec1`; primary worktree remains untouched.
+- **Completed unit**: opt-in discovery-only typed crossover; global G0-before-G1 barrier; per-row lineage and resume validation; exact candidate-budget/unused-tail evidence; G0+G1 effective-trial union; adaptive final-holdout prohibition; `feedback=0` preserves `blind_v1`; O(1) discovery-candidate count.
+- **Evidence**: 169 scoped tests; five break probes; full unit suite 14,561 passed / 20 skipped / 87.74% coverage; changed research+CLI files mypy clean; Ruff/format, discipline, dependency-boundary, test-hygiene and agent-docs gates passed; independent diff review and test-gap re-audit both APPROVE.
+- **Known external gate debt**: repository-wide `make check` stops at five mypy errors in four untouched modules (`position_stuck_monitor.py`, `telegram.py`, Shioaji `subscription_manager.py`, and `client.py`); no Wave 1 file contributes an error.
+- **Landing**: Wave 0 code `5b8ef487`, Wave 0 evidence `abfd7ec1`, Wave 1 code `5d1c3d06`; all local only, no push.
+- **Next**: Wave 2 lands reversible semantic-equivalence patches in order: quantile hoist, selection context cache, horizon target/detrend cache, then aggregate worker-RSS governance before any new 20k multiworker run. Do not escalate to 100k/1M before their preregistered memory/integrity gates.
 - **Do not touch**: existing `research/experiments/runs/**`, frozen profiles/registry, final holdout, or dirty primary worktree.
 - **Date**: 2026-07-14 (second session)
 - **Session**: Agent System v3 design + implementation (設計此專案的agent
@@ -199,6 +200,7 @@ One branch = one theme; update this table when creating or retiring a branch.
 | Branch | Theme / purpose | Expected lifetime |
 |---|---|---|
 | `alpha/mining-v3-validation-wave0-20260802` | Alpha Mining v3 locked-validation corrections + harness controls | until Wave 0 is reviewed and landed |
+| `alpha/mining-v3-adaptive-wave1-20260802` | Alpha Mining v3 governed discovery-feedback pilot | until Wave 1 evidence is archived and Wave 2 branches from it |
 | `research-flow/edge-evidence-parity-hardening` | edge-evidence/§7 parity hardening (pushed, synced) | until merged or superseded |
 | `research/replay-parity-field-set` | `OrderIntent.session_phase` §7 groundwork (pushed, synced) | until merged or superseded |
 | `main` | default branch (rollout merge a1e2d0f2 landed 2026-07-11) | permanent |
