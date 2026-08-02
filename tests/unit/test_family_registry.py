@@ -464,6 +464,7 @@ def test_campaign_parser_and_driver_supervise_all_six_locked_diagnostic_legs(
     }
     assert all(config.posthoc_diagnostic for config in captured)
     assert all(not config.unlock_final_holdout for config in captured)
+    assert all(config.feedback_expressions_per_group == 0 for config in captured)
     assert len(payload["legs"]) == 6
     assert payload["harness_controls"]["passed"] is True
     assert (tmp_path / "campaign-test" / "campaign_report.json").exists()

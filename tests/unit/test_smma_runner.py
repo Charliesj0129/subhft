@@ -13,6 +13,7 @@ import hft_platform.cli as cli
 from research.combinatorial.smma_dataset import BarDataset, save_governed_dataset
 from research.combinatorial.smma_runner import (
     DISCOVERY_NUMERIC_THREAD_ENV,
+    FAMILY_REGISTRY,
     OUTPUT_STOP_BYTES,
     RSS_PAUSE_BYTES,
     RSS_STOP_BYTES,
@@ -24,9 +25,11 @@ from research.combinatorial.smma_runner import (
     RunIntegrityError,
     SplitUnlockGuard,
     _discovery_process_pool,
+    _discovery_trial_sharpe_std,
     _evaluate_candidate,
     _evaluate_discovery_worker,
     _exact_horizon_inputs,
+    _feedback_seed,
     _timestamp_signal_correlation,
     _with_integrity_hash,
     code_fingerprint,
@@ -40,6 +43,7 @@ from research.combinatorial.smma_validation import (
     HarnessControlSummary,
     KillMetrics,
     LockedMetrics,
+    build_split_plan,
     forward_target_indices,
     simulate_next_bar_execution,
 )
@@ -85,6 +89,102 @@ def _write_dataset(run_dir) -> None:
         query_evidence=[{"query_sha256": "test", "guard_overall": "pass"}],
         code_fingerprint=code_fingerprint(),
     )
+
+
+def _install_single_group_adaptive_fixture(monkeypatch) -> None:
+    adapter = FAMILY_REGISTRY["smma"]
+
+    def build_features(bars, _config):
+        count = len(bars)
+        return {
+            "x": np.linspace(-1.0, 1.0, count),
+            "y": np.cos(np.arange(count, dtype=np.float64) / 4.0),
+        }
+
+    monkeypatch.setitem(
+        FAMILY_REGISTRY,
+        "smma",
+        replace(
+            adapter,
+            build_features=build_features,
+            dataset=replace(adapter.dataset, roots=("TXF",)),
+        ),
+    )
+    monkeypatch.setattr(
+        "research.combinatorial.smma_runner.generated_gp_expressions",
+        lambda *_args, **_kwargs: ["x", "sign(y)"],
+    )
+
+
+def _seed_generation_zero(run: MiningRun, bars: BarDataset):
+    built = run._build_group_context(
+        bars,
+        "TXF",
+        60,
+        expression_limit=2,
+        seed=1,
+        record_effective_trials=False,
+        semantic_dedupe=True,
+    )
+    group_bars, labels, signals, expressions, candidates = built
+    proposal_ids = run._record_generation_zero(
+        root="TXF",
+        timeframe=60,
+        seed=1,
+        expressions=expressions,
+        candidates=candidates,
+    )
+    passing_kill = KillMetrics(0.02, 0.02, 0.02, 1.0, 2.0, 1.0, 0.1, 8.0, True, ())
+    killed = KillMetrics(0.0, 0.0, 0.0, 1.0, -1.0, 0.0, 0.0, 11.0, False, ("net_edge",))
+    passed_expressions: set[str] = set()
+    for candidate in candidates:
+        row = {
+            "candidate_id": candidate.candidate_id,
+            "stage": "discovery",
+            "search_generation": 0,
+            "generation_proposal_id": proposal_ids[candidate.expression],
+            "candidate": asdict(candidate),
+        }
+        if candidate.duplicate_of is not None:
+            row.update(
+                {
+                    "status": "deduplicated",
+                    "failure_reason": "exact_resolved_cut_duplicate",
+                    "reference_candidate_id": candidate.duplicate_of,
+                }
+            )
+        elif candidate.expression not in passed_expressions:
+            passed_expressions.add(candidate.expression)
+            row.update({"status": "passed", "metrics": asdict(passing_kill), "failure_reason": ""})
+        else:
+            row.update({"status": "killed", "metrics": asdict(killed), "failure_reason": "net_edge"})
+        assert run._ledger.append(row)
+    return group_bars, labels, signals, expressions, candidates
+
+
+def _new_seeded_adaptive_run(monkeypatch, run_dir, *, workers: int, max_candidates: int = 72):
+    _install_single_group_adaptive_fixture(monkeypatch)
+    run_dir.mkdir()
+    _write_dataset(run_dir)
+    run = MiningRun(
+        RunConfig(
+            run_dir=run_dir,
+            timeframes_minutes=(60,),
+            max_candidates=max_candidates,
+            feedback_expressions_per_group=1,
+            workers=workers,
+            seeds=(1, 2, 3),
+        )
+    )
+    bars = _dataset()
+    context = _seed_generation_zero(run, bars)
+    return run, bars, context
+
+
+def _normalized_adaptive_rows(run: MiningRun) -> list[dict[str, object]]:
+    ignored = {"previous_hash", "recorded_at_ns"}
+    normalized = [{key: value for key, value in row.items() if key not in ignored} for row in run._ledger.rows()]
+    return json.loads(json.dumps(normalized, sort_keys=True))
 
 
 def _field_names(dataset: BarDataset) -> tuple[str, ...]:
@@ -498,6 +598,106 @@ def test_group_context_prefilters_unavailable_features_before_gp_generation(
     assert all(candidate.family == "smma" for candidate in candidates)
 
 
+def test_expression_eligibility_is_unchanged_when_non_discovery_values_change(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    bars = _dataset()
+    discovery_rows = len(bars) // 2
+    feature = np.arange(len(bars), dtype=np.float64)
+    feature[discovery_rows:] = np.inf
+    captured: dict[str, tuple[str, ...]] = {}
+
+    monkeypatch.setattr(
+        "research.combinatorial.smma_runner.build_smma_family_features",
+        lambda **_kwargs: {"usable": feature},
+    )
+
+    def fake_generate(feature_names, *, seed, limit):
+        del seed, limit
+        captured["feature_names"] = tuple(feature_names)
+        return ["usable"]
+
+    monkeypatch.setattr(
+        "research.combinatorial.smma_runner.generated_gp_expressions",
+        fake_generate,
+    )
+    run = MiningRun(RunConfig(run_dir=tmp_path / "run", seeds=(1, 2, 3)))
+
+    _bars, _labels, _signals, expressions, candidates = run._build_group_context(
+        bars,
+        "TXF",
+        60,
+        expression_limit=1,
+        seed=1,
+    )
+
+    assert captured["feature_names"] == ("usable",)
+    assert expressions == ["usable"]
+    assert len(candidates) == 24
+
+
+def test_generation_zero_semantically_deduplicates_commutative_expressions(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    bars = _dataset()
+    a = np.linspace(-1.0, 1.0, len(bars))
+    b = np.cos(np.arange(len(bars), dtype=np.float64) / 4.0)
+    monkeypatch.setattr(
+        "research.combinatorial.smma_runner.build_smma_family_features",
+        lambda **_kwargs: {"a": a, "b": b},
+    )
+    monkeypatch.setattr(
+        "research.combinatorial.smma_runner.generated_gp_expressions",
+        lambda *_args, **_kwargs: ["add(a, b)", "add(b, a)"],
+    )
+    run = MiningRun(RunConfig(run_dir=tmp_path / "run", seeds=(1, 2, 3)))
+
+    _bars, _labels, _signals, expressions, candidates = run._build_group_context(
+        bars,
+        "TXF",
+        60,
+        expression_limit=2,
+        seed=1,
+        semantic_dedupe=True,
+    )
+
+    assert expressions == ["add(a, b)"]
+    assert len(candidates) == 24
+    assert run._expression_supply["TXF/60"]["semantic_duplicate_rejected"] == 1
+
+
+def test_feedback_zero_preserves_blind_v1_semantic_duplicates(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    bars = _dataset()
+    a = np.linspace(-1.0, 1.0, len(bars))
+    b = np.cos(np.arange(len(bars), dtype=np.float64) / 4.0)
+    monkeypatch.setattr(
+        "research.combinatorial.smma_runner.build_smma_family_features",
+        lambda **_kwargs: {"a": a, "b": b},
+    )
+    monkeypatch.setattr(
+        "research.combinatorial.smma_runner.generated_gp_expressions",
+        lambda *_args, **_kwargs: ["add(a, b)", "add(b, a)"],
+    )
+    run = MiningRun(RunConfig(run_dir=tmp_path / "run", seeds=(1, 2, 3)))
+
+    _bars, _labels, _signals, expressions, candidates = run._build_group_context(
+        bars,
+        "TXF",
+        60,
+        expression_limit=2,
+        seed=1,
+    )
+
+    assert expressions == ["add(a, b)", "add(b, a)"]
+    assert len(candidates) == 48
+    assert run._expression_supply["TXF/60"]["semantic_duplicate_rejected"] == 0
+
+
 def test_candidate_id_uses_family_and_quantile_not_resolved_cut() -> None:
     first = enumerate_candidates(
         family="bidask",
@@ -526,9 +726,21 @@ def test_candidate_id_uses_family_and_quantile_not_resolved_cut() -> None:
         discovery_mask=np.asarray([True, True, True, False]),
         seed=1,
     )
+    other_generation_seed = enumerate_candidates(
+        family="bidask",
+        root="TXF",
+        timeframe_min=60,
+        expressions=["usable"],
+        signals={"usable": np.asarray([0.0, 1.0, 2.0, 3.0])},
+        discovery_mask=np.asarray([True, True, True, False]),
+        seed=999,
+    )
 
     assert [candidate.candidate_id for candidate in first] == [candidate.candidate_id for candidate in second]
     assert [candidate.threshold for candidate in first] != [candidate.threshold for candidate in second]
+    assert [candidate.candidate_id for candidate in first] == [
+        candidate.candidate_id for candidate in other_generation_seed
+    ]
     assert first[0].candidate_id != other_family[0].candidate_id
 
 
@@ -695,6 +907,602 @@ def test_hash_chain_ledger_detects_tamper(tmp_path) -> None:
     path.write_text(json.dumps(row) + "\n")
     with pytest.raises(RunIntegrityError, match="hash chain mismatch"):
         HashChainLedger(path)
+
+
+def test_hash_chain_ledger_counts_only_unique_discovery_candidates_after_resume(tmp_path) -> None:
+    path = tmp_path / "trials.jsonl"
+    ledger = HashChainLedger(path)
+    assert ledger.append({"candidate_id": "a", "stage": "generation", "status": "accepted"})
+    assert ledger.append({"candidate_id": "a", "stage": "discovery", "status": "passed"})
+    assert ledger.append({"candidate_id": "b", "stage": "selection", "status": "killed"})
+    assert ledger.unique_candidates == 1
+
+    restored = HashChainLedger(path)
+
+    assert restored.unique_candidates == 1
+
+
+def test_dsr_trial_sharpe_dispersion_excludes_non_evaluated_duplicates() -> None:
+    rows = (
+        {"status": "passed", "metrics": {"clustered_sharpe": 1.0}},
+        {"status": "deduplicated"},
+        {"status": "killed", "metrics": {"clustered_sharpe": 3.0}},
+        {"status": "generation", "metrics": {"clustered_sharpe": 100.0}},
+    )
+
+    assert _discovery_trial_sharpe_std(rows) == pytest.approx(np.sqrt(2.0))
+
+
+def test_blind_v1_dsr_dispersion_retains_legacy_duplicate_rows() -> None:
+    rows = (
+        {"status": "passed", "metrics": {"clustered_sharpe": 1.0}},
+        {"status": "deduplicated"},
+        {"status": "killed", "metrics": {"clustered_sharpe": 3.0}},
+    )
+
+    assert _discovery_trial_sharpe_std(rows, evaluated_only=False) == pytest.approx(
+        np.std(np.asarray([1.0, 0.0, 3.0]), ddof=1)
+    )
+
+
+def test_resume_rejects_changed_generation_evidence_for_existing_proposal_id(tmp_path) -> None:
+    run = MiningRun(RunConfig(run_dir=tmp_path / "run", seeds=(1, 2, 3)))
+    original = {
+        "candidate_id": "proposal-1",
+        "stage": "generation",
+        "status": "rejected",
+        "event": "expression_proposal",
+        "rejection_reason": "semantic_duplicate",
+    }
+    run._append_generation_evidence(original)
+
+    with pytest.raises(RunIntegrityError, match="evidence changed during resume"):
+        run._append_generation_evidence({**original, "rejection_reason": "discovery_constant"})
+
+
+def test_adaptive_lineage_rejects_discovery_row_linked_to_wrong_proposal(tmp_path) -> None:
+    run = MiningRun(
+        RunConfig(
+            run_dir=tmp_path / "run",
+            timeframes_minutes=(60,),
+            max_candidates=144,
+            feedback_expressions_per_group=1,
+            seeds=(1, 2, 3),
+        )
+    )
+    expressions = ("x", "y")
+    candidates = (
+        Candidate("candidate-x", "TXF", 60, "x", "1h", 1, 0.0, 1, 1),
+        Candidate("candidate-y", "TXF", 60, "y", "1h", 1, 0.0, 1, 1),
+    )
+    for proposal_id, expression, candidate in zip(("proposal-x", "proposal-y"), expressions, candidates, strict=True):
+        run._append_generation_evidence(
+            {
+                "candidate_id": proposal_id,
+                "stage": "generation",
+                "status": "accepted",
+                "event": "expression_proposal",
+                "search_generation": 0,
+                "family": "smma",
+                "root": "TXF",
+                "timeframe_min": 60,
+                "expression": expression,
+                "parent_candidate_ids": [],
+                "candidate_ids": [candidate.candidate_id],
+            }
+        )
+    for candidate, wrong_proposal in zip(candidates, ("proposal-y", "proposal-x"), strict=True):
+        run._ledger.append(
+            {
+                "candidate_id": candidate.candidate_id,
+                "stage": "discovery",
+                "status": "killed",
+                "search_generation": 0,
+                "generation_proposal_id": wrong_proposal,
+                "candidate": asdict(candidate),
+            }
+        )
+
+    with pytest.raises(RunIntegrityError, match="wrong generation proposal"):
+        run._validate_adaptive_lineage()
+
+
+def test_adaptive_budget_reserves_equal_per_group_quota_and_leaves_tail_unused(tmp_path) -> None:
+    run = MiningRun(
+        RunConfig(
+            run_dir=tmp_path / "run",
+            timeframes_minutes=(60,),
+            max_candidates=145,
+            feedback_expressions_per_group=1,
+            seeds=(1, 2, 3),
+        )
+    )
+
+    assert run._adaptive_search_budget() == {
+        "strategy": "discovery_feedback_v1",
+        "groups": 2,
+        "candidate_variants_per_expression": 24,
+        "generation_zero_expressions_per_group": 2,
+        "feedback_expressions_per_group": 1,
+        "allocated_candidate_ceiling": 144,
+        "unallocated_candidate_tail": 1,
+        "feedback_generator_version": "typed_crossover_v1",
+    }
+
+
+def test_adaptive_config_fails_closed_on_final_holdout_or_missing_generation_zero_budget(tmp_path) -> None:
+    with pytest.raises(ValueError, match="cannot unlock the final holdout"):
+        RunConfig(
+            run_dir=tmp_path / "holdout",
+            timeframes_minutes=(60,),
+            max_candidates=144,
+            feedback_expressions_per_group=1,
+            unlock_final_holdout=True,
+        ).validate()
+
+    with pytest.raises(ValueError, match="leave at least one generation-0 expression"):
+        RunConfig(
+            run_dir=tmp_path / "budget",
+            timeframes_minutes=(60,),
+            max_candidates=48,
+            feedback_expressions_per_group=1,
+        ).validate()
+
+
+def test_feedback_parents_are_distinct_generation_zero_discovery_passes_only(tmp_path) -> None:
+    run = MiningRun(RunConfig(run_dir=tmp_path / "run", seeds=(1, 2, 3)))
+    passing_kill = KillMetrics(0.02, 0.02, 0.02, 1.0, 2.0, 1.0, 0.1, 8.0, True, ())
+
+    def append(candidate_id: str, expression: str, generation: int, status: str = "passed") -> None:
+        candidate = Candidate(
+            candidate_id=candidate_id,
+            root="TXF",
+            timeframe_min=60,
+            expression=expression,
+            horizon="1h",
+            direction=1,
+            threshold=0.0,
+            seed=1,
+            complexity=1,
+        )
+        run._ledger.append(
+            {
+                "candidate_id": candidate_id,
+                "stage": "discovery",
+                "status": status,
+                "search_generation": generation,
+                "candidate": asdict(candidate),
+                "metrics": asdict(passing_kill),
+            }
+        )
+
+    append("g0-x-best", "x", 0)
+    append("g0-x-second", "x", 0)
+    append("g0-y", "sign(y)", 0)
+    append("g1-z", "z", 1)
+    append("g0-killed", "ts_delta(x, 3)", 0, status="killed")
+
+    parents = run._generation_zero_parents(root="TXF", timeframe=60)
+
+    assert {item.candidate.candidate_id for item in parents} == {"g0-x-best", "g0-y"}
+
+
+def test_feedback_resume_reuses_identical_lineage_without_generation_one_parents(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    bars = _dataset()
+    labels = build_split_plan(bars.trading_day).labels
+    x = np.linspace(-1.0, 1.0, len(bars))
+    y = np.cos(np.arange(len(bars), dtype=np.float64) / 4.0)
+    monkeypatch.setattr(
+        "research.combinatorial.smma_runner.build_smma_family_features",
+        lambda **_kwargs: {"x": x, "y": y},
+    )
+    run = MiningRun(RunConfig(run_dir=tmp_path / "run", seeds=(1, 2, 3)))
+    passing_kill = KillMetrics(0.02, 0.02, 0.02, 1.0, 2.0, 1.0, 0.1, 8.0, True, ())
+    parents = (
+        Candidate("g0-x", "TXF", 60, "x", "1h", 1, 0.0, 1, 1),
+        Candidate("g0-y", "TXF", 60, "sign(y)", "1h", 1, 0.0, 1, 1),
+        Candidate("g1-poison", "TXF", 60, "y", "1h", 1, 0.0, 1, 1),
+    )
+    for generation, candidate in zip((0, 0, 1), parents, strict=True):
+        run._ledger.append(
+            {
+                "candidate_id": candidate.candidate_id,
+                "stage": "discovery",
+                "status": "passed",
+                "search_generation": generation,
+                "candidate": asdict(candidate),
+                "metrics": asdict(passing_kill),
+            }
+        )
+
+    first = run._build_feedback_context(
+        root="TXF",
+        timeframe=60,
+        seed=7,
+        bars=bars,
+        labels=labels,
+        generation_zero_expressions=("x", "sign(y)"),
+        feedback_limit=2,
+    )
+    row_count = run._ledger.row_count
+    second = run._build_feedback_context(
+        root="TXF",
+        timeframe=60,
+        seed=7,
+        bars=bars,
+        labels=labels,
+        generation_zero_expressions=("x", "sign(y)"),
+        feedback_limit=2,
+    )
+    generation_one_rows = [
+        row
+        for row in run._ledger.rows(stage="generation")
+        if row.get("event") == "expression_proposal" and row.get("status") == "accepted"
+    ]
+
+    assert first[1] == second[1]
+    assert [candidate.candidate_id for candidate in first[2]] == [candidate.candidate_id for candidate in second[2]]
+    assert run._ledger.row_count == row_count
+    assert generation_one_rows
+    assert all("g1-poison" not in row["parent_candidate_ids"] for row in generation_one_rows)
+
+
+def test_feedback_generation_is_unchanged_when_later_split_values_change(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    source = _dataset()
+    labels = build_split_plan(source.trading_day).labels
+    later = labels != "discovery"
+    baseline_close = source.close.copy()
+    baseline_close[later] = 0.0
+    baseline = replace(
+        source,
+        open=baseline_close,
+        high=baseline_close,
+        low=baseline_close,
+        close=baseline_close,
+        bid_open=baseline_close,
+        ask_open=baseline_close,
+        bid_close=baseline_close,
+        ask_close=baseline_close,
+    )
+    mutated_close = baseline_close.copy()
+    mutated_close[later] = np.arange(int(np.count_nonzero(later)), dtype=np.float64) + 1.0
+    mutated = replace(
+        baseline,
+        open=mutated_close,
+        high=mutated_close,
+        low=mutated_close,
+        close=mutated_close,
+        bid_open=mutated_close,
+        ask_open=mutated_close,
+        bid_close=mutated_close,
+        ask_close=mutated_close,
+    )
+
+    def fake_features(**kwargs):
+        close = np.asarray(kwargs["close"], dtype=np.float64)
+        x = np.zeros(close.size, dtype=np.float64)
+        x[later] = close[later]
+        return {
+            "x": x,
+            "y": np.zeros(close.size, dtype=np.float64),
+        }
+
+    monkeypatch.setattr("research.combinatorial.smma_runner.build_smma_family_features", fake_features)
+    monkeypatch.setattr(
+        "research.combinatorial.smma_runner.generated_feedback_proposals",
+        lambda *_args, **_kwargs: (
+            SimpleNamespace(
+                attempt=0,
+                attempt_seed=123,
+                parent_expressions=("x", "y"),
+                expression="add(x, y)",
+                semantic_hash="semantic-add-x-y",
+                generator_status="candidate",
+                rejection_reason="",
+            ),
+        ),
+    )
+    passing_kill = KillMetrics(0.02, 0.02, 0.02, 1.0, 2.0, 1.0, 0.1, 8.0, True, ())
+
+    def build(run_dir, bars):
+        run = MiningRun(
+            RunConfig(
+                run_dir=run_dir,
+                timeframes_minutes=(60,),
+                max_candidates=144,
+                feedback_expressions_per_group=1,
+                seeds=(1, 2, 3),
+            )
+        )
+        for candidate_id, expression in (("parent-x", "x"), ("parent-y", "y")):
+            candidate = Candidate(candidate_id, "TXF", 60, expression, "1h", 1, 0.0, 1, 1)
+            run._ledger.append(
+                {
+                    "candidate_id": candidate_id,
+                    "stage": "discovery",
+                    "status": "passed",
+                    "search_generation": 0,
+                    "candidate": asdict(candidate),
+                    "metrics": asdict(passing_kill),
+                }
+            )
+        result = run._build_feedback_context(
+            root="TXF",
+            timeframe=60,
+            seed=7,
+            bars=bars,
+            labels=labels,
+            generation_zero_expressions=("x", "y"),
+            feedback_limit=1,
+        )
+        evidence = [
+            {key: value for key, value in row.items() if key != "previous_hash"}
+            for row in run._ledger.rows(stage="generation")
+        ]
+        return result, evidence
+
+    first, first_evidence = build(tmp_path / "baseline", baseline)
+    second, second_evidence = build(tmp_path / "mutated", mutated)
+
+    assert first[0] == second[0] == {}
+    assert first[1] == second[1]
+    assert [asdict(candidate) for candidate in first[2]] == [asdict(candidate) for candidate in second[2]]
+    assert first_evidence == second_evidence
+
+
+def test_insufficient_parent_diversity_leaves_feedback_budget_unused(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    bars = _dataset()
+    labels = build_split_plan(bars.trading_day).labels
+    x = np.linspace(-1.0, 1.0, len(bars))
+    monkeypatch.setattr(
+        "research.combinatorial.smma_runner.build_smma_family_features",
+        lambda **_kwargs: {"x": x},
+    )
+    run = MiningRun(RunConfig(run_dir=tmp_path / "run", seeds=(1, 2, 3)))
+    candidate = Candidate("g0-x", "TXF", 60, "x", "1h", 1, 0.0, 1, 1)
+    passing_kill = KillMetrics(0.02, 0.02, 0.02, 1.0, 2.0, 1.0, 0.1, 8.0, True, ())
+    run._ledger.append(
+        {
+            "candidate_id": candidate.candidate_id,
+            "stage": "discovery",
+            "status": "passed",
+            "search_generation": 0,
+            "candidate": asdict(candidate),
+            "metrics": asdict(passing_kill),
+        }
+    )
+
+    signals, expressions, candidates, proposal_ids = run._build_feedback_context(
+        root="TXF",
+        timeframe=60,
+        seed=7,
+        bars=bars,
+        labels=labels,
+        generation_zero_expressions=("x",),
+        feedback_limit=2,
+    )
+    closure = [row for row in run._ledger.rows(stage="generation") if row.get("event") == "generation_closure"]
+
+    assert signals == {}
+    assert expressions == []
+    assert candidates == []
+    assert proposal_ids == {}
+    assert closure[0]["status"] == "closed_with_unused_budget"
+    assert closure[0]["closure_reason"] == "insufficient_generation0_parent_diversity"
+    assert closure[0]["unused_expressions"] == 2
+
+
+def test_adaptive_discovery_closes_generation_zero_before_union_effective_count(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    bars = _dataset()
+    labels = build_split_plan(bars.trading_day).labels
+    signal_x = np.linspace(-1.0, 1.0, len(bars))
+    signal_y = np.cos(np.arange(len(bars), dtype=np.float64) / 4.0)
+    run = MiningRun(
+        RunConfig(
+            run_dir=tmp_path / "run",
+            timeframes_minutes=(60,),
+            max_candidates=144,
+            feedback_expressions_per_group=1,
+            workers=1,
+            seeds=(1, 2, 3),
+        )
+    )
+    evaluation_generations: list[int] = []
+    union_candidate_counts: list[int] = []
+
+    def fake_group_context(_dataset_value, root, timeframe, expression_limit, seed, **_kwargs):
+        assert expression_limit == 2
+        expressions = ["x", "y"]
+        signals = {"x": signal_x, "y": signal_y}
+        candidates = enumerate_candidates(
+            family="smma",
+            root=root,
+            timeframe_min=timeframe,
+            expressions=expressions,
+            signals=signals,
+            discovery_mask=labels == "discovery",
+            seed=seed,
+        )
+        run._expression_supply[f"{root}/{timeframe}"] = {"requested": 2, "valid": 2}
+        return bars, labels, signals, expressions, candidates
+
+    def fake_feedback_context(*, root, timeframe, seed, **_kwargs):
+        expression = "sign(x)"
+        signals = {expression: np.sign(signal_x)}
+        child_candidates = enumerate_candidates(
+            family="smma",
+            root=root,
+            timeframe_min=timeframe,
+            expressions=[expression],
+            signals=signals,
+            discovery_mask=labels == "discovery",
+            seed=seed,
+        )
+        proposal_id = f"proposal-{root}"
+        parents = run._generation_zero_parents(root=root, timeframe=timeframe)[:2]
+        run._append_generation_evidence(
+            {
+                "candidate_id": proposal_id,
+                "stage": "generation",
+                "status": "accepted",
+                "event": "expression_proposal",
+                "search_generation": 1,
+                "family": "smma",
+                "root": root,
+                "timeframe_min": timeframe,
+                "expression": expression,
+                "parent_candidate_ids": [item.candidate.candidate_id for item in parents],
+                "parent_expressions": [item.candidate.expression for item in parents],
+                "candidate_ids": [candidate.candidate_id for candidate in child_candidates],
+            }
+        )
+        run._generation_evidence[f"{root}/{timeframe}"] = {"feedback_accepted": 1}
+        return signals, [expression], child_candidates, {expression: proposal_id}
+
+    def fake_evaluate(*, candidates, passing, search_generation, proposal_ids, **_kwargs):
+        evaluation_generations.append(search_generation)
+        passed_expressions: set[str] = set()
+        for candidate in candidates:
+            if candidate.duplicate_of is not None:
+                status = "deduplicated"
+                kill = None
+            elif candidate.expression not in passed_expressions:
+                status = "passed"
+                passed_expressions.add(candidate.expression)
+                kill = KillMetrics(0.02, 0.02, 0.02, 1.0, 2.0, 1.0, 0.1, 8.0, True, ())
+            else:
+                status = "killed"
+                kill = KillMetrics(0.0, 0.0, 0.0, 1.0, -1.0, 0.0, 0.0, 11.0, False, ("net_edge",))
+            row = {
+                "candidate_id": candidate.candidate_id,
+                "stage": "discovery",
+                "status": status,
+                "search_generation": search_generation,
+                "generation_proposal_id": proposal_ids[candidate.expression],
+                "candidate": asdict(candidate),
+            }
+            if kill is not None:
+                row["metrics"] = asdict(kill)
+            run._ledger.append(row)
+            if status == "passed" and kill is not None:
+                passing.append(CandidateResult(candidate, kill, "discovery", "passed"))
+        return None
+
+    def fake_effective_count(*, candidates, **_kwargs):
+        union_candidate_counts.append(len(candidates))
+        return len(candidates)
+
+    monkeypatch.setattr(run, "_build_group_context", fake_group_context)
+    monkeypatch.setattr(run, "_build_feedback_context", fake_feedback_context)
+    monkeypatch.setattr(run, "_evaluate_discovery_candidates", fake_evaluate)
+    monkeypatch.setattr(run, "_finalize_discovery", lambda passing: list(passing))
+    monkeypatch.setattr("research.combinatorial.smma_runner._effective_trigger_test_count", fake_effective_count)
+
+    results = run._adaptive_discover(bars, [])
+
+    assert results
+    assert evaluation_generations == [0, 0, 1, 1]
+    assert union_candidate_counts == [72, 72]
+    assert run._effective_trial_counts == {"TMF/60": 72, "TXF/60": 72}
+
+
+def test_adaptive_search_is_deterministic_across_worker_counts(monkeypatch, tmp_path) -> None:
+    serial, serial_bars, _serial_context = _new_seeded_adaptive_run(
+        monkeypatch,
+        tmp_path / "serial",
+        workers=1,
+    )
+    parallel, parallel_bars, _parallel_context = _new_seeded_adaptive_run(
+        monkeypatch,
+        tmp_path / "parallel",
+        workers=2,
+    )
+
+    serial._adaptive_discover(serial_bars, [])
+    parallel._adaptive_discover(parallel_bars, [])
+
+    assert _normalized_adaptive_rows(serial) == _normalized_adaptive_rows(parallel)
+    assert json.loads((serial.run_dir / "search_space.json").read_text()) == json.loads(
+        (parallel.run_dir / "search_space.json").read_text()
+    )
+
+
+def test_adaptive_resume_after_partial_generation_one_is_bit_identical(monkeypatch, tmp_path) -> None:
+    clean, clean_bars, _clean_context = _new_seeded_adaptive_run(
+        monkeypatch,
+        tmp_path / "clean",
+        workers=1,
+    )
+    partial, partial_bars, partial_context = _new_seeded_adaptive_run(
+        monkeypatch,
+        tmp_path / "partial",
+        workers=1,
+    )
+    clean._adaptive_discover(clean_bars, [])
+
+    group_bars, labels, _signals, expressions, _candidates = partial_context
+    feedback_seed = _feedback_seed(family="smma", root="TXF", timeframe_min=60, base_seed=1)
+    feedback_signals, _feedback_expressions, feedback_candidates, proposal_ids = partial._build_feedback_context(
+        root="TXF",
+        timeframe=60,
+        seed=feedback_seed,
+        bars=group_bars,
+        labels=labels,
+        generation_zero_expressions=expressions,
+        feedback_limit=1,
+    )
+    partial._evaluate_discovery_candidates(
+        dataset=partial_bars,
+        bars=group_bars,
+        labels=labels,
+        signals=feedback_signals,
+        candidates=feedback_candidates[:5],
+        passing=[],
+        search_generation=1,
+        proposal_ids=proposal_ids,
+    )
+    resumed = MiningRun(replace(partial.config, resume=True))
+    resumed._adaptive_discover(partial_bars, [])
+
+    assert _normalized_adaptive_rows(clean) == _normalized_adaptive_rows(resumed)
+    assert json.loads((clean.run_dir / "search_space.json").read_text()) == json.loads(
+        (resumed.run_dir / "search_space.json").read_text()
+    )
+
+
+def test_adaptive_candidate_budget_and_union_evidence_restore_end_to_end(monkeypatch, tmp_path) -> None:
+    run, bars, _context = _new_seeded_adaptive_run(
+        monkeypatch,
+        tmp_path / "run",
+        workers=1,
+        max_candidates=73,
+    )
+    run._adaptive_discover(bars, [])
+    search_space = json.loads((run.run_dir / "search_space.json").read_text())
+
+    assert run._ledger.unique_candidates == 72
+    assert search_space["adaptive_search_budget"]["allocated_candidate_ceiling"] == 72
+    assert search_space["adaptive_search_budget"]["unallocated_candidate_tail"] == 1
+    assert search_space["effective_trials_total"] == sum(search_space["effective_trial_counts_by_group"].values())
+    assert not (run.run_dir / "split_access.jsonl").exists()
+
+    restored = MiningRun(replace(run.config, resume=True))
+    restored._restore_search_space_evidence(required=True)
+
+    assert restored._effective_trial_counts == run._effective_trial_counts
+    assert restored._generation_evidence == run._generation_evidence
 
 
 def test_resume_restores_frozen_effective_trial_count_evidence(tmp_path) -> None:
@@ -1088,6 +1896,149 @@ def test_resume_manifest_mismatch_fails_closed(tmp_path) -> None:
         resumed._ensure_manifest(dataset, {})
 
 
+def test_resume_rejects_trial_ledger_shorter_than_durable_checkpoint(tmp_path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_dataset(run_dir)
+    run = MiningRun(RunConfig(run_dir=run_dir, seeds=(1, 2, 3), resume=True))
+    run._ledger.append({"candidate_id": "candidate-1", "stage": "discovery", "status": "killed"})
+    checkpoint = _with_integrity_hash(
+        {
+            "schema": "alpha_mining_checkpoint.v2",
+            "stage": "discovery_complete",
+            "dataset_fingerprint": run._dataset_fingerprint(),
+            "code_fingerprint": run._code_fingerprint,
+            "trials": 1,
+            "ledger_rows": 2,
+            "state": {},
+            "recorded_at": "2026-08-02T00:00:00+00:00",
+        },
+        "checkpoint_hash",
+    )
+    run.checkpoint_path.write_text(json.dumps(checkpoint), encoding="utf-8")
+
+    with pytest.raises(RunIntegrityError, match="shorter than the durable checkpoint"):
+        run._load_checkpoint()
+
+
+def test_resume_rejects_search_space_lineage_hash_mismatch_with_ledger(tmp_path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_dataset(run_dir)
+    run = MiningRun(
+        RunConfig(
+            run_dir=run_dir,
+            timeframes_minutes=(60,),
+            max_candidates=144,
+            feedback_expressions_per_group=1,
+            seeds=(1, 2, 3),
+            resume=True,
+        )
+    )
+    payload = _with_integrity_hash(
+        {
+            "schema": "alpha_mining_search_space.v3",
+            "family": "smma",
+            "code_fingerprint": run._code_fingerprint,
+            "dataset_fingerprint": run._dataset_fingerprint(),
+            "search_strategy": "discovery_feedback_v1",
+            "lineage_hash": "not-the-ledger-lineage",
+            "union_candidate_hash": "not-the-ledger-union",
+            "effective_trial_counts_by_group": {"TXF/60": 1},
+            "expression_supply_by_group": {},
+        },
+        "search_space_hash",
+    )
+    (run_dir / "search_space.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(RunIntegrityError, match="lineage hash does not match"):
+        run._restore_search_space_evidence(required=True)
+
+
+def test_resume_rejects_search_space_candidate_union_hash_mismatch_with_ledger(tmp_path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_dataset(run_dir)
+    run = MiningRun(
+        RunConfig(
+            run_dir=run_dir,
+            timeframes_minutes=(60,),
+            max_candidates=144,
+            feedback_expressions_per_group=1,
+            seeds=(1, 2, 3),
+            resume=True,
+        )
+    )
+    correct_lineage_hash = _with_integrity_hash({"generation_rows": []}, "value")["value"]
+    payload = _with_integrity_hash(
+        {
+            "schema": "alpha_mining_search_space.v3",
+            "family": "smma",
+            "code_fingerprint": run._code_fingerprint,
+            "dataset_fingerprint": run._dataset_fingerprint(),
+            "search_strategy": "discovery_feedback_v1",
+            "lineage_hash": correct_lineage_hash,
+            "union_candidate_hash": "not-the-ledger-union",
+            "effective_trial_counts_by_group": {"TXF/60": 1},
+            "expression_supply_by_group": {},
+        },
+        "search_space_hash",
+    )
+    (run_dir / "search_space.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(RunIntegrityError, match="candidate-union hash does not match"):
+        run._restore_search_space_evidence(required=True)
+
+
+def test_adaptive_resume_cannot_enter_selection_without_search_space_evidence(tmp_path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_dataset(run_dir)
+    run = MiningRun(
+        RunConfig(
+            run_dir=run_dir,
+            timeframes_minutes=(60,),
+            max_candidates=144,
+            feedback_expressions_per_group=1,
+            seeds=(1, 2, 3),
+            resume=True,
+        )
+    )
+    run._checkpoint(stage="discovery_complete", state={"discovery_passed": []}, force=True)
+
+    with pytest.raises(RunIntegrityError, match="no search-space evidence"):
+        run._run_stages(_dataset(), {"manifest_hash": "manifest-test"})
+
+
+def test_adaptive_search_budget_is_frozen_in_manifest_identity(tmp_path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_dataset(run_dir)
+    first = MiningRun(
+        RunConfig(
+            run_dir=run_dir,
+            timeframes_minutes=(60,),
+            max_candidates=144,
+            seeds=(1, 2, 3),
+        )
+    )
+    dataset = first._load_or_export_dataset()
+    first._ensure_manifest(dataset, {})
+    resumed = MiningRun(
+        RunConfig(
+            run_dir=run_dir,
+            timeframes_minutes=(60,),
+            max_candidates=144,
+            feedback_expressions_per_group=1,
+            seeds=(1, 2, 3),
+            resume=True,
+        )
+    )
+
+    with pytest.raises(RunIntegrityError, match="fingerprint mismatch"):
+        resumed._ensure_manifest(dataset, {})
+
+
 def test_run_rejects_dataset_outside_frozen_instrument_scope(tmp_path) -> None:
     run_dir = tmp_path / "run"
     run_dir.mkdir()
@@ -1247,6 +2198,108 @@ def test_selection_dispositions_are_idempotent_and_funnel_conserves(tmp_path) ->
     assert conservation["selection_conserved"] is True
 
 
+def test_adaptive_terminal_stop_writes_kill_report_with_explicit_incomplete_conservation(tmp_path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_dataset(run_dir)
+    run = MiningRun(
+        RunConfig(
+            run_dir=run_dir,
+            timeframes_minutes=(60,),
+            max_candidates=144,
+            feedback_expressions_per_group=1,
+            seeds=(1, 2, 3),
+        )
+    )
+    run._ledger.append(
+        {
+            "candidate_id": "partial-pass",
+            "stage": "discovery",
+            "status": "passed",
+        }
+    )
+    run._terminal_stop_reason = "wall_time"
+
+    report = run._finish(
+        {"manifest_hash": "manifest-test"},
+        _dataset(),
+        [],
+        [],
+        "KILL",
+        "mining stopped before validation: wall_time",
+    )
+
+    assert report["verdict"] == "KILL"
+    assert report["stage_conservation"]["post_discovery_conserved"] is False
+    assert run.report_path.exists()
+
+
+def test_adaptive_terminal_stop_report_is_idempotent_on_resume(monkeypatch, tmp_path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_dataset(run_dir)
+    config = RunConfig(
+        run_dir=run_dir,
+        timeframes_minutes=(60,),
+        max_candidates=144,
+        feedback_expressions_per_group=1,
+        seeds=(1, 2, 3),
+        resume=True,
+    )
+    run = MiningRun(config)
+    candidate = Candidate("partial-pass", "TXF", 60, "x", "1h", 1, 0.0, 1, 1)
+    kill = KillMetrics(0.02, 0.02, 0.02, 1.0, 2.0, 1.0, 0.1, 8.0, True, ())
+    result = CandidateResult(candidate, kill, "discovery", "passed")
+    run._ledger.append(
+        {
+            "candidate_id": candidate.candidate_id,
+            "stage": "discovery",
+            "status": "passed",
+            "candidate": asdict(candidate),
+            "metrics": asdict(kill),
+        }
+    )
+    run._checkpoint(stage="discovery", state={"discovery_passed": [result.to_dict()]}, force=True)
+    monkeypatch.setattr(MiningRun, "_wall_time_reached", lambda _self: True)
+
+    first = run._run_stages(_dataset(), {"manifest_hash": "manifest-test"})
+    resumed = MiningRun(config)
+    second = resumed._run_stages(_dataset(), {"manifest_hash": "manifest-test"})
+
+    assert first == second
+    assert first["verdict"] == "KILL"
+    assert first["terminal_stop_reason"] == "wall_time"
+    assert not (run_dir / "search_space.json").exists()
+
+
+def test_adaptive_terminal_stop_with_zero_discovery_passes_is_idempotent_on_resume(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_dataset(run_dir)
+    config = RunConfig(
+        run_dir=run_dir,
+        timeframes_minutes=(60,),
+        max_candidates=144,
+        feedback_expressions_per_group=1,
+        seeds=(1, 2, 3),
+        resume=True,
+    )
+    run = MiningRun(config)
+    run._checkpoint(stage="discovery", state={"discovery_passed": []}, force=True)
+    monkeypatch.setattr(MiningRun, "_wall_time_reached", lambda _self: True)
+
+    first = run._run_stages(_dataset(), {"manifest_hash": "manifest-test"})
+    resumed = MiningRun(config)
+    second = resumed._run_stages(_dataset(), {"manifest_hash": "manifest-test"})
+
+    assert first == second
+    assert first["terminal_stop_reason"] == "wall_time"
+    assert first["search_space_complete"] is False
+
+
 def test_status_reads_artifacts_without_mutation(tmp_path) -> None:
     run_dir = tmp_path / "run"
     run_dir.mkdir()
@@ -1273,6 +2326,8 @@ def test_parser_accepts_frozen_smma_run_and_status_contract() -> None:
             "72",
             "--max-candidates",
             "20000",
+            "--feedback-expressions-per-group",
+            "8",
             "--workers",
             "12",
             "--timeframes-minutes",
@@ -1303,6 +2358,7 @@ def test_parser_accepts_frozen_smma_run_and_status_contract() -> None:
     assert run_args.unlock_final_holdout is False
     assert run_args.dataset_cache_dir is None
     assert run_args.cost_mode == "per_contract"
+    assert run_args.feedback_expressions_per_group == 8
     status_args = cli.build_parser().parse_args(
         ["alpha", "mine", "status", "--run-dir", "research/experiments/runs/smma_test"]
     )
@@ -1354,6 +2410,7 @@ def test_cmd_run_passes_frozen_contract_to_runner(monkeypatch, capsys, tmp_path)
     assert captured["config"].unlock_final_holdout is False
     assert captured["config"].dataset_cache_dir is None
     assert captured["config"].cost_mode == "per_contract"
+    assert captured["config"].feedback_expressions_per_group == 0
     assert json.loads(capsys.readouterr().out)["screen_only"] is True
 
 

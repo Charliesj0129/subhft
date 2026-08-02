@@ -19,21 +19,24 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterator, Mapping, Sequence
+from typing import Any, Iterator, Mapping, Sequence, TypeAlias
 
 import numpy as np
 
 from hft_platform.core import timebase
 from research.backtest.cost_models import load_cost_profile
 from research.combinatorial.bidask import BIDASK_FEATURE_HISTORY_BARS, build_bidask_family_features
+from research.combinatorial.canonical_ast import canonical_hash
 from research.combinatorial.expression_eval import evaluate_family_expression
 from research.combinatorial.expression_lang import compile_expression
 from research.combinatorial.gp_alpha_adapter import required_history_by_variable
 from research.combinatorial.kbar import KBAR_FEATURE_HISTORY_BARS, build_kbar_family_features
 from research.combinatorial.smma import (
+    FEEDBACK_GENERATOR_VERSION,
     SMMA_LENGTHS,
     build_smma_family_features,
     evaluate_smma_expression,
+    generated_feedback_proposals,
     generated_gp_expressions,
     normalize_smma_lengths,
     smma_lengths_from_expression,
@@ -88,7 +91,7 @@ from research.combinatorial.tick_dataset import (
 # independent TickBarDataset. Every
 # generic MiningRun code path (split planning, robustness slicing, fill
 # simulation) only ever touches fields both dataclasses share.
-GovernedBars = BarDataset | TickBarDataset
+GovernedBars: TypeAlias = BarDataset | TickBarDataset
 
 RUN_SCHEMA = "alpha_mining_run.v3"
 CHECKPOINT_SCHEMA = "alpha_mining_checkpoint.v3"
@@ -112,6 +115,9 @@ RSS_PAUSE_BYTES = 18 * 1024**3
 RSS_STOP_BYTES = 20 * 1024**3
 OUTPUT_STOP_BYTES = 100 * 1024**3
 DAY_NS = 24 * 60 * 60 * 1_000_000_000
+CANDIDATES_PER_EXPRESSION = len(("1h", "4h", "session")) * len((1, -1)) * len(THRESHOLD_QUANTILES)
+FEEDBACK_ATTEMPTS_PER_EXPRESSION = 50
+MIN_FEEDBACK_ATTEMPTS = 100
 
 _CODE_FILES: tuple[str, ...] = (
     "research/combinatorial/smma.py",
@@ -321,6 +327,7 @@ class RunConfig:
     unlock_final_holdout: bool = False
     dataset_cache_dir: Path | None = None
     cost_mode: str = "per_contract"
+    feedback_expressions_per_group: int = 0
 
     def validate(self) -> None:
         if self.family not in FAMILY_REGISTRY:
@@ -349,6 +356,15 @@ class RunConfig:
             raise ValueError("cost_mode must be 'per_contract' or 'root_proxy'")
         if self.cost_mode == "root_proxy" and not self.posthoc_diagnostic:
             raise ValueError("root_proxy cost mode is allowed only for an explicit posthoc diagnostic")
+        if int(self.feedback_expressions_per_group) < 0:
+            raise ValueError("feedback_expressions_per_group must be non-negative")
+        if self.feedback_expressions_per_group and self.unlock_final_holdout:
+            raise ValueError("adaptive-search pilots cannot unlock the final holdout")
+        if self.feedback_expressions_per_group:
+            group_count = len(FAMILY_REGISTRY[self.family].dataset.roots) * len(self.timeframes_minutes)
+            expression_slots = int(self.max_candidates) // (group_count * CANDIDATES_PER_EXPRESSION)
+            if expression_slots <= int(self.feedback_expressions_per_group):
+                raise ValueError("adaptive-search budget must leave at least one generation-0 expression per group")
 
 
 @dataclass(frozen=True, slots=True)
@@ -500,6 +516,7 @@ class HashChainLedger:
         self._lock = threading.Lock()
         self._last_hash = ""
         self._candidate_stages: set[tuple[str, str]] = set()
+        self._discovery_candidate_ids: set[str] = set()
         self._rows: list[dict[str, Any]] = []
         self._warm()
 
@@ -517,7 +534,11 @@ class HashChainLedger:
                 if row.get("previous_hash", "") != previous or _canonical_hash(row) != row_hash:
                     raise RunIntegrityError(f"trial ledger hash chain mismatch at line {line_number}")
                 previous = row_hash
-                self._candidate_stages.add((str(row.get("candidate_id", "")), str(row.get("stage", ""))))
+                candidate_id = str(row.get("candidate_id", ""))
+                stage = str(row.get("stage", ""))
+                self._candidate_stages.add((candidate_id, stage))
+                if stage == "discovery":
+                    self._discovery_candidate_ids.add(candidate_id)
                 self._rows.append(dict(row))
         self._last_hash = previous
 
@@ -539,6 +560,8 @@ class HashChainLedger:
                 os.fsync(handle.fileno())
             self._last_hash = row_hash
             self._candidate_stages.add((candidate_id, stage))
+            if stage == "discovery":
+                self._discovery_candidate_ids.add(candidate_id)
             stored = dict(row)
             stored.pop("row_hash")
             self._rows.append(stored)
@@ -551,7 +574,7 @@ class HashChainLedger:
     @property
     def unique_candidates(self) -> int:
         with self._lock:
-            return len({candidate_id for candidate_id, stage in self._candidate_stages if stage == "discovery"})
+            return len(self._discovery_candidate_ids)
 
     @property
     def row_count(self) -> int:
@@ -610,6 +633,11 @@ class SplitUnlockGuard:
 
 def _candidate_id(payload: Mapping[str, Any]) -> str:
     return _canonical_hash(payload)
+
+
+def _feedback_seed(*, family: str, root: str, timeframe_min: int, base_seed: int) -> int:
+    material = f"{FEEDBACK_GENERATOR_VERSION}:{family}:{root}:{int(timeframe_min)}:{int(base_seed)}".encode()
+    return int.from_bytes(hashlib.sha256(material).digest()[:8], "big")
 
 
 def enumerate_candidates(
@@ -700,6 +728,24 @@ def _effective_trigger_test_count(
     return max(1, min(len(candidates), activation_effective * max(1, horizon_count)))
 
 
+def _discovery_trial_sharpe_std(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    evaluated_only: bool = True,
+) -> float:
+    """Return discovery Sharpe dispersion with an explicit compatibility mode."""
+    sharpes = np.asarray(
+        [
+            float(row.get("metrics", {}).get("clustered_sharpe", 0.0))
+            for row in rows
+            if (not evaluated_only or row.get("status") in {"passed", "killed"})
+            and np.isfinite(float(row.get("metrics", {}).get("clustered_sharpe", 0.0)))
+        ],
+        dtype=np.float64,
+    )
+    return float(np.std(sharpes, ddof=1)) if sharpes.size > 1 else 0.0
+
+
 def _profile_for_root(root: str) -> str:
     return "TXFD6" if root == "TXF" else "TMFD6"
 
@@ -734,7 +780,7 @@ def _feature_grid_history_starts(
     feature_count: int,
     feature_history_bars: int | None,
 ) -> np.ndarray:
-    starts = np.full(feature_count, -1, dtype=np.int64)
+    starts: np.ndarray = np.full(feature_count, -1, dtype=np.int64)
     if feature_history_bars is None:
         return starts
     if int(feature_history_bars) < 1:
@@ -796,8 +842,8 @@ def _exact_horizon_inputs(
 
     minute_ns = 60 * 1_000_000_000
     aligned_signal: np.ndarray = np.full(len(execution_bars), np.nan, dtype=np.float64)
-    aligned_history_starts = np.full(len(execution_bars), -1, dtype=np.int64)
-    feature_bucket_starts = np.full(len(feature_bars), -1, dtype=np.int64)
+    aligned_history_starts: np.ndarray = np.full(len(execution_bars), -1, dtype=np.int64)
+    feature_bucket_starts: np.ndarray = np.full(len(feature_bars), -1, dtype=np.int64)
     missing_buckets: list[int] = []
     for feature_index, value in enumerate(signal):
         bucket_start = int(feature_bars.ts_ns[feature_index])
@@ -1197,6 +1243,7 @@ class MiningRun:
         self._deadline_epoch_s: float | None = None
         self._effective_trial_counts: dict[str, int] = {}
         self._expression_supply: dict[str, dict[str, int]] = {}
+        self._generation_evidence: dict[str, dict[str, Any]] = {}
         self._dataset_cache_evidence: dict[str, Any] = {"enabled": False, "hit": False}
         self._code_fingerprint = code_fingerprint()
 
@@ -1204,6 +1251,23 @@ class MiningRun:
     def _family_roots(self) -> tuple[str, ...]:
         """Iterate the active family's frozen roots, never the SMMA constant."""
         return FAMILY_REGISTRY[self.config.family].dataset.roots
+
+    def _adaptive_search_budget(self) -> dict[str, int | str]:
+        group_count = len(self._family_roots) * len(self.config.timeframes_minutes)
+        expression_slots = self.config.max_candidates // (group_count * CANDIDATES_PER_EXPRESSION)
+        feedback_slots = int(self.config.feedback_expressions_per_group)
+        generation_zero_slots = expression_slots - feedback_slots
+        allocated_candidates = expression_slots * group_count * CANDIDATES_PER_EXPRESSION
+        return {
+            "strategy": "discovery_feedback_v1",
+            "groups": group_count,
+            "candidate_variants_per_expression": CANDIDATES_PER_EXPRESSION,
+            "generation_zero_expressions_per_group": generation_zero_slots,
+            "feedback_expressions_per_group": feedback_slots,
+            "allocated_candidate_ceiling": allocated_candidates,
+            "unallocated_candidate_tail": self.config.max_candidates - allocated_candidates,
+            "feedback_generator_version": FEEDBACK_GENERATOR_VERSION,
+        }
 
     def _load_or_export_dataset(self) -> GovernedBars:
         family_dataset = FAMILY_REGISTRY[self.config.family].dataset
@@ -1436,6 +1500,11 @@ class MiningRun:
             "entry_rule_version": ENTRY_RULE_VERSION,
             "entry_comparator": ">=",
             "directions": [1, -1],
+            "search_strategy": ("discovery_feedback_v1" if self.config.feedback_expressions_per_group else "blind_v1"),
+            "feedback_expressions_per_group": int(self.config.feedback_expressions_per_group),
+            "adaptive_search_budget": (
+                self._adaptive_search_budget() if self.config.feedback_expressions_per_group else None
+            ),
             "screen_only": True,
             "posthoc_diagnostic": bool(self.config.posthoc_diagnostic),
             "final_holdout_unlocked": bool(self.config.unlock_final_holdout),
@@ -1541,8 +1610,14 @@ class MiningRun:
             raise RunIntegrityError("checkpoint dataset fingerprint mismatch")
         if payload.get("code_fingerprint") != self._code_fingerprint:
             raise RunIntegrityError("checkpoint code fingerprint mismatch")
+        checkpoint_rows = int(payload.get("ledger_rows", payload.get("trials", 0)))
+        if self._ledger.row_count < checkpoint_rows:
+            raise RunIntegrityError("trial ledger is shorter than the durable checkpoint")
+        checkpoint_trials = int(payload.get("trials", 0))
+        if self._ledger.unique_candidates < checkpoint_trials:
+            raise RunIntegrityError("trial ledger has fewer discovery candidates than the durable checkpoint")
         self._active_checkpoint_stage = str(payload.get("stage", "initialized"))
-        self._last_checkpoint_row_count = int(payload.get("ledger_rows", payload.get("trials", 0)))
+        self._last_checkpoint_row_count = checkpoint_rows
         state = payload.get("state")
         self._active_checkpoint_state = dict(state) if isinstance(state, Mapping) else {}
         return payload
@@ -1587,9 +1662,13 @@ class MiningRun:
         timeframe: int,
         expression_limit: int,
         seed: int,
+        *,
+        record_effective_trials: bool = True,
+        semantic_dedupe: bool = False,
     ) -> tuple[GovernedBars, np.ndarray, dict[str, np.ndarray], list[str], list[Candidate]]:
         bars = dataset.group(root, timeframe)
         plan = build_split_plan(bars.trading_day)
+        discovery_mask = plan.mask("discovery")
         adapter = FAMILY_REGISTRY[self.config.family]
         features = adapter.build_features(bars, self.config)
         expected_history = _FINITE_FEATURE_HISTORY_BY_FAMILY.get(self.config.family)
@@ -1602,7 +1681,7 @@ class MiningRun:
         usable_feature_names = [
             name
             for name in sorted(features)
-            if validate_stationary_signal(adapter.evaluate_expression(name, features, bars.reset))[0]
+            if validate_stationary_signal(adapter.evaluate_expression(name, features, bars.reset)[discovery_mask])[0]
         ]
         expressions = generated_gp_expressions(
             usable_feature_names,
@@ -1612,17 +1691,25 @@ class MiningRun:
         valid_expressions: list[str] = []
         signals: dict[str, np.ndarray] = {}
         feature_history_rejected = 0
+        semantic_duplicate_rejected = 0
+        semantic_hashes: set[str] = set()
         for expression in expressions:
             try:
                 feature_history_bars_for_expression(self.config.family, expression)
             except (KeyError, TypeError, ValueError, SyntaxError):
                 feature_history_rejected += 1
                 continue
+            if semantic_dedupe:
+                expression_semantic_hash = canonical_hash(expression)
+                if expression_semantic_hash in semantic_hashes:
+                    semantic_duplicate_rejected += 1
+                    continue
+                semantic_hashes.add(expression_semantic_hash)
             try:
                 signal = adapter.evaluate_expression(expression, features, bars.reset)
             except (KeyError, TypeError, ValueError, SyntaxError):
                 continue
-            valid, _reason = validate_stationary_signal(signal)
+            valid, _reason = validate_stationary_signal(signal[discovery_mask])
             if valid:
                 valid_expressions.append(expression)
                 signals[expression] = signal
@@ -1634,30 +1721,589 @@ class MiningRun:
             timeframe_min=timeframe,
             expressions=valid_expressions,
             signals=signals,
-            discovery_mask=plan.mask("discovery"),
+            discovery_mask=discovery_mask,
             seed=seed,
         )
-        self._effective_trial_counts[f"{root}/{timeframe}"] = _effective_trigger_test_count(
-            candidates=candidates,
-            signals=signals,
-            discovery_mask=plan.mask("discovery"),
-            trading_days=bars.trading_day,
-        )
+        if record_effective_trials:
+            self._effective_trial_counts[f"{root}/{timeframe}"] = _effective_trigger_test_count(
+                candidates=candidates,
+                signals=signals,
+                discovery_mask=discovery_mask,
+                trading_days=bars.trading_day,
+            )
         self._expression_supply[f"{root}/{timeframe}"] = {
             "requested": int(expression_limit),
             "valid": len(valid_expressions),
             "feature_history_rejected": feature_history_rejected,
+            "semantic_duplicate_rejected": semantic_duplicate_rejected,
         }
         return bars, plan.labels, signals, valid_expressions, candidates
 
+    def _append_generation_evidence(self, payload: Mapping[str, Any]) -> None:
+        expected = dict(payload)
+        candidate_id = str(expected["candidate_id"])
+        prior = next(
+            (row for row in self._ledger.rows(stage="generation") if str(row.get("candidate_id")) == candidate_id),
+            None,
+        )
+        if prior is not None:
+            comparable = dict(prior)
+            comparable.pop("previous_hash", None)
+            if comparable != expected:
+                raise RunIntegrityError("adaptive generation evidence changed during resume")
+            return
+        if not self._ledger.append(expected):
+            raise RunIntegrityError("adaptive generation evidence could not be appended")
+
+    def _record_generation_zero(
+        self,
+        *,
+        root: str,
+        timeframe: int,
+        seed: int,
+        expressions: Sequence[str],
+        candidates: Sequence[Candidate],
+    ) -> dict[str, str]:
+        candidate_ids_by_expression: dict[str, list[str]] = {}
+        for candidate in candidates:
+            candidate_ids_by_expression.setdefault(candidate.expression, []).append(candidate.candidate_id)
+        proposal_ids: dict[str, str] = {}
+        for ordinal, expression in enumerate(expressions):
+            semantic_hash = canonical_hash(expression)
+            proposal_id = _canonical_hash(
+                {
+                    "schema": "alpha_mining_generation_proposal.v1",
+                    "family": self.config.family,
+                    "root": root,
+                    "timeframe_min": timeframe,
+                    "generation": 0,
+                    "ordinal": ordinal,
+                    "seed": int(seed),
+                    "semantic_hash": semantic_hash,
+                }
+            )
+            payload = {
+                "candidate_id": proposal_id,
+                "stage": "generation",
+                "status": "accepted",
+                "event": "expression_proposal",
+                "search_generation": 0,
+                "family": self.config.family,
+                "root": root,
+                "timeframe_min": timeframe,
+                "ordinal": ordinal,
+                "seed": int(seed),
+                "generator_version": "deterministic_gp_v1",
+                "expression": expression,
+                "semantic_hash": semantic_hash,
+                "parent_candidate_ids": [],
+                "parent_expressions": [],
+                "candidate_ids": candidate_ids_by_expression.get(expression, []),
+                "rejection_reason": "",
+            }
+            self._append_generation_evidence(payload)
+            proposal_ids[expression] = proposal_id
+        return proposal_ids
+
+    def _generation_zero_parents(self, *, root: str, timeframe: int) -> list[CandidateResult]:
+        generation_zero = [
+            _result_from_kill_ledger_row(row)
+            for row in self._ledger.rows(stage="discovery")
+            if row.get("status") == "passed"
+            and int(row.get("search_generation", 0)) == 0
+            and str(row.get("candidate", {}).get("root")) == root
+            and int(row.get("candidate", {}).get("timeframe_min", -1)) == timeframe
+        ]
+        distinct: list[CandidateResult] = []
+        seen_semantics: set[str] = set()
+        for result in sorted(generation_zero, key=_result_sort_key):
+            semantic_hash = canonical_hash(result.candidate.expression)
+            if semantic_hash in seen_semantics:
+                continue
+            seen_semantics.add(semantic_hash)
+            distinct.append(result)
+        return distinct
+
+    def _build_feedback_context(
+        self,
+        *,
+        root: str,
+        timeframe: int,
+        seed: int,
+        bars: GovernedBars,
+        labels: np.ndarray,
+        generation_zero_expressions: Sequence[str],
+        feedback_limit: int,
+    ) -> tuple[dict[str, np.ndarray], list[str], list[Candidate], dict[str, str]]:
+        group_key = f"{root}/{timeframe}"
+        parents = self._generation_zero_parents(root=root, timeframe=timeframe)
+        parent_by_expression = {result.candidate.expression: result for result in parents}
+        parent_expressions = [result.candidate.expression for result in parents]
+        rejection_counts: Counter[str] = Counter()
+        accepted_expressions: list[str] = []
+        signals: dict[str, np.ndarray] = {}
+        candidates: list[Candidate] = []
+        proposal_ids: dict[str, str] = {}
+        adapter = FAMILY_REGISTRY[self.config.family]
+        features = adapter.build_features(bars, self.config)
+        discovery_mask = labels == "discovery"
+        max_attempts = max(
+            MIN_FEEDBACK_ATTEMPTS,
+            int(feedback_limit) * FEEDBACK_ATTEMPTS_PER_EXPRESSION,
+        )
+        proposals = generated_feedback_proposals(
+            parent_expressions,
+            seed=seed,
+            excluded_semantic_hashes=tuple(canonical_hash(item) for item in generation_zero_expressions),
+            max_attempts=max_attempts,
+        )
+        for proposal in proposals:
+            parent_candidate_ids = [
+                parent_by_expression[parent].candidate.candidate_id for parent in proposal.parent_expressions
+            ]
+            proposal_id = _canonical_hash(
+                {
+                    "schema": "alpha_mining_generation_proposal.v1",
+                    "family": self.config.family,
+                    "root": root,
+                    "timeframe_min": timeframe,
+                    "generation": 1,
+                    "attempt": proposal.attempt,
+                    "attempt_seed": proposal.attempt_seed,
+                    "semantic_hash": proposal.semantic_hash,
+                    "parent_candidate_ids": parent_candidate_ids,
+                }
+            )
+            status = proposal.generator_status
+            reason = proposal.rejection_reason
+            child_candidates: list[Candidate] = []
+            signal: np.ndarray | None = None
+            if status == "candidate":
+                try:
+                    feature_history_bars_for_expression(self.config.family, proposal.expression)
+                    signal = adapter.evaluate_expression(proposal.expression, features, bars.reset)
+                    valid, stationarity_reason = validate_stationary_signal(signal[discovery_mask])
+                    if not valid:
+                        status = "rejected"
+                        reason = f"discovery_{stationarity_reason}"
+                except (KeyError, TypeError, ValueError, SyntaxError) as exc:
+                    status = "rejected"
+                    reason = f"invalid_feedback_expression:{type(exc).__name__}"
+            if status == "candidate" and signal is not None:
+                child_candidates = enumerate_candidates(
+                    family=self.config.family,
+                    root=root,
+                    timeframe_min=timeframe,
+                    expressions=[proposal.expression],
+                    signals={proposal.expression: signal},
+                    discovery_mask=discovery_mask,
+                    seed=seed,
+                )
+                status = "accepted"
+                accepted_expressions.append(proposal.expression)
+                signals[proposal.expression] = signal
+                candidates.extend(child_candidates)
+                proposal_ids[proposal.expression] = proposal_id
+            else:
+                rejection_counts[reason or "rejected"] += 1
+            self._append_generation_evidence(
+                {
+                    "candidate_id": proposal_id,
+                    "stage": "generation",
+                    "status": status,
+                    "event": "expression_proposal",
+                    "search_generation": 1,
+                    "family": self.config.family,
+                    "root": root,
+                    "timeframe_min": timeframe,
+                    "ordinal": len(accepted_expressions) - 1 if status == "accepted" else None,
+                    "attempt": proposal.attempt,
+                    "seed": int(seed),
+                    "attempt_seed": proposal.attempt_seed,
+                    "generator_version": FEEDBACK_GENERATOR_VERSION,
+                    "expression": proposal.expression,
+                    "semantic_hash": proposal.semantic_hash,
+                    "parent_candidate_ids": parent_candidate_ids,
+                    "parent_expressions": list(proposal.parent_expressions),
+                    "candidate_ids": [candidate.candidate_id for candidate in child_candidates],
+                    "rejection_reason": reason,
+                }
+            )
+            if len(accepted_expressions) >= int(feedback_limit):
+                break
+        closure_status = "closed" if len(accepted_expressions) == int(feedback_limit) else "closed_with_unused_budget"
+        closure_reason = ""
+        if len(parents) < 2:
+            closure_reason = "insufficient_generation0_parent_diversity"
+        elif len(accepted_expressions) < int(feedback_limit):
+            closure_reason = "insufficient_novel_feedback_supply"
+        closure_id = _canonical_hash(
+            {
+                "schema": "alpha_mining_generation_closure.v1",
+                "family": self.config.family,
+                "root": root,
+                "timeframe_min": timeframe,
+                "generation": 1,
+                "seed": int(seed),
+                "requested": int(feedback_limit),
+            }
+        )
+        self._append_generation_evidence(
+            {
+                "candidate_id": closure_id,
+                "stage": "generation",
+                "status": closure_status,
+                "event": "generation_closure",
+                "search_generation": 1,
+                "family": self.config.family,
+                "root": root,
+                "timeframe_min": timeframe,
+                "seed": int(seed),
+                "generator_version": FEEDBACK_GENERATOR_VERSION,
+                "requested_expressions": int(feedback_limit),
+                "accepted_expressions": len(accepted_expressions),
+                "unused_expressions": int(feedback_limit) - len(accepted_expressions),
+                "parent_expressions": len(parents),
+                "rejection_counts": dict(sorted(rejection_counts.items())),
+                "closure_reason": closure_reason,
+                "candidate_ids": [candidate.candidate_id for candidate in candidates],
+            }
+        )
+        self._generation_evidence[group_key] = {
+            "generation_zero_parent_expressions": len(parents),
+            "feedback_requested": int(feedback_limit),
+            "feedback_accepted": len(accepted_expressions),
+            "feedback_unused": int(feedback_limit) - len(accepted_expressions),
+            "feedback_attempts": len(
+                [
+                    row
+                    for row in self._ledger.rows(stage="generation")
+                    if row.get("root") == root
+                    and int(row.get("timeframe_min", -1)) == timeframe
+                    and int(row.get("search_generation", -1)) == 1
+                    and row.get("event") == "expression_proposal"
+                ]
+            ),
+            "feedback_rejection_counts": dict(sorted(rejection_counts.items())),
+            "closure_reason": closure_reason,
+        }
+        return signals, accepted_expressions, candidates, proposal_ids
+
+    def _evaluate_discovery_candidates(
+        self,
+        *,
+        dataset: GovernedBars,
+        bars: GovernedBars,
+        labels: np.ndarray,
+        signals: Mapping[str, np.ndarray],
+        candidates: Sequence[Candidate],
+        passing: list[CandidateResult],
+        search_generation: int,
+        proposal_ids: Mapping[str, str],
+    ) -> str | None:
+        remaining = [
+            candidate for candidate in candidates if not self._ledger.has(candidate.candidate_id, "discovery")
+        ][: max(0, self.config.max_candidates - self._ledger.unique_candidates)]
+
+        def evaluate(candidate: Candidate) -> CandidateResult:
+            return _evaluate_candidate(
+                candidate,
+                dataset=dataset,
+                bars=bars,
+                signal=signals[candidate.expression],
+                split_name="discovery",
+                split_labels=labels,
+                evaluation_fraction=0.25,
+                cost_mode=self.config.cost_mode,
+            )
+
+        stop_reason: str | None = None
+        batch_size = max(1, self.config.workers * 2)
+        with _discovery_process_pool(
+            workers=self.config.workers,
+            dataset=dataset,
+            bars=bars,
+            signals=signals,
+            labels=labels,
+            cost_mode=self.config.cost_mode,
+            has_work=any(candidate.duplicate_of is None for candidate in remaining),
+        ) as executor:
+            for batch_start in range(0, len(remaining), batch_size):
+                batch = remaining[batch_start : batch_start + batch_size]
+                evaluated_batch = [candidate for candidate in batch if candidate.duplicate_of is None]
+                evaluated_results = (
+                    (evaluate(candidate) for candidate in evaluated_batch)
+                    if executor is None
+                    else executor.map(_evaluate_discovery_worker, evaluated_batch, chunksize=1)
+                )
+                results_by_id = {result.candidate.candidate_id: result for result in evaluated_results}
+                for candidate in batch:
+                    common = {
+                        "search_generation": int(search_generation),
+                        "generation_proposal_id": proposal_ids[candidate.expression],
+                    }
+                    if candidate.duplicate_of is not None:
+                        self._ledger.append(
+                            {
+                                "candidate_id": candidate.candidate_id,
+                                "stage": "discovery",
+                                "status": "deduplicated",
+                                "candidate": asdict(candidate),
+                                **common,
+                                "failure_reason": "exact_resolved_cut_duplicate",
+                                "reference_candidate_id": candidate.duplicate_of,
+                                "threshold_resolution": (
+                                    asdict(candidate.threshold_resolution)
+                                    if candidate.threshold_resolution is not None
+                                    else None
+                                ),
+                                "recorded_at_ns": timebase.now_ns(),
+                            }
+                        )
+                    else:
+                        result = results_by_id[candidate.candidate_id]
+                        self._ledger.append(
+                            {
+                                "candidate_id": result.candidate.candidate_id,
+                                "stage": "discovery",
+                                "status": result.status,
+                                "candidate": asdict(result.candidate),
+                                **common,
+                                "metrics": metrics_to_dict(result.kill),
+                                "threshold_resolution": (
+                                    asdict(result.candidate.threshold_resolution)
+                                    if result.candidate.threshold_resolution is not None
+                                    else None
+                                ),
+                                "failure_reason": result.failure_reason,
+                                "recorded_at_ns": timebase.now_ns(),
+                            }
+                        )
+                        if result.kill.passed:
+                            passing.append(result)
+                    self._heartbeat(stage="discovery")
+                    self._checkpoint(
+                        stage="discovery",
+                        state={"discovery_passed": [item.to_dict() for item in passing]},
+                    )
+                    stop_reason = self._stop_reason()
+                    if stop_reason:
+                        if stop_reason != "max_candidates":
+                            self._terminal_stop_reason = stop_reason
+                        break
+                if stop_reason:
+                    break
+        return stop_reason
+
+    def _validate_adaptive_lineage(self) -> None:
+        """Require every adaptive discovery row to match one accepted proposal."""
+        accepted = [
+            row
+            for row in self._ledger.rows(stage="generation")
+            if row.get("status") == "accepted" and row.get("event") == "expression_proposal"
+        ]
+        owners: dict[str, tuple[str, Mapping[str, Any]]] = {}
+        for proposal in accepted:
+            proposal_id = str(proposal.get("candidate_id", ""))
+            candidate_ids = proposal.get("candidate_ids")
+            if not proposal_id or not isinstance(candidate_ids, list) or not candidate_ids:
+                raise RunIntegrityError("accepted adaptive proposal has no candidate lineage")
+            for raw_candidate_id in candidate_ids:
+                candidate_id = str(raw_candidate_id)
+                if candidate_id in owners:
+                    raise RunIntegrityError("adaptive candidate belongs to multiple generation proposals")
+                owners[candidate_id] = (proposal_id, proposal)
+
+        discovery_rows = self._ledger.rows(stage="discovery")
+        discovery_ids = {str(row.get("candidate_id", "")) for row in discovery_rows}
+        if set(owners) != discovery_ids:
+            raise RunIntegrityError("adaptive generation/discovery lineage does not conserve candidate IDs")
+
+        generation_zero_passes = {
+            str(row.get("candidate_id", ""))
+            for row in discovery_rows
+            if int(row.get("search_generation", -1)) == 0 and row.get("status") == "passed"
+        }
+        for proposal in accepted:
+            generation = int(proposal.get("search_generation", -1))
+            parent_ids = [str(value) for value in proposal.get("parent_candidate_ids", ())]
+            if generation == 0 and parent_ids:
+                raise RunIntegrityError("generation-0 proposal unexpectedly declares parents")
+            if generation == 1 and (
+                len(parent_ids) != 2 or any(item not in generation_zero_passes for item in parent_ids)
+            ):
+                raise RunIntegrityError("generation-1 proposal parents are not generation-0 discovery passes")
+
+        for row in discovery_rows:
+            candidate_id = str(row.get("candidate_id", ""))
+            proposal_id, owned_proposal = owners[candidate_id]
+            generation = int(owned_proposal.get("search_generation", -1))
+            if str(row.get("generation_proposal_id", "")) != proposal_id:
+                raise RunIntegrityError("adaptive discovery row links to the wrong generation proposal")
+            if int(row.get("search_generation", -1)) != generation:
+                raise RunIntegrityError("adaptive discovery row has the wrong search generation")
+            candidate = row.get("candidate")
+            if not isinstance(candidate, Mapping) or str(candidate.get("candidate_id", "")) != candidate_id:
+                raise RunIntegrityError("adaptive discovery row candidate payload does not match its identity")
+            expected_fields = {
+                "family": str(owned_proposal.get("family", "")),
+                "root": str(owned_proposal.get("root", "")),
+                "timeframe_min": int(owned_proposal.get("timeframe_min", -1)),
+                "expression": str(owned_proposal.get("expression", "")),
+            }
+            actual_fields = {
+                "family": str(candidate.get("family", "")),
+                "root": str(candidate.get("root", "")),
+                "timeframe_min": int(candidate.get("timeframe_min", -1)),
+                "expression": str(candidate.get("expression", "")),
+            }
+            if actual_fields != expected_fields:
+                raise RunIntegrityError("adaptive discovery candidate does not match its generation proposal")
+
+    def _adaptive_discover(self, dataset: GovernedBars, restored: Sequence[CandidateResult]) -> list[CandidateResult]:
+        passing_by_id = {item.candidate.candidate_id: item for item in restored}
+        for row in self._ledger.rows(stage="discovery"):
+            if row.get("status") == "passed":
+                recovered = _result_from_kill_ledger_row(row)
+                passing_by_id[recovered.candidate.candidate_id] = recovered
+        passing = list(passing_by_id.values())
+        budget = self._adaptive_search_budget()
+        generation_zero_limit = int(budget["generation_zero_expressions_per_group"])
+        feedback_limit = int(budget["feedback_expressions_per_group"])
+        groups = [(root, timeframe) for root in self._family_roots for timeframe in self.config.timeframes_minutes]
+        contexts: dict[
+            tuple[str, int],
+            tuple[GovernedBars, np.ndarray, dict[str, np.ndarray], list[str], list[Candidate], dict[str, str]],
+        ] = {}
+
+        for group_index, (root, timeframe) in enumerate(groups):
+            stop_reason = self._stop_reason()
+            if stop_reason:
+                if stop_reason != "max_candidates":
+                    self._terminal_stop_reason = stop_reason
+                    return passing
+                raise RunIntegrityError("adaptive candidate budget exhausted before generation-0 closure")
+            seed = self.config.seeds[group_index % len(self.config.seeds)]
+            bars, labels, signals, expressions, candidates = self._build_group_context(
+                dataset,
+                root,
+                timeframe,
+                generation_zero_limit,
+                seed,
+                record_effective_trials=False,
+                semantic_dedupe=True,
+            )
+            proposal_ids = self._record_generation_zero(
+                root=root,
+                timeframe=timeframe,
+                seed=seed,
+                expressions=expressions,
+                candidates=candidates,
+            )
+            contexts[(root, timeframe)] = (bars, labels, signals, expressions, candidates, proposal_ids)
+            stop_reason = self._evaluate_discovery_candidates(
+                dataset=dataset,
+                bars=bars,
+                labels=labels,
+                signals=signals,
+                candidates=candidates,
+                passing=passing,
+                search_generation=0,
+                proposal_ids=proposal_ids,
+            )
+            if stop_reason:
+                if stop_reason != "max_candidates":
+                    return passing
+                raise RunIntegrityError("adaptive candidate budget exhausted before generation-0 closure")
+
+        for group_index, (root, timeframe) in enumerate(groups):
+            stop_reason = self._stop_reason()
+            if stop_reason:
+                if stop_reason != "max_candidates":
+                    self._terminal_stop_reason = stop_reason
+                    return passing
+                raise RunIntegrityError("adaptive candidate budget exhausted before generation-1 closure")
+            base_seed = self.config.seeds[group_index % len(self.config.seeds)]
+            seed = _feedback_seed(
+                family=self.config.family,
+                root=root,
+                timeframe_min=timeframe,
+                base_seed=base_seed,
+            )
+            bars, labels, signals, expressions, candidates, _proposal_ids = contexts[(root, timeframe)]
+            feedback_signals, feedback_expressions, feedback_candidates, feedback_proposal_ids = (
+                self._build_feedback_context(
+                    root=root,
+                    timeframe=timeframe,
+                    seed=seed,
+                    bars=bars,
+                    labels=labels,
+                    generation_zero_expressions=expressions,
+                    feedback_limit=feedback_limit,
+                )
+            )
+            union_signals = {**signals, **feedback_signals}
+            union_candidates = [*candidates, *feedback_candidates]
+            discovery_mask = labels == "discovery"
+            self._effective_trial_counts[f"{root}/{timeframe}"] = _effective_trigger_test_count(
+                candidates=union_candidates,
+                signals=union_signals,
+                discovery_mask=discovery_mask,
+                trading_days=bars.trading_day,
+            )
+            supply = self._expression_supply[f"{root}/{timeframe}"]
+            supply.update(
+                {
+                    "feedback_requested": feedback_limit,
+                    "feedback_valid": len(feedback_expressions),
+                    "union_valid": len(expressions) + len(feedback_expressions),
+                }
+            )
+            stop_reason = self._evaluate_discovery_candidates(
+                dataset=dataset,
+                bars=bars,
+                labels=labels,
+                signals=feedback_signals,
+                candidates=feedback_candidates,
+                passing=passing,
+                search_generation=1,
+                proposal_ids=feedback_proposal_ids,
+            )
+            if stop_reason and stop_reason != "max_candidates":
+                return passing
+            if stop_reason == "max_candidates" and group_index != len(groups) - 1:
+                raise RunIntegrityError("adaptive candidate budget exhausted before generation-1 closure")
+
+        self._validate_adaptive_lineage()
+        return self._finalize_discovery(passing)
+
     def _finalize_discovery(self, passing: Sequence[CandidateResult]) -> list[CandidateResult]:
         discovery_rows = self._ledger.rows(stage="discovery")
+        generation_rows = [
+            {key: value for key, value in row.items() if key != "previous_hash"}
+            for row in self._ledger.rows(stage="generation")
+        ]
         search_space = _with_integrity_hash(
             {
-                "schema": "alpha_mining_search_space.v2",
+                "schema": "alpha_mining_search_space.v3",
                 "family": self.config.family,
                 "code_fingerprint": self._code_fingerprint,
                 "dataset_fingerprint": self._dataset_fingerprint(),
+                "search_strategy": (
+                    "discovery_feedback_v1" if self.config.feedback_expressions_per_group else "blind_v1"
+                ),
+                "generation_count": 2 if self.config.feedback_expressions_per_group else 1,
+                "feedback_generator_version": (
+                    FEEDBACK_GENERATOR_VERSION if self.config.feedback_expressions_per_group else None
+                ),
+                "adaptive_search_budget": (
+                    self._adaptive_search_budget() if self.config.feedback_expressions_per_group else None
+                ),
+                "generation_evidence_by_group": dict(sorted(self._generation_evidence.items())),
+                "lineage_hash": _canonical_hash({"generation_rows": generation_rows}),
+                "union_candidate_hash": _canonical_hash(
+                    {"candidate_ids": sorted(str(row["candidate_id"]) for row in discovery_rows)}
+                ),
                 "effective_trial_counts_by_group": dict(sorted(self._effective_trial_counts.items())),
                 "effective_trials_total": max(1, sum(self._effective_trial_counts.values())),
                 "expression_supply_by_group": dict(sorted(self._expression_supply.items())),
@@ -1756,6 +2402,8 @@ class MiningRun:
         return per_root
 
     def _discover(self, dataset: GovernedBars, restored: Sequence[CandidateResult]) -> list[CandidateResult]:
+        if self.config.feedback_expressions_per_group:
+            return self._adaptive_discover(dataset, restored)
         passing_by_id = {item.candidate.candidate_id: item for item in restored}
         for row in self._ledger.rows(stage="discovery"):
             if row.get("status") == "passed":
@@ -2067,15 +2715,10 @@ class MiningRun:
             1,
             min(actual_trials, sum(self._effective_trial_counts.values()) or actual_trials),
         )
-        discovery_sharpes = np.asarray(
-            [
-                float(row.get("metrics", {}).get("clustered_sharpe", 0.0))
-                for row in self._ledger.rows(stage="discovery")
-                if np.isfinite(float(row.get("metrics", {}).get("clustered_sharpe", 0.0)))
-            ],
-            dtype=np.float64,
+        trial_sharpe_std = _discovery_trial_sharpe_std(
+            self._ledger.rows(stage="discovery"),
+            evaluated_only=bool(self.config.feedback_expressions_per_group),
         )
-        trial_sharpe_std = float(np.std(discovery_sharpes, ddof=1)) if discovery_sharpes.size > 1 else 0.0
 
         def checkpoint_state() -> dict[str, Any]:
             return {
@@ -2230,20 +2873,38 @@ class MiningRun:
         )
         return final_frozen
 
-    def _restore_search_space_evidence(self) -> None:
-        if self._effective_trial_counts:
-            return
+    def _restore_search_space_evidence(self, *, required: bool = False) -> None:
         path = self.run_dir / "search_space.json"
         if not path.exists():
+            if required:
+                raise RunIntegrityError("completed discovery checkpoint has no search-space evidence")
             return
         payload = json.loads(path.read_text(encoding="utf-8"))
         _verify_integrity_hash(payload, "search_space_hash", artifact="search space")
         if (
-            payload.get("schema") != "alpha_mining_search_space.v2"
+            payload.get("schema") not in {"alpha_mining_search_space.v2", "alpha_mining_search_space.v3"}
             or payload.get("code_fingerprint") != self._code_fingerprint
             or payload.get("dataset_fingerprint") != self._dataset_fingerprint()
         ):
             raise RunIntegrityError("search-space evidence fingerprint mismatch")
+        if payload.get("schema") == "alpha_mining_search_space.v3":
+            generation_rows = [
+                {key: value for key, value in row.items() if key != "previous_hash"}
+                for row in self._ledger.rows(stage="generation")
+            ]
+            expected_lineage_hash = _canonical_hash({"generation_rows": generation_rows})
+            if payload.get("lineage_hash") != expected_lineage_hash:
+                raise RunIntegrityError("search-space lineage hash does not match the trial ledger")
+            discovery_rows = self._ledger.rows(stage="discovery")
+            expected_union_hash = _canonical_hash(
+                {"candidate_ids": sorted(str(row.get("candidate_id", "")) for row in discovery_rows)}
+            )
+            if payload.get("union_candidate_hash") != expected_union_hash:
+                raise RunIntegrityError("search-space candidate-union hash does not match the trial ledger")
+            if payload.get("search_strategy") == "discovery_feedback_v1":
+                if not self.config.feedback_expressions_per_group:
+                    raise RunIntegrityError("adaptive search-space evidence does not match the run configuration")
+                self._validate_adaptive_lineage()
         counts = payload.get("effective_trial_counts_by_group")
         if not isinstance(counts, Mapping) or not counts:
             raise RunIntegrityError("search-space evidence has no effective trial counts")
@@ -2254,12 +2915,14 @@ class MiningRun:
         supply = payload.get("expression_supply_by_group")
         if isinstance(supply, Mapping):
             self._expression_supply = {
-                str(key): {
-                    "requested": int(dict(value).get("requested", 0)),
-                    "valid": int(dict(value).get("valid", 0)),
-                }
+                str(key): {str(name): int(count) for name, count in dict(value).items()}
                 for key, value in supply.items()
                 if isinstance(value, Mapping)
+            }
+        generation_evidence = payload.get("generation_evidence_by_group")
+        if isinstance(generation_evidence, Mapping):
+            self._generation_evidence = {
+                str(key): dict(value) for key, value in generation_evidence.items() if isinstance(value, Mapping)
             }
 
     def _final(self, dataset: GovernedBars, frozen: Sequence[CandidateResult]) -> list[CandidateResult]:
@@ -2583,21 +3246,50 @@ class MiningRun:
             )
         return None, []
 
+    def _restore_complete_report(self, state: Mapping[str, Any]) -> dict[str, Any]:
+        if not self.report_path.exists():
+            raise RunIntegrityError("complete checkpoint has no durable report")
+        report = json.loads(self.report_path.read_text(encoding="utf-8"))
+        _verify_integrity_hash(report, "report_hash", artifact="report")
+        checkpoint_report = state.get("report")
+        if isinstance(checkpoint_report, Mapping) and dict(checkpoint_report) != report:
+            raise RunIntegrityError("complete checkpoint report does not match the durable report")
+        search_space_complete = bool(report.get("search_space_complete", False))
+        if (
+            self.config.feedback_expressions_per_group
+            and not search_space_complete
+            and not report.get("terminal_stop_reason")
+        ):
+            raise RunIntegrityError("adaptive complete report has neither search-space nor terminal-stop evidence")
+        self._restore_search_space_evidence(
+            required=bool(self.config.feedback_expressions_per_group) and search_space_complete
+        )
+        return report
+
     def _run_stages(
         self,
         dataset: GovernedBars,
         manifest: Mapping[str, Any],
     ) -> dict[str, Any]:
         checkpoint = self._load_checkpoint() if self.config.resume else {}
-        self._restore_search_space_evidence()
         raw_state = checkpoint.get("state")
         state: Mapping[str, Any] = raw_state if isinstance(raw_state, Mapping) else {}
         stage = str(checkpoint.get("stage", ""))
-        if stage == "complete" and self.report_path.exists():
-            report = json.loads(self.report_path.read_text(encoding="utf-8"))
-            _verify_integrity_hash(report, "report_hash", artifact="report")
-            return report
+        if stage == "complete":
+            return self._restore_complete_report(state)
+        self._restore_search_space_evidence(
+            required=bool(self.config.feedback_expressions_per_group)
+            and stage
+            in {
+                "discovery_complete",
+                "selection",
+                "selection_complete",
+                "locked_validation",
+                "locked_complete",
+            }
+        )
         if self._wall_time_reached():
+            self._terminal_stop_reason = "wall_time"
             return self._finish(
                 manifest,
                 dataset,
@@ -2775,7 +3467,7 @@ class MiningRun:
             "selection_dispositions": selection_total,
             "selection_conserved": post_discovery_advanced == selection_total,
         }
-        if not conservation["post_discovery_conserved"]:
+        if self._terminal_stop_reason is None and not conservation["post_discovery_conserved"]:
             raise RunIntegrityError("report funnel does not conserve discovery passes")
         if self._terminal_stop_reason is None and not conservation["selection_conserved"]:
             raise RunIntegrityError("report funnel does not conserve selection dispositions")
@@ -2825,6 +3517,8 @@ class MiningRun:
                 "non_gate_dispositions": dispositions,
                 "stage_conservation": conservation,
                 "near_misses": near_misses,
+                "terminal_stop_reason": self._terminal_stop_reason or "",
+                "search_space_complete": (self.run_dir / "search_space.json").exists(),
                 "effective_trial_counts_by_group": dict(sorted(self._effective_trial_counts.items())),
                 "expression_supply_by_group": dict(sorted(self._expression_supply.items())),
                 "completed_at": datetime.now(UTC).isoformat(),

@@ -478,6 +478,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     mine_run.add_argument("--wall-time-hours", type=float, default=72.0)
     mine_run.add_argument("--max-candidates", type=int, default=20_000)
+    mine_run.add_argument(
+        "--feedback-expressions-per-group",
+        type=int,
+        default=0,
+        help=(
+            "Opt-in discovery-only generation-1 expression quota per root/timeframe; "
+            "default 0 preserves blind search and adaptive runs cannot unlock final holdout"
+        ),
+    )
     mine_run.add_argument("--workers", type=int, default=12)
     mine_run.add_argument(
         "--timeframes-minutes",

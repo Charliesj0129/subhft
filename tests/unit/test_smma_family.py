@@ -3,11 +3,13 @@ from __future__ import annotations
 import numpy as np
 
 from hft_platform.contracts.alpha import AlphaManifest
+from research.combinatorial.canonical_ast import canonical_hash
 from research.combinatorial.expression_lang import compile_expression
 from research.combinatorial.smma import (
     FIBONACCI_SMMA_LENGTHS,
     build_smma_family_features,
     evaluate_smma_expression,
+    generated_feedback_proposals,
     generated_gp_expressions,
     pine_smma,
     smma_lengths_from_expression,
@@ -103,6 +105,45 @@ def test_generated_gp_expressions_ban_self_correlation_and_repeated_operands() -
     assert all("ts_corr(b, b" not in expression for expression in expressions)
     assert all("ts_corr(c, c" not in expression for expression in expressions)
     assert all(compile_expression(expression, max_depth=3).max_depth <= 3 for expression in expressions)
+
+
+def test_feedback_children_are_deterministic_typed_and_semantically_novel() -> None:
+    parents = ("x", "sign(y)", "ts_delta(z, 3)", "add(x, y)")
+    excluded = tuple(canonical_hash(expression) for expression in parents)
+
+    first = generated_feedback_proposals(
+        parents,
+        seed=7,
+        excluded_semantic_hashes=excluded,
+        max_attempts=40,
+    )
+    second = generated_feedback_proposals(
+        parents,
+        seed=7,
+        excluded_semantic_hashes=excluded,
+        max_attempts=40,
+    )
+    children = [proposal for proposal in first if proposal.generator_status == "candidate"]
+
+    assert first == second
+    assert children
+    assert len({proposal.semantic_hash for proposal in children}) == len(children)
+    assert not set(excluded).intersection(proposal.semantic_hash for proposal in children)
+    assert all(compile_expression(proposal.expression, max_depth=3).max_depth <= 3 for proposal in children)
+
+
+def test_semantically_equivalent_feedback_child_is_recorded_but_not_accepted() -> None:
+    parents = ("x", "y")
+    proposals = generated_feedback_proposals(
+        parents,
+        seed=11,
+        excluded_semantic_hashes=tuple(canonical_hash(expression) for expression in parents),
+        max_attempts=8,
+    )
+
+    assert proposals
+    assert all(proposal.generator_status == "rejected" for proposal in proposals)
+    assert {proposal.rejection_reason for proposal in proposals} == {"semantic_duplicate"}
 
 
 def test_constant_signal_is_rejected() -> None:

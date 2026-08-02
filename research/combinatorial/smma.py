@@ -7,9 +7,12 @@ features (distance, slope, spread, alignment), never a raw price or SMMA level.
 
 from __future__ import annotations
 
+import hashlib
 import itertools
+import random
 import re
 from collections import deque
+from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
 import numpy as np
@@ -19,7 +22,19 @@ SMMA_LENGTHS: tuple[int, ...] = (3, 5, 7, 10, 14, 21, 34, 55)
 FIBONACCI_SMMA_LENGTHS: tuple[int, ...] = (1, 2, 3, 5, 8, 13, 21, 34, 55)
 SMMA_SLOPE_LAGS: tuple[int, ...] = (1, 3, 6)
 SMMA_NORMALIZERS: tuple[str, ...] = ("atr14", "retvol14")
+FEEDBACK_GENERATOR_VERSION = "typed_crossover_v1"
 _FEATURE_LENGTHS_RE = re.compile(r"^(?:close|hl2|hlc3|ohlc4)_l(?P<lengths>[0-9_]+)_(?:atr14|retvol14)_")
+
+
+@dataclass(frozen=True, slots=True)
+class FeedbackExpressionProposal:
+    attempt: int
+    attempt_seed: int
+    parent_expressions: tuple[str, str]
+    expression: str
+    semantic_hash: str
+    generator_status: str
+    rejection_reason: str = ""
 
 
 class SMMAState:
@@ -367,3 +382,85 @@ def generated_gp_expressions(
             expressions.append(expression)
         attempts += 1
     return expressions
+
+
+def generated_feedback_proposals(
+    parent_expressions: Sequence[str],
+    *,
+    seed: int,
+    excluded_semantic_hashes: Sequence[str],
+    max_attempts: int,
+) -> tuple[FeedbackExpressionProposal, ...]:
+    """Generate deterministic, typed crossover attempts from discovery parents.
+
+    This function deliberately knows nothing about returns or later splits.
+    Streamability and discovery-only stationarity remain runner preconditions
+    before a proposal can consume candidate budget.
+    """
+    from research.combinatorial.canonical_ast import canonical_hash, crossover
+    from research.combinatorial.expression_lang import compile_expression
+
+    if int(max_attempts) < 0:
+        raise ValueError("max_attempts must be non-negative")
+    parents: list[str] = []
+    parent_hashes: set[str] = set()
+    for expression in parent_expressions:
+        compile_expression(str(expression), max_depth=3)
+        semantic_hash = canonical_hash(str(expression))
+        if semantic_hash in parent_hashes:
+            continue
+        parent_hashes.add(semantic_hash)
+        parents.append(str(expression))
+    if len(parents) < 2 or int(max_attempts) == 0:
+        return ()
+
+    seen = set(str(value) for value in excluded_semantic_hashes)
+    proposals: list[FeedbackExpressionProposal] = []
+    for attempt in range(int(max_attempts)):
+        seed_material = f"{FEEDBACK_GENERATOR_VERSION}:{int(seed)}:{attempt}".encode()
+        attempt_seed = int.from_bytes(hashlib.sha256(seed_material).digest()[:8], "big")
+        rng = random.Random(attempt_seed)
+        left_index, right_index = rng.sample(range(len(parents)), 2)
+        parent_pair = (parents[left_index], parents[right_index])
+        try:
+            child = crossover(parent_pair[0], parent_pair[1], rng)
+            compile_expression(child, max_depth=3)
+            semantic_hash = canonical_hash(child)
+        except (SyntaxError, TypeError, ValueError) as exc:
+            proposals.append(
+                FeedbackExpressionProposal(
+                    attempt=attempt,
+                    attempt_seed=attempt_seed,
+                    parent_expressions=parent_pair,
+                    expression="",
+                    semantic_hash="",
+                    generator_status="rejected",
+                    rejection_reason=f"invalid_typed_crossover:{type(exc).__name__}",
+                )
+            )
+            continue
+        if semantic_hash in seen:
+            proposals.append(
+                FeedbackExpressionProposal(
+                    attempt=attempt,
+                    attempt_seed=attempt_seed,
+                    parent_expressions=parent_pair,
+                    expression=child,
+                    semantic_hash=semantic_hash,
+                    generator_status="rejected",
+                    rejection_reason="semantic_duplicate",
+                )
+            )
+            continue
+        seen.add(semantic_hash)
+        proposals.append(
+            FeedbackExpressionProposal(
+                attempt=attempt,
+                attempt_seed=attempt_seed,
+                parent_expressions=parent_pair,
+                expression=child,
+                semantic_hash=semantic_hash,
+                generator_status="candidate",
+            )
+        )
+    return tuple(proposals)

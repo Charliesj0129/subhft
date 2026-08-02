@@ -307,6 +307,7 @@ def cmd_alpha_mine_run(args: argparse.Namespace) -> None:
             unlock_final_holdout=bool(getattr(args, "unlock_final_holdout", False)),
             dataset_cache_dir=(Path(args.dataset_cache_dir) if getattr(args, "dataset_cache_dir", None) else None),
             cost_mode=str(getattr(args, "cost_mode", "per_contract")),
+            feedback_expressions_per_group=int(getattr(args, "feedback_expressions_per_group", 0)),
         )
         report = run_mining(config)
     except (DatasetGovernanceError, TickDatasetGovernanceError, RunIntegrityError, ValueError, OSError) as exc:
