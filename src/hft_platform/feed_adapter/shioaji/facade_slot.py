@@ -72,6 +72,7 @@ class FacadeSlot:
         "reconnect_failures",
         "degraded_since_mono",
         "_pending_warmup_reset",
+        "_suppress_logged_mono",
         "_lock",
     )
 
@@ -87,6 +88,11 @@ class FacadeSlot:
         self.reconnect_failures: int = 0
         self.degraded_since_mono: float | None = None
         self._pending_warmup_reset: bool = False
+        # Throttles the "reconnect suppressed" log. The supervisor evaluates
+        # facade health at 1 Hz, and a slot stays past its reconnect trigger for
+        # the entire time the market is shut, so an unthrottled log would emit
+        # ~4 lines/second all night and all weekend. 0.0 means "never logged".
+        self._suppress_logged_mono: float = 0.0
         # Guards compound state transitions (state + reconnect_failures +
         # degraded_since_mono + _pending_warmup_reset) across the event-loop
         # supervisor and the daemon reconnect threads spawned in

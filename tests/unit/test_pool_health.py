@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import time
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
+from hft_platform.feed_adapter.shioaji import pool_health as pool_health_mod
 from hft_platform.feed_adapter.shioaji.facade_slot import FacadeSlot, FacadeState
 from hft_platform.feed_adapter.shioaji.pool_health import (
     check_facade_health,
@@ -426,3 +427,87 @@ class TestCheckFacadeHealthSuppressReconnect:
             suppress_reconnect=True,
         )
         schedule_fn.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# check_facade_health — suppression log throttling
+# ---------------------------------------------------------------------------
+
+
+class TestSuppressionLogThrottling:
+    """The supervisor evaluates facade health at 1 Hz and a slot stays past its
+    reconnect trigger for the whole time the market is shut, so the suppression
+    log must not fire on every tick."""
+
+    def test_suppression_log_emitted_once_across_repeated_ticks(self) -> None:
+        slot = _make_slot(
+            "conn-0",
+            FacadeState.DEGRADED,
+            last_data_offset_s=5.0,
+            degraded_since_offset_s=15.0,
+        )
+        schedule_fn = MagicMock()
+        with patch.object(pool_health_mod.log, "info") as mock_info:
+            for _ in range(60):
+                check_facade_health(
+                    [slot],
+                    degraded_threshold_s=3.0,
+                    reconnect_trigger_s=10.0,
+                    schedule_fn=schedule_fn,
+                    suppress_reconnect=True,
+                )
+        suppressed = [c for c in mock_info.call_args_list if c.args and c.args[0] == "facade_reconnect_suppressed"]
+        assert len(suppressed) == 1
+        schedule_fn.assert_not_called()
+
+    def test_suppression_log_rearms_after_feed_recovers(self) -> None:
+        """A new degraded episode must be able to log again."""
+        slot = _make_slot(
+            "conn-0",
+            FacadeState.DEGRADED,
+            last_data_offset_s=5.0,
+            degraded_since_offset_s=15.0,
+        )
+        schedule_fn = MagicMock()
+        kwargs = {
+            "degraded_threshold_s": 3.0,
+            "reconnect_trigger_s": 10.0,
+            "schedule_fn": schedule_fn,
+            "suppress_reconnect": True,
+        }
+        check_facade_health([slot], **kwargs)
+        assert slot._suppress_logged_mono != 0.0
+
+        # Feed comes back -> recovery clears the throttle.
+        slot.last_data_mono = time.monotonic()
+        check_facade_health([slot], **kwargs)
+        assert slot.state == FacadeState.CONNECTED
+        assert slot._suppress_logged_mono == 0.0
+
+    def test_scheduling_a_real_reconnect_clears_the_throttle(self) -> None:
+        """Leaving suppression must not strand a stale throttle timestamp."""
+        slot = _make_slot(
+            "conn-0",
+            FacadeState.DEGRADED,
+            last_data_offset_s=5.0,
+            degraded_since_offset_s=15.0,
+        )
+        schedule_fn = MagicMock()
+        check_facade_health(
+            [slot],
+            degraded_threshold_s=3.0,
+            reconnect_trigger_s=10.0,
+            schedule_fn=schedule_fn,
+            suppress_reconnect=True,
+        )
+        assert slot._suppress_logged_mono != 0.0
+
+        check_facade_health(
+            [slot],
+            degraded_threshold_s=3.0,
+            reconnect_trigger_s=10.0,
+            schedule_fn=schedule_fn,
+            suppress_reconnect=False,
+        )
+        schedule_fn.assert_called_once_with("conn-0")
+        assert slot._suppress_logged_mono == 0.0
