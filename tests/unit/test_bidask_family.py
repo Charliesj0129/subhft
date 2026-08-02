@@ -3,7 +3,11 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from research.combinatorial.bidask import BIDASK_SLOPE_LAGS, build_bidask_family_features
+from research.combinatorial.bidask import (
+    BIDASK_FEATURE_HISTORY_BARS,
+    BIDASK_SLOPE_LAGS,
+    build_bidask_family_features,
+)
 from research.combinatorial.expression_lang import compile_expression
 
 
@@ -38,6 +42,10 @@ def test_bidask_features_are_float64_arrays_matching_input_length() -> None:
     for name, values in features.items():
         assert values.dtype == np.float64, name
         assert values.shape == (12,), name
+
+
+def test_bidask_feature_history_metadata_covers_every_exported_feature() -> None:
+    assert set(BIDASK_FEATURE_HISTORY_BARS) == set(_features())
 
 
 def test_bidask_feature_names_are_dsl_compilable_and_carry_transform_tokens() -> None:

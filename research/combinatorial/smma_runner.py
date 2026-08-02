@@ -25,10 +25,11 @@ import numpy as np
 
 from hft_platform.core import timebase
 from research.backtest.cost_models import load_cost_profile
-from research.combinatorial.bidask import build_bidask_family_features
+from research.combinatorial.bidask import BIDASK_FEATURE_HISTORY_BARS, build_bidask_family_features
 from research.combinatorial.expression_eval import evaluate_family_expression
 from research.combinatorial.expression_lang import compile_expression
-from research.combinatorial.kbar import build_kbar_family_features
+from research.combinatorial.gp_alpha_adapter import required_history_by_variable
+from research.combinatorial.kbar import KBAR_FEATURE_HISTORY_BARS, build_kbar_family_features
 from research.combinatorial.smma import (
     SMMA_LENGTHS,
     build_smma_family_features,
@@ -72,7 +73,7 @@ from research.combinatorial.smma_validation import (
     simulate_next_bar_execution,
 )
 from research.combinatorial.taifex_trading_dates import build_trading_date_window
-from research.combinatorial.tick import build_tick_family_features
+from research.combinatorial.tick import TICK_FEATURE_HISTORY_BARS, build_tick_family_features
 from research.combinatorial.tick_dataset import (
     TICK_DATASET_SCHEMA,
     TICK_ROOTS,
@@ -110,6 +111,7 @@ HEARTBEAT_SECONDS = 60.0
 RSS_PAUSE_BYTES = 18 * 1024**3
 RSS_STOP_BYTES = 20 * 1024**3
 OUTPUT_STOP_BYTES = 100 * 1024**3
+DAY_NS = 24 * 60 * 60 * 1_000_000_000
 
 _CODE_FILES: tuple[str, ...] = (
     "research/combinatorial/smma.py",
@@ -395,6 +397,12 @@ class CandidateResult:
         if locked_payload is not None:
             locked_payload["walk_forward_sharpes"] = tuple(locked_payload.get("walk_forward_sharpes", ()))
             locked_payload["failure_reasons"] = tuple(locked_payload.get("failure_reasons", ()))
+            locked_payload["walk_forward_fold_trade_counts"] = tuple(
+                locked_payload.get("walk_forward_fold_trade_counts", ())
+            )
+            locked_payload["walk_forward_fold_purged_counts"] = tuple(
+                locked_payload.get("walk_forward_fold_purged_counts", ())
+            )
         candidate_payload = dict(payload["candidate"])
         resolution_payload = candidate_payload.get("threshold_resolution")
         if isinstance(resolution_payload, Mapping):
@@ -696,6 +704,52 @@ def _profile_for_root(root: str) -> str:
     return "TXFD6" if root == "TXF" else "TMFD6"
 
 
+_FINITE_FEATURE_HISTORY_BY_FAMILY: Mapping[str, Mapping[str, int]] = {
+    "bidask": BIDASK_FEATURE_HISTORY_BARS,
+    "kbar": KBAR_FEATURE_HISTORY_BARS,
+    "tick": TICK_FEATURE_HISTORY_BARS,
+}
+
+
+def feature_history_bars_for_expression(family: str, expression: str) -> int | None:
+    """Exact raw feature-bar history, or ``None`` for recursive SMMA state."""
+    expression_history = required_history_by_variable(expression)
+    if not expression_history:
+        raise ValueError("candidate expression has no feature variables")
+    if family == "smma":
+        return None
+    try:
+        base_history = _FINITE_FEATURE_HISTORY_BY_FAMILY[family]
+    except KeyError as exc:
+        raise RunIntegrityError(f"feature-history metadata is unavailable for family {family!r}") from exc
+    missing = sorted(set(expression_history) - set(base_history))
+    if missing:
+        raise RunIntegrityError(f"feature-history metadata is missing variables: {missing}")
+    return max(int(required) + int(base_history[variable]) - 1 for variable, required in expression_history.items())
+
+
+def _feature_grid_history_starts(
+    reset_mask: Sequence[bool] | np.ndarray,
+    *,
+    feature_count: int,
+    feature_history_bars: int | None,
+) -> np.ndarray:
+    starts = np.full(feature_count, -1, dtype=np.int64)
+    if feature_history_bars is None:
+        return starts
+    if int(feature_history_bars) < 1:
+        raise ValueError("feature_history_bars must be positive when history is finite")
+    resets = np.asarray(reset_mask, dtype=np.bool_).reshape(-1)
+    if resets.size != feature_count:
+        raise ValueError("feature reset mask must align with the feature grid")
+    segment_start = 0
+    for feature_index in range(feature_count):
+        if bool(resets[feature_index]):
+            segment_start = feature_index
+        starts[feature_index] = max(segment_start, feature_index - int(feature_history_bars) + 1)
+    return starts
+
+
 def _exact_horizon_inputs(
     *,
     dataset: GovernedBars,
@@ -703,14 +757,20 @@ def _exact_horizon_inputs(
     feature_bars: GovernedBars,
     feature_signal: np.ndarray,
     split_labels: np.ndarray,
-) -> tuple[GovernedBars, np.ndarray, np.ndarray, int]:
+    feature_history_bars: int | None = 1,
+) -> tuple[GovernedBars, np.ndarray, np.ndarray, int, np.ndarray]:
     """Project coarse signals onto 60-minute bars when a true 1h horizon requires it."""
     signal = np.asarray(feature_signal, dtype=np.float64).reshape(-1)
     labels = np.asarray(split_labels).astype("<U18").reshape(-1)
     if len({len(feature_bars), signal.size, labels.size}) != 1:
         raise ValueError("feature bars, signal, and split labels must have identical lengths")
+    history_starts = _feature_grid_history_starts(
+        feature_bars.reset,
+        feature_count=signal.size,
+        feature_history_bars=feature_history_bars,
+    )
     if candidate.horizon != "1h" or candidate.timeframe_min <= 60:
-        return feature_bars, signal, labels, candidate.timeframe_min
+        return feature_bars, signal, labels, candidate.timeframe_min, history_starts
 
     if candidate.timeframe_min not in (120, 240):
         raise RunIntegrityError(f"cannot represent an exact 1h horizon for {candidate.timeframe_min}m features")
@@ -736,6 +796,8 @@ def _exact_horizon_inputs(
 
     minute_ns = 60 * 1_000_000_000
     aligned_signal: np.ndarray = np.full(len(execution_bars), np.nan, dtype=np.float64)
+    aligned_history_starts = np.full(len(execution_bars), -1, dtype=np.int64)
+    feature_bucket_starts = np.full(len(feature_bars), -1, dtype=np.int64)
     missing_buckets: list[int] = []
     for feature_index, value in enumerate(signal):
         bucket_start = int(feature_bars.ts_ns[feature_index])
@@ -754,9 +816,16 @@ def _exact_horizon_inputs(
         if np.isfinite(aligned_signal[index]):
             raise RunIntegrityError(f"multiple coarse bars map to 60m execution index {index}")
         aligned_signal[index] = value
+        feature_bucket_starts[feature_index] = int(matching[0])
+        source_feature_index = int(history_starts[feature_index])
+        if source_feature_index >= 0:
+            source_start = int(feature_bucket_starts[source_feature_index])
+            if source_start < 0:
+                raise RunIntegrityError("feature-history source bucket was not mapped to the execution grid")
+            aligned_history_starts[index] = source_start
     if missing_buckets:
         raise RunIntegrityError(f"60m execution grid is missing coarse-bar bucket(s): {missing_buckets[:3]}")
-    return execution_bars, aligned_signal, execution_labels, 60
+    return execution_bars, aligned_signal, execution_labels, 60, aligned_history_starts
 
 
 def _evaluate_candidate(
@@ -770,7 +839,7 @@ def _evaluate_candidate(
     evaluation_fraction: float = 1.0,
     cost_mode: str = "root_proxy",
 ) -> CandidateResult:
-    bars, signal, split_labels, target_timeframe_min = _exact_horizon_inputs(
+    bars, signal, split_labels, target_timeframe_min, _history_starts = _exact_horizon_inputs(
         dataset=dataset,
         candidate=candidate,
         feature_bars=bars,
@@ -1287,6 +1356,12 @@ class MiningRun:
                 f"only {trading_day_count} trading days; achievable verdict is capped below promotion "
                 f"until {MIN_DAYS_FOR_PROMOTION} days"
             )
+        feature_history_exact = self.config.family in _FINITE_FEATURE_HISTORY_BY_FAMILY
+        if not feature_history_exact:
+            warnings.append(
+                "SMMA recursive/global normalizer history has no finite exact lookback; "
+                "Validation-v3 locked walk-forward is fail-closed for this family"
+            )
         edge_thresholds: dict[str, dict[str, float | str]] = {}
         cost_coverage = self._cost_profile_coverage(dataset)
         for root in FAMILY_REGISTRY[self.config.family].dataset.roots:
@@ -1335,8 +1410,11 @@ class MiningRun:
             "dataset_timeframes_minutes": list(self._required_dataset_timeframes()),
             "trading_day_count": trading_day_count,
             "achievable_verdict_ceiling": (
-                "NEEDS_MORE_DAYS" if trading_day_count < MIN_DAYS_FOR_PROMOTION else "SCREEN_ONLY"
+                "DISCOVERY_SELECTION_ONLY"
+                if not feature_history_exact
+                else ("NEEDS_MORE_DAYS" if trading_day_count < MIN_DAYS_FOR_PROMOTION else "SCREEN_ONLY")
             ),
+            "validation_v3_feature_history_eligible": feature_history_exact,
             "startup_warnings": warnings,
             "edge_thresholds": edge_thresholds,
             "cost_mode": self.config.cost_mode,
@@ -1514,6 +1592,13 @@ class MiningRun:
         plan = build_split_plan(bars.trading_day)
         adapter = FAMILY_REGISTRY[self.config.family]
         features = adapter.build_features(bars, self.config)
+        expected_history = _FINITE_FEATURE_HISTORY_BY_FAMILY.get(self.config.family)
+        if expected_history is not None and set(features) != set(expected_history):
+            missing = sorted(set(features) - set(expected_history))
+            stale = sorted(set(expected_history) - set(features))
+            raise RunIntegrityError(
+                f"feature-history metadata does not match exported features: missing={missing}, stale={stale}"
+            )
         usable_feature_names = [
             name
             for name in sorted(features)
@@ -1526,7 +1611,13 @@ class MiningRun:
         )
         valid_expressions: list[str] = []
         signals: dict[str, np.ndarray] = {}
+        feature_history_rejected = 0
         for expression in expressions:
+            try:
+                feature_history_bars_for_expression(self.config.family, expression)
+            except (KeyError, TypeError, ValueError, SyntaxError):
+                feature_history_rejected += 1
+                continue
             try:
                 signal = adapter.evaluate_expression(expression, features, bars.reset)
             except (KeyError, TypeError, ValueError, SyntaxError):
@@ -1555,6 +1646,7 @@ class MiningRun:
         self._expression_supply[f"{root}/{timeframe}"] = {
             "requested": int(expression_limit),
             "valid": len(valid_expressions),
+            "feature_history_rejected": feature_history_rejected,
         }
         return bars, plan.labels, signals, valid_expressions, candidates
 
@@ -2011,12 +2103,23 @@ class MiningRun:
                 adapter = FAMILY_REGISTRY[self.config.family]
                 features = adapter.build_features(bars, self.config)
                 signal = adapter.evaluate_expression(candidate.expression, features, bars.reset)
-                evaluation_bars, evaluation_signal, evaluation_labels, target_timeframe_min = _exact_horizon_inputs(
+                feature_history_bars = feature_history_bars_for_expression(
+                    candidate.family,
+                    candidate.expression,
+                )
+                (
+                    evaluation_bars,
+                    evaluation_signal,
+                    evaluation_labels,
+                    target_timeframe_min,
+                    signal_history_starts,
+                ) = _exact_horizon_inputs(
                     dataset=dataset,
                     candidate=candidate,
                     feature_bars=bars,
                     feature_signal=signal,
                     split_labels=plan.labels,
+                    feature_history_bars=feature_history_bars,
                 )
                 targets = forward_target_indices(
                     horizon=candidate.horizon,
@@ -2027,6 +2130,17 @@ class MiningRun:
                 )
                 target_returns = forward_returns(evaluation_bars.close, targets)
                 mask = evaluation_labels == "locked_validation"
+                permutation_clusters = np.asarray(
+                    [
+                        f"{day}:{session}"
+                        for day, session in zip(
+                            evaluation_bars.trading_day[mask],
+                            evaluation_bars.session[mask],
+                            strict=True,
+                        )
+                    ],
+                    dtype="<U32",
+                )
                 masked_signal = np.full(evaluation_signal.size, np.nan)
                 masked_signal[mask] = evaluation_signal[mask]
                 execution = simulate_next_bar_execution(
@@ -2052,6 +2166,13 @@ class MiningRun:
                     trial_sharpe_std=trial_sharpe_std,
                     trading_days=evaluation_bars.trading_day,
                     validation_days=tuple(dict.fromkeys(str(day) for day in evaluation_bars.trading_day[mask])),
+                    permutation_clusters=permutation_clusters,
+                    permutation_strata=evaluation_bars.session[mask],
+                    permutation_positions=evaluation_bars.ts_ns[mask] % DAY_NS,
+                    signal_history_start_indices=signal_history_starts,
+                    feature_history_exact=feature_history_bars is not None,
+                    feature_history_reason=("" if feature_history_bars is not None else "unbounded_feature_history"),
+                    feature_history_bars=feature_history_bars,
                     seed=self.config.seeds[index % len(self.config.seeds)],
                 )
                 result = CandidateResult(

@@ -9,13 +9,16 @@ from research.combinatorial.smma_validation import (
     benjamini_hochberg,
     block_bootstrap_mean,
     build_split_plan,
+    cluster_permutation_test,
     effective_test_count,
     evaluate_recent_kill_criteria,
     forward_target_indices,
     locked_validation,
     monotonic_horizon_pollution,
+    purged_walk_forward_evidence,
     purged_walk_forward_sharpes,
     resolve_quantile_threshold,
+    run_locked_harness_controls,
     simulate_next_bar_execution,
 )
 
@@ -256,6 +259,89 @@ def test_effective_test_count_equals_trial_count_for_orthogonal_signals() -> Non
     assert effective_test_count(signals) == 3
 
 
+def test_session_block_permutation_is_deterministic_and_breaks_cross_day_pairing() -> None:
+    clusters = np.repeat([f"d{index:02d}" for index in range(12)], 4)
+    signal = np.arange(clusters.size, dtype=np.float64)
+
+    first = cluster_permutation_test(signal, signal, clusters, samples=199, seed=7)
+    second = cluster_permutation_test(signal, signal, clusters, samples=199, seed=7)
+
+    assert first == second
+    assert first.pvalue <= 0.10
+    assert first.clusters == 12
+    assert first.exchangeable_groups == 1
+    assert first.reason == "ok"
+
+
+def test_session_block_permutation_excludes_nonexchangeable_validity_patterns() -> None:
+    clusters = np.repeat(["a", "b", "c", "d"], 4)
+    signal = np.arange(clusters.size, dtype=np.float64)
+    target = signal.copy()
+    signal[8] = np.nan
+    target[15] = np.nan
+
+    result = cluster_permutation_test(signal, target, clusters, samples=49, seed=3)
+
+    assert result.reason == "insufficient_exchangeable_clusters"
+    assert result.clusters == 2
+    assert result.excluded_clusters == 2
+    assert result.observations == 8
+
+
+def test_session_block_permutation_rejects_misaligned_cluster_vector() -> None:
+    with pytest.raises(ValueError, match="identical lengths"):
+        cluster_permutation_test(
+            np.arange(8, dtype=np.float64),
+            np.arange(8, dtype=np.float64),
+            np.asarray(["a"] * 7),
+            seed=1,
+        )
+
+
+def test_session_block_permutation_excludes_shifted_time_bucket_signature() -> None:
+    clusters = np.repeat(["a", "b", "c"], 4)
+    positions = np.concatenate((np.arange(4), np.arange(4), np.arange(1, 5)))
+    signal = np.arange(clusters.size, dtype=np.float64)
+
+    result = cluster_permutation_test(
+        signal,
+        signal,
+        clusters,
+        positions=positions,
+        samples=49,
+        seed=2,
+    )
+
+    assert result.reason == "insufficient_exchangeable_clusters"
+    assert result.clusters == 2
+    assert result.excluded_clusters == 1
+
+
+def test_session_block_permutation_fails_closed_below_frozen_cluster_minimum() -> None:
+    clusters = np.repeat(["a", "b", "c", "d"], 4)
+    signal = np.arange(clusters.size, dtype=np.float64)
+
+    result = cluster_permutation_test(signal, signal, clusters, samples=199, seed=7)
+
+    assert result.pvalue == 1.0
+    assert result.clusters == 4
+    assert result.reason == "insufficient_exchangeable_clusters"
+
+
+def test_session_block_permutation_does_not_count_all_nan_blocks_as_informative() -> None:
+    clusters = np.repeat([f"d{index:02d}" for index in range(12)], 4)
+    signal = np.arange(clusters.size, dtype=np.float64)
+    target = signal.copy()
+    signal[-8:] = np.nan
+    target[-8:] = np.nan
+
+    result = cluster_permutation_test(signal, target, clusters, samples=49, seed=7)
+
+    assert result.clusters == 10
+    assert result.excluded_clusters == 2
+    assert result.reason == "ok_excluded_nonexchangeable_blocks"
+
+
 def test_deflated_sharpe_does_not_tighten_when_only_raw_trial_count_grows() -> None:
     days = np.repeat([f"d{index:02d}" for index in range(10)], 2)
     pnl = np.repeat(np.linspace(1.0, 2.0, 10), 2)
@@ -275,6 +361,9 @@ def test_deflated_sharpe_does_not_tighten_when_only_raw_trial_count_grows() -> N
         "trial_sharpe_std": 0.2,
         "trading_days": days,
         "validation_days": tuple(dict.fromkeys(days)),
+        "feature_history_exact": True,
+        "feature_history_bars": 1,
+        "signal_history_start_indices": np.arange(days.size, dtype=np.int64),
         "seed": 9,
     }
 
@@ -301,6 +390,41 @@ def test_walk_forward_reports_nan_for_inactive_calendar_fold() -> None:
     assert all(np.isnan(value) for value in sharpes[1:])
 
 
+def test_walk_forward_purges_trade_whose_feature_history_crosses_fold_start() -> None:
+    days = np.repeat(["d1", "d2", "d3", "d4"], 3)
+    entries = np.asarray([1, 4, 7, 9])
+    history_starts = np.arange(days.size, dtype=np.int64)
+    history_starts[6] = 5  # decision for entry 7 reaches behind fold-2 row 6
+
+    evidence = purged_walk_forward_evidence(
+        np.asarray([1.0, 2.0, 3.0, 4.0]),
+        entry_indices=entries,
+        exit_indices=entries,
+        trading_days=days,
+        validation_days=("d1", "d2", "d3", "d4"),
+        signal_history_start_indices=history_starts,
+        folds=2,
+    )
+
+    assert evidence.fold_purged_counts == (0, 1)
+    assert evidence.fold_trade_counts == (2, 1)
+    assert np.isfinite(evidence.sharpes[0])
+    assert np.isnan(evidence.sharpes[1])
+
+
+def test_walk_forward_rejects_future_feature_provenance() -> None:
+    with pytest.raises(ValueError, match="same/past"):
+        purged_walk_forward_evidence(
+            np.asarray([1.0, 2.0]),
+            entry_indices=np.asarray([1, 3]),
+            exit_indices=np.asarray([1, 3]),
+            trading_days=np.repeat(["d1", "d2"], 2),
+            validation_days=("d1", "d2"),
+            signal_history_start_indices=np.asarray([0, 2, 2, 3]),
+            folds=2,
+        )
+
+
 def test_locked_candidate_with_too_few_active_folds_has_distinct_reason() -> None:
     execution = ExecutionResult(
         trade_pnl=np.asarray([1.0, 2.0]),
@@ -320,6 +444,9 @@ def test_locked_candidate_with_too_few_active_folds_has_distinct_reason() -> Non
         trial_sharpe_std=0.2,
         trading_days=np.asarray(["d1", "d1", "d2", "d2", "d3", "d3", "d4", "d4", "d5", "d5"]),
         validation_days=("d1", "d2", "d3", "d4", "d5"),
+        feature_history_exact=True,
+        feature_history_bars=1,
+        signal_history_start_indices=np.arange(10, dtype=np.int64),
         seed=1,
     )
 
@@ -351,6 +478,9 @@ def test_synthetic_high_signal_control_passes_corrected_locked_harness() -> None
         trial_sharpe_std=0.2,
         trading_days=days,
         validation_days=tuple(dict.fromkeys(days)),
+        feature_history_exact=True,
+        feature_history_bars=1,
+        signal_history_start_indices=np.arange(days.size, dtype=np.int64),
         seed=11,
     )
 
@@ -380,7 +510,107 @@ def test_shuffled_null_control_does_not_pass_corrected_locked_harness() -> None:
         trial_sharpe_std=0.2,
         trading_days=days,
         validation_days=tuple(dict.fromkeys(days)),
+        feature_history_exact=True,
+        feature_history_bars=1,
+        signal_history_start_indices=np.arange(days.size, dtype=np.int64),
         seed=13,
     )
 
     assert not locked.passed
+
+
+def test_locked_validation_fails_closed_when_feature_history_is_unverified() -> None:
+    days = np.repeat([f"d{index:02d}" for index in range(10)], 2)
+    pnl = np.linspace(1.0, 2.0, days.size)
+    execution = ExecutionResult(
+        trade_pnl=pnl,
+        entry_indices=np.arange(days.size, dtype=np.int64),
+        exit_indices=np.arange(days.size, dtype=np.int64),
+        net_edge=float(np.mean(pnl)),
+        net_sharpe=1.0,
+        turnover=1.0,
+    )
+
+    locked = locked_validation(
+        signal=np.linspace(-1.0, 1.0, days.size),
+        target_returns=np.linspace(-1.0, 1.0, days.size),
+        execution=execution,
+        actual_trials=100,
+        trading_days=days,
+        seed=5,
+    )
+
+    assert not locked.passed
+    assert "feature_history_unverified" in locked.failure_reasons
+    assert locked.feature_history_exact is False
+
+
+def test_locked_validation_rejects_exact_history_claim_without_provenance_vector() -> None:
+    days = np.repeat([f"d{index:02d}" for index in range(5)], 2)
+    execution = ExecutionResult(
+        trade_pnl=np.linspace(1.0, 2.0, days.size),
+        entry_indices=np.arange(days.size, dtype=np.int64),
+        exit_indices=np.arange(days.size, dtype=np.int64),
+        net_edge=1.5,
+        net_sharpe=1.0,
+        turnover=1.0,
+    )
+
+    with pytest.raises(ValueError, match="requires both"):
+        locked_validation(
+            signal=np.linspace(-1.0, 1.0, days.size),
+            target_returns=np.linspace(-1.0, 1.0, days.size),
+            execution=execution,
+            actual_trials=100,
+            trading_days=days,
+            feature_history_exact=True,
+            feature_history_bars=1,
+            seed=5,
+        )
+    with pytest.raises(ValueError, match="requires calendar"):
+        locked_validation(
+            signal=np.linspace(-1.0, 1.0, days.size),
+            target_returns=np.linspace(-1.0, 1.0, days.size),
+            execution=execution,
+            actual_trials=100,
+            signal_history_start_indices=np.arange(days.size, dtype=np.int64),
+            feature_history_exact=True,
+            feature_history_bars=1,
+            seed=5,
+        )
+    with pytest.raises(ValueError, match="must be positive"):
+        locked_validation(
+            signal=np.linspace(-1.0, 1.0, days.size),
+            target_returns=np.linspace(-1.0, 1.0, days.size),
+            execution=execution,
+            actual_trials=100,
+            trading_days=days,
+            signal_history_start_indices=np.arange(days.size, dtype=np.int64),
+            feature_history_exact=True,
+            feature_history_bars=0,
+            seed=5,
+        )
+
+
+def test_aggregate_harness_controls_meet_frozen_positive_and_null_bounds() -> None:
+    summary = run_locked_harness_controls(seed=19, resample_samples=49)
+
+    assert summary.positive_cases == 20
+    assert summary.positive_passes >= 18
+    assert summary.null_cases == 100
+    assert summary.null_survivors <= 10
+    assert summary.effective_trials == 20
+    assert summary.passed
+    assert set(summary.positive_gate_pass_counts) == {
+        "cluster_bootstrap",
+        "permutation",
+        "deflated_sharpe",
+        "walk_forward",
+    }
+    assert len({case.seed for case in summary.cases}) == 120
+    seasonal_nulls = [
+        case for case in summary.cases if case.scenario == "shared_intraday_seasonality_independent_day_shocks"
+    ]
+    assert len(seasonal_nulls) == 50
+    assert sum(case.gate_results["permutation"] for case in seasonal_nulls) <= 5
+    assert summary.interpretation == "conditional_harness_calibration_only_not_alpha_evidence"

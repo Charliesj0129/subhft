@@ -20,6 +20,7 @@ from research.combinatorial.smma_runner import (
     code_fingerprint,
     mining_status,
 )
+from research.combinatorial.smma_validation import HarnessControlSummary
 from research.combinatorial.tick import build_tick_family_features
 from research.combinatorial.tick_dataset import (
     TICK_ROOTS,
@@ -117,6 +118,29 @@ def _stub_campaign_preflight(monkeypatch) -> None:
     monkeypatch.setattr(MiningRun, "_load_or_export_dataset", fake_load)
     monkeypatch.setattr(MiningRun, "_validate_frozen_dataset_scope", lambda _self, _dataset: None)
     monkeypatch.setattr(MiningRun, "_cost_profile_coverage", staticmethod(lambda _dataset: coverage))
+    passing_controls = HarnessControlSummary(
+        schema="alpha_mining_harness_controls.v1",
+        seed=20260802,
+        resample_samples=2_000,
+        effective_trials=20,
+        positive_cases=20,
+        positive_passes=20,
+        positive_locked_passes=20,
+        positive_minimum_passes=18,
+        null_cases=100,
+        null_survivors=0,
+        null_locked_passes=0,
+        null_maximum_survivors=10,
+        positive_gate_pass_counts={},
+        null_gate_pass_counts={},
+        passed=True,
+        interpretation="conditional_harness_calibration_only_not_alpha_evidence",
+        cases=(),
+    )
+    monkeypatch.setattr(
+        "research.combinatorial.smma_validation.run_locked_harness_controls",
+        lambda **_kwargs: passing_controls,
+    )
 
 
 def test_family_registry_exposes_exactly_the_four_supported_families() -> None:
@@ -441,6 +465,7 @@ def test_campaign_parser_and_driver_supervise_all_six_locked_diagnostic_legs(
     assert all(config.posthoc_diagnostic for config in captured)
     assert all(not config.unlock_final_holdout for config in captured)
     assert len(payload["legs"]) == 6
+    assert payload["harness_controls"]["passed"] is True
     assert (tmp_path / "campaign-test" / "campaign_report.json").exists()
 
 

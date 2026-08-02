@@ -16,6 +16,19 @@ import numpy as np
 
 TICK_SLOPE_LAGS: tuple[int, ...] = (1, 3, 6)
 
+_TICK_BASE_FEATURES: tuple[str, ...] = (
+    "tick_buy_sell_imbalance",
+    "tick_buy_sell_volume_ratio",
+    "tick_intensity_ratio",
+)
+
+# Exact raw-bar history for every feature exported by
+# ``build_tick_family_features``.
+TICK_FEATURE_HISTORY_BARS: dict[str, int] = {
+    **dict.fromkeys(_TICK_BASE_FEATURES, 1),
+    **{f"{name}_delta{lag}": lag + 1 for name in _TICK_BASE_FEATURES for lag in TICK_SLOPE_LAGS},
+}
+
 
 def _safe_normalize(numerator: np.ndarray, denominator: np.ndarray) -> np.ndarray:
     out: np.ndarray = np.full(numerator.size, np.nan, dtype=np.float64)

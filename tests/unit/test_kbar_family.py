@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from research.combinatorial.expression_lang import compile_expression
-from research.combinatorial.kbar import KBAR_DELTA_LAGS, build_kbar_family_features
+from research.combinatorial.kbar import KBAR_DELTA_LAGS, KBAR_FEATURE_HISTORY_BARS, build_kbar_family_features
 
 
 def _inputs(count: int = 12) -> dict[str, np.ndarray]:
@@ -35,6 +35,10 @@ def test_kbar_features_are_float64_arrays_matching_input_length() -> None:
     for name, values in features.items():
         assert values.dtype == np.float64, name
         assert values.shape == (12,), name
+
+
+def test_kbar_feature_history_metadata_covers_every_exported_feature() -> None:
+    assert set(KBAR_FEATURE_HISTORY_BARS) == set(_features())
 
 
 def test_kbar_feature_names_are_dsl_compilable_and_survive_the_raw_price_ban() -> None:

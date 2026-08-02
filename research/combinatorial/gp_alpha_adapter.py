@@ -110,6 +110,25 @@ _WHOLE_ARRAY_LOOKAHEAD_OPS = frozenset({"rank"})
 _MIN_OWN_WINDOW: dict[str, int] = {"ts_corr": 2, "zscore": 2}
 
 
+def required_history_by_variable(expression: str) -> dict[str, int]:
+    """Return the exact trailing sample count required for each input variable.
+
+    The counts describe the GP expression itself.  Callers whose variables are
+    already derived from multi-bar features must add that base-feature history
+    separately (``expression_history + base_history - 1``).
+    """
+    tree = to_typed_ast(expression)
+    if _uses_whole_array_lookahead(tree):
+        raise ValueError(
+            "Cannot stream expression: uses rank(...) or a 1-arg zscore(...), "
+            f"both whole-array look-ahead operators with no bounded-buffer "
+            f"streaming equivalent: {expression!r}"
+        )
+    per_variable: dict[str, int] = {}
+    _required_history(tree, 1, per_variable)
+    return per_variable
+
+
 def max_window_for_expression(expression: str) -> int:
     """Minimum trailing-sample buffer length, per variable, to stream *expression*
     with output identical (index for index) to its batch evaluation.
@@ -127,15 +146,7 @@ def max_window_for_expression(expression: str) -> int:
     not evaluable — ``operator_library`` window params are consumed via
     ``int(window)`` and expect a scalar).
     """
-    tree = to_typed_ast(expression)
-    if _uses_whole_array_lookahead(tree):
-        raise ValueError(
-            "Cannot stream expression: uses rank(...) or a 1-arg zscore(...), "
-            f"both whole-array look-ahead operators with no bounded-buffer "
-            f"streaming equivalent: {expression!r}"
-        )
-    per_variable: dict[str, int] = {}
-    _required_history(tree, 1, per_variable)
+    per_variable = required_history_by_variable(expression)
     if not per_variable:
         return 1
     return max(per_variable.values())

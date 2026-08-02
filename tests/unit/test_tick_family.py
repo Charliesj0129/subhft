@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from research.combinatorial.expression_lang import compile_expression
-from research.combinatorial.tick import TICK_SLOPE_LAGS, build_tick_family_features
+from research.combinatorial.tick import TICK_FEATURE_HISTORY_BARS, TICK_SLOPE_LAGS, build_tick_family_features
 
 
 def _inputs(count: int = 12) -> dict[str, np.ndarray]:
@@ -38,6 +38,10 @@ def test_tick_features_are_float64_arrays_matching_input_length() -> None:
     for name, values in features.items():
         assert values.dtype == np.float64, name
         assert values.shape == (12,), name
+
+
+def test_tick_feature_history_metadata_covers_every_exported_feature() -> None:
+    assert set(TICK_FEATURE_HISTORY_BARS) == set(_features())
 
 
 def test_tick_feature_names_are_dsl_compilable_and_carry_transform_tokens() -> None:

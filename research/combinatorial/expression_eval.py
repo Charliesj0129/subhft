@@ -12,6 +12,18 @@ from typing import Mapping, Sequence
 
 import numpy as np
 
+from research.combinatorial.canonical_ast import OPERATOR_ARG_ROLES, OpNode, to_typed_ast
+
+
+def _uses_windowed_operator(expression: str) -> bool:
+    def visit(node: object) -> bool:
+        if not isinstance(node, OpNode):
+            return False
+        roles = OPERATOR_ARG_ROLES[node.op][: len(node.args)]
+        return "window" in roles or any(visit(child) for child in node.args)
+
+    return visit(to_typed_ast(expression))
+
 
 def evaluate_family_expression(
     expression: str,
@@ -29,7 +41,7 @@ def evaluate_family_expression(
         raise ValueError("expression features and reset mask must have identical lengths")
     if not relevant:
         raise ValueError("expressions must reference at least one family feature")
-    if not any(token in expression for token in ("ts_delta(", "zscore(", "ts_corr(")):
+    if not _uses_windowed_operator(expression):
         return compiled.evaluate(relevant)
 
     out: np.ndarray = np.zeros(resets.size, dtype=np.float64)

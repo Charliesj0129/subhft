@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from typing import Mapping, Sequence
 
 import numpy as np
@@ -20,6 +20,21 @@ THRESHOLD_QUANTILES: tuple[float, ...] = (0.50, 0.70, 0.85, 0.95)
 MINIMUM_EDGE_POINTS: Mapping[str, float] = {"TXF": 1.0, "TMF": 5.0}
 STRICT_EDGE_TARGET_POINTS: Mapping[str, float] = {"TXF": 10.0, "TMF": 10.0}
 ENTRY_RULE_VERSION = "quantile_gte_v2"
+HARNESS_POSITIVE_CONTROL_CASES = 20
+HARNESS_POSITIVE_MINIMUM_PASSES = 18
+HARNESS_NULL_CONTROL_CASES = 100
+HARNESS_NULL_MAXIMUM_SURVIVORS = 10
+# Calibrated to the five-fold locked design: require ten informative,
+# exchangeable blocks in total before a block-randomization result may screen.
+# This is a frozen harness-activity precondition, not a claim that each fold
+# contains two blocks and not an alpha-tuned significance floor.
+MIN_EXCHANGEABLE_PERMUTATION_CLUSTERS = 10
+LOCKED_GATE_NAMES: tuple[str, ...] = (
+    "cluster_bootstrap",
+    "permutation",
+    "deflated_sharpe",
+    "walk_forward",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,6 +105,76 @@ class LockedMetrics:
     gate_results: dict[str, bool] = field(default_factory=dict)
     effective_gate_count: int = 0
     failure_reasons: tuple[str, ...] = ()
+    permutation_observations: int = 0
+    permutation_clusters: int = 0
+    permutation_exchangeable_groups: int = 0
+    permutation_reason: str = ""
+    permutation_excluded_observations: int = 0
+    permutation_excluded_clusters: int = 0
+    permutation_minimum_clusters: int = MIN_EXCHANGEABLE_PERMUTATION_CLUSTERS
+    walk_forward_fold_trade_counts: tuple[int, ...] = ()
+    walk_forward_fold_purged_counts: tuple[int, ...] = ()
+    feature_history_exact: bool | None = None
+    feature_history_reason: str = ""
+    feature_history_bars: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ClusterPermutationResult:
+    pvalue: float
+    observations: int
+    clusters: int
+    exchangeable_groups: int
+    reason: str
+    excluded_observations: int = 0
+    excluded_clusters: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class WalkForwardEvidence:
+    sharpes: tuple[float, ...]
+    fold_trade_counts: tuple[int, ...]
+    fold_purged_counts: tuple[int, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class HarnessControlCase:
+    control_type: str
+    scenario: str
+    case_index: int
+    seed: int
+    effect_strength: float
+    noise_scale: float
+    passed: bool
+    gate_results: dict[str, bool]
+    failure_reasons: tuple[str, ...]
+    bootstrap_pvalue: float
+    permutation_pvalue: float
+    deflated_sharpe: float
+    walk_forward_positive_fraction: float
+    bh_q10_passed: bool = False
+    campaign_stage_passed: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class HarnessControlSummary:
+    schema: str
+    seed: int
+    resample_samples: int
+    effective_trials: int
+    positive_cases: int
+    positive_passes: int
+    positive_locked_passes: int
+    positive_minimum_passes: int
+    null_cases: int
+    null_survivors: int
+    null_locked_passes: int
+    null_maximum_survivors: int
+    positive_gate_pass_counts: dict[str, int]
+    null_gate_pass_counts: dict[str, int]
+    passed: bool
+    interpretation: str
+    cases: tuple[HarnessControlCase, ...]
 
 
 def build_split_plan(trading_days: Sequence[str] | np.ndarray) -> SplitPlan:
@@ -532,9 +617,10 @@ def permutation_pvalue(
 ) -> float:
     signal_arr = np.asarray(signal, dtype=np.float64).reshape(-1)
     target_arr = np.asarray(target, dtype=np.float64).reshape(-1)
-    count = min(signal_arr.size, target_arr.size)
-    valid = np.isfinite(signal_arr[:count]) & np.isfinite(target_arr[:count])
-    lhs, rhs = signal_arr[:count][valid], target_arr[:count][valid]
+    if signal_arr.size != target_arr.size:
+        raise ValueError("signal and target must have identical lengths")
+    valid = np.isfinite(signal_arr) & np.isfinite(target_arr)
+    lhs, rhs = signal_arr[valid], target_arr[valid]
     if lhs.size < 5:
         return 1.0
     observed = abs(spearman_ic(lhs, rhs))
@@ -543,6 +629,170 @@ def permutation_pvalue(
     for _ in range(max(1, int(samples))):
         exceed += abs(spearman_ic(lhs, rng.permutation(rhs))) >= observed
     return float((exceed + 1) / (max(1, int(samples)) + 1))
+
+
+def _permutation_alignment_arrays(
+    size: int,
+    *,
+    strata: Sequence[str] | np.ndarray | None,
+    positions: Sequence[int] | np.ndarray | None,
+) -> tuple[np.ndarray, np.ndarray | None]:
+    if strata is None:
+        stratum_arr = np.full(size, "all", dtype="<U32")
+    else:
+        stratum_arr = np.asarray(strata).astype("<U32").reshape(-1)
+        if stratum_arr.size != size:
+            raise ValueError("permutation strata must align one-to-one with signal and target")
+    if positions is None:
+        return stratum_arr, None
+    position_arr = np.asarray(positions, dtype=np.int64).reshape(-1)
+    if position_arr.size != size:
+        raise ValueError("permutation positions must align one-to-one with signal and target")
+    return stratum_arr, position_arr
+
+
+def cluster_permutation_test(
+    signal: Sequence[float] | np.ndarray,
+    target: Sequence[float] | np.ndarray,
+    clusters: Sequence[str] | np.ndarray,
+    *,
+    strata: Sequence[str] | np.ndarray | None = None,
+    positions: Sequence[int] | np.ndarray | None = None,
+    samples: int = 2_000,
+    seed: int,
+) -> ClusterPermutationResult:
+    """Permutation test that moves intact, exchangeable session/day blocks.
+
+    Blocks are only exchanged when stratum, raw length, and signal/target
+    validity patterns match.  This preserves intrablock order and
+    time-of-session alignment.  Nonexchangeable blocks are excluded from both
+    the observed and permuted statistic; no exchangeable pair fails closed.
+    """
+    signal_arr = np.asarray(signal, dtype=np.float64).reshape(-1)
+    target_arr = np.asarray(target, dtype=np.float64).reshape(-1)
+    cluster_arr = np.asarray(clusters).astype("<U64").reshape(-1)
+    if len({signal_arr.size, target_arr.size, cluster_arr.size}) != 1:
+        raise ValueError("signal, target, and permutation clusters must have identical lengths")
+    stratum_arr, position_arr = _permutation_alignment_arrays(
+        signal_arr.size,
+        strata=strata,
+        positions=positions,
+    )
+
+    valid = np.isfinite(signal_arr) & np.isfinite(target_arr)
+    valid_observations = int(np.count_nonzero(valid))
+    ordered_clusters = tuple(dict.fromkeys(str(value) for value in cluster_arr))
+    if valid_observations < 5:
+        return ClusterPermutationResult(
+            1.0,
+            valid_observations,
+            len(ordered_clusters),
+            0,
+            "insufficient_observations",
+        )
+    if len(ordered_clusters) < 2:
+        return ClusterPermutationResult(1.0, valid_observations, len(ordered_clusters), 0, "insufficient_clusters")
+
+    blocks: list[np.ndarray] = []
+    block_strata: list[str] = []
+    block_signatures: list[tuple[bytes, bytes, bytes]] = []
+    for cluster in ordered_clusters:
+        indices = np.flatnonzero(cluster_arr == cluster)
+        cluster_strata = tuple(dict.fromkeys(str(value) for value in stratum_arr[indices]))
+        if len(cluster_strata) != 1:
+            return ClusterPermutationResult(
+                1.0,
+                valid_observations,
+                len(ordered_clusters),
+                0,
+                "cluster_spans_multiple_strata",
+            )
+        blocks.append(indices)
+        block_strata.append(cluster_strata[0])
+        position_signature = (
+            np.arange(indices.size, dtype=np.int64).tobytes()
+            if position_arr is None
+            else position_arr[indices].tobytes()
+        )
+        block_signatures.append(
+            (
+                np.isfinite(signal_arr[indices]).tobytes(),
+                np.isfinite(target_arr[indices]).tobytes(),
+                position_signature,
+            )
+        )
+
+    exchange_buckets: dict[tuple[str, int, bytes, bytes, bytes], list[int]] = {}
+    for block_index, (indices, stratum, signature) in enumerate(
+        zip(blocks, block_strata, block_signatures, strict=True)
+    ):
+        if not np.any(valid[indices]):
+            continue
+        exchange_buckets.setdefault((stratum, int(indices.size), *signature), []).append(block_index)
+    exchangeable = tuple(indices for indices in exchange_buckets.values() if len(indices) >= 2)
+    if not exchangeable:
+        return ClusterPermutationResult(
+            1.0,
+            0,
+            0,
+            len(exchangeable),
+            "nonexchangeable_block_signatures",
+            excluded_observations=valid_observations,
+            excluded_clusters=len(ordered_clusters),
+        )
+
+    used_block_indices = tuple(block_index for bucket in exchangeable for block_index in bucket)
+    used_positions = np.sort(np.concatenate([blocks[block_index] for block_index in used_block_indices]))
+    used_signal = signal_arr[used_positions]
+    used_target = target_arr[used_positions]
+    used_valid = np.isfinite(used_signal) & np.isfinite(used_target)
+    used_observations = int(np.count_nonzero(used_valid))
+    used_cluster_count = len(used_block_indices)
+    excluded_observations = valid_observations - used_observations
+    excluded_clusters = len(ordered_clusters) - used_cluster_count
+    if used_cluster_count < MIN_EXCHANGEABLE_PERMUTATION_CLUSTERS:
+        return ClusterPermutationResult(
+            1.0,
+            used_observations,
+            used_cluster_count,
+            len(exchangeable),
+            "insufficient_exchangeable_clusters",
+            excluded_observations=excluded_observations,
+            excluded_clusters=excluded_clusters,
+        )
+    if used_observations < 5:
+        return ClusterPermutationResult(
+            1.0,
+            used_observations,
+            used_cluster_count,
+            len(exchangeable),
+            "insufficient_exchangeable_observations",
+            excluded_observations=excluded_observations,
+            excluded_clusters=excluded_clusters,
+        )
+
+    observed = abs(spearman_ic(used_signal, used_target))
+    rng = np.random.default_rng(int(seed))
+    sample_count = max(1, int(samples))
+    exceed = 0
+    for _ in range(sample_count):
+        permuted = target_arr.copy()
+        for bucket in exchangeable:
+            sources = rng.permutation(len(bucket))
+            for destination_position, source_position in enumerate(sources):
+                destination = blocks[bucket[destination_position]]
+                source = blocks[bucket[int(source_position)]]
+                permuted[destination] = target_arr[source]
+        exceed += abs(spearman_ic(signal_arr[used_positions], permuted[used_positions])) >= observed
+    return ClusterPermutationResult(
+        pvalue=float((exceed + 1) / (sample_count + 1)),
+        observations=used_observations,
+        clusters=used_cluster_count,
+        exchangeable_groups=len(exchangeable),
+        reason="ok" if excluded_clusters == 0 else "ok_excluded_nonexchangeable_blocks",
+        excluded_observations=excluded_observations,
+        excluded_clusters=excluded_clusters,
+    )
 
 
 def benjamini_hochberg(pvalues: Sequence[float], q: float = 0.10) -> np.ndarray:
@@ -621,26 +871,32 @@ def deflated_sharpe(
     return float(norm.cdf((sharpe - expected_max) / standard_error))
 
 
-def purged_walk_forward_sharpes(
+def purged_walk_forward_evidence(
     trade_pnl: Sequence[float] | np.ndarray,
     *,
     entry_indices: Sequence[int] | np.ndarray | None = None,
     exit_indices: Sequence[int] | np.ndarray | None = None,
     trading_days: Sequence[str] | np.ndarray | None = None,
     validation_days: Sequence[str] | None = None,
+    signal_history_start_indices: Sequence[int] | np.ndarray | None = None,
     folds: int = 5,
-) -> tuple[float, ...]:
-    """Calendar folds that purge trades whose labels cross a fold boundary."""
+) -> WalkForwardEvidence:
+    """Calendar folds purged for both label overlap and feature provenance."""
     values = np.asarray(trade_pnl, dtype=np.float64).reshape(-1)
     if entry_indices is None or exit_indices is None or trading_days is None:
         fold_indices = np.array_split(np.arange(values.size), folds)
-        return tuple(
+        fallback_sharpes = tuple(
             (
                 float(np.mean(values[indices]) / np.std(values[indices], ddof=1))
                 if indices.size >= 2 and float(np.std(values[indices], ddof=1)) > 1e-12
                 else math.nan
             )
             for indices in fold_indices
+        )
+        return WalkForwardEvidence(
+            sharpes=fallback_sharpes,
+            fold_trade_counts=tuple(int(indices.size) for indices in fold_indices),
+            fold_purged_counts=tuple(0 for _ in fold_indices),
         )
     entries = np.asarray(entry_indices, dtype=np.int64).reshape(-1)
     exits = np.asarray(exit_indices, dtype=np.int64).reshape(-1)
@@ -649,21 +905,68 @@ def purged_walk_forward_sharpes(
         raise ValueError("trade pnl and entry/exit indices must have identical lengths")
     if np.any(entries < 0) or np.any(exits < entries) or np.any(exits >= days.size):
         raise ValueError("trade entry/exit indices are outside the trading-day array")
+    history_starts = None
+    if signal_history_start_indices is not None:
+        history_starts = np.asarray(signal_history_start_indices, dtype=np.int64).reshape(-1)
+        if history_starts.size != days.size:
+            raise ValueError("signal history-start indices must align with the execution grid")
+        row_indices = np.arange(history_starts.size, dtype=np.int64)
+        if np.any(history_starts < -1) or np.any(history_starts > row_indices):
+            raise ValueError("signal history-start indices must be -1 or point to the same/past execution row")
     ordered_days = (
         tuple(validation_days) if validation_days is not None else tuple(dict.fromkeys(str(day) for day in days))
     )
     fold_days = np.array_split(np.asarray(ordered_days, dtype="<U10"), folds)
     sharpes: list[float] = []
+    fold_trade_counts: list[int] = []
+    fold_purged_counts: list[int] = []
+    entry_days = days[entries]
+    exit_days = days[exits]
     for current_days in fold_days:
-        entry_days = days[entries]
-        exit_days = days[exits]
-        in_fold = np.isin(entry_days, current_days) & np.isin(exit_days, current_days)
+        fold_rows = np.flatnonzero(np.isin(days, current_days))
+        label_inside = np.isin(entry_days, current_days) & np.isin(exit_days, current_days)
+        history_inside = np.ones(values.size, dtype=np.bool_)
+        if history_starts is not None:
+            history_inside.fill(False)
+            decisions = entries - 1
+            valid_decisions = (decisions >= 0) & (decisions < history_starts.size)
+            if fold_rows.size:
+                history_inside[valid_decisions] = history_starts[decisions[valid_decisions]] >= int(fold_rows[0])
+        in_fold = label_inside & history_inside
+        fold_purged_counts.append(int(np.count_nonzero(label_inside & ~history_inside)))
         view = values[in_fold]
+        fold_trade_counts.append(int(view.size))
         if view.size < 2 or float(np.std(view, ddof=1)) <= 1e-12:
             sharpes.append(math.nan)
         else:
             sharpes.append(float(np.mean(view) / np.std(view, ddof=1)))
-    return tuple(sharpes)
+    return WalkForwardEvidence(
+        sharpes=tuple(sharpes),
+        fold_trade_counts=tuple(fold_trade_counts),
+        fold_purged_counts=tuple(fold_purged_counts),
+    )
+
+
+def purged_walk_forward_sharpes(
+    trade_pnl: Sequence[float] | np.ndarray,
+    *,
+    entry_indices: Sequence[int] | np.ndarray | None = None,
+    exit_indices: Sequence[int] | np.ndarray | None = None,
+    trading_days: Sequence[str] | np.ndarray | None = None,
+    validation_days: Sequence[str] | None = None,
+    signal_history_start_indices: Sequence[int] | np.ndarray | None = None,
+    folds: int = 5,
+) -> tuple[float, ...]:
+    """Compatibility wrapper returning only walk-forward Sharpe values."""
+    return purged_walk_forward_evidence(
+        trade_pnl,
+        entry_indices=entry_indices,
+        exit_indices=exit_indices,
+        trading_days=trading_days,
+        validation_days=validation_days,
+        signal_history_start_indices=signal_history_start_indices,
+        folds=folds,
+    ).sharpes
 
 
 def locked_validation(
@@ -676,12 +979,39 @@ def locked_validation(
     trial_sharpe_std: float = 1.0,
     trading_days: Sequence[str] | np.ndarray | None = None,
     validation_days: Sequence[str] | None = None,
+    permutation_clusters: Sequence[str] | np.ndarray | None = None,
+    permutation_strata: Sequence[str] | np.ndarray | None = None,
+    permutation_positions: Sequence[int] | np.ndarray | None = None,
+    signal_history_start_indices: Sequence[int] | np.ndarray | None = None,
+    feature_history_exact: bool = False,
+    feature_history_reason: str = "feature_history_unverified",
+    feature_history_bars: int | None = None,
+    resample_samples: int = 2_000,
     seed: int,
 ) -> LockedMetrics:
+    sample_count = max(1, int(resample_samples))
+    if feature_history_exact and trading_days is None:
+        raise ValueError("an exact feature-history claim requires calendar trading days")
+    if trading_days is not None and feature_history_exact:
+        if signal_history_start_indices is None or feature_history_bars is None:
+            raise ValueError(
+                "calendar locked validation with exact feature history requires both "
+                "signal_history_start_indices and feature_history_bars"
+            )
+        if int(feature_history_bars) < 1:
+            raise ValueError("feature_history_bars must be positive for an exact feature-history claim")
     if trading_days is None:
         trade_clusters: np.ndarray = np.arange(execution.trade_pnl.size).astype("<U32")
-        lower, bootstrap_p = block_bootstrap_mean(execution.trade_pnl, samples=2_000, seed=seed)
+        lower, bootstrap_p = block_bootstrap_mean(execution.trade_pnl, samples=sample_count, seed=seed)
         dsr_values = execution.trade_pnl
+        perm_p = permutation_pvalue(signal, target_returns, samples=sample_count, seed=seed + 1)
+        permutation_result = ClusterPermutationResult(
+            pvalue=perm_p,
+            observations=int(np.count_nonzero(np.isfinite(signal) & np.isfinite(target_returns))),
+            clusters=0,
+            exchangeable_groups=0,
+            reason="pointwise_legacy_without_clusters",
+        )
     else:
         day_array = np.asarray(trading_days).astype("<U10").reshape(-1)
         if (
@@ -701,7 +1031,7 @@ def locked_validation(
         lower, bootstrap_p = cluster_bootstrap_mean(
             execution.trade_pnl,
             trade_clusters,
-            samples=2_000,
+            samples=sample_count,
             seed=seed,
         )
         ordered_clusters = tuple(dict.fromkeys(str(value) for value in trade_clusters))
@@ -709,15 +1039,35 @@ def locked_validation(
             [np.sum(execution.trade_pnl[trade_clusters == cluster]) for cluster in ordered_clusters],
             dtype=np.float64,
         )
-    perm_p = permutation_pvalue(signal, target_returns, samples=2_000, seed=seed + 1)
-    fold_sharpes = purged_walk_forward_sharpes(
+        if permutation_clusters is None:
+            signal_size = np.asarray(signal).size
+            target_size = np.asarray(target_returns).size
+            if day_array.size != signal_size or day_array.size != target_size:
+                raise ValueError(
+                    "permutation_clusters are required when signal/target are a split slice "
+                    "but trading_days reference the full execution grid"
+                )
+            permutation_clusters = day_array
+        permutation_result = cluster_permutation_test(
+            signal,
+            target_returns,
+            permutation_clusters,
+            strata=permutation_strata,
+            positions=permutation_positions,
+            samples=sample_count,
+            seed=seed + 1,
+        )
+        perm_p = permutation_result.pvalue
+    walk_forward = purged_walk_forward_evidence(
         execution.trade_pnl,
         entry_indices=execution.entry_indices if trading_days is not None else None,
         exit_indices=execution.exit_indices if trading_days is not None else None,
         trading_days=trading_days,
         validation_days=validation_days,
+        signal_history_start_indices=signal_history_start_indices,
         folds=5,
     )
+    fold_sharpes = walk_forward.sharpes
     finite_folds = np.asarray(fold_sharpes, dtype=np.float64)
     finite_folds = finite_folds[np.isfinite(finite_folds)]
     active_folds = int(finite_folds.size)
@@ -746,13 +1096,19 @@ def locked_validation(
         "cluster_bootstrap": bool(lower > 0.0 and bootstrap_p <= 0.10),
         "permutation": bool(perm_p <= 0.10),
         "deflated_sharpe": bool(dsr >= 0.50),
-        "walk_forward": bool(active_folds >= 3 and positive_fraction >= 0.60),
+        "walk_forward": bool(feature_history_exact and active_folds >= 3 and positive_fraction >= 0.60),
     }
-    failure_reasons = tuple(
-        ("insufficient_trade_activity" if name == "walk_forward" and active_folds < 3 else name)
-        for name, passed in gate_results.items()
-        if not passed
-    )
+    failure_reasons_list: list[str] = []
+    for name, gate_passed in gate_results.items():
+        if gate_passed:
+            continue
+        if name == "walk_forward" and not feature_history_exact:
+            failure_reasons_list.append(str(feature_history_reason or "feature_history_unverified"))
+        elif name == "walk_forward" and active_folds < 3:
+            failure_reasons_list.append("insufficient_trade_activity")
+        else:
+            failure_reasons_list.append(name)
+    failure_reasons = tuple(failure_reasons_list)
     passed = all(gate_results.values())
     return LockedMetrics(
         bootstrap_lower_95=lower,
@@ -768,6 +1124,170 @@ def locked_validation(
         gate_results=gate_results,
         effective_gate_count=len(gate_results),
         failure_reasons=failure_reasons,
+        permutation_observations=permutation_result.observations,
+        permutation_clusters=permutation_result.clusters,
+        permutation_exchangeable_groups=permutation_result.exchangeable_groups,
+        permutation_reason=permutation_result.reason,
+        permutation_excluded_observations=permutation_result.excluded_observations,
+        permutation_excluded_clusters=permutation_result.excluded_clusters,
+        permutation_minimum_clusters=MIN_EXCHANGEABLE_PERMUTATION_CLUSTERS,
+        walk_forward_fold_trade_counts=walk_forward.fold_trade_counts,
+        walk_forward_fold_purged_counts=walk_forward.fold_purged_counts,
+        feature_history_exact=bool(feature_history_exact),
+        feature_history_reason="" if feature_history_exact else str(feature_history_reason),
+        feature_history_bars=None if feature_history_bars is None else int(feature_history_bars),
+    )
+
+
+def run_locked_harness_controls(
+    *,
+    seed: int = 20260802,
+    resample_samples: int = 2_000,
+) -> HarnessControlSummary:
+    """Run frozen synthetic positive/null controls for the locked harness.
+
+    This calibrates whether the harness can recognize deliberately strong
+    structure and reject independent nulls.  It is conditional harness
+    evidence only; it is never candidate or holdout evidence.
+    """
+    sample_count = max(1, int(resample_samples))
+    days = np.repeat(np.asarray([f"control-{index:02d}" for index in range(20)]), 6)
+    sessions = np.full(days.size, "synthetic", dtype="<U16")
+    clusters = days.copy()
+    history_starts = np.arange(days.size, dtype=np.int64)
+    entries = np.arange(1, days.size, dtype=np.int64)
+    exits = entries.copy()
+    control_effective_trials = 20
+
+    def evaluate_case(control_type: str, case_index: int) -> HarnessControlCase:
+        case_seed = int(seed) + (case_index + 1) * (17 if control_type == "positive" else 101)
+        rng = np.random.default_rng(case_seed)
+        latent = rng.normal(size=days.size)
+        if control_type == "positive":
+            scenario = "high_snr_varying_effect_and_noise"
+            effect_strength = 1.25 - 0.015 * case_index
+            noise_scale = 0.05 + 0.0075 * case_index
+            signal = latent + rng.normal(scale=noise_scale, size=days.size)
+            target = effect_strength * latent + rng.normal(scale=noise_scale, size=days.size)
+            phase = np.linspace(0.0, 6.0 * math.pi, entries.size)
+            pnl = 1.25 + 0.15 * np.sin(phase) + rng.normal(scale=0.08 + noise_scale * 0.1, size=entries.size)
+        elif case_index < HARNESS_NULL_CONTROL_CASES // 2:
+            scenario = "iid_independent_null"
+            effect_strength = 0.0
+            noise_scale = 1.0
+            signal = rng.normal(size=days.size)
+            target = rng.normal(size=days.size)
+            pnl = rng.normal(size=entries.size)
+        else:
+            scenario = "shared_intraday_seasonality_independent_day_shocks"
+            effect_strength = 0.0
+            noise_scale = 0.10
+            intraday = np.tile(np.linspace(-2.0, 2.0, 6), 20)
+            signal_day_shocks = np.repeat(rng.normal(scale=0.35, size=20), 6)
+            target_day_shocks = np.repeat(rng.normal(scale=0.35, size=20), 6)
+            signal = intraday + signal_day_shocks + rng.normal(scale=noise_scale, size=days.size)
+            target = intraday + target_day_shocks + rng.normal(scale=noise_scale, size=days.size)
+            pnl = rng.normal(size=entries.size)
+        pnl_standard_deviation = float(np.std(pnl, ddof=1)) if pnl.size > 1 else 0.0
+        execution = ExecutionResult(
+            trade_pnl=pnl,
+            entry_indices=entries,
+            exit_indices=exits,
+            net_edge=float(np.mean(pnl)),
+            net_sharpe=float(np.mean(pnl) / pnl_standard_deviation) if pnl_standard_deviation > 1e-12 else 0.0,
+            turnover=float((2 * pnl.size) / days.size),
+        )
+        locked = locked_validation(
+            signal=signal,
+            target_returns=target,
+            execution=execution,
+            actual_trials=20_000,
+            effective_trials=control_effective_trials,
+            trial_sharpe_std=0.2,
+            trading_days=days,
+            validation_days=tuple(dict.fromkeys(str(day) for day in days)),
+            permutation_clusters=clusters,
+            permutation_strata=sessions,
+            signal_history_start_indices=history_starts,
+            feature_history_exact=True,
+            feature_history_bars=1,
+            resample_samples=sample_count,
+            seed=case_seed,
+        )
+        return HarnessControlCase(
+            control_type=control_type,
+            scenario=scenario,
+            case_index=case_index,
+            seed=case_seed,
+            effect_strength=effect_strength,
+            noise_scale=noise_scale,
+            passed=locked.passed,
+            gate_results=dict(locked.gate_results),
+            failure_reasons=locked.failure_reasons,
+            bootstrap_pvalue=locked.bootstrap_pvalue,
+            permutation_pvalue=locked.permutation_pvalue,
+            deflated_sharpe=locked.deflated_sharpe,
+            walk_forward_positive_fraction=locked.walk_forward_positive_fraction,
+        )
+
+    raw_cases = tuple(
+        [evaluate_case("positive", index) for index in range(HARNESS_POSITIVE_CONTROL_CASES)]
+        + [evaluate_case("null", index) for index in range(HARNESS_NULL_CONTROL_CASES)]
+    )
+    raw_positive = tuple(case for case in raw_cases if case.control_type == "positive")
+    raw_null = tuple(case for case in raw_cases if case.control_type == "null")
+    positive_bh = benjamini_hochberg(
+        [max(case.bootstrap_pvalue, case.permutation_pvalue) for case in raw_positive],
+        q=0.10,
+    )
+    null_bh = benjamini_hochberg(
+        [max(case.bootstrap_pvalue, case.permutation_pvalue) for case in raw_null],
+        q=0.10,
+    )
+    positive = tuple(
+        replace(
+            case,
+            bh_q10_passed=bool(bh_passed),
+            campaign_stage_passed=bool(case.passed and bh_passed),
+        )
+        for case, bh_passed in zip(raw_positive, positive_bh, strict=True)
+    )
+    null = tuple(
+        replace(
+            case,
+            bh_q10_passed=bool(bh_passed),
+            campaign_stage_passed=bool(case.passed and bh_passed),
+        )
+        for case, bh_passed in zip(raw_null, null_bh, strict=True)
+    )
+    cases = positive + null
+    positive_gate_counts = {
+        gate: sum(bool(case.gate_results.get(gate)) for case in positive) for gate in LOCKED_GATE_NAMES
+    }
+    null_gate_counts = {gate: sum(bool(case.gate_results.get(gate)) for case in null) for gate in LOCKED_GATE_NAMES}
+    positive_locked_passes = sum(case.passed for case in positive)
+    null_locked_passes = sum(case.passed for case in null)
+    positive_passes = sum(case.campaign_stage_passed for case in positive)
+    null_survivors = sum(case.campaign_stage_passed for case in null)
+    passed = positive_passes >= HARNESS_POSITIVE_MINIMUM_PASSES and null_survivors <= HARNESS_NULL_MAXIMUM_SURVIVORS
+    return HarnessControlSummary(
+        schema="alpha_mining_harness_controls.v1",
+        seed=int(seed),
+        resample_samples=sample_count,
+        effective_trials=control_effective_trials,
+        positive_cases=len(positive),
+        positive_passes=positive_passes,
+        positive_locked_passes=positive_locked_passes,
+        positive_minimum_passes=HARNESS_POSITIVE_MINIMUM_PASSES,
+        null_cases=len(null),
+        null_survivors=null_survivors,
+        null_locked_passes=null_locked_passes,
+        null_maximum_survivors=HARNESS_NULL_MAXIMUM_SURVIVORS,
+        positive_gate_pass_counts=positive_gate_counts,
+        null_gate_pass_counts=null_gate_counts,
+        passed=passed,
+        interpretation="conditional_harness_calibration_only_not_alpha_evidence",
+        cases=cases,
     )
 
 

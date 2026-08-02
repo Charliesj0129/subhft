@@ -16,6 +16,26 @@ import numpy as np
 
 BIDASK_SLOPE_LAGS: tuple[int, ...] = (1, 3, 6)
 
+_BIDASK_BASE_FEATURES: tuple[str, ...] = (
+    "bidask_spread_frac_open",
+    "bidask_spread_frac_close",
+    "bidask_qty_imbalance_open",
+    "bidask_qty_imbalance_close",
+    "bidask_qty_ratio_open",
+    "bidask_qty_ratio_close",
+    "bidask_mid_shift_ratio",
+)
+
+# Exact raw-bar history for every feature exported by
+# ``build_bidask_family_features``.  Keeping this metadata beside the feature
+# definitions avoids reverse-engineering lookback from names in validation.
+BIDASK_FEATURE_HISTORY_BARS: dict[str, int] = {
+    **dict.fromkeys(_BIDASK_BASE_FEATURES, 1),
+    "bidask_spread_frac_delta_open_close": 1,
+    "bidask_qty_imbalance_delta_open_close": 1,
+    **{f"{name}_slope{lag}": lag + 1 for name in _BIDASK_BASE_FEATURES for lag in BIDASK_SLOPE_LAGS},
+}
+
 
 def _safe_normalize(numerator: np.ndarray, denominator: np.ndarray) -> np.ndarray:
     out: np.ndarray = np.full(numerator.size, np.nan, dtype=np.float64)

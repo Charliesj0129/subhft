@@ -5,7 +5,11 @@ import pytest
 
 from hft_platform.contracts.alpha import AlphaManifest, AlphaProtocol
 from research.combinatorial.expression_lang import compile_expression
-from research.combinatorial.gp_alpha_adapter import GPCompiledAlpha, max_window_for_expression
+from research.combinatorial.gp_alpha_adapter import (
+    GPCompiledAlpha,
+    max_window_for_expression,
+    required_history_by_variable,
+)
 
 
 def _manifest(formula: str = "x") -> AlphaManifest:
@@ -121,6 +125,13 @@ def test_max_window_for_expression_ts_corr_and_zscore_floor_at_two() -> None:
 
 def test_max_window_for_expression_picks_max_across_variables() -> None:
     assert max_window_for_expression("add(ts_mean(x, 5), ts_sum(x, 3))") == 5
+
+
+def test_required_history_is_reported_per_variable_for_feature_provenance() -> None:
+    assert required_history_by_variable("add(ts_delta(x, 5), ts_mean(y, 3))") == {
+        "x": 6,
+        "y": 3,
+    }
 
 
 def test_max_window_for_expression_rejects_bare_rank() -> None:

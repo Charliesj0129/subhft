@@ -32,10 +32,12 @@ from research.combinatorial.smma_runner import (
     code_fingerprint,
     enumerate_candidates,
     evaluate_robustness_slices,
+    feature_history_bars_for_expression,
     mining_status,
     resource_decision,
 )
 from research.combinatorial.smma_validation import (
+    HarnessControlSummary,
     KillMetrics,
     LockedMetrics,
     forward_target_indices,
@@ -146,12 +148,13 @@ def test_coarse_feature_signal_uses_exact_60_minute_execution_horizon() -> None:
         complexity=1,
     )
 
-    execution_bars, signal, labels, target_timeframe = _exact_horizon_inputs(
+    execution_bars, signal, labels, target_timeframe, _history_starts = _exact_horizon_inputs(
         dataset=combined,
         candidate=candidate,
         feature_bars=coarse,
         feature_signal=np.asarray([1.0, 2.0]),
         split_labels=np.asarray(["discovery", "discovery"]),
+        feature_history_bars=2,
     )
     targets = forward_target_indices(
         horizon="1h",
@@ -175,6 +178,7 @@ def test_coarse_feature_signal_uses_exact_60_minute_execution_horizon() -> None:
 
     assert target_timeframe == 60
     assert np.flatnonzero(np.isfinite(signal)).tolist() == [1, 3]
+    assert _history_starts[[1, 3]].tolist() == [0, 0]
     assert targets[1] == 2
     assert execution.entry_indices.tolist() == [2]
     assert execution.exit_indices.tolist() == [2]
@@ -219,7 +223,7 @@ def test_partial_coarse_bar_maps_to_last_observed_60_minute_close() -> None:
         complexity=1,
     )
 
-    execution_bars, signal, labels, target_timeframe = _exact_horizon_inputs(
+    execution_bars, signal, labels, target_timeframe, _history_starts = _exact_horizon_inputs(
         dataset=combined,
         candidate=candidate,
         feature_bars=coarse,
@@ -260,6 +264,29 @@ def test_run_config_enforces_frozen_resource_caps(tmp_path) -> None:
         posthoc_diagnostic=True,
         cost_mode="root_proxy",
     ).validate()
+
+
+def test_feature_history_composes_gp_and_family_base_lookbacks() -> None:
+    assert (
+        feature_history_bars_for_expression(
+            "bidask",
+            "ts_delta(bidask_mid_shift_ratio_slope6, 14)",
+        )
+        == 21
+    )
+    assert (
+        feature_history_bars_for_expression(
+            "kbar",
+            "ts_delta(kbar_gap_return_delta6, 14)",
+        )
+        == 22
+    )
+    assert feature_history_bars_for_expression("smma", "close_l3_atr14_distance") is None
+
+
+def test_unstreamable_expression_is_rejected_even_for_recursive_smma() -> None:
+    with pytest.raises(ValueError, match="Cannot stream expression"):
+        feature_history_bars_for_expression("smma", "rank(close_l3_atr14_distance)")
 
 
 def test_two_minute_run_also_requires_sixty_minute_completeness_evidence(tmp_path) -> None:
@@ -404,7 +431,7 @@ def test_two_minute_horizon_uses_thirty_bar_target_without_projection() -> None:
         complexity=1,
     )
 
-    execution_bars, signal, labels, target_timeframe = _exact_horizon_inputs(
+    execution_bars, signal, labels, target_timeframe, _history_starts = _exact_horizon_inputs(
         dataset=bars,
         candidate=candidate,
         feature_bars=bars,
@@ -874,6 +901,58 @@ def test_resume_routes_locked_checkpoint_without_repeating_selection(monkeypatch
     assert captured == {"selection": [selection], "restored": [evaluated]}
 
 
+def test_locked_checkpoint_round_trip_preserves_validation_v3_tuple_evidence() -> None:
+    candidate = Candidate(
+        candidate_id="candidate-v3",
+        root="TXF",
+        timeframe_min=60,
+        expression="close_l3_atr14_distance",
+        horizon="1h",
+        direction=1,
+        threshold=0.0,
+        seed=1,
+        complexity=1,
+    )
+    kill = KillMetrics(0.02, 0.02, 0.02, 1.0, 2.0, 1.0, 0.1, 8.0, True, ())
+    locked = LockedMetrics(
+        -1.0,
+        0.5,
+        0.5,
+        0.0,
+        0.0,
+        (0.1, 0.2),
+        False,
+        walk_forward_fold_trade_counts=(3, 4),
+        walk_forward_fold_purged_counts=(1, 2),
+        feature_history_exact=True,
+        feature_history_bars=7,
+    )
+    original = CandidateResult(
+        candidate=candidate,
+        kill=kill,
+        locked=locked,
+        stage="locked_validation",
+        status="killed",
+    )
+
+    restored = CandidateResult.from_dict(json.loads(json.dumps(original.to_dict())))
+
+    assert restored == original
+
+
+def test_smma_manifest_warns_that_validation_v3_feature_history_is_not_finite(tmp_path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_dataset(run_dir)
+    run = MiningRun(RunConfig(run_dir=run_dir, seeds=(1, 2, 3)))
+
+    identity = run._manifest_identity(_dataset())
+
+    assert identity["validation_v3_feature_history_eligible"] is False
+    assert identity["achievable_verdict_ceiling"] == "DISCOVERY_SELECTION_ONLY"
+    assert any("no finite exact lookback" in warning for warning in identity["startup_warnings"])
+
+
 def test_selection_rejects_ledger_candidate_outside_frozen_discovery(tmp_path) -> None:
     run_dir = tmp_path / "run"
     run_dir.mkdir()
@@ -1341,6 +1420,7 @@ def test_campaign_separates_full_search_from_promotion_day_eligibility(
         workers=2,
         seeds=[1, 2, 3],
         resume=False,
+        harness_control_samples=9,
     )
 
     cli.cmd_alpha_mine_campaign(args)
@@ -1352,6 +1432,10 @@ def test_campaign_separates_full_search_from_promotion_day_eligibility(
         "full_per_contract_when_cost_profiles_complete_else_bounded_root_proxy_diagnostic"
     )
     assert report["promotion_policy"] == "minimum_100_eligible_trading_days; independent_of_search_breadth"
+    assert report["harness_controls"]["passed"] is True
+    assert len(report["harness_controls"]["code_fingerprint"]) == 64
+    assert report["harness_controls"]["positive_passes"] >= 18
+    assert report["harness_controls"]["null_survivors"] <= 10
     assert {leg["mode"] for leg in report["legs"]} == {expected_mode}
     assert {leg["full_search_eligible"] for leg in report["legs"]} == {coverage_complete}
     assert {leg["promotion_day_count_eligible"] for leg in report["legs"]} == {eligible_days >= 100}
@@ -1408,6 +1492,7 @@ def test_campaign_preserves_preflight_dataset_cache_evidence(
         workers=2,
         seeds=[1, 2, 3],
         resume=False,
+        harness_control_samples=9,
     )
 
     cli.cmd_alpha_mine_campaign(args)
@@ -1418,6 +1503,72 @@ def test_campaign_preserves_preflight_dataset_cache_evidence(
         assert evidence["hit"] is (family == "kbar")
         assert str(evidence["cache_key"]).startswith(f"cache-{family}-")
     assert len(json.loads(capsys.readouterr().out)["legs"]) == 6
+
+
+def test_campaign_controls_fail_closed_and_artifact_resume_is_idempotent(
+    monkeypatch,
+    capsys,
+    tmp_path,
+) -> None:
+    import research.combinatorial.smma_validation as validation
+
+    failed = HarnessControlSummary(
+        schema="alpha_mining_harness_controls.v1",
+        seed=1,
+        resample_samples=9,
+        effective_trials=20,
+        positive_cases=20,
+        positive_passes=17,
+        positive_locked_passes=17,
+        positive_minimum_passes=18,
+        null_cases=100,
+        null_survivors=0,
+        null_locked_passes=0,
+        null_maximum_survivors=10,
+        positive_gate_pass_counts={},
+        null_gate_pass_counts={},
+        passed=False,
+        interpretation="conditional_harness_calibration_only_not_alpha_evidence",
+        cases=(),
+    )
+    monkeypatch.setattr(validation, "run_locked_harness_controls", lambda **_kwargs: failed)
+    monkeypatch.setattr(MiningRun, "_load_or_export_dataset", lambda _self: pytest.fail("leg started"))
+    args = Namespace(
+        run_root=str(tmp_path / "campaigns"),
+        campaign_id="controls-fail",
+        wall_time_hours=12.0,
+        max_candidates=20_000,
+        diagnostic_max_candidates=200,
+        diagnostic_wall_time_hours=1.0,
+        workers=2,
+        seeds=[1, 2, 3],
+        resume=False,
+        harness_control_samples=9,
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        cli.cmd_alpha_mine_campaign(args)
+
+    assert exc.value.code == 2
+    assert "campaign legs were not started" in capsys.readouterr().err
+    control_path = tmp_path / "campaigns" / "controls-fail" / "harness_controls.json"
+    persisted = json.loads(control_path.read_text())
+    assert persisted["passed"] is False
+    from hft_platform.cli._alpha import _write_alpha_mining_harness_controls
+
+    same = _write_alpha_mining_harness_controls(
+        control_path.parent,
+        failed,
+        code_fingerprint_value=persisted["code_fingerprint"],
+    )
+    assert same["control_hash"] == persisted["control_hash"]
+
+    with pytest.raises(ValueError, match="differs from the frozen"):
+        _write_alpha_mining_harness_controls(
+            control_path.parent,
+            failed,
+            code_fingerprint_value="different-code-fingerprint",
+        )
 
 
 def test_bounded_run_writes_kill_report_when_first_hypothesis_fails(monkeypatch, tmp_path) -> None:

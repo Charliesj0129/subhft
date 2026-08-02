@@ -23,6 +23,28 @@ import numpy as np
 
 KBAR_DELTA_LAGS: tuple[int, ...] = (1, 3, 6)
 
+_KBAR_BASE_FEATURE_HISTORY_BARS: dict[str, int] = {
+    "kbar_open_close_return": 1,
+    "kbar_body_ratio": 1,
+    "kbar_upper_wick_ratio": 1,
+    "kbar_lower_wick_ratio": 1,
+    "kbar_range_ratio": 1,
+    "kbar_close_location_ratio": 1,
+    "kbar_gap_return": 2,
+    "kbar_volume_change_ratio": 2,
+}
+
+# Exact raw-bar history for every exported kbar feature.  A delta at lag L
+# needs both the base feature now and at t-L, so its history is base+L.
+KBAR_FEATURE_HISTORY_BARS: dict[str, int] = {
+    **_KBAR_BASE_FEATURE_HISTORY_BARS,
+    **{
+        f"{name}_delta{lag}": base_history + lag
+        for name, base_history in _KBAR_BASE_FEATURE_HISTORY_BARS.items()
+        for lag in KBAR_DELTA_LAGS
+    },
+}
+
 
 def _safe_normalize(numerator: np.ndarray, denominator: np.ndarray) -> np.ndarray:
     out: np.ndarray = np.full(numerator.size, np.nan, dtype=np.float64)

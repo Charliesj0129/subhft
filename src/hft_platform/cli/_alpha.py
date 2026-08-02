@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from dataclasses import asdict
 from importlib import import_module
 from pathlib import Path
 from typing import Any
@@ -331,6 +332,7 @@ def _write_alpha_mining_campaign_report(
     campaign_id: str,
     outcomes: list[dict[str, Any]],
     minimum_days_for_promotion: int,
+    harness_controls: dict[str, Any],
 ) -> dict[str, Any]:
     payload = {
         "schema": "alpha_mining_campaign.v3",
@@ -341,6 +343,7 @@ def _write_alpha_mining_campaign_report(
             f"minimum_{minimum_days_for_promotion}_eligible_trading_days; independent_of_search_breadth"
         ),
         "final_holdout_unlocked": False,
+        "harness_controls": dict(harness_controls),
         "legs": list(outcomes),
     }
     payload["campaign_hash"] = hashlib.sha256(
@@ -363,6 +366,53 @@ def _write_alpha_mining_campaign_report(
     return payload
 
 
+def _write_alpha_mining_harness_controls(
+    campaign_dir: Path,
+    summary: Any,
+    *,
+    code_fingerprint_value: str,
+) -> dict[str, Any]:
+    # Normalize dataclass tuples to their persisted JSON representation before
+    # hashing or comparing.  Otherwise a resumable second invocation compares
+    # in-memory tuples with on-disk lists and falsely reports drift.
+    payload = json.loads(json.dumps(asdict(summary), sort_keys=True, separators=(",", ":")))
+    payload["code_fingerprint"] = str(code_fingerprint_value)
+    payload["control_hash"] = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    path = campaign_dir / "harness_controls.json"
+    if path.exists():
+        existing = json.loads(path.read_text(encoding="utf-8"))
+        if existing != payload:
+            raise ValueError("existing harness-controls artifact differs from the frozen deterministic controls")
+    else:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            dir=campaign_dir,
+            suffix=".json",
+            delete=False,
+            encoding="utf-8",
+        ) as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+            temporary = Path(handle.name)
+        temporary.replace(path)
+    return {
+        "schema": payload["schema"],
+        "path": str(path),
+        "control_hash": payload["control_hash"],
+        "code_fingerprint": payload["code_fingerprint"],
+        "passed": bool(payload["passed"]),
+        "positive_passes": int(payload["positive_passes"]),
+        "positive_cases": int(payload["positive_cases"]),
+        "null_survivors": int(payload["null_survivors"]),
+        "null_cases": int(payload["null_cases"]),
+        "interpretation": payload["interpretation"],
+    }
+
+
 def cmd_alpha_mine_campaign(args: argparse.Namespace) -> None:
     """Run the six governed family/timeframe legs with resumable per-leg artifacts."""
     try:
@@ -372,7 +422,9 @@ def cmd_alpha_mine_campaign(args: argparse.Namespace) -> None:
             MiningRun,
             RunConfig,
             RunIntegrityError,
+            code_fingerprint,
         )
+        from research.combinatorial.smma_validation import run_locked_harness_controls
         from research.combinatorial.tick_dataset import TickDatasetGovernanceError
 
         run_root = Path(args.run_root).resolve()
@@ -383,6 +435,16 @@ def cmd_alpha_mine_campaign(args: argparse.Namespace) -> None:
             raise ValueError("run-root must be a dedicated artifact parent, not a broad filesystem root")
         campaign_dir = run_root / campaign_id
         campaign_dir.mkdir(parents=True, exist_ok=True)
+        control_summary = run_locked_harness_controls(
+            resample_samples=int(getattr(args, "harness_control_samples", 2_000))
+        )
+        harness_controls = _write_alpha_mining_harness_controls(
+            campaign_dir,
+            control_summary,
+            code_fingerprint_value=code_fingerprint(),
+        )
+        if not control_summary.passed:
+            raise RunIntegrityError("locked-validation harness controls failed; campaign legs were not started")
         legs = [
             (family, label, timeframes)
             for family in ("bidask", "kbar", "tick")
@@ -491,8 +553,9 @@ def cmd_alpha_mine_campaign(args: argparse.Namespace) -> None:
                 campaign_id,
                 outcomes,
                 MIN_DAYS_FOR_PROMOTION,
+                harness_controls,
             )
-    except (ValueError, OSError) as exc:
+    except (RunIntegrityError, ValueError, OSError) as exc:
         print(f"[hft alpha mine campaign] {exc}", file=sys.stderr)
         sys.exit(2)
     print(json.dumps(payload, indent=2, sort_keys=True))
