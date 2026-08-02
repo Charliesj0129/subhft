@@ -280,6 +280,8 @@ class TestStartupFillBackfill:
             # SimpleNamespace stub must expose it the same way the real class does.
             _env_float=HFTSystem._env_float,
             _start_service=_start_service,
+            # run() also starts the loop-lag probe alongside the supervisor.
+            _probe_event_loop_lag=MagicMock(return_value=asyncio.sleep(0)),
             _supervise=MagicMock(return_value=asyncio.sleep(0)),
             stop_async=MagicMock(return_value=asyncio.sleep(0)),
             evidence_writer=MagicMock(record_transition=MagicMock()),

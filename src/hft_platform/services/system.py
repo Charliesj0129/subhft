@@ -653,6 +653,11 @@ class HFTSystem:
             )
             self._loop_watchdog.start()
 
+            # Independent loop-congestion probe. Not in _iter_supervised_services:
+            # it is a measurement, and a measurement dying must never HALT the
+            # platform. It is cancelled with the rest of self.tasks on shutdown.
+            self._start_service("loop_probe", self._probe_event_loop_lag())
+
             # Start Monitor/Supervisor Loop
             await self._supervise()
 
@@ -1088,6 +1093,12 @@ class HFTSystem:
         while self.running:
             await asyncio.sleep(interval_s)  # 1Hz Tick
             now_tick = loop.time()
+            # This spans the WHOLE tick period (sleep + the body below), so it is
+            # loop congestion PLUS this loop's own work — not "event loop lag"
+            # despite the metric name. Kept unrenamed because dashboards and
+            # alerts query it; ``event_loop_probe_lag_ms`` (an idle probe task)
+            # and ``supervisor_tick_duration_ms`` (recorded at the bottom of this
+            # body) split it into its two halves and should sum back to it.
             lag_s = max(0.0, now_tick - last_tick - interval_s)
             metrics.event_loop_lag_ms.set(lag_s * 1000.0)
             last_tick = now_tick
@@ -1549,6 +1560,38 @@ class HFTSystem:
                             collected=_gc2_collected,
                             duration_ms=round(_gc2_ms, 2),
                         )
+
+            # Last statement of the tick body: how long this loop's own work
+            # took. Everything above ran between ``now_tick`` and here, so the
+            # remainder of ``event_loop_lag_ms`` is congestion this loop did not
+            # cause. Attributing the 1 ms budget needs both numbers.
+            _tick_hist = getattr(metrics, "supervisor_tick_duration_ms", None)
+            if _tick_hist is not None:
+                _tick_hist.observe((loop.time() - now_tick) * 1000.0)
+
+    async def _probe_event_loop_lag(self):
+        """Measure event-loop congestion with a task that does nothing else.
+
+        The supervisor's ``event_loop_lag_ms`` cannot separate "the loop was
+        busy" from "this tick did a lot of work", because it times its own
+        period. This probe sleeps for a fixed short interval and records the
+        overshoot, so every millisecond it reports is time the loop was
+        unavailable to *any* callback — including the hot path.
+        """
+        from hft_platform.observability.metrics import MetricsRegistry
+
+        metrics = MetricsRegistry.get()
+        hist = getattr(metrics, "event_loop_probe_lag_ms", None)
+        loop = asyncio.get_running_loop()
+        interval_s = self._env_float("HFT_LOOP_PROBE_INTERVAL_S", 0.1, 0.01)
+        last = loop.time()
+        while self.running:
+            await asyncio.sleep(interval_s)
+            now = loop.time()
+            overshoot_ms = max(0.0, (now - last - interval_s) * 1000.0)
+            last = now
+            if hist is not None:
+                hist.observe(overshoot_ms)
 
     async def stop_async(self):
         """Async stop with proper task cleanup."""
