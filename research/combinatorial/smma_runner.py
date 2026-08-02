@@ -653,15 +653,21 @@ def enumerate_candidates(
     candidates: list[Candidate] = []
     for expression in expressions:
         complexity = compile_expression(expression, max_depth=3).max_depth
+        discovery_signal = np.asarray(signals[expression])[discovery_mask]
+        resolutions = {
+            (direction, threshold_quantile): resolve_quantile_threshold(
+                discovery_signal,
+                direction=direction,
+                quantile=threshold_quantile,
+            )
+            for direction in (1, -1)
+            for threshold_quantile in THRESHOLD_QUANTILES
+        }
         for horizon in ("1h", "4h", "session"):
             for direction in (1, -1):
                 canonical_by_cut: dict[str, str] = {}
                 for threshold_quantile in THRESHOLD_QUANTILES:
-                    resolution = resolve_quantile_threshold(
-                        np.asarray(signals[expression])[discovery_mask],
-                        direction=direction,
-                        quantile=threshold_quantile,
-                    )
+                    resolution = resolutions[(direction, threshold_quantile)]
                     identity = {
                         "family": family,
                         "root": root,

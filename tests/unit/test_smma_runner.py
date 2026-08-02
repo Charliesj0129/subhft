@@ -744,6 +744,46 @@ def test_candidate_id_uses_family_and_quantile_not_resolved_cut() -> None:
     assert first[0].candidate_id != other_family[0].candidate_id
 
 
+def test_candidate_quantiles_are_resolved_once_per_expression_direction(monkeypatch) -> None:
+    import research.combinatorial.smma_runner as runner
+
+    original = runner.resolve_quantile_threshold
+    calls: list[tuple[int, float]] = []
+
+    def counted_resolution(signal, *, direction, quantile):
+        calls.append((int(direction), float(quantile)))
+        return original(signal, direction=direction, quantile=quantile)
+
+    monkeypatch.setattr(runner, "resolve_quantile_threshold", counted_resolution)
+    candidates = enumerate_candidates(
+        family="kbar",
+        root="TXF",
+        timeframe_min=60,
+        expressions=["usable"],
+        signals={"usable": np.linspace(-2.0, 2.0, 101)},
+        discovery_mask=np.ones(101, dtype=bool),
+        seed=1,
+    )
+
+    assert calls == [(direction, quantile) for direction in (1, -1) for quantile in (0.50, 0.70, 0.85, 0.95)]
+    assert [(candidate.horizon, candidate.direction, candidate.threshold_quantile) for candidate in candidates] == [
+        (horizon, direction, quantile)
+        for horizon in ("1h", "4h", "session")
+        for direction in (1, -1)
+        for quantile in (0.50, 0.70, 0.85, 0.95)
+    ]
+    for direction in (1, -1):
+        by_horizon = [
+            [
+                candidate.threshold_resolution
+                for candidate in candidates
+                if candidate.horizon == horizon and candidate.direction == direction
+            ]
+            for horizon in ("1h", "4h", "session")
+        ]
+        assert by_horizon[0] == by_horizon[1] == by_horizon[2]
+
+
 def test_exact_resolved_cut_duplicates_reference_the_lowest_quantile_candidate() -> None:
     candidates = enumerate_candidates(
         family="kbar",
