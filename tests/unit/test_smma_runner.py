@@ -24,12 +24,15 @@ from research.combinatorial.smma_runner import (
     RunConfig,
     RunIntegrityError,
     SplitUnlockGuard,
+    _build_candidate_evaluation_context,
     _discovery_process_pool,
     _discovery_trial_sharpe_std,
     _evaluate_candidate,
     _evaluate_discovery_worker,
     _exact_horizon_inputs,
     _feedback_seed,
+    _initialize_discovery_worker,
+    _project_horizon_signal,
     _timestamp_signal_correlation,
     _with_integrity_hash,
     code_fingerprint,
@@ -213,6 +216,30 @@ def _with_daily(dataset: BarDataset) -> BarDataset:
     )
 
 
+def _evaluation_dataset(timeframe_min: int, *, days: int = 24) -> tuple[BarDataset, BarDataset]:
+    base = _dataset(days=days)
+    if timeframe_min in (2, 60):
+        feature_bars = replace(
+            base,
+            timeframe_min=np.full(len(base), timeframe_min, dtype=np.int16),
+        )
+        return feature_bars, feature_bars
+
+    indices = np.arange(0, len(base), 2, dtype=np.int64)
+    values = {field: np.asarray(getattr(base, field))[indices].copy() for field in _field_names(base)}
+    values["timeframe_min"][:] = timeframe_min
+    values["reset"][:] = True
+    values["session_close"][:] = True
+    feature_bars = BarDataset(**values)
+    combined = BarDataset(
+        **{
+            field: np.concatenate((np.asarray(getattr(base, field)), np.asarray(getattr(feature_bars, field))))
+            for field in _field_names(base)
+        }
+    )
+    return combined, feature_bars
+
+
 def test_coarse_feature_signal_uses_exact_60_minute_execution_horizon() -> None:
     base = _dataset(days=2)
     hour_ns = 3_600_000_000_000
@@ -335,6 +362,185 @@ def test_partial_coarse_bar_maps_to_last_observed_60_minute_close() -> None:
     assert labels.tolist() == ["discovery", "discovery", "discovery"]
     assert np.flatnonzero(np.isfinite(signal)).tolist() == [2]
     assert execution_bars.session_close.tolist() == [False, False, True]
+
+
+@pytest.mark.parametrize(
+    ("timeframe_min", "horizon"),
+    [
+        (2, "1h"),
+        (60, "1h"),
+        (60, "4h"),
+        (60, "session"),
+        (120, "1h"),
+        (240, "1h"),
+    ],
+)
+def test_cached_candidate_context_is_exactly_equal_to_uncached_evaluation(
+    timeframe_min: int,
+    horizon: str,
+) -> None:
+    dataset, feature_bars = _evaluation_dataset(timeframe_min)
+    labels = np.full(len(feature_bars), "discovery", dtype="<U18")
+    labels[-6:] = "selection"
+    signal = np.sin(np.arange(len(feature_bars), dtype=np.float64) / 2.0)
+    signal[3] = np.nan
+    candidate = Candidate(
+        candidate_id=f"cached-{timeframe_min}-{horizon}",
+        root="TXF",
+        timeframe_min=timeframe_min,
+        expression="signal",
+        horizon=horizon,
+        direction=-1,
+        threshold=-0.25,
+        seed=1,
+        complexity=1,
+    )
+
+    expected = _evaluate_candidate(
+        candidate,
+        dataset=dataset,
+        bars=feature_bars,
+        signal=signal,
+        split_name="discovery",
+        split_labels=labels,
+        evaluation_fraction=0.25,
+        cost_mode="per_contract",
+    )
+    context = _build_candidate_evaluation_context(
+        dataset=dataset,
+        candidate=candidate,
+        feature_bars=feature_bars,
+        split_name="discovery",
+        split_labels=labels,
+        evaluation_fraction=0.25,
+    )
+    projected_signal, _history_starts = _project_horizon_signal(
+        grid=context.grid,
+        feature_bars=feature_bars,
+        feature_signal=signal,
+    )
+    actual = _evaluate_candidate(
+        candidate,
+        dataset=dataset,
+        bars=feature_bars,
+        signal=signal,
+        split_name="discovery",
+        split_labels=labels,
+        evaluation_fraction=0.25,
+        cost_mode="per_contract",
+        evaluation_context=context,
+        projected_signal=projected_signal,
+    )
+    reference_bars, reference_signal, reference_labels, target_timeframe, _history = _exact_horizon_inputs(
+        dataset=dataset,
+        candidate=candidate,
+        feature_bars=feature_bars,
+        feature_signal=signal,
+        split_labels=labels,
+    )
+
+    assert actual.to_dict() == expected.to_dict()
+    assert context.grid.target_timeframe_min == target_timeframe
+    assert not np.shares_memory(context.grid.feature_labels, labels)
+    assert _field_names(context.grid.execution_bars) == _field_names(reference_bars)
+    for field in _field_names(reference_bars):
+        np.testing.assert_array_equal(
+            getattr(context.grid.execution_bars, field),
+            getattr(reference_bars, field),
+        )
+    np.testing.assert_allclose(projected_signal, reference_signal, rtol=0, atol=0, equal_nan=True)
+    np.testing.assert_array_equal(context.grid.execution_labels, reference_labels)
+
+
+def test_coarse_horizon_rejects_a_misaligned_signal_before_execution_grid_access() -> None:
+    _dataset_with_execution, feature_bars = _evaluation_dataset(120)
+    labels = np.full(len(feature_bars), "discovery", dtype="<U18")
+    candidate = Candidate(
+        candidate_id="misaligned-coarse",
+        root="TXF",
+        timeframe_min=120,
+        expression="signal",
+        horizon="1h",
+        direction=1,
+        threshold=0.0,
+        seed=1,
+        complexity=1,
+    )
+
+    with pytest.raises(ValueError, match="feature bars, signal, and split labels"):
+        _exact_horizon_inputs(
+            dataset=feature_bars,
+            candidate=candidate,
+            feature_bars=feature_bars,
+            feature_signal=np.zeros(len(feature_bars) - 1),
+            split_labels=labels,
+        )
+    with pytest.raises(ValueError, match="feature bars, signal, and split labels"):
+        _evaluate_candidate(
+            candidate,
+            dataset=feature_bars,
+            bars=feature_bars,
+            signal=np.zeros(len(feature_bars) - 1),
+            split_name="discovery",
+            split_labels=labels,
+        )
+
+
+def test_cached_candidate_still_validates_the_raw_expression_signal() -> None:
+    dataset, feature_bars = _evaluation_dataset(120)
+    labels = np.full(len(feature_bars), "discovery", dtype="<U18")
+    candidate = Candidate(
+        candidate_id="cached-raw-validation",
+        root="TXF",
+        timeframe_min=120,
+        expression="signal",
+        horizon="1h",
+        direction=1,
+        threshold=0.0,
+        seed=1,
+        complexity=1,
+    )
+    context = _build_candidate_evaluation_context(
+        dataset=dataset,
+        candidate=candidate,
+        feature_bars=feature_bars,
+        split_name="discovery",
+        split_labels=labels,
+        evaluation_fraction=0.25,
+    )
+    projected, _history_starts = _project_horizon_signal(
+        grid=context.grid,
+        feature_bars=feature_bars,
+        feature_signal=np.ones(len(feature_bars)),
+    )
+
+    with pytest.raises(ValueError, match="feature bars, signal, and split labels"):
+        _evaluate_candidate(
+            candidate,
+            dataset=dataset,
+            bars=feature_bars,
+            signal=np.ones(len(feature_bars) - 1),
+            split_name="discovery",
+            split_labels=labels,
+            evaluation_fraction=0.25,
+            evaluation_context=context,
+            projected_signal=projected,
+        )
+
+    labels[0] = "selection"
+    assert context.grid.feature_labels[0] == "discovery"
+    with pytest.raises(RunIntegrityError, match="does not match the feature grid"):
+        _evaluate_candidate(
+            candidate,
+            dataset=dataset,
+            bars=feature_bars,
+            signal=np.ones(len(feature_bars)),
+            split_name="discovery",
+            split_labels=labels,
+            evaluation_fraction=0.25,
+            evaluation_context=context,
+            projected_signal=projected,
+        )
 
 
 def test_run_config_enforces_frozen_resource_caps(tmp_path) -> None:
@@ -907,6 +1113,79 @@ def test_process_discovery_matches_single_process_candidate_results() -> None:
 
     assert actual == expected
     assert {name: os.environ.get(name) for name in DISCOVERY_NUMERIC_THREAD_ENV} == prior_thread_env
+
+
+def test_discovery_worker_reuses_group_context_and_initializer_clears_it(monkeypatch) -> None:
+    import research.combinatorial.smma_runner as runner
+
+    bars = _dataset(days=24)
+    labels = np.full(len(bars), "discovery", dtype="<U18")
+    signals = {
+        "x": np.linspace(-1.0, 1.0, len(bars)),
+        "y": np.cos(np.arange(len(bars), dtype=np.float64) / 3.0),
+    }
+    candidates = [
+        Candidate(
+            candidate_id=f"worker-{expression}-{direction}-{threshold}",
+            root="TXF",
+            timeframe_min=60,
+            expression=expression,
+            horizon="1h",
+            direction=direction,
+            threshold=threshold,
+            seed=1,
+            complexity=1,
+        )
+        for expression in ("x", "y")
+        for direction in (1, -1)
+        for threshold in (0.0, 0.5)
+    ]
+    second_bars = replace(bars, close=np.asarray(bars.close)[::-1].copy())
+    second_expected = _evaluate_candidate(
+        candidates[0],
+        dataset=second_bars,
+        bars=second_bars,
+        signal=signals["x"],
+        split_name="discovery",
+        split_labels=labels,
+        evaluation_fraction=0.25,
+        cost_mode="per_contract",
+    ).to_dict()
+    counts = {"targets": 0, "returns": 0, "detrend": 0, "projection": 0}
+    real_targets = runner.forward_target_indices
+    real_returns = runner.forward_returns
+    real_detrend = runner.rolling_detrend
+    real_projection = runner._project_horizon_signal
+
+    def counted_targets(**kwargs):
+        counts["targets"] += 1
+        return real_targets(**kwargs)
+
+    def counted_returns(*args, **kwargs):
+        counts["returns"] += 1
+        return real_returns(*args, **kwargs)
+
+    def counted_detrend(*args, **kwargs):
+        counts["detrend"] += 1
+        return real_detrend(*args, **kwargs)
+
+    def counted_projection(**kwargs):
+        counts["projection"] += 1
+        return real_projection(**kwargs)
+
+    monkeypatch.setattr(runner, "forward_target_indices", counted_targets)
+    monkeypatch.setattr(runner, "forward_returns", counted_returns)
+    monkeypatch.setattr(runner, "rolling_detrend", counted_detrend)
+    monkeypatch.setattr(runner, "_project_horizon_signal", counted_projection)
+
+    _initialize_discovery_worker(bars, bars, signals, labels, "per_contract")
+    [_evaluate_discovery_worker(candidate) for candidate in candidates]
+    assert counts == {"targets": 1, "returns": 1, "detrend": 1, "projection": 2}
+
+    _initialize_discovery_worker(second_bars, second_bars, signals, labels, "per_contract")
+    second_actual = [_evaluate_discovery_worker(candidate) for candidate in candidates]
+    assert counts == {"targets": 2, "returns": 2, "detrend": 2, "projection": 4}
+    assert second_actual[0].to_dict() == second_expected
 
 
 def test_selection_clustered_sharpe_uses_full_trading_day_axis() -> None:
@@ -2242,12 +2521,13 @@ def test_selection_builds_each_group_and_expression_once(monkeypatch, tmp_path) 
     import research.combinatorial.smma_runner as runner
 
     base = _dataset()
+    coarse_indices = np.arange(0, len(base), 2, dtype=np.int64)
     coarse = BarDataset(
         **{
             field.name: (
-                np.full(len(base), 120, dtype=np.int16)
+                np.full(coarse_indices.size, 120, dtype=np.int16)
                 if field.name == "timeframe_min"
-                else np.asarray(getattr(base, field.name)).copy()
+                else np.asarray(getattr(base, field.name))[coarse_indices].copy()
             )
             for field in fields(base)
         }

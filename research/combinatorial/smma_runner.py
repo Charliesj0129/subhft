@@ -73,6 +73,7 @@ from research.combinatorial.smma_validation import (
     metrics_to_dict,
     monotonic_horizon_pollution,
     resolve_quantile_threshold,
+    rolling_detrend,
     simulate_next_bar_execution,
 )
 from research.combinatorial.taifex_trading_dates import build_trading_date_window
@@ -270,6 +271,8 @@ class _SelectionGroupContext:
     selection_ts: np.ndarray
     features: Mapping[str, np.ndarray]
     signals: dict[str, tuple[np.ndarray, np.ndarray]]
+    evaluation_contexts: dict[tuple[str, int, str, str, float], _CandidateEvaluationContext]
+    projected_signals: dict[tuple[str, int, str, str], np.ndarray]
 
 
 FAMILY_REGISTRY: dict[str, FamilyAdapter] = {
@@ -443,6 +446,36 @@ class CandidateResult:
             status=str(payload["status"]),
             failure_reason=str(payload.get("failure_reason", "")),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class _HorizonGrid:
+    root: str
+    feature_timeframe_min: int
+    horizon: str
+    feature_count: int
+    execution_bars: GovernedBars
+    execution_labels: np.ndarray
+    feature_labels: np.ndarray
+    target_timeframe_min: int
+    bucket_first_indices: np.ndarray | None
+    bucket_last_indices: np.ndarray | None
+
+
+@dataclass(frozen=True, slots=True)
+class _CandidateEvaluationContext:
+    root: str
+    feature_timeframe_min: int
+    horizon: str
+    split_name: str
+    evaluation_fraction: float
+    grid: _HorizonGrid
+    target_indices: np.ndarray
+    target_returns: np.ndarray
+    split_mask: np.ndarray
+    recent_indices: np.ndarray
+    precomputed_recent_target_detrend: np.ndarray
+    horizon_step: int
 
 
 def _result_from_kill_ledger_row(
@@ -814,31 +847,48 @@ def _feature_grid_history_starts(
     return starts
 
 
-def _exact_horizon_inputs(
-    *,
-    dataset: GovernedBars,
-    candidate: Candidate,
+def _normalize_feature_inputs(
     feature_bars: GovernedBars,
     feature_signal: np.ndarray,
     split_labels: np.ndarray,
-    feature_history_bars: int | None = 1,
-) -> tuple[GovernedBars, np.ndarray, np.ndarray, int, np.ndarray]:
-    """Project coarse signals onto 60-minute bars when a true 1h horizon requires it."""
+) -> tuple[np.ndarray, np.ndarray]:
     signal = np.asarray(feature_signal, dtype=np.float64).reshape(-1)
-    labels = np.asarray(split_labels).astype("<U18").reshape(-1)
+    labels = np.asarray(split_labels, dtype="<U18").reshape(-1)
     if len({len(feature_bars), signal.size, labels.size}) != 1:
         raise ValueError("feature bars, signal, and split labels must have identical lengths")
-    history_starts = _feature_grid_history_starts(
-        feature_bars.reset,
-        feature_count=signal.size,
-        feature_history_bars=feature_history_bars,
-    )
-    if candidate.horizon != "1h" or candidate.timeframe_min <= 60:
-        return feature_bars, signal, labels, candidate.timeframe_min, history_starts
+    return signal, labels
 
-    if candidate.timeframe_min not in (120, 240):
-        raise RunIntegrityError(f"cannot represent an exact 1h horizon for {candidate.timeframe_min}m features")
-    execution_bars = dataset.group(candidate.root, 60)
+
+def _build_horizon_grid(
+    *,
+    dataset: GovernedBars,
+    root: str,
+    feature_timeframe_min: int,
+    horizon: str,
+    feature_bars: GovernedBars,
+    split_labels: np.ndarray,
+) -> _HorizonGrid:
+    """Build candidate-independent execution geometry for one horizon."""
+    labels = np.array(split_labels, dtype="<U18", copy=True).reshape(-1)
+    if len(feature_bars) != labels.size:
+        raise ValueError("feature bars, signal, and split labels must have identical lengths")
+    if horizon != "1h" or feature_timeframe_min <= 60:
+        return _HorizonGrid(
+            root=root,
+            feature_timeframe_min=feature_timeframe_min,
+            horizon=horizon,
+            feature_count=len(feature_bars),
+            execution_bars=feature_bars,
+            execution_labels=labels,
+            feature_labels=labels,
+            target_timeframe_min=feature_timeframe_min,
+            bucket_first_indices=None,
+            bucket_last_indices=None,
+        )
+
+    if feature_timeframe_min not in (120, 240):
+        raise RunIntegrityError(f"cannot represent an exact 1h horizon for {feature_timeframe_min}m features")
+    execution_bars = dataset.group(root, 60)
     source_days = np.unique(feature_bars.trading_day)
     source_sessions = np.unique(feature_bars.session)
     mask = np.isin(execution_bars.trading_day, source_days)
@@ -859,13 +909,11 @@ def _exact_horizon_inputs(
     )
 
     minute_ns = 60 * 1_000_000_000
-    aligned_signal: np.ndarray = np.full(len(execution_bars), np.nan, dtype=np.float64)
-    aligned_history_starts: np.ndarray = np.full(len(execution_bars), -1, dtype=np.int64)
-    feature_bucket_starts: np.ndarray = np.full(len(feature_bars), -1, dtype=np.int64)
-    missing_buckets: list[int] = []
-    for feature_index, value in enumerate(signal):
+    bucket_first_indices: np.ndarray = np.full(len(feature_bars), -1, dtype=np.int64)
+    bucket_last_indices: np.ndarray = np.full(len(feature_bars), -1, dtype=np.int64)
+    for feature_index in range(len(feature_bars)):
         bucket_start = int(feature_bars.ts_ns[feature_index])
-        bucket_end = bucket_start + candidate.timeframe_min * minute_ns
+        bucket_end = bucket_start + feature_timeframe_min * minute_ns
         matching = np.flatnonzero(
             (execution_bars.trading_day == feature_bars.trading_day[feature_index])
             & (execution_bars.session == feature_bars.session[feature_index])
@@ -873,23 +921,188 @@ def _exact_horizon_inputs(
             & (execution_bars.ts_ns >= bucket_start)
             & (execution_bars.ts_ns < bucket_end)
         )
-        if matching.size == 0:
-            missing_buckets.append(bucket_start)
+        if matching.size:
+            bucket_first_indices[feature_index] = int(matching[0])
+            bucket_last_indices[feature_index] = int(matching[-1])
+    return _HorizonGrid(
+        root=root,
+        feature_timeframe_min=feature_timeframe_min,
+        horizon=horizon,
+        feature_count=len(feature_bars),
+        execution_bars=execution_bars,
+        execution_labels=execution_labels,
+        feature_labels=labels,
+        target_timeframe_min=60,
+        bucket_first_indices=bucket_first_indices,
+        bucket_last_indices=bucket_last_indices,
+    )
+
+
+def _project_horizon_signal(
+    *,
+    grid: _HorizonGrid,
+    feature_bars: GovernedBars,
+    feature_signal: np.ndarray,
+    feature_history_bars: int | None = 1,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Project one expression signal through a frozen horizon grid."""
+    signal = np.asarray(feature_signal, dtype=np.float64).reshape(-1)
+    if len(feature_bars) != grid.feature_count or signal.size != grid.feature_count:
+        raise ValueError("feature bars, signal, and split labels must have identical lengths")
+    history_starts = _feature_grid_history_starts(
+        feature_bars.reset,
+        feature_count=signal.size,
+        feature_history_bars=feature_history_bars,
+    )
+    if grid.bucket_first_indices is None or grid.bucket_last_indices is None:
+        return signal, history_starts
+
+    aligned_signal: np.ndarray = np.full(len(grid.execution_bars), np.nan, dtype=np.float64)
+    aligned_history_starts: np.ndarray = np.full(len(grid.execution_bars), -1, dtype=np.int64)
+    missing_buckets: list[int] = []
+    for feature_index, value in enumerate(signal):
+        first_index = int(grid.bucket_first_indices[feature_index])
+        last_index = int(grid.bucket_last_indices[feature_index])
+        if last_index < 0:
+            missing_buckets.append(int(feature_bars.ts_ns[feature_index]))
             continue
-        index = int(matching[-1])
-        if np.isfinite(aligned_signal[index]):
-            raise RunIntegrityError(f"multiple coarse bars map to 60m execution index {index}")
-        aligned_signal[index] = value
-        feature_bucket_starts[feature_index] = int(matching[0])
+        if np.isfinite(aligned_signal[last_index]):
+            raise RunIntegrityError(f"multiple coarse bars map to 60m execution index {last_index}")
+        aligned_signal[last_index] = value
         source_feature_index = int(history_starts[feature_index])
         if source_feature_index >= 0:
-            source_start = int(feature_bucket_starts[source_feature_index])
+            source_start = int(grid.bucket_first_indices[source_feature_index])
             if source_start < 0:
                 raise RunIntegrityError("feature-history source bucket was not mapped to the execution grid")
-            aligned_history_starts[index] = source_start
+            aligned_history_starts[last_index] = source_start
+        if first_index < 0:
+            raise RunIntegrityError("coarse-bar bucket has an invalid execution-grid start")
     if missing_buckets:
         raise RunIntegrityError(f"60m execution grid is missing coarse-bar bucket(s): {missing_buckets[:3]}")
-    return execution_bars, aligned_signal, execution_labels, 60, aligned_history_starts
+    return aligned_signal, aligned_history_starts
+
+
+def _exact_horizon_inputs(
+    *,
+    dataset: GovernedBars,
+    candidate: Candidate,
+    feature_bars: GovernedBars,
+    feature_signal: np.ndarray,
+    split_labels: np.ndarray,
+    feature_history_bars: int | None = 1,
+) -> tuple[GovernedBars, np.ndarray, np.ndarray, int, np.ndarray]:
+    """Project coarse signals onto 60-minute bars when a true 1h horizon requires it."""
+    signal, labels = _normalize_feature_inputs(feature_bars, feature_signal, split_labels)
+    grid = _build_horizon_grid(
+        dataset=dataset,
+        root=candidate.root,
+        feature_timeframe_min=candidate.timeframe_min,
+        horizon=candidate.horizon,
+        feature_bars=feature_bars,
+        split_labels=labels,
+    )
+    signal, history_starts = _project_horizon_signal(
+        grid=grid,
+        feature_bars=feature_bars,
+        feature_signal=signal,
+        feature_history_bars=feature_history_bars,
+    )
+    return (
+        grid.execution_bars,
+        signal,
+        grid.execution_labels,
+        grid.target_timeframe_min,
+        history_starts,
+    )
+
+
+def _build_candidate_evaluation_context(
+    *,
+    dataset: GovernedBars,
+    candidate: Candidate,
+    feature_bars: GovernedBars,
+    split_name: str,
+    split_labels: np.ndarray,
+    evaluation_fraction: float,
+    grid: _HorizonGrid | None = None,
+) -> _CandidateEvaluationContext:
+    horizon_grid = grid or _build_horizon_grid(
+        dataset=dataset,
+        feature_bars=feature_bars,
+        root=candidate.root,
+        feature_timeframe_min=candidate.timeframe_min,
+        horizon=candidate.horizon,
+        split_labels=split_labels,
+    )
+    targets = forward_target_indices(
+        horizon=candidate.horizon,
+        timeframe_min=horizon_grid.target_timeframe_min,
+        split_labels=horizon_grid.execution_labels,
+        reset_mask=horizon_grid.execution_bars.reset,
+        session_close=horizon_grid.execution_bars.session_close,
+    )
+    target_returns = forward_returns(horizon_grid.execution_bars.close, targets)
+    split_mask = horizon_grid.execution_labels == split_name
+    split_indices = np.flatnonzero(split_mask)
+    if not (0.0 < float(evaluation_fraction) <= 1.0):
+        raise ValueError("evaluation_fraction must be in (0, 1]")
+    recent_start = int(split_indices.size * (1.0 - float(evaluation_fraction)))
+    recent_indices = split_indices[recent_start:]
+    split_target = target_returns[split_mask]
+    recent_target_start = int(split_target.size * (1.0 - float(evaluation_fraction)))
+    recent_target_detrend = rolling_detrend(split_target[recent_target_start:])
+    horizon_step = (
+        1
+        if candidate.horizon == "session"
+        else max(
+            1,
+            int(np.ceil((60 if candidate.horizon == "1h" else 240) / horizon_grid.target_timeframe_min)),
+        )
+    )
+    return _CandidateEvaluationContext(
+        root=candidate.root,
+        feature_timeframe_min=candidate.timeframe_min,
+        horizon=candidate.horizon,
+        split_name=split_name,
+        evaluation_fraction=float(evaluation_fraction),
+        grid=horizon_grid,
+        target_indices=targets,
+        target_returns=target_returns,
+        split_mask=split_mask,
+        recent_indices=recent_indices,
+        precomputed_recent_target_detrend=recent_target_detrend,
+        horizon_step=horizon_step,
+    )
+
+
+def _validate_candidate_evaluation_context(
+    context: _CandidateEvaluationContext,
+    *,
+    candidate: Candidate,
+    feature_bars: GovernedBars,
+    split_name: str,
+    split_labels: np.ndarray,
+    evaluation_fraction: float,
+) -> None:
+    expected = (
+        candidate.root,
+        candidate.timeframe_min,
+        candidate.horizon,
+        split_name,
+        float(evaluation_fraction),
+    )
+    actual = (
+        context.root,
+        context.feature_timeframe_min,
+        context.horizon,
+        context.split_name,
+        context.evaluation_fraction,
+    )
+    if actual != expected:
+        raise RunIntegrityError("candidate evaluation context does not match candidate semantics")
+    labels = np.asarray(split_labels, dtype="<U18").reshape(-1)
+    if len(feature_bars) != context.grid.feature_count or not np.array_equal(labels, context.grid.feature_labels):
+        raise RunIntegrityError("candidate evaluation context does not match the feature grid")
 
 
 def _evaluate_candidate(
@@ -902,30 +1115,40 @@ def _evaluate_candidate(
     split_labels: np.ndarray,
     evaluation_fraction: float = 1.0,
     cost_mode: str = "root_proxy",
+    evaluation_context: _CandidateEvaluationContext | None = None,
+    projected_signal: np.ndarray | None = None,
 ) -> CandidateResult:
-    bars, signal, split_labels, target_timeframe_min, _history_starts = _exact_horizon_inputs(
+    feature_signal, feature_labels = _normalize_feature_inputs(bars, signal, split_labels)
+    context = evaluation_context or _build_candidate_evaluation_context(
         dataset=dataset,
         candidate=candidate,
         feature_bars=bars,
-        feature_signal=signal,
-        split_labels=split_labels,
+        split_name=split_name,
+        split_labels=feature_labels,
+        evaluation_fraction=evaluation_fraction,
     )
-    targets = forward_target_indices(
-        horizon=candidate.horizon,
-        timeframe_min=target_timeframe_min,
-        split_labels=split_labels,
-        reset_mask=bars.reset,
-        session_close=bars.session_close,
+    _validate_candidate_evaluation_context(
+        context,
+        candidate=candidate,
+        feature_bars=bars,
+        split_name=split_name,
+        split_labels=feature_labels,
+        evaluation_fraction=evaluation_fraction,
     )
-    target_returns = forward_returns(bars.close, targets)
-    split_mask = split_labels == split_name
-    masked_signal: np.ndarray = np.full(signal.size, np.nan, dtype=np.float64)
-    split_indices = np.flatnonzero(split_mask)
-    if not (0.0 < float(evaluation_fraction) <= 1.0):
-        raise ValueError("evaluation_fraction must be in (0, 1]")
-    recent_start = int(split_indices.size * (1.0 - float(evaluation_fraction)))
-    recent_indices = split_indices[recent_start:]
-    masked_signal[recent_indices] = signal[recent_indices]
+    if projected_signal is None:
+        execution_signal, _history_starts = _project_horizon_signal(
+            grid=context.grid,
+            feature_bars=bars,
+            feature_signal=feature_signal,
+        )
+    else:
+        execution_signal = np.asarray(projected_signal, dtype=np.float64).reshape(-1)
+        if execution_signal.size != len(context.grid.execution_bars):
+            raise RunIntegrityError("projected signal does not match the candidate execution grid")
+    execution_bars = context.grid.execution_bars
+    masked_signal: np.ndarray = np.full(execution_signal.size, np.nan, dtype=np.float64)
+    recent_indices = context.recent_indices
+    masked_signal[recent_indices] = execution_signal[recent_indices]
     active = activation_mask(
         masked_signal,
         direction=candidate.direction,
@@ -936,14 +1159,14 @@ def _evaluate_candidate(
             signal=masked_signal,
             direction=candidate.direction,
             threshold=candidate.threshold,
-            target_indices=targets,
-            bid_open=bars.bid_open,
-            ask_open=bars.ask_open,
-            bid_close=bars.bid_close,
-            ask_close=bars.ask_close,
-            reset_mask=bars.reset,
+            target_indices=context.target_indices,
+            bid_open=execution_bars.bid_open,
+            ask_open=execution_bars.ask_open,
+            bid_close=execution_bars.bid_close,
+            ask_close=execution_bars.ask_close,
+            reset_mask=execution_bars.reset,
             instrument_profile=_profile_for_root(candidate.root),
-            contracts=bars.contract,
+            contracts=execution_bars.contract,
             cost_mode=cost_mode,
         )
     else:
@@ -955,21 +1178,17 @@ def _evaluate_candidate(
             net_sharpe=0.0,
             turnover=0.0,
         )
-    horizon_step = (
-        1
-        if candidate.horizon == "session"
-        else max(1, int(np.ceil((60 if candidate.horizon == "1h" else 240) / target_timeframe_min)))
-    )
     kill = evaluate_recent_kill_criteria(
-        signal=masked_signal[split_mask],
+        signal=masked_signal[context.split_mask],
         direction=candidate.direction,
-        target_returns=target_returns[split_mask],
+        target_returns=context.target_returns[context.split_mask],
         execution=execution,
         root=candidate.root,
-        nonoverlap_step=horizon_step,
-        trading_days=bars.trading_day,
+        nonoverlap_step=context.horizon_step,
+        trading_days=execution_bars.trading_day,
         recent_fraction=evaluation_fraction,
         trade_activity_reason="no_executable_trades" if np.any(active) else "insufficient_trigger_activity",
+        precomputed_recent_target_detrend=context.precomputed_recent_target_detrend,
     )
     return CandidateResult(
         candidate=candidate,
@@ -980,16 +1199,79 @@ def _evaluate_candidate(
     )
 
 
-_DISCOVERY_WORKER_CONTEXT: (
-    tuple[
-        GovernedBars,
-        GovernedBars,
-        Mapping[str, np.ndarray],
-        np.ndarray,
-        str,
-    ]
-    | None
-) = None
+def _evaluate_candidate_with_group_cache(
+    candidate: Candidate,
+    *,
+    dataset: GovernedBars,
+    bars: GovernedBars,
+    signal: np.ndarray,
+    split_name: str,
+    split_labels: np.ndarray,
+    evaluation_fraction: float,
+    cost_mode: str,
+    evaluation_contexts: dict[tuple[str, int, str, str, float], _CandidateEvaluationContext],
+    projected_signals: dict[tuple[str, int, str, str], np.ndarray],
+) -> CandidateResult:
+    feature_signal, feature_labels = _normalize_feature_inputs(bars, signal, split_labels)
+    context_key = (
+        candidate.root,
+        candidate.timeframe_min,
+        candidate.horizon,
+        split_name,
+        float(evaluation_fraction),
+    )
+    context = evaluation_contexts.get(context_key)
+    if context is None:
+        context = _build_candidate_evaluation_context(
+            dataset=dataset,
+            candidate=candidate,
+            feature_bars=bars,
+            split_name=split_name,
+            split_labels=feature_labels,
+            evaluation_fraction=evaluation_fraction,
+        )
+        evaluation_contexts[context_key] = context
+
+    projection_key = (
+        candidate.root,
+        candidate.timeframe_min,
+        candidate.expression,
+        candidate.horizon,
+    )
+    projected_signal = projected_signals.get(projection_key)
+    if projected_signal is None:
+        projected_signal, _history_starts = _project_horizon_signal(
+            grid=context.grid,
+            feature_bars=bars,
+            feature_signal=feature_signal,
+        )
+        projected_signals[projection_key] = projected_signal
+    return _evaluate_candidate(
+        candidate,
+        dataset=dataset,
+        bars=bars,
+        signal=feature_signal,
+        split_name=split_name,
+        split_labels=feature_labels,
+        evaluation_fraction=evaluation_fraction,
+        cost_mode=cost_mode,
+        evaluation_context=context,
+        projected_signal=projected_signal,
+    )
+
+
+@dataclass(slots=True)
+class _DiscoveryWorkerContext:
+    dataset: GovernedBars
+    bars: GovernedBars
+    signals: Mapping[str, np.ndarray]
+    labels: np.ndarray
+    cost_mode: str
+    evaluation_contexts: dict[tuple[str, int, str, str, float], _CandidateEvaluationContext]
+    projected_signals: dict[tuple[str, int, str, str], np.ndarray]
+
+
+_DISCOVERY_WORKER_CONTEXT: _DiscoveryWorkerContext | None = None
 
 
 def _initialize_discovery_worker(
@@ -1001,23 +1283,33 @@ def _initialize_discovery_worker(
 ) -> None:
     """Freeze one group's read-only inputs in each discovery worker."""
     global _DISCOVERY_WORKER_CONTEXT
-    _DISCOVERY_WORKER_CONTEXT = (dataset, bars, signals, labels, cost_mode)
+    _DISCOVERY_WORKER_CONTEXT = _DiscoveryWorkerContext(
+        dataset=dataset,
+        bars=bars,
+        signals=signals,
+        labels=labels,
+        cost_mode=cost_mode,
+        evaluation_contexts={},
+        projected_signals={},
+    )
 
 
 def _evaluate_discovery_worker(candidate: Candidate) -> CandidateResult:
     """Evaluate one candidate without sending group arrays with every task."""
-    if _DISCOVERY_WORKER_CONTEXT is None:
+    context = _DISCOVERY_WORKER_CONTEXT
+    if context is None:
         raise RuntimeError("discovery worker context was not initialized")
-    dataset, bars, signals, labels, cost_mode = _DISCOVERY_WORKER_CONTEXT
-    return _evaluate_candidate(
+    return _evaluate_candidate_with_group_cache(
         candidate,
-        dataset=dataset,
-        bars=bars,
-        signal=signals[candidate.expression],
+        dataset=context.dataset,
+        bars=context.bars,
+        signal=context.signals[candidate.expression],
         split_name="discovery",
-        split_labels=labels,
+        split_labels=context.labels,
         evaluation_fraction=0.25,
-        cost_mode=cost_mode,
+        cost_mode=context.cost_mode,
+        evaluation_contexts=context.evaluation_contexts,
+        projected_signals=context.projected_signals,
     )
 
 
@@ -2022,9 +2314,14 @@ class MiningRun:
         remaining = [
             candidate for candidate in candidates if not self._ledger.has(candidate.candidate_id, "discovery")
         ][: max(0, self.config.max_candidates - self._ledger.unique_candidates)]
+        evaluation_contexts: dict[
+            tuple[str, int, str, str, float],
+            _CandidateEvaluationContext,
+        ] = {}
+        projected_signals: dict[tuple[str, int, str, str], np.ndarray] = {}
 
         def evaluate(candidate: Candidate) -> CandidateResult:
-            return _evaluate_candidate(
+            return _evaluate_candidate_with_group_cache(
                 candidate,
                 dataset=dataset,
                 bars=bars,
@@ -2033,6 +2330,8 @@ class MiningRun:
                 split_labels=labels,
                 evaluation_fraction=0.25,
                 cost_mode=self.config.cost_mode,
+                evaluation_contexts=evaluation_contexts,
+                projected_signals=projected_signals,
             )
 
         stop_reason: str | None = None
@@ -2448,14 +2747,27 @@ class MiningRun:
             remaining = [
                 candidate for candidate in candidates if not self._ledger.has(candidate.candidate_id, "discovery")
             ][: max(0, self.config.max_candidates - self._ledger.unique_candidates)]
+            evaluation_contexts: dict[
+                tuple[str, int, str, str, float],
+                _CandidateEvaluationContext,
+            ] = {}
+            projected_signals: dict[tuple[str, int, str, str], np.ndarray] = {}
 
             def evaluate(
                 candidate: Candidate,
                 bars: GovernedBars = bars,
                 signals: Mapping[str, np.ndarray] = signals,
                 labels: np.ndarray = labels,
+                evaluation_contexts: dict[
+                    tuple[str, int, str, str, float],
+                    _CandidateEvaluationContext,
+                ] = evaluation_contexts,
+                projected_signals: dict[
+                    tuple[str, int, str, str],
+                    np.ndarray,
+                ] = projected_signals,
             ) -> CandidateResult:
-                return _evaluate_candidate(
+                return _evaluate_candidate_with_group_cache(
                     candidate,
                     dataset=dataset,
                     bars=bars,
@@ -2464,6 +2776,8 @@ class MiningRun:
                     split_labels=labels,
                     evaluation_fraction=0.25,
                     cost_mode=self.config.cost_mode,
+                    evaluation_contexts=evaluation_contexts,
+                    projected_signals=projected_signals,
                 )
 
             batch_size = max(1, self.config.workers * 2)
@@ -2665,6 +2979,8 @@ class MiningRun:
                         selection_ts=bars.ts_ns[selection_mask],
                         features=adapter.build_features(bars, self.config),
                         signals={},
+                        evaluation_contexts={},
+                        projected_signals={},
                     )
                     group_contexts[group_key] = context
                 if candidate.expression not in context.signals:
@@ -2690,7 +3006,7 @@ class MiningRun:
                     continue
                 evaluated = recorded.get(candidate.candidate_id)
                 if evaluated is None:
-                    evaluated = _evaluate_candidate(
+                    evaluated = _evaluate_candidate_with_group_cache(
                         candidate,
                         dataset=dataset,
                         bars=context.bars,
@@ -2698,6 +3014,9 @@ class MiningRun:
                         split_name="selection",
                         split_labels=context.split_labels,
                         cost_mode=self.config.cost_mode,
+                        evaluation_fraction=1.0,
+                        evaluation_contexts=context.evaluation_contexts,
+                        projected_signals=context.projected_signals,
                     )
                     self._ledger.append(
                         {

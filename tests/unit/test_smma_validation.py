@@ -18,6 +18,7 @@ from research.combinatorial.smma_validation import (
     purged_walk_forward_evidence,
     purged_walk_forward_sharpes,
     resolve_quantile_threshold,
+    rolling_detrend,
     run_locked_harness_controls,
     simulate_next_bar_execution,
 )
@@ -145,6 +146,83 @@ def test_recent_kill_rejects_constant_or_trend_contaminated_signal() -> None:
     )
     assert not metrics.passed
     assert "raw_ic_inflation" in metrics.reasons or "detrended_ic" in metrics.reasons
+
+
+def test_recent_kill_reuses_an_exact_precomputed_recent_target_detrend(monkeypatch) -> None:
+    import research.combinatorial.smma_validation as validation
+
+    signal = np.sin(np.arange(80, dtype=np.float64) / 7.0)
+    target = np.cos(np.arange(80, dtype=np.float64) / 9.0) + np.arange(80) * 0.01
+    execution = ExecutionResult(
+        trade_pnl=np.asarray([5.0, 7.0, 9.0]),
+        entry_indices=np.asarray([61, 66, 71]),
+        exit_indices=np.asarray([62, 67, 72]),
+        net_edge=7.0,
+        net_sharpe=3.5,
+        turnover=0.05,
+    )
+    recent_fraction = 0.25
+    start = int(target.size * (1.0 - recent_fraction))
+    precomputed = rolling_detrend(target[start:])
+    expected = evaluate_recent_kill_criteria(
+        signal=signal,
+        direction=-1,
+        target_returns=target,
+        execution=execution,
+        root="TXF",
+        nonoverlap_step=4,
+        recent_fraction=recent_fraction,
+    )
+
+    monkeypatch.setattr(
+        validation,
+        "rolling_detrend",
+        lambda _values: (_ for _ in ()).throw(AssertionError("detrend must be reused")),
+    )
+    actual = evaluate_recent_kill_criteria(
+        signal=signal,
+        direction=-1,
+        target_returns=target,
+        execution=execution,
+        root="TXF",
+        nonoverlap_step=4,
+        recent_fraction=recent_fraction,
+        precomputed_recent_target_detrend=precomputed,
+    )
+
+    assert actual == expected
+    with pytest.raises(ValueError, match="precomputed recent target detrend"):
+        evaluate_recent_kill_criteria(
+            signal=signal,
+            direction=1,
+            target_returns=target,
+            execution=execution,
+            root="TXF",
+            nonoverlap_step=4,
+            recent_fraction=recent_fraction,
+            precomputed_recent_target_detrend=precomputed[:-1],
+        )
+
+
+def test_recent_detrend_is_applied_after_the_recent_slice_and_is_trailing_only() -> None:
+    target = np.arange(20, dtype=np.float64)
+    recent = target[-5:]
+
+    np.testing.assert_allclose(
+        rolling_detrend(recent),
+        np.asarray([np.nan, np.nan, np.nan, np.nan, 2.0]),
+        rtol=0,
+        atol=0,
+        equal_nan=True,
+    )
+    assert not np.array_equal(rolling_detrend(recent), rolling_detrend(target)[-5:], equal_nan=True)
+
+    values = np.asarray([1, 2, 3, 4, 100, 6, 7, 8, 9, 10], dtype=np.float64)
+    expected = np.asarray([np.nan, np.nan, np.nan, np.nan, 78, -17, -17, -17, -17, 2])
+    np.testing.assert_allclose(rolling_detrend(values), expected, rtol=0, atol=0, equal_nan=True)
+    changed_future = values.copy()
+    changed_future[5:] = -1_000
+    assert rolling_detrend(changed_future)[4] == rolling_detrend(values)[4]
 
 
 def test_quantile_threshold_makes_a_micro_scale_feature_tradeable() -> None:

@@ -466,6 +466,7 @@ def evaluate_recent_kill_criteria(
     trading_days: Sequence[str] | np.ndarray | None = None,
     recent_fraction: float = 0.25,
     trade_activity_reason: str | None = None,
+    precomputed_recent_target_detrend: Sequence[float] | np.ndarray | None = None,
 ) -> KillMetrics:
     """Apply the preregistered recent-quarter IC and net-edge kills."""
     if direction not in (-1, 1):
@@ -478,8 +479,17 @@ def evaluate_recent_kill_criteria(
     start = int(count * (1.0 - float(recent_fraction)))
     recent_signal = signal_arr[start:count]
     recent_target = target[start:count]
+    if precomputed_recent_target_detrend is None:
+        recent_target_detrended = rolling_detrend(recent_target)
+    else:
+        recent_target_detrended = np.asarray(
+            precomputed_recent_target_detrend,
+            dtype=np.float64,
+        ).reshape(-1)
+        if recent_target_detrended.size != recent_target.size:
+            raise ValueError("precomputed recent target detrend must match the recent target length")
     raw_ic = spearman_ic(recent_signal, recent_target)
-    detrended_ic = spearman_ic(recent_signal, rolling_detrend(recent_target))
+    detrended_ic = spearman_ic(recent_signal, recent_target_detrended)
     stride = max(1, int(nonoverlap_step))
     nonoverlap_ic = spearman_ic(recent_signal[::stride], recent_target[::stride])
     overlap_ratio = abs(raw_ic) / max(abs(nonoverlap_ic), 1e-12)
