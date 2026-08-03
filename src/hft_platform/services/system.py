@@ -1092,8 +1092,9 @@ class HFTSystem:
         # ~40 ms with the feed idle and **100-116 ms during a live session** —
         # it scales with the live object graph, not with uptime — while 105 of
         # those 107 runs reclaimed *zero* objects (111 in total). At 5 min that
-        # was ~12 hard event-loop stalls per hour, and over a 3 h window every
-        # single probe excursion above 50 ms was one of them.
+        # was ~12 hard event-loop stalls per hour, against 18.5 measured probe
+        # excursions above 50 ms per hour — so this is the largest identified
+        # contributor to the tail, roughly two thirds of it, not all of it.
         #
         # ``gc.collect()`` holds the GIL, so this cannot be moved to an executor;
         # frequency is the only lever that does not change what gets reclaimed.
