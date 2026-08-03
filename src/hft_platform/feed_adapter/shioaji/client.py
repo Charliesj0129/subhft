@@ -572,6 +572,13 @@ class ShioajiClient:
         # C3: Contract cache refresh thread
         self._contract_refresh_s = float(os.getenv("HFT_CONTRACT_REFRESH_S", "86400"))
         self._contract_cache_path = os.getenv("HFT_CONTRACT_CACHE_PATH", "config/contracts.json")
+        # How recent a sibling facade's rebuild has to be for this facade to reuse
+        # it instead of repeating the read/walk/write. The pooled facades' refresh
+        # threads start together and stay within ~11 s of each other, so 300 s is
+        # generous; a facade whose thread has drifted further does its own
+        # rebuild rather than inherit a stale delta. Must stay well under
+        # ``_contract_refresh_s``.
+        self._contract_refresh_share_window_s = float(os.getenv("HFT_CONTRACT_REFRESH_SHARE_WINDOW_S", "300"))
         self._contract_refresh_running = False
         self._contract_refresh_thread: threading.Thread | None = None
         self._contract_refresh_lock = threading.Lock()
