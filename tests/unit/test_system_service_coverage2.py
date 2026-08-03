@@ -2591,3 +2591,83 @@ class TestLoopLagAttribution:
                 os.environ.pop("HFT_LOOP_PROBE_INTERVAL_S", None)
 
         assert probe.done() and not probe.cancelled()
+
+
+class TestPeriodicGen2GC:
+    """``gc.collect(2)`` runs synchronously on the event loop and holds the GIL,
+    so its cadence is a latency decision, not just a memory one."""
+
+    async def _drive_ticks(self, sys_obj, ticks: int) -> list[int]:
+        """Run the supervisor for ``ticks`` iterations; return the generations collected."""
+        collected: list[int] = []
+        iteration = 0
+
+        async def _mock_sleep(_s):
+            nonlocal iteration
+            iteration += 1
+            if iteration >= ticks:
+                sys_obj.running = False
+
+        def _record_collect(generation):
+            collected.append(generation)
+            return 0  # the caller compares the result to 100; None would raise
+
+        mock_metrics = MagicMock()
+        mock_metrics.cap_symbol = MagicMock(return_value="X")
+
+        with patch("hft_platform.observability.metrics.MetricsRegistry") as MockMR:
+            MockMR.get.return_value = mock_metrics
+            with patch("asyncio.sleep", side_effect=_mock_sleep):
+                with patch("hft_platform.services.system.gc.collect", side_effect=_record_collect):
+                    with patch.object(sys_obj, "_iter_supervised_services", return_value=[]):
+                        with patch.object(sys_obj, "_update_platform_degrade_state"):
+                            with patch.object(sys_obj, "_get_max_feed_gap_s", return_value=0.0):
+                                with patch.object(sys_obj, "_get_drawdown_pct", return_value=0.0):
+                                    with patch("hft_platform.services.system.write_heartbeat"):
+                                        await sys_obj._supervise()
+        return collected
+
+    @pytest.mark.asyncio
+    async def test_gen2_gc_does_not_run_at_the_old_five_minute_cadence(self):
+        """The default interval must be well past 300 ticks.
+
+        Measured in production, one gen-2 collection costs 100-116 ms of hard
+        event-loop stall mid-session while reclaiming nothing, so a ~5 min
+        default meant ~12 stalls an hour. Driving 400 ticks with no env override
+        must therefore produce no gen-2 collection at all — at the old default
+        it would have produced one.
+        """
+        os.environ.pop("HFT_GC_GEN2_INTERVAL_TICKS", None)
+        os.environ["HFT_GC_DISABLE_TRADING"] = "1"
+        try:
+            sys_obj = _make_stub()
+            sys_obj.running = True
+            collected = await self._drive_ticks(sys_obj, 400)
+        finally:
+            os.environ.pop("HFT_GC_DISABLE_TRADING", None)
+
+        # Positive control first. gen-0 and gen-2 share one enable gate, so
+        # "no gen-2 ran" is indistinguishable from "the whole block was off"
+        # without this — and an assertion that cannot fail proves nothing.
+        assert 0 in collected, "periodic GC was disabled outright; the gen-2 assertion below would be vacuous"
+        assert 2 not in collected, f"gen-2 GC ran within 400 ticks of the default cadence: {collected}"
+
+    @pytest.mark.asyncio
+    async def test_gen2_gc_still_runs_at_its_configured_interval(self):
+        """Lengthening the default must not disable the collection.
+
+        The block exists to bound gen-1/gen-2 accumulation under ``gc.disable()``;
+        a change that silently stopped it from ever running would trade a latency
+        problem for a leak.
+        """
+        os.environ["HFT_GC_GEN2_INTERVAL_TICKS"] = "60"  # floor of the max(60, ...) clamp
+        os.environ["HFT_GC_DISABLE_TRADING"] = "1"
+        try:
+            sys_obj = _make_stub()
+            sys_obj.running = True
+            collected = await self._drive_ticks(sys_obj, 130)
+        finally:
+            os.environ.pop("HFT_GC_GEN2_INTERVAL_TICKS", None)
+            os.environ.pop("HFT_GC_DISABLE_TRADING", None)
+
+        assert collected.count(2) == 2, f"expected two gen-2 collections in 130 ticks at interval 60: {collected}"

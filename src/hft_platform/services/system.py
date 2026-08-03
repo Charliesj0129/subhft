@@ -1085,8 +1085,21 @@ class HFTSystem:
             "on",
         } and os.getenv("HFT_GC_GEN0_PERIODIC", "1").strip().lower() not in {"0", "false", "no", "off"}
         # Periodic gen-2 GC: reclaim long-lived cyclic refs (structlog, asyncio internals).
-        # Runs at low frequency to avoid latency impact. Typically <10ms.
-        _gc_gen2_interval = max(60, int(os.getenv("HFT_GC_GEN2_INTERVAL_TICKS", "300")))
+        #
+        # The default used to be 300 ticks (~5 min), justified by "typically
+        # <10 ms". Production disproved that. Measured on THESHOW across 107
+        # consecutive runs via the ``gc_gen2_periodic`` log below: the pause is
+        # ~40 ms with the feed idle and **100-116 ms during a live session** —
+        # it scales with the live object graph, not with uptime — while 105 of
+        # those 107 runs reclaimed *zero* objects (111 in total). At 5 min that
+        # was ~12 hard event-loop stalls per hour, and over a 3 h window every
+        # single probe excursion above 50 ms was one of them.
+        #
+        # ``gc.collect()`` holds the GIL, so this cannot be moved to an executor;
+        # frequency is the only lever that does not change what gets reclaimed.
+        # Hourly still yields 24 collections a day, which is ample for the
+        # gen-1/gen-2 accumulation this exists to bound under ``gc.disable()``.
+        _gc_gen2_interval = max(60, int(os.getenv("HFT_GC_GEN2_INTERVAL_TICKS", "3600")))
         _gc_gen2_tick = 0
         _gc_gen2_enabled = _gc_gen0_enabled  # same gate as gen-0
 
