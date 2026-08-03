@@ -439,7 +439,9 @@ async def test_run_disabled_order_mode_never_starts_order_risk_strategy_plane(mo
     with pytest.raises(RuntimeError, match="stop before supervisor loop"):
         await HFTSystem.run(sys_obj)
 
-    assert started == ["health_server", "recorder", "md"]
+    # loop_probe is a measurement task, not part of the trading plane; it starts
+    # in every mode, including this one.
+    assert started == ["health_server", "recorder", "md", "loop_probe"]
     for forbidden in (
         "exec_router",
         "gateway",

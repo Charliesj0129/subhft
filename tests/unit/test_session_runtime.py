@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as _dt
 import time as _real_time
 from contextlib import contextmanager
 from types import SimpleNamespace
@@ -823,3 +824,107 @@ def test_login_failure_metric_uses_the_bounded_reason():
     assert SessionRuntime(client).login_with_retry(api_key="k", secret_key="s") is False
 
     client.metrics.shioaji_login_fail_total.labels.assert_called_once_with(reason="connection_limit")
+
+
+# ------------------------------------------------------------------ #
+# Preventive refresh scheduling (regression: 2026-08-02 residual 451s)
+# ------------------------------------------------------------------ #
+
+
+class _StubCalendar:
+    """Calendar that records which market it was asked about."""
+
+    _tz = _dt.timezone(_dt.timedelta(hours=8))
+
+    def __init__(self, *, stock_open: bool, futures_open: bool, days_until: int) -> None:
+        self.product_types: list[str | None] = []
+        self._stock_open = stock_open
+        self._futures_open = futures_open
+        self._days_until = days_until
+
+    def is_trading_hours(self, ts, product_type=None) -> bool:
+        self.product_types.append(product_type)
+        return self._futures_open if product_type in ("future", "option") else self._stock_open
+
+    def days_until_trading(self, _date) -> int:
+        return self._days_until
+
+
+def _preventive_client(*, holiday_aware: bool, elapsed_s: float) -> MagicMock:
+    """A logged-in client whose first wake-up lands on the schedule boundary."""
+    client = _loop_client(logged_in=True, iterations=2)
+    client._session_refresh_holiday_aware = holiday_aware
+    # One wake-up must cross next_schedule_ts (= now + check_interval).
+    client._session_relogin_poll_s = 3600.0
+    client._last_session_refresh_ts = 3600.0 - elapsed_s
+    return client
+
+
+def _run_preventive(client, calendar):
+    _runtime, loop = _capture_refresh_loop(client)
+    with (
+        _run_loop(client),
+        patch("hft_platform.core.market_calendar.get_calendar", return_value=calendar),
+        patch.object(SessionRuntime, "do_session_refresh", return_value=True) as mock_refresh,
+    ):
+        loop()
+    return mock_refresh
+
+
+def test_preventive_refresh_asks_the_calendar_about_futures_not_stocks():
+    """The default calendar window is TWSE stocks; this platform trades TAIFEX."""
+    client = _preventive_client(holiday_aware=False, elapsed_s=90_000.0)
+    calendar = _StubCalendar(stock_open=False, futures_open=False, days_until=0)
+
+    _run_preventive(client, calendar)
+
+    assert calendar.product_types == ["future"]
+
+
+def test_preventive_refresh_is_skipped_during_the_futures_night_session():
+    """Logging a live facade out mid-session is what produced the residual 451s.
+
+    The night session (15:00-05:00) is entirely outside the TWSE window, so
+    asking the calendar the default question answered "closed" and a
+    logout/login cycle ran on facades carrying 74 live subscriptions.
+    """
+    client = _preventive_client(holiday_aware=False, elapsed_s=90_000.0)
+    calendar = _StubCalendar(stock_open=False, futures_open=True, days_until=0)
+
+    mock_refresh = _run_preventive(client, calendar)
+
+    assert mock_refresh.call_count == 0
+
+
+def test_preventive_refresh_runs_once_the_futures_session_is_closed():
+    client = _preventive_client(holiday_aware=False, elapsed_s=90_000.0)
+    calendar = _StubCalendar(stock_open=False, futures_open=False, days_until=0)
+
+    mock_refresh = _run_preventive(client, calendar)
+
+    assert mock_refresh.call_count == 1
+
+
+def test_holiday_refresh_honours_the_refresh_interval():
+    """ "Approaching a long holiday" must not mean "every check interval".
+
+    ``days_until > 1 and elapsed > 0`` is true on every pass, so all four
+    facades relogged in hourly for the whole weekend — 96 refreshes in 60 h on
+    THESHOW, every one reason="holiday".
+    """
+    client = _preventive_client(holiday_aware=True, elapsed_s=3_600.0)
+    calendar = _StubCalendar(stock_open=False, futures_open=False, days_until=2)
+
+    mock_refresh = _run_preventive(client, calendar)
+
+    assert mock_refresh.call_count == 0
+
+
+def test_holiday_refresh_still_happens_across_a_long_break():
+    """The interval gate must not disable holiday refresh, only rate-limit it."""
+    client = _preventive_client(holiday_aware=True, elapsed_s=90_000.0)
+    calendar = _StubCalendar(stock_open=False, futures_open=False, days_until=2)
+
+    mock_refresh = _run_preventive(client, calendar)
+
+    assert mock_refresh.call_count == 1

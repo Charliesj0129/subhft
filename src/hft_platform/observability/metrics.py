@@ -165,6 +165,8 @@ class MetricsRegistry:
                 _pn("system_cpu_usage"),
                 _pn("system_memory_usage"),
                 _pn("event_loop_lag_ms"),
+                _pn("event_loop_probe_lag_ms"),
+                _pn("supervisor_tick_duration_ms"),
                 # Phase 5 metrics
                 _pn("circuit_breaker_state"),
                 _pn("dlq_size_total"),
@@ -252,6 +254,7 @@ class MetricsRegistry:
                 _pn("contract_cache_last_success_ts"),
                 _pn("contract_update_events_total"),
                 _pn("contract_update_last_event_ts"),
+                _pn("contract_event_callback_registered"),
                 _pn("autonomy_mode"),
                 _pn("autonomy_transitions_total"),
                 _pn("strategy_quarantine_active"),
@@ -797,7 +800,28 @@ class MetricsRegistry:
             "Pipeline health state transition count",
         )
         self.queue_depth = Gauge(_pn("queue_depth"), "Queue depth by type", ["queue"])
+        # NOTE: despite the name, this gauge is NOT pure loop lag. The supervisor
+        # computes it as (tick period - nominal 1 s sleep), so it is the sum of
+        # real loop congestion AND the supervisor tick body's own duration. The
+        # two histograms below split it; keep all three and expect
+        # ``event_loop_probe_lag_ms + supervisor_tick_duration_ms ~= this gauge``.
+        # The name is preserved because dashboards and alerts already query it.
         self.event_loop_lag_ms = Gauge(_pn("event_loop_lag_ms"), "Event loop lag (ms)")
+        # Real loop congestion, measured by a task that does nothing but sleep,
+        # so nothing it observes is its own work. Histogram, not Gauge: a 1 Hz
+        # gauge read by a 15 s scrape shows ~1 sample in 15, which is how a
+        # recurring spike can look like a once-an-hour outlier.
+        self.event_loop_probe_lag_ms = Histogram(
+            _pn("event_loop_probe_lag_ms"),
+            "Event loop scheduling overshoot measured by an idle probe task (ms)",
+            buckets=[0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0],
+        )
+        # Wall time of one supervisor tick body (excludes its 1 Hz sleep).
+        self.supervisor_tick_duration_ms = Histogram(
+            _pn("supervisor_tick_duration_ms"),
+            "Duration of one supervisor tick body, excluding the 1 Hz sleep (ms)",
+            buckets=[0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0],
+        )
         self.startup_warnings_total = Counter(
             _pn("startup_warnings_total"),
             "Startup warnings by component",
@@ -1384,6 +1408,19 @@ class MetricsRegistry:
         self.contract_update_last_event_ts = Gauge(
             _pn("contract_update_last_event_ts"),
             "Unix timestamp of the last broker contract-change announcement",
+        )
+        # Whether the push callback above is actually registered. Without this,
+        # "registered and the broker is quiet" and "registration silently failed"
+        # are the same observation (last_event_ts == 0), so no alert can tell
+        # them apart. Any rule about announcement staleness must require this.
+        # Labelled per facade for the same reason ``shioaji_thread_alive`` is:
+        # four pooled facades share this process, and an unlabelled gauge would
+        # be last-writer-wins, so one facade succeeding would paper over another
+        # failing.
+        self.contract_event_callback_registered = Gauge(
+            _pn("contract_event_callback_registered"),
+            "1 if the SYS/CONTRACT push callback is registered on this facade, else 0",
+            ["conn_id"],
         )
 
         # ── Backup Metrics ──────────────────────────────────────────

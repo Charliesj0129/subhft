@@ -529,8 +529,19 @@ class SessionRuntime:
 
                     now_dt = dt.datetime.fromtimestamp(timebase.now_s(), tz=calendar._tz)
 
-                    # Skip refresh during active trading hours
-                    if calendar.is_trading_hours(now_dt):
+                    # Skip refresh during active trading hours.
+                    #
+                    # ``product_type="future"`` is load-bearing: the default is
+                    # the TWSE *stock* window (09:00-13:30), and this platform
+                    # trades TAIFEX. Without it the entire night session
+                    # (15:00-05:00) reads as "closed", so a preventive
+                    # logout/login cycle ran on facades carrying 74 live
+                    # subscriptions while quotes were flowing. Measured on
+                    # THESHOW: refreshes at 00:11, 01:11, ... CST on 2026-08-01,
+                    # i.e. inside the Friday night session, and every observed
+                    # residual "451 Too Many Connections" outside a restart sat
+                    # in that window.
+                    if calendar.is_trading_hours(now_dt, product_type="future"):
                         continue
 
                     days_until = calendar.days_until_trading(now_dt.date())
@@ -538,9 +549,18 @@ class SessionRuntime:
 
                     if c._session_refresh_holiday_aware:
                         # Holiday-aware mode (O4):
-                        # - Refresh if approaching long holiday (days_until > 1)
+                        # - Refresh during a long break (days_until > 1) too, so
+                        #   the session does not expire across it
                         # - Regular refresh only on trading day or day before
-                        holiday_refresh = days_until > 1 and elapsed > 0
+                        #
+                        # Both branches honour the interval. ``elapsed > 0`` used
+                        # to stand in for the holiday branch's condition, which
+                        # is true on every pass, so "refresh when approaching a
+                        # long holiday" actually meant "relogin every facade once
+                        # per check interval for the whole break": 96 refreshes
+                        # in 60 h on THESHOW, all reason="holiday", exactly 4 per
+                        # hour. That churn is what fed the residual 451s.
+                        holiday_refresh = days_until > 1 and elapsed >= c._session_refresh_interval_s
                         regular_refresh = days_until <= 1 and elapsed >= c._session_refresh_interval_s
 
                         if not (holiday_refresh or regular_refresh):

@@ -15,6 +15,7 @@ import asyncio
 import collections
 import json
 import os
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -2464,3 +2465,129 @@ class TestRecorderBridgeDirectSkip:
                 await sys_obj._recorder_bridge()
 
         assert sys_obj.recorder_queue.qsize() == 1
+
+
+# ===========================================================================
+# _supervise / _probe_event_loop_lag — loop-lag attribution
+# ===========================================================================
+
+
+class TestLoopLagAttribution:
+    """``event_loop_lag_ms`` times the supervisor's own period, so it reports
+    congestion PLUS this loop's work. These tests pin the split that makes the
+    number interpretable."""
+
+    @pytest.mark.asyncio
+    async def test_supervisor_tick_duration_excludes_the_1hz_sleep(self):
+        """The duration histogram must measure the body, not the period.
+
+        Clock is driven explicitly rather than by wall time: the fake sleep
+        advances it 1.5 s (1 s nominal + 0.5 s congestion) and one stubbed body
+        call advances it 0.03 s. So the gauge must read 500 ms and the histogram
+        30 ms — if the histogram ever included the sleep it would read 1530 ms.
+        """
+        sys_obj = _make_stub()
+        sys_obj.running = True
+
+        mock_metrics = MagicMock()
+        mock_metrics.cap_symbol = MagicMock(return_value="X")
+
+        clock = [0.0]
+        iteration = 0
+
+        async def _mock_sleep(_s):
+            nonlocal iteration
+            iteration += 1
+            clock[0] += 1.5
+            if iteration >= 2:
+                sys_obj.running = False
+
+        def _body_work():
+            clock[0] += 0.03
+
+        loop = asyncio.get_running_loop()
+        with patch("hft_platform.observability.metrics.MetricsRegistry") as MockMR:
+            MockMR.get.return_value = mock_metrics
+            with patch.object(loop, "time", side_effect=lambda: clock[0]):
+                with patch("asyncio.sleep", side_effect=_mock_sleep):
+                    with patch.object(sys_obj, "_iter_supervised_services", return_value=[]):
+                        with patch.object(sys_obj, "_update_platform_degrade_state", side_effect=_body_work):
+                            with patch.object(sys_obj, "_get_max_feed_gap_s", return_value=0.0):
+                                with patch.object(sys_obj, "_get_drawdown_pct", return_value=0.0):
+                                    with patch("hft_platform.services.system.write_heartbeat"):
+                                        await sys_obj._supervise()
+
+        lag_values = [call.args[0] for call in mock_metrics.event_loop_lag_ms.set.call_args_list]
+        tick_values = [call.args[0] for call in mock_metrics.supervisor_tick_duration_ms.observe.call_args_list]
+
+        assert lag_values, "the legacy gauge must keep being published"
+        assert tick_values, "the tick body must be timed"
+        assert lag_values[0] == pytest.approx(500.0, abs=1e-6)
+        assert tick_values[0] == pytest.approx(30.0, abs=1e-6)
+        # The point of the split: the remainder is congestion this loop did not
+        # cause, and is what the probe measures independently.
+        assert lag_values[0] - tick_values[0] == pytest.approx(470.0, abs=1e-6)
+
+    @pytest.mark.asyncio
+    async def test_loop_probe_reports_lag_independently_of_supervisor_work(self):
+        """The probe does nothing, so everything it records is real congestion.
+
+        Blocking the loop is the only way to make an idle task late, so the
+        assertion is relative: observations taken while a synchronous block runs
+        must exceed the idle ones. Absolute thresholds here would be a CI-load
+        coin flip.
+        """
+        sys_obj = HFTSystem.__new__(HFTSystem)
+        sys_obj.running = True
+
+        mock_metrics = MagicMock()
+        observed: list[float] = []
+        mock_metrics.event_loop_probe_lag_ms.observe = observed.append
+
+        os.environ["HFT_LOOP_PROBE_INTERVAL_S"] = "0.01"
+        try:
+            with patch("hft_platform.observability.metrics.MetricsRegistry") as MockMR:
+                MockMR.get.return_value = mock_metrics
+                probe = asyncio.create_task(sys_obj._probe_event_loop_lag())
+                # Idle phase: yield repeatedly so the probe accumulates a baseline.
+                for _ in range(10):
+                    await asyncio.sleep(0.01)
+                idle = list(observed)
+                # Congestion phase: a synchronous block the loop cannot preempt.
+                # 40 ms is 4x the probe interval and under the 50 ms cap for a
+                # deliberate sleep; the block IS the behaviour under test.
+                time.sleep(0.04)
+                await asyncio.sleep(0.02)
+                sys_obj.running = False
+                await asyncio.sleep(0.02)
+                probe.cancel()
+        finally:
+            os.environ.pop("HFT_LOOP_PROBE_INTERVAL_S", None)
+
+        assert idle, "probe must record while the loop is idle"
+        blocked = observed[len(idle) :]
+        assert blocked, "probe must keep recording across the block"
+        assert max(blocked) > max(idle), (
+            f"a blocked loop must read worse than an idle one: idle={max(idle):.2f}ms blocked={max(blocked):.2f}ms"
+        )
+        assert max(blocked) >= 20.0, "a 40 ms block must show up as tens of ms, not noise"
+
+    @pytest.mark.asyncio
+    async def test_loop_probe_stops_when_the_system_stops(self):
+        """A measurement task that outlives shutdown would block a clean stop."""
+        sys_obj = HFTSystem.__new__(HFTSystem)
+        sys_obj.running = True
+
+        mock_metrics = MagicMock()
+        with patch("hft_platform.observability.metrics.MetricsRegistry") as MockMR:
+            MockMR.get.return_value = mock_metrics
+            os.environ["HFT_LOOP_PROBE_INTERVAL_S"] = "0.01"
+            try:
+                probe = asyncio.create_task(sys_obj._probe_event_loop_lag())
+                await asyncio.sleep(0.02)
+                sys_obj.running = False
+                await asyncio.wait_for(probe, timeout=1.0)
+            finally:
+                os.environ.pop("HFT_LOOP_PROBE_INTERVAL_S", None)
+
+        assert probe.done() and not probe.cancelled()

@@ -145,31 +145,42 @@ def _refresh_client(tmp_path: Path, *, cached_contracts: list[dict] | None = Non
     return client
 
 
-def test_contract_refresh_reports_failure_when_fetch_fails(tmp_path: Path):
-    """A failed fetch must not be logged or counted as a successful refresh."""
+def test_contract_refresh_no_longer_calls_the_doomed_fetch(tmp_path: Path):
+    """``fetch_contracts`` cannot succeed on a subscribed facade, so don't call it.
+
+    shioaji 1.5.6's Rust ``_core`` needs sole ownership of the inner client and
+    the facade's live subscriptions hold references for the whole session.
+    Measured on THESHOW: 96 attempts, 96 failures, zero successes in 24 h. The
+    refresh now re-reads what login already loaded instead.
+    """
     client = _refresh_client(tmp_path)
-    client._ensure_contracts.return_value = False
     runtime = ContractsRuntime(client)
 
     with structlog.testing.capture_logs() as logs:
         runtime.refresh_contracts_and_symbols()
 
+    client._ensure_contracts.assert_not_called()
     events = [entry.get("event") for entry in logs]
-    assert "contract_refresh_fetch_failed" in events
-    assert "Contract data refreshed from broker" not in events
-
-    results = [call.kwargs.get("result") for call in client.metrics.contract_refresh_total.labels.call_args_list]
-    assert "fetch_failed" in results
-    assert "ok" not in results
-
-    status = json.loads((tmp_path / "status.json").read_text(encoding="utf-8"))
-    assert status["result"] == "fetch_failed"
+    assert "contract_refresh_fetch_failed" not in events
+    assert "contract_refresh_reading_sdk_contracts" in events
 
 
-def test_contract_refresh_releases_its_lock_when_the_fetch_fails(tmp_path: Path):
-    """A failure path that leaks the lock would wedge every later refresh."""
+def test_contract_refresh_names_the_sdk_status_it_read(tmp_path: Path):
+    """The log must say which load it is re-serialising, not imply a fetch."""
     client = _refresh_client(tmp_path)
-    client._ensure_contracts.return_value = False
+    client.api.Contracts.status = "FetchStatus.Fetched"
+
+    with structlog.testing.capture_logs() as logs:
+        ContractsRuntime(client).refresh_contracts_and_symbols()
+
+    read = [entry for entry in logs if entry.get("event") == "contract_refresh_reading_sdk_contracts"]
+    assert read
+    assert read[0]["status"] == "FetchStatus.Fetched"
+
+
+def test_contract_refresh_releases_its_lock_after_a_rebuild(tmp_path: Path):
+    """A path that leaks the lock would wedge every later refresh."""
+    client = _refresh_client(tmp_path)
     runtime = ContractsRuntime(client)
 
     runtime.refresh_contracts_and_symbols()
@@ -177,53 +188,37 @@ def test_contract_refresh_releases_its_lock_when_the_fetch_fails(tmp_path: Path)
     assert client._contract_refresh_lock.locked() is False
 
 
-def test_contract_refresh_flags_a_status_that_was_already_fetched(tmp_path: Path):
-    """``Fetched`` that never left ``Fetched`` proves nothing was re-read."""
-    client = _refresh_client(tmp_path)
-    client._ensure_contracts.return_value = True
-    client.api.Contracts.status = "FetchStatus.Fetched"
-    runtime = ContractsRuntime(client)
+def test_contract_refresh_releases_its_lock_when_integrity_check_fails(tmp_path: Path):
+    """The derivative-integrity bail-out is the one early return left."""
+    client = _refresh_client(
+        tmp_path,
+        cached_contracts=[{"code": "TXFH6", "exchange": "TAIFEX", "type": "future"}],
+    )
+    client.api.Contracts.Stocks.TSE = []
+    client.api.Contracts.Stocks.OTC = []
+    client.api.Contracts.Futures.keys.return_value = []
+    client.api.Contracts.Options.keys.return_value = []
 
     with structlog.testing.capture_logs() as logs:
-        runtime.refresh_contracts_and_symbols()
+        ContractsRuntime(client).refresh_contracts_and_symbols()
 
-    ready = [entry for entry in logs if entry.get("event") == "Contract fetch ready"]
-    assert ready, "the readiness log must still be emitted"
-    assert ready[0]["status_assumed"] is True
-    assert ready[0]["status_before"] == "FetchStatus.Fetched"
-
-
-def test_contract_refresh_does_not_flag_a_status_that_changed(tmp_path: Path):
-    """A status that moved off its previous value is a genuinely observed fetch."""
-    client = _refresh_client(tmp_path)
-    client._ensure_contracts.return_value = True
-    statuses = iter(["FetchStatus.Unfetch", "FetchStatus.Fetched", "FetchStatus.Fetched"])
-
-    class _Contracts:
-        @property
-        def status(self):
-            return next(statuses, "FetchStatus.Fetched")
-
-    client.api.Contracts = _Contracts()
-    runtime = ContractsRuntime(client)
-
-    with structlog.testing.capture_logs() as logs:
-        runtime.refresh_contracts_and_symbols()
-
-    ready = [entry for entry in logs if entry.get("event") == "Contract fetch ready"]
-    assert ready
-    assert ready[0]["status_assumed"] is False
+    events = [entry.get("event") for entry in logs]
+    assert "contract_refresh_integrity_failed" in events
+    assert client._contract_refresh_lock.locked() is False
 
 
-def test_contract_refresh_takes_the_shared_slot_around_the_fetch(tmp_path: Path):
-    """Serialising the pooled facades is what stops "exclusive access lost".
+def test_contract_refresh_takes_the_shared_slot_around_the_sdk_read(tmp_path: Path):
+    """Four facades walking the SDK's contract store at once is still contention.
 
-    The slot must be held across the fetch and released afterwards, so the four
-    facades' hourly refreshes queue instead of colliding inside the SDK.
+    The read is not a fetch, but it is the same process-wide SDK entry that made
+    concurrent fetches abort, so it stays serialised on the login slot.
     """
-    client = _refresh_client(tmp_path)
+    client = _refresh_client(tmp_path, cached_contracts=[{"code": "2330", "exchange": "TSE", "type": "stock"}])
     calls: list[str] = []
-    client._ensure_contracts.side_effect = lambda: calls.append("fetch") or True
+    client.api.Contracts.Stocks.TSE = [SimpleNamespace(code="2330", symbol="2330", name="TSMC")]
+    client.api.Contracts.Stocks.OTC = []
+    client.api.Contracts.Futures.keys.return_value = []
+    client.api.Contracts.Options.keys.return_value = []
 
     with (
         patch(
@@ -234,10 +229,16 @@ def test_contract_refresh_takes_the_shared_slot_around_the_fetch(tmp_path: Path)
             "hft_platform.feed_adapter.shioaji.contracts_runtime.release_login_slot",
             side_effect=lambda: calls.append("release"),
         ),
+        patch(
+            "hft_platform.feed_adapter.shioaji.contracts_runtime.iter_contract_category",
+            side_effect=lambda _cat: (calls.append("read"), [])[1],
+        ),
     ):
         ContractsRuntime(client).refresh_contracts_and_symbols()
 
-    assert calls == ["acquire", "fetch", "release"]
+    assert calls[0] == "acquire"
+    assert calls[-1] == "release"
+    assert "read" in calls
 
 
 def test_contract_refresh_does_not_release_a_slot_it_never_held(tmp_path: Path):
@@ -257,19 +258,18 @@ def test_contract_refresh_does_not_release_a_slot_it_never_held(tmp_path: Path):
     ):
         ContractsRuntime(client).refresh_contracts_and_symbols()
 
-    client._ensure_contracts.assert_called_once_with()
     assert released == []
 
 
-def test_contract_cache_age_gauge_moves_only_on_a_real_cache_write(tmp_path: Path):
-    """The freshness gauge is the one signal a stuck cache cannot fake."""
-    client = _refresh_client(tmp_path)
-    client._ensure_contracts.return_value = False
-    ContractsRuntime(client).refresh_contracts_and_symbols()
-    assert client.metrics.contract_cache_last_success_ts.set.call_count == 0
+def test_contract_cache_gauge_is_not_advanced_by_a_refresh_that_never_reached_the_broker(tmp_path: Path):
+    """``contract_cache_last_success_ts`` must keep meaning "loaded from broker".
 
+    The refresh now rebuilds the cache from the SDK's in-memory contracts, which
+    is not new information. Stamping the gauge here would let
+    ``ContractsStaleVsBrokerAnnouncement`` clear itself within an hour of any
+    announcement without anything having been re-read. Only login stamps it.
+    """
     client = _refresh_client(tmp_path, cached_contracts=[{"code": "2330", "exchange": "TSE", "type": "stock"}])
-    client._ensure_contracts.return_value = True
     client.api.Contracts.Stocks.TSE = [SimpleNamespace(code="2330", symbol="2330", name="TSMC")]
     client.api.Contracts.Stocks.OTC = []
     client.api.Contracts.Futures.keys.return_value = []
@@ -280,4 +280,6 @@ def test_contract_cache_age_gauge_moves_only_on_a_real_cache_write(tmp_path: Pat
             build.return_value = MagicMock(symbols=[], errors=[])
             ContractsRuntime(client).refresh_contracts_and_symbols()
 
-    assert client.metrics.contract_cache_last_success_ts.set.call_count == 1
+    results = [call.kwargs.get("result") for call in client.metrics.contract_refresh_total.labels.call_args_list]
+    assert "ok" in results, "the rebuild itself still succeeds"
+    assert client.metrics.contract_cache_last_success_ts.set.call_count == 0
