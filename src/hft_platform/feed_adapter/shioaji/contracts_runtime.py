@@ -4,6 +4,8 @@ import datetime as dt
 import json
 import threading
 import time
+from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -40,6 +42,71 @@ _CONTRACT_EVENT_ACTIONS = frozenset({"force", "check"})
 _CONTRACT_EVENT_SECURITY_TYPES = frozenset({"all", "ind", "stk", "fut", "opt"})
 
 
+@dataclass(frozen=True)
+class _SharedRebuild:
+    """One cycle's contract rebuild, shared across the pooled facades.
+
+    The rebuild is process-global data wearing a per-facade coat. Every pooled
+    facade resolves ``HFT_CONTRACT_CACHE_PATH`` to the *same* file
+    (``config/contracts.json``, 13 MB on THESHOW) and every facade is logged in
+    to the same broker account, so their SDK contract stores are identical.
+    Measured on THESHOW 2026-08-03: four facades produced identical diffs on
+    every hourly cycle (54 727 contracts, ``removed_count`` and
+    ``relevant_count`` matching to the digit), each paying a full read → walk →
+    write, spanning ~11 s per hour of largely GIL-held work.
+
+    Only the *global* half of the cycle lives here. ``relevant_count`` stays
+    per-facade because each facade subscribes to its own ~74-symbol shard, and
+    that half is a set intersection over 74 codes — the cheap part. ``added`` /
+    ``removed`` are kept whole (not the truncated ``[:200]`` log lists) for the
+    same reason ``_compute_diff_payload`` computes relevance pre-truncation.
+
+    Nothing large is retained: adds/removes are single digits in a normal cycle,
+    so this holds a few dozen strings, not the 54 727-contract list.
+    """
+
+    mono: float
+    contracts_before: int
+    contracts_after: int
+    added: tuple[str, ...]
+    removed: tuple[str, ...]
+
+
+#: Guards ``_shared_rebuild``. Distinct from ``ShioajiClient._contract_refresh_lock``,
+#: which is *per client* and therefore serialises nothing across pooled facades.
+_shared_rebuild_lock = threading.Lock()
+_shared_rebuild: _SharedRebuild | None = None
+
+
+def _publish_shared_rebuild(rebuild: _SharedRebuild) -> None:
+    global _shared_rebuild
+    with _shared_rebuild_lock:
+        _shared_rebuild = rebuild
+
+
+def _take_shared_rebuild(max_age_s: float) -> _SharedRebuild | None:
+    """Return this cycle's rebuild if another facade already did the work.
+
+    ``max_age_s`` must stay well under the refresh interval so a facade whose
+    thread has drifted does its own rebuild rather than silently inheriting a
+    stale one. The pooled facades arrive within ~11 s of each other in practice.
+    """
+    with _shared_rebuild_lock:
+        shared = _shared_rebuild
+    if shared is None:
+        return None
+    if (time.monotonic() - shared.mono) > max_age_s:
+        return None
+    return shared
+
+
+def _reset_shared_rebuild() -> None:
+    """Test hook — the module global would otherwise leak between tests."""
+    global _shared_rebuild
+    with _shared_rebuild_lock:
+        _shared_rebuild = None
+
+
 def _classify_contract_event_field(value: Any, allowed: frozenset[str]) -> str:
     """Map an SDK enum (or anything else) onto a bounded lowercase label.
 
@@ -74,17 +141,40 @@ def _compute_diff_payload(
     rebind-guard regex in ``test_resubscribe_concurrent.py`` doesn't flag
     callers that pass the live ``c.subscribed_codes`` set by keyword.
     """
-    added = sorted(codes_after - codes_before)
-    removed = sorted(codes_before - codes_after)
+    return _diff_payload_from_delta(
+        version=version,
+        contracts_before=len(codes_before),
+        contracts_after=len(codes_after),
+        added=sorted(codes_after - codes_before),
+        removed=sorted(codes_before - codes_after),
+        subscribed=subscribed,
+    )
+
+
+def _diff_payload_from_delta(
+    *,
+    version: int,
+    contracts_before: int,
+    contracts_after: int,
+    added: Sequence[str],
+    removed: Sequence[str],
+    subscribed: set[str],
+) -> dict[str, Any]:
+    """Build the diff payload from an already-computed add/remove delta.
+
+    Split out of ``_compute_diff_payload`` so a pooled facade reusing another
+    facade's rebuild pays only for its own ``relevant_*`` fields — the add/remove
+    delta is identical across facades, the subscription shard is not.
+    """
     relevant = (set(added) | set(removed)) & set(subscribed or ())
     return {
         "version": int(version),
-        "contracts_before": len(codes_before),
-        "contracts_after": len(codes_after),
+        "contracts_before": int(contracts_before),
+        "contracts_after": int(contracts_after),
         "added_count": len(added),
         "removed_count": len(removed),
-        "added_codes": added[:200],
-        "removed_codes": removed[:200],
+        "added_codes": list(added[:200]),
+        "removed_codes": list(removed[:200]),
         "relevant_count": len(relevant),
         "relevant_codes": sorted(relevant)[:50],
     }
@@ -660,8 +750,22 @@ class ContractsRuntime:
                 pass
             return
 
+        # Pool mode: ``config_path`` points at a QuoteConnectionPool shard, which
+        # is also the only mode where the rebuild is safely shareable — see
+        # ``_reuse_shared_rebuild``. Computed up front because the reuse decision
+        # happens before any of the expensive work.
+        is_pool_shard = "/hft_quote_pool_" in str(self._client.config_path)
+        if is_pool_shard:
+            shared = _take_shared_rebuild(
+                max_age_s=client_float(self._client, "_contract_refresh_share_window_s", 300.0),
+            )
+            if shared is not None:
+                self._reuse_shared_rebuild(shared)
+                return
+
         codes_before: set[str] = set()
         contracts_before: list[dict[str, Any]] = []
+        _t_phase = time.monotonic()
         try:
             cache_path = Path(self._client._contract_cache_path)
             if cache_path.exists():
@@ -671,6 +775,7 @@ class ContractsRuntime:
         except Exception as exc:
             logger.debug("operation_fallback", error=str(exc))
             pass
+        _ms_cache_read = (time.monotonic() - _t_phase) * 1000.0
 
         # There is deliberately no broker fetch here any more.
         #
@@ -760,6 +865,7 @@ class ContractsRuntime:
             finally:
                 if slot_held:
                     release_login_slot()
+            _ms_sdk_walk = (time.monotonic() - _t_phase) * 1000.0 - _ms_cache_read
 
             counts_before = _contract_type_counts(contracts_before)
             counts_after = _contract_type_counts(raw_contracts)
@@ -796,7 +902,9 @@ class ContractsRuntime:
                     self._client._contract_refresh_lock.release()
                 return
 
+            _t_write = time.monotonic()
             write_contract_cache(raw_contracts, self._client._contract_cache_path)
+            _ms_cache_write = (time.monotonic() - _t_write) * 1000.0
             # ``contract_cache_last_success_ts`` is deliberately NOT advanced
             # here. It means "when did we last load contracts *from the broker*",
             # and this routine no longer talks to the broker — it re-serialises
@@ -807,13 +915,30 @@ class ContractsRuntime:
             # avoid. Login stamps it (``session_runtime``); nothing else should.
 
             codes_after = {str(c.get("code", "")) for c in raw_contracts if c.get("code")}
+            full_added = sorted(codes_after - codes_before)
+            full_removed = sorted(codes_before - codes_after)
             self._client._contract_refresh_version += 1
-            self._client._contract_refresh_last_diff = _compute_diff_payload(
+            self._client._contract_refresh_last_diff = _diff_payload_from_delta(
                 version=self._client._contract_refresh_version,
-                codes_before=codes_before,
-                codes_after=codes_after,
+                contracts_before=len(codes_before),
+                contracts_after=len(codes_after),
+                added=full_added,
+                removed=full_removed,
                 subscribed=set(getattr(self._client, "subscribed_codes", None) or ()),
             )
+            # Publish before the symbol rebuild below, not after: the sibling
+            # facades are already waiting on the login slot, and everything after
+            # this point is per-facade work they must not inherit.
+            if is_pool_shard:
+                _publish_shared_rebuild(
+                    _SharedRebuild(
+                        mono=time.monotonic(),
+                        contracts_before=len(codes_before),
+                        contracts_after=len(codes_after),
+                        added=tuple(full_added),
+                        removed=tuple(full_removed),
+                    )
+                )
             added = self._client._contract_refresh_last_diff["added_codes"]
             removed = self._client._contract_refresh_last_diff["removed_codes"]
             logger.info(
@@ -824,6 +949,19 @@ class ContractsRuntime:
                 added_count=self._client._contract_refresh_last_diff["added_count"],
                 removed_count=self._client._contract_refresh_last_diff["removed_count"],
                 relevant_count=self._client._contract_refresh_last_diff["relevant_count"],
+                shared="owner",
+            )
+            # Phase timings decide whether narrowing the walk is worth a second
+            # change: if ``sdk_walk_ms`` dominates, the cost is crossing into the
+            # SDK's Rust contract store at all and fewer ``getattr``s per contract
+            # will not help; if ``cache_read_ms``/``cache_write_ms`` dominate, the
+            # 13 MB JSON round-trip is the target instead.
+            logger.info(
+                "contract_refresh_phase_timings",
+                cache_read_ms=round(_ms_cache_read, 1),
+                sdk_walk_ms=round(_ms_sdk_walk, 1),
+                cache_write_ms=round(_ms_cache_write, 1),
+                contracts=len(raw_contracts),
             )
             try:
                 if self._client.metrics and hasattr(self._client.metrics, "contract_refresh_symbols_changed_total"):
@@ -837,11 +975,17 @@ class ContractsRuntime:
                 logger.debug("operation_fallback", error=str(exc))
                 pass
 
+            _t_build = time.monotonic()
             contract_index = ContractIndex(contracts=raw_contracts)
             list_path = Path(Path(self._client.config_path).parent / "symbols.list")
             if not list_path.exists():
                 list_path = Path(DEFAULT_LIST_PATH)
             build_result = build_symbols(str(list_path), contract_index)
+            logger.info(
+                "contract_refresh_symbol_build_ms",
+                symbol_build_ms=round((time.monotonic() - _t_build) * 1000.0, 1),
+                rebuilt_count=len(build_result.symbols),
+            )
             # Pool mode: ``config_path`` points at a QuoteConnectionPool shard
             # (``/tmp/hft_quote_pool_*/symbols_group_<id>.yaml``) which holds
             # only this facade's partition (~universe/num_conns). Writing the
@@ -849,7 +993,6 @@ class ContractsRuntime:
             # 2026-05-23 root cause where ``symbols_group_0.yaml`` was being
             # promoted to 478 symbols every hour. The pool owns shard
             # composition; refresh only updates the broker contract index here.
-            is_pool_shard = "/hft_quote_pool_" in str(self._client.config_path)
             if build_result.symbols and not is_pool_shard:
                 write_symbols_yaml(build_result.symbols, self._client.config_path)
                 logger.info(
@@ -941,6 +1084,89 @@ class ContractsRuntime:
                     logger.warning("contract_refresh_resubscribe_failed", error=str(exc))
             self._client._contract_refresh_lock.release()
             self.write_refresh_status(result="ok")
+
+    def _reuse_shared_rebuild(self, shared: _SharedRebuild) -> None:
+        """Complete this facade's refresh cycle from a sibling facade's rebuild.
+
+        Skips the three expensive steps — reading the 13 MB contract cache,
+        walking the SDK's ~54 700 contracts, and writing the cache back — because
+        a sibling facade has just produced exactly that result from the same file
+        and the same broker account. Everything that is genuinely per-facade
+        still runs: the relevance half of the diff (this facade's own ~74-symbol
+        subscription shard), the resubscribe decision, the config reload, and the
+        status file.
+
+        Only reached in pool-shard mode. In single-facade or non-pool
+        deployments each client owns its ``config_path`` and must run its own
+        ``write_symbols_yaml``, which needs the full contract list — so those
+        keep the original path untouched.
+
+        Caller holds ``_contract_refresh_lock``; this method releases it.
+        """
+        try:
+            self._client._contract_refresh_version += 1
+            self._client._contract_refresh_last_diff = _diff_payload_from_delta(
+                version=self._client._contract_refresh_version,
+                contracts_before=shared.contracts_before,
+                contracts_after=shared.contracts_after,
+                added=shared.added,
+                removed=shared.removed,
+                subscribed=set(getattr(self._client, "subscribed_codes", None) or ()),
+            )
+            diff = self._client._contract_refresh_last_diff
+            logger.info(
+                "contract_refresh_diff",
+                version=diff["version"],
+                contracts_before=diff["contracts_before"],
+                contracts_after=diff["contracts_after"],
+                added_count=diff["added_count"],
+                removed_count=diff["removed_count"],
+                relevant_count=diff["relevant_count"],
+                shared="reused",
+                shared_age_s=round(time.monotonic() - shared.mono, 3),
+            )
+            try:
+                if self._client.metrics and hasattr(self._client.metrics, "contract_refresh_symbols_changed_total"):
+                    if not shared.added and not shared.removed:
+                        self._client.metrics.contract_refresh_symbols_changed_total.labels(change="same").inc()
+                    if shared.added:
+                        self._client.metrics.contract_refresh_symbols_changed_total.labels(change="added").inc()
+                    if shared.removed:
+                        self._client.metrics.contract_refresh_symbols_changed_total.labels(change="removed").inc()
+            except Exception as exc:
+                logger.debug("operation_fallback", error=str(exc))
+
+            try:
+                self._client._load_config()
+            except Exception as exc:
+                logger.error(
+                    "Symbol config reload failed after contract refresh",
+                    error=str(exc),
+                    severity="critical",
+                )
+        finally:
+            try:
+                if self._client.metrics and hasattr(self._client.metrics, "contract_refresh_total"):
+                    self._client.metrics.contract_refresh_total.labels(result="ok_shared").inc()
+            except Exception as exc:
+                logger.debug("operation_fallback", error=str(exc))
+            policy = self._client._contract_refresh_resubscribe_policy
+            should_resub = policy == "all"
+            if policy == "diff":
+                should_resub = _diff_should_resubscribe(self._client._contract_refresh_last_diff or {})
+            if should_resub and self._client.logged_in:
+                try:
+                    logger.info(
+                        "contract_refresh_resubscribe",
+                        policy=policy,
+                        relevant_count=(self._client._contract_refresh_last_diff or {}).get("relevant_count"),
+                        shared="reused",
+                    )
+                    self._client._resubscribe_all()
+                except Exception as exc:
+                    logger.warning("contract_refresh_resubscribe_failed", error=str(exc))
+            self._client._contract_refresh_lock.release()
+            self.write_refresh_status(result="ok_shared")
 
     def preflight_contracts(self) -> None:
         errors: list[str] = []
