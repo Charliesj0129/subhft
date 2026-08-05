@@ -573,12 +573,15 @@ class ShioajiClient:
         self._contract_refresh_s = float(os.getenv("HFT_CONTRACT_REFRESH_S", "86400"))
         self._contract_cache_path = os.getenv("HFT_CONTRACT_CACHE_PATH", "config/contracts.json")
         # How recent a sibling facade's rebuild has to be for this facade to reuse
-        # it instead of repeating the read/walk/write. The pooled facades' refresh
-        # threads start together and stay within ~11 s of each other, so 300 s is
-        # generous; a facade whose thread has drifted further does its own
-        # rebuild rather than inherit a stale delta. Must stay well under
-        # ``_contract_refresh_s``.
+        # it instead of repeating the read/walk/write. Its real job is to stop the
+        # *next* hourly cycle inheriting this one, so it only has to sit between
+        # one cycle's duration (~11 s worst case) and ``_contract_refresh_s``.
         self._contract_refresh_share_window_s = float(os.getenv("HFT_CONTRACT_REFRESH_SHARE_WINDOW_S", "300"))
+        # How long a facade waits for whichever sibling is mid-rebuild before
+        # giving up and repeating the work itself. One rebuild measured 2.0 s
+        # uncontended on THESHOW, so 30 s is ~15x headroom; it exists only so a
+        # wedged facade cannot stall the pool's other refresh threads forever.
+        self._contract_refresh_share_wait_s = float(os.getenv("HFT_CONTRACT_REFRESH_SHARE_WAIT_S", "30"))
         self._contract_refresh_running = False
         self._contract_refresh_thread: threading.Thread | None = None
         self._contract_refresh_lock = threading.Lock()
