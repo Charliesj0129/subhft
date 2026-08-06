@@ -30,6 +30,8 @@ from src.hft_platform.backtest.ch_data_source import (
     validate_events,
 )
 
+from . import quality
+
 CH_PRICE_SCALE = 1_000_000.0
 DEDUP_WINDOW_NS = 500_000
 DEFAULT_OUT_DIR = Path("research/data/raw")
@@ -238,6 +240,7 @@ def _write_day_outputs(
     dedup_removed: int,
     owner: str,
     overwrite: bool,
+    quality_report: quality.QualityReport | None = None,
 ) -> dict[str, Any]:
     sym_dir = out_dir / symbol.lower()
     sym_dir.mkdir(parents=True, exist_ok=True)
@@ -256,6 +259,9 @@ def _write_day_outputs(
     np.savez_compressed(str(l2_path), data=events)
     np.save(str(tick_path), ticks)
     created_at = datetime.now(UTC).isoformat()
+    # Advisory provenance: record which source-quality audit this artifact was built
+    # under. Never blocks the export; an absent audit is stamped as "unstamped".
+    quality_stamp = quality.stamp_payload(quality_report, requested_from=date, requested_to=date)
 
     l2_meta = {
         "created_at": created_at,
@@ -278,6 +284,7 @@ def _write_day_outputs(
         "source_type": "real",
         "split": "full",
         "symbols": [symbol],
+        **quality_stamp,
     }
     tick_meta = {
         "created_at": created_at,
@@ -298,6 +305,7 @@ def _write_day_outputs(
         "source_type": "real",
         "split": "full",
         "symbols": [symbol],
+        **quality_stamp,
     }
     _write_meta(l2_path, l2_meta)
     _write_meta(tick_path, tick_meta)
@@ -328,6 +336,7 @@ def export_l2_ticks(
     overwrite: bool = False,
 ) -> dict[str, Any]:
     client = _get_client(host, port, user, password)
+    quality_report = quality.load_latest_report()
     summary: dict[str, Any] = {
         "schema": "research.data_pipeline.export_l2_ticks.v1",
         "generated_at": datetime.now(UTC).isoformat(),
@@ -336,6 +345,7 @@ def export_l2_ticks(
         "symbols": list(symbols),
         "out_dir": str(out_dir),
         "dry_run": dry_run,
+        "source_quality_verdict": (quality_report.verdict if quality_report is not None else "unstamped"),
         "outputs": [],
         "errors": [],
     }
@@ -361,6 +371,7 @@ def export_l2_ticks(
                     dedup_removed=dedup_removed,
                     owner=owner,
                     overwrite=overwrite,
+                    quality_report=quality_report,
                 )
                 output["source_rows"] = source_rows
                 summary["outputs"].append(output)
@@ -405,6 +416,32 @@ def _build_parser() -> argparse.ArgumentParser:
 
     validate = sub.add_parser("validate", help="Validate exported L2/tick dataset")
     validate.add_argument("--path", required=True)
+
+    audit = sub.add_parser("quality", help="Audit raw ClickHouse market-data quality (advisory)")
+    audit.add_argument("--date-from", required=True)
+    audit.add_argument("--date-to", required=True)
+    audit.add_argument("--host", default=os.getenv("HFT_CLICKHOUSE_HOST", "localhost"))
+    audit.add_argument("--port", type=int, default=int(os.getenv("HFT_CLICKHOUSE_PORT", "8123")))
+    audit.add_argument("--user", default=os.getenv("HFT_CLICKHOUSE_USER", "default"))
+    audit.add_argument("--password", default=None)
+    audit.add_argument("--out-dir", default=str(quality.DEFAULT_REPORT_DIR))
+    audit.add_argument(
+        "--chunk-days",
+        type=int,
+        default=4,
+        help="Days per aggregate query; halved automatically on ClickHouse memory pressure",
+    )
+    audit.add_argument(
+        "--no-calendar",
+        action="store_true",
+        help="Skip the exchange calendar; report coverage over observed days only",
+    )
+    audit.add_argument(
+        "--fail-on",
+        choices=("error", "warn"),
+        default=None,
+        help="Exit non-zero on BROKEN (error) or on anything but CLEAN (warn). Advisory by default.",
+    )
     return parser
 
 
@@ -429,6 +466,36 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1 if summary["errors"] else 0
     if args.command == "validate":
         print(json.dumps(validate_dataset(Path(args.path)), indent=2, sort_keys=True))
+        return 0
+    if args.command == "quality":
+        password = args.password if args.password is not None else _dotenv_value("CLICKHOUSE_PASSWORD")
+        client = _get_client(args.host, args.port, args.user, password)
+        report = quality.run_audit(
+            client,
+            date_from=args.date_from,
+            date_to=args.date_to,
+            use_calendar=not args.no_calendar,
+            chunk_days=args.chunk_days,
+        )
+        json_path, md_path = quality.write_report(report, Path(args.out_dir))
+        print(
+            json.dumps(
+                {
+                    "verdict": report.verdict,
+                    "report_sha256": report.report_sha256,
+                    "findings": report.findings,
+                    "extent": report.extent,
+                    "json_report": str(json_path),
+                    "markdown_report": str(md_path),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        if args.fail_on == "error" and report.verdict == "BROKEN":
+            return 1
+        if args.fail_on == "warn" and report.verdict != "CLEAN":
+            return 1
         return 0
     raise AssertionError(args.command)
 

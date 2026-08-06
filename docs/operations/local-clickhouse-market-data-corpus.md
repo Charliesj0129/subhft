@@ -1,7 +1,12 @@
 # Local ClickHouse `hft.market_data` corpus — provenance and TTL divergence
 
-Status: current as of 2026-07-25. Applies to the **local/research** ClickHouse
+Status: current as of 2026-08-06. Applies to the **local/research** ClickHouse
 container only, not the production host.
+
+Coverage numbers below are **generated**, not hand-maintained: run
+`make research-data-quality DATE_FROM=2026-01-26 DATE_TO=<today>` and read
+`research/reports/data_quality/*_source_audit.{json,md}`
+(`research/data_pipeline/quality.py`, see `docs/modules/data_quality.md`).
 
 ## Why this file exists
 
@@ -19,9 +24,9 @@ re-derive:
 
 | Property | Value |
 |---|---|
-| Range (Asia/Taipei) | 2026-01-26 → 2026-07-25 |
-| Rows | 877,326,445 |
-| On disk | 20.56 GiB, 158 active parts |
+| Range (Asia/Taipei) | 2026-01-26 → 2026-08-05 |
+| Rows | 936,216,159 |
+| On disk | 22.12 GiB, 182 active parts |
 | Engine | `MergeTree`, `PARTITION BY toYYYYMMDD(toDateTime(ingest_ts/1000000000))` (**UTC**), `ORDER BY (symbol, exch_ts, ingest_ts)` |
 | TTL | **none** (see below) |
 | Price scale | **×1,000,000** raw — the live platform scale is ×10,000; conversions must be explicit (`.agent/rules/70-research-data.md`) |
@@ -86,39 +91,81 @@ night session had already closed, so nothing was in flight — but **Monday
 
 ## Coverage — real holes, not transfer failures
 
-Daily row counts and symbol counts for the pulled range (Asia/Taipei):
+Measured 2026-08-06 by `make research-data-quality` over the whole corpus
+(936,216,159 rows, report `9606665855875e86…`). Of the **126 XTAI sessions**
+between 2026-01-26 and 2026-08-05:
 
-| Date | Rows | Symbols | Note |
-|---|---|---|---|
-| 06-05 | 6,689,815 | 368 | |
-| 06-06 | 420,000 | 81 | partial |
-| 06-08 → 06-12 | 7.3 M – 8.3 M/day | 368 | clean week |
-| 06-13 | 371,108 | 265 | partial |
-| 06-15 | 996,044 | 318 | degraded |
-| 06-16 | 6,381,148 | 368 | |
-| 06-17 | 4,473,069 | 368 | |
-| 06-18 | 3,696,596 | 259 | degraded |
-| 06-19 | 35,585 | 209 | degraded |
-| 06-22 | 5,839,609 | 342 | |
-| 06-23 | 8,136,199 | 357 | |
-| 06-24 | 7,273,301 | 357 | |
-| 07-07 | 2,826,569 | 357 | |
-| 07-08 | 8,352,916 | 357 | |
-| 07-09 | 7,789,089 | 357 | |
-| 07-10 | 577,597 | 57 | degraded |
-| 07-15 | 506,454 | 164 | degraded |
-| 07-17 | 4,318,658 | 351 | |
-| 07-18 | 470,233 | 201 | partial |
-| 07-20 → 07-24 | 6.0 M – 7.2 M/day | 296 | clean week |
-| 07-25 | 682,795 | 246 | partial (night session only) |
+| Status | Sessions | Meaning |
+|---|---|---|
+| clean | 90 | rows and symbols at the local baseline |
+| partial | 12 | present but below baseline |
+| degraded | 8 | symbol count collapsed, or <10% of baseline rows |
+| **missing** | **16** | exchange session with **zero** rows |
 
-**Missing entirely — 11 trading days**: 06-25, 06-26, 06-29, 06-30, 07-01, 07-02,
-07-03, 07-06, 07-13, 07-14, 07-16. The 07-13 → 07-19 gap corresponds to the
-shioaji 1.5.6 deploy / connectivity incident; the production engine has run clean
-since 2026-07-19T12:56Z.
+(A further 22 calendar dates hold rows but are not sessions — they are the
+post-midnight tail of the previous night session, which lands on the next calendar
+date. They are labelled `non_session` and excluded from the tally.)
 
-**Symbol universe stepped 368 → 357 → 296**, the last change from 2026-07-20
-(pool config change). Cross-period studies must not assume a constant universe.
+**Missing — 16 sessions**: `02-02`, `02-09`, `02-10`, `02-11`, `03-02`, then the
+11-day block `06-25`, `06-26`, `06-29`, `06-30`, `07-01`, `07-02`, `07-03`, `07-06`,
+`07-13`, `07-14`, `07-16`. The `07-13 → 07-19` part corresponds to the shioaji 1.5.6
+deploy / connectivity incident; the production engine has run clean since
+2026-07-19T12:56Z.
+
+**Degraded — 8 sessions**:
+
+| Date | Rows | Symbols |
+|---|---|---|
+| 2026-01-26 | 565,101 | 78 |
+| 2026-03-25 | 229,017 | 48 |
+| 2026-04-01 | 3,552,023 | 48 |
+| 2026-04-23 | 974,246 | **1** |
+| 2026-04-24 | 1,059,883 | 6 |
+| 2026-07-10 | 577,597 | 57 |
+| 2026-07-15 | 506,454 | 164 |
+| 2026-08-05 | 676,269 | 246 |
+
+**Partial — 12 sessions**: `02-03`, `02-24`, `03-19`, `03-20`, `04-16`, `05-04`,
+`05-07`, `05-11`, `05-21`, `05-22`, `06-15`, `06-18`.
+
+**Longest unbroken clean runs** — use these, not a hand-picked window:
+
+| Sessions | Range |
+|---|---|
+| 15 | 2026-05-25 → 2026-06-12 |
+| 13 | 2026-07-17 → 2026-08-04 |
+| 12 | 2026-03-03 → 2026-03-18 |
+| 8 | 2026-04-02 → 2026-04-15 |
+| 7 | 2026-05-12 → 2026-05-20 |
+
+> **Correction.** `.agent/rules/70-research-data.md` used to call
+> `2026-03-02 → 2026-03-24` the "best known complete research interval". It is not:
+> **`2026-03-02` has zero rows**, and `03-19`/`03-20` are partial while `03-25` is
+> degraded. The real clean run in that month is `2026-03-03 → 2026-03-18`.
+
+**Symbol universe is not constant.** It ranges 1–523 across the corpus, with 29
+day-over-day steps clearing both a 5-symbol and a 15% floor. Cross-period studies
+must not assume a fixed universe. Note the audit cannot see *small* pool changes
+(the documented 368 → 357 is ~3%, the same magnitude as monthly contract rollover
+churn) — see `docs/modules/data_quality.md`.
+
+## Other findings from the 2026-08-06 audit
+
+- **`exch_ts` causality is clean table-wide**: 0 rows with `exch_ts > ingest_ts + 1s`
+  across all 936 M rows, `max(exch_ts - ingest_ts)` = 46 ms. The 2026-08-05 repair of
+  the +8h shift holds.
+- **`trade_direction` population is a hard family constraint** (Tick rows only):
+  `202601`–`202603` = **0.0**, `202604` = 0.928, `202605` = 0.998, `202606` = 0.997,
+  `202607` = 0.999, `202608` = 1.000. Aggressor-split research cannot use Q1 at all.
+- **5,593 duplicate `(symbol, exch_ts, ingest_ts, seq_no)` rows** on 5 days:
+  `02-26` (426), `03-03` (7), `03-31` (144), `04-27` (1,387), `04-28` (3,629).
+  Consistent with partial re-inserts — `market_data` is a plain MergeTree, so a
+  re-import duplicates rather than replaces (see the 2026-07-25 pull above).
+- **3,189,310 `BidAsk` rows carry empty depth arrays** (0.34% of the corpus).
+- **`2026-04-03` is the one day with rows outside a session window** (17.3%,
+  198,678 rows). It is a market holiday; hours 06:00–12:59 Taipei carry ~187 k events
+  from only 5–6 symbols. Worth identifying which instruments those are — a feed that
+  does not observe the TW holiday calendar would explain it.
 
 ## Related
 

@@ -105,7 +105,6 @@ CORE_TOOL_FILES: set[str] = {
     "cross_signal_explorer.py",
     "data_governance.py",
     "data_ingest.py",
-    "data_quality_check.py",
     "depth_alpha_explorer.py",
     "enrich_data_for_alpha.py",
     "eval_batch_3_depth.py",
