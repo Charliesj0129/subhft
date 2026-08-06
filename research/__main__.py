@@ -65,7 +65,7 @@ Paper-trade: record-paper --alpha-id <id> | summarize-paper --alpha-id <id> |
              check-paper-governance --alpha-id <id>
 Batch:    batch-search <queries> | hypothesis-queue {ingest|list|top} | auto-scaffold
 Data-governance: stamp-data-meta <data> | validate-data-meta <data>
-Data-pipeline: data-pipeline {export-l2-ticks|validate}
+Data-pipeline: data-pipeline {export-l2-ticks|validate|quality}
 Maintenance: audit-note-citations | backfill-note-citations | triage-pyspy
 
 Run 'python -m research <command> --help' for per-command help.
