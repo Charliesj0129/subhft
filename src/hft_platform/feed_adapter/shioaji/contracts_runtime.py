@@ -53,7 +53,16 @@ class _SharedRebuild:
     Measured on THESHOW 2026-08-03: four facades produced identical diffs on
     every hourly cycle (54 727 contracts, ``removed_count`` and
     ``relevant_count`` matching to the digit), each paying a full read → walk →
-    write, spanning ~11 s per hour of largely GIL-held work.
+    write, spanning ~11 s per hour.
+
+    Note what that ~11 s is *not*. The walk below already runs behind
+    ``acquire_login_slot`` with a 2 s minimum gap, so the four walks are
+    serialised, and ``sdk_walk_ms`` — timed from before the cache read — bills
+    each facade for its wait in that queue. The 2026-08-05 readings
+    (1197.7 / 3391.4 / 5619.4 / 7975.9 ms, steps of ~2.2 s) are therefore three
+    facades queueing, not four contending for the GIL. The real cost is
+    ~1.2 s of GIL-held walk **times four**, plus three 2 s stagger gaps spent
+    waiting to repeat work that was already done. Sharing removes both.
 
     Only the *global* half of the cycle lives here. ``relevant_count`` stays
     per-facade because each facade subscribes to its own ~74-symbol shard, and
@@ -77,6 +86,47 @@ class _SharedRebuild:
 _shared_rebuild_lock = threading.Lock()
 _shared_rebuild: _SharedRebuild | None = None
 
+#: The right to perform this cycle's rebuild. Held for the *shareable* part of a
+#: refresh only — from before the cache read until just after the result is
+#: published — so a sibling that blocks here wakes up to a finished rebuild
+#: instead of starting a redundant one.
+#:
+#: This is the barrier, and it has to be: the first attempt at sharing (PR #392)
+#: published on completion and checked on arrival, which cannot ever trade,
+#: because the facades arrive *closer together* than one rebuild takes. Measured
+#: on THESHOW 2026-08-05: four arrivals spanning **1.494 s** (07:19:29.230 →
+#: 07:19:30.724) against a **2.028 s** time-to-publish, so all four sailed past
+#: an empty slot and did the work four times over — `ok=4`, `ok_shared` absent.
+#: A handoff must be claimed at arrival, never published at completion.
+_rebuild_slot_lock = threading.Lock()
+
+
+def _acquire_rebuild_slot(timeout_s: float) -> bool:
+    """Claim this cycle's rebuild, or wait out whichever facade already has it.
+
+    Returns True if the caller now owns the slot (and must release it), False if
+    the wait expired — in which case the caller falls back to its own rebuild
+    rather than blocking a refresh thread indefinitely behind a wedged sibling.
+    """
+    if timeout_s <= 0:
+        return _rebuild_slot_lock.acquire(blocking=False)
+    return _rebuild_slot_lock.acquire(timeout=timeout_s)
+
+
+def _release_rebuild_slot() -> None:
+    """Release the rebuild slot, tolerating a double release.
+
+    The slot is released from several exit paths (publish, integrity failure,
+    the outer ``finally``), each guarded by the caller's ``rebuild_slot_held``
+    flag — deliberately *not* named ``slot_held``, which this function already
+    uses for the unrelated login slot. Swallowing the unheld case keeps a
+    bookkeeping slip from turning into a crash on the refresh thread.
+    """
+    try:
+        _rebuild_slot_lock.release()
+    except RuntimeError:
+        logger.debug("contract_refresh_slot_released_unheld")
+
 
 def _publish_shared_rebuild(rebuild: _SharedRebuild) -> None:
     global _shared_rebuild
@@ -87,9 +137,14 @@ def _publish_shared_rebuild(rebuild: _SharedRebuild) -> None:
 def _take_shared_rebuild(max_age_s: float) -> _SharedRebuild | None:
     """Return this cycle's rebuild if another facade already did the work.
 
+    **Only meaningful when called while holding the rebuild slot.** Called on
+    arrival it is always empty — see ``_rebuild_slot_lock`` for the measurement
+    that proves it. Holding the slot means any sibling that was going to produce
+    a rebuild has already finished and published it.
+
     ``max_age_s`` must stay well under the refresh interval so a facade whose
     thread has drifted does its own rebuild rather than silently inheriting a
-    stale one. The pooled facades arrive within ~11 s of each other in practice.
+    stale one — in particular the *next* hourly cycle must not inherit this one.
     """
     with _shared_rebuild_lock:
         shared = _shared_rebuild
@@ -101,10 +156,12 @@ def _take_shared_rebuild(max_age_s: float) -> _SharedRebuild | None:
 
 
 def _reset_shared_rebuild() -> None:
-    """Test hook — the module global would otherwise leak between tests."""
+    """Test hook — the module globals would otherwise leak between tests."""
     global _shared_rebuild
     with _shared_rebuild_lock:
         _shared_rebuild = None
+    if _rebuild_slot_lock.locked():
+        _release_rebuild_slot()
 
 
 def _classify_contract_event_field(value: Any, allowed: frozenset[str]) -> str:
@@ -755,13 +812,39 @@ class ContractsRuntime:
         # ``_reuse_shared_rebuild``. Computed up front because the reuse decision
         # happens before any of the expensive work.
         is_pool_shard = "/hft_quote_pool_" in str(self._client.config_path)
+        rebuild_slot_held = False
         if is_pool_shard:
-            shared = _take_shared_rebuild(
-                max_age_s=client_float(self._client, "_contract_refresh_share_window_s", 300.0),
+            # Claim the slot *first*, then look for a result. Whoever gets here
+            # first owns the rebuild; the siblings block right here — arriving
+            # 0.2-0.7 s apart, well before the owner could publish — and wake to
+            # a finished rebuild. Checking before claiming is what made PR #392 a
+            # no-op; see ``_rebuild_slot_lock``.
+            rebuild_slot_held = _acquire_rebuild_slot(
+                client_float(self._client, "_contract_refresh_share_wait_s", 30.0),
             )
-            if shared is not None:
-                self._reuse_shared_rebuild(shared)
-                return
+            if rebuild_slot_held:
+                shared = _take_shared_rebuild(
+                    max_age_s=client_float(self._client, "_contract_refresh_share_window_s", 300.0),
+                )
+                if shared is not None:
+                    # Hand the slot on before the per-facade tail: siblings still
+                    # queued behind it must not wait for our resubscribe.
+                    _release_rebuild_slot()
+                    self._reuse_shared_rebuild(shared)
+                    return
+            else:
+                # A wedged owner must not wedge the whole pool. Rebuild alone —
+                # correct, just as expensive as before this change.
+                logger.warning(
+                    "contract_refresh_slot_wait_timeout",
+                    wait_s=client_float(self._client, "_contract_refresh_share_wait_s", 30.0),
+                )
+
+        # ``owner`` did the rebuild for the pool; ``fallback`` had to do it alone
+        # because the handoff failed; ``solo`` is a non-pool client, which has no
+        # siblings to share with. A field cycle should read 1x owner + 3x reused
+        # and zero fallback — anything else means the barrier is not trading.
+        shared_role = "owner" if rebuild_slot_held else ("fallback" if is_pool_shard else "solo")
 
         codes_before: set[str] = set()
         contracts_before: list[dict[str, Any]] = []
@@ -899,6 +982,12 @@ class ContractsRuntime:
                 except Exception as exc:
                     logger.debug("operation_fallback", error=str(exc))
                 finally:
+                    # Nothing was published, so the siblings waiting on the slot
+                    # must be released to rebuild for themselves rather than
+                    # inherit a cycle that never happened.
+                    if rebuild_slot_held:
+                        _release_rebuild_slot()
+                        rebuild_slot_held = False
                     self._client._contract_refresh_lock.release()
                 return
 
@@ -926,10 +1015,12 @@ class ContractsRuntime:
                 removed=full_removed,
                 subscribed=set(getattr(self._client, "subscribed_codes", None) or ()),
             )
-            # Publish before the symbol rebuild below, not after: the sibling
-            # facades are already waiting on the login slot, and everything after
-            # this point is per-facade work they must not inherit.
-            if is_pool_shard:
+            # Publish before the symbol rebuild below, not after: the siblings
+            # are blocked on the rebuild slot right now, and everything after
+            # this point is per-facade work they must not inherit. Publish then
+            # release, in that order — releasing first would let a sibling take
+            # the slot and find it empty.
+            if rebuild_slot_held:
                 _publish_shared_rebuild(
                     _SharedRebuild(
                         mono=time.monotonic(),
@@ -939,6 +1030,8 @@ class ContractsRuntime:
                         removed=tuple(full_removed),
                     )
                 )
+                _release_rebuild_slot()
+                rebuild_slot_held = False
             added = self._client._contract_refresh_last_diff["added_codes"]
             removed = self._client._contract_refresh_last_diff["removed_codes"]
             logger.info(
@@ -949,7 +1042,7 @@ class ContractsRuntime:
                 added_count=self._client._contract_refresh_last_diff["added_count"],
                 removed_count=self._client._contract_refresh_last_diff["removed_count"],
                 relevant_count=self._client._contract_refresh_last_diff["relevant_count"],
-                shared="owner",
+                shared=shared_role,
             )
             # Phase timings decide whether narrowing the walk is worth a second
             # change: if ``sdk_walk_ms`` dominates, the cost is crossing into the
@@ -1061,6 +1154,14 @@ class ContractsRuntime:
                         error=str(notify_exc),
                     )
         finally:
+            # Backstop: the slot is normally handed on right after publishing, so
+            # reaching here still holding it means the rebuild died before that
+            # point. Release before the resubscribe below — siblings blocked on
+            # the slot have their own rebuild to do and should not queue behind
+            # our per-facade work.
+            if rebuild_slot_held:
+                _release_rebuild_slot()
+                rebuild_slot_held = False
             try:
                 if self._client.metrics and hasattr(self._client.metrics, "contract_refresh_total"):
                     self._client.metrics.contract_refresh_total.labels(result="ok").inc()
