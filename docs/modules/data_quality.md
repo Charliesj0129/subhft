@@ -34,10 +34,68 @@ months undetected.
 | `coverage_profile` | warn | Per-day `clean` / `partial` / `degraded` / `missing`, against a **local** baseline (median of a centred 11-day window) so a genuine universe step does not condemn an era |
 | `universe_drift` | warn | Day-over-day symbol-universe steps |
 | `field_coverage` | info | Per-month `trade_direction` population and event-type mix |
+| `archive_sync` | warn / **error** | Partitions present upstream but missing from the local archive. See below |
 | `eligibility` | info | Delegated to `research.combinatorial.taifex_trading_dates.full_session_eligibility`; reported `unavailable` when that module is not importable |
 
 Verdict: any failing `error` → `BROKEN`; else any failing `warn` → `DEGRADED`; else
 `CLEAN`.
+
+## `archive_sync` — the only check with dynamic severity
+
+The local corpus is the **only durable copy** of research market data (its TTL was
+removed 2026-07-25), while the upstream production table still enforces a 6-month TTL.
+A partition missing locally is therefore recoverable *until it is not*.
+
+- `warn` — behind, but the upstream copy still exists with runway.
+- `error` — missing locally **and** the upstream copy expires within
+  `ARCHIVE_SYNC_URGENT_HORIZON_DAYS` (30). This is the window in which the loss becomes
+  irreversible, and it is the only condition under which being behind should turn the
+  whole audit `BROKEN`.
+- `unavailable` — no reference inventory was supplied; the detail names the producer.
+
+The check is **offline**: it never connects to the upstream host. It compares the local
+`system.parts` inventory against a JSON reference emitted separately:
+
+```bash
+make research-archive-sync     # writes research/reports/data_quality/theshow_inventory.json
+make research-data-quality DATE_FROM=2026-01-26 DATE_TO=2026-08-06 \
+  ARGS='--reference-inventory research/reports/data_quality/theshow_inventory.json'
+```
+
+Row-count deltas on shared partitions are reported separately from missing partitions,
+because they are **not** repairable the same way: `market_data` is a plain MergeTree, so
+re-pulling a partition duplicates rather than replaces it.
+
+## Session filtering in the L2 exporter
+
+The audit found one day — `2026-04-03` — where the tick channel kept publishing real
+trades for seven hours after the market closed (`ts_session_window`, 198,678 rows).
+`research/data_pipeline/__init__.py` previously had no session filter at all, so those
+rows would have been exported as a legitimate trading day.
+
+`is_session_row()` / `filter_session_rows()` now apply two independent conditions:
+
+| Row's Taipei clock | Kept when |
+|---|---|
+| Day window 08:45–13:45 | **this** date is an XTAI session |
+| Night window 15:00–05:00 | 15:00–23:59: this date is a session · 00:00–05:00: the **previous** date is |
+| Anything else | never |
+
+Both halves are load-bearing. On `2026-04-03`, 06:00–08:44 falls between the windows,
+but 08:45–12:59 sits squarely *inside* the day window — only the calendar can reject it.
+Measured on `TXFD6`/`2026-04-03`: 32,629 of 146,323 rows dropped, of which **5,404 are
+rejected by the calendar half alone**, while the legitimate post-midnight night tail of
+trading day `2026-04-02` survives intact.
+
+Filtering is done in Python rather than SQL so the rule has exactly one implementation
+and can be tested against the real defect shape without a running ClickHouse
+(`tests/research/test_export_contamination.py`). Each artifact records
+`session_filtered_rows` and `session_rule` in its sidecar, on the same principle as the
+source-quality stamp: what was excluded is stated, not silent. `--allow-non-session`
+relaxes the calendar half only; the clock windows always apply.
+
+Trading-day *eligibility* remains delegated (below). Asking "is this date a session" is
+a plain calendar lookup and is not the same question.
 
 ## Why eligibility is delegated, never recomputed
 
