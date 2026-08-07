@@ -12,7 +12,7 @@ import argparse
 import hashlib
 import json
 import os
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
@@ -63,8 +63,92 @@ def _dotenv_value(key: str, *, env_path: Path = Path(".env")) -> str:
     return ""
 
 
+# Asia/Taipei has been a fixed UTC+8 with no DST since 1980, and this corpus starts in
+# 2026, so the offset is applied as integer arithmetic rather than constructing a
+# timezone-aware datetime per row. ``test_taipei_offset_matches_zoneinfo_for_a_corpus_date``
+# pins that assumption against ``zoneinfo``.
+TAIPEI_UTC_OFFSET_NS = 8 * 3600 * 1_000_000_000
+_NS_PER_DAY = 86_400_000_000_000
+_NS_PER_MINUTE = 60_000_000_000
+# Not `datetime.date`: this module already uses `date` as a parameter and loop variable
+# throughout, so importing the class here would shadow it.
+_EPOCH_DAY = datetime(1970, 1, 1, tzinfo=UTC).date()
+_DAY_STRING_CACHE: dict[int, str] = {}
+
+SESSION_RULE_CALENDAR = "xtai_session_dates+taifex_session_windows"
+SESSION_RULE_WINDOW_ONLY = "taifex_session_windows_only"
+
+
 def _fingerprint(arr: np.ndarray) -> str:
     return hashlib.sha256(arr.tobytes()[:4096]).hexdigest()
+
+
+def _taipei_day_and_minute(exch_ts_ns: int) -> tuple[int, int]:
+    """Days since epoch and minute-of-day, both in Taipei local time."""
+    taipei = int(exch_ts_ns) + TAIPEI_UTC_OFFSET_NS
+    day_index, remainder = divmod(taipei, _NS_PER_DAY)
+    return int(day_index), int(remainder // _NS_PER_MINUTE)
+
+
+def _day_string(day_index: int) -> str:
+    cached = _DAY_STRING_CACHE.get(day_index)
+    if cached is None:
+        cached = (_EPOCH_DAY + timedelta(days=day_index)).isoformat()
+        _DAY_STRING_CACHE[day_index] = cached
+    return cached
+
+
+def is_session_row(exch_ts_ns: int, sessions: frozenset[str] | None) -> bool:
+    """Whether a row was published while TAIFEX was actually open.
+
+    Two independent conditions, and the corpus contains a defect that only the second
+    one catches. On 2026-04-03 -- an XTAI-closed date -- the tick channel published real
+    trades from 06:00 to 12:59 Taipei. 06:00-08:44 falls between the session windows, but
+    08:45-12:59 sits squarely inside the day window: only the calendar can reject it.
+
+    * Day window 08:45-13:45 belongs to *this* date's session.
+    * Night window 15:00-05:00 opens on a session date and runs past midnight, so
+      00:00-05:00 belongs to the *previous* date's session. This is what keeps the
+      legitimate ~722k-row night tail of 2026-04-02 while dropping the contamination
+      that shares its calendar date.
+
+    ``sessions`` of ``None`` means no exchange calendar is installed. The clock rule
+    still applies; the date rule cannot, and the caller records that in the artifact.
+    """
+    day_index, minute = _taipei_day_and_minute(exch_ts_ns)
+    if quality.DAY_SESSION_OPEN_MINUTE <= minute <= quality.DAY_SESSION_CLOSE_MINUTE:
+        return sessions is None or _day_string(day_index) in sessions
+    if minute >= quality.NIGHT_SESSION_OPEN_MINUTE:
+        return sessions is None or _day_string(day_index) in sessions
+    if minute < quality.NIGHT_SESSION_CLOSE_MINUTE:
+        return sessions is None or _day_string(day_index - 1) in sessions
+    return False
+
+
+def filter_session_rows(
+    rows: Iterable[Sequence[Any]],
+    sessions: frozenset[str] | None,
+) -> tuple[list[Sequence[Any]], int]:
+    """Split ClickHouse rows into those published in-session and a dropped count.
+
+    Filtering happens here rather than in SQL so the rule has exactly one implementation
+    and can be tested against the real defect shape without a running ClickHouse.
+    """
+    kept: list[Sequence[Any]] = []
+    dropped = 0
+    for row in rows:
+        if is_session_row(int(row[1]), sessions):
+            kept.append(row)
+        else:
+            dropped += 1
+    return kept, dropped
+
+
+def _session_dates(date_from: str, date_to: str) -> frozenset[str] | None:
+    """Exchange sessions covering the range, widened one day left for the night tail."""
+    start = (datetime.fromisoformat(date_from).date() - timedelta(days=1)).isoformat()
+    sessions = quality.expected_trading_days(start, date_to)
+    return frozenset(sessions) if sessions is not None else None
 
 
 def _write_meta(path: Path, payload: dict[str, Any]) -> Path:
@@ -241,6 +325,8 @@ def _write_day_outputs(
     owner: str,
     overwrite: bool,
     quality_report: quality.QualityReport | None = None,
+    session_filtered_rows: int = 0,
+    session_rule: str = SESSION_RULE_CALENDAR,
 ) -> dict[str, Any]:
     sym_dir = out_dir / symbol.lower()
     sym_dir.mkdir(parents=True, exist_ok=True)
@@ -262,6 +348,12 @@ def _write_day_outputs(
     # Advisory provenance: record which source-quality audit this artifact was built
     # under. Never blocks the export; an absent audit is stamped as "unstamped".
     quality_stamp = quality.stamp_payload(quality_report, requested_from=date, requested_to=date)
+    # What the session rule excluded is recorded in the artifact rather than left
+    # silent, on the same principle as the source-quality stamp above.
+    session_provenance = {
+        "session_filtered_rows": int(session_filtered_rows),
+        "session_rule": session_rule,
+    }
 
     l2_meta = {
         "created_at": created_at,
@@ -272,6 +364,7 @@ def _write_day_outputs(
         "dataset_id": f"{symbol}_{date}_l2_hftbacktest",
         "date": date,
         "dedup_removed": int(dedup_removed),
+        **session_provenance,
         "depth_levels": 5,
         "fields": list(events.dtype.names or ()),
         "generator": "research.data_pipeline.export_l2_ticks",
@@ -294,6 +387,7 @@ def _write_day_outputs(
         "data_ul": 5,
         "dataset_id": f"{symbol}_{date}_tick",
         "date": date,
+        **session_provenance,
         "fields": list(ticks.dtype.names or ()),
         "generator": "research.data_pipeline.export_l2_ticks",
         "owner": owner,
@@ -318,6 +412,7 @@ def _write_day_outputs(
         "l2_rows": int(len(events)),
         "tick_rows": int(len(ticks)),
         "dedup_removed": int(dedup_removed),
+        "session_filtered_rows": int(session_filtered_rows),
     }
 
 
@@ -334,9 +429,12 @@ def export_l2_ticks(
     owner: str = "research",
     dry_run: bool = False,
     overwrite: bool = False,
+    allow_non_session: bool = False,
 ) -> dict[str, Any]:
     client = _get_client(host, port, user, password)
     quality_report = quality.load_latest_report()
+    sessions = None if allow_non_session else _session_dates(date_from, date_to)
+    session_rule = SESSION_RULE_CALENDAR if sessions is not None else SESSION_RULE_WINDOW_ONLY
     summary: dict[str, Any] = {
         "schema": "research.data_pipeline.export_l2_ticks.v1",
         "generated_at": datetime.now(UTC).isoformat(),
@@ -346,6 +444,7 @@ def export_l2_ticks(
         "out_dir": str(out_dir),
         "dry_run": dry_run,
         "source_quality_verdict": (quality_report.verdict if quality_report is not None else "unstamped"),
+        "session_rule": session_rule,
         "outputs": [],
         "errors": [],
     }
@@ -357,7 +456,19 @@ def export_l2_ticks(
                 )
                 continue
             try:
-                rows = _fetch_day_rows(client, symbol, date)
+                rows, session_filtered = filter_session_rows(_fetch_day_rows(client, symbol, date), sessions)
+                if not rows:
+                    # Every row on this date was published outside a session. Reporting it
+                    # as a skip rather than an error keeps a genuine export failure legible.
+                    summary["outputs"].append(
+                        {
+                            "symbol": symbol,
+                            "date": date,
+                            "status": "skipped_non_session",
+                            "session_filtered_rows": session_filtered,
+                        }
+                    )
+                    continue
                 events, ticks, dedup_removed = rows_to_l2_and_ticks(rows)
                 if len(events) == 0 or len(ticks) == 0:
                     summary["errors"].append({"symbol": symbol, "date": date, "error": "empty_export"})
@@ -372,6 +483,8 @@ def export_l2_ticks(
                     owner=owner,
                     overwrite=overwrite,
                     quality_report=quality_report,
+                    session_filtered_rows=session_filtered,
+                    session_rule=session_rule,
                 )
                 output["source_rows"] = source_rows
                 summary["outputs"].append(output)
@@ -413,6 +526,14 @@ def _build_parser() -> argparse.ArgumentParser:
     export.add_argument("--owner", default="research")
     export.add_argument("--dry-run", action="store_true")
     export.add_argument("--overwrite", action="store_true")
+    export.add_argument(
+        "--allow-non-session",
+        action="store_true",
+        help=(
+            "Relax the exchange-calendar half of the session rule. The TAIFEX clock "
+            "windows still apply; rows published on a closed date are no longer rejected."
+        ),
+    )
 
     validate = sub.add_parser("validate", help="Validate exported L2/tick dataset")
     validate.add_argument("--path", required=True)
@@ -435,6 +556,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "--no-calendar",
         action="store_true",
         help="Skip the exchange calendar; report coverage over observed days only",
+    )
+    audit.add_argument(
+        "--reference-inventory",
+        default=None,
+        help=(
+            "Upstream partition inventory from "
+            "'scripts/sync_market_data_archive.py --emit-inventory'; enables the archive_sync check"
+        ),
     )
     audit.add_argument(
         "--fail-on",
@@ -461,6 +590,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             owner=args.owner,
             dry_run=bool(args.dry_run),
             overwrite=bool(args.overwrite),
+            allow_non_session=bool(args.allow_non_session),
         )
         print(json.dumps(summary, indent=2, sort_keys=True))
         return 1 if summary["errors"] else 0
@@ -476,6 +606,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             date_to=args.date_to,
             use_calendar=not args.no_calendar,
             chunk_days=args.chunk_days,
+            reference_inventory=Path(args.reference_inventory) if args.reference_inventory else None,
         )
         json_path, md_path = quality.write_report(report, Path(args.out_dir))
         print(

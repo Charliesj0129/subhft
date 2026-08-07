@@ -85,6 +85,11 @@ COVERAGE_DEGRADED_ROW_RATIO = 0.10
 UNIVERSE_STEP_MIN_DELTA = 5
 UNIVERSE_STEP_MIN_RATIO = 0.15
 
+# A partition missing from the local archive is merely "behind" while the upstream copy
+# still exists. Once the upstream TTL fires it is unrecoverable, so a missing partition
+# inside this horizon escalates from warn to error.
+ARCHIVE_SYNC_URGENT_HORIZON_DAYS = 30
+
 QUERY_SETTINGS: dict[str, Any] = {"max_memory_usage": 2_500_000_000, "max_threads": 2}
 
 
@@ -507,6 +512,98 @@ def evaluate_eligibility(date_from: str, date_to: str) -> CheckResult:
     )
 
 
+def evaluate_archive_sync(
+    local_partitions: Mapping[str, int],
+    reference: Mapping[str, Any] | None,
+    *,
+    now: datetime | None = None,
+) -> CheckResult:
+    """Compare the local archive against a reference inventory of the upstream table.
+
+    This check exists because the local corpus is the only durable copy of research
+    market data -- its TTL was removed on 2026-07-25 -- while the upstream production
+    table still enforces a 6-month TTL. A partition that is missing locally and whose
+    upstream TTL has fired is gone permanently, and nothing previously measured that.
+
+    Severity is deliberately dynamic. Being merely behind is a ``warn``; being behind on
+    a partition whose upstream copy expires within
+    ``ARCHIVE_SYNC_URGENT_HORIZON_DAYS`` is an ``error``, because that is the window in
+    which the loss becomes irreversible.
+
+    Offline by construction: the reference inventory is produced separately by
+    ``scripts/sync_market_data_archive.py --emit-inventory``. The auditor never opens a
+    connection to the upstream host itself.
+    """
+    detail: dict[str, Any] = {"local_partitions": len(local_partitions)}
+    if reference is None:
+        detail["reason"] = "no reference inventory supplied"
+        detail["producer"] = "scripts/sync_market_data_archive.py --emit-inventory <path>"
+        return CheckResult(
+            "archive_sync",
+            "warn",
+            "unavailable",
+            "archive sync state unknown (no reference inventory)",
+            detail,
+        )
+
+    moment = now or datetime.now(UTC)
+    entries = list(reference.get("partitions") or ())
+    detail["reference_generated_at"] = reference.get("generated_at")
+    detail["reference_partitions"] = len(entries)
+
+    missing: list[dict[str, Any]] = []
+    deltas: list[dict[str, Any]] = []
+    for entry in entries:
+        name = str(entry["partition"])
+        remote_rows = int(entry.get("rows") or 0)
+        if remote_rows <= 0:
+            continue
+        local_rows = local_partitions.get(name)
+        if local_rows is None:
+            days_left = _days_until(entry.get("ttl_expiry"), moment)
+            missing.append(
+                {"partition": name, "rows": remote_rows, "days_until_upstream_expiry": days_left}
+            )
+        elif local_rows != remote_rows:
+            deltas.append({"partition": name, "local_rows": local_rows, "remote_rows": remote_rows})
+
+    urgent = [
+        entry
+        for entry in missing
+        if entry["days_until_upstream_expiry"] is not None
+        and entry["days_until_upstream_expiry"] <= ARCHIVE_SYNC_URGENT_HORIZON_DAYS
+    ]
+    horizons = [
+        entry["days_until_upstream_expiry"] for entry in missing if entry["days_until_upstream_expiry"] is not None
+    ]
+    detail["missing_partitions"] = missing
+    detail["row_delta_partitions"] = deltas
+    detail["urgent_partitions"] = [entry["partition"] for entry in urgent]
+    detail["days_until_permanent_loss"] = min(horizons) if horizons else None
+    detail["urgent_horizon_days"] = ARCHIVE_SYNC_URGENT_HORIZON_DAYS
+
+    if urgent:
+        summary = f"{len(urgent)} unsynced partitions expire upstream within {ARCHIVE_SYNC_URGENT_HORIZON_DAYS} days"
+        return CheckResult("archive_sync", "error", "fail", summary, detail)
+    if missing or deltas:
+        summary = f"{len(missing)} partitions missing locally, {len(deltas)} with row-count deltas"
+        return CheckResult("archive_sync", "warn", "fail", summary, detail)
+    return CheckResult("archive_sync", "warn", "pass", "archive matches the reference inventory", detail)
+
+
+def _days_until(expiry: Any, moment: datetime) -> int | None:
+    """Whole days from ``moment`` to an upstream TTL expiry, or ``None`` when unknown."""
+    if not expiry or str(expiry).startswith("1970-01-01"):
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(expiry))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return (parsed - moment).days
+
+
 def classify_verdict(checks: Sequence[CheckResult]) -> Verdict:
     if any(check.failed and check.severity == "error" for check in checks):
         return "BROKEN"
@@ -524,6 +621,8 @@ def build_report(
     trade_direction_present: bool,
     expected_days: Sequence[str] | None = None,
     generated_at: str | None = None,
+    local_partitions: Mapping[str, int] | None = None,
+    reference_inventory: Mapping[str, Any] | None = None,
 ) -> QualityReport:
     checks = (
         evaluate_causality(days),
@@ -535,6 +634,7 @@ def build_report(
         evaluate_coverage(days, expected_days=expected_days),
         evaluate_universe_drift(days, expected_days=expected_days),
         evaluate_field_coverage(months, trade_direction_present=trade_direction_present),
+        evaluate_archive_sync(local_partitions or {}, reference_inventory),
         evaluate_eligibility(date_from, date_to),
     )
     populated = [d for d in days if d.rows > 0]
@@ -771,6 +871,26 @@ def expected_trading_days(date_from: str, date_to: str) -> list[str] | None:
     return [str(value.date()) for value in sessions]
 
 
+def fetch_local_partitions(client: Any) -> dict[str, int]:
+    """Partition -> row count from ``system.parts``. Metadata only; no data is scanned."""
+    database, table = SOURCE_TABLE.split(".", 1)
+    query = (
+        "SELECT partition, sum(rows) FROM system.parts "
+        f"WHERE database = '{database}' AND table = '{table}' AND active "
+        "GROUP BY partition ORDER BY partition"
+    )
+    result = client.query(query, settings=QUERY_SETTINGS)
+    return {str(row[0]): int(row[1]) for row in result.result_rows}
+
+
+def load_reference_inventory(path: Path | None) -> dict[str, Any] | None:
+    """Load an upstream inventory emitted by ``scripts/sync_market_data_archive.py``."""
+    if path is None or not path.exists():
+        return None
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return dict(payload) if isinstance(payload, dict) else None
+
+
 def run_audit(
     client: Any,
     *,
@@ -778,6 +898,7 @@ def run_audit(
     date_to: str,
     use_calendar: bool = True,
     chunk_days: int = 4,
+    reference_inventory: Path | None = None,
 ) -> QualityReport:
     days = fetch_day_stats(client, date_from, date_to, chunk_days=chunk_days)
     trade_direction_present = has_trade_direction_column(client)
@@ -794,6 +915,8 @@ def run_audit(
         months=months,
         trade_direction_present=trade_direction_present,
         expected_days=expected,
+        local_partitions=fetch_local_partitions(client),
+        reference_inventory=load_reference_inventory(reference_inventory),
     )
 
 

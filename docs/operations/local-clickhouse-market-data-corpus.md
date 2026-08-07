@@ -66,13 +66,49 @@ Consequences to remember:
   TTLs but hold 0 rows; `orders`, `fills_legacy_pre_rmt` and `config_snapshots`
   hold a few rows that do not expire until 2027.
 
-## The 2026-07-25 pull from THESHOW
+## Keeping the archive alive — `scripts/sync_market_data_archive.py`
+
+This local table is the **only durable copy** of research market data: its TTL is gone
+(below) and the L2 NPZ corpus was deleted on 2026-07-20. Upstream still enforces the
+DDL's 6-month TTL, so anything not pulled before a partition expires is lost for good.
+
+```bash
+make research-archive-sync                       # dry-run diff + upstream inventory
+uv run python scripts/sync_market_data_archive.py --partitions 20260805,20260806 --sync
+```
+
+The upstream host comes from `HFT_ARCHIVE_REMOTE` (environment or `.env`) or `--remote`.
+Dry-run is the default; writing requires `--sync`.
+
+Properties that matter, and why:
+
+- **Read-only upstream.** Every remote statement is a `SELECT`.
+- **Refuses a partition that already holds local rows.** `market_data` is a plain
+  `MergeTree`, so re-inserting *duplicates* rather than replaces. This is exactly why
+  the 2-row shortfall on partition `20260804` cannot be repaired by re-pulling it —
+  that would duplicate 7.3M rows. Those 2 rows stay missing.
+- **Skips the in-flight partition** (today, UTC): a partition still being written
+  cannot be hash-verified.
+- **Verifies both sides** with `count()` + `sum(cityHash64(symbol, exch_ts, ingest_ts,
+  price_scaled, volume, seq_no))` before and after each transfer. On mismatch it aborts
+  and prints the `DROP PARTITION` remediation rather than dropping anything itself.
+- **Column order is read from `system.columns` at runtime** and named explicitly on
+  both the `SELECT` and the `INSERT`, because the two tables order `instrument_type`
+  differently in their physical schema.
+
+> **Why this is a script and not a runbook paragraph.** Until 2026-08-07 this procedure
+> lived in `scratchpad/pull_theshow_market_data.sh`, which this document cited as if it
+> were an asset. It was never committed and did not survive its session — the directory
+> no longer exists. The archive's only maintenance tool was therefore unrecoverable
+> prose. `archive_sync` in the source auditor now measures the gap so that losing the
+> habit is *detectable* rather than discovered months later.
+
+### The 2026-07-25 pull from THESHOW
 
 Source: THESHOW production ClickHouse, both sides on 25.12.3.21. Read-only on the
-remote; nothing was written to the production host. Script:
-`scratchpad/pull_theshow_market_data.sh` (per-partition `FORMAT Native` over SSH
-with `pigz`, verified by `count()` + `sum(cityHash64(symbol, exch_ts, ingest_ts,
-price_scaled, volume, seq_no))` on both sides before and after each partition).
+remote; nothing was written to the production host. Performed with the ad-hoc
+predecessor of the script above, using the same per-partition `FORMAT Native` transfer
+and the same digest verification.
 
 - **Transferred: 19 partitions / 95,461,225 rows**, all hash-verified.
 - **Skipped: 6 partitions** (`20260605`, `20260608`–`20260612`, 47,080,325 rows)
@@ -85,9 +121,30 @@ The two tables order `instrument_type` differently in their physical schema (bot
 have the same 18 columns), so the transfer named all columns explicitly on both
 the `SELECT` and the `INSERT`. Any future Native transfer must do the same.
 
-The pull captured everything the remote held as of 2026-07-25 17:29 CST. The
-night session had already closed, so nothing was in flight — but **Monday
-2026-07-27 onwards will need another pull**.
+The pull captured everything the remote held as of 2026-07-25 17:29 CST.
+
+### The 2026-08-07 sync
+
+First run of the versioned script. Partitions `20260805` (6,905,958 rows) and
+`20260806` (6,698,862 rows) transferred and digest-verified identical on both sides;
+`20260807` was skipped as in-flight. The archive went **936,216,159 → 949,820,979 rows**
+across 111 → 113 partitions.
+
+The pre-sync diff also established the shape of the archive's relationship to upstream,
+which is worth keeping:
+
+| | |
+|---|---|
+| Shared partitions | **byte-identical row counts**, with exactly one exception |
+| `20260804` | local 7,338,496 vs upstream 7,338,498 — a **+2 watermark boundary** from the previous pull, permanently unrepairable |
+| Upstream extent | oldest active partition `20260605`; upstream is **not** a backstop for anything older |
+| `06-25` → `07-06`, `07-13`/`07-14`/`07-16` | **absent upstream too** — a recording outage, not a sync failure, and permanently lost |
+| Local-only | 78 partitions (`20260126`–`20260604`) that have already aged out upstream |
+
+Note the upstream TTL is genuinely active and computable per partition
+(`system.parts.delete_ttl_info_max`): as of 2026-08-07 the oldest upstream partition
+expires 2026-12-05. The ~2-month upstream extent is therefore **not** TTL attrition —
+data older than `20260605` was lost upstream for some other reason.
 
 ## Coverage — real holes, not transfer failures
 
@@ -160,12 +217,41 @@ churn) — see `docs/modules/data_quality.md`.
 - **5,593 duplicate `(symbol, exch_ts, ingest_ts, seq_no)` rows** on 5 days:
   `02-26` (426), `03-03` (7), `03-31` (144), `04-27` (1,387), `04-28` (3,629).
   Consistent with partial re-inserts — `market_data` is a plain MergeTree, so a
-  re-import duplicates rather than replaces (see the 2026-07-25 pull above).
-- **3,189,310 `BidAsk` rows carry empty depth arrays** (0.34% of the corpus).
-- **`2026-04-03` is the one day with rows outside a session window** (17.3%,
-  198,678 rows). It is a market holiday; hours 06:00–12:59 Taipei carry ~187 k events
-  from only 5–6 symbols. Worth identifying which instruments those are — a feed that
-  does not observe the TW holiday calendar would explain it.
+  re-import duplicates rather than replaces (see the pull sections above).
+
+  **Not repaired, and here is exactly what that costs.** The source rows are left
+  untouched; the exposure differs by consumer:
+
+  | Consumer | Effect |
+  |---|---|
+  | `smma_dataset` OHLC | **none** — `argMinIf`/`argMaxIf` key on `(exch_ts, ingest_ts, seq_no)` and are idempotent under duplication |
+  | `smma_dataset` `bar_trade_volume` | **inflated** — `sumIf(volume, type='Tick')` double-counts |
+  | L2 tick export | **inflated** — the exporter's dedup (`DEDUP_WINDOW_NS`) is a *consecutive-identical-book* rule, not a key rule, and ticks get no dedup at all |
+
+  Magnitude: the worst-affected day, `04-28`, has 3,629 duplicates against 23.7 M rows
+  = **0.015%**. Documented rather than fixed because repairing it means mutating the
+  only durable copy of the archive.
+- **3,189,310 `BidAsk` rows carry empty depth arrays** (0.34% of the corpus), rising
+  1.195% (Jan) → 6.433% (Aug). That trend is mostly **universe composition**, not
+  degradation: restricted to `TXF`/`TMF` the rate is 0.04–0.55%, since one-sided books
+  are normal for illiquid options and the universe grew 78 → 523 symbols. The one
+  genuine anomaly is **July, where the futures-only rate spikes to 2.111%** against a
+  0.544% June baseline — unexplained, and July is also the month holding the recording
+  outage. Both exporters already exclude these rows.
+- **`2026-04-03`: the tick channel published after the market closed.** The one day
+  with rows outside a session window (17.3%, 198,678 rows). `exchange_calendars` marks
+  XTAI **closed**; the `BidAsk` channel correctly stops at the 05:00 night close, but
+  `Tick` keeps flowing 06:00 → 12:59 for 5–6 futures, decaying 88,959 → 4,804 rows/hour.
+  These are not stale republishes: `TXFD6` alone shows 646 distinct prices and 17,446
+  lots in hour 6. `exch_ts == ingest_ts` (lag 0), so `ts_causality` structurally cannot
+  see them — `ts_session_window` is the only check that can, and it is what found them.
+
+  The source table is **not** modified. The exporter is what changed: see
+  `docs/modules/data_quality.md`. Measured end-to-end on `TXFD6`/`2026-04-03`, the
+  session rule drops 32,629 of 146,323 rows (32,628 `Tick` + 1 `BidAsk`) and keeps the
+  legitimate post-midnight night tail of trading day `2026-04-02`. 5,404 of those rows
+  sit inside a valid clock window and are rejected **only** by the calendar half of the
+  rule.
 
 ## Related
 
