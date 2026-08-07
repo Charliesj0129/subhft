@@ -41,6 +41,22 @@ def _is_connection_limit_error(error: str | None) -> bool:
 _LOGIN_FAILURE_REASONS = ("connection_limit", "sdk_busy", "timeout", "auth", "network", "unknown", "other")
 
 
+def _reconnect_in_flight(client: Any) -> bool:
+    """True while another thread holds this facade's reconnect lock.
+
+    Probe-and-release, the same non-blocking pattern ``quote_runtime`` uses:
+    the acquire only succeeds when nobody else holds the lock and we hand it
+    straight back, so this is a read of the lock, never a claim on it.
+    """
+    lock = getattr(client, "_reconnect_lock", None)
+    if lock is None:
+        return False
+    if not lock.acquire(blocking=False):
+        return True
+    lock.release()
+    return False
+
+
 def classify_login_failure(error: str | None) -> str:
     """Map a raw broker login error onto a bounded reason label."""
     if not error:
@@ -472,6 +488,11 @@ class SessionRuntime:
             relogin_attempts = 0
             relogin_backoff_s = 0.0
             relogin_next_ts = 0.0
+            # How long this thread will stand aside for a reconnect that is
+            # already in flight. Reusing the re-login backoff keeps one number
+            # for "how long am I willing to wait before trying myself".
+            max_defer_s = base_backoff_s
+            defer_started_ts = 0.0
             # Start the schedule clock a full interval out so the poll quantum
             # cannot pull the first refresh evaluation forward.
             next_schedule_ts = timebase.now_s() + check_interval_s
@@ -492,6 +513,32 @@ class SessionRuntime:
                         # and already serialises on the process-wide login slot,
                         # so retrying here cannot re-create the login storm that
                         # caused the logout.
+                        #
+                        # But `logged_in` is also False for the whole
+                        # logout->login gap of a reconnect running on another
+                        # thread (reconnect_orchestrator clears it before
+                        # calling login()). Reading that as "abandoned facade"
+                        # stacks a second logout/login onto the first, and the
+                        # broker answers 451 — 8 of them inside the 14:45 CST
+                        # pre-open window on 2026-08-07. Stand aside instead,
+                        # without burning an attempt or advancing the backoff:
+                        # this is somebody else's recovery, not a failed one.
+                        #
+                        # Bounded on purpose. A reconnect that never releases
+                        # the lock must not disable this recovery path for
+                        # good — that would be the 2026-07-25 stranded-facade
+                        # failure wearing a new costume.
+                        if _reconnect_in_flight(c):
+                            if defer_started_ts == 0.0:
+                                defer_started_ts = now
+                                logger.info("Session refresh deferring to an in-flight reconnect")
+                            if now - defer_started_ts < max_defer_s:
+                                continue
+                            logger.warning(
+                                "In-flight reconnect outlasted the defer budget; recovering anyway",
+                                deferred_s=round(now - defer_started_ts, 1),
+                            )
+                        defer_started_ts = 0.0
                         if now < relogin_next_ts:
                             continue
                         relogin_attempts += 1

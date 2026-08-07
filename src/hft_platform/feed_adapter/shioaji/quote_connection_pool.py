@@ -553,13 +553,40 @@ class QuoteConnectionPool:
         LOB/FE mutations are safe here.
         """
         self._apply_pending_resets()
+        # Two gates with different evidence behind them. A feed gap only proves
+        # a broken connection while the session is open, so the gap-driven
+        # trigger is held to the session proper; a DISCONNECTED slot is proof
+        # on its own and keeps the pre-open lead. ``or`` short-circuits so an
+        # open session costs the same single calendar lookup as before.
+        session_open = self.session_open_now()
         check_facade_health(
             self._slots,
             degraded_threshold_s=self._degraded_threshold_s,
             reconnect_trigger_s=self._reconnect_trigger_s,
             schedule_fn=self._schedule_reconnect,
-            suppress_reconnect=not self.reconnect_allowed(),
+            suppress_reconnect=not (session_open or self.reconnect_allowed()),
+            suppress_gap_reconnect=not session_open,
         )
+
+    def session_open_now(self) -> bool:
+        """Return True when the TAIFEX session is open *right now*.
+
+        Split out of :meth:`reconnect_allowed` (this is exactly its first
+        branch) so callers can tell "the market is trading" apart from "a
+        reconnect is worth attempting", which also covers the pre-open lead.
+
+        Fail-open for the same reason :meth:`reconnect_allowed` is: a calendar
+        that cannot answer must not strand a dead facade mid-session.
+        """
+        try:
+            from hft_platform.core.market_calendar import get_calendar
+
+            calendar = get_calendar()
+            now_dt = dt.datetime.fromtimestamp(timebase.now_s(), tz=calendar._tz)
+            return bool(calendar.is_trading_hours(now_dt, product_type="future"))
+        except Exception as exc:
+            logger.debug("operation_fallback", error=str(exc))
+            return True
 
     def reconnect_allowed(self) -> bool:
         """Return True when a facade reconnect could plausibly succeed.
@@ -580,14 +607,18 @@ class QuoteConnectionPool:
         Fail-open: if the calendar cannot answer, allow the reconnect. Leaving a
         genuinely dead facade unrecovered during a live session is far worse
         than a futile relogin outside one.
+
+        Note this covers the lead as well as the session, so it answers "may a
+        DISCONNECTED slot be revived?". Feed-gap-driven reconnects ask
+        :meth:`session_open_now` instead — see :func:`check_facade_health`.
         """
         try:
             from hft_platform.core.market_calendar import get_calendar
 
+            if self.session_open_now():
+                return True
             calendar = get_calendar()
             now_dt = dt.datetime.fromtimestamp(timebase.now_s(), tz=calendar._tz)
-            if calendar.is_trading_hours(now_dt, product_type="future"):
-                return True
             ahead = now_dt + dt.timedelta(seconds=self._reconnect_pre_open_lead_s)
             return bool(calendar.is_trading_hours(ahead, product_type="future"))
         except Exception as exc:
