@@ -24,9 +24,9 @@ re-derive:
 
 | Property | Value |
 |---|---|
-| Range (Asia/Taipei) | 2026-01-26 → 2026-08-05 |
-| Rows | 936,216,159 |
-| On disk | 22.12 GiB, 182 active parts |
+| Range (Asia/Taipei) | 2026-01-26 → 2026-08-06 |
+| Rows | 949,820,979 |
+| On disk | 22.49 GiB, 186 active parts, 113 partitions |
 | Engine | `MergeTree`, `PARTITION BY toYYYYMMDD(toDateTime(ingest_ts/1000000000))` (**UTC**), `ORDER BY (symbol, exch_ts, ingest_ts)` |
 | TTL | **none** (see below) |
 | Price scale | **×1,000,000** raw — the live platform scale is ×10,000; conversions must be explicit (`.agent/rules/70-research-data.md`) |
@@ -146,18 +146,31 @@ Note the upstream TTL is genuinely active and computable per partition
 expires 2026-12-05. The ~2-month upstream extent is therefore **not** TTL attrition —
 data older than `20260605` was lost upstream for some other reason.
 
+The post-sync audit's `archive_sync` check reports the residual state precisely:
+one partition missing locally (`20260807`, 4,385,195 rows and still growing) and one
+row-count delta (`20260804`, −2). Severity is `warn`, not `error`, because that
+partition's upstream copy has **183 days** of runway — far outside the 30-day urgent
+horizon. That is the intended reading: behind, but not yet losing anything.
+
 ## Coverage — real holes, not transfer failures
 
-Measured 2026-08-06 by `make research-data-quality` over the whole corpus
-(936,216,159 rows, report `9606665855875e86…`). Of the **126 XTAI sessions**
-between 2026-01-26 and 2026-08-05:
+Measured 2026-08-07 by `make research-data-quality` over the whole corpus
+(949,078,108 rows in the audited range, report `2ae03ee9352ec7ed…`). Of the
+**127 XTAI sessions** between 2026-01-26 and 2026-08-06:
 
 | Status | Sessions | Meaning |
 |---|---|---|
-| clean | 90 | rows and symbols at the local baseline |
+| clean | 92 | rows and symbols at the local baseline |
 | partial | 12 | present but below baseline |
-| degraded | 8 | symbol count collapsed, or <10% of baseline rows |
+| degraded | 7 | symbol count collapsed, or <10% of baseline rows |
 | **missing** | **16** | exchange session with **zero** rows |
+
+Against the 2026-08-06 baseline (`9606665855875e86…`, 90/12/8/16) the only two
+changes are the two days the sync recovered: `2026-08-05` moved `degraded` →
+`clean` (676,269 rows / 246 symbols → 6,846,720 / 296) and `2026-08-06` is a new
+`clean` session (6,691,498 / 296). **No other day changed status** — verified by
+diffing the per-day arrays of the two reports, which matters because the rolling
+11-day baseline median shifts when days are added.
 
 (A further 22 calendar dates hold rows but are not sessions — they are the
 post-midnight tail of the previous night session, which lands on the next calendar
@@ -169,7 +182,7 @@ date. They are labelled `non_session` and excluded from the tally.)
 deploy / connectivity incident; the production engine has run clean since
 2026-07-19T12:56Z.
 
-**Degraded — 8 sessions**:
+**Degraded — 7 sessions**:
 
 | Date | Rows | Symbols |
 |---|---|---|
@@ -180,7 +193,6 @@ deploy / connectivity incident; the production engine has run clean since
 | 2026-04-24 | 1,059,883 | 6 |
 | 2026-07-10 | 577,597 | 57 |
 | 2026-07-15 | 506,454 | 164 |
-| 2026-08-05 | 676,269 | 246 |
 
 **Partial — 12 sessions**: `02-03`, `02-24`, `03-19`, `03-20`, `04-16`, `05-04`,
 `05-07`, `05-11`, `05-21`, `05-22`, `06-15`, `06-18`.
@@ -190,30 +202,36 @@ deploy / connectivity incident; the production engine has run clean since
 | Sessions | Range |
 |---|---|
 | 15 | 2026-05-25 → 2026-06-12 |
-| 13 | 2026-07-17 → 2026-08-04 |
+| 15 | 2026-07-17 → 2026-08-06 |
 | 12 | 2026-03-03 → 2026-03-18 |
 | 8 | 2026-04-02 → 2026-04-15 |
 | 7 | 2026-05-12 → 2026-05-20 |
+
+The July–August run was 13 sessions (`→ 2026-08-04`) before the 2026-08-07 sync;
+recovering `08-05` and `08-06` extended it to 15 and made it the most recent
+clean window in the corpus. Runs are counted over consecutive *sessions* —
+weekends and holidays are not breaks.
 
 > **Correction.** `.agent/rules/70-research-data.md` used to call
 > `2026-03-02 → 2026-03-24` the "best known complete research interval". It is not:
 > **`2026-03-02` has zero rows**, and `03-19`/`03-20` are partial while `03-25` is
 > degraded. The real clean run in that month is `2026-03-03 → 2026-03-18`.
 
-**Symbol universe is not constant.** It ranges 1–523 across the corpus, with 29
-day-over-day steps clearing both a 5-symbol and a 15% floor. Cross-period studies
+**Symbol universe is not constant.** It ranges 1–523 across the corpus, with 28
+day-over-day steps clearing both a 5-symbol and a 15% floor (29 before the sync —
+recovering `08-05`'s full 296-symbol universe removed one step). Cross-period studies
 must not assume a fixed universe. Note the audit cannot see *small* pool changes
 (the documented 368 → 357 is ~3%, the same magnitude as monthly contract rollover
 churn) — see `docs/modules/data_quality.md`.
 
-## Other findings from the 2026-08-06 audit
+## Other findings from the 2026-08-07 audit
 
 - **`exch_ts` causality is clean table-wide**: 0 rows with `exch_ts > ingest_ts + 1s`
-  across all 936 M rows, `max(exch_ts - ingest_ts)` = 46 ms. The 2026-08-05 repair of
-  the +8h shift holds.
+  across all 949 M rows, `max(exch_ts - ingest_ts)` = 46 ms. The 2026-08-05 repair of
+  the +8h shift holds, and the two newly synced partitions did not disturb it.
 - **`trade_direction` population is a hard family constraint** (Tick rows only):
   `202601`–`202603` = **0.0**, `202604` = 0.928, `202605` = 0.998, `202606` = 0.997,
-  `202607` = 0.999, `202608` = 1.000. Aggressor-split research cannot use Q1 at all.
+  `202607` = 0.999, `202608` = 0.9997. Aggressor-split research cannot use Q1 at all.
 - **5,593 duplicate `(symbol, exch_ts, ingest_ts, seq_no)` rows** on 5 days:
   `02-26` (426), `03-03` (7), `03-31` (144), `04-27` (1,387), `04-28` (3,629).
   Consistent with partial re-inserts — `market_data` is a plain MergeTree, so a
@@ -231,7 +249,7 @@ churn) — see `docs/modules/data_quality.md`.
   Magnitude: the worst-affected day, `04-28`, has 3,629 duplicates against 23.7 M rows
   = **0.015%**. Documented rather than fixed because repairing it means mutating the
   only durable copy of the archive.
-- **3,189,310 `BidAsk` rows carry empty depth arrays** (0.34% of the corpus), rising
+- **3,223,674 `BidAsk` rows carry empty depth arrays** (0.34% of the corpus), rising
   1.195% (Jan) → 6.433% (Aug). That trend is mostly **universe composition**, not
   degradation: restricted to `TXF`/`TMF` the rate is 0.04–0.55%, since one-sided books
   are normal for illiquid options and the universe grew 78 → 523 symbols. The one
