@@ -80,6 +80,7 @@ def check_facade_health(
     reconnect_trigger_s: float = 10.0,
     schedule_fn: Callable[[str], None],
     suppress_reconnect: bool = False,
+    suppress_gap_reconnect: bool = False,
 ) -> None:
     """Evaluate each slot's health and drive FSM transitions.
 
@@ -90,7 +91,8 @@ def check_facade_health(
     DEGRADED:
         gap < degraded_threshold_s → CONNECTED (feed recovered)
         gap > degraded_threshold_s AND degraded_since > reconnect_trigger_s
-            → calls schedule_fn(conn_id)  (skipped when suppress_reconnect=True)
+            → calls schedule_fn(conn_id)  (skipped when suppress_reconnect=True
+            **or** suppress_gap_reconnect=True)
     DISCONNECTED:
         time since last_reconnect_mono > backoff_s() → calls schedule_fn(conn_id)
             (skipped when suppress_reconnect=True)
@@ -112,8 +114,31 @@ def check_facade_health(
         coroutine for that connection.  Must be non-blocking.
     suppress_reconnect:
         When True, state transitions (CONNECTED→DEGRADED, DEGRADED→CONNECTED)
-        still occur for observability, but ``schedule_fn`` is never called.
-        Use outside trading hours to prevent futile reconnect attempts.
+        still occur for observability, but ``schedule_fn`` is never called for
+        *any* state.  Use outside the reconnect window to prevent futile
+        reconnect attempts.
+    suppress_gap_reconnect:
+        When True, only the DEGRADED (feed-gap driven) trigger is held back;
+        a genuinely DISCONNECTED slot is still recovered.
+
+        A feed gap is evidence of a broken connection **only while the session
+        is open**.  Outside one there is by definition no data, so the trigger
+        is guaranteed true and the remedy guaranteed ineffective: the reconnect
+        succeeds, ``last_data_mono`` is refreshed, no tick arrives,
+        ``degraded_threshold_s`` elapses, ``reconnect_trigger_s`` elapses, and
+        the slot relogs — every ~13 s until the market itself supplies data.
+        On 2026-08-07 the four pooled facades entered that loop the instant the
+        pre-open lead opened the gate (four ``facade_reconnect_triggered`` in
+        one tick at 14:45:00.652–.654) and cost 52 reconnect schedules, 35
+        logins, 35 full 54,727-contract loads, 34 basket resubscribes and 9
+        broker ``451`` rejections in the 20 minutes before the night open —
+        on four connections that were logged in and fully subscribed the whole
+        time.  The same shape ran at the 08:30 day pre-open (7 × ``451``).
+
+        Callers pass ``suppress_gap_reconnect=not session_open`` and
+        ``suppress_reconnect=not reconnect_window_open`` so the pre-open lead
+        keeps doing the one job it is for — reviving a genuinely dead session
+        before the bell — without dismantling live ones.
     """
     now = time.monotonic()
 
@@ -150,12 +175,15 @@ def check_facade_health(
                 if degraded_since is not None:
                     degraded_duration = now - degraded_since
                     if degraded_duration > reconnect_trigger_s:
-                        if suppress_reconnect:
+                        if suppress_reconnect or suppress_gap_reconnect:
                             if _should_log_suppression(slot, now):
                                 log.info(
                                     "facade_reconnect_suppressed",
                                     conn_id=slot.conn_id,
                                     degraded_duration_s=round(degraded_duration, 3),
+                                    # Which gate held, so the pre-open window is
+                                    # distinguishable from the closed market.
+                                    reason=("outside_reconnect_window" if suppress_reconnect else "session_closed"),
                                 )
                         else:
                             slot._suppress_logged_mono = 0.0

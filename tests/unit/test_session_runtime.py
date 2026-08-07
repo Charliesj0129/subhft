@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as _dt
+import threading
 import time as _real_time
 from contextlib import contextmanager
 from types import SimpleNamespace
@@ -508,6 +509,97 @@ def test_relogin_backoff_resets_after_successful_recovery():
     # next logged-out wake-up retries at the base poll instead of waiting 240s.
     assert attempt_times[2] - attempt_times[1] == 120.0
     assert attempt_times[3] - attempt_times[2] == 60.0
+
+
+# ------------------------------------------------------------------ #
+# Recovery path vs a reconnect already in flight
+# ------------------------------------------------------------------ #
+
+
+def _logged_out_warnings(mock_logger) -> list[object]:
+    return [
+        call.kwargs.get("attempt")
+        for call in mock_logger.warning.call_args_list
+        if call.args and str(call.args[0]).startswith("Session refresh thread found facade logged out")
+    ]
+
+
+def test_refresh_thread_does_not_relogin_while_a_reconnect_is_in_flight():
+    """``logged_in=False`` during a reconnect is not an abandoned facade.
+
+    ``reconnect_orchestrator`` clears ``logged_in`` between logout and login,
+    so this thread used to read a reconnect in progress as a facade nobody was
+    looking after and stack a second logout/login onto it. On 2026-08-07 that
+    fired 8 times inside the 14:45 CST pre-open window, each one landing on a
+    facade the reconnect was already logging in — and the broker answered 451.
+    """
+    client = _loop_client(logged_in=False, iterations=2)
+    lock = threading.Lock()
+    lock.acquire()  # somebody else's reconnect owns this facade right now
+    client._reconnect_lock = lock
+    _runtime, loop = _capture_refresh_loop(client)
+
+    with (
+        _run_loop(client),
+        patch.object(session_runtime_mod, "logger", MagicMock()) as mock_logger,
+        patch.object(SessionRuntime, "do_session_refresh") as mock_refresh,
+    ):
+        loop()
+
+    mock_refresh.assert_not_called()
+    # No attempt burned and no backoff advanced — this was not a failed recovery.
+    assert _logged_out_warnings(mock_logger) == []
+
+
+def test_refresh_thread_still_recovers_an_abandoned_facade():
+    """Guards the 2026-07-25 stranded-facade fix: a free lock means nobody is coming."""
+    client = _loop_client(logged_in=False, iterations=2)
+    client._reconnect_lock = threading.Lock()  # not held
+    _runtime, loop = _capture_refresh_loop(client)
+
+    def _recover() -> bool:
+        client.logged_in = True
+        return True
+
+    with (
+        _run_loop(client),
+        patch.object(SessionRuntime, "do_session_refresh", side_effect=_recover) as mock_refresh,
+    ):
+        loop()
+
+    assert mock_refresh.call_count == 1
+    assert client.logged_in is True
+
+
+def test_refresh_thread_stops_deferring_when_the_reconnect_lock_never_frees():
+    """The deferral is bounded — a wedged reconnect must not strand the facade.
+
+    Standing aside for a reconnect in flight is only safe while it is in fact
+    in flight. A lock that is never released would otherwise disable this
+    recovery path permanently, which is the 2026-07-25 stranded-facade failure
+    in a new costume.
+    """
+    client = _loop_client(logged_in=False, iterations=3)
+    lock = threading.Lock()
+    lock.acquire()  # and never released
+    client._reconnect_lock = lock
+    _runtime, loop = _capture_refresh_loop(client)
+
+    with (
+        _run_loop(client),
+        patch.object(session_runtime_mod, "logger", MagicMock()) as mock_logger,
+        patch.object(SessionRuntime, "do_session_refresh", return_value=False) as mock_refresh,
+    ):
+        loop()
+
+    # t=60 defers (budget = _session_relogin_backoff_s = 60s); t=120 gives up
+    # waiting and recovers anyway.
+    assert mock_refresh.call_count == 1
+    assert _logged_out_warnings(mock_logger) == [1]
+    assert any(
+        call.args and str(call.args[0]).startswith("In-flight reconnect outlasted the defer budget")
+        for call in mock_logger.warning.call_args_list
+    )
 
 
 # ------------------------------------------------------------------ #

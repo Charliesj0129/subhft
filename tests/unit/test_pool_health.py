@@ -430,6 +430,83 @@ class TestCheckFacadeHealthSuppressReconnect:
 
 
 # ---------------------------------------------------------------------------
+# check_facade_health — suppress_gap_reconnect (session-gated feed-gap trigger)
+# ---------------------------------------------------------------------------
+
+
+class TestCheckFacadeHealthSuppressGapReconnect:
+    """A feed gap only proves a broken connection while the session is open.
+
+    Regression for the 2026-08-07 pre-open reconnect storm: the pre-open lead
+    opened the reconnect gate 15 min before the night open, and because there
+    is no market data before the open, every reconnect immediately re-degraded
+    and retriggered — 35 logins and 9 broker 451s on four facades that were
+    logged in and fully subscribed the whole time.
+    """
+
+    def test_degraded_slot_does_not_reconnect_while_market_is_closed(self) -> None:
+        slot = _make_slot(
+            conn_id="conn-0",
+            state=FacadeState.DEGRADED,
+            last_data_offset_s=600.0,
+            degraded_since_offset_s=3600.0,  # degraded since the last close
+        )
+        schedule_fn = MagicMock()
+        with patch.object(pool_health_mod.log, "info") as mock_info:
+            check_facade_health(
+                [slot],
+                degraded_threshold_s=3.0,
+                reconnect_trigger_s=10.0,
+                schedule_fn=schedule_fn,
+                suppress_reconnect=False,  # inside the pre-open lead
+                suppress_gap_reconnect=True,  # but the session is still shut
+            )
+        schedule_fn.assert_not_called()
+        assert slot.state == FacadeState.DEGRADED
+        suppressed = [c for c in mock_info.call_args_list if c.args and c.args[0] == "facade_reconnect_suppressed"]
+        assert len(suppressed) == 1
+        assert suppressed[0].kwargs["reason"] == "session_closed"
+
+    def test_disconnected_slot_still_reconnects_during_the_pre_open_lead(self) -> None:
+        """The lead exists to revive genuinely dead sessions before the bell."""
+        slot = _make_slot(
+            conn_id="conn-1",
+            state=FacadeState.DISCONNECTED,
+            reconnect_failures=0,  # backoff = 5s
+        )
+        slot.last_reconnect_mono = time.monotonic() - 10.0
+        schedule_fn = MagicMock()
+        check_facade_health(
+            [slot],
+            degraded_threshold_s=3.0,
+            reconnect_trigger_s=10.0,
+            schedule_fn=schedule_fn,
+            suppress_reconnect=False,
+            suppress_gap_reconnect=True,
+        )
+        schedule_fn.assert_called_once_with("conn-1")
+
+    def test_degraded_slot_reconnects_once_the_session_is_open(self) -> None:
+        """Session open — a feed gap is evidence again, so the trigger returns."""
+        slot = _make_slot(
+            conn_id="conn-2",
+            state=FacadeState.DEGRADED,
+            last_data_offset_s=5.0,
+            degraded_since_offset_s=15.0,
+        )
+        schedule_fn = MagicMock()
+        check_facade_health(
+            [slot],
+            degraded_threshold_s=3.0,
+            reconnect_trigger_s=10.0,
+            schedule_fn=schedule_fn,
+            suppress_reconnect=False,
+            suppress_gap_reconnect=False,
+        )
+        schedule_fn.assert_called_once_with("conn-2")
+
+
+# ---------------------------------------------------------------------------
 # check_facade_health — suppression log throttling
 # ---------------------------------------------------------------------------
 

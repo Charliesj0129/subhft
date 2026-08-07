@@ -1138,10 +1138,58 @@ class TestReconnectAllowedSessionBoundaries:
         pool._slots = [slot]
 
         # __slots__ makes instance-level patching read-only — patch the class.
+        # ``session_open_now`` is patched alongside because a feed-gap trigger
+        # now needs an open session, not just an open reconnect window.
         with mock.patch.object(QuoteConnectionPool, "_schedule_reconnect") as sched:
-            with mock.patch.object(QuoteConnectionPool, "reconnect_allowed", return_value=False):
+            with (
+                mock.patch.object(QuoteConnectionPool, "reconnect_allowed", return_value=False),
+                mock.patch.object(QuoteConnectionPool, "session_open_now", return_value=False),
+            ):
                 pool.check_facade_health()
             sched.assert_not_called()
-            with mock.patch.object(QuoteConnectionPool, "reconnect_allowed", return_value=True):
+            with (
+                mock.patch.object(QuoteConnectionPool, "reconnect_allowed", return_value=True),
+                mock.patch.object(QuoteConnectionPool, "session_open_now", return_value=True),
+            ):
                 pool.check_facade_health()
             sched.assert_called_once_with("conn-0")
+
+    @pytest.mark.parametrize(
+        ("hh", "mm", "suppress_reconnect", "suppress_gap"),
+        [
+            (14, 45, False, True),  # night pre-open lead opens — storm started here
+            (14, 59, False, True),  # still shut; pre-open matching feeds nothing
+            (15, 0, False, False),  # night open — a gap is evidence again
+            (8, 30, False, True),  # day pre-open lead
+            (8, 45, False, False),  # day open
+            (13, 44, False, False),  # last minute of the day session
+            (13, 46, True, True),  # after the close, outside any lead
+        ],
+    )
+    def test_gap_reconnects_are_gated_on_the_session_not_the_pre_open_lead(
+        self, tmp_path, hh, mm, suppress_reconnect, suppress_gap
+    ):
+        """Regression for the four same-tick triggers at 14:45:00 on 2026-08-07.
+
+        Inside a pre-open lead the pool must still allow a DISCONNECTED slot to
+        be revived (``suppress_reconnect=False``) while refusing to act on a
+        feed gap (``suppress_gap_reconnect=True``) — before the open there is
+        no feed, so the gap proves nothing and the reconnect cannot fix it.
+        """
+        import datetime as dt
+
+        from hft_platform.core.market_calendar import get_calendar
+        from hft_platform.feed_adapter.shioaji import quote_connection_pool as qcp_mod
+
+        pool = self._pool(tmp_path)
+        tz = get_calendar()._tz
+        moment = dt.datetime(2026, 7, 31, hh, mm, 0, tzinfo=tz)  # Friday
+        with (
+            mock.patch("hft_platform.core.timebase.now_s", return_value=moment.timestamp()),
+            mock.patch.object(qcp_mod, "check_facade_health") as spy,
+        ):
+            pool.check_facade_health()
+
+        kwargs = spy.call_args.kwargs
+        assert kwargs["suppress_reconnect"] is suppress_reconnect
+        assert kwargs["suppress_gap_reconnect"] is suppress_gap
