@@ -815,6 +815,37 @@ class QuoteConnectionPool:
                     return api
         return None
 
+    def _get_contract(
+        self,
+        exchange: str,
+        code: str,
+        product_type: str | None = None,
+        allow_synthetic: bool = False,
+    ) -> Any:
+        """Contract lookup delegated to the first logged-in facade.
+
+        Same gap as ``api`` above, found the same way: the stale-instrument
+        gate resolves subscribed codes through ``md_client._get_contract``, and
+        under a pooled client that attribute did not exist — so the gate took
+        its "no lookup available" branch and returned without checking
+        anything. Every facade loads the same contract table, so the first
+        logged-in one answers for all of them.
+
+        Returns ``None`` when no facade is up, which callers already treat as
+        "cannot judge this code" rather than "this code is fine".
+        """
+        for client in self._clients:
+            if getattr(client, "logged_in", False):
+                lookup = getattr(client, "_get_contract", None)
+                if lookup is not None:
+                    return lookup(
+                        exchange,
+                        code,
+                        product_type=product_type,
+                        allow_synthetic=allow_synthetic,
+                    )
+        return None
+
     @property
     def subscribed_count(self) -> int:
         return sum(getattr(c, "subscribed_count", 0) for c in self._clients)

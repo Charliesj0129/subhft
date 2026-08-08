@@ -1191,7 +1191,11 @@ class SystemBootstrapper:
                         symbols=sorted(strat_symbols),
                     )
 
-        md_service._post_connect_hooks.append(_preflight_symbol_consistency)
+        # NOTE: registered *after* the contract-family populators below, not
+        # here. Hooks run in registration order, and this one measures the
+        # binding the populators are about to correct — registered here it
+        # published `strategy_bound_live_symbols=0` for a strategy that was
+        # rebound onto the front month microseconds later, every single connect.
 
         # Propagate alias map to OrderAdapter for reverse resolution (TMFE6 → TMFR1)
         def _propagate_alias_to_order_adapter() -> None:
@@ -1245,6 +1249,10 @@ class SystemBootstrapper:
 
                 md_service._post_connect_hooks.append(_populate_families_from_fubon)
 
+        # Trading-liveness measurement runs last, so it judges the settled
+        # post-rebind state rather than the stale config it was loaded with.
+        md_service._post_connect_hooks.append(_preflight_symbol_consistency)
+
         # Loop_v1 L2: refuse to start if any subscribed contract has
         # delivery_date < today. Same-day expiry (rollover day) is permitted.
         # Shioaji-only for now; Fubon hook to follow when its contract lookup
@@ -1260,6 +1268,15 @@ class SystemBootstrapper:
             def _stale_instrument_gate() -> None:
                 api_lookup = getattr(md_client, "_get_contract", None)
                 if api_lookup is None:
+                    # Not "nothing to check" — "cannot check". This branch is
+                    # how the gate spent its whole life doing nothing under a
+                    # pooled client, which had no `_get_contract`, while
+                    # reporting success by saying nothing at all.
+                    logger.error(
+                        "stale_instrument_gate_unavailable",
+                        reason="md_client exposes no _get_contract",
+                        client_type=type(md_client).__name__,
+                    )
                     return
                 symbols = list(getattr(md_client, "symbols", []) or [])
 

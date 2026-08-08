@@ -353,3 +353,67 @@ def test_bound_live_symbols_gauge_counts_only_symbols_the_feed_carries():
     counts = publish_strategy_binding_liveness([strategy], {"TMFI6", "TXFI6"})
 
     assert counts == {"R47_MAKER_TMF": 1}
+
+
+# --------------------------------------------------------------------------- #
+# 5. Field findings from the 2026-08-08 deploy                                 #
+# --------------------------------------------------------------------------- #
+
+
+def test_liveness_measurement_is_registered_after_the_family_populators():
+    """The gauge must judge the settled state, not the state it starts in.
+
+    Found in the field: the first deploy of this fix rebound R47 from the
+    expired ``TMFE6`` onto ``TMFH6`` exactly as designed, and
+    ``strategy_bound_live_symbols`` still read 0. Hooks run in registration
+    order, and ``_preflight_symbol_consistency`` — the only hook that publishes
+    the gauge — was registered *before* the populator that does the rebind, so
+    it measured the stale config on every connect. Left alone this would have
+    fired a false ``StrategyBoundToNoLiveSymbols`` critical within five minutes
+    of the next session open.
+
+    A source-order assertion is normally a poor test. Here the defect *is* the
+    order, it is invisible in any single unit's behaviour, and it had a dated
+    production consequence — so the ordering is the thing worth pinning.
+    """
+    import inspect
+
+    from hft_platform.services import bootstrap
+
+    source = inspect.getsource(bootstrap)
+    populator = source.index("_post_connect_hooks.append(_populate_families_from_shioaji)")
+    liveness = source.index("_post_connect_hooks.append(_preflight_symbol_consistency)")
+
+    assert populator < liveness, (
+        "the liveness gauge is published before the family populator rebinds "
+        "strategy.symbols, so it always reports the pre-rebind state"
+    )
+
+
+def test_pool_exposes_contract_lookup_from_a_logged_in_client():
+    """Second attribute the pool did not forward, found the same way as ``api``.
+
+    Under `HFT_QUOTE_CONNECTIONS=4` the stale-instrument gate resolved
+    `md_client._get_contract`, got `None`, and returned without checking
+    anything — so the gate ran, reported nothing, and verified nothing.
+    """
+    from hft_platform.feed_adapter.shioaji.quote_connection_pool import QuoteConnectionPool
+
+    sentinel = object()
+    dead = SimpleNamespace(logged_in=False, _get_contract=lambda *a, **k: "WRONG")
+    live = SimpleNamespace(logged_in=True, _get_contract=lambda *a, **k: sentinel)
+
+    pool = QuoteConnectionPool.__new__(QuoteConnectionPool)
+    pool._clients = [dead, live]
+
+    assert pool._get_contract("TAIFEX", "TMFH6") is sentinel
+
+
+def test_pool_contract_lookup_returns_none_when_no_facade_is_logged_in():
+    """`None` means "cannot judge", which callers must not read as "fine"."""
+    from hft_platform.feed_adapter.shioaji.quote_connection_pool import QuoteConnectionPool
+
+    pool = QuoteConnectionPool.__new__(QuoteConnectionPool)
+    pool._clients = [SimpleNamespace(logged_in=False, _get_contract=lambda *a, **k: "WRONG")]
+
+    assert pool._get_contract("TAIFEX", "TMFH6") is None

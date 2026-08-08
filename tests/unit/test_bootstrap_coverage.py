@@ -1633,9 +1633,11 @@ class TestAliasMapPropagation:
         # Simulate alias_to_actual on md_client
         registry.md_client.alias_to_actual = {"TMFR1": "TMFE6", "TXFR1": "TXFD6"}
 
-        # The propagation hook is the third one registered
-        assert len(hooks_list) >= 3
-        alias_hook = hooks_list[2]
+        # Select the hook by name, not by position. Hook registration order is
+        # deliberately meaningful (the liveness gauge has to run after the
+        # family populators rebind), so it changes; an index into the list
+        # silently retargets this test at a different hook when it does.
+        alias_hook = next(h for h in hooks_list if getattr(h, "__name__", "") == "_propagate_alias_to_order_adapter")
         alias_hook()
 
         # Verify OrderAdapter.set_alias_map was called
