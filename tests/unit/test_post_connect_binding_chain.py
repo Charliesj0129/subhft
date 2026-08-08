@@ -400,11 +400,34 @@ def test_pool_exposes_contract_lookup_from_a_logged_in_client():
     from hft_platform.feed_adapter.shioaji.quote_connection_pool import QuoteConnectionPool
 
     sentinel = object()
-    dead = SimpleNamespace(logged_in=False, _get_contract=lambda *a, **k: "WRONG")
-    live = SimpleNamespace(logged_in=True, _get_contract=lambda *a, **k: sentinel)
+    # Real shape, verified against the running engine: ShioajiClientFacade
+    # exposes `api` and `logged_in` but NOT `_get_contract`, and defines no
+    # `__getattr__`, so the lookup only exists one level down on `_client`.
+    # The first version of this test used a facade fake that carried
+    # `_get_contract` directly — a fake more capable than the real object — so
+    # it passed while production resolved every contract to None.
+    dead = SimpleNamespace(logged_in=False, _client=SimpleNamespace(_get_contract=lambda *a, **k: "WRONG"))
+    live = SimpleNamespace(logged_in=True, _client=SimpleNamespace(_get_contract=lambda *a, **k: sentinel))
 
     pool = QuoteConnectionPool.__new__(QuoteConnectionPool)
     pool._clients = [dead, live]
+
+    assert not hasattr(live, "_get_contract"), "fake must match the real facade surface"
+    assert pool._get_contract("TAIFEX", "TMFH6") is sentinel
+
+
+def test_pool_contract_lookup_prefers_the_facade_when_it_has_one():
+    """If the facade ever grows the method, use it rather than reaching past."""
+    from hft_platform.feed_adapter.shioaji.quote_connection_pool import QuoteConnectionPool
+
+    sentinel = object()
+    facade = SimpleNamespace(
+        logged_in=True,
+        _get_contract=lambda *a, **k: sentinel,
+        _client=SimpleNamespace(_get_contract=lambda *a, **k: "INNER"),
+    )
+    pool = QuoteConnectionPool.__new__(QuoteConnectionPool)
+    pool._clients = [facade]
 
     assert pool._get_contract("TAIFEX", "TMFH6") is sentinel
 
@@ -414,6 +437,6 @@ def test_pool_contract_lookup_returns_none_when_no_facade_is_logged_in():
     from hft_platform.feed_adapter.shioaji.quote_connection_pool import QuoteConnectionPool
 
     pool = QuoteConnectionPool.__new__(QuoteConnectionPool)
-    pool._clients = [SimpleNamespace(logged_in=False, _get_contract=lambda *a, **k: "WRONG")]
+    pool._clients = [SimpleNamespace(logged_in=False, _client=SimpleNamespace(_get_contract=lambda *a, **k: "WRONG"))]
 
     assert pool._get_contract("TAIFEX", "TMFH6") is None

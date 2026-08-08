@@ -833,10 +833,19 @@ class QuoteConnectionPool:
 
         Returns ``None`` when no facade is up, which callers already treat as
         "cannot judge this code" rather than "this code is fine".
+
+        Note the two different depths on the same object: ``api`` is a facade
+        attribute, ``_get_contract`` lives on the inner ``ShioajiClient`` and
+        the facade does not proxy it (no ``__getattr__``). Reading it off the
+        facade — by analogy with ``api`` — returns ``None`` for every code, so
+        the gate above checked 296 symbols and verified none of them while
+        logging that it had passed. ``symbols`` reaches through the same way.
         """
         for client in self._clients:
-            if getattr(client, "logged_in", False):
-                lookup = getattr(client, "_get_contract", None)
+            if not getattr(client, "logged_in", False):
+                continue
+            for holder in (client, getattr(client, "_client", None)):
+                lookup = getattr(holder, "_get_contract", None) if holder is not None else None
                 if lookup is not None:
                     return lookup(
                         exchange,
