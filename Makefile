@@ -322,8 +322,16 @@ rebuild-symbols-yaml: ## Regenerate config/symbols.yaml from current contracts c
 	@# the next pool boot partitions the fresh universe. ``--no-contracts``
 	@# is intentionally NOT used — we want the live broker cache to drive
 	@# month selection and drop expired derivatives.
-	$(PY) -m hft_platform symbols build \
-		--list-path config/symbols.list \
+	@#
+	@# The subcommand is ``config build``, not ``symbols build``, and the input
+	@# flag is ``--list``, not ``--list-path``. Both were wrong here from the
+	@# start, so this target had never run: argparse rejected it with exit 2
+	@# before reaching the builder. Covered by
+	@# tests/unit/test_rebuild_symbols_yaml_target.py so it cannot rot silently
+	@# again — an operator only reaches for this target on a contract-roll
+	@# deadline, which is the worst moment to discover it does not exist.
+	$(PY) -m hft_platform config build \
+		--list config/symbols.list \
 		--contracts config/contracts.json \
 		--output config/symbols.yaml \
 		--preview
