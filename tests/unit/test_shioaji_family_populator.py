@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import date
 from types import SimpleNamespace
 
+import structlog
+
 from hft_platform.contracts.family_resolver import ContractFamilyResolver
 from hft_platform.contracts.ref import ContractFamily, FamilyCode, Product
 from hft_platform.feed_adapter.shioaji.family_populator import (
@@ -165,6 +167,42 @@ class TestPopulator:
         api = SimpleNamespace()  # no Contracts attribute
         count = populate_resolver_from_shioaji(resolver, api, today=date(2026, 4, 19))
         assert count == 0
+
+    def test_populator_warns_instead_of_silently_returning_when_api_is_none(self) -> None:
+        """A ``None`` api meant *no contract table at all* — and said nothing.
+
+        Production passed ``getattr(md_client, "api", None)`` where md_client
+        was the quote pool, which had no ``.api``. The populator returned an
+        empty calendar with zero log output, so the family bindings were dead
+        for two months without a single line to grep for.
+        """
+        resolver = ContractFamilyResolver()
+        with structlog.testing.capture_logs() as logs:
+            populate_resolver_from_shioaji(resolver, None, today=date(2026, 4, 19))
+
+        assert [e for e in logs if e.get("event") == "shioaji_family_populator_no_api"]
+
+    def test_populator_warns_when_contract_table_is_unreachable(self) -> None:
+        resolver = ContractFamilyResolver()
+        with structlog.testing.capture_logs() as logs:
+            populate_resolver_from_shioaji(resolver, SimpleNamespace(), today=date(2026, 4, 19))
+
+        events = [e for e in logs if e.get("event") == "shioaji_family_populator_no_contracts"]
+        assert events
+        assert events[0]["has_contracts"] is False
+
+    def test_zero_bindings_is_reported_as_a_failure_not_a_routine_install(self) -> None:
+        """Zero bindings means every strategy keeps its config-time symbols."""
+        resolver = ContractFamilyResolver()
+        api = _fake_api({"TMF": [_mock_contract("TMF_UNKNOWN")]})  # no delivery info
+
+        with structlog.testing.capture_logs() as logs:
+            count = populate_resolver_from_shioaji(resolver, api, today=date(2026, 4, 19))
+
+        assert count == 0
+        warned = [e for e in logs if e.get("event") == "shioaji_family_populator_no_bindings"]
+        assert warned
+        assert warned[0]["log_level"] == "warning"
 
     def test_native_hints_carry_broker_contract(self) -> None:
         """After populate, ``snapshot.native_hint(ref)`` returns the

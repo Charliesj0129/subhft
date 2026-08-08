@@ -348,7 +348,19 @@ def assert_no_stale_subscriptions(
     On stale contract: emits a structlog ``stale_instrument_subscription_blocked``
     error event with the offending code + delivery_date, then re-raises so
     bootstrap fails closed.
+
+    An unparseable ``delivery_date`` is *not* a refusal. Shioaji reports an
+    empty string for undated instruments (stocks, indices), and this gate
+    exists to catch expired contracts, not to validate the SDK's field
+    formatting — blocking startup over a malformed field would make the whole
+    feed hostage to a cosmetic quirk. Those are logged and skipped.
+
+    Emits ``stale_instrument_gate_passed`` on a clean pass so the check's own
+    execution is observable; a safety gate that leaves no trace when it
+    succeeds cannot be distinguished from one that never ran.
     """
+    checked = 0
+    skipped = 0
     for sym in symbols:
         if not isinstance(sym, dict):
             continue
@@ -362,6 +374,7 @@ def assert_no_stale_subscriptions(
             continue
         try:
             assert_not_expired(contract, today=today)
+            checked += 1
         except StaleInstrumentError as exc:
             log.error(
                 "stale_instrument_subscription_blocked",
@@ -370,6 +383,19 @@ def assert_no_stale_subscriptions(
                 today=today.isoformat(),
             )
             raise
+        except (ValueError, TypeError) as exc:
+            skipped += 1
+            log.warning(
+                "stale_instrument_delivery_date_unparseable",
+                code=str(code),
+                error=str(exc),
+            )
+    log.info(
+        "stale_instrument_gate_passed",
+        checked=checked,
+        skipped=skipped,
+        today=today.isoformat(),
+    )
 
 
 def derive_callback_code(contract: Any, config_code: str) -> str:

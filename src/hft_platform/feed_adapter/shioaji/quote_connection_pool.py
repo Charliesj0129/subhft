@@ -793,6 +793,29 @@ class QuoteConnectionPool:
         return any(c.logged_in for c in self._clients)
 
     @property
+    def api(self) -> Any:
+        """Raw SDK handle of the first logged-in facade, or ``None``.
+
+        The pool duck-types as a single facade for ``MarketDataService``, but
+        several post-connect consumers reach past that interface for the SDK
+        object itself — the contract-family populator reads ``api.Contracts``
+        to rebuild family bindings. ``ShioajiClientFacade`` exposes ``.api``;
+        the pool did not, so under ``HFT_QUOTE_CONNECTIONS > 1`` every one of
+        those consumers received ``None`` and no-oped.
+
+        Every facade logs into the same account and loads the same contract
+        table, so the first logged-in one is representative. Returns ``None``
+        rather than raising when nothing is up: callers run on the post-connect
+        path and must degrade, not abort the connect sequence.
+        """
+        for client in self._clients:
+            if getattr(client, "logged_in", False):
+                api = getattr(client, "api", None)
+                if api is not None:
+                    return api
+        return None
+
+    @property
     def subscribed_count(self) -> int:
         return sum(getattr(c, "subscribed_count", 0) for c in self._clients)
 

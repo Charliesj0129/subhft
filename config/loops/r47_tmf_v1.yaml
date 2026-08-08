@@ -4,7 +4,9 @@
 # settings carry `loop_id: r47_tmf_v1`. Selecting a loop_id forces:
 #   1. Reads config/loops/<loop_id>.yaml
 #   2. Forces strategy.id / module / class
-#   3. Asserts strategy is `enabled: true` in config/base/strategies.yaml
+#   3. Asserts strategy is `enabled: true` in config/live/strategies.yaml
+#      (STRATEGIES_YAML_PATH in loader.py; config/base/strategies.yaml, which
+#      this line used to name, does not exist)
 #   4. Switches the schema to strict mode (unknown top-level keys fail)
 #
 # Anti-scope: do not add a second strategy here. Loop_v1 is intentionally

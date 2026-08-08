@@ -1,0 +1,290 @@
+"""Regression tests for the dead post-connect binding chain (2026-08-08).
+
+Symptom: ``alpha_signal_events_total{outcome="intent"} == 0`` for R47 across
+16.7M received events, and no order in ClickHouse since 2026-06-08 — while
+every health signal, dashboard and alert stayed green.
+
+Root cause chain, each link verified against production:
+
+1. ``config/live/strategies.yaml`` pins ``symbols: ["TMFE6"]`` — a May-2026
+   expiry — and relies on ``contract_families`` to roll it forward.
+2. That roll-forward is the Shioaji family populator, registered on
+   ``MarketDataService._post_connect_hooks``.
+3. ``_propagate_alias_map`` ran the whole hook chain only when the alias map
+   *changed size*.
+4. The live symbol universe declares no R1/R2/C0/C1 aliases, so the map is
+   permanently empty and ``new_size == prev_size == 0`` on every connect.
+5. → no hook ever ran → ``strategy.symbols`` stayed ``{"TMFE6"}`` while the
+   feed published ``TMFI6`` → ``StrategyBase.handle_event`` dropped 100% of
+   events at its symbol filter.
+
+Two independent breaks sat on the same chain: the populator also received
+``None`` for ``api`` (the pool object had no ``.api`` property) and returned
+an empty calendar without logging, and the stale-instrument gate — the check
+that exists to refuse exactly this — was registered as a hook, so the runner's
+``except Exception`` would have downgraded its refusal to a warning.
+"""
+
+from __future__ import annotations
+
+from datetime import date
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
+import pytest
+import structlog
+
+from hft_platform.contracts.family_resolver import ContractFamilyResolver
+from hft_platform.contracts.ref import ContractFamily, FamilyCode, Product
+from hft_platform.feed_adapter.shioaji.family_populator import populate_resolver_from_shioaji
+from hft_platform.services.market_data import MarketDataService
+
+
+class _FakeSymbolMetadata:
+    def __init__(self) -> None:
+        self.alias_to_actual: dict[str, str] = {}
+
+    def set_alias_map(self, alias_map: dict[str, str]) -> None:
+        self.alias_to_actual.update(alias_map)
+
+
+def _md_shim(client, *, hooks=None, gates=None) -> MarketDataService:
+    """Minimal MarketDataService carrying only the propagation surface."""
+    inst = MarketDataService.__new__(MarketDataService)
+    inst.client = client
+    inst.symbol_metadata = _FakeSymbolMetadata()
+    inst._post_connect_hooks = list(hooks or [])
+    inst._post_connect_gates = list(gates or [])
+    return inst
+
+
+# --------------------------------------------------------------------------- #
+# 1. The defect itself                                                         #
+# --------------------------------------------------------------------------- #
+
+
+def test_post_connect_hooks_run_even_when_alias_map_is_empty():
+    """An alias-free symbol universe must still get one hook pass per connect.
+
+    This is the exact production state: 292 concrete-month entries, zero
+    aliases. Before the fix the hook chain was gated on an alias-map size
+    change, so it never ran at all.
+    """
+    hook = MagicMock()
+    md = _md_shim(SimpleNamespace(alias_to_actual={}), hooks=[hook])
+
+    md._propagate_alias_map(trigger="post_subscribe", force_hooks=True)
+
+    hook.assert_called_once()
+
+
+def test_unforced_propagation_still_skips_hooks_when_nothing_changed():
+    """The size-change trigger is kept as an *additional* trigger, not replaced.
+
+    Late aliases learned by the background retry thread must still fire hooks
+    without waiting for a reconnect (Bug 12), and a no-change pass must stay
+    cheap.
+    """
+    hook = MagicMock()
+    client = SimpleNamespace(alias_to_actual={})
+    md = _md_shim(client, hooks=[hook])
+
+    md._propagate_alias_map(trigger="pre_subscribe")
+    hook.assert_not_called()
+
+    client.alias_to_actual["TMFR1"] = "TMFE6"
+    md._propagate_alias_map(trigger="retry")
+    assert hook.call_count == 1
+
+
+def test_one_failing_hook_does_not_stop_the_rest_of_the_chain():
+    """Hooks stay advisory: a broken one must not silence the populator."""
+    order: list[str] = []
+
+    def _boom() -> None:
+        order.append("boom")
+        raise RuntimeError("hook exploded")
+
+    def _later() -> None:
+        order.append("later")
+
+    md = _md_shim(SimpleNamespace(alias_to_actual={}), hooks=[_boom, _later])
+    md._propagate_alias_map(trigger="post_subscribe", force_hooks=True)
+
+    assert order == ["boom", "later"]
+
+
+# --------------------------------------------------------------------------- #
+# 2. The chain end to end: expired binding → front month                        #
+# --------------------------------------------------------------------------- #
+
+
+def test_family_populator_rebinds_strategy_symbols_to_current_front_month():
+    """Drive the real chain: connect fires the hook, the populator rebinds.
+
+    The strategy starts pinned to the expired ``TMFE6`` the config named and
+    must end up on the live front month without any alias ever appearing.
+    """
+    from hft_platform.strategy.runner import StrategyRunner
+
+    resolver = ContractFamilyResolver()
+    strategy = SimpleNamespace(
+        strategy_id="R47_MAKER_TMF",
+        symbols={"TMFE6"},
+        contract_families=(ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1),),
+    )
+    runner = StrategyRunner.__new__(StrategyRunner)
+    runner.strategies = [strategy]
+    runner._family_resolver = None
+    runner.set_family_resolver(resolver)
+
+    # Mapping container matching Shioaji's ``Contracts.Futures`` interface.
+    roots = {
+        "TMF": [
+            SimpleNamespace(code="TMFI6", delivery_date="2026/09/16", delivery_month=None),
+            SimpleNamespace(code="TMFJ6", delivery_date="2026/10/21", delivery_month=None),
+        ]
+    }
+
+    class _Container:
+        def keys(self):
+            return roots.keys()
+
+        def __getitem__(self, root):
+            return roots[root]
+
+    api = SimpleNamespace(Contracts=SimpleNamespace(Futures=_Container()))
+
+    def _populate() -> None:
+        populate_resolver_from_shioaji(resolver, api, today=date(2026, 8, 8))
+
+    md = _md_shim(SimpleNamespace(alias_to_actual={}), hooks=[_populate])
+    md._propagate_alias_map(trigger="post_subscribe", force_hooks=True)
+
+    assert "TMFI6" in strategy.symbols, "front month must be bound after connect"
+    # The expired expiry survives because the config file hardcodes it and
+    # ``_apply_family_bindings`` only adds. Harmless for liveness (nothing is
+    # subscribed to it) but it keeps ``preflight_symbol_mismatch`` firing —
+    # removing the hardcode from config/live/strategies.yaml is a separate,
+    # frozen-registry change.
+    assert "TMFE6" in strategy.symbols
+
+
+# --------------------------------------------------------------------------- #
+# 3. Gates fail closed instead of degrading to a warning                        #
+# --------------------------------------------------------------------------- #
+
+
+def test_stale_instrument_gate_runs_without_any_alias_change():
+    """The gate must fire on a plain connect, not only on an alias delta."""
+    gate = MagicMock()
+    md = _md_shim(SimpleNamespace(alias_to_actual={}), gates=[gate])
+
+    md._propagate_alias_map(trigger="post_subscribe", force_hooks=True)
+
+    gate.assert_called_once()
+
+
+def test_gate_refusal_propagates_instead_of_being_swallowed():
+    """A gate raising is the whole point of a gate.
+
+    On ``_post_connect_hooks`` the runner's ``except Exception`` caught
+    ``StaleInstrumentError`` and logged a warning, so the platform carried on
+    subscribed to an expired contract.
+    """
+
+    def _refuse() -> None:
+        raise RuntimeError("stale instrument TMFE6")
+
+    md = _md_shim(SimpleNamespace(alias_to_actual={}), gates=[_refuse])
+
+    with structlog.testing.capture_logs() as logs:
+        with pytest.raises(RuntimeError, match="stale instrument TMFE6"):
+            md._propagate_alias_map(trigger="post_subscribe", force_hooks=True)
+
+    blocked = [e for e in logs if e.get("event") == "post_connect_gate_blocked"]
+    assert blocked, "a blocked gate must emit its own event, not a generic connect failure"
+    assert blocked[0]["error_type"] == "RuntimeError"
+
+
+def test_gates_do_not_run_on_unforced_propagation_passes():
+    """Gates judge the settled post-subscribe state, once per connect."""
+    gate = MagicMock()
+    client = SimpleNamespace(alias_to_actual={"TMFR1": "TMFE6"})
+    md = _md_shim(client, gates=[gate])
+
+    md._propagate_alias_map(trigger="pre_subscribe")
+
+    gate.assert_not_called()
+
+
+# --------------------------------------------------------------------------- #
+# 4. Coverage ratio stops claiming health it cannot have                        #
+# --------------------------------------------------------------------------- #
+
+
+def test_coverage_ratio_is_not_one_when_no_aliases_are_configured():
+    """0/0 is undefined, not "fully covered".
+
+    Reporting 1.0 made the healthiest-looking gauge on the dashboard the
+    direct evidence of the empty alias map that disabled the hook chain.
+    """
+    from hft_platform.observability.metrics import MetricsRegistry
+
+    MetricsRegistry._instance = None
+    registry = MetricsRegistry.get()
+
+    md = _md_shim(SimpleNamespace(alias_to_actual={}))
+    md._propagate_alias_map(trigger="post_subscribe", force_hooks=True)
+
+    ratio = registry.alias_resolution_coverage_ratio._value.get()
+    assert ratio != 1.0
+    assert ratio != ratio, "undefined coverage must read as NaN"
+    assert registry.alias_map_size._value.get() == 0.0
+
+
+def test_alias_map_size_reports_the_configured_alias_count():
+    from hft_platform.observability.metrics import MetricsRegistry
+
+    MetricsRegistry._instance = None
+    registry = MetricsRegistry.get()
+
+    md = _md_shim(SimpleNamespace(alias_to_actual={"TMFR1": "TMFE6", "TXFR1": "TXFE6"}))
+    md._propagate_alias_map(trigger="post_subscribe", force_hooks=True)
+
+    assert registry.alias_map_size._value.get() == 2.0
+    assert registry.alias_resolution_coverage_ratio._value.get() == 1.0
+
+
+# --------------------------------------------------------------------------- #
+# 5. Trading liveness is measurable                                             #
+# --------------------------------------------------------------------------- #
+
+
+def test_bound_live_symbols_gauge_is_zero_when_strategy_binds_expired_contract():
+    """The number that would have caught this in an hour instead of two months."""
+    from hft_platform.observability.metrics import MetricsRegistry
+    from hft_platform.services.bootstrap import publish_strategy_binding_liveness
+
+    MetricsRegistry._instance = None
+    registry = MetricsRegistry.get()
+
+    strategy = SimpleNamespace(strategy_id="R47_MAKER_TMF", symbols={"TMFE6"})
+    counts = publish_strategy_binding_liveness([strategy], {"TMFI6", "TXFI6"})
+
+    assert counts == {"R47_MAKER_TMF": 0}
+    gauge = registry.strategy_bound_live_symbols.labels(strategy_id="R47_MAKER_TMF")
+    assert gauge._value.get() == 0.0
+
+
+def test_bound_live_symbols_gauge_counts_only_symbols_the_feed_carries():
+    from hft_platform.observability.metrics import MetricsRegistry
+    from hft_platform.services.bootstrap import publish_strategy_binding_liveness
+
+    MetricsRegistry._instance = None
+    MetricsRegistry.get()
+
+    strategy = SimpleNamespace(strategy_id="R47_MAKER_TMF", symbols={"TMFI6", "TMFE6"})
+    counts = publish_strategy_binding_liveness([strategy], {"TMFI6", "TXFI6"})
+
+    assert counts == {"R47_MAKER_TMF": 1}

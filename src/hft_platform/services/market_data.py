@@ -298,6 +298,12 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
             pass
 
         self._post_connect_hooks: list[Callable[[], None]] = []  # called after subscribe_basket + alias resolution
+        # Safety gates, run once per connect after the hooks. Unlike hooks,
+        # a gate raising is *the point* — its exception is not swallowed, so a
+        # refusal (e.g. an expired subscribed contract) leaves the feed
+        # DISCONNECTED instead of degrading into a warning line. Registering a
+        # fail-closed check on ``_post_connect_hooks`` makes it advisory.
+        self._post_connect_gates: list[Callable[[], None]] = []
         self.state = FeedState.INIT
         self.running = False
         self.last_event_ts = timebase.now_s()
@@ -1040,7 +1046,7 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
 
     # -- connect sequence ----------------------------------------------------
 
-    def _propagate_alias_map(self, *, trigger: str = "connect") -> int:
+    def _propagate_alias_map(self, *, trigger: str = "connect", force_hooks: bool = False) -> int:
         """Propagate alias_to_actual from broker client to SymbolMetadata and
         fire post-connect hooks (strategy/risk re-resolution).
 
@@ -1048,6 +1054,10 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         added to ``client.alias_to_actual`` since the last propagation so that
         late subscriptions (Bug 12: background retry thread) refresh strategy
         symbols instead of being orphaned.
+
+        ``force_hooks`` runs the hook chain regardless of whether the alias map
+        changed; the connect sequence sets it once subscriptions are in place so
+        every connect gets at least one hook pass.
 
         Returns the size of the alias map after propagation.
         """
@@ -1065,14 +1075,48 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                 aliases=dict(alias_map),
                 trigger=trigger,
             )
-        if new_size != prev_size:
+        if force_hooks or new_size != prev_size:
             # Hooks (e.g. StrategyRunner.resolve_symbol_aliases) must re-run
             # whenever new aliases appear so strategy.symbols is re-resolved.
+            #
+            # ``force_hooks`` exists because keying the whole chain on an alias
+            # *size change* silently disabled it: a symbol universe carrying no
+            # R1/R2/C0/C1 aliases leaves the map permanently empty, so
+            # ``new_size == prev_size == 0`` on every connect and no hook ever
+            # ran. The contract-family populator — the thing that keeps
+            # ``strategy.symbols`` on the front month across rollovers — is one
+            # of those hooks, so strategies stayed pinned to whatever expiry the
+            # config file happened to name when it was written.
+            ran = 0
             for hook in self._post_connect_hooks:
                 try:
                     hook()
+                    ran += 1
                 except Exception as exc:
                     logger.warning("post_connect_hook_failed", hook=str(hook), error=str(exc))
+            logger.info(
+                "post_connect_hooks_ran",
+                trigger=trigger,
+                forced=force_hooks,
+                succeeded=ran,
+                registered=len(self._post_connect_hooks),
+                alias_map_size=new_size,
+            )
+        if force_hooks:
+            # Gates run once per connect, after every hook has had its pass, so
+            # they judge the final state (family rebinds included). Exceptions
+            # propagate on purpose.
+            for gate in self._post_connect_gates:
+                try:
+                    gate()
+                except Exception as exc:
+                    logger.error(
+                        "post_connect_gate_blocked",
+                        gate=getattr(gate, "__name__", str(gate)),
+                        error_type=type(exc).__name__,
+                        error=str(exc),
+                    )
+                    raise
         # Observability gap closure (Bug 12): alias resolution coverage ratio.
         # configured = broker client's resolved alias map size (source of truth)
         # resolved   = entries actually landed in SymbolMetadata after propagation
@@ -1081,12 +1125,20 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
 
             _m = get_metrics()
             if _m is not None:
+                configured = len(alias_map)
+                _size_gauge = getattr(_m, "alias_map_size", None)
+                if _size_gauge is not None:
+                    # Unambiguous, alertable companion to the ratio: how many
+                    # aliases the broker client actually resolved.
+                    _size_gauge.set(configured)
                 _gauge = getattr(_m, "alias_resolution_coverage_ratio", None)
                 if _gauge is not None:
-                    configured = len(alias_map)
                     if configured <= 0:
-                        # No aliases configured → trivially fully covered.
-                        _gauge.set(1.0)
+                        # 0/0 is undefined, not "trivially fully covered".
+                        # Reporting 1.0 here made the healthiest-looking number
+                        # on the dashboard the direct evidence of an empty alias
+                        # map — alert on ``alias_map_size`` instead.
+                        _gauge.set(float("nan"))
                     else:
                         _gauge.set(min(1.0, new_size / configured))
         except Exception:
@@ -1165,7 +1217,10 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
 
             # Post-subscribe propagation picks up any aliases learned during the
             # inline subscribe loop; also idempotent if eager path already fired.
-            self._propagate_alias_map(trigger="post_subscribe")
+            # ``force_hooks`` guarantees one hook pass per connect even when the
+            # alias map never changes (an alias-free symbol universe is the
+            # normal case for a futures-only book, not an anomaly).
+            self._propagate_alias_map(trigger="post_subscribe", force_hooks=True)
 
             self._set_state(FeedState.CONNECTED)
 

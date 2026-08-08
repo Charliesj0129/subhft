@@ -1193,3 +1193,56 @@ class TestReconnectAllowedSessionBoundaries:
         kwargs = spy.call_args.kwargs
         assert kwargs["suppress_reconnect"] is suppress_reconnect
         assert kwargs["suppress_gap_reconnect"] is suppress_gap
+
+
+class TestPoolApiHandle:
+    """The pool duck-types as a facade — including the raw SDK handle.
+
+    ``bootstrap`` passes ``getattr(md_client, "api", None)`` to the contract
+    family populator. Under ``HFT_QUOTE_CONNECTIONS > 1`` that md_client is the
+    pool, which had no ``api`` property, so the populator got ``None`` on every
+    connect and rebuilt nothing — the second independent break on the chain
+    that left R47 pinned to an expired contract.
+    """
+
+    @staticmethod
+    def _pool(tmp_path, num_conns=2):
+        from hft_platform.feed_adapter.shioaji.quote_connection_pool import QuoteConnectionPool
+
+        sym_path = tmp_path / "symbols.yaml"
+        sym_path.write_text(yaml.safe_dump({"symbols": []}))
+        return QuoteConnectionPool(str(sym_path), {}, num_conns=num_conns)
+
+    def test_pool_exposes_api_from_a_logged_in_client(self, tmp_path):
+        pool = self._pool(tmp_path)
+        sentinel = object()
+        pool._clients = [
+            mock.MagicMock(logged_in=False, api=object()),
+            mock.MagicMock(logged_in=True, api=sentinel),
+        ]
+
+        assert pool.api is sentinel
+
+    def test_pool_api_is_none_when_no_client_is_logged_in(self, tmp_path):
+        """Post-connect consumers must degrade, not crash the connect sequence."""
+        pool = self._pool(tmp_path)
+        pool._clients = [mock.MagicMock(logged_in=False, api=object())]
+
+        assert pool.api is None
+
+    def test_pool_api_is_none_before_any_facade_exists(self, tmp_path):
+        pool = self._pool(tmp_path)
+        pool._clients = []
+
+        assert pool.api is None
+
+    def test_pool_api_skips_a_logged_in_client_with_no_sdk_handle(self, tmp_path):
+        """A facade mid-login can report logged_in before ``api`` is attached."""
+        pool = self._pool(tmp_path)
+        sentinel = object()
+        pool._clients = [
+            mock.MagicMock(logged_in=True, api=None),
+            mock.MagicMock(logged_in=True, api=sentinel),
+        ]
+
+        assert pool.api is sentinel
