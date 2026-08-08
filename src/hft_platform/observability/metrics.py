@@ -345,6 +345,7 @@ class MetricsRegistry:
                 _pn("alias_resolution_coverage_ratio"),
                 _pn("alias_map_size"),
                 _pn("strategy_bound_live_symbols"),
+                _pn("feed_connect_gate_blocked_total"),
                 _pn("reconciliation_drift_streak"),
                 # Q3 (2026-04-27): symbol config reload result observability.
                 _pn("feed_symbol_config_reload_total"),
@@ -1617,6 +1618,15 @@ class MetricsRegistry:
             _pn("strategy_bound_live_symbols"),
             "Count of a strategy's symbols that are actually present in the subscribed feed",
             ["strategy_id"],
+        )
+        # A connect gate refusing is deliberate fail-closed behaviour, and it
+        # presents as a feed that simply never delivers data. Without this the
+        # only difference between "we refused an expired contract" and "the
+        # broker is down" is a log line nobody is alerting on.
+        self.feed_connect_gate_blocked_total = Counter(
+            _pn("feed_connect_gate_blocked_total"),
+            "Times a connect safety gate refused the connect before subscribing",
+            ["gate"],
         )
         # MANUAL drift persistence: mirror consecutive_observations counter
         # per-symbol so operators can alert on streaks that never clear.

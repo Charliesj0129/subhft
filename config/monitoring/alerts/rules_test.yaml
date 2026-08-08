@@ -125,3 +125,41 @@ tests:
       - eval_time: 45m
         alertname: StrategyProducesNoIntentsDuringSession
         exp_alerts: []
+
+  # ── FeedConnectGateBlockedConnect ───────────────────────────────
+  # Positive control: a refusal must be visible as its own cause, not left to
+  # be inferred from the feed-gap alerts that its own side effect triggers.
+  - interval: 1m
+    name: connect-gate refusal raises a critical naming the gate
+    input_series:
+      - series: 'feed_connect_gate_blocked_total{gate="_stale_instrument_gate"}'
+        values: "0 0 1 1 1 1 1 1 1 1"
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: FeedConnectGateBlockedConnect
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: FeedConnectGateBlockedConnect
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              gate: _stale_instrument_gate
+            exp_annotations:
+              summary: "Connect refused by safety gate _stale_instrument_gate — feed is down on purpose"
+              description: >-
+                A pre-subscribe safety gate refused the connect, so the engine holds no
+                subscription and no market data is flowing. This is fail-closed behaviour, not
+                a crash. Most likely cause: config/symbols.yaml still lists a contract that has
+                passed its delivery date. Check the `connect_gate_blocked` log event for the
+                offending code, regenerate symbols.yaml, and restart.
+
+  # Negative control: an engine that has never refused must stay quiet.
+  - interval: 1m
+    name: connect-gate quiet when no gate has ever refused
+    input_series:
+      - series: 'feed_connect_gate_blocked_total{gate="_stale_instrument_gate"}'
+        values: "0+0x30"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: FeedConnectGateBlockedConnect
+        exp_alerts: []

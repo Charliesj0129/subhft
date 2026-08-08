@@ -23,10 +23,18 @@ Two independent breaks sat on the same chain: the populator also received
 an empty calendar without logging, and the stale-instrument gate — the check
 that exists to refuse exactly this — was registered as a hook, so the runner's
 ``except Exception`` would have downgraded its refusal to a warning.
+
+The gate then had to be fixed twice. Moving it off ``_post_connect_hooks``
+onto its own list made its exception propagate, but it still ran from the
+post-subscribe propagation pass — i.e. *after* ``subscribe_basket``, when the
+broker is already streaming the contract being refused. Placement, not just
+exception handling, is what makes a gate a gate; see
+``test_gate_refusal_prevents_the_subscription_from_happening``.
 """
 
 from __future__ import annotations
 
+import asyncio
 from datetime import date
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -37,7 +45,7 @@ import structlog
 from hft_platform.contracts.family_resolver import ContractFamilyResolver
 from hft_platform.contracts.ref import ContractFamily, FamilyCode, Product
 from hft_platform.feed_adapter.shioaji.family_populator import populate_resolver_from_shioaji
-from hft_platform.services.market_data import MarketDataService
+from hft_platform.services.market_data import FeedState, MarketDataService
 
 
 class _FakeSymbolMetadata:
@@ -55,6 +63,7 @@ def _md_shim(client, *, hooks=None, gates=None) -> MarketDataService:
     inst.symbol_metadata = _FakeSymbolMetadata()
     inst._post_connect_hooks = list(hooks or [])
     inst._post_connect_gates = list(gates or [])
+    inst.metrics_registry = None
     return inst
 
 
@@ -175,12 +184,12 @@ def test_family_populator_rebinds_strategy_symbols_to_current_front_month():
 # --------------------------------------------------------------------------- #
 
 
-def test_stale_instrument_gate_runs_without_any_alias_change():
-    """The gate must fire on a plain connect, not only on an alias delta."""
+def test_stale_instrument_gate_runs_on_a_plain_connect():
+    """The gate must fire on every connect, not only on an alias delta."""
     gate = MagicMock()
     md = _md_shim(SimpleNamespace(alias_to_actual={}), gates=[gate])
 
-    md._propagate_alias_map(trigger="post_subscribe", force_hooks=True)
+    md._run_connect_gates()
 
     gate.assert_called_once()
 
@@ -200,22 +209,78 @@ def test_gate_refusal_propagates_instead_of_being_swallowed():
 
     with structlog.testing.capture_logs() as logs:
         with pytest.raises(RuntimeError, match="stale instrument TMFE6"):
-            md._propagate_alias_map(trigger="post_subscribe", force_hooks=True)
+            md._run_connect_gates()
 
-    blocked = [e for e in logs if e.get("event") == "post_connect_gate_blocked"]
+    blocked = [e for e in logs if e.get("event") == "connect_gate_blocked"]
     assert blocked, "a blocked gate must emit its own event, not a generic connect failure"
     assert blocked[0]["error_type"] == "RuntimeError"
 
 
-def test_gates_do_not_run_on_unforced_propagation_passes():
-    """Gates judge the settled post-subscribe state, once per connect."""
+def test_gates_never_run_from_alias_propagation():
+    """Gates are not part of the propagation pass at all.
+
+    They used to be, which is how they ended up running *after*
+    ``subscribe_basket`` — see
+    ``test_gate_refusal_prevents_the_subscription_from_happening``.
+    """
     gate = MagicMock()
     client = SimpleNamespace(alias_to_actual={"TMFR1": "TMFE6"})
     md = _md_shim(client, gates=[gate])
 
     md._propagate_alias_map(trigger="pre_subscribe")
+    md._propagate_alias_map(trigger="post_subscribe", force_hooks=True)
 
     gate.assert_not_called()
+
+
+def test_gate_refusal_prevents_the_subscription_from_happening():
+    """A refused connect must never reach ``subscribe_basket``.
+
+    This is the test that distinguishes a gate from a log line. The first
+    version of this fix ran gates *after* ``subscribe_basket``, so by the time
+    the gate refused an expired contract the broker was already streaming it:
+    the raise was caught by ``_connect_sequence``'s ``except Exception``,
+    ``_set_state(DISCONNECTED)`` wrote a field nothing outside this module
+    reads, and quotes kept arriving on the raw queue exactly as before. The
+    refusal changed nothing it was written to prevent.
+    """
+    client = MagicMock()
+    client.login.return_value = True
+    client.fetch_snapshots.return_value = []
+
+    def _refuse() -> None:
+        raise RuntimeError("stale instrument TMFE6")
+
+    md = _md_shim(client, gates=[_refuse])
+    md.state = FeedState.INIT
+    md.metrics_registry = None
+    md._resolve_aliases_eager = lambda: None
+    md._propagate_alias_map = lambda **_kwargs: 0
+
+    asyncio.run(md._connect_sequence())
+
+    client.subscribe_basket.assert_not_called()
+    assert md.state is FeedState.DISCONNECTED
+
+
+def test_gate_refusal_increments_its_own_counter():
+    """A deliberate refusal and a dead broker both present as a silent feed.
+
+    The counter is the only thing that tells an operator which one happened.
+    """
+    counter = MagicMock()
+
+    def _refuse() -> None:
+        raise RuntimeError("stale instrument TMFE6")
+
+    md = _md_shim(SimpleNamespace(alias_to_actual={}), gates=[_refuse])
+    md.metrics_registry = SimpleNamespace(feed_connect_gate_blocked_total=counter)
+
+    with pytest.raises(RuntimeError):
+        md._run_connect_gates()
+
+    counter.labels.assert_called_once_with(gate="_refuse")
+    counter.labels.return_value.inc.assert_called_once()
 
 
 # --------------------------------------------------------------------------- #

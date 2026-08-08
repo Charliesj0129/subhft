@@ -298,11 +298,12 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
             pass
 
         self._post_connect_hooks: list[Callable[[], None]] = []  # called after subscribe_basket + alias resolution
-        # Safety gates, run once per connect after the hooks. Unlike hooks,
-        # a gate raising is *the point* — its exception is not swallowed, so a
-        # refusal (e.g. an expired subscribed contract) leaves the feed
-        # DISCONNECTED instead of degrading into a warning line. Registering a
-        # fail-closed check on ``_post_connect_hooks`` makes it advisory.
+        # Safety gates, run once per connect *before* subscribe_basket — see
+        # ``_run_connect_gates``. Unlike hooks, a gate raising is the point: it
+        # aborts the connect before any subscription exists, so an expired
+        # contract is never streamed in the first place. Registering a
+        # fail-closed check on ``_post_connect_hooks`` instead makes it
+        # advisory, because that runner catches every exception.
         self._post_connect_gates: list[Callable[[], None]] = []
         self.state = FeedState.INIT
         self.running = False
@@ -1102,21 +1103,6 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                 registered=len(self._post_connect_hooks),
                 alias_map_size=new_size,
             )
-        if force_hooks:
-            # Gates run once per connect, after every hook has had its pass, so
-            # they judge the final state (family rebinds included). Exceptions
-            # propagate on purpose.
-            for gate in self._post_connect_gates:
-                try:
-                    gate()
-                except Exception as exc:
-                    logger.error(
-                        "post_connect_gate_blocked",
-                        gate=getattr(gate, "__name__", str(gate)),
-                        error_type=type(exc).__name__,
-                        error=str(exc),
-                    )
-                    raise
         # Observability gap closure (Bug 12): alias resolution coverage ratio.
         # configured = broker client's resolved alias map size (source of truth)
         # resolved   = entries actually landed in SymbolMetadata after propagation
@@ -1170,6 +1156,42 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         except Exception as exc:
             logger.warning("alias_eager_resolve_failed", error=str(exc))
 
+    def _run_connect_gates(self) -> None:
+        """Run every registered safety gate. A refusal aborts the connect.
+
+        Called *before* ``subscribe_basket`` on purpose. A gate whose job is to
+        refuse a bad subscription has to run while refusing still prevents
+        something: run after the subscribe call and the broker is already
+        streaming the very contract the gate rejects, so the refusal changes
+        nothing except the log. Every gate's inputs (the client's configured
+        ``symbols`` list and its login-populated contract lookup) are ready as
+        soon as login returns, so there is nothing to wait for.
+
+        The raised exception is left to propagate into ``_connect_sequence``'s
+        handler, which leaves the feed DISCONNECTED with no subscription — no
+        data flows, so the existing feed-gap and SLO alerts fire on their own.
+        The counter below is what names the *reason*, rather than leaving an
+        operator to infer a deliberate refusal from a silent feed.
+        """
+        for gate in self._post_connect_gates:
+            try:
+                gate()
+            except Exception as exc:
+                gate_name = getattr(gate, "__name__", str(gate))
+                logger.error(
+                    "connect_gate_blocked",
+                    gate=gate_name,
+                    error_type=type(exc).__name__,
+                    error=str(exc),
+                )
+                counter = getattr(self.metrics_registry, "feed_connect_gate_blocked_total", None)
+                if counter is not None:
+                    try:
+                        counter.labels(gate=gate_name).inc()
+                    except Exception as metric_exc:  # noqa: BLE001
+                        logger.warning("connect_gate_metric_failed", error=str(metric_exc))
+                raise
+
     async def _connect_sequence(self) -> None:
         try:
             self._set_state(FeedState.CONNECTING)
@@ -1212,6 +1234,10 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                 self.client.on_alias_map_updated = lambda: self._propagate_alias_map(trigger="retry")
             except Exception:
                 pass
+
+            # Gates before subscribe: a refusal must stop the subscription from
+            # happening at all, not annotate one already in flight.
+            self._run_connect_gates()
 
             await self._call_client(self.client.subscribe_basket, self._on_shioaji_event)
 
