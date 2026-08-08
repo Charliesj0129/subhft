@@ -343,6 +343,9 @@ class MetricsRegistry:
                 # Observability gap closures
                 _pn("strategy_events_received_total"),
                 _pn("alias_resolution_coverage_ratio"),
+                _pn("alias_map_size"),
+                _pn("strategy_bound_live_symbols"),
+                _pn("feed_connect_gate_blocked_total"),
                 _pn("reconciliation_drift_streak"),
                 # Q3 (2026-04-27): symbol config reload result observability.
                 _pn("feed_symbol_config_reload_total"),
@@ -1598,7 +1601,32 @@ class MetricsRegistry:
         # fail to land in SymbolMetadata, strategies silently see 0 events.
         self.alias_resolution_coverage_ratio = Gauge(
             _pn("alias_resolution_coverage_ratio"),
-            "Fraction of configured broker aliases propagated into SymbolMetadata (0.0-1.0)",
+            "Fraction of configured broker aliases propagated into SymbolMetadata (0.0-1.0; NaN when none configured)",
+        )
+        # Companion to the ratio above. The ratio is undefined when nothing is
+        # configured, which is exactly the state that disabled the post-connect
+        # hook chain for two months — so the count itself has to be alertable.
+        self.alias_map_size = Gauge(
+            _pn("alias_map_size"),
+            "Number of aliases the broker client resolved (0 disables alias-driven rebinds)",
+        )
+        # Trading liveness. Every other strategy metric answers "is something
+        # broken"; this one answers "is the thing that is supposed to happen
+        # happening". A strategy bound only to expired or unsubscribed
+        # contracts reads 0 here while every health signal stays green.
+        self.strategy_bound_live_symbols = Gauge(
+            _pn("strategy_bound_live_symbols"),
+            "Count of a strategy's symbols that are actually present in the subscribed feed",
+            ["strategy_id"],
+        )
+        # A connect gate refusing is deliberate fail-closed behaviour, and it
+        # presents as a feed that simply never delivers data. Without this the
+        # only difference between "we refused an expired contract" and "the
+        # broker is down" is a log line nobody is alerting on.
+        self.feed_connect_gate_blocked_total = Counter(
+            _pn("feed_connect_gate_blocked_total"),
+            "Times a connect safety gate refused the connect before subscribing",
+            ["gate"],
         )
         # MANUAL drift persistence: mirror consecutive_observations counter
         # per-symbol so operators can alert on streaks that never clear.

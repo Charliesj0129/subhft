@@ -822,6 +822,69 @@ groups:
       summary: "No alpha decisions for >5 minutes"
       description: "No intent or flat alpha decisions were observed for >5 minutes after the strategy had previously emitted an intent. Alpha pipeline may be stalled."
 
+  # ── Trading Liveness (2026-08-08) ────────────────────────────
+  # Every rule above this point asks "is something broken". None of them ask
+  # "is the thing that is supposed to happen happening", which is why R47 went
+  # from 2026-06-08 to 2026-08-08 producing zero intents across 16.7M events
+  # with 83 rules armed and not one of them firing.
+  #
+  # AlphaSignalSilent above cannot catch it by design: it counts *all* alpha
+  # outcomes and states outright that "a strategy can be healthy while emitting
+  # only flat decisions". 16,754,489 flats and 0 intents satisfied it perfectly.
+  - alert: StrategyBoundToNoLiveSymbols
+    expr: strategy_bound_live_symbols == 0 and on() market_trading_hours_active == 1
+    for: 5m
+    labels:
+      severity: critical
+    annotations:
+      summary: "Strategy {{ $labels.strategy_id }} is bound to no symbol the feed carries"
+      description: >-
+        None of this strategy's configured symbols appear in the subscribed
+        feed, so StrategyBase.handle_event drops every event at its symbol
+        filter and no intent can ever be produced. Usual cause: the strategy is
+        pinned to an expired expiry and the contract-family rebind did not run.
+        Check `post_connect_hooks_ran` and
+        `shioaji_family_populator_snapshot_installed` in the engine log.
+      runbook_url: "docs/runbooks/alpha-development-workflow.md"
+
+  - alert: StrategyProducesNoIntentsDuringSession
+    expr: |
+      (sum by (strategy) (increase(alpha_signal_events_total{outcome="intent"}[30m])) == 0)
+      and (sum by (strategy) (increase(alpha_signal_events_total{outcome="flat"}[30m])) > 0)
+      and on() market_trading_hours_active == 1
+    for: 10m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Strategy {{ $labels.strategy }} has decided flat on every event for 30m"
+      description: >-
+        The strategy is registered, receiving events and deciding — the flat
+        counter is moving — but has not produced a single intent in 30 minutes
+        of open session. The `flat > 0` term is what separates this from a
+        disabled or unsubscribed strategy, so unlike AlphaSignalSilent this
+        rule does not need `alpha_last_signal_ts > 0` and therefore still fires
+        for a strategy that has *never* emitted an intent.
+
+  # A connect gate refusing is correct, deliberate behaviour — and it looks
+  # from the outside exactly like a broker outage, because the engine ends up
+  # with no subscription and therefore no data. Feed-gap alerts will fire, but
+  # they name the symptom; this one names the cause, so nobody spends an
+  # outage hunting a network fault that is really an expired contract.
+  - alert: FeedConnectGateBlockedConnect
+    expr: increase(feed_connect_gate_blocked_total[10m]) > 0
+    for: 0s
+    labels:
+      severity: critical
+    annotations:
+      summary: "Connect refused by safety gate {{ $labels.gate }} — feed is down on purpose"
+      description: >-
+        A pre-subscribe safety gate refused the connect, so the engine holds no
+        subscription and no market data is flowing. This is fail-closed
+        behaviour, not a crash. Most likely cause: config/symbols.yaml still
+        lists a contract that has passed its delivery date. Check the
+        `connect_gate_blocked` log event for the offending code, regenerate
+        symbols.yaml, and restart.
+
   # ── Autonomy Control-Plane (M-10) ────────────────────────────
   - alert: StrategyQuarantineActive
     expr: strategy_quarantine_active == 1

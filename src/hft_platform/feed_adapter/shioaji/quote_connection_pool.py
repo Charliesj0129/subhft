@@ -793,6 +793,69 @@ class QuoteConnectionPool:
         return any(c.logged_in for c in self._clients)
 
     @property
+    def api(self) -> Any:
+        """Raw SDK handle of the first logged-in facade, or ``None``.
+
+        The pool duck-types as a single facade for ``MarketDataService``, but
+        several post-connect consumers reach past that interface for the SDK
+        object itself — the contract-family populator reads ``api.Contracts``
+        to rebuild family bindings. ``ShioajiClientFacade`` exposes ``.api``;
+        the pool did not, so under ``HFT_QUOTE_CONNECTIONS > 1`` every one of
+        those consumers received ``None`` and no-oped.
+
+        Every facade logs into the same account and loads the same contract
+        table, so the first logged-in one is representative. Returns ``None``
+        rather than raising when nothing is up: callers run on the post-connect
+        path and must degrade, not abort the connect sequence.
+        """
+        for client in self._clients:
+            if getattr(client, "logged_in", False):
+                api = getattr(client, "api", None)
+                if api is not None:
+                    return api
+        return None
+
+    def _get_contract(
+        self,
+        exchange: str,
+        code: str,
+        product_type: str | None = None,
+        allow_synthetic: bool = False,
+    ) -> Any:
+        """Contract lookup delegated to the first logged-in facade.
+
+        Same gap as ``api`` above, found the same way: the stale-instrument
+        gate resolves subscribed codes through ``md_client._get_contract``, and
+        under a pooled client that attribute did not exist — so the gate took
+        its "no lookup available" branch and returned without checking
+        anything. Every facade loads the same contract table, so the first
+        logged-in one answers for all of them.
+
+        Returns ``None`` when no facade is up, which callers already treat as
+        "cannot judge this code" rather than "this code is fine".
+
+        Note the two different depths on the same object: ``api`` is a facade
+        attribute, ``_get_contract`` lives on the inner ``ShioajiClient`` and
+        the facade does not proxy it (no ``__getattr__``). Reading it off the
+        facade — by analogy with ``api`` — returns ``None`` for every code, so
+        the gate above checked 296 symbols and verified none of them while
+        logging that it had passed. ``symbols`` reaches through the same way.
+        """
+        for client in self._clients:
+            if not getattr(client, "logged_in", False):
+                continue
+            for holder in (client, getattr(client, "_client", None)):
+                lookup = getattr(holder, "_get_contract", None) if holder is not None else None
+                if lookup is not None:
+                    return lookup(
+                        exchange,
+                        code,
+                        product_type=product_type,
+                        allow_synthetic=allow_synthetic,
+                    )
+        return None
+
+    @property
     def subscribed_count(self) -> int:
         return sum(getattr(c, "subscribed_count", 0) for c in self._clients)
 

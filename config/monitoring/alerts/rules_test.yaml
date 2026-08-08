@@ -1,0 +1,165 @@
+# promtool unit tests for the trading-liveness rules added 2026-08-08.
+#
+# Run:  docker run --rm --entrypoint promtool \
+#         -v "$PWD/config/monitoring/alerts:/rules:ro" prom/prometheus:latest \
+#         test rules /rules/rules_test.yaml
+#
+# These fixtures encode the actual production state that 83 armed alert rules
+# failed to describe: R47 bound to an expired expiry, deciding "flat" on every
+# one of 16.7M events, producing zero intents from 2026-06-08 to 2026-08-08.
+# The point of each test is the *positive control* — a rule that cannot fire on
+# the failure it was written for is not a rule.
+
+rule_files:
+  - rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # ── StrategyBoundToNoLiveSymbols ────────────────────────────────
+  - interval: 1m
+    name: bound-to-no-live-symbols fires during the session
+    input_series:
+      - series: 'strategy_bound_live_symbols{strategy_id="R47_MAKER_TMF"}'
+        values: "0+0x30"
+      - series: "market_trading_hours_active"
+        values: "1+0x30"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: StrategyBoundToNoLiveSymbols
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: StrategyBoundToNoLiveSymbols
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              strategy_id: R47_MAKER_TMF
+            exp_annotations:
+              summary: "Strategy R47_MAKER_TMF is bound to no symbol the feed carries"
+              description: >-
+                None of this strategy's configured symbols appear in the subscribed feed, so
+                StrategyBase.handle_event drops every event at its symbol filter and no intent can ever be
+                produced. Usual cause: the strategy is pinned to an expired expiry and the contract-family
+                rebind did not run. Check `post_connect_hooks_ran` and
+                `shioaji_family_populator_snapshot_installed` in the engine log.
+              runbook_url: "docs/runbooks/alpha-development-workflow.md"
+
+  - interval: 1m
+    name: bound-to-no-live-symbols stays quiet outside the session
+    input_series:
+      - series: 'strategy_bound_live_symbols{strategy_id="R47_MAKER_TMF"}'
+        values: "0+0x30"
+      - series: "market_trading_hours_active"
+        values: "0+0x30"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: StrategyBoundToNoLiveSymbols
+        exp_alerts: []
+
+  - interval: 1m
+    name: bound-to-no-live-symbols clears once the front month is bound
+    input_series:
+      - series: 'strategy_bound_live_symbols{strategy_id="R47_MAKER_TMF"}'
+        values: "1+0x30"
+      - series: "market_trading_hours_active"
+        values: "1+0x30"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: StrategyBoundToNoLiveSymbols
+        exp_alerts: []
+
+  # ── StrategyProducesNoIntentsDuringSession ──────────────────────
+  - interval: 1m
+    name: all-flat-no-intent fires for a strategy that has never emitted an intent
+    input_series:
+      # Flat counter climbing steadily; intent counter flat at zero. This is
+      # what AlphaSignalSilent reads as perfectly healthy.
+      - series: 'alpha_signal_events_total{strategy="R47_MAKER_TMF",outcome="flat"}'
+        values: "0+1000x60"
+      - series: 'alpha_signal_events_total{strategy="R47_MAKER_TMF",outcome="intent"}'
+        values: "0+0x60"
+      - series: "market_trading_hours_active"
+        values: "1+0x60"
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: StrategyProducesNoIntentsDuringSession
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              strategy: R47_MAKER_TMF
+            exp_annotations:
+              summary: "Strategy R47_MAKER_TMF has decided flat on every event for 30m"
+              description: >-
+                The strategy is registered, receiving events and deciding — the flat counter is moving —
+                but has not produced a single intent in 30 minutes of open session. The `flat > 0` term is
+                what separates this from a disabled or unsubscribed strategy, so unlike AlphaSignalSilent
+                this rule does not need `alpha_last_signal_ts > 0` and therefore still fires for a strategy
+                that has *never* emitted an intent.
+
+  - interval: 1m
+    name: all-flat-no-intent stays quiet while intents are flowing
+    input_series:
+      - series: 'alpha_signal_events_total{strategy="R47_MAKER_TMF",outcome="flat"}'
+        values: "0+1000x60"
+      - series: 'alpha_signal_events_total{strategy="R47_MAKER_TMF",outcome="intent"}'
+        values: "0+1x60"
+      - series: "market_trading_hours_active"
+        values: "1+0x60"
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: StrategyProducesNoIntentsDuringSession
+        exp_alerts: []
+
+  - interval: 1m
+    name: all-flat-no-intent does not fire for a strategy receiving no events
+    input_series:
+      # No flat decisions either — the strategy is disabled or unsubscribed.
+      # That is AlphaSignalSilent's job, not this rule's.
+      - series: 'alpha_signal_events_total{strategy="R47_MAKER_TMF",outcome="flat"}'
+        values: "0+0x60"
+      - series: 'alpha_signal_events_total{strategy="R47_MAKER_TMF",outcome="intent"}'
+        values: "0+0x60"
+      - series: "market_trading_hours_active"
+        values: "1+0x60"
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: StrategyProducesNoIntentsDuringSession
+        exp_alerts: []
+
+  # ── FeedConnectGateBlockedConnect ───────────────────────────────
+  # Positive control: a refusal must be visible as its own cause, not left to
+  # be inferred from the feed-gap alerts that its own side effect triggers.
+  - interval: 1m
+    name: connect-gate refusal raises a critical naming the gate
+    input_series:
+      - series: 'feed_connect_gate_blocked_total{gate="_stale_instrument_gate"}'
+        values: "0 0 1 1 1 1 1 1 1 1"
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: FeedConnectGateBlockedConnect
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: FeedConnectGateBlockedConnect
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              gate: _stale_instrument_gate
+            exp_annotations:
+              summary: "Connect refused by safety gate _stale_instrument_gate — feed is down on purpose"
+              description: >-
+                A pre-subscribe safety gate refused the connect, so the engine holds no
+                subscription and no market data is flowing. This is fail-closed behaviour, not
+                a crash. Most likely cause: config/symbols.yaml still lists a contract that has
+                passed its delivery date. Check the `connect_gate_blocked` log event for the
+                offending code, regenerate symbols.yaml, and restart.
+
+  # Negative control: an engine that has never refused must stay quiet.
+  - interval: 1m
+    name: connect-gate quiet when no gate has ever refused
+    input_series:
+      - series: 'feed_connect_gate_blocked_total{gate="_stale_instrument_gate"}'
+        values: "0+0x30"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: FeedConnectGateBlockedConnect
+        exp_alerts: []

@@ -254,6 +254,36 @@ def validate_order_mode_safety() -> None:
         )
 
 
+def publish_strategy_binding_liveness(strategies: Any, subscribed: set[str]) -> dict[str, int]:
+    """Publish ``strategy_bound_live_symbols`` per strategy; return the counts.
+
+    ``subscribed`` is the set of codes the feed actually carries (subscribed
+    codes plus resolved alias targets). The overlap with a strategy's own
+    ``symbols`` is the only number that answers "can this strategy see anything
+    at all" — a strategy pinned to an expired expiry reads 0 here while its
+    event counters, its heartbeat and every facade gauge stay green.
+
+    Kept module-level so the invariant is testable without standing up a full
+    bootstrap.
+    """
+    from hft_platform.observability.metrics import get_metrics
+
+    metrics = get_metrics()
+    gauge = getattr(metrics, "strategy_bound_live_symbols", None) if metrics is not None else None
+    counts: dict[str, int] = {}
+    for strategy in strategies:
+        strategy_id = str(getattr(strategy, "strategy_id", "UNKNOWN"))
+        strat_symbols = set(getattr(strategy, "symbols", set()) or set())
+        live = len(strat_symbols & subscribed)
+        counts[strategy_id] = live
+        if gauge is not None:
+            try:
+                gauge.labels(strategy_id=strategy_id).set(live)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("bound_live_symbols_gauge_failed", strategy_id=strategy_id, error=str(exc))
+    return counts
+
+
 def _is_shadow_enabled_by_config(settings: dict[str, Any] | None = None) -> bool:
     """Check if shadow mode is enabled via YAML config (shadow.enabled: true)."""
     if settings is not None:
@@ -1126,20 +1156,32 @@ class SystemBootstrapper:
 
         # Preflight: validate symbol consistency after alias resolution
         def _preflight_symbol_consistency() -> None:
-            """Warn if strategy symbols are not in the subscribed set."""
+            """Warn if strategy symbols are not in the subscribed set, and
+            publish the resulting overlap as ``strategy_bound_live_symbols``.
+
+            This hook is the only place that sees both halves — what the
+            strategy thinks it trades and what the feed actually carries — so
+            it is where trading liveness becomes measurable. A strategy bound
+            entirely to expired contracts logs ``preflight_symbol_mismatch``
+            here today, but a single ERROR line at connect is not something an
+            operator can alert on months later; the gauge is.
+            """
             subscribed: set[str] = set(getattr(md_client, "subscribed_codes", set()))
             # Also include actual codes from alias map
             alias_map = getattr(md_client, "alias_to_actual", {})
             all_subscribed = set(subscribed) | set(alias_map.values())
+            publish_strategy_binding_liveness(strategy_runner.strategies, all_subscribed)
             for strategy in strategy_runner.strategies:
                 strat_symbols = getattr(strategy, "symbols", set()) or set()
                 missing = set(strat_symbols) - all_subscribed
+                live = set(strat_symbols) & all_subscribed
                 if missing:
                     logger.error(
                         "preflight_symbol_mismatch",
                         strategy_id=strategy.strategy_id,
                         strategy_symbols=sorted(strat_symbols),
                         missing_from_feed=sorted(missing),
+                        live_symbols=sorted(live),
                         subscribed=sorted(all_subscribed),
                     )
                 else:
@@ -1149,7 +1191,11 @@ class SystemBootstrapper:
                         symbols=sorted(strat_symbols),
                     )
 
-        md_service._post_connect_hooks.append(_preflight_symbol_consistency)
+        # NOTE: registered *after* the contract-family populators below, not
+        # here. Hooks run in registration order, and this one measures the
+        # binding the populators are about to correct — registered here it
+        # published `strategy_bound_live_symbols=0` for a strategy that was
+        # rebound onto the front month microseconds later, every single connect.
 
         # Propagate alias map to OrderAdapter for reverse resolution (TMFE6 → TMFR1)
         def _propagate_alias_to_order_adapter() -> None:
@@ -1203,6 +1249,10 @@ class SystemBootstrapper:
 
                 md_service._post_connect_hooks.append(_populate_families_from_fubon)
 
+        # Trading-liveness measurement runs last, so it judges the settled
+        # post-rebind state rather than the stale config it was loaded with.
+        md_service._post_connect_hooks.append(_preflight_symbol_consistency)
+
         # Loop_v1 L2: refuse to start if any subscribed contract has
         # delivery_date < today. Same-day expiry (rollover day) is permitted.
         # Shioaji-only for now; Fubon hook to follow when its contract lookup
@@ -1218,6 +1268,15 @@ class SystemBootstrapper:
             def _stale_instrument_gate() -> None:
                 api_lookup = getattr(md_client, "_get_contract", None)
                 if api_lookup is None:
+                    # Not "nothing to check" — "cannot check". This branch is
+                    # how the gate spent its whole life doing nothing under a
+                    # pooled client, which had no `_get_contract`, while
+                    # reporting success by saying nothing at all.
+                    logger.error(
+                        "stale_instrument_gate_unavailable",
+                        reason="md_client exposes no _get_contract",
+                        client_type=type(md_client).__name__,
+                    )
                     return
                 symbols = list(getattr(md_client, "symbols", []) or [])
 
@@ -1236,7 +1295,12 @@ class SystemBootstrapper:
                     log=logger,
                 )
 
-            md_service._post_connect_hooks.append(_stale_instrument_gate)
+            # Registered as a *gate*, not a hook. On ``_post_connect_hooks`` the
+            # runner's ``except Exception`` caught ``StaleInstrumentError`` and
+            # downgraded a fail-closed refusal to a warning line, so the one
+            # check that exists to stop the platform trading an expired contract
+            # could never actually stop it.
+            md_service._post_connect_gates.append(_stale_instrument_gate)
 
         # P2 (2026-04-25): ``set_publish_sink`` wiring removed — the runner
         # never propagated the sink to ``StrategyContext`` instances, so the

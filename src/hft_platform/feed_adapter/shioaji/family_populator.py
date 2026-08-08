@@ -70,10 +70,23 @@ def _extract_futures(
        lookup path.
     """
     if api is None:
+        # Silence here cost two months of dead bindings: the pool object the
+        # platform passes as ``md_client`` had no ``.api``, so this returned an
+        # empty calendar with no trace at all. An unreachable contract table is
+        # a failure, not a quiet no-op.
+        logger.warning(
+            "shioaji_family_populator_no_api",
+            note="broker client exposed no .api handle; family bindings not refreshed",
+        )
         return {}, {}
     contracts = getattr(api, "Contracts", None)
     futures = getattr(contracts, "Futures", None) if contracts is not None else None
     if futures is None:
+        logger.warning(
+            "shioaji_family_populator_no_contracts",
+            has_contracts=contracts is not None,
+            note="api.Contracts.Futures unavailable; family bindings not refreshed",
+        )
         return {}, {}
     try:
         groups = contract_category_groups(futures)
@@ -135,10 +148,22 @@ def populate_resolver_from_shioaji(
         native_hints=native_hints,
     )
     resolver.swap_snapshot(snapshot)
-    logger.info(
-        "shioaji_family_populator_snapshot_installed",
-        roots=sorted(calendars.keys()),
-        bindings=len(snapshot.family_map),
-        native_hints=len(native_hints),
-    )
-    return len(snapshot.family_map)
+    bindings = len(snapshot.family_map)
+    if bindings:
+        logger.info(
+            "shioaji_family_populator_snapshot_installed",
+            roots=sorted(calendars.keys()),
+            bindings=bindings,
+            native_hints=len(native_hints),
+        )
+    else:
+        # Zero bindings means every strategy keeps whatever symbols its config
+        # named — including expiries that rolled off months ago. That is the
+        # failure this module exists to prevent, so it must not log as routine.
+        logger.warning(
+            "shioaji_family_populator_no_bindings",
+            roots=sorted(calendars.keys()),
+            native_hints=len(native_hints),
+            note="strategy.symbols will not be rebound to the front month",
+        )
+    return bindings

@@ -14,6 +14,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+import structlog
 
 from hft_platform.feed_adapter.shioaji.contracts_runtime import (
     StaleInstrumentError,
@@ -206,3 +207,79 @@ class TestAssertNoStaleSubscriptions:
         log = MagicMock()
         assert_no_stale_subscriptions(symbols, _lookup, today=today, log=log)
         assert not log.error.called
+
+
+class TestGateSafetyUnderMalformedFields:
+    """The gate became fail-closed on 2026-08-08 (moved off ``_post_connect_hooks``,
+    where ``except Exception`` had been downgrading its refusal to a warning).
+
+    That makes anything it raises capable of taking the whole feed down, so the
+    set of things it raises on has to be exactly "an expired contract" — and
+    nothing else.
+    """
+
+    @staticmethod
+    def _symbols(*codes):
+        return [{"code": c, "exchange": "TAIFEX", "product_type": "FUT"} for c in codes]
+
+    def test_unparseable_delivery_date_is_skipped_not_blocked(self):
+        """Shioaji reports ``delivery_date=''`` for undated instruments.
+
+        Blocking startup on that would make the feed hostage to a cosmetic SDK
+        quirk, on a code path that had never once executed in production.
+        """
+        import datetime as dt
+
+        from hft_platform.feed_adapter.shioaji.contracts_runtime import assert_no_stale_subscriptions
+
+        contracts = {"2330": SimpleNamespace(code="2330", delivery_date="")}
+
+        with structlog.testing.capture_logs() as logs:
+            assert_no_stale_subscriptions(
+                self._symbols("2330"),
+                lambda _exch, code, _pt: contracts.get(code),
+                today=dt.date(2026, 8, 8),
+            )
+
+        assert [e for e in logs if e.get("event") == "stale_instrument_delivery_date_unparseable"]
+
+    def test_expired_contract_still_blocks(self):
+        import datetime as dt
+
+        from hft_platform.feed_adapter.shioaji.contracts_runtime import (
+            StaleInstrumentError,
+            assert_no_stale_subscriptions,
+        )
+
+        contracts = {"TMFD6": SimpleNamespace(code="TMFD6", delivery_date="2026/04/16")}
+
+        with pytest.raises(StaleInstrumentError):
+            assert_no_stale_subscriptions(
+                self._symbols("TMFD6"),
+                lambda _exch, code, _pt: contracts.get(code),
+                today=dt.date(2026, 8, 8),
+            )
+
+    def test_clean_pass_leaves_a_trace(self):
+        """A gate that logs nothing on success is indistinguishable from a gate
+        that never ran — which is exactly how this one spent its whole life."""
+        import datetime as dt
+
+        from hft_platform.feed_adapter.shioaji.contracts_runtime import assert_no_stale_subscriptions
+
+        contracts = {
+            "TMFI6": SimpleNamespace(code="TMFI6", delivery_date="2026/09/16"),
+            "TMFH6": SimpleNamespace(code="TMFH6", delivery_date="2026/08/19"),
+        }
+
+        with structlog.testing.capture_logs() as logs:
+            assert_no_stale_subscriptions(
+                self._symbols("TMFI6", "TMFH6"),
+                lambda _exch, code, _pt: contracts.get(code),
+                today=dt.date(2026, 8, 8),
+            )
+
+        passed = [e for e in logs if e.get("event") == "stale_instrument_gate_passed"]
+        assert passed
+        assert passed[0]["checked"] == 2
+        assert passed[0]["skipped"] == 0
