@@ -123,13 +123,39 @@ class PriceBandValidator(RiskValidator):
             val = self.defaults.get(key)
             if val is not None:
                 self._product_caps_raw[ptype] = float(val)
+        # Per-root caps (``max_price_cap_root_TMF``). A per-*symbol* key names a
+        # delivery month and therefore expires: on 2026-08-10 the live TMFH6 had
+        # no entry and silently fell through to the futures default of 50,000
+        # while TAIEX traded near 45,033 — ~11% from rejecting every order. A
+        # root outlives every roll.
+        self._root_caps_raw: Dict[str, float] = {}
+        _root_prefix = "max_price_cap_root_"
+        for key, val in self.defaults.items():
+            if isinstance(key, str) and key.startswith(_root_prefix) and val is not None:
+                self._root_caps_raw[key[len(_root_prefix) :]] = float(val)
         self._mid_price_max_age_ns = int(float(self.defaults.get("mid_price_max_age_s", 10)) * 1_000_000_000)
 
+    def _resolve_root_cap_raw(self, symbol: str) -> float | None:
+        """Return the configured cap for *symbol*'s product root, or ``None``.
+
+        A symbol belongs to a root when it is that root plus one delivery-month
+        letter and one year digit (``TMF`` -> ``TMFH6``). The length test rather
+        than a bare prefix match is what keeps longer option codes from
+        inheriting a futures cap.
+        """
+        for root, cap in self._root_caps_raw.items():
+            if len(symbol) == len(root) + 2 and symbol.startswith(root):
+                return cap
+        return None
+
     def _resolve_cap_raw(self, symbol: str) -> float:
-        """Resolve price cap: per-symbol > per-product-type > global."""
+        """Resolve price cap: per-symbol > per-root > per-product-type > global."""
         sym_cap = self.defaults.get(f"max_price_cap_{symbol}")
         if sym_cap is not None:
             return float(sym_cap)
+        root_cap = self._resolve_root_cap_raw(symbol)
+        if root_cap is not None:
+            return root_cap
         metadata = getattr(getattr(self.price_codec, "provider", None), "metadata", None)
         if metadata is not None:
             ptype = metadata.product_type(symbol)

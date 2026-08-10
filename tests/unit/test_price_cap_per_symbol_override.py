@@ -39,6 +39,11 @@ from hft_platform.risk.validators import PriceBandValidator
 # three TAIFEX futures families that platform strategies route through.
 ROLLOVER_SYMBOLS = ("TMFE6", "TMFD6", "TXFE6", "TXFD6", "MXFE6", "MXFD6")
 
+# The months that actually matter now, and ones that do not exist yet. The
+# 2026-08-10 outage happened because coverage was asserted only for the codes
+# above — every one of which had expired by then.
+CURRENT_AND_FUTURE_SYMBOLS = ("TMFH6", "TXFH6", "MXFH6", "TMFI6", "TXFI6", "MXFI6", "TMFA7", "TXFA7")
+
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 BASE_LIMITS = REPO_ROOT / "config" / "base" / "strategy_limits.yaml"
 PROD_LIMITS = REPO_ROOT / "config" / "env" / "prod" / "strategy_limits.yaml"
@@ -76,24 +81,34 @@ def _load_yaml(path: Path) -> dict:
 
 
 @pytest.mark.parametrize("config_path", [BASE_LIMITS, PROD_LIMITS], ids=["base", "prod"])
-@pytest.mark.parametrize("symbol", ROLLOVER_SYMBOLS)
-def test_yaml_declares_per_symbol_override(config_path: Path, symbol: str) -> None:
-    """Each rollover code MUST have ``max_price_cap_<symbol>`` in shipping configs.
+@pytest.mark.parametrize("symbol", ROLLOVER_SYMBOLS + CURRENT_AND_FUTURE_SYMBOLS)
+def test_shipping_config_covers_rollover_codes_despite_broken_metadata(config_path: Path, symbol: str) -> None:
+    """Every TAIFEX rollover code MUST resolve to a futures-grade cap.
 
-    This is the regression that the prod incident required: without these
-    entries, ``_resolve_cap_raw`` cannot defend against a metadata gap.
+    This asserts the B1 *guarantee* rather than the mechanism that used to
+    implement it. The original test required a literal
+    ``max_price_cap_<SYMBOL>`` key per contract, which is the very thing that
+    failed on 2026-08-10: all six declared codes (D6/E6 = April/May-2026) had
+    expired, the live front month TMFH6 matched none of them, and the cap fell
+    back to ``max_price_cap_futures`` = 50,000 with TAIEX at 45,033 — about 11%
+    from rejecting every order. A key that names a delivery month expires with
+    the contract, so pinning the key made the config *look* guarded while the
+    protection had already lapsed.
+
+    The guarantee is unchanged and now roll-proof: with ``product_type``
+    deliberately broken (the documented metadata gap), the shipped config must
+    still admit a TAIEX-sized price for the contract in question — including
+    months that do not exist yet, which the old assertion could never cover.
     """
     cfg = _load_yaml(config_path)
-    defaults = cfg.get("global_defaults") or {}
-    key = f"max_price_cap_{symbol}"
-    assert key in defaults, (
-        f"{config_path.relative_to(REPO_ROOT)}: missing {key!r} — per-symbol override required for rollover safety."
+    validator = PriceBandValidator(cfg, price_scale_provider=_provider_with_broken_metadata())
+
+    cap = validator._resolve_cap_raw(symbol)
+
+    assert cap >= 50000.0, (
+        f"{config_path.relative_to(REPO_ROOT)}: {symbol} resolves to a cap of {cap} with product_type broken; "
+        "a TAIEX-sized price would be rejected. Declare max_price_cap_root_<ROOT>."
     )
-    # Sanity: the override must be high enough to admit a TAIEX-sized price
-    # (~40,400 NTD raw). 50000.0 is the minimum safe value; we recommend
-    # 500000.0 for ~12x headroom.
-    cap = float(defaults[key])
-    assert cap >= 50000.0, f"{key} = {cap} too low for futures pricing."
 
 
 def test_validator_admits_real_taiex_price_with_override() -> None:

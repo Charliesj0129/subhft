@@ -451,6 +451,18 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
             "EXF": 30.0,  # TAIFEX electronics sector futures
             "FXF": 30.0,  # TAIFEX finance sector futures
         }
+        # TSE equities are numeric codes, so they have no "root" the prefix map
+        # can key on, and they were left on the 6 s global threshold. Measured
+        # 2026-08-10 over 1,036,551 inter-arrivals across 50 subscribed stocks:
+        # p50 0.14 s, p90 1.83 s, p99 8.45 s, p99.9 24.02 s — 6 s sits *below*
+        # p99, so the watchdog flagged 5-9 stocks continuously and produced
+        # 1,224 of the engine's ~1,224 warnings in a 4 h window, drowning every
+        # other signal. Time-weighted expected simultaneously-stale count:
+        # 6 s -> 6.33 (matches the observed 5-9), 30 s -> 1.05, 60 s -> 0.46.
+        # 60 s keeps normal illiquidity clear of the 5-symbol escalation floor
+        # while still catching a genuinely dead equity feed within a minute.
+        # Index futures keep the strict global threshold at every month.
+        self._symbol_gap_equity_threshold_s = float(os.getenv("HFT_SYMBOL_GAP_EQUITY_THRESHOLD_S", "60.0"))
         self._watchdog_interval_s = float(os.getenv("HFT_WATCHDOG_INTERVAL_S", "1.0"))
         self._symbol_gap_min_stale_count = max(1, int(os.getenv("HFT_SYMBOL_GAP_MIN_STALE_COUNT", "5")))
         self._symbol_gap_min_active_symbols = max(1, int(os.getenv("HFT_SYMBOL_GAP_MIN_ACTIVE_SYMBOLS", "24")))

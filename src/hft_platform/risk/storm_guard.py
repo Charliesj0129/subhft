@@ -473,6 +473,26 @@ class StormGuard:
 
         result = detector.evaluate(mid_price_x2, spread_scaled, imbalance, ts, symbol)
 
+        # Publish the breaker's *input*, not just its output. Without this the
+        # only evidence a drift burst ever happened was an INFO log, so nobody
+        # could see how close toxicity runs to the WARM entry threshold — and
+        # since toxicity is a sigmoid of the t-statistic that equals exactly
+        # 0.5 at the burst threshold, "WARM at 0.501" is indistinguishable from
+        # a mis-set threshold without the series. Called from the periodic
+        # monitor loop, not per tick.
+        try:
+            _sym = symbol or "unknown"
+            self.metrics.stormguard_toxicity_score.labels(symbol=self.metrics.cap_symbol(_sym)).set(
+                result.toxicity_score
+            )
+            if result.burst_detected:
+                _tox_type = getattr(result.burst_event, "toxicity_type", "") or "unknown"
+                self.metrics.drift_burst_detected_total.labels(
+                    symbol=self.metrics.cap_symbol(_sym), toxicity_type=_tox_type
+                ).inc()
+        except Exception:  # noqa: BLE001 - metrics must never break the breaker
+            pass
+
         # Determine escalation target from toxicity signal.
         # Only escalate, never de-escalate (additive safety).
         # P4 (2026-04-28): WARM entry uses ``_warm_toxicity_entry`` (default
@@ -643,6 +663,17 @@ class StormGuard:
                 self.metrics.stormguard_transitions_total.labels(direction=direction).inc()
             except Exception as exc:
                 logger.warning("stormguard_metric_update_failed", metric="transitions", error=str(exc))
+
+            # Same event, labelled by target state. The direction-only counter
+            # cannot distinguish three WARM excursions from three HALTs, which
+            # is the difference between a normal volatile session and a day the
+            # platform stopped trading. Added alongside rather than as a label
+            # on the existing counter so current dashboards keep working.
+            if direction == "escalation":
+                try:
+                    self.metrics.stormguard_escalations_total.labels(to_state=StormGuardState(new_state_int).name).inc()
+                except Exception as exc:
+                    logger.warning("stormguard_metric_update_failed", metric="escalations", error=str(exc))
 
             # Audit guardrail transition (may block on asyncio.Queue.put_nowait;
             # still safer outside the state lock).

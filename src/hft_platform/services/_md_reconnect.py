@@ -344,14 +344,20 @@ class MarketDataReconnectMixin:
         noise comes back — which is how ~2700 warnings/day for one structurally
         illiquid contract went unfixed. Product-root defaults
         (``_symbol_gap_threshold_prefix_defaults``) survive the roll. Resolution
-        order is exact override → longest matching root → global threshold; an
-        exact override always wins so ops keep the last word.
+        order is exact override → longest matching root → equity class default
+        → global threshold; an exact override always wins so ops keep the last
+        word.
+
+        TSE equities get a class default because their numeric codes give the
+        root map nothing to key on, so they stayed on the futures-grade
+        threshold and produced essentially all of the engine's warning volume.
         """
         global_threshold = getattr(self, "_symbol_gap_threshold_s", 6.0)
         if self._is_market_open_grace_period():
             global_threshold = max(global_threshold, getattr(self, "_market_open_grace_gap_threshold_s", 30.0))
         overrides: dict[str, float] = getattr(self, "_symbol_gap_threshold_overrides", {}) or {}
         prefix_defaults: dict[str, float] = getattr(self, "_symbol_gap_threshold_prefix_defaults", {}) or {}
+        equity_threshold: float = getattr(self, "_symbol_gap_equity_threshold_s", 60.0)
         stale: list[tuple[str, float]] = []
         for symbol, last_ts in active_snapshot.items():
             if any(symbol.startswith(p) for p in _WATCHDOG_EXCLUDE_PREFIXES):
@@ -359,6 +365,14 @@ class MarketDataReconnectMixin:
             threshold = overrides.get(symbol)
             if threshold is None:
                 prefix_threshold = _prefix_gap_threshold(symbol, prefix_defaults)
+                if prefix_threshold is None and symbol.isdigit():
+                    # TSE equities are numeric codes, so no product root can key
+                    # them and they sat on the strict futures threshold. Their
+                    # measured p99.9 inter-arrival is 24 s against a 6 s
+                    # threshold, which is why they generated essentially the
+                    # engine's entire warning volume. Class default, resolved
+                    # after an exact override and after any root default.
+                    prefix_threshold = equity_threshold
                 # ``max`` so the market-open grace period can only ever relax a
                 # root default, never tighten one.
                 threshold = global_threshold if prefix_threshold is None else max(prefix_threshold, global_threshold)

@@ -113,6 +113,9 @@ class MetricsRegistry:
                 _pn("risk_reject_total"),
                 _pn("stormguard_mode"),
                 _pn("stormguard_transitions_total"),
+                _pn("stormguard_toxicity_score"),
+                _pn("stormguard_escalations_total"),
+                _pn("drift_burst_detected_total"),
                 _pn("stormguard_halt_exempt_bypass_total"),
                 _pn("halt_drain_safety_intent_lost_total"),
                 # H2: HALT notification-callback dispatch observability
@@ -1142,6 +1145,27 @@ class MetricsRegistry:
             _pn("alpha_signal_events_total"),
             "Alpha signal decisions by outcome",
             ["strategy", "outcome"],  # outcome: "intent" | "flat"
+        )
+        # StormGuard drift-burst observability (2026-08-10).
+        # stormguard_transitions_total counts escalation/de_escalation but not
+        # the target state, so three WARM excursions and three HALTs are the
+        # same number. The toxicity score driving them had no metric at all —
+        # only an INFO log — so there was no way to see how close the breaker
+        # runs to its threshold, or whether a day had 3 bursts or 300.
+        self.stormguard_toxicity_score = Gauge(
+            _pn("stormguard_toxicity_score"),
+            "Latest drift-burst toxicity score [0,1] for the reference instrument",
+            ["symbol"],
+        )
+        self.stormguard_escalations_total = Counter(
+            _pn("stormguard_escalations_total"),
+            "StormGuard escalations by target state",
+            ["to_state"],
+        )
+        self.drift_burst_detected_total = Counter(
+            _pn("drift_burst_detected_total"),
+            "Drift-burst detections by reference symbol and toxicity type",
+            ["symbol", "toxicity_type"],
         )
         self.alpha_last_signal_ts = Gauge(
             _pn("alpha_last_signal_ts"),
