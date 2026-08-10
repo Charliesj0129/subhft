@@ -63,6 +63,7 @@ class TrackConfig:
 
     name: str
     symbols: list[str] = field(default_factory=list)
+    roots: list[str] = field(default_factory=list)
     schedule: list[dict[str, str]] = field(default_factory=list)
 
 
@@ -83,10 +84,23 @@ class TrackGate:
         SessionPhase.CLOSED: 0,
     }
 
-    __slots__ = ("_symbol_to_tracks", "_track_phases", "_warned_unknown", "_default_open")
+    __slots__ = (
+        "_symbol_to_tracks",
+        "_root_to_tracks",
+        "_track_phases",
+        "_warned_unknown",
+        "_default_open",
+    )
+
+    # Bound on the memo built by root resolution. The live universe is ~300
+    # codes, so this is headroom, not a limit anyone should reach; past it the
+    # phase is still resolved correctly, just recomputed each call rather than
+    # letting an unbounded stream of unknown symbols grow the map.
+    _MAX_RESOLVED_SYMBOLS: int = 4096
 
     def __init__(self) -> None:
         self._symbol_to_tracks: dict[str, list[str]] = {}
+        self._root_to_tracks: dict[str, list[str]] = {}
         self._track_phases: dict[str, SessionPhase] = {}
         self._warned_unknown: set[str] = set()
         self._default_open: bool = os.getenv("HFT_TRACK_GATE_DEFAULT_OPEN", "0") in ("1", "true", "yes")
@@ -98,6 +112,28 @@ class TrackGate:
             self._symbol_to_tracks[symbol] = [track_name]
         elif track_name not in tracks:
             tracks.append(track_name)
+
+    def register_root(self, root: str, track_name: str) -> None:
+        """Register a *product root* (e.g. ``TMF``) to a track.
+
+        Membership by root is what makes a track survive a contract roll: the
+        month code changes every expiry, the root does not. A symbol matches a
+        root when it is that root plus exactly one month letter and one year
+        digit (``TMF`` -> ``TMFH6``), which also covers the continuous aliases
+        (``TMFR1``) and excludes longer codes such as TXO option series.
+        """
+        tracks = self._root_to_tracks.get(root)
+        if tracks is None:
+            self._root_to_tracks[root] = [track_name]
+        elif track_name not in tracks:
+            tracks.append(track_name)
+
+    def _tracks_for_root(self, symbol: str) -> list[str] | None:
+        """Resolve *symbol* to tracks via its product root, or ``None``."""
+        for root, tracks in self._root_to_tracks.items():
+            if len(symbol) == len(root) + 2 and symbol.startswith(root):
+                return tracks
+        return None
 
     def set_track_phase(self, track_name: str, phase: SessionPhase) -> None:
         """Update the current phase for a track."""
@@ -111,12 +147,20 @@ class TrackGate:
         """
         tracks = self._symbol_to_tracks.get(symbol)
         if tracks is None:
-            if self._default_open:
-                return SessionPhase.OPEN
-            if symbol not in self._warned_unknown:
-                self._warned_unknown.add(symbol)
-                logger.warning("track_gate_unknown_symbol_blocked", symbol=symbol, default_phase="CLOSED")
-            return SessionPhase.CLOSED
+            tracks = self._tracks_for_root(symbol)
+            if tracks is None:
+                if self._default_open:
+                    return SessionPhase.OPEN
+                if symbol not in self._warned_unknown:
+                    self._warned_unknown.add(symbol)
+                    logger.warning("track_gate_unknown_symbol_blocked", symbol=symbol, default_phase="CLOSED")
+                return SessionPhase.CLOSED
+            # Memoise the root resolution so the scan runs once per symbol
+            # rather than once per intent. Copy the list: the root's own list
+            # must not be mutated by a later ``register_symbol``.
+            if len(self._symbol_to_tracks) < self._MAX_RESOLVED_SYMBOLS:
+                self._symbol_to_tracks[symbol] = list(tracks)
+                logger.info("track_gate_symbol_resolved_by_root", symbol=symbol, tracks=list(tracks))
         if len(tracks) == 1:
             return self._track_phases.get(tracks[0], SessionPhase.CLOSED)
         # Multi-track: pick the most permissive phase
@@ -189,11 +233,14 @@ class SessionGovernor:
                 cfg = TrackConfig(
                     name=track_name,
                     symbols=list(track_cfg.get("symbols", [])),
+                    roots=list(track_cfg.get("roots", [])),
                     schedule=list(track_cfg.get("schedule", [])),
                 )
                 self._tracks[track_name] = cfg
                 for symbol in cfg.symbols:
                     self._track_gate.register_symbol(symbol, track_name)
+                for root in cfg.roots:
+                    self._track_gate.register_root(root, track_name)
                 # Initialize all tracks to INIT phase
                 self._track_gate.set_track_phase(track_name, SessionPhase.INIT)
             logger.info("session_governor_config_loaded", tracks=list(self._tracks.keys()))

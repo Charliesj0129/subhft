@@ -1305,8 +1305,33 @@ class StrategyRunner:
                 dropped = [i for i in pre_filter_intents if id(i) not in filtered_set]
                 if dropped:
                     now_ns = timebase.now_ns()
+                    # Count every session-phase drop. Before this existed the
+                    # only trace was a debug log, so the classification below
+                    # recorded these as `flat` — indistinguishable from a
+                    # strategy that decided not to quote. Deliberately NOT
+                    # gated on _diagnostic_metrics_enabled: a signal that says
+                    # "your intents are being discarded" must not be something
+                    # an observability policy can switch off. Drops are rare,
+                    # so the label work is off the steady-state path.
+                    _gate_metric = (
+                        getattr(self.metrics, "track_gate_intents_filtered_total", None) if self.metrics else None
+                    )
                     for intent in dropped:
                         iid, sid, sym, side = _typed_intent_identity(intent)
+                        if _gate_metric is not None:
+                            try:
+                                # Re-read the phase rather than reading the
+                                # stamp: _stamp_intent_session_phase only
+                                # reaches OrderIntent objects, not the
+                                # typed-tuple fast path.
+                                _drop_phase = self.track_gate.get_phase(sym)
+                                _gate_metric.labels(
+                                    strategy=sid,
+                                    symbol=self.metrics.cap_symbol(sym),
+                                    phase=getattr(_drop_phase, "name", str(_drop_phase)),
+                                ).inc()
+                            except Exception:  # noqa: BLE001
+                                pass
                         fb = RiskFeedback(
                             intent_id=iid,
                             strategy_id=sid,
