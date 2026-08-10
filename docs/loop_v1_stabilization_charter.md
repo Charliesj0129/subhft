@@ -82,7 +82,9 @@ Alerts fire from `config/monitoring/alerts/replay_parity_alert.yml` based on `ph
 During stabilization the loop is **frozen**:
 
 1. **CODEOWNERS** — `config/loops/`, `src/hft_platform/strategies/`, `src/hft_platform/alpha/`, `src/hft_platform/order/` require explicit human approval. No bot approvals.
-2. **GitHub environment protection** — `production` deploy environment requires manual approval; `deploy.yml` cannot auto-deploy on `workflow_run`.
+2. **Manual-dispatch-only CD** — `deploy.yml` has no automatic trigger; the only way to start a production deploy is for a human to run the workflow. It previously fired on `workflow_run` for every successful CI run on `main`.
+
+   This item used to read "`production` deploy environment requires manual approval". That was never true — the environment was measured on 2026-08-10 with `protection_rules: []`, and the only thing preventing an unattended SSH deploy was that `DEPLOY_HOST`/`DEPLOY_USER`/`DEPLOY_KEY` happened to be unset. Adding required reviewers is still worth doing as defence in depth; verify with `gh api repos/<owner>/<repo>/environments/production` rather than trusting this document.
 3. **Dependabot allowlist** — restricted to security-only updates; major-version bumps blocked.
 4. **Freeze-guard CI** — `.github/workflows/freeze-guard.yml` blocks any PR adding new strategies / new loop YAMLs unless labelled `freeze-override: <reason>`.
 

@@ -1,10 +1,11 @@
 name: CD — Deploy
 
+# Manual dispatch only. This workflow used to fire on `workflow_run` for every
+# successful CI run on `main`, which made a merge to `main` sufficient to reach
+# the production deploy job. Remote deployment on this project is always manual
+# (docs/runbooks/deployment.md, deploy laws D1/D5/D6), so the automatic trigger
+# was removed on 2026-08-10 rather than left to be gated by something else.
 on:
-  workflow_run:
-    workflows: ["CI"]
-    types: [completed]
-    branches: [main]
   workflow_dispatch:
     inputs:
       dry_run:
@@ -30,9 +31,6 @@ jobs:
   deploy-staging:
     name: Deploy to Staging
     runs-on: ubuntu-latest
-    if: >
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main')
     permissions:
       contents: read
       packages: write
@@ -132,17 +130,22 @@ jobs:
     name: Build & Deploy to Production
     needs: deploy-staging
     runs-on: ubuntu-latest
-    # Loop_v1 stabilization freeze: `production` is a GitHub environment with
-    # required-reviewer protection. Auto-deploy on `workflow_run` cannot
-    # bypass this gate; manual approval is required for every deploy.
-    # Configure the rule server-side: Settings → Environments → production →
-    # Required reviewers. See docs/loop_v1_stabilization_charter.md.
+    # Loop_v1 stabilization freeze: this job reaches the production host, so it
+    # must never start without a human. That is now enforced by the trigger —
+    # the workflow is `workflow_dispatch`-only, so someone has to press the
+    # button. See docs/loop_v1_stabilization_charter.md.
+    #
+    # This comment previously claimed the `production` environment carried
+    # required-reviewer protection. It did not: as of 2026-08-10 the environment
+    # had `protection_rules: []`, so the only thing preventing an unattended SSH
+    # deploy was that DEPLOY_HOST/DEPLOY_USER/DEPLOY_KEY happened to be unset.
+    # Adding required reviewers server-side (Settings → Environments →
+    # production) is still worth doing as defence in depth, but do not treat
+    # this comment as evidence that it has been done — query
+    # `gh api repos/<owner>/<repo>/environments/production`.
     environment:
       name: production
       url: https://github.com/${{ github.repository }}/actions
-    if: >
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main')
     permissions:
       contents: read
       packages: write
