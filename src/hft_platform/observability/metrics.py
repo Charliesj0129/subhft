@@ -110,6 +110,7 @@ class MetricsRegistry:
                 _pn("feed_time_skew_over_threshold_total"),
                 _pn("strategy_latency_ns"),
                 _pn("strategy_intents_total"),
+                _pn("track_gate_intents_filtered_total"),
                 _pn("risk_reject_total"),
                 _pn("stormguard_mode"),
                 _pn("stormguard_transitions_total"),
@@ -1142,6 +1143,16 @@ class MetricsRegistry:
             _pn("alpha_signal_events_total"),
             "Alpha signal decisions by outcome",
             ["strategy", "outcome"],  # outcome: "intent" | "flat"
+        )
+        # TrackGate session filtering (2026-08-10).
+        # An intent dropped by the session phase filter used to leave no trace
+        # but a debug log, so the runner counted it as `flat` — indistinguishable
+        # from a strategy that chose not to quote. That is how a whole session of
+        # R47 intents disappeared. Drops are cheap and rare; this counts them.
+        self.track_gate_intents_filtered_total = Counter(
+            _pn("track_gate_intents_filtered_total"),
+            "Intents dropped by the TrackGate session-phase filter",
+            ["strategy", "symbol", "phase"],
         )
         self.alpha_last_signal_ts = Gauge(
             _pn("alpha_last_signal_ts"),

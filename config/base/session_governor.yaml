@@ -1,17 +1,31 @@
-# Session tracks: symbols use R1 continuous codes (resolved to actual month codes at runtime).
-# Actual month codes (TMFE6/TXFE6) are also listed as belt-and-suspenders so TrackGate
-# works even if alias resolution hook does not propagate to SessionGovernor
-# (Bug 19, 2026-04-17: session_governor_alias_resolved never fired after restart).
+# Session tracks. Membership is by product ROOT (`roots`), never by month code.
+#
+# Why: a month code expires, a root does not. This file previously listed
+# TMFE6/TXFE6 as "belt-and-suspenders so TrackGate works even if alias
+# resolution does not propagate" (Bug 19, 2026-04-17). On 2026-08-10 both
+# halves failed at once:
+#   - the alias half never runs — the live universe declares zero R1/R2
+#     aliases, so SessionGovernor.resolve_symbol_aliases() returns early;
+#   - the belt half named May-2026 contracts that had already expired.
+# The live symbol TMFH6 therefore matched no track, TrackGate returned CLOSED
+# (fail-closed, correct), and StrategyRunner dropped 100% of R47's intents —
+# 2,703 in that session — leaving `alpha_signal_events_total{outcome="intent"}`
+# at zero. Roots make the membership survive every roll without an edit.
+#
+# R1 continuous codes stay listed because they never expire and are what the
+# rest of the config layer refers to; they are also covered by the roots.
 tracks:
   futures_day:
-    symbols: ["TMFR1", "TMFE6", "TXFR1", "TXFE6"]
+    roots: ["TMF", "TXF"]
+    symbols: ["TMFR1", "TXFR1"]
     schedule:
       - {phase: "open", time: "08:45"}
       - {phase: "close_only", time: "13:40"}
       - {phase: "force_flat", time: "13:44"}
       - {phase: "closed", time: "13:45"}
   futures_night:
-    symbols: ["TMFR1", "TMFE6", "TXFR1", "TXFE6"]
+    roots: ["TMF", "TXF"]
+    symbols: ["TMFR1", "TXFR1"]
     schedule:
       - {phase: "open", time: "15:00"}
       - {phase: "close_only", time: "04:55"}
