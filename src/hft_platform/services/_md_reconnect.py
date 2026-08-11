@@ -330,8 +330,8 @@ class MarketDataReconnectMixin:
 
     # -- watchdog helpers ------------------------------------------------------
 
-    def _find_stale_symbols(self: Any, active_snapshot: dict[str, float], now: float) -> list[tuple[str, float]]:
-        """Return (symbol, gap) pairs exceeding the per-symbol gap threshold.
+    def _find_stale_symbols(self: Any, active_snapshot: dict[str, float], now: float) -> list[tuple[str, float, float]]:
+        """Return (symbol, gap, threshold) triples exceeding the per-symbol gap threshold.
 
         Bug #36: previously a single global threshold flagged illiquid stocks
         (2207, 2201) and far-month futures (TXFG6) as stale even though
@@ -351,6 +351,12 @@ class MarketDataReconnectMixin:
         TSE equities get a class default because their numeric codes give the
         root map nothing to key on, so they stayed on the futures-grade
         threshold and produced essentially all of the engine's warning volume.
+
+        The resolved threshold travels with each hit instead of being
+        re-derived by the caller. The warning used to read the global value
+        directly, so it reported a threshold that had been applied to none of
+        the symbols it named: measured 2026-08-11, **695 of 695** lines printed
+        ``6.0`` while flagging gaps judged at 60 s (equities) and 30 s (EXF).
         """
         global_threshold = getattr(self, "_symbol_gap_threshold_s", 6.0)
         if self._is_market_open_grace_period():
@@ -358,7 +364,7 @@ class MarketDataReconnectMixin:
         overrides: dict[str, float] = getattr(self, "_symbol_gap_threshold_overrides", {}) or {}
         prefix_defaults: dict[str, float] = getattr(self, "_symbol_gap_threshold_prefix_defaults", {}) or {}
         equity_threshold: float = getattr(self, "_symbol_gap_equity_threshold_s", 60.0)
-        stale: list[tuple[str, float]] = []
+        stale: list[tuple[str, float, float]] = []
         for symbol, last_ts in active_snapshot.items():
             if any(symbol.startswith(p) for p in _WATCHDOG_EXCLUDE_PREFIXES):
                 continue
@@ -378,7 +384,7 @@ class MarketDataReconnectMixin:
                 threshold = global_threshold if prefix_threshold is None else max(prefix_threshold, global_threshold)
             gap = now - last_ts
             if gap > threshold:
-                stale.append((symbol, gap))
+                stale.append((symbol, gap, threshold))
         return stale
 
     # -- watchdog loop -------------------------------------------------------
@@ -425,10 +431,14 @@ class MarketDataReconnectMixin:
 
             if stale_symbols:
                 self._symbol_gap_consecutive_hits += 1
-                symbols_str = ", ".join(f"{s}({g:.1f}s)" for s, g in stale_symbols[:5])
+                # ``gap>threshold`` per symbol: one line can name symbols in
+                # different threshold classes (an equity at 60 s beside an EXF
+                # future at 30 s), so a single scalar field cannot describe the
+                # bar any of them cleared.
+                symbols_str = ", ".join(f"{s}({g:.1f}s>{t:g}s)" for s, g, t in stale_symbols[:5])
                 active_count = len(active_snapshot)
                 stale_ratio = (len(stale_symbols) / active_count) if active_count > 0 else 0.0
-                max_stale_gap = max(g for _, g in stale_symbols)
+                max_stale_gap = max(g for _, g, _ in stale_symbols)
                 hits = self._symbol_gap_consecutive_hits
                 if hits == 1 or hits % 10 == 0:
                     logger.warning(
@@ -437,7 +447,7 @@ class MarketDataReconnectMixin:
                         active_count=active_count,
                         stale_ratio=round(stale_ratio, 3),
                         symbols=symbols_str,
-                        threshold_s=getattr(self, "_symbol_gap_threshold_s", 6.0),
+                        thresholds_s=sorted({t for _, _, t in stale_symbols}),
                         consecutive_cycles=hits,
                     )
 

@@ -41,6 +41,16 @@ def _watchdog(**overrides):
     return obj
 
 
+def _resolved(watchdog, snapshot: dict[str, float], *, now: float) -> dict[str, float]:
+    """Map each stale symbol to the threshold it was actually judged against.
+
+    Asserting on the threshold and not merely on membership is what makes these
+    resolution-order tests say which rule won, rather than only that *some* rule
+    flagged the symbol.
+    """
+    return {symbol: threshold for symbol, _, threshold in watchdog._find_stale_symbols(snapshot, now)}
+
+
 @pytest.mark.unit
 class TestEquityClassThreshold:
     def test_equity_silent_within_the_measured_p999_is_not_stale(self) -> None:
@@ -55,31 +65,31 @@ class TestEquityClassThreshold:
         """The whole point: relaxing equities must not blind the traded product."""
         wd = _watchdog()
 
-        stale = dict(wd._find_stale_symbols({"TMFH6": 0.0, "TXFH6": 0.0}, now=7.0))
+        stale = _resolved(wd, {"TMFH6": 0.0, "TXFH6": 0.0}, now=7.0)
 
-        assert set(stale) == {"TMFH6", "TXFH6"}
+        assert stale == {"TMFH6": 6.0, "TXFH6": 6.0}
 
     def test_equity_really_dead_is_still_caught(self) -> None:
         wd = _watchdog()
 
-        stale = dict(wd._find_stale_symbols({"2912": 0.0}, now=61.0))
+        stale = _resolved(wd, {"2912": 0.0}, now=61.0)
 
-        assert "2912" in stale
+        assert stale == {"2912": 60.0}
 
     def test_exact_override_still_wins_over_the_class_default(self) -> None:
         wd = _watchdog(_symbol_gap_threshold_overrides={"2912": 10.0})
 
-        stale = dict(wd._find_stale_symbols({"2912": 0.0, "1101": 0.0}, now=12.0))
+        stale = _resolved(wd, {"2912": 0.0, "1101": 0.0}, now=12.0)
 
-        assert set(stale) == {"2912"}
+        assert stale == {"2912": 10.0}
 
     def test_product_root_default_still_wins_over_the_class_default(self) -> None:
         """EXF is a futures root; it must not be treated as an equity."""
         wd = _watchdog()
 
-        stale = dict(wd._find_stale_symbols({"EXFH6": 0.0}, now=45.0))
+        stale = _resolved(wd, {"EXFH6": 0.0}, now=45.0)
 
-        assert "EXFH6" in stale
+        assert stale == {"EXFH6": 30.0}
 
     def test_market_open_grace_can_only_relax_never_tighten(self) -> None:
         """Grace raises the global to 30 s; the equity default is higher and holds."""
