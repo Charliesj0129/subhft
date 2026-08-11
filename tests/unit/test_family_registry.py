@@ -293,6 +293,10 @@ def test_new_family_modules_are_covered_by_the_resume_code_fingerprint() -> None
     }.issubset(covered)
 
 
+def test_alpha_manifest_contract_is_covered_by_the_resume_code_fingerprint() -> None:
+    assert "src/hft_platform/contracts/alpha.py" in set(runner._CODE_FILES)
+
+
 @pytest.mark.parametrize("family", ["smma", "bidask", "kbar", "tick"])
 def test_run_config_accepts_every_registered_family(family: str, tmp_path) -> None:
     config = RunConfig(run_dir=tmp_path, family=family, seeds=(1, 2, 3))

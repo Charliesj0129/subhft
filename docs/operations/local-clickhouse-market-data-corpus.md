@@ -152,7 +152,8 @@ days, up from 58 and 41 in the prior campaign. Trading date 2026-07-27 remained
 excluded because the TMF night session was incomplete; only 2026-07-28 and
 2026-07-29 added eligible evidence. All contracts observed by the repaired
 exports had frozen cost-profile coverage, but every family remains below the
-100-day full-run floor.
+100-day promotion-eligibility floor. That floor does not cap mining search
+breadth.
 
 ### The 2026-08-07 sync
 

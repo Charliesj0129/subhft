@@ -24,6 +24,7 @@ from research.combinatorial.smma_runner import (
     RunIntegrityError,
     SplitUnlockGuard,
     _discovery_process_pool,
+    _effective_trigger_test_count,
     _evaluate_candidate,
     _evaluate_discovery_worker,
     _exact_horizon_inputs,
@@ -520,6 +521,38 @@ def test_exact_resolved_cut_duplicates_reference_the_lowest_quantile_candidate()
     assert first_group[0].duplicate_of is None
     assert all(candidate.duplicate_of == first_group[0].candidate_id for candidate in first_group[1:])
     assert len({candidate.candidate_id for candidate in first_group}) == 4
+
+
+def test_effective_trials_preserve_distinct_intraday_signals_with_equal_daily_trigger_rates() -> None:
+    trading_days = np.repeat(np.asarray(["d1", "d2", "d3", "d4"]), 4)
+    signals = {
+        "first": np.tile(np.asarray([1.0, 1.0, 0.0, 0.0]), 4),
+        "second": np.tile(np.asarray([1.0, 0.0, 1.0, 0.0]), 4),
+    }
+    candidates = [
+        Candidate(
+            candidate_id=expression,
+            root="TXF",
+            timeframe_min=60,
+            expression=expression,
+            horizon="1h",
+            direction=1,
+            threshold=0.5,
+            seed=1,
+            complexity=1,
+        )
+        for expression in signals
+    ]
+
+    effective = _effective_trigger_test_count(
+        candidates=candidates,
+        signals=signals,
+        discovery_mask=np.ones(trading_days.size, dtype=bool),
+        trading_days=trading_days,
+    )
+
+    assert np.corrcoef(signals["first"], signals["second"])[0, 1] == pytest.approx(0.0)
+    assert effective == 2
 
 
 def test_quantile_cut_is_resolved_on_discovery_split_only() -> None:

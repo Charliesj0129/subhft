@@ -133,6 +133,7 @@ _CODE_FILES: tuple[str, ...] = (
     "research/combinatorial/promote.py",
     "research/backtest/cost_models.py",
     "config/research/cost_profiles.yaml",
+    "src/hft_platform/contracts/alpha.py",
     "src/hft_platform/cli/_alpha.py",
     "src/hft_platform/cli/_parser.py",
 )
@@ -667,29 +668,23 @@ def _effective_trigger_test_count(
     discovery_mask: np.ndarray,
     trading_days: np.ndarray,
 ) -> int:
-    """Estimate independent tested trigger rules from discovery-day activation profiles."""
-    discovery_days = np.asarray(trading_days)[discovery_mask]
-    ordered_days = tuple(dict.fromkeys(str(value) for value in discovery_days))
-    profiles: list[np.ndarray] = []
-    for candidate in candidates:
-        if candidate.horizon != "1h" or candidate.duplicate_of is not None:
-            continue
-        active = activation_mask(
-            np.asarray(signals[candidate.expression])[discovery_mask],
-            direction=candidate.direction,
-            threshold=candidate.threshold,
-        )
-        profiles.append(
-            np.asarray(
-                [np.mean(active[discovery_days == day]) for day in ordered_days],
-                dtype=np.float64,
-            )
-        )
-    if not profiles:
+    """Estimate independent signal tests without discarding intraday structure."""
+    mask = np.asarray(discovery_mask, dtype=np.bool_).reshape(-1)
+    day_axis = np.asarray(trading_days).reshape(-1)
+    if mask.size != day_axis.size:
+        raise ValueError("discovery mask and trading-day axis must have identical lengths")
+    expressions = tuple(dict.fromkeys(candidate.expression for candidate in candidates if candidate.horizon == "1h"))
+    if not expressions:
         return 1
-    activation_effective = effective_test_count(np.vstack(profiles))
+    discovery_signals: list[np.ndarray] = []
+    for expression in expressions:
+        signal = np.asarray(signals[expression], dtype=np.float64).reshape(-1)
+        if signal.size != mask.size:
+            raise ValueError("candidate signal and discovery mask must have identical lengths")
+        discovery_signals.append(signal[mask])
+    signal_effective = effective_test_count(np.vstack(discovery_signals))
     horizon_count = len({candidate.horizon for candidate in candidates})
-    return max(1, min(len(candidates), activation_effective * max(1, horizon_count)))
+    return max(1, min(len(candidates), signal_effective * max(1, horizon_count)))
 
 
 def _profile_for_root(root: str) -> str:
@@ -1574,7 +1569,7 @@ class MiningRun:
                 "exact_cut_duplicates": sum(row.get("status") == "deduplicated" for row in discovery_rows),
                 "entry_rule_version": ENTRY_RULE_VERSION,
                 "entry_comparator": ">=",
-                "estimator": "Li-Ji eigenvalue count over discovery-day trigger activation profiles",
+                "estimator": "Li-Ji eigenvalue count over discovery signal correlations, times target horizons",
             },
             "search_space_hash",
         )
