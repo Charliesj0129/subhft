@@ -482,7 +482,7 @@ class TestFindStaleSymbols:
         snapshot = {"SYM_A": 90.0, "SYM_B": 99.0, "SYM_C": 80.0}
         md._symbol_gap_threshold_s = 6.0
         stale = md._find_stale_symbols(snapshot, now)
-        symbols = [s for s, _ in stale]
+        symbols = [s for s, _, _ in stale]
         assert "SYM_A" in symbols  # gap=10
         assert "SYM_C" in symbols  # gap=20
         assert "SYM_B" not in symbols  # gap=1
@@ -492,7 +492,7 @@ class TestFindStaleSymbols:
         now = 100.0
         snapshot = {"TXO20240115": 80.0, "TXFD6": 80.0}
         stale = md._find_stale_symbols(snapshot, now)
-        symbols = [s for s, _ in stale]
+        symbols = [s for s, _, _ in stale]
         assert "TXFD6" in symbols
         assert "TXO20240115" not in symbols
 
@@ -530,7 +530,7 @@ class TestFindStaleSymbols:
 
         with patch.object(md, "_is_market_open_grace_period", return_value=False):
             stale = md._find_stale_symbols(snapshot, now)
-        symbols = [s for s, _ in stale]
+        symbols = [s for s, _, _ in stale]
         assert "TXFG6" not in symbols  # 20s < 60s override
         assert "2207" not in symbols  # 60s < 120s override
         assert "TXFD6" in symbols  # 20s > 6s global threshold
@@ -545,7 +545,7 @@ class TestFindStaleSymbols:
 
         with patch.object(md, "_is_market_open_grace_period", return_value=False):
             stale = md._find_stale_symbols(snapshot, now)
-        assert ("UNRELATED", 15.0) in [(s, round(g, 1)) for s, g in stale]
+        assert ("UNRELATED", 15.0) in [(s, round(g, 1)) for s, g, _ in stale]
 
 
 # ---------------------------------------------------------------------------
