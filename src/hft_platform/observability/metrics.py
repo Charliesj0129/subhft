@@ -132,6 +132,7 @@ class MetricsRegistry:
                 _pn("order_deadline_expired_total"),
                 _pn("phantom_order_candidates_total"),
                 _pn("phantom_recovery_releases_total"),
+                _pn("live_order_ttl_releases_total"),
                 _pn("api_guard_timeout_total"),
                 _pn("shadow_orders_total"),
                 _pn("shadow_mode_active"),
@@ -650,6 +651,11 @@ class MetricsRegistry:
         self.phantom_recovery_releases_total = Counter(
             _pn("phantom_recovery_releases_total"),
             "Phantom orders released after TTL expiry to unfreeze strategy pending counters (Bug D, 2026-04-20)",
+        )
+        self.live_order_ttl_releases_total = Counter(
+            _pn("live_order_ttl_releases_total"),
+            "Dispatched orders swept after TTL with no terminal callback, releasing the strategy pending slot "
+            "(2026-08-10: two such orders froze R47 for two days with no counter anywhere)",
         )
         self.api_guard_timeout_total = Counter(
             _pn("api_guard_timeout_total"),

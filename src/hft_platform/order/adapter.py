@@ -106,6 +106,11 @@ class OrderAdapter:
         "_metadata",
         "price_codec",
         "live_orders",
+        # Sidecar for ``sweep_stale_live_orders``: ``live_orders`` values are
+        # broker Trade objects, which carry no strategy_id/symbol/side, so the
+        # sweep cannot tell the strategy which pending slot it just orphaned.
+        # Keyed identically to ``live_orders``; evicted on the same paths.
+        "_live_order_intents",
         "_live_orders_lock",
         "rate_limiter",
         "circuit_breaker",
@@ -239,6 +244,10 @@ class OrderAdapter:
 
         # State - Protected by _live_orders_lock for concurrent access
         self.live_orders: Dict[str, Any] = {}  # Map "strategy_id:intent_id" -> Trade Object or Status dict
+        # order_key -> (intent, effective side). FORCE_FLAT places on the
+        # closing side, which is the opposite of ``intent.side``, so the side
+        # is stored explicitly rather than re-derived at release time.
+        self._live_order_intents: Dict[str, tuple[OrderIntent, Side]] = {}
         self._live_orders_lock = asyncio.Lock()
         self._pending_order_keys: set[str] = set()
         # TTL sweep: evict orphaned live_orders entries (missed terminal callbacks)
@@ -575,11 +584,27 @@ class OrderAdapter:
             pass
         return intent.symbol
 
+    def _track_live_order_intent(self, order_key: str, intent: OrderIntent, side: Side) -> None:
+        """Remember who to tell if this order is later swept as orphaned.
+
+        Called under ``_live_orders_lock`` alongside the ``live_orders`` insert.
+        """
+        self._live_order_intents[order_key] = (intent, side)
+
+    def _untrack_live_order_intent(self, order_key: str) -> None:
+        """Drop release state for an order that reached a terminal state.
+
+        Idempotent — every ``live_orders`` removal path calls this, and several
+        of them can run for the same key (terminal callback then sweep).
+        """
+        self._live_order_intents.pop(order_key, None)
+
     def _send_dispatch_rejection(
         self,
         intent: OrderIntent,
         reason_code: str,
         phantom_pending: bool = False,
+        side: Side | None = None,
     ) -> None:
         """Non-blocking rejection feedback for dispatch failures.
 
@@ -605,7 +630,7 @@ class OrderAdapter:
                     symbol=intent.symbol,
                     reason_code=reason_code,
                     timestamp_ns=timebase.now_ns(),
-                    side=getattr(intent, "side", None),
+                    side=side if side is not None else getattr(intent, "side", None),
                     was_approved=phantom_pending,
                 )
             )
@@ -674,6 +699,7 @@ class OrderAdapter:
                 self.live_orders.clear()
                 self._pending_order_keys.clear()
                 self._live_orders_inserted_at.clear()
+                self._live_order_intents.clear()
             return count
 
     async def sweep_stale_live_orders(self) -> int:
@@ -681,6 +707,19 @@ class OrderAdapter:
 
         Returns the number of evicted entries.  Rate-limited to once per 60s.
         Called from the supervisor loop.
+
+        2026-08-10: eviction alone is not enough. Two orders dispatched with
+        broker ids, no terminal callback ever arrived (the SDK payload was
+        being dropped at the type boundary), and this sweep logged
+        ``evicted=2 remaining=0`` — while R47's ``_pending_buy`` stayed at 1
+        and the strategy quoted nothing for two days. ``release_stale_phantom_
+        pendings`` does not cover these: a phantom is a *dispatch failure*,
+        and these dispatched successfully.
+
+        So every stale eviction now also hands the pending slot back, via the
+        same ``was_approved=False`` feedback the phantom janitor uses. The
+        strategy dedups a late terminal callback for the released order against
+        ``client_order_id`` so the slot is not paid for twice.
         """
         now_mono = time.monotonic()
         if now_mono - self._live_orders_last_sweep_s < 60.0:
@@ -688,6 +727,10 @@ class OrderAdapter:
         self._live_orders_last_sweep_s = now_mono
         cutoff = now_mono - self._live_orders_ttl_s
         evicted = 0
+        # Collected under the lock, emitted after it: _send_dispatch_rejection
+        # calls into the rejection sink's put_nowait and must not run while the
+        # live-orders lock is held.
+        orphaned_pendings: list[tuple[OrderIntent, Side]] = []
         async with self._live_orders_lock:
             stale_keys = [
                 k
@@ -697,6 +740,9 @@ class OrderAdapter:
             for k in stale_keys:
                 self.live_orders.pop(k, None)
                 self._live_orders_inserted_at.pop(k, None)
+                tracked = self._live_order_intents.pop(k, None)
+                if tracked is not None:
+                    orphaned_pendings.append(tracked)
                 self._remove_pending_fill(k)
                 evicted += 1
             # Also prune _live_orders_inserted_at for keys no longer in live_orders
@@ -709,7 +755,19 @@ class OrderAdapter:
                 evicted=evicted,
                 remaining=len(self.live_orders),
                 ttl_s=self._live_orders_ttl_s,
+                pendings_released=len(orphaned_pendings),
             )
+        for intent, side in orphaned_pendings:
+            self._send_dispatch_rejection(
+                intent,
+                "live_order_ttl_expired",
+                phantom_pending=False,
+                side=side,
+            )
+            try:
+                self.metrics.live_order_ttl_releases_total.inc()
+            except Exception:  # noqa: BLE001 — metric must never break order path
+                pass
         # Hard cap: if still over max size, evict oldest
         if len(self.live_orders) > self._live_orders_max_size:
             async with self._live_orders_lock:
@@ -721,6 +779,7 @@ class OrderAdapter:
                 for k in sorted_keys[:overflow]:
                     self.live_orders.pop(k, None)
                     self._live_orders_inserted_at.pop(k, None)
+                    self._untrack_live_order_intent(k)
                     evicted += 1
                 if overflow > 0:
                     logger.warning(
@@ -823,6 +882,7 @@ class OrderAdapter:
         async with self._live_orders_lock:
             if self.live_orders.get(order_key) is _PENDING_SENTINEL:
                 del self.live_orders[order_key]
+                self._untrack_live_order_intent(order_key)
                 self._pending_order_keys.discard(order_key)
         # NOTE: do NOT remove pending_fill for phantom candidates — the order
         # may have reached the broker and fills arriving later need the
@@ -1818,6 +1878,7 @@ class OrderAdapter:
                 # Normal path — order is registered, clean up
                 logger.info("Removing terminal order", key=order_key)
                 del self.live_orders[order_key]
+                self._untrack_live_order_intent(order_key)
                 self._record_recent_terminal(order_key, reason="terminal")
                 # Clean up e2e latency tracking entry (SLO-2)
                 self._cmd_created_ns_map.pop(order_key, None)
@@ -1850,6 +1911,7 @@ class OrderAdapter:
                     evicted = self._deferred_terminals[0]  # will be popped by append
                     evicted_key = f"{evicted[0]}:{evicted[1]}"
                     self.live_orders.pop(evicted_key, None)
+                    self._untrack_live_order_intent(evicted_key)
                     self._live_orders_inserted_at.pop(evicted_key, None)
                     self._cmd_created_ns_map.pop(evicted_key, None)
                     self._cmd_tca_map.pop(evicted_key, None)
@@ -1875,6 +1937,7 @@ class OrderAdapter:
             if order_key in self.live_orders:
                 logger.info("Removing terminal order", key=order_key)
                 del self.live_orders[order_key]
+                self._untrack_live_order_intent(order_key)
                 self._record_recent_terminal(order_key, reason="terminal")
         self._remove_pending_fill(resolved_order_key)
 
@@ -2091,6 +2154,7 @@ class OrderAdapter:
                 resolved = self.order_id_resolver.resolve_order_key(sid, oid, self.live_orders)
                 if resolved in self.live_orders:
                     del self.live_orders[resolved]
+                    self._untrack_live_order_intent(resolved)
                     self._remove_pending_fill(resolved)
                     logger.info(
                         "deferred_terminal_cleanup",
@@ -2553,6 +2617,7 @@ class OrderAdapter:
                     self.live_orders[order_key] = _PENDING_SENTINEL
                     self._pending_order_keys.add(order_key)
                     self._live_orders_inserted_at[order_key] = time.monotonic()
+                    self._track_live_order_intent(order_key, intent, intent.side)
 
                 c_field = self._next_custom_field_token()
                 await self._register_pending_fill(order_key, intent.symbol, intent.side, c_field)
@@ -2572,6 +2637,7 @@ class OrderAdapter:
                     self.metrics.order_reject_total.inc()
                     async with self._live_orders_lock:
                         self.live_orders.pop(order_key, None)
+                        self._untrack_live_order_intent(order_key)
                         self._pending_order_keys.discard(order_key)
                     self._remove_pending_fill(order_key)
                     return False
@@ -2586,6 +2652,7 @@ class OrderAdapter:
                         self.metrics.order_reject_total.inc()
                         async with self._live_orders_lock:
                             self.live_orders.pop(order_key, None)
+                            self._untrack_live_order_intent(order_key)
                             self._pending_order_keys.discard(order_key)
                         self._remove_pending_fill(order_key)
                         return False
@@ -2636,6 +2703,7 @@ class OrderAdapter:
                     _dlq_reason = RejectionReason.API_TIMEOUT if _is_timeout else RejectionReason.CONNECTION_ERROR
                     async with self._live_orders_lock:
                         self.live_orders.pop(order_key, None)
+                        self._untrack_live_order_intent(order_key)
                         self._pending_order_keys.discard(order_key)
                     if not _is_timeout:
                         self._remove_pending_fill(order_key)
@@ -2757,6 +2825,8 @@ class OrderAdapter:
                     self.live_orders[order_key] = _PENDING_SENTINEL
                     self._pending_order_keys.add(order_key)
                     self._live_orders_inserted_at[order_key] = time.monotonic()
+                    # FORCE_FLAT places on the closing side, not intent.side.
+                    self._track_live_order_intent(order_key, intent, close_side)
 
                 c_field = self._next_custom_field_token()
                 await self._register_pending_fill(order_key, intent.symbol, close_side, c_field)
@@ -2780,6 +2850,7 @@ class OrderAdapter:
                 if trade is None or trade is _GUARD_TIMEOUT:
                     async with self._live_orders_lock:
                         self.live_orders.pop(order_key, None)
+                        self._untrack_live_order_intent(order_key)
                         self._pending_order_keys.discard(order_key)
                     if trade is not _GUARD_TIMEOUT:
                         self._remove_pending_fill(order_key)
@@ -3001,6 +3072,7 @@ class OrderAdapter:
             async with self._live_orders_lock:
                 if order_key in self.live_orders and self.live_orders.get(order_key) is _PENDING_SENTINEL:
                     del self.live_orders[order_key]
+                    self._untrack_live_order_intent(order_key)
                     self._pending_order_keys.discard(order_key)
             self._remove_pending_fill(order_key)
             return False

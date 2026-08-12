@@ -439,6 +439,13 @@ class R47MakerStrategy(SimpleMarketMaker):
         self._seen_fill_ids: set[str] = set()
         self._FILL_DEDUP_MAX = 500
 
+        # 2026-08-10: client_order_ids whose pending slot was already handed
+        # back by the adapter's stale-live-order sweep. A terminal callback can
+        # still arrive after the 300s TTL; without this, the slot is paid for
+        # twice and two pending orders on one side collapse to zero.
+        self._ttl_released_keys: set[str] = set()
+        self._TTL_RELEASED_MAX = 2048
+
         # F2: Active order tracking — maps symbol to broker order_id.
         # Used to cancel stale ROD orders before requoting at a new price.
         # Without this, ROD orders stack at the exchange and fill on any
@@ -660,6 +667,23 @@ class R47MakerStrategy(SimpleMarketMaker):
             if self._active_sell_oid.get(sym) == event.order_id:
                 del self._active_sell_oid[sym]
             self._discard_inflight_oid(sym, Side.SELL, event.order_id)  # D3
+        # 2026-08-10: the adapter's stale-live-order sweep may already have
+        # released this order's slot after the 300s TTL. Paying for it again
+        # here would free a slot a live order still occupies. The active/
+        # in-flight tracking above is cleared either way — only the pending
+        # decrement is skipped. An unattributable callback (empty
+        # client_order_id — the normalizer resolves it best-effort) keeps the
+        # pre-existing behaviour and decrements.
+        coid = getattr(event, "client_order_id", "")
+        if coid and coid in self._ttl_released_keys:
+            self._ttl_released_keys.discard(coid)
+            logger.info(
+                "r47_terminal_after_ttl_release_skipped",
+                symbol=sym,
+                client_order_id=coid,
+                status=event.status.name,
+            )
+            return
         # DEC2-002: remaining_qty=0 means fully filled before cancel arrived.
         # Decrement by 0 (no-op) — the fill already decremented pending.
         remaining = max(0, event.remaining_qty)
@@ -713,6 +737,23 @@ class R47MakerStrategy(SimpleMarketMaker):
                 feedback_side=repr(side),
             )
             return
+        # 2026-08-10: remember which order this release paid for, so a terminal
+        # callback arriving after the adapter's 300s TTL does not decrement the
+        # same slot a second time. ``client_order_id`` on an OrderEvent is
+        # exactly ``"strategy_id:intent_id"``, so the two sides correlate.
+        if feedback.reason_code == "live_order_ttl_expired":
+            self._ttl_released_keys.add(f"{feedback.strategy_id}:{feedback.intent_id}")
+            if len(self._ttl_released_keys) > self._TTL_RELEASED_MAX:
+                # Set has no ordering; drop half to bound memory. A dropped key
+                # only costs the double-decrement this guard prevents, which is
+                # still floored at zero.
+                evict = len(self._ttl_released_keys) - self._TTL_RELEASED_MAX // 2
+                victims: set[str] = set()
+                for key in self._ttl_released_keys:
+                    if len(victims) >= evict:
+                        break
+                    victims.add(key)
+                self._ttl_released_keys -= victims
         logger.debug(
             "r47_risk_rejection_pending_released",
             symbol=sym,
