@@ -390,23 +390,86 @@ def _extract_pnl_snapshot_values(row) -> list | None:
         return None
 
 
+# Positional layout of the typed-intent fast-path frame built by
+# ``StrategyRunner._make_intent`` (``strategy/runner.py:891-910``) and decoded
+# by ``gateway.channel.typed_frame_to_view``. Duplicated here because the
+# recorder must not import the gateway; ``tests/unit/
+# test_intent_recorder_typed_tuple.py`` fails if the two ever drift apart.
+_TYPED_FRAME_TAG = "typed_intent_v1"
+_TYPED_FRAME_MIN_LEN = 17  # legacy frames stop at decision_price (index 16)
+
+
+def _enum_name(enum_cls, value) -> str:
+    """Render a fast-path enum int as the ``String`` column ClickHouse expects."""
+    try:
+        return enum_cls(int(value)).name
+    except (ValueError, TypeError):
+        return str(value)
+
+
+def _extract_typed_intent_values(frame: tuple, ingest_ts: int) -> list | None:
+    """Extract recorder values from a typed-intent tuple.
+
+    The fast path (``HFT_TYPED_INTENT_CHANNEL``, default on) carries intents as
+    tuples, not ``OrderIntent`` objects, and ``getattr`` on a tuple silently
+    yields the default for every field — the row would be written with
+    intent_id 0, empty strategy_id/symbol/side and price 0.
+    ``contracts/strategy.py:132-135`` warns about precisely this pattern.
+    """
+    if len(frame) < _TYPED_FRAME_MIN_LEN:
+        return None
+    from hft_platform.contracts.strategy import TIF, IntentType, Side  # noqa: PLC0415 — keeps import-time cheap
+
+    try:
+        return [
+            int(frame[1]),
+            str(frame[2]),
+            str(frame[3]),
+            _enum_name(IntentType, frame[4]),
+            _enum_name(Side, frame[5]),
+            int(frame[6]),  # scaled int x10000
+            int(frame[7]),
+            _enum_name(TIF, frame[8]),
+            str(frame[9] or ""),
+            int(frame[10]),
+            int(frame[11]),
+            int(frame[16]),  # decision_price
+            str(frame[17]) if len(frame) > 17 and frame[17] else "LMT",
+            str(frame[13] or ""),
+            str(frame[14] or ""),
+            int(frame[15]),
+            str(frame[12] or ""),
+            int(ingest_ts),
+        ]
+    except (TypeError, ValueError, IndexError) as exc:
+        logger.debug("typed_intent_extract_failed", error=str(exc))
+        return None
+
+
 def _extract_intent_values(row) -> list | None:
     """Slice C task 3 — extractor for the opt-in ``intents`` topic.
 
     Accepts the envelope format produced by ``StrategyRunner`` after a
-    successful risk submit: ``{"intent": OrderIntent, "ingest_ts": int_ns}``.
+    successful risk submit: ``{"intent": OrderIntent | typed frame,
+    "ingest_ts": int_ns}``.
 
     Returns a list of values ordered identically to ``INTENT_COLUMNS`` so the
     ``Batcher`` columnar buffer can pack rows without further reflection. Enum
     fields (``intent_type``, ``side``, ``tif``) are emitted as their ``.name``
     string for ClickHouse ``String`` columns. ``target_order_id`` of ``None``
-    is normalized to the empty string.
+    is normalized to the empty string. A row that cannot be extracted is
+    dropped rather than written short — the buffer is columnar, so a
+    wrong-length row misaligns every column in the batch, not just its own.
     """
     if row is None:
         return None
     intent = row.get("intent") if isinstance(row, dict) else row
     if intent is None:
         return None
+    if isinstance(intent, tuple):
+        if not intent or intent[0] != _TYPED_FRAME_TAG:
+            return None
+        return _extract_typed_intent_values(intent, int(row.get("ingest_ts", 0)) if isinstance(row, dict) else 0)
     try:
         return [
             int(getattr(intent, "intent_id", 0)),
