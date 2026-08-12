@@ -153,6 +153,13 @@ class ExecutionNormalizer:
 
         try:
             if not isinstance(d, dict):
+                # Silent until 2026-08-12: both orders of 2026-08-10 died here
+                # without a log line, so the visible symptom was only the fill
+                # warning and nobody could see that the order path was dead.
+                # A broker payload the platform cannot read is a defect in the
+                # adapter's conversion, never a routine skip.
+                logger.warning("normalize_order_non_mapping_payload", payload_type=str(type(d)))
+                self.metrics.order_normalization_failed_total.labels(reason="non_mapping_payload").inc()
                 return None
 
             status_payload = d.get("status")
@@ -176,6 +183,8 @@ class ExecutionNormalizer:
             status = self._map_status(status_text, op_type=op_type, op_code=op_code, state=state)
 
             if "order" in d and not isinstance(d.get("order"), dict):
+                logger.warning("normalize_order_non_mapping_order_block", order_type=str(type(d.get("order"))))
+                self.metrics.order_normalization_failed_total.labels(reason="non_mapping_order_block").inc()
                 return None
             order = d.get("order", {}) if isinstance(d.get("order"), dict) else {}
             ord_no = self._first_str(order, fm.order_id_keys()) or self._first_str(d, fm.order_id_keys())

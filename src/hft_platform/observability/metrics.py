@@ -668,6 +668,11 @@ class MetricsRegistry:
             _pn("fill_normalization_failed_total"),
             "Fill events that failed normalization (missing account, parse error)",
         )
+        self.order_normalization_failed_total = Counter(
+            _pn("order_normalization_failed_total"),
+            "Order events dropped by normalization, by reason",
+            ["reason"],
+        )
         self.synthetic_fill_id_total = Counter(
             _pn("synthetic_fill_id_total"),
             "Fills with synthesized fill_id (broker omitted seqno)",
