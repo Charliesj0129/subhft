@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -41,6 +42,7 @@ DEFAULT_RATIOS: dict[str, float] = {
 
 _FROZEN_FILENAME = "frozen_candidates.jsonl"
 _ACCESS_LOG_FILENAME = "locked_access_log.jsonl"
+_DATASET_FINGERPRINT_DOMAIN = b"hft.alpha.mine.dataset.v2\x00"
 
 
 class LockedPartitionAccessError(RuntimeError):
@@ -57,6 +59,20 @@ class _PartitionSpan:
     session_count: int
     raw_row_count: int
     row_indices: np.ndarray  # post-embargo, ascending
+
+
+def dataset_fingerprint(array: Any) -> str:
+    """Hash the complete array contract used by immutable mining manifests."""
+    contiguous = np.ascontiguousarray(array)
+    dtype_descriptor = np.lib.format.dtype_to_descr(contiguous.dtype)
+    digest = hashlib.sha256()
+    digest.update(_DATASET_FINGERPRINT_DOMAIN)
+    digest.update(json.dumps(dtype_descriptor, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+    digest.update(b"\x00")
+    digest.update(json.dumps(list(contiguous.shape), separators=(",", ":")).encode("ascii"))
+    digest.update(b"\x00")
+    digest.update(memoryview(contiguous).cast("B"))
+    return digest.hexdigest()
 
 
 class DatasetPartitionManager:
@@ -79,13 +95,23 @@ class DatasetPartitionManager:
         missing = set(PARTITION_ORDER) - set(resolved_ratios)
         if missing:
             raise PartitionConfigError(f"ratios missing required partitions: {sorted(missing)}")
-        total = sum(resolved_ratios[name] for name in PARTITION_ORDER)
+        unexpected = set(resolved_ratios) - set(PARTITION_ORDER)
+        if unexpected:
+            raise PartitionConfigError(f"ratios contain unknown partitions: {sorted(unexpected)}")
+        try:
+            normalized_ratios = {name: float(resolved_ratios[name]) for name in PARTITION_ORDER}
+        except (TypeError, ValueError) as exc:
+            raise PartitionConfigError(f"ratios must be finite positive numbers: {exc}") from exc
+        invalid = {name: value for name, value in normalized_ratios.items() if not math.isfinite(value) or value <= 0.0}
+        if invalid:
+            raise PartitionConfigError(f"ratios must be finite and strictly positive: {invalid}")
+        total = sum(normalized_ratios.values())
         if abs(total - 1.0) > 1e-6:
             raise PartitionConfigError(f"ratios must sum to 1.0, got {total}")
 
         self.dataset_fingerprint = dataset_fingerprint
         self.embargo_rows = int(embargo_rows)
-        self.ratios: dict[str, float] = {name: float(resolved_ratios[name]) for name in PARTITION_ORDER}
+        self.ratios = normalized_ratios
         self.random_seed = int(random_seed)
         self.manifest_dir = Path(manifest_dir)
 
@@ -96,6 +122,13 @@ class DatasetPartitionManager:
         self._sessions_arr = sessions_arr
         self._ordered_sessions, self._session_assignment = _assign_sessions(sessions_arr, self.ratios)
         self._spans = _build_spans(sessions_arr, self._session_assignment, self.embargo_rows)
+        empty_after_embargo = [name for name, span in self._spans.items() if span.row_indices.size == 0]
+        if empty_after_embargo:
+            raw_counts = {name: span.raw_row_count for name, span in self._spans.items()}
+            raise PartitionConfigError(
+                "embargo leaves governed partitions empty: "
+                f"{empty_after_embargo}; embargo_rows={self.embargo_rows}; raw_row_counts={raw_counts}"
+            )
         self._manifest_hash = _compute_manifest_hash(
             dataset_fingerprint=self.dataset_fingerprint,
             ratios=self.ratios,
@@ -295,6 +328,12 @@ def _assign_sessions(
         else:
             counts[name] = int(round(ratios[name] * n))
             allocated += counts[name]
+
+    empty = [name for name, count in counts.items() if count <= 0]
+    if empty:
+        raise PartitionConfigError(
+            f"session allocation leaves governed partitions empty: {empty}; session_count={n}; counts={counts}"
+        )
 
     assignment: dict[Any, str] = {}
     idx = 0

@@ -7,35 +7,47 @@ from datetime import date, timedelta
 from pathlib import Path
 
 import numpy as np
+import pytest
 import yaml
 
 from hft_platform.cli._alpha import cmd_alpha_screen
 from research.combinatorial.promote import promote_smma_candidate
 from research.combinatorial.smma_dataset import BarDataset, save_governed_dataset
 from research.combinatorial.smma_runner import Candidate, _candidate_id
-from research.combinatorial.smma_screen import is_smma_screen_package, run_smma_screen
+from research.combinatorial.smma_screen import SMMAScreenError, is_smma_screen_package, run_smma_screen
+from research.combinatorial.smma_validation import ENTRY_RULE_VERSION, resolve_quantile_threshold
 
 
-def _candidate() -> Candidate:
+def _candidate(*, expression: str = "close_l3_atr14_distance", timeframe_min: int = 60) -> Candidate:
+    threshold_quantile = 0.70
+    resolution = resolve_quantile_threshold(
+        np.asarray([-2.0, -0.4, 0.13, 0.77, 1.8]),
+        direction=1,
+        quantile=threshold_quantile,
+    )
     identity = {
         "family": "smma",
         "root": "TXF",
-        "timeframe_min": 60,
-        "expression": "close_l3_atr14_distance",
+        "timeframe_min": timeframe_min,
+        "expression": expression,
         "horizon": "1h",
         "direction": 1,
-        "threshold": 0.0,
+        "threshold_quantile": threshold_quantile,
+        "entry_rule_version": ENTRY_RULE_VERSION,
     }
     return Candidate(
         candidate_id=_candidate_id(identity),
         root="TXF",
-        timeframe_min=60,
-        expression="close_l3_atr14_distance",
+        timeframe_min=timeframe_min,
+        expression=expression,
         horizon="1h",
         direction=1,
-        threshold=0.0,
+        threshold=resolution.cut,
         seed=20260726,
         complexity=1,
+        threshold_quantile=threshold_quantile,
+        entry_rule_version=ENTRY_RULE_VERSION,
+        threshold_resolution=resolution,
     )
 
 
@@ -136,29 +148,13 @@ def test_smma_screen_writes_gate_a_c_screen_only_scorecard(tmp_path) -> None:
     payload = json.loads(Path(result["scorecard_path"]).read_text(encoding="utf-8"))
     assert payload["screen_only"] is True
     assert payload["promotion_eligible"] is False
+    assert payload["candidate"]["threshold_quantile"] == 0.70
+    assert payload["candidate"]["entry_rule_version"] == ENTRY_RULE_VERSION
+    assert payload["candidate"]["threshold_resolution"]["cut"] == candidate.threshold
 
 
 def test_smma_screen_accepts_two_minute_fibonacci_candidate(tmp_path) -> None:
-    identity = {
-        "family": "smma",
-        "root": "TXF",
-        "timeframe_min": 2,
-        "expression": "close_l1_2_atr14_spread",
-        "horizon": "1h",
-        "direction": 1,
-        "threshold": 0.0,
-    }
-    candidate = Candidate(
-        candidate_id=_candidate_id(identity),
-        root="TXF",
-        timeframe_min=2,
-        expression="close_l1_2_atr14_spread",
-        horizon="1h",
-        direction=1,
-        threshold=0.0,
-        seed=20260726,
-        complexity=1,
-    )
+    candidate = _candidate(expression="close_l1_2_atr14_spread", timeframe_min=2)
     alphas_dir = tmp_path / "research" / "alphas"
     promote_smma_candidate(
         candidate.expression,
@@ -192,6 +188,144 @@ def test_smma_screen_accepts_two_minute_fibonacci_candidate(tmp_path) -> None:
     assert payload["candidate"]["timeframe_min"] == 2
     assert payload["screen_only"] is True
     assert payload["promotion_eligible"] is False
+
+
+def test_smma_screen_rejects_legacy_absolute_threshold_identity(tmp_path) -> None:
+    identity = {
+        "family": "smma",
+        "root": "TXF",
+        "timeframe_min": 60,
+        "expression": "close_l3_atr14_distance",
+        "horizon": "1h",
+        "direction": 1,
+        "threshold": 0.5,
+    }
+    candidate = Candidate(
+        candidate_id=_candidate_id(identity),
+        root="TXF",
+        timeframe_min=60,
+        expression="close_l3_atr14_distance",
+        horizon="1h",
+        direction=1,
+        threshold=0.5,
+        seed=20260726,
+        complexity=1,
+    )
+    promote_smma_candidate(
+        candidate.expression,
+        alpha_id="smma_legacy_candidate",
+        owner="research",
+        instrument="TXFD6",
+        candidate_spec=asdict(candidate),
+        out_dir=tmp_path / "research" / "alphas",
+    )
+
+    with pytest.raises(SMMAScreenError, match="outside the frozen family"):
+        run_smma_screen(
+            alpha_id="smma_legacy_candidate",
+            data_path=tmp_path / "unused.npz",
+            experiments_dir=tmp_path / "experiments",
+            project_root=tmp_path,
+            skip_gate_b_tests=True,
+        )
+
+
+def test_smma_screen_rejects_malformed_quantile_resolution_fail_closed(tmp_path) -> None:
+    candidate = _candidate()
+    candidate_spec = asdict(candidate)
+    candidate_spec["threshold_resolution"]["cut"] = "not-a-number"
+    promote_smma_candidate(
+        candidate.expression,
+        alpha_id="smma_malformed_resolution",
+        owner="research",
+        instrument="TXFD6",
+        candidate_spec=candidate_spec,
+        out_dir=tmp_path / "research" / "alphas",
+    )
+
+    with pytest.raises(SMMAScreenError, match="threshold resolution does not match"):
+        run_smma_screen(
+            alpha_id="smma_malformed_resolution",
+            data_path=tmp_path / "unused.npz",
+            experiments_dir=tmp_path / "experiments",
+            project_root=tmp_path,
+            skip_gate_b_tests=True,
+        )
+
+
+def test_smma_screen_rejects_quantile_candidate_without_explicit_entry_version(tmp_path) -> None:
+    candidate = _candidate()
+    candidate_spec = asdict(candidate)
+    del candidate_spec["entry_rule_version"]
+    promote_smma_candidate(
+        candidate.expression,
+        alpha_id="smma_missing_entry_version",
+        owner="research",
+        instrument="TXFD6",
+        candidate_spec=candidate_spec,
+        out_dir=tmp_path / "research" / "alphas",
+    )
+
+    with pytest.raises(SMMAScreenError, match="missing entry fields"):
+        run_smma_screen(
+            alpha_id="smma_missing_entry_version",
+            data_path=tmp_path / "unused.npz",
+            experiments_dir=tmp_path / "experiments",
+            project_root=tmp_path,
+            skip_gate_b_tests=True,
+        )
+
+
+def test_batch_stream_parity_accepts_matching_warmup_nans(monkeypatch) -> None:
+    import research.combinatorial.smma_screen as screen
+
+    candidate = _candidate()
+    bars = _dataset().group("TXF", 60)
+    streamed_values = np.linspace(-1.0, 1.0, len(bars))
+    streamed_values[:3] = np.nan
+
+    class FakeCompiledAlpha:
+        def __init__(self, *_args) -> None:
+            self.index = 0
+
+        def update(self, **_kwargs) -> float:
+            value = float(streamed_values[self.index])
+            self.index += 1
+            return value
+
+    monkeypatch.setattr(screen, "SMMACompiledAlpha", FakeCompiledAlpha)
+
+    passed, difference = screen._batch_stream_parity(object(), candidate, bars, streamed_values.copy())
+
+    assert passed is True
+    assert difference == 0.0
+
+
+def test_batch_stream_parity_rejects_nonfinite_mask_mismatches(monkeypatch) -> None:
+    import research.combinatorial.smma_screen as screen
+
+    candidate = _candidate()
+    bars = _dataset().group("TXF", 60)
+    streamed_values = np.linspace(-1.0, 1.0, len(bars))
+
+    class FakeCompiledAlpha:
+        def __init__(self, *_args) -> None:
+            self.index = 0
+
+        def update(self, **_kwargs) -> float:
+            value = float(streamed_values[self.index])
+            self.index += 1
+            return value
+
+    monkeypatch.setattr(screen, "SMMACompiledAlpha", FakeCompiledAlpha)
+
+    batch = streamed_values.copy()
+    streamed_values[0] = np.nan
+    assert screen._batch_stream_parity(object(), candidate, bars, batch) == (False, np.inf)
+
+    streamed_values[0] = np.inf
+    batch[0] = np.inf
+    assert screen._batch_stream_parity(object(), candidate, bars, batch) == (False, np.inf)
 
 
 def test_cli_screen_routes_smma_package_to_family_adapter(monkeypatch, capsys, tmp_path) -> None:

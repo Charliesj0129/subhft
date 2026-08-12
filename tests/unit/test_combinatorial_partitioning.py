@@ -70,6 +70,58 @@ def test_ratios_must_sum_to_one(tmp_path):
         )
 
 
+@pytest.mark.parametrize("invalid_ratio", [0.0, -0.1, np.nan, np.inf])
+def test_ratios_must_be_finite_and_strictly_positive(tmp_path, invalid_ratio):
+    ratios = {"discovery": 0.50, "selection": 0.25, "locked_validation": 0.15, "final_holdout": 0.10}
+    ratios["final_holdout"] = invalid_ratio
+
+    with pytest.raises(PartitionConfigError, match="finite and strictly positive"):
+        DatasetPartitionManager(
+            session_ids=_session_ids(),
+            dataset_fingerprint="fp",
+            embargo_rows=0,
+            manifest_dir=tmp_path / "manifest",
+            ratios=ratios,
+        )
+
+
+def test_four_sessions_are_rejected_when_default_allocation_leaves_empty_holdout(tmp_path):
+    with pytest.raises(PartitionConfigError, match="session allocation leaves governed partitions empty"):
+        DatasetPartitionManager(
+            session_ids=_session_ids(n_sessions=4),
+            dataset_fingerprint="fp",
+            embargo_rows=0,
+            manifest_dir=tmp_path / "manifest",
+        )
+
+
+def test_five_sessions_create_four_nonempty_default_partitions(tmp_path):
+    manager = DatasetPartitionManager(
+        session_ids=_session_ids(n_sessions=5),
+        dataset_fingerprint="fp",
+        embargo_rows=0,
+        manifest_dir=tmp_path / "manifest",
+    )
+
+    assert {name: item["session_count"] for name, item in manager.partition_summary().items()} == {
+        "discovery": 2,
+        "selection": 1,
+        "locked_validation": 1,
+        "final_holdout": 1,
+    }
+    assert all(item["post_embargo_row_count"] > 0 for item in manager.partition_summary().values())
+
+
+def test_embargo_that_empties_partition_is_rejected(tmp_path):
+    with pytest.raises(PartitionConfigError, match="embargo leaves governed partitions empty"):
+        DatasetPartitionManager(
+            session_ids=_session_ids(n_sessions=5),
+            dataset_fingerprint="fp",
+            embargo_rows=6,
+            manifest_dir=tmp_path / "manifest",
+        )
+
+
 def test_get_rows_locked_partition_denied_before_freeze_and_granted_after(tmp_path):
     manager = _manager(tmp_path)
     features = {"x": np.arange(200, dtype=np.float64)}

@@ -194,7 +194,7 @@ def cmd_alpha_mine_init(args: argparse.Namespace) -> None:
         print(f"Session field not found in data: {args.session_field}")
         sys.exit(2)
 
-    dataset_fingerprint = hashlib.sha256(np.ascontiguousarray(arr).tobytes()[:4096]).hexdigest()
+    dataset_fingerprint = partitioning.dataset_fingerprint(arr)
     session_ids = arr[args.session_field].tolist()
 
     ratios = {

@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import tempfile
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Mapping
@@ -40,6 +41,9 @@ from research.combinatorial.smma_runner import (
     evaluate_robustness_slices,
 )
 from research.combinatorial.smma_validation import (
+    ENTRY_RULE_VERSION,
+    THRESHOLD_QUANTILES,
+    ThresholdResolution,
     build_split_plan,
     metrics_to_dict,
     monotonic_horizon_pollution,
@@ -89,6 +93,69 @@ def is_smma_screen_package(alpha_id: str, *, project_root: str | Path = ".") -> 
     )
 
 
+def _candidate_from_spec(candidate_raw: Mapping[str, Any]) -> Candidate:
+    required_entry_fields = {"family", "threshold_quantile", "entry_rule_version", "threshold_resolution"}
+    missing_entry_fields = required_entry_fields - set(candidate_raw)
+    if missing_entry_fields:
+        raise SMMAScreenError(f"SMMA candidate specification is missing entry fields: {sorted(missing_entry_fields)}")
+    candidate_payload = dict(candidate_raw)
+    resolution_payload = candidate_payload.get("threshold_resolution")
+    if isinstance(resolution_payload, Mapping):
+        try:
+            candidate_payload["threshold_resolution"] = ThresholdResolution(**dict(resolution_payload))
+        except (TypeError, ValueError) as exc:
+            raise SMMAScreenError(f"SMMA threshold resolution is invalid: {exc}") from exc
+    try:
+        return Candidate(**candidate_payload)
+    except (TypeError, ValueError) as exc:
+        raise SMMAScreenError(f"SMMA candidate specification is invalid: {exc}") from exc
+
+
+def _candidate_is_in_frozen_family(candidate: Candidate) -> bool:
+    try:
+        return bool(
+            candidate.family == "smma"
+            and candidate.root in ROOTS
+            and candidate.timeframe_min in SUPPORTED_PRIMARY_TIMEFRAMES_MINUTES
+            and candidate.horizon in {"1h", "4h", "session"}
+            and candidate.direction in {-1, 1}
+            and math.isfinite(candidate.threshold)
+            and candidate.threshold_quantile in THRESHOLD_QUANTILES
+            and candidate.entry_rule_version == ENTRY_RULE_VERSION
+            and isinstance(candidate.threshold_resolution, ThresholdResolution)
+        )
+    except (TypeError, ValueError):
+        return False
+
+
+def _threshold_resolution_matches_candidate(candidate: Candidate) -> bool:
+    resolution = candidate.threshold_resolution
+    if not isinstance(resolution, ThresholdResolution):
+        return False
+    try:
+        return bool(
+            math.isfinite(resolution.cut)
+            and resolution.cut == candidate.threshold
+            and resolution.quantile == candidate.threshold_quantile
+            and resolution.comparator == ">="
+            and resolution.finite_count > 0
+            and 0 < resolution.distinct_count <= resolution.finite_count
+            and resolution.below_count >= 0
+            and resolution.tie_count >= 0
+            and resolution.active_count > 0
+            and resolution.tie_count <= resolution.active_count
+            and resolution.below_count + resolution.active_count == resolution.finite_count
+            and math.isclose(
+                resolution.active_rate,
+                resolution.active_count / resolution.finite_count,
+                rel_tol=1e-12,
+                abs_tol=1e-12,
+            )
+        )
+    except (TypeError, ValueError, ZeroDivisionError):
+        return False
+
+
 def _load_package(alpha_id: str, project_root: Path) -> tuple[dict[str, Any], AlphaManifest, Candidate]:
     if _ALPHA_ID_RE.fullmatch(alpha_id) is None:
         raise SMMAScreenError(f"invalid alpha id: {alpha_id}")
@@ -111,24 +178,21 @@ def _load_package(alpha_id: str, project_root: Path) -> tuple[dict[str, Any], Al
     candidate_raw = metadata.get("candidate_spec")
     if not isinstance(candidate_raw, Mapping):
         raise SMMAScreenError("SMMA candidate_spec is missing")
-    candidate = Candidate(**dict(candidate_raw))
-    if (
-        candidate.root not in ROOTS
-        or candidate.timeframe_min not in SUPPORTED_PRIMARY_TIMEFRAMES_MINUTES
-        or candidate.horizon not in {"1h", "4h", "session"}
-        or candidate.direction not in {-1, 1}
-        or candidate.threshold not in {0.0, 0.5, 1.0, 1.5}
-    ):
+    candidate = _candidate_from_spec(candidate_raw)
+    if not _candidate_is_in_frozen_family(candidate):
         raise SMMAScreenError("SMMA candidate specification is outside the frozen family")
+    if not _threshold_resolution_matches_candidate(candidate):
+        raise SMMAScreenError("SMMA threshold resolution does not match the candidate entry rule")
     expected_id = _candidate_id(
         {
-            "family": "smma",
+            "family": candidate.family,
             "root": candidate.root,
             "timeframe_min": candidate.timeframe_min,
             "expression": candidate.expression,
             "horizon": candidate.horizon,
             "direction": candidate.direction,
-            "threshold": candidate.threshold,
+            "threshold_quantile": candidate.threshold_quantile,
+            "entry_rule_version": candidate.entry_rule_version,
         }
     )
     if candidate.candidate_id != expected_id:
@@ -184,8 +248,21 @@ def _batch_stream_parity(
             close=float(bars.close[index]),
             reset=bool(bars.reset[index]),
         )
-    difference = float(np.max(np.abs(streamed - batch_signal))) if streamed.size else 0.0
-    return bool(np.allclose(streamed, batch_signal, rtol=1e-12, atol=1e-12)), difference
+    batch = np.asarray(batch_signal, dtype=np.float64).reshape(-1)
+    if streamed.size != batch.size:
+        return False, math.inf
+    streamed_nan = np.isnan(streamed)
+    batch_nan = np.isnan(batch)
+    if not np.array_equal(streamed_nan, batch_nan):
+        return False, math.inf
+    finite = np.isfinite(streamed) & np.isfinite(batch)
+    if not np.array_equal(np.isfinite(streamed), np.isfinite(batch)) or np.any(~finite & ~streamed_nan):
+        return False, math.inf
+    if not np.any(finite):
+        return True, 0.0
+    differences = np.abs(streamed[finite] - batch[finite])
+    difference = float(np.max(differences))
+    return bool(np.allclose(streamed[finite], batch[finite], rtol=1e-12, atol=1e-12)), difference
 
 
 def run_smma_screen(
@@ -228,17 +305,7 @@ def run_smma_screen(
     labels = np.where(split_plan.labels == "final_holdout", "excluded", "screen")
     horizon_results: dict[str, CandidateResult] = {}
     for horizon in ("1h", "4h", "session"):
-        horizon_candidate = Candidate(
-            candidate_id=candidate.candidate_id,
-            root=candidate.root,
-            timeframe_min=candidate.timeframe_min,
-            expression=candidate.expression,
-            horizon=horizon,
-            direction=candidate.direction,
-            threshold=candidate.threshold,
-            seed=candidate.seed,
-            complexity=candidate.complexity,
-        )
+        horizon_candidate = replace(candidate, horizon=horizon)
         horizon_results[horizon] = _evaluate_candidate(
             horizon_candidate,
             dataset=dataset,

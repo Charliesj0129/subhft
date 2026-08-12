@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 import hft_platform.cli as cli
+from research.combinatorial.partitioning import dataset_fingerprint
 
 
 def _mine_init_args(*, data_path, out_dir, session_field="session_id", **overrides) -> Namespace:
@@ -55,6 +56,30 @@ def test_cmd_alpha_mine_init_writes_manifest_and_prints_payload(capsys, tmp_path
     written = json.loads(open(manifest_path).read())
     assert written["manifest_hash"] == payload["manifest_hash"]
     assert written["symbols"] == ["TXFD6"]
+
+
+def test_alpha_mine_dataset_fingerprint_hashes_bytes_after_prefix() -> None:
+    baseline = _structured_data(n_sessions=100, rows_per_session=10)
+    changed = baseline.copy()
+    assert baseline.nbytes > 4096
+    changed["ofi"][-1] += 1.0
+
+    baseline_fingerprint = dataset_fingerprint(baseline)
+    changed_fingerprint = dataset_fingerprint(changed)
+
+    assert len(baseline_fingerprint) == 64
+    assert baseline_fingerprint != changed_fingerprint
+
+
+def test_alpha_mine_dataset_fingerprint_includes_dtype_and_shape() -> None:
+    baseline = np.arange(16, dtype=np.uint8)
+    same_bytes_new_shape = baseline.reshape(4, 4)
+    same_bytes_new_dtype = baseline.view(np.uint16)
+
+    baseline_fingerprint = dataset_fingerprint(baseline)
+
+    assert dataset_fingerprint(same_bytes_new_shape) != baseline_fingerprint
+    assert dataset_fingerprint(same_bytes_new_dtype) != baseline_fingerprint
 
 
 def test_cmd_alpha_mine_init_rejects_non_structured_array(capsys, tmp_path):
