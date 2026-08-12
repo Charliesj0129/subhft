@@ -43,6 +43,19 @@ TXFF6:
   point_value_nwd: 200
   scale: 1000000
 
+# Contract month changes the instrument identity, not the frozen TXF economics.
+TXFG6:
+  commission_pts_per_side: 0.3
+  tax_pts_per_side: 1.2
+  point_value_nwd: 200
+  scale: 1000000
+
+TXFH6:
+  commission_pts_per_side: 0.3
+  tax_pts_per_side: 1.2
+  point_value_nwd: 200
+  scale: 1000000
+
 TMFB6:
   commission_pts_per_side: 1.3
   tax_pts_per_side: 0.7
@@ -50,6 +63,31 @@ TMFB6:
   scale: 1000000
 
 TMFC6:
+  commission_pts_per_side: 1.3
+  tax_pts_per_side: 0.7
+  point_value_nwd: 10
+  scale: 1000000
+
+# Contract month changes the instrument identity, not the frozen TMF economics.
+TMFE6:
+  commission_pts_per_side: 1.3
+  tax_pts_per_side: 0.7
+  point_value_nwd: 10
+  scale: 1000000
+
+TMFF6:
+  commission_pts_per_side: 1.3
+  tax_pts_per_side: 0.7
+  point_value_nwd: 10
+  scale: 1000000
+
+TMFG6:
+  commission_pts_per_side: 1.3
+  tax_pts_per_side: 0.7
+  point_value_nwd: 10
+  scale: 1000000
+
+TMFH6:
   commission_pts_per_side: 1.3
   tax_pts_per_side: 0.7
   point_value_nwd: 10

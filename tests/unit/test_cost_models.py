@@ -29,6 +29,32 @@ def test_load_txfd6_cost():
     assert cost.point_value_nwd == 200
 
 
+@pytest.mark.parametrize(
+    ("instrument", "commission", "tax", "point_value"),
+    [
+        ("TMFE6", 1.3, 0.7, 10),
+        ("TMFF6", 1.3, 0.7, 10),
+        ("TMFG6", 1.3, 0.7, 10),
+        ("TMFH6", 1.3, 0.7, 10),
+        ("TXFG6", 0.3, 1.2, 200),
+        ("TXFH6", 0.3, 1.2, 200),
+    ],
+)
+def test_new_mining_contract_cost_profiles_are_frozen_to_root_economics(
+    instrument,
+    commission,
+    tax,
+    point_value,
+):
+    cost = load_cost_profile(instrument)
+
+    assert cost.commission_pts_per_side == commission
+    assert cost.tax_pts_per_side == tax
+    assert cost.point_value_nwd == point_value
+    assert cost.scale == 1_000_000
+    assert cost.rt_cost_pts == (4.0 if instrument.startswith("TMF") else 3.0)
+
+
 def test_rt_cost_pts():
     cost = load_cost_profile("TMFD6")
     assert cost.rt_cost_pts == 4.0

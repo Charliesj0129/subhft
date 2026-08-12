@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
 import subprocess
 import sys
+import tempfile
 from importlib import import_module
 from pathlib import Path
 from typing import Any
@@ -151,6 +154,352 @@ def _parse_param_grid(raw: str | None) -> dict[str, list[Any]]:
     return grid
 
 
+def cmd_alpha_mine_init(args: argparse.Namespace) -> None:
+    """SubHFT Alpha Mining v2 Phase 1: build and write a partition manifest.
+
+    Loads a session-id column from the data file and splits it into
+    Discovery/Selection/Locked-validation/Final-holdout partitions
+    (contiguous in time order, with an embargo gap at each boundary), then
+    writes the immutable ``partition_manifest.json``. Locked-validation and
+    final-holdout stay unreadable until a candidate is frozen — see
+    ``DatasetPartitionManager.get_rows`` / ``freeze_candidate``.
+    """
+    try:
+        np = import_module("numpy")
+        partitioning = import_module("research.combinatorial.partitioning")
+    except Exception as exc:
+        print(f"Failed to import partitioning module: {exc}")
+        sys.exit(1)
+
+    source = np.load(args.data, allow_pickle=False)
+    try:
+        if isinstance(source, np.lib.npyio.NpzFile):
+            if "data" in source:
+                arr = np.asarray(source["data"])
+            else:
+                first_key = source.files[0] if source.files else None
+                if first_key is None:
+                    raise ValueError("Empty NPZ file")
+                arr = np.asarray(source[first_key])
+        else:
+            arr = np.asarray(source)
+    finally:
+        if isinstance(source, np.lib.npyio.NpzFile):
+            source.close()
+
+    if not arr.dtype.names:
+        print("--data must be a structured array with named fields (--session-field requires one)")
+        sys.exit(2)
+    if args.session_field not in arr.dtype.names:
+        print(f"Session field not found in data: {args.session_field}")
+        sys.exit(2)
+
+    dataset_fingerprint = partitioning.dataset_fingerprint(arr)
+    session_ids = arr[args.session_field].tolist()
+
+    ratios = {
+        "discovery": float(args.discovery_ratio),
+        "selection": float(args.selection_ratio),
+        "locked_validation": float(args.locked_ratio),
+        "final_holdout": float(args.holdout_ratio),
+    }
+
+    try:
+        manager = partitioning.DatasetPartitionManager(
+            session_ids=session_ids,
+            dataset_fingerprint=dataset_fingerprint,
+            embargo_rows=int(args.embargo_rows),
+            manifest_dir=args.out_dir,
+            ratios=ratios,
+            random_seed=int(args.seed),
+        )
+    except partitioning.PartitionConfigError as exc:
+        print(f"Invalid partition configuration: {exc}")
+        sys.exit(2)
+
+    symbols = [s.strip() for s in str(args.symbols or "").split(",") if s.strip()]
+    manifest_path = manager.write_manifest(
+        Path(args.out_dir) / "partition_manifest.json",
+        symbols=symbols,
+    )
+
+    payload: dict[str, Any] = {
+        "partition_manifest_path": manifest_path,
+        "manifest_hash": manager.manifest_hash,
+        "dataset_fingerprint": dataset_fingerprint,
+        "partitions": manager.partition_summary(),
+    }
+
+    if args.out:
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+    print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def cmd_alpha_mine_promote(args: argparse.Namespace) -> None:
+    """SubHFT Alpha Mining v2 Phase 4: scaffold a ``research/alphas/<id>/`` package
+    from a GP-discovered expression -- the intake path into the existing,
+    unmodified Gate A/B/C alpha-governance pipeline (``research/combinatorial/
+    promote.py``). Stops at ``status=DRAFT``; no gate runs automatically, same
+    boundary ``hft alpha scaffold`` already has.
+    """
+    try:
+        from research.combinatorial.promote import promote_candidate, promote_from_results
+    except Exception as exc:
+        print(f"Failed to import alpha promote module: {exc}")
+        sys.exit(1)
+
+    expression = getattr(args, "expression", None)
+    from_results = getattr(args, "from_results", None)
+    if bool(expression) == bool(from_results):
+        print("Exactly one of --expression or --from-results is required")
+        sys.exit(2)
+
+    common_kwargs: dict[str, Any] = {
+        "alpha_id": args.alpha_id,
+        "owner": args.owner,
+        "strategy_type": args.strategy_type,
+        "instrument": args.instrument,
+        "force": bool(args.force),
+    }
+
+    try:
+        if expression:
+            alpha_dir = promote_candidate(expression, **common_kwargs)
+        else:
+            rank = getattr(args, "rank", None)
+            if rank is None:
+                print("--rank is required with --from-results")
+                sys.exit(2)
+            alpha_dir = promote_from_results(str(from_results), int(rank), **common_kwargs)
+    except FileExistsError as exc:
+        print(f"[hft alpha mine promote] {exc}")
+        sys.exit(2)
+    except (ValueError, SyntaxError, IndexError, FileNotFoundError, KeyError) as exc:
+        print(f"[hft alpha mine promote] {exc}")
+        sys.exit(2)
+
+    print(f"Promoted GP candidate to: {alpha_dir}")
+    print("[INFO] Status: DRAFT -- no live registry entry yet.")
+    print(f"  Next: review {alpha_dir}/manifest.yaml, then `hft alpha validate --alpha-id {args.alpha_id} ...`")
+
+
+def cmd_alpha_mine_run(args: argparse.Namespace) -> None:
+    """Run or resume the bounded SMMA mining workflow."""
+    try:
+        from research.combinatorial.smma_dataset import DatasetGovernanceError
+        from research.combinatorial.smma_runner import RunConfig, RunIntegrityError, run_mining
+        from research.combinatorial.tick_dataset import TickDatasetGovernanceError
+
+        config = RunConfig(
+            run_dir=Path(args.run_dir),
+            family=str(args.family),
+            wall_time_hours=float(args.wall_time_hours),
+            max_candidates=int(args.max_candidates),
+            workers=int(args.workers),
+            seeds=tuple(int(seed) for seed in args.seeds),
+            timeframes_minutes=tuple(int(value) for value in args.timeframes_minutes),
+            smma_lengths=tuple(int(value) for value in args.smma_lengths),
+            posthoc_diagnostic=bool(args.posthoc_diagnostic),
+            resume=bool(args.resume),
+            unlock_final_holdout=bool(getattr(args, "unlock_final_holdout", False)),
+            dataset_cache_dir=(Path(args.dataset_cache_dir) if getattr(args, "dataset_cache_dir", None) else None),
+            cost_mode=str(getattr(args, "cost_mode", "per_contract")),
+        )
+        report = run_mining(config)
+    except (DatasetGovernanceError, TickDatasetGovernanceError, RunIntegrityError, ValueError, OSError) as exc:
+        print(f"[hft alpha mine run] {exc}", file=sys.stderr)
+        sys.exit(2)
+    print(json.dumps(report, indent=2, sort_keys=True))
+
+
+def cmd_alpha_mine_status(args: argparse.Namespace) -> None:
+    """Inspect manifest/checkpoint/heartbeat without changing a mining run."""
+    try:
+        from research.combinatorial.smma_runner import RunIntegrityError, mining_status
+
+        payload = mining_status(args.run_dir)
+    except (RunIntegrityError, ValueError, OSError, json.JSONDecodeError) as exc:
+        print(f"[hft alpha mine status] {exc}", file=sys.stderr)
+        sys.exit(2)
+    print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def _write_alpha_mining_campaign_report(
+    campaign_dir: Path,
+    campaign_id: str,
+    outcomes: list[dict[str, Any]],
+    minimum_days_for_promotion: int,
+) -> dict[str, Any]:
+    payload = {
+        "schema": "alpha_mining_campaign.v3",
+        "campaign_id": campaign_id,
+        "screen_only": True,
+        "execution_policy": "full_per_contract_when_cost_profiles_complete_else_bounded_root_proxy_diagnostic",
+        "promotion_policy": (
+            f"minimum_{minimum_days_for_promotion}_eligible_trading_days; independent_of_search_breadth"
+        ),
+        "final_holdout_unlocked": False,
+        "legs": list(outcomes),
+    }
+    payload["campaign_hash"] = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    report_path = campaign_dir / "campaign_report.json"
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        dir=campaign_dir,
+        suffix=".json",
+        delete=False,
+        encoding="utf-8",
+    ) as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+        temporary = Path(handle.name)
+    temporary.replace(report_path)
+    return payload
+
+
+def cmd_alpha_mine_campaign(args: argparse.Namespace) -> None:
+    """Run the six governed family/timeframe legs with resumable per-leg artifacts."""
+    try:
+        from research.combinatorial.smma_dataset import DatasetGovernanceError
+        from research.combinatorial.smma_runner import (
+            MIN_DAYS_FOR_PROMOTION,
+            MiningRun,
+            RunConfig,
+            RunIntegrityError,
+        )
+        from research.combinatorial.tick_dataset import TickDatasetGovernanceError
+
+        run_root = Path(args.run_root).resolve()
+        campaign_id = str(args.campaign_id)
+        if not campaign_id or Path(campaign_id).name != campaign_id:
+            raise ValueError("campaign-id must be one filesystem-safe path component")
+        if run_root in {Path("/"), Path.home().resolve(), Path.cwd().resolve()}:
+            raise ValueError("run-root must be a dedicated artifact parent, not a broad filesystem root")
+        campaign_dir = run_root / campaign_id
+        campaign_dir.mkdir(parents=True, exist_ok=True)
+        legs = [
+            (family, label, timeframes)
+            for family in ("bidask", "kbar", "tick")
+            for label, timeframes in (("2m", (2,)), ("h1h2h4", (60, 120, 240)))
+        ]
+        outcomes: list[dict[str, Any]] = []
+        for family, label, timeframes in legs:
+            leg_name = f"{family}-{label}-{campaign_id}"
+            leg_dir = campaign_dir / leg_name
+            try:
+                preflight_config = RunConfig(
+                    run_dir=leg_dir,
+                    family=family,
+                    wall_time_hours=min(float(args.wall_time_hours), float(args.diagnostic_wall_time_hours)),
+                    max_candidates=min(int(args.max_candidates), int(args.diagnostic_max_candidates)),
+                    workers=int(args.workers),
+                    seeds=tuple(int(seed) for seed in args.seeds),
+                    timeframes_minutes=timeframes,
+                    posthoc_diagnostic=True,
+                    resume=False,
+                    unlock_final_holdout=False,
+                    dataset_cache_dir=campaign_dir / "dataset_cache",
+                    cost_mode="root_proxy",
+                )
+                preflight = MiningRun(preflight_config)
+                preflight.run_dir.mkdir(parents=True, exist_ok=True)
+                dataset = preflight._load_or_export_dataset()
+                preflight._validate_frozen_dataset_scope(dataset)
+                sidecar = json.loads(Path(str(preflight.dataset_path) + ".meta.json").read_text(encoding="utf-8"))
+                eligible_days = int(sidecar["trading_day_count"])
+                cost_coverage = preflight._cost_profile_coverage(dataset)
+                full_search_eligible = bool(cost_coverage["complete"])
+                promotion_day_count_eligible = eligible_days >= MIN_DAYS_FOR_PROMOTION
+                if full_search_eligible:
+                    mode = "full" if promotion_day_count_eligible else "full_needs_more_days"
+                else:
+                    mode = "bounded_diagnostic"
+                eligibility_reasons: list[str] = []
+                if not promotion_day_count_eligible:
+                    eligibility_reasons.append(f"eligible_trading_days={eligible_days}<{MIN_DAYS_FOR_PROMOTION}")
+                if not full_search_eligible:
+                    eligibility_reasons.append(f"missing_cost_profiles={cost_coverage['missing_contracts']}")
+                config = RunConfig(
+                    run_dir=leg_dir,
+                    family=family,
+                    wall_time_hours=(
+                        float(args.wall_time_hours)
+                        if full_search_eligible
+                        else min(float(args.wall_time_hours), float(args.diagnostic_wall_time_hours))
+                    ),
+                    max_candidates=(
+                        int(args.max_candidates)
+                        if full_search_eligible
+                        else min(int(args.max_candidates), int(args.diagnostic_max_candidates))
+                    ),
+                    workers=int(args.workers),
+                    seeds=tuple(int(seed) for seed in args.seeds),
+                    timeframes_minutes=timeframes,
+                    posthoc_diagnostic=not full_search_eligible,
+                    resume=bool(args.resume) and (leg_dir / "run_manifest.json").exists(),
+                    unlock_final_holdout=False,
+                    dataset_cache_dir=campaign_dir / "dataset_cache",
+                    cost_mode="per_contract" if full_search_eligible else "root_proxy",
+                )
+                mining_run = MiningRun(config)
+                mining_run._dataset_cache_evidence = dict(preflight._dataset_cache_evidence)
+                report = mining_run.run()
+                outcomes.append(
+                    {
+                        "leg": leg_name,
+                        "run_dir": str(leg_dir),
+                        "status": "complete",
+                        "verdict": report.get("verdict"),
+                        "report_hash": report.get("report_hash"),
+                        "mode": mode,
+                        "eligible_trading_days": eligible_days,
+                        "minimum_days_for_promotion": MIN_DAYS_FOR_PROMOTION,
+                        "promotion_day_count_eligible": promotion_day_count_eligible,
+                        "full_search_eligible": full_search_eligible,
+                        "cost_profile_coverage": cost_coverage,
+                        "eligibility_reasons": eligibility_reasons,
+                        "candidate_cap": config.max_candidates,
+                        "wall_time_hours": config.wall_time_hours,
+                        "cost_mode": config.cost_mode,
+                        "cost_claim_eligible": report.get("cost_claim_eligible", False),
+                    }
+                )
+            except (
+                DatasetGovernanceError,
+                TickDatasetGovernanceError,
+                RunIntegrityError,
+                ValueError,
+                OSError,
+            ) as exc:
+                outcomes.append(
+                    {
+                        "leg": leg_name,
+                        "run_dir": str(leg_dir),
+                        "status": "failed",
+                        "error_type": type(exc).__name__,
+                        "error": str(exc),
+                    }
+                )
+            payload = _write_alpha_mining_campaign_report(
+                campaign_dir,
+                campaign_id,
+                outcomes,
+                MIN_DAYS_FOR_PROMOTION,
+            )
+    except (ValueError, OSError) as exc:
+        print(f"[hft alpha mine campaign] {exc}", file=sys.stderr)
+        sys.exit(2)
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    if any(outcome["status"] == "failed" for outcome in outcomes):
+        sys.exit(2)
+
+
 def cmd_alpha_list(args: argparse.Namespace) -> None:
     try:
         from research.registry.alpha_registry import AlphaRegistry
@@ -225,6 +574,38 @@ def cmd_alpha_screen(args: argparse.Namespace) -> None:
     triage during research; use ``hft alpha validate --profile strict``
     when an artifact must be eligible for Gate D.
     """
+    try:
+        from research.combinatorial.smma_screen import (
+            SMMAScreenError,
+            is_smma_screen_package,
+            run_smma_screen,
+        )
+    except (ImportError, AttributeError) as exc:
+        print(f"Failed to import SMMA screen adapter: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        if is_smma_screen_package(args.alpha_id):
+            if len(args.data) != 1:
+                raise SMMAScreenError("SMMA screen requires exactly one governed dataset")
+            summary = run_smma_screen(
+                alpha_id=str(args.alpha_id),
+                data_path=str(args.data[0]),
+                experiments_dir=str(getattr(args, "experiments_dir", "research/experiments")),
+                skip_gate_b_tests=bool(getattr(args, "skip_gate_b_tests", False)),
+            )
+            if args.out:
+                out_path = Path(args.out)
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                out_path.write_text(json.dumps(summary, indent=2, sort_keys=True))
+            print(json.dumps(summary, indent=2, sort_keys=True))
+            if not summary["passed"]:
+                sys.exit(2)
+            return
+    except (SMMAScreenError, ValueError, OSError, json.JSONDecodeError) as exc:
+        print(f"[hft alpha screen smma] {exc}", file=sys.stderr)
+        sys.exit(2)
+
     try:
         from hft_platform.alpha.validation import ValidationConfig, run_alpha_validation
     except Exception as exc:

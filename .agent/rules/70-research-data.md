@@ -4,7 +4,13 @@ Local L2/tick source is ClickHouse `hft.market_data` on 8123/9000. Auth comes fr
 
 Longest unbroken clean intervals, measured 2026-08-07: 2026-05-25 to 2026-06-12 (15 sessions), 2026-07-17 to 2026-08-06 (15), 2026-03-03 to 2026-03-18 (12). The previously documented "2026-03-02 to 2026-03-24" was wrong — 2026-03-02 has zero rows. Avoid known sparse/unusable dates unless intentionally testing gaps.
 
-Local corpus now spans 2026-01-26 to 2026-08-06 (949,820,979 rows); its TTL was removed locally. Of 127 exchange sessions: 92 clean, 12 partial, 7 degraded, 16 missing. Coverage holes, degraded days, and the symbol-universe range (1–523) are inventoried in `docs/operations/local-clickhouse-market-data-corpus.md` — read it before choosing a date range, and regenerate it with the audit rather than editing by hand.
+Local corpus now spans 2026-01-26 to 2026-08-06 (949,820,979 rows) after the
+2026-07-31 closed-partition repair and 2026-08-07 archive sync; its TTL was
+removed locally. Of 127 exchange sessions: 92 clean, 12 partial, 7 degraded,
+16 missing. Coverage holes, degraded days, and the symbol-universe range
+(1–523) are inventoried in `docs/operations/local-clickhouse-market-data-corpus.md`
+— read it before choosing a date range, and regenerate it with the audit rather
+than editing by hand.
 
 The local archive is the only durable copy and upstream retains ~2 months, so a lapse in syncing is permanent loss. Maintain it with `make research-archive-sync` (`scripts/sync_market_data_archive.py`) — read-only on production, per-partition `FORMAT Native` + `cityHash64` verification, and it refuses any partition that already has local rows because `market_data` is a plain MergeTree. The audit's `archive_sync` check measures how far behind the archive is and how long before the upstream copy expires.
 

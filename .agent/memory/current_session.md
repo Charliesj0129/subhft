@@ -2,6 +2,22 @@
 
 ## Last Updated
 
+- **Date**: 2026-08-12
+- **Active task**: Alpha Mining PR-1 convergence on
+  `alpha/mining-convergence-pr1-harness-20260811`. Baseline head `1028c52a`;
+  isolated worktree `/tmp/hft-alpha-mining-pr1-convergence`; original focused
+  baseline 27 passed / 1 skipped. Commit `99ab1638` closes four unresolved PR
+  #411 review themes: quantile screen identity, matching warm-up NaNs,
+  complete dataset fingerprint, and nonempty governed partitions. Focused
+  after-change suite: 41 passed / 1 skipped; mining regression: 324 passed / 1
+  skipped; regression probes fail against detached `1028c52a` and pass on the
+  fix. `make check` passed. `make ci` passed twice before final test additions;
+  subsequent reruns exposed one isolated existing capture flake and 5 mypy
+  errors reproduced unchanged on the detached baseline under the shared venv.
+  Tier-3 review verdict: APPROVE. Next approval point: push the new commits to
+  PR #411; thread resolution and merge remain separate Charlie approvals.
+  Local wave2 head `4bb4770b` is 18 commits ahead of its remote and must be
+  backed up before any transplant.
 - **Date**: 2026-07-14 (second session)
 - **Session**: Agent System v3 design + implementation (設計此專案的agent
   system; brainstormed → spec approved section-by-section → plan approved →
@@ -190,6 +206,7 @@ One branch = one theme; update this table when creating or retiring a branch.
 
 | Branch | Theme / purpose | Expected lifetime |
 |---|---|---|
+| `alpha/mining-convergence-pr1-harness-20260811` | correct and converge Alpha Mining PR #411 harness | until #411 is merged or superseded |
 | `research-flow/edge-evidence-parity-hardening` | edge-evidence/§7 parity hardening (pushed, synced) | until merged or superseded |
 | `research/replay-parity-field-set` | `OrderIntent.session_phase` §7 groundwork (pushed, synced) | until merged or superseded |
 | `main` | default branch (rollout merge a1e2d0f2 landed 2026-07-11) | permanent |

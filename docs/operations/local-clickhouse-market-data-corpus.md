@@ -10,11 +10,11 @@ Coverage numbers below are **generated**, not hand-maintained: run
 
 ## Why this file exists
 
-Two things happened on 2026-07-25 that a future reader must not have to
-re-derive:
+Two corpus changes that a future reader must not have to re-derive:
 
 1. The local corpus was extended with production data pulled off THESHOW
-   (`charl-AB350M-Gaming-3`), so the local table now spans 2026-01-26 → 2026-07-25.
+   (`charl-AB350M-Gaming-3`), and later received a verified closed-partition
+   repair through UTC partition 20260729.
 2. The local table's 6-month TTL was **removed**, because it was hours away from
    starting to delete the oldest month. Local ClickHouse is the only remaining
    regeneration source for research data (the L2 NPZ corpus was deleted on
@@ -106,9 +106,9 @@ Properties that matter, and why:
 ### The 2026-07-25 pull from THESHOW
 
 Source: THESHOW production ClickHouse, both sides on 25.12.3.21. Read-only on the
-remote; nothing was written to the production host. Performed with the ad-hoc
-predecessor of the script above, using the same per-partition `FORMAT Native` transfer
-and the same digest verification.
+remote; nothing was written to the production host. The unretained ad-hoc
+predecessor of the script above transferred per-partition `FORMAT Native` over
+SSH with `pigz` and used the same count-and-digest verification on both sides.
 
 - **Transferred: 19 partitions / 95,461,225 rows**, all hash-verified.
 - **Skipped: 6 partitions** (`20260605`, `20260608`–`20260612`, 47,080,325 rows)
@@ -121,7 +121,39 @@ The two tables order `instrument_type` differently in their physical schema (bot
 have the same 18 columns), so the transfer named all columns explicitly on both
 the `SELECT` and the `INSERT`. Any future Native transfer must do the same.
 
-The pull captured everything the remote held as of 2026-07-25 17:29 CST.
+The pull captured everything the remote held as of 2026-07-25 17:29 CST. The
+night session had already closed, so nothing was in flight.
+
+### The 2026-07-31 closed-partition repair
+
+Only UTC ingest partitions that were absent locally and did not overlap the
+active local WAL were copied. Remote ClickHouse remained read-only. Data first
+landed in a separate local staging table; every partition had to match the
+remote count, symbol count, and content hash before it was inserted into
+`hft.market_data`.
+
+| UTC ingest partition | Rows | Symbols | Content hash |
+|---|---:|---:|---:|
+| 20260727 | 7,064,800 | 296 | 11097430841529907375 |
+| 20260728 | 8,268,651 | 296 | 16208870874059515396 |
+| 20260729 | 10,838,879 | 296 | 9099460484293833097 |
+
+The repair added **26,172,330 rows**. Post-merge verification matched all three
+remote fingerprints exactly, after which the staging table was dropped.
+Partitions `20260730` and `20260731` were deliberately not copied because they
+overlapped an active local WAL and could duplicate rows in this plain
+`MergeTree`. The Asia/Taipei wall-date range reaches 2026-07-30 because UTC
+partition 20260729 includes early 2026-07-30 local timestamps; that does not
+make the 2026-07-30 trading session complete.
+
+A fresh governed preflight over the repaired window (ending 2026-07-29)
+accepted 60 eligible bidask/kbar trading days and 43 eligible tick trading
+days, up from 58 and 41 in the prior campaign. Trading date 2026-07-27 remained
+excluded because the TMF night session was incomplete; only 2026-07-28 and
+2026-07-29 added eligible evidence. All contracts observed by the repaired
+exports had frozen cost-profile coverage, but every family remains below the
+100-day promotion-eligibility floor. That floor does not cap mining search
+breadth.
 
 ### The 2026-08-07 sync
 
