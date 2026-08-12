@@ -1493,6 +1493,15 @@ class SystemBootstrapper:
         # ``deferred_tasks`` and let HFTSystem.run() create the tasks on the engine loop.
         from hft_platform.ops.config_snapshot import build_snapshot, write_snapshot_to_clickhouse
 
+        # HFT_GIT_SHA names the image; src/ is a bind mount in production, so it
+        # does not name the running code. Put both on one boot line.
+        try:
+            from hft_platform.observability.code_identity import log_code_identity
+
+            log_code_identity()
+        except Exception:  # noqa: BLE001 - audit convenience must never block boot
+            logger.warning("code_identity_log_failed", exc_info=True)
+
         deferred_tasks: list[Any] = []
 
         # ch_client is only set when HFT_DAILY_REPORT_ENABLED=1; fall back to recorder writer

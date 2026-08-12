@@ -3,6 +3,8 @@ import threading
 
 from prometheus_client import REGISTRY, Counter, Gauge, Histogram
 
+from hft_platform.observability.code_identity import running_code_sha
+
 _METRICS_PREFIX = os.getenv("HFT_METRICS_PREFIX", "")
 
 # P1 fix: guards the unregister+reregister cycle in ``MetricsRegistry.__init__``
@@ -1616,15 +1618,24 @@ class MetricsRegistry:
         # build_ts read from env (baked at image build time). Always set to 1
         # so dashboards can detect drift across services / instances by
         # `count by (git_sha) (hft_build_info) > 1`.
+        # 2026-08-13: `git_sha` is not wrong — it identifies the image, which
+        # is what pins the SDK and deps (shioaji-version-diff.md:490). It just
+        # cannot see through the `src/` bind mount, so on THESHOW it named a
+        # 2026-07-17 build while four weeks of scp deploys changed the code.
+        # `code_sha` hashes the source tree this process actually loaded;
+        # `count by (code_sha) (hft_build_info) > 1` catches that drift.
         self.hft_build_info = Gauge(
             _pn("build_info"),
-            "Build identity for this process (constant 1) — labels expose git_sha and build_ts",
-            ["git_sha", "build_ts"],
+            "Build identity for this process (constant 1) — git_sha/build_ts describe the image, "
+            "code_sha hashes the source tree actually running (bind mounts make these differ)",
+            ["git_sha", "build_ts", "code_sha"],
         )
         try:
             _git_sha = os.environ.get("HFT_GIT_SHA", "unknown") or "unknown"
             _build_ts = os.environ.get("HFT_BUILD_TS", "unknown") or "unknown"
-            self.hft_build_info.labels(git_sha=_git_sha, build_ts=_build_ts).set(1)
+            self.hft_build_info.labels(
+                git_sha=_git_sha, build_ts=_build_ts, code_sha=running_code_sha()
+            ).set(1)
         except Exception:  # noqa: BLE001
             pass
         self.intent_queue_full_total = Counter(
