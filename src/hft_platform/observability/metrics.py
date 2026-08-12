@@ -118,6 +118,8 @@ class MetricsRegistry:
                 _pn("stormguard_transitions_total"),
                 _pn("stormguard_toxicity_score"),
                 _pn("stormguard_escalations_total"),
+                _pn("stormguard_latency_input_armed"),
+                _pn("stormguard_latency_input_max_us"),
                 _pn("drift_burst_detected_total"),
                 _pn("stormguard_halt_exempt_bypass_total"),
                 _pn("halt_drain_safety_intent_lost_total"),
@@ -1188,6 +1190,24 @@ class MetricsRegistry:
             _pn("stormguard_escalations_total"),
             "StormGuard escalations by target state",
             ["to_state"],
+        )
+        # StormGuard latency-input observability (2026-08-13).
+        # The breaker's latency branch is fed event-loop lag (p99.9 ~9 ms) while
+        # THESHOW configured it at 5 s / 10 s, so it had never fired and could
+        # not — with nothing to distinguish "never fired" from "cannot fire".
+        # armed says whether a threshold pair is set at all; max_us says how far
+        # the input has ever reached, which is what makes an unreachable
+        # threshold visible (and what the order-RTT thresholds must be
+        # calibrated from before they are armed).
+        self.stormguard_latency_input_armed = Gauge(
+            _pn("stormguard_latency_input_armed"),
+            "Whether a StormGuard latency input has thresholds configured (1) or is unarmed (0)",
+            ["input"],
+        )
+        self.stormguard_latency_input_max_us = Gauge(
+            _pn("stormguard_latency_input_max_us"),
+            "Largest value seen for a StormGuard latency input this process (microseconds)",
+            ["input"],
         )
         self.drift_burst_detected_total = Counter(
             _pn("drift_burst_detected_total"),
