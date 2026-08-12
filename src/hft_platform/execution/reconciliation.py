@@ -139,6 +139,25 @@ class ReconciliationService:
             )
         )
 
+        # 2026-08-12: at the 5 s default this loop wrote ~86k lines/day, every
+        # one of them describing the same empty portfolio — and its four debug
+        # lines were effectively the whole debug channel (69k of 69.7k lines),
+        # so the channel you turn on when something is wrong was unreadable.
+        # The clean-sync lines now collapse while the state is unchanged.
+        # "Change or heartbeat", never change alone: an unchanging portfolio
+        # still logs on this cadence, so a collapsed log cannot be mistaken for
+        # a dead loop (and ``reconciliation_last_success_ts`` still ticks every
+        # cycle). Warning/error paths are never collapsed.
+        self.sync_log_heartbeat_s: float = float(  # precision-ok
+            recon_cfg.get(
+                "sync_log_heartbeat_s",
+                os.environ.get("HFT_RECON_SYNC_LOG_HEARTBEAT_S", "300"),
+            )
+        )
+        self._last_sync_log_signature: tuple[tuple[tuple[str, int], ...], ...] | None = None
+        self._last_sync_log_ts: float = 0.0  # precision-ok
+        self._suppressed_sync_logs: int = 0
+
         self.last_heartbeat: float = timebase.now_s()  # precision-ok
         self.running: bool = False
         self._last_discrepancies: List[PositionDiscrepancy] = []
@@ -186,6 +205,36 @@ class ReconciliationService:
 
     def _update_failure_gauge(self) -> None:
         self._metrics().reconciliation_consecutive_failures.set(self._consecutive_failures)
+
+    # ------------------------------------------------------------------
+    # Clean-sync log collapsing (2026-08-12)
+    # ------------------------------------------------------------------
+
+    def _sync_log_due(self, broker_map: Dict[str, int], local_map: Dict[str, int]) -> bool:
+        """Whether this cycle's clean-sync lines are worth writing.
+
+        True whenever the observed state differs from the last one logged, and
+        at least once per ``sync_log_heartbeat_s`` regardless — a quiet log has
+        to stay distinguishable from a stopped loop. Cycles that are skipped are
+        counted and reported on the next line that does get written.
+        """
+        signature = (
+            tuple(sorted(broker_map.items())),
+            tuple(sorted(local_map.items())),
+        )
+        now = time.monotonic()
+        if signature != self._last_sync_log_signature or (now - self._last_sync_log_ts) >= self.sync_log_heartbeat_s:
+            self._last_sync_log_signature = signature
+            self._last_sync_log_ts = now
+            return True
+        self._suppressed_sync_logs += 1
+        return False
+
+    def _take_suppressed_sync_logs(self) -> int:
+        """Read and clear the collapsed-cycle count for the line about to say it."""
+        count = self._suppressed_sync_logs
+        self._suppressed_sync_logs = 0
+        return count
 
     def _update_last_success_ts(self) -> None:
         self._metrics().reconciliation_last_success_ts.set(timebase.now_ns() / 1e9)
@@ -300,10 +349,9 @@ class ReconciliationService:
                     await asyncio.sleep(delay)
 
     async def sync_portfolio(self) -> None:  # noqa: C901
-        # Downgraded to DEBUG: with 5 s default interval this fires 17k
-        # times/day. The final "Portfolio Sync Complete" / warning lines
-        # are the authoritative liveness signals.
-        logger.debug("Starting Portfolio Sync...")
+        # The old "Starting Portfolio Sync..." debug line carried no fields and
+        # fired 17k times/day; the completion line below (and, when the cycle
+        # never reaches it, "Portfolio Sync Failed") says everything it did.
         t0 = time.monotonic()
         try:
             # 1. Fetch positions from broker
@@ -320,8 +368,6 @@ class ReconciliationService:
 
             # 2. Build broker position map {symbol: qty}
             broker_map = self._build_broker_map(raw_positions)
-
-            logger.debug("Portfolio Sync: Broker State", positions=broker_map)
 
             # 3. Build local position map {symbol: qty}
             # Also build per-strategy breakdown for drift attribution (M9)
@@ -385,13 +431,18 @@ class ReconciliationService:
             # Per-strategy breakdown + local state at DEBUG to cut 34k INFO
             # lines/day. Discrepancy path below still emits at WARNING with
             # full attribution, which is the operator-relevant signal.
-            logger.debug(
-                "Portfolio Sync: Per-strategy position breakdown",
-                strategies=list(per_strategy_map.keys()),
-                per_strategy=per_strategy_map,
-            )
-
-            logger.debug("Portfolio Sync: Local State", positions=local_map)
+            # Emitted only when the state changed or the heartbeat is due
+            # (see ``_sync_log_due``) — repeating an unchanged snapshot every
+            # 5 s is what made the debug channel unusable.
+            sync_log_due = self._sync_log_due(broker_map, local_map)
+            if sync_log_due:
+                logger.debug("Portfolio Sync: Broker State", positions=broker_map)
+                logger.debug(
+                    "Portfolio Sync: Per-strategy position breakdown",
+                    strategies=list(per_strategy_map.keys()),
+                    per_strategy=per_strategy_map,
+                )
+                logger.debug("Portfolio Sync: Local State", positions=local_map)
             self.platform_degrade_controller.update_reference_positions(local_map=local_map, broker_map=broker_map)
 
             broker_has_positions = any(int(qty) != 0 for qty in broker_map.values())
@@ -566,7 +617,12 @@ class ReconciliationService:
                     # StormGuard can de-escalate from HALT.
                     self.storm_guard.set_reconciliation_hold(False)
                 self._halt_triggered = False
-                logger.info("Portfolio Sync Complete - No discrepancies", count=len(broker_map))
+                if sync_log_due:
+                    logger.info(
+                        "Portfolio Sync Complete - No discrepancies",
+                        count=len(broker_map),
+                        suppressed_cycles=self._take_suppressed_sync_logs(),
+                    )
 
         except Exception as e:
             self._last_noncritical_drift_signature = {}
