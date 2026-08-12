@@ -525,6 +525,19 @@ class MetricsRegistry:
             "In-flight order count per strategy/side (D3 tracking)",
             ["strategy", "side"],
         )
+        self.strategy_pending_qty = Gauge(
+            _pn("strategy_pending_qty"),
+            "Quantity a strategy believes is working at the broker, per symbol/side. "
+            "This is what gates further quoting; if it stays elevated the strategy "
+            "is latched off. Had no metric until 2026-08-12, which is why a "
+            "two-day quoting freeze was invisible.",
+            ["strategy", "symbol", "side"],
+        )
+        self.strategy_gate_blocked_total = Counter(
+            _pn("strategy_gate_blocked_total"),
+            "Ticks suppressed by a strategy placement gate, by gate name",
+            ["strategy", "gate"],
+        )
         self.risk_reject_total = Counter(_pn("risk_reject_total"), "Risk rejections", ["reason", "strategy"])
         self.stormguard_mode = Gauge(
             _pn("stormguard_mode"), "StormGuard State (0=NORMAL, 1=WARM, 2=STORM, 3=HALT)", ["strategy"]
