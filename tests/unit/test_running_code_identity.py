@@ -225,16 +225,16 @@ def test_the_build_info_gauge_exposes_the_running_code_sha() -> None:
 
 
 @pytest.mark.unit
-def test_the_startup_line_names_the_image_and_the_code_separately(monkeypatch) -> None:
+def test_the_startup_line_names_the_image_and_the_code_separately(monkeypatch, module_log_sink) -> None:
     """Logs are the surface the deploy runbook actually reads. Both identities
     have to be on the line, or the next reader repeats the same mistake."""
-    from structlog.testing import capture_logs
+    from hft_platform.observability import code_identity as code_identity_module
 
+    events = module_log_sink(code_identity_module)
     monkeypatch.setenv("HFT_GIT_SHA", "bfa46e1d")
-    with capture_logs() as logs:
-        identity = log_code_identity()
+    identity = log_code_identity()
 
-    line = next(entry for entry in logs if entry.get("event") == "running_code_identity")
+    line = next(entry for entry in events if entry.get("event") == "running_code_identity")
     assert line["code_sha"] == identity.sha
     assert line["image_git_sha"] == "bfa46e1d"
     assert line["files"] == identity.file_count

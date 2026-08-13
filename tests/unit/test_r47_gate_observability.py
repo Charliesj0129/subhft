@@ -26,7 +26,6 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import pytest
-from structlog.testing import capture_logs
 
 from hft_platform.events import LOBStatsEvent
 
@@ -75,15 +74,24 @@ def r47():
     return strat
 
 
-def _emit(r47, event) -> list[dict]:
-    """Run one tick and return the r47_stats lines it produced.
+@pytest.fixture()
+def emit(module_log_sink):
+    """Run one tick and return the ``r47_stats`` lines it produced.
 
-    structlog here renders straight to stdout rather than through stdlib
-    logging, so caplog never sees these; capture_logs taps the processor chain.
+    structlog renders straight to stdout here rather than through stdlib
+    logging, so caplog never sees these. ``capture_logs`` does not work either —
+    see ``module_log_sink`` in conftest for why it goes blind mid-session.
     """
-    with capture_logs() as logs:
+    from hft_platform.strategies import r47_maker
+
+    entries = module_log_sink(r47_maker)
+
+    def _emit(r47, event) -> list[dict]:
+        del entries[:]
         r47.handle_event(_ctx(), event)
-    return [entry for entry in logs if entry.get("event") == "r47_stats"]
+        return [entry for entry in entries if entry.get("event") == "r47_stats"]
+
+    return _emit
 
 
 # --------------------------------------------------------------------------- #
@@ -92,32 +100,32 @@ def _emit(r47, event) -> list[dict]:
 
 
 @pytest.mark.unit
-def test_stats_are_logged_on_the_first_tick_even_when_the_spread_gate_blocks(r47) -> None:
+def test_stats_are_logged_on_the_first_tick_even_when_the_spread_gate_blocks(r47, emit) -> None:
     """The regression: a sub-threshold spread used to produce no diagnostic at
     all, so the log could never show why quoting had stopped."""
-    lines = _emit(r47, _lob_stats(spread_scaled=2 * _PRICE_SCALE))
+    lines = emit(r47, _lob_stats(spread_scaled=2 * _PRICE_SCALE))
 
     assert len(lines) == 1
     assert lines[0]["blocked_by"] == "spread"
 
 
 @pytest.mark.unit
-def test_the_logged_spread_is_the_blocked_one_not_a_survivor(r47) -> None:
+def test_the_logged_spread_is_the_blocked_one_not_a_survivor(r47, emit) -> None:
     """55 survivor lines all printed spread_pts:5 while the mean was 2.96. The
     diagnostic has to report the tick it actually saw."""
-    assert _emit(r47, _lob_stats(spread_scaled=2 * _PRICE_SCALE))[0]["spread_pts"] == 2
+    assert emit(r47, _lob_stats(spread_scaled=2 * _PRICE_SCALE))[0]["spread_pts"] == 2
 
 
 @pytest.mark.unit
-def test_stats_name_no_gate_when_quoting_proceeds(r47) -> None:
-    assert _emit(r47, _lob_stats(spread_scaled=5 * _PRICE_SCALE))[0]["blocked_by"] is None
+def test_stats_name_no_gate_when_quoting_proceeds(r47, emit) -> None:
+    assert emit(r47, _lob_stats(spread_scaled=5 * _PRICE_SCALE))[0]["blocked_by"] is None
 
 
 @pytest.mark.unit
-def test_stats_report_pending_so_a_latched_strategy_is_visible_in_the_log(r47) -> None:
+def test_stats_report_pending_so_a_latched_strategy_is_visible_in_the_log(r47, emit) -> None:
     """``pending_buy``/``pending_sell`` are what gate further quoting. With them
     in the line, "latched off" is distinguishable from "nothing to quote on"."""
-    line = _emit(r47, _lob_stats(spread_scaled=5 * _PRICE_SCALE))[0]
+    line = emit(r47, _lob_stats(spread_scaled=5 * _PRICE_SCALE))[0]
 
     assert line["pending_buy"] == 1
     assert line["pending_sell"] == 1

@@ -200,32 +200,32 @@ def test_a_malformed_order_rtt_threshold_leaves_the_input_unarmed(monkeypatch) -
 
 
 @pytest.mark.unit
-def test_a_loop_lag_threshold_above_the_stall_watchdog_is_flagged_as_dead(monkeypatch) -> None:
+def test_a_loop_lag_threshold_above_the_stall_watchdog_is_flagged_as_dead(monkeypatch, module_log_sink) -> None:
     """Provably unreachable: ``LoopStallWatchdog`` force-exits the process at
     ``HFT_LOOP_STALL_KILL_S`` (default 60 s), so a loop-lag threshold beyond
     that is killed before it can fire."""
-    from structlog.testing import capture_logs
+    from hft_platform.risk import storm_guard
 
+    events = module_log_sink(storm_guard)
     monkeypatch.setenv("HFT_LOOP_STALL_KILL_S", "60")
     monkeypatch.setenv("HFT_STORMGUARD_LATENCY_STORM_US", "90000000")  # 90 s
 
-    with capture_logs() as logs:
-        StormGuard()
+    StormGuard()
 
-    assert any(entry.get("event") == "stormguard_latency_threshold_unreachable" for entry in logs)
+    assert any(entry.get("event") == "stormguard_latency_threshold_unreachable" for entry in events)
 
 
 @pytest.mark.unit
-def test_a_reachable_loop_lag_threshold_is_not_flagged(monkeypatch) -> None:
-    from structlog.testing import capture_logs
+def test_a_reachable_loop_lag_threshold_is_not_flagged(monkeypatch, module_log_sink) -> None:
+    from hft_platform.risk import storm_guard
 
+    events = module_log_sink(storm_guard)
     monkeypatch.setenv("HFT_LOOP_STALL_KILL_S", "60")
     monkeypatch.setenv("HFT_STORMGUARD_LATENCY_STORM_US", "20000")
 
-    with capture_logs() as logs:
-        StormGuard()
+    StormGuard()
 
-    assert not any(entry.get("event") == "stormguard_latency_threshold_unreachable" for entry in logs)
+    assert not any(entry.get("event") == "stormguard_latency_threshold_unreachable" for entry in events)
 
 
 # --------------------------------------------------------------------------- #
