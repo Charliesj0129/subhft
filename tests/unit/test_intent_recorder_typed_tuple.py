@@ -203,7 +203,9 @@ def test_an_order_intent_object_still_records_every_field() -> None:
 def test_the_extractor_emits_exactly_one_value_per_column() -> None:
     """Positional packing: a length mismatch misaligns every column in the
     batch. Pinned for both input shapes."""
-    for payload in (_typed_frame(), OrderIntent(
+    for payload in (
+        _typed_frame(),
+        OrderIntent(
             intent_id=1,
             strategy_id="s",
             symbol="X",
@@ -211,7 +213,8 @@ def test_the_extractor_emits_exactly_one_value_per_column() -> None:
             side=Side.BUY,
             price=1_0000,
             qty=1,
-        )):
+        ),
+    ):
         values = _extract_intent_values(_envelope(payload))
         assert values is not None
         assert len(values) == len(INTENT_COLUMNS)

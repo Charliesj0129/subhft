@@ -26,6 +26,10 @@ class TestDeferredTerminal:
 
         a = OrderAdapter.__new__(OrderAdapter)
         a.live_orders = {}
+        # Sidecar of ``live_orders``, evicted on the same paths, so every
+        # terminal path calls ``_untrack_live_order_intent``. ``OrderAdapter``
+        # uses ``__slots__``, so ``__new__`` leaves it unset here.
+        a._live_order_intents = {}
         a._live_orders_lock = asyncio.Lock()
         a._pending_order_keys = set()
         a._deferred_terminals = collections.deque(maxlen=256)

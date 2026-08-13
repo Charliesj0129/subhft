@@ -206,7 +206,7 @@ def test_an_unknown_symbol_still_falls_back_to_the_epoch() -> None:
     """The fallback is what makes the column non-nullable-safe; it must stay."""
     from hft_platform.recorder.mapper import _instrument_fields
 
-    assert _instrument_fields("NOPE", _meta({})) ["expiry"] == date(1970, 1, 1)
+    assert _instrument_fields("NOPE", _meta({}))["expiry"] == date(1970, 1, 1)
 
 
 # --------------------------------------------------------------------------- #

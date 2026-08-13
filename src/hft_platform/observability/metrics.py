@@ -1653,9 +1653,7 @@ class MetricsRegistry:
         try:
             _git_sha = os.environ.get("HFT_GIT_SHA", "unknown") or "unknown"
             _build_ts = os.environ.get("HFT_BUILD_TS", "unknown") or "unknown"
-            self.hft_build_info.labels(
-                git_sha=_git_sha, build_ts=_build_ts, code_sha=running_code_sha()
-            ).set(1)
+            self.hft_build_info.labels(git_sha=_git_sha, build_ts=_build_ts, code_sha=running_code_sha()).set(1)
         except Exception:  # noqa: BLE001
             pass
         self.intent_queue_full_total = Counter(
