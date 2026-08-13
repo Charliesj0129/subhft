@@ -228,6 +228,11 @@ target/
 notebooks/.ipynb_checkpoints
 .gemini/
 .antigravity/
+# understand-anything knowledge-graph cache: 42 MB of regenerable batch JSON.
+# Both directory names are in use — the tool wrote `.ua/` in older worktrees
+# (659 untracked entries in one of them) and `.understand-anything/` here.
+.understand-anything/
+.ua/
 
 # Agent prompts (local only) — but rules/ is tracked so auto-loaded rules work across machines
 /.agent/*
@@ -262,6 +267,12 @@ research/results/
 research/results_batch6/
 research/results_batch7/
 research/__pycache__/
+
+# Mining run outputs. `research/results/` above does not cover this path, so
+# `mine run` artifacts (hunt_*.json, *_qualifying.json, WINNER_*.json) were
+# landing as untracked noise in every status check. Re-runnable from the
+# governed dataset + manifest; ClickHouse and the sidecars are the record.
+research/combinatorial/results/
 
 # Slice-D alpha-factory generated artifacts (writer-side outputs, re-runnable).
 # kill ledger jsonl is the offline fallback for audit.alpha_kill_ledger;
