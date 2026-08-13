@@ -53,8 +53,9 @@ def compile_expression(
     *,
     max_depth: int = 3,
     forbid_raw_price_levels: bool = True,
+    type_check: bool = True,
 ) -> CompiledExpression:
-    return _compile_expression_cached(expression, int(max_depth), bool(forbid_raw_price_levels))
+    return _compile_expression_cached(expression, int(max_depth), bool(forbid_raw_price_levels), bool(type_check))
 
 
 @lru_cache(maxsize=4096)
@@ -62,6 +63,7 @@ def _compile_expression_cached(
     expression: str,
     max_depth: int,
     forbid_raw_price_levels: bool,
+    type_check: bool,
 ) -> CompiledExpression:
     # Single parse: validate and compile in one pass to avoid double ast.parse
     tree = ast.parse(expression, mode="eval")
@@ -72,6 +74,12 @@ def _compile_expression_cached(
         bad = [name for name in names if _looks_like_raw_price(name)]
         if bad:
             raise ValueError(f"Raw price level variable is not allowed: {sorted(set(bad))}")
+    if type_check:
+        # Local import: canonical_ast imports _validate_tree from this module,
+        # so a top-level import here would be circular.
+        from research.combinatorial.canonical_ast import to_typed_ast
+
+        to_typed_ast(expression)  # raises ValueError on operator arity mismatch
     fast_path = _detect_fast_path(tree.body)
     return CompiledExpression(
         expression=expression,

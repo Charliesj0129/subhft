@@ -70,6 +70,12 @@ class MockOrderAdapter:
         self._api_queue: asyncio.Queue[OrderCommand] = asyncio.Queue(maxsize=maxsize)
         self.dispatched: list[OrderCommand] = []
 
+    async def submit_command(self, command: OrderCommand, *, timeout_s: float = 0.01) -> None:
+        try:
+            self._api_queue.put_nowait(command)
+        except asyncio.QueueFull:
+            await asyncio.wait_for(self._api_queue.put(command), timeout=timeout_s)
+
 
 def make_intent(
     intent_id: int,

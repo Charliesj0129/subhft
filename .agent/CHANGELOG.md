@@ -1,5 +1,7 @@
 # .agent Governance CHANGELOG
 
+2026-07-19 · docs/CODEMAPS/dependencies.md, docs/operations/long-term-risk-register.md, .agent/memory/architecture-decisions.md, tests/unit/feed_adapter/shioaji/test_quote_api_compat.py · User-approved Shioaji 1.5.6 governance alignment; historical SDK harnesses remain versioned and deployment remains HOLD.
+
 One line per governance change, newest first: `date · files · why (commit)`.
 Governing docs covered: `CLAUDE.md`, `AGENTS.md`, `.agent/rules/`,
 `.agent/skills/`, `.agent/evals/`, `.agent/templates/`, `.agent/00-MANIFEST.md`.

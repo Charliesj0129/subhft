@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import argparse
 import os
+from importlib.util import find_spec
+from pathlib import Path
+
+from hft_platform.cli_args.research_pipeline import add_common_research_pipeline_args
 
 from ._alpha import (
     cmd_alpha_ab_compare,
@@ -18,6 +22,10 @@ from ._alpha import (
     cmd_alpha_experiments_list,
     cmd_alpha_kill,
     cmd_alpha_list,
+    cmd_alpha_mine_init,
+    cmd_alpha_mine_promote,
+    cmd_alpha_mine_run,
+    cmd_alpha_mine_status,
     cmd_alpha_paper_trade_batch,
     cmd_alpha_pipeline_run,
     cmd_alpha_pipeline_triage,
@@ -65,6 +73,17 @@ from ._symbols import (
     cmd_symbols_validate,
 )
 from ._tca import cmd_tca_daily
+
+
+def _research_pipeline_available() -> bool:
+    """Check for the dev-only pipeline module without importing research."""
+    try:
+        spec = find_spec("research")
+    except (AttributeError, ImportError, ValueError):
+        return False
+    if spec is None or spec.submodule_search_locations is None:
+        return False
+    return any((Path(root) / "pipeline.py").is_file() for root in spec.submodule_search_locations)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -441,6 +460,84 @@ def build_parser() -> argparse.ArgumentParser:
     alpha_search.add_argument("--save-results", help="Optional path to persist result artifacts")
     alpha_search.add_argument("--out", help="Optional JSON output path")
     alpha_search.set_defaults(func=cmd_alpha_search)
+
+    alpha_mine = alpha_sub.add_parser("mine", help="SubHFT Alpha Mining v2 (Phase 1: partitioning + trial ledger)")
+    alpha_mine_sub = alpha_mine.add_subparsers(dest="mine_cmd")
+
+    mine_init = alpha_mine_sub.add_parser(
+        "init", help="Build and write a session-based partition manifest (Discovery/Selection/Locked/Holdout)"
+    )
+    mine_init.add_argument("--data", required=True, help="Input npy/npz structured-array data path")
+    mine_init.add_argument("--session-field", required=True, help="Structured array field holding per-row session id")
+    mine_init.add_argument("--embargo-rows", type=int, required=True, help="Rows purged at each partition boundary")
+    mine_init.add_argument("--discovery-ratio", type=float, default=0.50, help="Discovery partition ratio")
+    mine_init.add_argument("--selection-ratio", type=float, default=0.25, help="Selection partition ratio")
+    mine_init.add_argument("--locked-ratio", type=float, default=0.15, help="Locked-validation partition ratio")
+    mine_init.add_argument("--holdout-ratio", type=float, default=0.10, help="Final-holdout partition ratio")
+    mine_init.add_argument("--symbols", help="Comma-separated symbol list recorded in the manifest")
+    mine_init.add_argument("--out-dir", required=True, help="Directory for partition_manifest.json + audit logs")
+    mine_init.add_argument("--seed", type=int, default=42, help="Random seed (recorded, not used for row assignment)")
+    mine_init.add_argument("--out", help="Optional JSON output path")
+    mine_init.set_defaults(func=cmd_alpha_mine_init)
+
+    mine_run = alpha_mine_sub.add_parser(
+        "run",
+        help="Run/resume bounded family mining (screen-only research evidence)",
+    )
+    mine_run.add_argument("--family", choices=["smma", "bidask", "kbar", "tick"], required=True)
+    mine_run.add_argument("--run-dir", required=True, help="Immutable run artifact directory")
+    mine_run.add_argument("--wall-time-hours", type=float, default=72.0)
+    mine_run.add_argument("--max-candidates", type=int, default=20_000)
+    mine_run.add_argument("--workers", type=int, default=12)
+    mine_run.add_argument(
+        "--timeframes-minutes",
+        type=int,
+        nargs="+",
+        default=[60, 120, 240],
+        help="Primary SMMA search bar sizes; supported: 2, 60, 120, 240",
+    )
+    mine_run.add_argument(
+        "--smma-lengths",
+        type=int,
+        nargs="+",
+        default=[3, 5, 7, 10, 14, 21, 34, 55],
+        help=(
+            "Strictly increasing recursive SMMA lengths frozen into the run manifest "
+            "(ignored for --family bidask/kbar/tick)"
+        ),
+    )
+    mine_run.add_argument(
+        "--seeds",
+        type=int,
+        nargs=3,
+        default=[20260726, 20260727, 20260728],
+        metavar=("SEED1", "SEED2", "SEED3"),
+    )
+    mine_run.add_argument(
+        "--posthoc-diagnostic",
+        action="store_true",
+        help="Mark results as post-hoc screen-only diagnostics with no fresh-holdout claim",
+    )
+    mine_run.add_argument("--resume", action="store_true")
+    mine_run.set_defaults(func=cmd_alpha_mine_run)
+
+    mine_status = alpha_mine_sub.add_parser("status", help="Read mining manifest/checkpoint/heartbeat status")
+    mine_status.add_argument("--run-dir", required=True)
+    mine_status.set_defaults(func=cmd_alpha_mine_status)
+
+    mine_promote = alpha_mine_sub.add_parser(
+        "promote", help="Scaffold a research/alphas/<id>/ package from a GP-discovered expression"
+    )
+    mine_promote_source = mine_promote.add_mutually_exclusive_group(required=True)
+    mine_promote_source.add_argument("--expression", help="Raw GP expression string to promote")
+    mine_promote_source.add_argument("--from-results", help="Path to an AlphaSearchEngine.save_results() JSON file")
+    mine_promote.add_argument("--rank", type=int, help="Result index to promote (required with --from-results)")
+    mine_promote.add_argument("--alpha-id", required=True, help="New alpha id (e.g. zz_gp_candidate_1)")
+    mine_promote.add_argument("--owner", required=True, help="Alpha owner")
+    mine_promote.add_argument("--strategy-type", default="taker", help="taker|maker (default: taker)")
+    mine_promote.add_argument("--instrument", required=True, help="Primary instrument, e.g. TMFD6")
+    mine_promote.add_argument("--force", action="store_true", help="Overwrite an existing alpha directory")
+    mine_promote.set_defaults(func=cmd_alpha_mine_promote)
 
     alpha_validate = alpha_sub.add_parser("validate", help="Run alpha validation pipeline (Gate A-C)")
     alpha_validate.add_argument("--alpha-id", required=True, help="Alpha id under research/alphas")
@@ -976,18 +1073,13 @@ def build_parser() -> argparse.ArgumentParser:
     # ── Stage 5: canonical pipeline orchestrator (D2) ───────────────────
     # `hft alpha pipeline {run,triage}` is the single entrypoint that
     # `make research` / `make research-triage` now shell out to. Argument
-    # spec is borrowed verbatim from `research.pipeline._add_common_run_args`
-    # so any new arg landed there is automatically exposed here.
+    # spec lives in a side-effect-free shared CLI contract so parser creation
+    # never imports the dev-only research implementation.
     # `research/` is dev-only and not shipped in production images/mounts;
     # the whole CLI must stay usable there (ops commands like
     # `hft ops rearm-platform` run in-container), so the pipeline commands
     # are registered only when the package is importable.
-    try:
-        from research.pipeline import _add_common_run_args as _research_add_common_run_args
-    except ImportError:
-        _research_add_common_run_args = None
-
-    if _research_add_common_run_args is not None:
+    if _research_pipeline_available():
         alpha_pipeline = alpha_sub.add_parser(
             "pipeline",
             help="Canonical research pipeline orchestrator (mirrors `make research`).",
@@ -998,15 +1090,21 @@ def build_parser() -> argparse.ArgumentParser:
             "run",
             help="Strict SOP: optimize preflight → validate → promote → index (non-bypassable).",
         )
-        _research_add_common_run_args(alpha_pipeline_run, strict=True)
-        alpha_pipeline_run.set_defaults(func=cmd_alpha_pipeline_run)
+        add_common_research_pipeline_args(
+            alpha_pipeline_run,
+            strict=True,
+            handler=cmd_alpha_pipeline_run,
+        )
 
         alpha_pipeline_triage = alpha_pipeline_sub.add_parser(
             "triage",
             help="Internal debug mode (requires HFT_RESEARCH_ALLOW_TRIAGE=1); outputs non-promotable.",
         )
-        _research_add_common_run_args(alpha_pipeline_triage, strict=False)
-        alpha_pipeline_triage.set_defaults(func=cmd_alpha_pipeline_triage)
+        add_common_research_pipeline_args(
+            alpha_pipeline_triage,
+            strict=False,
+            handler=cmd_alpha_pipeline_triage,
+        )
 
     # ── TCA ─────────────────────────────────────────────────────────────
     tca = sub.add_parser("tca", help="Transaction Cost Analysis utilities")

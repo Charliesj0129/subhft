@@ -10,7 +10,7 @@ Architecture (D2):
     3. exposure.check_and_update(key, intent)   → reject if overshoot
     4. risk_engine.evaluate(intent)             → synchronous
     5. risk_engine.create_command(intent)       → synchronous
-    6. order_adapter._api_queue.put_nowait(cmd)
+    6. order_adapter.submit_command(cmd, timeout_s=0.01)
     7. dedup.commit(key, approved, reason, cmd_id) [after dispatch outcome]
 - Latency histogram CE2-07 wraps steps 1-7.
 """
@@ -76,7 +76,7 @@ class GatewayService:
     Parameters mirror plan D2:
         channel:        LocalIntentChannel — receives intents from StrategyRunner
         risk_engine:    RiskEngine — evaluate() + create_command() called synchronously
-        order_adapter:  OrderAdapter — _api_queue.put_nowait(cmd)
+        order_adapter:  OrderAdapter — public command-ingress port
         exposure_store: ExposureStore
         dedup_store:    IdempotencyStore
         storm_guard:    StormGuard
@@ -507,23 +507,16 @@ class GatewayService:
                     cmd = self._risk_engine.create_command(decision.intent)
                 cmd_id_for_commit = int(cmd.cmd_id)
             # Step 6: Dispatch to order adapter (dedup committed AFTER outcome is known)
-            # Bug #6: use put() with short timeout instead of put_nowait() to
-            # tolerate transient _api_queue fullness (gives _api_worker ~10ms to drain).
+            # Bug #6: the public ingress uses a short bounded wait after its
+            # non-blocking fast path, giving the API worker ~10ms to drain.
             _dispatch_ok = False
             try:
                 if typed_cmd_frame is not None and callable(typed_submit):
                     typed_submit(typed_cmd_frame)
                     _dispatch_ok = True
                 else:
-                    try:
-                        self._order_adapter._api_queue.put_nowait(cmd)
-                        _dispatch_ok = True
-                    except asyncio.QueueFull:
-                        await asyncio.wait_for(
-                            self._order_adapter._api_queue.put(cmd),
-                            timeout=0.01,
-                        )
-                        _dispatch_ok = True
+                    await self._order_adapter.submit_command(cmd, timeout_s=0.01)
+                    _dispatch_ok = True
                 self._dispatched += 1
             except (asyncio.QueueFull, asyncio.TimeoutError):
                 self._rejected += 1

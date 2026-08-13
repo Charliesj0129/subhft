@@ -299,9 +299,16 @@ global_defaults:
 
         order_queue: asyncio.Queue = asyncio.Queue(maxsize=64)
 
-        # Build a fake order adapter that has _api_queue
+        # Build a fake order adapter with the public command-ingress port.
         fake_adapter = MagicMock()
-        fake_adapter._api_queue = order_queue
+
+        async def submit_command(command, *, timeout_s=0.01):
+            try:
+                order_queue.put_nowait(command)
+            except asyncio.QueueFull:
+                await asyncio.wait_for(order_queue.put(command), timeout=timeout_s)
+
+        fake_adapter.submit_command.side_effect = submit_command
         fake_adapter._supports_typed_command_ingress = False
 
         channel = LocalIntentChannel(maxsize=64)

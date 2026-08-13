@@ -21,12 +21,15 @@ contract roll (`make rebuild-symbols-yaml`); in-process rebuild was removed.
 Why: the in-process rebuild overwrote per-connection shards.
 Revisit: only with a shard-aware rebuild design.
 
-## shioaji pinned at 1.3.3 (2026-06-01, re-confirmed 2026-06-16)
-Decision: hold the SDK pin; 1.5.3 is a full Rust `_core.abi3.so` rewrite
-(solace internals gone, enum moves, `bidask`->`bid_ask`, timeout defaults
-changed). Migration proceeds via the surface-diff tool + golden guard
-(`scripts/shioaji_api_diff/`, `make shioaji-guard`) on a dedicated branch.
-Revisit-trigger: adapter rewrite validated end-to-end (see current-risks.md).
+## shioaji pinned at 1.5.6 (2026-07-15, confirmed 2026-07-19)
+Decision: repository dependency and lock authority are `shioaji[speed]==1.5.6`.
+The 1.2.9/1.3.3/1.5.3/1.5.5 artifacts remain versioned historical
+compatibility evidence and must not be presented as the current runtime
+contract. Deployment acceptance remains HOLD until a separately captured
+runtime version and execution/replay evidence are available.
+Why: the adapter migration and repository pin were approved, while old-PC
+records do not contain an SDK version claim. Revisit-trigger: new SDK upgrade
+proposal or verified runtime/deployment evidence.
 
 ## Research modules imported by tracked code must be tracked (2026-07-12)
 Decision: any research module a tracked file imports — including dynamic

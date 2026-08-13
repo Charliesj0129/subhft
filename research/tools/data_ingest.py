@@ -54,21 +54,31 @@ _LOB_DTYPE = np.dtype(
     ]
 )
 
+# Column order must match the row unpacking in ingest_from_clickhouse().
+#
+# hft.market_data has no `timestamp`/`price`/`side`/`bid_*`/`ask_*` columns — this
+# query used to name them and could not run at all (UNKNOWN_IDENTIFIER). The unit
+# tests mock the ClickHouse client, so the SQL text was never checked against the
+# real schema. Keep that in mind before editing: only a live query proves this works.
+#
+# `exch_ts` is already nanoseconds. Date bounds are UTC because a UTC calendar day
+# is exactly one TAIFEX trading day (Taipei 08:00 -> next 08:00), so a night session
+# stays with the day session that precedes it.
 _QUERY_TEMPLATE = """\
 SELECT
-    toUnixTimestamp64Nano(timestamp) AS timestamp_ns,
-    price,
+    exch_ts AS timestamp_ns,
+    price_scaled AS price,
     volume,
-    side,
-    bid_price,
-    bid_volume,
-    ask_price,
-    ask_volume
+    multiIf(trade_direction > 0, 'Buy', trade_direction < 0, 'Sell', '') AS side,
+    if(length(bids_price) > 0, bids_price[1], 0) AS bid_price,
+    if(length(bids_vol) > 0, bids_vol[1], 0) AS bid_volume,
+    if(length(asks_price) > 0, asks_price[1], 0) AS ask_price,
+    if(length(asks_vol) > 0, asks_vol[1], 0) AS ask_volume
 FROM hft.market_data
 WHERE symbol = {symbol:String}
-  AND timestamp >= parseDateTimeBestEffort({start:String})
-  AND timestamp < parseDateTimeBestEffort({end:String})
-ORDER BY timestamp
+  AND exch_ts >= toUnixTimestamp64Nano(toDateTime64({start:String}, 9, 'UTC'))
+  AND exch_ts < toUnixTimestamp64Nano(toDateTime64({end:String}, 9, 'UTC'))
+ORDER BY exch_ts
 """
 
 

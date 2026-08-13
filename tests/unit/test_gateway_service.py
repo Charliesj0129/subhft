@@ -55,7 +55,14 @@ def _make_service(channel=None, approve=True, queue_full=False, exposure_store=N
         for _ in range(64):
             api_queue.put_nowait(MagicMock())
     order_adapter = MagicMock()
-    order_adapter._api_queue = api_queue
+
+    async def submit_command(command, *, timeout_s=0.01):
+        try:
+            api_queue.put_nowait(command)
+        except asyncio.QueueFull:
+            await asyncio.wait_for(api_queue.put(command), timeout=timeout_s)
+
+    order_adapter.submit_command.side_effect = submit_command
 
     storm_guard = MagicMock()
     storm_guard.state = StormGuardState.NORMAL
@@ -485,7 +492,14 @@ def _make_service_with_rejection_sink(channel=None, approve=True, queue_full=Fal
         for _ in range(64):
             api_queue.put_nowait(MagicMock())
     order_adapter = MagicMock()
-    order_adapter._api_queue = api_queue
+
+    async def submit_command(command, *, timeout_s=0.01):
+        try:
+            api_queue.put_nowait(command)
+        except asyncio.QueueFull:
+            await asyncio.wait_for(api_queue.put(command), timeout=timeout_s)
+
+    order_adapter.submit_command.side_effect = submit_command
 
     storm_guard = MagicMock()
     storm_guard.state = StormGuardState.NORMAL

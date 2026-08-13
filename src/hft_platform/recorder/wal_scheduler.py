@@ -10,7 +10,7 @@ import datetime as dt
 import os
 import threading
 import time
-from typing import TYPE_CHECKING
+from typing import Protocol
 
 from structlog import get_logger
 
@@ -18,10 +18,14 @@ from hft_platform.core import timebase
 from hft_platform.core.market_calendar import get_calendar
 from hft_platform.observability.metrics import MetricsRegistry
 
-if TYPE_CHECKING:
-    from hft_platform.recorder.loader import WALLoaderService
-
 logger = get_logger("recorder.wal_scheduler")
+
+
+class WALFlushTarget(Protocol):
+    """Persistence capability required by the market-close scheduler."""
+
+    def process_files(self, force: bool = False) -> None:
+        """Process pending WAL files, optionally bypassing age checks."""
 
 
 class WALScheduler:
@@ -31,11 +35,11 @@ class WALScheduler:
     pending WAL files shortly after market close.
     """
 
-    def __init__(self, loader: WALLoaderService):
+    def __init__(self, loader: WALFlushTarget):
         """Initialize WAL scheduler.
 
         Args:
-            loader: WALLoaderService instance to flush
+            loader: WAL persistence target to flush
         """
         self._loader = loader
         self._calendar = get_calendar()

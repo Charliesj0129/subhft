@@ -92,6 +92,28 @@ class TestBuildServiceGraph:
 
         guard.assert_called_once_with()
 
+    @pytest.mark.usefixtures("_sim_env")
+    def test_build_injects_prometheus_event_bus_telemetry(self, _mock_services: dict) -> None:
+        from hft_platform.observability.event_bus_telemetry import PrometheusEventBusTelemetry
+
+        _build_with_mocks()
+
+        telemetry = _mock_services["RingBufferBus"].call_args.kwargs["telemetry"]
+        assert isinstance(telemetry, PrometheusEventBusTelemetry)
+
+    @pytest.mark.usefixtures("_sim_env")
+    def test_build_uses_noop_event_bus_telemetry_when_metrics_are_unavailable(
+        self,
+        _mock_services: dict,
+    ) -> None:
+        with patch(
+            "hft_platform.observability.metrics.MetricsRegistry.get",
+            side_effect=ImportError("metrics unavailable"),
+        ):
+            _build_with_mocks()
+
+        assert _mock_services["RingBufferBus"].call_args.kwargs["telemetry"] is None
+
     @pytest.mark.usefixtures("_sim_env", "_mock_services")
     def test_build_sim_has_all_required_services(self) -> None:
         registry = _build_with_mocks()

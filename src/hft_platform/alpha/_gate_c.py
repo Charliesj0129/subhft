@@ -26,6 +26,7 @@ from hft_platform.alpha._validation_helpers import (
     _resolve_first_data_meta_path,
 )
 from hft_platform.alpha._validation_types import GateReport, ValidationConfig
+from hft_platform.alpha.gate_c_runtime import GateCRuntime
 
 logger = structlog.get_logger("alpha.gate_c")
 
@@ -269,18 +270,36 @@ def _equity_to_daily_pnl(equity_curve: Any) -> list[float]:
     return []
 
 
+def _load_gate_c_runtime() -> GateCRuntime:
+    """Load the research adapter during the compatibility migration window."""
+    from research.backtest.gate_c_runtime import build_gate_c_runtime
+
+    return build_gate_c_runtime()
+
+
+def _resolve_gate_c_runtime(runtime: GateCRuntime | None) -> GateCRuntime:
+    if runtime is not None:
+        return runtime
+    return _load_gate_c_runtime()
+
+
 def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as follow-up
     alpha: Any,
     config: ValidationConfig,
     root: Path,
     resolved_data_paths: list[str],
     experiments_base: Path,
+    runtime: GateCRuntime | None = None,
 ) -> tuple[GateReport, str, str, str, str]:
     _ensure_project_root_on_path(root)
     from hft_platform.alpha.experiments import ExperimentTracker
-    from research.backtest.hft_native_runner import HftNativeRunner, ensure_hftbt_npz
-    from research.backtest.types import BacktestConfig, WalkForwardConfig
-    from research.registry.scorecard import compute_scorecard
+
+    runtime = _resolve_gate_c_runtime(runtime)
+    HftNativeRunner = runtime.hft_native_runner
+    ensure_hftbt_npz = runtime.ensure_hftbt_npz
+    BacktestConfig = runtime.backtest_config
+    WalkForwardConfig = runtime.walk_forward_config
+    compute_scorecard = runtime.compute_scorecard
 
     alpha_id = alpha.manifest.alpha_id
     strategy_type = getattr(alpha.manifest, "strategy_type", "taker")
@@ -289,10 +308,14 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
     if strategy_type == "maker":
         # --- Maker path: CK-direct backtest ---
         from hft_platform.alpha.latency_profiles import resolve_profile
-        from research.backtest.cost_models import load_cost_profile
-        from research.backtest.fill_models import QueueDepletionFill
-        from research.backtest.maker_engine import ClickHouseSource, LatencyProfile, MakerEngine
-        from research.backtest.result_store import ResultStore
+
+        maker_runtime = runtime.load_maker_runtime()
+        load_cost_profile = maker_runtime.load_cost_profile
+        QueueDepletionFill = maker_runtime.queue_depletion_fill
+        ClickHouseSource = maker_runtime.clickhouse_source
+        LatencyProfile = maker_runtime.latency_profile
+        MakerEngine = maker_runtime.maker_engine
+        ResultStore = maker_runtime.result_store
 
         ck_source = ClickHouseSource()
         ck_source.health_check()
@@ -305,7 +328,7 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
         # (logged). This closes the wiring gap identified in
         # docs/incidents/2026-04-24-r47-backtest-credibility-audit.md.
         latency_profile_name = getattr(alpha.manifest, "latency_profile", "") or ""
-        latency_profile: LatencyProfile | None = None
+        latency_profile: Any | None = None
         if latency_profile_name:
             try:
                 resolved = resolve_profile(latency_profile_name)
@@ -388,8 +411,6 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
         maker_passed = all(maker_checks.values()) and (maker_blocking is None or maker_blocking["passed"])
 
         # Compute scorecard (reuse existing function with maker data)
-        from research.registry.scorecard import compute_scorecard
-
         tracker = ExperimentTracker(base_dir=experiments_base)
         latest_signals = getattr(tracker, "latest_signals_by_alpha", None)
         pool_signals = latest_signals() if callable(latest_signals) else {}
@@ -493,8 +514,9 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
         # Enrich taker result with provenance (only if result is a dataclass instance)
         import dataclasses as _dc
 
-        from research.backtest.result_store import ResultStore
-        from research.backtest.taker_engine import TakerEngine
+        taker_runtime = runtime.load_taker_runtime()
+        ResultStore = taker_runtime.result_store
+        TakerEngine = taker_runtime.taker_engine
 
         if _dc.is_dataclass(base_result) and not isinstance(base_result, type):
             data_period = ""
@@ -509,9 +531,7 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
             # 限制 §4.  We never default to a stand-in cost model.
             _cost_model = None
             try:
-                from research.backtest.cost_models import load_cost_profile
-
-                _cost_model = load_cost_profile(instrument)
+                _cost_model = taker_runtime.load_cost_profile(instrument)
             except (KeyError, FileNotFoundError):
                 _cost_model = None
             base_result = TakerEngine().enrich_result(

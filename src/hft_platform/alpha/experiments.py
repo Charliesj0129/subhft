@@ -686,7 +686,7 @@ def _stamp_edge_metric_semantics(
     if not _has_edge_round_trip_metric(report):
         return scorecard, report
 
-    from research.registry.schemas import (
+    from hft_platform.contracts.alpha import (
         EDGE_METRIC_SOURCE_GATE,
         EDGE_METRIC_SUPPORTING_GATES,
         edge_metric_semantics,

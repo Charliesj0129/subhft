@@ -272,6 +272,39 @@ def test_validate_events_non_monotonic_raises():
         validate_events(events, instrument="TMFD6")
 
 
+def test_validate_events_timezone_shifted_exch_ts_raises():
+    """A uniform +8h shift stays monotonic, so only the causality check can see it.
+
+    Mirrors hft.market_data partitions 20260126-20260205, where Taipei
+    wall-clock was recorded as UTC.
+    """
+    local = 1_769_433_525_000_000_000
+    shift = 8 * 3600 * 1_000_000_000
+    events = _make_events(
+        [
+            (DEPTH_EVENT | EXCH_EVENT | BUY_EVENT, local + shift, local, 17000.0, 5, 0, 0, 0.0),
+            (TRADE_EVENT | EXCH_EVENT | BUY_EVENT, local + shift + 1, local + 1, 17000.0, 1, 0, 0, 0.0),
+        ]
+    )
+    with pytest.raises(DataValidationError, match="exch_ts precedes local_ts"):
+        validate_events(events, instrument="TMFD6")
+
+
+def test_validate_events_allows_sub_second_clock_skew():
+    """Benign exchange/local clock skew is milliseconds and must not fail a day."""
+    local = 1_769_433_525_000_000_000
+    skew = 5_000_000  # 5 ms, matching the observed p99 of the pre-clamp era
+    events = _make_events(
+        [
+            (DEPTH_EVENT | EXCH_EVENT | BUY_EVENT, local + skew, local, 17000.0, 5, 0, 0, 0.0),
+            (DEPTH_EVENT | EXCH_EVENT | SELL_EVENT, local + skew, local, 17001.0, 3, 0, 0, 0.0),
+            (TRADE_EVENT | EXCH_EVENT | BUY_EVENT, local + skew + 1, local + 1, 17000.5, 1, 0, 0, 0.0),
+        ]
+    )
+    validate_events(events, instrument="TMFD6")
+    assert len(events) == 3
+
+
 def test_validate_events_negative_price_raises():
     events = _make_events(
         [

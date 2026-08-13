@@ -426,6 +426,18 @@ _MONEY_DOMAIN_PARTS = frozenset({"contracts", "order", "execution", "risk"})
 # tests). Live trading paths in those domains remain enforced.
 _HFT_P004_EXEMPT_FILES = frozenset({"stress_test.py"})
 
+# Exact class fields that contain a money-related token but are dimensionless.
+# Match both the repository-relative path suffix and field name so this cannot
+# suppress the same name in another contract or a function parameter.
+_HFT_P004_EXEMPT_CLASS_FIELDS = frozenset(
+    {
+        (
+            ("src", "hft_platform", "contracts", "alpha.py"),
+            "cost_sensitivity_ratio",
+        ),
+    }
+)
+
 
 def _is_money_field_name(name: str) -> bool:
     lower = name.lower()
@@ -438,6 +450,11 @@ def _is_money_field_name(name: str) -> bool:
         ):
             return True
     return False
+
+
+def _is_hft_p004_exempt_class_field(path: Path, name: str) -> bool:
+    path_suffix = tuple(path.parts[-4:])
+    return (path_suffix, name) in _HFT_P004_EXEMPT_CLASS_FIELDS
 
 
 def _is_float_annotation(annotation: ast.expr | None) -> bool:
@@ -482,7 +499,12 @@ def check_no_float_money(tree: ast.Module, path: Path) -> list[Violation]:
                 name = target.id
             elif isinstance(target, ast.Attribute):
                 name = target.attr
-            if name and _is_money_field_name(name) and _is_float_annotation(node.annotation):
+            if (
+                name
+                and _is_money_field_name(name)
+                and _is_float_annotation(node.annotation)
+                and not _is_hft_p004_exempt_class_field(path, name)
+            ):
                 violations.append(Violation(
                     file=str(path),
                     line=node.lineno,

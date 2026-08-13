@@ -1,5 +1,8 @@
+import ast
 from decimal import Decimal
+from pathlib import Path
 
+from hft_platform.core import pricing as pricing_module
 from hft_platform.core.pricing import FixedPriceScaleProvider, PriceCodec, SymbolMetadataPriceScaleProvider
 from hft_platform.feed_adapter.normalizer import SymbolMetadata
 
@@ -39,3 +42,16 @@ def test_price_codec_decimal_helpers():
     codec = PriceCodec(FixedPriceScaleProvider(scale=10))
     assert codec.scale_decimal("AAA", Decimal("1.23")) == 12
     assert codec.descale_decimal("AAA", 123) == Decimal("12.3")
+
+
+def test_pricing_kernel_does_not_import_feed_adapter():
+    tree = ast.parse(Path(pricing_module.__file__).read_text(encoding="utf-8"))
+    imported_modules: list[str] = []
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            imported_modules.append(node.module)
+        elif isinstance(node, ast.Import):
+            imported_modules.extend(alias.name for alias in node.names)
+
+    assert all(not module.startswith("hft_platform.feed_adapter") for module in imported_modules)

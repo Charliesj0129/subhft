@@ -111,7 +111,14 @@ def _build_service(
             api_q.put_nowait(MagicMock())
 
     order_adapter = MagicMock()
-    order_adapter._api_queue = api_q
+
+    async def submit_command(command, *, timeout_s=0.01):
+        try:
+            api_q.put_nowait(command)
+        except asyncio.QueueFull:
+            await asyncio.wait_for(api_q.put(command), timeout=timeout_s)
+
+    order_adapter.submit_command.side_effect = submit_command
     order_adapter._supports_typed_command_ingress = False
 
     storm_guard = MagicMock()

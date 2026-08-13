@@ -13,11 +13,13 @@ from typing import Any
 from hft_platform.alpha._validation_profile import ValidationProfile, load_profile
 from hft_platform.alpha.promotion import PromotionConfig, promote_alpha
 from hft_platform.alpha.validation import ValidationConfig, run_alpha_validation
+from hft_platform.cli_args.research_pipeline import (
+    STANDARD_VALIDATION_PROFILE as _STANDARD_VALIDATION_PROFILE,
+    VM_UL6_STRICT_VALIDATION_PROFILE as _VM_UL6_STRICT_VALIDATION_PROFILE,
+    VM_UL6_VALIDATION_PROFILE as _VM_UL6_VALIDATION_PROFILE,
+    add_common_research_pipeline_args,
+)
 from research import factory
-
-_STANDARD_VALIDATION_PROFILE = "standard"
-_VM_UL6_VALIDATION_PROFILE = "vm_ul6"  # legacy alias for vm_ul6_strict
-_VM_UL6_STRICT_VALIDATION_PROFILE = "vm_ul6_strict"
 
 # Stage 2 (2026-05-28): the legacy in-code overrides dict
 # ``_VM_UL6_PROFILE_OVERRIDES`` and ``_PROFILE_BASELINE_DEFAULTS`` were removed.
@@ -379,151 +381,11 @@ def cmd_triage(args: argparse.Namespace) -> int:
 
 
 def _add_common_run_args(cmd: argparse.ArgumentParser, *, strict: bool) -> None:
-    cmd.add_argument(
-        "--validation-profile",
-        choices=(
-            _STANDARD_VALIDATION_PROFILE,
-            _VM_UL6_STRICT_VALIDATION_PROFILE,
-            _VM_UL6_VALIDATION_PROFILE,  # legacy alias for vm_ul6_strict (deprecated)
-        ),
-        default=_STANDARD_VALIDATION_PROFILE,
-        help=(
-            "Validation parameter profile preset. vm_ul6_strict enables stricter "
-            "institutional-grade defaults loaded from "
-            "config/research/profiles/vm_ul6_strict.yaml. vm_ul6 is a deprecated alias."
-        ),
+    add_common_research_pipeline_args(
+        cmd,
+        strict=strict,
+        handler=cmd_run if strict else cmd_triage,
     )
-    cmd.add_argument("--alpha-id", required=True, help="Alpha id under research/alphas/<alpha_id>")
-    cmd.add_argument("--owner", required=True, help="Promotion owner")
-    cmd.add_argument("--data", nargs="+", required=True, help="Input data paths for Gate A-C validation")
-    cmd.add_argument("--project-root", default=".", help="Project root path")
-    cmd.add_argument("--out-dir", default="outputs/research_pipeline", help="Output directory for pipeline reports")
-    cmd.add_argument("--experiments-dir", default="research/experiments", help="Experiment base directory")
-    cmd.add_argument(
-        "--skip-factory-clean",
-        action="store_true",
-        help="Skip factory clean stage in preflight optimize.",
-    )
-
-    cmd.add_argument("--is-oos-split", type=float, default=0.7)
-    cmd.add_argument("--signal-threshold", type=float, default=0.3)
-    cmd.add_argument("--max-position", type=int, default=5)
-    cmd.add_argument("--min-sharpe-oos-gate-c", type=float, default=0.0)
-    cmd.add_argument("--max-abs-drawdown-gate-c", type=float, default=0.3)
-    cmd.add_argument("--min-turnover-gate-c", type=float, default=1e-6)
-    cmd.add_argument("--pytest-timeout-s", type=int, default=300)
-
-    cmd.add_argument("--latency-profile-id", default="sim_p95_v2026-02-26")
-    cmd.add_argument("--local-decision-pipeline-latency-us", type=int, default=250)
-    cmd.add_argument("--submit-ack-latency-ms", type=float, default=36.0)
-    cmd.add_argument("--modify-ack-latency-ms", type=float, default=43.0)
-    cmd.add_argument("--cancel-ack-latency-ms", type=float, default=47.0)
-    cmd.add_argument("--live-uplift-factor", type=float, default=1.5)
-    cmd.add_argument("--maker-fee-bps", type=float, default=-0.2)
-    cmd.add_argument("--taker-fee-bps", type=float, default=0.2)
-    cmd.add_argument("--stat-pvalue-threshold", type=float, default=0.1)
-    cmd.add_argument("--min-stat-tests-pass", type=int, default=2)
-    cmd.add_argument("--bootstrap-samples", type=int, default=1000)
-    cmd.add_argument("--opt-signal-threshold-min", type=float, default=0.05)
-    cmd.add_argument("--opt-signal-threshold-max", type=float, default=0.6)
-    cmd.add_argument("--opt-signal-threshold-steps", type=int, default=8)
-    cmd.add_argument("--opt-objective", default="risk_adjusted")
-    cmd.add_argument("--opt-max-is-oos-gap", type=float, default=1.0)
-    cmd.add_argument("--opt-min-neighbor-objective-ratio", type=float, default=0.6)
-    cmd.add_argument("--opt-min-deflated-sharpe", type=float, default=-0.1)
-    cmd.add_argument(
-        "--allowed-data-roots",
-        nargs="+",
-        default=[
-            "research/data/raw",
-            "research/data/interim",
-            "research/data/processed",
-            "research/data/hbt_multiproduct",
-        ],
-        help="Allowed dataset roots for strict data governance.",
-    )
-    cmd.add_argument(
-        "--required-data-provenance-fields",
-        nargs="*",
-        default=[],
-        help=(
-            "Optional metadata keys required in each dataset sidecar when data governance is enforced "
-            "(example: source generator seed created_at)."
-        ),
-    )
-    cmd.add_argument(
-        "--data-ul",
-        type=int,
-        default=2,
-        help="Minimum metadata validation tier (VM-UL1..VM-UL6) used by Gate A data governance checks.",
-    )
-    cmd.add_argument("--stress-latency-multiplier", type=float, default=1.5)
-    cmd.add_argument("--stress-fee-multiplier", type=float, default=1.5)
-    cmd.add_argument("--min-stress-sharpe-ratio", type=float, default=0.5)
-    cmd.add_argument("--stress-drawdown-limit-multiplier", type=float, default=1.25)
-
-    cmd.add_argument("--shadow-sessions", type=int, default=0)
-    cmd.add_argument("--min-shadow-sessions", type=int, default=5)
-    cmd.add_argument("--drift-alerts", type=int, default=0)
-    cmd.add_argument("--execution-reject-rate", type=float, default=0.0)
-    cmd.add_argument("--max-execution-reject-rate", type=float, default=0.01)
-    cmd.add_argument(
-        "--paper-trade-summary",
-        default=None,
-        help="Optional JSON summary path for paper-trade governance (Gate E strict mode).",
-    )
-    cmd.add_argument("--min-paper-trade-calendar-days", type=int, default=7)
-    cmd.add_argument("--min-paper-trade-trading-days", type=int, default=5)
-    cmd.add_argument("--min-paper-trade-session-minutes", type=int, default=30)
-    cmd.add_argument("--min-sharpe-oos-gate-d", type=float, default=1.0)
-    cmd.add_argument("--max-abs-drawdown-gate-d", type=float, default=0.2)
-    cmd.add_argument("--max-turnover-gate-d", type=float, default=2.0)
-    cmd.add_argument("--max-correlation-gate-d", type=float, default=0.7)
-    cmd.add_argument("--canary-weight", type=float, default=None)
-    cmd.add_argument(
-        "--rust-module-name",
-        default=None,
-        help="Optional rust module override used by Gate F readiness check.",
-    )
-    cmd.add_argument(
-        "--rust-parity-test-path",
-        default="tests/unit/test_rust_hotpath_parity.py",
-        help="Pytest target used by Gate F Rust readiness check.",
-    )
-    cmd.add_argument("--rust-parity-timeout-s", type=int, default=180)
-    cmd.add_argument(
-        "--enforce-rust-benchmark-gate",
-        action="store_true",
-        help="Enable benchmark regression command in Gate F.",
-    )
-    cmd.add_argument(
-        "--rust-benchmark-cmd",
-        default=(
-            "uv run python tests/benchmark/perf_regression_gate.py "
-            "--baseline tests/benchmark/.benchmark_baseline.json "
-            "--current benchmark.json "
-            "--threshold 0.10"
-        ),
-    )
-
-    if strict:
-        cmd.set_defaults(func=cmd_run)
-        return
-
-    cmd.add_argument("--skip-gate-b-tests", action="store_true")
-    cmd.add_argument("--no-promote", action="store_true", help="Stop after validation and skip promotion.")
-    cmd.add_argument("--force-promote", action="store_true")
-    cmd.add_argument(
-        "--allow-audit-warnings",
-        action="store_true",
-        help="Do not fail pipeline when audit has warnings.",
-    )
-    cmd.add_argument(
-        "--allow-gate-fail",
-        action="store_true",
-        help="Return 0 even when validation/promotion gates fail.",
-    )
-    cmd.set_defaults(func=cmd_triage)
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -136,7 +136,7 @@ class HealthServer:
         # 3. StormGuard
         storm_guard = getattr(self._system, "storm_guard", None)
         if storm_guard is not None:
-            from hft_platform.risk.storm_guard import StormGuardState
+            from hft_platform.contracts.strategy import StormGuardState
 
             sg_state = storm_guard.state
             checks["storm_guard"] = sg_state.name

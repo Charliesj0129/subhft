@@ -98,13 +98,17 @@ free after the 2026-03-02 cleanup). Research data remains the largest uncontroll
 - **Mitigation**: TTL on system logs (done); monitor SMART data for wear indicators
 - **Status**: ✅ Done — weekly SMART cron + alert (2026-03-27)
 
-### R10 — Shioaji SDK Version Unpinned
+### R10 — Shioaji SDK Runtime/Documentation Drift
 - **Severity**: MEDIUM
-- **Timeline**: Next `uv sync` or `pip install -e .` could pull breaking API changes
-- **Cause**: `pyproject.toml` specifies `shioaji` without a version upper bound
-- **Mitigation**: Pin to `shioaji==X.Y.Z` after validating; document that upgrades require
-  re-running latency baseline (`docs/architecture/latency-baseline-shioaji-sim-vs-system.md`)
-- **Status**: ✅ Done — pinned to `shioaji[speed]==1.2.9` (2026-03-27)
+- **Timeline**: Repository and deployed runtime can diverge; historical compatibility
+  notes may also be mistaken for the current SDK contract
+- **Cause**: Earlier 1.2.9/1.3.3/1.5.3 notes remained after the repository authority moved
+  to 1.5.6
+- **Mitigation**: Keep `pyproject.toml` and `uv.lock` at `shioaji[speed]==1.5.6`,
+  label historical harnesses by version, and require a separately captured runtime
+  version before deployment approval
+- **Status**: ⚠️ Repository pin unified; runtime acceptance and documentation cleanup tracked
+  separately (2026-07-19)
 
 ### R11 — Ubuntu Security Updates Pending
 - **Severity**: LOW-MEDIUM

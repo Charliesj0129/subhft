@@ -1,4 +1,7 @@
+import ast
+import inspect
 import json
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -7,6 +10,7 @@ import yaml
 from hft_platform.alpha.promotion import (
     PromotionConfig,
     _evaluate_gate_d,
+    _load_rust_module_name,
     build_promotion_checklist,
     promote_alpha,
 )
@@ -16,6 +20,38 @@ def _strict_profile():
     from hft_platform.alpha._validation_profile import ValidationProfile
 
     return ValidationProfile(name="test", is_strict=True, thresholds={}, blocking_sub_gates=("sharpe_threshold",))
+
+
+def test_load_rust_module_name_uses_canonical_discovery_registry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Manifest:
+        rust_module = "hft_platform.rust_core"
+
+    class _Alpha:
+        manifest = _Manifest()
+
+    class _Registry:
+        def discover(self, path: str):
+            discovered_paths.append(path)
+            return {"alpha_x": _Alpha()}
+
+    discovered_paths: list[str] = []
+    monkeypatch.setattr("hft_platform.alpha.discovery.AlphaDiscoveryRegistry", _Registry)
+
+    assert _load_rust_module_name(tmp_path, "alpha_x") == "hft_platform.rust_core"
+    assert discovered_paths == [str(tmp_path / "research" / "alphas")]
+
+
+def test_load_rust_module_name_has_no_production_to_research_import() -> None:
+    tree = ast.parse(textwrap.dedent(inspect.getsource(_load_rust_module_name)))
+    imported_modules = {
+        node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) and node.module is not None
+    }
+
+    assert "hft_platform.alpha.discovery" in imported_modules
+    assert not any(module == "research" or module.startswith("research.") for module in imported_modules)
 
 
 def _write_scorecard(

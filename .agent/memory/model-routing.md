@@ -13,6 +13,8 @@ lessons. Do NOT record: generic model claims; single anecdotes (wait for a
 | Sonnet | Tier-2 code+test | 2 | 2 | 1 (report nudge; 0 this run) | 0/2 (capability probes) |
 | Sonnet | Tier-1 docs verify | 1 | 0 (1 PARTIAL) | 2 (false-positive fixes) | 0/1 |
 | Sonnet | Tier-2 alpha-research (append-only research/) | 2 | 2 | 0 (1 review-caught narrative overclaim, no code fix needed) | 2/2 (context-isolation, parallelism) |
+| gpt-5.6-sol | Tier-3 plan/spec review | 1 | 0 | 1 (stop-now request; no report) | 0/1 |
+| orchestrator-class reviewer (inherit) | Tier-3 code diff review | 1 | 1 | 0 | 1/1 (review separation) |
 
 Net-win = delegations that were cheaper/faster than doing it directly (not
 capability probes). ROI-first routing (AGENTS.md `## ROI-First Delegation`)
@@ -350,3 +352,129 @@ Lessons:
   keeping this framing in future packets for the same class of task ("a
   rule passing is not the same as a rule being meaningful — report which one
   you're claiming").
+
+### 2026-07-13 · Tier 3 · plan/spec review · Shioaji 1.5.6 quote-only candidate · gpt-5.6-sol · FAIL
+Interventions: 1 (stop-now/report-now request; no response) · Cost: ~734K
+reported session tokens / ~4 min
+ROI: net-win no · realized-saving none · would-delegate-again no
+Archive: .agent/memory/delegations/2026-07-13-shioaji-156-plan-review.md
+Lessons:
+- A broad reviewer packet plus a large inherited context did not return a
+  verdict before interruption. Keep future independent review packets scoped
+  to the actual diff and a small set of governing rules; the orchestrator must
+  still review directly when no report is delivered.
+
+### 2026-07-14 · governance · golden-intake re-run after task-intake §6 harness-binding edit · 8/8 PASS
+Fresh-eyes pass required by evals/golden-intake-tasks.md before the
+docs(agents) commit: §6 now binds subagent_type to the .claude/agents/ role
+definitions (meta-audit 2026-07-14 action 2) but changes no classification,
+tier, trigger, or model assignment — G1–G8 all route as pinned.
+
+### 2026-07-14 · Tier 2 · independent review (diff-scoped) · W1 hooks commit 1e8619d1 · hft-reviewer (inherit) · SUCCESS
+Interventions: 0 (sync delivery; verdict in format on first attempt) · Cost:
+~59K subagent tokens / 14 tool uses / ~7 min
+ROI: net-win YES · realized-saving review-separation (8 real findings incl. 2
+HIGH the author missed; 3 findings evidenced live by the reviewer being
+falsely denied by the buggy guard itself) · would-delegate-again yes
+Archive: .agent/memory/delegations/2026-07-14-w1-hooks-review.md
+Lessons:
+- The 2026-07-13 packet lessons applied (diff-scoped, small rule set, sync,
+  verdict-mandatory) produced delivery + REQUEST-CHANGES with evidence — the
+  packet shape, not the model, was the earlier failure.
+- Adversarial review of ENFORCEMENT code pays disproportionately: the reviewer
+  probed bypasses (marker self-rewrite, path traversal) the author's own tests
+  never imagined.
+
+### 2026-07-14 · governance · golden-intake re-run after task-intake §6 pipeline pointer (v3 W2) · 8/8 PASS
+pipeline-implement defines HOW after task-intake decides IF; no
+classification, tier, trigger, or model assignment changed — G1–G8 route as
+pinned.
+
+### 2026-07-23 · Tier 3 · independent code review · AlphaDiscoveryRegistry boundary · orchestrator-class reviewer (inherit) · SUCCESS
+Interventions: 0 code/review corrections; 3 evidence/status follow-ups · Cost: not measured
+ROI: net-win yes · realized-saving review separation · would-delegate-again yes
+Archive: .agent/memory/delegations/2026-07-23-alpha-discovery-registry-review.md
+Lessons:
+- A diff-scoped packet with frozen hashes returned APPROVE and independently
+  verified ABI/pickle parity, 11 direct edges, runtime smoke, and local gates.
+- The reviewer correctly separated removed direct imports from the remaining
+  `research/__init__.py` discover-time transitive closure instead of overclaiming.
+
+### 2026-07-24 · Tier 3 · independent code review · research lazy import closure · gpt-5.6-sol · SUCCESS
+Interventions: 1 report-now reminder; 2 low test-quality nits accepted and
+fixed · Cost: not measured
+ROI: net-win yes · realized-saving review separation · would-delegate-again yes
+Archive: .agent/memory/delegations/2026-07-24-stage6a-research-lazy-import-review.md
+Lessons:
+- The reviewer reproduced six cwd-dependent failures that the repository-root
+  command hid; deriving the root from `__file__` made the tests venue-stable.
+- Full lazy-export identity and normal submodule fallback needed explicit
+  coverage; a single `AlphaRegistry` identity assertion was not enough.
+- A temporary eager-import break probe failed both closure tests and byte-exact
+  restoration returned the suite to 18 passed.
+
+### 2026-07-24 · Tier 3 · independent code review · canonical alpha registry consumers · gpt-5.6-sol · SUCCESS
+Interventions: 0 · Cost: not measured
+ROI: net-win yes · realized-saving review separation · would-delegate-again yes
+Archive: .agent/memory/delegations/2026-07-24-stage6b-canonical-alpha-registry-review.md
+Lessons:
+- Exact source hashes let the reviewer distinguish three authorized consumer
+  changes from unrelated dirty hunks in the same files.
+- The compatibility wrapper subclasses the canonical registry, so behavior
+  monkeypatching alone can false-pass; the function-scoped AST boundary test
+  reliably failed under legacy import reversion.
+- The bounded reviewer returned APPROVE on the first attempt with 122 focused
+  tests, exact source hashes, and no confirmed finding.
+
+### 2026-07-24 · Tier 3 · independent code review · Gate C runtime port · gpt-5.6-sol · SUCCESS
+Interventions: 1 HIGH finding fixed; 1 bounded re-review · Cost: not measured
+ROI: net-win yes · realized-saving review separation · would-delegate-again yes
+Archive: .agent/memory/delegations/2026-07-24-stage6c-gate-c-runtime-port-review.md
+Lessons:
+- A single adapter builder still changed behavior when it eagerly loaded both
+  maker and taker lanes; reducing static edges is not enough without preserving
+  branch-specific import timing and exception precedence.
+- Splitting common, maker, and taker runtime bindings closed the cross-lane
+  closure; clean subprocess probes now enforce lane isolation.
+- The reviewer first returned REQUEST-CHANGES, then APPROVE after 154 tests,
+  mypy, architecture, and dependency gates independently confirmed the fix.
+
+### 2026-07-24 · Tier 3 · independent code review · health and Gateway boundaries · gpt-5.6-sol · SUCCESS
+Interventions: 1 progress request; 0 code/review corrections · Cost: not measured
+ROI: net-win yes · realized-saving review separation · would-delegate-again yes
+Archive: .agent/memory/delegations/2026-07-24-stage7a-health-gateway-boundaries-review.md
+Lessons:
+- The reviewer independently proved parity for fast, drained, timed-out, and
+  cancelled queue submissions, including zero residual putters.
+- Exact hashes plus an explicit 16-file fixture allowlist separated the
+  boundary seam from the repository's large intentional dirty tree.
+- Typed-first dispatch, dedup commit timing, rejection feedback, and exposure
+  release all remained unchanged; focused P99 and 10,000-intent stress gates
+  found no material latency regression.
+
+### 2026-07-24 · Tier 3 · independent code review · WAL scheduler flush port · gpt-5.6-sol · SUCCESS
+Interventions: 1 progress request; 0 code/review corrections · Cost: not measured
+ROI: net-win yes · realized-saving review separation · would-delegate-again yes
+Archive: .agent/memory/delegations/2026-07-24-stage7b1-wal-scheduler-flush-port-review.md
+Lessons:
+- A consumer-owned structural protocol removed a two-file durability SCC
+  without changing loader construction, flush calls, retries, or persistence
+  ordering.
+- Static mypy compatibility at the real `WALScheduler(self)` call and a
+  source-reversion-sensitive AST test jointly covered behavior and boundary.
+- Independent fresh-process probes confirmed import timing stayed lazy while
+  the SCC inventory fell from 6 groups/25 files to 5 groups/23 files.
+
+### 2026-07-24 · Tier 3 · independent code review · platform-degrade registry · gpt-5.6-sol · SUCCESS
+Interventions: 2 progress requests; 0 code/review corrections · Cost: not measured
+ROI: net-win yes · realized-saving review separation · would-delegate-again yes
+Archive: .agent/memory/delegations/2026-07-24-stage7b2-platform-degrade-registry-review.md
+Lessons:
+- Moving the singleton and its lock behind a lightweight registry removed the
+  concrete safety cycle while retaining the full old lock scope.
+- Independent deadlock and factory-exception probes demonstrated that
+  force-clear remains outside the lock and failed construction remains
+  retryable.
+- Persist-before-clear, phantom-latch recovery, nonrecoverable relatch, and
+  HALT/reduce-only behavior stayed green across 180 expanded tests; SCCs fell
+  from 5 groups/23 files to 4 groups/21 files.

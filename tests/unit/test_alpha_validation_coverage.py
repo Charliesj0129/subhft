@@ -227,16 +227,16 @@ class TestRunAlphaValidation:
             experiments_dir=str(tmp_path / "exp"),
         )
         # Mock discover to return an empty registry
-        with patch("hft_platform.alpha.validation._ensure_project_root_on_path"):
-            mock_registry_cls = MagicMock()
-            mock_registry_instance = MagicMock()
-            mock_registry_instance.discover.return_value = {}
-            mock_registry_cls.return_value = mock_registry_instance
-            with patch.dict(
-                "sys.modules", {"research.registry.alpha_registry": MagicMock(AlphaRegistry=mock_registry_cls)}
-            ):
-                with pytest.raises(ValueError, match="Unknown alpha_id"):
-                    run_alpha_validation(config)
+        mock_registry_cls = MagicMock()
+        mock_registry_instance = MagicMock()
+        mock_registry_instance.discover.return_value = {}
+        mock_registry_cls.return_value = mock_registry_instance
+        with (
+            patch("hft_platform.alpha.validation._ensure_project_root_on_path"),
+            patch("hft_platform.alpha.discovery.AlphaDiscoveryRegistry", mock_registry_cls),
+            pytest.raises(ValueError, match="Unknown alpha_id"),
+        ):
+            run_alpha_validation(config)
 
     def test_orchestrator_gate_c_skipped_when_gate_a_fails(self, tmp_path: Path):
         """When gate A fails, gate C is skipped with appropriate details."""
@@ -268,7 +268,7 @@ class TestRunAlphaValidation:
             patch("hft_platform.alpha.validation.run_gate_b", return_value=passed_gate_b),
             patch("hft_platform.alpha.validation._resolve_data_path", side_effect=lambda root, p: p),
             patch("hft_platform.alpha.validation._update_manifest_status"),
-            patch.dict("sys.modules", {"research.registry.alpha_registry": MagicMock(AlphaRegistry=mock_registry_cls)}),
+            patch("hft_platform.alpha.discovery.AlphaDiscoveryRegistry", mock_registry_cls),
         ):
             result = run_alpha_validation(config)
 
@@ -312,7 +312,7 @@ class TestRunAlphaValidation:
             ),
             patch("hft_platform.alpha.validation._resolve_data_path", side_effect=lambda root, p: p),
             patch("hft_platform.alpha.validation._update_manifest_status"),
-            patch.dict("sys.modules", {"research.registry.alpha_registry": MagicMock(AlphaRegistry=mock_registry_cls)}),
+            patch("hft_platform.alpha.discovery.AlphaDiscoveryRegistry", mock_registry_cls),
         ):
             result = run_alpha_validation(config)
 
@@ -363,13 +363,8 @@ class TestRunAlphaValidation:
             ),
             patch("hft_platform.alpha.validation._resolve_data_path", side_effect=lambda root, p: p),
             patch("hft_platform.alpha.validation._update_manifest_status"),
-            patch.dict(
-                "sys.modules",
-                {
-                    "research.registry.alpha_registry": MagicMock(AlphaRegistry=mock_registry_cls),
-                    "hft_platform.alpha.audit": audit_mod,
-                },
-            ),
+            patch("hft_platform.alpha.discovery.AlphaDiscoveryRegistry", mock_registry_cls),
+            patch.dict("sys.modules", {"hft_platform.alpha.audit": audit_mod}),
         ):
             result = run_alpha_validation(config)
 

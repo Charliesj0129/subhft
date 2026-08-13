@@ -1,5 +1,12 @@
 # Current Session State
 
+## 2026-07-19 continuation
+
+User approved Phase 1 Shioaji 1.5.6 governance alignment. Updated dependency
+codemap, risk register, architecture decision, and compatibility-test wording;
+historical 1.2.9/1.3.3/1.5.3 harnesses remain unchanged. No CI, deployment,
+Fubon, or live-trading work was performed.
+
 ## Last Updated
 
 - **Date**: 2026-07-14 (second session)
@@ -204,3 +211,16 @@ Retired 2026-07-13 (explicit user request): `docs/agent-knowledge-distillation`
 (tip cf40f68b verified contained in origin/main, zero unpushed commits;
 deleted locally and on origin). Theme history: Agent System v2 +
 institutionalization waves + governed cleanup; merged via a1e2d0f2.
+
+## 2026-07-19 shioaji 1.5.6 old-host deploy — WS4 accepted (session ea9503c1)
+
+Full timeline + evidence in runbook "Runtime validation 2026-07-17→19" and
+host bundle `deploy-staging/shioaji156-third-attempt-20260717T045731Z/`.
+State: engine = v4.1 image (`latest` retagged, rollback anchor c79974da41d9),
+full-engine SIM readyz-ready, inline `HFT_ORDER_MODE=sim
+HFT_QUOTE_CONNECTIONS=3`. Commits pushed: bfa46e1d (Dockerfile rich),
+3b1c10c8 (1.5.6 AuthError account properties + regression tests).
+RTT probe aborted (305/305 broker rejects, reason unqueried, account clean).
+Monday owed: pool=4 retry pre-market, day-session full-universe confirm.
+Traps: .env still ORDER_MODE=live (plain compose up = LIVE); /app/outputs
+container-local (rearm state + evidence lost on recreate).

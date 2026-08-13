@@ -1,7 +1,7 @@
-"""Dual-version Shioaji compatibility tests.
+"""Versioned Shioaji compatibility tests.
 
-The adapter must run correctly on both the pinned 1.3.3 SDK (current
-production) and the held 1.5.3 upgrade (PR #367). Between those releases the
+The adapter's current authority is the pinned 1.5.6 SDK. Historical 1.3.3 and
+1.5.3 behavior remains covered by versioned compatibility fixtures. Between those releases the
 quote enums moved from ``sj.constant.*`` to top-level ``sj.*`` and the quote
 API surface (subscribe/unsubscribe/setters/event-callback) moved from the
 ``api.quote`` proxy to the top-level ``api``; both old locations remain in

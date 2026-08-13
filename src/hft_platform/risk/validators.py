@@ -13,6 +13,12 @@ if TYPE_CHECKING:
 logger = get_logger("risk_validators")
 
 
+def _default_price_scale_provider() -> PriceScaleProvider:
+    from hft_platform.feed_adapter.normalizer import SymbolMetadata
+
+    return SymbolMetadataPriceScaleProvider(SymbolMetadata())
+
+
 class RiskValidator:
     def __init__(
         self,
@@ -24,7 +30,7 @@ class RiskValidator:
         self.config = config
         self.defaults = config.get("global_defaults", {})
         self.strat_configs = config.get("strategies", {})
-        provider = price_scale_provider or SymbolMetadataPriceScaleProvider()
+        provider = price_scale_provider or _default_price_scale_provider()
         self.price_codec = PriceCodec(provider)
         self.lob = lob
         self._position_provider = position_provider

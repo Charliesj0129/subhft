@@ -3156,6 +3156,18 @@ class OrderAdapter:
     def _evict_new_for_cancel(self) -> OrderCommand | None:
         return self._evict_lower_priority_for_safety_intent(IntentType.CANCEL)
 
+    async def submit_command(self, cmd: OrderCommand, *, timeout_s: float = 0.01) -> None:
+        """Submit a Gateway command with bounded queue backpressure.
+
+        The fast path is non-blocking. A transiently full queue gets one
+        bounded wait so the API worker can drain it; ``QueueFull`` or
+        ``TimeoutError`` remains the caller's rejection decision.
+        """
+        try:
+            self._api_queue.put_nowait(cmd)
+        except asyncio.QueueFull:
+            await asyncio.wait_for(self._api_queue.put(cmd), timeout=timeout_s)
+
     def submit_typed_command_nowait(self, frame: TypedOrderCommandFrame) -> None:
         """Prototype typed command ingress from GatewayService (avoids early materialization)."""
         if not _is_typed_order_cmd_frame(frame):

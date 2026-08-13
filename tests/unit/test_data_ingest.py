@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -11,10 +12,69 @@ import pytest
 
 from research.tools.data_ingest import (
     _LOB_DTYPE,
+    _QUERY_TEMPLATE,
     _build_meta,
     _ch_price_to_x10000,
     ingest_from_clickhouse,
 )
+
+# ---------------------------------------------------------------------------
+# Query schema conformance
+# ---------------------------------------------------------------------------
+
+# Columns of hft.market_data, per
+# src/hft_platform/migrations/clickhouse/20260301_001_initial_schema.sql
+_MARKET_DATA_COLUMNS = frozenset(
+    {
+        "symbol",
+        "exchange",
+        "type",
+        "exch_ts",
+        "ingest_ts",
+        "price_scaled",
+        "volume",
+        "bids_price",
+        "bids_vol",
+        "asks_price",
+        "asks_vol",
+        "seq_no",
+        "trade_direction",
+        "underlying",
+        "strike_scaled",
+        "option_right",
+        "expiry",
+        "instrument_type",
+    }
+)
+
+
+def test_query_template_reads_real_market_data_columns() -> None:
+    """Guards the regression: the query used to select columns the table lacks.
+
+    It named ``timestamp``/``price``/``side``/``bid_*``/``ask_*`` and raised
+    UNKNOWN_IDENTIFIER on every run; the other tests here mock the ClickHouse
+    client, which is why that went unnoticed for so long.
+
+    Scope: identifier presence only. ``bid_price`` and friends are legitimate
+    output *aliases* of the corrected query, so a token check cannot tell a dead
+    source column from a live alias — only ``timestamp`` is unambiguous. Proving
+    the SQL executes needs a live ClickHouse and is out of scope for a unit test.
+    """
+    tokens = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", _QUERY_TEMPLATE))
+    assert "timestamp" not in tokens, "hft.market_data has exch_ts/ingest_ts, not timestamp"
+
+    for real in ("exch_ts", "price_scaled", "trade_direction", "bids_price", "asks_vol"):
+        assert real in _MARKET_DATA_COLUMNS
+        assert real in tokens
+
+
+def test_query_template_aliases_match_row_unpacking_order() -> None:
+    """SELECT output order is positional: ingest_from_clickhouse unpacks by position."""
+    expected = ["timestamp_ns", "price", "volume", "side", "bid_price", "bid_volume", "ask_price", "ask_volume"]
+    aliases = [line.split(" AS ")[-1].strip().rstrip(",") for line in _QUERY_TEMPLATE.splitlines() if " AS " in line]
+    # `volume` is selected bare (no alias), so it is absent from the alias list.
+    assert aliases == [name for name in expected if name != "volume"]
+
 
 # ---------------------------------------------------------------------------
 # Price scaling

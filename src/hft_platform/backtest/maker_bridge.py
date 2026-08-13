@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
+from hft_platform.contracts.maker_actions import CancelQuote, Hold, PostQuote
 from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, Side
 from hft_platform.strategy.base import BaseStrategy
 
@@ -68,13 +69,6 @@ class MakerStrategyBridge(BaseStrategy):
         ctx is the StrategyContext (unused by bridge, passed through by framework).
         event is whatever the MakerEngine strategy expects.
         """
-        # Lazy import so this module does not hard-require MakerEngine at import time
-        from research.backtest.maker_engine import (  # noqa: PLC0415
-            CancelQuote,
-            Hold,
-            PostQuote,
-        )
-
         action = self._inner.on_tick(event)
         symbol = getattr(event, "symbol", None) or self._symbol
 

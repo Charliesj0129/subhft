@@ -89,6 +89,44 @@ Produces `research/alphas/<id>/{impl.py, manifest.yaml, README.md}` from `_templ
 
 > **No live registry entry yet.** Loop binding (`config/loops/<loop_id>.yaml`) is the only source of truth for live strategies. Scaffolded alphas live exclusively under `research/alphas/`. See loop_v1 step L10.
 
+### 2a. GP-discovered candidates (SubHFT Alpha Mining v2, Phase 4)
+
+`research/combinatorial`'s genetic-programming search engine is a separate,
+alternate entry path parallel to `hft alpha scaffold`, for candidates
+discovered by search rather than hand-authored:
+
+```bash
+hft alpha search --mode genetic --data <path> --feature-fields x,y \
+  --population 100 --generations 50 --save-results research/combinatorial/results/latest.json
+
+hft alpha mine promote --from-results research/combinatorial/results/latest.json --rank 0 \
+  --alpha-id <id> --owner <owner> --instrument TMFD6
+# or promote a specific expression directly:
+hft alpha mine promote --expression "zscore(ts_delta(x, 5), 20)" \
+  --alpha-id <id> --owner <owner> --instrument TMFD6
+```
+
+Produces the same `research/alphas/<id>/{impl.py, manifest.yaml, README.md}`
+shape as `hft alpha scaffold`, with two deliberate differences:
+
+- `formula` carries the raw GP expression text (`research/combinatorial`'s
+  function-call grammar: `ts_mean`, `ts_corr`, `zscore`, ... over named
+  features). `dsl_formula` is intentionally left unset (`None`) — the
+  `src/hft_platform/alpha/dsl/` grammar only supports linear `+ - *`
+  weighted sums and cannot represent GP output; do not try to unify them.
+- `impl.py` wraps `research/combinatorial/gp_alpha_adapter.py::GPCompiledAlpha`,
+  a streaming `AlphaProtocol` adapter that reproduces the search engine's
+  batch-evaluated score tick-by-tick via a provably-sized rolling buffer
+  (see that module's docstring — nested windowed operators require additive,
+  not max, buffer sizing). Expressions using `rank(...)` or a 1-arg
+  `zscore(...)` are refused at promotion time: both are whole-array
+  look-ahead operators with no bounded-buffer streaming equivalent.
+
+Same boundary as scaffolding: **status is `DRAFT`, no live registry entry,
+no gate runs automatically.** The next step is identical to any other
+scaffolded alpha — human review of `manifest.yaml`, then `hft alpha
+validate --profile <strict-profile> --data <path>` to run Gate A.
+
 ---
 
 ## 3. Backtest & data-meta stamping

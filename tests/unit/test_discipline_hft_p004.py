@@ -66,7 +66,31 @@ def test_interior_pattern_max_loss_amount_is_flagged() -> None:
     assert len(vs) == 1
 
 
+def test_cost_sensitivity_ratio_parameter_in_alpha_contract_is_flagged() -> None:
+    src = "def update(cost_sensitivity_ratio: float) -> None: ...\n"
+    vs = _scan(src, "src/hft_platform/contracts/alpha.py")
+    assert len(vs) == 1
+
+
+def test_cost_sensitivity_ratio_field_in_other_contract_is_flagged() -> None:
+    src = "class S:\n    cost_sensitivity_ratio: float | None = None\n"
+    vs = _scan(src, "src/hft_platform/contracts/order.py")
+    assert len(vs) == 1
+
+
+def test_other_cost_field_in_alpha_contract_is_flagged() -> None:
+    src = "class S:\n    estimated_cost: float | None = None\n"
+    vs = _scan(src, "src/hft_platform/contracts/alpha.py")
+    assert len(vs) == 1
+
+
 # ---- negative: should NOT be flagged --------------------------------------
+
+
+def test_cost_sensitivity_ratio_field_in_alpha_contract_is_exempt() -> None:
+    src = "class Scorecard:\n    cost_sensitivity_ratio: float | None = None\n"
+    vs = _scan(src, "src/hft_platform/contracts/alpha.py")
+    assert vs == []
 
 
 def test_int_price_is_not_flagged() -> None:

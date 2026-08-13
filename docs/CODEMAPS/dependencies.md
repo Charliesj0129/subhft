@@ -39,7 +39,7 @@
 ### Trading
 | Package | Version | Purpose |
 |---------|---------|---------|
-| shioaji[speed] | ==1.2.9 (pinned) | SinoPac broker SDK (optional) |
+| shioaji[speed] | ==1.5.6 (pinned authority) | SinoPac broker SDK (optional); deployment runtime remains separately gated |
 | fubon-neo | (private) | Fubon broker SDK (optional) |
 | hftbacktest | >=2.4 | Backtest simulator |
 | exchange-calendars | >=4.13.1 | Trading hours |

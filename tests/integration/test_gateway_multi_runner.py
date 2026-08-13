@@ -64,7 +64,14 @@ def _build_service(channel, api_queue, storm_guard=None):
     risk_engine.create_command.side_effect = create_command
 
     order_adapter = MagicMock()
-    order_adapter._api_queue = api_queue
+
+    async def submit_command(command, *, timeout_s=0.01):
+        try:
+            api_queue.put_nowait(command)
+        except asyncio.QueueFull:
+            await asyncio.wait_for(api_queue.put(command), timeout=timeout_s)
+
+    order_adapter.submit_command.side_effect = submit_command
 
     if storm_guard is None:
         storm_guard = MagicMock()

@@ -181,11 +181,6 @@ class FeatureUpdateEvent:
             return None
         return self.values[idx]
 
-    def to_typed_frame(self):
-        from hft_platform.feature.boundary import event_to_typed_frame
-
-        return event_to_typed_frame(self)
-
 
 @dataclass(slots=True)
 class GapEvent:

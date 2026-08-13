@@ -7,6 +7,7 @@ from typing import Any
 from structlog import get_logger
 
 from hft_platform.core import timebase
+from hft_platform.ops.platform_degrade_registry import try_force_clear_shared_controller
 
 logger = get_logger("manual_rearm")
 
@@ -43,17 +44,10 @@ class ManualRearmGate:
         """
         self.clear_platform_flag()
 
-        # Best-effort: bridge the live controller.  We import lazily to
-        # avoid a circular import (``platform_degrade`` does not depend
-        # on ``manual_rearm``).
+        # Best-effort: bridge the live controller through its process-local
+        # registry without importing the concrete controller module.
         try:
-            import hft_platform.ops.platform_degrade as _pd
-
-            with _pd._shared_controller_lock:
-                ctrl = _pd._shared_controller
-            if ctrl is not None:
-                ctrl.force_clear(reason="manual_rearm_gate")
-            else:
+            if not try_force_clear_shared_controller(reason="manual_rearm_gate"):
                 # Different process from the live engine (typical Docker
                 # path: `docker compose exec` runs a fresh interpreter).
                 # The persisted flag will be honoured on the next engine
@@ -74,10 +68,10 @@ class ManualRearmGate:
     def clear_platform_flag(self) -> None:
         """Clear the persisted platform manual-rearm flag, lock-free.
 
-        Unlike :meth:`rearm_platform` this does NOT bridge the live controller
-        (no ``_shared_controller_lock`` acquisition), so it is safe to call from
-        within controller bootstrap — which already holds that lock — to discard
-        a stale auto-recoverable flag without deadlocking.
+        Unlike :meth:`rearm_platform` this does NOT bridge the live controller,
+        so it is safe to call from within controller bootstrap — which already
+        holds the registry lock — to discard a stale auto-recoverable flag
+        without deadlocking.
         """
         state = self._load_state()
         platform_state = self._platform_section(state)

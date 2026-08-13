@@ -218,13 +218,13 @@ class HftBacktestAdapter:
                 )
             from pathlib import Path as _Path
 
-            from research.calibration.config import (
+            from hft_platform.config.calibration_profiles import (
                 DEFAULT_PROFILES_PATH,
-                load_calibration_profile,
+                load_queue_calibration_profile,
             )
 
             _prof_path = _Path(calibration_profile_path) if calibration_profile_path else DEFAULT_PROFILES_PATH
-            profile = load_calibration_profile(instrument, _prof_path)
+            profile = load_queue_calibration_profile(instrument, _prof_path)
             _qm_name_map = {
                 "power_prob": "PowerProbQueueModel",
                 "power_prob2": "PowerProbQueueModel2",

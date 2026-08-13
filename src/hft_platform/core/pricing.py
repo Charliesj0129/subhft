@@ -14,13 +14,7 @@ class PriceScaleProvider(Protocol):
 
 @dataclass(slots=True)
 class SymbolMetadataPriceScaleProvider:
-    metadata: Any | None = None
-
-    def __post_init__(self) -> None:
-        if self.metadata is None:
-            from hft_platform.feed_adapter.normalizer import SymbolMetadata
-
-            self.metadata = SymbolMetadata()
+    metadata: Any
 
     def price_scale(self, symbol: str) -> int:
         return int(self.metadata.price_scale(symbol)) if self.metadata else 1

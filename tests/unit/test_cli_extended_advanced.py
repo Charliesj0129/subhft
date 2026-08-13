@@ -69,17 +69,19 @@ def test_cmd_alpha_search_random(monkeypatch, capsys, tmp_path):
             return {
                 "expression": "zscore(ts_delta(ofi, 5), 5)",
                 "score": 1.2,
-                "sharpe_oos": 1.3,
+                "selection_sharpe": 1.3,
                 "correlation_pool_max": 0.2,
                 "passed": True,
                 "metadata": {"depth": 2},
             }
 
     class _Engine:
-        def __init__(self, *, features, returns, random_seed):
+        def __init__(self, *, features, returns, random_seed, dataset_fingerprint=None):
             assert "ofi" in features
             assert returns is not None
             assert random_seed == 7
+            self.search_run_id = "fake-run-id"
+            self.dataset_fingerprint = dataset_fingerprint
 
         def random_search(self, n_trials):
             assert n_trials == 5
@@ -108,6 +110,8 @@ def test_cmd_alpha_search_random(monkeypatch, capsys, tmp_path):
     assert payload["mode"] == "random"
     assert payload["count"] == 1
     assert payload["results"][0]["passed"] is True
+    assert payload["search_run_id"]
+    assert payload["dataset_fingerprint"]
 
 
 def test_cmd_alpha_search_template_requires_template(tmp_path):

@@ -120,6 +120,9 @@ class _NoopOrderAdapter:
     def submit_typed_command_nowait(self, frame) -> None:  # pragma: no cover - microbench hook
         self._typed_count += 1
 
+    async def submit_command(self, command, *, timeout_s=0.01) -> None:  # pragma: no cover - microbench hook
+        return None
+
 
 class _StormGuardStub:
     __slots__ = ("state",)

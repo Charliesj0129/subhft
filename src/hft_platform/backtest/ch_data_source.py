@@ -32,6 +32,10 @@ SELL_EVENT = 1 << 28
 # Upper bits hold flags (EXCH_EVENT, LOCAL_EVENT, BUY_EVENT, SELL_EVENT).
 EV_TYPE_MASK = 0xFF
 
+# How far exch_ts may run ahead of local_ts before the day is rejected. Absorbs
+# benign exchange/local clock skew without letting a timezone-scale shift pass.
+_TS_CAUSALITY_TOLERANCE_NS = 1_000_000_000
+
 
 class DataValidationError(RuntimeError):
     """Raised when loaded market data fails post-load sanity checks."""
@@ -84,6 +88,13 @@ class ChDataSource:
         Queries hft.market_data for the given instrument/date, converts rows
         into hftbacktest-compatible events, and validates the result.
 
+        ``date`` selects a TAIFEX trading day, i.e. the UTC calendar day of
+        ``exch_ts``. That is Taipei 08:00 -> next 08:00, which brackets the day
+        session (08:45-13:45) together with the night session that follows it
+        (15:00-05:00). The ``'UTC'`` argument is load-bearing: without it the
+        window would follow the ClickHouse server timezone and a night session
+        would be split across two days.
+
         Real hft.market_data schema uses:
           - ``type`` (not event_type), ``ingest_ts`` (not local_ts),
           - ``price_scaled`` (not price), ``bids_price``/``bids_vol`` (not bid_prices/bid_volumes),
@@ -112,7 +123,7 @@ class ChDataSource:
                 asks_vol AS ask_volumes
             FROM hft.market_data
             WHERE symbol = {instrument:String}
-              AND toDate(toDateTime64(exch_ts/1e9, 3)) = {date:Date}
+              AND toDate(toDateTime64(exch_ts/1e9, 3), 'UTC') = {date:Date}
             ORDER BY exch_ts
         """
         df = client.query_df(
@@ -435,6 +446,31 @@ def assemble_day_events(df: "pd.DataFrame", price_scale: int) -> np.ndarray:
     return np.concatenate(chunks)
 
 
+def _check_ts_causality(events: np.ndarray, instrument: str) -> None:
+    """Reject events the exchange stamped after we received them.
+
+    ``exch_ts > local_ts`` is physically impossible: the exchange cannot stamp an
+    event later than the moment we ingested it. A uniform timezone shift stays
+    perfectly monotonic, so the monotonicity check above cannot see it — this one
+    can. ``hft.market_data`` partitions 20260126-20260205 carried exactly such a
+    shift (Taipei wall-clock written as UTC, +8h); the recorder-side cause was
+    fixed in 8a154b63.
+
+    The tolerance absorbs benign exchange/local clock skew (single-digit ms in
+    practice) while still catching anything at timezone scale.
+    """
+    exch = events["exch_ts"]
+    local = events["local_ts"]
+    ahead = exch - local
+    worst = int(ahead.max()) if len(ahead) else 0
+    if worst > _TS_CAUSALITY_TOLERANCE_NS:
+        n_bad = int(np.count_nonzero(ahead > _TS_CAUSALITY_TOLERANCE_NS))
+        raise DataValidationError(
+            f"{instrument}: exch_ts precedes local_ts on {n_bad}/{len(ahead)} events "
+            f"(worst {worst / 1e9:.3f}s ahead); a timezone-shifted exch_ts is the usual cause"
+        )
+
+
 def _check_spread_sanity(events: np.ndarray, instrument: str) -> None:
     """Check spread sanity by running an incremental book, validated at
     snapshot boundaries (transitions between distinct exch_ts values).
@@ -494,7 +530,8 @@ def validate_events(events: np.ndarray, instrument: str) -> None:
     2. At least one DEPTH_EVENT is present
     3. At least one TRADE_EVENT is present
     4. Timestamps (exch_ts) are monotonically non-decreasing
-    5. No negative prices on non-clear events
+    5. exch_ts does not precede local_ts (causality)
+    6. No negative prices on non-clear events
     """
     if len(events) == 0:
         raise DataValidationError(f"{instrument}: empty event array")
@@ -511,6 +548,8 @@ def validate_events(events: np.ndarray, instrument: str) -> None:
     if len(ts) > 1 and np.any(ts[1:] < ts[:-1]):
         first_bad = int(np.argmax(ts[1:] < ts[:-1]))
         raise DataValidationError(f"{instrument}: timestamps not monotonic at row {first_bad}")
+
+    _check_ts_causality(events, instrument)
 
     # Identify DEPTH_CLEAR rows to exclude from price check (clear events have px=0)
     is_clear = ev_types == DEPTH_CLEAR_EVENT

@@ -126,6 +126,12 @@ class _StubAdapter:
     def __init__(self) -> None:
         self._api_queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=65536)
 
+    async def submit_command(self, command: Any, *, timeout_s: float = 0.01) -> None:
+        try:
+            self._api_queue.put_nowait(command)
+        except asyncio.QueueFull:
+            await asyncio.wait_for(self._api_queue.put(command), timeout=timeout_s)
+
 
 @pytest.fixture()
 def gateway_for_bench() -> GatewayService:
