@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import time
-from threading import Lock
 from typing import Any
 
 from structlog import get_logger
@@ -10,6 +9,10 @@ from structlog import get_logger
 from hft_platform.contracts.strategy import IntentType
 from hft_platform.ops.autonomy import AutonomyMode, AutonomyTransition
 from hft_platform.ops.evidence import get_shared_autonomy_evidence_writer
+from hft_platform.ops.platform_degrade_registry import (
+    get_or_create_shared_controller,
+    reset_shared_controller,
+)
 
 _AUTONOMY_MODE_VALUES = {
     AutonomyMode.NORMAL: 0,
@@ -39,8 +42,6 @@ _AUTO_RECOVERABLE_REASONS: frozenset[str] = frozenset(
     }
 )
 
-_shared_controller: "PlatformDegradeController | None" = None
-_shared_controller_lock = Lock()
 logger = get_logger("platform_degrade")
 
 
@@ -341,26 +342,23 @@ def get_shared_platform_degrade_controller(
     metrics: Any | None = None,
     shadow_mode: bool | None = None,
 ) -> PlatformDegradeController:
-    global _shared_controller
-    with _shared_controller_lock:
-        if _shared_controller is None:
-            _shadow = shadow_mode if shadow_mode is not None else (os.getenv("HFT_ORDER_SHADOW_MODE", "0") == "1")
-            _auto_enabled = os.getenv("HFT_PLATFORM_AUTO_RECOVERY_ENABLED", "1") == "1"
-            try:
-                _cooldown = int(os.getenv("HFT_PLATFORM_AUTO_RECOVERY_COOLDOWN_S", "60"))
-            except ValueError:
-                _cooldown = 60
-            _shared_controller = PlatformDegradeController(
-                metrics=metrics,
-                shadow_mode=_shadow,
-                auto_recovery_enabled=_auto_enabled,
-                auto_recovery_cooldown_s=_cooldown,
-            )
-            _restore_manual_rearm_state(_shared_controller)
-        elif metrics is not None and _shared_controller.metrics is None:
-            _shared_controller.metrics = metrics
-            _shared_controller._sync_metrics()
-        return _shared_controller
+    def _build_controller() -> PlatformDegradeController:
+        _shadow = shadow_mode if shadow_mode is not None else (os.getenv("HFT_ORDER_SHADOW_MODE", "0") == "1")
+        _auto_enabled = os.getenv("HFT_PLATFORM_AUTO_RECOVERY_ENABLED", "1") == "1"
+        try:
+            _cooldown = int(os.getenv("HFT_PLATFORM_AUTO_RECOVERY_COOLDOWN_S", "60"))
+        except ValueError:
+            _cooldown = 60
+        controller = PlatformDegradeController(
+            metrics=metrics,
+            shadow_mode=_shadow,
+            auto_recovery_enabled=_auto_enabled,
+            auto_recovery_cooldown_s=_cooldown,
+        )
+        _restore_manual_rearm_state(controller)
+        return controller
+
+    return get_or_create_shared_controller(_build_controller, metrics=metrics)
 
 
 def _restore_manual_rearm_state(controller: "PlatformDegradeController") -> None:
@@ -397,7 +395,7 @@ def _restore_manual_rearm_state(controller: "PlatformDegradeController") -> None
                 reason=reason,
                 note="auto-recoverable reason should never require manual rearm; clearing stale flag",
             )
-            # Lock-free: we already hold _shared_controller_lock here.
+            # Lock-free: singleton construction already holds the registry lock.
             gate.clear_platform_flag()
             return
         controller.enter_reduce_only(reason=reason)
@@ -406,6 +404,4 @@ def _restore_manual_rearm_state(controller: "PlatformDegradeController") -> None
 
 
 def reset_shared_platform_degrade_controller() -> None:
-    global _shared_controller
-    with _shared_controller_lock:
-        _shared_controller = None
+    reset_shared_controller()

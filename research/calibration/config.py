@@ -3,6 +3,7 @@
 Profiles are stored in config/research/calibration_profiles.yaml.
 Each instrument has one entry with calibrated params + validation scores.
 """
+
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
@@ -11,14 +12,12 @@ from typing import Literal
 
 import yaml
 
+from hft_platform.config.calibration_profiles import (
+    DEFAULT_PROFILES_PATH,
+    CalibrationNotFoundError,
+    load_calibration_profile_entry,
+)
 from research.calibration.scoring import CalibrationScore
-
-DEFAULT_PROFILES_PATH = Path("config/research/calibration_profiles.yaml")
-"""Canonical location for per-instrument calibration profiles."""
-
-
-class CalibrationNotFoundError(KeyError):
-    """Raised when an instrument has no calibration profile."""
 
 
 @dataclass(frozen=True)
@@ -62,15 +61,7 @@ def save_calibration_profile(profile: CalibrationProfile, path: Path = DEFAULT_P
 
 def load_calibration_profile(instrument: str, path: Path = DEFAULT_PROFILES_PATH) -> CalibrationProfile:
     path = Path(path)
-    if not path.exists():
-        raise CalibrationNotFoundError(f"No calibration file at {path}")
-    data = yaml.safe_load(path.read_text()) or {}
-    if instrument not in data:
-        raise CalibrationNotFoundError(
-            f"No calibration profile for {instrument} in {path}. "
-            f"Run: uv run python -m research.calibration.cli calibrate --instrument {instrument}"
-        )
-    entry = data[instrument]
+    entry = load_calibration_profile_entry(instrument, path)
     try:
         vs = entry["validation_scores"]
         return CalibrationProfile(

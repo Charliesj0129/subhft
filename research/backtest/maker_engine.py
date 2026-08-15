@@ -17,6 +17,7 @@ import numpy as np
 import requests
 import structlog
 
+from hft_platform.contracts.maker_actions import CancelQuote, Hold, PostQuote
 from research.backtest.cost_models import CostModel
 from research.backtest.fill_models import FillModel, QueuePosition
 from research.backtest.trade_pnl_projector import project_trade_pnl
@@ -46,23 +47,6 @@ class TickData:
     @property
     def mid_price(self) -> float:
         return (self.bid_price + self.ask_price) / (2 * self.scale)
-
-
-@dataclass(frozen=True)
-class PostQuote:
-    side: str
-    price: int
-    qty: int = 1
-
-
-@dataclass(frozen=True)
-class CancelQuote:
-    side: str
-
-
-@dataclass(frozen=True)
-class Hold:
-    pass
 
 
 @dataclass(frozen=True)

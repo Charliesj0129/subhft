@@ -726,7 +726,18 @@ class SystemBootstrapper:
 
         # 1. Infrastructure
         # Note: StormGuard is created below, so we set it after creation
-        bus = RingBufferBus()
+        try:
+            from hft_platform.observability.event_bus_telemetry import PrometheusEventBusTelemetry
+            from hft_platform.observability.metrics import MetricsRegistry
+
+            bus_telemetry = PrometheusEventBusTelemetry(MetricsRegistry.get())
+        except (ImportError, OSError, RuntimeError, ValueError) as exc:
+            # The bus falls back to a no-op sink rather than refusing to start:
+            # losing observability must not stop the hot path from carrying ticks.
+            logger.warning("event_bus_telemetry_unavailable", error=str(exc))
+            bus_telemetry = None
+
+        bus = RingBufferBus(telemetry=bus_telemetry)
 
         # Bounded queues with sensible defaults (prevents OOM under load)
         # CRITICAL: Always enforce minimum bounds to prevent unbounded memory growth

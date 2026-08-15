@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import argparse
 import os
+from importlib.util import find_spec
+from pathlib import Path
+
+from hft_platform.cli_args.research_pipeline import add_common_research_pipeline_args
 
 from ._alpha import (
     cmd_alpha_ab_compare,
@@ -70,6 +74,17 @@ from ._symbols import (
     cmd_symbols_validate,
 )
 from ._tca import cmd_tca_daily
+
+
+def _research_pipeline_available() -> bool:
+    """Check for the dev-only pipeline module without importing research."""
+    try:
+        spec = find_spec("research")
+    except (AttributeError, ImportError, ValueError):
+        return False
+    if spec is None or spec.submodule_search_locations is None:
+        return False
+    return any((Path(root) / "pipeline.py").is_file() for root in spec.submodule_search_locations)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1095,18 +1110,15 @@ def build_parser() -> argparse.ArgumentParser:
     # ── Stage 5: canonical pipeline orchestrator (D2) ───────────────────
     # `hft alpha pipeline {run,triage}` is the single entrypoint that
     # `make research` / `make research-triage` now shell out to. Argument
-    # spec is borrowed verbatim from `research.pipeline._add_common_run_args`
-    # so any new arg landed there is automatically exposed here.
+    # spec lives in `hft_platform.cli_args.research_pipeline`, which both this
+    # parser and `research.pipeline` import — platform code must not import
+    # `research`, so the contract moved to the platform side rather than being
+    # borrowed from it.
     # `research/` is dev-only and not shipped in production images/mounts;
     # the whole CLI must stay usable there (ops commands like
     # `hft ops rearm-platform` run in-container), so the pipeline commands
-    # are registered only when the package is importable.
-    try:
-        from research.pipeline import _add_common_run_args as _research_add_common_run_args
-    except ImportError:
-        _research_add_common_run_args = None
-
-    if _research_add_common_run_args is not None:
+    # are registered only when the package is present.
+    if _research_pipeline_available():
         alpha_pipeline = alpha_sub.add_parser(
             "pipeline",
             help="Canonical research pipeline orchestrator (mirrors `make research`).",
@@ -1117,15 +1129,21 @@ def build_parser() -> argparse.ArgumentParser:
             "run",
             help="Strict SOP: optimize preflight → validate → promote → index (non-bypassable).",
         )
-        _research_add_common_run_args(alpha_pipeline_run, strict=True)
-        alpha_pipeline_run.set_defaults(func=cmd_alpha_pipeline_run)
+        add_common_research_pipeline_args(
+            alpha_pipeline_run,
+            strict=True,
+            handler=cmd_alpha_pipeline_run,
+        )
 
         alpha_pipeline_triage = alpha_pipeline_sub.add_parser(
             "triage",
             help="Internal debug mode (requires HFT_RESEARCH_ALLOW_TRIAGE=1); outputs non-promotable.",
         )
-        _research_add_common_run_args(alpha_pipeline_triage, strict=False)
-        alpha_pipeline_triage.set_defaults(func=cmd_alpha_pipeline_triage)
+        add_common_research_pipeline_args(
+            alpha_pipeline_triage,
+            strict=False,
+            handler=cmd_alpha_pipeline_triage,
+        )
 
     # ── TCA ─────────────────────────────────────────────────────────────
     tca = sub.add_parser("tca", help="Transaction Cost Analysis utilities")
