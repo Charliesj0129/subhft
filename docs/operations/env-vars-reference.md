@@ -329,6 +329,7 @@ Shadow deployment note:
 | 變數 | 預設值 | 用途 | 調整建議 |
 |---|---|---|---|
 | `HFT_ENGINE_IMAGE` | `hft-engine:latest` | Docker image for hft-engine（含 tag/SHA） | 部署時指定已知穩定版本 |
+| `HFT_GIT_SHA` | `unknown` | 建置時由 `Dockerfile` 烘進 image 的 commit SHA；標示的是**image**，不是實際執行的原始碼（production 的 `src/` 是 bind mount）。用於 `hft_build_info` metric、config snapshot 與部署驗證 | 由建置流程設定，不要手動覆寫；要確認實際跑的程式碼請看 `code_identity` 的 `running_code_sha` |
 | `HFT_AUTO_FLATTEN_DISABLED` | `0` | `1` = 禁用 HALT 自動平倉（手動介入模式） | 事故排查時暫時設為 `1` |
 | `HFT_LIVE_CONFIRM` | `0` | `1` = 確認 live 模式啟動（防止誤操作） | 生產環境設 `1` |
 | `HFT_SESSION_GOVERNOR_ENABLED` | `0` | `1` = 啟用 session governor 自動管理 | 多帳號場景使用 |
