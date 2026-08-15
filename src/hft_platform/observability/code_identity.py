@@ -55,7 +55,7 @@ def _blob_sha1(data: bytes) -> str:
     sha1 here is a compatibility requirement, not a security choice: the value
     is only useful because an operator can reproduce it with git.
     """
-    digest = hashlib.sha1(b"blob %d\0" % len(data))  # noqa: S324 - must match git's object id
+    digest = hashlib.sha1(b"blob %d\0" % len(data), usedforsecurity=False)  # noqa: S324 - must match git's object id
     digest.update(data)
     return digest.hexdigest()
 

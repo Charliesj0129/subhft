@@ -311,9 +311,9 @@ class StormGuard:
         ``stormguard_latency_input_max_us`` rather than judged here.
         """
         try:
-            stall_kill_s = float(os.getenv("HFT_LOOP_STALL_KILL_S", "60"))
+            stall_kill_seconds = float(os.getenv("HFT_LOOP_STALL_KILL_S", "60"))
         except ValueError:
-            stall_kill_s = 60.0
+            stall_kill_seconds = 60.0
         t = self.thresholds
         logger.info(
             "stormguard_latency_inputs",
@@ -323,8 +323,8 @@ class StormGuard:
             order_rtt_storm_us=t.order_rtt_storm_us,
             order_rtt_armed=self._order_rtt_armed(),
         )
-        if stall_kill_s > 0:
-            kill_us = int(stall_kill_s * 1_000_000)
+        if stall_kill_seconds > 0:
+            kill_us = int(stall_kill_seconds * 1_000_000)
             for name, value in (("warm", t.latency_warm_us), ("storm", t.latency_storm_us)):
                 if value >= kill_us:
                     logger.warning(
