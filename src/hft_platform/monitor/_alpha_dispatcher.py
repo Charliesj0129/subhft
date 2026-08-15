@@ -48,9 +48,9 @@ class AlphaDispatcher:
         promotions_dir: str | Path = "config/strategy_promotions",
     ) -> list[str]:
         """Discover and load requested alphas. Returns list of successfully loaded IDs."""
-        from research.registry.alpha_registry import AlphaRegistry
+        from hft_platform.alpha.discovery import AlphaDiscoveryRegistry
 
-        registry = AlphaRegistry()
+        registry = AlphaDiscoveryRegistry()
         discovered = registry.discover(alphas_dir)
 
         loaded: list[str] = []

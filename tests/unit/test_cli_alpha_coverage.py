@@ -145,20 +145,20 @@ class TestCmdAlphaList:
         registry = self._make_registry()
         with patch("hft_platform.cli._alpha.import_module") as mock_import:
             mock_mod = MagicMock()
-            mock_mod.AlphaRegistry.return_value = registry
+            mock_mod.AlphaDiscoveryRegistry.return_value = registry
             mock_import.return_value = mock_mod
             # Directly patch the inner import via builtins would be complex;
             # instead patch using sys.modules insertion
             fake_mod = MagicMock()
-            fake_mod.AlphaRegistry = MagicMock(return_value=registry)
-            with patch.dict("sys.modules", {"research.registry.alpha_registry": fake_mod}):
+            fake_mod.AlphaDiscoveryRegistry = MagicMock(return_value=registry)
+            with patch.dict("sys.modules", {"hft_platform.alpha.discovery": fake_mod}):
                 cmd_alpha_list(_ns())
         out = capsys.readouterr().out
         assert "alpha_one" in out
         assert "validated" in out
 
     def test_import_failure_exits(self, capsys):
-        with patch.dict("sys.modules", {"research.registry.alpha_registry": None}):
+        with patch.dict("sys.modules", {"hft_platform.alpha.discovery": None}):
             with pytest.raises(SystemExit) as exc_info:
                 cmd_alpha_list(_ns())
         assert exc_info.value.code == 1
@@ -168,8 +168,8 @@ class TestCmdAlphaList:
         registry.errors = []
         registry.discover.return_value = {}
         fake_mod = MagicMock()
-        fake_mod.AlphaRegistry = MagicMock(return_value=registry)
-        with patch.dict("sys.modules", {"research.registry.alpha_registry": fake_mod}):
+        fake_mod.AlphaDiscoveryRegistry = MagicMock(return_value=registry)
+        with patch.dict("sys.modules", {"hft_platform.alpha.discovery": fake_mod}):
             cmd_alpha_list(_ns())
         out = capsys.readouterr().out
         assert "No alpha artifacts" in out
@@ -182,8 +182,8 @@ class TestCmdAlphaList:
         m1.manifest.tier = None
         registry.discover.return_value = {"a": m1}
         fake_mod = MagicMock()
-        fake_mod.AlphaRegistry = MagicMock(return_value=registry)
-        with patch.dict("sys.modules", {"research.registry.alpha_registry": fake_mod}):
+        fake_mod.AlphaDiscoveryRegistry = MagicMock(return_value=registry)
+        with patch.dict("sys.modules", {"hft_platform.alpha.discovery": fake_mod}):
             cmd_alpha_list(_ns())
         out = capsys.readouterr().out
         assert "warn1" in out
@@ -1016,7 +1016,7 @@ class TestCmdAlphaValidateBatch:
         registry.discover.return_value = {a: m for a in alpha_ids}
         registry.errors = []
         fake_registry_mod = MagicMock()
-        fake_registry_mod.AlphaRegistry = MagicMock(return_value=registry)
+        fake_registry_mod.AlphaDiscoveryRegistry = MagicMock(return_value=registry)
 
         result = MagicMock()
         result.passed = pass_result
@@ -1040,7 +1040,7 @@ class TestCmdAlphaValidateBatch:
         reg_mod, val_mod = self._mock_modules(["a1", "a2"], pass_result=True)
         with patch.dict(
             "sys.modules",
-            {"hft_platform.alpha.validation": val_mod, "research.registry.alpha_registry": reg_mod},
+            {"hft_platform.alpha.validation": val_mod, "hft_platform.alpha.discovery": reg_mod},
         ):
             cmd_alpha_validate_batch(self._base_args())
         out = capsys.readouterr().out
@@ -1050,7 +1050,7 @@ class TestCmdAlphaValidateBatch:
         reg_mod, val_mod = self._mock_modules(["a1", "a2"], pass_result=False)
         with patch.dict(
             "sys.modules",
-            {"hft_platform.alpha.validation": val_mod, "research.registry.alpha_registry": reg_mod},
+            {"hft_platform.alpha.validation": val_mod, "hft_platform.alpha.discovery": reg_mod},
         ):
             with pytest.raises(SystemExit) as exc_info:
                 cmd_alpha_validate_batch(self._base_args(fail_fast=True))
@@ -1060,7 +1060,7 @@ class TestCmdAlphaValidateBatch:
         reg_mod, val_mod = self._mock_modules(["a1", "a2", "a3"], pass_result=True)
         with patch.dict(
             "sys.modules",
-            {"hft_platform.alpha.validation": val_mod, "research.registry.alpha_registry": reg_mod},
+            {"hft_platform.alpha.validation": val_mod, "hft_platform.alpha.discovery": reg_mod},
         ):
             cmd_alpha_validate_batch(self._base_args(alpha_ids=["a1"]))
         # Only 1 alpha validated
@@ -1071,13 +1071,13 @@ class TestCmdAlphaValidateBatch:
         """Alpha that raises an exception goes into errored_ids."""
         reg_mod = MagicMock()
         m = MagicMock()
-        reg_mod.AlphaRegistry.return_value.discover.return_value = {"a1": m}
+        reg_mod.AlphaDiscoveryRegistry.return_value.discover.return_value = {"a1": m}
         val_mod = MagicMock()
         val_mod.ValidationConfig = MagicMock()
         val_mod.run_alpha_validation.side_effect = RuntimeError("boom")
         with patch.dict(
             "sys.modules",
-            {"hft_platform.alpha.validation": val_mod, "research.registry.alpha_registry": reg_mod},
+            {"hft_platform.alpha.validation": val_mod, "hft_platform.alpha.discovery": reg_mod},
         ):
             with pytest.raises(SystemExit) as exc_info:
                 cmd_alpha_validate_batch(self._base_args())
@@ -1088,7 +1088,7 @@ class TestCmdAlphaValidateBatch:
         reg_mod, val_mod = self._mock_modules(["a1"], pass_result=True)
         with patch.dict(
             "sys.modules",
-            {"hft_platform.alpha.validation": val_mod, "research.registry.alpha_registry": reg_mod},
+            {"hft_platform.alpha.validation": val_mod, "hft_platform.alpha.discovery": reg_mod},
         ):
             cmd_alpha_validate_batch(self._base_args(out=str(out_file)))
         assert out_file.exists()

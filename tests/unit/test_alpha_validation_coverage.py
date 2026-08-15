@@ -233,7 +233,7 @@ class TestRunAlphaValidation:
             mock_registry_instance.discover.return_value = {}
             mock_registry_cls.return_value = mock_registry_instance
             with patch.dict(
-                "sys.modules", {"research.registry.alpha_registry": MagicMock(AlphaRegistry=mock_registry_cls)}
+                "sys.modules", {"hft_platform.alpha.discovery": MagicMock(AlphaDiscoveryRegistry=mock_registry_cls)}
             ):
                 with pytest.raises(ValueError, match="Unknown alpha_id"):
                     run_alpha_validation(config)
@@ -268,7 +268,9 @@ class TestRunAlphaValidation:
             patch("hft_platform.alpha.validation.run_gate_b", return_value=passed_gate_b),
             patch("hft_platform.alpha.validation._resolve_data_path", side_effect=lambda root, p: p),
             patch("hft_platform.alpha.validation._update_manifest_status"),
-            patch.dict("sys.modules", {"research.registry.alpha_registry": MagicMock(AlphaRegistry=mock_registry_cls)}),
+            patch.dict(
+                "sys.modules", {"hft_platform.alpha.discovery": MagicMock(AlphaDiscoveryRegistry=mock_registry_cls)}
+            ),
         ):
             result = run_alpha_validation(config)
 
@@ -312,7 +314,9 @@ class TestRunAlphaValidation:
             ),
             patch("hft_platform.alpha.validation._resolve_data_path", side_effect=lambda root, p: p),
             patch("hft_platform.alpha.validation._update_manifest_status"),
-            patch.dict("sys.modules", {"research.registry.alpha_registry": MagicMock(AlphaRegistry=mock_registry_cls)}),
+            patch.dict(
+                "sys.modules", {"hft_platform.alpha.discovery": MagicMock(AlphaDiscoveryRegistry=mock_registry_cls)}
+            ),
         ):
             result = run_alpha_validation(config)
 
@@ -366,7 +370,7 @@ class TestRunAlphaValidation:
             patch.dict(
                 "sys.modules",
                 {
-                    "research.registry.alpha_registry": MagicMock(AlphaRegistry=mock_registry_cls),
+                    "hft_platform.alpha.discovery": MagicMock(AlphaDiscoveryRegistry=mock_registry_cls),
                     "hft_platform.alpha.audit": audit_mod,
                 },
             ),

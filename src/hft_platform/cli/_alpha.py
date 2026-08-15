@@ -505,12 +505,12 @@ def cmd_alpha_mine_campaign(args: argparse.Namespace) -> None:
 
 def cmd_alpha_list(args: argparse.Namespace) -> None:
     try:
-        from research.registry.alpha_registry import AlphaRegistry
+        from hft_platform.alpha.discovery import AlphaDiscoveryRegistry
     except Exception as exc:
-        print(f"Failed to import research registry: {exc}")
+        print(f"Failed to import alpha discovery registry: {exc}")
         sys.exit(1)
 
-    registry = AlphaRegistry()
+    registry = AlphaDiscoveryRegistry()
     loaded = registry.discover("research/alphas")
     if not loaded:
         print("No alpha artifacts discovered.")
@@ -1257,13 +1257,13 @@ def cmd_alpha_validate_batch(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     try:
-        from research.registry.alpha_registry import AlphaRegistry
+        from hft_platform.alpha.discovery import AlphaDiscoveryRegistry
     except Exception as exc:
-        print(f"Failed to import alpha registry: {exc}")
+        print(f"Failed to import alpha discovery registry: {exc}")
         sys.exit(1)
 
     alphas_dir = getattr(args, "alphas_dir", "research/alphas")
-    registry = AlphaRegistry()
+    registry = AlphaDiscoveryRegistry()
     all_alphas = registry.discover(alphas_dir)
 
     alpha_ids_filter = getattr(args, "alpha_ids", None)

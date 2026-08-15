@@ -25,7 +25,7 @@ from __future__ import annotations
 import dataclasses
 import math
 
-from research.registry.schemas import AlphaManifest
+from hft_platform.contracts.alpha import AlphaManifest
 
 from .compiler import DSLNameError
 from .parser import BinOp, Identifier, Literal, Node, UnaryOp, parse

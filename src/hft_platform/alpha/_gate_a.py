@@ -123,7 +123,7 @@ def run_gate_a(
                     continue
                 problems = _validate_dataset_metadata(meta_payload, data_path)
                 try:
-                    from research.tools.vm_ul import DataUL, infer_data_ul, validate_meta_ul
+                    from hft_platform.contracts.data_ul import DataUL, infer_data_ul, validate_meta_ul
 
                     ul_enum = DataUL(data_ul_target)
                     ul_ok, ul_missing = validate_meta_ul(meta_payload, ul_enum)
@@ -163,7 +163,7 @@ def run_gate_a(
             "manifest.roles_used is empty — add role attribution per SOP Stage 2 (e.g. planner, code-reviewer)"
         )
     try:
-        from research.registry.schemas import VALID_ROLES, VALID_SKILLS
+        from hft_platform.contracts.alpha import VALID_ROLES, VALID_SKILLS
 
         invalid_roles_list = [r for r in roles_used if r not in VALID_ROLES]
         invalid_skills_list = [s for s in skills_used if s not in VALID_SKILLS]
@@ -173,12 +173,12 @@ def run_gate_a(
     if invalid_roles_list:
         skills_warnings.append(
             f"manifest.roles_used contains unknown values: {invalid_roles_list} "
-            f"(valid roles are defined in research.registry.schemas.VALID_ROLES)"
+            f"(valid roles are defined in hft_platform.contracts.alpha.VALID_ROLES)"
         )
     if invalid_skills_list:
         skills_warnings.append(
             f"manifest.skills_used contains unknown values: {invalid_skills_list} "
-            f"(valid skills are defined in research.registry.schemas.VALID_SKILLS)"
+            f"(valid skills are defined in hft_platform.contracts.alpha.VALID_SKILLS)"
         )
 
     # Latency profile advisory check

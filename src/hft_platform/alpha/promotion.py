@@ -927,9 +927,9 @@ def _resolve_paper_trade_summary(
 
 def _load_rust_module_name(root: Path, alpha_id: str) -> str:
     try:
-        from research.registry.alpha_registry import AlphaRegistry
+        from hft_platform.alpha.discovery import AlphaDiscoveryRegistry
 
-        registry = AlphaRegistry()
+        registry = AlphaDiscoveryRegistry()
         loaded = registry.discover(str(root / "research" / "alphas"))
         alpha = loaded.get(alpha_id)
         if alpha is None:
@@ -1189,7 +1189,7 @@ def _load_manifest_artifact_hash(alpha_dir: Path) -> str:
         return ""
     try:
         from hft_platform.alpha.kill_ledger import stable_artifact_hash
-        from research.registry.schemas import AlphaManifest
+        from hft_platform.contracts.alpha import AlphaManifest
 
         payload = yaml.safe_load(manifest_path.read_text()) or {}
         if not isinstance(payload, dict):
