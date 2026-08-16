@@ -34,8 +34,8 @@ from typing import Any
 from structlog import get_logger
 
 from hft_platform.alpha import audit
+from hft_platform.contracts.alpha import AlphaManifest
 from hft_platform.core import timebase
-from research.registry.schemas import AlphaManifest
 
 logger = get_logger("alpha_kill_ledger")
 

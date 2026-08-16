@@ -123,14 +123,15 @@ def run_gate_c(
 # Orchestrator — stays in validation.py (unique)
 # ---------------------------------------------------------------------------
 def run_alpha_validation(config: ValidationConfig) -> ValidationResult:
+    from hft_platform.alpha.discovery import AlphaDiscoveryRegistry
+
     root = Path(config.project_root).resolve()
     _ensure_project_root_on_path(root)
-    from research.registry.alpha_registry import AlphaRegistry
 
     resolved_data_paths = [_resolve_data_path(root, path) for path in config.data_paths]
     experiments_base = _resolve_data_path(root, config.experiments_dir)
     validation_dir = _make_validation_artifact_dir(Path(experiments_base), config.alpha_id)
-    registry = AlphaRegistry()
+    registry = AlphaDiscoveryRegistry()
     with _pushd(root):
         loaded = registry.discover("research/alphas")
     alpha = loaded.get(config.alpha_id)

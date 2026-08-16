@@ -24,7 +24,9 @@ def test_cmd_alpha_list(monkeypatch, capsys):
         def discover(self, _path):
             return {"ofi_mc": _Alpha()}
 
-    monkeypatch.setitem(sys.modules, "research.registry.alpha_registry", types.SimpleNamespace(AlphaRegistry=_Registry))
+    monkeypatch.setitem(
+        sys.modules, "hft_platform.alpha.discovery", types.SimpleNamespace(AlphaDiscoveryRegistry=_Registry)
+    )
     cli.cmd_alpha_list(Namespace())
     out = capsys.readouterr().out
     assert "ofi_mc" in out
