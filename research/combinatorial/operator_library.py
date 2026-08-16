@@ -28,6 +28,7 @@ except Exception:  # pragma: no cover - optional dependency
     _NUMBA_ENABLED = False
 
 if njit is not None:
+
     @njit(cache=True)
     def _ts_std_numba_kernel(arr: np.ndarray, w: int, target: np.ndarray) -> None:
         n = arr.size
@@ -379,3 +380,25 @@ OPERATORS: dict[str, Callable[..., np.ndarray]] = {
     "ts_sum": ts_sum,
     "zscore": zscore,
 }
+
+# Operators whose output at index i depends only on the inputs at index i.
+# These are the only ones safe to evaluate over a whole array that spans several
+# reset segments (contracts, sessions).
+ELEMENTWISE_OPERATORS: frozenset[str] = frozenset(
+    {
+        "abs",
+        "add",
+        "div",
+        "log1p",
+        "mul",
+        "sign",
+    }
+)
+
+# Everything else reads other positions: a rolling window (the ts_* family,
+# decay_linear, windowed zscore) or the entire series (rank, window-less
+# zscore). Evaluating any of these across a reset boundary lets samples from the
+# previous contract or session into the current one's value, so expression
+# evaluation must segment them. Derived rather than listed so that a new entry
+# in OPERATORS is treated as cross-sample until someone proves otherwise.
+CROSS_SAMPLE_OPERATORS: frozenset[str] = frozenset(OPERATORS) - ELEMENTWISE_OPERATORS

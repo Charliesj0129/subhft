@@ -76,17 +76,33 @@ def infer_data_ul(meta: Mapping[str, Any]) -> DataUL:
     return achieved
 
 
-UL_REQUIRED_FIELDS: dict[DataUL, frozenset[str]] = {
-    tier: required_fields_for_ul(tier) for tier in DataUL
-}
+def audit_claimed_ul(meta: Mapping[str, Any], claimed: DataUL) -> dict[str, Any]:
+    """Compare a metadata block's *claimed* UL against what it can actually prove.
+
+    A sidecar that writes ``data_ul: 5`` while carrying none of the UL3–UL5
+    provenance fields is not merely optimistic — nothing downstream can tell the
+    claim is empty, because the number is what gets read. This returns the
+    inferred tier and the exact unmet fields so a writer can record both next to
+    the claim, making the gap visible in the artifact itself.
+    """
+    inferred = infer_data_ul(meta)
+    _ok, missing = validate_meta_ul(meta, claimed)
+    return {
+        "data_ul_claimed": int(claimed),
+        "data_ul_inferred": int(inferred),
+        "data_ul_unmet_fields": missing,
+    }
+
+
+UL_REQUIRED_FIELDS: dict[DataUL, frozenset[str]] = {tier: required_fields_for_ul(tier) for tier in DataUL}
 
 
 __all__ = [
     "DataUL",
     "UL_REQUIRED_FIELDS",
+    "audit_claimed_ul",
     "coerce_data_ul",
     "infer_data_ul",
     "required_fields_for_ul",
     "validate_meta_ul",
 ]
-

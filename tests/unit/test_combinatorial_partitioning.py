@@ -14,7 +14,16 @@ def _session_ids(n_sessions: int = 20, rows_per_session: int = 10) -> np.ndarray
     return np.repeat(np.arange(n_sessions), rows_per_session)
 
 
-def _manager(tmp_path, *, embargo_rows: int = 2, ratios=None, seed: int = 42) -> DatasetPartitionManager:
+def _manager(
+    tmp_path,
+    *,
+    embargo_rows: int = 2,
+    ratios=None,
+    seed: int = 42,
+    symbols=("TXFD6",),
+    feature_schema_version: str = "v1",
+    target_definition: str = "fwd_ret_5",
+) -> DatasetPartitionManager:
     return DatasetPartitionManager(
         session_ids=_session_ids(),
         dataset_fingerprint="fp-abc123",
@@ -22,6 +31,9 @@ def _manager(tmp_path, *, embargo_rows: int = 2, ratios=None, seed: int = 42) ->
         manifest_dir=tmp_path / "manifest",
         ratios=ratios,
         random_seed=seed,
+        symbols=symbols,
+        feature_schema_version=feature_schema_version,
+        target_definition=target_definition,
     )
 
 
@@ -181,15 +193,11 @@ def test_freeze_candidate_is_idempotent_on_resume(tmp_path):
 
 def test_write_manifest_round_trips_required_fields(tmp_path):
     manager = _manager(tmp_path)
-    manifest_path = manager.write_manifest(
-        tmp_path / "manifest" / "partition_manifest.json",
-        symbols=["TXFD6"],
-        feature_schema_version="v1",
-        target_definition="fwd_ret_5",
-    )
+    manifest_path = manager.write_manifest(tmp_path / "manifest" / "partition_manifest.json")
     payload = json.loads(open(manifest_path).read())
 
     for key in (
+        "manifest_schema_version",
         "manifest_hash",
         "dataset_fingerprint",
         "symbols",
@@ -216,8 +224,8 @@ def test_write_manifest_round_trips_required_fields(tmp_path):
 def test_write_manifest_is_idempotent_on_resume(tmp_path):
     manager = _manager(tmp_path)
     path = tmp_path / "manifest" / "partition_manifest.json"
-    first = manager.write_manifest(path, symbols=["TXFD6"])
-    second = manager.write_manifest(path, symbols=["TXFD6"])
+    first = manager.write_manifest(path)
+    second = manager.write_manifest(path)
     assert first == second
 
 
@@ -238,3 +246,70 @@ def test_manifest_hash_deterministic_and_sensitive_to_embargo(tmp_path):
 
     assert manager_a.manifest_hash == manager_b.manifest_hash
     assert manager_a.manifest_hash != manager_c.manifest_hash
+
+
+@pytest.mark.parametrize(
+    "differing",
+    [
+        {"symbols": ("MXFD6",)},
+        {"feature_schema_version": "v2"},
+        {"target_definition": "fwd_ret_30"},
+    ],
+)
+def test_manifest_hash_is_sensitive_to_semantic_fields(tmp_path, differing):
+    """These three describe *what was mined*, not just how rows were split.
+
+    Before ``MANIFEST_SCHEMA_VERSION`` 2 they were written into the manifest but
+    left out of its hash, so a second ``mine init`` differing only in ``--symbols``
+    produced an identical hash.
+    """
+    baseline = _manager(tmp_path)
+    other = _manager(tmp_path, **differing)
+
+    assert baseline.manifest_hash != other.manifest_hash
+
+
+@pytest.mark.parametrize(
+    "differing",
+    [
+        {"symbols": ("MXFD6",)},
+        {"feature_schema_version": "v2"},
+        {"target_definition": "fwd_ret_30"},
+    ],
+)
+def test_write_manifest_rejects_a_rerun_that_changes_a_semantic_field(tmp_path, differing):
+    path = tmp_path / "manifest" / "partition_manifest.json"
+    _manager(tmp_path).write_manifest(path)
+
+    with pytest.raises(PartitionConfigError, match="immutable"):
+        _manager(tmp_path, **differing).write_manifest(path)
+
+
+def test_manifest_written_before_schema_version_2_still_resumes(tmp_path):
+    """An in-flight run must not abort just because this file's hash changed."""
+    from research.combinatorial import partitioning as partitioning_module
+
+    manager = _manager(tmp_path)
+    path = tmp_path / "manifest" / "partition_manifest.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    legacy_payload = {
+        "manifest_hash": manager._legacy_manifest_hash,
+        "dataset_fingerprint": manager.dataset_fingerprint,
+    }
+    path.write_text(json.dumps(legacy_payload), encoding="utf-8")
+
+    assert manager.write_manifest(path) == str(path)
+    # Left byte-for-byte alone: rewriting it would be the mutation the
+    # immutability rule exists to prevent.
+    assert json.loads(path.read_text(encoding="utf-8")) == legacy_payload
+    assert manager.manifest_hash != manager._legacy_manifest_hash
+    assert partitioning_module.MANIFEST_SCHEMA_VERSION == 2
+
+
+def test_manifest_written_before_schema_version_2_still_rejects_a_different_partitioning(tmp_path):
+    path = tmp_path / "manifest" / "partition_manifest.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"manifest_hash": "some-other-run"}), encoding="utf-8")
+
+    with pytest.raises(PartitionConfigError, match="immutable"):
+        _manager(tmp_path).write_manifest(path)

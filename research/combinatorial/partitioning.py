@@ -44,6 +44,13 @@ _FROZEN_FILENAME = "frozen_candidates.jsonl"
 _ACCESS_LOG_FILENAME = "locked_access_log.jsonl"
 _DATASET_FINGERPRINT_DOMAIN = b"hft.alpha.mine.dataset.v2\x00"
 
+# v1 hashed only the partitioning arithmetic, so two manifests that differed in
+# `symbols`, `feature_schema_version` or `target_definition` collided and the
+# immutability check in `write_manifest` waved the second one through. v2 folds
+# those three into the hash. Manifests already on disk carry no version field
+# and are validated against the v1 algorithm so in-flight runs keep resuming.
+MANIFEST_SCHEMA_VERSION = 2
+
 
 class LockedPartitionAccessError(RuntimeError):
     """Raised when locked-validation/final-holdout rows are requested before candidate freeze."""
@@ -85,6 +92,9 @@ class DatasetPartitionManager:
         manifest_dir: str | Path,
         ratios: Mapping[str, float] | None = None,
         random_seed: int = 42,
+        symbols: Sequence[str] = (),
+        feature_schema_version: str = "",
+        target_definition: str = "",
     ) -> None:
         if not dataset_fingerprint:
             raise PartitionConfigError("dataset_fingerprint must be non-empty")
@@ -114,6 +124,9 @@ class DatasetPartitionManager:
         self.ratios = normalized_ratios
         self.random_seed = int(random_seed)
         self.manifest_dir = Path(manifest_dir)
+        self.symbols = [str(s) for s in symbols]
+        self.feature_schema_version = str(feature_schema_version)
+        self.target_definition = str(target_definition)
 
         sessions_arr = np.asarray(list(session_ids))
         if sessions_arr.size == 0:
@@ -129,14 +142,22 @@ class DatasetPartitionManager:
                 "embargo leaves governed partitions empty: "
                 f"{empty_after_embargo}; embargo_rows={self.embargo_rows}; raw_row_counts={raw_counts}"
             )
+        structural = {
+            "dataset_fingerprint": self.dataset_fingerprint,
+            "ratios": self.ratios,
+            "embargo_rows": self.embargo_rows,
+            "random_seed": self.random_seed,
+            "ordered_sessions": self._ordered_sessions,
+            "session_assignment": self._session_assignment,
+        }
         self._manifest_hash = _compute_manifest_hash(
-            dataset_fingerprint=self.dataset_fingerprint,
-            ratios=self.ratios,
-            embargo_rows=self.embargo_rows,
-            random_seed=self.random_seed,
-            ordered_sessions=self._ordered_sessions,
-            session_assignment=self._session_assignment,
+            **structural,
+            symbols=self.symbols,
+            feature_schema_version=self.feature_schema_version,
+            target_definition=self.target_definition,
         )
+        # Kept only to recognise manifests written before MANIFEST_SCHEMA_VERSION 2.
+        self._legacy_manifest_hash = _compute_manifest_hash(**structural)
 
     @property
     def manifest_hash(self) -> str:
@@ -157,22 +178,17 @@ class DatasetPartitionManager:
             for name, span in self._spans.items()
         }
 
-    def _manifest_payload(
-        self,
-        *,
-        symbols: Sequence[str],
-        feature_schema_version: str,
-        target_definition: str,
-    ) -> dict[str, Any]:
+    def _manifest_payload(self) -> dict[str, Any]:
         return {
+            "manifest_schema_version": MANIFEST_SCHEMA_VERSION,
             "manifest_hash": self._manifest_hash,
             "dataset_fingerprint": self.dataset_fingerprint,
-            "symbols": list(symbols),
+            "symbols": list(self.symbols),
             "ratios": self.ratios,
             "embargo_rows": self.embargo_rows,
             "random_seed": self.random_seed,
-            "feature_schema_version": feature_schema_version,
-            "target_definition": target_definition,
+            "feature_schema_version": self.feature_schema_version,
+            "target_definition": self.target_definition,
             "created_at_ns": timebase.now_ns(),
             "sessions": [str(s) for s in self._ordered_sessions],
             "session_assignment": {str(s): p for s, p in self._session_assignment.items()},
@@ -186,33 +202,30 @@ class DatasetPartitionManager:
             },
         }
 
-    def write_manifest(
-        self,
-        path: str | Path,
-        *,
-        symbols: Sequence[str] = (),
-        feature_schema_version: str = "",
-        target_definition: str = "",
-    ) -> str:
+    def write_manifest(self, path: str | Path) -> str:
         """Write the immutable ``partition_manifest.json``.
 
-        Idempotent: re-writing to a path that already holds a manifest with the
-        same ``manifest_hash`` is a no-op (supports resuming a search run).
-        Writing over a manifest with a *different* hash raises, since manifests
-        are immutable records.
+        Idempotent: re-writing to a path that already holds a manifest for the
+        same partitioning is a no-op (supports resuming a search run). Writing
+        over a manifest describing a *different* partitioning raises, since
+        manifests are immutable records.
+
+        A manifest written before ``MANIFEST_SCHEMA_VERSION`` 2 is compared
+        against the v1 hash it was written with, so a run already in flight is
+        not aborted by this file's own upgrade. Such a manifest is left on disk
+        untouched — rewriting it under the new algorithm would be exactly the
+        mutation the immutability rule exists to prevent.
         """
         out = Path(path)
-        payload = self._manifest_payload(
-            symbols=symbols,
-            feature_schema_version=feature_schema_version,
-            target_definition=target_definition,
-        )
+        payload = self._manifest_payload()
         if out.exists():
             try:
                 existing = json.loads(out.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError) as exc:
                 raise PartitionConfigError(f"existing manifest at {out} is unreadable: {exc}") from exc
-            if existing.get("manifest_hash") != payload["manifest_hash"]:
+            legacy = int(existing.get("manifest_schema_version", 1)) < MANIFEST_SCHEMA_VERSION
+            expected = self._legacy_manifest_hash if legacy else self._manifest_hash
+            if existing.get("manifest_hash") != expected:
                 raise PartitionConfigError(
                     f"partition_manifest.json already exists at {out} with a different manifest_hash "
                     "— manifests are immutable; use a new manifest_dir for a different partitioning"
@@ -413,13 +426,26 @@ def _compute_manifest_hash(
     random_seed: int,
     ordered_sessions: Sequence[Any],
     session_assignment: Mapping[Any, str],
+    symbols: Sequence[str] | None = None,
+    feature_schema_version: str | None = None,
+    target_definition: str | None = None,
 ) -> str:
-    payload = {
+    """Hash a partitioning's identity.
+
+    Omitting the three semantic arguments reproduces the v1 algorithm, which is
+    what recognising a pre-``MANIFEST_SCHEMA_VERSION``-2 manifest on disk needs.
+    """
+    payload: dict[str, Any] = {
         "dataset_fingerprint": dataset_fingerprint,
         "ratios": {name: ratios[name] for name in PARTITION_ORDER},
         "embargo_rows": embargo_rows,
         "random_seed": random_seed,
         "session_assignment": [[str(sid), session_assignment[sid]] for sid in ordered_sessions],
     }
+    if symbols is not None or feature_schema_version is not None or target_definition is not None:
+        payload["schema_version"] = MANIFEST_SCHEMA_VERSION
+        payload["symbols"] = [str(s) for s in (symbols or ())]
+        payload["feature_schema_version"] = str(feature_schema_version or "")
+        payload["target_definition"] = str(target_definition or "")
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()

@@ -204,6 +204,8 @@ def cmd_alpha_mine_init(args: argparse.Namespace) -> None:
         "final_holdout": float(args.holdout_ratio),
     }
 
+    symbols = [s.strip() for s in str(args.symbols or "").split(",") if s.strip()]
+
     try:
         manager = partitioning.DatasetPartitionManager(
             session_ids=session_ids,
@@ -212,16 +214,17 @@ def cmd_alpha_mine_init(args: argparse.Namespace) -> None:
             manifest_dir=args.out_dir,
             ratios=ratios,
             random_seed=int(args.seed),
+            symbols=symbols,
         )
     except partitioning.PartitionConfigError as exc:
         print(f"Invalid partition configuration: {exc}")
         sys.exit(2)
 
-    symbols = [s.strip() for s in str(args.symbols or "").split(",") if s.strip()]
-    manifest_path = manager.write_manifest(
-        Path(args.out_dir) / "partition_manifest.json",
-        symbols=symbols,
-    )
+    try:
+        manifest_path = manager.write_manifest(Path(args.out_dir) / "partition_manifest.json")
+    except partitioning.PartitionConfigError as exc:
+        print(f"Refusing to overwrite an immutable manifest: {exc}")
+        sys.exit(2)
 
     payload: dict[str, Any] = {
         "partition_manifest_path": manifest_path,

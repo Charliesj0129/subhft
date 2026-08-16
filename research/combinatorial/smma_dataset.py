@@ -20,6 +20,7 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 
 from hft_platform.infra.ch_client import get_ch_client
+from research.tools.vm_ul import DataUL, audit_claimed_ul
 from research.combinatorial.taifex_trading_dates import (
     BarAggregationLayout,
     FullSessionEligibility,
@@ -620,10 +621,28 @@ def save_governed_dataset(
         "code_fingerprint": code_fingerprint,
         "content_sha256": content_hash,
         "data_fingerprint": content_hash,
+        "generator_script": "research/combinatorial/smma_dataset.py",
+        "generator_version": code_fingerprint,
+        "parameters": {
+            "requested_trading_date_from": requested_from,
+            "requested_trading_date_to": requested_to,
+            "symbols": sorted(str(value) for value in np.unique(dataset.root)),
+            "timeframes_minutes": sorted(int(value) for value in np.unique(dataset.timeframe_min)),
+            "price_scale_source": 1_000_000,
+            "price_scale_output": 1,
+        },
+        "lineage": {
+            "source": "hft.market_data",
+            "query_evidence": [dict(item) for item in query_evidence],
+            "calendar_name": window.calendar_name,
+            "calendar_mapping_hash": window.calendar_mapping_hash,
+            "code_fingerprint": code_fingerprint,
+        },
         "data_ul": 5,
         "schema_version": 2,
         "governance_complete": eligibility is not None,
     }
+    payload.update(audit_claimed_ul(payload, DataUL.UL5))
     payload["metadata_hash"] = _metadata_hash(payload)
     sidecar = Path(str(output) + ".meta.json")
     with tempfile.NamedTemporaryFile(
