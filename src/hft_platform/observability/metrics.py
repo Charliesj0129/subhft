@@ -3,6 +3,8 @@ import threading
 
 from prometheus_client import REGISTRY, Counter, Gauge, Histogram
 
+from hft_platform.observability.code_identity import running_code_sha
+
 _METRICS_PREFIX = os.getenv("HFT_METRICS_PREFIX", "")
 
 # P1 fix: guards the unregister+reregister cycle in ``MetricsRegistry.__init__``
@@ -116,6 +118,8 @@ class MetricsRegistry:
                 _pn("stormguard_transitions_total"),
                 _pn("stormguard_toxicity_score"),
                 _pn("stormguard_escalations_total"),
+                _pn("stormguard_latency_input_armed"),
+                _pn("stormguard_latency_input_max_us"),
                 _pn("drift_burst_detected_total"),
                 _pn("stormguard_halt_exempt_bypass_total"),
                 _pn("halt_drain_safety_intent_lost_total"),
@@ -132,6 +136,7 @@ class MetricsRegistry:
                 _pn("order_deadline_expired_total"),
                 _pn("phantom_order_candidates_total"),
                 _pn("phantom_recovery_releases_total"),
+                _pn("live_order_ttl_releases_total"),
                 _pn("api_guard_timeout_total"),
                 _pn("shadow_orders_total"),
                 _pn("shadow_mode_active"),
@@ -525,6 +530,19 @@ class MetricsRegistry:
             "In-flight order count per strategy/side (D3 tracking)",
             ["strategy", "side"],
         )
+        self.strategy_pending_qty = Gauge(
+            _pn("strategy_pending_qty"),
+            "Quantity a strategy believes is working at the broker, per symbol/side. "
+            "This is what gates further quoting; if it stays elevated the strategy "
+            "is latched off. Had no metric until 2026-08-12, which is why a "
+            "two-day quoting freeze was invisible.",
+            ["strategy", "symbol", "side"],
+        )
+        self.strategy_gate_blocked_total = Counter(
+            _pn("strategy_gate_blocked_total"),
+            "Ticks suppressed by a strategy placement gate, by gate name",
+            ["strategy", "gate"],
+        )
         self.risk_reject_total = Counter(_pn("risk_reject_total"), "Risk rejections", ["reason", "strategy"])
         self.stormguard_mode = Gauge(
             _pn("stormguard_mode"), "StormGuard State (0=NORMAL, 1=WARM, 2=STORM, 3=HALT)", ["strategy"]
@@ -638,6 +656,11 @@ class MetricsRegistry:
             _pn("phantom_recovery_releases_total"),
             "Phantom orders released after TTL expiry to unfreeze strategy pending counters (Bug D, 2026-04-20)",
         )
+        self.live_order_ttl_releases_total = Counter(
+            _pn("live_order_ttl_releases_total"),
+            "Dispatched orders swept after TTL with no terminal callback, releasing the strategy pending slot "
+            "(2026-08-10: two such orders froze R47 for two days with no counter anywhere)",
+        )
         self.api_guard_timeout_total = Counter(
             _pn("api_guard_timeout_total"),
             "API semaphore guard timeouts (not counted as circuit breaker failures)",
@@ -667,6 +690,11 @@ class MetricsRegistry:
         self.fill_normalization_failed_total = Counter(
             _pn("fill_normalization_failed_total"),
             "Fill events that failed normalization (missing account, parse error)",
+        )
+        self.order_normalization_failed_total = Counter(
+            _pn("order_normalization_failed_total"),
+            "Order events dropped by normalization, by reason",
+            ["reason"],
         )
         self.synthetic_fill_id_total = Counter(
             _pn("synthetic_fill_id_total"),
@@ -1163,6 +1191,24 @@ class MetricsRegistry:
             "StormGuard escalations by target state",
             ["to_state"],
         )
+        # StormGuard latency-input observability (2026-08-13).
+        # The breaker's latency branch is fed event-loop lag (p99.9 ~9 ms) while
+        # THESHOW configured it at 5 s / 10 s, so it had never fired and could
+        # not — with nothing to distinguish "never fired" from "cannot fire".
+        # armed says whether a threshold pair is set at all; max_us says how far
+        # the input has ever reached, which is what makes an unreachable
+        # threshold visible (and what the order-RTT thresholds must be
+        # calibrated from before they are armed).
+        self.stormguard_latency_input_armed = Gauge(
+            _pn("stormguard_latency_input_armed"),
+            "Whether a StormGuard latency input has thresholds configured (1) or is unarmed (0)",
+            ["input"],
+        )
+        self.stormguard_latency_input_max_us = Gauge(
+            _pn("stormguard_latency_input_max_us"),
+            "Largest value seen for a StormGuard latency input this process (microseconds)",
+            ["input"],
+        )
         self.drift_burst_detected_total = Counter(
             _pn("drift_burst_detected_total"),
             "Drift-burst detections by reference symbol and toxicity type",
@@ -1592,15 +1638,22 @@ class MetricsRegistry:
         # build_ts read from env (baked at image build time). Always set to 1
         # so dashboards can detect drift across services / instances by
         # `count by (git_sha) (hft_build_info) > 1`.
+        # 2026-08-13: `git_sha` is not wrong — it identifies the image, which
+        # is what pins the SDK and deps (shioaji-version-diff.md:490). It just
+        # cannot see through the `src/` bind mount, so on THESHOW it named a
+        # 2026-07-17 build while four weeks of scp deploys changed the code.
+        # `code_sha` hashes the source tree this process actually loaded;
+        # `count by (code_sha) (hft_build_info) > 1` catches that drift.
         self.hft_build_info = Gauge(
             _pn("build_info"),
-            "Build identity for this process (constant 1) — labels expose git_sha and build_ts",
-            ["git_sha", "build_ts"],
+            "Build identity for this process (constant 1) — git_sha/build_ts describe the image, "
+            "code_sha hashes the source tree actually running (bind mounts make these differ)",
+            ["git_sha", "build_ts", "code_sha"],
         )
         try:
             _git_sha = os.environ.get("HFT_GIT_SHA", "unknown") or "unknown"
             _build_ts = os.environ.get("HFT_BUILD_TS", "unknown") or "unknown"
-            self.hft_build_info.labels(git_sha=_git_sha, build_ts=_build_ts).set(1)
+            self.hft_build_info.labels(git_sha=_git_sha, build_ts=_build_ts, code_sha=running_code_sha()).set(1)
         except Exception:  # noqa: BLE001
             pass
         self.intent_queue_full_total = Counter(

@@ -58,6 +58,69 @@ def _scrub_operator_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture()
+def module_log_sink(monkeypatch: pytest.MonkeyPatch):
+    """Record one module's structlog events, independent of global config.
+
+    ``structlog.testing.capture_logs`` swaps the *global* processor chain, so it
+    only observes a logger that re-binds on every call. ``configure_logging``
+    sets ``cache_logger_on_first_use=True`` (:file:`utils/logging.py:107`), so
+    once any earlier test builds a real ``HFTSystem`` — ``test_system_supervision.py``
+    does, without patching ``configure_logging`` the way its neighbours do — the
+    module-level loggers hold a cached bound logger and ``capture_logs`` goes
+    blind for the rest of the session.
+
+    The failure is nastier than a plain flake: the event still reaches stdout,
+    so the test reads as "the code stopped logging" when the code is fine and
+    only the capture broke. It depends on file ordering, so it passes in
+    isolation. ``test_post_connect_binding_chain.py`` fails exactly this way on
+    main.
+
+    Usage::
+
+        events = module_log_sink(hft_platform.risk.storm_guard)
+        StormGuard()
+        assert any(e["event"] == "..." for e in events)
+    """
+
+    def _bind(module) -> list[dict]:
+        entries: list[dict] = []
+
+        class _Recorder:
+            def bind(self, **kw):
+                return self
+
+            # Positional-only: structlog treats every keyword as a log field,
+            # and real call sites use names that would otherwise collide with
+            # the recorder's own parameters — ``storm_guard.py:331`` logs
+            # ``level=`` as a field.
+            def _emit(self, level: str, event=None, /, **kw) -> None:
+                entries.append({"event": event, "log_level": level, **kw})
+
+            def debug(self, event=None, /, **kw) -> None:
+                self._emit("debug", event, **kw)
+
+            def info(self, event=None, /, **kw) -> None:
+                self._emit("info", event, **kw)
+
+            def warning(self, event=None, /, **kw) -> None:
+                self._emit("warning", event, **kw)
+
+            def error(self, event=None, /, **kw) -> None:
+                self._emit("error", event, **kw)
+
+            def critical(self, event=None, /, **kw) -> None:
+                self._emit("critical", event, **kw)
+
+            def exception(self, event=None, /, **kw) -> None:
+                self._emit("error", event, **kw)
+
+        monkeypatch.setattr(module, "logger", _Recorder())
+        return entries
+
+    return _bind
+
+
+@pytest.fixture()
 def symbols_yaml(tmp_path):
     """Write a minimal symbols.yaml and return its path."""
     data = {

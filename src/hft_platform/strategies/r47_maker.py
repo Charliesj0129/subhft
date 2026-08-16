@@ -439,6 +439,13 @@ class R47MakerStrategy(SimpleMarketMaker):
         self._seen_fill_ids: set[str] = set()
         self._FILL_DEDUP_MAX = 500
 
+        # 2026-08-10: client_order_ids whose pending slot was already handed
+        # back by the adapter's stale-live-order sweep. A terminal callback can
+        # still arrive after the 300s TTL; without this, the slot is paid for
+        # twice and two pending orders on one side collapse to zero.
+        self._ttl_released_keys: set[str] = set()
+        self._TTL_RELEASED_MAX = 2048
+
         # F2: Active order tracking — maps symbol to broker order_id.
         # Used to cancel stale ROD orders before requoting at a new price.
         # Without this, ROD orders stack at the exchange and fill on any
@@ -460,12 +467,17 @@ class R47MakerStrategy(SimpleMarketMaker):
         # in this test/context — strategy still works without observability.
         self._metric_stale_cancels = None
         self._metric_inflight_oids = None
+        self._metric_pending_qty = None
+        self._metric_gate_blocked = None
+        self._gate_blocked_published: dict[str, int] = {}
         try:
             from hft_platform.observability.metrics import MetricsRegistry as _MR
 
             m = _MR.get()
             self._metric_stale_cancels = getattr(m, "strategy_stale_cancels_total", None)
             self._metric_inflight_oids = getattr(m, "strategy_inflight_oids", None)
+            self._metric_pending_qty = getattr(m, "strategy_pending_qty", None)
+            self._metric_gate_blocked = getattr(m, "strategy_gate_blocked_total", None)
         except Exception as exc:  # pragma: no cover
             logger.debug("r47_metrics_lookup_fallback", error=str(exc))
 
@@ -655,6 +667,23 @@ class R47MakerStrategy(SimpleMarketMaker):
             if self._active_sell_oid.get(sym) == event.order_id:
                 del self._active_sell_oid[sym]
             self._discard_inflight_oid(sym, Side.SELL, event.order_id)  # D3
+        # 2026-08-10: the adapter's stale-live-order sweep may already have
+        # released this order's slot after the 300s TTL. Paying for it again
+        # here would free a slot a live order still occupies. The active/
+        # in-flight tracking above is cleared either way — only the pending
+        # decrement is skipped. An unattributable callback (empty
+        # client_order_id — the normalizer resolves it best-effort) keeps the
+        # pre-existing behaviour and decrements.
+        coid = getattr(event, "client_order_id", "")
+        if coid and coid in self._ttl_released_keys:
+            self._ttl_released_keys.discard(coid)
+            logger.info(
+                "r47_terminal_after_ttl_release_skipped",
+                symbol=sym,
+                client_order_id=coid,
+                status=event.status.name,
+            )
+            return
         # DEC2-002: remaining_qty=0 means fully filled before cancel arrived.
         # Decrement by 0 (no-op) — the fill already decremented pending.
         remaining = max(0, event.remaining_qty)
@@ -708,6 +737,23 @@ class R47MakerStrategy(SimpleMarketMaker):
                 feedback_side=repr(side),
             )
             return
+        # 2026-08-10: remember which order this release paid for, so a terminal
+        # callback arriving after the adapter's 300s TTL does not decrement the
+        # same slot a second time. ``client_order_id`` on an OrderEvent is
+        # exactly ``"strategy_id:intent_id"``, so the two sides correlate.
+        if feedback.reason_code == "live_order_ttl_expired":
+            self._ttl_released_keys.add(f"{feedback.strategy_id}:{feedback.intent_id}")
+            if len(self._ttl_released_keys) > self._TTL_RELEASED_MAX:
+                # Set has no ordering; drop half to bound memory. A dropped key
+                # only costs the double-decrement this guard prevents, which is
+                # still floored at zero.
+                evict = len(self._ttl_released_keys) - self._TTL_RELEASED_MAX // 2
+                victims: set[str] = set()
+                for key in self._ttl_released_keys:
+                    if len(victims) >= evict:
+                        break
+                    victims.add(key)
+                self._ttl_released_keys -= victims
         logger.debug(
             "r47_risk_rejection_pending_released",
             symbol=sym,
@@ -900,32 +946,43 @@ class R47MakerStrategy(SimpleMarketMaker):
         # they must not block cleanup of abandoned orders.
         self._reconcile_stale_quotes(event)
 
+        # Each gate records *which* one suppressed the tick rather than
+        # returning, so the periodic diagnostic below can be emitted on every
+        # path. It used to live inside _generate_quotes, i.e. only after all
+        # three gates passed, which made it a survivor sample: across
+        # 2026-08-10..12 every one of the 55 r47_stats lines printed
+        # spread_pts:5 while the true mean was 2.96 and 94.19% of ticks were
+        # being blocked. The only diagnostic that could explain the silence was
+        # emitted only when the strategy was not silent.
+        blocked_by: str | None = None
+
         # ── Spread gate (hard floor) ──────────────────────────────────
         if event.spread_scaled < self._spread_thresh_scaled:
             self._spread_blocked += 1
-            return  # suppress all quotes this tick
+            blocked_by = "spread"
 
         # ── Toxicity gate ─────────────────────────────────────────────
-        features = self._feature_cache.get(symbol)
-        if features and len(features) > _IDX_TOXICITY_EMA50_X1000:
-            toxicity = int(features[_IDX_TOXICITY_EMA50_X1000])
-            if toxicity > self._toxicity_max:
-                self._toxicity_blocked += 1
-                return  # suppress all quotes this tick
+        if blocked_by is None:
+            features = self._feature_cache.get(symbol)
+            if features and len(features) > _IDX_TOXICITY_EMA50_X1000:
+                toxicity = int(features[_IDX_TOXICITY_EMA50_X1000])
+                if toxicity > self._toxicity_max:
+                    self._toxicity_blocked += 1
+                    blocked_by = "toxicity"
 
         # ── D1: PE Regime Gate ────────────────────────────────────────
         pe = self._get_pe(symbol)
-        if pe.warmed_up:
-            h = pe.h
-            if h < self._pe_danger:
-                # Market too structured (trending) — do NOT quote
-                self._pe_blocked += 1
-                if self._stats_count % _LOG_INTERVAL == 1:
-                    logger.debug("r47_pe_blocked", symbol=symbol, h=round(h, 4))
-                return  # suppress all quotes this tick
+        if blocked_by is None and pe.warmed_up and pe.h < self._pe_danger:
+            # Market too structured (trending) — do NOT quote
+            self._pe_blocked += 1
+            blocked_by = "pe"
 
         # ── Generate and place quotes ─────────────────────────────────
-        self._generate_quotes(symbol, event, pe)
+        if blocked_by is None:
+            self._generate_quotes(symbol, event, pe)
+
+        if self._stats_count % _LOG_INTERVAL == 1:
+            self._log_stats(symbol, pe, event.spread_scaled, blocked_by)
 
     def _generate_quotes(self, symbol: str, event: LOBStatsEvent, pe: _PEState) -> None:
         """Compute quote prices and place orders with D3 widening + D2 suppression."""
@@ -1021,9 +1078,6 @@ class R47MakerStrategy(SimpleMarketMaker):
         if quoted:
             self._last_quote_ns[exec_sym] = now_ns
 
-        if self._stats_count % _LOG_INTERVAL == 1:
-            self._log_stats(symbol, pe, mfg, event.spread_scaled, pos)
-
     def _compute_mfg_widening(self, mfg: _MFGState, spread_scaled: int) -> tuple[int, int]:
         """D3: Asymmetric spread widening on capitulation side."""
         if not mfg.warmed_up or mfg.capitulation_z <= self._mfg_skew_z_thresh:
@@ -1038,16 +1092,57 @@ class R47MakerStrategy(SimpleMarketMaker):
             return widen, 0  # widen bid
         return 0, 0
 
-    def _log_stats(self, symbol: str, pe: _PEState, mfg: _MFGState, spread_scaled: int, pos: int) -> None:
+    def _publish_gate_and_pending_metrics(self, exec_sym: str) -> None:
+        """Export the two states that were unobservable during the 2026-08-10
+        freeze: how much the strategy thinks is working at the broker, and how
+        often each gate is suppressing quotes.
+
+        Gate counters publish the delta accumulated since the last call rather
+        than incrementing per tick. The spread gate alone fired on 94.19% of
+        1.3M ticks, and a per-tick ``.labels()`` lookup on that path is exactly
+        the kind of avoidable hot-path work Core Law #1 rules out. Deltas keep
+        the counter exact at 1/500th of the calls.
+        """
+        if self._metric_pending_qty is not None:
+            self._metric_pending_qty.labels(strategy=self.strategy_id, symbol=exec_sym, side=Side.BUY.name).set(
+                self._pending_buy.get(exec_sym, 0)
+            )
+            self._metric_pending_qty.labels(strategy=self.strategy_id, symbol=exec_sym, side=Side.SELL.name).set(
+                self._pending_sell.get(exec_sym, 0)
+            )
+        if self._metric_gate_blocked is not None:
+            for gate, total in (
+                ("spread", self._spread_blocked),
+                ("toxicity", self._toxicity_blocked),
+                ("pe", self._pe_blocked),
+            ):
+                delta = total - self._gate_blocked_published.get(gate, 0)
+                if delta > 0:
+                    self._metric_gate_blocked.labels(strategy=self.strategy_id, gate=gate).inc(delta)
+                    self._gate_blocked_published[gate] = total
+
+    def _log_stats(self, symbol: str, pe: _PEState, spread_scaled: int, blocked_by: str | None) -> None:
+        """Periodic diagnostic. Called from on_stats on *every* path, blocked or
+        not — see the comment at the gate chain for why that matters.
+
+        ``mfg`` and ``pos`` are resolved here rather than passed in, because the
+        blocked paths never compute them.
+        """
+        exec_sym = self._exec_symbol(symbol)
+        mfg = self._get_mfg(symbol)
+        self._publish_gate_and_pending_metrics(exec_sym)
         logger.info(
             "r47_stats",
             symbol=symbol,
+            blocked_by=blocked_by,
+            pending_buy=self._pending_buy.get(exec_sym, 0),
+            pending_sell=self._pending_sell.get(exec_sym, 0),
             h=round(pe.h, 4) if pe.warmed_up else None,
             p_depl_bid=round(self._get_queue(symbol).p_depl_bid, 3),
             p_depl_ask=round(self._get_queue(symbol).p_depl_ask, 3),
             mfg_z=round(mfg.capitulation_z, 2) if mfg.warmed_up else None,
             spread_pts=spread_scaled // _PRICE_SCALE,
-            pos=pos,
+            pos=self._local_position(exec_sym),
             quotes=self._quotes_sent,
             pe_blk=self._pe_blocked,
             q_suppress=self._queue_suppressed,

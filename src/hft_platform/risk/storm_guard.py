@@ -23,8 +23,19 @@ class RiskThresholds:
     storm_drawdown_bps: int = -100  # -1.0% = -100 bps
     halt_drawdown_bps: int = -200  # -2.0% = -200 bps
 
+    # Event-loop lag. ``system.py:1159`` is the only producer: latency_us is
+    # ``lag_s * 1e6``, a platform-health signal whose budget is 1 ms.
     latency_warm_us: int = 5_000
     latency_storm_us: int = 20_000
+
+    # Order round-trip to the broker — a different quantity two orders of
+    # magnitude larger (the measured shioaji profile puts place_order p95 at
+    # 395 ms). Ships unarmed (0 = off): THESHOW has no order-RTT samples at all
+    # (gateway_dispatch_latency_ns_count = 0), so any threshold chosen now
+    # would be a guess on a risk breaker. See
+    # ``stormguard_latency_input_max_us`` for the evidence to arm it with.
+    order_rtt_warm_us: int = 0
+    order_rtt_storm_us: int = 0
 
     feed_gap_storm_s: float = 1.0  # precision-time (triggers STORM, not HALT)
 
@@ -106,8 +117,10 @@ class StormGuard:
     ):
         self.state = StormGuardState.NORMAL
         self.thresholds = thresholds or RiskThresholds()
-        self._apply_env_overrides()
+        # Before _apply_env_overrides: it publishes the latency inputs' armed
+        # state, which needs the registry.
         self.metrics = MetricsRegistry.get()
+        self._apply_env_overrides()
         self.last_state_change = time.monotonic()
         self._de_escalate_count: int = 0
         self._storm_entry_ts: float = 0.0  # precision-time
@@ -211,6 +224,8 @@ class StormGuard:
                 "halt_drawdown_bps",
                 "latency_warm_us",
                 "latency_storm_us",
+                "order_rtt_warm_us",
+                "order_rtt_storm_us",
             ):
                 if key in risk_cfg:
                     setattr(self.thresholds, key, int(risk_cfg[key]))
@@ -257,13 +272,115 @@ class StormGuard:
             except ValueError:
                 logger.warning("Invalid HFT_STORMGUARD_LATENCY_WARM_US", value=latency_warm)
 
+        for var, attr in (
+            ("HFT_STORMGUARD_ORDER_RTT_WARM_US", "order_rtt_warm_us"),
+            ("HFT_STORMGUARD_ORDER_RTT_STORM_US", "order_rtt_storm_us"),
+        ):
+            raw = os.getenv(var)
+            if not raw:
+                continue
+            try:
+                setattr(self.thresholds, attr, int(raw))
+            except ValueError:
+                # Leave the input unarmed rather than guessing a threshold for
+                # a risk breaker out of an unparseable value.
+                logger.warning("Invalid order-RTT threshold; input stays unarmed", var=var, value=raw)
+
+        self._report_latency_input_health()
+
+    # ------------------------------------------------------------------
+    # Latency input health (2026-08-13)
+    # ------------------------------------------------------------------
+    #
+    # THESHOW ran the loop-lag input at 5 s WARM / 10 s STORM against a
+    # distribution with p99.9 ~9 ms: ~1000x of headroom, so that branch of the
+    # breaker had never fired and never could in practice — and nothing said so.
+    # Same failure family as the zero-sample metrics: a breaker that cannot fire
+    # reads exactly like a breaker with nothing to do.
+
+    def _order_rtt_armed(self) -> bool:
+        return self.thresholds.order_rtt_warm_us > 0 or self.thresholds.order_rtt_storm_us > 0
+
+    def _report_latency_input_health(self) -> None:
+        """Log both latency inputs and flag a provably unreachable threshold.
+
+        "Unreachable" is claimed only where it is provable: ``LoopStallWatchdog``
+        force-exits the process at ``HFT_LOOP_STALL_KILL_S`` (default 60 s), so a
+        loop-lag threshold beyond that is killed before it can fire. Thresholds
+        merely far above the observed distribution are left to
+        ``stormguard_latency_input_max_us`` rather than judged here.
+        """
+        try:
+            stall_kill_seconds = float(os.getenv("HFT_LOOP_STALL_KILL_S", "60"))
+        except ValueError:
+            stall_kill_seconds = 60.0
+        t = self.thresholds
+        logger.info(
+            "stormguard_latency_inputs",
+            loop_lag_warm_us=t.latency_warm_us,
+            loop_lag_storm_us=t.latency_storm_us,
+            order_rtt_warm_us=t.order_rtt_warm_us,
+            order_rtt_storm_us=t.order_rtt_storm_us,
+            order_rtt_armed=self._order_rtt_armed(),
+        )
+        if stall_kill_seconds > 0:
+            kill_us = int(stall_kill_seconds * 1_000_000)
+            for name, value in (("warm", t.latency_warm_us), ("storm", t.latency_storm_us)):
+                if value >= kill_us:
+                    logger.warning(
+                        "stormguard_latency_threshold_unreachable",
+                        level=name,
+                        threshold_us=value,
+                        stall_kill_us=kill_us,
+                        detail="loop-lag threshold is at or beyond the stall watchdog's force-exit deadline",
+                    )
+        self.publish_latency_input_health()
+
+    def publish_latency_input_health(self) -> None:
+        """Publish armed/unarmed per latency input, explicitly for both."""
+        try:
+            gauge = self.metrics.stormguard_latency_input_armed
+            gauge.labels(input="loop_lag").set(
+                1 if (self.thresholds.latency_warm_us > 0 or self.thresholds.latency_storm_us > 0) else 0
+            )
+            gauge.labels(input="order_rtt").set(1 if self._order_rtt_armed() else 0)
+            # Touch both max series so "no samples yet" (0) stays distinguishable
+            # from "series absent" — the distinction whose loss is what let three
+            # zero-sample metrics read as healthy for two days.
+            max_gauge = self.metrics.stormguard_latency_input_max_us
+            for name in ("loop_lag", "order_rtt"):
+                max_gauge.labels(input=name).inc(0)
+        except Exception:  # noqa: BLE001 - observability must never break the breaker
+            pass
+
+    def _observe_latency_input(self, input_name: str, value_us: int) -> None:
+        """Track the largest value an input has produced this process.
+
+        Without it there is no way to see that a threshold sits 1000x above its
+        own input — and no data to calibrate the order-RTT thresholds from.
+        """
+        if value_us <= 0:
+            return
+        try:
+            gauge = self.metrics.stormguard_latency_input_max_us.labels(input=input_name)
+            if value_us > gauge._value.get():
+                gauge.set(value_us)
+        except Exception:  # noqa: BLE001 - observability must never break the breaker
+            pass
+
     def _evaluate_target_state(
         self,
         drawdown_bps: int,
         latency_us: int,
         feed_gap_s: float,  # precision-time (not a price; seconds, float acceptable)
+        order_rtt_us: int = 0,
     ) -> tuple[StormGuardState, str]:
-        """Determine target state from inputs. Priority: HALT > STORM > WARM > NORMAL."""
+        """Determine target state from inputs. Priority: HALT > STORM > WARM > NORMAL.
+
+        ``latency_us`` is event-loop lag; ``order_rtt_us`` is broker round-trip.
+        They are two quantities two orders of magnitude apart and each has its
+        own threshold pair — one number cannot serve both.
+        """
         t = self.thresholds
         if drawdown_bps <= t.halt_drawdown_bps:
             return StormGuardState.HALT, f"Drawdown {drawdown_bps}bps"
@@ -271,6 +388,10 @@ class StormGuard:
             return StormGuardState.STORM, f"Drawdown {drawdown_bps}bps"
         if latency_us >= t.latency_storm_us:
             return StormGuardState.STORM, f"Latency {latency_us}us"
+        # 0 = unarmed, and must stay unarmed: a bare `>=` would escalate on
+        # every sample the moment the threshold is left at its default.
+        if t.order_rtt_storm_us > 0 and order_rtt_us >= t.order_rtt_storm_us:
+            return StormGuardState.STORM, f"Order RTT {order_rtt_us}us"
         if feed_gap_s >= t.feed_gap_storm_s and self._session_active:
             return StormGuardState.STORM, f"Feed Gap {feed_gap_s:.3f}s"
         # Component failure holds STORM regardless of drawdown/latency WARM thresholds.
@@ -288,6 +409,8 @@ class StormGuard:
             return StormGuardState.WARM, "Drawdown Warning"
         if latency_us >= t.latency_warm_us:
             return StormGuardState.WARM, "Latency Warning"
+        if t.order_rtt_warm_us > 0 and order_rtt_us >= t.order_rtt_warm_us:
+            return StormGuardState.WARM, f"Order RTT Warning {order_rtt_us}us"
         return StormGuardState.NORMAL, ""
 
     def update(
@@ -295,16 +418,21 @@ class StormGuard:
         drawdown_bps: int = 0,
         latency_us: int = 0,
         feed_gap_s: float = 0.0,  # precision-ok
+        order_rtt_us: int = 0,
     ) -> StormGuardState:
         """
         Evaluate inputs and transition state.
 
         Args:
             drawdown_bps: Drawdown in basis points (1 bps = 0.01% = 0.0001).
-            latency_us: Latency in microseconds.
+            latency_us: Event-loop lag in microseconds (platform health).
             feed_gap_s: Feed gap in seconds.
+            order_rtt_us: Broker order round-trip in microseconds (trading-path
+                health). Unarmed by default — see ``RiskThresholds``.
         """
-        new_state, reason = self._evaluate_target_state(drawdown_bps, latency_us, feed_gap_s)
+        self._observe_latency_input("loop_lag", latency_us)
+        self._observe_latency_input("order_rtt", order_rtt_us)
+        new_state, reason = self._evaluate_target_state(drawdown_bps, latency_us, feed_gap_s, order_rtt_us)
 
         # Transition Logic (with hysteresis protection for de-escalation)
         fire_callback = False

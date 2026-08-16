@@ -112,6 +112,72 @@ if _FUSED_ENABLED and _RUST_SCALE_BOOK is not None:  # _rust_core loaded success
         _HAS_FUSED = False
 
 
+# TAIFEX monthly contract codes: ROOT + month letter (A=Jan … L=Dec) + year
+# digit, e.g. TMFH6 = August 2026. Continuous-family codes (TMFR1) and weekly
+# option codes do not match and are deliberately left without a derived date.
+_MONTHLY_CONTRACT_RE = re.compile(r"^([A-Z]{2,4})([A-L])([0-9])$")
+
+
+def _third_wednesday(year: int, month: int) -> dt.date:
+    """Settlement date for a TAIFEX monthly futures/options contract.
+
+    Cross-checked against the broker-supplied option expiries in
+    ``config/symbols.yaml``: June 2026 ships as ``2026/06/17``, which is the
+    third Wednesday of that month.
+    """
+    first = dt.date(year, month, 1)
+    # weekday(): Monday=0 … Wednesday=2
+    first_wednesday = 1 + (2 - first.weekday()) % 7
+    return dt.date(year, month, first_wednesday + 14)
+
+
+def _parse_instrument_expiry(raw: Any, code: str) -> dt.date | None:
+    """Parse a configured expiry, accepting the formats the config actually uses.
+
+    ``config/symbols.yaml`` writes ``"2026/06/17"``. ``date.fromisoformat``
+    rejects slash separators, and the resulting ``ValueError`` used to be
+    swallowed by a bare ``pass`` — the value was present, parsed, rejected and
+    discarded without a trace, for every one of the 106 option entries.
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, dt.datetime):
+        return raw.date()
+    if isinstance(raw, dt.date):
+        return raw
+    text = str(raw).strip()
+    if not text:
+        return None
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%Y%m%d"):
+        try:
+            return dt.datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    logger.warning("instrument_expiry_unparseable", symbol=code, value=text)
+    return None
+
+
+def _derive_monthly_expiry(code: str) -> dt.date | None:
+    """Derive expiry from a TAIFEX monthly contract code.
+
+    ``config/symbols.yaml`` carries no ``expiry`` on any futures entry, so
+    without this every futures row records the schema default. The single-digit
+    year is anchored to the current decade and rolled forward when that would
+    place the contract more than five years in the past — the same rule
+    ``contracts/ref.py:237`` uses for parsing display strings.
+    """
+    match = _MONTHLY_CONTRACT_RE.match(code)
+    if match is None:
+        return None
+    _root, letter, year_digit = match.groups()
+    month = ord(letter) - ord("A") + 1
+    base_year = dt.date.today().year
+    year = (base_year // 10) * 10 + int(year_digit)
+    if year < base_year - 5:
+        year += 10
+    return _third_wednesday(year, month)
+
+
 class SymbolMetadata:
     """
     Loads per-symbol configuration.
@@ -420,7 +486,6 @@ class SymbolMetadata:
 
             strike_scaled = None
             option_right = None
-            expiry = None
             if itype == InstrumentType.OPTION:
                 raw_strike = entry.get("strike") or entry.get("strike_price")
                 if raw_strike is not None:
@@ -430,17 +495,14 @@ class SymbolMetadata:
                     option_right = OptionRight.CALL
                 elif raw_right.upper() in ("P", "PUT"):
                     option_right = OptionRight.PUT
-                raw_expiry = entry.get("expiry")
-                if raw_expiry is not None:
-                    from datetime import date as _d
-
-                    if isinstance(raw_expiry, _d):
-                        expiry = raw_expiry
-                    else:
-                        try:
-                            expiry = _d.fromisoformat(str(raw_expiry))
-                        except ValueError:
-                            pass
+            # Expiry applies to every derivative, not just options. Gating it
+            # with strike/right left every futures row in ``hft.market_data``
+            # on the schema default 1970-01-01, and left ``InstrumentRegistry.
+            # evict_expired`` — the registry's only capacity relief valve —
+            # with nothing it could ever evict.
+            expiry = _parse_instrument_expiry(entry.get("expiry"), code)
+            if expiry is None and itype in (InstrumentType.FUTURE, InstrumentType.OPTION):
+                expiry = _derive_monthly_expiry(code)
 
             profile = InstrumentProfile(
                 symbol=code,

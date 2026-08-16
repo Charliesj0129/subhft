@@ -325,6 +325,21 @@ docker exec hft-engine sh -c 'find /app/outputs -type f | wc -l'   # must match"
 re-read every D9 check plus the change-specific ones. Facades take ~20 s: four
 staggered logins ≥ 2 s apart, 74 symbols each, zero 451.
 
+Confirm the restart actually picked up the new source. `HFT_GIT_SHA` /
+`build_info{git_sha}` describe the **image** (and therefore the SDK and deps —
+see `shioaji-version-diff.md`), which a bind-mount deploy does not change. The
+running source tree is reported separately:
+
+```bash
+ssh $HOST "docker logs hft-engine --since 10m 2>&1 | grep running_code_identity"
+# code_sha must differ from the value logged by the previous boot; files= is a
+# sanity check that the whole tree was walked, not a truncated mount.
+```
+
+`hft_build_info{code_sha}` carries the same value, so
+`count by (code_sha) (hft_build_info) > 1` catches two engines running
+different source from the same image.
+
 **9. D10 append the ledger line.**
 
 ---

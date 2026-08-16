@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict
 from structlog import get_logger
 
 from hft_platform.core import timebase
-from hft_platform.feed_adapter.shioaji._compat import resolve_quote_enum
+from hft_platform.feed_adapter.shioaji._compat import resolve_quote_enum, to_plain_payload
 from hft_platform.feed_adapter.shioaji.contracts_runtime import derive_callback_code
 
 try:
@@ -447,10 +447,16 @@ class SubscriptionManager:
 
         def _order_cb(stat: Any, msg: Any) -> None:
             try:
+                # The 1.5.x core hands back Rust mapping types that no
+                # isinstance(x, dict) gate downstream accepts and that orjson
+                # refuses outright. Converting here — the last point that is
+                # allowed to know an SDK type exists — is what keeps the rest
+                # of the platform broker-agnostic. See to_plain_payload.
+                payload = to_plain_payload(msg)
                 if stat in deal_states:
-                    on_deal(msg)
+                    on_deal(payload)
                 else:
-                    on_order(stat, msg)
+                    on_order(stat, payload)
             except Exception as exc:
                 logger.error("Execution callback failed", error=str(exc))
 
