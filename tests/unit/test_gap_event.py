@@ -6,6 +6,8 @@ from hft_platform.contracts.execution import FillEvent, OrderEvent, OrderStatus
 from hft_platform.contracts.strategy import Side
 from hft_platform.engine.event_bus import RingBufferBus
 from hft_platform.events import GapEvent
+from hft_platform.observability.event_bus_telemetry import PrometheusEventBusTelemetry
+from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.strategies.r47_maker import R47MakerStrategy
 from hft_platform.strategy.base import BaseStrategy, StrategyContext
 
@@ -122,8 +124,9 @@ def test_r47_max_pos_not_bypassed_after_gap() -> None:
 
 def test_consume_overflow_gap_event_metric() -> None:
     """bus_gap_events_total metric must increment on overflow."""
-    bus = RingBufferBus(size=2)
-    initial = bus.metrics.bus_gap_events_total._value.get()
+    registry = MetricsRegistry.get()
+    bus = RingBufferBus(size=2, telemetry=PrometheusEventBusTelemetry(registry))
+    initial = registry.bus_gap_events_total._value.get()
 
     for i in range(10):
         bus.publish_nowait(f"evt-{i}")
@@ -133,7 +136,7 @@ def test_consume_overflow_gap_event_metric() -> None:
             return
 
     asyncio.run(_run())
-    assert bus.metrics.bus_gap_events_total._value.get() > initial
+    assert registry.bus_gap_events_total._value.get() == initial + 1
 
 
 def test_consume_batch_overflow_yields_gap_event() -> None:

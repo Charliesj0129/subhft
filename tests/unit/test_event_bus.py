@@ -2,6 +2,13 @@ import asyncio
 
 from hft_platform.engine import event_bus as event_bus_mod
 from hft_platform.engine.event_bus import RingBufferBus
+from hft_platform.observability.event_bus_telemetry import PrometheusEventBusTelemetry
+from hft_platform.observability.metrics import MetricsRegistry
+
+
+def _bus_with_metrics(size: int) -> tuple[RingBufferBus, MetricsRegistry]:
+    registry = MetricsRegistry.get()
+    return RingBufferBus(size=size, telemetry=PrometheusEventBusTelemetry(registry)), registry
 
 
 def test_publish_nowait_consume_single():
@@ -29,7 +36,8 @@ def test_publish_many_nowait_consume_batch():
 
 
 def test_consume_overflow_increments_counter():
-    bus = RingBufferBus(size=2)
+    bus, registry = _bus_with_metrics(size=2)
+    initial = registry.bus_overflow_total._value.get()
     bus.publish_many_nowait(["e1", "e2", "e3", "e4", "e5"])
 
     async def _run():
@@ -37,7 +45,7 @@ def test_consume_overflow_increments_counter():
             return evt
 
     asyncio.run(_run())
-    assert bus.metrics.bus_overflow_total._value.get() >= 1
+    assert registry.bus_overflow_total._value.get() == initial + 1
 
 
 def test_publish_multi_writer_path(monkeypatch):
@@ -305,7 +313,7 @@ def test_non_consecutive_overflows_do_not_trigger_halt(monkeypatch):
 
 def test_consumer_lag_gauge_updates_on_consume():
     """bus_consumer_lag gauge is updated after each catch-up iteration in consume()."""
-    bus = RingBufferBus(size=16)
+    bus, registry = _bus_with_metrics(size=16)
     bus.publish_many_nowait(["a", "b", "c"])
 
     async def _run():
@@ -329,13 +337,13 @@ def test_consumer_lag_gauge_updates_on_consume():
     result = asyncio.run(_run())
     assert result == "f"
     # Gauge was set; verify it is a non-negative number
-    lag_value = bus.metrics.bus_consumer_lag.labels(consumer="lag_consumer")._value.get()
+    lag_value = registry.bus_consumer_lag.labels(consumer="lag_consumer")._value.get()
     assert lag_value >= 0
 
 
 def test_consumer_lag_gauge_reflects_writer_distance():
     """Gauge value equals cursor - local_seq at end of catch-up iteration."""
-    bus = RingBufferBus(size=16)
+    bus, registry = _bus_with_metrics(size=16)
     bus.publish_many_nowait(["a", "b", "c"])
 
     async def _run():
@@ -364,7 +372,7 @@ def test_consumer_lag_gauge_reflects_writer_distance():
 
     result = asyncio.run(_run())
     assert result == "sentinel"
-    lag_value = bus.metrics.bus_consumer_lag.labels(consumer="distance_check")._value.get()
+    lag_value = registry.bus_consumer_lag.labels(consumer="distance_check")._value.get()
     # Lag is always non-negative
     assert lag_value >= 0
 
@@ -393,7 +401,7 @@ def test_consumer_position_cleaned_up_on_close():
 
 def test_consumer_lag_gauge_with_consume_batch():
     """bus_consumer_lag is also updated when using consume_batch."""
-    bus = RingBufferBus(size=16)
+    bus, registry = _bus_with_metrics(size=16)
     bus.publish_many_nowait(["a", "b", "c"])
 
     async def _run():
@@ -410,7 +418,7 @@ def test_consumer_lag_gauge_with_consume_batch():
 
     asyncio.run(_run())
     # Gauge was set; verify it is a non-negative number
-    lag_value = bus.metrics.bus_consumer_lag.labels(consumer="batch_consumer")._value.get()
+    lag_value = registry.bus_consumer_lag.labels(consumer="batch_consumer")._value.get()
     assert lag_value >= 0
 
 

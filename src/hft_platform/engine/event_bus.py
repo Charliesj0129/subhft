@@ -8,8 +8,11 @@ from typing import Any, Callable, List, Optional
 from structlog import get_logger
 
 from hft_platform.core import timebase
+from hft_platform.engine.event_bus_telemetry import (
+    NOOP_EVENT_BUS_TELEMETRY,
+    EventBusTelemetry,
+)
 from hft_platform.events import GapEvent
-from hft_platform.observability.metrics import MetricsRegistry
 
 logger = get_logger("event_bus")
 
@@ -300,7 +303,13 @@ class RingBufferBus:
     - Multiple Readers -> track their own local_seq
     """
 
-    def __init__(self, size: int = 65536, storm_guard: Any = None):
+    def __init__(
+        self,
+        size: int = 65536,
+        storm_guard: Any = None,
+        *,
+        telemetry: EventBusTelemetry | None = None,
+    ) -> None:
         self.size = size
         self._bus_mode: str = _BUS_MODE
         self._use_rust = _RUST_ENABLED and _USE_RUST_BUS and _RUST_RING_FACTORY is not None
@@ -330,7 +339,7 @@ class RingBufferBus:
             "off",
         }
         self.write_lock = asyncio.Lock()
-        self.metrics = MetricsRegistry.get()
+        self._telemetry = telemetry if telemetry is not None else NOOP_EVENT_BUS_TELEMETRY
         # Event for lock-free notification (optional)
         # Per-consumer signals to avoid lost-wakeup race (DEC-02)
         self.signal = None if _WAIT_MODE == "spin" else asyncio.Event()
@@ -623,7 +632,7 @@ class RingBufferBus:
         if self.signal is not None:
             my_signal = asyncio.Event()
             self._consumer_signals.append(my_signal)
-        lag_gauge = self.metrics.bus_consumer_lag.labels(consumer=consumer_name) if self.metrics else None
+        lag_gauge = self._telemetry.bind_consumer(consumer_name)
 
         try:
             while True:
@@ -648,7 +657,7 @@ class RingBufferBus:
                 # Don't read more than size at once (buffer wrap protection for very slow consumer)
                 if current_cursor - local_seq > self.size:
                     # Lagged too much, skip to latest - size
-                    self.metrics.bus_overflow_total.inc()
+                    self._telemetry.overflow_counter.inc()
                     self._overflow_count += 1  # legacy global
                     _consumer_ov = self._overflow_count_per_consumer.get(consumer_name, 0) + 1
                     self._overflow_count_per_consumer[consumer_name] = _consumer_ov
@@ -674,9 +683,8 @@ class RingBufferBus:
 
                     # Inject GapEvent so downstream strategies can reset stale state
                     self._consumer_positions[consumer_name] = local_seq
-                    if lag_gauge is not None:
-                        lag_gauge.set(self.cursor - local_seq)
-                    self.metrics.bus_gap_events_total.inc()
+                    lag_gauge.set(self.cursor - local_seq)
+                    self._telemetry.gap_event_counter.inc()
                     yield GapEvent(
                         missed_count=lag - self.size,
                         first_missed_seq=first_missed,
@@ -708,8 +716,7 @@ class RingBufferBus:
 
                 # Track consumer position and report lag
                 self._consumer_positions[consumer_name] = local_seq
-                if lag_gauge is not None:
-                    lag_gauge.set(self.cursor - local_seq)
+                lag_gauge.set(self.cursor - local_seq)
 
                 # Successful catch-up with no overflow — reset per-consumer counter
                 if self._overflow_count_per_consumer.get(consumer_name, 0) > 0:
@@ -732,7 +739,7 @@ class RingBufferBus:
         if self.signal is not None:
             my_signal = asyncio.Event()
             self._consumer_signals.append(my_signal)
-        lag_gauge = self.metrics.bus_consumer_lag.labels(consumer=consumer_name) if self.metrics else None
+        lag_gauge = self._telemetry.bind_consumer(consumer_name)
 
         try:
             while True:
@@ -752,7 +759,7 @@ class RingBufferBus:
 
                 current_cursor = self.cursor
                 if current_cursor - local_seq > self.size:
-                    self.metrics.bus_overflow_total.inc()
+                    self._telemetry.overflow_counter.inc()
                     self._overflow_count += 1  # legacy global
                     _consumer_ov = self._overflow_count_per_consumer.get(consumer_name, 0) + 1
                     self._overflow_count_per_consumer[consumer_name] = _consumer_ov
@@ -781,9 +788,8 @@ class RingBufferBus:
 
                     # Inject GapEvent into batch so downstream strategies can reset stale state
                     self._consumer_positions[consumer_name] = local_seq
-                    if lag_gauge is not None:
-                        lag_gauge.set(self.cursor - local_seq)
-                    self.metrics.bus_gap_events_total.inc()
+                    lag_gauge.set(self.cursor - local_seq)
+                    self._telemetry.gap_event_counter.inc()
                     gap_event = GapEvent(
                         missed_count=lag - self.size,
                         first_missed_seq=first_missed,
@@ -820,8 +826,7 @@ class RingBufferBus:
 
                 # Track consumer position and report lag
                 self._consumer_positions[consumer_name] = local_seq
-                if lag_gauge is not None:
-                    lag_gauge.set(self.cursor - local_seq)
+                lag_gauge.set(self.cursor - local_seq)
 
                 if self._overflow_count_per_consumer.get(consumer_name, 0) > 0:
                     self._overflow_count_per_consumer[consumer_name] = 0
