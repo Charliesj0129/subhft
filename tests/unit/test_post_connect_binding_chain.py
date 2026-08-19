@@ -40,11 +40,11 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
-import structlog
 
 from hft_platform.contracts.family_resolver import ContractFamilyResolver
 from hft_platform.contracts.ref import ContractFamily, FamilyCode, Product
 from hft_platform.feed_adapter.shioaji.family_populator import populate_resolver_from_shioaji
+from hft_platform.services import market_data as market_data_module
 from hft_platform.services.market_data import FeedState, MarketDataService
 
 
@@ -194,24 +194,32 @@ def test_stale_instrument_gate_runs_on_a_plain_connect():
     gate.assert_called_once()
 
 
-def test_gate_refusal_propagates_instead_of_being_swallowed():
+def test_gate_refusal_propagates_instead_of_being_swallowed(module_log_sink):
     """A gate raising is the whole point of a gate.
 
     On ``_post_connect_hooks`` the runner's ``except Exception`` caught
     ``StaleInstrumentError`` and logged a warning, so the platform carried on
     subscribed to an expired contract.
+
+    Reads the event through ``module_log_sink`` rather than
+    ``structlog.testing.capture_logs``: the latter swaps the *global* processor
+    chain, which an earlier test in a full-suite run has already made
+    ineffective, so this assertion failed for months on a code path that was
+    working — see the fixture's docstring. A false red on the guard for the
+    two-month outage is worse than no guard, because it trains the reader to
+    skip it.
     """
 
     def _refuse() -> None:
         raise RuntimeError("stale instrument TMFE6")
 
+    events = module_log_sink(market_data_module)
     md = _md_shim(SimpleNamespace(alias_to_actual={}), gates=[_refuse])
 
-    with structlog.testing.capture_logs() as logs:
-        with pytest.raises(RuntimeError, match="stale instrument TMFE6"):
-            md._run_connect_gates()
+    with pytest.raises(RuntimeError, match="stale instrument TMFE6"):
+        md._run_connect_gates()
 
-    blocked = [e for e in logs if e.get("event") == "connect_gate_blocked"]
+    blocked = [e for e in events if e.get("event") == "connect_gate_blocked"]
     assert blocked, "a blocked gate must emit its own event, not a generic connect failure"
     assert blocked[0]["error_type"] == "RuntimeError"
 
