@@ -123,3 +123,37 @@ def test_preview_summary_counts_the_validation_errors_it_prints() -> None:
     summary = [line for line in preview_lines(build, validation=validation) if line.startswith("errors=")]
 
     assert summary == ["errors=1 warnings=0"]
+
+
+def test_builder_output_passes_the_connect_gate_it_feeds(frozen_roll_window: None, tmp_path) -> None:
+    """The invariant the two clocks broke: what the builder emits must boot.
+
+    ``symbols.yaml`` is the connect gate's input, so any contract the builder
+    keeps has to be one the gate accepts. They resolved "today" independently —
+    the builder in UTC, the gate in local time — and disagreed for the eight
+    hours that contain the roll-day remedy window.
+    """
+    from types import SimpleNamespace
+
+    from hft_platform.feed_adapter.shioaji.contracts_runtime import (
+        assert_no_stale_subscriptions,
+    )
+
+    list_path = tmp_path / "symbols.list"
+    list_path.write_text("TXF@front exchange=FUT tags=futures|front_month|txf\n", encoding="utf-8")
+    index = ContractIndex(
+        contracts=[
+            _future("TXFH6", EXPIRED_DELIVERY_DATE),
+            _future("TXFI6", "2026/09/16"),
+        ]
+    )
+    delivery_by_code = {"TXFH6": EXPIRED_DELIVERY_DATE, "TXFI6": "2026/09/16"}
+
+    built = build_symbols(str(list_path), index)
+    subscribed = [{"code": str(e.get("code")), "exchange": "TAIFEX", "product_type": "future"} for e in built.symbols]
+
+    def _lookup(_exchange: str, code: str, _ptype: object) -> object:
+        return SimpleNamespace(code=code, delivery_date=delivery_by_code[code])
+
+    # Same instant, the gate's own clock: it must accept the whole universe.
+    assert_no_stale_subscriptions(subscribed, _lookup, today=exchange_today())
