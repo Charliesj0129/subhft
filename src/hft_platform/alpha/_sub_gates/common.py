@@ -30,6 +30,34 @@ def _to_float_list(daily: Any) -> list[float]:
     return [_entry_to_float(e) for e in (daily or [])]
 
 
+def _to_daily_series(daily: Any) -> list[float]:
+    """Collapse ``daily_pnl`` rows to one value per trading date.
+
+    Day-axis gates ask a question about *days*: what share did the biggest day
+    carry, does the sign survive dropping a day.  ``daily_pnl`` is one row per
+    (instrument, date), so a result covering several instruments contributes
+    several rows for one date.  Counting rows then overstates the sample and
+    lets a dominant day hide as two smaller ones -- both fail-open, which is
+    the wrong direction for a gate.  ``monthly_distribution`` already
+    aggregates on ``date`` before measuring; this is the same rule on the day
+    axis.
+
+    Dated rows come back in chronological order so order-dependent reads
+    (drawdown, equity curves) stay meaningful.  Rows with no usable ``date``
+    -- legacy ``list[float]`` payloads and synthetic fixtures -- keep their
+    existing one-row-per-day meaning and are appended unchanged.
+    """
+    dated: dict[str, float] = {}
+    undated: list[float] = []
+    for entry in daily or []:
+        date = entry.get("date") if isinstance(entry, dict) else None
+        if isinstance(date, str) and date:
+            dated[date] = dated.get(date, 0.0) + _entry_to_float(entry)
+        else:
+            undated.append(_entry_to_float(entry))
+    return [value for _, value in sorted(dated.items())] + undated
+
+
 class SharpeThresholdGate:
     """Daily Sharpe ratio threshold check (annualized by sqrt(252))."""
 

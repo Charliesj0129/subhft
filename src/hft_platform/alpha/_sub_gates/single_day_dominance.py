@@ -9,13 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from hft_platform.alpha._sub_gates.common import _to_daily_series
 from hft_platform.alpha._sub_gates.registry import SubGateResult
-
-
-def _entry_to_float(entry: Any) -> float:
-    if isinstance(entry, dict):
-        return float(entry.get("pnl_pts", 0.0))
-    return float(entry)
 
 
 class SingleDayDominanceGate:
@@ -25,7 +20,7 @@ class SingleDayDominanceGate:
     applies_to = {"maker", "taker"}
 
     def evaluate(self, result: Any, config: Any, thresholds: dict) -> SubGateResult:
-        daily = [_entry_to_float(e) for e in (getattr(result, "daily_pnl", None) or [])]
+        daily = _to_daily_series(getattr(result, "daily_pnl", None))
         max_pct = float(thresholds.get("outlier_day_contribution_max_pct", 100.0))
 
         if not daily:
