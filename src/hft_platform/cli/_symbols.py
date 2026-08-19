@@ -99,7 +99,7 @@ def cmd_symbols_build(args: argparse.Namespace) -> None:
     warnings = result.warnings + validation.warnings
 
     if args.preview:
-        for line in preview_lines(result, sample=args.sample):
+        for line in preview_lines(result, sample=args.sample, validation=validation):
             print(line)
 
     if warnings or errors:
@@ -119,7 +119,7 @@ def cmd_symbols_preview(args: argparse.Namespace) -> None:
     result = build_symbols(args.list_path, contract_index)
     validation = validate_symbols(result.symbols, contract_index, max_subscriptions=_resolve_max_subscriptions(args))
 
-    for line in preview_lines(result, sample=args.sample):
+    for line in preview_lines(result, sample=args.sample, validation=validation):
         print(line)
 
     errors = result.errors + validation.errors
@@ -197,7 +197,7 @@ def cmd_symbols_sync(args: argparse.Namespace) -> None:
     warnings = result.warnings + validation.warnings
 
     if args.preview:
-        for line in preview_lines(result, sample=args.sample):
+        for line in preview_lines(result, sample=args.sample, validation=validation):
             print(line)
 
     if warnings or errors:

@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import date, datetime
 from typing import Any
+
+from hft_platform.core.timebase import TZINFO
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -147,13 +149,35 @@ def expiry_key(contract: dict[str, Any]) -> int:
     return 99999999
 
 
+def exchange_today() -> date:
+    """Today's calendar date on the *exchange's* clock, not UTC.
+
+    Contract expiry is an exchange-calendar fact, so days-to-expiry has to be
+    measured against the exchange's date. Using UTC put this builder eight
+    hours behind every other component: ``TZ=Asia/Taipei`` is set in the image
+    (``Dockerfile``) and the stale-instrument connect gate
+    (``feed_adapter/shioaji/contracts_runtime.assert_no_stale_subscriptions``)
+    compares against the local date. Between Taipei midnight and 08:00 the two
+    disagreed, and that window is exactly when an operator rebuilds
+    ``symbols.yaml`` after a contract roll — see ``make rebuild-symbols-yaml``.
+    A rebuild there kept contracts that had already expired, so the next boot
+    was refused by the gate with no data at all.
+
+    Resolved through ``timebase`` so there is one definition of the trading
+    timezone (``HFT_TS_TZ``, default ``Asia/Taipei``) rather than a second copy
+    that can drift. Deliberately independent of the machine's ``TZ``: an
+    operator may run the builder from a host in any timezone.
+    """
+    return datetime.now(TZINFO).date()
+
+
 def contract_dte_days(contract: dict[str, Any]) -> int | None:
     for key in ("delivery_date", "expiry", "due_date", "maturity_date"):
         parsed = parse_date_key(contract.get(key))
         if parsed:
             try:
                 date_val = datetime.strptime(str(parsed), "%Y%m%d").date()
-                return (date_val - datetime.now(UTC).date()).days
+                return (date_val - exchange_today()).days
             except ValueError:
                 continue
     return None
