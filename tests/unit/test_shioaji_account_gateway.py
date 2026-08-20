@@ -346,10 +346,17 @@ class _PreLoginApi:
 
 class TestAccountPropertiesRaisePreLogin:
     def test_get_positions_treats_raising_accounts_as_unavailable(self) -> None:
+        """Unavailable must read as unknown (None), never as a flat account.
+
+        This assertion used to be ``== []``, which contradicted the test's own
+        name: the reconciler only treats ``None`` as "query unhealthy" and
+        builds a broker map from anything else, so an empty list here announced
+        "you hold nothing" whenever the SDK could not hand back an account.
+        """
         client = _make_client()
         client.api = _PreLoginApi()
         gw = AccountGateway(client)
-        assert gw.get_positions() == []
+        assert gw.get_positions() is None
 
     def test_get_margin_returns_empty_when_account_property_raises(self) -> None:
         client = _make_client()

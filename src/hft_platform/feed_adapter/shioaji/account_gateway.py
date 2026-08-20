@@ -89,9 +89,21 @@ class AccountGateway:
                 errors.append(f"futopt: {exc!s}")
 
         if not queried_any:
-            self._client._record_api_latency("positions", start_ns, ok=True)
-            self._last_positions_error = None
-            return positions
+            # Neither account resolved, so the broker was never asked. Returning
+            # the empty ``positions`` list here reported "the account is flat" —
+            # a fail-open the reconciler cannot see through, because it only
+            # treats ``None`` as "query unhealthy" and builds a broker map from
+            # anything else. A logged-out session, an unactivated account, or an
+            # SDK surface change all land here, and each one would have silently
+            # cleared every real position out of the reconciliation view.
+            # "I could not ask" is not "there is nothing there": return None.
+            self._client._record_api_latency("positions", start_ns, ok=False)
+            self._last_positions_error = "no trading account resolved (stock_account/futopt_account both unavailable)"
+            logger.error(
+                "Failed to fetch positions — no trading account resolved, returning None",
+                error=self._last_positions_error,
+            )
+            return None
 
         if len(errors) == 2:
             self._client._record_api_latency("positions", start_ns, ok=False)
