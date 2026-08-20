@@ -1053,6 +1053,10 @@ class SystemBootstrapper:
             symbol_metadata=symbol_metadata,
             price_scale_provider=price_scale_provider,
             wal_writer=_exec_wal_writer,
+            # Step 3 of the normalizer's account-id chain. Passed as a callable,
+            # not a value: the broker session is not authenticated yet here and
+            # get_default_account_id() would answer "".
+            default_account_id_provider=getattr(order_client, "get_default_account_id", None),
         )
         if _fee_calculator is not None:
             exec_service.normalizer._fee_calculator = _fee_calculator
