@@ -67,13 +67,22 @@ def _normalize_contract(contract: Any, exchange: str, kind: str) -> dict[str, An
         "exchange": exchange,
         "type": kind,
         "root": getattr(contract, "category", None) or getattr(contract, "symbol", None),
-        "tick_size": getattr(contract, "tick_size", None),
-        "price_scale": getattr(contract, "price_scale", None),
-        "contract_size": getattr(contract, "contract_size", None),
         "delivery_date": getattr(contract, "delivery_date", None),
-        "strike": getattr(contract, "strike_price", None) or getattr(contract, "strike", None),
+        "strike": getattr(contract, "strike_price", None),
         "right": right,
         "reference": getattr(contract, "reference", None),
+        # Real SDK fields (see tests/golden/shioaji_sdk/surface_1.5.6.json).
+        # ``tick_size`` / ``price_scale`` / ``contract_size`` used to be read
+        # here and have never existed on a shioaji Contract in any version, so
+        # they were dropped by the None filter on every one of the 55k rows and
+        # the cache silently never carried them. ``multiplier`` and ``unit`` are
+        # the fields that actually hold the contract-size information.
+        "multiplier": getattr(contract, "multiplier", None),
+        "unit": getattr(contract, "unit", None),
+        "limit_up": getattr(contract, "limit_up", None),
+        "limit_down": getattr(contract, "limit_down", None),
+        "underlying_code": getattr(contract, "underlying_code", None),
+        "update_date": getattr(contract, "update_date", None),
     }
     return {k: v for k, v in payload.items() if v is not None}
 
