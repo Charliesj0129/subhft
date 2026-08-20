@@ -58,6 +58,34 @@ def _to_daily_series(daily: Any) -> list[float]:
     return [value for _, value in sorted(dated.items())] + undated
 
 
+def _to_traded_daily_series(daily: Any) -> list[float]:
+    """``_to_daily_series`` restricted to days that actually traded.
+
+    ``cost_uncertainty`` excludes non-traded rows (``fills == 0``) before
+    building its CI, and both its ``min_days_strict`` sample check and the
+    ``sqrt(n_days)`` term read the length of what comes back.  Counting rows
+    there inflates ``n_days``, which clears the minimum-sample check on fewer
+    real days *and* narrows the interval -- fail-open on both counts.  A date
+    is traded when any of its rows has ``fills > 0``, and its value is the sum
+    over those rows.
+    """
+    dated: dict[str, float] = {}
+    undated: list[float] = []
+    for entry in daily or []:
+        if not isinstance(entry, dict):
+            undated.append(float(entry))
+            continue
+        if int(entry.get("fills", 0) or 0) <= 0:
+            continue
+        date = entry.get("date")
+        value = float(entry.get("pnl_pts", 0.0) or 0.0)
+        if isinstance(date, str) and date:
+            dated[date] = dated.get(date, 0.0) + value
+        else:
+            undated.append(value)
+    return [value for _, value in sorted(dated.items())] + undated
+
+
 class SharpeThresholdGate:
     """Daily Sharpe ratio threshold check (annualized by sqrt(252))."""
 
@@ -65,7 +93,7 @@ class SharpeThresholdGate:
     applies_to = {"maker", "taker"}
 
     def evaluate(self, result: Any, config: Any, thresholds: dict) -> SubGateResult:
-        pnl = _to_float_list(result.daily_pnl)
+        pnl = _to_daily_series(result.daily_pnl)
         if len(pnl) < 2:
             return SubGateResult(
                 name=self.name,
@@ -93,7 +121,7 @@ class MaxDrawdownGate:
     applies_to = {"maker", "taker"}
 
     def evaluate(self, result: Any, config: Any, thresholds: dict) -> SubGateResult:
-        pnl = _to_float_list(result.daily_pnl)
+        pnl = _to_daily_series(result.daily_pnl)
         if not pnl:
             return SubGateResult(
                 name=self.name,
@@ -125,7 +153,7 @@ class WinningDayPctGate:
     applies_to = {"maker", "taker"}
 
     def evaluate(self, result: Any, config: Any, thresholds: dict) -> SubGateResult:
-        pnl = _to_float_list(result.daily_pnl)
+        pnl = _to_daily_series(result.daily_pnl)
         if not pnl:
             return SubGateResult(
                 name=self.name,
