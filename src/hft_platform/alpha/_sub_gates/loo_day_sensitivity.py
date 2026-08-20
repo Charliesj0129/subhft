@@ -9,13 +9,8 @@ from __future__ import annotations
 from typing import Any
 
 from hft_platform.alpha._resampling import leave_one_day_out
+from hft_platform.alpha._sub_gates.common import _to_daily_series
 from hft_platform.alpha._sub_gates.registry import SubGateResult
-
-
-def _entry_to_float(entry: Any) -> float:
-    if isinstance(entry, dict):
-        return float(entry.get("pnl_pts", 0.0))
-    return float(entry)
 
 
 class LOODaySensitivityGate:
@@ -34,7 +29,7 @@ class LOODaySensitivityGate:
                 details="loo_day_sign_preserved=False — gate skipped",
             )
 
-        daily = [_entry_to_float(e) for e in (getattr(result, "daily_pnl", None) or [])]
+        daily = _to_daily_series(getattr(result, "daily_pnl", None))
         if len(daily) < 2:
             return SubGateResult(
                 name=self.name,

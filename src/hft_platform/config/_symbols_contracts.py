@@ -235,8 +235,26 @@ def validate_symbols(
     return result
 
 
-def preview_lines(result: SymbolBuildResult, sample: int = 10) -> list[str]:
-    """Generate human-readable preview lines for a build result."""
+def preview_lines(
+    result: SymbolBuildResult,
+    sample: int = 10,
+    validation: SymbolBuildResult | None = None,
+) -> list[str]:
+    """Generate human-readable preview lines for a build result.
+
+    ``validation`` is the separate :func:`validate_symbols` result. Pass it
+    whenever the caller also runs validation: the summary line is the first
+    thing an operator reads, and reporting ``errors=0`` above an ``Errors:``
+    section listing a fatal validation failure reads as a clean build. That
+    matters most during a contract roll, when the rebuild is run against a
+    deadline and the subscription-limit error is the one that aborts it.
+    """
+    errors = list(result.errors)
+    warnings = list(result.warnings)
+    if validation is not None:
+        errors += validation.errors
+        warnings += validation.warnings
+
     lines: list[str] = []
     lines.append(f"symbols={len(result.symbols)}")
     if result.symbols:
@@ -245,6 +263,6 @@ def preview_lines(result: SymbolBuildResult, sample: int = 10) -> list[str]:
             f"{item.get('code')}({item.get('exchange', '')})" for item in sample_items if item.get("code")
         )
         lines.append(f"sample={rendered}")
-    if result.errors or result.warnings:
-        lines.append(f"errors={len(result.errors)} warnings={len(result.warnings)}")
+    if errors or warnings:
+        lines.append(f"errors={len(errors)} warnings={len(warnings)}")
     return lines

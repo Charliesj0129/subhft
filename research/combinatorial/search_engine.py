@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import ast
 import itertools
 import json
 import random
@@ -20,6 +21,38 @@ from structlog import get_logger
 from research.combinatorial.expression_lang import compile_expression
 
 logger = get_logger("search_engine")
+
+# Rolling operators whose value is identically constant when both operands are
+# the same series, so any candidate containing one is a tautology, not an alpha.
+_SELF_DEGENERATE_OPS = frozenset({"ts_corr"})
+
+
+def has_self_correlation(expression: str) -> bool:
+    """True if *expression* correlates a sub-expression with itself.
+
+    ``ts_corr(x, x, w)`` is +1 for every window in which ``x`` varies, so
+    ``sign(ts_corr(x, x, w))`` is a permanent long signal whose Sharpe measures
+    market drift. The screens reject constant signals (``smma.validate_stationary_signal``),
+    but the generator could still spend its trial budget manufacturing them —
+    ``_random_expression`` drew the second operand independently of the first.
+
+    Compares operands structurally (via ``ast``) rather than by string equality,
+    so ``ts_corr(mid, mid, 50)`` and ``ts_corr(mid, (mid), 50)`` are both caught.
+    An unparseable expression is not our concern here — ``compile_expression``
+    is the authority on validity — so it returns False and lets that path report.
+    """
+    try:
+        tree = ast.parse(expression, mode="eval")
+    except SyntaxError:
+        return False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+            continue
+        if node.func.id not in _SELF_DEGENERATE_OPS or len(node.args) < 2:
+            continue
+        if ast.dump(node.args[0]) == ast.dump(node.args[1]):
+            return True
+    return False
 
 
 @dataclass(frozen=True)
@@ -163,8 +196,19 @@ class AlphaSearchEngine:
             return f"sign(ts_delta({field}, {window}))"
         if family == "volume":
             return f"rank(ts_sum({field}, {window}))"
-        other = self._rng.choice(self._feature_keys)
+        other = self._pick_distinct_feature(field)
+        if other is None:
+            # Only one feature available: a correlation family cannot be built
+            # without correlating it with itself, so fall back to a real one.
+            return f"zscore(ts_delta({field}, {window}), {window})"
         return f"sign(ts_corr({field}, {other}, {window}))"
+
+    def _pick_distinct_feature(self, field: str) -> str | None:
+        """Choose a feature key that is not *field*, or None if none exists."""
+        candidates = [k for k in self._feature_keys if k != field]
+        if not candidates:
+            return None
+        return self._rng.choice(candidates)
 
     def _mutate_expression(self, expression: str) -> str:
         tokens = expression.replace("(", " ").replace(")", " ").replace(",", " ").split()
@@ -176,6 +220,13 @@ class AlphaSearchEngine:
                 out[i] = self._rng.choice(self._feature_keys)
         rebuilt = " ".join(out)
         rebuilt = rebuilt.replace(" ,", ",").replace("( ", "(").replace(" )", ")")
+        if has_self_correlation(rebuilt):
+            # Swapping a feature token can collapse ts_corr(a, b, w) into
+            # ts_corr(a, a, w), which is identically +1 on every non-degenerate
+            # window — a constant signal that scores as market drift, not alpha.
+            self._mutation_failures += 1
+            logger.warning("alpha_mutation_degenerate", expr=rebuilt[:120], reason="self_correlation")
+            return self._random_expression()
         try:
             compile_expression(rebuilt)
             return rebuilt

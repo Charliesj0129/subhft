@@ -7,13 +7,8 @@ from typing import Any
 import numpy as np
 
 from hft_platform.alpha._resampling import stationary_block_bootstrap
+from hft_platform.alpha._sub_gates.common import _to_daily_series
 from hft_platform.alpha._sub_gates.registry import SubGateResult
-
-
-def _entry_to_float(entry: Any) -> float:
-    if isinstance(entry, dict):
-        return float(entry.get("pnl_pts", 0.0))
-    return float(entry)
 
 
 class StationaryBlockBootstrapGate:
@@ -23,7 +18,7 @@ class StationaryBlockBootstrapGate:
     applies_to = {"maker", "taker"}
 
     def evaluate(self, result: Any, config: Any, thresholds: dict) -> SubGateResult:
-        daily = [_entry_to_float(e) for e in (getattr(result, "daily_pnl", None) or [])]
+        daily = _to_daily_series(getattr(result, "daily_pnl", None))
         ci_min = float(thresholds.get("block_bootstrap_ci_lower_bound_min", 0.0))
         block_size = int(thresholds.get("block_bootstrap_block_size_days", 5))
         n_resamples = int(thresholds.get("block_bootstrap_n_resamples", 1000))

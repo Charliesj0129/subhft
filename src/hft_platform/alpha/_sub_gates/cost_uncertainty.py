@@ -28,6 +28,7 @@ import math
 from statistics import mean, stdev
 from typing import Any
 
+from hft_platform.alpha._sub_gates.common import _to_traded_daily_series
 from hft_platform.alpha._sub_gates.registry import SubGateResult
 
 # One-sided 95% normal CI z-score.
@@ -61,17 +62,12 @@ class CostUncertaintyGate:
         # to preserve the back-compat advisory branch.
         min_n_strict = int(thresholds.get("cost_uncertainty_min_days_strict", 5))
 
-        daily = getattr(result, "daily_pnl", None) or []
         # Accept both Slice B dict rows ({pnl_pts, fills, ...}) and legacy
         # float rows (raw daily PnL). Float rows are assumed to be traded
         # days; dict rows with fills==0 are excluded as non-traded days.
-        pnl_series: list[float] = []
-        for row in daily:
-            if isinstance(row, dict):
-                if int(row.get("fills", 0) or 0) > 0:
-                    pnl_series.append(float(row.get("pnl_pts", 0.0) or 0.0))
-            else:
-                pnl_series.append(float(row))
+        # Rows are collapsed per date first -- ``daily_pnl`` is one row per
+        # (instrument, date), and ``n_days`` has to mean days.
+        pnl_series: list[float] = _to_traded_daily_series(getattr(result, "daily_pnl", None))
 
         n_days = len(pnl_series)
 

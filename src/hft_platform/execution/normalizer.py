@@ -34,9 +34,15 @@ class ExecutionNormalizer:
         fee_calculator: Any = None,
         default_account_id: str = "",
         field_map: BrokerExecFieldMap | None = None,
+        default_account_id_provider: Optional[Callable[[], str]] = None,
     ) -> None:
         self.raw_queue = raw_queue
         self._default_account_id = default_account_id
+        # Resolved lazily: BrokerProtocol.get_default_account_id returns "" until
+        # the session authenticates, and the normalizer is constructed before
+        # login. Cached on first non-empty answer so the fill path stays O(1)
+        # and never re-enters the SDK.
+        self._default_account_id_provider = default_account_id_provider
         self._synth_counter: int = 0
         self.metrics = MetricsRegistry.get()
         self.metadata = SymbolMetadata()
@@ -51,6 +57,32 @@ class ExecutionNormalizer:
         ]
         self._fee_calculator = fee_calculator
         self.field_map: BrokerExecFieldMap = field_map or ShioajiExecFieldMap()
+
+    def _resolve_default_account_id(self) -> str:
+        """Return the broker session's account id, resolving it at most once.
+
+        ``BrokerProtocol.get_default_account_id`` documents that its return
+        value "must match the ``account_id`` value that ``ExecutionNormalizer``
+        resolves from fill callbacks, so that recovery keys align with live
+        fill keys in ``PositionStore``".  Nothing wired the two together, so
+        this stayed ``""`` and step 3 of the resolution chain was dead: a fill
+        arriving without its own account field fell straight through to the
+        reject branch and never reached ``PositionStore``.
+        """
+        if self._default_account_id:
+            return self._default_account_id
+        provider = self._default_account_id_provider
+        if provider is None:
+            return ""
+        try:
+            resolved = str(provider() or "")
+        except Exception:  # broker session may be mid-reconnect
+            logger.warning("default_account_id_provider_failed", exc_info=True)
+            return ""
+        if resolved:
+            self._default_account_id = resolved
+            logger.info("execution_default_account_resolved", account_id_len=len(resolved))
+        return resolved
 
     def _first_nonempty(self, payload: Any, keys: tuple[str, ...], default: Any = None) -> Any:
         """Walk *keys* on *payload* and return the first truthy value, else *default*."""
@@ -301,7 +333,7 @@ class ExecutionNormalizer:
                 if acct_obj is not None:
                     raw_account_id = getattr(acct_obj, "account_id", None) or str(acct_obj)
             if not raw_account_id:
-                raw_account_id = self._default_account_id
+                raw_account_id = self._resolve_default_account_id()
             if not raw_account_id:
                 logger.critical(
                     "fill_rejected_missing_account_id",

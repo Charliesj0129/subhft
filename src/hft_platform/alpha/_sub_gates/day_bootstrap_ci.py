@@ -7,13 +7,8 @@ from typing import Any
 import numpy as np
 
 from hft_platform.alpha._resampling import day_bootstrap
+from hft_platform.alpha._sub_gates.common import _to_daily_series
 from hft_platform.alpha._sub_gates.registry import SubGateResult
-
-
-def _entry_to_float(entry: Any) -> float:
-    if isinstance(entry, dict):
-        return float(entry.get("pnl_pts", 0.0))
-    return float(entry)
 
 
 class DayLevelBootstrapCIGate:
@@ -23,7 +18,7 @@ class DayLevelBootstrapCIGate:
     applies_to = {"maker", "taker"}
 
     def evaluate(self, result: Any, config: Any, thresholds: dict) -> SubGateResult:
-        daily = [_entry_to_float(e) for e in (getattr(result, "daily_pnl", None) or [])]
+        daily = _to_daily_series(getattr(result, "daily_pnl", None))
         ci_min = float(thresholds.get("bootstrap_ci_lower_bound_min", 0.0))
         n_resamples = int(thresholds.get("bootstrap_n_resamples", 2000))
         alpha = float(thresholds.get("bootstrap_alpha", 0.05))

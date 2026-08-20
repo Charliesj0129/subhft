@@ -83,11 +83,16 @@ class ExecutionRouter:
         symbol_metadata: Optional[Any] = None,
         price_scale_provider: Optional[Any] = None,
         wal_writer: Optional[WALWriter] = None,
+        default_account_id_provider: Optional[Callable[[], str]] = None,
     ):
         self.bus = bus
         self.raw_queue = raw_queue
         self._order_id_map = order_id_map
-        self.normalizer = ExecutionNormalizer(raw_queue, order_id_map)
+        self.normalizer = ExecutionNormalizer(
+            raw_queue,
+            order_id_map,
+            default_account_id_provider=default_account_id_provider,
+        )
         self.position_store = position_store
         self.terminal_handler = terminal_handler
         self._risk_engine = risk_engine
