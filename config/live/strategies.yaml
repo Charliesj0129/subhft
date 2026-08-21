@@ -27,7 +27,18 @@ strategies:
     class: "R47MakerStrategy"
     enabled: true
     product_type: "FUT"
-    symbols: ["TMFE6"]              # Concrete May-2026 expiry; still listed for MD subscription via symbols.yaml. After Option-3 Gate 1 verification this hardcode becomes removable — contract_families below keeps strategy.symbols current across rollovers.
+    # No `symbols:` seed. It used to pin "TMFE6" (May-2026) with a note saying
+    # the hardcode became removable once Option-3 Gate 1 was verified in prod.
+    # It was: THESHOW rebinds this strategy onto the front month at every
+    # connect. What the note missed is that `_apply_family_bindings` *unions*
+    # the resolved contract into `strategy.symbols` and `_on_family_rebind`
+    # only discards the previously *resolved* ref, never the YAML seed — so the
+    # expired code stayed in the set forever and logged `preflight_symbol_mismatch`
+    # (ERROR) on every single connect. Liveness is unaffected by the removal:
+    # `strategy_bound_live_symbols` counts the overlap with the subscribed set,
+    # and an expired code contributed nothing to it. If family resolution ever
+    # fails, the gauge reads 0 either way — the seed never provided a fallback,
+    # it only made a broken binding look like a configured one.
     # Option-3 Gate 1 prod (2026-04-19): opt-in family binding. On broker
     # login the ContractFamilyResolver (Shioaji populator) reads delivery_month
     # per TAIFEX contract and swaps an atomic snapshot. The StrategyRunner
