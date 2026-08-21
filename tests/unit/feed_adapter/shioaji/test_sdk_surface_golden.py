@@ -68,7 +68,14 @@ def test_installed_shioaji_surface_matches_committed_golden() -> None:
             f"tests/golden/shioaji_sdk/surface_{version}.json."
         )
     expected = _strip_volatile(json.loads(golden.read_text(encoding="utf-8")))
-    actual = _strip_volatile(build_surface_snapshot())
+    # ``include_nm_symbols=False``: the nm sweep of the shioaji ``_core`` .so is
+    # the slowest part of a capture and ``_strip_volatile`` drops its output
+    # anyway. Paying for it here made this test exceed CI's per-test budget --
+    # `make test-unit-ci` runs with `--timeout=10` while the nm subprocess sets
+    # its own `timeout=30`, so on a contended runner pytest-timeout could only
+    # ever kill it mid-poll. Observed twice on PR #408, which changes nothing
+    # but an actions/checkout pin.
+    actual = _strip_volatile(build_surface_snapshot(include_nm_symbols=False))
     if actual != expected:
         delta = "\n".join(
             difflib.unified_diff(

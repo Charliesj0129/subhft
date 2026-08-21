@@ -64,25 +64,83 @@ _EMPTY = inspect.Parameter.empty
 # logical enum name -> module search order
 ENUM_SEARCH = ["shioaji", "shioaji.constant", "shioaji.account", "shioaji.contracts"]
 DECLARED_ENUMS: list[str] = [
-    "AccountType", "Action", "ChangeType", "Currency", "DayTrade", "Exchange",
-    "FetchStatus", "FuturesOCType", "FuturesPriceType", "OptionRight",
-    "OrderState", "OrderType", "QuoteType", "QuoteVersion", "ScannerType",
-    "SecurityType", "Status", "StockOrderCond", "StockOrderLot",
-    "StockPriceType", "TickType", "TicksQueryType", "TradeType", "Unit",
+    "AccountType",
+    "Action",
+    "ChangeType",
+    "Currency",
+    "DayTrade",
+    "Exchange",
+    "FetchStatus",
+    "FuturesOCType",
+    "FuturesPriceType",
+    "OptionRight",
+    "OrderState",
+    "OrderType",
+    "QuoteType",
+    "QuoteVersion",
+    "ScannerType",
+    "SecurityType",
+    "Status",
+    "StockOrderCond",
+    "StockOrderLot",
+    "StockPriceType",
+    "TickType",
+    "TicksQueryType",
+    "TradeType",
+    "Unit",
 ]
 
 # logical model name -> module search order (top-level first)
-MODEL_SEARCH = ["shioaji", "shioaji.order", "shioaji.account", "shioaji.position",
-                "shioaji.stream_data_type", "shioaji.contracts", "shioaji.data"]
+MODEL_SEARCH = [
+    "shioaji",
+    "shioaji.order",
+    "shioaji.account",
+    "shioaji.position",
+    "shioaji.stream_data_type",
+    "shioaji.contracts",
+    "shioaji.data",
+]
 DECLARED_MODELS: list[str] = [
-    "Account", "AccountBalance", "BaseOrder", "BidAskFOPv1", "BidAskSTKv1",
-    "ComboContract", "ComboOrder", "Contract", "Contracts", "CreditEnquire",
-    "DailyQuotes", "Deal", "Future", "FutureAccount", "FuturePosition",
-    "FuturesOrder", "Index", "Kbars", "Margin", "Option", "Order",
-    "OrderStatus", "Position", "PositionDetail", "ProfitLoss", "QuoteFOPv1",
-    "QuoteSTKv1", "ScannerItem", "Settlement", "Snapshot", "Stock",
-    "StockAccount", "StockOrder", "StockPosition", "TickFOPv1", "TickSTKv1",
-    "Ticks", "Trade", "TradingLimits", "UsageStatus",
+    "Account",
+    "AccountBalance",
+    "BaseOrder",
+    "BidAskFOPv1",
+    "BidAskSTKv1",
+    "ComboContract",
+    "ComboOrder",
+    "Contract",
+    "Contracts",
+    "CreditEnquire",
+    "DailyQuotes",
+    "Deal",
+    "Future",
+    "FutureAccount",
+    "FuturePosition",
+    "FuturesOrder",
+    "Index",
+    "Kbars",
+    "Margin",
+    "Option",
+    "Order",
+    "OrderStatus",
+    "Position",
+    "PositionDetail",
+    "ProfitLoss",
+    "QuoteFOPv1",
+    "QuoteSTKv1",
+    "ScannerItem",
+    "Settlement",
+    "Snapshot",
+    "Stock",
+    "StockAccount",
+    "StockOrder",
+    "StockPosition",
+    "TickFOPv1",
+    "TickSTKv1",
+    "Ticks",
+    "Trade",
+    "TradingLimits",
+    "UsageStatus",
 ]
 
 # logical client/quote class -> module search order
@@ -92,32 +150,69 @@ CLIENT_SEARCH = {
 }
 DECLARED_METHODS: dict[str, list[str]] = {
     "Shioaji": [
-        "account_balance", "activate_ca", "cancel_order", "credit_enquires",
-        "daily_quotes", "fetch_contracts", "kbars", "list_accounts",
-        "list_position_detail", "list_positions", "list_profit_loss",
-        "list_settlements", "list_trades", "login", "logout", "margin",
-        "place_order", "scanners", "set_order_callback", "short_stock_sources",
-        "snapshots", "subscribe", "subscribe_trade", "ticks", "trading_limits",
-        "unsubscribe", "unsubscribe_trade", "update_order", "update_price",
-        "update_qty", "update_status", "usage",
+        "account_balance",
+        "activate_ca",
+        "cancel_order",
+        "credit_enquires",
+        "daily_quotes",
+        "fetch_contracts",
+        "kbars",
+        "list_accounts",
+        "list_position_detail",
+        "list_positions",
+        "list_profit_loss",
+        "list_settlements",
+        "list_trades",
+        "login",
+        "logout",
+        "margin",
+        "place_order",
+        "scanners",
+        "set_order_callback",
+        "short_stock_sources",
+        "snapshots",
+        "subscribe",
+        "subscribe_trade",
+        "ticks",
+        "trading_limits",
+        "unsubscribe",
+        "unsubscribe_trade",
+        "update_order",
+        "update_price",
+        "update_qty",
+        "update_status",
+        "usage",
     ],
     "Quote": [
-        "subscribe", "unsubscribe", "set_on_tick_stk_v1_callback",
-        "set_on_tick_fop_v1_callback", "set_on_bidask_stk_v1_callback",
+        "subscribe",
+        "unsubscribe",
+        "set_on_tick_stk_v1_callback",
+        "set_on_tick_fop_v1_callback",
+        "set_on_bidask_stk_v1_callback",
         "set_on_bidask_fop_v1_callback",
     ],
 }
 
 CONFIG_SEARCH = ["shioaji.config", "shioaji"]
 DECLARED_SOL_CONFIG: list[str] = [
-    "SOL_CONNECT_TIMEOUT_MS", "SOL_KEEP_ALIVE_LIMIT", "SOL_KEEP_ALIVE_MS",
-    "SOL_RECONNECT_RETRIES", "SOL_RECONNECT_RETRY_WAIT",
+    "SOL_CONNECT_TIMEOUT_MS",
+    "SOL_KEEP_ALIVE_LIMIT",
+    "SOL_KEEP_ALIVE_MS",
+    "SOL_RECONNECT_RETRIES",
+    "SOL_RECONNECT_RETRY_WAIT",
 ]
 
 DECLARED_EXCEPTIONS: list[str] = [
-    "AccountError", "AccountNotProvideError", "AccountNotSignError", "BaseError",
-    "CaError", "ContractError", "SystemMaintenance", "TargetContractNotExistError",
-    "TimeoutError", "TokenError",
+    "AccountError",
+    "AccountNotProvideError",
+    "AccountNotSignError",
+    "BaseError",
+    "CaError",
+    "ContractError",
+    "SystemMaintenance",
+    "TargetContractNotExistError",
+    "TimeoutError",
+    "TokenError",
 ]
 EXCEPTION_SEARCH = ["shioaji.error", "shioaji"]
 
@@ -127,9 +222,14 @@ EXCEPTION_SEARCH = ["shioaji.error", "shioaji"]
 DECLARED_COMPILED: dict[str, dict[str, list[str]]] = {
     "shioaji.backend.solace.api": {
         "SolClient": [
-            "event_callback_wrap", "msg_callback_wrap", "onreply_callback_wrap",
-            "p2p_callback_wrap", "reply_callback_wrap", "session_down_callback_wrap",
-            "subscribe", "unsubscribe",
+            "event_callback_wrap",
+            "msg_callback_wrap",
+            "onreply_callback_wrap",
+            "p2p_callback_wrap",
+            "reply_callback_wrap",
+            "session_down_callback_wrap",
+            "subscribe",
+            "unsubscribe",
         ],
     },
     "shioaji.backend.solace.tick": {},
@@ -144,8 +244,13 @@ DECLARED_COMPILED: dict[str, dict[str, list[str]]] = {
 
 # Legacy submodules whose presence/absence marks the pure-Python → compiled shift.
 LAYOUT_SUBMODULES = [
-    "shioaji.config", "shioaji.shioaji", "shioaji.main", "shioaji.backend",
-    "shioaji.backend.solace.api", "shioaji.constant", "shioaji.order",
+    "shioaji.config",
+    "shioaji.shioaji",
+    "shioaji.main",
+    "shioaji.backend",
+    "shioaji.backend.solace.api",
+    "shioaji.constant",
+    "shioaji.order",
     "shioaji._core",
 ]
 
@@ -168,9 +273,14 @@ def _constraints(metadata: Any) -> list[str]:
         if m is None:
             continue
         for attr, label in (
-            ("gt", "gt"), ("ge", "ge"), ("lt", "lt"), ("le", "le"),
-            ("max_length", "max_length"), ("min_length", "min_length"),
-            ("max_digits", "max_digits"), ("decimal_places", "decimal_places"),
+            ("gt", "gt"),
+            ("ge", "ge"),
+            ("lt", "lt"),
+            ("le", "le"),
+            ("max_length", "max_length"),
+            ("min_length", "min_length"),
+            ("max_digits", "max_digits"),
+            ("decimal_places", "decimal_places"),
             ("multiple_of", "multiple_of"),
         ):
             val = getattr(m, attr, None)
@@ -206,8 +316,7 @@ def normalize_type(tp: Any) -> str:
         return f"Optional[{body}]" if had_none else body
 
     if origin is not None:
-        builtins_map = {list: "list", dict: "dict", set: "set",
-                        tuple: "tuple", frozenset: "frozenset"}
+        builtins_map = {list: "list", dict: "dict", set: "set", tuple: "tuple", frozenset: "frozenset"}
         oname = builtins_map.get(origin) or _short(getattr(origin, "__name__", str(origin)))
         if args:
             return f"{oname}[{', '.join(normalize_type(a) for a in args)}]"
@@ -305,8 +414,7 @@ def _fields_pydantic_v2(cls: type) -> dict[str, dict[str, Any]]:
         cons = _constraints(getattr(fi, "metadata", []) or [])
         if cons and "[" not in type_repr:
             type_repr = f"{type_repr}[{','.join(cons)}]"
-        fields[name] = {"type": type_repr, "required": required,
-                        "default": default, "has_default": has_default}
+        fields[name] = {"type": type_repr, "required": required, "default": default, "has_default": has_default}
     return fields
 
 
@@ -320,8 +428,12 @@ def _fields_pydantic_v1(cls: type) -> dict[str, dict[str, Any]]:
             has_default, default = True, "<factory>"
         elif getattr(mf, "default", None) is not None:
             has_default, default = True, normalize_default(mf.default)
-        fields[name] = {"type": normalize_type(type_obj), "required": required,
-                        "default": default, "has_default": has_default}
+        fields[name] = {
+            "type": normalize_type(type_obj),
+            "required": required,
+            "default": default,
+            "has_default": has_default,
+        }
     return fields
 
 
@@ -340,14 +452,19 @@ def _fields_annotated(cls: type) -> dict[str, dict[str, Any]]:
             type_obj = hints.get(name, getattr(klass, "__annotations__", {}).get(name))
             has_default = hasattr(cls, name) and not isinstance(getattr(cls, name), type)
             default = normalize_default(getattr(cls, name)) if has_default else None
-            fields[name] = {"type": normalize_type(type_obj), "required": not has_default,
-                            "default": default, "has_default": has_default}
+            fields[name] = {
+                "type": normalize_type(type_obj),
+                "required": not has_default,
+                "default": default,
+                "has_default": has_default,
+            }
     return fields
 
 
 def introspect_model(cls: type) -> dict[str, Any]:
-    bases = sorted(_scrub(f"{b.__module__}.{getattr(b, '__qualname__', b.__name__)}")
-                   for b in getattr(cls, "__bases__", ()))
+    bases = sorted(
+        _scrub(f"{b.__module__}.{getattr(b, '__qualname__', b.__name__)}") for b in getattr(cls, "__bases__", ())
+    )
     if isinstance(getattr(cls, "model_fields", None), dict):
         return {"kind": "pydantic2", "bases": bases, "fields": _fields_pydantic_v2(cls)}
     if getattr(cls, "__fields__", None):
@@ -356,10 +473,8 @@ def introspect_model(cls: type) -> dict[str, Any]:
     if fields:
         return {"kind": "annotated", "bases": bases, "fields": fields}
     # Compiled struct (PyO3) with no Python annotations: record public data attrs.
-    attrs = sorted(a for a in dir(cls)
-                   if not a.startswith("_") and not callable(getattr(cls, a, None)))
-    return {"kind": "compiled", "bases": bases, "fields": {},
-            "attributes": attrs}
+    attrs = sorted(a for a in dir(cls) if not a.startswith("_") and not callable(getattr(cls, a, None)))
+    return {"kind": "compiled", "bases": bases, "fields": {}, "attributes": attrs}
 
 
 def capture_models() -> dict[str, Any]:
@@ -408,11 +523,9 @@ def introspect_callable(obj: Any) -> dict[str, Any]:
     for p in sig.parameters.values():
         annotation = None if p.annotation is _EMPTY else normalize_type(p.annotation)
         default = "<empty>" if p.default is _EMPTY else normalize_default(p.default)
-        params.append({"name": p.name, "kind": p.kind.name,
-                       "annotation": annotation, "default": default})
+        params.append({"name": p.name, "kind": p.kind.name, "annotation": annotation, "default": default})
     returns = None if sig.return_annotation is _EMPTY else normalize_type(sig.return_annotation)
-    return {"_present": True, "params": params, "returns": returns,
-            "signature": _build_sig_str(params, returns)}
+    return {"_present": True, "params": params, "returns": returns, "signature": _build_sig_str(params, returns)}
 
 
 def _class_members(cls: type, declared: list[str]) -> dict[str, Any]:
@@ -451,8 +564,11 @@ def capture_methods() -> dict[str, Any]:
         if cls is _MISSING or not isinstance(cls, type):
             result[logical] = {"_present": False}
             continue
-        result[logical] = {"_present": True, "source": source,
-                           "members": _safe(lambda c=cls, d=declared: _class_members(c, d))}
+        result[logical] = {
+            "_present": True,
+            "source": source,
+            "members": _safe(lambda c=cls, d=declared: _class_members(c, d)),
+        }
     return result
 
 
@@ -461,6 +577,7 @@ def capture_methods() -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 def capture_config() -> dict[str, Any]:
     import os
+
     mod, source = None, None
     for mod_name in CONFIG_SEARCH:
         try:
@@ -481,10 +598,8 @@ def capture_config() -> dict[str, Any]:
         if val is _MISSING:
             defaults[name] = {"_present": False}
         else:
-            defaults[name] = {"value": normalize_default(val), "type": type(val).__name__,
-                              "env_var": name}
-    present = mod is not None and any(v.get("_present", True) for v in defaults.values()
-                                      if isinstance(v, dict))
+            defaults[name] = {"value": normalize_default(val), "type": type(val).__name__, "env_var": name}
+    present = mod is not None and any(v.get("_present", True) for v in defaults.values() if isinstance(v, dict))
     out: dict[str, Any] = {"_present": bool(present), "module": source, "defaults": defaults}
     if override:
         out["_env_override_detected"] = True
@@ -517,15 +632,30 @@ def _nm_symbols(mod: Any) -> dict[str, Any]:
     if not path or not path.endswith(".so") or nm is None:
         return {"_signal": "coarse", "_present": False}
     try:
-        proc = subprocess.run([nm, "-D", "--defined-only", path],  # noqa: S603 - fixed argv
-                              capture_output=True, text=True, timeout=30, check=False)
+        proc = subprocess.run(
+            [nm, "-D", "--defined-only", path],  # noqa: S603 - fixed argv
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
     except Exception as exc:  # noqa: BLE001
         return {"_signal": "coarse", "_present": False, "_error": type(exc).__name__}
     syms = sorted({line.split()[-1] for line in proc.stdout.splitlines() if line.strip()})
     return {"_signal": "coarse", "_present": True, "count": len(syms), "symbols": syms}
 
 
-def capture_compiled() -> dict[str, Any]:
+def capture_compiled(*, include_nm_symbols: bool = True) -> dict[str, Any]:
+    """Snapshot the compiled (Rust) modules.
+
+    ``include_nm_symbols`` shells out to ``nm -D --defined-only`` on each ``.so``.
+    That is the slowest part of a capture by a wide margin -- the shioaji 1.5.x
+    ``_core`` is a large binary -- and the caller that reads the result back is
+    the regeneration path, not the comparison path: the golden test drops
+    ``nm_symbols`` in ``_strip_volatile`` because the symbol list depends on the
+    local toolchain. Letting that caller opt out removes the cost rather than
+    paying it and discarding the answer.
+    """
     result: dict[str, Any] = {}
     for mod_name, classes in DECLARED_COMPILED.items():
         try:
@@ -554,7 +684,8 @@ def capture_compiled() -> dict[str, Any]:
                 rec["param_count"] = len(params) if params is not None else None
                 method_recs[meth] = rec
             entry["classes"][cls_name] = {"_present": True, "methods": method_recs}
-        entry["nm_symbols"] = _nm_symbols(mod)
+        if include_nm_symbols:
+            entry["nm_symbols"] = _nm_symbols(mod)
         result[mod_name] = entry
     return result
 
@@ -597,30 +728,36 @@ def _safe(fn: typing.Callable[[], Any]) -> Any:
 
 def capture_dist() -> dict[str, Any]:
     import shioaji
+
     runtime_version = getattr(shioaji, "__version__", None)
     try:
         dist = ilm.distribution("shioaji")
         meta_version, requires = dist.version, sorted(dist.requires or [])
     except ilm.PackageNotFoundError:
         meta_version, requires = None, []
-    out: dict[str, Any] = {"_present": True, "name": "shioaji", "version": runtime_version,
-                           "metadata_version": meta_version, "requires": requires}
+    out: dict[str, Any] = {
+        "_present": True,
+        "name": "shioaji",
+        "version": runtime_version,
+        "metadata_version": meta_version,
+        "requires": requires,
+    }
     if meta_version and runtime_version and meta_version != runtime_version:
         out["_version_mismatch"] = True
     return out
 
 
-def build_surface_snapshot() -> dict[str, Any]:
+def build_surface_snapshot(*, include_nm_symbols: bool = True) -> dict[str, Any]:
     # Deprecation shims in shioaji ≥1.5 warn on every legacy attribute access; we
     # resolve those paths deliberately. Contain the suppression to this call so
     # importing the module (e.g. from the CI guard) never mutates the global
     # warnings filter for the rest of the test suite.
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        return _build_surface_snapshot_inner()
+        return _build_surface_snapshot_inner(include_nm_symbols=include_nm_symbols)
 
 
-def _build_surface_snapshot_inner() -> dict[str, Any]:
+def _build_surface_snapshot_inner(*, include_nm_symbols: bool = True) -> dict[str, Any]:
     body: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "capture": {
@@ -635,7 +772,7 @@ def _build_surface_snapshot_inner() -> dict[str, Any]:
         "methods": _safe(capture_methods),
         "config": _safe(capture_config),
         "exceptions": _safe(capture_exceptions),
-        "compiled": _safe(capture_compiled),
+        "compiled": _safe(lambda: capture_compiled(include_nm_symbols=include_nm_symbols)),
     }
     body["snapshot_sha256"] = _digest(body)
     return body
@@ -644,6 +781,7 @@ def _build_surface_snapshot_inner() -> dict[str, Any]:
 def _pydantic_runtime() -> str:
     try:
         import pydantic
+
         return (pydantic.VERSION or "?").split(".", 1)[0]
     except Exception:  # noqa: BLE001
         return "none"
@@ -660,8 +798,7 @@ def _digest(body: dict[str, Any]) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Capture the installed shioaji API surface.")
-    parser.add_argument("--emit-json", action="store_true",
-                        help="Write the canonical JSON snapshot to stdout.")
+    parser.add_argument("--emit-json", action="store_true", help="Write the canonical JSON snapshot to stdout.")
     parser.parse_args(argv)
     sys.stdout.write(canonical_json(build_surface_snapshot()))
     return 0
