@@ -33,6 +33,7 @@ from research.combinatorial.taifex_trading_dates import (
     full_session_eligibility,
     reaggregate_taifex_bar_rows,
 )
+from research.data_pipeline.quality import load_latest_report, stamp_payload
 
 CH_PRICE_SCALE = 1_000_000.0
 DATASET_SCHEMA = "smma_taifex_bars.v2"
@@ -642,6 +643,13 @@ def save_governed_dataset(
         "schema_version": 2,
         "governance_complete": eligibility is not None,
     }
+    # Advisory source-layer provenance: which raw-ClickHouse audit this dataset was
+    # built under. Never blocks the export -- a missing audit, or one whose range does
+    # not cover the request, is recorded as an explicit "unstamped" /
+    # "unstamped_range_mismatch" verdict rather than being silently omitted, so a
+    # sidecar always says which of the three it is. Merged before the metadata hash,
+    # so the stamp is covered by the hash and cannot be appended after the fact.
+    payload.update(stamp_payload(load_latest_report(), requested_from=requested_from, requested_to=requested_to))
     payload.update(audit_claimed_ul(payload, DataUL.UL5))
     payload["metadata_hash"] = _metadata_hash(payload)
     sidecar = Path(str(output) + ".meta.json")

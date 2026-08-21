@@ -6,6 +6,7 @@ from typing import Any
 import numpy as np
 import pytest
 
+import research.combinatorial.smma_dataset as smma_dataset_module
 from research.combinatorial.smma_dataset import (
     DatasetGovernanceError,
     _bar_query,
@@ -296,3 +297,82 @@ def test_bar_export_queries_once_and_records_causal_derivation_evidence(tmp_path
         "2026-07-06",
     ]
     assert set(load_governed_dataset(path).timeframe_min) == {60, 120, 240, 1440}
+
+
+def _audit_report(date_from: str, date_to: str, *, verdict: str = "pass") -> Any:
+    """A minimal QualityReport standing in for a real source-layer audit."""
+    from research.data_pipeline.quality import QualityReport
+
+    return QualityReport(
+        schema="source_audit.v1",
+        generated_at="2026-08-01T00:00:00+00:00",
+        source="hft.market_data",
+        date_from=date_from,
+        date_to=date_to,
+        verdict=verdict,
+        checks=(),
+        extent={"rows": 1},
+        report_sha256="a" * 64,
+    )
+
+
+def _save_with_report(tmp_path, monkeypatch, report) -> dict[str, Any]:
+    monkeypatch.setattr(smma_dataset_module, "load_latest_report", lambda *_a, **_k: report)
+    dataset = rows_to_bar_dataset(_causal_rows())
+    path = tmp_path / "dataset.npz"
+    _output, sidecar = save_governed_dataset(
+        path,
+        dataset,
+        query_evidence=[{"query_sha256": "abc", "guard_overall": "pass"}],
+        code_fingerprint="code",
+    )
+    return json.loads(sidecar.read_text())
+
+
+def test_sidecar_records_an_unstamped_verdict_when_no_source_audit_exists(tmp_path, monkeypatch) -> None:
+    payload = _save_with_report(tmp_path, monkeypatch, None)
+
+    # The absence of an audit must be visible in the artifact, not inferred from a
+    # missing key -- a reader cannot tell "never audited" from "key dropped".
+    assert payload["source_quality_verdict"] == "unstamped"
+
+
+def test_sidecar_carries_the_source_audit_verdict_when_the_audit_covers_the_range(tmp_path, monkeypatch) -> None:
+    payload = _save_with_report(tmp_path, monkeypatch, _audit_report("2026-06-01", "2026-07-31"))
+
+    assert payload["source_quality_verdict"] == "pass"
+    assert payload["source_quality_report_sha256"] == "a" * 64
+    assert payload["source_quality_range"] == ["2026-06-01", "2026-07-31"]
+
+
+def test_sidecar_flags_a_source_audit_that_does_not_cover_the_requested_range(tmp_path, monkeypatch) -> None:
+    payload = _save_with_report(tmp_path, monkeypatch, _audit_report("2026-01-01", "2026-02-01"))
+
+    # A stale audit is worse than none if it reads as coverage, so the mismatch is
+    # named and the requested window recorded alongside it.
+    assert payload["source_quality_verdict"] == "unstamped_range_mismatch"
+    assert payload["source_quality_requested_range"] == ["2026-07-02", "2026-07-06"]
+
+
+def test_source_quality_stamp_is_covered_by_the_sidecar_metadata_hash(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        smma_dataset_module, "load_latest_report", lambda *_a, **_k: _audit_report("2026-06-01", "2026-07-31")
+    )
+    dataset = rows_to_bar_dataset(_causal_rows())
+    path = tmp_path / "dataset.npz"
+    _output, sidecar = save_governed_dataset(
+        path,
+        dataset,
+        query_evidence=[{"query_sha256": "abc", "guard_overall": "pass"}],
+        code_fingerprint="code",
+    )
+
+    payload = json.loads(sidecar.read_text())
+    assert payload["source_quality_verdict"] == "pass"
+    payload["source_quality_verdict"] = "fail"  # rewrite the verdict by hand
+    sidecar.write_text(json.dumps(payload))
+
+    # The stamp is merged before the hash is computed, so rewriting the verdict
+    # invalidates the sidecar instead of silently changing the artifact's story.
+    with pytest.raises(DatasetGovernanceError, match="sidecar fingerprint mismatch"):
+        load_governed_dataset(path)
