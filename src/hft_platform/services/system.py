@@ -961,10 +961,41 @@ class HFTSystem:
         logger.warning("graceful_reset_completed", reason=reason, results=results)
         return results
 
-    def _try_restart_service(self, name: str, component: str, coro_factory: Any) -> None:
+    def _try_restart_service(
+        self,
+        name: str,
+        component: str,
+        coro_factory: Any,
+        *,
+        count_attempt: bool = True,
+    ) -> None:
+        """Restart a supervised service task.
+
+        Args:
+            count_attempt: whether this restart consumes the crash-recovery
+                budget (``HFT_TASK_RESTART_MAX_ATTEMPTS``). ``True`` for a task
+                that died; ``False`` for a controlled restart of a task that
+                exited cleanly because the supervisor stopped it. The budget
+                exists to stop a crash loop, and spending it on normal control
+                flow means a real crash later has no restarts left. Production
+                2026-08-21: a HALT that oscillated 25 times drove ``order`` to
+                ``attempt=10 max_attempts=10`` and then latched a HALT reading
+                "Service order crash-loop: 10 restarts exceeded max" -- with
+                nothing having crashed.
+        """
         now_s = timebase.now_s()
         allowed_at = self._task_restart_until_s.get(name, 0.0)
         if now_s < allowed_at:
+            return
+        if not count_attempt:
+            logger.info(
+                "Restarting service task (uncounted)",
+                task=name,
+                component=component,
+                reason="controlled_restart",
+            )
+            self._start_service(name, coro_factory())
+            self._task_started_at[name] = timebase.now_s()
             return
         attempt = self._task_restart_attempts.get(name, 0) + 1
 
@@ -1297,7 +1328,11 @@ class HFTSystem:
                     _svc = self.order_adapter if name == "order" else self.execution_gateway
                     self._set_service_running(_svc, True)
                     if self.running:
-                        self._try_restart_service(name, component, coro_factory)
+                        # count_attempt=False: this task exited cleanly because
+                        # HALT stopped it. Bringing it back is normal control
+                        # flow, not crash recovery, and must not spend the
+                        # crash-loop budget.
+                        self._try_restart_service(name, component, coro_factory, count_attempt=False)
                     continue
                 # Detect immediate failures: task died within 2s of creation.
                 # Apply extra backoff penalty to avoid rapid retry budget burn.

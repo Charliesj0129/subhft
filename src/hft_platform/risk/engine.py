@@ -1068,12 +1068,45 @@ class RiskEngine:
                 break
         self._check_daily_loss_halt()
 
+    def _sync_daily_loss_hold(self) -> None:
+        """Mirror ``DailyLossLimitValidator.halt_triggered`` onto StormGuard.
+
+        StormGuard recomputes its target state from drawdown, latency and feed
+        gap alone, so it cannot see that trading stopped for the day. Without a
+        hold, a market-clean tick de-escalates HALT to NORMAL and the still
+        latched validator flag re-halts it on the next check -- a ~65 s square
+        wave, measured 26 times in production on 2026-08-21.
+
+        The write is guarded by a cheap comparison so the common case (no
+        change) is a bool read, not a lock acquire, on the evaluate() path.
+        """
+        storm_guard = self.storm_guard
+        if storm_guard is None:
+            return
+        setter = getattr(storm_guard, "set_daily_loss_hold", None)
+        if setter is None:  # pragma: no cover - older StormGuard stubs in tests
+            return
+        for v in self.validators:
+            if isinstance(v, DailyLossLimitValidator):
+                if v.halt_triggered != bool(getattr(storm_guard, "daily_loss_hold", False)):
+                    setter(v.halt_triggered)
+                return
+
     def _check_daily_loss_halt(self) -> None:
         """Check if DailyLossLimitValidator has triggered a HALT; if so, escalate StormGuard.
+
+        Also keeps StormGuard's daily-loss hold in sync with the validator's
+        latched flag, so HALT stays latched instead of oscillating.
 
         Non-blocking: Telegram notification is scheduled via asyncio.create_task so it
         never delays the evaluate() hot path.
         """
+        # Sync the hold BEFORE the already-in-HALT short circuit. The flag can
+        # only clear inside the validator (05:00 reset / _force_reset), and if
+        # the short circuit ran first the hold would never be released and HALT
+        # would survive the daily reset.
+        self._sync_daily_loss_hold()
+
         if self.storm_guard.state == StormGuardState.HALT:
             return  # Already in HALT — nothing to do
 

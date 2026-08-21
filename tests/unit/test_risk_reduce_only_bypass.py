@@ -136,6 +136,11 @@ class TestReducesPositionPredicate:
 # ---------------------------------------------------------------------------
 # 2. DailyLossLimitValidator — PEAK_DRAWDOWN, SOFT_LIMIT, DAILY_LOSS_LIMIT
 # ---------------------------------------------------------------------------
+def _ntd(amount_ntd: int) -> int:
+    """NTD -> PnL accumulator units (see test_intraday_pnl_watermark._ntd)."""
+    return amount_ntd * 10_000
+
+
 class TestDailyLossLimitCoverBypass:
     def _make_validator(self, position: int = 0):
         cfg = {
@@ -158,10 +163,10 @@ class TestDailyLossLimitCoverBypass:
     def test_peak_drawdown_blocks_opener_still(self):
         """Sanity: opener SHOULD still be blocked by PEAK_DRAWDOWN."""
         v = self._make_validator(position=0)
-        v.record_pnl("R47", 280_000)  # +280 NTD gain establishes peak
-        v.update_unrealized(0)
+        v.record_pnl("R47", _ntd(280))  # +280 NTD gain establishes peak
+        v.update_unrealized(_ntd(0))
         v.check(_make_intent(side=Side.BUY, qty=1))  # update peak via check
-        v.update_unrealized(-2_120_000)  # -2120 NTD unrealized => drawdown huge
+        v.update_unrealized(_ntd(-2120))  # -2120 NTD unrealized => drawdown huge
         ok, reason = v.check(_make_intent(side=Side.BUY, qty=1))
         assert not ok, "Opener must still be blocked — drawdown protection required"
         assert "PEAK_DRAWDOWN" in reason
@@ -169,10 +174,10 @@ class TestDailyLossLimitCoverBypass:
     def test_peak_drawdown_allows_cover_when_short(self):
         """Bug 21: cover order for short position must bypass PEAK_DRAWDOWN."""
         v = self._make_validator(position=-1)  # R47 is short 1 lot
-        v.record_pnl("R47", 280_000)
-        v.update_unrealized(0)
+        v.record_pnl("R47", _ntd(280))
+        v.update_unrealized(_ntd(0))
         v.check(_make_intent(side=Side.BUY, qty=1))  # prime peak
-        v.update_unrealized(-2_120_000)  # large unrealized loss
+        v.update_unrealized(_ntd(-2120))  # large unrealized loss
 
         # Cover BUY must be allowed
         ok, reason = v.check(_make_intent(side=Side.BUY, qty=1))
@@ -182,10 +187,10 @@ class TestDailyLossLimitCoverBypass:
     def test_peak_drawdown_allows_cover_when_long(self):
         """Long position in drawdown must be allowed to close."""
         v = self._make_validator(position=+1)
-        v.record_pnl("R47", 280_000)
-        v.update_unrealized(0)
+        v.record_pnl("R47", _ntd(280))
+        v.update_unrealized(_ntd(0))
         v.check(_make_intent(side=Side.SELL, qty=1))
-        v.update_unrealized(-2_120_000)
+        v.update_unrealized(_ntd(-2120))
 
         ok, reason = v.check(_make_intent(side=Side.SELL, qty=1))
         assert ok, f"Long exit must bypass PEAK_DRAWDOWN, got: {reason}"
@@ -193,10 +198,10 @@ class TestDailyLossLimitCoverBypass:
     def test_peak_drawdown_blocks_overshoot_flip(self):
         """Short -1, BUY 2 (flip to +1): same magnitude, NOT reducing → still blocked."""
         v = self._make_validator(position=-1)
-        v.record_pnl("R47", 280_000)
-        v.update_unrealized(0)
+        v.record_pnl("R47", _ntd(280))
+        v.update_unrealized(_ntd(0))
         v.check(_make_intent(side=Side.BUY, qty=1))
-        v.update_unrealized(-2_120_000)
+        v.update_unrealized(_ntd(-2120))
 
         ok, reason = v.check(_make_intent(side=Side.BUY, qty=2))
         assert not ok, "Flip-and-hold must still be blocked (not a reducing order)"
@@ -204,23 +209,23 @@ class TestDailyLossLimitCoverBypass:
     def test_soft_limit_allows_cover(self):
         """SOFT_LIMIT must also allow covers (Bug 21 extended)."""
         v = self._make_validator(position=-1)
-        v.record_pnl("R47", -600_000)  # -600 NTD realized → soft limit breached
-        v.update_unrealized(0)
+        v.record_pnl("R47", _ntd(-600))  # -600 NTD realized → soft limit breached
+        v.update_unrealized(_ntd(0))
         ok, reason = v.check(_make_intent(side=Side.BUY, qty=1))
         assert ok, f"Cover under SOFT_LIMIT must bypass, got: {reason}"
 
     def test_daily_loss_limit_allows_cover(self):
         """Hard DAILY_LOSS_LIMIT_EXCEEDED must also allow covers."""
         v = self._make_validator(position=-1)
-        v.record_pnl("R47", -9_000_000)  # -9000 NTD > 8000 hard limit
-        v.update_unrealized(0)
+        v.record_pnl("R47", _ntd(-9000))  # -9000 NTD, past the -8000 hard limit
+        v.update_unrealized(_ntd(0))
         ok, reason = v.check(_make_intent(side=Side.BUY, qty=1))
         assert ok, f"Cover under DAILY_LOSS_LIMIT must bypass, got: {reason}"
 
     def test_daily_loss_limit_blocks_opener(self):
         """Opener under DAILY_LOSS_LIMIT_EXCEEDED must still be blocked."""
         v = self._make_validator(position=0)
-        v.record_pnl("R47", -9_000_000)
+        v.record_pnl("R47", _ntd(-9000))
         ok, reason = v.check(_make_intent(side=Side.BUY, qty=1))
         assert not ok
 

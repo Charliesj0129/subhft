@@ -15,9 +15,24 @@ from __future__ import annotations
 import asyncio
 import collections
 import os
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+
+async def _wait_for_file(path: str, timeout_s: float = 5.0, interval_s: float = 0.005) -> None:
+    """Wait until ``path`` exists, or the deadline passes.
+
+    Returns silently on timeout so the caller's ``assert os.path.exists`` is
+    what reports the failure, with its own message and path.
+    """
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if os.path.exists(path):
+            return
+        await asyncio.sleep(interval_s)
+
 
 # ---------------------------------------------------------------------------
 # Issue #1: Fill dedup persist/load
@@ -321,9 +336,13 @@ class TestOrderIdMapPersistence:
 
         await adapter._register_broker_ids("R47:101", {"ordno": "ORD_RESTART", "seqno": "SEQ_RESTART"})
 
-        # _maybe_persist_order_id_map uses run_in_executor (fire-and-forget).
-        # Give the executor a chance to flush before asserting file existence.
-        await asyncio.sleep(0.05)
+        # _maybe_persist_order_id_map uses run_in_executor (fire-and-forget), so
+        # the write lands on a worker thread at an unknown time. A single fixed
+        # sleep is a race, not a wait: on 2026-08-21 this test failed under
+        # xdist on a loaded CI runner while passing in 0.64s locally. Poll to a
+        # deadline instead, which finishes as soon as the executor has flushed
+        # and only spends the full budget when something is genuinely wrong.
+        await _wait_for_file(persist_path)
         assert os.path.exists(persist_path)
 
         with patch.dict(os.environ, {"HFT_ORDER_ID_MAP_PERSIST_PATH": persist_path}):
