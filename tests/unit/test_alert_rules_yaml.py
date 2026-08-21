@@ -9,6 +9,7 @@ semantic correctness requires `promtool test rules` and is not covered here.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import yaml
@@ -377,3 +378,62 @@ def test_dead_letter_queue_growth_raises_an_alert():
     alerts = _load_alerts_by_name()
     matching = [n for n, r in alerts.items() if "dlq_size_total" in str(r.get("expr", ""))]
     assert matching, "no alert references dlq_size_total; dead-lettered rows would be silent"
+
+
+def test_wal_loader_job_only_scrapes_metrics_it_owns() -> None:
+    """The loader serves every engine metric name at its registration default.
+
+    ``MetricsRegistry.get()`` builds the whole registry in the loader process,
+    so its /metrics endpoint also carries ``execution_router_alive 0``,
+    ``execution_gateway_alive 0``, ``execution_router_heartbeat_ts 0`` and
+    ``clickhouse_connection_health 0`` -- gauges nothing in that process sets.
+
+    Scraped unfiltered, they fired ExecutionRouterTaskDown,
+    ExecutionGatewayTaskDown, ExecutionRouterHeartbeatStale and
+    ClickHouseConnectionDown within 90 seconds of the job being added on
+    2026-08-21, all labelled ``job="wal-loader"``, while the engine was healthy.
+    That is the mirror of the defect the job exists to fix.
+    """
+    prom = yaml.safe_load(PROMETHEUS_PATH.read_text(encoding="utf-8"))
+    jobs = {job["job_name"]: job for job in prom["scrape_configs"]}
+    assert "wal-loader" in jobs, "the wal-loader scrape job disappeared"
+
+    relabel = jobs["wal-loader"].get("metric_relabel_configs")
+    assert relabel, "wal-loader must filter its scrape; see this test's docstring"
+
+    keeps = [r for r in relabel if r.get("action") == "keep" and r.get("source_labels") == ["__name__"]]
+    assert keeps, "expected a keep action on __name__"
+
+    pattern = re.compile(f"^(?:{keeps[0]['regex']})$")
+    for owned in _WAL_LOADER_ONLY_METRICS:
+        assert pattern.match(owned), f"{owned} is loader-owned but the keep filter drops it"
+    for engine_metric in (
+        "execution_router_alive",
+        "execution_gateway_alive",
+        "execution_router_heartbeat_ts",
+        "clickhouse_connection_health",
+    ):
+        assert not pattern.match(engine_metric), (
+            f"{engine_metric} is an engine gauge the loader never sets; scraping it "
+            "raises a false alert labelled job=wal-loader"
+        )
+
+
+def test_every_wal_alert_metric_survives_the_wal_loader_keep_filter() -> None:
+    """A keep filter that drops an alert's only real source re-blinds the alert."""
+    prom = yaml.safe_load(PROMETHEUS_PATH.read_text(encoding="utf-8"))
+    jobs = {job["job_name"]: job for job in prom["scrape_configs"]}
+    keeps = [
+        r
+        for r in jobs["wal-loader"].get("metric_relabel_configs", [])
+        if r.get("action") == "keep" and r.get("source_labels") == ["__name__"]
+    ]
+    assert keeps, "wal-loader has no keep filter on __name__"
+    pattern = re.compile(f"^(?:{keeps[0]['regex']})$")
+
+    rules_text = RULES_PATH.read_text(encoding="utf-8")
+    for metric in _WAL_LOADER_ONLY_METRICS:
+        if metric in rules_text:
+            assert pattern.match(metric), (
+                f"{metric} is used by an alert and is only produced by the wal-loader, but the keep filter drops it"
+            )

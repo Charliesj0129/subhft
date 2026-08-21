@@ -30,6 +30,29 @@ scrape_configs:
     static_configs:
       - targets:
           - "wal-loader:9090"
+    # The loader builds the FULL MetricsRegistry, so its endpoint also serves
+    # every engine metric name at its registration default -- execution_router_alive 0,
+    # execution_gateway_alive 0, execution_router_heartbeat_ts 0,
+    # clickhouse_connection_health 0. None of those describe the loader; they are
+    # gauges nothing in this process ever sets.
+    #
+    # Scraping them unfiltered fired ExecutionRouterTaskDown,
+    # ExecutionGatewayTaskDown, ExecutionRouterHeartbeatStale and
+    # ClickHouseConnectionDown within 90 seconds of this job being added on
+    # 2026-08-21, all labelled job="wal-loader", while the engine was healthy --
+    # the exact mirror of the bug this job exists to fix, where the engine's
+    # constant-0 copies of wal_* made three WAL alerts report healthy.
+    #
+    # So keep only the families this process actually owns. All six WAL/DLQ
+    # alerts (WALReplayLagHigh, WALBacklogFilesHigh, WALReplayErrorsDetected,
+    # RecorderDeadLetterQueueGrowing, RecorderDeadLetterQueueNonEmpty,
+    # WALReplayBacklogStalled) read only wal_*/dlq_* names, so none lose their
+    # source. Adding a name here requires checking no engine alert reads it
+    # without a job matcher.
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: "(wal|dlq)_.*"
+        action: keep
 
   - job_name: "node"
     static_configs:
