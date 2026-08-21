@@ -305,3 +305,18 @@ research/audit/sub_gate_runs.jsonl
 # These are re-derivable from ClickHouse and carry proprietary market data —
 # never commit them (15-security / 70-research-data). Keep local only.
 backups/
+
+# Machine-local analyzer cache (understand-anything plugin). ~42 MB of
+# generated state whose scripts embed absolute /home/<user> paths and a pinned
+# plugin version, so it is neither portable nor reproducible on another host.
+# The graph inside it also pins whatever commit it was built at, so a committed
+# copy goes stale silently and misreports blast radius.
+.understand-anything/
+
+# Combinatorial mining run outputs. `!research/combinatorial/` above un-ignores
+# the whole package so its *.py are trackable, which also un-ignores every
+# artifact a run drops beside them. These JSONs carry no run id, dataset
+# fingerprint, or code revision, so they are not reproducible evidence --
+# governed artifacts belong under research/experiments/ with provenance
+# (research/README.md).
+research/combinatorial/results/
