@@ -410,8 +410,48 @@ def test_validate_and_sync_timestamp_emits_severity_counters_and_current_gauge(m
     assert high_child._value.get() == high_before + 1
     assert crit_child._value.get() == crit_before + 1
 
-    # Gauge must reflect the *current* (post-clamp) delta from the last call.
-    # After clamp, local_ts = exch_ts + _TS_MAX_LAG_NS (1s), so post-clamp
-    # delta is exactly 1_000_000_000 ns.
+    # Gauge must reflect the *raw* delta from the last call, not the clamped
+    # one. Asserting 1_000_000_000 here (the ceiling) is what this test used to
+    # do, and it locked in the saturation that hid a 75s skew behind a 1s
+    # reading -- exactly the production shape on 2026-08-20.
     gauge_child = metrics.feed_time_skew_ns.labels(topic="tick")
-    assert gauge_child._value.get() == 1_000_000_000
+    assert gauge_child._value.get() == 75_000_000_000
+
+
+def test_time_skew_gauge_reports_the_raw_delta_when_the_clamp_fires(monkeypatch, normalizer):
+    """A clamped skew must still be legible in the gauge.
+
+    The clamp pins ``local_ts`` to ``exch_ts + _TS_MAX_LAG_NS``, so a gauge fed
+    the post-clamp delta reads back as the ceiling for *any* skew above it.
+    Production showed ``feed_time_skew_ns{topic="snapshot"} == 5e9`` — the
+    ceiling to the nanosecond — while the critical_60s counter was climbing.
+    """
+    import hft_platform.feed_adapter.normalizer as norm
+
+    monkeypatch.setattr(norm, "_TS_MAX_LAG_NS", 5_000_000_000)
+    monkeypatch.setattr(norm, "_TS_SKEW_LOG_COOLDOWN_NS", 0)
+    metrics = normalizer.metrics
+    assert metrics is not None
+
+    exch_ts = 100_000_000_000
+    _exch, local_ts = normalizer._validate_and_sync_timestamp(exch_ts, exch_ts + 900_000_000_000, "snapshot", "TXFI6")
+
+    gauge = metrics.feed_time_skew_ns.labels(topic="snapshot")
+    assert gauge._value.get() == 900_000_000_000, "gauge must not saturate at the clamp ceiling"
+    # The clamp itself is unchanged: the data path still gets the bounded value.
+    assert local_ts == exch_ts + 5_000_000_000
+
+
+def test_time_skew_gauge_is_unchanged_when_no_clamp_fires(monkeypatch, normalizer):
+    """Below the ceiling, raw and post-clamp deltas agree — no behaviour change."""
+    import hft_platform.feed_adapter.normalizer as norm
+
+    monkeypatch.setattr(norm, "_TS_MAX_LAG_NS", 5_000_000_000)
+    metrics = normalizer.metrics
+    assert metrics is not None
+
+    exch_ts = 100_000_000_000
+    _exch, local_ts = normalizer._validate_and_sync_timestamp(exch_ts, exch_ts + 250_000_000, "tick", "TXFI6")
+
+    assert metrics.feed_time_skew_ns.labels(topic="tick")._value.get() == 250_000_000
+    assert local_ts == exch_ts + 250_000_000

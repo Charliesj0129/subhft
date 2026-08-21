@@ -72,6 +72,41 @@ groups:
           offline (make rebuild-symbols-yaml) and restart the engine.
         runbook_url: "docs/runbooks/SymbolsYamlRegeneration.md"
 
+  # Feed timestamp skew. `feed_time_skew_ns` is clamped at HFT_TS_MAX_LAG_S
+  # on the data path, so alert on the severity counter, which carries the raw
+  # magnitude, not on the gauge. On 2026-08-20 production had accumulated 362
+  # critical_60s crossings on topic="snapshot" with no alert defined at all.
+  - alert: FeedTimeSkewCritical
+    expr: increase(feed_time_skew_over_threshold_total{severity="critical_60s"}[10m]) > 0
+    for: 0s
+    labels:
+        severity: warning
+    annotations:
+        summary: "Exchange timestamps are more than 60s behind local time"
+        description: |
+          topic="{{ $labels.topic }}" saw exchange/local timestamp skew above
+          60s in the last 10m. The normalizer clamps local_ts to
+          exch_ts + HFT_TS_MAX_LAG_S, so downstream ordering is protected, but
+          the recorded exch_ts for this topic is not trustworthy for latency
+          or research use while this fires. Most common cause is a broker
+          ts_epoch problem on a specific contract — the "feed_time_skew"
+          warning log carries symbol and raw_delta_ns.
+
+  # Scheduled resubscribes run on a daemon thread; before they recorded an
+  # outcome an escaping exception reached only threading.excepthook.
+  - alert: FeedResubscribeFailing
+    expr: increase(feed_resubscribe_total{result="error"}[10m]) > 0
+    for: 0s
+    labels:
+        severity: warning
+    annotations:
+        summary: "Feed resubscribe raised"
+        description: |
+          A resubscribe attempt raised in the last 10m. Subscriptions may be
+          short of the configured basket; compare
+          hft_quote_conn_subscribed_count against the expected total before
+          trusting the feed for a session.
+
   # Contract freshness (rewritten 2026-07-31 against measured behaviour; the
   # 2026-07-29 originals were authored on a model that field data disproved and
   # were never deployed — see the "Contract freshness alerts" section of
