@@ -71,12 +71,27 @@ def _create_columns(body: str) -> list[str]:
     return names
 
 
+def _strip_leading_comments(stmt: str) -> str:
+    """Drop the `-- ...` header lines a statement carries in from its file.
+
+    ``_extract_up_statements`` splits on `;` and keeps whatever preceded the
+    statement, so most DDL arrives with its explanatory comment attached. The
+    regexes below anchor at position 0, so without this every commented CREATE
+    is silently skipped -- which is how `hft.latency_spans` and the audit
+    tables went missing from an earlier version of this replay.
+    """
+    lines = stmt.strip().splitlines()
+    while lines and (not lines[0].strip() or lines[0].lstrip().startswith("--")):
+        lines.pop(0)
+    return "\n".join(lines).strip()
+
+
 def _replay_migrations() -> dict[str, set[str]]:
     """Apply every migration's Up section and return {table: columns}."""
     tables: dict[str, set[str]] = {}
     for path in sorted(MIGRATIONS_DIR.glob("*.sql")):
         for stmt in _extract_up_statements(path.read_text(encoding="utf-8")):
-            stripped = stmt.strip()
+            stripped = _strip_leading_comments(stmt)
             if (m := _CREATE_RE.match(stripped)) is not None:
                 tables.setdefault(m.group(1), set()).update(_create_columns(m.group(2)))
                 continue
