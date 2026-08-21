@@ -611,3 +611,75 @@ class TestAutonomyMonitorSupervised:
         name, component, coro_factory = entry
         assert component == "AutonomyMonitor"
         assert coro_factory is mock_monitor.run
+
+
+class TestControlledRestartDoesNotSpendCrashBudget:
+    """A restart the supervisor itself caused is not crash recovery.
+
+    Production 2026-08-21: a daily-loss HALT oscillated 25 times. Each
+    de-escalation restarted ``order`` and ``exec_gateway`` through
+    ``_try_restart_service``, which counts every call against
+    ``HFT_TASK_RESTART_MAX_ATTEMPTS``. After 10 cycles the supervisor latched a
+    HALT reading "Service order crash-loop: 10 restarts exceeded max" -- and
+    nothing had crashed. A real crash after that point would have had no
+    restarts left.
+    """
+
+    @staticmethod
+    def _system_with_mocked_start() -> HFTSystem:
+        system = _make_system()
+        system.running = True
+
+        def _close_coro(_name, coro):
+            coro.close()
+
+        system._start_service = MagicMock(side_effect=_close_coro)
+        return system
+
+    def test_uncounted_restart_leaves_the_attempt_counter_untouched(self):
+        system = self._system_with_mocked_start()
+
+        for _ in range(20):
+            system._try_restart_service("order", "OrderAdapter", system.order_adapter.run, count_attempt=False)
+
+        assert system._start_service.call_count == 20
+        assert "order" not in system._task_restart_attempts
+
+    def test_uncounted_restarts_never_exhaust_the_crash_budget(self):
+        system = self._system_with_mocked_start()
+        system._task_restart_max_attempts = 3
+        halts: list[str] = []
+        system.storm_guard.trigger_halt = lambda reason: halts.append(reason)
+
+        for _ in range(10):
+            system._try_restart_service("order", "OrderAdapter", system.order_adapter.run, count_attempt=False)
+
+        assert halts == []
+        assert system._start_service.call_count == 10
+
+    def test_counted_restarts_still_exhaust_the_crash_budget(self):
+        """The budget must still stop a genuine crash loop."""
+        system = self._system_with_mocked_start()
+        system._task_restart_max_attempts = 3
+        system._task_restart_base_delay_s = 0.0
+        system._task_restart_max_delay_s = 0.0
+        halts: list[str] = []
+        system.storm_guard.trigger_halt = lambda reason: halts.append(reason)
+
+        for _ in range(5):
+            system._try_restart_service("order", "OrderAdapter", system.order_adapter.run)
+
+        assert system._task_restart_attempts["order"] == 3
+        assert any("crash-loop" in r for r in halts)
+
+    def test_a_counted_crash_budget_survives_uncounted_restarts(self):
+        """An uncounted restart must not reset a crash budget already being spent."""
+        system = self._system_with_mocked_start()
+        system._task_restart_base_delay_s = 0.0
+        system._task_restart_max_delay_s = 0.0
+
+        system._try_restart_service("order", "OrderAdapter", system.order_adapter.run)
+        assert system._task_restart_attempts["order"] == 1
+
+        system._try_restart_service("order", "OrderAdapter", system.order_adapter.run, count_attempt=False)
+        assert system._task_restart_attempts["order"] == 1
