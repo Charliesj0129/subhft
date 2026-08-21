@@ -588,3 +588,64 @@ class TestSuppressionLogThrottling:
         )
         schedule_fn.assert_called_once_with("conn-0")
         assert slot._suppress_logged_mono == 0.0
+
+
+# ---------------------------------------------------------------------------
+# facade_degraded severity — a closed session is not a fault
+# ---------------------------------------------------------------------------
+
+
+class TestDegradedSeverityIsSessionAware:
+    """A feed gap outside the session is the expected reading, not a warning.
+
+    THESHOW logged ~37 `facade_degraded` warnings every day across the
+    13:45-15:00 close/open interval, for four connections that were logged in
+    and fully subscribed throughout. On 2026-08-20 a genuine four-connection
+    outage produced log lines of exactly the same shape and severity, so the
+    real event was indistinguishable from a week of routine noise.
+    """
+
+    def test_open_session_gap_is_still_a_warning(self) -> None:
+        slot = _make_slot("conn-0", FacadeState.CONNECTED, last_data_offset_s=30.0)
+        with patch.object(pool_health_mod, "log") as mock_log:
+            check_facade_health(
+                [slot],
+                degraded_threshold_s=10.0,
+                reconnect_trigger_s=13.0,
+                schedule_fn=MagicMock(),
+            )
+        assert slot.state is FacadeState.DEGRADED
+        assert mock_log.warning.call_count == 1
+        assert mock_log.warning.call_args.args[0] == "facade_degraded"
+        assert "reason" not in mock_log.warning.call_args.kwargs
+
+    def test_closed_session_gap_is_informational_and_names_the_reason(self) -> None:
+        slot = _make_slot("conn-0", FacadeState.CONNECTED, last_data_offset_s=30.0)
+        with patch.object(pool_health_mod, "log") as mock_log:
+            check_facade_health(
+                [slot],
+                degraded_threshold_s=10.0,
+                reconnect_trigger_s=13.0,
+                schedule_fn=MagicMock(),
+                suppress_gap_reconnect=True,
+            )
+        # The state machine must still reach DEGRADED: the suppression path
+        # reports from that state, and hiding the transition would hide the gap.
+        assert slot.state is FacadeState.DEGRADED
+        assert mock_log.warning.call_count == 0
+        assert mock_log.info.call_args.args[0] == "facade_degraded"
+        assert mock_log.info.call_args.kwargs["reason"] == "session_closed"
+
+    def test_outside_reconnect_window_is_named_separately(self) -> None:
+        """The pre-open lead must stay distinguishable from the closed market."""
+        slot = _make_slot("conn-0", FacadeState.CONNECTED, last_data_offset_s=30.0)
+        with patch.object(pool_health_mod, "log") as mock_log:
+            check_facade_health(
+                [slot],
+                degraded_threshold_s=10.0,
+                reconnect_trigger_s=13.0,
+                schedule_fn=MagicMock(),
+                suppress_reconnect=True,
+            )
+        assert mock_log.warning.call_count == 0
+        assert mock_log.info.call_args.kwargs["reason"] == "outside_reconnect_window"

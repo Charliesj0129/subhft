@@ -73,6 +73,29 @@ def _should_log_suppression(slot: FacadeSlot, now: float) -> bool:
     return True
 
 
+def _closed_session_reason(suppress_reconnect: bool, suppress_gap_reconnect: bool) -> str | None:
+    """Name the gate that makes a feed gap expected, or ``None`` if none does."""
+    if suppress_reconnect:
+        return "outside_reconnect_window"
+    if suppress_gap_reconnect:
+        return "session_closed"
+    return None
+
+
+def _log_degraded(
+    slot: FacadeSlot,
+    gap: float,
+    suppress_reconnect: bool,
+    suppress_gap_reconnect: bool,
+) -> None:
+    """Emit ``facade_degraded`` at a severity that matches whether it is a fault."""
+    reason = _closed_session_reason(suppress_reconnect, suppress_gap_reconnect)
+    if reason is None:
+        log.warning("facade_degraded", conn_id=slot.conn_id, feed_gap_s=round(gap, 3))
+    else:
+        log.info("facade_degraded", conn_id=slot.conn_id, feed_gap_s=round(gap, 3), reason=reason)
+
+
 def check_facade_health(
     slots: list[FacadeSlot],
     *,
@@ -154,11 +177,18 @@ def check_facade_health(
             if gap > degraded_threshold_s:
                 slot.state = FacadeState.DEGRADED
                 slot.degraded_since_mono = now
-                log.warning(
-                    "facade_degraded",
-                    conn_id=slot.conn_id,
-                    feed_gap_s=round(gap, 3),
-                )
+                # The transition is unconditional -- callers rely on the state
+                # machine reaching DEGRADED so the suppression path can report
+                # it. The *severity* is not: outside the session a feed gap is
+                # the expected reading, and the docstring above already says a
+                # gap is evidence of a broken connection only while the session
+                # is open. Logging it at warning made the daily 13:45-15:00
+                # close/open interval emit ~37 warnings on THESHOW, every day,
+                # for four healthy logged-in connections -- and on 2026-08-20 a
+                # genuine four-connection outage produced a log line of exactly
+                # the same shape and severity. Carry the reason so the two are
+                # distinguishable by machine, not just by knowing the calendar.
+                _log_degraded(slot, gap, suppress_reconnect, suppress_gap_reconnect)
 
         elif state is FacadeState.DEGRADED:
             gap = slot.feed_gap_s()
