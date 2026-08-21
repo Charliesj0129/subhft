@@ -38,3 +38,14 @@ updates:
       - dependency-name: "*"
         update-types:
           - "version-update:semver-major"
+      # shioaji is pinned by CLAUDE.md and may not move without explicit
+      # operator approval: 1.5.x replaced the SDK internals with a Rust `_core`
+      # (see docs/runbooks/shioaji-version-diff.md) and every broker callback
+      # payload type in feed_adapter/shioaji/ is written against that surface.
+      # The semver-major rule above does not cover it — 1.5.6 -> 1.7.2 is a
+      # minor bump — so #406 was opened and had to be closed by hand. Ignore
+      # the package outright; a deliberate bump is a hand-written PR that also
+      # regenerates the SDK surface golden (`make shioaji-surface-regen`).
+      # Security advisories still reach us through Dependabot alerts, which
+      # this list does not suppress.
+      - dependency-name: "shioaji"
