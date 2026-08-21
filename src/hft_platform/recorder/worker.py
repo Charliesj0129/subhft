@@ -827,6 +827,18 @@ class RecorderService:
 
             # We use default config for now, assuming env vars set
             loader = WALLoaderService()
+            # ``self.metrics`` is only assigned by ``_init_run_common``, which
+            # runs from ``run``/``run_async`` -- neither of which this recovery
+            # path calls. Left unset, every ``if svc.metrics:`` guard inside the
+            # loader is dead, so a boot-time replay that dead-letters rows does
+            # so without touching dlq_size_total. The engine registry is scraped,
+            # so wiring it here makes the recovery pass observable.
+            try:
+                from hft_platform.observability.metrics import MetricsRegistry
+
+                loader.metrics = MetricsRegistry.get()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("wal_recovery_metrics_unavailable", error=str(exc))
             await asyncio.to_thread(loader.connect)
             if loader.ch_client:
                 logger.info("Starting WAL Recovery...")

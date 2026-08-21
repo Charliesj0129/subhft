@@ -305,3 +305,75 @@ def test_feed_resubscribe_alert_fires_on_the_error_outcome_only():
     assert "event_4" not in expr and "event_13" not in expr, (
         f"event_4/event_13 are trigger counts, not failures. Current expression: {expr!r}"
     )
+
+
+PROMETHEUS_PATH = Path(__file__).resolve().parents[2] / "config" / "monitoring" / "prometheus.yml"
+
+# Metrics that ONLY the wal-loader container sets. The engine registers them
+# too -- they live in the shared MetricsRegistry -- but nothing in the engine
+# process ever calls `.set()` on them, so the engine scrape reports a constant
+# 0. An alert reading one of these against the engine job is not merely blind,
+# it looks permanently healthy.
+_WAL_LOADER_ONLY_METRICS = (
+    "dlq_size_total",
+    "wal_directory_bytes",
+    "wal_file_count_tiered",
+    "wal_backlog_files",
+    "wal_replay_lag_seconds",
+    "wal_replay_errors_total",
+)
+
+
+def _scrape_targets() -> set[str]:
+    with PROMETHEUS_PATH.open() as f:
+        data = yaml.safe_load(f)
+    targets: set[str] = set()
+    for job in data.get("scrape_configs", []):
+        for sc in job.get("static_configs", []):
+            targets.update(sc.get("targets", []))
+    return targets
+
+
+def test_wal_loader_is_a_prometheus_scrape_target():
+    """Alerts on WAL/DLQ metrics are dead unless the loader is scraped.
+
+    `docker-compose.yml` runs the WAL loader as its own container
+    (`python -m hft_platform.recorder.loader`), and it is the only process that
+    sets the metrics in `_WAL_LOADER_ONLY_METRICS`. On 2026-08-21 the
+    production Prometheus scraped only hft-engine, node, loki and clickhouse,
+    so WALReplayLagHigh, WALBacklogFilesHigh and WALReplayErrorsDetected were
+    all evaluating a constant 0 -- while 18 dead-letter batches of fills sat
+    unreplayed on disk and hft.fills held 0 rows.
+    """
+    targets = _scrape_targets()
+    assert any(t.startswith("wal-loader:") for t in targets), (
+        "prometheus.yml has no wal-loader scrape job, so every WAL/DLQ alert "
+        f"evaluates a metric nobody reports. Targets: {sorted(targets)}"
+    )
+
+
+def test_every_wal_loader_metric_used_in_an_alert_is_scrapeable():
+    """No alert may read a metric from a job Prometheus does not scrape."""
+    alerts = _load_alerts_by_name()
+    used = {
+        metric for metric in _WAL_LOADER_ONLY_METRICS for rule in alerts.values() if metric in str(rule.get("expr", ""))
+    }
+    assert used, "expected at least one alert to reference a WAL loader metric"
+    targets = _scrape_targets()
+    assert any(t.startswith("wal-loader:") for t in targets), (
+        f"alerts reference {sorted(used)} but prometheus.yml does not scrape wal-loader"
+    )
+
+
+def test_dead_letter_queue_growth_raises_an_alert():
+    """A dead-lettered batch is data that is NOT in ClickHouse; it must alert.
+
+    `write_to_dlq` increments `dlq_size_total` for every batch that fails its
+    ClickHouse insert past all retries. Before 2026-08-21 no alert referenced
+    that counter at all, which is how a schema drift on `hft.fills` went four
+    months without anyone noticing that every fill was being written to disk
+    and dropped.
+    """
+    alerts = _load_alerts_by_name()
+    matching = [n for n, r in alerts.items() if "dlq_size_total" in str(r.get("expr", ""))]
+    assert matching, "no alert references dlq_size_total; dead-lettered rows would be silent"
