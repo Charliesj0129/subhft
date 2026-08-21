@@ -131,3 +131,64 @@ def test_map_unknown_event_returns_none(tmp_path):
         pass
 
     assert map_event_to_record(Dummy(), metadata) is None
+
+
+def test_fill_tca_prices_share_the_scale_of_price_scaled(tmp_path):
+    """decision/arrival must land on the SAME scale as price_scaled.
+
+    ``tca/analyzer.py`` computes ``(price_scaled - arrival_price) / price_scaled``
+    inside one row. Platform events carry these three as x10000, but
+    ``price_scaled`` is converted to the ClickHouse x1000000 convention on the
+    way out. If the TCA prices are written raw, the row mixes two scales and
+    every exec_cost_bps degenerates to ~9900 regardless of execution quality.
+    """
+    metadata = _metadata(tmp_path)
+    fill = FillEvent(
+        fill_id="F2",
+        account_id="A1",
+        order_id="O2",
+        strategy_id="S1",
+        symbol="AAA",
+        side=Side.BUY,
+        qty=1,
+        price=12000,  # x10000 -> 1.2
+        fee=0,
+        tax=0,
+        ingest_ts_ns=100,
+        match_ts_ns=110,
+        client_order_id="S1:43",
+        decision_price=11900,  # x10000 -> 1.19
+        arrival_price=11950,  # x10000 -> 1.195
+    )
+    topic, row = map_event_to_record(fill, metadata)
+    assert topic == "fills"
+    assert row["price_scaled"] == 1_200_000
+    assert row["decision_price"] == 1_190_000
+    assert row["arrival_price"] == 1_195_000
+
+    # The TCA arithmetic must now produce a sane basis-point figure.
+    exec_cost_bps = (row["price_scaled"] - row["arrival_price"]) / row["price_scaled"] * 10_000
+    assert 0 < exec_cost_bps < 100, exec_cost_bps
+
+
+def test_fill_tca_prices_stay_zero_when_unstamped(tmp_path):
+    """Zero is the "not stamped" sentinel TCA filters on; scaling must preserve it."""
+    metadata = _metadata(tmp_path)
+    fill = FillEvent(
+        fill_id="F3",
+        account_id="A1",
+        order_id="O3",
+        strategy_id="S1",
+        symbol="AAA",
+        side=Side.BUY,
+        qty=1,
+        price=12000,
+        fee=0,
+        tax=0,
+        ingest_ts_ns=100,
+        match_ts_ns=110,
+        client_order_id="S1:44",
+    )
+    _, row = map_event_to_record(fill, metadata)
+    assert row["decision_price"] == 0
+    assert row["arrival_price"] == 0

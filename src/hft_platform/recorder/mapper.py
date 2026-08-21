@@ -202,8 +202,15 @@ def map_event_to_record(
             "price_scaled": _to_ch_price_scaled(symbol, event.price, metadata, price_codec),
             "fee_scaled": int(event.fee),  # NTD x10000 (flat amount, not instrument price)
             "tax_scaled": int(event.tax),  # NTD x10000 (tax portion of fee)
-            "decision_price": int(event.decision_price),
-            "arrival_price": int(event.arrival_price),
+            # TCA divides these against ``price_scaled`` in the same row
+            # (tca/analyzer.py: (price_scaled - arrival_price) / price_scaled),
+            # so they must carry the SAME scale. ``event.decision_price`` and
+            # ``event.arrival_price`` are platform x10000 (contracts/execution.py)
+            # while ``price_scaled`` above is converted to ClickHouse x1000000 --
+            # writing them raw leaves two scales in one row and makes every
+            # exec_cost_bps come out as ~9900 and every delay_cost_bps 100x small.
+            "decision_price": _to_ch_price_scaled(symbol, event.decision_price, metadata, price_codec),
+            "arrival_price": _to_ch_price_scaled(symbol, event.arrival_price, metadata, price_codec),
             "source": os.getenv("HFT_BROKER", "shioaji"),
             "instrument_type": _instrument_fields(symbol, metadata).get("instrument_type", ""),
             "oc_type": "",
