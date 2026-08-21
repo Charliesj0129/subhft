@@ -696,6 +696,21 @@ class MetricsRegistry:
             "Order events dropped by normalization, by reason",
             ["reason"],
         )
+        # An order callback the platform could normalize but could NOT attribute
+        # to the order that produced it: client_order_id resolves to "" and
+        # strategy_id to "UNKNOWN". The row still lands in hft.orders, so this
+        # failure is invisible in every count -- on 2026-08-21 all 56 rows in
+        # production had an empty client_order_id, which is the join key to
+        # hft.fills, and nothing had ever incremented.
+        # ``present`` names which of the four candidate id fields the payload
+        # actually carried, so the next occurrence says WHY resolution failed
+        # rather than only that it did. Cardinality is bounded at 16 (the
+        # subsets of a 4-element set), plus "none".
+        self.order_attribution_unresolved_total = Counter(
+            _pn("order_attribution_unresolved_total"),
+            "Order callbacks normalized but not attributable to an order_key",
+            ["present"],
+        )
         self.synthetic_fill_id_total = Counter(
             _pn("synthetic_fill_id_total"),
             "Fills with synthesized fill_id (broker omitted seqno)",

@@ -134,6 +134,10 @@ MAPPER_FILL_KEYS = {
     "source",
     "instrument_type",
     "oc_type",
+    # L7 audit column, stamped by ExecutionRouter from the originating
+    # OrderIntent. The other six L7 columns are still unpopulated by the
+    # mapper and default to '' in ClickHouse.
+    "trace_id",
 }
 
 

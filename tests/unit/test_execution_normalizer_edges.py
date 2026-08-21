@@ -447,3 +447,112 @@ def test_normalize_fill_none_account_id_uses_default(tmp_path, monkeypatch):
     event = norm.normalize_fill(raw)
     assert event is not None
     assert event.account_id == "FALLBACK"
+
+
+def _unresolved_count(norm, present: str) -> float:
+    """Read one label's value off the attribution counter."""
+    return norm.metrics.order_attribution_unresolved_total.labels(present=present)._value.get()
+
+
+def test_order_that_matches_no_registered_id_increments_the_attribution_counter(tmp_path, monkeypatch):
+    """A normalizable-but-unattributable order must be counted, not written silently.
+
+    Production held 56 such rows on 2026-08-21 -- 100% of hft.orders -- each
+    with an empty client_order_id, which is the join key to hft.fills. The row
+    is still written (dropping it would lose the order entirely), so a counter
+    is the only thing that can distinguish this from a healthy insert.
+    """
+    monkeypatch.setenv("SYMBOLS_CONFIG", str(_symbols_cfg(tmp_path)))
+    norm = ExecutionNormalizer(order_id_map={"REGISTERED": "strat:1"})
+
+    before = _unresolved_count(norm, "ordno,custom_field")
+    raw = RawExecEvent(
+        "order",
+        {
+            "status": {"status": "Submitted"},
+            "contract": {"code": "AAA"},
+            "order": {"action": "Buy", "price": 1.23, "quantity": 1, "ordno": "NOTINMAP", "custom_field": "ALSONOT"},
+        },
+        time.time_ns(),
+    )
+    event = norm.normalize_order(raw)
+
+    assert event is not None, "the order must still be recorded, only flagged"
+    assert event.client_order_id == ""
+    # The label names which candidates the payload carried, so the next
+    # occurrence in production says WHY it failed, not just that it did.
+    assert _unresolved_count(norm, "ordno,custom_field") == before + 1
+
+
+def test_order_carrying_no_id_fields_at_all_is_counted_under_none(tmp_path, monkeypatch):
+    monkeypatch.setenv("SYMBOLS_CONFIG", str(_symbols_cfg(tmp_path)))
+    norm = ExecutionNormalizer(order_id_map={})
+
+    before = _unresolved_count(norm, "none")
+    raw = RawExecEvent(
+        "order",
+        {
+            "status": {"status": "Submitted"},
+            "contract": {"code": "AAA"},
+            "order": {"action": "Buy", "price": 1.23, "quantity": 1},
+        },
+        time.time_ns(),
+    )
+    norm.normalize_order(raw)
+
+    assert _unresolved_count(norm, "none") == before + 1
+
+
+def test_a_resolvable_order_does_not_touch_the_attribution_counter(tmp_path, monkeypatch):
+    """Guards against the counter firing on healthy orders and drowning the signal."""
+    monkeypatch.setenv("SYMBOLS_CONFIG", str(_symbols_cfg(tmp_path)))
+    norm = ExecutionNormalizer(order_id_map={"O1": "strat:7"})
+
+    before = _unresolved_count(norm, "ordno")
+    raw = RawExecEvent(
+        "order",
+        {
+            "status": {"status": "Submitted"},
+            "contract": {"code": "AAA"},
+            "order": {"action": "Buy", "price": 1.23, "quantity": 1, "ordno": "O1"},
+        },
+        time.time_ns(),
+    )
+    event = norm.normalize_order(raw)
+
+    assert event.client_order_id == "strat:7"
+    assert _unresolved_count(norm, "ordno") == before
+
+
+def test_repeated_unattributed_orders_log_the_shape_only_once(tmp_path, monkeypatch):
+    """The counter carries volume; the log must not storm during an order burst."""
+    monkeypatch.setenv("SYMBOLS_CONFIG", str(_symbols_cfg(tmp_path)))
+    norm = ExecutionNormalizer(order_id_map={})
+
+    logged: list[dict] = []
+    monkeypatch.setattr(
+        "hft_platform.execution.normalizer.logger",
+        SimpleNamespace(
+            warning=lambda event, **kw: logged.append({"event": event, **kw}),
+            error=lambda *a, **kw: None,
+            info=lambda *a, **kw: None,
+            debug=lambda *a, **kw: None,
+        ),
+    )
+
+    for _ in range(5):
+        norm.normalize_order(
+            RawExecEvent(
+                "order",
+                {
+                    "status": {"status": "Submitted"},
+                    "contract": {"code": "AAA"},
+                    "order": {"action": "Buy", "price": 1.23, "quantity": 1, "ordno": "NOTINMAP"},
+                },
+                time.time_ns(),
+            )
+        )
+
+    unattributed = [entry for entry in logged if entry["event"] == "order_attribution_unresolved"]
+    assert len(unattributed) == 1
+    assert unattributed[0]["present"] == "ordno"

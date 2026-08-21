@@ -214,6 +214,14 @@ def map_event_to_record(
             "source": os.getenv("HFT_BROKER", "shioaji"),
             "instrument_type": _instrument_fields(symbol, metadata).get("instrument_type", ""),
             "oc_type": "",
+            # L8: ExecutionRouter stamps ``FillEvent.trace_id`` from the
+            # originating OrderIntent (router.py: _cmd_trace_id_map) precisely
+            # so hft.fills can be joined to hft.order_explanations on
+            # (trace_id, client_order_id). Omitting the key here made
+            # ``_extract_fill_values`` fall through to its ``get("trace_id","")``
+            # default, so the value was computed on every fill and then thrown
+            # away at the last step before the insert.
+            "trace_id": event.trace_id,
         }
         return ("fills", fill_record)
 
