@@ -101,6 +101,17 @@ x-hft-common: &hft-common
     # --- Risk DLQ ---
     - HFT_RISK_DLQ_DRAIN_INTERVAL=${HFT_RISK_DLQ_DRAIN_INTERVAL:-50}
     - HFT_RISK_DLQ_TTL_S=${HFT_RISK_DLQ_TTL_S:-30}
+    # --- Recorder DLQ retention (recorder/loader.py:98-99) ---
+    # Rows ClickHouse refused land in .wal/dlq. cleanup_old_dlq_files() runs
+    # hourly and, with HFT_DLQ_ARCHIVE_PATH unset, calls os.remove() on anything
+    # older than HFT_DLQ_RETENTION_DAYS -- so "recoverable" described the data,
+    # not the process that owned it. Setting the path turns that os.remove into
+    # a shutil.move. The directory is deliberately NOT .wal/archive (which
+    # cleanup_old_archive_files prunes at 14 days) and NOT .wal/corrupt (30
+    # days): nothing prunes dlq_expired, and it sits inside the .wal bind mount
+    # so it survives container recreation.
+    - HFT_DLQ_RETENTION_DAYS=${HFT_DLQ_RETENTION_DAYS:-7}
+    - HFT_DLQ_ARCHIVE_PATH=${HFT_DLQ_ARCHIVE_PATH:-/app/.wal/dlq_expired}
     # --- Platform ---
     - HFT_GC_DISABLE_TRADING=${HFT_GC_DISABLE_TRADING:-0}
     - HFT_PLATFORM_AUTO_RECOVERY_ENABLED=${HFT_PLATFORM_AUTO_RECOVERY_ENABLED:-1}
