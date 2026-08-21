@@ -8,7 +8,11 @@ This document records the first versioned governance controls added to the repos
 - `Dependency Boundary` CI job enforces Python import contracts from `importlinter.ini`.
 - `Semgrep` CI workflow enforces governance/security rules from `semgrep/rules/`.
 - `CodeQL (python)` CI workflow runs GitHub code scanning on the Python codebase.
-- PR template requires an `AI Participation` disclosure section.
+- PR template requires an `AI Participation` disclosure section. `Code Quality
+  Checks` enforces `## Summary` / `## Test Plan` / `## AI Participation` on PRs
+  touching `src/**` or `.github/**`, except for PRs opened by `dependabot[bot]`,
+  whose bodies are bot-generated and cannot carry those sections. The exemption
+  is an exact login match, so it does not extend to other GitHub Apps.
 - `merge_group` is enabled in CI/security/governance workflows so merge queue can replay required checks.
 
 ## Manual GitHub Settings To Turn On
