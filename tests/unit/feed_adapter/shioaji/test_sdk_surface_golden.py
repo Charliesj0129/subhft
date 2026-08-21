@@ -96,9 +96,21 @@ def test_installed_shioaji_surface_matches_committed_golden() -> None:
 
 @pytest.mark.unit
 def test_capture_is_deterministic() -> None:
-    """Two captures of the same install must be byte-identical."""
-    first = canonical_json(build_surface_snapshot())
-    second = canonical_json(build_surface_snapshot())
+    """Two captures of the same install must be byte-identical.
+
+    Captured without ``nm_symbols`` — twice, for the same reason the golden
+    comparison excludes it. The nm sweep is the slowest part of a capture and
+    ``_strip_volatile`` declares its output environment-dependent, so asserting
+    that it is *stable* was asserting the stability of the one field the golden
+    contract deliberately throws away. Paying for it twice inside CI's 10s
+    per-test budget (`make test-unit-ci` runs `--timeout=10`, while the nm
+    subprocess sets its own `timeout=30`) is what made this test fail on #430,
+    a PR that changes nothing but three pinned action SHAs.
+
+    What this now asserts is exactly the surface the golden compares.
+    """
+    first = canonical_json(build_surface_snapshot(include_nm_symbols=False))
+    second = canonical_json(build_surface_snapshot(include_nm_symbols=False))
     assert first == second
 
 
