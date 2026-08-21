@@ -834,3 +834,49 @@ class TestRecorderServiceExtra(unittest.IsolatedAsyncioTestCase):
         # rows should be the list as-is
         assert call_args[0][0] == "market_data"
         assert len(call_args[0][1]) == 2
+
+
+class TestWALRecoveryObservability(unittest.IsolatedAsyncioTestCase):
+    """The boot-time WAL replay must not run metrics-blind.
+
+    ``WALLoaderService.metrics`` is assigned only by ``_init_run_common``,
+    which runs from ``run``/``run_async``. ``recover_wal`` calls neither -- it
+    drives ``connect`` and ``process_files`` directly -- so before this was
+    wired the loader's every ``if svc.metrics:`` guard was dead on this path.
+    A boot replay that dead-lettered rows did so without touching
+    ``dlq_size_total``.
+    """
+
+    async def test_recover_wal_gives_the_loader_the_engine_metrics_registry(self):
+        loader = SimpleNamespace(metrics=None, ch_client=None, connect=MagicMock(), process_files=MagicMock())
+        registry = object()
+
+        with (
+            patch("hft_platform.recorder.worker.DataWriter"),
+            patch("hft_platform.recorder.loader.WALLoaderService", return_value=loader),
+            patch("hft_platform.observability.metrics.MetricsRegistry.get", return_value=registry),
+            patch.dict(os.environ, {"HFT_CLICKHOUSE_ENABLED": "1"}, clear=False),
+        ):
+            svc = RecorderService(asyncio.Queue())
+            await svc.recover_wal()
+
+        self.assertIs(loader.metrics, registry)
+
+    async def test_recover_wal_still_replays_when_the_metrics_registry_is_unavailable(self):
+        """Durability outranks telemetry: a metrics failure must not skip replay."""
+        loader = SimpleNamespace(metrics=None, ch_client=MagicMock(), connect=MagicMock(), process_files=MagicMock())
+
+        with (
+            patch("hft_platform.recorder.worker.DataWriter"),
+            patch("hft_platform.recorder.loader.WALLoaderService", return_value=loader),
+            patch(
+                "hft_platform.observability.metrics.MetricsRegistry.get",
+                side_effect=RuntimeError("registry unavailable"),
+            ),
+            patch.dict(os.environ, {"HFT_CLICKHOUSE_ENABLED": "1"}, clear=False),
+        ):
+            svc = RecorderService(asyncio.Queue())
+            await svc.recover_wal()
+
+        self.assertIsNone(loader.metrics)
+        loader.process_files.assert_called_once()

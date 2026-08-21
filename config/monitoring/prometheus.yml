@@ -18,6 +18,19 @@ scrape_configs:
       - targets:
           - "hft-engine:9090"
 
+  # The WAL loader runs as its own container (docker-compose.yml: wal-loader,
+  # `python -m hft_platform.recorder.loader`). It owns every dead-letter and
+  # replay-backlog metric there is -- dlq_size_total, wal_directory_bytes,
+  # wal_file_count_tiered, wal_backlog_files, wal_replay_lag_seconds. Without
+  # this job those are computed and discarded: on 2026-08-21 the production
+  # loader had dead-lettered 18 fills batches over four months with no metric,
+  # no alert, and hft.fills stuck at 0 rows.
+  - job_name: "wal-loader"
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - "wal-loader:9090"
+
   - job_name: "node"
     static_configs:
       - targets:

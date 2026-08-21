@@ -541,6 +541,33 @@ if __name__ == "__main__":
     from hft_platform.utils.logging import configure_logging
 
     configure_logging()
+
+    # This entrypoint bypasses ``hft_platform.main``, which is the only other
+    # place that starts a Prometheus exporter. Without this block the loader
+    # populates MetricsRegistry in-process and then discards it: the container
+    # refuses connections on :9090, so dlq_size_total, wal_directory_bytes,
+    # wal_file_count_tiered, wal_backlog_files, wal_replay_lag_seconds and
+    # wal_drain_eta_seconds are all structurally unobservable. That is how the
+    # production loader dead-lettered every fill for four months in silence.
+    #
+    # Failing to bind must not stop WAL replay -- durability outranks
+    # telemetry -- so this degrades to a warning.
+    _prom_port_raw = os.getenv("HFT_PROM_PORT", "9090")
+    try:
+        _prom_port = int(_prom_port_raw)
+    except ValueError:
+        _prom_port = 9090
+    try:
+        from hft_platform.observability.metrics import MetricsRegistry
+        from hft_platform.observability.metrics_server import start_resilient_metrics_server
+
+        # Build the registry before the scrape thread can see it.
+        MetricsRegistry.get()
+        start_resilient_metrics_server(_prom_port, addr=os.getenv("HFT_PROM_ADDR", "0.0.0.0"))  # nosec B104
+        logger.info("Prometheus metrics started", port=_prom_port, role="wal_loader")
+    except Exception as _exc:  # noqa: BLE001
+        logger.warning("wal_loader_metrics_server_failed", error=str(_exc), port=_prom_port)
+
     loader = WALLoaderService()
     if loader._async_enabled:
         asyncio.run(loader.run_async())

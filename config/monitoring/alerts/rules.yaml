@@ -94,6 +94,49 @@ groups:
 
   # Scheduled resubscribes run on a daemon thread; before they recorded an
   # outcome an escaping exception reached only threading.excepthook.
+  - alert: RecorderDeadLetterQueueGrowing
+    expr: increase(dlq_size_total[30m]) > 0
+    for: 0s
+    labels:
+        severity: critical
+    annotations:
+        summary: "Recorder dead-lettered a batch"
+        description: |
+          The recorder failed a ClickHouse insert past its retries and wrote the
+          batch to .wal/dlq/. Those rows are NOT in ClickHouse. Read the first
+          line of the newest .wal/dlq/<table>_*.jsonl for the table and error,
+          then check `SELECT name FROM system.columns` for that table -- a
+          schema drift between the migration ledger and the live table is the
+          way this has failed before (hft.fills, 2026-04-25 to 2026-08-21, four
+          months undetected because this alert did not exist).
+
+  - alert: RecorderDeadLetterQueueNonEmpty
+    expr: wal_file_count_tiered{tier="dlq"} > 0
+    for: 30m
+    labels:
+        severity: warning
+    annotations:
+        summary: "Dead-letter queue has unreplayed batches"
+        description: |
+          {{ $value }} dead-letter file(s) have been sitting in .wal/dlq/ for
+          30m. DLQ files are never replayed automatically; they stay until an
+          operator replays them. This fires for as long as the backlog exists,
+          unlike the increase()-based alert above which only catches the moment
+          of failure.
+
+  - alert: WALReplayBacklogStalled
+    expr: wal_backlog_files > 0 and increase(wal_replay_throughput_rows_total[15m]) == 0
+    for: 15m
+    labels:
+        severity: critical
+    annotations:
+        summary: "WAL backlog is not draining"
+        description: |
+          {{ $value }} WAL file(s) are queued and no rows have been replayed in
+          15m. ClickHouse ingestion has stopped while the durability path keeps
+          writing. Check the wal-loader container and ClickHouse health before
+          the disk fills.
+
   - alert: FeedResubscribeFailing
     expr: increase(feed_resubscribe_total{result="error"}[10m]) > 0
     for: 0s
