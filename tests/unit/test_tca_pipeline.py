@@ -206,7 +206,14 @@ class TestExecutionRouterTCAEnrichment:
 
 class TestMapperTCAFields:
     def test_fill_record_contains_tca_prices(self):
-        """map_event_to_record should include decision_price and arrival_price."""
+        """map_event_to_record should include decision_price and arrival_price.
+
+        Both are converted from the platform's x10000 to the ClickHouse
+        x1000000 convention, the same as ``price_scaled`` in the same row.
+        ``tca/analyzer.py`` divides them against each other, so a passthrough
+        here would leave two scales in one row -- this test previously asserted
+        exactly that passthrough and so could not see the defect.
+        """
         from hft_platform.recorder.mapper import map_event_to_record
 
         metadata = MagicMock()
@@ -221,8 +228,10 @@ class TestMapperTCAFields:
         assert result is not None
         topic, payload = result
         assert topic == "fills"
-        assert payload["decision_price"] == 500_0000
-        assert payload["arrival_price"] == 502_0000
+        assert payload["decision_price"] == 500_000000
+        assert payload["arrival_price"] == 502_000000
+        # The invariant that matters: same scale as price_scaled in this row.
+        assert payload["price_scaled"] == 501_000000
 
     def test_fill_record_tca_prices_default_zero(self):
         """TCA prices should be 0 when not enriched."""
