@@ -92,6 +92,7 @@ class OrderAdapter:
         "_order_id_map_max_size",
         "_order_id_map_persist_interval_s",
         "_order_id_map_last_persist_s",
+        "_order_id_map_trailing_handle",
         # H3: per-entry metadata for TTL-based ABA prevention. Sidecar to
         # ``order_id_map`` so the (broker_id -> order_key) lookup API stays
         # unchanged. ``_order_id_meta[broker_id] = (created_ns, state)`` where
@@ -218,6 +219,7 @@ class OrderAdapter:
         self._order_id_map_persist_path: str = os.getenv("HFT_ORDER_ID_MAP_PERSIST_PATH", ".state/order_id_map.jsonl")
         self._order_id_map_persist_interval_s: float = float(os.getenv("HFT_ORDER_ID_MAP_PERSIST_INTERVAL_S", "1.0"))
         self._order_id_map_last_persist_s: float = 0.0  # monotonic timestamp
+        self._order_id_map_trailing_handle: asyncio.TimerHandle | None = None
         # H3: per-entry metadata sidecar (broker_id -> (created_ns, state)).
         # ``state`` is "live" or "terminal"; the persist filter drops terminal
         # rows so a future restart cannot resurrect a stale (broker_id ->
@@ -1651,7 +1653,17 @@ class OrderAdapter:
         now_s = time.monotonic()
         if not force and self._order_id_map_persist_interval_s > 0:
             if (now_s - self._order_id_map_last_persist_s) < self._order_id_map_persist_interval_s:
+                # Leading-edge-only throttling silently dropped this write, and
+                # nothing ever retried it: ``force=True`` has no call site, so a
+                # mapping registered inside the interval was persisted only if
+                # another order happened to arrive after it. A two-sided quote
+                # registers both legs ~0.3 s apart, so the second leg was never
+                # checkpointed and could not be recovered after a restart.
+                # Schedule the trailing edge so the newest mapping always
+                # reaches disk within one interval.
+                self._schedule_trailing_persist(now_s)
                 return
+        self._cancel_trailing_persist()
         self._order_id_map_last_persist_s = now_s
         try:
             loop = asyncio.get_running_loop()
@@ -1659,6 +1671,33 @@ class OrderAdapter:
         except RuntimeError:
             # No running loop (shutdown or non-async context) — persist inline
             self.persist_order_id_map()
+
+    def _schedule_trailing_persist(self, now_seconds: float) -> None:
+        """Arm a one-shot flush for the end of the current throttle window."""
+        if self._order_id_map_trailing_handle is not None:
+            return  # already armed; it will capture this write too
+        delay = max(0.0, self._order_id_map_persist_interval_s - (now_seconds - self._order_id_map_last_persist_s))
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # No running loop (shutdown or a sync caller): there is nothing to
+            # defer onto. Persisting inline here would honour durability at the
+            # cost of the throttle's only job — bounding fsync frequency — so
+            # the write is left for the next call, exactly as before. The adapter
+            # always runs under a loop in production, which is where the dropped
+            # trailing write actually cost us.
+            return
+        self._order_id_map_trailing_handle = loop.call_later(delay, self._run_trailing_persist)
+
+    def _run_trailing_persist(self) -> None:
+        self._order_id_map_trailing_handle = None
+        self._maybe_persist_order_id_map(force=True)
+
+    def _cancel_trailing_persist(self) -> None:
+        handle = self._order_id_map_trailing_handle
+        if handle is not None:
+            handle.cancel()
+            self._order_id_map_trailing_handle = None
 
     def _next_custom_field_token(self) -> str:
         """Allocate a 6-char broker-safe token without reusing current map keys."""
