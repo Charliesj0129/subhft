@@ -678,11 +678,20 @@ class MarketDataNormalizer:
         P2-b: The gauge ``feed_time_skew_ns`` previously only updated inside
         the over-threshold branch, so it stuck at the worst raw delta ever
         seen (a 7,997s value from a stale ts_epoch was observed in the
-        live signal). It now reflects the *current* delta on every event
-        (post-clamp), and a separate counter
+        live signal). It now reflects the *current* delta on every event,
+        and a separate counter
         ``feed_time_skew_over_threshold_total{topic, severity}`` records
-        how often we actually exceeded 1s / 10s / 60s — that is the
-        durable observability handle, not the gauge.
+        how often we actually exceeded 1s / 10s / 60s.
+
+        The gauge reports the delta **before** the clamp. Reporting it after
+        made the gauge saturate: the clamp pins ``local_ts`` to
+        ``exch_ts + _TS_MAX_LAG_NS``, so every clamped event read back as
+        exactly the ceiling. Production on 2026-08-20 showed
+        ``feed_time_skew_ns{topic="snapshot"} == 5e9`` — the ceiling to the
+        nanosecond — while
+        ``feed_time_skew_over_threshold_total{severity="critical_60s"}`` had
+        counted 362 skews above *60* seconds on the same topic. The gauge
+        said 5s, the counter said >60s, and only the counter was right.
         """
         raw_delta: int = 0
         if exch_ts:
@@ -726,12 +735,15 @@ class MarketDataNormalizer:
                                 topic=topic, severity="warn_1s"
                             ).inc()
                     local_ts = exch_ts + _TS_MAX_LAG_NS
-            # P2-b: gauge always reflects the current (post-clamp) delta
-            # so "feed_time_skew_ns" answers "right now, how skewed is this
-            # topic?" instead of "what is the worst delta ever seen?".
+            # The gauge answers "right now, how skewed is this topic?", so it
+            # must carry the raw delta. ``local_ts - exch_ts`` here is the
+            # post-clamp delta, which is capped at _TS_MAX_LAG_NS and therefore
+            # cannot express the magnitude that actually matters. ``raw_delta``
+            # is 0 when the exchange timestamp was in the future (nothing to
+            # report) and equals the post-clamp delta whenever no clamp fired,
+            # so this is strictly more information for the same one ``set()``.
             if self.metrics:
-                current_delta = local_ts - exch_ts
-                self.metrics.feed_time_skew_ns.labels(topic=topic).set(current_delta)
+                self.metrics.feed_time_skew_ns.labels(topic=topic).set(raw_delta)
         return exch_ts, local_ts
 
     def _record_latency_metrics(self, exch_ts: int, local_ts: int, last_ts_attr: str) -> None:

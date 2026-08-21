@@ -898,6 +898,15 @@ class QuoteRuntime:
         delay = max(0.0, c._resubscribe_delay_s)
 
         def _do_resubscribe() -> None:
+            # ``result`` is what this thread actually achieved, not that it ran.
+            # Before this was recorded, the scheduled path -- the one every
+            # event_4/event_12/event_13 takes -- produced no metric at all:
+            # feed_resubscribe_total only ever moved for the explicit
+            # ``resubscribe()`` entry point, so an operator reading the counter
+            # saw 5 "ok" against 1433 event_4 triggers and had no way to tell
+            # whether the 1433 had been serviced. It also logged "completed"
+            # when ``tick_callback`` was None, i.e. having done nothing.
+            result = "skip"
             try:
                 if delay > 0:
                     time.sleep(delay)
@@ -905,9 +914,22 @@ class QuoteRuntime:
                     c._callbacks_registered = False
                     c._ensure_callbacks(c.tick_callback)
                     c._resubscribe_all()
-                logger.info("Resubscribe completed", reason=reason)
+                    result = "ok"
+                    logger.info("Resubscribe completed", reason=reason)
+                else:
+                    logger.warning("Resubscribe skipped: no tick callback registered", reason=reason)
+            except Exception as exc:
+                # This runs on a daemon thread, so an escaping exception reached
+                # only threading.excepthook and left no operational trace.
+                result = "error"
+                logger.error("Scheduled resubscribe failed", reason=reason, error=str(exc))
             finally:
                 c._resubscribe_scheduled = False
+                if c.metrics:
+                    try:
+                        c.metrics.feed_resubscribe_total.labels(result=result).inc()
+                    except Exception as exc:
+                        logger.debug("operation_fallback", error=str(exc))
 
         c._resubscribe_thread = threading.Thread(
             target=_do_resubscribe,

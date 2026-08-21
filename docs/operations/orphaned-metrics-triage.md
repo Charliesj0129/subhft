@@ -52,7 +52,7 @@ Triage buckets:
 | `shioaji_api_jitter_ms_hist` | Histogram | API jitter distribution; useful for tail latency analysis. |
 | `feed_interarrival_ns` | Histogram | Feed inter-arrival time distribution; useful for detecting feed thinning or gaps. |
 | `feed_gap_by_symbol_seconds` | Gauge | Per-symbol feed gap; should be a heatmap row in the feed-health dashboard. |
-| `feed_time_skew_ns` | Gauge | Exchange vs. local timestamp skew by topic; clock drift indicator. |
+| `feed_time_skew_ns` | Gauge | Exchange vs. local timestamp skew by topic, **before** the `HFT_TS_MAX_LAG_S` clamp. Reporting the post-clamp value made it saturate at the ceiling (production read exactly `5e9` on `topic="snapshot"` while the `critical_60s` counter climbed). Alerting lives on `feed_time_skew_over_threshold_total` (`FeedTimeSkewCritical`). |
 | `feed_last_event_ts` | Gauge | Last feed event timestamp by source; freshness indicator. |
 | `clickhouse_pool_active` | Gauge | Active ClickHouse connection pool connections. Add to gateway_wal_slo dashboard. |
 | `clickhouse_pool_checkout_latency_ms` | Histogram | Pool checkout latency; pairs with pool timeout alert. |

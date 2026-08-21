@@ -10,7 +10,13 @@
 - `feed_reconnect_total{result=...}`
 - `feed_first_quote_total`
 - `quote_watchdog_recovery_attempts_total{action=...}`
-- `feed_resubscribe_total{result=...}`
+- `feed_resubscribe_total{result=...}` — the `result` label carries two
+  different kinds of value. `event_4` / `event_13` are **triggers** (the SDK
+  asked for a resubscribe); `ok` / `error` / `skip` are **outcomes** of an
+  attempt. Triggers greatly outnumber outcomes because
+  `QuoteRuntime.schedule_resubscribe` coalesces while one is already armed,
+  so a large `event_4` count against a small `ok` count is normal. Alert on
+  `result="error"`, never on the trigger labels.
 - `normalization_errors_total{type=...}`
 
 ## 2) Pipeline / Queue

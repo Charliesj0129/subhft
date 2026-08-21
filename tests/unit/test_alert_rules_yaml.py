@@ -265,3 +265,43 @@ def test_redis_connection_down_alert_removed():
         "ever sets. Remove the alert (and the dead gauge) until Redis health is "
         "probed from the component that actually uses Redis."
     )
+
+
+def test_feed_time_skew_alert_reads_the_counter_not_the_clamped_gauge():
+    """`FeedTimeSkewCritical` must alert on the severity counter.
+
+    `feed_time_skew_ns` is bounded by the normalizer's clamp
+    (`HFT_TS_MAX_LAG_S`, 5s by default), so a gauge threshold above the ceiling
+    can never fire and one below it fires on every clamped event. The counter
+    `feed_time_skew_over_threshold_total{severity="critical_60s"}` carries the
+    real magnitude, which is why production accumulated 362 crossings while the
+    gauge sat at exactly 5e9.
+    """
+    alerts = _load_alerts_by_name()
+    assert "FeedTimeSkewCritical" in alerts, "FeedTimeSkewCritical alert missing from rules.yaml"
+    expr = alerts["FeedTimeSkewCritical"]["expr"]
+    assert "feed_time_skew_over_threshold_total" in expr, (
+        f"FeedTimeSkewCritical must read the severity counter, not the clamped gauge. Current expression: {expr!r}"
+    )
+    assert "feed_time_skew_ns" not in expr, (
+        f"feed_time_skew_ns is clamped at HFT_TS_MAX_LAG_S and cannot express a >60s skew. Current expression: {expr!r}"
+    )
+
+
+def test_feed_resubscribe_alert_fires_on_the_error_outcome_only():
+    """`FeedResubscribeFailing` must not read the trigger labels.
+
+    `feed_resubscribe_total` carries both triggers (`event_4`, `event_13`) and
+    outcomes (`ok`, `error`, `skip`) under one `result` label. Alerting on the
+    trigger labels would fire continuously on a healthy engine — production
+    logged 1433 `event_4` in a single session with no failures at all.
+    """
+    alerts = _load_alerts_by_name()
+    assert "FeedResubscribeFailing" in alerts, "FeedResubscribeFailing alert missing from rules.yaml"
+    expr = alerts["FeedResubscribeFailing"]["expr"]
+    assert 'result="error"' in expr, (
+        f"FeedResubscribeFailing must select the error outcome explicitly. Current expression: {expr!r}"
+    )
+    assert "event_4" not in expr and "event_13" not in expr, (
+        f"event_4/event_13 are trigger counts, not failures. Current expression: {expr!r}"
+    )
