@@ -90,6 +90,10 @@ class StormGuard:
         "_warm_deescalation_ts",
         "_warm_reescalation_cooldown_s",
         "_reconciliation_hold",
+        # Blocks HALT de-escalation while the daily loss limit is latched.
+        # ``update()`` derives its target state from drawdown/latency/feed-gap
+        # only, so "we stopped for the day" is a reason it cannot see.
+        "_daily_loss_hold",
         # P0-I4: engine loop reference bound via ``bind_loop()`` by HFTSystem.run().
         # Used by ``_fire_halt_callback`` to dispatch coroutine halt callbacks from
         # non-asyncio threads (e.g. bootstrap lease-refresh daemon).
@@ -176,6 +180,7 @@ class StormGuard:
         # Reconciliation hold: when True, HALT de-escalation is blocked until
         # ReconciliationService confirms drift is resolved.
         self._reconciliation_hold: bool = False
+        self._daily_loss_hold: bool = False
         # P0-I4: engine loop reference; bound by HFTSystem.run() via ``bind_loop``.
         # When ``None``, ``_fire_halt_callback`` falls back to a best-effort
         # ``asyncio.get_running_loop()`` lookup (safe on the loop thread itself).
@@ -481,6 +486,27 @@ class StormGuard:
                     self._de_escalate_count = 0
                     logger.warning(
                         "stormguard_deescalation_blocked_reconciliation_hold",
+                        current_state=self.state.name,
+                        target_state=new_state.name,
+                    )
+                    current_state = self.state
+                    return current_state
+                # Daily-loss hold: the same shape as the reconciliation hold,
+                # for the same reason. ``_evaluate_target_state`` sees only
+                # drawdown/latency/feed-gap, so once the daily loss limit
+                # latches, a market-clean tick computes NORMAL and de-escalates
+                # -- and ``RiskEngine._check_daily_loss_halt`` immediately
+                # re-halts from the still-latched validator flag. Observed in
+                # production 2026-08-21: 26 escalations / 25 de-escalations in
+                # 27 minutes, ~65 s per cycle, which is a square wave rather
+                # than a latch. The hold is set and cleared by the risk engine
+                # from ``DailyLossLimitValidator.halt_triggered``, so it clears
+                # at the 05:00 reset or an operator force-reset -- never from a
+                # quiet market.
+                if self.state == StormGuardState.HALT and self._daily_loss_hold:
+                    self._de_escalate_count = 0
+                    logger.warning(
+                        "stormguard_deescalation_blocked_daily_loss_hold",
                         current_state=self.state.name,
                         target_state=new_state.name,
                     )
@@ -1233,3 +1259,27 @@ class StormGuard:
     def reconciliation_hold(self) -> bool:
         """Whether reconciliation hold is active (read-only)."""
         return self._reconciliation_hold
+
+    def set_daily_loss_hold(self, hold: bool) -> None:
+        """Set or clear the daily-loss hold on HALT de-escalation.
+
+        When ``hold=True``, HALT will not auto-recover via ``update()``. The
+        risk engine keeps this in sync with
+        ``DailyLossLimitValidator.halt_triggered``, which clears only at the
+        05:00 daily reset or an operator force-reset.
+        Thread-safe.
+        """
+        with self._state_lock:
+            old = self._daily_loss_hold
+            self._daily_loss_hold = hold
+        if old != hold:
+            logger.warning(
+                "stormguard_daily_loss_hold_changed",
+                hold=hold,
+                current_state=self.state.name,
+            )
+
+    @property
+    def daily_loss_hold(self) -> bool:
+        """Whether the daily-loss hold is active (read-only)."""
+        return self._daily_loss_hold

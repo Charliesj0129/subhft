@@ -326,6 +326,11 @@ class DailyLossLimitValidator(RiskValidator):
     Prices are scaled int x10000 per platform conventions.
     Uses timebase.now_ns() for time — never datetime.now().
 
+    Accumulator unit: ``NTD * price_scale``. Both producers (PositionStore for
+    realized, MtMCalculator for unrealized) have already multiplied the price
+    delta by the instrument's contract multiplier / point value, so the value
+    that arrives here is money, scaled -- not points.
+
     Intraday watermark extensions (opt-in via config ``intraday_pnl`` section):
     - Soft limit: rejects new orders (not CANCEL/FORCE_FLAT) when loss exceeds
       ``soft_limit_ntd``, with cooldown-guarded recovery.
@@ -380,9 +385,26 @@ class DailyLossLimitValidator(RiskValidator):
 
         if self._intraday_pnl_enabled:
             price_scale: int = int(ipnl_cfg.get("price_scale", 10000))
-            point_value: int = int(ipnl_cfg.get("point_value", 10))
-            # 1 NTD = price_scale / point_value scaled units
-            ntd_to_scaled: int = price_scale // point_value
+            # 1 NTD == price_scale accumulator units.
+            #
+            # The accumulator is fed by ``record_pnl`` (realized, from
+            # PositionStore) and ``update_unrealized`` (from MtMCalculator).
+            # Both producers compute ``delta_price_scaled * qty *
+            # contract_multiplier`` where ``contract_multiplier`` IS the
+            # instrument's point value (positions.py PositionState.update,
+            # mtm.py MtMCalculator._unrealized). So the point value is already
+            # inside the number that arrives here, and its unit is
+            # ``NTD * price_scale`` for futures and stocks alike.
+            #
+            # This used to divide by ``point_value`` a second time
+            # (``price_scale // point_value``), which enforced every threshold
+            # at 1/point_value of its configured value: on 2026-08-21 in
+            # production ``hard_limit_ntd: 5000`` halted at 670 NTD of realized
+            # loss and ``soft_limit_ntd: 500`` fired at 50 NTD. The error
+            # factor was the point value itself -- 10x for TMF, 50x for MXF,
+            # 200x for TXF. It was unreachable until fills started recording
+            # again, which is why it survived this long.
+            ntd_to_scaled: int = price_scale
 
             self._soft_limit_threshold_scaled: int = int(ipnl_cfg.get("soft_limit_ntd", 500) * ntd_to_scaled)
             self._hard_limit_threshold_scaled: int = int(ipnl_cfg.get("hard_limit_ntd", 1000) * ntd_to_scaled)
