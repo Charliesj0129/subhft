@@ -44,6 +44,12 @@ class ExecutionNormalizer:
         # and never re-enters the SDK.
         self._default_account_id_provider = default_account_id_provider
         self._synth_counter: int = 0
+        # Which "which candidate ids were present" shapes have already been
+        # logged. The counter below carries the volume; the log only has to
+        # carry the payload shape once per distinct shape, so a burst of
+        # unattributable orders cannot turn into a log storm. Bounded at 17
+        # entries (the subsets of four candidate fields, plus "none").
+        self._unattributed_shapes_logged: set[str] = set()
         self.metrics = MetricsRegistry.get()
         self.metadata = SymbolMetadata()
         self.price_codec = PriceCodec(SymbolMetadataPriceScaleProvider(self.metadata))
@@ -228,6 +234,10 @@ class ExecutionNormalizer:
             client_order_id = self.order_id_resolver.resolve_order_key_from_candidates(
                 [ord_no, seq_no, other_id, custom_field]
             )
+            if not client_order_id:
+                self._record_unattributed_order(
+                    ord_no=ord_no, seq_no=seq_no, other_id=other_id, custom_field=custom_field
+                )
 
             contract = d.get("contract", {}) if isinstance(d.get("contract"), dict) else {}
             symbol = self._first_str(contract, fm.symbol_keys()) or self._first_str(d, fm.symbol_keys()) or "UNKNOWN"
@@ -253,6 +263,44 @@ class ExecutionNormalizer:
         except (KeyError, TypeError, ValueError) as e:
             logger.error("Order normalization failed", error=str(e), data=d)
             return None
+
+    def _record_unattributed_order(self, *, ord_no: str, seq_no: str, other_id: str, custom_field: str) -> None:
+        """Count (and once per shape, describe) an order we cannot attribute.
+
+        An order callback that normalizes cleanly but resolves to no order_key
+        is written to ``hft.orders`` with ``client_order_id=''`` and
+        ``strategy_id='UNKNOWN'``. Nothing rejects it and nothing counts it, so
+        the row looks like every other row -- on 2026-08-21 production held 56
+        such rows, 100% of the table, with an empty join key to ``hft.fills``,
+        and no metric had ever moved.
+
+        Only the *names* of the candidate fields are recorded, never their
+        values: broker ids are account-linked identifiers and this runs on the
+        logging path.
+        """
+        present = ",".join(
+            name
+            for name, value in (
+                ("ordno", ord_no),
+                ("seqno", seq_no),
+                ("other", other_id),
+                ("custom_field", custom_field),
+            )
+            if value
+        )
+        label = present or "none"
+        self.metrics.order_attribution_unresolved_total.labels(present=label).inc()
+        if label not in self._unattributed_shapes_logged:
+            self._unattributed_shapes_logged.add(label)
+            logger.warning(
+                "order_attribution_unresolved",
+                present=label,
+                map_size=len(self.order_id_map),
+                hint=(
+                    "no candidate id matched order_id_map; the row will record "
+                    "client_order_id='' and strategy_id='UNKNOWN'"
+                ),
+            )
 
     def normalize_fill(self, raw: RawExecEvent) -> Optional[FillEvent]:  # noqa: C901
         self.metrics.execution_events_total.labels(type="fill").inc()

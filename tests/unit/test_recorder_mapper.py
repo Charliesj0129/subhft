@@ -192,3 +192,55 @@ def test_fill_tca_prices_stay_zero_when_unstamped(tmp_path):
     _, row = map_event_to_record(fill, metadata)
     assert row["decision_price"] == 0
     assert row["arrival_price"] == 0
+
+
+def test_fill_record_carries_the_trace_id_the_router_stamped(tmp_path):
+    """FillEvent.trace_id must survive the last hop into the ClickHouse row.
+
+    ExecutionRouter enriches every fill's trace_id from the originating
+    OrderIntent (``_cmd_trace_id_map``) so hft.fills can be joined to
+    hft.order_explanations on (trace_id, client_order_id). The mapper omitted
+    the key, so ``_extract_fill_values`` fell through to its ``""`` default and
+    the value was computed on every fill and discarded one step before the
+    insert -- leaving the join permanently impossible.
+    """
+    metadata = _metadata(tmp_path)
+    fill = FillEvent(
+        fill_id="F4",
+        account_id="A1",
+        order_id="O4",
+        strategy_id="S1",
+        symbol="AAA",
+        side=Side.BUY,
+        qty=1,
+        price=12000,
+        fee=0,
+        tax=0,
+        ingest_ts_ns=100,
+        match_ts_ns=110,
+        client_order_id="S1:44",
+        trace_id="trace-abc-123",
+    )
+    _, row = map_event_to_record(fill, metadata)
+    assert row["trace_id"] == "trace-abc-123"
+
+
+def test_fill_record_trace_id_is_empty_when_the_router_did_not_stamp_one(tmp_path):
+    """Empty is the assembler's "no explanation row" sentinel — it must not become None."""
+    metadata = _metadata(tmp_path)
+    fill = FillEvent(
+        fill_id="F5",
+        account_id="A1",
+        order_id="O5",
+        strategy_id="S1",
+        symbol="AAA",
+        side=Side.BUY,
+        qty=1,
+        price=12000,
+        fee=0,
+        tax=0,
+        ingest_ts_ns=100,
+        match_ts_ns=110,
+    )
+    _, row = map_event_to_record(fill, metadata)
+    assert row["trace_id"] == ""
