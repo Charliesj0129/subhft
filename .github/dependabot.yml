@@ -20,6 +20,17 @@ updates:
       - dependencies
       - ci
       - freeze-allowed
+    # `github/codeql-action/*` must move as one unit. The sub-actions are
+    # published from a single repository and the action refuses to run `init`
+    # and `analyze` at different versions, so a per-sub-action PR can never go
+    # green on its own: #407 and #409 both sat red on `Analyze Python` for a
+    # month for exactly that reason, and #422 had to bump all three by hand.
+    # Dependabot re-created the split the same day (#426, #427), which is why
+    # this is a config fix rather than another manual combined PR.
+    groups:
+      codeql-action:
+        patterns:
+          - "github/codeql-action*"
     ignore:
       - dependency-name: "*"
         update-types:
