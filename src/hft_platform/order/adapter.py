@@ -1672,11 +1672,11 @@ class OrderAdapter:
             # No running loop (shutdown or non-async context) — persist inline
             self.persist_order_id_map()
 
-    def _schedule_trailing_persist(self, now_s: float) -> None:
+    def _schedule_trailing_persist(self, now_seconds: float) -> None:
         """Arm a one-shot flush for the end of the current throttle window."""
         if self._order_id_map_trailing_handle is not None:
             return  # already armed; it will capture this write too
-        delay = max(0.0, self._order_id_map_persist_interval_s - (now_s - self._order_id_map_last_persist_s))
+        delay = max(0.0, self._order_id_map_persist_interval_s - (now_seconds - self._order_id_map_last_persist_s))
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
