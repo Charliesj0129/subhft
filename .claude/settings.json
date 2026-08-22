@@ -4,21 +4,41 @@
     "PreToolUse": [
       {
         "matcher": "Edit|Write|NotebookEdit",
-        "hooks": [{"type": "command", "command": "python3 .claude/hooks/scope_guard.py"}]
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR:-/home/charlie/hft_platform}/.claude/hooks/scope_guard.py\""
+          }
+        ]
       },
       {
         "matcher": "Bash",
-        "hooks": [{"type": "command", "command": "python3 .claude/hooks/git_guard.py"}]
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR:-/home/charlie/hft_platform}/.claude/hooks/git_guard.py\""
+          }
+        ]
       }
     ],
     "PostToolUse": [
       {
         "matcher": "Edit|Write",
-        "hooks": [{"type": "command", "command": "python3 .claude/hooks/discipline_feedback.py"}]
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR:-/home/charlie/hft_platform}/.claude/hooks/discipline_feedback.py\""
+          }
+        ]
       },
       {
         "matcher": "Bash",
-        "hooks": [{"type": "command", "command": "python3 .claude/hooks/commit_audit.py"}]
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR:-/home/charlie/hft_platform}/.claude/hooks/commit_audit.py\""
+          }
+        ]
       }
     ]
   },
