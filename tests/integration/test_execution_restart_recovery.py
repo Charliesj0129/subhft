@@ -105,6 +105,11 @@ async def test_restart_restores_fill_dedup_and_skips_replayed_fill(tmp_path):
 
     assert drained1 == 1
     position_store1.on_fill.assert_called_once()
+    # The checkpoint is handed to the default executor, so "the fill was
+    # registered" and "the dedup window is recoverable" are two different
+    # instants. Waiting makes this a durability check rather than a race
+    # against a thread pool.
+    await router1.flush_fill_dedup()
     assert os.path.exists(persist_path)
 
     router2, position_store2 = _make_router(persist_path, dict(order_id_map))

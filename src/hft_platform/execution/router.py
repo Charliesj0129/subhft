@@ -4,6 +4,8 @@ import dataclasses
 import inspect
 import os
 import tempfile
+import threading
+import time
 from collections.abc import Coroutine
 from typing import Any, Callable, Dict, Optional, Union
 
@@ -114,7 +116,25 @@ class ExecutionRouter:
             "HFT_FILL_DEDUP_PERSIST_PATH", ".state/fill_dedup_window.jsonl"
         )
         self._fill_dedup_persist_interval_s: float = float(os.environ.get("HFT_FILL_DEDUP_PERSIST_INTERVAL_S", "1.0"))
-        self._fill_dedup_last_persist_s: float = 0.0  # noqa: monotonic timestamp
+        # Monotonic, as the old comment claimed while the code read
+        # ``timebase.now_ns()`` -- i.e. ``time.time_ns()``. An NTP step
+        # backwards therefore stalled fill-dedup checkpointing for the length of
+        # the step, and a restart inside that window re-processes fills that
+        # were already applied -- double-counted positions. Named ``_seconds``
+        # rather than ``_s`` so the float gate reads the unit off the name
+        # instead of off a ``# noqa`` nobody has to keep true.
+        #
+        # -inf, not 0.0: under the old wall clock, 0.0 meant "1970", i.e. always
+        # longer ago than any interval. ``time.monotonic()`` counts from boot,
+        # so 0.0 would mean "at boot" -- and on a freshly started host the very
+        # first checkpoint would be throttled away for as long as the configured
+        # interval exceeds the uptime.
+        self._fill_dedup_last_persist_seconds: float = float("-inf")
+        # Serialises the checkpoint's snapshot+write, so a slow writer holding
+        # an older snapshot cannot win the rename against a newer one.
+        self._fill_dedup_io_lock = threading.Lock()
+        self._fill_dedup_persist_futures: set[asyncio.Future[None]] = set()
+        self._fill_dedup_trailing_handle: asyncio.TimerHandle | None = None
         self._load_fill_dedup()
         self._events_since_dlq_retry = 0
         self._recorder_queue: Optional[asyncio.Queue] = recorder_queue
@@ -176,7 +196,17 @@ class ExecutionRouter:
         """Persist fill dedup window to disk atomically (temp+fsync+rename).
 
         Called during graceful shutdown. Safe to call from thread pool.
+
+        Serialised on ``_fill_dedup_io_lock``, which covers the snapshot as well
+        as the write: ``_maybe_persist_fill_dedup`` hands this to the default
+        executor, whose pool has many workers, so two checkpoints can run at
+        once and the rename that lands last wins. Snapshotting inside the lock
+        makes the last writer necessarily the one holding the newest window.
         """
+        with self._fill_dedup_io_lock:
+            self._persist_fill_dedup_locked()
+
+    def _persist_fill_dedup_locked(self) -> None:
         path = self._fill_dedup_persist_path
         # Snapshot under CPython GIL atomicity
         keys_snapshot = list(self._seen_fill_ids.keys())
@@ -206,13 +236,68 @@ class ExecutionRouter:
             logger.warning("fill_dedup_persist_failed", error=str(exc), path=path)
 
     def _maybe_persist_fill_dedup(self, *, force: bool = False) -> None:
-        """Throttle fill dedup checkpointing to bound crash-recovery loss."""
-        now_s = timebase.now_ns() / 1_000_000_000
+        """Throttle fill dedup checkpointing to bound crash-recovery loss.
+
+        Offloads the synchronous fsync to the default thread pool executor.
+        This ran inline on the event loop, once per second for as long as fills
+        kept arriving, which is a blocking write on the loop that also carries
+        market data and order dispatch (Constitution Law 3). The order_id_map
+        twin was offloaded for exactly this reason; this one was not.
+        """
+        now_s = time.monotonic()
         if not force and self._fill_dedup_persist_interval_s > 0:
-            if (now_s - self._fill_dedup_last_persist_s) < self._fill_dedup_persist_interval_s:
+            if (now_s - self._fill_dedup_last_persist_seconds) < self._fill_dedup_persist_interval_s:
+                # Leading-edge-only throttling dropped this write and nothing
+                # retried it, so the last fill before a crash reached disk only
+                # if another fill happened to arrive after it -- and a restart
+                # then re-processes a fill already applied to the position.
+                # Same defect, and same fix, as the order_id_map checkpoint.
+                self._schedule_trailing_fill_dedup_persist(now_s)
                 return
-        self.persist_fill_dedup()
-        self._fill_dedup_last_persist_s = now_s
+        self._cancel_trailing_fill_dedup_persist()
+        self._fill_dedup_last_persist_seconds = now_s
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # No running loop (shutdown or a sync caller) — persist inline.
+            self.persist_fill_dedup()
+            return
+        future = loop.run_in_executor(None, self.persist_fill_dedup)
+        self._fill_dedup_persist_futures.add(future)
+        future.add_done_callback(self._fill_dedup_persist_futures.discard)
+
+    def _schedule_trailing_fill_dedup_persist(self, now_seconds: float) -> None:
+        """Arm a one-shot flush for the end of the current throttle window."""
+        if self._fill_dedup_trailing_handle is not None:
+            return  # already armed; it will capture this write too
+        delay = max(0.0, self._fill_dedup_persist_interval_s - (now_seconds - self._fill_dedup_last_persist_seconds))
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # Nothing to defer onto; the next call persists. The router always
+            # runs under a loop in production, which is where the dropped
+            # trailing write actually cost us.
+            return
+        self._fill_dedup_trailing_handle = loop.call_later(delay, self._run_trailing_fill_dedup_persist)
+
+    def _run_trailing_fill_dedup_persist(self) -> None:
+        self._fill_dedup_trailing_handle = None
+        self._maybe_persist_fill_dedup(force=True)
+
+    def _cancel_trailing_fill_dedup_persist(self) -> None:
+        handle = self._fill_dedup_trailing_handle
+        if handle is not None:
+            handle.cancel()
+            self._fill_dedup_trailing_handle = None
+
+    async def flush_fill_dedup(self) -> None:
+        """Wait for every dedup checkpoint already scheduled to reach disk."""
+        pending = [f for f in tuple(self._fill_dedup_persist_futures) if not f.done()]
+        if not pending:
+            return
+        # ``return_exceptions`` because the write logs and swallows its own
+        # failures: a shutdown must not be aborted by one.
+        await asyncio.gather(*pending, return_exceptions=True)
 
     def _register_fill_dedup_key(self, dedup_key: str) -> None:
         self._seen_fill_ids[dedup_key] = None
