@@ -24,9 +24,10 @@ def _runner():
     r._intent_seq = 0
     r._current_source_ts_ns = 0
     r._current_trace_id = ""
-    # Slot added with the tuple-event trace-id fix; __new__ bypasses __init__,
+    # Slots added with the tuple-event trace-id fix; __new__ bypasses __init__,
     # and an unset slot on a __slots__ class raises rather than defaulting.
     r._current_trace_tag = ""
+    r._current_event_seq = 0
     r._current_contract = None
     r._typed_intent_fastpath = False
     r._default_intent_ttl_ns = 0

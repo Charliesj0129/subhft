@@ -17,6 +17,15 @@ L8 explanation row could ever be produced from live trading.
 The fix must not pay for itself on every tick: the id is built in
 ``_intent_factory`` (per intent) rather than in ``_extract_event_trace`` (per
 event), which is what the allocation test below pins.
+
+A first version keyed the id on ``tag:symbol:source_ts_ns`` alone. That merged
+distinct events: the LOB rejects only timestamps that go *backwards*, so two
+ticks on one symbol may share an exchange timestamp, and an event with no
+timestamp falls back to ``timebase.now_ns()`` -- a clock, not an identity. Two
+unrelated decisions would then have produced orders under one trace and any
+incident timeline built from it would have merged them. A per-event counter
+now carries the uniqueness; the timestamp stays only so ids remain distinct
+across process restarts, which the counter cannot do on its own.
 """
 
 from __future__ import annotations
@@ -37,6 +46,7 @@ def _runner() -> StrategyRunner:
     runner._current_source_ts_ns = 0
     runner._current_trace_id = ""
     runner._current_trace_tag = ""
+    runner._current_event_seq = 0
     runner._current_contract = None
     runner._typed_intent_fastpath = False
     runner._default_intent_ttl_ns = 0
@@ -83,7 +93,7 @@ class TestTupleEventsProduceATraceId:
         source_ts_ns, trace_id = runner._extract_event_trace(event)
         runner._current_source_ts_ns = source_ts_ns
         runner._current_trace_id = trace_id
-        assert _make(runner).trace_id == f"tick:TMFI6:{ts}"
+        assert _make(runner).trace_id == f"tick:TMFI6:{ts}:1"
 
     def test_two_intents_from_one_event_share_the_trace_id(self) -> None:
         """trace_id identifies the causing event, so a two-sided quote shares one."""
@@ -113,6 +123,52 @@ class TestTupleEventsProduceATraceId:
         assert len(seen) == 2
 
 
+class TestDistinctEventsNeverShareATraceId:
+    """The regressions for the collision the first version of this fix had."""
+
+    def test_two_events_with_the_same_timestamp_do_not_share_a_trace_id(self) -> None:
+        """Equal exchange timestamps are legal: the LOB only rejects backwards ones."""
+        runner = _runner()
+        ts = 1_787_329_000_000_000_000
+        first = ("tick", 0, 0, 0, 0, 0, 0, ts, 11)
+        second = ("tick", 0, 0, 0, 0, 0, 0, ts, 22)
+
+        runner._current_source_ts_ns, runner._current_trace_id = runner._extract_event_trace(first)
+        a = _make(runner).trace_id
+        runner._current_source_ts_ns, runner._current_trace_id = runner._extract_event_trace(second)
+        b = _make(runner).trace_id
+
+        assert a and b
+        assert a != b, "two distinct events collapsed into one trace"
+
+    def test_events_without_a_timestamp_do_not_share_a_trace_id(self, monkeypatch) -> None:
+        """The now_ns() fallback is a clock; a frozen clock must not merge events."""
+        from hft_platform.core import timebase
+
+        monkeypatch.setattr(timebase, "now_ns", lambda: 1_787_329_000_000_000_000)
+        runner = _runner()
+        untimed = ("tick", 0, 0, 0, 0, 0, 0, 0, 0)
+
+        runner._current_source_ts_ns, runner._current_trace_id = runner._extract_event_trace(untimed)
+        a = _make(runner).trace_id
+        runner._current_source_ts_ns, runner._current_trace_id = runner._extract_event_trace(untimed)
+        b = _make(runner).trace_id
+
+        assert a and b
+        assert a != b
+
+    def test_the_event_counter_advances_once_per_event_not_per_intent(self) -> None:
+        runner = _runner()
+        event = ("bidask", 0, 0, 0, 1_787_329_000_000_000_000, 0)
+        runner._current_source_ts_ns, runner._current_trace_id = runner._extract_event_trace(event)
+        assert runner._current_event_seq == 1
+        _make(runner, side=1)
+        _make(runner, side=2)
+        assert runner._current_event_seq == 1, "the counter must not move per intent"
+        runner._extract_event_trace(event)
+        assert runner._current_event_seq == 2
+
+
 class TestExistingBehaviourIsPreserved:
     def test_an_event_with_meta_still_uses_its_own_seq(self) -> None:
         """The meta branch already worked; it must keep winning over the fallback."""
@@ -135,7 +191,7 @@ class TestExistingBehaviourIsPreserved:
             meta=types.SimpleNamespace(local_ts=1_787_329_000_000_000_000, seq=None, topic="ticks")
         )
         runner._current_source_ts_ns, runner._current_trace_id = runner._extract_event_trace(event)
-        assert _make(runner).trace_id == "ticks:TMFI6:1787329000000000000"
+        assert _make(runner).trace_id == "ticks:TMFI6:1787329000000000000:1"
 
     def test_an_unrecognised_event_still_yields_a_usable_trace_id(self) -> None:
         """Fail-open on the id, never empty: an empty one is silently dropped downstream."""
@@ -145,7 +201,7 @@ class TestExistingBehaviourIsPreserved:
 
         runner = _runner()
         runner._current_source_ts_ns, runner._current_trace_id = runner._extract_event_trace(OddEvent())
-        assert _make(runner).trace_id == "OddEvent:TMFI6:1787329000000000000"
+        assert _make(runner).trace_id == "OddEvent:TMFI6:1787329000000000000:1"
 
 
 class TestTheTypedFastPathCarriesItToo:
@@ -158,7 +214,7 @@ class TestTheTypedFastPathCarriesItToo:
         intent = _make(runner)
         assert intent[0] == "typed_intent_v1"
         # index 13 is trace_id in the typed_intent_v1 layout
-        assert intent[13] == "tick:TMFI6:1787329000000000000"
+        assert intent[13] == "tick:TMFI6:1787329000000000000:1"
 
 
 class TestPerEventCostIsUnchanged:

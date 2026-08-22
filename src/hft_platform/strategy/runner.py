@@ -196,6 +196,12 @@ class StrategyRunner:
         # costs a reference assignment per event; building the string costs an
         # allocation, so that is deferred to intent creation.
         "_current_trace_tag",
+        # Monotonic per-event counter. Two ticks for one symbol can carry the
+        # same exchange timestamp (the LOB only rejects timestamps that go
+        # backwards), so a tag+symbol+ts id would merge the causal timelines of
+        # unrelated decisions. The counter is what makes the derived id unique;
+        # the timestamp is kept so ids stay unique across process restarts too.
+        "_current_event_seq",
         "_strategy_metrics_sample_every",
         "_strategy_metrics_batch",
         "_strategy_metrics_seq",
@@ -290,6 +296,7 @@ class StrategyRunner:
         self._current_source_ts_ns = 0
         self._current_trace_id = ""
         self._current_trace_tag = ""
+        self._current_event_seq = 0
         # Option-3 Gate 3 slice: propagated from the currently-processed
         # event (see ``process_event``). Read by ``_intent_factory`` for the
         # object-form intent path.
@@ -878,11 +885,22 @@ class StrategyRunner:
         if not trace_id:
             # The event carried no id of its own (every tuple event on the hot
             # path). Derive one from what identifies the event -- its tag, the
-            # symbol, and its source timestamp -- so intents born of the same
-            # event for the same symbol share an id, and the fill side has
-            # something to join on. Built here, not in _extract_event_trace,
-            # because that runs per event and this runs per intent.
-            trace_id = f"{self._current_trace_tag or 'event'}:{symbol}:{int(source_ts_ns or 0)}"
+            # symbol, its source timestamp, and the per-event counter -- so
+            # intents born of the same event for the same symbol share an id,
+            # and the fill side has something to join on. Built here, not in
+            # _extract_event_trace, because that runs per event and this runs
+            # per intent.
+            #
+            # The counter carries the uniqueness: two ticks on one symbol may
+            # share an exchange timestamp, and an event with no timestamp at all
+            # falls back to ``timebase.now_ns()``, which is a clock rather than
+            # an identity. Without it, orders from unrelated decisions would
+            # share a trace and an incident timeline would merge them. The
+            # timestamp stays in the id because the counter restarts with the
+            # process and ``hft.fills`` outlives it.
+            trace_id = (
+                f"{self._current_trace_tag or 'event'}:{symbol}:{int(source_ts_ns or 0)}:{self._current_event_seq}"
+            )
         # Scale guard: reject under-scaled prices on NEW/AMEND orders. Catches
         # operator errors like `place_order(price=505)` when the symbol uses
         # price_scale=10000 and expects 5_050_000. CANCEL/FORCE_FLAT carry
@@ -1876,4 +1894,8 @@ class StrategyRunner:
         if not source_ts_ns:
             source_ts_ns = timebase.now_ns()
         self._current_trace_tag = tag
+        # One integer increment per event -- no formatting, no container. The
+        # id built from it is formatted in _intent_factory, which runs per
+        # intent rather than per tick.
+        self._current_event_seq += 1
         return source_ts_ns, trace_id
