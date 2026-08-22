@@ -1786,6 +1786,10 @@ class HFTSystem:
 
         # Persist order_id_map for restart-safe strategy resolution
         try:
+            # Let any checkpoint already queued on the executor finish first,
+            # so the final synchronous write is not contending with it for the
+            # persist lock while the loop is on its way down.
+            await self.order_adapter.flush_order_id_map()
             self.order_adapter.persist_order_id_map()
         except Exception as exc:
             logger.warning("order_id_map_persist_failed_shutdown", error=str(exc))

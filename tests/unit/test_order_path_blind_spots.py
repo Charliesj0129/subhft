@@ -148,6 +148,8 @@ async def test_second_mapping_inside_the_throttle_window_still_reaches_disk(
     adapter._order_id_map_persist_interval_s = 0.2
     adapter._order_id_map_last_persist_s = 0.0
     adapter._order_id_map_trailing_handle = None
+    # __new__ skips __init__, so the checkpoint's own state must be seeded.
+    adapter._order_id_map_persist_futures = set()
     adapter.order_id_map = {}
 
     persisted: list[dict[str, str]] = []
