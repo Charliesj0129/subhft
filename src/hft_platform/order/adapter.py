@@ -51,6 +51,11 @@ class _PhantomEntry(NamedTuple):
 # Operations that mutate broker state and must not be retried if the
 # timed-out attempt might still succeed in the thread pool.
 _MUTATING_OPS: frozenset[str] = frozenset({"place_order", "update_order"})
+# Ops whose duration is a broker round-trip worth reporting to StormGuard's
+# ``order_rtt`` input. Cancel is included even though it is not "mutating" in
+# the duplicate-order sense: a broker that stops answering cancels is exactly
+# the condition the breaker exists for.
+_ORDER_RTT_OPS: frozenset[str] = frozenset({"place_order", "cancel_order", "update_order"})
 
 
 class _TimeoutCancelled(Exception):
@@ -410,6 +415,26 @@ class OrderAdapter:
     def set_storm_guard(self, storm_guard: Any) -> None:
         """Inject StormGuard reference for live HALT checks (M1 gap closure)."""
         self._storm_guard = storm_guard
+
+    def _observe_order_rtt(self, op: str, duration_ns: int) -> None:
+        """Report one broker round-trip to StormGuard's ``order_rtt`` input.
+
+        Guarded on every side because this runs on the order path: no
+        StormGuard bound (unit-test construction), an older StormGuard without
+        the hook, or a raising observer must never fail an order.
+        """
+        if op not in _ORDER_RTT_OPS or duration_ns <= 0:
+            return
+        guard = self._storm_guard
+        if guard is None:
+            return
+        observe = getattr(guard, "observe_order_rtt_us", None)
+        if observe is None:
+            return
+        try:
+            observe(duration_ns // 1000)
+        except Exception:  # noqa: BLE001 - a risk-input report must never fail an order
+            logger.debug("order_rtt_observe_failed", op=op)
 
     def _begin_dispatch_ticket(self, intent: OrderIntent) -> int | None:
         """H1: open a dispatch ticket on StormGuard for HALT-TOCTOU detection.
@@ -3615,6 +3640,15 @@ class OrderAdapter:
                                 symbol=intent.symbol,
                                 strategy_id=intent.strategy_id,
                             )
+                    # Feed the broker round-trip to StormGuard. This is the
+                    # only place in the platform that measures it, and until
+                    # now the value stopped at the histogram: the ``order_rtt``
+                    # breaker input had no producer at all, so it sat at a
+                    # structural zero that reads exactly like a healthy input.
+                    # Recording only -- ``StormGuard.update()`` stays the sole
+                    # evaluator, so the breaker cannot be escalated from a path
+                    # its own state machine cannot see.
+                    self._observe_order_rtt(op, duration)
                     self.circuit_breaker.record_success()
                     self._update_cb_metric()
                     if intent and intent.strategy_id:
@@ -3637,6 +3671,10 @@ class OrderAdapter:
                     # original thread-pool call may still complete at the
                     # broker side, and retrying would create a duplicate.
                     if is_mutating and isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
+                        # A broker that never answers is the strongest possible
+                        # round-trip signal; reporting only successes would keep
+                        # the input quiet exactly when it matters most.
+                        self._observe_order_rtt(op, time.perf_counter_ns() - start_ns)
                         logger.error(
                             "Mutating API call timed out, skipping retry to prevent duplicate",
                             op=op,

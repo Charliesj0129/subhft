@@ -63,6 +63,15 @@ class HFTSystem:
     # ``_drift_burst_book``). Empty until the first book with a valid mid.
     _drift_burst_symbol: str
 
+    # Largest idle-probe overshoot since the supervisor last read it, and how
+    # many probe samples have been taken. Class-level defaults so instances
+    # built without ``__init__`` (tests use ``__new__``) still read cleanly, and
+    # so the supervisor can tell "the loop was clean" (peak 0.0, samples > 0)
+    # from "the probe never ran" (samples == 0), which must fall back rather
+    # than report a confident zero.
+    _loop_probe_peak_ms: float = 0.0
+    _loop_probe_samples: int = 0
+
     # -- Typed helpers to replace hasattr probes ----------------------------------
 
     @staticmethod
@@ -1186,8 +1195,8 @@ class HFTSystem:
             except Exception as e:
                 logger.warning("StormGuard drawdown computation failed", error=str(e))
 
-            # 3. Get P99 latency estimate
-            latency_us = int(lag_s * 1_000_000)
+            # 3. Latency input for StormGuard.
+            latency_us = self._stormguard_latency_us(lag_s)
 
             # 3b. Inform StormGuard of session state
             try:
@@ -1618,6 +1627,43 @@ class HFTSystem:
             if _tick_hist is not None:
                 _tick_hist.observe((loop.time() - now_tick) * 1000.0)
 
+    def _stormguard_latency_us(self, lag_s: float) -> int:
+        """Return the loop-congestion value StormGuard should evaluate.
+
+        This used to be ``lag_s * 1e6`` -- ``event_loop_lag_ms``, which spans
+        the supervisor's whole tick period and therefore includes this loop's
+        own work. Measured on THESHOW over 22 h (2026-08-22) the supervisor's
+        body was **89.3%** of that composite (``supervisor_tick_duration_ms``
+        mean 4.93 ms against ``event_loop_probe_lag_ms`` mean 0.59 ms), so the
+        breaker was armed on a number that mostly measured the supervisor
+        timing itself.
+
+        The idle probe reports only time the loop was unavailable to *any*
+        callback, which is what the breaker is about. Peak rather than mean,
+        because one blocked interval is the event of interest, and drained so a
+        spike is evaluated exactly once instead of holding the breaker up after
+        the loop has recovered.
+
+        Falls back to the old composite while the probe has produced no samples
+        at all -- not started, or disabled. A risk breaker must not be handed a
+        confident zero by an input that simply is not running.
+        """
+        samples = self._loop_probe_samples
+        # Drained, not accumulated. The probe is started by _start_service and
+        # deliberately left out of _iter_supervised_services, so it can die
+        # without HALTing anything -- and a dead probe's peak is 0.0, which a
+        # latency breaker reads as a perfectly healthy loop. A cumulative count
+        # would keep selecting this branch forever after the first sample and
+        # hand StormGuard that confident zero. Draining means a window with no
+        # new samples falls back to the supervisor's own signal: noisier, but
+        # alive.
+        self._loop_probe_samples = 0
+        if samples > 0:
+            peak_ms = self._loop_probe_peak_ms
+            self._loop_probe_peak_ms = 0.0
+            return int(peak_ms * 1_000.0)
+        return int(lag_s * 1_000_000)
+
     async def _probe_event_loop_lag(self):
         """Measure event-loop congestion with a task that does nothing else.
 
@@ -1641,6 +1687,12 @@ class HFTSystem:
             last = now
             if hist is not None:
                 hist.observe(overshoot_ms)
+            # Peak since the supervisor last drained it: this is StormGuard's
+            # loop-lag input. Kept here rather than read back off the histogram
+            # because a Prometheus histogram cannot report a max.
+            if overshoot_ms > self._loop_probe_peak_ms:
+                self._loop_probe_peak_ms = overshoot_ms
+            self._loop_probe_samples += 1
 
     async def stop_async(self):
         """Async stop with proper task cleanup."""
