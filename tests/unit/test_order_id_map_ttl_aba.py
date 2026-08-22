@@ -36,6 +36,8 @@ def _make_adapter(persist_path: Path, *, ttl_s: float = 86400.0) -> OrderAdapter
     adapter = OrderAdapter.__new__(OrderAdapter)
     adapter.order_id_map = {}
     adapter._order_id_map_lock = threading.RLock()
+    # Serialises snapshot+write in persist_order_id_map; __new__ skips __init__.
+    adapter._order_id_map_io_lock = threading.Lock()
     adapter._order_id_map_max_size = 10000
     adapter._order_id_map_persist_path = str(persist_path)
     adapter._order_id_map_persist_interval_s = 1.0

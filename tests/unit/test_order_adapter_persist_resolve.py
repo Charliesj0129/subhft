@@ -704,3 +704,85 @@ def test_register_broker_ids_skips_eviction_for_live_order_keys(tmp_config):
         assert adapter.order_id_map.get("NEW_KEY") == "strat:7"
 
     asyncio.run(_run())
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Group 6 — checkpoint serialisation and the awaitable flush
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+def test_a_checkpoint_snapshots_the_map_only_after_it_owns_the_write(tmp_path, tmp_config):
+    """The snapshot must be taken inside the persist lock, not before it.
+
+    ``_maybe_persist_order_id_map`` hands the write to the default executor,
+    whose pool has many workers, so two checkpoints can run at once. Each ends
+    in ``os.rename`` and the last rename wins -- so a checkpoint that snapshots
+    early and writes late can overwrite a newer view of the map, and the
+    restart that follows resolves a fill against a mapping that had already
+    moved on.
+    """
+    import threading
+
+    persist_path = tmp_path / "oid_map_serialised.jsonl"
+    with patch.dict(os.environ, {"HFT_ORDER_ID_MAP_PERSIST_PATH": str(persist_path)}):
+        adapter = _make_adapter(tmp_config)
+
+    adapter.order_id_map["TOK_OLD"] = "stratA:1"
+
+    # Stand in for a checkpoint that is already writing.
+    adapter._order_id_map_io_lock.acquire()
+    writer = threading.Thread(target=adapter.persist_order_id_map)
+    writer.start()
+    try:
+        # Bounded wait: it must NOT finish, because it cannot read the map
+        # while the lock is held. A pre-lock snapshot would already be taken.
+        writer.join(timeout=0.05)
+        assert writer.is_alive()
+        assert not persist_path.exists()
+
+        adapter.order_id_map["TOK_NEW"] = "stratB:2"
+    finally:
+        adapter._order_id_map_io_lock.release()
+
+    writer.join(timeout=5.0)
+    assert not writer.is_alive()
+    written = persist_path.read_bytes()
+    assert b"TOK_NEW" in written, "the checkpoint snapshotted before it owned the write"
+    assert b"TOK_OLD" in written
+
+
+def test_flush_order_id_map_waits_for_a_checkpoint_that_is_only_scheduled(tmp_path, tmp_config):
+    """Scheduling a checkpoint and completing one are different instants."""
+    persist_path = tmp_path / "oid_map_flush.jsonl"
+    with patch.dict(os.environ, {"HFT_ORDER_ID_MAP_PERSIST_PATH": str(persist_path)}):
+        adapter = _make_adapter(tmp_config)
+
+    adapter.order_id_map["TOK_FLUSH"] = "stratC:3"
+    adapter._order_id_map_persist_interval_s = 0.0
+
+    async def _run():
+        # Hold the write so the executor cannot get past scheduling.
+        adapter._order_id_map_io_lock.acquire()
+        try:
+            adapter._maybe_persist_order_id_map()
+            assert not persist_path.exists()
+        finally:
+            adapter._order_id_map_io_lock.release()
+
+        await adapter.flush_order_id_map()
+        assert persist_path.exists()
+        assert b"TOK_FLUSH" in persist_path.read_bytes()
+
+    asyncio.run(_run())
+
+
+def test_flush_order_id_map_returns_when_nothing_is_pending(tmp_path, tmp_config):
+    """Shutdown calls it unconditionally; no scheduled write must not hang."""
+    with patch.dict(os.environ, {"HFT_ORDER_ID_MAP_PERSIST_PATH": str(tmp_path / "unused.jsonl")}):
+        adapter = _make_adapter(tmp_config)
+
+    async def _run():
+        await asyncio.wait_for(adapter.flush_order_id_map(), timeout=1.0)
+        return True
+
+    assert asyncio.run(_run()) is True

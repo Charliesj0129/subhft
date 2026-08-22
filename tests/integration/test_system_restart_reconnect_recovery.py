@@ -188,6 +188,11 @@ async def test_system_crash_restart_restores_order_routing_and_fill_dedup(tmp_pa
     drained = await system1.exec_service.stop(drain_timeout_s=1.0)
     assert drained == 1
 
+    # The checkpoint is handed to the default executor, so registration
+    # returning is not the same instant as the mapping being recoverable.
+    # Waiting for it here is what makes the assertion below a durability
+    # check rather than a race against a thread pool.
+    await system1.order_adapter.flush_order_id_map()
     assert os.path.exists(str(tmp_path / "order_id_map.jsonl"))
     assert os.path.exists(str(tmp_path / "fill_dedup.jsonl"))
 

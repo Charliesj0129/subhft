@@ -98,6 +98,14 @@ class OrderAdapter:
         "_order_id_map_persist_interval_s",
         "_order_id_map_last_persist_s",
         "_order_id_map_trailing_handle",
+        # Serialises the checkpoint's snapshot+write. ``_maybe_persist`` hands
+        # the write to the default executor, which has many workers, so two
+        # checkpoints could otherwise run concurrently and the older snapshot
+        # could win the rename.
+        "_order_id_map_io_lock",
+        # In-flight executor futures for those writes, so a caller can await
+        # the checkpoint it just scheduled instead of guessing.
+        "_order_id_map_persist_futures",
         # H3: per-entry metadata for TTL-based ABA prevention. Sidecar to
         # ``order_id_map`` so the (broker_id -> order_key) lookup API stays
         # unchanged. ``_order_id_meta[broker_id] = (created_ns, state)`` where
@@ -225,6 +233,8 @@ class OrderAdapter:
         self._order_id_map_persist_interval_s: float = float(os.getenv("HFT_ORDER_ID_MAP_PERSIST_INTERVAL_S", "1.0"))
         self._order_id_map_last_persist_s: float = 0.0  # monotonic timestamp
         self._order_id_map_trailing_handle: asyncio.TimerHandle | None = None
+        self._order_id_map_io_lock = threading.Lock()
+        self._order_id_map_persist_futures: set[asyncio.Future[None]] = set()
         # H3: per-entry metadata sidecar (broker_id -> (created_ns, state)).
         # ``state`` is "live" or "terminal"; the persist filter drops terminal
         # rows so a future restart cannot resurrect a stale (broker_id ->
@@ -1618,6 +1628,16 @@ class OrderAdapter:
 
         Called during graceful shutdown. Safe to call from thread pool.
 
+        Serialised on ``_order_id_map_io_lock``. ``_maybe_persist_order_id_map``
+        hands this to the default executor, whose pool has many workers, so two
+        checkpoints could previously run at once: each takes its own snapshot
+        and each ends in ``os.rename``, and the rename that lands last wins.
+        Nothing ordered those renames by snapshot age, so an older view of the
+        map could overwrite a newer one and a restart would then resolve a fill
+        against a mapping that had already moved on. Taking the snapshot inside
+        this lock makes the last writer necessarily the one holding the newest
+        view.
+
         H3: writes the new schema ``{k, v, t_ns, s}`` and filters out any
         entry whose state has been flipped to ``"terminal"`` (via
         ``_mark_order_id_terminal``). Terminal entries are dropped from
@@ -1626,48 +1646,49 @@ class OrderAdapter:
         re-uses the numeric id (the ABA attack vector). Snapshotting under
         the lock guarantees the state and order_id_map views agree.
         """
-        path = self._order_id_map_persist_path
-        # Snapshot under the lock so the order_id_map and metadata views agree.
-        meta_dict = self._get_order_id_meta()
-        with self._order_id_map_lock:
-            snapshot: list[tuple[str, str, int, str]] = []
-            now_ns = timebase.now_ns()
-            for k, v in self.order_id_map.items():
-                meta = meta_dict.get(k)
-                if meta is None:
-                    # Defensive: unmetered entry (direct mutation, legacy
-                    # callsite, or test path) — stamp as live with the
-                    # current timestamp so a future load applies TTL only.
-                    snapshot.append((k, v, now_ns, "live"))
-                    continue
-                t_ns, state = meta
-                if state == "terminal":
-                    continue  # H3: drop terminals from the persisted snapshot
-                snapshot.append((k, v, t_ns, state))
-        try:
-            import orjson
-
-            persist_dir = os.path.dirname(path) or "."
-            os.makedirs(persist_dir, exist_ok=True)
-            fd, tmp_path = tempfile.mkstemp(suffix=".tmp", dir=persist_dir)
+        with self._order_id_map_io_lock:
+            path = self._order_id_map_persist_path
+            # Snapshot under the lock so the order_id_map and metadata views agree.
+            meta_dict = self._get_order_id_meta()
+            with self._order_id_map_lock:
+                snapshot: list[tuple[str, str, int, str]] = []
+                now_ns = timebase.now_ns()
+                for k, v in self.order_id_map.items():
+                    meta = meta_dict.get(k)
+                    if meta is None:
+                        # Defensive: unmetered entry (direct mutation, legacy
+                        # callsite, or test path) — stamp as live with the
+                        # current timestamp so a future load applies TTL only.
+                        snapshot.append((k, v, now_ns, "live"))
+                        continue
+                    t_ns, state = meta
+                    if state == "terminal":
+                        continue  # H3: drop terminals from the persisted snapshot
+                    snapshot.append((k, v, t_ns, state))
             try:
-                with os.fdopen(fd, "wb") as f:
-                    for k, v, t_ns, state in snapshot:
-                        f.write(orjson.dumps({"k": k, "v": v, "t_ns": t_ns, "s": state}) + b"\n")
-                    f.flush()
-                    os.fsync(f.fileno())
-                os.rename(tmp_path, path)
-            finally:
-                # M2 (2026-04-25): finally-cleanup so orphan tmpfiles don't
-                # accumulate when the worker dies between fsync and rename.
-                if os.path.exists(tmp_path):
-                    try:
-                        os.unlink(tmp_path)
-                    except OSError:
-                        pass
-            logger.info("order_id_map_persisted", count=len(snapshot), path=path)
-        except Exception as exc:
-            logger.warning("order_id_map_persist_failed", error=str(exc), path=path)
+                import orjson
+
+                persist_dir = os.path.dirname(path) or "."
+                os.makedirs(persist_dir, exist_ok=True)
+                fd, tmp_path = tempfile.mkstemp(suffix=".tmp", dir=persist_dir)
+                try:
+                    with os.fdopen(fd, "wb") as f:
+                        for k, v, t_ns, state in snapshot:
+                            f.write(orjson.dumps({"k": k, "v": v, "t_ns": t_ns, "s": state}) + b"\n")
+                        f.flush()
+                        os.fsync(f.fileno())
+                    os.rename(tmp_path, path)
+                finally:
+                    # M2 (2026-04-25): finally-cleanup so orphan tmpfiles don't
+                    # accumulate when the worker dies between fsync and rename.
+                    if os.path.exists(tmp_path):
+                        try:
+                            os.unlink(tmp_path)
+                        except OSError:
+                            pass
+                logger.info("order_id_map_persisted", count=len(snapshot), path=path)
+            except Exception as exc:
+                logger.warning("order_id_map_persist_failed", error=str(exc), path=path)
 
     def _maybe_persist_order_id_map(self, *, force: bool = False) -> None:
         """Throttle order-id checkpointing to bound crash-recovery loss.
@@ -1692,10 +1713,32 @@ class OrderAdapter:
         self._order_id_map_last_persist_s = now_s
         try:
             loop = asyncio.get_running_loop()
-            loop.run_in_executor(None, self.persist_order_id_map)
         except RuntimeError:
             # No running loop (shutdown or non-async context) — persist inline
             self.persist_order_id_map()
+            return
+        # Keep the future. It used to be dropped on the floor, which left no
+        # way to tell a scheduled checkpoint from a completed one: the caller
+        # could only guess how long the executor needed. ``flush_order_id_map``
+        # turns that guess into a wait.
+        future = loop.run_in_executor(None, self.persist_order_id_map)
+        self._order_id_map_persist_futures.add(future)
+        future.add_done_callback(self._order_id_map_persist_futures.discard)
+
+    async def flush_order_id_map(self) -> None:
+        """Wait for every checkpoint already scheduled to reach disk.
+
+        ``_maybe_persist_order_id_map`` returns as soon as the write is queued
+        on the executor, so "the mapping was registered" and "the mapping is
+        recoverable" are two different instants. Anything that needs the second
+        one -- shutdown, a restart-durability test -- awaits this.
+        """
+        pending = [f for f in tuple(self._order_id_map_persist_futures) if not f.done()]
+        if not pending:
+            return
+        # ``return_exceptions`` because the write itself already logs and
+        # swallows its own failures: a shutdown must not be aborted by one.
+        await asyncio.gather(*pending, return_exceptions=True)
 
     def _schedule_trailing_persist(self, now_seconds: float) -> None:
         """Arm a one-shot flush for the end of the current throttle window."""
