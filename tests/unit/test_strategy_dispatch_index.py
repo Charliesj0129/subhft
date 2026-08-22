@@ -47,6 +47,11 @@ class TestStrategyDispatchIndex:
         runner._positions_dirty = True
         runner._current_source_ts_ns = 0
         runner._current_trace_id = ""
+        # Slots added with the tuple-event trace-id fix. __new__ bypasses
+        # __init__ and an unset slot on a __slots__ class raises rather than
+        # defaulting, and _extract_event_trace reads the counter (+= 1).
+        runner._current_trace_tag = ""
+        runner._current_event_seq = 0
         runner._stale_event_threshold_ns = 500 * 1_000_000  # 500ms
         runner._stale_event_skip_total = 0
         runner._stale_event_metric = None

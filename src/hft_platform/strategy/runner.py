@@ -191,6 +191,17 @@ class StrategyRunner:
         "_positions_dirty",
         "_current_source_ts_ns",
         "_current_trace_id",
+        # Tag of the event being processed, kept so _intent_factory can build a
+        # trace id for events that carry no seq of their own. Holding the tag
+        # costs a reference assignment per event; building the string costs an
+        # allocation, so that is deferred to intent creation.
+        "_current_trace_tag",
+        # Monotonic per-event counter. Two ticks for one symbol can carry the
+        # same exchange timestamp (the LOB only rejects timestamps that go
+        # backwards), so a tag+symbol+ts id would merge the causal timelines of
+        # unrelated decisions. The counter is what makes the derived id unique;
+        # the timestamp is kept so ids stay unique across process restarts too.
+        "_current_event_seq",
         "_strategy_metrics_sample_every",
         "_strategy_metrics_batch",
         "_strategy_metrics_seq",
@@ -284,6 +295,8 @@ class StrategyRunner:
         self._positions_dirty = True
         self._current_source_ts_ns = 0
         self._current_trace_id = ""
+        self._current_trace_tag = ""
+        self._current_event_seq = 0
         # Option-3 Gate 3 slice: propagated from the currently-processed
         # event (see ``process_event``). Read by ``_intent_factory`` for the
         # object-form intent path.
@@ -869,6 +882,25 @@ class StrategyRunner:
             source_ts_ns = self._current_source_ts_ns
         if trace_id is None:
             trace_id = self._current_trace_id
+        if not trace_id:
+            # The event carried no id of its own (every tuple event on the hot
+            # path). Derive one from what identifies the event -- its tag, the
+            # symbol, its source timestamp, and the per-event counter -- so
+            # intents born of the same event for the same symbol share an id,
+            # and the fill side has something to join on. Built here, not in
+            # _extract_event_trace, because that runs per event and this runs
+            # per intent.
+            #
+            # The counter carries the uniqueness: two ticks on one symbol may
+            # share an exchange timestamp, and an event with no timestamp at all
+            # falls back to ``timebase.now_ns()``, which is a clock rather than
+            # an identity. Without it, orders from unrelated decisions would
+            # share a trace and an incident timeline would merge them. The
+            # timestamp stays in the id because the counter restarts with the
+            # process and ``hft.fills`` outlives it.
+            trace_id = (
+                f"{self._current_trace_tag or 'event'}:{symbol}:{int(source_ts_ns or 0)}:{self._current_event_seq}"
+            )
         # Scale guard: reject under-scaled prices on NEW/AMEND orders. Catches
         # operator errors like `place_order(price=505)` when the symbol uses
         # price_scale=10000 and expects 5_050_000. CANCEL/FORCE_FLAT carry
@@ -1815,16 +1847,32 @@ class StrategyRunner:
     _TUPLE_TS_INDEX: dict[str, int] = {"tick": 7, "bidask": 4, "lobstats": 2}
 
     def _extract_event_trace(self, event: Any) -> tuple[int, str]:
+        """Resolve the event's source timestamp and, when it has one, its trace id.
+
+        Also records ``_current_trace_tag`` for the branches that cannot produce
+        a trace id here. Only the ``meta`` branch can: it has a ``seq``. The hot
+        path dispatches tuples (``("tick", ...)``), which have none, so every
+        intent produced from a tick used to carry ``trace_id=""`` all the way to
+        the fill -- which is why ``hft.fills.trace_id`` is empty on every row
+        and ``OrderExplanationAssembler`` drops every registration
+        (``order/explanation.py`` treats an empty trace id as "no explanation").
+
+        The tag is stored rather than formatted because this runs on every
+        event; ``_intent_factory`` formats it, and intents are rare next to ticks.
+        """
         source_ts_ns = 0
         trace_id = ""
+        tag = ""
         meta = getattr(event, "meta", None)
         if meta is not None:
             source_ts_ns = int(getattr(meta, "local_ts", 0) or getattr(meta, "source_ts", 0) or 0)
             seq = getattr(meta, "seq", None)
             topic = getattr(meta, "topic", "event")
+            tag = str(topic)
             if seq is not None:
                 trace_id = f"{topic}:{seq}"
         elif isinstance(event, tuple) and len(event) > 2 and isinstance(event[0], str):
+            tag = event[0]
             ts_idx = self._TUPLE_TS_INDEX.get(event[0])
             if ts_idx is not None and len(event) > ts_idx:
                 try:
@@ -1832,15 +1880,22 @@ class StrategyRunner:
                 except (TypeError, ValueError):
                     source_ts_ns = 0
         elif hasattr(event, "local_ts"):
+            tag = type(event).__name__
             try:
                 source_ts_ns = int(getattr(event, "local_ts") or 0)
             except (TypeError, ValueError):
                 source_ts_ns = 0
         elif hasattr(event, "ts"):
+            tag = type(event).__name__
             try:
                 source_ts_ns = int(getattr(event, "ts") or 0)
             except (TypeError, ValueError):
                 source_ts_ns = 0
         if not source_ts_ns:
             source_ts_ns = timebase.now_ns()
+        self._current_trace_tag = tag
+        # One integer increment per event -- no formatting, no container. The
+        # id built from it is formatted in _intent_factory, which runs per
+        # intent rather than per tick.
+        self._current_event_seq += 1
         return source_ts_ns, trace_id
