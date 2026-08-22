@@ -193,6 +193,7 @@ async def test_system_crash_restart_restores_order_routing_and_fill_dedup(tmp_pa
     # Waiting for it here is what makes the assertion below a durability
     # check rather than a race against a thread pool.
     await system1.order_adapter.flush_order_id_map()
+    await system1.exec_service.flush_fill_dedup()
     assert os.path.exists(str(tmp_path / "order_id_map.jsonl"))
     assert os.path.exists(str(tmp_path / "fill_dedup.jsonl"))
 

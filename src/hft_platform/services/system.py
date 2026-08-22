@@ -1764,6 +1764,10 @@ class HFTSystem:
 
         # Persist fill dedup window for restart-safe exactly-once fills
         try:
+            # Let any checkpoint already queued on the executor finish first, so
+            # the final synchronous write is not contending with it for the
+            # persist lock while the loop is on its way down.
+            await self.exec_service.flush_fill_dedup()
             self.exec_service.persist_fill_dedup()
         except Exception as exc:
             logger.warning("fill_dedup_persist_failed_shutdown", error=str(exc))

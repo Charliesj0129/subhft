@@ -160,6 +160,11 @@ class TestFillDedupPersistence:
 
         await router.stop(drain_timeout_s=1.0)
 
+        # The checkpoint is handed to the default executor, so "the fill was
+        # registered" and "the dedup window is recoverable" are two different
+        # instants. Waiting makes this a durability check rather than a race
+        # against a thread pool.
+        await router.flush_fill_dedup()
         assert os.path.exists(persist_path)
 
         with patch.dict(os.environ, {"HFT_FILL_DEDUP_PERSIST_PATH": persist_path}):
@@ -539,3 +544,130 @@ class TestDeferredTerminalOverflowMetric:
         await adapter.on_terminal_state("strat_a", "oid_3")
 
         metrics.deferred_terminal_overflow_total.inc.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Fill dedup checkpoint: offload, serialisation, trailing edge, clock
+# ---------------------------------------------------------------------------
+
+
+class TestFillDedupCheckpointDurability:
+    """The dedup window is what stops a restart re-applying a fill.
+
+    Every gap here ends the same way: a fill that was already applied to the
+    position is applied a second time after a restart.
+    """
+
+    def _make_router(self, tmp_path, name="fill_dedup_ck.jsonl"):
+        from hft_platform.execution.router import ExecutionRouter
+
+        persist_path = str(tmp_path / name)
+        with patch.dict(os.environ, {"HFT_FILL_DEDUP_PERSIST_PATH": persist_path}):
+            router = ExecutionRouter(
+                bus=MagicMock(),
+                raw_queue=asyncio.Queue(),
+                order_id_map={},
+                position_store=MagicMock(),
+                terminal_handler=MagicMock(),
+            )
+        return router, persist_path
+
+    def test_a_checkpoint_snapshots_the_window_only_after_it_owns_the_write(self, tmp_path):
+        """Two checkpoints can run at once; the last rename wins.
+
+        If the snapshot is taken before the write is owned, a slow writer
+        holding an older window overwrites a newer one, and the restart that
+        follows re-applies whatever the older window was missing.
+        """
+        import threading
+
+        router, persist_path = self._make_router(tmp_path)
+        router._seen_fill_ids["FILL_OLD"] = None
+
+        # Stand in for a checkpoint that is already writing.
+        router._fill_dedup_io_lock.acquire()
+        writer = threading.Thread(target=router.persist_fill_dedup)
+        writer.start()
+        try:
+            # Bounded wait: it must NOT finish, because it cannot read the
+            # window while the lock is held.
+            writer.join(timeout=0.05)
+            assert writer.is_alive()
+            assert not os.path.exists(persist_path)
+
+            router._seen_fill_ids["FILL_NEW"] = None
+        finally:
+            router._fill_dedup_io_lock.release()
+
+        writer.join(timeout=5.0)
+        assert not writer.is_alive()
+        written = open(persist_path, "rb").read()
+        assert b"FILL_NEW" in written, "the checkpoint snapshotted before it owned the write"
+        assert b"FILL_OLD" in written
+
+    @pytest.mark.asyncio
+    async def test_a_fill_inside_the_throttle_window_still_reaches_disk(self, tmp_path):
+        """Leading-edge-only throttling dropped the write and never retried.
+
+        So the last fill before a crash was checkpointed only if another fill
+        happened to arrive after it.
+        """
+        router, persist_path = self._make_router(tmp_path)
+        router._fill_dedup_persist_interval_s = 0.02
+
+        router._register_fill_dedup_key("FILL_FIRST")
+        await router.flush_fill_dedup()
+        assert b"FILL_FIRST" in open(persist_path, "rb").read()
+
+        # Second fill lands inside the throttle window: the write is skipped.
+        router._register_fill_dedup_key("FILL_INSIDE_WINDOW")
+        assert b"FILL_INSIDE_WINDOW" not in open(persist_path, "rb").read()
+
+        # The trailing edge must carry it to disk on its own.
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            if b"FILL_INSIDE_WINDOW" in open(persist_path, "rb").read():
+                break
+            await asyncio.sleep(0.005)
+        assert b"FILL_INSIDE_WINDOW" in open(persist_path, "rb").read()
+
+    def test_the_throttle_is_keyed_on_a_monotonic_clock(self, tmp_path):
+        """It read ``timebase.now_ns()``, which is ``time.time_ns()``.
+
+        An NTP step backwards therefore stalled checkpointing for the length of
+        the step, with no bound on how many fills went unrecorded meanwhile.
+        """
+        router, _ = self._make_router(tmp_path)
+        router._seen_fill_ids["FILL_CLOCK"] = None
+
+        router._maybe_persist_fill_dedup(force=True)
+
+        assert abs(router._fill_dedup_last_persist_seconds - time.monotonic()) < 1.0, (
+            "the throttle stamp is on the wall clock, not the monotonic clock"
+        )
+
+    def test_the_first_checkpoint_is_not_throttled_on_a_freshly_booted_host(self, tmp_path):
+        """``time.monotonic()`` counts from boot, so 0.0 is not "long ago".
+
+        Under the old wall clock a 0.0 stamp meant 1970 -- older than any
+        interval. On the monotonic clock it means "at boot", so on a host whose
+        uptime is shorter than the configured interval the very first
+        checkpoint would be throttled away entirely.
+        """
+        router, persist_path = self._make_router(tmp_path, name="fill_dedup_boot.jsonl")
+        assert router._fill_dedup_last_persist_seconds == float("-inf"), (
+            "0.0 means 'at boot' on a monotonic clock, not 'long ago'"
+        )
+
+        router._fill_dedup_persist_interval_s = 86400.0  # longer than a new host's uptime
+        router._seen_fill_ids["FILL_BOOT"] = None
+        router._maybe_persist_fill_dedup()
+
+        assert os.path.exists(persist_path), "the first checkpoint was throttled away"
+
+    @pytest.mark.asyncio
+    async def test_flush_fill_dedup_returns_when_nothing_is_pending(self, tmp_path):
+        """Shutdown calls it unconditionally; no scheduled write must not hang."""
+        router, _ = self._make_router(tmp_path)
+        await asyncio.wait_for(router.flush_fill_dedup(), timeout=1.0)
+        assert router._fill_dedup_persist_futures == set()
