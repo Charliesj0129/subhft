@@ -1,27 +1,25 @@
 """The latency breaker measures the event loop and is calibrated for the broker.
 
-``system.py:1159`` computes ``latency_us = int(lag_s * 1_000_000)`` — event-loop
-lag, and nothing else. THESHOW runs it against
-``HFT_STORMGUARD_LATENCY_WARM_US=5_000_000`` / ``STORM_US=10_000_000``, i.e. 5
-and 10 *seconds*, while the measured distribution over 1,907,539 probes is
-p50 ~0.55 ms, p99 ~4.7 ms, p99.9 ~9 ms, max ~1 s. The input is ~1000x below its
-own threshold, so this branch of the breaker has never fired and cannot be
-expected to. All 20 escalations in the 2-day window came from feed_gap and
-drift_burst.
-
 Two different quantities were being funnelled through one parameter: platform
-health (loop lag, sub-millisecond, budget 1 ms) and trading-path health (order
-round-trip, tens to hundreds of milliseconds — the broker profile measures
-``place_order`` p95 at 395 ms). One threshold cannot serve both, and the one in
-production serves neither.
+health (loop congestion, sub-millisecond, budget 1 ms) and trading-path health
+(order round-trip, tens to hundreds of milliseconds). One threshold cannot
+serve both. This module splits them, ships the order-RTT input **unarmed**, and
+publishes each input's observed maximum plus an explicit armed/unarmed gauge so
+an unarmed breaker cannot be mistaken for a quiet one.
 
-This module splits them. The order-RTT input ships **unarmed**: THESHOW has no
-order-RTT samples at all (``gateway_dispatch_latency_ns_count = 0``, gateway
-disabled), so any threshold picked now would be a guess. Arming it is a
-calibration decision with data behind it, not a default. What ships instead is
-the evidence needed to make that decision: each input's observed maximum, and an
-explicit armed/unarmed gauge so an unarmed breaker cannot be mistaken for a
-quiet one.
+Two claims in the original version of this docstring were later measured and
+found wrong; see ``test_stormguard_latency_input_wiring.py`` for the evidence.
+
+* It said ``system.py`` computes ``latency_us = int(lag_s * 1_000_000)`` and
+  called that "event-loop lag, and nothing else". That value spans the
+  supervisor's whole tick period: on THESHOW the supervisor's own body was
+  89.3% of it. The supervisor now feeds the idle probe instead.
+* It said "THESHOW has no order-RTT samples at all". It had them all along, as
+  ``pipeline_latency_ns{stage="api_place_order"}`` (mean 34.1 ms) -- what was
+  missing was the wiring from the adapter into the breaker, now in place.
+
+The order-RTT input still ships unarmed: arming a risk breaker is a calibration
+decision, and it is now made against real values rather than a structural zero.
 """
 
 from __future__ import annotations

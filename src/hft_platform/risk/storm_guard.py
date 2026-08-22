@@ -23,17 +23,32 @@ class RiskThresholds:
     storm_drawdown_bps: int = -100  # -1.0% = -100 bps
     halt_drawdown_bps: int = -200  # -2.0% = -200 bps
 
-    # Event-loop lag. ``system.py:1159`` is the only producer: latency_us is
-    # ``lag_s * 1e6``, a platform-health signal whose budget is 1 ms.
+    # Event-loop congestion. The supervisor is the only producer. It used to
+    # pass ``lag_s * 1e6`` -- its own tick period minus the sleep, which is loop
+    # congestion PLUS the supervisor's own work. Measured on THESHOW over 22 h
+    # on 2026-08-22, the supervisor's body was **89.3%** of that composite
+    # (``supervisor_tick_duration_ms`` mean 4.93 ms vs
+    # ``event_loop_probe_lag_ms`` mean 0.59 ms), so the breaker was armed on a
+    # number that mostly measured the supervisor timing itself. It now reads the
+    # idle probe, which reports only time the loop was unavailable to any
+    # callback. Reference distribution for that signal: 99.895% of samples
+    # <= 10 ms, exactly one sample in (500, 1000] ms, nothing above 1 s.
     latency_warm_us: int = 5_000
     latency_storm_us: int = 20_000
 
     # Order round-trip to the broker — a different quantity two orders of
-    # magnitude larger (the measured shioaji profile puts place_order p95 at
-    # 395 ms). Ships unarmed (0 = off): THESHOW has no order-RTT samples at all
-    # (gateway_dispatch_latency_ns_count = 0), so any threshold chosen now
-    # would be a guess on a risk breaker. See
-    # ``stormguard_latency_input_max_us`` for the evidence to arm it with.
+    # magnitude larger. This used to say THESHOW had no order-RTT samples at
+    # all; that was wrong. ``OrderAdapter`` has always timed the broker SDK call
+    # itself and published it as ``pipeline_latency_ns{stage="api_place_order"}``
+    # -- measured 2026-08-22 over 22 h, unsampled: n=7, mean 34.1 ms, 6 samples
+    # in (10, 50] ms and 1 in (50, 100] ms, consistent with the Gate-C profile's
+    # ``submit_ack_latency_ms=36.0``. What was missing was the wiring, not the
+    # measurement; ``StormGuard.observe_order_rtt_us`` now receives it.
+    #
+    # Still ships unarmed (0 = off). Arming a risk breaker is a config decision,
+    # and n=7 is a sample, not a distribution: watch
+    # ``stormguard_latency_input_max_us{input="order_rtt"}`` accumulate first,
+    # then set ``HFT_STORMGUARD_ORDER_RTT_WARM_US`` / ``..._STORM_US``.
     order_rtt_warm_us: int = 0
     order_rtt_storm_us: int = 0
 
@@ -109,6 +124,11 @@ class StormGuard:
         # mid-await and emit a defensive cancel.
         "_inflight_dispatch_tickets",
         "_next_ticket_id",
+        # Largest broker order round-trip seen since the last ``update()``.
+        # Written by the order path, drained by ``update()`` -- see
+        # ``observe_order_rtt_us`` for why it is not evaluated where it is
+        # measured.
+        "_order_rtt_peak_us",
     )
 
     def __init__(
@@ -193,6 +213,7 @@ class StormGuard:
         # under ``_state_lock`` so callers can issue a defensive cancel.
         self._inflight_dispatch_tickets: dict[int, dict[str, Any]] = {}
         self._next_ticket_id: int = 0
+        self._order_rtt_peak_us: int = 0
 
     def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         """Bind the engine event loop for cross-thread halt-callback dispatch.
@@ -358,6 +379,42 @@ class StormGuard:
         except Exception:  # noqa: BLE001 - observability must never break the breaker
             pass
 
+    def observe_order_rtt_us(self, rtt_us: int) -> None:
+        """Record one broker order round-trip for the next ``update()`` to read.
+
+        Called from the order path, because that is where the measurement
+        already exists: ``OrderAdapter`` times the broker SDK call and reports
+        it as ``pipeline_latency_ns{stage="api_place_order"}``. Before this the
+        ``order_rtt`` breaker input had no producer at all and sat at a
+        structural zero, which reads exactly like a healthy input.
+
+        It deliberately does **not** evaluate state. An escalation raised out of
+        band is one ``update()`` cannot see, and an escalation ``update()``
+        cannot see is not a latch -- that is precisely how a StormGuard HALT
+        became 101 oscillations on 2026-08-21. The peak is drained by
+        ``update()``, which stays the single evaluator.
+
+        A plain int max: written from the event loop (the order path awaits the
+        broker call on it) and drained there too, so no lock is needed, and an
+        int assignment is atomic under the GIL regardless.
+        """
+        if rtt_us <= 0:
+            return
+        if rtt_us > self._order_rtt_peak_us:
+            self._order_rtt_peak_us = rtt_us
+
+    def _drain_order_rtt_peak_us(self) -> int:
+        """Return the peak RTT since the last drain and reset it.
+
+        Draining rather than decaying means one slow round-trip is seen by
+        exactly one ``update()``: it cannot hold the breaker up across ticks
+        after the broker has recovered.
+        """
+        peak = self._order_rtt_peak_us
+        if peak:
+            self._order_rtt_peak_us = 0
+        return peak
+
     def _observe_latency_input(self, input_name: str, value_us: int) -> None:
         """Track the largest value an input has produced this process.
 
@@ -433,8 +490,16 @@ class StormGuard:
             latency_us: Event-loop lag in microseconds (platform health).
             feed_gap_s: Feed gap in seconds.
             order_rtt_us: Broker order round-trip in microseconds (trading-path
-                health). Unarmed by default — see ``RiskThresholds``.
+                health). Unarmed by default — see ``RiskThresholds``. Callers
+                may leave this at 0: the peak recorded by
+                ``observe_order_rtt_us`` since the last call is drained here and
+                used when it is larger.
         """
+        # Drain unconditionally: leaving a peak behind would let it surface at
+        # an unrelated later tick.
+        peak_rtt_us = self._drain_order_rtt_peak_us()
+        if peak_rtt_us > order_rtt_us:
+            order_rtt_us = peak_rtt_us
         self._observe_latency_input("loop_lag", latency_us)
         self._observe_latency_input("order_rtt", order_rtt_us)
         new_state, reason = self._evaluate_target_state(drawdown_bps, latency_us, feed_gap_s, order_rtt_us)
