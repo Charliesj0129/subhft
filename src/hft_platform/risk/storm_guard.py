@@ -675,6 +675,19 @@ class StormGuard:
         if spread_scaled < 0:
             with self._state_lock:
                 if self.state < StormGuardState.STORM:
+                    # Stamp the cooldown, as every OTHER storm-entry site in
+                    # this file does. ``_transition`` only sets ``state`` and
+                    # ``last_state_change``; it does not maintain the
+                    # hysteresis fields. Without these two lines
+                    # ``_storm_entry_ts`` stayed at its 0.0 initial value (or
+                    # the 0.0 the de-escalation path resets it to), so
+                    # ``cooldown_ok = (now - 0.0) >= 30`` was trivially true on
+                    # the next tick and STORM could clear after ~5 clean
+                    # observations instead of ~35 s. A book that oscillates in
+                    # and out of crossed is exactly what the cooldown exists to
+                    # ride out.
+                    self._storm_entry_ts = time.monotonic()
+                    self._de_escalate_count = 0
                     self._transition(
                         StormGuardState.STORM,
                         f"Crossed book: spread_scaled={spread_scaled}",
