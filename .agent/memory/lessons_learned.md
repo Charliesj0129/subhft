@@ -528,3 +528,99 @@ partitioning.py:15-17` documents `combinatorial` and `candidate_loop` as
 *deliberately* decoupled systems, not an oversight — Phase 4 does not touch
 `candidate_loop` at all. Don't unify these without an explicit ask; the
 decoupling is a documented design choice, not tech debt.
+
+## [BUG] When you fix a defect in one implementation of a pattern, grep for the others (2026-08-22, PRs #445/#446)
+
+`OrderAdapter.order_id_map` and `ExecutionRouter.fill_dedup` are the same
+checkpoint pattern written twice: snapshot state, write to a temp file, fsync,
+rename, throttled by an interval. Three defects were found in the fill-dedup
+copy, and **two of them had already been found and fixed in the order_id_map
+copy** — the fix was never carried across, and nothing in either file pointed
+at the other.
+
+1. `fsync` running inline on the event loop from `ExecutionRouter.run()`
+   (Law 3). The twin had been offloaded to the executor for exactly this
+   reason.
+2. Leading-edge-only throttling with no trailing flush: the last event before a
+   crash reached disk only if another event happened to arrive after it. Same
+   defect, same prior fix on the twin.
+3. A throttle keyed on `timebase.now_ns()` (wall clock) under a comment that
+   said `# noqa: monotonic timestamp`. An NTP step backwards stalls
+   checkpointing for the length of the step; a restart inside that window
+   re-applies fills that were already applied — double-counted positions.
+
+Both fixes also had to add a completion signal (`flush_order_id_map()` /
+`flush_fill_dedup()`): the original code dropped the executor future on the
+floor, so a caller could only *guess* how long a write took. The "flaky"
+integration test that started this whole arc was asserting `os.path.exists()`
+immediately after a write it had no way to wait for — the test was racing
+production's missing signal, not a scheduler.
+
+**How to apply:** a durability assertion that has to guess a duration is
+evidence the write has no completion signal. And before closing a checkpoint
+defect, `rg` for the other implementations of the same pattern and check each
+one for the same three failure modes.
+
+## [PROCESS] A `# noqa` can be load-bearing, and a comment is a worse place for a unit than the name (2026-08-22, PR #446)
+
+`_fill_dedup_last_persist_s: float = 0.0  # noqa: monotonic timestamp` passed
+CI's "Detect float in financial paths" gate *only* because of the comment —
+and the same comment was describing the code incorrectly, since the field was
+being set from a wall clock. Deleting the wrong comment turned the lint job
+red.
+
+The fix was to rename the field `_fill_dedup_last_persist_seconds`, which the
+gate's allowlist matches on the `_seconds` suffix. The unit now lives in the
+identifier, where it cannot drift away from the code, instead of in a comment
+nobody is obliged to keep true.
+
+Second trap in the same change: `0.0` is a sane "long ago" sentinel under a
+wall clock (1970) and a **bug** under `time.monotonic()`, which counts from
+boot — on a host whose uptime is shorter than the configured interval, the very
+first checkpoint is throttled away. Use `float("-inf")`. CI caught this;
+the local run could not, because the dev box's uptime exceeded the interval.
+
+## [PROCESS] A working-tree review reports the diff of whatever branch it is standing on (2026-08-23)
+
+Two automated review passes in two days were both distorted by the checkout
+they ran against, in opposite directions:
+
+- 2026-08-22: the tree was parked 82 commits behind `origin/main`, and **all 5
+  findings** were defects that had already been fixed upstream.
+- 2026-08-23: the tree was on `refactor/boundary-extractions-b2`, which held
+  `pip 26.1.2` while `origin/main` held `26.2.1`. The reviewer read the diff
+  backwards and reported the **merged security bump** (#438, PYSEC-2026-3721)
+  as unapproved dependency drift. Acting on that advice would have reverted the
+  fix.
+
+The second failure is worse than the first: a stale checkout does not only
+manufacture already-closed findings, it can invert the sign of a real change.
+
+**How to apply:** before accepting any "this change introduces X" from a
+working-tree review, run `git rev-list --left-right --count origin/main...HEAD`
+and read the specific hunk against `origin/main` yourself. Also note what a
+clean review does *not* prove: the same day's cloud review returned `[]` while
+never seeing the focus note it was launched with.
+
+## [RESEARCH] Gitignoring a regenerable tree removes it from every staleness check (2026-08-23)
+
+`research/combinatorial/results/` was gitignored in PR #435 because it dirtied
+every `git status`. Every file in it is dated **2026-07-25**. The
+self-correlation guard (`has_self_correlation`, `search_engine.py:30`) landed
+**2026-08-19** in `6ce84168`.
+
+So `WINNER_DAILY.json` still sits on disk promoting
+`sign(ts_corr(mid, mid, 50))` — a tautology, +1 in every window where `mid`
+varies, hence permanently long — at `day_sharpe` 13.4, while its own
+`tick_selection_sharpe` is 0.0025. `WINNER_BARS` and `WINNER_OOS` are clean.
+Self-correlated expressions also survive in `daily_hunt_qualifying.json` and
+`oos_hunt_qualifying.json`.
+
+Nothing was ever going to catch this: no diff, no CI gate, no `git status`, and
+the artifact carries no record of which generator version produced it.
+
+**How to apply:** a fix that invalidates previously-emitted artifacts is not
+done until those artifacts are regenerated or quarantined — say which, in the
+PR. Stamp the generator commit into every emitted artifact. And when a note
+says an artifact set is "clean", name the defect it is clean *of*: this set was
+clean of the reset leak and simultaneously tautological.
