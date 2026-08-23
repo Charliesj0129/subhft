@@ -605,8 +605,14 @@ class RingBufferBus:
             # Ideally we track min_reader_cursor to prevent overwrite if strict usage.
             # But for HFT, latest data > stalled consumer.
             self._publish_unlocked(event)
-            if self.signal is not None:
-                self.signal.set()
+            # _notify(), not a bare ``self.signal.set()``. ``consume()`` waits
+            # on its OWN Event from ``_consumer_signals`` (DEC-02, added to fix
+            # a lost-wakeup race); the shared ``self.signal`` is only kept for
+            # backward compatibility and nothing awaits it. Setting just the
+            # legacy signal left every consumer parked in ``my_signal.wait()``
+            # forever -- a permanent hang, not a slowdown -- on the
+            # multi-writer path.
+            self._notify()
 
     async def publish_many(self, events: List[Any]):
         """Publish a batch of events."""
@@ -619,8 +625,9 @@ class RingBufferBus:
         async with self.write_lock:
             for event in events:
                 self._publish_unlocked(event)
-            if self.signal is not None:
-                self.signal.set()
+            # Same lost-wakeup as publish() above: per-consumer signals, not
+            # the legacy shared one.
+            self._notify()
 
     async def consume(self, start_cursor: int | None = None, consumer_name: str = "unknown"):
         """Async generator for consuming events."""

@@ -89,9 +89,7 @@ class ContractFamilyResolver:
         old = self._snapshot
         self._snapshot = new_snapshot
         changes: list[FamilyBindingChanged] = []
-        seen: set[ContractFamily] = set()
         for family, new_ref in new_snapshot.family_map.items():
-            seen.add(family)
             old_ref = old.family_map.get(family)
             if old_ref != new_ref:
                 changes.append(
