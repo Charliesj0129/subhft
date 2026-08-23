@@ -36,6 +36,7 @@ def _make_store(positions=None, recovery=None):
 
     store.snapshot_positions.return_value = pos_dict
     store._recovery_positions = recovery or {}
+    store.snapshot_positions_with_recovery.return_value = (pos_dict, recovery or {})
     return store
 
 

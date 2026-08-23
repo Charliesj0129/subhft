@@ -119,12 +119,31 @@ class PositionCheckpointWriter:
 
         Returns the path written.
 
-        M3: Acquires _fill_lock via snapshot_positions() to ensure a consistent
-        read of position state during serialization (no concurrent fill mutations).
+        M3: Acquires _fill_lock via snapshot_positions_with_recovery() to ensure
+        a consistent read of position state during serialization (no concurrent
+        fill mutations).
+
+        Both views come out of ONE lock acquisition. Taking them separately --
+        ``snapshot_positions()`` under the lock, then reading
+        ``_store._recovery_positions`` bare, as this used to -- has two failure
+        modes, and the silent one is the worse:
+
+        * ``_seed_from_recovery`` pops a recovery entry into ``positions``
+          inside its own critical section. Between the two reads, a key popped
+          from recovery and added to positions is in *neither* snapshot, so the
+          position vanishes from the checkpoint with a valid sha256 and no
+          error. The restart after that reads a checkpoint that is simply
+          missing a position.
+        * Iterating the live dict while another thread pops raises
+          ``RuntimeError: dictionary changed size during iteration``, which the
+          caller swallows as ``checkpoint_write_failed`` -- durable state then
+          ages up to a full write interval.
+
+        ``snapshot_positions_with_recovery`` exists precisely for callers that
+        merge both views and its docstring says they MUST use it; StrategyRunner
+        already does.
         """
-        # M3: Use snapshot_positions() which holds _fill_lock for the copy,
-        # preventing concurrent fills from producing partial/torn position state.
-        snapshot = self._store.snapshot_positions()
+        snapshot, recovery = self._store.snapshot_positions_with_recovery()
 
         positions_payload: Dict[str, Any] = {}
         for key, pos in snapshot.items():
@@ -142,7 +161,6 @@ class PositionCheckpointWriter:
         # M4: Also persist pending recovery positions that haven't been merged
         # into live positions yet (no fills received since restart). Without this,
         # a restart-without-fills followed by checkpoint would erase recovery data.
-        recovery = getattr(self._store, "_recovery_positions", {})
         for rkey, rdata in recovery.items():
             if rkey not in positions_payload:
                 avg_price = rdata.get("avg_price_scaled", 0)

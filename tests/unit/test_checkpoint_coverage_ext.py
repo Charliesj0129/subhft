@@ -36,6 +36,7 @@ def _make_store(positions=None, recovery=None):
 
     store.snapshot_positions.return_value = pos_dict
     store._recovery_positions = recovery or {}
+    store.snapshot_positions_with_recovery.return_value = (pos_dict, recovery or {})
     return store
 
 
@@ -157,10 +158,10 @@ class TestRunLoopExceptionHandling:
             if call_count == 1:
                 raise RuntimeError("simulated write failure")
             writer.running = False
-            return {}
+            return ({}, {})
 
         # Use the store's snapshot method to cause write_checkpoint to fail
-        store.snapshot_positions = failing_snapshot
+        store.snapshot_positions_with_recovery = failing_snapshot
 
         await asyncio.wait_for(writer.run(), timeout=5.0)
 

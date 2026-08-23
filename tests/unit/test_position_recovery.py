@@ -102,6 +102,7 @@ def _write_checkpoint(path, trading_date, positions):
         )
         store.positions[f"test::{sym}"] = pos
     store.snapshot_positions.return_value = dict(store.positions)
+    store.snapshot_positions_with_recovery.return_value = (dict(store.positions), {})
 
     writer = PositionCheckpointWriter(
         store=store,

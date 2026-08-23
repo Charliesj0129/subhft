@@ -2,6 +2,7 @@ import dataclasses
 import importlib
 import os
 import threading
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, Dict
 
@@ -278,8 +279,28 @@ class PositionStore:
         if pnl_delta != 0:
             self._total_realized_pnl_scaled += pnl_delta
         else:
+            # Recovery positions count. ``net_qty_for_symbol`` directly above
+            # already walks both ``positions`` and ``_recovery_positions``; this
+            # recompute used to sum only the former, so the two aggregates in
+            # this one file disagreed about what is in the portfolio.
+            #
+            # The recompute branch is not a rare manual-reconciliation path:
+            # ``Position.update`` only moves ``realized_pnl_scaled`` when a
+            # position is *closed*, so every opening fill arrives here with
+            # ``pnl_delta == 0`` and takes it. On the first opening fill after a
+            # crash restart that overwrote the ``_total_realized_pnl_scaled``
+            # that recovery had just restored -- dropping the recovered realized
+            # PnL to zero, which can trip a false StormGuard drawdown HALT, and
+            # the next checkpoint then wrote the wrong number to disk.
+            recovery_realized = sum(
+                int(rdata.get("realized_pnl_scaled", 0) or 0)
+                for rdata in self._recovery_positions.values()
+                if isinstance(rdata, dict)
+            )
             self._total_realized_pnl_scaled = (
-                sum(p.realized_pnl_scaled for p in self.positions.values()) + self._evicted_realized_pnl_scaled
+                sum(p.realized_pnl_scaled for p in self.positions.values())
+                + self._evicted_realized_pnl_scaled
+                + recovery_realized
             )
         if self._total_realized_pnl_scaled > self._peak_equity_scaled:
             self._peak_equity_scaled = self._total_realized_pnl_scaled
@@ -615,6 +636,27 @@ class PositionStore:
         with self._fill_lock:
             return {k: dataclasses.replace(v) for k, v in self.positions.items()}
 
+    def _reset_rust_keys(self, keys: Iterable[str]) -> None:
+        """Drop *keys* from the Rust tracker as well as the Python dicts.
+
+        The Rust tracker owns the authoritative ``net_qty`` whenever it is
+        available (``_on_fill_rust`` reads it back and returns it), so clearing
+        only the Python side leaves the next fill for that key accumulating on
+        top of a quantity the operator believes was cleared -- the phantom
+        position comes straight back. That matters most for
+        ``clear_symbol_positions``, which is the mechanism
+        ``_auto_correct_drift`` uses to break a drift loop: without this the
+        correction was a no-op and the loop could not terminate.
+        """
+        tracker = self._rust_tracker
+        if tracker is None:
+            return
+        for key in keys:
+            try:
+                tracker.reset(key)
+            except Exception:  # noqa: BLE001 — a clear must not fail on tracker state
+                logger.warning("rust_tracker_reset_failed", key=key, exc_info=True)
+
     def reset(self) -> int:
         """Clear all positions, recovery state, and portfolio aggregates.
 
@@ -623,6 +665,9 @@ class PositionStore:
         """
         with self._fill_lock:
             count = len(self.positions)
+            # Reset the Rust tracker for every key we know about before the
+            # Python dicts are emptied -- afterwards we no longer have the keys.
+            self._reset_rust_keys([*self.positions.keys(), *self._recovery_positions.keys()])
             self.positions.clear()
             self._recovery_positions.clear()
             self._recovery_rpnl_offsets.clear()
@@ -630,6 +675,12 @@ class PositionStore:
             self._peak_equity_scaled = 0
             self._total_realized_pnl_scaled = 0
             self._evicted_realized_pnl_scaled = 0
+            # The tracker has no bulk clear, so a key it holds that Python never
+            # knew about would survive. Report it rather than leaving a silent
+            # residue behind an operation whose whole point is "everything is zero".
+            residual = self._rust_tracker.len() if self._rust_tracker is not None else 0
+        if residual:
+            logger.warning("position_store_reset_rust_residual", residual_keys=residual)
         logger.warning("position_store_reset", cleared_positions=count)
         return count
 
@@ -675,6 +726,9 @@ class PositionStore:
             rkeys_to_remove = [rk for rk, rd in self._recovery_positions.items() if _recovery_matches(rd)]
             for rk in rkeys_to_remove:
                 del self._recovery_positions[rk]
+            # Same keys out of the Rust tracker, or the next fill resurrects the
+            # phantom quantity this call exists to remove.
+            self._reset_rust_keys([*keys_to_remove, *rkeys_to_remove])
         if keys_to_remove or rkeys_to_remove:
             logger.info(
                 "symbol_positions_cleared",

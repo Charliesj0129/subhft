@@ -32,6 +32,7 @@ def _make_store(positions: dict | None = None) -> MagicMock:
     snapshot = positions or {}
     store.positions = snapshot
     store.snapshot_positions.return_value = snapshot
+    store.snapshot_positions_with_recovery.return_value = (snapshot, {})
     store._peak_equity_scaled = 0
     store._total_realized_pnl_scaled = sum(pos.realized_pnl_scaled for pos in snapshot.values())
     return store

@@ -446,7 +446,16 @@ class StartupPositionVerifier:
                 merged[key] = {
                     "symbol": symbol,
                     "net_qty": target_qty,
-                    "avg_price_scaled": 0,
+                    # -1, not 0, for the same reason ``_recover_broker_only``
+                    # gives below: the broker told us a quantity and not a cost
+                    # basis, and every downstream consumer detects "unknown
+                    # basis" with ``avg_price_scaled < 0``
+                    # (checkpoint.py:138, checkpoint.py:155, positions.py:586).
+                    # A 0 here is not a sentinel -- it is read as a real fill at
+                    # price zero, so unrealized PnL accrues at mid x qty x
+                    # multiplier on every tick and the first close books the
+                    # entire notional as profit.
+                    "avg_price_scaled": -1,
                     "realized_pnl_scaled": 0,
                     "fees_scaled": 0,
                     "account_id": account_id,
