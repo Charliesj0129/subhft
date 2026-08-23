@@ -302,7 +302,13 @@ class Batcher:
         # CC-1: Columnar buffers with CC-2 double-buffer swap
         self._active = self._new_buffer()
         self._standby = self._new_buffer()
-        self.last_flush_time = timebase.now_s()
+        # Monotonic, not wall clock: this value is only ever used to measure the
+        # age of the buffer. recorder/wal.py already times its own durations with
+        # a monotonic clock; the batcher was the one place in the durability path
+        # where an NTP step or a manual clock correction moved a *duration*. A
+        # backward step stalls check_flush() for exactly as long as the step,
+        # holding rows that the flush interval says should already be on disk.
+        self.last_flush_monotonic_ns = timebase.monotonic_ns()
         self.lock = asyncio.Lock()
 
         # CC-5: Schema extractor
@@ -521,7 +527,7 @@ class Batcher:
             if self._active.row_count == 0:
                 return
 
-            age = (timebase.now_s() - self.last_flush_time) * 1000
+            age = (timebase.monotonic_ns() - self.last_flush_monotonic_ns) / 1_000_000
             if age >= self.flush_interval_ms:
                 flush_buf = self._swap_flush_buffer_locked()
 
@@ -548,7 +554,7 @@ class Batcher:
         self._standby = flush_buf
         # Clear active for new writes (keeps schema)
         self._active.clear()
-        self.last_flush_time = timebase.now_s()
+        self.last_flush_monotonic_ns = timebase.monotonic_ns()
         if self._memory_guard is not None:
             self._memory_guard.note_rows_removed(flush_buf.row_count)
         return flush_buf

@@ -276,7 +276,7 @@ async def test_batcher_check_flush():
     b = Batcher("hft.test", flush_limit=10, flush_interval_ms=1, writer=w)
 
     await b.add({"id": 1})
-    b.last_flush_time = time.time() - 1
+    b.last_flush_monotonic_ns = time.monotonic_ns() - 1_000_000_000
 
     await b.check_flush()
     assert w.columnar_calls

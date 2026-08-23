@@ -321,16 +321,43 @@ class TestBatcher:
         writer = self._make_writer()
         b = Batcher("hft.orders", flush_limit=100, flush_interval_ms=0, writer=writer)
         await b.add({"a": 1})
-        # Set last_flush_time far in the past
-        b.last_flush_time = 0.0
+        # Set the last flush far in the past on the monotonic clock
+        b.last_flush_monotonic_ns = 0
         await b.check_flush()
+        writer.write_columnar.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_a_backward_wall_clock_step_does_not_stall_the_flush(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Buffer age is a duration, so it must not ride the wall clock.
+
+        An NTP correction or a manual clock set moves ``time.time()`` but not
+        ``time.monotonic()``. When the age was computed from the wall clock a
+        backward step made ``age`` negative, so ``check_flush`` stopped
+        flushing for exactly as long as the step -- rows the flush interval
+        says are already due sat in memory instead, and a crash in that window
+        loses them.
+        """
+        import time as _time
+
+        from hft_platform.core import timebase
+
+        writer = self._make_writer()
+        b = Batcher("hft.orders", flush_limit=100, flush_interval_ms=10, writer=writer)
+        await b.add({"a": 1})
+        # Monotonic time says the buffer is well past its flush interval.
+        b.last_flush_monotonic_ns = _time.monotonic_ns() - 50_000_000
+        # The wall clock jumps an hour backwards.
+        monkeypatch.setattr(timebase, "now_s", lambda: _time.time() - 3600.0)
+
+        await b.check_flush()
+
         writer.write_columnar.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_check_flush_noop_when_empty(self) -> None:
         writer = self._make_writer()
         b = Batcher("hft.orders", flush_limit=100, flush_interval_ms=0, writer=writer)
-        b.last_flush_time = 0.0
+        b.last_flush_monotonic_ns = 0
         await b.check_flush()
         writer.write_columnar.assert_not_called()
 
