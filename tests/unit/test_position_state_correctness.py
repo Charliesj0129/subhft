@@ -232,3 +232,103 @@ class TestCheckpointSnapshotsBothViewsAtomically:
             t.join(timeout=2)
 
         assert json.loads(path.read_text())["sha256"]
+
+
+def _closing_fill(symbol: str, price: int, *, strategy_id: str = "S1") -> FillEvent:
+    return FillEvent(
+        fill_id=f"C-{symbol}-{price}",
+        order_id="O-2",
+        symbol=symbol,
+        side=Side.SELL,
+        qty=1,
+        price=price,
+        fee=0,
+        tax=0,
+        ingest_ts_ns=2,
+        match_ts_ns=2,
+        strategy_id=strategy_id,
+        account_id="ACC",
+    )
+
+
+class TestEvictionForgetsEveryStore:
+    """Eviction banks a position's *cumulative* realized PnL and deletes the
+    Python entry. Two other stores are keyed the same way and were left behind.
+    """
+
+    def test_evicting_a_flat_position_does_not_double_count_its_realized_pnl(self) -> None:
+        store = PositionStore()
+        if store._rust_tracker is None:
+            pytest.skip("Rust tracker unavailable; the double-count is Rust-path only")
+
+        store.on_fill(_fill("TXFE6", price=1_800_000))
+        store.on_fill(_closing_fill("TXFE6", price=1_810_000))
+        banked = store.total_pnl
+        assert banked != 0, "closing fill must realize PnL or the test proves nothing"
+
+        store._evict_flat_positions()
+        assert "ACC:S1:TXFE6" not in store.positions
+        assert store._evicted_realized_pnl_scaled == banked
+
+        # Reopening the same key takes the O(n) recompute branch, because
+        # Position.update only moves realized_pnl_scaled on a close.
+        store.on_fill(_fill("TXFE6", price=1_800_000))
+        assert store.total_pnl == banked
+
+    def test_eviction_removes_the_key_from_the_rust_tracker(self) -> None:
+        store = PositionStore()
+        if store._rust_tracker is None:
+            pytest.skip("Rust tracker unavailable")
+
+        store.on_fill(_fill("TXFE6", price=1_800_000))
+        store.on_fill(_closing_fill("TXFE6", price=1_810_000))
+        before = store._rust_tracker.len()
+
+        store._evict_flat_positions()
+
+        assert store._rust_tracker.len() == before - 1
+        assert store._rust_tracker.get("ACC:S1:TXFE6") == (0, 0, 0, 0)
+
+    def test_forgetting_a_key_drops_its_recovery_offsets(self) -> None:
+        store = PositionStore()
+        store.load_recovery(
+            account_id="ACC",
+            symbol="TXFE6",
+            net_qty=1,
+            avg_price_scaled=1_800_000,
+            realized_pnl_scaled=-70_000,
+            strategy_id="S1",
+        )
+        store.on_fill(_fill("TXFE6", price=1_800_000))
+        key = "ACC:S1:TXFE6"
+        assert store._recovery_rpnl_offsets.get(key) == -70_000
+
+        store.clear_symbol_positions("TXFE6")
+
+        assert key not in store._recovery_rpnl_offsets
+        assert key not in store._recovery_fees_offsets
+
+
+class TestCardinalityCapAppliesToBothFillPaths:
+    """``HFT_POSITIONS_MAX_SIZE`` is the documented exposure cap (default
+    10,000). The tracker is selected once in ``__init__``, so when it is
+    available the Python path never runs and the cap had no effect at all.
+    """
+
+    def test_the_cap_is_enforced_when_the_rust_tracker_handles_the_fill(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HFT_POSITIONS_MAX_SIZE", "3")
+        store = PositionStore()
+        if store._rust_tracker is None:
+            pytest.skip("Rust tracker unavailable; the Python path already capped")
+        assert store._positions_max_size == 3
+
+        for i in range(3):
+            sym = f"SYM{i}"
+            store.on_fill(_fill(sym, price=1_800_000))
+            store.on_fill(_closing_fill(sym, price=1_800_000))
+        assert len(store.positions) == 3
+
+        store.on_fill(_fill("SYM9", price=1_800_000))
+
+        assert len(store.positions) <= 3
+        assert "ACC:S1:SYM9" in store.positions
