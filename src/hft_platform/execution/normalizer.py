@@ -43,7 +43,6 @@ class ExecutionNormalizer:
         # login. Cached on first non-empty answer so the fill path stays O(1)
         # and never re-enters the SDK.
         self._default_account_id_provider = default_account_id_provider
-        self._synth_counter: int = 0
         # Which "which candidate ids were present" shapes have already been
         # logged. The counter below carries the volume; the log only has to
         # carry the payload shape once per distinct shape, so a burst of
@@ -359,9 +358,25 @@ class ExecutionNormalizer:
             if not fill_id:
                 # Synthesize a fill_id when broker omits seqno (e.g. reconnect replays).
                 # This enables downstream dedup to catch duplicate fills.
+                #
+                # CONTENT-ADDRESSED, deliberately. This used to append
+                # ``self._synth_counter``, which increments per call, so the
+                # same replayed deal produced a DIFFERENT id every time and
+                # dedup could never match it -- defeating the one purpose the
+                # docstring above claims. Worse, the id was always truthy, so
+                # the router's content-keyed fallback
+                # (``fill.fill_id or _synthesize_dedup_key(fill)``, four call
+                # sites) was unreachable dead code. A reconnect replay
+                # therefore double-counted position and realized PnL.
+                #
+                # Fields match ``execution.router._synthesize_dedup_key``
+                # exactly, so the synthesized id and the fallback key agree on
+                # what "the same fill" means. ``order_id`` is included for the
+                # same reason it is there: without it, two different orders
+                # filling the same qty at the same price in the same
+                # nanosecond collapse into one.
                 _exch_ts = self._normalize_ts_ns(get("ts"))
-                fill_id = f"synth_{sym}_{side.name}_{scale_price}_{qty}_{_exch_ts}_{self._synth_counter}"
-                self._synth_counter += 1
+                fill_id = f"synth_{sym}|{order_id}|{side.name}|{scale_price}|{qty}|{_exch_ts}"
                 self.metrics.synthetic_fill_id_total.inc()
                 logger.info(
                     "synthetic_fill_id_generated",

@@ -377,8 +377,24 @@ class TestNormalizerSyntheticFillId:
         assert "TMFD6" in fill.fill_id
         assert "SELL" in fill.fill_id
 
-    def test_synthetic_fill_id_deterministic(self) -> None:
-        """Same input produces unique synthetic fill_ids (counter-based) for disambiguation."""
+    def test_a_replayed_deal_synthesizes_the_same_fill_id(self) -> None:
+        """The same broker payload twice must produce the SAME synthetic id.
+
+        This test previously asserted the opposite -- it was named
+        ``..._deterministic`` while asserting ``fill1.fill_id != fill2.fill_id``,
+        on the reasoning that a per-call counter "disambiguates". It does the
+        reverse: a reconnect replay of one deal got two ids, dedup could never
+        match them, and the position and realized PnL were counted twice. The
+        id was also always truthy, which made the router's content-keyed
+        fallback (``fill.fill_id or _synthesize_dedup_key(fill)``) dead code at
+        all four of its call sites.
+
+        The tradeoff is explicit and is the safer side of it: with no broker
+        sequence number you cannot both dedup a replay and disambiguate two
+        genuinely distinct fills that share every field. Double-counting a
+        position is the worse error, and a broker that omits the seqno is
+        precisely the replay case.
+        """
         normalizer = ExecutionNormalizer()
         data = {
             "code": "2330",
@@ -394,9 +410,30 @@ class TestNormalizerSyntheticFillId:
         fill1 = normalizer.normalize_fill(raw1)
         fill2 = normalizer.normalize_fill(raw2)
         assert fill1 is not None and fill2 is not None
-        # Each call increments _synth_counter, so IDs differ by the trailing counter
+        assert fill1.fill_id == fill2.fill_id
+
+    def test_two_orders_with_identical_economics_keep_distinct_fill_ids(self) -> None:
+        """order_id is in the key, so the collision risk is narrower than before.
+
+        The old synthetic id did not include the order id at all, so its
+        "prefix" collided for any two orders filling the same qty at the same
+        price in the same nanosecond. Including it makes the new id strictly
+        more discriminating than the old prefix while also being stable across
+        a replay.
+        """
+        normalizer = ExecutionNormalizer()
+        base = {
+            "code": "2330",
+            "action": "Buy",
+            "price": 100.0,
+            "quantity": 1,
+            "account_id": "acct1",
+            "custom_field": "strat1",
+            "ts": 1_000_000_000,
+        }
+        raw1 = RawExecEvent(topic="deal", data={**base, "ordno": "ORD-A"}, ingest_ts_ns=1_000_000_000)
+        raw2 = RawExecEvent(topic="deal", data={**base, "ordno": "ORD-B"}, ingest_ts_ns=1_000_000_000)
+        fill1 = normalizer.normalize_fill(raw1)
+        fill2 = normalizer.normalize_fill(raw2)
+        assert fill1 is not None and fill2 is not None
         assert fill1.fill_id != fill2.fill_id
-        # Both share the same prefix (symbol, side, price, qty, ts)
-        prefix1 = "_".join(fill1.fill_id.rsplit("_", 1)[:-1])
-        prefix2 = "_".join(fill2.fill_id.rsplit("_", 1)[:-1])
-        assert prefix1 == prefix2
