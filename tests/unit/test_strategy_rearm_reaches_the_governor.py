@@ -99,12 +99,23 @@ def test_a_rearmed_strategy_can_be_quarantined_again(rig):
 
 
 def test_the_tick_is_a_no_op_without_a_runner(rig):
-    """Partially constructed systems (tests, early boot) must not raise."""
+    """Partially constructed systems (early boot, tests) must not raise.
+
+    Asserted against the real governor rather than on absence-of-exception: a
+    tick that cannot see a runner must leave the quarantine exactly as it found
+    it, not merely decline to crash.
+    """
+    rig.governor.quarantine(STRATEGY_ID, reason="strategy_exception")
+    rig.gate.rearm_strategy(STRATEGY_ID)
+    rearmed = rig.gate.snapshot()
+
     rig.system.strategy_runner = None
-    rig.system._consume_strategy_rearm_requests({"strategies": {}})
+    rig.system._consume_strategy_rearm_requests(rearmed)
+    assert rig.governor.is_quarantined(STRATEGY_ID)
 
     rig.system.strategy_runner = SimpleNamespace(strategy_governor=None)
-    rig.system._consume_strategy_rearm_requests({"strategies": {}})
+    rig.system._consume_strategy_rearm_requests(rearmed)
+    assert rig.governor.is_quarantined(STRATEGY_ID)
 
 
 def test_an_unreadable_state_file_leaves_the_quarantine_alone(rig):
