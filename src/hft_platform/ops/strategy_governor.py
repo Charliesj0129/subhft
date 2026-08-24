@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import uuid
 from dataclasses import dataclass
 from typing import Any, Iterable
 
@@ -20,11 +22,20 @@ _AUTONOMY_MODE_VALUES = {
 }
 
 
+#: Identifies this engine process. A quarantine token carries it so a re-arm
+#: request written against a *previous* run can never match a live quarantine
+#: after a restart, when the per-process counter starts over at 1.
+_RUN_ID = f"{os.getpid():d}-{uuid.uuid4().hex[:8]}"
+
+
 @dataclass(slots=True, frozen=True)
 class StrategyQuarantine:
     strategy_id: str
     reason: str
     transition: AutonomyTransition
+    #: Unique per quarantine *instance*, not per strategy. An operator re-arm
+    #: must name the exact token it intends to clear; see ``rearm``.
+    token: str = ""
 
 
 class StrategyHealthGovernor:
@@ -32,14 +43,23 @@ class StrategyHealthGovernor:
         self.metrics = metrics or MetricsRegistry.get()
         self.evidence_writer = evidence_writer or get_shared_autonomy_evidence_writer()
         self._quarantined: dict[str, StrategyQuarantine] = {}
+        self._quarantine_seq: int = 0
+
+    def quarantine_token(self, strategy_id: str) -> str | None:
+        """Token of the strategy's live quarantine, or ``None`` if not quarantined."""
+        entry = self._quarantined.get(strategy_id)
+        return entry.token if entry is not None else None
 
     def quarantine(self, strategy_id: str, *, reason: str) -> AutonomyTransition:
         from_mode = AutonomyMode.STRATEGY_QUARANTINED if strategy_id in self._quarantined else AutonomyMode.NORMAL
         transition = self._build_transition(from_mode=from_mode, reason=reason)
+        self._quarantine_seq += 1
+        token = f"{_RUN_ID}:{strategy_id}:{self._quarantine_seq}"
         self._quarantined[strategy_id] = StrategyQuarantine(
             strategy_id=strategy_id,
             reason=reason,
             transition=transition,
+            token=token,
         )
         self._set_strategy_quarantine_active(strategy_id, active=True)
         self._set_strategy_scope_state()
@@ -50,21 +70,49 @@ class StrategyHealthGovernor:
                 mode=transition.to_mode.value,
                 reason=transition.reason,
                 manual_rearm_required=transition.manual_rearm_required,
-                metadata={"strategy_id": strategy_id},
+                metadata={"strategy_id": strategy_id, "quarantine_token": token},
             )
-        logger.warning("strategy_quarantined", strategy_id=strategy_id, reason=reason)
+        logger.warning("strategy_quarantined", strategy_id=strategy_id, reason=reason, quarantine_token=token)
         return transition
 
     def is_quarantined(self, strategy_id: str) -> bool:
         return strategy_id in self._quarantined
 
-    def rearm(self, strategy_id: str) -> None:
-        if strategy_id not in self._quarantined:
+    def rearm(self, strategy_id: str, *, request_id: str | None = None) -> None:
+        """Clear one strategy's quarantine and record the recovery transition.
+
+        The transition record matters as much as the state change. Before this,
+        ``rearm`` mutated memory and gauges only, so ``state_timeline.jsonl`` and
+        ``strategy_quarantine.json`` still ended at ``STRATEGY_QUARANTINED``
+        after dispatch had resumed — an incident reconstruction read the
+        strategy as permanently halted. Recording a NORMAL transition with
+        ``manual_rearm_required=False`` is also what clears the persisted flag
+        and consumes the request in ``runtime_state.json``; without it the stale
+        ``false`` is what re-enabled a freshly quarantined strategy.
+        """
+        entry = self._quarantined.pop(strategy_id, None)
+        if entry is None:
             return
-        self._quarantined.pop(strategy_id, None)
         self._set_strategy_quarantine_active(strategy_id, active=False)
         self._set_strategy_scope_state()
-        logger.info("strategy_rearmed", strategy_id=strategy_id)
+        if self.evidence_writer is not None:
+            self.evidence_writer.record_transition(
+                scope="strategy",
+                mode=AutonomyMode.NORMAL.value,
+                reason="manual_rearm",
+                manual_rearm_required=False,
+                metadata={
+                    "strategy_id": strategy_id,
+                    "quarantine_token": entry.token,
+                    "request_id": request_id,
+                },
+            )
+        logger.info(
+            "strategy_rearmed",
+            strategy_id=strategy_id,
+            quarantine_token=entry.token,
+            request_id=request_id,
+        )
 
     def build_cancel_intents(
         self,

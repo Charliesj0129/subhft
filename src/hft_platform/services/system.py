@@ -58,6 +58,17 @@ def _audit_persistence_writer_for_recorder(recorder: Any) -> Any | None:
     return getattr(recorder, "writer", None)
 
 
+#: Cap on remembered consumed re-arm request ids. The quarantine token is what
+#: actually enforces single-use; this set only guards against a duplicate within
+#: one tick, so it never needs to grow.
+_MAX_CONSUMED_REARM_REQUESTS = 256
+
+#: Distinguishes "caller did not supply state" from "the shared read failed and
+#: returned None". Without it the failure path read runtime_state.json twice and
+#: logged two warnings on every one-second supervisor tick.
+_STATE_NOT_SUPPLIED: Any = object()
+
+
 class HFTSystem:
     # Latched reference instrument for the drift-burst detector (see
     # ``_drift_burst_book``). Empty until the first book with a valid mid.
@@ -316,6 +327,9 @@ class HFTSystem:
         )
         self.manual_rearm_gate = ManualRearmGate()
         self._last_platform_rearm_request_seen = 0.0
+        # Request ids already applied to the governor, so a duplicate read of
+        # the same request within one tick cannot re-arm twice.
+        self._consumed_rearm_request_ids: set[str] = set()
         self.platform_degrade_inputs = getattr(
             self.registry, "platform_degrade_inputs", None
         ) or self.bootstrapper.build_platform_degrade_inputs(
@@ -1073,25 +1087,33 @@ class HFTSystem:
 
         Without this the strategy re-arm is a **write-only loop**. The quarantine
         that gates dispatch is ``StrategyHealthGovernor._quarantined``, an
-        in-memory dict; ``ManualRearmGate.rearm_strategy`` only clears a flag in
-        runtime_state.json, and until now nothing read that flag back --
-        ``_consume_platform_rearm_request`` polls the ``platform`` section only,
-        and ``StrategyHealthGovernor.rearm`` had no production caller at all, just
-        two lines in a unit test. The CLI command therefore reported success and
-        changed nothing, leaving an engine restart as the only real remedy.
+        in-memory dict; the CLI only touches runtime_state.json, and nothing read
+        it back -- ``StrategyHealthGovernor.rearm`` had no production caller at
+        all. The command reported success and changed nothing, leaving an engine
+        restart as the only real remedy. Measured on THESHOW: ``R47_MAKER_TMF``
+        was quarantined at 2026-08-23T14:18:20Z by a single rejected intent and
+        emitted no alpha decision for 33 h, paging the whole time.
 
-        Measured consequence on THESHOW: ``R47_MAKER_TMF`` was quarantined at
-        2026-08-23T14:18:20Z by a single rejected intent and had emitted no alpha
-        decision for the 22 h since -- through a full day session and into the
-        next night session -- with ``StrategyQuarantineActive`` and
-        ``ManualRearmRequired`` both paging the whole time.
+        **This consumer is edge-triggered, and that is the whole point.** The
+        first version keyed off ``manual_rearm_required`` being false, reasoning
+        that a fresh quarantine always rewrites the flag to true. Two independent
+        reviews falsified that, and the source agrees:
 
-        No watermark is needed here, unlike the platform path. The in-memory dict
-        *is* the state: a re-armed strategy leaves ``_quarantined`` and stops
-        being examined, and a fresh quarantine rewrites the persisted flag back to
-        true. A strategy quarantined in memory but missing from the file (evidence
-        writer disabled, or its write failed) reads as "no re-arm requested" and
-        stays quarantined, which is the fail-closed direction.
+        * ``rearm`` never wrote the flag back, so after one re-arm the entry
+          stays ``false`` **forever**;
+        * ``quarantine`` populates ``_quarantined`` *before* the evidence writer
+          persists ``true``, so a tick inside that window sees the stale
+          ``false``;
+        * if that write ever fails -- unwritable dir, full disk -- the strategy
+          becomes permanently un-quarantinable, silently re-armed every second.
+
+        A level-triggered flag cannot distinguish "an operator authorized this"
+        from "nobody has needed to set it yet". So the file now carries an
+        explicit request bound to a ``quarantine_token`` minted per quarantine
+        *instance* and namespaced by the engine's run id. A request is applied
+        only when it names the token of the live quarantine, which makes a
+        replayed, stale, or cross-restart request a no-op. Anything missing or
+        malformed is skipped, which is the fail-closed direction.
         """
         if not state:
             return
@@ -1105,24 +1127,57 @@ class HFTSystem:
         strategies = state.get("strategies")
         if not isinstance(strategies, dict):
             return
+        consumed = getattr(self, "_consumed_rearm_request_ids", None)
+        if consumed is None:
+            consumed = set()
+            self._consumed_rearm_request_ids = consumed
         for strategy_id in list(quarantined):
             entry = strategies.get(strategy_id)
             if not isinstance(entry, dict):
                 continue
-            if bool(entry.get("manual_rearm_required")):
+            request = entry.get("rearm_request")
+            if not isinstance(request, dict):
                 continue
-            governor.rearm(strategy_id)
+            requested_token = request.get("quarantine_token")
+            live_token = governor.quarantine_token(strategy_id)
+            if not isinstance(requested_token, str) or not requested_token:
+                continue
+            if not live_token or requested_token != live_token:
+                # Names a different quarantine instance: an operator request that
+                # lost a race with a re-quarantine, or one left over from a
+                # previous engine run. Never apply it.
+                logger.warning(
+                    "strategy_rearm_request_token_mismatch",
+                    strategy_id=strategy_id,
+                    requested_token=requested_token,
+                    live_token=live_token,
+                )
+                continue
+            request_id = request.get("request_id")
+            if not isinstance(request_id, str) or not request_id:
+                continue
+            if request_id in consumed:
+                continue
+            consumed.add(request_id)
+            if len(consumed) > _MAX_CONSUMED_REARM_REQUESTS:
+                # Bounded: the token check is what enforces single-use, so this
+                # set is only belt-and-braces against a same-tick duplicate.
+                consumed.clear()
+                consumed.add(request_id)
+            governor.rearm(strategy_id, request_id=request_id)
             logger.warning(
                 "strategy_rearm_applied_from_operator_request",
                 strategy_id=strategy_id,
+                request_id=request_id,
+                quarantine_token=requested_token,
             )
 
-    def _consume_platform_rearm_request(self, state: dict | None = None) -> None:
+    def _consume_platform_rearm_request(self, state: Any = _STATE_NOT_SUPPLIED) -> None:
         gate = getattr(self, "manual_rearm_gate", None)
         controller = getattr(self, "platform_degrade_controller", None)
         if gate is None or controller is None:
             return
-        if state is None:
+        if state is _STATE_NOT_SUPPLIED:
             state = self._read_rearm_state()
         if not state:
             return

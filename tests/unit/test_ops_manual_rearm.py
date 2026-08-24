@@ -137,7 +137,42 @@ class TestWriteState:
 
 
 class TestRearmStrategy:
-    def test_rearm_strategy_clears_flag(self, tmp_path: Path) -> None:
+    def test_rearm_strategy_records_a_request_bound_to_the_quarantine(self, tmp_path: Path) -> None:
+        """The gate writes a request; the engine decides.
+
+        This test previously asserted that the gate cleared
+        ``manual_rearm_required`` itself. That was the defect, not the contract:
+        a cleared flag is level-triggered, so a stale ``false`` -- left by an
+        earlier re-arm or by a persist that never landed -- was indistinguishable
+        from a fresh operator authorization and silently re-armed a broken
+        strategy. Rewritten deliberately, not to make a failure go away.
+        """
+        path = tmp_path / "state.json"
+        _write_state(
+            path,
+            {
+                "platform": {"manual_rearm_required": False, "reason": None},
+                "strategies": {
+                    "alpha": {
+                        "manual_rearm_required": True,
+                        "reason": "halt",
+                        "quarantine_token": "run1:alpha:1",
+                    }
+                },
+            },
+        )
+        gate = ManualRearmGate(state_path=path)
+        request_id = gate.rearm_strategy("alpha")
+
+        reloaded = json.loads(path.read_text(encoding="utf-8"))
+        entry = reloaded["strategies"]["alpha"]
+        # The flag stays set until the engine consumes the request.
+        assert entry["manual_rearm_required"] is True
+        assert entry["rearm_request"]["request_id"] == request_id
+        assert entry["rearm_request"]["quarantine_token"] == "run1:alpha:1"
+
+    def test_rearm_strategy_refuses_an_entry_without_a_quarantine_token(self, tmp_path: Path) -> None:
+        """Legacy entries fail closed: the engine could not verify the target."""
         path = tmp_path / "state.json"
         _write_state(
             path,
@@ -147,10 +182,8 @@ class TestRearmStrategy:
             },
         )
         gate = ManualRearmGate(state_path=path)
-        gate.rearm_strategy("alpha")
-        reloaded = json.loads(path.read_text(encoding="utf-8"))
-        assert reloaded["strategies"]["alpha"]["manual_rearm_required"] is False
-        assert reloaded["strategies"]["alpha"]["reason"] is None
+        with pytest.raises(ValueError, match="quarantine_token"):
+            gate.rearm_strategy("alpha")
 
     def test_rearm_strategy_raises_when_not_required(self, tmp_path: Path) -> None:
         path = tmp_path / "state.json"

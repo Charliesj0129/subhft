@@ -67,6 +67,14 @@ class AutonomyEvidenceWriter:
                 reason=reason,
                 metadata=metadata,
             )
+        else:
+            # A recovery transition MUST reach runtime_state.json too. It used
+            # not to: _update_runtime_state was reachable only through
+            # record_manual_rearm_requirement, which runs only when the flag is
+            # being *set*. So nothing in the engine ever wrote the flag back to
+            # false, and the stale false left behind by an earlier operator
+            # re-arm was then indistinguishable from a fresh authorization.
+            self._update_runtime_state(record)
         for cb in self._on_transition_callbacks:
             try:
                 cb(record)
@@ -135,6 +143,18 @@ class AutonomyEvidenceWriter:
             handle.write(json.dumps(record, ensure_ascii=False) + "\n")
 
     def _update_runtime_state(self, record: dict[str, Any]) -> None:
+        """Project one transition onto the operator-visible runtime state.
+
+        Two properties this file depends on:
+
+        * **The record's own flag decides.** This used to hardcode ``True``,
+          which is why a recovery could never clear anything.
+        * **The write is atomic.** A plain ``write_text`` here races the CLI's
+          own writer in another process; a crash mid-write leaves truncated
+          JSON that ``_load_state`` then discards, silently dropping a live
+          quarantine's flag. Temp file + ``replace`` makes the swap atomic,
+          matching what ``ManualRearmGate._write_state`` already did.
+        """
         path = self.base_dir / "runtime_state.json"
         if path.exists():
             try:
@@ -142,6 +162,8 @@ class AutonomyEvidenceWriter:
             except Exception:
                 payload = {}
         else:
+            payload = {}
+        if not isinstance(payload, dict):
             payload = {}
 
         platform = payload.get("platform")
@@ -153,19 +175,40 @@ class AutonomyEvidenceWriter:
             strategies = {}
             payload["strategies"] = strategies
 
+        required = bool(record.get("manual_rearm_required", True))
+        metadata = record.get("metadata")
+        metadata = metadata if isinstance(metadata, dict) else {}
+
         if record["scope"] == "platform":
-            platform["manual_rearm_required"] = True
-            platform["reason"] = record["reason"]
+            platform["manual_rearm_required"] = required
+            platform["reason"] = record["reason"] if required else None
         elif record["scope"] == "strategy":
-            strategy_id = str(record["metadata"].get("strategy_id") or "").strip()
+            strategy_id = str(metadata.get("strategy_id") or "").strip()
             if strategy_id:
-                strategies[strategy_id] = {
-                    "manual_rearm_required": True,
-                    "reason": record["reason"],
-                }
+                if required:
+                    entry: dict[str, Any] = {
+                        "manual_rearm_required": True,
+                        "reason": record["reason"],
+                    }
+                    token = metadata.get("quarantine_token")
+                    if isinstance(token, str) and token:
+                        # The operator's re-arm must name this exact token, so a
+                        # request aimed at an earlier quarantine cannot clear it.
+                        entry["quarantine_token"] = token
+                    strategies[strategy_id] = entry
+                else:
+                    # Recovery: drop the flag AND the consumed request, so the
+                    # same request can never be replayed against a later
+                    # quarantine of the same strategy.
+                    strategies[strategy_id] = {
+                        "manual_rearm_required": False,
+                        "reason": None,
+                    }
 
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+        tmp_path = path.with_suffix(f"{path.suffix}.tmp")
+        tmp_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+        tmp_path.replace(path)
 
     def _append_markdown(self, filename: str, line: str) -> None:
         path = self._ensure_session_dir() / filename

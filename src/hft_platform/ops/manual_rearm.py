@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -18,16 +19,55 @@ class ManualRearmGate:
     def __init__(self, *, state_path: str | Path | None = None) -> None:
         self.state_path = Path(state_path) if state_path is not None else DEFAULT_RUNTIME_STATE_PATH
 
-    def rearm_strategy(self, strategy_id: str) -> None:
+    def rearm_strategy(self, strategy_id: str) -> str:
+        """Record an operator request to clear one strategy's quarantine.
+
+        This writes a *request*, not the outcome. It used to clear the
+        ``manual_rearm_required`` boolean directly, which made the file
+        level-triggered: any strategy whose flag read false was treated by the
+        engine as freshly authorized. A stale false — left by an earlier
+        re-arm, or by a failed write during a later quarantine — then re-enabled
+        a broken strategy on the next supervisor tick, with no operator
+        involved.
+
+        The request is edge-triggered instead, and bound to the exact
+        quarantine it intends to clear via ``quarantine_token``. The engine
+        consumes it, clears the flag itself, and drops the request, so it can
+        never apply twice or apply to a later quarantine.
+
+        Returns the request id, for correlating with the engine's
+        ``strategy_rearm_applied_from_operator_request`` log line.
+        """
         state = self._load_state()
         strategies = self._strategies_section(state)
         strategy_state = strategies.get(strategy_id)
         if not isinstance(strategy_state, dict) or not bool(strategy_state.get("manual_rearm_required")):
             raise ValueError(f"strategy {strategy_id!r} does not require manual re-arm")
 
-        strategy_state["manual_rearm_required"] = False
-        strategy_state["reason"] = None
+        token = strategy_state.get("quarantine_token")
+        if not isinstance(token, str) or not token:
+            # Fail closed. An entry without a token predates this protocol, so
+            # the engine cannot verify which quarantine the request targets.
+            raise ValueError(
+                f"strategy {strategy_id!r} has no quarantine_token; the running engine "
+                "predates the request/ack re-arm protocol. Restart the engine to clear "
+                "the quarantine, or deploy the current build first."
+            )
+
+        request_id = uuid.uuid4().hex
+        strategy_state["rearm_request"] = {
+            "request_id": request_id,
+            "quarantine_token": token,
+            "requested_at_ns": timebase.now_ns(),
+        }
         self._write_state(state)
+        logger.warning(
+            "strategy_rearm_requested",
+            strategy_id=strategy_id,
+            request_id=request_id,
+            quarantine_token=token,
+        )
+        return request_id
 
     def rearm_platform(self) -> None:
         """Persist the manual-rearm flag AND clear the live controller.
