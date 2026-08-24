@@ -41,7 +41,7 @@ async def test_batcher_flush_on_interval():
     batcher = Batcher("hft.table", flush_limit=10, flush_interval_ms=1, writer=writer)
 
     await batcher.add({"id": 1})
-    batcher.last_flush_time = time.time() - 1
+    batcher.last_flush_monotonic_ns = time.monotonic_ns() - 1_000_000_000
 
     await batcher.check_flush()
     assert writer.calls
