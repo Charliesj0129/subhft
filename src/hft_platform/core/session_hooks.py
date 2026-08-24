@@ -57,6 +57,7 @@ class SessionHookManager:
         "_phase",
         "_running",
         "_calendar",
+        "_product_type",
     )
 
     def __init__(self) -> None:
@@ -70,6 +71,14 @@ class SessionHookManager:
         self._hook_timeout_s = float(os.getenv("HFT_SESSION_HOOKS_TIMEOUT_S", str(_DEFAULT_HOOK_TIMEOUT_S)))
         self._pre_market_hooks: list[tuple[str, HookCallback]] = []
         self._post_market_hooks: list[tuple[str, HookCallback]] = []
+        # TAIFEX by default. ``MarketCalendar.is_trading_hours`` treats
+        # ``product_type=None`` as the TWSE stock day session (09:00-13:30);
+        # this platform is TAIFEX-primary (day 08:45-13:45, night 15:00-05:00),
+        # so the default answered about the wrong market. With the old default a
+        # pre-market hook would fire 15 min after the futures open, a
+        # post-market hook 15 min before the futures close, and the entire night
+        # session would read as POST_MARKET so its boundaries never fired at all.
+        self._product_type = os.getenv("HFT_SESSION_HOOKS_PRODUCT", "future")
         self._phase: SessionPhase | None = None
         self._running = False
         self._calendar: Any = None  # Lazy-loaded MarketCalendar
@@ -117,7 +126,7 @@ class SessionHookManager:
 
         now = dt.datetime.now(tz)
 
-        if cal.is_trading_hours(now):
+        if cal.is_trading_hours(now, product_type=self._product_type):
             return SessionPhase.MARKET_OPEN
 
         # Check if today is a trading day and we are past market close.

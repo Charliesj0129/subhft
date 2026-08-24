@@ -231,7 +231,15 @@ class OrderAdapter:
         self._order_id_map_max_size = int(os.getenv("HFT_ORDER_ID_MAP_MAX_SIZE", "10000"))
         self._order_id_map_persist_path: str = os.getenv("HFT_ORDER_ID_MAP_PERSIST_PATH", ".state/order_id_map.jsonl")
         self._order_id_map_persist_interval_s: float = float(os.getenv("HFT_ORDER_ID_MAP_PERSIST_INTERVAL_S", "1.0"))
-        self._order_id_map_last_persist_s: float = 0.0  # monotonic timestamp
+        # -inf, not 0.0. ``time.monotonic()`` counts from boot, so 0.0 means
+        # "at boot" -- on a host whose uptime is shorter than
+        # HFT_ORDER_ID_MAP_PERSIST_INTERVAL_S the very first checkpoint is
+        # throttled away instead of being written immediately. The fill-dedup
+        # twin had the same sentinel and was fixed in PR #446; this copy was
+        # left behind, which is the third time this checkpoint pair has drifted
+        # apart. Benign at the 1 s default, live as soon as the interval is
+        # configured larger.
+        self._order_id_map_last_persist_s: float = float("-inf")  # monotonic timestamp
         self._order_id_map_trailing_handle: asyncio.TimerHandle | None = None
         self._order_id_map_io_lock = threading.Lock()
         self._order_id_map_persist_futures: set[asyncio.Future[None]] = set()
@@ -270,7 +278,10 @@ class OrderAdapter:
         # TTL sweep: evict orphaned live_orders entries (missed terminal callbacks)
         self._live_orders_ttl_s: float = float(os.getenv("HFT_LIVE_ORDERS_TTL_S", "300"))  # duration (s)
         self._live_orders_max_size: int = int(os.getenv("HFT_LIVE_ORDERS_MAX_SIZE", "10000"))
-        self._live_orders_last_sweep_s: float = 0.0  # monotonic timestamp
+        # -inf for the same reason as the checkpoint stamp above: this is a
+        # monotonic clock, so 0.0 means "at boot" and the first sweep inside
+        # the first 60 s of uptime is skipped rather than run.
+        self._live_orders_last_sweep_s: float = float("-inf")  # monotonic timestamp
         self._live_orders_inserted_at: Dict[str, float] = {}  # order_key -> monotonic timestamp
         # Bounded deque: auto-evicts oldest entries when full (OOM protection)
         self._deferred_terminals: collections.deque[tuple[str, str, float]] = collections.deque(maxlen=256)

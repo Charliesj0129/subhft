@@ -350,6 +350,7 @@ class ExecutionRouter:
         # ``_set_order_id_mapping`` so every writer site is greppable under
         # the ``order_id_map_set`` event with a stable ``source=`` tag.
         changed = False
+        newly_mapped: list[str] = []
         with resolver.lock:
             for broker_id in ids:
                 if broker_id not in resolver.order_id_map:
@@ -361,11 +362,18 @@ class ExecutionRouter:
                         source="execution_router_backfill",
                     )
                     changed = True
+                    newly_mapped.append(broker_id)
         if changed:
+            # Collected as the ids are actually written. The old expression
+            # recomputed the list AFTER the mutations, from a predicate that
+            # every already-correct entry also satisfies
+            # (``order_id_map.get(i) == order_key``), so ids that were already
+            # mapped were reported as new and the log could not be used to see
+            # what a backfill actually did.
             logger.debug(
                 "order_id_map_backfilled",
                 order_key=order_key,
-                new_ids=[i for i in ids if i not in resolver.order_id_map or resolver.order_id_map.get(i) == order_key],
+                new_ids=newly_mapped,
             )
 
     def _resolve_order_key_for_fill(self, fill: Any) -> str | None:

@@ -9,12 +9,24 @@ All monetary fields follow the Precision Law: scaled integers (x10000).
 
 from __future__ import annotations
 
+import datetime as dt
 import enum
 from dataclasses import dataclass
 from datetime import date
 from typing import Literal
 
 import structlog
+
+
+def _trading_date_today() -> date:
+    """Today's date in the platform's trading timezone (``HFT_TS_TZ``).
+
+    Imported lazily so this module stays importable without pulling in the
+    timebase's environment resolution at import time.
+    """
+    from hft_platform.core import timebase
+
+    return dt.datetime.fromtimestamp(timebase.now_ns() / 1e9, tz=timebase.TZINFO).date()
 
 
 class InstrumentType(enum.Enum):
@@ -264,7 +276,16 @@ class InstrumentRegistry:
 
         Raises :class:`InstrumentLimitError` if nothing could be evicted.
         """
-        evicted = self.evict_expired(as_of=date.today())
+        # Trading date from the platform timebase, not ``date.today()``.
+        # ``date.today()`` reads the SYSTEM-local date; every expiry in this
+        # registry is a Taiwan trading date. Production containers set
+        # TZ=Asia/Taipei so the two coincide there, but CI runners and
+        # non-Docker dev hosts default to UTC, where for the 8 hours of the TW
+        # morning the UTC date is still TW-yesterday. A contract that expired
+        # at the end of the previous TW day then fails the strict
+        # ``expiry < as_of`` check, is not evicted, and this raises
+        # InstrumentLimitError while genuinely-expired space sits unreclaimed.
+        evicted = self.evict_expired(as_of=_trading_date_today())
         if evicted == 0:
             raise InstrumentLimitError(
                 f"InstrumentRegistry is at capacity ({self._max}); "
