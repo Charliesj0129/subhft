@@ -437,3 +437,106 @@ def test_every_wal_alert_metric_survives_the_wal_loader_keep_filter() -> None:
             assert pattern.match(metric), (
                 f"{metric} is used by an alert and is only produced by the wal-loader, but the keep filter drops it"
             )
+
+
+def test_execution_router_heartbeat_stale_gates_on_nonzero_timestamp() -> None:
+    """ExecutionRouterHeartbeatStale must not fire from an unset gauge.
+
+    ``execution_router_heartbeat_ts`` is a Gauge, so prometheus_client publishes
+    it as 0 from process start until ``ExecutionRouter`` first beats. Without a
+    ``> 0`` gate, ``time() - 0`` is ~1.8e9 and always exceeds 120, so the rule
+    fires the instant the process starts scraping -- at ``for: 0s`` and severity
+    critical, i.e. a page on every restart. THESHOW fired exactly that at
+    14:16Z on 2026-08-23, the minute of the restart, and it self-cleared.
+
+    Identical defect to :func:`test_alpha_signal_silent_gates_on_nonzero_timestamp`.
+    """
+    alerts = _load_alerts_by_name()
+    assert "ExecutionRouterHeartbeatStale" in alerts
+    expr = alerts["ExecutionRouterHeartbeatStale"]["expr"]
+    assert "execution_router_heartbeat_ts > 0" in expr, (
+        "ExecutionRouterHeartbeatStale must gate on a non-zero heartbeat so an "
+        f"unset gauge cannot page on every engine restart. Current expression: {expr!r}"
+    )
+
+
+def test_event_loop_lag_alert_reads_the_probe_not_the_supervisor_composite() -> None:
+    """The lag alert must read the idle probe, not the supervisor's own tick period.
+
+    ``event_loop_lag_ms`` times the supervisor's whole tick period, so it is loop
+    congestion PLUS the supervisor's own work -- ``services/system.py`` says so in
+    the source. Measured on THESHOW over 1 h on 2026-08-24: composite 7.31 ms,
+    of which ``supervisor_tick_duration_ms`` was 5.90 ms and true probe lag
+    1.19 ms. A 5 ms threshold on the composite sits below the supervisor's own
+    mean body time and cannot do anything but flap; it produced 15 firing
+    episodes in one healthy day. StormGuard's loop-lag input was already moved
+    onto the probe for this reason.
+    """
+    alerts = _load_alerts_by_name()
+    assert "EventLoopLagHigh" in alerts
+    expr = alerts["EventLoopLagHigh"]["expr"]
+    assert "event_loop_probe_lag_ms" in expr, (
+        "EventLoopLagHigh must read event_loop_probe_lag_ms, which measures only time "
+        f"the loop was unavailable to any callback. Current expression: {expr!r}"
+    )
+    assert "event_loop_lag_ms" not in expr.replace("event_loop_probe_lag_ms", ""), (
+        "EventLoopLagHigh must not also read the supervisor composite event_loop_lag_ms; "
+        f"81% of that gauge is the supervisor timing itself. Current expression: {expr!r}"
+    )
+
+
+def test_feed_time_skew_alert_excludes_the_snapshot_topic() -> None:
+    """A snapshot's exch_ts is a last-trade time, not a feed-health signal.
+
+    On subscribe, every contract emits one snapshot carrying its last trade
+    timestamp, which for an illiquid option is legitimately hours or days old.
+    THESHOW's ``critical_60s`` counter for ``topic="snapshot"`` stood at exactly
+    478 -- one per subscription -- having jumped 0 -> 458 -> 478 during the
+    22:16 CST subscribe burst on 2026-08-23 and then stayed flat for 22 h.
+    """
+    alerts = _load_alerts_by_name()
+    assert "FeedTimeSkewCritical" in alerts
+    expr = alerts["FeedTimeSkewCritical"]["expr"]
+    assert 'topic!="snapshot"' in expr, (
+        'FeedTimeSkewCritical must exclude topic="snapshot"; a snapshot is stale by '
+        f"construction and every crossing is one-per-subscription. Current expression: {expr!r}"
+    )
+
+
+def test_feed_time_skew_alert_only_fires_while_the_market_is_open() -> None:
+    """Every observed crossing was a between-sessions artifact.
+
+    The first quote after a session gap is stale by construction. Across 36 h on
+    THESHOW every bidask/tick ``critical_60s`` crossing fell outside trading
+    hours: 08:31 and 08:46 CST around the 08:47 open, and 14:26-14:56 CST inside
+    the 13:47-15:02 close. The bursts are too large to separate by magnitude (up
+    to 126 per 10m) and too long to separate by ``for:`` (~20 min), so the
+    session gate is the cut that leaves the alert able to page on real skew.
+    """
+    alerts = _load_alerts_by_name()
+    expr = alerts["FeedTimeSkewCritical"]["expr"]
+    assert "market_trading_hours_active == 1" in expr, (
+        "FeedTimeSkewCritical must be gated on market_trading_hours_active or it "
+        f"reduces to a session-boundary detector. Current expression: {expr!r}"
+    )
+
+
+def test_feed_time_skew_hold_covers_its_own_lookback_window() -> None:
+    """``for:`` must be at least the range length, or the boundary leaks through.
+
+    ``increase(...[10m])`` keeps summing pre-open crossings for one full range
+    length after the market opens, so the session gate alone still let an
+    8-minute burst through at 08:45-08:52 CST on 2026-08-24. Requiring the
+    condition to hold for the lookback guarantees every sample in the window is
+    itself in-session.
+    """
+    alerts = _load_alerts_by_name()
+    rule = alerts["FeedTimeSkewCritical"]
+    window = re.search(r"\[(\d+)m\]", rule["expr"])
+    assert window, f"expected a minutes-scale range vector, got {rule['expr']!r}"
+    hold = re.fullmatch(r"(\d+)m", str(rule.get("for", "0s")))
+    assert hold, f"expected a minutes-scale `for:`, got {rule.get('for')!r}"
+    assert int(hold.group(1)) >= int(window.group(1)), (
+        f"FeedTimeSkewCritical holds for {rule['for']} but looks back "
+        f"{window.group(0)}; the range vector still spans the session boundary"
+    )

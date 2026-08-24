@@ -74,11 +74,42 @@ groups:
 
   # Feed timestamp skew. `feed_time_skew_ns` is clamped at HFT_TS_MAX_LAG_S
   # on the data path, so alert on the severity counter, which carries the raw
-  # magnitude, not on the gauge. On 2026-08-20 production had accumulated 362
-  # critical_60s crossings on topic="snapshot" with no alert defined at all.
+  # magnitude, not on the gauge.
+  #
+  # Two exclusions, both measured on THESHOW 2026-08-24, and both there because
+  # the rule as first written fired only at session boundaries and never once
+  # from steady-state market data:
+  #
+  # 1. topic="snapshot" is excluded outright. A snapshot's exch_ts is the
+  #    contract's *last trade* time, so for an illiquid option it is legitimately
+  #    hours or days old and says nothing about feed health. The counter stood at
+  #    exactly 478 -- one per subscription (120/120/119/119) -- having jumped
+  #    0 -> 458 -> 478 during the 22:16 CST subscribe burst and then stayed
+  #    perfectly flat for the following 22 h. The earlier note here read those
+  #    crossings as an unalerted problem; they are one crossing per contract at
+  #    subscribe time.
+  # 2. The whole rule is gated on market_trading_hours_active, as
+  #    EventLoopLagHigh and AlphaSignalSilent already are. Every bidask/tick
+  #    crossing in 36 h fell in a between-sessions window (08:31 and 08:46 CST
+  #    around the 08:47 open, 14:26-14:56 CST inside the 13:47-15:02 close), where
+  #    the first quote after a gap is stale by construction. The bursts are too
+  #    large to separate by magnitude (up to 126 per 10m) and too long to
+  #    separate by `for:` (~20 min), so the session gate is the only cut that
+  #    keeps the alert able to page on genuine in-session skew.
+  #
+  # `for:` matches the lookback window on purpose, and that is not a tuning
+  # constant. A range vector straddles the session boundary: for one full range
+  # length after the open, `increase(...[10m])` is still summing crossings from
+  # before it, so the gate alone left one 8-minute burst at 08:45-08:52 CST.
+  # Holding for at least the lookback guarantees every sample in the window is
+  # itself in-session. Ten minutes of delay is acceptable here because this
+  # warning is about whether recorded exch_ts is trustworthy for research and
+  # latency work -- it stops nothing trading.
   - alert: FeedTimeSkewCritical
-    expr: increase(feed_time_skew_over_threshold_total{severity="critical_60s"}[10m]) > 0
-    for: 0s
+    expr: |
+      increase(feed_time_skew_over_threshold_total{severity="critical_60s",topic!="snapshot"}[10m]) > 0
+      and on() market_trading_hours_active == 1
+    for: 10m
     labels:
         severity: warning
     annotations:
@@ -631,8 +662,16 @@ groups:
         summary: "Reconciliation discrepancy detected"
         description: "reconciliation_discrepancy_count has been > 0 for more than 1 minute; position state may diverge from broker."
 
+  # The `> 0` gate is load-bearing. execution_router_heartbeat_ts is a Gauge,
+  # so prometheus_client publishes it as 0 from process start until the router
+  # first beats -- and `time() - 0` is ~1.8e9, far past 120. With `for: 0s` and
+  # severity critical, every engine restart paged instantly: THESHOW fired this
+  # at 14:16Z on 2026-08-23, the exact minute of the restart, and it cleared on
+  # its own. Same defect and same fix as AlphaSignalSilent above; an unset gauge
+  # reads as a confident zero, and zero means "healthy" to some rules and
+  # "dead" to others.
   - alert: ExecutionRouterHeartbeatStale
-    expr: time() - execution_router_heartbeat_ts > 120
+    expr: time() - execution_router_heartbeat_ts > 120 and execution_router_heartbeat_ts > 0
     for: 0s
     labels:
         severity: critical
@@ -773,15 +812,44 @@ groups:
         summary: "Recorder schema initialization failed — WAL-only mode"
         description: "ClickHouse schema migration failed at startup. All data is going to WAL with no ClickHouse persistence path."
 
-  # Event loop lag
+  # Event loop lag.
+  #
+  # Reads event_loop_probe_lag_ms, NOT event_loop_lag_ms. The latter is named
+  # for what this alert wants but does not measure it: services/system.py times
+  # its own whole supervisor tick period, so the gauge is loop congestion PLUS
+  # the supervisor's own work, and the source comment there says so outright.
+  # Measured on THESHOW 2026-08-24 over 1 h: event_loop_lag_ms averaged 7.31 ms,
+  # of which supervisor_tick_duration_ms was 5.90 ms and true probe lag only
+  # 1.19 ms -- the two halves sum back to the composite, and 81% of it was the
+  # supervisor timing itself. A 5 ms threshold therefore sat *below* the
+  # supervisor's own mean body time, which is why this alert flapped through 15
+  # separate firing episodes in a single healthy day. StormGuard's loop-lag
+  # input was moved off the composite onto the probe for exactly this reason
+  # (see SystemSupervisor._stormguard_latency_us); this rule had not followed.
+  #
+  # Threshold from the probe's own distribution over 782,926 samples: p50
+  # 0.47 ms, p90 1.63 ms, p99 15.94 ms, p99.9 47.29 ms, and the worst 5-minute
+  # p99 in 24 h of healthy operation was 59.49 ms. 100 ms is ~1.7x that healthy
+  # maximum, so a normal day cannot reach it, while an order-of-magnitude
+  # degradation still pages. Do NOT lower this to the 1 ms hot-path budget:
+  # today's p99 exceeds that routinely, so such a rule would fire permanently
+  # and mean nothing. That the steady-state p99 is 16 ms against a 1 ms budget
+  # is a real engineering question, but it is a latency question, not an
+  # alerting one.
   - alert: EventLoopLagHigh
-    expr: event_loop_lag_ms > 5 and on() market_trading_hours_active == 1
-    for: 1m
+    expr: |
+      histogram_quantile(0.99, sum by (le) (rate(event_loop_probe_lag_ms_bucket[5m]))) > 100
+      and on() market_trading_hours_active == 1
+    for: 2m
     labels:
         severity: warning
     annotations:
         summary: "Event loop lag high"
-        description: "asyncio event loop lag > 5ms for 1 minute. Hot path latency degraded."
+        description: >-
+          p99 event-loop unavailability exceeded 100ms over 5 minutes, sustained
+          for 2 minutes, while the market was open. This is time the loop was
+          unavailable to any callback, hot path included, measured by the idle
+          probe task rather than by the supervisor timing itself.
 
   # Strategy exceptions
   - alert: StrategyExceptionsRateHigh
