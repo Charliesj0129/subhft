@@ -188,8 +188,18 @@ class RiskEngine:
             DailyLossLimitValidator(self.config, price_scale_provider, position_provider=_pos_provider),
         ]
         # Pre-compute validators that Rust doesn't cover (avoid per-call isinstance)
+        # PerSymbolNotionalValidator belongs here too. It is a sibling of
+        # MaxNotionalValidator (both inherit RiskValidator directly), not a
+        # subclass, so this isinstance filter excluded it -- and
+        # ``_init_rust_validator`` never forwards ``symbol_limits`` to Rust
+        # either, so with HFT_RISK_RUST_VALIDATOR=1 the per-symbol notional cap
+        # was enforced by nobody. Per-symbol limits exist precisely to be
+        # TIGHTER than the per-strategy default, so losing them silently
+        # defeats their purpose.
         self._rust_uncovered_validators: list[RiskValidator] = [
-            v for v in self.validators if isinstance(v, (PositionLimitValidator, DailyLossLimitValidator))
+            v
+            for v in self.validators
+            if isinstance(v, (PositionLimitValidator, DailyLossLimitValidator, PerSymbolNotionalValidator))
         ]
         shared_scale_cache: dict[str, int] = {}
         for validator in self.validators:
@@ -403,13 +413,22 @@ class RiskEngine:
         """
         self.config = new_config
         for v in self.validators:
-            # Clear per-validator caches
+            # Delegate to the validator, which rebinds config, clears caches AND
+            # re-derives the scalars it snapshotted in __init__. This loop used
+            # to do only the first two, so raising `max_price_cap` or
+            # tightening `intraday_pnl.hard_limit_ntd` over SIGHUP changed
+            # nothing while still logging a successful reload — the caches were
+            # simply re-populated from the stale `_*_raw` values. StormGuard
+            # already had a proper `reload_thresholds`; the validators did not.
+            reload_fn = getattr(v, "reload", None)
+            if callable(reload_fn):
+                reload_fn(new_config)
+                continue
             for attr in list(vars(v)):
                 if "cache" in attr.lower():
                     obj = getattr(v, attr, None)
                     if isinstance(obj, dict):
                         obj.clear()
-            # Also update the config references on each validator
             v.config = new_config
             v.defaults = new_config.get("global_defaults", {})
             v.strat_configs = new_config.get("strategies", {})
@@ -471,10 +490,25 @@ class RiskEngine:
 
                 if decision.approved:
                     cmd = self.create_command(decision.intent)
-                    _is_safety_order = cmd.intent.intent_type in (
-                        IntentType.CANCEL,
-                        IntentType.FORCE_FLAT,
-                    ) or self._is_halt_exempt(intent.strategy_id)
+                    # A reducing (cover) order is a safety order. StormGuard
+                    # already approves them in HALT -- ``_validate_locked``
+                    # returns ``(True, "HALT_REDUCE_ONLY")`` -- and every
+                    # validator returns ``REDUCE_ONLY_BYPASS``; this gate then
+                    # rejected them anyway, because it only counted
+                    # CANCEL/FORCE_FLAT/halt-exempt. Nothing is halt-exempt in
+                    # any shipped config, so a strategy holding a position
+                    # during HALT could not unwind it. That is the deadlock the
+                    # comment on ``set_position_provider`` says the wiring was
+                    # added to prevent; the layer above StormGuard reimposed it.
+                    _is_safety_order = (
+                        cmd.intent.intent_type
+                        in (
+                            IntentType.CANCEL,
+                            IntentType.FORCE_FLAT,
+                        )
+                        or self._is_halt_exempt(intent.strategy_id)
+                        or self._cmd_reduces_position(cmd)
+                    )
                     if self.storm_guard.state == StormGuardState.HALT and not _is_safety_order:
                         logger.warning(
                             "risk_engine_blocked_by_halt",
@@ -658,12 +692,31 @@ class RiskEngine:
         when no position_provider is available.
         """
         intent = cmd.intent
-        provider = self._position_provider
-        if provider is None:
+        if self._position_provider is None:
             return False
         try:
-            current = int(provider(intent.symbol, intent.strategy_id) or 0)
-        except Exception:  # noqa: BLE001
+            # Through the wrapper, NOT the raw slot. bootstrap.py wires
+            # ``position_provider=position_store`` -- a PositionStore INSTANCE,
+            # which has __slots__ and no __call__ -- so calling the slot
+            # directly raised TypeError on every single invocation, the bare
+            # except swallowed it, and this returned False for every command.
+            # _drain_order_dlq then classified every queued cover as an opener
+            # and evicted it the moment StormGuard escalated: exactly the
+            # stuck-position deadlock the Bug 21/25 wiring exists to prevent.
+            # ``_current_strategy_symbol_net_position`` handles both the
+            # callable and the object shape, and is what StormGuard,
+            # GatewayPolicy and every validator already use.
+            current = int(self._current_strategy_symbol_net_position(intent.symbol, intent.strategy_id))
+        except (TypeError, AttributeError, ValueError):
+            # Narrowed from a bare except, and loud: a provider that cannot
+            # answer means reducing orders silently lose their protection, so
+            # it must not be invisible the way the TypeError above was.
+            logger.warning(
+                "cmd_reduces_position_provider_failed",
+                symbol=getattr(intent, "symbol", ""),
+                strategy_id=getattr(intent, "strategy_id", ""),
+                exc_info=True,
+            )
             return False
         if current == 0:
             return False
@@ -1141,7 +1194,16 @@ class RiskEngine:
                     target_loop = sg_loop if sg_loop is not None and not sg_loop.is_closed() else running
                     if target_loop is not None:
                         total_pnl = sum(v._accumulated_loss.values()) + v._unrealized_pnl
-                        limit = v._default_max_daily_loss
+                        # Mirror the validator's own selection. Both halt
+                        # decision paths in DailyLossLimitValidator pick
+                        # ``_hard_limit_threshold_scaled`` when the intraday_pnl
+                        # block is enabled -- and prod enables it
+                        # (config/env/prod/strategy_limits.yaml, hard_limit_ntd
+                        # 5000). Reporting ``_default_max_daily_loss`` therefore
+                        # put a 10x-wrong number in the Telegram alert, so
+                        # triage read "we halted far too early" instead of "we
+                        # hit the intended limit".
+                        limit = v._hard_limit_threshold_scaled if v._intraday_pnl_enabled else v._default_max_daily_loss
                         try:
                             if running is target_loop:
                                 # Same-thread fast path

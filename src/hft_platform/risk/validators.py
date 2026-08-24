@@ -30,6 +30,44 @@ class RiskValidator:
         self._position_provider = position_provider
         self._shared_scale_cache: Dict[str, int] = {}
 
+    def _derive_from_defaults(self) -> None:
+        """Re-derive every config-dependent scalar from ``self.defaults``/``self.config``.
+
+        Subclasses that snapshot config values in ``__init__`` MUST override
+        this and do the snapshotting here instead, calling it from
+        ``__init__``. ``reload`` then re-runs exactly the same derivation, so
+        the two can never drift.
+
+        Runtime state (accumulated PnL, latched HALT, cooldown deadlines) is
+        deliberately NOT touched: a config reload must not clear a live halt.
+        """
+
+    def reload(self, new_config: Dict[str, Any]) -> None:
+        """Adopt *new_config* — rebind, clear caches, and re-derive scalars.
+
+        ``RiskEngine.on_config_reload`` used to rebind ``config``/``defaults``/
+        ``strat_configs`` and clear any attribute with "cache" in its name, and
+        stop there. But every validator reads its DEFAULTS off scalars
+        snapshotted in ``__init__`` (``_max_price_cap_raw``,
+        ``_hard_limit_threshold_scaled``, ...), which nothing re-derived, so
+        clearing the caches merely re-populated them from the stale scalars.
+        Raising ``max_price_cap`` or tightening ``intraday_pnl.hard_limit_ntd``
+        over SIGHUP was a silent no-op while the reload logged success — and
+        SIGHUP exists precisely for adjusting money-facing thresholds mid-session
+        without a restart. Per-strategy and per-symbol overrides did take
+        effect, which made the failure a partial one and harder to notice.
+        """
+        self.config = new_config
+        self.defaults = new_config.get("global_defaults", {})
+        self.strat_configs = new_config.get("strategies", {})
+        for attr in list(vars(self)):
+            if "cache" in attr.lower():
+                obj = getattr(self, attr, None)
+                if isinstance(obj, dict):
+                    obj.clear()
+        self._shared_scale_cache.clear()
+        self._derive_from_defaults()
+
     def _scale_factor(self, symbol: str) -> int:
         cache = self._shared_scale_cache
         value = cache.get(symbol)
@@ -113,11 +151,14 @@ class PriceBandValidator(RiskValidator):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self._max_price_cap_raw = float(self.defaults.get("max_price_cap", 5000.0))  # precision-config
-        self._tick_size_raw = float(self.defaults.get("tick_size", 0.01))  # precision-config
         self._max_price_scaled_cache: Dict[str, int] = {}
         self._tick_size_scaled_cache: Dict[str, int] = {}
         self._band_ticks_cache: Dict[str, int] = {}
+        self._derive_from_defaults()
+
+    def _derive_from_defaults(self) -> None:
+        self._max_price_cap_raw = float(self.defaults.get("max_price_cap", 5000.0))  # precision-config
+        self._tick_size_raw = float(self.defaults.get("tick_size", 0.01))  # precision-config
         self._product_caps_raw: Dict[str, float] = {}
         for ptype, key in self._PRODUCT_CAP_KEYS.items():
             val = self.defaults.get(key)
@@ -248,8 +289,11 @@ class PriceBandValidator(RiskValidator):
 class MaxNotionalValidator(RiskValidator):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self._default_max_notional_raw = self.defaults.get("max_notional", 10_000_000)
         self._max_notional_scaled_cache: Dict[tuple[str, str], int] = {}
+        self._derive_from_defaults()
+
+    def _derive_from_defaults(self) -> None:
+        self._default_max_notional_raw = self.defaults.get("max_notional", 10_000_000)
 
     def check(self, intent: OrderIntent) -> Tuple[bool, str]:
         if intent.intent_type == IntentType.CANCEL:
@@ -285,8 +329,11 @@ class PositionLimitValidator(RiskValidator):
         # position_provider is now on the base class; forward it.
         kwargs.setdefault("position_provider", position_provider)
         super().__init__(*args, **kwargs)
-        self._default_max_position_lots: int = int(self.defaults.get("max_position_lots", 1_000))
         self._max_position_cache: Dict[str, int] = {}
+        self._derive_from_defaults()
+
+    def _derive_from_defaults(self) -> None:
+        self._default_max_position_lots: int = int(self.defaults.get("max_position_lots", 1_000))
 
     def check(self, intent: OrderIntent) -> Tuple[bool, str]:
         if intent.intent_type in (IntentType.CANCEL, IntentType.FORCE_FLAT):
@@ -369,7 +416,6 @@ class DailyLossLimitValidator(RiskValidator):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         # Stored as a positive threshold; loss is compared as abs value
-        self._default_max_daily_loss: int = int(self.defaults.get("max_daily_loss", 500_000_000))
         # Accumulated realized PnL per strategy (negative = loss, positive = gain); scaled int
         self._accumulated_loss: Dict[str, int] = {}
         # Epoch-ns of the last 21:00 UTC reset boundary (cached)
@@ -378,6 +424,20 @@ class DailyLossLimitValidator(RiskValidator):
         self._unrealized_pnl: int = 0
         # Set to True when limit is breached; cleared only by _force_reset()
         self.halt_triggered: bool = False
+
+        self._derive_from_defaults()
+
+        # Runtime watermark state
+        self._peak_pnl_scaled: int = 0
+        self.soft_limit_active: bool = False
+        self._soft_limit_cooldown_until_ns: int = 0
+
+    def _derive_from_defaults(self) -> None:
+        """Thresholds only. Runtime state (accumulated loss, latched HALT,
+        cooldown deadline, peak watermark) is untouched, so a SIGHUP reload
+        cannot clear a live halt or reset the drawdown watermark."""
+        # Stored as a positive threshold; loss is compared as abs value
+        self._default_max_daily_loss: int = int(self.defaults.get("max_daily_loss", 500_000_000))
 
         # --- Intraday watermark config ---
         ipnl_cfg = self.config.get("intraday_pnl", {})
@@ -423,11 +483,6 @@ class DailyLossLimitValidator(RiskValidator):
             self._drawdown_recovery_pct = 0.0
             self._soft_limit_cooldown_ns = 0
             self._peak_drawdown_min_peak_scaled = 0
-
-        # Runtime watermark state
-        self._peak_pnl_scaled: int = 0
-        self.soft_limit_active: bool = False
-        self._soft_limit_cooldown_until_ns: int = 0
 
     @staticmethod
     def _current_boundary_ns() -> int:
@@ -714,6 +769,9 @@ class PerSymbolNotionalValidator(RiskValidator):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
+        self._derive_from_defaults()
+
+    def _derive_from_defaults(self) -> None:
         self._default_per_symbol_max_notional_raw: int = int(self.defaults.get("per_symbol_max_notional", 50_000_000))
         self._per_symbol_notional_cache: Dict[tuple[str, str], int] = {}
         self._MAX_CACHE_ENTRIES: int = int(os.getenv("HFT_RISK_PER_SYMBOL_CACHE_MAX", "10000"))
