@@ -34,6 +34,7 @@ def _make_store():
     store._total_realized_pnl_scaled = 500
     store.snapshot_positions.return_value = {}
     store._recovery_positions = {}
+    store.snapshot_positions_with_recovery.return_value = ({}, {})
     return store
 
 

@@ -39,6 +39,7 @@ def _mk_store():
     store = MagicMock()
     store.positions = {}
     store.snapshot_positions.return_value = {}
+    store.snapshot_positions_with_recovery.return_value = ({}, {})
     store._peak_equity_scaled = 0
     store._total_realized_pnl_scaled = 0
     # load_recovery should be a no-op that counts invocations
@@ -59,6 +60,7 @@ def _write_checkpoint(path: str, trading_date: str) -> None:
         fees_scaled=0,
     )
     store.snapshot_positions.return_value = {"acc:strat:TMFD6": pos}
+    store.snapshot_positions_with_recovery.return_value = ({"acc:strat:TMFD6": pos}, {})
     store.positions = {"acc:strat:TMFD6": pos}
     store._peak_equity_scaled = 0
     store._total_realized_pnl_scaled = 0

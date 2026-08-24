@@ -11,6 +11,7 @@ def _make_store(positions=None):
     pos_dict = positions or {}
     store.positions = pos_dict
     store.snapshot_positions.return_value = pos_dict
+    store.snapshot_positions_with_recovery.return_value = (pos_dict, {})
     store._peak_equity_scaled = 0
     store._total_realized_pnl_scaled = 0
     return store
@@ -110,6 +111,7 @@ def _make_store_with_positions(positions=None):
     pos_dict = positions or {}
     store.positions = pos_dict
     store.snapshot_positions.return_value = pos_dict
+    store.snapshot_positions_with_recovery.return_value = (pos_dict, {})
     store._peak_equity_scaled = 0
     store._total_realized_pnl_scaled = 0
     return store
@@ -209,8 +211,17 @@ def test_checkpoint_portfolio_aggregates_zero_written(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_checkpoint_uses_snapshot_positions(tmp_path):
-    """M3: write_checkpoint must call snapshot_positions() (which holds _fill_lock)."""
+def test_checkpoint_takes_both_views_in_one_lock_acquisition(tmp_path):
+    """M3, strengthened: the writer must take positions AND recovery atomically.
+
+    It used to call ``snapshot_positions()`` (locked) and then read
+    ``_recovery_positions`` bare, which is two acquisitions with a window in
+    between; ``_seed_from_recovery`` popping inside that window drops the entry
+    from both views and the checkpoint is written without it. Asserting the
+    single-call API is what pins the guarantee -- asserting
+    ``snapshot_positions`` was called does not, because the old code called it
+    too and was still wrong.
+    """
     from hft_platform.execution.checkpoint import PositionCheckpointWriter
 
     store = _make_store_with_positions()
@@ -218,8 +229,8 @@ def test_checkpoint_uses_snapshot_positions(tmp_path):
     writer = PositionCheckpointWriter(store=store, path=path, trading_date_provider=lambda: "20260405")
     writer.write_checkpoint()
 
-    # snapshot_positions() must have been called to ensure lock-protected read
-    store.snapshot_positions.assert_called_once()
+    store.snapshot_positions_with_recovery.assert_called_once()
+    store.snapshot_positions.assert_not_called()
 
 
 def test_checkpoint_snapshot_positions_called_not_direct_access(tmp_path):
@@ -229,8 +240,8 @@ def test_checkpoint_snapshot_positions_called_not_direct_access(tmp_path):
     pos = _make_position("TXFD6", 1, 180000000, 0, 0)
     # snapshot returns isolated copy, positions dict returns different data
     store = _make_store_with_positions()
-    store.snapshot_positions.return_value = {"acc:strat:TXFD6": pos}
-    # positions is intentionally empty — writer must use snapshot, not this
+    store.snapshot_positions_with_recovery.return_value = ({"acc:strat:TXFD6": pos}, {})
+    # positions is intentionally empty — writer must use the snapshot, not this
     store.positions = {}
 
     path = str(tmp_path / "ckpt.json")
