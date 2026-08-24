@@ -3,7 +3,7 @@
 Two different quantities were being funnelled through one parameter: platform
 health (loop congestion, sub-millisecond, budget 1 ms) and trading-path health
 (order round-trip, tens to hundreds of milliseconds). One threshold cannot
-serve both. This module splits them, ships the order-RTT input **unarmed**, and
+serve both. This module splits them, gives each its own thresholds, and
 publishes each input's observed maximum plus an explicit armed/unarmed gauge so
 an unarmed breaker cannot be mistaken for a quiet one.
 
@@ -18,8 +18,9 @@ found wrong; see ``test_stormguard_latency_input_wiring.py`` for the evidence.
   ``pipeline_latency_ns{stage="api_place_order"}`` (mean 34.1 ms) -- what was
   missing was the wiring from the adapter into the breaker, now in place.
 
-The order-RTT input still ships unarmed: arming a risk breaker is a calibration
-decision, and it is now made against real values rather than a structural zero.
+The order-RTT input shipped unarmed until 2026-08-24, when it was armed at
+500 ms WARM / 1000 ms STORM against the n=300 direct live probe rather than
+against a structural zero. See ``RiskThresholds`` for the derivation.
 """
 
 from __future__ import annotations
@@ -105,11 +106,34 @@ def test_the_reason_names_which_input_escalated() -> None:
 
 
 @pytest.mark.unit
-def test_the_order_rtt_input_ships_unarmed() -> None:
-    """No production samples exist to calibrate against; a guessed threshold on
-    a risk breaker is worse than an explicit zero."""
-    assert RiskThresholds().order_rtt_warm_us == 0
-    assert RiskThresholds().order_rtt_storm_us == 0
+def test_the_order_rtt_input_ships_armed_at_the_measured_thresholds() -> None:
+    """Armed 2026-08-24 from the n=300 direct live probe
+    (``r47_maker_shioaji_p95_v2026-04-24_measured``): place_order wall-time
+    P50=27.4, P95=92.7, P99=185.4 ms. The input shipped unarmed only while
+    those numbers had not been connected to this breaker; a zero was the honest
+    answer then and would be a dead branch now."""
+    assert RiskThresholds().order_rtt_warm_us == 500_000
+    assert RiskThresholds().order_rtt_storm_us == 1_000_000
+
+
+@pytest.mark.unit
+def test_the_measured_healthy_distribution_sits_below_the_warm_threshold() -> None:
+    """The threshold pair is only as good as its distance from normal. ``update()``
+    consumes the PEAK RTT since the last tick, so the healthy P99 -- not the
+    healthy median -- is what has to clear it."""
+    guard = StormGuard()
+    live_p99_us = 185_400
+
+    assert guard.update(order_rtt_us=live_p99_us) is StormGuardState.NORMAL
+
+
+@pytest.mark.unit
+def test_a_full_second_at_the_broker_stops_new_quotes() -> None:
+    """STORM is reduce-only for NEW/AMEND. That is the whole cost of arming
+    this input, and it must be reachable."""
+    guard = StormGuard()
+
+    assert guard.update(order_rtt_us=1_000_000) is StormGuardState.STORM
 
 
 @pytest.mark.unit
@@ -187,14 +211,19 @@ def test_order_rtt_thresholds_are_settable_from_the_environment(monkeypatch) -> 
 
 
 @pytest.mark.unit
-def test_a_malformed_order_rtt_threshold_leaves_the_input_unarmed(monkeypatch) -> None:
-    """Fail-closed on a risk threshold means "do not arm on a value you could
-    not parse", not "fall back to something plausible"."""
+def test_a_malformed_order_rtt_threshold_keeps_the_measured_default(monkeypatch) -> None:
+    """Fail-closed changed direction when the default did.
+
+    While the default was 0, refusing to arm on an unparseable value was the
+    closed direction. Now that the default is armed from measurement, honouring
+    a typo would *disarm* a live breaker. Neither reading guesses a number --
+    both refuse the unparseable one -- but only keeping the default preserves
+    the protection."""
     monkeypatch.setenv("HFT_STORMGUARD_ORDER_RTT_STORM_US", "400ms")
 
     guard = StormGuard()
 
-    assert guard.thresholds.order_rtt_storm_us == 0
+    assert guard.thresholds.order_rtt_storm_us == RiskThresholds().order_rtt_storm_us
 
 
 @pytest.mark.unit

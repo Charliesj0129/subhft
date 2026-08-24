@@ -45,12 +45,42 @@ class RiskThresholds:
     # ``submit_ack_latency_ms=36.0``. What was missing was the wiring, not the
     # measurement; ``StormGuard.observe_order_rtt_us`` now receives it.
     #
-    # Still ships unarmed (0 = off). Arming a risk breaker is a config decision,
-    # and n=7 is a sample, not a distribution: watch
-    # ``stormguard_latency_input_max_us{input="order_rtt"}`` accumulate first,
-    # then set ``HFT_STORMGUARD_ORDER_RTT_WARM_US`` / ``..._STORM_US``.
-    order_rtt_warm_us: int = 0
-    order_rtt_storm_us: int = 0
+    # ARMED 2026-08-24. The n=7 production sample above is not a distribution,
+    # so the thresholds come from the one direct probe of this exact quantity:
+    # ``r47_maker_shioaji_p95_v2026-04-24_measured`` in
+    # ``config/research/latency_profiles.yaml`` — n=300, live TAIFEX night
+    # session, TMFE6, zero errors. Its ``place_order`` wall-time decomposition
+    # is the same clock this breaker reads (``pipeline_latency_ns``
+    # ``{stage="api_place_order"}``): P50=27.4, P95=92.7, P99=185.4 ms, with a
+    # bootstrap 95% CI on P95 of [77.6, 110.2] ms. The 2026-08-22 production
+    # samples (mean 34.1 ms, 6 of 7 in (10, 50] ms) sit inside that.
+    #
+    # Two facts set the gap between the pair. First, ``update()`` consumes
+    # ``_drain_order_rtt_peak_us`` — the PEAK since the last tick, not a
+    # quantile — so one slow order decides the state, and a percentile-tight
+    # threshold would trip constantly. Second, the two states cost very
+    # different things: WARM blocks nothing (``_validate_locked`` gates only
+    # HALT and STORM), while STORM is reduce-only for NEW/AMEND, i.e. it stops
+    # the maker quoting.
+    #
+    # Because the input is a peak, neither threshold may sit at a percentile of
+    # the sample distribution. P99=185.4 ms with a handful of orders per window
+    # puts a 200 ms line inside the healthy peak, and a breaker that sits in
+    # WARM all session is the RC-4 failure again: indistinguishable from one
+    # with nothing to do.
+    #
+    # WARM = 500 ms: 2.7x the live P99, and above the P95 of the *whole*
+    # quote-activation path (394.5 ms). One place_order call alone taking
+    # longer than a normal end-to-end quote activation is abnormal by any
+    # reading of the probe. STORM = 1000 ms: 5.4x P99, just under the worst
+    # quote-activation sample recorded (1156.8 ms). A single place_order call
+    # taking a full second is not a slow broker, it is one that is not
+    # answering — and only then is it worth stopping the maker quoting.
+    #
+    # Override per host with ``HFT_STORMGUARD_ORDER_RTT_WARM_US`` /
+    # ``..._STORM_US``; 0 disarms either side independently.
+    order_rtt_warm_us: int = 500_000  # 500 ms — 2.7x live P99 (185.4 ms)
+    order_rtt_storm_us: int = 1_000_000  # 1000 ms — 5.4x live P99
 
     feed_gap_storm_s: float = 1.0  # precision-time (triggers STORM, not HALT)
 
@@ -308,9 +338,18 @@ class StormGuard:
             try:
                 setattr(self.thresholds, attr, int(raw))
             except ValueError:
-                # Leave the input unarmed rather than guessing a threshold for
-                # a risk breaker out of an unparseable value.
-                logger.warning("Invalid order-RTT threshold; input stays unarmed", var=var, value=raw)
+                # Keep the measured default rather than guessing a threshold
+                # for a risk breaker out of an unparseable value. This used to
+                # say "stays unarmed", which was true only while the default
+                # was 0; now that the default is armed from the n=300 probe,
+                # honouring an unparseable override would *disarm* a live
+                # breaker — the opposite of failing closed.
+                logger.warning(
+                    "Invalid order-RTT threshold; keeping the built-in default",
+                    var=var,
+                    value=raw,
+                    default_us=getattr(self.thresholds, attr),
+                )
 
         self._report_latency_input_health()
 
