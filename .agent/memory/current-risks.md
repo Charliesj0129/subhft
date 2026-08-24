@@ -62,3 +62,29 @@ Expires: if Sinopac raises the cap or the pool shape is redesigned. Owner: Charl
 ## RISK: prometheus_client pinned <0.25
 0.25.0 corrupts MutexValue (TypeError on /metrics). Do not "upgrade to fix
 deprecation warnings". Expires: upstream fix verified. Owner: any.
+
+## RISK: stale mining artifacts promote a tautological winner (since 2026-08-23)
+`research/combinatorial/results/` is gitignored (`.gitignore:322`, PR #435) and
+every file in it is dated 2026-07-25. The self-correlation guard landed
+2026-08-19 (`6ce84168`, `has_self_correlation`), so the artifacts predate the
+fix and were never regenerated. `WINNER_DAILY.json` reads
+`sign(ts_corr(mid, mid, 50))` — a tautology whose 13.4 `day_sharpe` measures
+drift — and self-correlated expressions survive in `daily_hunt_qualifying.json`
+(`depth_imb, imb, micro_dev, mid, spread`) and `oos_hunt_qualifying.json`
+(`mid, spread`). `WINNER_BARS`/`WINNER_OOS` are clean. Nothing will flag these:
+no diff, no CI gate, no `git status`, and no generator stamp inside the files.
+Per `feedback_no_cross_candidate_kill_shortcuts` the re-screen scope is not
+mine to decide; nothing has been deleted or regenerated.
+Expires: when the artifacts are regenerated under the guard, or quarantined.
+Owner: Charlie.
+
+## RISK: #443 ships unarmed; four order-path fixes are merged but undeployed (since 2026-08-22)
+PRs #442–#446 are on `origin/main` and CI-green, and **none of them is running
+in production** — the host serves a bind-mounted source mosaic that matches no
+single commit (see `deployed_source_is_a_bind_mounted_mosaic`). #443 in
+particular is inert even once deployed: production sets neither
+`HFT_STORMGUARD_ORDER_RTT_WARM_US` nor `HFT_STORMGUARD_ORDER_RTT_STORM_US`, so
+the newly-connected input has no thresholds to trip. Do not treat "merged" as
+"the double-counted-position hazard is closed in the field".
+Expires: on a deploy with per-batch authorization + threshold values from
+Charlie. Owner: Charlie.

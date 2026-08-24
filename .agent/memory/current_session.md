@@ -2,6 +2,48 @@
 
 ## Last Updated
 
+- **Date**: 2026-08-23
+- **Active task**: order/execution durability hardening, then a two-review
+  disposition pass. Working tree CLEAN on `main` @ `0c0ff0f0`; zero open PRs.
+  MERGED this arc (all on `origin/main`, all CI-green):
+  #442 `6838c682` tuple-born intents get a trace id;
+  #443 `4df2dc55` both StormGuard latency inputs connected to producers
+  (ships UNARMED — production sets neither `HFT_STORMGUARD_ORDER_RTT_WARM_US`
+  nor `..._STORM_US`);
+  #444 `32536c7b` hook scripts addressed absolutely;
+  #445 `d2499252` order_id_map checkpoint serialised under a dedicated IO lock
+  + `flush_order_id_map()`;
+  #446 `e01cba6c` fill-dedup checkpoint off the event loop, trailing-edge flush,
+  monotonic throttle seeded `-inf`, + `flush_fill_dedup()`.
+  #445 and #446 are the same three defects in two implementations of one
+  pattern; two had already been fixed on the order_id_map twin and were never
+  carried across to the router.
+  Evidence: unit sweep 14636 passed / 0 failed on #446 (14634/1 on #445, the
+  one failure a `__new__`-bypass seed CI found and I fixed); integration
+  2 failed / 231 passed, both failures `test_prod_compose_parity`, which
+  compares bind mounts against `/home/charlie/hft_platform` and therefore
+  cannot pass in a worktree — green on CI. Every new test verified failing
+  against unfixed `origin/main` first. NOT RUN: `make ci` (cannot run in this
+  checkout), `make build-rust` (`test_rust_*`/`test_shm_*` excluded locally).
+  TWO REVIEWS, both disposed rather than actioned: the cloud review returned
+  `[]` (and did not see its own focus note, so an empty result is not evidence
+  of stability); the Codex adversarial pass returned 3 findings, of which one
+  is REFUTED (pip 26.2.1 is main's approved state via #438, the reviewer stood
+  on a stale branch holding the older 26.1.2 and read the diff backwards), one
+  is a stale gitignored ARTIFACT rather than a code defect (`WINNER_DAILY.json`
+  is `sign(ts_corr(mid, mid, 50))`, dated 2026-07-25; the `has_self_correlation`
+  guard landed `6ce84168` 2026-08-19), and one concerns the `.understand-anything/`
+  analyzer cache, which is gitignored tool output that ships nothing.
+  NO host interaction in this arc: no deploys, no restarts, no reads.
+  Pending on Charlie: the `order_rtt` thresholds that would arm #443; a producer
+  for `OrderExplanationAssembler` (nothing in `src/` constructs it, so
+  `hft.order_explanations` stays at 0 rows regardless of #442);
+  `HFT_INTENT_RECORDER_ENABLED`; the re-screen scope for the stale mining
+  artifacts. Pending on a market-close window + per-batch deploy authorization:
+  the `config/live/strategies.yaml` TMFE6 removal (merged as #425, NOT deployed).
+  Known-unfixed and reported, not started: `recorder/batcher.py:524` measures a
+  flush duration with `timebase.now_s()` (wall clock) while `recorder/wal.py`
+  correctly uses `time.monotonic()`.
 - **Date**: 2026-08-12
 - **Active task**: Alpha Mining PR-1 convergence on
   `alpha/mining-convergence-pr1-harness-20260811`. Baseline head `1028c52a`;
