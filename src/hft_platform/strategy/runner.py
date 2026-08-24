@@ -47,6 +47,25 @@ logger = get_logger("strategy_runner")
 
 _KNOWN_TUPLE_TAGS: frozenset[str] = frozenset({"tick", "bidask", "lobstats", "typed_intent_v1"})
 
+
+def _typed_intent_with_decision_price(intent: tuple, decision_price: int) -> tuple:
+    """Return *intent* with index 16 (decision_price) replaced, tail preserved.
+
+    This used to be inlined at its one call site as ``(*intent[:16], _mid)``,
+    which produced a 17-element frame and silently dropped index 17,
+    ``price_type``. ``typed_intent_price_type`` requires ``len(intent) >= 18``
+    and otherwise returns its legacy-frame default "LMT", so every
+    ``ctx.place_order(price_type="MKT")`` was downgraded to a limit order
+    whenever the LOB had a positive mid -- essentially always, and with no
+    error raised anywhere on the path.
+
+    Named and hoisted out of the loop so the frame layout is stated once and
+    can be tested directly; splicing the tail rather than enumerating fields
+    keeps it correct if the frame grows again.
+    """
+    return (*intent[:16], decision_price, *intent[17:])
+
+
 _RUST_CIRCUIT_ENABLED = os.getenv("HFT_STRATEGY_CIRCUIT_RUST", "1").lower() not in {
     "0",
     "false",
@@ -1534,8 +1553,12 @@ class StrategyRunner:
                                         and len(intent) >= 17
                                         and intent[0] == "typed_intent_v1"
                                     ):
-                                        # Typed intent tuple: position 16 is decision_price
-                                        intent = (*intent[:16], _mid)
+                                        # Rebuilt by the contracts helper, which
+                                        # owns the frame layout. Inlining it here
+                                        # as ``(*intent[:16], _mid)`` is what
+                                        # dropped index 17 (price_type) and
+                                        # downgraded every MKT order to LMT.
+                                        intent = _typed_intent_with_decision_price(intent, _mid)
 
                     # L5: order-bearing — every OrderIntent gets a trace, no sampling.
                     self._emit_trace_always(

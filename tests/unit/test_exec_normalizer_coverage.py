@@ -102,8 +102,24 @@ class TestNormalizeFill:
         assert fill is not None
         assert fill.fill_id == "S42"
 
-    def test_synthetic_fill_id_no_collision(self) -> None:
-        """Two identical partial fills without seqno must get distinct synthetic fill_ids."""
+    def test_a_replayed_deal_without_seqno_gets_the_same_synthetic_fill_id(self) -> None:
+        """Reversed deliberately: identical payloads must now COLLIDE, so dedup works.
+
+        This asserted ``fill1.fill_id != fill2.fill_id`` on the reasoning that
+        two identical partial fills must stay distinguishable. The cost of that
+        choice was that a reconnect replay -- the case the synthetic path exists
+        for, per its own comment -- produced a fresh id every time, so
+        ``duplicate_fill_total`` could never fire on this path and position and
+        realized PnL were counted twice.
+
+        Both errors are real and you cannot have neither without a broker
+        sequence number. Double-counting a position is the worse one, and the
+        synthetic path is only reached when the broker omitted the seqno, which
+        is the replay case. If the other error does occur, it is now visible:
+        the router increments ``duplicate_fill_total`` and logs
+        ``duplicate_fill_skipped`` with the key -- a counter that was
+        structurally unreachable on this path before.
+        """
         norm = ExecutionNormalizer(default_account_id="test-acct")
         data = _fill_data(seqno="", ordno="O1", price=100.5, qty=1)
         data.pop("seqno", None)  # force synthetic path
@@ -112,7 +128,19 @@ class TestNormalizeFill:
         fill1 = norm.normalize_fill(raw1)
         fill2 = norm.normalize_fill(raw2)
         assert fill1 is not None and fill2 is not None
-        assert fill1.fill_id != fill2.fill_id, f"Collision: {fill1.fill_id} == {fill2.fill_id}"
+        assert fill1.fill_id == fill2.fill_id
+
+    def test_synthetic_ids_separate_two_different_orders(self) -> None:
+        """order_id is part of the key, which the old scheme's prefix lacked."""
+        norm = ExecutionNormalizer(default_account_id="test-acct")
+        base = _fill_data(seqno="", price=100.5, qty=1)
+        base.pop("seqno", None)
+        raw1 = _make_raw("deal", dict(base, ordno="O1", ts=1))
+        raw2 = _make_raw("deal", dict(base, ordno="O2", ts=1))
+        fill1 = norm.normalize_fill(raw1)
+        fill2 = norm.normalize_fill(raw2)
+        assert fill1 is not None and fill2 is not None
+        assert fill1.fill_id != fill2.fill_id
 
     def test_fill_order_id_from_ordno(self) -> None:
         norm = ExecutionNormalizer(default_account_id="test-acct")
