@@ -408,6 +408,7 @@ class R47MakerStrategy(SimpleMarketMaker):
         self._toxicity_blocked = 0
         self._quotes_sent = 0
         self._stale_cancels = 0  # D1 counter
+        self._nonpositive_quote_blocked = 0
 
         # D2 quote suppression flags (set in on_features, read in on_stats)
         self._suppress_bid: bool = False
@@ -1035,6 +1036,27 @@ class R47MakerStrategy(SimpleMarketMaker):
         bid_price_scaled = (bid_price_scaled // _PRICE_SCALE) * _PRICE_SCALE
         ask_price_scaled = -(-ask_price_scaled // _PRICE_SCALE) * _PRICE_SCALE
 
+        # Price floor. Every widening term above (base_width, the MFG skew, and
+        # the QI skew) is denominated in whole TXF points via ``_PRICE_SCALE``,
+        # so on any instrument whose entire premium is smaller than one point
+        # they subtract more than the mid and the bid comes out <= 0. The
+        # platform's under-scaled-price guard does catch that, but it catches it
+        # by raising out of ``handle_event``, which the runner reads as "this
+        # strategy is broken" and quarantines until a manual re-arm. A rejected
+        # quote must not be able to halt the strategy: drop it here instead.
+        if bid_price_scaled <= 0 or ask_price_scaled <= 0:
+            self._nonpositive_quote_blocked += 1
+            logger.warning(
+                "r47_nonpositive_quote_blocked",
+                symbol=symbol,
+                exec_symbol=exec_sym,
+                bid=bid_price_scaled,
+                ask=ask_price_scaled,
+                mid_x2=mid_price_x2,
+                spread_scaled=spread_scaled,
+            )
+            return
+
         # Execution with D2 quote suppression — use exec_sym for orders.
         # Price-gate: only send a new ROD if the price has moved by >= 1 tick
         # from the last quoted price. ROD orders rest at the exchange; resending
@@ -1151,6 +1173,7 @@ class R47MakerStrategy(SimpleMarketMaker):
             tox_blk=self._toxicity_blocked,
             qi_wdn=self._qi_widened,
             stale_cnl=self._stale_cancels,  # D1
+            nonpos_blk=self._nonpositive_quote_blocked,
         )
 
     # Note: cancel-by-order-id is not possible because BaseStrategy.buy()/sell()

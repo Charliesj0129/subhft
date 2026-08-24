@@ -7,6 +7,7 @@ from structlog import get_logger
 
 # Fill/Order Events might be imported from contracts or events
 from hft_platform.contracts.execution import FillEvent, OrderEvent, OrderStatus
+from hft_platform.contracts.ref import ContractFamily
 from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, RiskFeedback, Side
 from hft_platform.core.timebase import now_ns as _now_ns
 from hft_platform.events import BidAskEvent, FeatureUpdateEvent, GapEvent, LOBStatsEvent, TickEvent
@@ -207,11 +208,21 @@ class BaseStrategy(ABC):
 
         subs = kwargs.get("subscribe_symbols") or kwargs.get("symbols") or []
         self.symbols = set(subs)
+        # Populated by StrategyRegistry from ``contract_families`` in
+        # strategies.yaml and read by StrategyRunner to bind a family to a
+        # concrete month. Declared here because handle_event's dispatch guard
+        # depends on it existing: a strategy that declares a family but has no
+        # binding yet must not be handed the whole bus.
+        self.contract_families: tuple[ContractFamily, ...] = ()
         self.enabled = True
 
         self.ctx: Optional[StrategyContext] = None
         self._generated_intents: List[OrderIntent] = []
         self._cancel_inflight_targets: set[str] = set()
+        # Market-data events dropped because a declared contract family has no
+        # concrete binding yet. Non-zero after the boot window means the
+        # resolver never bound the family and the strategy is silent by design.
+        self._unbound_dispatch_skipped = 0
 
     # --- Event Handlers ---
 
@@ -271,15 +282,34 @@ class BaseStrategy(ABC):
         self.ctx = ctx
         self._generated_intents.clear()
 
-        # Auto-filter by symbol if applicable
-        if hasattr(event, "symbol") and self.symbols:
-            if event.symbol not in self.symbols:
-                # Special case for Fills/Orders which might target this strategy specifically?
-                # Strategy logic usually cares about its own fills regardless of symbol list (e.g. closing legacy)
-                # But Runner handles private dispatch.
-                # Here we just filter Market Data.
-                if not isinstance(event, (FillEvent, OrderEvent)):
+        # Auto-filter market data by symbol. Fills and orders are exempt: a
+        # strategy cares about its own executions regardless of the symbol
+        # list (e.g. closing a legacy position on a rolled-off month), and the
+        # runner handles targeted private dispatch.
+        if hasattr(event, "symbol") and not isinstance(event, (FillEvent, OrderEvent)):
+            if self.symbols:
+                if event.symbol not in self.symbols:
                     return []
+            elif self.contract_families:
+                # The strategy declared a family scope, but the resolver has
+                # not bound it to a concrete month yet -- the boot window
+                # before the first resolve, or a rebind that resolved to
+                # nothing. An empty set here means "not bound", NOT "every
+                # symbol". Reading it as a wildcard hands a single-instrument
+                # strategy the entire bus, and it then prices an unrelated
+                # instrument on its own tick grid: on 2026-08-23 R47_MAKER_TMF
+                # quoted TXO40900U6 at -20000 (its widening terms are whole
+                # TXF points, larger than the option's whole premium) 2.4 s
+                # before the TMF binding landed. Fail closed until it does.
+                if not self._unbound_dispatch_skipped:
+                    logger.warning(
+                        "strategy_market_data_skipped_unbound_family",
+                        strategy_id=self.strategy_id,
+                        symbol=getattr(event, "symbol", ""),
+                        families=[str(f) for f in self.contract_families],
+                    )
+                self._unbound_dispatch_skipped += 1
+                return []
 
         if isinstance(event, FillEvent) or (
             isinstance(event, OrderEvent)
