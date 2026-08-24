@@ -35,7 +35,28 @@ class TestScheduleJobs:
         assert job_queue.run_daily.call_count == 2
         assert job_queue.run_repeating.call_count == 1
 
-    def test_day_report_schedule(self) -> None:
+    # python-telegram-bot maps run_daily(days=...) 0-6 to SUNDAY-SATURDAY; it
+    # mapped them to Monday-Sunday before v20.0. These tests name the weekdays
+    # rather than asserting raw ints, because the previous versions asserted
+    # {0,1,2,3,4} and {0,1,2,3,4,5} -- which is what the code shipped, and which
+    # under PTB 22.8 means Sun-Thu and Sun-Fri. The tests were pinning the bug.
+    _PTB_WEEKDAY = {
+        "sunday": 0,
+        "monday": 1,
+        "tuesday": 2,
+        "wednesday": 3,
+        "thursday": 4,
+        "friday": 5,
+        "saturday": 6,
+    }
+
+    def test_the_day_report_runs_every_weekday_and_only_weekdays(self) -> None:
+        """13:50 covers the day session that closed at 13:45, Monday to Friday.
+
+        Friday was the casualty of the old numbering: 4 meant Thursday, so the
+        Friday day-session report was never sent. THESHOW's heartbeat still read
+        ``last_day=2026-08-20`` (a Thursday) on Saturday 2026-08-22.
+        """
         from hft_platform.bot.scheduler import schedule_jobs
 
         job_queue = MagicMock()
@@ -44,9 +65,22 @@ class TestScheduleJobs:
         call_kwargs = job_queue.run_daily.call_args_list[0]
         assert call_kwargs.kwargs["time"].hour == 13
         assert call_kwargs.kwargs["time"].minute == 50
-        assert set(call_kwargs.kwargs["days"]) == {0, 1, 2, 3, 4}
+        expected = {self._PTB_WEEKDAY[d] for d in ("monday", "tuesday", "wednesday", "thursday", "friday")}
+        assert set(call_kwargs.kwargs["days"]) == expected
 
-    def test_night_report_schedule(self) -> None:
+    def test_the_night_report_runs_tuesday_through_saturday(self) -> None:
+        """05:05 covers the night session that just closed at 05:00.
+
+        A TAIFEX night session opens 15:00 on a trading day and closes 05:00 the
+        next calendar day, so sessions run Mon->Tue through Fri->Sat and the
+        reports land Tuesday through Saturday.
+
+        Saturday is the one that matters and the one the old numbering dropped
+        (5 meant Friday): the Saturday 05:05 run is the *Friday night session*
+        report, and it never fired. Monday must be absent -- there is no
+        Sunday-night session for it to report, and running it produced one of the
+        two ``bot.dead_data_alert`` pages THESHOW sent every weekend.
+        """
         from hft_platform.bot.scheduler import schedule_jobs
 
         job_queue = MagicMock()
@@ -55,7 +89,12 @@ class TestScheduleJobs:
         call_kwargs = job_queue.run_daily.call_args_list[1]
         assert call_kwargs.kwargs["time"].hour == 5
         assert call_kwargs.kwargs["time"].minute == 5
-        assert set(call_kwargs.kwargs["days"]) == {0, 1, 2, 3, 4, 5}
+        days = set(call_kwargs.kwargs["days"])
+        expected = {self._PTB_WEEKDAY[d] for d in ("tuesday", "wednesday", "thursday", "friday", "saturday")}
+        assert days == expected
+        assert self._PTB_WEEKDAY["saturday"] in days, "the Friday night session report would be lost"
+        assert self._PTB_WEEKDAY["sunday"] not in days
+        assert self._PTB_WEEKDAY["monday"] not in days, "there is no Sunday-night session to report"
 
 
 class TestPushJob:
@@ -268,3 +307,85 @@ class TestHybridPush:
             await _push_report(ctx, "day")
 
         assert bot_app.latest_manual_report_context is existing
+
+
+class TestDeadDataAlertRespectsTheCalendar:
+    """A market that was closed is not a dead feed.
+
+    THESHOW sent two ``bot.dead_data_alert`` pages -- each carrying the hint
+    "likely an upstream feed/CK ingestion issue" -- every single weekend for at
+    least a month (2026-07-26/27, 08-02/03, 08-09/10, 08-16/17, 08-23/24). The
+    streak counter read "no rows" as evidence of an ingestion fault without ever
+    asking whether the market had been open.
+    """
+
+    @staticmethod
+    def _reset() -> None:
+        import hft_platform.bot.app as bot_app
+
+        bot_app.consecutive_empty_attempts = 0
+
+    def test_a_closed_market_does_not_count_toward_the_dead_data_streak(self) -> None:
+        import hft_platform.bot.app as bot_app
+        from hft_platform.bot.scheduler import _record_empty_attempt
+
+        self._reset()
+        with patch("hft_platform.bot.scheduler._is_trading_day", return_value=False):
+            for _ in range(5):
+                _record_empty_attempt("night", "2026-08-23", ["TXFR1"])
+
+        assert bot_app.consecutive_empty_attempts == 0
+
+    def test_an_open_market_with_no_data_still_counts(self) -> None:
+        import hft_platform.bot.app as bot_app
+        from hft_platform.bot.scheduler import _record_empty_attempt
+
+        self._reset()
+        with patch("hft_platform.bot.scheduler._is_trading_day", return_value=True):
+            _record_empty_attempt("day", "2026-08-24", ["TXFR1"])
+            _record_empty_attempt("night", "2026-08-24", ["TXFR1"])
+
+        assert bot_app.consecutive_empty_attempts == 2
+
+    def test_a_holiday_does_not_launder_an_ongoing_outage(self) -> None:
+        """The streak is preserved, not reset, across a closed session.
+
+        A feed that died on Friday is still dead on Monday. Resetting here would
+        make any weekend or holiday hide an outage that spans it.
+        """
+        import hft_platform.bot.app as bot_app
+        from hft_platform.bot.scheduler import _record_empty_attempt
+
+        self._reset()
+        with patch("hft_platform.bot.scheduler._is_trading_day", return_value=True):
+            _record_empty_attempt("day", "2026-08-21", ["TXFR1"])
+        with patch("hft_platform.bot.scheduler._is_trading_day", return_value=False):
+            _record_empty_attempt("night", "2026-08-23", ["TXFR1"])
+        with patch("hft_platform.bot.scheduler._is_trading_day", return_value=True):
+            _record_empty_attempt("day", "2026-08-24", ["TXFR1"])
+
+        assert bot_app.consecutive_empty_attempts == 2
+
+    def test_the_trading_day_check_fails_open(self) -> None:
+        """Any doubt must resolve to "alert", never to "stay quiet".
+
+        Suppressing a real outage is the expensive mistake; one spurious page on
+        a holiday is not.
+        """
+        from hft_platform.bot.scheduler import _is_trading_day
+
+        assert _is_trading_day("not-a-date") is True
+
+        with patch(
+            "hft_platform.core.market_calendar.get_calendar",
+            side_effect=RuntimeError("no calendar"),
+        ):
+            assert _is_trading_day("2026-08-24") is True
+
+    def test_a_weekend_reads_as_closed_and_a_weekday_as_open(self) -> None:
+        """The real calendar, not a mock -- weekends are the whole point."""
+        from hft_platform.bot.scheduler import _is_trading_day
+
+        assert _is_trading_day("2026-08-23") is False  # Sunday
+        assert _is_trading_day("2026-08-22") is False  # Saturday
+        assert _is_trading_day("2026-08-24") is True  # Monday

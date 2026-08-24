@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import io
 import os
 from datetime import datetime, time
@@ -17,6 +18,23 @@ _TZ = ZoneInfo("Asia/Taipei")
 
 def _get_owner_chat_id() -> str:
     return os.environ.get("HFT_TELEGRAM_CHAT_ID", "")
+
+
+def _is_trading_day(date: str) -> bool:
+    """Was the market open on ``date``? Fails **open**, on purpose.
+
+    Any doubt -- an unparseable date, a missing calendar, an import failure --
+    resolves to True, so an empty session still counts toward the dead-data
+    streak. Suppressing a real feed outage is the expensive mistake here; one
+    spurious alert on a holiday is not.
+    """
+    try:
+        from hft_platform.core.market_calendar import get_calendar
+
+        return get_calendar().is_trading_day(dt.date.fromisoformat(date))
+    except Exception as exc:  # noqa: BLE001 -- calendar is advisory, never a gate
+        _log.debug("bot.trading_day_check_failed", date=date, error=str(exc))
+        return True
 
 
 async def _push_report(context: Any, session: str) -> None:
@@ -82,30 +100,56 @@ async def _push_report(context: Any, session: str) -> None:
         # Reset empty-attempt counter on any successful symbol.
         bot_app.consecutive_empty_attempts = 0
     else:
-        # P1-c: every symbol returned no_data. Increment the streak counter.
-        bot_app.consecutive_empty_attempts += 1
-        threshold = bot_app.DEAD_DATA_ALERT_THRESHOLD
-        if bot_app.consecutive_empty_attempts >= threshold:
-            _log.warning(
-                "bot.dead_data_alert",
-                session=session,
-                date=date,
-                consecutive_empty_attempts=bot_app.consecutive_empty_attempts,
-                threshold=threshold,
-                symbols=symbols,
-                hint=(
-                    "Scheduled push fired but all symbols returned no_data — "
-                    "likely an upstream feed/CK ingestion issue, not a bot bug."
-                ),
-            )
-            try:
-                from hft_platform.observability.metrics import MetricsRegistry
-
-                MetricsRegistry.get().bot_dead_data_alerts_total.labels(session=session).inc()
-            except Exception:  # noqa: BLE001 — observability is best-effort
-                pass
+        _record_empty_attempt(session, date, symbols)
 
     _log.info("bot.push_complete", session=session, date=date, symbols=len(symbols))
+
+
+def _record_empty_attempt(session: str, date: str, symbols: list[str]) -> None:
+    """Every symbol returned no_data. Decide whether that is worth paging about.
+
+    P1-c (2026-04-27): track the streak so operators see a dead feed instead of
+    silently believing the bot is healthy.
+    """
+    import hft_platform.bot.app as bot_app
+
+    if not _is_trading_day(date):
+        # A market that was closed is not a dead feed. The weekday sets in
+        # schedule_jobs keep the scheduler off weekends, but they cannot know
+        # about a holiday, and the streak counter reads "no rows" as evidence of
+        # an ingestion fault either way. Counting a closed session pages an
+        # operator with "likely an upstream feed/CK ingestion issue" for a market
+        # that simply was not trading -- which is exactly how THESHOW sent two of
+        # those every single weekend for at least a month.
+        #
+        # Deliberately does NOT reset the streak: a feed that died on Friday is
+        # still dead on Monday, and a holiday in between must not launder it.
+        _log.info("bot.push_skipped_market_closed", session=session, date=date, symbols=symbols)
+        return
+
+    bot_app.consecutive_empty_attempts += 1
+    threshold = bot_app.DEAD_DATA_ALERT_THRESHOLD
+    if bot_app.consecutive_empty_attempts < threshold:
+        return
+
+    _log.warning(
+        "bot.dead_data_alert",
+        session=session,
+        date=date,
+        consecutive_empty_attempts=bot_app.consecutive_empty_attempts,
+        threshold=threshold,
+        symbols=symbols,
+        hint=(
+            "Scheduled push fired but all symbols returned no_data — "
+            "likely an upstream feed/CK ingestion issue, not a bot bug."
+        ),
+    )
+    try:
+        from hft_platform.observability.metrics import MetricsRegistry
+
+        MetricsRegistry.get().bot_dead_data_alerts_total.labels(session=session).inc()
+    except Exception:  # noqa: BLE001 — observability is best-effort
+        pass
 
 
 async def _push_day(context: Any) -> None:
@@ -138,21 +182,43 @@ async def _heartbeat(context: Any) -> None:
     )
 
 
+# python-telegram-bot's ``run_daily(days=...)`` maps 0-6 to **Sunday-Saturday**.
+# It mapped 0-6 to Monday-Sunday before v20.0 and the library's own changelog
+# calls the change out; this module was written against the old numbering and
+# never updated, while the host runs PTB 22.8. The comments therefore described
+# a schedule the code did not implement:
+#
+#   day   (0,1,2,3,4)   read as Mon-Fri  ->  actually Sun,Mon,Tue,Wed,Thu
+#   night (0,1,2,3,4,5) read as Mon-Sat  ->  actually Sun,Mon,Tue,Wed,Thu,Fri
+#
+# Two reports a week were silently lost and two junk ones sent instead, which is
+# exactly what THESHOW's logs show: no day report on Friday 2026-08-21 (the
+# heartbeat still read ``last_day=2026-08-20`` on the Saturday), no 05:05 run at
+# all on Saturday 2026-08-22 -- the run that carries the *Friday night session* --
+# and two runs over Sunday that could only ever find an empty market and page
+# ``bot.dead_data_alert``.
+_SUN, _MON, _TUE, _WED, _THU, _FRI, _SAT = range(7)
+
+
 def schedule_jobs(job_queue: Any) -> None:
     """Register scheduled jobs on the JobQueue."""
-    # Day report: 13:50 CST, Mon-Fri
+    # Day report: 13:50 CST, covering the day session that closed at 13:45.
     job_queue.run_daily(
         _push_day,
         time=time(hour=13, minute=50, tzinfo=_TZ),
-        days=(0, 1, 2, 3, 4),
+        days=(_MON, _TUE, _WED, _THU, _FRI),
         name="push_day_report",
     )
 
-    # Night report: 05:05 CST, Mon-Sat
+    # Night report: 05:05 CST, covering the night session that just closed at
+    # 05:00. A TAIFEX night session opens 15:00 on a trading day and closes
+    # 05:00 the *next* calendar day, so the sessions are Mon->Tue through
+    # Fri->Sat and the reports land Tuesday through Saturday. Monday 05:05 is
+    # deliberately absent: there is no Sunday-night session for it to report.
     job_queue.run_daily(
         _push_night,
         time=time(hour=5, minute=5, tzinfo=_TZ),
-        days=(0, 1, 2, 3, 4, 5),
+        days=(_TUE, _WED, _THU, _FRI, _SAT),
         name="push_night_report",
     )
 
