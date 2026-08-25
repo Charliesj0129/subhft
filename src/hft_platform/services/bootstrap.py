@@ -1127,6 +1127,16 @@ class SystemBootstrapper:
             # publish to the existing recorder. Drained by RecorderService.run().
             recorder_queue=recorder_queue,
         )
+        # A strategy quarantine is a money-path safety latch, and until this call
+        # existed a restart silently released every one of them: the governor's
+        # dict starts empty, so ``manual_rearm_required{scope="strategy"}`` read
+        # 0 and ``ManualRearmRequired`` *resolved itself* while the persisted
+        # document still said the latch was set (observed in production
+        # 2026-08-25). Restored here at the composition root rather than in
+        # ``StrategyRunner.__init__`` so constructing a runner stays free of
+        # filesystem IO. Fail-closed: an unreadable state document raises and
+        # refuses startup rather than booting as if nothing were latched.
+        strategy_runner.strategy_governor.restore_persisted_quarantines()
         # Phase 3: rejection feedback queue.
         # P2 (2026-04-25): the former ``_publish_queue`` was wired into
         # ``strategy_runner.set_publish_sink`` but nothing ever consumed it —

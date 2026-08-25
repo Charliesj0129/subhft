@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Iterable
 
 from structlog import get_logger
@@ -80,6 +81,64 @@ class StrategyHealthGovernor:
     def is_quarantined(self, strategy_id: str) -> bool:
         return strategy_id in self._quarantined
 
+    def restore_persisted_quarantines(self, *, state_path: str | Path | None = None) -> list[str]:
+        """Re-enter quarantine for every strategy the previous run left latched.
+
+        Without this, **a restart is an unauthenticated re-arm**: ``_quarantined``
+        starts empty, ``manual_rearm_required{scope="strategy"}`` therefore reads
+        0, and the ``ManualRearmRequired`` alert *resolves itself* -- reporting to
+        the operator that a safety latch was handled when nothing handled it.
+
+        Observed in production 2026-08-25T14:16:29Z: the engine was restarted
+        with ``R47_MAKER_TMF`` quarantined, both ``ManualRearmRequired`` and
+        ``StrategyQuarantineActive`` resolved 70 s later with no operator action,
+        and the strategy resumed quoting -- while the persisted document still
+        read ``manual_rearm_required: true``. The durable record was intact and
+        correct; nothing ever read it back. Under ``HFT_ORDER_MODE=sim`` that was
+        harmless. Under live order mode the identical restart silently reactivates
+        a strategy that a safety control stopped, with the alert showing green.
+
+        The latch is restored; the *authorization to clear it* is not. Each
+        restored quarantine is minted a fresh token in the current run, so a
+        re-arm request written before the restart can never match it. A latch is
+        state and must survive a restart; a re-arm is an edge and must not.
+
+        Fail-closed: an unreadable state document raises. A safety latch that
+        cannot be read must not be assumed absent -- that is precisely the
+        assumption this method exists to remove. A *missing* document is a cold
+        start and restores nothing.
+
+        Returns the strategy ids restored, in sorted order.
+        """
+        from hft_platform.ops.manual_rearm import ManualRearmGate
+
+        gate = ManualRearmGate(state_path=state_path)
+        snapshot = gate.snapshot()
+        strategies = snapshot.get("strategies")
+        if not isinstance(strategies, dict):
+            return []
+
+        restored: list[str] = []
+        for strategy_id in sorted(strategies):
+            entry = strategies[strategy_id]
+            if not isinstance(entry, dict) or not bool(entry.get("manual_rearm_required")):
+                continue
+            reason = entry.get("reason") or "restored_from_runtime_state"
+            # Reuse the live path: it mints the fresh token, sets both gauges and
+            # writes the evidence record, so a restored quarantine is
+            # indistinguishable from a fresh one to every consumer.
+            self.quarantine(strategy_id, reason=str(reason))
+            restored.append(strategy_id)
+
+        if restored:
+            logger.warning(
+                "strategy_quarantines_restored",
+                strategy_ids=restored,
+                count=len(restored),
+                note="latch survived restart; a fresh re-arm request is required to clear it",
+            )
+        return restored
+
     def rearm(self, strategy_id: str, *, expected_token: str, request_id: str | None = None) -> bool:
         """Clear one strategy's quarantine, and only the exact one authorized.
 
@@ -89,13 +148,15 @@ class StrategyHealthGovernor:
         no IO between them, so nothing can interleave: on the event loop this is
         atomic by construction.
 
-        The evidence write follows the decision rather than gating it. That
-        ordering is safe here for a reason specific to this state -- **a
-        strategy quarantine does not survive a restart**; only the platform
-        scope has a boot-time restore. So the record is an audit trail, not a
-        durability guarantee, and a filesystem failure must not be allowed to
-        block a recovery the operator has already authorized. It is recorded
-        best-effort and loudly on failure.
+        The evidence write follows the decision rather than gating it, and a
+        failed write must not block a recovery the operator already authorized.
+        Since ``restore_persisted_quarantines`` exists, that record is also the
+        durability mechanism, so losing it has a consequence worth naming: the
+        persisted document keeps ``manual_rearm_required: true`` and the next
+        restart re-latches a strategy that was legitimately re-armed. That is
+        the *fail-closed* direction -- the strategy stops rather than trades --
+        which is why the ordering stands. It is recorded best-effort and logged
+        loudly on failure so the operator can re-issue the request.
 
         Returns ``True`` only when a live quarantine was actually cleared.
         """
