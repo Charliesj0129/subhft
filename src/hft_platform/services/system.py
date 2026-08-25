@@ -330,6 +330,7 @@ class HFTSystem:
         # Request ids already applied to the governor, so a duplicate read of
         # the same request within one tick cannot re-arm twice.
         self._consumed_rearm_request_ids: set[str] = set()
+        self._pending_rearm_state: dict | None = None
         self.platform_degrade_inputs = getattr(
             self.registry, "platform_degrade_inputs", None
         ) or self.bootstrapper.build_platform_degrade_inputs(
@@ -1054,7 +1055,10 @@ class HFTSystem:
     def _update_platform_degrade_state(self) -> None:
         state = self._read_rearm_state()
         self._consume_platform_rearm_request(state)
-        self._consume_strategy_rearm_requests(state)
+        # Selection is pure dict work; the *application* writes several files, so
+        # it is handed to the supervisor to run off-loop. See
+        # _apply_pending_strategy_rearms.
+        self._pending_rearm_state = state if self._has_pending_rearm_request(state) else None
         controller = getattr(self, "platform_degrade_controller", None)
         inputs = getattr(self, "platform_degrade_inputs", None)
         if controller is None or inputs is None:
@@ -1081,6 +1085,59 @@ class HFTSystem:
         except Exception as exc:
             logger.warning("manual_rearm_state_read_failed", error=str(exc))
             return None
+
+    @staticmethod
+    def _has_pending_rearm_request(state: dict | None) -> bool:
+        """Cheap, IO-free test for whether any strategy carries a re-arm request.
+
+        Keeps the common case -- no operator request -- entirely on the event
+        loop with no filesystem work beyond the tick's existing state read.
+        """
+        if not state:
+            return False
+        strategies = state.get("strategies")
+        if not isinstance(strategies, dict):
+            return False
+        return any(
+            isinstance(entry, dict) and isinstance(entry.get("rearm_request"), dict) for entry in strategies.values()
+        )
+
+    def _record_rearm_failure(self, strategy_id: str, request_id: str, error: str) -> None:
+        """Best-effort marker that a recovery transition did not complete."""
+        runner = getattr(self, "strategy_runner", None)
+        governor = getattr(runner, "strategy_governor", None)
+        writer = getattr(governor, "evidence_writer", None)
+        if writer is None:
+            return
+        try:
+            writer.record_transition(
+                scope="strategy",
+                mode="STRATEGY_QUARANTINED",
+                reason="manual_rearm_failed",
+                metadata={"strategy_id": strategy_id, "request_id": request_id, "error": error},
+            )
+        except Exception:
+            # The volume that failed the re-arm will usually fail this too.
+            pass
+
+    async def _apply_pending_strategy_rearms(self) -> None:
+        """Apply operator re-arm requests off the event loop.
+
+        ``rearm`` persists a recovery transition before clearing the quarantine,
+        which is several reads, appends and full JSON rewrites -- measured 0.69 ms
+        p50 and 1.95 ms max on a healthy local disk, and unbounded on a degraded
+        autonomy volume. That is at or past the 1 ms event-loop budget, so the
+        filesystem work runs in a thread while the fail-closed ordering inside
+        ``rearm`` is preserved exactly.
+        """
+        state = getattr(self, "_pending_rearm_state", None)
+        if state is None:
+            return
+        self._pending_rearm_state = None
+        try:
+            await asyncio.to_thread(self._consume_strategy_rearm_requests, state)
+        except Exception as exc:
+            logger.error("strategy_rearm_offloop_apply_failed", error=str(exc))
 
     def _consume_strategy_rearm_requests(self, state: dict | None) -> None:
         """Apply an operator's ``hft ops rearm-strategy`` to the live governor.
@@ -1176,6 +1233,14 @@ class HFTSystem:
                     quarantine_token=requested_token,
                     error=str(exc),
                 )
+                # record_transition writes the timeline before the runtime-state
+                # acknowledgement, so a failure between the two leaves the
+                # timeline claiming a NORMAL recovery that did not happen --
+                # exactly the misleading evidence this change exists to remove.
+                # Append an explicit contradiction. Best-effort: if the volume is
+                # the thing that failed, this fails too, and the log line above
+                # is then the only record.
+                self._record_rearm_failure(strategy_id, request_id, str(exc))
                 continue
             consumed.add(request_id)
             if len(consumed) > _MAX_CONSUMED_REARM_REQUESTS:
@@ -1551,6 +1616,7 @@ class HFTSystem:
                 logger.info("Queues", **_log_kwargs)
 
             self._update_platform_degrade_state()
+            await self._apply_pending_strategy_rearms()
 
             # Periodic stale symbol eviction for FeatureEngine (rate-limited internally)
             _fe = getattr(getattr(self, "md_service", None), "feature_engine", None)

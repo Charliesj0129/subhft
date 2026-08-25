@@ -332,3 +332,51 @@ def test_a_recovered_acknowledgement_applies_on_a_later_tick(rig):
     tick(rig)
 
     assert not rig.governor.is_quarantined(STRATEGY)
+
+
+def test_the_offloop_selector_is_false_without_a_request(rig):
+    """The common case must not schedule any filesystem work."""
+    rig.governor.quarantine(STRATEGY, reason="handler_exception")
+    assert HFTSystem._has_pending_rearm_request(rig.gate.snapshot()) is False
+
+
+def test_the_offloop_selector_sees_a_published_request(rig):
+    rig.governor.quarantine(STRATEGY, reason="handler_exception")
+    rig.gate.rearm_strategy(STRATEGY)
+    assert HFTSystem._has_pending_rearm_request(rig.gate.snapshot()) is True
+
+
+def test_the_offloop_selector_tolerates_malformed_state():
+    for bad in (None, {}, {"strategies": "nope"}, {"strategies": {"a": None}}, {"strategies": {"a": {}}}):
+        assert HFTSystem._has_pending_rearm_request(bad) is False
+
+
+def test_a_failed_recovery_leaves_a_contradicting_evidence_record(rig):
+    """A NORMAL timeline entry must not stand when the recovery did not finish."""
+
+    class _HalfWriter:
+        """Writes the timeline, then fails before the acknowledgement."""
+
+        def __init__(self, real):
+            self._real = real
+            self.calls = 0
+
+        def record_transition(self, **kwargs):
+            self.calls += 1
+            if kwargs.get("reason") == "manual_rearm":
+                self._real._append_jsonl("state_timeline.jsonl", {**kwargs, "ts_ns": 0})
+                raise OSError("No space left on device")
+            return self._real.record_transition(**kwargs)
+
+    rig.governor.quarantine(STRATEGY, reason="handler_exception")
+    rig.gate.rearm_strategy(STRATEGY)
+    half = _HalfWriter(rig.writer)
+    rig.governor.evidence_writer = half
+
+    tick(rig)
+
+    assert rig.governor.is_quarantined(STRATEGY)
+    timeline = (rig.writer._ensure_session_dir() / "state_timeline.jsonl").read_text(encoding="utf-8")
+    records = [json.loads(line) for line in timeline.splitlines() if line.strip()]
+    assert records[-1]["reason"] == "manual_rearm_failed"
+    assert records[-1]["mode"] == "STRATEGY_QUARANTINED"

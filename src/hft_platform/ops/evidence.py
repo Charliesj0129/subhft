@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
-import uuid
 from datetime import date, datetime
 from pathlib import Path
 from threading import Lock
@@ -10,6 +8,7 @@ from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
 from hft_platform.core import timebase
+from hft_platform.ops.runtime_state_store import locked_state
 
 _TZ_TAIPEI = ZoneInfo("Asia/Taipei")
 
@@ -166,77 +165,51 @@ class AutonomyEvidenceWriter:
     def _update_runtime_state(self, record: dict[str, Any]) -> None:
         """Project one transition onto the operator-visible runtime state.
 
-        Two properties this file depends on:
+        Three properties this file depends on:
 
         * **The record's own flag decides.** This used to hardcode ``True``,
           which is why a recovery could never clear anything.
-        * **The write is atomic.** A plain ``write_text`` here races the CLI's
-          own writer in another process; a crash mid-write leaves truncated
-          JSON that ``_load_state`` then discards, silently dropping a live
-          quarantine's flag. Temp file + ``replace`` makes the swap atomic,
-          matching what ``ManualRearmGate._write_state`` already did.
+        * **The whole read-modify-write is serialized.** The operator CLI
+          mutates the same document from another process; without a shared lock
+          its write-back silently erased a platform latch this method had just
+          persisted. See ``runtime_state_store``.
+        * **The write is atomic and writer-unique.**
         """
-        path = self.base_dir / "runtime_state.json"
-        if path.exists():
-            try:
-                payload = json.loads(path.read_text(encoding="utf-8"))
-            except Exception:
-                payload = {}
-        else:
-            payload = {}
-        if not isinstance(payload, dict):
-            payload = {}
-
-        platform = payload.get("platform")
-        if not isinstance(platform, dict):
-            platform = {"manual_rearm_required": False, "reason": None}
-            payload["platform"] = platform
-        strategies = payload.get("strategies")
-        if not isinstance(strategies, dict):
-            strategies = {}
-            payload["strategies"] = strategies
-
         required = bool(record.get("manual_rearm_required", True))
         metadata = record.get("metadata")
         metadata = metadata if isinstance(metadata, dict) else {}
+        scope = record["scope"]
 
-        if record["scope"] == "platform":
-            # Only reachable with required=True; see _is_strategy_rearm_ack.
-            platform["manual_rearm_required"] = required
-            platform["reason"] = record["reason"] if required else None
-        elif record["scope"] == "strategy":
-            strategy_id = str(metadata.get("strategy_id") or "").strip()
-            if strategy_id:
-                if required:
-                    entry: dict[str, Any] = {
-                        "manual_rearm_required": True,
-                        "reason": record["reason"],
-                    }
-                    token = metadata.get("quarantine_token")
-                    if isinstance(token, str) and token:
-                        # The operator's re-arm must name this exact token, so a
-                        # request aimed at an earlier quarantine cannot clear it.
-                        entry["quarantine_token"] = token
-                    strategies[strategy_id] = entry
-                else:
-                    # Recovery: drop the flag AND the consumed request, so the
-                    # same request can never be replayed against a later
-                    # quarantine of the same strategy.
-                    strategies[strategy_id] = {
-                        "manual_rearm_required": False,
-                        "reason": None,
-                    }
-
-        path.parent.mkdir(parents=True, exist_ok=True)
-        # Writer-unique temp name. Both this process and the operator CLI write
-        # runtime_state.json; a shared `.tmp` means whichever renames second
-        # either moves the other's payload or fails with FileNotFoundError.
-        tmp_path = path.with_suffix(f"{path.suffix}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
-        try:
-            tmp_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True), encoding="utf-8")
-            tmp_path.replace(path)
-        finally:
-            tmp_path.unlink(missing_ok=True)
+        with locked_state(self.base_dir / "runtime_state.json") as state:
+            if scope == "platform":
+                # Only reachable with required=True; see _is_strategy_rearm_ack.
+                platform = state["platform"]
+                platform["manual_rearm_required"] = required
+                platform["reason"] = record["reason"] if required else None
+            elif scope == "strategy":
+                strategy_id = str(metadata.get("strategy_id") or "").strip()
+                if strategy_id:
+                    strategies = state["strategies"]
+                    if required:
+                        entry: dict[str, Any] = {
+                            "manual_rearm_required": True,
+                            "reason": record["reason"],
+                        }
+                        token = metadata.get("quarantine_token")
+                        if isinstance(token, str) and token:
+                            # The operator's re-arm must name this exact token,
+                            # so a request aimed at an earlier quarantine cannot
+                            # clear it.
+                            entry["quarantine_token"] = token
+                        strategies[strategy_id] = entry
+                    else:
+                        # Recovery: drop the flag AND the consumed request, so
+                        # the same request can never be replayed against a later
+                        # quarantine of the same strategy.
+                        strategies[strategy_id] = {
+                            "manual_rearm_required": False,
+                            "reason": None,
+                        }
 
     def _append_markdown(self, filename: str, line: str) -> None:
         path = self._ensure_session_dir() / filename
