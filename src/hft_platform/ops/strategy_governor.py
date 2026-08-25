@@ -80,27 +80,24 @@ class StrategyHealthGovernor:
     def is_quarantined(self, strategy_id: str) -> bool:
         return strategy_id in self._quarantined
 
-    def rearm(self, strategy_id: str, *, request_id: str | None = None) -> None:
-        """Clear one strategy's quarantine and record the recovery transition.
+    def rearm(self, strategy_id: str, *, expected_token: str, request_id: str | None = None) -> bool:
+        """Clear one strategy's quarantine, but only the exact one authorized.
 
-        The transition record matters as much as the state change. Before this,
-        ``rearm`` mutated memory and gauges only, so ``state_timeline.jsonl`` and
-        ``strategy_quarantine.json`` still ended at ``STRATEGY_QUARANTINED``
-        after dispatch had resumed -- an incident reconstruction read the
-        strategy as permanently halted. Recording a NORMAL transition with
-        ``manual_rearm_required=False`` is also what clears the persisted flag
-        and consumes the operator's request in ``runtime_state.json``.
+        ``expected_token`` is mandatory and is compared **twice**: before the
+        persistence and again after it. The second check is not paranoia. The
+        persistence runs off the event loop, so the loop can quarantine the same
+        strategy again while it is in flight; an earlier draft popped by
+        ``strategy_id`` unconditionally and therefore let an authorization for
+        quarantine T1 erase a newer T2. That interleaving was reproduced.
 
-        **Durable acknowledgement happens first, deliberately.** If the evidence
-        write fails -- disk full, unwritable dir -- the exception propagates with
-        the quarantine still intact and the request still unconsumed, so the
-        caller retries on its next tick. Clearing memory first would leave a
-        strategy trading with its recovery unrecorded and its request
-        un-acknowledged, which is the fail-open direction.
+        Ordering is persist-then-clear: if the evidence write fails, the
+        exception propagates with the quarantine intact and the request
+        unconsumed, so the caller retries. Returns ``True`` only when the live
+        quarantine was actually cleared.
         """
         entry = self._quarantined.get(strategy_id)
-        if entry is None:
-            return
+        if entry is None or entry.token != expected_token:
+            return False
         if self.evidence_writer is not None:
             self.evidence_writer.record_transition(
                 scope="strategy",
@@ -113,6 +110,19 @@ class StrategyHealthGovernor:
                     "request_id": request_id,
                 },
             )
+        # Re-check: a re-quarantine may have replaced this entry while the write
+        # above was blocked. Clearing then would release a failure nobody
+        # authorized.
+        current = self._quarantined.get(strategy_id)
+        if current is None or current.token != expected_token:
+            logger.warning(
+                "strategy_rearm_superseded_by_new_quarantine",
+                strategy_id=strategy_id,
+                authorized_token=expected_token,
+                live_token=current.token if current is not None else None,
+                request_id=request_id,
+            )
+            return False
         self._quarantined.pop(strategy_id, None)
         self._set_strategy_quarantine_active(strategy_id, active=False)
         self._set_strategy_scope_state()
@@ -122,6 +132,7 @@ class StrategyHealthGovernor:
             quarantine_token=entry.token,
             request_id=request_id,
         )
+        return True
 
     def build_cancel_intents(
         self,

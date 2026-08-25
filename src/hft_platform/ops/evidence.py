@@ -23,6 +23,13 @@ class AutonomyEvidenceWriter:
         self.base_dir = Path(base_dir) if base_dir is not None else DEFAULT_AUTONOMY_EVIDENCE_DIR
         self._trading_date: date | None = None
         self._on_transition_callbacks: list[Callable[[dict[str, Any]], None]] = []
+        # Guards the multi-file write in record_transition. The shared writer is
+        # now reached from two threads: the event loop (quarantine, platform
+        # transitions) and the off-loop worker that applies operator re-arms.
+        # _update_scope_summary and _update_summary are read-modify-write over
+        # whole JSON documents, so concurrent transitions would otherwise
+        # overwrite each other's events, counts and latest record.
+        self._transition_lock = Lock()
 
     def set_trading_date(self, d: date) -> None:
         """Override the trading date used for session directory naming."""
@@ -47,46 +54,47 @@ class AutonomyEvidenceWriter:
         manual_rearm_required: bool = True,
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        record = {
-            "ts_ns": timebase.now_ns(),
-            "scope": str(scope),
-            "mode": str(mode),
-            "reason": str(reason),
-            "manual_rearm_required": bool(manual_rearm_required),
-            "metadata": dict(metadata or {}),
-        }
-        self._append_jsonl("state_timeline.jsonl", record)
-        self._append_markdown(
-            "alert_digest.md",
-            f"- `{record['scope']}` -> `{record['mode']}` reason=`{record['reason']}`",
-        )
-        self._update_scope_summary(record)
-        self._update_summary(record)
-        if manual_rearm_required:
-            self.record_manual_rearm_requirement(
-                scope=scope,
-                reason=reason,
-                metadata=metadata,
+        with self._transition_lock:
+            record = {
+                "ts_ns": timebase.now_ns(),
+                "scope": str(scope),
+                "mode": str(mode),
+                "reason": str(reason),
+                "manual_rearm_required": bool(manual_rearm_required),
+                "metadata": dict(metadata or {}),
+            }
+            self._append_jsonl("state_timeline.jsonl", record)
+            self._append_markdown(
+                "alert_digest.md",
+                f"- `{record['scope']}` -> `{record['mode']}` reason=`{record['reason']}`",
             )
-        elif self._is_strategy_rearm_ack(record):
-            # A recovery transition must reach runtime_state.json too -- it used
-            # not to, which is why nothing ever wrote the flag back to false and
-            # a stale false was indistinguishable from a fresh authorization.
-            #
-            # But ONLY an explicit, correlated strategy re-arm may do so. Most
-            # false transitions are not recoveries at all: HFTSystem.run()
-            # records `system_start` with manual_rearm_required=False on every
-            # boot, and projecting that would clear a genuine platform latch
-            # that no operator had re-armed -- turning a restart into an
-            # unauthorised HALT release. Fail-closed means a transition that
-            # cannot prove it is a recovery must not clear anything.
-            self._update_runtime_state(record)
-        for cb in self._on_transition_callbacks:
-            try:
-                cb(record)
-            except Exception:
-                pass
-        return record
+            self._update_scope_summary(record)
+            self._update_summary(record)
+            if manual_rearm_required:
+                self.record_manual_rearm_requirement(
+                    scope=scope,
+                    reason=reason,
+                    metadata=metadata,
+                )
+            elif self._is_strategy_rearm_ack(record):
+                # A recovery transition must reach runtime_state.json too -- it used
+                # not to, which is why nothing ever wrote the flag back to false and
+                # a stale false was indistinguishable from a fresh authorization.
+                #
+                # But ONLY an explicit, correlated strategy re-arm may do so. Most
+                # false transitions are not recoveries at all: HFTSystem.run()
+                # records `system_start` with manual_rearm_required=False on every
+                # boot, and projecting that would clear a genuine platform latch
+                # that no operator had re-armed -- turning a restart into an
+                # unauthorised HALT release. Fail-closed means a transition that
+                # cannot prove it is a recovery must not clear anything.
+                self._update_runtime_state(record)
+            for cb in self._on_transition_callbacks:
+                try:
+                    cb(record)
+                except Exception:
+                    pass
+            return record
 
     def record_manual_rearm_requirement(
         self,

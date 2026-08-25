@@ -8,12 +8,18 @@ the request/ack protocol that replaced it, and every fail-open they identified.
 from __future__ import annotations
 
 import json
+import time
 from types import SimpleNamespace
 
 import pytest
 
 from hft_platform.ops.evidence import AutonomyEvidenceWriter
 from hft_platform.ops.manual_rearm import ManualRearmGate
+from hft_platform.ops.runtime_state_store import (
+    RuntimeStateLockTimeout,
+    RuntimeStateUnreadable,
+    locked_state,
+)
 from hft_platform.ops.strategy_governor import StrategyHealthGovernor
 from hft_platform.services.system import HFTSystem
 
@@ -380,3 +386,125 @@ def test_a_failed_recovery_leaves_a_contradicting_evidence_record(rig):
     records = [json.loads(line) for line in timeline.splitlines() if line.strip()]
     assert records[-1]["reason"] == "manual_rearm_failed"
     assert records[-1]["mode"] == "STRATEGY_QUARANTINED"
+
+
+# --- round 3: fail-opens introduced by moving persistence off-loop ------------
+
+
+def test_a_rearm_in_flight_does_not_erase_a_newer_quarantine(rig):
+    """The race the worker thread created.
+
+    ``rearm`` persists before clearing, and that persistence now runs off the
+    event loop, so the loop can quarantine the same strategy again while it is
+    in flight. An earlier draft popped by ``strategy_id`` unconditionally, so an
+    authorization for quarantine T1 removed a newer T2 -- releasing a failure
+    nobody authorized. Reproduced with a blocking writer.
+    """
+    import threading
+
+    mid_persist = threading.Event()
+
+    class _SlowWriter:
+        def __init__(self, real):
+            self._real = real
+
+        def record_transition(self, **kwargs):
+            if kwargs.get("reason") == "manual_rearm":
+                mid_persist.set()
+                time.sleep(0.2)
+            return self._real.record_transition(**kwargs)
+
+    rig.governor.quarantine(STRATEGY, reason="first")
+    token_1 = rig.governor.quarantine_token(STRATEGY)
+    rig.governor.evidence_writer = _SlowWriter(rig.writer)
+
+    result: list[bool] = []
+    worker = threading.Thread(
+        target=lambda: result.append(rig.governor.rearm(STRATEGY, expected_token=token_1, request_id="r1"))
+    )
+    worker.start()
+    assert mid_persist.wait(timeout=5)
+    rig.governor.quarantine(STRATEGY, reason="second")
+    token_2 = rig.governor.quarantine_token(STRATEGY)
+    worker.join(timeout=5)
+
+    assert token_2 != token_1
+    assert result == [False], "an authorization for T1 must not apply to T2"
+    assert rig.governor.is_quarantined(STRATEGY)
+    assert rig.governor.quarantine_token(STRATEGY) == token_2
+
+
+def test_a_rearm_for_a_token_that_is_not_live_is_refused(rig):
+    rig.governor.quarantine(STRATEGY, reason="first")
+    assert rig.governor.rearm(STRATEGY, expected_token="someone-elses-token") is False
+    assert rig.governor.is_quarantined(STRATEGY)
+
+
+def test_an_unreadable_state_file_is_never_overwritten_with_defaults(rig, tmp_path):
+    """A corrupt file must not let the next write erase a persisted latch."""
+    rig.writer.record_transition(
+        scope="platform",
+        mode="PLATFORM_REDUCE_ONLY",
+        reason="clickhouse_unhealthy",
+    )
+    state_path = tmp_path / "runtime_state.json"
+    original = state_path.read_bytes()
+    state_path.write_text("{ truncated", encoding="utf-8")
+
+    with pytest.raises(RuntimeStateUnreadable):
+        with locked_state(state_path):
+            pass
+
+    assert state_path.read_text(encoding="utf-8") == "{ truncated"
+    assert original  # the latch existed before corruption; nothing rewrote the file
+
+
+def test_a_missing_state_file_is_a_cold_start_not_an_error(tmp_path):
+    with locked_state(tmp_path / "absent.json") as state:
+        assert state["platform"]["manual_rearm_required"] is False
+
+
+def test_lock_acquisition_is_bounded(tmp_path):
+    """An unbounded LOCK_EX would wedge the supervisor and trip the watchdog."""
+    import fcntl
+
+    path = tmp_path / "runtime_state.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = path.with_suffix(f"{path.suffix}.lock")
+    holder = open(lock_path, "a+", encoding="utf-8")
+    fcntl.flock(holder.fileno(), fcntl.LOCK_EX)
+    try:
+        started = time.monotonic()
+        with pytest.raises(RuntimeStateLockTimeout):
+            with locked_state(path, timeout_s=0.2):
+                pass
+        elapsed = time.monotonic() - started
+        assert elapsed < 3.0, f"acquisition was not bounded: {elapsed:.2f}s"
+    finally:
+        fcntl.flock(holder.fileno(), fcntl.LOCK_UN)
+        holder.close()
+
+
+def test_a_failed_recovery_preserves_the_token_and_the_request(rig):
+    """A transient audit-write error must not make re-arm impossible."""
+
+    class _FailOnce:
+        def __init__(self, real):
+            self._real = real
+
+        def record_transition(self, **kwargs):
+            if kwargs.get("reason") == "manual_rearm":
+                raise OSError("No space left on device")
+            return self._real.record_transition(**kwargs)
+
+    rig.governor.quarantine(STRATEGY, reason="handler_exception")
+    rig.gate.rearm_strategy(STRATEGY)
+    rig.governor.evidence_writer = _FailOnce(rig.writer)
+
+    tick(rig)
+
+    entry = rig.gate.snapshot()["strategies"][STRATEGY]
+    assert entry["manual_rearm_required"] is True
+    assert entry.get("quarantine_token"), "the token must survive a failed recovery"
+    assert entry.get("rearm_request"), "the request must stay available to retry"
+    assert rig.governor.is_quarantined(STRATEGY)

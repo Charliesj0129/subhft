@@ -63,6 +63,10 @@ def _audit_persistence_writer_for_recorder(recorder: Any) -> Any | None:
 #: one tick, so it never needs to grow.
 _MAX_CONSUMED_REARM_REQUESTS = 256
 
+#: Deadline for applying one operator re-arm off-loop. Must stay well under the
+#: LoopStallWatchdog's 60 s, since the supervisor tick awaits it.
+_REARM_APPLY_TIMEOUT_S = 5.0
+
 #: Distinguishes "caller did not supply state" from "the shared read failed and
 #: returned None". Without it the failure path read runtime_state.json twice and
 #: logged two warnings on every one-second supervisor tick.
@@ -1110,10 +1114,19 @@ class HFTSystem:
         if writer is None:
             return
         try:
+            # manual_rearm_required=False keeps this OUT of runtime_state.json:
+            # the recovery branch requires reason == "manual_rearm", and the
+            # requirement branch requires the flag. That matters -- an earlier
+            # draft let this marker rewrite the strategy entry through the
+            # requirement branch, dropping its quarantine_token and pending
+            # rearm_request, so one transient audit-write error made the
+            # strategy un-rearmable until a restart. This is a timeline record
+            # only.
             writer.record_transition(
                 scope="strategy",
                 mode="STRATEGY_QUARANTINED",
                 reason="manual_rearm_failed",
+                manual_rearm_required=False,
                 metadata={"strategy_id": strategy_id, "request_id": request_id, "error": error},
             )
         except Exception:
@@ -1135,7 +1148,19 @@ class HFTSystem:
             return
         self._pending_rearm_state = None
         try:
-            await asyncio.to_thread(self._consume_strategy_rearm_requests, state)
+            # Bounded. The supervisor beats the loop watchdog, so awaiting this
+            # without a deadline would let a stalled autonomy volume stop the
+            # watchdog beat, the kill-switch poll and the StormGuard update --
+            # and after the watchdog's 60 s the engine force-exits, even though
+            # the event loop itself is perfectly runnable. A re-arm is never
+            # urgent enough to risk that; a timeout just means the next tick
+            # retries, because the request id is only recorded on success.
+            await asyncio.wait_for(
+                asyncio.to_thread(self._consume_strategy_rearm_requests, state),
+                timeout=_REARM_APPLY_TIMEOUT_S,
+            )
+        except TimeoutError:
+            logger.error("strategy_rearm_apply_timed_out", timeout_s=_REARM_APPLY_TIMEOUT_S)
         except Exception as exc:
             logger.error("strategy_rearm_offloop_apply_failed", error=str(exc))
 
@@ -1224,7 +1249,7 @@ class HFTSystem:
             # the id on failure lets the next tick retry; the token check still
             # makes a genuine double-apply impossible.
             try:
-                governor.rearm(strategy_id, request_id=request_id)
+                applied = governor.rearm(strategy_id, expected_token=requested_token, request_id=request_id)
             except Exception as exc:
                 logger.error(
                     "strategy_rearm_apply_failed",
@@ -1241,6 +1266,11 @@ class HFTSystem:
                 # the thing that failed, this fails too, and the log line above
                 # is then the only record.
                 self._record_rearm_failure(strategy_id, request_id, str(exc))
+                continue
+            if not applied:
+                # Superseded by a newer quarantine, or already gone. Do not
+                # record the id: the request stays available for the operator to
+                # reissue against the live quarantine.
                 continue
             consumed.add(request_id)
             if len(consumed) > _MAX_CONSUMED_REARM_REQUESTS:
