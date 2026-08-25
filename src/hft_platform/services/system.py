@@ -13,6 +13,7 @@ from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceCodec
 from hft_platform.core.session_hooks import SessionHookManager
 from hft_platform.observability.health import HealthServer
+from hft_platform.ops import rearm_requests
 from hft_platform.ops.evidence import get_shared_autonomy_evidence_writer
 from hft_platform.ops.manual_rearm import ManualRearmGate
 from hft_platform.ops.platform_degrade import get_shared_platform_degrade_controller
@@ -57,15 +58,6 @@ def _audit_persistence_writer_for_recorder(recorder: Any) -> Any | None:
         return RecorderQueueAuditWriter(queue)
     return getattr(recorder, "writer", None)
 
-
-#: Cap on remembered consumed re-arm request ids. The quarantine token is what
-#: actually enforces single-use; this set only guards against a duplicate within
-#: one tick, so it never needs to grow.
-_MAX_CONSUMED_REARM_REQUESTS = 256
-
-#: Deadline for applying one operator re-arm off-loop. Must stay well under the
-#: LoopStallWatchdog's 60 s, since the supervisor tick awaits it.
-_REARM_APPLY_TIMEOUT_S = 5.0
 
 #: Distinguishes "caller did not supply state" from "the shared read failed and
 #: returned None". Without it the failure path read runtime_state.json twice and
@@ -333,8 +325,7 @@ class HFTSystem:
         self._last_platform_rearm_request_seen = 0.0
         # Request ids already applied to the governor, so a duplicate read of
         # the same request within one tick cannot re-arm twice.
-        self._consumed_rearm_request_ids: set[str] = set()
-        self._pending_rearm_state: dict | None = None
+
         self.platform_degrade_inputs = getattr(
             self.registry, "platform_degrade_inputs", None
         ) or self.bootstrapper.build_platform_degrade_inputs(
@@ -1059,10 +1050,7 @@ class HFTSystem:
     def _update_platform_degrade_state(self) -> None:
         state = self._read_rearm_state()
         self._consume_platform_rearm_request(state)
-        # Selection is pure dict work; the *application* writes several files, so
-        # it is handed to the supervisor to run off-loop. See
-        # _apply_pending_strategy_rearms.
-        self._pending_rearm_state = state if self._has_pending_rearm_request(state) else None
+        self._consume_strategy_rearm_requests(state)
         controller = getattr(self, "platform_degrade_controller", None)
         inputs = getattr(self, "platform_degrade_inputs", None)
         if controller is None or inputs is None:
@@ -1090,200 +1078,82 @@ class HFTSystem:
             logger.warning("manual_rearm_state_read_failed", error=str(exc))
             return None
 
-    @staticmethod
-    def _has_pending_rearm_request(state: dict | None) -> bool:
-        """Cheap, IO-free test for whether any strategy carries a re-arm request.
-
-        Keeps the common case -- no operator request -- entirely on the event
-        loop with no filesystem work beyond the tick's existing state read.
-        """
-        if not state:
-            return False
-        strategies = state.get("strategies")
-        if not isinstance(strategies, dict):
-            return False
-        return any(
-            isinstance(entry, dict) and isinstance(entry.get("rearm_request"), dict) for entry in strategies.values()
-        )
-
-    def _record_rearm_failure(self, strategy_id: str, request_id: str, error: str) -> None:
-        """Best-effort marker that a recovery transition did not complete."""
-        runner = getattr(self, "strategy_runner", None)
-        governor = getattr(runner, "strategy_governor", None)
-        writer = getattr(governor, "evidence_writer", None)
-        if writer is None:
-            return
-        try:
-            # manual_rearm_required=False keeps this OUT of runtime_state.json:
-            # the recovery branch requires reason == "manual_rearm", and the
-            # requirement branch requires the flag. That matters -- an earlier
-            # draft let this marker rewrite the strategy entry through the
-            # requirement branch, dropping its quarantine_token and pending
-            # rearm_request, so one transient audit-write error made the
-            # strategy un-rearmable until a restart. This is a timeline record
-            # only.
-            writer.record_transition(
-                scope="strategy",
-                mode="STRATEGY_QUARANTINED",
-                reason="manual_rearm_failed",
-                manual_rearm_required=False,
-                metadata={"strategy_id": strategy_id, "request_id": request_id, "error": error},
-            )
-        except Exception:
-            # The volume that failed the re-arm will usually fail this too.
-            pass
-
-    async def _apply_pending_strategy_rearms(self) -> None:
-        """Apply operator re-arm requests off the event loop.
-
-        ``rearm`` persists a recovery transition before clearing the quarantine,
-        which is several reads, appends and full JSON rewrites -- measured 0.69 ms
-        p50 and 1.95 ms max on a healthy local disk, and unbounded on a degraded
-        autonomy volume. That is at or past the 1 ms event-loop budget, so the
-        filesystem work runs in a thread while the fail-closed ordering inside
-        ``rearm`` is preserved exactly.
-        """
-        state = getattr(self, "_pending_rearm_state", None)
-        if state is None:
-            return
-        self._pending_rearm_state = None
-        try:
-            # Bounded. The supervisor beats the loop watchdog, so awaiting this
-            # without a deadline would let a stalled autonomy volume stop the
-            # watchdog beat, the kill-switch poll and the StormGuard update --
-            # and after the watchdog's 60 s the engine force-exits, even though
-            # the event loop itself is perfectly runnable. A re-arm is never
-            # urgent enough to risk that; a timeout just means the next tick
-            # retries, because the request id is only recorded on success.
-            await asyncio.wait_for(
-                asyncio.to_thread(self._consume_strategy_rearm_requests, state),
-                timeout=_REARM_APPLY_TIMEOUT_S,
-            )
-        except TimeoutError:
-            logger.error("strategy_rearm_apply_timed_out", timeout_s=_REARM_APPLY_TIMEOUT_S)
-        except Exception as exc:
-            logger.error("strategy_rearm_offloop_apply_failed", error=str(exc))
-
-    def _consume_strategy_rearm_requests(self, state: dict | None) -> None:
-        """Apply an operator's ``hft ops rearm-strategy`` to the live governor.
+    def _consume_strategy_rearm_requests(self, state: dict | None = None) -> None:
+        """Apply operator re-arm requests to the live governor.
 
         Without this the strategy re-arm is a **write-only loop**. The quarantine
         that gates dispatch is ``StrategyHealthGovernor._quarantined``, an
-        in-memory dict; the CLI only touches runtime_state.json, and nothing read
-        it back -- ``StrategyHealthGovernor.rearm`` had no production caller at
-        all. The command reported success and changed nothing, leaving an engine
-        restart as the only real remedy. Measured on THESHOW: ``R47_MAKER_TMF``
-        was quarantined at 2026-08-23T14:18:20Z by a single rejected intent and
-        emitted no alpha decision for 33 h, paging the whole time.
+        in-memory dict; the CLI only wrote to disk, and nothing read it back --
+        ``StrategyHealthGovernor.rearm`` had no production caller at all. The
+        command reported success and changed nothing, leaving an engine restart
+        as the only real remedy. Measured on THESHOW: ``R47_MAKER_TMF`` was
+        quarantined at 2026-08-23T14:18:20Z by a single rejected intent and
+        emitted no alpha decision for 46 h, paging the whole time.
 
-        **This consumer is edge-triggered, and that is the whole point.** The
-        first version keyed off ``manual_rearm_required`` being false, reasoning
-        that a fresh quarantine always rewrites the flag to true. Two independent
-        reviews falsified that, and the source agrees:
+        Requests arrive as write-once files, each naming the ``quarantine_token``
+        it authorizes. This runs entirely on the event loop and entirely in
+        memory: listing an empty directory is one ``scandir``, and matching a
+        token against the live dict is microseconds. Nothing here needs a worker,
+        a deadline, a lock, or a consumed-id watermark -- a request is consumed
+        by deleting it, so a replay is impossible because the request is gone.
 
-        * ``rearm`` never wrote the flag back, so after one re-arm the entry
-          stays ``false`` **forever**;
-        * ``quarantine`` populates ``_quarantined`` *before* the evidence writer
-          persists ``true``, so a tick inside that window sees the stale
-          ``false``;
-        * if that write ever fails -- unwritable dir, full disk -- the strategy
-          becomes permanently un-quarantinable, silently re-armed every second.
-
-        A level-triggered flag cannot distinguish "an operator authorized this"
-        from "nobody has needed to set it yet". So the file now carries an
-        explicit request bound to a ``quarantine_token`` minted per quarantine
-        *instance* and namespaced by the engine's run id. A request is applied
-        only when it names the token of the live quarantine, which makes a
-        replayed, stale, or cross-restart request a no-op. Anything missing or
-        malformed is skipped, which is the fail-closed direction.
+        ``state`` is accepted and ignored; it remains in the signature only so
+        the supervisor keeps its single shared read.
         """
-        if not state:
-            return
+        del state
         runner = getattr(self, "strategy_runner", None)
         governor = getattr(runner, "strategy_governor", None)
         if governor is None:
             return
-        quarantined = getattr(governor, "_quarantined", None)
-        if not quarantined:
+        gate = getattr(self, "manual_rearm_gate", None)
+        if gate is None:
             return
-        strategies = state.get("strategies")
-        if not isinstance(strategies, dict):
+        try:
+            requests = rearm_requests.pending(gate.state_path.parent)
+        except Exception as exc:
+            logger.warning("strategy_rearm_request_scan_failed", error=str(exc))
             return
-        consumed = getattr(self, "_consumed_rearm_request_ids", None)
-        if consumed is None:
-            consumed = set()
-            self._consumed_rearm_request_ids = consumed
-        for strategy_id in list(quarantined):
-            entry = strategies.get(strategy_id)
-            if not isinstance(entry, dict):
-                continue
-            request = entry.get("rearm_request")
-            if not isinstance(request, dict):
-                continue
-            requested_token = request.get("quarantine_token")
-            live_token = governor.quarantine_token(strategy_id)
-            if not isinstance(requested_token, str) or not requested_token:
-                continue
-            if not live_token or requested_token != live_token:
-                # Names a different quarantine instance: an operator request that
-                # lost a race with a re-quarantine, or one left over from a
-                # previous engine run. Never apply it.
+        for request in requests:
+            live_token = governor.quarantine_token(request.strategy_id)
+            if live_token is None:
+                # No live quarantine: either it was already cleared, or the
+                # engine restarted since the request was written (a strategy
+                # quarantine does not survive a restart). Retire the request so
+                # it cannot linger and cannot apply to some future quarantine.
+                rearm_requests.consume(request)
                 logger.warning(
-                    "strategy_rearm_request_token_mismatch",
-                    strategy_id=strategy_id,
-                    requested_token=requested_token,
+                    "strategy_rearm_request_retired_no_live_quarantine",
+                    strategy_id=request.strategy_id,
+                    request_id=request.request_id,
+                )
+                continue
+            if live_token != request.quarantine_token:
+                # Authorizes a different quarantine instance than the live one.
+                # Retire it: the operator must look at the current failure.
+                rearm_requests.consume(request)
+                logger.warning(
+                    "strategy_rearm_request_superseded",
+                    strategy_id=request.strategy_id,
+                    request_id=request.request_id,
+                    authorized_token=request.quarantine_token,
                     live_token=live_token,
                 )
                 continue
-            request_id = request.get("request_id")
-            if not isinstance(request_id, str) or not request_id:
-                continue
-            if request_id in consumed:
-                continue
-            # Apply first, remember second, and never let a persistence failure
-            # escape. `rearm` clears the live quarantine and then performs
-            # several evidence writes; an unhandled disk-full or permission
-            # error here would propagate out of the supervisor tick and take the
-            # whole engine down via the container restart policy -- during a
-            # manual recovery, which is the worst possible moment. Not recording
-            # the id on failure lets the next tick retry; the token check still
-            # makes a genuine double-apply impossible.
-            try:
-                applied = governor.rearm(strategy_id, expected_token=requested_token, request_id=request_id)
-            except Exception as exc:
-                logger.error(
-                    "strategy_rearm_apply_failed",
-                    strategy_id=strategy_id,
-                    request_id=request_id,
-                    quarantine_token=requested_token,
-                    error=str(exc),
+            # Consume before applying. If the process dies between the two, the
+            # strategy stays quarantined and the operator reissues -- the
+            # fail-closed direction. Consuming after could replay the request.
+            rearm_requests.consume(request)
+            if governor.rearm(
+                request.strategy_id,
+                expected_token=request.quarantine_token,
+                request_id=request.request_id,
+            ):
+                logger.warning(
+                    "strategy_rearm_applied_from_operator_request",
+                    strategy_id=request.strategy_id,
+                    request_id=request.request_id,
+                    quarantine_token=request.quarantine_token,
                 )
-                # record_transition writes the timeline before the runtime-state
-                # acknowledgement, so a failure between the two leaves the
-                # timeline claiming a NORMAL recovery that did not happen --
-                # exactly the misleading evidence this change exists to remove.
-                # Append an explicit contradiction. Best-effort: if the volume is
-                # the thing that failed, this fails too, and the log line above
-                # is then the only record.
-                self._record_rearm_failure(strategy_id, request_id, str(exc))
-                continue
-            if not applied:
-                # Superseded by a newer quarantine, or already gone. Do not
-                # record the id: the request stays available for the operator to
-                # reissue against the live quarantine.
-                continue
-            consumed.add(request_id)
-            if len(consumed) > _MAX_CONSUMED_REARM_REQUESTS:
-                # Bounded: the token check is what enforces single-use, so this
-                # set is only belt-and-braces against a same-tick duplicate.
-                consumed.clear()
-                consumed.add(request_id)
-            logger.warning(
-                "strategy_rearm_applied_from_operator_request",
-                strategy_id=strategy_id,
-                request_id=request_id,
-                quarantine_token=requested_token,
-            )
 
     def _consume_platform_rearm_request(self, state: Any = _STATE_NOT_SUPPLIED) -> None:
         gate = getattr(self, "manual_rearm_gate", None)
@@ -1646,7 +1516,6 @@ class HFTSystem:
                 logger.info("Queues", **_log_kwargs)
 
             self._update_platform_degrade_state()
-            await self._apply_pending_strategy_rearms()
 
             # Periodic stale symbol eviction for FeatureEngine (rate-limited internally)
             _fe = getattr(getattr(self, "md_service", None), "feature_engine", None)

@@ -7,8 +7,9 @@ from typing import Any
 from structlog import get_logger
 
 from hft_platform.core import timebase
+from hft_platform.ops import rearm_requests
 from hft_platform.ops.platform_degrade_registry import try_force_clear_shared_controller
-from hft_platform.ops.runtime_state_store import locked_state, read_state
+from hft_platform.ops.runtime_state_store import locked_state, read_state_strict
 
 logger = get_logger("manual_rearm")
 
@@ -20,51 +21,48 @@ class ManualRearmGate:
         self.state_path = Path(state_path) if state_path is not None else DEFAULT_RUNTIME_STATE_PATH
 
     def rearm_strategy(self, strategy_id: str) -> str:
-        """Record an operator request to clear one strategy's quarantine.
+        """Publish an operator request to clear one strategy's quarantine.
 
-        This writes a *request*, not the outcome. It used to clear the
-        ``manual_rearm_required`` boolean directly, which made the file
+        This writes a *request*, not the outcome, and it writes it to its own
+        file rather than mutating the shared state document. It used to clear
+        ``manual_rearm_required`` directly, which made the channel
         level-triggered: any strategy whose flag read false was treated by the
-        engine as freshly authorized. A stale false -- left by an earlier
-        re-arm, or by a failed write during a later quarantine -- then
-        re-enabled a broken strategy on the next supervisor tick, with no
-        operator involved.
+        engine as freshly authorized, so a stale false -- from an earlier
+        re-arm, or from a quarantine whose persist never landed -- silently
+        re-enabled a broken strategy with no operator involved.
 
-        The request is edge-triggered instead, and bound to the exact quarantine
-        it intends to clear via ``quarantine_token``. The engine consumes it,
-        clears the flag itself, and drops the request, so it can never apply
-        twice or apply to a later quarantine.
-
-        The read, the validation and the write are one locked transaction. The
-        engine mutates this same document from another process; without the lock
-        a write-back here erased a platform latch the engine had just persisted.
+        The request names the exact ``quarantine_token`` it intends to clear.
+        The engine matches that against its live in-memory quarantine, clears it
+        only on an exact match, and deletes the request. Nothing here mutates
+        state the engine also writes, so the two processes cannot lose each
+        other's updates.
 
         Returns the request id, for correlating with the engine's
         ``strategy_rearm_applied_from_operator_request`` log line.
         """
+        state = self._load_state()
+        strategies = self._strategies_section(state)
+        strategy_state = strategies.get(strategy_id)
+        if not isinstance(strategy_state, dict) or not bool(strategy_state.get("manual_rearm_required")):
+            raise ValueError(f"strategy {strategy_id!r} does not require manual re-arm")
+
+        token = strategy_state.get("quarantine_token")
+        if not isinstance(token, str) or not token:
+            # Fail closed. An entry without a token predates this protocol, so
+            # the engine cannot verify which quarantine the request targets.
+            raise ValueError(
+                f"strategy {strategy_id!r} has no quarantine_token; the running engine "
+                "predates the request/ack re-arm protocol. Restart the engine to clear "
+                "the quarantine, or deploy the current build first."
+            )
+
         request_id = uuid.uuid4().hex
-        with locked_state(self.state_path) as state:
-            strategies = self._strategies_section(state)
-            strategy_state = strategies.get(strategy_id)
-            if not isinstance(strategy_state, dict) or not bool(strategy_state.get("manual_rearm_required")):
-                raise ValueError(f"strategy {strategy_id!r} does not require manual re-arm")
-
-            token = strategy_state.get("quarantine_token")
-            if not isinstance(token, str) or not token:
-                # Fail closed. An entry without a token predates this protocol,
-                # so the engine cannot verify which quarantine it targets.
-                raise ValueError(
-                    f"strategy {strategy_id!r} has no quarantine_token; the running engine "
-                    "predates the request/ack re-arm protocol. Restart the engine to clear "
-                    "the quarantine, or deploy the current build first."
-                )
-
-            strategy_state["rearm_request"] = {
-                "request_id": request_id,
-                "quarantine_token": token,
-                "requested_at_ns": timebase.now_ns(),
-            }
-
+        rearm_requests.publish(
+            self.state_path.parent,
+            strategy_id=strategy_id,
+            quarantine_token=token,
+            request_id=request_id,
+        )
         logger.warning(
             "strategy_rearm_requested",
             strategy_id=strategy_id,
@@ -143,7 +141,10 @@ class ManualRearmGate:
         return self._load_state()
 
     def _load_state(self) -> dict[str, Any]:
-        return read_state(self.state_path)
+        """Strict. ``requires_manual_rearm`` feeds the platform bootstrap's
+        decision to restore reduce-only, so an unreadable file must raise rather
+        than read as an all-clear. A missing file is still a cold start."""
+        return read_state_strict(self.state_path)
 
     def _write_state(self, state: dict[str, Any]) -> None:
         """Replace the whole document under the shared lock.

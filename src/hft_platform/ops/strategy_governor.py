@@ -81,48 +81,29 @@ class StrategyHealthGovernor:
         return strategy_id in self._quarantined
 
     def rearm(self, strategy_id: str, *, expected_token: str, request_id: str | None = None) -> bool:
-        """Clear one strategy's quarantine, but only the exact one authorized.
+        """Clear one strategy's quarantine, and only the exact one authorized.
 
-        ``expected_token`` is mandatory and is compared **twice**: before the
-        persistence and again after it. The second check is not paranoia. The
-        persistence runs off the event loop, so the loop can quarantine the same
-        strategy again while it is in flight; an earlier draft popped by
-        ``strategy_id`` unconditionally and therefore let an authorization for
-        quarantine T1 erase a newer T2. That interleaving was reproduced.
+        ``expected_token`` names a specific quarantine *instance*, so an
+        authorization issued for an earlier failure can never release a later
+        one. The comparison and the removal happen together, with no await and
+        no IO between them, so nothing can interleave: on the event loop this is
+        atomic by construction.
 
-        Ordering is persist-then-clear: if the evidence write fails, the
-        exception propagates with the quarantine intact and the request
-        unconsumed, so the caller retries. Returns ``True`` only when the live
-        quarantine was actually cleared.
+        The evidence write follows the decision rather than gating it. That
+        ordering is safe here for a reason specific to this state -- **a
+        strategy quarantine does not survive a restart**; only the platform
+        scope has a boot-time restore. So the record is an audit trail, not a
+        durability guarantee, and a filesystem failure must not be allowed to
+        block a recovery the operator has already authorized. It is recorded
+        best-effort and loudly on failure.
+
+        Returns ``True`` only when a live quarantine was actually cleared.
         """
         entry = self._quarantined.get(strategy_id)
         if entry is None or entry.token != expected_token:
             return False
-        if self.evidence_writer is not None:
-            self.evidence_writer.record_transition(
-                scope="strategy",
-                mode=AutonomyMode.NORMAL.value,
-                reason="manual_rearm",
-                manual_rearm_required=False,
-                metadata={
-                    "strategy_id": strategy_id,
-                    "quarantine_token": entry.token,
-                    "request_id": request_id,
-                },
-            )
-        # Re-check: a re-quarantine may have replaced this entry while the write
-        # above was blocked. Clearing then would release a failure nobody
-        # authorized.
-        current = self._quarantined.get(strategy_id)
-        if current is None or current.token != expected_token:
-            logger.warning(
-                "strategy_rearm_superseded_by_new_quarantine",
-                strategy_id=strategy_id,
-                authorized_token=expected_token,
-                live_token=current.token if current is not None else None,
-                request_id=request_id,
-            )
-            return False
+
+        # Decide and mutate with nothing in between.
         self._quarantined.pop(strategy_id, None)
         self._set_strategy_quarantine_active(strategy_id, active=False)
         self._set_strategy_scope_state()
@@ -132,6 +113,29 @@ class StrategyHealthGovernor:
             quarantine_token=entry.token,
             request_id=request_id,
         )
+
+        if self.evidence_writer is not None:
+            try:
+                self.evidence_writer.record_transition(
+                    scope="strategy",
+                    mode=AutonomyMode.NORMAL.value,
+                    reason="manual_rearm",
+                    manual_rearm_required=False,
+                    metadata={
+                        "strategy_id": strategy_id,
+                        "quarantine_token": entry.token,
+                        "request_id": request_id,
+                    },
+                )
+            except Exception as exc:
+                # The strategy is re-armed either way; losing the audit record
+                # must not be silent.
+                logger.error(
+                    "strategy_rearm_evidence_write_failed",
+                    strategy_id=strategy_id,
+                    request_id=request_id,
+                    error=str(exc),
+                )
         return True
 
     def build_cancel_intents(

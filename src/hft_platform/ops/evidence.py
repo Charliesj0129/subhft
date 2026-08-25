@@ -23,12 +23,9 @@ class AutonomyEvidenceWriter:
         self.base_dir = Path(base_dir) if base_dir is not None else DEFAULT_AUTONOMY_EVIDENCE_DIR
         self._trading_date: date | None = None
         self._on_transition_callbacks: list[Callable[[dict[str, Any]], None]] = []
-        # Guards the multi-file write in record_transition. The shared writer is
-        # now reached from two threads: the event loop (quarantine, platform
-        # transitions) and the off-loop worker that applies operator re-arms.
-        # _update_scope_summary and _update_summary are read-modify-write over
-        # whole JSON documents, so concurrent transitions would otherwise
-        # overwrite each other's events, counts and latest record.
+        # Guards the multi-file write in record_transition. Transitions are
+        # written from the event loop only, but this is cheap insurance for the
+        # shared singleton writer.
         self._transition_lock = Lock()
 
     def set_trading_date(self, d: date) -> None:

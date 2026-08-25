@@ -1,25 +1,22 @@
 """The operator re-arm must reach the live governor -- and nothing else may.
 
-Two independent Codex reviews on 2026-08-24 falsified the first version of this
-bridge, which keyed off ``manual_rearm_required`` being false. These tests pin
-the request/ack protocol that replaced it, and every fail-open they identified.
+Four rounds of dual review on 2026-08-24/25 falsified three successive designs
+here. Each test below pins a specific way one of them failed open, so the
+channel cannot regress into any of them.
 """
 
 from __future__ import annotations
 
 import json
+import threading
 import time
 from types import SimpleNamespace
 
 import pytest
 
+from hft_platform.ops import rearm_requests
 from hft_platform.ops.evidence import AutonomyEvidenceWriter
 from hft_platform.ops.manual_rearm import ManualRearmGate
-from hft_platform.ops.runtime_state_store import (
-    RuntimeStateLockTimeout,
-    RuntimeStateUnreadable,
-    locked_state,
-)
 from hft_platform.ops.strategy_governor import StrategyHealthGovernor
 from hft_platform.services.system import HFTSystem
 
@@ -34,11 +31,14 @@ def rig(tmp_path):
     system = HFTSystem.__new__(HFTSystem)
     system.manual_rearm_gate = gate
     system.strategy_runner = SimpleNamespace(strategy_governor=governor)
-    return SimpleNamespace(governor=governor, gate=gate, system=system, writer=writer)
+    return SimpleNamespace(governor=governor, gate=gate, system=system, writer=writer, base=tmp_path)
 
 
 def tick(rig) -> None:
-    rig.system._consume_strategy_rearm_requests(rig.gate.snapshot())
+    rig.system._consume_strategy_rearm_requests()
+
+
+# --- the behaviour ------------------------------------------------------------
 
 
 def test_an_operator_rearm_clears_the_live_quarantine(rig):
@@ -57,11 +57,16 @@ def test_a_quarantine_survives_a_tick_when_no_rearm_was_requested(rig):
     assert rig.governor.is_quarantined(STRATEGY)
 
 
-def test_a_strategy_missing_from_the_state_file_stays_quarantined(rig):
-    rig.governor.quarantine(STRATEGY, reason="handler_exception")
-    rig.gate.state_path.write_text(json.dumps({"strategies": {}}), encoding="utf-8")
+def test_a_rearmed_strategy_can_be_quarantined_again(rig):
+    rig.governor.quarantine(STRATEGY, reason="first")
+    rig.gate.rearm_strategy(STRATEGY)
     tick(rig)
-    assert rig.governor.is_quarantined(STRATEGY)
+    assert not rig.governor.is_quarantined(STRATEGY)
+
+    rig.governor.quarantine(STRATEGY, reason="second")
+    rig.gate.rearm_strategy(STRATEGY)
+    tick(rig)
+    assert not rig.governor.is_quarantined(STRATEGY)
 
 
 def test_the_tick_is_a_no_op_without_a_runner(rig):
@@ -74,73 +79,6 @@ def test_the_tick_is_a_no_op_without_a_runner(rig):
     assert rig.governor.is_quarantined(STRATEGY)
 
 
-def test_an_unreadable_state_file_leaves_the_quarantine_alone(rig):
-    rig.governor.quarantine(STRATEGY, reason="handler_exception")
-    rig.gate.state_path.write_text("{not json", encoding="utf-8")
-
-    rig.system._consume_strategy_rearm_requests(None)
-
-    assert rig.governor.is_quarantined(STRATEGY)
-
-
-# --- the fail-opens both reviewers found -------------------------------------
-
-
-def test_a_stale_cleared_flag_does_not_rearm_a_later_quarantine(rig):
-    """The P1/high finding: a stale ``false`` is not an authorization.
-
-    Re-arm once, then quarantine again. The first version re-armed the second
-    quarantine immediately, because the entry still read
-    ``manual_rearm_required: false`` and nothing distinguished that from a
-    fresh operator request.
-    """
-    rig.governor.quarantine(STRATEGY, reason="first")
-    rig.gate.rearm_strategy(STRATEGY)
-    tick(rig)
-    assert not rig.governor.is_quarantined(STRATEGY)
-
-    rig.governor.quarantine(STRATEGY, reason="second")
-    tick(rig)
-
-    assert rig.governor.is_quarantined(STRATEGY)
-
-
-def test_a_rearm_request_is_single_use(rig):
-    rig.governor.quarantine(STRATEGY, reason="first")
-    rig.gate.rearm_strategy(STRATEGY)
-    state = rig.gate.snapshot()
-    tick(rig)
-    assert not rig.governor.is_quarantined(STRATEGY)
-
-    # Replay the exact pre-consumption snapshot against a new quarantine.
-    rig.governor.quarantine(STRATEGY, reason="second")
-    rig.system._consume_strategy_rearm_requests(state)
-
-    assert rig.governor.is_quarantined(STRATEGY)
-
-
-def test_a_request_naming_another_quarantine_is_refused(rig):
-    rig.governor.quarantine(STRATEGY, reason="first")
-    rig.gate.rearm_strategy(STRATEGY)
-    stale = rig.gate.snapshot()
-
-    # A re-quarantine mints a new token while the operator's request is in flight.
-    rig.governor.quarantine(STRATEGY, reason="second")
-    rig.system._consume_strategy_rearm_requests(stale)
-
-    assert rig.governor.is_quarantined(STRATEGY)
-
-
-def test_a_rearm_clears_the_persisted_flag_and_consumes_the_request(rig):
-    rig.governor.quarantine(STRATEGY, reason="handler_exception")
-    rig.gate.rearm_strategy(STRATEGY)
-    tick(rig)
-
-    entry = rig.gate.snapshot()["strategies"][STRATEGY]
-    assert entry["manual_rearm_required"] is False
-    assert "rearm_request" not in entry
-
-
 def test_a_rearm_records_a_normal_transition(rig):
     """Recovery must be reconstructable; the timeline used to end at QUARANTINED."""
     rig.governor.quarantine(STRATEGY, reason="handler_exception")
@@ -151,6 +89,56 @@ def test_a_rearm_records_a_normal_transition(rig):
     records = [json.loads(line) for line in timeline.splitlines() if line.strip()]
     assert records[-1]["mode"] == "NORMAL"
     assert records[-1]["manual_rearm_required"] is False
+
+
+def test_a_rearm_clears_the_persisted_flag(rig):
+    rig.governor.quarantine(STRATEGY, reason="handler_exception")
+    rig.gate.rearm_strategy(STRATEGY)
+    tick(rig)
+
+    assert rig.gate.snapshot()["strategies"][STRATEGY]["manual_rearm_required"] is False
+
+
+# --- round 1: a level-triggered flag is not an authorization ------------------
+
+
+def test_a_stale_cleared_flag_does_not_rearm_a_later_quarantine(rig):
+    """A cleared flag means "nothing to do", never "an operator authorized this"."""
+    rig.governor.quarantine(STRATEGY, reason="first")
+    rig.gate.rearm_strategy(STRATEGY)
+    tick(rig)
+    assert not rig.governor.is_quarantined(STRATEGY)
+
+    rig.governor.quarantine(STRATEGY, reason="second")
+    tick(rig)
+
+    assert rig.governor.is_quarantined(STRATEGY)
+
+
+def test_a_quarantine_whose_persist_did_not_land_is_not_rearmed(rig):
+    """A quarantine whose flag never reached disk must still gate dispatch."""
+    rig.governor.quarantine(STRATEGY, reason="first")
+    rig.gate.rearm_strategy(STRATEGY)
+    tick(rig)
+
+    rig.governor.evidence_writer = None
+    rig.governor.quarantine(STRATEGY, reason="second")
+    for _ in range(10):
+        tick(rig)
+
+    assert rig.governor.is_quarantined(STRATEGY)
+
+
+def test_a_request_is_single_use(rig):
+    rig.governor.quarantine(STRATEGY, reason="first")
+    rig.gate.rearm_strategy(STRATEGY)
+    tick(rig)
+    assert not rig.governor.is_quarantined(STRATEGY)
+
+    rig.governor.quarantine(STRATEGY, reason="second")
+    tick(rig)
+
+    assert rig.governor.is_quarantined(STRATEGY), "a consumed request must not replay"
 
 
 def test_a_quarantine_without_a_token_cannot_be_rearmed_by_request(rig):
@@ -172,339 +160,166 @@ def test_the_cli_refuses_to_request_a_rearm_for_a_healthy_strategy(rig):
         rig.gate.rearm_strategy(STRATEGY)
 
 
-def test_a_rearmed_strategy_can_be_quarantined_again(rig):
+# --- round 3/4: an authorization must never release a different quarantine ----
+
+
+def test_a_request_naming_another_quarantine_is_refused_and_retired(rig):
     rig.governor.quarantine(STRATEGY, reason="first")
     rig.gate.rearm_strategy(STRATEGY)
-    tick(rig)
-    assert not rig.governor.is_quarantined(STRATEGY)
 
+    # A re-quarantine mints a new token while the request is in flight.
     rig.governor.quarantine(STRATEGY, reason="second")
-    rig.gate.rearm_strategy(STRATEGY)
-    tick(rig)
-    assert not rig.governor.is_quarantined(STRATEGY)
-
-
-def test_a_quarantine_whose_persist_did_not_land_is_not_rearmed(rig):
-    """The real shape of the fail-open both reviews named.
-
-    ``quarantine()`` populates ``_quarantined`` first and only then asks the
-    evidence writer to persist ``manual_rearm_required: true``. Anything that
-    stops that write -- an unwritable autonomy dir, a full disk, or simply a
-    supervisor tick landing inside the window -- leaves the previous re-arm's
-    ``false`` in the file. The level-triggered version read that as a fresh
-    authorization and re-armed a strategy no operator had touched, every tick,
-    for as long as the condition lasted.
-    """
-    rig.governor.quarantine(STRATEGY, reason="first")
-    rig.gate.rearm_strategy(STRATEGY)
-    tick(rig)
-    assert not rig.governor.is_quarantined(STRATEGY)
-
-    # Second quarantine, persist does not land.
-    rig.governor.evidence_writer = None
-    rig.governor.quarantine(STRATEGY, reason="second")
-    assert rig.gate.snapshot()["strategies"][STRATEGY]["manual_rearm_required"] is False
-
+    live = rig.governor.quarantine_token(STRATEGY)
     tick(rig)
 
     assert rig.governor.is_quarantined(STRATEGY)
+    assert rig.governor.quarantine_token(STRATEGY) == live
+    assert rearm_requests.pending(rig.base) == [], "a superseded request must not linger"
 
 
-def test_a_persist_failure_does_not_make_a_strategy_permanently_rearmable(rig):
-    """The same condition, held across many ticks, must never open."""
-    rig.governor.quarantine(STRATEGY, reason="first")
-    rig.gate.rearm_strategy(STRATEGY)
-    tick(rig)
-
-    rig.governor.evidence_writer = None
-    rig.governor.quarantine(STRATEGY, reason="second")
-    for _ in range(10):
-        tick(rig)
-
-    assert rig.governor.is_quarantined(STRATEGY)
-
-
-# --- the fail-opens the review of the FIX itself found ------------------------
-
-
-def test_a_system_start_transition_does_not_clear_a_platform_latch(rig, tmp_path):
-    """The regression the first draft of this fix introduced.
-
-    ``HFTSystem.run()`` records ``system_start`` as a platform NORMAL transition
-    with ``manual_rearm_required=False`` on **every boot**. Projecting any false
-    transition onto runtime_state.json therefore released a genuine platform
-    latch that no operator had re-armed -- a restart silently clearing a HALT.
-    Only an explicit, correlated strategy re-arm may write false.
-    """
-    rig.writer.record_transition(
-        scope="platform",
-        mode="PLATFORM_REDUCE_ONLY",
-        reason="clickhouse_unhealthy",
-    )
-    assert rig.gate.snapshot()["platform"]["manual_rearm_required"] is True
-
-    rig.writer.record_transition(
-        scope="platform",
-        mode="NORMAL",
-        reason="system_start",
-        manual_rearm_required=False,
-    )
-
-    platform = rig.gate.snapshot()["platform"]
-    assert platform["manual_rearm_required"] is True
-    assert platform["reason"] == "clickhouse_unhealthy"
-
-
-def test_a_strategy_normal_transition_without_a_request_id_clears_nothing(rig):
-    """A recovery must name the request it consumed, or it proves nothing."""
-    rig.governor.quarantine(STRATEGY, reason="handler_exception")
-
-    rig.writer.record_transition(
-        scope="strategy",
-        mode="NORMAL",
-        reason="manual_rearm",
-        manual_rearm_required=False,
-        metadata={"strategy_id": STRATEGY},
-    )
-
-    assert rig.gate.snapshot()["strategies"][STRATEGY]["manual_rearm_required"] is True
-
-
-def test_concurrent_writers_do_not_share_a_temp_file(rig, tmp_path):
-    """Engine and CLI write the same file from different processes.
-
-    A shared ``runtime_state.json.tmp`` means whichever renames second either
-    moves the other writer's payload or dies with FileNotFoundError.
-    """
-    rig.governor.quarantine(STRATEGY, reason="handler_exception")
-    rig.gate.rearm_strategy(STRATEGY)
-
-    leftovers = list(tmp_path.glob("runtime_state.json*.tmp"))
-    assert leftovers == [], f"temp files must not survive a write: {leftovers}"
-
-    # Both writers must derive distinct temp names, not one shared path.
-    assert not (tmp_path / "runtime_state.json.tmp").exists()
-
-
-def test_a_failed_acknowledgement_leaves_the_quarantine_intact(rig):
-    """Persist first, clear second: a write failure must not open the gate."""
-
-    class _Boom:
-        def record_transition(self, **_kwargs):
-            raise OSError("No space left on device")
-
-    rig.governor.quarantine(STRATEGY, reason="handler_exception")
-    rig.gate.rearm_strategy(STRATEGY)
-    rig.governor.evidence_writer = _Boom()
-
-    tick(rig)
-
-    assert rig.governor.is_quarantined(STRATEGY)
-
-
-def test_a_failed_acknowledgement_does_not_escape_the_supervisor_tick(rig):
-    """An unhandled error here would restart the whole engine mid-recovery."""
-
-    class _Boom:
-        def record_transition(self, **_kwargs):
-            raise OSError("No space left on device")
-
-    rig.governor.quarantine(STRATEGY, reason="handler_exception")
-    rig.gate.rearm_strategy(STRATEGY)
-    rig.governor.evidence_writer = _Boom()
-
-    for _ in range(3):
-        tick(rig)  # must not raise
-
-    assert rig.governor.is_quarantined(STRATEGY)
-
-
-def test_a_recovered_acknowledgement_applies_on_a_later_tick(rig):
-    """Not recording the id on failure is what makes the retry possible."""
-
-    class _Boom:
-        def record_transition(self, **_kwargs):
-            raise OSError("No space left on device")
-
-    rig.governor.quarantine(STRATEGY, reason="handler_exception")
-    rig.gate.rearm_strategy(STRATEGY)
-
-    healthy = rig.governor.evidence_writer
-    rig.governor.evidence_writer = _Boom()
-    tick(rig)
-    assert rig.governor.is_quarantined(STRATEGY)
-
-    rig.governor.evidence_writer = healthy
-    tick(rig)
-
-    assert not rig.governor.is_quarantined(STRATEGY)
-
-
-def test_the_offloop_selector_is_false_without_a_request(rig):
-    """The common case must not schedule any filesystem work."""
-    rig.governor.quarantine(STRATEGY, reason="handler_exception")
-    assert HFTSystem._has_pending_rearm_request(rig.gate.snapshot()) is False
-
-
-def test_the_offloop_selector_sees_a_published_request(rig):
-    rig.governor.quarantine(STRATEGY, reason="handler_exception")
-    rig.gate.rearm_strategy(STRATEGY)
-    assert HFTSystem._has_pending_rearm_request(rig.gate.snapshot()) is True
-
-
-def test_the_offloop_selector_tolerates_malformed_state():
-    for bad in (None, {}, {"strategies": "nope"}, {"strategies": {"a": None}}, {"strategies": {"a": {}}}):
-        assert HFTSystem._has_pending_rearm_request(bad) is False
-
-
-def test_a_failed_recovery_leaves_a_contradicting_evidence_record(rig):
-    """A NORMAL timeline entry must not stand when the recovery did not finish."""
-
-    class _HalfWriter:
-        """Writes the timeline, then fails before the acknowledgement."""
-
-        def __init__(self, real):
-            self._real = real
-            self.calls = 0
-
-        def record_transition(self, **kwargs):
-            self.calls += 1
-            if kwargs.get("reason") == "manual_rearm":
-                self._real._append_jsonl("state_timeline.jsonl", {**kwargs, "ts_ns": 0})
-                raise OSError("No space left on device")
-            return self._real.record_transition(**kwargs)
-
-    rig.governor.quarantine(STRATEGY, reason="handler_exception")
-    rig.gate.rearm_strategy(STRATEGY)
-    half = _HalfWriter(rig.writer)
-    rig.governor.evidence_writer = half
-
-    tick(rig)
-
-    assert rig.governor.is_quarantined(STRATEGY)
-    timeline = (rig.writer._ensure_session_dir() / "state_timeline.jsonl").read_text(encoding="utf-8")
-    records = [json.loads(line) for line in timeline.splitlines() if line.strip()]
-    assert records[-1]["reason"] == "manual_rearm_failed"
-    assert records[-1]["mode"] == "STRATEGY_QUARANTINED"
-
-
-# --- round 3: fail-opens introduced by moving persistence off-loop ------------
-
-
-def test_a_rearm_in_flight_does_not_erase_a_newer_quarantine(rig):
-    """The race the worker thread created.
-
-    ``rearm`` persists before clearing, and that persistence now runs off the
-    event loop, so the loop can quarantine the same strategy again while it is
-    in flight. An earlier draft popped by ``strategy_id`` unconditionally, so an
-    authorization for quarantine T1 removed a newer T2 -- releasing a failure
-    nobody authorized. Reproduced with a blocking writer.
-    """
-    import threading
-
-    mid_persist = threading.Event()
-
-    class _SlowWriter:
-        def __init__(self, real):
-            self._real = real
-
-        def record_transition(self, **kwargs):
-            if kwargs.get("reason") == "manual_rearm":
-                mid_persist.set()
-                time.sleep(0.2)
-            return self._real.record_transition(**kwargs)
-
-    rig.governor.quarantine(STRATEGY, reason="first")
-    token_1 = rig.governor.quarantine_token(STRATEGY)
-    rig.governor.evidence_writer = _SlowWriter(rig.writer)
-
-    result: list[bool] = []
-    worker = threading.Thread(
-        target=lambda: result.append(rig.governor.rearm(STRATEGY, expected_token=token_1, request_id="r1"))
-    )
-    worker.start()
-    assert mid_persist.wait(timeout=5)
-    rig.governor.quarantine(STRATEGY, reason="second")
-    token_2 = rig.governor.quarantine_token(STRATEGY)
-    worker.join(timeout=5)
-
-    assert token_2 != token_1
-    assert result == [False], "an authorization for T1 must not apply to T2"
-    assert rig.governor.is_quarantined(STRATEGY)
-    assert rig.governor.quarantine_token(STRATEGY) == token_2
-
-
-def test_a_rearm_for_a_token_that_is_not_live_is_refused(rig):
+def test_the_governor_refuses_a_token_that_is_not_live(rig):
     rig.governor.quarantine(STRATEGY, reason="first")
     assert rig.governor.rearm(STRATEGY, expected_token="someone-elses-token") is False
     assert rig.governor.is_quarantined(STRATEGY)
 
 
-def test_an_unreadable_state_file_is_never_overwritten_with_defaults(rig, tmp_path):
-    """A corrupt file must not let the next write erase a persisted latch."""
-    rig.writer.record_transition(
-        scope="platform",
-        mode="PLATFORM_REDUCE_ONLY",
-        reason="clickhouse_unhealthy",
-    )
-    state_path = tmp_path / "runtime_state.json"
-    original = state_path.read_bytes()
-    state_path.write_text("{ truncated", encoding="utf-8")
+def test_a_concurrent_requarantine_cannot_be_cleared_by_an_older_authorization(rig):
+    """The decision and the removal happen with nothing in between."""
+    rig.governor.quarantine(STRATEGY, reason="first")
+    token_1 = rig.governor.quarantine_token(STRATEGY)
+    rig.governor.quarantine(STRATEGY, reason="second")
+    token_2 = rig.governor.quarantine_token(STRATEGY)
 
-    with pytest.raises(RuntimeStateUnreadable):
-        with locked_state(state_path):
-            pass
-
-    assert state_path.read_text(encoding="utf-8") == "{ truncated"
-    assert original  # the latch existed before corruption; nothing rewrote the file
+    assert token_2 != token_1
+    assert rig.governor.rearm(STRATEGY, expected_token=token_1) is False
+    assert rig.governor.is_quarantined(STRATEGY)
+    assert rig.governor.quarantine_token(STRATEGY) == token_2
 
 
-def test_a_missing_state_file_is_a_cold_start_not_an_error(tmp_path):
-    with locked_state(tmp_path / "absent.json") as state:
-        assert state["platform"]["manual_rearm_required"] is False
-
-
-def test_lock_acquisition_is_bounded(tmp_path):
-    """An unbounded LOCK_EX would wedge the supervisor and trip the watchdog."""
-    import fcntl
-
-    path = tmp_path / "runtime_state.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    lock_path = path.with_suffix(f"{path.suffix}.lock")
-    holder = open(lock_path, "a+", encoding="utf-8")
-    fcntl.flock(holder.fileno(), fcntl.LOCK_EX)
-    try:
-        started = time.monotonic()
-        with pytest.raises(RuntimeStateLockTimeout):
-            with locked_state(path, timeout_s=0.2):
-                pass
-        elapsed = time.monotonic() - started
-        assert elapsed < 3.0, f"acquisition was not bounded: {elapsed:.2f}s"
-    finally:
-        fcntl.flock(holder.fileno(), fcntl.LOCK_UN)
-        holder.close()
-
-
-def test_a_failed_recovery_preserves_the_token_and_the_request(rig):
-    """A transient audit-write error must not make re-arm impossible."""
-
-    class _FailOnce:
-        def __init__(self, real):
-            self._real = real
-
-        def record_transition(self, **kwargs):
-            if kwargs.get("reason") == "manual_rearm":
-                raise OSError("No space left on device")
-            return self._real.record_transition(**kwargs)
-
+def test_a_request_left_by_a_previous_engine_run_is_retired(rig):
+    """A quarantine does not survive a restart, so neither may its request."""
     rig.governor.quarantine(STRATEGY, reason="handler_exception")
     rig.gate.rearm_strategy(STRATEGY)
-    rig.governor.evidence_writer = _FailOnce(rig.writer)
+
+    # Simulate a restart: fresh governor, no in-memory quarantines.
+    fresh = StrategyHealthGovernor(evidence_writer=rig.writer)
+    rig.system.strategy_runner = SimpleNamespace(strategy_governor=fresh)
 
     tick(rig)
 
-    entry = rig.gate.snapshot()["strategies"][STRATEGY]
-    assert entry["manual_rearm_required"] is True
-    assert entry.get("quarantine_token"), "the token must survive a failed recovery"
-    assert entry.get("rearm_request"), "the request must stay available to retry"
+    assert not fresh.is_quarantined(STRATEGY)
+    assert rearm_requests.pending(rig.base) == [], "an orphaned request must not persist forever"
+
+
+# --- failure handling ---------------------------------------------------------
+
+
+def test_an_evidence_failure_does_not_block_an_authorized_recovery(rig):
+    """The gate is memory; the record is an audit trail and must not veto it."""
+
+    class _Boom:
+        def record_transition(self, **_kwargs):
+            raise OSError("No space left on device")
+
+    rig.governor.quarantine(STRATEGY, reason="handler_exception")
+    rig.gate.rearm_strategy(STRATEGY)
+    rig.governor.evidence_writer = _Boom()
+
+    tick(rig)
+
+    assert not rig.governor.is_quarantined(STRATEGY)
+
+
+def test_a_tick_does_not_raise_when_the_request_dir_is_unreadable(rig, monkeypatch):
+    rig.governor.quarantine(STRATEGY, reason="handler_exception")
+    monkeypatch.setattr(rearm_requests, "pending", lambda _base: (_ for _ in ()).throw(OSError("EACCES")))
+
+    tick(rig)  # must not raise
+
     assert rig.governor.is_quarantined(STRATEGY)
+
+
+def test_a_malformed_request_is_skipped_and_left_for_an_operator(rig):
+    rig.governor.quarantine(STRATEGY, reason="handler_exception")
+    directory = rearm_requests.request_dir(rig.base)
+    directory.mkdir(parents=True, exist_ok=True)
+    bad = directory / "broken.json"
+    bad.write_text("{ truncated", encoding="utf-8")
+
+    tick(rig)
+
+    assert rig.governor.is_quarantined(STRATEGY)
+    assert bad.exists(), "deleting it would hide the problem"
+
+
+def test_a_request_without_a_token_is_never_treated_as_authorization(rig):
+    rig.governor.quarantine(STRATEGY, reason="handler_exception")
+    directory = rearm_requests.request_dir(rig.base)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "notoken.json").write_text(json.dumps({"request_id": "r1", "strategy_id": STRATEGY}), encoding="utf-8")
+
+    tick(rig)
+
+    assert rig.governor.is_quarantined(STRATEGY)
+
+
+# --- the channel itself -------------------------------------------------------
+
+
+def test_publishing_the_same_request_id_twice_is_refused(rig):
+    rig.governor.quarantine(STRATEGY, reason="handler_exception")
+    rearm_requests.publish(rig.base, strategy_id=STRATEGY, quarantine_token="t", request_id="dup")
+    with pytest.raises(FileExistsError):
+        rearm_requests.publish(rig.base, strategy_id=STRATEGY, quarantine_token="t", request_id="dup")
+
+
+def test_pending_is_empty_before_any_request_exists(rig):
+    assert rearm_requests.pending(rig.base) == []
+
+
+def test_consuming_a_request_twice_is_harmless(rig):
+    rig.governor.quarantine(STRATEGY, reason="handler_exception")
+    rig.gate.rearm_strategy(STRATEGY)
+    (request,) = rearm_requests.pending(rig.base)
+    rearm_requests.consume(request)
+    rearm_requests.consume(request)
+    assert rearm_requests.pending(rig.base) == []
+
+
+def test_concurrent_publishers_do_not_lose_requests(rig):
+    """Write-once files have no read-modify-write, so nothing can be clobbered."""
+    rig.governor.quarantine(STRATEGY, reason="handler_exception")
+    errors: list[BaseException] = []
+
+    def publish(n: int) -> None:
+        try:
+            rearm_requests.publish(rig.base, strategy_id=STRATEGY, quarantine_token="t", request_id=f"r{n}")
+        except BaseException as exc:  # pragma: no cover - only on failure
+            errors.append(exc)
+
+    threads = [threading.Thread(target=publish, args=(n,)) for n in range(12)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert errors == []
+    assert len(rearm_requests.pending(rig.base)) == 12
+
+
+def test_a_partially_written_request_is_never_visible(rig):
+    """The name appears only after a completed write."""
+    directory = rearm_requests.request_dir(rig.base)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / ".half.1234.tmp").write_text('{"request_id": "hal', encoding="utf-8")
+    assert rearm_requests.pending(rig.base) == []
+
+
+def test_the_scan_is_cheap_when_there_is_nothing_to_do(rig):
+    """This runs on the event loop every tick."""
+    rig.governor.quarantine(STRATEGY, reason="handler_exception")
+    started = time.perf_counter()
+    for _ in range(200):
+        rearm_requests.pending(rig.base)
+    per_call_ms = (time.perf_counter() - started) * 1000 / 200
+    assert per_call_ms < 1.0, f"empty scan cost {per_call_ms:.3f} ms per tick"

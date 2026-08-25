@@ -164,12 +164,18 @@ class TestRearmStrategy:
         gate = ManualRearmGate(state_path=path)
         request_id = gate.rearm_strategy("alpha")
 
+        # The request is its own write-once file, not a field in the shared
+        # document. That is what removes the two-writer lost update entirely.
+        from hft_platform.ops import rearm_requests
+
+        (request,) = rearm_requests.pending(path.parent)
+        assert request.request_id == request_id
+        assert request.strategy_id == "alpha"
+        assert request.quarantine_token == "run1:alpha:1"
+
         reloaded = json.loads(path.read_text(encoding="utf-8"))
-        entry = reloaded["strategies"]["alpha"]
-        # The flag stays set until the engine consumes the request.
-        assert entry["manual_rearm_required"] is True
-        assert entry["rearm_request"]["request_id"] == request_id
-        assert entry["rearm_request"]["quarantine_token"] == "run1:alpha:1"
+        # The CLI does not touch the shared state document at all.
+        assert reloaded["strategies"]["alpha"]["manual_rearm_required"] is True
 
     def test_rearm_strategy_refuses_an_entry_without_a_quarantine_token(self, tmp_path: Path) -> None:
         """Legacy entries fail closed: the engine could not verify the target."""
