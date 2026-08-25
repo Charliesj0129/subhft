@@ -1158,13 +1158,31 @@ class HFTSystem:
                 continue
             if request_id in consumed:
                 continue
+            # Apply first, remember second, and never let a persistence failure
+            # escape. `rearm` clears the live quarantine and then performs
+            # several evidence writes; an unhandled disk-full or permission
+            # error here would propagate out of the supervisor tick and take the
+            # whole engine down via the container restart policy -- during a
+            # manual recovery, which is the worst possible moment. Not recording
+            # the id on failure lets the next tick retry; the token check still
+            # makes a genuine double-apply impossible.
+            try:
+                governor.rearm(strategy_id, request_id=request_id)
+            except Exception as exc:
+                logger.error(
+                    "strategy_rearm_apply_failed",
+                    strategy_id=strategy_id,
+                    request_id=request_id,
+                    quarantine_token=requested_token,
+                    error=str(exc),
+                )
+                continue
             consumed.add(request_id)
             if len(consumed) > _MAX_CONSUMED_REARM_REQUESTS:
                 # Bounded: the token check is what enforces single-use, so this
                 # set is only belt-and-braces against a same-tick duplicate.
                 consumed.clear()
                 consumed.add(request_id)
-            governor.rearm(strategy_id, request_id=request_id)
             logger.warning(
                 "strategy_rearm_applied_from_operator_request",
                 strategy_id=strategy_id,

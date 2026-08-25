@@ -22,10 +22,12 @@ _AUTONOMY_MODE_VALUES = {
 }
 
 
-#: Identifies this engine process. A quarantine token carries it so a re-arm
-#: request written against a *previous* run can never match a live quarantine
-#: after a restart, when the per-process counter starts over at 1.
-_RUN_ID = f"{os.getpid():d}-{uuid.uuid4().hex[:8]}"
+#: Identifies this engine run. A quarantine token carries it so a re-arm request
+#: written against a *previous* run can never match a live quarantine after a
+#: restart, when the per-process counter starts over at 1. Full uuid4, not a
+#: truncation: a PID and a sequence number both repeat across restarts, so the
+#: run id is the only part carrying the non-collision guarantee.
+_RUN_ID = f"{os.getpid():d}-{uuid.uuid4().hex}"
 
 
 @dataclass(slots=True, frozen=True)
@@ -84,17 +86,21 @@ class StrategyHealthGovernor:
         The transition record matters as much as the state change. Before this,
         ``rearm`` mutated memory and gauges only, so ``state_timeline.jsonl`` and
         ``strategy_quarantine.json`` still ended at ``STRATEGY_QUARANTINED``
-        after dispatch had resumed — an incident reconstruction read the
+        after dispatch had resumed -- an incident reconstruction read the
         strategy as permanently halted. Recording a NORMAL transition with
         ``manual_rearm_required=False`` is also what clears the persisted flag
-        and consumes the request in ``runtime_state.json``; without it the stale
-        ``false`` is what re-enabled a freshly quarantined strategy.
+        and consumes the operator's request in ``runtime_state.json``.
+
+        **Durable acknowledgement happens first, deliberately.** If the evidence
+        write fails -- disk full, unwritable dir -- the exception propagates with
+        the quarantine still intact and the request still unconsumed, so the
+        caller retries on its next tick. Clearing memory first would leave a
+        strategy trading with its recovery unrecorded and its request
+        un-acknowledged, which is the fail-open direction.
         """
-        entry = self._quarantined.pop(strategy_id, None)
+        entry = self._quarantined.get(strategy_id)
         if entry is None:
             return
-        self._set_strategy_quarantine_active(strategy_id, active=False)
-        self._set_strategy_scope_state()
         if self.evidence_writer is not None:
             self.evidence_writer.record_transition(
                 scope="strategy",
@@ -107,6 +113,9 @@ class StrategyHealthGovernor:
                     "request_id": request_id,
                 },
             )
+        self._quarantined.pop(strategy_id, None)
+        self._set_strategy_quarantine_active(strategy_id, active=False)
+        self._set_strategy_scope_state()
         logger.info(
             "strategy_rearmed",
             strategy_id=strategy_id,

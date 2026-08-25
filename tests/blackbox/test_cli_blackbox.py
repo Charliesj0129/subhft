@@ -98,7 +98,14 @@ def test_cli_feed_status_unreachable():
 
 
 @pytest.mark.blackbox
-def test_cli_ops_rearm_strategy_updates_runtime_state(tmp_path):
+def test_cli_ops_rearm_strategy_publishes_a_request(tmp_path):
+    """The CLI publishes a request; only the engine clears the quarantine.
+
+    This asserted immediate clearing until 2026-08-25. That was the defect: a
+    cleared flag is level-triggered, so a stale false -- from an earlier re-arm,
+    or from a quarantine whose persist never landed -- was indistinguishable
+    from a fresh operator authorization and silently re-armed a broken strategy.
+    """
     state_path = tmp_path / "outputs/production_rollout/autonomy/runtime_state.json"
     state_path.parent.mkdir(parents=True, exist_ok=True)
     state_path.write_text(
@@ -106,7 +113,11 @@ def test_cli_ops_rearm_strategy_updates_runtime_state(tmp_path):
             {
                 "platform": {"manual_rearm_required": False, "reason": None},
                 "strategies": {
-                    "strat_a": {"manual_rearm_required": True, "reason": "strategy_reject_spike"},
+                    "strat_a": {
+                        "manual_rearm_required": True,
+                        "reason": "strategy_reject_spike",
+                        "quarantine_token": "run-abc:strat_a:1",
+                    },
                 },
             }
         ),
@@ -116,10 +127,36 @@ def test_cli_ops_rearm_strategy_updates_runtime_state(tmp_path):
     result = _run_cli(["ops", "rearm-strategy", "--strategy-id", "strat_a"], cwd=tmp_path)
 
     assert result.returncode == 0
-    assert "strategy re-armed: strat_a" in result.stdout.lower()
+    assert "requested" in result.stdout.lower()
     payload = json.loads(state_path.read_text(encoding="utf-8"))
-    assert payload["strategies"]["strat_a"]["manual_rearm_required"] is False
-    assert payload["strategies"]["strat_a"]["reason"] is None
+    entry = payload["strategies"]["strat_a"]
+    # Still latched: the engine consumes the request and clears it.
+    assert entry["manual_rearm_required"] is True
+    assert entry["rearm_request"]["quarantine_token"] == "run-abc:strat_a:1"
+    assert entry["rearm_request"]["request_id"]
+
+
+@pytest.mark.blackbox
+def test_cli_ops_rearm_strategy_refuses_a_latch_without_a_token(tmp_path):
+    """A latch written by an engine predating this protocol fails closed."""
+    state_path = tmp_path / "outputs/production_rollout/autonomy/runtime_state.json"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "platform": {"manual_rearm_required": False, "reason": None},
+                "strategies": {"strat_a": {"manual_rearm_required": True, "reason": "spike"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = _run_cli(["ops", "rearm-strategy", "--strategy-id", "strat_a"], cwd=tmp_path)
+
+    assert result.returncode == 1
+    assert "quarantine_token" in result.stderr
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    assert payload["strategies"]["strat_a"]["manual_rearm_required"] is True
 
 
 @pytest.mark.blackbox

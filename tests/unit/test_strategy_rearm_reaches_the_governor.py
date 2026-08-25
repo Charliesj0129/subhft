@@ -216,3 +216,119 @@ def test_a_persist_failure_does_not_make_a_strategy_permanently_rearmable(rig):
         tick(rig)
 
     assert rig.governor.is_quarantined(STRATEGY)
+
+
+# --- the fail-opens the review of the FIX itself found ------------------------
+
+
+def test_a_system_start_transition_does_not_clear_a_platform_latch(rig, tmp_path):
+    """The regression the first draft of this fix introduced.
+
+    ``HFTSystem.run()`` records ``system_start`` as a platform NORMAL transition
+    with ``manual_rearm_required=False`` on **every boot**. Projecting any false
+    transition onto runtime_state.json therefore released a genuine platform
+    latch that no operator had re-armed -- a restart silently clearing a HALT.
+    Only an explicit, correlated strategy re-arm may write false.
+    """
+    rig.writer.record_transition(
+        scope="platform",
+        mode="PLATFORM_REDUCE_ONLY",
+        reason="clickhouse_unhealthy",
+    )
+    assert rig.gate.snapshot()["platform"]["manual_rearm_required"] is True
+
+    rig.writer.record_transition(
+        scope="platform",
+        mode="NORMAL",
+        reason="system_start",
+        manual_rearm_required=False,
+    )
+
+    platform = rig.gate.snapshot()["platform"]
+    assert platform["manual_rearm_required"] is True
+    assert platform["reason"] == "clickhouse_unhealthy"
+
+
+def test_a_strategy_normal_transition_without_a_request_id_clears_nothing(rig):
+    """A recovery must name the request it consumed, or it proves nothing."""
+    rig.governor.quarantine(STRATEGY, reason="handler_exception")
+
+    rig.writer.record_transition(
+        scope="strategy",
+        mode="NORMAL",
+        reason="manual_rearm",
+        manual_rearm_required=False,
+        metadata={"strategy_id": STRATEGY},
+    )
+
+    assert rig.gate.snapshot()["strategies"][STRATEGY]["manual_rearm_required"] is True
+
+
+def test_concurrent_writers_do_not_share_a_temp_file(rig, tmp_path):
+    """Engine and CLI write the same file from different processes.
+
+    A shared ``runtime_state.json.tmp`` means whichever renames second either
+    moves the other writer's payload or dies with FileNotFoundError.
+    """
+    rig.governor.quarantine(STRATEGY, reason="handler_exception")
+    rig.gate.rearm_strategy(STRATEGY)
+
+    leftovers = list(tmp_path.glob("runtime_state.json*.tmp"))
+    assert leftovers == [], f"temp files must not survive a write: {leftovers}"
+
+    # Both writers must derive distinct temp names, not one shared path.
+    assert not (tmp_path / "runtime_state.json.tmp").exists()
+
+
+def test_a_failed_acknowledgement_leaves_the_quarantine_intact(rig):
+    """Persist first, clear second: a write failure must not open the gate."""
+
+    class _Boom:
+        def record_transition(self, **_kwargs):
+            raise OSError("No space left on device")
+
+    rig.governor.quarantine(STRATEGY, reason="handler_exception")
+    rig.gate.rearm_strategy(STRATEGY)
+    rig.governor.evidence_writer = _Boom()
+
+    tick(rig)
+
+    assert rig.governor.is_quarantined(STRATEGY)
+
+
+def test_a_failed_acknowledgement_does_not_escape_the_supervisor_tick(rig):
+    """An unhandled error here would restart the whole engine mid-recovery."""
+
+    class _Boom:
+        def record_transition(self, **_kwargs):
+            raise OSError("No space left on device")
+
+    rig.governor.quarantine(STRATEGY, reason="handler_exception")
+    rig.gate.rearm_strategy(STRATEGY)
+    rig.governor.evidence_writer = _Boom()
+
+    for _ in range(3):
+        tick(rig)  # must not raise
+
+    assert rig.governor.is_quarantined(STRATEGY)
+
+
+def test_a_recovered_acknowledgement_applies_on_a_later_tick(rig):
+    """Not recording the id on failure is what makes the retry possible."""
+
+    class _Boom:
+        def record_transition(self, **_kwargs):
+            raise OSError("No space left on device")
+
+    rig.governor.quarantine(STRATEGY, reason="handler_exception")
+    rig.gate.rearm_strategy(STRATEGY)
+
+    healthy = rig.governor.evidence_writer
+    rig.governor.evidence_writer = _Boom()
+    tick(rig)
+    assert rig.governor.is_quarantined(STRATEGY)
+
+    rig.governor.evidence_writer = healthy
+    tick(rig)
+
+    assert not rig.governor.is_quarantined(STRATEGY)

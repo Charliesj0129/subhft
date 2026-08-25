@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import uuid
 from datetime import date, datetime
 from pathlib import Path
 from threading import Lock
@@ -67,13 +69,18 @@ class AutonomyEvidenceWriter:
                 reason=reason,
                 metadata=metadata,
             )
-        else:
-            # A recovery transition MUST reach runtime_state.json too. It used
-            # not to: _update_runtime_state was reachable only through
-            # record_manual_rearm_requirement, which runs only when the flag is
-            # being *set*. So nothing in the engine ever wrote the flag back to
-            # false, and the stale false left behind by an earlier operator
-            # re-arm was then indistinguishable from a fresh authorization.
+        elif self._is_strategy_rearm_ack(record):
+            # A recovery transition must reach runtime_state.json too -- it used
+            # not to, which is why nothing ever wrote the flag back to false and
+            # a stale false was indistinguishable from a fresh authorization.
+            #
+            # But ONLY an explicit, correlated strategy re-arm may do so. Most
+            # false transitions are not recoveries at all: HFTSystem.run()
+            # records `system_start` with manual_rearm_required=False on every
+            # boot, and projecting that would clear a genuine platform latch
+            # that no operator had re-armed -- turning a restart into an
+            # unauthorised HALT release. Fail-closed means a transition that
+            # cannot prove it is a recovery must not clear anything.
             self._update_runtime_state(record)
         for cb in self._on_transition_callbacks:
             try:
@@ -101,6 +108,20 @@ class AutonomyEvidenceWriter:
             f"metadata={json.dumps(record['metadata'], ensure_ascii=False)}",
         )
         self._update_runtime_state(record)
+
+    @staticmethod
+    def _is_strategy_rearm_ack(record: dict[str, Any]) -> bool:
+        """True only for a strategy recovery that names the request it consumed."""
+        if record.get("scope") != "strategy":
+            return False
+        if record.get("reason") != "manual_rearm":
+            return False
+        metadata = record.get("metadata")
+        if not isinstance(metadata, dict):
+            return False
+        request_id = metadata.get("request_id")
+        strategy_id = metadata.get("strategy_id")
+        return bool(isinstance(request_id, str) and request_id and isinstance(strategy_id, str) and strategy_id)
 
     def _update_scope_summary(self, record: dict[str, Any]) -> None:
         filename = "platform_degrade.json" if record["scope"] == "platform" else "strategy_quarantine.json"
@@ -180,6 +201,7 @@ class AutonomyEvidenceWriter:
         metadata = metadata if isinstance(metadata, dict) else {}
 
         if record["scope"] == "platform":
+            # Only reachable with required=True; see _is_strategy_rearm_ack.
             platform["manual_rearm_required"] = required
             platform["reason"] = record["reason"] if required else None
         elif record["scope"] == "strategy":
@@ -206,9 +228,15 @@ class AutonomyEvidenceWriter:
                     }
 
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = path.with_suffix(f"{path.suffix}.tmp")
-        tmp_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True), encoding="utf-8")
-        tmp_path.replace(path)
+        # Writer-unique temp name. Both this process and the operator CLI write
+        # runtime_state.json; a shared `.tmp` means whichever renames second
+        # either moves the other's payload or fails with FileNotFoundError.
+        tmp_path = path.with_suffix(f"{path.suffix}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
+        try:
+            tmp_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+            tmp_path.replace(path)
+        finally:
+            tmp_path.unlink(missing_ok=True)
 
     def _append_markdown(self, filename: str, line: str) -> None:
         path = self._ensure_session_dir() / filename

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from pathlib import Path
 from typing import Any
@@ -154,9 +155,15 @@ class ManualRearmGate:
 
     def _write_state(self, state: dict[str, Any]) -> None:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = self.state_path.with_suffix(f"{self.state_path.suffix}.tmp")
-        tmp_path.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
-        tmp_path.replace(self.state_path)
+        # Writer-unique temp name: the engine writes this same file from another
+        # process. A shared `.tmp` means whichever renames second either moves
+        # the other writer's payload or fails with FileNotFoundError.
+        tmp_path = self.state_path.with_suffix(f"{self.state_path.suffix}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
+        try:
+            tmp_path.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
+            tmp_path.replace(self.state_path)
+        finally:
+            tmp_path.unlink(missing_ok=True)
 
     @staticmethod
     def _default_state() -> dict[str, Any]:
