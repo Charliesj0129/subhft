@@ -25,6 +25,7 @@ from hft_platform.feature.profile import load_feature_profile_registry
 from hft_platform.feature.rollout import load_feature_rollout_controller
 from hft_platform.feed_adapter.normalizer import SymbolMetadata
 from hft_platform.observability.latency import LatencyRecorder
+from hft_platform.ops.manual_rearm import ManualRearmGate
 from hft_platform.ops.platform_inputs import PlatformDegradeInputs
 from hft_platform.order.adapter import OrderAdapter
 from hft_platform.recorder.worker import RecorderService
@@ -711,6 +712,17 @@ class SystemBootstrapper:
         # Fail fast on unsafe live/sim combinations before wiring broker-facing services.
         validate_order_mode_safety()
 
+        # Read the persisted strategy safety latches HERE -- before the Redis
+        # session lease is taken and its refresh thread started, and before any
+        # service exists. This read is fail-closed (see
+        # ``restore_persisted_quarantines``), and a fail-closed read placed
+        # after startup side effects is a crash loop: with ``restart: always``
+        # the engine would take the lease, raise, and leave the refresh thread
+        # and the lease behind on every attempt. Nothing has been acquired yet
+        # at this point, so raising here is an ordinary refusal to start.
+        # Applied to the governor further down, once it exists.
+        persisted_safety_state = ManualRearmGate().snapshot()
+
         # B-OPS-03: Non-blocking preflight — warn if another runtime owns the session.
         lease_owned = self._check_session_ownership(role)
         self._last_role = role
@@ -1134,9 +1146,10 @@ class SystemBootstrapper:
         # document still said the latch was set (observed in production
         # 2026-08-25). Restored here at the composition root rather than in
         # ``StrategyRunner.__init__`` so constructing a runner stays free of
-        # filesystem IO. Fail-closed: an unreadable state document raises and
-        # refuses startup rather than booting as if nothing were latched.
-        strategy_runner.strategy_governor.restore_persisted_quarantines()
+        # filesystem IO. The document was read and validated at the top of
+        # ``build()``; this call only applies it, so it performs no IO and
+        # cannot fail after the lease has been acquired.
+        strategy_runner.strategy_governor.restore_persisted_quarantines(snapshot=persisted_safety_state)
         # Phase 3: rejection feedback queue.
         # P2 (2026-04-25): the former ``_publish_queue`` was wired into
         # ``strategy_runner.set_publish_sink`` but nothing ever consumed it —

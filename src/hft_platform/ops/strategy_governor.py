@@ -23,12 +23,16 @@ _AUTONOMY_MODE_VALUES = {
 }
 
 
-#: Identifies this engine run. A quarantine token carries it so a re-arm request
-#: written against a *previous* run can never match a live quarantine after a
-#: restart, when the per-process counter starts over at 1. Full uuid4, not a
-#: truncation: a PID and a sequence number both repeat across restarts, so the
-#: run id is the only part carrying the non-collision guarantee.
-_RUN_ID = f"{os.getpid():d}-{uuid.uuid4().hex}"
+class StrategyQuarantineStateCorrupt(RuntimeError):
+    """The persisted safety state exists but cannot be read as a latch record.
+
+    Distinct from "no document" (a cold start, genuinely nothing latched) and
+    from ``RuntimeStateUnreadable`` (the JSON itself will not parse). This is
+    the middle case the first version missed: a *syntactically valid* document
+    whose ``strategies`` section has the wrong shape. Normalising that to "no
+    quarantines" is the same fail-open the restore exists to remove, so it
+    raises instead.
+    """
 
 
 @dataclass(slots=True, frozen=True)
@@ -47,6 +51,20 @@ class StrategyHealthGovernor:
         self.evidence_writer = evidence_writer or get_shared_autonomy_evidence_writer()
         self._quarantined: dict[str, StrategyQuarantine] = {}
         self._quarantine_seq: int = 0
+        #: Identifies this governor instance. A quarantine token carries it so a
+        #: re-arm request issued for an *earlier* quarantine can never match a
+        #: later one, even when the process is the same: the per-instance
+        #: counter restarts at 1 on every rebuild, so a module-scoped id would
+        #: hand the first quarantine of a rebuilt governor a token a previous
+        #: instance had already issued. Full uuid4, not a truncation -- a PID
+        #: and a sequence number both repeat, so this is the only part carrying
+        #: the non-collision guarantee.
+        self._run_id: str = f"{os.getpid():d}-{uuid.uuid4().hex}"
+
+    def _mint_token(self, strategy_id: str) -> str:
+        """A token names one quarantine *instance*, unique within this process."""
+        self._quarantine_seq += 1
+        return f"{self._run_id}:{strategy_id}:{self._quarantine_seq}"
 
     def quarantine_token(self, strategy_id: str) -> str | None:
         """Token of the strategy's live quarantine, or ``None`` if not quarantined."""
@@ -56,8 +74,7 @@ class StrategyHealthGovernor:
     def quarantine(self, strategy_id: str, *, reason: str) -> AutonomyTransition:
         from_mode = AutonomyMode.STRATEGY_QUARANTINED if strategy_id in self._quarantined else AutonomyMode.NORMAL
         transition = self._build_transition(from_mode=from_mode, reason=reason)
-        self._quarantine_seq += 1
-        token = f"{_RUN_ID}:{strategy_id}:{self._quarantine_seq}"
+        token = self._mint_token(strategy_id)
         self._quarantined[strategy_id] = StrategyQuarantine(
             strategy_id=strategy_id,
             reason=reason,
@@ -81,8 +98,13 @@ class StrategyHealthGovernor:
     def is_quarantined(self, strategy_id: str) -> bool:
         return strategy_id in self._quarantined
 
-    def restore_persisted_quarantines(self, *, state_path: str | Path | None = None) -> list[str]:
-        """Re-enter quarantine for every strategy the previous run left latched.
+    def restore_persisted_quarantines(
+        self,
+        *,
+        state_path: str | Path | None = None,
+        snapshot: dict[str, Any] | None = None,
+    ) -> list[str]:
+        """Hydrate every strategy quarantine the previous run left latched.
 
         Without this, **a restart is an unauthenticated re-arm**: ``_quarantined``
         starts empty, ``manual_rearm_required{scope="strategy"}`` therefore reads
@@ -94,50 +116,147 @@ class StrategyHealthGovernor:
         ``StrategyQuarantineActive`` resolved 70 s later with no operator action,
         and the strategy resumed quoting -- while the persisted document still
         read ``manual_rearm_required: true``. The durable record was intact and
-        correct; nothing ever read it back. Under ``HFT_ORDER_MODE=sim`` that was
-        harmless. Under live order mode the identical restart silently reactivates
-        a strategy that a safety control stopped, with the alert showing green.
+        correct; nothing ever read it back.
 
-        The latch is restored; the *authorization to clear it* is not. Each
-        restored quarantine is minted a fresh token in the current run, so a
-        re-arm request written before the restart can never match it. A latch is
-        state and must survive a restart; a re-arm is an edge and must not.
+        **This is hydration, not a new quarantine.** The distinction is the whole
+        design, and the first version got it backwards by re-entering through
+        ``quarantine()`` to mint a fresh token. Three consequences, all wrong:
 
-        Fail-closed: an unreadable state document raises. A safety latch that
-        cannot be read must not be assumed absent -- that is precisely the
-        assumption this method exists to remove. A *missing* document is a cold
-        start and restores nothing.
+        1. An operator re-arm request published *before* the restart names the
+           token of this same latch. Minting a new one makes that request look
+           superseded, so the consumer unlinks it unacknowledged -- one restart
+           silently destroys a legitimate authorization, and a restart loop
+           destroys every retry. The token exists to stop an authorization for
+           *quarantine instance N* from clearing *instance N+1*; a restart does
+           not create an instance N+1. It is the same latch.
+        2. Re-entering through the live path appends a transition, a digest and
+           a manual-rearm record on every boot, and rewrites the whole ``events``
+           array each time -- O(n^2) bytes under a restart loop, which is exactly
+           when the disk can least afford it.
+        3. Reading from ``state_path`` while writing through the evidence
+           writer's own directory splits the two halves of the protocol, so a
+           gate on the supplied path would never see the token it must name.
+
+        So this path reuses the persisted token verbatim, sets the in-memory
+        latch and the two gauges, and writes nothing. It is idempotent, and the
+        structlog record below is the bounded boot evidence.
+
+        Fail-closed on every reading it cannot trust: unparseable JSON raises
+        ``RuntimeStateUnreadable``; a valid document with a malformed
+        ``strategies`` section, a malformed entry, or a latched entry carrying no
+        token raises ``StrategyQuarantineStateCorrupt``. A latch that cannot be
+        read must not be assumed absent -- that assumption is the defect this
+        method exists to remove. Only a *missing* section is a cold start.
+
+        ``snapshot`` lets the caller supply state it has already read and
+        validated, so the read can happen before any startup side effect exists
+        to unwind. See the call site in ``services.bootstrap``.
 
         Returns the strategy ids restored, in sorted order.
         """
-        from hft_platform.ops.manual_rearm import ManualRearmGate
+        if snapshot is None:
+            from hft_platform.ops.manual_rearm import ManualRearmGate
 
-        gate = ManualRearmGate(state_path=state_path)
-        snapshot = gate.snapshot()
+            snapshot = ManualRearmGate(state_path=state_path).snapshot()
+
         strategies = snapshot.get("strategies")
-        if not isinstance(strategies, dict):
+        if strategies is None:
+            self._set_strategy_scope_state()
             return []
+        if not isinstance(strategies, dict):
+            raise StrategyQuarantineStateCorrupt(
+                f"persisted 'strategies' section is {type(strategies).__name__}, not an object; "
+                "refusing to start rather than assume no strategy is quarantined"
+            )
 
         restored: list[str] = []
+        legacy_tokens: dict[str, str] = {}
         for strategy_id in sorted(strategies):
             entry = strategies[strategy_id]
-            if not isinstance(entry, dict) or not bool(entry.get("manual_rearm_required")):
+            if not isinstance(entry, dict):
+                raise StrategyQuarantineStateCorrupt(
+                    f"persisted entry for strategy {strategy_id!r} is {type(entry).__name__}, not an "
+                    "object; its latch state cannot be read and must not be assumed clear"
+                )
+            if not bool(entry.get("manual_rearm_required")):
                 continue
-            reason = entry.get("reason") or "restored_from_runtime_state"
-            # Reuse the live path: it mints the fresh token, sets both gauges and
-            # writes the evidence record, so a restored quarantine is
-            # indistinguishable from a fresh one to every consumer.
-            self.quarantine(strategy_id, reason=str(reason))
+            reason = str(entry.get("reason") or "restored_from_runtime_state")
+            token = entry.get("quarantine_token")
+            if not isinstance(token, str) or not token:
+                # A latch written by an engine from before tokens existed. Refusing
+                # to start would turn the upgrade that introduces this code into an
+                # outage, and minting here destroys nothing: ``rearm_strategy``
+                # refuses to publish a request for a tokenless entry, so no
+                # authorization can be in flight for this latch. Verified against
+                # the production document 2026-08-26, which carries exactly this
+                # shape for ``R47_MAKER_TMF``.
+                #
+                # The latch is kept -- only its identity is filled in -- so the
+                # migration is fail-closed, and it is the one case where restore
+                # writes. It happens once: the next boot reads the token back.
+                token = self._mint_token(strategy_id)
+                legacy_tokens[strategy_id] = token
+            # Built for ``build_cancel_intents``, deliberately NOT recorded: this
+            # is the same transition the previous run already counted.
+            transition = self._build_transition(from_mode=AutonomyMode.STRATEGY_QUARANTINED, reason=reason)
+            self._quarantined[strategy_id] = StrategyQuarantine(
+                strategy_id=strategy_id,
+                reason=reason,
+                transition=transition,
+                token=token,
+            )
+            self._set_strategy_quarantine_active(strategy_id, active=True)
             restored.append(strategy_id)
 
+        self._set_strategy_scope_state()
+        if legacy_tokens:
+            self._persist_legacy_tokens(legacy_tokens, state_path=state_path)
         if restored:
             logger.warning(
                 "strategy_quarantines_restored",
                 strategy_ids=restored,
                 count=len(restored),
-                note="latch survived restart; a fresh re-arm request is required to clear it",
+                note="latch survived restart; the pre-restart re-arm token is still the one that clears it",
             )
         return restored
+
+    def _persist_legacy_tokens(self, tokens: dict[str, str], *, state_path: str | Path | None) -> None:
+        """Give pre-token latches an identity so the authorized re-arm path can name them.
+
+        Best-effort by design: the latch is already held in memory, so a failed
+        write leaves the strategy *stopped* and merely un-clearable until the
+        next boot retries. That is the fail-closed direction. It is logged at
+        error level because the operator needs to know why ``rearm-strategy``
+        would refuse.
+        """
+        from hft_platform.ops.manual_rearm import DEFAULT_RUNTIME_STATE_PATH
+        from hft_platform.ops.runtime_state_store import locked_state
+
+        path = Path(state_path) if state_path is not None else DEFAULT_RUNTIME_STATE_PATH
+        try:
+            with locked_state(path) as state:
+                strategies = state.get("strategies")
+                if not isinstance(strategies, dict):
+                    return
+                for strategy_id, token in tokens.items():
+                    entry = strategies.get(strategy_id)
+                    # Re-check under the lock: another writer may have supplied a
+                    # token, and overwriting it would strand an in-flight request.
+                    if isinstance(entry, dict) and not entry.get("quarantine_token"):
+                        entry["quarantine_token"] = token
+        except Exception as exc:
+            logger.error(
+                "strategy_quarantine_legacy_token_persist_failed",
+                strategy_ids=sorted(tokens),
+                error=str(exc),
+                note="latch is held in memory but cannot be re-armed until a boot persists a token",
+            )
+            return
+        logger.warning(
+            "strategy_quarantine_legacy_tokens_minted",
+            strategy_ids=sorted(tokens),
+            note="latch predates quarantine tokens; identity filled in so it can be re-armed",
+        )
 
     def rearm(self, strategy_id: str, *, expected_token: str, request_id: str | None = None) -> bool:
         """Clear one strategy's quarantine, and only the exact one authorized.

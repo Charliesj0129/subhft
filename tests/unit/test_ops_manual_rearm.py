@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from hft_platform.ops.manual_rearm import ManualRearmGate
+from hft_platform.ops.runtime_state_store import RuntimeStateUnreadable
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -74,13 +75,19 @@ class TestLoadState:
         assert state["platform"]["manual_rearm_required"] is True
         assert state["strategies"]["s1"]["manual_rearm_required"] is True
 
-    def test_non_dict_json_returns_default(self, tmp_path: Path) -> None:
+    def test_non_dict_json_refuses_rather_than_returning_default(self, tmp_path: Path) -> None:
+        """A document of the wrong shape is not evidence that nothing is latched.
+
+        This previously returned the all-clear default. ``_load_state`` is the
+        strict read feeding the platform reduce-only restore and the strategy
+        quarantine restore, so defaulting here is the same fail-open the strict
+        read exists to prevent -- an operator HALT latch read as NORMAL.
+        """
         path = tmp_path / "state.json"
         path.write_text("[1, 2, 3]", encoding="utf-8")
         gate = ManualRearmGate(state_path=path)
-        state = gate._load_state()
-        assert state["platform"]["manual_rearm_required"] is False
-        assert state["strategies"] == {}
+        with pytest.raises(RuntimeStateUnreadable):
+            gate._load_state()
 
     def test_file_missing_platform_key_is_normalised(self, tmp_path: Path) -> None:
         path = tmp_path / "state.json"

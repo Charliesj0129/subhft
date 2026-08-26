@@ -71,7 +71,35 @@ def read_state_strict(path: Path) -> dict[str, Any]:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:
         raise RuntimeStateUnreadable(f"{path} exists but could not be read: {exc}") from exc
+    _assert_section_shapes(path, raw)
     return normalize_state(raw)
+
+
+def _assert_section_shapes(path: Path, raw: Any) -> None:
+    """Reject a document that parses but whose latch sections are the wrong shape.
+
+    ``normalize_state`` replaces a non-object ``platform`` or ``strategies``
+    with an empty one. For the tolerant observer read that is the right call --
+    a gauge should not crash the engine. For the strict read it is the same
+    fail-open the strict read exists to prevent, just one level down: a
+    ``strategies`` section that arrives as ``[]`` reads as "no strategy is
+    latched", and a ``platform`` section that arrives as ``null`` reads as "no
+    HALT is latched". Neither is something this file can honestly conclude.
+
+    Only a *missing* section is treated as absent; a present one must have the
+    right type.
+    """
+    if not isinstance(raw, dict):
+        raise RuntimeStateUnreadable(
+            f"{path} parses as {type(raw).__name__}, not an object; its latch state cannot be read"
+        )
+    for section in ("platform", "strategies"):
+        value = raw.get(section)
+        if value is not None and not isinstance(value, dict):
+            raise RuntimeStateUnreadable(
+                f"{path} has a {section!r} section of type {type(value).__name__}, not an object; "
+                "refusing to read it as 'nothing latched'"
+            )
 
 
 def read_state(path: Path) -> dict[str, Any]:
