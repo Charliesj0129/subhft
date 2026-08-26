@@ -190,7 +190,10 @@ def test_a_malformed_strategies_section_supplied_directly_still_refuses() -> Non
 
 def test_a_malformed_strategy_entry_refuses_rather_than_being_skipped(tmp_path: Path) -> None:
     state = tmp_path / "runtime_state.json"
-    _write_state(state, {"platform": {}, "strategies": {_SID: "quarantined"}})
+    _write_state(
+        state,
+        {"platform": {"manual_rearm_required": False, "reason": None}, "strategies": {_SID: "quarantined"}},
+    )
 
     governor = StrategyHealthGovernor()
     with pytest.raises(StrategyQuarantineStateCorrupt):
@@ -419,3 +422,92 @@ def test_an_unreadable_reread_applies_the_validated_snapshot_instead_of_crashing
 
     assert restored == [_SID]
     assert governor.is_quarantined(_SID) is True
+
+
+# --- Review round 3: the same fail-open, in the places round 2 did not look --
+
+
+@pytest.mark.parametrize("flag", [None, "", 0, 1, "true"])
+def test_a_platform_latch_with_a_non_boolean_flag_refuses(tmp_path: Path, flag: object) -> None:
+    """Round 2 fixed the strategy half of this and left the platform half.
+
+    ``normalize_state`` ``setdefault``s a damaged ``manual_rearm_required`` to
+    ``False``, so a boot came up NORMAL holding a HALT latch it could not read.
+    Both sections of one document need the check.
+    """
+    state = tmp_path / "runtime_state.json"
+    _write_state(state, {"platform": {"manual_rearm_required": flag, "reason": "storm"}, "strategies": {}})
+
+    with pytest.raises(RuntimeStateUnreadable):
+        ManualRearmGate(state_path=state).snapshot()
+
+
+def test_a_platform_section_missing_its_latch_field_refuses(tmp_path: Path) -> None:
+    state = tmp_path / "runtime_state.json"
+    _write_state(state, {"platform": {}, "strategies": {}})
+
+    with pytest.raises(RuntimeStateUnreadable):
+        ManualRearmGate(state_path=state).snapshot()
+
+
+def test_a_clear_recorded_after_the_snapshot_supersedes_the_stale_latch(tmp_path: Path) -> None:
+    """An operator authorized the clear during startup; do not resurrect it.
+
+    Merging only the *latched* set could not represent "this run watched it get
+    cleared". The stale latch won, the restore did not rewrite the record, and
+    memory said quarantined while disk said no re-arm required -- a split brain
+    the CLI refuses to re-arm out of.
+    """
+    state = tmp_path / "runtime_state.json"
+    cleared = {
+        "platform": {"manual_rearm_required": False, "reason": None},
+        "strategies": {_SID: {"manual_rearm_required": False, "reason": None}},
+    }
+    _write_state(state, cleared)
+
+    governor = StrategyHealthGovernor()
+    restored = governor.restore_persisted_quarantines(snapshot=_latched(), state_path=state)
+
+    assert restored == []
+    assert governor.is_quarantined(_SID) is False
+
+
+def test_a_strategy_the_fresh_read_never_mentions_keeps_its_snapshot_latch(tmp_path: Path) -> None:
+    """Guard the fix above: "not mentioned" is not "cleared"."""
+    state = tmp_path / "runtime_state.json"
+    _write_state(state, {"platform": {"manual_rearm_required": False, "reason": None}, "strategies": {}})
+
+    governor = StrategyHealthGovernor()
+
+    assert governor.restore_persisted_quarantines(snapshot=_latched(), state_path=state) == [_SID]
+
+
+@pytest.mark.parametrize("token", [123, 0.5, [], {}, True])
+def test_a_present_but_malformed_token_is_corrupt_not_legacy(tmp_path: Path, token: object) -> None:
+    """Treating it as legacy produced a latch nothing could ever clear.
+
+    Restore minted a live token; ``_persist_legacy_tokens`` saw the existing
+    truthy value and declined to overwrite it. Disk kept ``123``, memory held
+    the new token, the CLI rejected the disk value and the governor rejected
+    the CLI's -- repeating every restart while logging migration success.
+    """
+    state = tmp_path / "runtime_state.json"
+    payload = _latched()
+    payload["strategies"][_SID]["quarantine_token"] = token
+    _write_state(state, payload)
+
+    governor = StrategyHealthGovernor()
+    with pytest.raises(StrategyQuarantineStateCorrupt):
+        governor.restore_persisted_quarantines(state_path=state)
+
+
+def test_an_empty_string_token_is_corrupt_not_legacy(tmp_path: Path) -> None:
+    """The falsey half of the same bug: it would have been silently re-minted."""
+    state = tmp_path / "runtime_state.json"
+    payload = _latched()
+    payload["strategies"][_SID]["quarantine_token"] = ""
+    _write_state(state, payload)
+
+    governor = StrategyHealthGovernor()
+    with pytest.raises(StrategyQuarantineStateCorrupt):
+        governor.restore_persisted_quarantines(state_path=state)

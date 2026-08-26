@@ -106,6 +106,33 @@ def _assert_section_shapes(path: Path, raw: Any) -> None:
                 f"{path} has a {section!r} section of type {type(value).__name__}, not an object; "
                 "refusing to read it as 'nothing latched'"
             )
+    _assert_platform_latch_readable(path, raw.get("platform"))
+
+
+def _assert_platform_latch_readable(path: Path, platform: Any) -> None:
+    """The platform HALT latch is one field; check the field, not its container.
+
+    Checking only that ``platform`` is an object left the identical fail-open
+    one level further down: ``normalize_state`` ``setdefault``s a missing or
+    ``null`` ``manual_rearm_required`` to ``False``, and ``ManualRearmGate``
+    then reports "no re-arm required", so a boot comes up NORMAL holding a HALT
+    latch it could not read. Every writer of this field writes an actual bool
+    (``ops/manual_rearm.py``, ``ops/evidence.py``), so a missing key or any
+    other type is damage -- and damage to a HALT latch is not something to
+    resolve in the trading direction.
+
+    The strategy half of this same check lives in
+    ``strategy_governor.parse_persisted_quarantines``; both sections of one
+    document need it, which is the part the first pass missed.
+    """
+    if not isinstance(platform, dict):
+        return  # absent, or already rejected by the caller
+    required = platform.get("manual_rearm_required")
+    if not isinstance(required, bool):
+        raise RuntimeStateUnreadable(
+            f"{path} has a platform section with manual_rearm_required={required!r} "
+            f"({type(required).__name__}), not a bool; refusing to read it as 'no HALT is latched'"
+        )
 
 
 def read_state(path: Path) -> dict[str, Any]:

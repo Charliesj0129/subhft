@@ -1158,9 +1158,11 @@ class SystemBootstrapper:
         # ``StrategyRunner.__init__`` so constructing a runner stays free of
         # filesystem IO. The document was read and validated at the top of
         # ``build()``, entries included, so no shape defect can raise here.
-        # It does re-read the file once, to pick up a latch written between that
-        # read and the session fence; that re-read cannot raise either (see
-        # ``restore_persisted_quarantines``).
+        # It does re-read the file once, to pick up anything written since that
+        # read; the re-read cannot raise either. Note the ownership preflight
+        # above is advisory -- it does not stop ``build()`` -- so this narrows
+        # the overlapping-restart window rather than closing it. See
+        # ``restore_persisted_quarantines``.
         strategy_runner.strategy_governor.restore_persisted_quarantines(snapshot=persisted_safety_state)
         # Phase 3: rejection feedback queue.
         # P2 (2026-04-25): the former ``_publish_queue`` was wired into

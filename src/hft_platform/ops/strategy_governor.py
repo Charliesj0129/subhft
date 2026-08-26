@@ -45,7 +45,7 @@ class PersistedQuarantine:
     token: str | None
 
 
-def parse_persisted_quarantines(snapshot: Any) -> dict[str, PersistedQuarantine]:
+def parse_persisted_quarantines(snapshot: Any) -> dict[str, PersistedQuarantine | None]:
     """Validate a safety snapshot and extract every latched strategy.
 
     Pure: no filesystem, no metrics, no governor. Split out of the restore so
@@ -57,6 +57,14 @@ def parse_persisted_quarantines(snapshot: Any) -> dict[str, PersistedQuarantine]
     lease it held until TTL. Validating the section container early and the
     entries late is not "validated early"; the entries are where the malformed
     shapes actually live.
+
+    Returns *every* strategy the document mentions: a ``PersistedQuarantine``
+    where the latch is set, ``None`` where the document explicitly records it
+    as clear. Dropping the cleared ones and returning only the latched set is
+    lossy in a way that matters to the caller's merge -- "this run never heard
+    of the strategy" and "this run watched an operator clear it" are different
+    facts, and collapsing them let a stale snapshot resurrect a latch that had
+    just been authorized away.
 
     Fail-closed on every reading it cannot trust. A missing ``strategies``
     section is the one benign case: a genuine cold start.
@@ -70,7 +78,7 @@ def parse_persisted_quarantines(snapshot: Any) -> dict[str, PersistedQuarantine]
             "refusing to start rather than assume no strategy is quarantined"
         )
 
-    latched: dict[str, PersistedQuarantine] = {}
+    seen: dict[str, PersistedQuarantine | None] = {}
     for strategy_id in sorted(strategies):
         entry = strategies[strategy_id]
         if not isinstance(entry, dict):
@@ -93,14 +101,32 @@ def parse_persisted_quarantines(snapshot: Any) -> dict[str, PersistedQuarantine]
                 "refusing to read it as 'not quarantined'"
             )
         if not required:
+            seen[strategy_id] = None
             continue
-        token = entry.get("quarantine_token")
-        latched[strategy_id] = PersistedQuarantine(
+        if "quarantine_token" not in entry:
+            # A latch written before tokens existed. The caller mints one.
+            token: str | None = None
+        else:
+            token = entry["quarantine_token"]
+            if not isinstance(token, str) or not token:
+                # Present but malformed is NOT legacy, and treating it as legacy
+                # produced a latch nothing could clear: restore minted a live
+                # token, ``_persist_legacy_tokens`` saw the existing truthy
+                # value and declined to overwrite it, so disk kept e.g. ``123``
+                # while memory held the new token. The CLI rejected the disk
+                # value, the governor rejected the CLI's, and every restart
+                # repeated it while logging that the migration had succeeded.
+                raise StrategyQuarantineStateCorrupt(
+                    f"persisted entry for strategy {strategy_id!r} has "
+                    f"quarantine_token={token!r} ({type(token).__name__}), not a non-empty string; "
+                    "it names the latch an operator must authorize and cannot be guessed"
+                )
+        seen[strategy_id] = PersistedQuarantine(
             strategy_id=strategy_id,
             reason=str(entry.get("reason") or "restored_from_runtime_state"),
-            token=token if isinstance(token, str) and token else None,
+            token=token,
         )
-    return latched
+    return seen
 
 
 @dataclass(slots=True, frozen=True)
@@ -225,16 +251,32 @@ class StrategyHealthGovernor:
         from hft_platform.ops.manual_rearm import ManualRearmGate
 
         if snapshot is None:
-            latched = parse_persisted_quarantines(ManualRearmGate(state_path=state_path).snapshot())
+            seen = parse_persisted_quarantines(ManualRearmGate(state_path=state_path).snapshot())
         else:
-            # The supplied snapshot was read before this run fenced the previous
-            # one, so an engine that was still alive could have latched a
-            # strategy in between. Re-read now that the fence is up and take the
-            # union: a latch seen in *either* reading is restored, and where both
-            # see the same strategy the fresher identity wins. Restoring one too
-            # many costs an operator re-arm; dropping one lets a strategy the
-            # operator stopped resume trading unattended.
-            latched = parse_persisted_quarantines(snapshot)
+            # The supplied snapshot was read at the top of ``build()``, before
+            # the session-ownership preflight. Re-read here to pick up anything
+            # written since, and merge whole *records* rather than latched ones:
+            #
+            #   fresh says latched   -> latched, with the fresher identity
+            #   fresh says cleared   -> cleared; an operator authorized that
+            #   fresh never mentions -> whatever the snapshot said
+            #
+            # Merging only the latched set instead let a stale snapshot
+            # resurrect a latch the fresh read showed as cleared, and since the
+            # restore does not rewrite the record, memory said "quarantined"
+            # while disk said "no re-arm required" -- a split brain the CLI
+            # refuses to re-arm out of.
+            #
+            # NOT a fence. ``SystemBootstrapper._check_session_ownership`` is a
+            # non-blocking preflight (B-OPS-03): on a conflicting owner, or with
+            # Redis down, it logs, returns False and ``build()`` continues. So a
+            # previous engine that is still alive can write after this read too.
+            # The re-read narrows that window from the whole of ``build()`` to
+            # the few instructions below it; closing it needs an exclusive
+            # startup fence, which is a separate change with its own
+            # availability tradeoff (an engine that refuses to start when Redis
+            # is unreachable).
+            seen = parse_persisted_quarantines(snapshot)
             try:
                 fresh = parse_persisted_quarantines(ManualRearmGate(state_path=state_path).snapshot())
             except Exception as exc:
@@ -245,11 +287,12 @@ class StrategyHealthGovernor:
                 logger.error(
                     "quarantine_reread_failed",
                     error=str(exc),
-                    note="applying the pre-fence snapshot; a latch written during startup may be missed",
+                    note="applying the earlier snapshot; a latch written during startup may be missed",
                 )
             else:
-                latched = {**latched, **fresh}
+                seen = {**seen, **fresh}
 
+        latched = {sid: rec for sid, rec in seen.items() if rec is not None}
         if not latched:
             self._set_strategy_scope_state()
             return []
@@ -320,7 +363,11 @@ class StrategyHealthGovernor:
                     entry = strategies.get(strategy_id)
                     # Re-check under the lock: another writer may have supplied a
                     # token, and overwriting it would strand an in-flight request.
-                    if isinstance(entry, dict) and not entry.get("quarantine_token"):
+                    # Keyed on *absence*, matching the parse: a present-but-
+                    # malformed token never reaches here (it is corrupt, not
+                    # legacy), and testing truthiness instead meant a malformed
+                    # value blocked its own replacement forever.
+                    if isinstance(entry, dict) and "quarantine_token" not in entry:
                         entry["quarantine_token"] = token
         except Exception as exc:
             logger.error(
