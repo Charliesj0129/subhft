@@ -87,9 +87,7 @@ def _resolve_compose() -> str:
     )
     if result.returncode != 0:
         sys.stderr.write(result.stderr)
-        raise SystemExit(
-            f"docker compose config failed (rc={result.returncode}); see stderr above."
-        )
+        raise SystemExit(f"docker compose config failed (rc={result.returncode}); see stderr above.")
     return result.stdout
 
 
@@ -160,6 +158,127 @@ def _render(compose: dict, *, stripped_count: int) -> str:
     return header + "\n" + body
 
 
+def _restore_parameterized_short_syntax(compose: dict) -> int:
+    """Re-emit ``${VAR}``-sourced mounts in short syntax. Returns how many.
+
+    Compose decides bind-vs-named-volume for a short-syntax mount by looking at
+    the *interpolated* source: a path becomes a bind, a bare name becomes a
+    named volume. ``config --no-interpolate`` has no interpolated source to look
+    at, so it renders every parameterized mount as long-syntax ``type: volume``
+    -- and feeding that back to Compose fails with "refers to undefined volume
+    ./backups/clickhouse", because that is now a named-volume reference rather
+    than a bind. Every locked file generated so far has been unloadable for this
+    reason.
+
+    Rewriting the classification here would mean guessing what the variable
+    expands to, and the guess is wrong for exactly the case the variable exists
+    for (``CH_DATA_HOT`` defaults to a named volume but is meant to be
+    overridable with an NVMe path). Short syntax has no classification to get
+    wrong: it hands the decision back to Compose at interpolation time, which is
+    what ``docker-compose.yml`` itself does.
+    """
+    restored = 0
+    for svc in (compose.get("services") or {}).values():
+        vols = svc.get("volumes")
+        if not vols:
+            continue
+        rewritten: list = []
+        for vol in vols:
+            if not isinstance(vol, dict) or "${" not in str(vol.get("source", "")):
+                rewritten.append(vol)
+                continue
+            spec = f"{vol['source']}:{vol.get('target', '')}"
+            if vol.get("read_only"):
+                spec += ":ro"
+            rewritten.append(spec)
+            restored += 1
+        svc["volumes"] = rewritten
+    return restored
+
+
+def _binds_by_target(compose: dict) -> dict[tuple[str, str], str]:
+    """Absolute bind sources keyed by ``(service, container target)``.
+
+    The target is what the container sees and is stable across regenerations,
+    so it is the join key that survives a checkout move; the source is the
+    absolute host path ``docker compose config`` baked in.
+    """
+    out: dict[tuple[str, str], str] = {}
+    for svc_name, svc in (compose.get("services") or {}).items():
+        for vol in svc.get("volumes") or []:
+            if not isinstance(vol, dict) or vol.get("type") != "bind":
+                continue
+            source = str(vol.get("source", ""))
+            if source.startswith("/"):
+                out[(str(svc_name), str(vol.get("target", "")))] = source
+    return out
+
+
+def _moved_bind_mounts(committed: dict, compose: dict) -> list[tuple[str, str, str, str]]:
+    """Bind mounts whose host path changed, as ``(service, target, old, new)``."""
+    old_binds = _binds_by_target(committed)
+    new_binds = _binds_by_target(compose)
+    moved = []
+    for key, old_source in sorted(old_binds.items()):
+        new_source = new_binds.get(key)
+        if new_source is not None and new_source != old_source:
+            moved.append((key[0], key[1], old_source, new_source))
+    return moved
+
+
+def _assert_matches_committed_identity(compose: dict) -> None:
+    """Refuse to regenerate into a different Compose project than the live one.
+
+    Neither ``docker-compose.yml`` nor the production overlay declares ``name:``,
+    so Compose derives the project name from the *directory name* and stamps it
+    onto the default network and every named volume. Regenerating from a git
+    worktree therefore renames ``hft_platform_ch_data_hot`` to
+    ``<worktree>_ch_data_hot``: the stack comes up attached to brand-new empty
+    volumes instead of production's ClickHouse data, and nothing about the diff
+    says so. The bind sources carry the same dependency in absolute form.
+
+    Both are silent, so check them against the file being replaced rather than
+    trusting the caller's working directory. Pin with ``COMPOSE_PROJECT_NAME``
+    (and regenerate from a checkout whose bind roots match) to satisfy this.
+    """
+    if not LOCKED_COMPOSE.exists():
+        return
+    try:
+        committed = yaml.safe_load(LOCKED_COMPOSE.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        raise SystemExit(f"cannot read the existing {LOCKED_COMPOSE.name} to verify identity: {exc}") from exc
+    if not isinstance(committed, dict):
+        # Only a *missing* file can mean "nothing to preserve". A file that
+        # exists and does not parse as a mapping is damage, and reading it as
+        # an absent baseline would disable both checks below on exactly the
+        # regeneration that most needs them.
+        raise SystemExit(
+            f"refusing to write {LOCKED_COMPOSE.name}: the existing file parses as "
+            f"{type(committed).__name__}, not a mapping, so the project name and bind paths it "
+            f"records cannot be read. Restore it from git before regenerating."
+        )
+
+    old_name, new_name = committed.get("name"), compose.get("name")
+    if old_name and new_name != old_name:
+        raise SystemExit(
+            f"refusing to write {LOCKED_COMPOSE.name}: Compose project name would change "
+            f"{old_name!r} -> {new_name!r}. That renames the default network and every named "
+            f"volume, so production would come up on empty volumes. Re-run with "
+            f"COMPOSE_PROJECT_NAME={old_name}."
+        )
+
+    moved = _moved_bind_mounts(committed, compose)
+    if moved:
+        detail = "\n".join(f"  {svc}:{target}  {old} -> {new}" for svc, target, old, new in moved[:5])
+        more = f"\n  ... and {len(moved) - 5} more" if len(moved) > 5 else ""
+        raise SystemExit(
+            f"refusing to write {LOCKED_COMPOSE.name}: {len(moved)} bind mount(s) would point at a "
+            f"different host path. The generated file records absolute paths, so regenerating from a "
+            f"different checkout silently repoints production's data directories:\n{detail}{more}\n"
+            f"Regenerate from the checkout the committed file names."
+        )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -175,6 +294,8 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit(f"docker compose config produced non-dict YAML: {type(compose)!r}")
 
     compose, stripped_count = _strip_source_volumes(compose)
+    restored_count = _restore_parameterized_short_syntax(compose)
+    _assert_matches_committed_identity(compose)
     output = _render(compose, stripped_count=stripped_count)
 
     if args.check:
@@ -184,7 +305,8 @@ def main(argv: list[str] | None = None) -> int:
     LOCKED_COMPOSE.write_text(output, encoding="utf-8")
     print(
         f"Generated {LOCKED_COMPOSE.relative_to(REPO_ROOT)} "
-        f"({len(output)} bytes, {stripped_count} source mounts stripped)"
+        f"({len(output)} bytes, {stripped_count} source mounts stripped, "
+        f"{restored_count} parameterized mounts kept in short syntax)"
     )
     return 0
 

@@ -3,9 +3,9 @@
 # DO NOT EDIT BY HAND. Regenerate with:
 #   uv run python scripts/ops/generate_locked_compose.py
 #
-# Generated:        2026-05-05T08:40:04Z (UTC)
-# Git SHA:          b21b9769
-# Base digest:      35cf6f99767a380f  (docker-compose.yml)
+# Generated:        2026-08-26T13:32:20Z (UTC)
+# Git SHA:          17d6445d
+# Base digest:      014d732cfb5dd296  (docker-compose.yml)
 # Prod digest:      15529f83b16a6a9e  (docker-compose.production.yml)
 # Volumes stripped: 15 (broad source-path bind mounts)
 #
@@ -68,11 +68,7 @@ services:
     tmpfs:
     - /tmp:size=32M
     volumes:
-    - read_only: true
-      source: ${HFT_ALERTMANAGER_CONFIG:-./config/monitoring/alerts/alertmanager.production.yml}
-      target: /etc/alertmanager/alertmanager.yml
-      type: volume
-      volume: {}
+    - ${HFT_ALERTMANAGER_CONFIG:-./config/monitoring/alerts/alertmanager.production.yml}:/etc/alertmanager/alertmanager.yml:ro
   clickhouse:
     container_name: clickhouse
     deploy:
@@ -142,18 +138,9 @@ services:
       source: /home/charlie/hft_platform/config/clickhouse_prometheus.xml
       target: /etc/clickhouse-server/config.d/prometheus.xml
       type: bind
-    - source: ${CH_BACKUP_PATH:-./backups/clickhouse}
-      target: /backups
-      type: volume
-      volume: {}
-    - source: ${CH_DATA_HOT:-ch_data_hot}
-      target: /var/lib/clickhouse/data/hot
-      type: volume
-      volume: {}
-    - source: ${CH_DATA_COLD:-ch_data_cold}
-      target: /var/lib/clickhouse/data/cold
-      type: volume
-      volume: {}
+    - ${CH_BACKUP_PATH:-./backups/clickhouse}:/backups
+    - ${CH_DATA_HOT:-ch_data_hot}:/var/lib/clickhouse/data/hot
+    - ${CH_DATA_COLD:-ch_data_cold}:/var/lib/clickhouse/data/cold
     - source: ch_metadata
       target: /var/lib/clickhouse
       type: volume
@@ -254,6 +241,8 @@ services:
     - HFT_BUS_DRAIN_TIMEOUT_MS=${HFT_BUS_DRAIN_TIMEOUT_MS:-500}
     - HFT_RISK_DLQ_DRAIN_INTERVAL=${HFT_RISK_DLQ_DRAIN_INTERVAL:-50}
     - HFT_RISK_DLQ_TTL_S=${HFT_RISK_DLQ_TTL_S:-30}
+    - HFT_DLQ_RETENTION_DAYS=${HFT_DLQ_RETENTION_DAYS:-7}
+    - HFT_DLQ_ARCHIVE_PATH=${HFT_DLQ_ARCHIVE_PATH:-/app/.wal/dlq_expired}
     - HFT_GC_DISABLE_TRADING=${HFT_GC_DISABLE_TRADING:-0}
     - HFT_PLATFORM_AUTO_RECOVERY_ENABLED=${HFT_PLATFORM_AUTO_RECOVERY_ENABLED:-1}
     - HFT_PLATFORM_AUTO_RECOVERY_COOLDOWN_S=${HFT_PLATFORM_AUTO_RECOVERY_COOLDOWN_S:-60}
@@ -490,6 +479,8 @@ services:
     - HFT_BUS_DRAIN_TIMEOUT_MS=${HFT_BUS_DRAIN_TIMEOUT_MS:-500}
     - HFT_RISK_DLQ_DRAIN_INTERVAL=${HFT_RISK_DLQ_DRAIN_INTERVAL:-50}
     - HFT_RISK_DLQ_TTL_S=${HFT_RISK_DLQ_TTL_S:-30}
+    - HFT_DLQ_RETENTION_DAYS=${HFT_DLQ_RETENTION_DAYS:-7}
+    - HFT_DLQ_ARCHIVE_PATH=${HFT_DLQ_ARCHIVE_PATH:-/app/.wal/dlq_expired}
     - HFT_GC_DISABLE_TRADING=${HFT_GC_DISABLE_TRADING:-0}
     - HFT_PLATFORM_AUTO_RECOVERY_ENABLED=${HFT_PLATFORM_AUTO_RECOVERY_ENABLED:-1}
     - HFT_PLATFORM_AUTO_RECOVERY_COOLDOWN_S=${HFT_PLATFORM_AUTO_RECOVERY_COOLDOWN_S:-60}
@@ -550,11 +541,7 @@ services:
       source: /dev/hugepages
       target: /dev/hugepages
       type: bind
-    - read_only: true
-      source: ${CA_CERT_DIR:-./certs}
-      target: /app/certs
-      type: volume
-      volume: {}
+    - ${CA_CERT_DIR:-./certs}:/app/certs:ro
     - bind:
         create_host_path: true
       source: /home/charlie/hft_platform/.cores
@@ -564,6 +551,12 @@ services:
         create_host_path: true
       source: /home/charlie/hft_platform/.hft-runtime
       target: /var/run/hft
+      type: bind
+    - ${CH_BACKUP_PATH:-./backups/clickhouse}:/backups
+    - bind:
+        create_host_path: true
+      source: /home/charlie/hft_platform/outputs
+      target: /app/outputs
       type: bind
   hft-monitor:
     build:
@@ -985,6 +978,8 @@ services:
     - HFT_BUS_DRAIN_TIMEOUT_MS=${HFT_BUS_DRAIN_TIMEOUT_MS:-500}
     - HFT_RISK_DLQ_DRAIN_INTERVAL=${HFT_RISK_DLQ_DRAIN_INTERVAL:-50}
     - HFT_RISK_DLQ_TTL_S=${HFT_RISK_DLQ_TTL_S:-30}
+    - HFT_DLQ_RETENTION_DAYS=${HFT_DLQ_RETENTION_DAYS:-7}
+    - HFT_DLQ_ARCHIVE_PATH=${HFT_DLQ_ARCHIVE_PATH:-/app/.wal/dlq_expired}
     - HFT_GC_DISABLE_TRADING=${HFT_GC_DISABLE_TRADING:-0}
     - HFT_PLATFORM_AUTO_RECOVERY_ENABLED=${HFT_PLATFORM_AUTO_RECOVERY_ENABLED:-1}
     - HFT_PLATFORM_AUTO_RECOVERY_COOLDOWN_S=${HFT_PLATFORM_AUTO_RECOVERY_COOLDOWN_S:-60}
@@ -1140,6 +1135,8 @@ x-hft-common:
   - HFT_BUS_DRAIN_TIMEOUT_MS=${HFT_BUS_DRAIN_TIMEOUT_MS:-500}
   - HFT_RISK_DLQ_DRAIN_INTERVAL=${HFT_RISK_DLQ_DRAIN_INTERVAL:-50}
   - HFT_RISK_DLQ_TTL_S=${HFT_RISK_DLQ_TTL_S:-30}
+  - HFT_DLQ_RETENTION_DAYS=${HFT_DLQ_RETENTION_DAYS:-7}
+  - HFT_DLQ_ARCHIVE_PATH=${HFT_DLQ_ARCHIVE_PATH:-/app/.wal/dlq_expired}
   - HFT_GC_DISABLE_TRADING=${HFT_GC_DISABLE_TRADING:-0}
   - HFT_PLATFORM_AUTO_RECOVERY_ENABLED=${HFT_PLATFORM_AUTO_RECOVERY_ENABLED:-1}
   - HFT_PLATFORM_AUTO_RECOVERY_COOLDOWN_S=${HFT_PLATFORM_AUTO_RECOVERY_COOLDOWN_S:-60}

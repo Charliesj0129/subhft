@@ -12,6 +12,8 @@ Skips cleanly if `docker` CLI is unavailable in the test env (CI-friendly).
 
 from __future__ import annotations
 
+import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -191,3 +193,37 @@ def test_no_source_bind_mounts_in_locked() -> None:
     assert not violations, "Locked compose contains broad source bind mounts that should be stripped:\n" + "\n".join(
         violations
     )
+
+
+@pytest.mark.skipif(not _docker_available(), reason="docker CLI not available in this environment")
+def test_locked_compose_is_loadable_on_its_own() -> None:
+    """Compose must accept the locked file. Every parity check above is moot otherwise.
+
+    ``docker compose config --no-interpolate`` renders a ``${VAR}``-sourced mount
+    as long-syntax ``type: volume`` because there is no interpolated source to
+    classify. Feeding that back to Compose makes it a named-volume reference
+    that nothing declares, and the whole file is rejected with "refers to
+    undefined volume ./backups/clickhouse" -- so a deploy fails at the first
+    command, on a file that parses as valid YAML and diffs cleanly. The parity
+    tests never caught it because they too read the file with
+    ``--no-interpolate``, which is the mode that produced the defect.
+    """
+    if not _LOCKED_COMPOSE.exists():
+        pytest.skip("docker-compose.prod.locked.yml not generated yet")
+
+    # Interpolation is the point of this check, so every ``${VAR:?...}`` needs a
+    # value. Supply placeholders rather than reading the operator's ``.env``.
+    required = set(re.findall(r"\$\{([A-Za-z_][A-Za-z0-9_]*):\?", _LOCKED_COMPOSE.read_text(encoding="utf-8")))
+    env = {**os.environ, **{name: "placeholder-for-parity-test" for name in required}}
+
+    result = subprocess.run(
+        ["docker", "compose", "-f", str(_LOCKED_COMPOSE), "config", "--quiet"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        cwd=str(REPO_ROOT),
+        env=env,
+    )
+    # Compose emits a warning line per unset optional variable; those are fine.
+    errors = "\n".join(line for line in result.stderr.splitlines() if "level=warning" not in line)
+    assert result.returncode == 0, f"docker compose rejects the locked file (rc={result.returncode}):\n{errors}"
