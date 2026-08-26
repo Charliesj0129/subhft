@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -66,12 +66,22 @@ def parse_persisted_quarantines(snapshot: Any) -> dict[str, PersistedQuarantine 
     facts, and collapsing them let a stale snapshot resurrect a latch that had
     just been authorized away.
 
-    Fail-closed on every reading it cannot trust. A missing ``strategies``
-    section is the one benign case: a genuine cold start.
+    Fail-closed on every reading it cannot trust. A snapshot with no
+    ``strategies`` key at all is the one benign case, and only because
+    ``read_state_strict`` will not hand one out for a document that exists:
+    there, section absence is already rejected. A *directly supplied* snapshot
+    bypasses that reader, so the same distinctions are enforced here rather
+    than assumed -- ``{"strategies": null}`` and a non-object snapshot both
+    used to land on the cold-start return.
     """
-    strategies = snapshot.get("strategies") if isinstance(snapshot, dict) else None
-    if strategies is None:
+    if not isinstance(snapshot, dict):
+        raise StrategyQuarantineStateCorrupt(
+            f"safety snapshot is {type(snapshot).__name__}, not an object; "
+            "refusing to read it as 'no strategy is quarantined'"
+        )
+    if "strategies" not in snapshot:
         return {}
+    strategies = snapshot["strategies"]
     if not isinstance(strategies, dict):
         raise StrategyQuarantineStateCorrupt(
             f"persisted 'strategies' section is {type(strategies).__name__}, not an object; "
@@ -354,6 +364,7 @@ class StrategyHealthGovernor:
         from hft_platform.ops.runtime_state_store import locked_state
 
         path = Path(state_path) if state_path is not None else DEFAULT_RUNTIME_STATE_PATH
+        adopted: dict[str, str] = {}
         try:
             with locked_state(path) as state:
                 strategies = state.get("strategies")
@@ -361,14 +372,25 @@ class StrategyHealthGovernor:
                     return
                 for strategy_id, token in tokens.items():
                     entry = strategies.get(strategy_id)
-                    # Re-check under the lock: another writer may have supplied a
-                    # token, and overwriting it would strand an in-flight request.
-                    # Keyed on *absence*, matching the parse: a present-but-
-                    # malformed token never reaches here (it is corrupt, not
-                    # legacy), and testing truthiness instead meant a malformed
-                    # value blocked its own replacement forever.
-                    if isinstance(entry, dict) and "quarantine_token" not in entry:
+                    if not isinstance(entry, dict):
+                        continue
+                    # Re-check under the lock: another engine migrating the same
+                    # tokenless latch may have got here first, and overwriting
+                    # its token would strand an in-flight request. Keyed on
+                    # *absence*, matching the parse: a present-but-malformed
+                    # token never reaches here (it is corrupt, not legacy), and
+                    # testing truthiness instead meant a malformed value blocked
+                    # its own replacement forever.
+                    existing = entry.get("quarantine_token")
+                    if "quarantine_token" not in entry:
                         entry["quarantine_token"] = token
+                    elif isinstance(existing, str) and existing and existing != token:
+                        # Someone else's token won the lock. Keeping ours would
+                        # split the latch's identity: the CLI reads *their*
+                        # token off disk and this governor would reject every
+                        # request naming it, leaving a quarantine no operator
+                        # can clear. Disk is the authority -- adopt it.
+                        adopted[strategy_id] = existing
         except Exception as exc:
             logger.error(
                 "strategy_quarantine_legacy_token_persist_failed",
@@ -377,11 +399,23 @@ class StrategyHealthGovernor:
                 note="latch is held in memory but cannot be re-armed until a boot persists a token",
             )
             return
-        logger.warning(
-            "strategy_quarantine_legacy_tokens_minted",
-            strategy_ids=sorted(tokens),
-            note="latch predates quarantine tokens; identity filled in so it can be re-armed",
-        )
+        for strategy_id, token in adopted.items():
+            held = self._quarantined.get(strategy_id)
+            if held is not None:
+                self._quarantined[strategy_id] = replace(held, token=token)
+        if adopted:
+            logger.warning(
+                "strategy_quarantine_legacy_token_adopted",
+                strategy_ids=sorted(adopted),
+                note="another start migrated this latch first; adopted its token so the CLI and this governor agree",
+            )
+        minted = sorted(set(tokens) - set(adopted))
+        if minted:
+            logger.warning(
+                "strategy_quarantine_legacy_tokens_minted",
+                strategy_ids=minted,
+                note="latch predates quarantine tokens; identity filled in so it can be re-armed",
+            )
 
     def rearm(self, strategy_id: str, *, expected_token: str, request_id: str | None = None) -> bool:
         """Clear one strategy's quarantine, and only the exact one authorized.

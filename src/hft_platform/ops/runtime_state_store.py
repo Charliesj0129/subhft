@@ -86,12 +86,16 @@ def _assert_section_shapes(path: Path, raw: Any) -> None:
     latched", and a ``platform`` section that arrives as ``null`` reads as "no
     HALT is latched". Neither is something this file can honestly conclude.
 
-    Only a *missing* section is treated as absent; a present one must have the
-    right type. "Missing" means the key is absent, not that its value is
-    ``null`` -- ``raw.get(section)`` cannot tell those apart, and a present
-    ``null`` is the one shape a truncated or half-migrated writer is most
-    likely to leave behind. Reading it as absent is the same fail-open one
-    level down.
+    Every existing document must carry both latch sections, each an object.
+    Nothing writes one without them (``normalize_state`` supplies both, and
+    every write goes through it), so a document missing one is damage rather
+    than an older format -- and reading a missing ``strategies`` as absent
+    releases every quarantine, a missing ``platform`` the HALT.
+
+    Note ``raw.get(section)`` cannot distinguish an absent key from a present
+    ``null``; a present ``null`` is the shape a truncated or half-migrated
+    writer is most likely to leave behind, and it must not read as absent
+    either. Both are rejected here.
     """
     if not isinstance(raw, dict):
         raise RuntimeStateUnreadable(
@@ -99,7 +103,14 @@ def _assert_section_shapes(path: Path, raw: Any) -> None:
         )
     for section in ("platform", "strategies"):
         if section not in raw:
-            continue
+            # Only a missing *file* can prove a cold start. An existing document
+            # that has lost a section is damage -- a partial write, a rolled-back
+            # migration -- and reading it as absent releases exactly what the
+            # section held: every strategy quarantine, or the platform HALT.
+            raise RuntimeStateUnreadable(
+                f"{path} exists but has no {section!r} section; only a missing file proves "
+                "nothing was latched"
+            )
         value = raw[section]
         if not isinstance(value, dict):
             raise RuntimeStateUnreadable(

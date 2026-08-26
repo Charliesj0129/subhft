@@ -89,21 +89,53 @@ class TestLoadState:
         with pytest.raises(RuntimeStateUnreadable):
             gate._load_state()
 
-    def test_file_missing_platform_key_is_normalised(self, tmp_path: Path) -> None:
+    def test_file_missing_platform_key_refuses(self, tmp_path: Path) -> None:
+        """Only a missing *file* proves a cold start.
+
+        This asserted normalisation, which is the same fail-open as the case
+        above one level down: an existing document that has lost its platform
+        section reads as "no HALT is latched". Nothing writes a document without
+        both sections, so a missing one is damage, not an older format.
+        """
         path = tmp_path / "state.json"
         _write_state(path, {"strategies": {}})
         gate = ManualRearmGate(state_path=path)
-        state = gate._load_state()
-        assert "platform" in state
-        assert "manual_rearm_required" in state["platform"]
+        with pytest.raises(RuntimeStateUnreadable):
+            gate._load_state()
 
-    def test_file_missing_strategies_key_is_normalised(self, tmp_path: Path) -> None:
+    def test_a_missing_section_still_normalises_for_the_tolerant_observer_read(self, tmp_path: Path) -> None:
+        """``read_state`` feeds gauges and status output; it must not crash.
+
+        The split is the point: the strict read refuses, the observer read
+        degrades. Only the strict read decides whether a latch is held.
+        """
+        from hft_platform.ops.runtime_state_store import read_state
+
+        path = tmp_path / "state.json"
+        _write_state(path, {"strategies": {}})
+
+        state = read_state(path)
+
+        assert state["platform"]["manual_rearm_required"] is False
+
+    def test_file_missing_strategies_key_refuses(self, tmp_path: Path) -> None:
+        """The strategy half of the same rule: absence of the section is damage.
+
+        Normalising it to an empty map releases every strategy quarantine the
+        document held.
+        """
         path = tmp_path / "state.json"
         _write_state(path, {"platform": {"manual_rearm_required": False, "reason": None}})
         gate = ManualRearmGate(state_path=path)
-        state = gate._load_state()
-        assert "strategies" in state
-        assert isinstance(state["strategies"], dict)
+        with pytest.raises(RuntimeStateUnreadable):
+            gate._load_state()
+
+    def test_an_empty_document_refuses(self, tmp_path: Path) -> None:
+        path = tmp_path / "state.json"
+        _write_state(path, {})
+        gate = ManualRearmGate(state_path=path)
+        with pytest.raises(RuntimeStateUnreadable):
+            gate._load_state()
 
 
 # ---------------------------------------------------------------------------

@@ -319,14 +319,26 @@ def test_a_present_null_latch_section_refuses_rather_than_reading_as_clear(tmp_p
         ManualRearmGate(state_path=state).snapshot()
 
 
-def test_an_absent_latch_section_is_still_a_cold_start(tmp_path: Path) -> None:
-    """Guard the fix above from over-reaching: a missing key must stay benign."""
+def test_an_existing_document_missing_the_strategies_section_refuses(tmp_path: Path) -> None:
+    """This test used to assert the opposite, and the opposite was the bug.
+
+    "Guard the fix from over-reaching" was the wrong instinct: a document that
+    exists but has lost its ``strategies`` section cannot prove that no
+    strategy was latched. Only a missing *file* proves a cold start.
+    """
     state = tmp_path / "runtime_state.json"
     _write_state(state, {"platform": {"manual_rearm_required": False, "reason": None}})
 
     governor = StrategyHealthGovernor()
+    with pytest.raises(RuntimeStateUnreadable):
+        governor.restore_persisted_quarantines(state_path=state)
 
-    assert governor.restore_persisted_quarantines(state_path=state) == []
+
+def test_no_document_at_all_is_a_cold_start(tmp_path: Path) -> None:
+    """The one case that genuinely proves nothing was latched."""
+    governor = StrategyHealthGovernor()
+
+    assert governor.restore_persisted_quarantines(state_path=tmp_path / "absent.json") == []
 
 
 @pytest.mark.parametrize("flag", [None, "", 0, 1, "true", "false", []])
@@ -511,3 +523,50 @@ def test_an_empty_string_token_is_corrupt_not_legacy(tmp_path: Path) -> None:
     governor = StrategyHealthGovernor()
     with pytest.raises(StrategyQuarantineStateCorrupt):
         governor.restore_persisted_quarantines(state_path=state)
+
+
+# --- Review round 3 ---------------------------------------------------------
+
+
+def test_a_second_start_adopts_the_token_the_first_one_committed(tmp_path: Path) -> None:
+    """Two starts migrating the same tokenless latch must not split its identity.
+
+    Both mint before either takes the lock. The loser used to keep its own
+    token while disk kept the winner's, so the CLI named one and the governor
+    accepted only the other -- a quarantine no operator could clear.
+    """
+    state = tmp_path / "runtime_state.json"
+    legacy = _latched()
+    del legacy["strategies"][_SID]["quarantine_token"]
+    _write_state(state, legacy)
+
+    first = StrategyHealthGovernor()
+    first.restore_persisted_quarantines(state_path=state)
+    committed = first.quarantine_token(_SID)
+    assert committed
+
+    second = StrategyHealthGovernor()
+    second.restore_persisted_quarantines(state_path=state)
+
+    assert second.quarantine_token(_SID) == committed
+
+
+@pytest.mark.parametrize("snapshot", [None, [], "latched", 3, {"strategies": None}])
+def test_a_malformed_supplied_snapshot_refuses(snapshot: object) -> None:
+    """A directly supplied snapshot bypasses the strict file reader.
+
+    Both a non-object snapshot and a present-null ``strategies`` used to land
+    on the cold-start return, so the one path that skips ``read_state_strict``
+    was also the one path with no fail-closed check.
+    """
+    with pytest.raises(StrategyQuarantineStateCorrupt):
+        parse_persisted_quarantines(snapshot)
+
+
+def test_a_supplied_snapshot_with_no_strategies_key_is_still_a_cold_start() -> None:
+    """``read_state_strict`` never hands one out for a document that exists.
+
+    Absence here means "the caller had nothing to say", not "the file lost a
+    section" -- that case is rejected before it can reach this function.
+    """
+    assert parse_persisted_quarantines({"platform": {"manual_rearm_required": False}}) == {}
