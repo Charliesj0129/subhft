@@ -24,6 +24,7 @@ from hft_platform.ops.runtime_state_store import RuntimeStateUnreadable
 from hft_platform.ops.strategy_governor import (
     StrategyHealthGovernor,
     StrategyQuarantineStateCorrupt,
+    parse_persisted_quarantines,
 )
 
 _SID = "R47_MAKER_TMF"
@@ -289,3 +290,132 @@ def test_the_legacy_migration_runs_once_and_is_stable_across_boots(tmp_path: Pat
         StrategyHealthGovernor().restore_persisted_quarantines(state_path=state)
 
     assert state.read_bytes() == after_first
+
+
+# --- Review round 2: the three fail-open gaps Codex found -------------------
+#
+# All three share one shape: a reading the code could not honestly make was
+# resolved in the trading direction. A latch that cannot be read is not an
+# absent latch.
+
+
+@pytest.mark.parametrize("section", ["platform", "strategies"])
+def test_a_present_null_latch_section_refuses_rather_than_reading_as_clear(tmp_path: Path, section: str) -> None:
+    """``raw.get(s)`` returns ``None`` for both "absent" and "present, null".
+
+    Only the first is a cold start. Collapsing them let a document such as
+    ``{"platform": null}`` normalize to ``manual_rearm_required=false`` and
+    release a platform HALT latch on boot.
+    """
+    state = tmp_path / "runtime_state.json"
+    payload: dict = {"platform": {"manual_rearm_required": True, "reason": "storm"}, "strategies": {}}
+    payload[section] = None
+    _write_state(state, payload)
+
+    with pytest.raises(RuntimeStateUnreadable):
+        ManualRearmGate(state_path=state).snapshot()
+
+
+def test_an_absent_latch_section_is_still_a_cold_start(tmp_path: Path) -> None:
+    """Guard the fix above from over-reaching: a missing key must stay benign."""
+    state = tmp_path / "runtime_state.json"
+    _write_state(state, {"platform": {"manual_rearm_required": False, "reason": None}})
+
+    governor = StrategyHealthGovernor()
+
+    assert governor.restore_persisted_quarantines(state_path=state) == []
+
+
+@pytest.mark.parametrize("flag", [None, "", 0, 1, "true", "false", []])
+def test_a_latched_entry_with_a_non_boolean_flag_refuses(tmp_path: Path, flag: object) -> None:
+    """``bool(entry.get(...))`` collapsed damage into a deliberate ``False``.
+
+    A record carrying a real reason and a real token, whose flag had been
+    truncated to null, read as "this strategy is free to trade". Every writer
+    of the field writes an actual bool, so anything else is damage.
+    """
+    state = tmp_path / "runtime_state.json"
+    payload = _latched()
+    payload["strategies"][_SID]["manual_rearm_required"] = flag
+    _write_state(state, payload)
+
+    governor = StrategyHealthGovernor()
+    with pytest.raises(StrategyQuarantineStateCorrupt):
+        governor.restore_persisted_quarantines(state_path=state)
+
+
+def test_a_malformed_entry_is_rejected_by_the_pre_lease_validation(tmp_path: Path) -> None:
+    """The startup gate must raise on *entries*, not only on the container.
+
+    Until it did, a damaged record raised at the apply call instead -- after the
+    Redis lease and its refresh thread were live -- so under ``restart: always``
+    every attempt leaked a lease it held until TTL.
+    """
+    payload = _latched()
+    payload["strategies"][_SID]["manual_rearm_required"] = None
+
+    with pytest.raises(StrategyQuarantineStateCorrupt):
+        parse_persisted_quarantines(payload)
+
+
+def test_the_pre_lease_validation_accepts_a_well_formed_document(tmp_path: Path) -> None:
+    parsed = parse_persisted_quarantines(_latched())
+
+    assert list(parsed) == [_SID]
+    assert parsed[_SID].token == "prev-run:R47_MAKER_TMF:1"
+
+
+def test_a_quarantine_written_after_the_snapshot_is_still_restored(tmp_path: Path) -> None:
+    """The snapshot is taken before this run fences the previous one.
+
+    An engine still alive during startup can latch a strategy in that window.
+    Hydrating only the pre-fence snapshot would resume a strategy the operator
+    had just stopped.
+    """
+    state = tmp_path / "runtime_state.json"
+    pre_fence = {"platform": {"manual_rearm_required": False, "reason": None}, "strategies": {}}
+    _write_state(state, pre_fence)
+
+    # ...the other engine latches a strategy while this one is constructing.
+    _write_state(state, _latched(strategy_id="OTHER", token="other-run:OTHER:2"))
+
+    governor = StrategyHealthGovernor()
+    restored = governor.restore_persisted_quarantines(snapshot=pre_fence, state_path=state)
+
+    assert restored == ["OTHER"]
+    assert governor.quarantine_token("OTHER") == "other-run:OTHER:2"
+
+
+def test_a_latch_only_in_the_pre_fence_snapshot_is_not_dropped(tmp_path: Path) -> None:
+    """The merge is a union, not a replacement.
+
+    A cleared-looking fresh read must not be able to release a latch the
+    validated snapshot saw.
+    """
+    state = tmp_path / "runtime_state.json"
+    _write_state(state, {"platform": {"manual_rearm_required": False, "reason": None}, "strategies": {}})
+
+    governor = StrategyHealthGovernor()
+    restored = governor.restore_persisted_quarantines(snapshot=_latched(), state_path=state)
+
+    assert restored == [_SID]
+
+
+def test_an_unreadable_reread_applies_the_validated_snapshot_instead_of_crashing(
+    tmp_path: Path,
+) -> None:
+    """Raising here would put a fail-closed read back after the lease.
+
+    That is the crash loop the early-read split exists to avoid, and it is
+    unnecessary: the supplied snapshot is itself a validated reading, so no
+    latch is lost by using it.
+    """
+    state = tmp_path / "runtime_state.json"
+    state.parent.mkdir(parents=True, exist_ok=True)
+    state.write_text("{ this is not json", encoding="utf-8")
+
+    governor = StrategyHealthGovernor()
+    restored = governor.restore_persisted_quarantines(snapshot=_latched(), state_path=state)
+
+    assert restored == [_SID]
+    assert governor.is_quarantined(_SID) is True

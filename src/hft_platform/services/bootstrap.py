@@ -27,6 +27,7 @@ from hft_platform.feed_adapter.normalizer import SymbolMetadata
 from hft_platform.observability.latency import LatencyRecorder
 from hft_platform.ops.manual_rearm import ManualRearmGate
 from hft_platform.ops.platform_inputs import PlatformDegradeInputs
+from hft_platform.ops.strategy_governor import parse_persisted_quarantines
 from hft_platform.order.adapter import OrderAdapter
 from hft_platform.recorder.worker import RecorderService
 from hft_platform.risk.engine import RiskEngine
@@ -722,6 +723,15 @@ class SystemBootstrapper:
         # at this point, so raising here is an ordinary refusal to start.
         # Applied to the governor further down, once it exists.
         persisted_safety_state = ManualRearmGate().snapshot()
+        # Validate every *entry*, not just the section container. The container
+        # check lives in the strict read; the malformed shapes that actually
+        # occur live one level down, in the per-strategy records. Until this
+        # line existed they raised at the apply call ~400 lines later -- after
+        # the lease and its refresh thread -- so a single damaged record became
+        # a restart loop that leaked a lease on every pass. The return value is
+        # discarded on purpose: this call is here to raise, and the governor
+        # re-parses when it applies.
+        parse_persisted_quarantines(persisted_safety_state)
 
         # B-OPS-03: Non-blocking preflight — warn if another runtime owns the session.
         lease_owned = self._check_session_ownership(role)
@@ -1147,8 +1157,10 @@ class SystemBootstrapper:
         # 2026-08-25). Restored here at the composition root rather than in
         # ``StrategyRunner.__init__`` so constructing a runner stays free of
         # filesystem IO. The document was read and validated at the top of
-        # ``build()``; this call only applies it, so it performs no IO and
-        # cannot fail after the lease has been acquired.
+        # ``build()``, entries included, so no shape defect can raise here.
+        # It does re-read the file once, to pick up a latch written between that
+        # read and the session fence; that re-read cannot raise either (see
+        # ``restore_persisted_quarantines``).
         strategy_runner.strategy_governor.restore_persisted_quarantines(snapshot=persisted_safety_state)
         # Phase 3: rejection feedback queue.
         # P2 (2026-04-25): the former ``_publish_queue`` was wired into

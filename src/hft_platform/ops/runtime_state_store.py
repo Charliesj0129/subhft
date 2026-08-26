@@ -87,15 +87,21 @@ def _assert_section_shapes(path: Path, raw: Any) -> None:
     HALT is latched". Neither is something this file can honestly conclude.
 
     Only a *missing* section is treated as absent; a present one must have the
-    right type.
+    right type. "Missing" means the key is absent, not that its value is
+    ``null`` -- ``raw.get(section)`` cannot tell those apart, and a present
+    ``null`` is the one shape a truncated or half-migrated writer is most
+    likely to leave behind. Reading it as absent is the same fail-open one
+    level down.
     """
     if not isinstance(raw, dict):
         raise RuntimeStateUnreadable(
             f"{path} parses as {type(raw).__name__}, not an object; its latch state cannot be read"
         )
     for section in ("platform", "strategies"):
-        value = raw.get(section)
-        if value is not None and not isinstance(value, dict):
+        if section not in raw:
+            continue
+        value = raw[section]
+        if not isinstance(value, dict):
             raise RuntimeStateUnreadable(
                 f"{path} has a {section!r} section of type {type(value).__name__}, not an object; "
                 "refusing to read it as 'nothing latched'"

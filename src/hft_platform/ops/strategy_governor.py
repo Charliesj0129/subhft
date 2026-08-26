@@ -36,6 +36,74 @@ class StrategyQuarantineStateCorrupt(RuntimeError):
 
 
 @dataclass(slots=True, frozen=True)
+class PersistedQuarantine:
+    """One latched strategy as it was found on disk. No live state, no IO."""
+
+    strategy_id: str
+    reason: str
+    #: ``None`` for a latch written before tokens existed; the caller mints one.
+    token: str | None
+
+
+def parse_persisted_quarantines(snapshot: Any) -> dict[str, PersistedQuarantine]:
+    """Validate a safety snapshot and extract every latched strategy.
+
+    Pure: no filesystem, no metrics, no governor. Split out of the restore so
+    the *validation* can run at a point in startup where refusing costs
+    nothing, while the *application* runs later, once a governor exists to
+    apply it to. Keeping them in one method meant a malformed individual entry
+    raised only at the second point -- after the Redis lease and its refresh
+    thread were live -- so under ``restart: always`` every attempt leaked a
+    lease it held until TTL. Validating the section container early and the
+    entries late is not "validated early"; the entries are where the malformed
+    shapes actually live.
+
+    Fail-closed on every reading it cannot trust. A missing ``strategies``
+    section is the one benign case: a genuine cold start.
+    """
+    strategies = snapshot.get("strategies") if isinstance(snapshot, dict) else None
+    if strategies is None:
+        return {}
+    if not isinstance(strategies, dict):
+        raise StrategyQuarantineStateCorrupt(
+            f"persisted 'strategies' section is {type(strategies).__name__}, not an object; "
+            "refusing to start rather than assume no strategy is quarantined"
+        )
+
+    latched: dict[str, PersistedQuarantine] = {}
+    for strategy_id in sorted(strategies):
+        entry = strategies[strategy_id]
+        if not isinstance(entry, dict):
+            raise StrategyQuarantineStateCorrupt(
+                f"persisted entry for strategy {strategy_id!r} is {type(entry).__name__}, not an "
+                "object; its latch state cannot be read and must not be assumed clear"
+            )
+        required = entry.get("manual_rearm_required")
+        if not isinstance(required, bool):
+            # ``bool(entry.get(...))`` collapsed missing, null, "" and 0 into a
+            # deliberate ``False`` -- so a record carrying a real reason and a
+            # real token, whose flag had been truncated to null, read as "this
+            # strategy is free to trade". Every writer of this field writes an
+            # actual bool (``ops/autonomy.py``, ``ops/evidence.py``), so
+            # anything else is damage, and damage to *this* field is not
+            # something to resolve in the trading direction.
+            raise StrategyQuarantineStateCorrupt(
+                f"persisted entry for strategy {strategy_id!r} has "
+                f"manual_rearm_required={required!r} ({type(required).__name__}), not a bool; "
+                "refusing to read it as 'not quarantined'"
+            )
+        if not required:
+            continue
+        token = entry.get("quarantine_token")
+        latched[strategy_id] = PersistedQuarantine(
+            strategy_id=strategy_id,
+            reason=str(entry.get("reason") or "restored_from_runtime_state"),
+            token=token if isinstance(token, str) and token else None,
+        )
+    return latched
+
+
+@dataclass(slots=True, frozen=True)
 class StrategyQuarantine:
     strategy_id: str
     reason: str
@@ -154,35 +222,45 @@ class StrategyHealthGovernor:
 
         Returns the strategy ids restored, in sorted order.
         """
+        from hft_platform.ops.manual_rearm import ManualRearmGate
+
         if snapshot is None:
-            from hft_platform.ops.manual_rearm import ManualRearmGate
+            latched = parse_persisted_quarantines(ManualRearmGate(state_path=state_path).snapshot())
+        else:
+            # The supplied snapshot was read before this run fenced the previous
+            # one, so an engine that was still alive could have latched a
+            # strategy in between. Re-read now that the fence is up and take the
+            # union: a latch seen in *either* reading is restored, and where both
+            # see the same strategy the fresher identity wins. Restoring one too
+            # many costs an operator re-arm; dropping one lets a strategy the
+            # operator stopped resume trading unattended.
+            latched = parse_persisted_quarantines(snapshot)
+            try:
+                fresh = parse_persisted_quarantines(ManualRearmGate(state_path=state_path).snapshot())
+            except Exception as exc:
+                # Do NOT raise: the supplied snapshot is itself a validated
+                # reading of this file, so every latch it holds is still
+                # applied below. Raising here would move a fail-closed read back
+                # after the lease -- the crash loop this split exists to avoid.
+                logger.error(
+                    "quarantine_reread_failed",
+                    error=str(exc),
+                    note="applying the pre-fence snapshot; a latch written during startup may be missed",
+                )
+            else:
+                latched = {**latched, **fresh}
 
-            snapshot = ManualRearmGate(state_path=state_path).snapshot()
-
-        strategies = snapshot.get("strategies")
-        if strategies is None:
+        if not latched:
             self._set_strategy_scope_state()
             return []
-        if not isinstance(strategies, dict):
-            raise StrategyQuarantineStateCorrupt(
-                f"persisted 'strategies' section is {type(strategies).__name__}, not an object; "
-                "refusing to start rather than assume no strategy is quarantined"
-            )
 
         restored: list[str] = []
         legacy_tokens: dict[str, str] = {}
-        for strategy_id in sorted(strategies):
-            entry = strategies[strategy_id]
-            if not isinstance(entry, dict):
-                raise StrategyQuarantineStateCorrupt(
-                    f"persisted entry for strategy {strategy_id!r} is {type(entry).__name__}, not an "
-                    "object; its latch state cannot be read and must not be assumed clear"
-                )
-            if not bool(entry.get("manual_rearm_required")):
-                continue
-            reason = str(entry.get("reason") or "restored_from_runtime_state")
-            token = entry.get("quarantine_token")
-            if not isinstance(token, str) or not token:
+        for strategy_id in sorted(latched):
+            persisted = latched[strategy_id]
+            reason = persisted.reason
+            token = persisted.token
+            if token is None:
                 # A latch written by an engine from before tokens existed. Refusing
                 # to start would turn the upgrade that introduces this code into an
                 # outage, and minting here destroys nothing: ``rearm_strategy``
