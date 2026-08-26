@@ -229,8 +229,11 @@ def _isolate_execution_state_paths(tmp_path, monkeypatch):
     after that. The failure looks like a flake and is not: it is the previous
     run's evidence doing its job.
     """
+    # Deliberately NOT created: several tests assert their ``tmp_path`` is
+    # empty, and a directory this fixture made would be a file they never
+    # wrote. Every writer below does ``mkdir(parents=True)`` on first use, so
+    # the directory appears only when a test actually persists something.
     base = tmp_path / "exec_state"
-    base.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("HFT_FILL_DEDUP_PERSIST_PATH", str(base / "fill_dedup_window.jsonl"))
     monkeypatch.setenv("HFT_DEDUP_PERSIST_PATH", str(base / "dedup_window.jsonl"))
     monkeypatch.setenv("HFT_POSITION_CHECKPOINT_PATH", str(base / "position_checkpoint.json"))

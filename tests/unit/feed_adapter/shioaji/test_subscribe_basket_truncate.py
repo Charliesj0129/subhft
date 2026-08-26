@@ -35,6 +35,7 @@ from typing import Any, Dict, List
 
 import pytest
 import yaml
+from structlog.testing import capture_logs
 
 from hft_platform.feed_adapter.shioaji.subscription_manager import SubscriptionManager
 from hft_platform.feed_adapter.shioaji_client import ShioajiClient
@@ -126,7 +127,7 @@ def _patched_subscribe_symbol(self: SubscriptionManager, sym: Dict[str, Any], cb
 # ---------------------------------------------------------------------------
 
 
-def test_subscribe_basket_bumps_truncate_metric_and_logs_critical(monkeypatch, capsys):
+def test_subscribe_basket_bumps_truncate_metric_and_logs_critical(monkeypatch):
     """P2 #8: 200 symbols + per-conn cap 120 → metric + critical log."""
     metrics = MetricsRegistry.get()
     counter = metrics.feed_subscription_truncate_total
@@ -138,7 +139,8 @@ def test_subscribe_basket_bumps_truncate_metric_and_logs_critical(monkeypatch, c
     # Skip real broker subscribe — we only test the guard.
     monkeypatch.setattr(SubscriptionManager, "_subscribe_symbol", _patched_subscribe_symbol)
 
-    mgr.subscribe_basket(cb=lambda *a, **kw: None)
+    with capture_logs() as records:
+        mgr.subscribe_basket(cb=lambda *a, **kw: None)
 
     after = _counter_value(counter, reason="conn_limit")
     assert after - before == 1.0, "truncate guard must bump metric exactly once"
@@ -146,16 +148,19 @@ def test_subscribe_basket_bumps_truncate_metric_and_logs_critical(monkeypatch, c
     # Per-conn cap honored: subscribed_count never exceeds limit.
     assert client.subscribed_count == 120
 
-    # Per-facade log emitted at the truncation site. structlog formats to
-    # stdout/stderr by default — capsys captures both. 2026-05-23 rewrite:
+    # Per-facade log emitted at the truncation site. 2026-05-23 rewrite:
     # template renamed to ``subscription_limit_reached`` with explicit
     # ``shard_size``/``dropped_this_facade`` fields and downgraded to
     # warning; the misleading ``severity="critical"`` string was dropped.
-    captured = capsys.readouterr()
-    combined = captured.out + captured.err
-    assert "subscription_limit_reached" in combined, "truncate event must be logged"
-    assert "shard_size=200" in combined, f"truncate log must record shard_size, got: {combined!r}"
-    assert "dropped_this_facade=80" in combined, f"truncate log must record drop count, got: {combined!r}"
+    #
+    # Read as a structured record, not as rendered text: asserting on
+    # ``capsys`` made this depend on whichever renderer the process-wide
+    # structlog config happened to have, so it passed only when an earlier
+    # test in the run had installed the key-value one.
+    truncate = [r for r in records if r.get("event") == "subscription_limit_reached"]
+    assert truncate, "truncate event must be logged"
+    assert truncate[-1]["shard_size"] == 200
+    assert truncate[-1]["dropped_this_facade"] == 80
 
 
 def test_subscribe_basket_no_metric_bump_when_under_per_conn_cap(monkeypatch):
