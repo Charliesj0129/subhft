@@ -212,6 +212,33 @@ def _isolate_autonomy_state_paths(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_execution_state_paths(tmp_path, monkeypatch):
+    """Keep the ``.state/`` durability files inside the test's tmp dir.
+
+    Sibling of ``_isolate_autonomy_state_paths``, for the same reason one level
+    over: the fill-dedup window, position checkpoint, order-id map, gateway
+    dedup window and leader lease all default to CWD-relative ``.state/``
+    paths, so every test that builds a real execution path writes into the
+    checkout pytest was launched from.
+
+    These files are *durability* state, and durability is the point: they
+    survive the process. So they also survive the pytest run. A fill id a test
+    replays -- ``SEQ001`` in ``tests/e2e/test_04_execution_plane.py`` -- lands
+    in ``.state/fill_dedup_window.jsonl`` and is deduplicated on the next run,
+    so the test passes exactly once on a clean tree and fails on every run
+    after that. The failure looks like a flake and is not: it is the previous
+    run's evidence doing its job.
+    """
+    base = tmp_path / "exec_state"
+    base.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("HFT_FILL_DEDUP_PERSIST_PATH", str(base / "fill_dedup_window.jsonl"))
+    monkeypatch.setenv("HFT_DEDUP_PERSIST_PATH", str(base / "dedup_window.jsonl"))
+    monkeypatch.setenv("HFT_POSITION_CHECKPOINT_PATH", str(base / "position_checkpoint.json"))
+    monkeypatch.setenv("HFT_ORDER_ID_MAP_PERSIST_PATH", str(base / "order_id_map.jsonl"))
+    monkeypatch.setenv("HFT_GATEWAY_LEADER_LEASE_PATH", str(base / "gateway_leader.lock"))
+
+
+@pytest.fixture(autouse=True)
 def _disarm_loop_stall_watchdog(monkeypatch):
     """Never let a test start a watchdog that can ``os._exit`` the test process.
 

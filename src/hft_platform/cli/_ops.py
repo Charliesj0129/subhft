@@ -212,7 +212,11 @@ def cmd_backtest(args: argparse.Namespace) -> None:
                 print("Strategy bridge currently supports single-asset backtest; provide one data file.")
                 sys.exit(1)
             adapter = StrategyHbtAdapter(
-                data_path=args.data[0],
+                # ``data``, not ``data_path``: the keyword never matched the
+                # signature, so ``hft backtest run --strategy-module ...`` died
+                # with TypeError on every invocation. Only tests/blackbox
+                # exercises this path, and no CI job runs that tier.
+                data=args.data[0],
                 strategy_module=args.strategy_module,
                 strategy_class=args.strategy_class or "SimpleMarketMaker",
                 strategy_id=args.strategy_id or "demo",

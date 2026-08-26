@@ -12,6 +12,7 @@ Skips cleanly if `docker` CLI is unavailable in the test env (CI-friendly).
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -86,9 +87,52 @@ def _run_compose_config(files: list[Path], timeout: int = 60) -> dict[str, Any]:
     return yaml.safe_load(result.stdout)
 
 
-def _vol_key(v: dict[str, Any]) -> tuple[str, str, bool, str]:
+def _infer_locked_root(locked: dict[str, Any], base_prod: dict[str, Any]) -> str:
+    """The checkout the locked file's absolute bind sources were generated in.
+
+    ``docker compose config`` resolves a relative bind source against the
+    compose file's directory, while the locked file carries absolute paths
+    baked in by its generator. Those two roots are equal only when the test
+    runs from the same checkout the locked file was generated in -- from any
+    git worktree every bind mount differs, and the test reported dozens of
+    mismatches that were entirely its own working directory, burying the two
+    real ones.
+
+    Inferred rather than assumed: find a bind mount both configs declare for
+    the same service and target, and strip the base+prod side's repo-relative
+    suffix off the locked side's absolute path. System mounts (``/proc``,
+    ``/sys``, ``/dev/hugepages``) are why a common-prefix scan cannot be used
+    -- they drag it to ``/``.
+    """
+    repo_root = str(REPO_ROOT)
+    for svc_name, locked_svc in locked.get("services", {}).items():
+        bp_svc = base_prod.get("services", {}).get(svc_name)
+        if not bp_svc:
+            continue
+        bp_by_target = {
+            str(v.get("target", "")): str(v.get("source", ""))
+            for v in (bp_svc.get("volumes") or [])
+            if str(v.get("source", "")).startswith(repo_root + os.sep)
+        }
+        for vol in locked_svc.get("volumes") or []:
+            bp_source = bp_by_target.get(str(vol.get("target", "")))
+            locked_source = str(vol.get("source", ""))
+            if not bp_source or not locked_source.startswith("/"):
+                continue
+            suffix = os.sep + os.path.relpath(bp_source, repo_root)
+            if locked_source.endswith(suffix):
+                return locked_source[: -len(suffix)]
+    return repo_root
+
+
+def _vol_key(v: dict[str, Any], root: str = "") -> tuple[str, str, bool, str]:
+    source = str(v.get("source", ""))
+    if root and source.startswith(root):
+        # Repo-relative, so the comparison asks "the same file?" rather than
+        # "the same checkout?" -- which is what this test claims to compare.
+        source = os.path.relpath(source, root)
     return (
-        str(v.get("source", "")),
+        source,
         str(v.get("target", "")),
         bool(v.get("read_only", False)),
         str(v.get("type", "bind")),
@@ -145,6 +189,9 @@ def test_volumes_differ_only_on_source_paths() -> None:
     locked_services: dict[str, Any] = locked.get("services", {})
     base_prod_services: dict[str, Any] = base_prod.get("services", {})
 
+    locked_root = _infer_locked_root(locked, base_prod)
+    bp_root = str(REPO_ROOT)
+
     mismatches: list[str] = []
     for svc_name, locked_svc in locked_services.items():
         if svc_name not in base_prod_services:
@@ -158,8 +205,8 @@ def test_volumes_differ_only_on_source_paths() -> None:
         bp_vols_filtered = [v for v in bp_vols if v.get("target") not in _STRIPPED_TARGETS]
         locked_vols_filtered = [v for v in locked_vols if v.get("target") not in _STRIPPED_TARGETS]
 
-        bp_set = {_vol_key(v) for v in bp_vols_filtered}
-        locked_set = {_vol_key(v) for v in locked_vols_filtered}
+        bp_set = {_vol_key(v, bp_root) for v in bp_vols_filtered}
+        locked_set = {_vol_key(v, locked_root) for v in locked_vols_filtered}
 
         only_in_bp = bp_set - locked_set
         only_in_locked = locked_set - bp_set
