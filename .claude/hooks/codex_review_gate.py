@@ -26,6 +26,12 @@ How a review is credited
 directory. A report counts only when that sha equals the current HEAD, so
 amending or adding a commit after a review invalidates it -- which is the point.
 
+It must ALSO contain a reviewer's ``Verdict:`` line. The stamp is written when
+the run is launched, not when it finishes, so a reviewer that dies mid-run
+leaves a stamped directory holding nothing but an error -- and crediting that
+would be crediting a review nobody performed. Measured on 2026-08-27: both
+reviewers hit a Codex usage limit, the stamp matched HEAD, and the gate cleared.
+
 Escape hatch
 ------------
 ``CODEX_REVIEW_OVERRIDE=1 git push ...`` proceeds and says so. Deliberate,
@@ -53,9 +59,7 @@ SOURCE_PREFIXES = ("src/", "rust_core/")
 
 
 def _git(*args: str, cwd: str | None = None) -> str:
-    out = subprocess.run(
-        ["git", *args], cwd=cwd, capture_output=True, text=True, timeout=10, check=False
-    )
+    out = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=10, check=False)
     return out.stdout.strip() if out.returncode == 0 else ""
 
 
@@ -73,16 +77,44 @@ def _outgoing_touches_source(cwd: str | None) -> bool:
     return any(f.startswith(SOURCE_PREFIXES) for f in files.splitlines())
 
 
+def _has_a_verdict(report_dir: Path) -> bool:
+    """True when at least one reviewer in this directory actually reported.
+
+    ``dual-review.sh`` stamps ``REVIEWED_SHA`` when it *launches*, before either
+    reviewer has said anything -- it has to, so the directory is findable while
+    the run is in flight. A reviewer that then dies (usage limit, network,
+    upstream error) leaves a report saying so, and matching the sha alone would
+    credit that as a review. On 2026-08-27 both reviewers hit a Codex usage
+    limit; the stamp was still there, and the push cleared a gate no reviewer
+    had ever looked at.
+
+    An empty review reads like an approval. It is not one, and the whole reason
+    this gate exists is that a control enforced by memory is not a control -- so
+    the credit has to rest on evidence a reviewer produced, not on a file that
+    proves only that one was started.
+    """
+    for report in sorted(report_dir.glob("*.md")):
+        try:
+            text = report.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if any(line.startswith("Verdict:") for line in text.splitlines()):
+            return True
+    return False
+
+
 def _reviewed(sha: str) -> Path | None:
     if not sha or not REPORTS.is_dir():
         return None
     for d in sorted(REPORTS.iterdir(), reverse=True):
         stamp = d / "REVIEWED_SHA"
         try:
-            if stamp.is_file() and stamp.read_text(encoding="utf-8").strip() == sha:
-                return d
+            if not (stamp.is_file() and stamp.read_text(encoding="utf-8").strip() == sha):
+                continue
         except OSError:
             continue
+        if _has_a_verdict(d):
+            return d
     return None
 
 
@@ -118,7 +150,9 @@ def main() -> int:
 
     print(
         "BLOCKED by codex_review_gate: this push/PR carries changes under src/ or "
-        f"rust_core/, and no Codex review report covers HEAD ({sha[:8]}).\n"
+        f"rust_core/, and no completed Codex review covers HEAD ({sha[:8]}).\n"
+        "  A report directory stamped with this sha but holding no `Verdict:` line does\n"
+        "  NOT count -- the reviewer was launched and did not report.\n"
         "  Run:  /dual-review        (or ~/.claude/bin/dual-review.sh --cwd <repo>)\n"
         "  Then re-run the command; the report stamps REVIEWED_SHA and this gate clears.\n"
         "  A review taken before the last commit does not count -- re-review after amending.\n"
