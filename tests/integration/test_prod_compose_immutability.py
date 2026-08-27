@@ -24,16 +24,21 @@ Skips cleanly if ``docker`` CLI is unavailable in the test env.
 from __future__ import annotations
 
 import shutil
-import subprocess
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import pytest
-import yaml
 
 REPO_ROOT = Path(__file__).parent.parent.parent
 
 _LOCKED_COMPOSE = REPO_ROOT / "docker-compose.prod.locked.yml"
+_LOCKED_NAME = _LOCKED_COMPOSE.name
+
+# Rendered by ``compose_render`` (tests/integration/conftest.py) from a scratch
+# copy with interpolation on: the locked file's ``${VAR:-default}`` volume specs
+# are rejected under ``--no-interpolate``, which is how this file used to read it.
+Renderer = Callable[..., dict[str, Any]]
 
 # Bind mounts whose target is one of these (or descends from one) shadow the
 # image-side code with the host working tree.
@@ -44,30 +49,12 @@ def _docker_available() -> bool:
     return shutil.which("docker") is not None
 
 
-def _run_compose_config(compose: Path, timeout: int = 60) -> dict[str, Any]:
-    cmd = ["docker", "compose", "-f", str(compose), "config", "--no-interpolate"]
-    result = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        cwd=str(REPO_ROOT),
-        check=False,
-    )
-    if result.returncode != 0:
-        pytest.fail(f"docker compose config failed (rc={result.returncode}):\n{result.stderr}")
-    return yaml.safe_load(result.stdout)
-
-
 @pytest.mark.skipif(not _docker_available(), reason="docker CLI not available in this environment")
-def test_locked_compose_has_no_bind_mounts_under_source_paths() -> None:
+def test_locked_compose_has_no_bind_mounts_under_source_paths(compose_render: Renderer) -> None:
     """No service in the locked compose may bind-mount onto a source-code
     target. Catches both exact matches (``/app/src``) and descendants
     (``/app/src/whatever``)."""
-    if not _LOCKED_COMPOSE.exists():
-        pytest.skip("docker-compose.prod.locked.yml not generated yet")
-
-    locked = _run_compose_config(_LOCKED_COMPOSE)
+    locked = compose_render(_LOCKED_NAME)
     services: dict[str, Any] = locked.get("services", {})
 
     violations: list[str] = []
@@ -96,14 +83,11 @@ def test_locked_compose_has_no_bind_mounts_under_source_paths() -> None:
 
 
 @pytest.mark.skipif(not _docker_available(), reason="docker CLI not available in this environment")
-def test_locked_compose_engine_runs_image_command() -> None:
+def test_locked_compose_engine_runs_image_command(compose_render: Renderer) -> None:
     """The hft-engine command in locked compose must invoke the image-side
     Python module, not a host script. ``python -m hft_platform.main`` is
     served from the image's installed package."""
-    if not _LOCKED_COMPOSE.exists():
-        pytest.skip("docker-compose.prod.locked.yml not generated yet")
-
-    locked = _run_compose_config(_LOCKED_COMPOSE)
+    locked = compose_render(_LOCKED_NAME)
     engine = locked.get("services", {}).get("hft-engine", {})
     cmd = engine.get("command")
     assert cmd, f"hft-engine has no command in locked compose: {engine!r}"
@@ -114,13 +98,10 @@ def test_locked_compose_engine_runs_image_command() -> None:
 
 
 @pytest.mark.skipif(not _docker_available(), reason="docker CLI not available in this environment")
-def test_locked_compose_engine_is_read_only() -> None:
+def test_locked_compose_engine_is_read_only(compose_render: Renderer) -> None:
     """The hft-engine service must declare ``read_only: true`` so the only
     writable surfaces are the explicitly-allowed tmpfs / state mounts."""
-    if not _LOCKED_COMPOSE.exists():
-        pytest.skip("docker-compose.prod.locked.yml not generated yet")
-
-    locked = _run_compose_config(_LOCKED_COMPOSE)
+    locked = compose_render(_LOCKED_NAME)
     engine = locked.get("services", {}).get("hft-engine", {})
     assert engine.get("read_only") is True, (
         f"hft-engine.read_only must be true in locked compose; got {engine.get('read_only')!r}"

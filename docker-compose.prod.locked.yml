@@ -3,11 +3,16 @@
 # DO NOT EDIT BY HAND. Regenerate with:
 #   uv run python scripts/ops/generate_locked_compose.py
 #
-# Generated:        2026-08-26T13:32:20Z (UTC)
-# Git SHA:          17d6445d
+# Generated:        2026-08-27T02:08:38Z (UTC)
+# Git SHA:          8994e6b6
 # Base digest:      014d732cfb5dd296  (docker-compose.yml)
 # Prod digest:      15529f83b16a6a9e  (docker-compose.production.yml)
 # Volumes stripped: 15 (broad source-path bind mounts)
+#
+# Host paths are relative to THIS FILE's directory, not to the checkout that
+# generated it: `docker compose config` emits them absolute, which pinned the
+# artifact (and its `required` env_file) to one machine. Parameterized mounts
+# stay in short syntax so Compose, not this script, decides bind vs volume.
 #
 # Stripped targets: /app/src, /app/scripts, /app/config
 # Reason: production must run the image-side code, not the host working
@@ -113,29 +118,29 @@ services:
     volumes:
     - bind:
         create_host_path: true
-      source: /home/charlie/hft_platform/config/clickhouse_storage.xml
+      source: ./config/clickhouse_storage.xml
       target: /etc/clickhouse-server/config.d/storage.xml
       type: bind
     - bind:
         create_host_path: true
-      source: /home/charlie/hft_platform/config/clickhouse_system_logs.xml
+      source: ./config/clickhouse_system_logs.xml
       target: /etc/clickhouse-server/config.d/system_logs.xml
       type: bind
     - bind:
         create_host_path: true
-      source: /home/charlie/hft_platform/config/clickhouse_memory.xml
+      source: ./config/clickhouse_memory.xml
       target: /etc/clickhouse-server/config.d/memory.xml
       type: bind
     - bind:
         create_host_path: true
       read_only: true
-      source: /home/charlie/hft_platform/config/clickhouse_backup.xml
+      source: ./config/clickhouse_backup.xml
       target: /etc/clickhouse-server/config.d/backup.xml
       type: bind
     - bind:
         create_host_path: true
       read_only: true
-      source: /home/charlie/hft_platform/config/clickhouse_prometheus.xml
+      source: ./config/clickhouse_prometheus.xml
       target: /etc/clickhouse-server/config.d/prometheus.xml
       type: bind
     - ${CH_BACKUP_PATH:-./backups/clickhouse}:/backups
@@ -150,7 +155,7 @@ services:
       args:
         BUILD_TS: ${HFT_BUILD_TS:-unknown}
         GIT_SHA: ${HFT_GIT_SHA:-unknown}
-      context: /home/charlie/hft_platform
+      context: .
       dockerfile: Dockerfile
     command:
     - sh
@@ -158,7 +163,7 @@ services:
     - HFT_RUNTIME_ROLE=maintenance sleep infinity
     container_name: hft-base
     env_file:
-    - path: /home/charlie/hft_platform/.env
+    - path: ./.env
       required: true
     environment:
     - SHIOAJI_API_KEY=${SHIOAJI_API_KEY}
@@ -275,27 +280,27 @@ services:
     volumes:
     - bind:
         create_host_path: true
-      source: /home/charlie/hft_platform/.wal
+      source: ./.wal
       target: /app/.wal
       type: bind
     - bind:
         create_host_path: true
-      source: /home/charlie/hft_platform/.state
+      source: ./.state
       target: /app/.state
       type: bind
     - bind:
         create_host_path: true
-      source: /home/charlie/hft_platform/data
+      source: ./data
       target: /app/data
       type: bind
     - bind:
         create_host_path: true
-      source: /home/charlie/hft_platform/.cores
+      source: ./.cores
       target: /var/cores
       type: bind
     - bind:
         create_host_path: true
-      source: /home/charlie/hft_platform/.hft-runtime
+      source: ./.hft-runtime
       target: /var/run/hft
       type: bind
   hft-bot:
@@ -303,7 +308,7 @@ services:
       args:
         BUILD_TS: ${HFT_BUILD_TS:-unknown}
         GIT_SHA: ${HFT_GIT_SHA:-unknown}
-      context: /home/charlie/hft_platform
+      context: .
       dockerfile: Dockerfile
     command:
     - sh
@@ -320,7 +325,7 @@ services:
           cpus: '0.5'
           memory: 256M
     env_file:
-    - path: /home/charlie/hft_platform/.env
+    - path: ./.env
       required: true
     environment:
     - HFT_TELEGRAM_BOT_TOKEN=${HFT_TELEGRAM_BOT_TOKEN:?HFT_TELEGRAM_BOT_TOKEN must be set}
@@ -348,27 +353,27 @@ services:
     volumes:
     - bind:
         create_host_path: true
-      source: /home/charlie/hft_platform/.wal
+      source: ./.wal
       target: /app/.wal
       type: bind
     - bind:
         create_host_path: true
-      source: /home/charlie/hft_platform/.state
+      source: ./.state
       target: /app/.state
       type: bind
     - bind:
         create_host_path: true
-      source: /home/charlie/hft_platform/data
+      source: ./data
       target: /app/data
       type: bind
     - bind:
         create_host_path: true
-      source: /home/charlie/hft_platform/.cores
+      source: ./.cores
       target: /var/cores
       type: bind
     - bind:
         create_host_path: true
-      source: /home/charlie/hft_platform/.hft-runtime
+      source: ./.hft-runtime
       target: /var/run/hft
       type: bind
   hft-engine:
@@ -376,7 +381,7 @@ services:
       args:
         BUILD_TS: ${HFT_BUILD_TS:-unknown}
         GIT_SHA: ${HFT_GIT_SHA:-unknown}
-      context: /home/charlie/hft_platform
+      context: .
       dockerfile: Dockerfile
     command:
     - sh
@@ -396,7 +401,7 @@ services:
           cpus: ${HFT_CPU_LIMIT:-2.0}
           memory: ${HFT_MEM_LIMIT:-4096M}
     env_file:
-    - path: /home/charlie/hft_platform/.env
+    - path: ./.env
       required: true
     environment:
     - SHIOAJI_API_KEY=${SHIOAJI_API_KEY}
@@ -523,17 +528,17 @@ services:
     volumes:
     - bind:
         create_host_path: true
-      source: /home/charlie/hft_platform/.wal
+      source: ./.wal
       target: /app/.wal
       type: bind
     - bind:
         create_host_path: true
-      source: /home/charlie/hft_platform/.state
+      source: ./.state
       target: /app/.state
       type: bind
     - bind:
         create_host_path: true
-      source: /home/charlie/hft_platform/data
+      source: ./data
       target: /app/data
       type: bind
     - bind:
@@ -544,18 +549,18 @@ services:
     - ${CA_CERT_DIR:-./certs}:/app/certs:ro
     - bind:
         create_host_path: true
-      source: /home/charlie/hft_platform/.cores
+      source: ./.cores
       target: /var/cores
       type: bind
     - bind:
         create_host_path: true
-      source: /home/charlie/hft_platform/.hft-runtime
+      source: ./.hft-runtime
       target: /var/run/hft
       type: bind
     - ${CH_BACKUP_PATH:-./backups/clickhouse}:/backups
     - bind:
         create_host_path: true
-      source: /home/charlie/hft_platform/outputs
+      source: ./outputs
       target: /app/outputs
       type: bind
   hft-monitor:
@@ -563,7 +568,7 @@ services:
       args:
         BUILD_TS: ${HFT_BUILD_TS:-unknown}
         GIT_SHA: ${HFT_GIT_SHA:-unknown}
-      context: /home/charlie/hft_platform
+      context: .
       dockerfile: Dockerfile
     command:
     - sh
@@ -583,7 +588,7 @@ services:
           cpus: '0.5'
           memory: 512M
     env_file:
-    - path: /home/charlie/hft_platform/.env
+    - path: ./.env
       required: true
     environment:
     - HFT_MONITOR_METRICS_URL=http://hft-engine:9090/metrics
@@ -620,27 +625,27 @@ services:
     volumes:
     - bind:
         create_host_path: true
-      source: /home/charlie/hft_platform/.wal
+      source: ./.wal
       target: /app/.wal
       type: bind
     - bind:
         create_host_path: true
-      source: /home/charlie/hft_platform/.state
+      source: ./.state
       target: /app/.state
       type: bind
     - bind:
         create_host_path: true
-      source: /home/charlie/hft_platform/data
+      source: ./data
       target: /app/data
       type: bind
     - bind:
         create_host_path: true
-      source: /home/charlie/hft_platform/.cores
+      source: ./.cores
       target: /var/cores
       type: bind
     - bind:
         create_host_path: true
-      source: /home/charlie/hft_platform/.hft-runtime
+      source: ./.hft-runtime
       target: /var/run/hft
       type: bind
   loki:
@@ -674,7 +679,7 @@ services:
     - bind:
         create_host_path: true
       read_only: true
-      source: /home/charlie/hft_platform/config/monitoring/loki.yml
+      source: ./config/monitoring/loki.yml
       target: /etc/loki/local-config.yaml
       type: bind
   node-exporter:
@@ -777,13 +782,13 @@ services:
     - bind:
         create_host_path: true
       read_only: true
-      source: /home/charlie/hft_platform/config/monitoring/prometheus.yml
+      source: ./config/monitoring/prometheus.yml
       target: /etc/prometheus/prometheus.yml
       type: bind
     - bind:
         create_host_path: true
       read_only: true
-      source: /home/charlie/hft_platform/config/monitoring/alerts
+      source: ./config/monitoring/alerts
       target: /etc/prometheus/alerts
       type: bind
     - source: prometheus_data
@@ -815,7 +820,7 @@ services:
     - bind:
         create_host_path: true
       read_only: true
-      source: /home/charlie/hft_platform/config/monitoring/promtail.yml
+      source: ./config/monitoring/promtail.yml
       target: /etc/promtail/config.yml
       type: bind
     - bind:
@@ -878,7 +883,7 @@ services:
       args:
         BUILD_TS: ${HFT_BUILD_TS:-unknown}
         GIT_SHA: ${HFT_GIT_SHA:-unknown}
-      context: /home/charlie/hft_platform
+      context: .
       dockerfile: Dockerfile
     command:
     - sh
@@ -895,7 +900,7 @@ services:
           cpus: '1.0'
           memory: 1G
     env_file:
-    - path: /home/charlie/hft_platform/.env
+    - path: ./.env
       required: true
     environment:
     - SHIOAJI_API_KEY=${SHIOAJI_API_KEY}
@@ -1013,27 +1018,27 @@ services:
     volumes:
     - bind:
         create_host_path: true
-      source: /home/charlie/hft_platform/.wal
+      source: ./.wal
       target: /app/.wal
       type: bind
     - bind:
         create_host_path: true
-      source: /home/charlie/hft_platform/.state
+      source: ./.state
       target: /app/.state
       type: bind
     - bind:
         create_host_path: true
-      source: /home/charlie/hft_platform/data
+      source: ./data
       target: /app/data
       type: bind
     - bind:
         create_host_path: true
-      source: /home/charlie/hft_platform/.cores
+      source: ./.cores
       target: /var/cores
       type: bind
     - bind:
         create_host_path: true
-      source: /home/charlie/hft_platform/.hft-runtime
+      source: ./.hft-runtime
       target: /var/run/hft
       type: bind
 volumes:

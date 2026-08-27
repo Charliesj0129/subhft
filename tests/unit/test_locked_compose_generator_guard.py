@@ -1,15 +1,17 @@
 """The locked-compose generator must produce a loadable, in-place artifact.
 
-Two properties of ``docker compose config --no-interpolate`` make the generated
-file wrong in ways that are invisible in a diff:
+Three properties of ``docker compose config`` make the generated file wrong in
+ways that are invisible in a diff:
 
 * the Compose project name is derived from the *directory name* and stamped
-  onto the default network and every named volume, and bind sources are
-  emitted as absolute paths -- so regenerating from a git worktree quietly
-  repoints production at empty volumes and different host directories;
-* a ``${VAR}``-sourced mount has no interpolated source to classify, so it is
-  rendered as long-syntax ``type: volume`` and Compose then rejects it as an
-  undefined named volume.
+  onto the default network and every named volume, so regenerating from a git
+  worktree quietly repoints production at empty volumes;
+* every host path is emitted absolute, so the artifact records the checkout
+  that produced it -- and a ``required`` ``env_file`` that does not exist on
+  the deploy host is a hard load failure, not a warning;
+* under ``--no-interpolate`` a ``${VAR}``-sourced mount has no interpolated
+  source to classify, so it is rendered as long-syntax ``type: volume`` and
+  Compose then rejects it as an undefined named volume.
 """
 
 from __future__ import annotations
@@ -85,49 +87,12 @@ def test_a_changed_project_name_refuses(generator: Any) -> None:
     assert "COMPOSE_PROJECT_NAME=hft_platform" in message
 
 
-def test_a_moved_bind_source_refuses(generator: Any) -> None:
-    _commit(generator, _compose(wal_source="/srv/hft/.wal"))
-    with pytest.raises(SystemExit) as excinfo:
-        generator._assert_matches_committed_identity(_compose(wal_source="/tmp/worktree/.wal"))
-    message = str(excinfo.value)
-    assert "/srv/hft/.wal" in message
-    assert "/tmp/worktree/.wal" in message
-    assert "hft-engine:/app/.wal" in message
-
-
-def test_a_newly_added_bind_mount_is_not_a_move(generator: Any) -> None:
-    """Adding a mount is the point of a regeneration; only repointing is not."""
-    _commit(generator, _compose())
-    candidate = _compose()
-    candidate["services"]["hft-engine"]["volumes"].append(
-        {"type": "bind", "source": "/srv/hft/outputs", "target": "/app/outputs"}
-    )
-    assert _permits(generator, candidate)
-
-
-def test_a_removed_bind_mount_is_not_a_move(generator: Any) -> None:
-    _commit(generator, _compose())
-    candidate = _compose()
-    candidate["services"]["hft-engine"]["volumes"] = [
-        v for v in candidate["services"]["hft-engine"]["volumes"] if v.get("type") != "bind"
-    ]
-    assert _permits(generator, candidate)
-
-
-def test_a_renamed_named_volume_is_not_read_as_a_bind_move(generator: Any) -> None:
-    """Named volumes carry the project prefix; only ``type: bind`` has a host path."""
-    _commit(generator, _compose())
-    candidate = _compose()
-    candidate["services"]["hft-engine"]["volumes"][1]["source"] = "ch_data_cold"
-    assert _permits(generator, candidate)
-
-
 def test_no_committed_file_is_a_first_generation(generator: Any) -> None:
     assert not generator.LOCKED_COMPOSE.exists()
     assert _permits(generator, _compose(name="anything"))
 
 
-def test_a_committed_file_without_a_project_name_only_checks_binds(generator: Any) -> None:
+def test_a_committed_file_without_a_project_name_is_permitted(generator: Any) -> None:
     """Older locked files predate ``name:``; that must not block a regeneration."""
     committed = _compose()
     del committed["name"]
@@ -216,3 +181,97 @@ def test_a_service_with_no_volumes_is_untouched(generator: Any) -> None:
     compose = {"services": {"hft-bot": {"image": "hft:latest"}}}
     assert generator._restore_parameterized_short_syntax(compose) == 0
     assert compose["services"]["hft-bot"] == {"image": "hft:latest"}
+
+
+# --------------------------------------------------------------------------
+# Relativization: the artifact must not name the checkout that generated it
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def rooted(generator: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
+    """``generator`` with its repo root pointed at a scratch checkout."""
+    monkeypatch.setattr(generator, "REPO_ROOT", tmp_path / "checkout")
+    return generator
+
+
+def _service(rooted: Any, **body: Any) -> dict[str, Any]:
+    return {"services": {"hft-engine": body}}
+
+
+def test_a_bind_source_inside_the_checkout_becomes_relative(rooted: Any) -> None:
+    compose = _service(rooted, volumes=[{"type": "bind", "source": f"{rooted.REPO_ROOT}/.wal", "target": "/app/.wal"}])
+    assert rooted._relativize_repo_paths(compose) == 1
+    assert compose["services"]["hft-engine"]["volumes"][0]["source"] == "./.wal"
+
+
+def test_an_env_file_inside_the_checkout_becomes_relative(rooted: Any) -> None:
+    compose = _service(rooted, env_file=[{"path": f"{rooted.REPO_ROOT}/.env", "required": True}])
+    assert rooted._relativize_repo_paths(compose) == 1
+    assert compose["services"]["hft-engine"]["env_file"][0]["path"] == "./.env"
+    # The requirement must survive: a missing .env has to stay a hard failure.
+    assert compose["services"]["hft-engine"]["env_file"][0]["required"] is True
+
+
+def test_a_string_env_file_inside_the_checkout_becomes_relative(rooted: Any) -> None:
+    compose = _service(rooted, env_file=f"{rooted.REPO_ROOT}/.env")
+    assert rooted._relativize_repo_paths(compose) == 1
+    assert compose["services"]["hft-engine"]["env_file"] == "./.env"
+
+
+def test_a_build_context_inside_the_checkout_becomes_relative(rooted: Any) -> None:
+    """``build.context`` is neither a volume nor an env file, and it leaked."""
+    compose = _service(rooted, build={"context": str(rooted.REPO_ROOT), "dockerfile": "Dockerfile"})
+    assert rooted._relativize_repo_paths(compose) == 1
+    assert compose["services"]["hft-engine"]["build"]["context"] == "."
+
+
+def test_a_host_path_outside_the_checkout_stays_absolute(rooted: Any) -> None:
+    """``/proc`` and the docker socket are real host locations, not ours."""
+    compose = _service(
+        rooted,
+        volumes=[
+            {"type": "bind", "source": "/proc", "target": "/host/proc"},
+            {"type": "bind", "source": "/var/run/docker.sock", "target": "/var/run/docker.sock"},
+        ],
+    )
+    assert rooted._relativize_repo_paths(compose) == 0
+    assert [v["source"] for v in compose["services"]["hft-engine"]["volumes"]] == ["/proc", "/var/run/docker.sock"]
+
+
+def test_a_parameterized_short_syntax_mount_is_left_alone(rooted: Any) -> None:
+    compose = _service(rooted, volumes=["${CH_DATA_HOT:-ch_data_hot}:/var/lib/clickhouse"])
+    assert rooted._relativize_repo_paths(compose) == 0
+    assert compose["services"]["hft-engine"]["volumes"] == ["${CH_DATA_HOT:-ch_data_hot}:/var/lib/clickhouse"]
+
+
+def test_a_named_volume_source_is_left_alone(rooted: Any) -> None:
+    compose = _service(rooted, volumes=[{"type": "volume", "source": "ch_metadata", "target": "/var/lib/clickhouse"}])
+    assert rooted._relativize_repo_paths(compose) == 0
+    assert compose["services"]["hft-engine"]["volumes"][0]["source"] == "ch_metadata"
+
+
+def test_a_relativized_compose_passes_the_leak_check(rooted: Any) -> None:
+    compose = _service(rooted, volumes=[{"type": "bind", "source": f"{rooted.REPO_ROOT}/data", "target": "/app/data"}])
+    rooted._relativize_repo_paths(compose)
+    assert rooted._generator_local_paths(compose) == []
+    rooted._assert_no_generator_local_paths(compose)  # therefore must not raise
+
+
+def test_a_checkout_path_under_a_field_the_rewrite_does_not_know_refuses(rooted: Any) -> None:
+    """The leak check walks blind so that a new path-valued key fails loudly.
+
+    This is how ``build.context`` was caught: the rewrite has to enumerate its
+    fields, so the check that the rewrite was complete must not.
+    """
+    compose = _service(rooted, some_future_key={"path": f"{rooted.REPO_ROOT}/secrets"})
+    assert rooted._relativize_repo_paths(compose) == 0
+    with pytest.raises(SystemExit) as excinfo:
+        rooted._assert_no_generator_local_paths(compose)
+    assert "some_future_key" in str(excinfo.value)
+
+
+def test_a_compose_with_no_checkout_paths_is_permitted(rooted: Any) -> None:
+    compose = _service(rooted, volumes=[{"type": "bind", "source": "./data", "target": "/app/data"}])
+    assert rooted._generator_local_paths(compose) == []
+    rooted._assert_no_generator_local_paths(compose)  # therefore must not raise
