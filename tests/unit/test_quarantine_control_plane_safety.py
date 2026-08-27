@@ -494,6 +494,63 @@ def test_a_filesystem_that_cannot_fsync_a_directory_is_still_usable(
     assert json.loads(target.read_text(encoding="utf-8"))["strategies"]["X"]["manual_rearm_required"] is True
 
 
+@pytest.mark.parametrize("errno_name", ["EBADF", "EACCES", "EPERM"])
+def test_an_errno_that_only_open_can_raise_is_not_tolerated_at_fsync(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, errno_name: str
+) -> None:
+    """These three say nothing about whether the rename reached the disk.
+
+    ``os.open`` and ``os.fsync`` fail for different reasons and shared one
+    errno set. ``EBADF`` on an fd this module opened four lines earlier is a bug
+    in this module; ``EACCES``/``EPERM`` are decided at open time, so seeing
+    them at fsync means the fd was taken away, not that the filesystem lacks
+    the feature. All three used to return normally -- which is this module
+    telling the caller the safety latch is durable.
+    """
+    import errno as errno_mod
+
+    from hft_platform.ops import runtime_state_store as store
+
+    real_fsync = os.fsync
+    err = getattr(errno_mod, errno_name)
+
+    def _fail_on_directory(fd: int) -> None:
+        if os.fstat(fd).st_mode & 0o040000:
+            raise OSError(err, errno_name)
+        real_fsync(fd)
+
+    monkeypatch.setattr(store.os, "fsync", _fail_on_directory)
+    with pytest.raises(OSError) as excinfo:
+        store._atomic_write(tmp_path / "runtime_state.json", {"strategies": {}})
+    assert excinfo.value.errno == err
+
+
+def test_a_directory_that_cannot_be_opened_for_fsync_is_still_usable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """EACCES from ``os.open`` is the one place it genuinely means "cannot".
+
+    A directory can be mode ``-wx``: writable and renameable into, not
+    readable. The write itself succeeded, so refusing here would make the
+    latch unwritable on a filesystem that can hold it perfectly well.
+    """
+    import errno as errno_mod
+
+    from hft_platform.ops import runtime_state_store as store
+
+    real_open = os.open
+
+    def _refuse_directory(path, flags, *args, **kwargs):  # type: ignore[no-untyped-def]
+        if os.path.isdir(path):
+            raise OSError(errno_mod.EACCES, "permission denied")
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(store.os, "open", _refuse_directory)
+    target = tmp_path / "runtime_state.json"
+    store._atomic_write(target, {"strategies": {"X": {"manual_rearm_required": True}}})
+    assert json.loads(target.read_text(encoding="utf-8"))["strategies"]["X"]["manual_rearm_required"] is True
+
+
 def test_a_stalled_durable_write_does_not_hold_the_strategy_consumer(rig: SimpleNamespace) -> None:
     """``quarantine_async`` is awaited by StrategyRunner's only bus consumer.
 
