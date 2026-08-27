@@ -71,6 +71,9 @@ class StartupPositionVerifier:
     ) -> None:
         self.client = client
         self.store = position_store
+        # Set when a valid checkpoint is read; ``_write_to_store`` uses it to
+        # bank the realized PnL no restored position ends up carrying.
+        self._ckpt_total_rpnl: int | None = None
 
         if blocking is not None:
             self.blocking = blocking
@@ -252,8 +255,13 @@ class StartupPositionVerifier:
                     peak_equity = int(ckpt_data.get("peak_equity_scaled") or 0)
                     total_rpnl = int(ckpt_data.get("total_realized_pnl_scaled") or 0)
                     if peak_equity or total_rpnl:
-                        self.store._peak_equity_scaled = peak_equity
-                        self.store._total_realized_pnl_scaled = total_rpnl
+                        self.store.restore_portfolio_aggregates(
+                            peak_equity_scaled=peak_equity,
+                            total_realized_pnl_scaled=total_rpnl,
+                        )
+                        # Positions are written later and will not account for
+                        # all of this total; _write_to_store rebanks the rest.
+                        self._ckpt_total_rpnl = total_rpnl
                         logger.info(
                             "position_recovery: portfolio aggregates restored",
                             peak_equity_scaled=peak_equity,
@@ -281,14 +289,17 @@ class StartupPositionVerifier:
 
         # 3. Determine source and act
         if ckpt_valid and broker_available:
-            return self._recover_dual(ckpt_positions, broker_map, account_id)
+            result = self._recover_dual(ckpt_positions, broker_map, account_id)
         elif broker_available:
-            return self._recover_broker_only(broker_map, account_id)
+            result = self._recover_broker_only(broker_map, account_id)
         elif ckpt_valid:
-            return self._recover_checkpoint_only(ckpt_positions, account_id)
+            result = self._recover_checkpoint_only(ckpt_positions, account_id)
         else:
             startup_recon_status.set(3)
-            return RecoveryResult(source="empty", halted=True)
+            result = RecoveryResult(source="empty", halted=True)
+
+        self._rebank_unaccounted_realized_pnl()
+        return result
 
     @staticmethod
     def _ckpt_date_within_tolerance(
@@ -607,3 +618,30 @@ class StartupPositionVerifier:
             )
             count += 1
         return count
+
+    def _rebank_unaccounted_realized_pnl(self) -> None:
+        """Make the store reproduce the checkpoint's total from what it holds.
+
+        Recovery reinstates fewer positions than the checkpoint recorded --
+        ``load_recovery`` drops flat entries, the broker-sourced paths replace
+        the checkpoint's positions -- so the realized PnL the survivors carry is
+        short of the total that was just restored. The first *opening* fill
+        recomputes the total from positions + recovery + bank and that shortfall
+        disappears, while ``_peak_equity_scaled`` keeps it: the difference is
+        reported as drawdown that never happened.
+
+        Called on every exit from ``recover``, including the halted ones. Those
+        leave the store holding restored aggregates and no positions at all,
+        which is the largest shortfall of the lot -- a halt that also leaves the
+        store internally inconsistent is not fail-closed.
+        """
+        ckpt_total = self._ckpt_total_rpnl
+        if ckpt_total is None:
+            return
+        banked = self.store.rebank_unaccounted_realized_pnl(ckpt_total)
+        if banked:
+            logger.info(
+                "position_recovery: unaccounted realized PnL banked",
+                banked_scaled=banked,
+                total_realized_pnl_scaled=ckpt_total,
+            )
