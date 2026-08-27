@@ -1,0 +1,41 @@
+name: Shioaji Release Watch
+
+# Nothing announces a new SinoPac SDK release on the lines dependabot ignores
+# (minor and major — see .github/dependabot.yml). This job is that announcement:
+# it reads PyPI and fails when a release newer than the pin has no captured API
+# surface in tests/golden/shioaji_sdk/, which is what `make shioaji-diff` needs
+# before anyone can call an upgrade SAFE or BLOCKED.
+#
+# Deliberately NOT wired to push/pull_request: it depends on the network and on
+# what SinoPac published this week, neither of which should ever be able to
+# redden someone's PR. A red run here is a prompt to assess, not a broken build.
+
+on:
+  schedule:
+    - cron: "0 7 * * 1" # Monday 07:00 UTC — SinoPac releases land ~00:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  watch:
+    name: Unassessed shioaji releases
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+
+      - uses: ./.github/actions/setup-python-uv
+
+      - name: Check PyPI for releases newer than the pin
+        run: make shioaji-watch
+
+      - name: What to do when this fails
+        if: failure()
+        run: |
+          echo "::notice::A shioaji release newer than the pin has no captured API surface."
+          echo "Capture and classify it locally (throwaway /tmp venvs, no broker login):"
+          echo "  make shioaji-surface VERSIONS='<versions>'"
+          echo "  make shioaji-diff"
+          echo "Then review docs/runbooks/shioaji-version-diff.md and decide."

@@ -1,0 +1,1041 @@
+{
+  "changes": [
+    {
+      "after": "calculated_index",
+      "before": null,
+      "classification": "ADDITIVE",
+      "enum": "QuoteType",
+      "kind": "enum_member_added",
+      "platform_used": false,
+      "qualname": "QuoteType.CalculatedIndex",
+      "remediation": "",
+      "section": "enum",
+      "shimmable": false
+    },
+    {
+      "after": "index_contribution",
+      "before": null,
+      "classification": "ADDITIVE",
+      "enum": "QuoteType",
+      "kind": "enum_member_added",
+      "platform_used": false,
+      "qualname": "QuoteType.IndexContribution",
+      "remediation": "",
+      "section": "enum",
+      "shimmable": false
+    },
+    {
+      "after": "industry_contribution",
+      "before": null,
+      "classification": "ADDITIVE",
+      "enum": "QuoteType",
+      "kind": "enum_member_added",
+      "platform_used": false,
+      "qualname": "QuoteType.IndustryContribution",
+      "remediation": "",
+      "section": "enum",
+      "shimmable": false
+    },
+    {
+      "after": "k_bar",
+      "before": null,
+      "classification": "ADDITIVE",
+      "enum": "QuoteType",
+      "kind": "enum_member_added",
+      "platform_used": false,
+      "qualname": "QuoteType.KBar",
+      "remediation": "",
+      "section": "enum",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": false,
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "bind"
+      },
+      "before": null,
+      "classification": "ADDITIVE",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "on_calculated_index",
+      "param": "bind",
+      "platform_used": false,
+      "qualname": "Shioaji.on_calculated_index(bind)",
+      "remediation": "",
+      "required": false,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": false,
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "bind"
+      },
+      "before": null,
+      "classification": "ADDITIVE",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "on_index_contribution",
+      "param": "bind",
+      "platform_used": false,
+      "qualname": "Shioaji.on_index_contribution(bind)",
+      "remediation": "",
+      "required": false,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": false,
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "bind"
+      },
+      "before": null,
+      "classification": "ADDITIVE",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "on_industry_contribution",
+      "param": "bind",
+      "platform_used": false,
+      "qualname": "Shioaji.on_industry_contribution(bind)",
+      "remediation": "",
+      "required": false,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": false,
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "bind"
+      },
+      "before": null,
+      "classification": "ADDITIVE",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "on_kbar",
+      "param": "bind",
+      "platform_used": false,
+      "qualname": "Shioaji.on_kbar(bind)",
+      "remediation": "",
+      "required": false,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": false,
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "bind"
+      },
+      "before": null,
+      "classification": "ADDITIVE",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "on_scanner",
+      "param": "bind",
+      "platform_used": false,
+      "qualname": "Shioaji.on_scanner(bind)",
+      "remediation": "",
+      "required": false,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": false,
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "bind"
+      },
+      "before": null,
+      "classification": "ADDITIVE",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "set_on_calculated_index_callback",
+      "param": "bind",
+      "platform_used": false,
+      "qualname": "Shioaji.set_on_calculated_index_callback(bind)",
+      "remediation": "",
+      "required": false,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": false,
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "bind"
+      },
+      "before": null,
+      "classification": "ADDITIVE",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "set_on_index_contribution_callback",
+      "param": "bind",
+      "platform_used": false,
+      "qualname": "Shioaji.set_on_index_contribution_callback(bind)",
+      "remediation": "",
+      "required": false,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": false,
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "bind"
+      },
+      "before": null,
+      "classification": "ADDITIVE",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "set_on_industry_contribution_callback",
+      "param": "bind",
+      "platform_used": false,
+      "qualname": "Shioaji.set_on_industry_contribution_callback(bind)",
+      "remediation": "",
+      "required": false,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": false,
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "bind"
+      },
+      "before": null,
+      "classification": "ADDITIVE",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "set_on_kbar_callback",
+      "param": "bind",
+      "platform_used": false,
+      "qualname": "Shioaji.set_on_kbar_callback(bind)",
+      "remediation": "",
+      "required": false,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": false,
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "bind"
+      },
+      "before": null,
+      "classification": "ADDITIVE",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "set_on_scanner_callback",
+      "param": "bind",
+      "platform_used": false,
+      "qualname": "Shioaji.set_on_scanner_callback(bind)",
+      "remediation": "",
+      "required": false,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": null,
+        "kind": "KEYWORD_ONLY",
+        "name": "ranking"
+      },
+      "before": null,
+      "classification": "ADDITIVE",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "subscribe",
+      "param": "ranking",
+      "platform_used": false,
+      "qualname": "Shioaji.subscribe(ranking)",
+      "remediation": "",
+      "required": false,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": null,
+        "kind": "KEYWORD_ONLY",
+        "name": "ranking"
+      },
+      "before": null,
+      "classification": "ADDITIVE",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "unsubscribe",
+      "param": "ranking",
+      "platform_used": false,
+      "qualname": "Shioaji.unsubscribe(ranking)",
+      "remediation": "",
+      "required": false,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": [
+        "CalculatedIndex",
+        "CalculatedIndexReceiver",
+        "ContributionRanking",
+        "IndexContribution",
+        "IndexContributionEntry",
+        "IndexContributionReceiver",
+        "IndustryContribution",
+        "IndustryContributionEntry",
+        "IndustryContributionReceiver",
+        "KBar",
+        "KBarReceiver",
+        "LimitScanner",
+        "LimitScannerExtra",
+        "PriceMoveExtra",
+        "PriceMoveScanner",
+        "ScannerGapEvent",
+        "ScannerGapSubscription",
+        "ScannerQuoteEvent",
+        "ScannerReceiver",
+        "ScannerSignalEvent",
+        "StreamScanner",
+        "VolumeBurstExtra",
+        "VolumeScanner"
+      ],
+      "before": [],
+      "classification": "INFORMATIONAL",
+      "kind": "compiled_attrs_changed",
+      "platform_used": false,
+      "qualname": "shioaji._core.module_attrs",
+      "remediation": "",
+      "section": "compiled",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_ONLY",
+        "name": "self"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "clear_on_calculated_index_callback",
+      "param": "self",
+      "platform_used": false,
+      "qualname": "Shioaji.clear_on_calculated_index_callback(self)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_ONLY",
+        "name": "self"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "clear_on_index_contribution_callback",
+      "param": "self",
+      "platform_used": false,
+      "qualname": "Shioaji.clear_on_index_contribution_callback(self)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_ONLY",
+        "name": "self"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "clear_on_industry_contribution_callback",
+      "param": "self",
+      "platform_used": false,
+      "qualname": "Shioaji.clear_on_industry_contribution_callback(self)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_ONLY",
+        "name": "self"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "clear_on_kbar_callback",
+      "param": "self",
+      "platform_used": false,
+      "qualname": "Shioaji.clear_on_kbar_callback(self)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_ONLY",
+        "name": "self"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "clear_on_scanner_callback",
+      "param": "self",
+      "platform_used": false,
+      "qualname": "Shioaji.clear_on_scanner_callback(self)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_ONLY",
+        "name": "self"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "get_calculated_index_receiver",
+      "param": "self",
+      "platform_used": false,
+      "qualname": "Shioaji.get_calculated_index_receiver(self)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_ONLY",
+        "name": "self"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "get_index_contribution_receiver",
+      "param": "self",
+      "platform_used": false,
+      "qualname": "Shioaji.get_index_contribution_receiver(self)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_ONLY",
+        "name": "self"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "get_industry_contribution_receiver",
+      "param": "self",
+      "platform_used": false,
+      "qualname": "Shioaji.get_industry_contribution_receiver(self)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_ONLY",
+        "name": "self"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "get_kbar_receiver",
+      "param": "self",
+      "platform_used": false,
+      "qualname": "Shioaji.get_kbar_receiver(self)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_ONLY",
+        "name": "self"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "get_scanner_receiver",
+      "param": "self",
+      "platform_used": false,
+      "qualname": "Shioaji.get_scanner_receiver(self)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_ONLY",
+        "name": "self"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "on_calculated_index",
+      "param": "self",
+      "platform_used": false,
+      "qualname": "Shioaji.on_calculated_index(self)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_ONLY",
+        "name": "self"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "on_index_contribution",
+      "param": "self",
+      "platform_used": false,
+      "qualname": "Shioaji.on_index_contribution(self)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_ONLY",
+        "name": "self"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "on_industry_contribution",
+      "param": "self",
+      "platform_used": false,
+      "qualname": "Shioaji.on_industry_contribution(self)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_ONLY",
+        "name": "self"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "on_kbar",
+      "param": "self",
+      "platform_used": false,
+      "qualname": "Shioaji.on_kbar(self)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_ONLY",
+        "name": "self"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "on_scanner",
+      "param": "self",
+      "platform_used": false,
+      "qualname": "Shioaji.on_scanner(self)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "callback"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "set_on_calculated_index_callback",
+      "param": "callback",
+      "platform_used": false,
+      "qualname": "Shioaji.set_on_calculated_index_callback(callback)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_ONLY",
+        "name": "self"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "set_on_calculated_index_callback",
+      "param": "self",
+      "platform_used": false,
+      "qualname": "Shioaji.set_on_calculated_index_callback(self)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "callback"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "set_on_index_contribution_callback",
+      "param": "callback",
+      "platform_used": false,
+      "qualname": "Shioaji.set_on_index_contribution_callback(callback)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_ONLY",
+        "name": "self"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "set_on_index_contribution_callback",
+      "param": "self",
+      "platform_used": false,
+      "qualname": "Shioaji.set_on_index_contribution_callback(self)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "callback"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "set_on_industry_contribution_callback",
+      "param": "callback",
+      "platform_used": false,
+      "qualname": "Shioaji.set_on_industry_contribution_callback(callback)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_ONLY",
+        "name": "self"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "set_on_industry_contribution_callback",
+      "param": "self",
+      "platform_used": false,
+      "qualname": "Shioaji.set_on_industry_contribution_callback(self)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "callback"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "set_on_kbar_callback",
+      "param": "callback",
+      "platform_used": false,
+      "qualname": "Shioaji.set_on_kbar_callback(callback)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_ONLY",
+        "name": "self"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "set_on_kbar_callback",
+      "param": "self",
+      "platform_used": false,
+      "qualname": "Shioaji.set_on_kbar_callback(self)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "callback"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "set_on_scanner_callback",
+      "param": "callback",
+      "platform_used": false,
+      "qualname": "Shioaji.set_on_scanner_callback(callback)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_ONLY",
+        "name": "self"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "set_on_scanner_callback",
+      "param": "self",
+      "platform_used": false,
+      "qualname": "Shioaji.set_on_scanner_callback(self)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "KEYWORD_ONLY",
+        "name": "exchange"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "subscribe_scanner",
+      "param": "exchange",
+      "platform_used": false,
+      "qualname": "Shioaji.subscribe_scanner(exchange)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "KEYWORD_ONLY",
+        "name": "region"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "subscribe_scanner",
+      "param": "region",
+      "platform_used": false,
+      "qualname": "Shioaji.subscribe_scanner(region)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "scanner"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "subscribe_scanner",
+      "param": "scanner",
+      "platform_used": false,
+      "qualname": "Shioaji.subscribe_scanner(scanner)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "KEYWORD_ONLY",
+        "name": "security_type"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "subscribe_scanner",
+      "param": "security_type",
+      "platform_used": false,
+      "qualname": "Shioaji.subscribe_scanner(security_type)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_ONLY",
+        "name": "self"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "subscribe_scanner",
+      "param": "self",
+      "platform_used": false,
+      "qualname": "Shioaji.subscribe_scanner(self)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "KEYWORD_ONLY",
+        "name": "exchange"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "unsubscribe_scanner",
+      "param": "exchange",
+      "platform_used": false,
+      "qualname": "Shioaji.unsubscribe_scanner(exchange)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "KEYWORD_ONLY",
+        "name": "region"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "unsubscribe_scanner",
+      "param": "region",
+      "platform_used": false,
+      "qualname": "Shioaji.unsubscribe_scanner(region)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "scanner"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "unsubscribe_scanner",
+      "param": "scanner",
+      "platform_used": false,
+      "qualname": "Shioaji.unsubscribe_scanner(scanner)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "KEYWORD_ONLY",
+        "name": "security_type"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "unsubscribe_scanner",
+      "param": "security_type",
+      "platform_used": false,
+      "qualname": "Shioaji.unsubscribe_scanner(security_type)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_ONLY",
+        "name": "self"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "unsubscribe_scanner",
+      "param": "self",
+      "platform_used": false,
+      "qualname": "Shioaji.unsubscribe_scanner(self)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    }
+  ],
+  "counts": {
+    "additive": 16,
+    "behavioral": 0,
+    "benign": 35,
+    "breaking_other": 0,
+    "breaking_platform": 0,
+    "informational": 1
+  },
+  "from": "1.7.0",
+  "from_sha256": "1188f5cd9e51bdd8d9abd755fe4a59c2d745a885d15d39843c2fc3e12d408882",
+  "generated_by": "scripts/shioaji_api_diff",
+  "to": "1.7.1",
+  "to_sha256": "3338f42f4d379e0093ffecb647e2c78db50d011f636c5dcc96c46de74bf5439b",
+  "verdict": "SAFE"
+}
