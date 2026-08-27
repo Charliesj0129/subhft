@@ -5,6 +5,7 @@ Subcommands:
   diff          Print a classified diff between two captured surfaces (JSON).
   report        Write machine diff JSON(s) + the Markdown runbook.
   guard-regen   Recapture the CURRENTLY-installed shioaji surface into its golden.
+  watch         List PyPI releases newer than the pin and flag unassessed ones.
 
 ``diff``/``report`` read only committed JSON (no venv, no network).
 """
@@ -18,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from . import report
+from . import watch as watch_mod
 from ._capture_entrypoint import build_surface_snapshot, canonical_json
 from .paths import DEFAULT_VERSIONS, GOLDEN_DIR, RUNBOOK_PATH
 
@@ -72,6 +74,24 @@ def _cmd_guard_regen(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_watch(args: argparse.Namespace) -> int:
+    """Report PyPI releases newer than the pin, and which lack a captured surface.
+
+    Exits non-zero when a newer release has no surface snapshot, so a scheduled
+    job can treat "a release nobody has looked at" as the failure condition.
+    ``--releases-json`` reads a saved PyPI payload instead of the network.
+    """
+    pin = watch_mod.read_pin()
+    if args.releases_json:
+        payload = json.loads(Path(args.releases_json).read_text(encoding="utf-8"))
+        versions = watch_mod.releases_from_payload(payload)
+    else:
+        versions = watch_mod.fetch_releases()
+    doc = watch_mod.build_report(pin, watch_mod.newer_releases(pin, versions))
+    sys.stdout.write(report.canonical_json(doc) if args.json else watch_mod.render_text(doc))
+    return 1 if doc["counts"]["unassessed"] and args.strict else 0
+
+
 def _consecutive_pairs(versions: list[str]) -> list[tuple[str, str]]:
     return [(versions[i], versions[i + 1]) for i in range(len(versions) - 1)]
 
@@ -108,6 +128,14 @@ def build_parser() -> argparse.ArgumentParser:
                        help="explicit FROM:TO pair (repeatable)")
     p_rep.add_argument("--date", default=None, help="snapshot date stamped in the runbook")
     p_rep.set_defaults(func=_cmd_report)
+
+    p_watch = sub.add_parser("watch", help="list PyPI releases newer than the pin")
+    p_watch.add_argument("--json", action="store_true", help="emit the machine report")
+    p_watch.add_argument("--releases-json", default=None,
+                         help="read a saved PyPI payload instead of calling the network")
+    p_watch.add_argument("--strict", action="store_true",
+                         help="exit 1 when a newer release has no captured surface")
+    p_watch.set_defaults(func=_cmd_watch)
 
     p_guard = sub.add_parser("guard-regen", help="recapture the installed surface into its golden")
     p_guard.set_defaults(func=_cmd_guard_regen)
