@@ -155,9 +155,7 @@ class TestBuildServiceGraph:
         assert registry.intent_channel is None
 
     @pytest.mark.usefixtures("_sim_env", "_mock_services")
-    def test_build_wires_startup_verifier_to_durable_checkpoint_default(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_build_wires_startup_verifier_to_durable_checkpoint_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # This test's subject is the *unset-env* default, so it has to opt out
         # of the autouse ``_isolate_execution_state_paths`` fixture that points
         # every other test's checkpoint into its tmp dir. Safe here: both the

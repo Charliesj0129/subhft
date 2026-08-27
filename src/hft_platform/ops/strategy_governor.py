@@ -156,6 +156,14 @@ class StrategyQuarantine:
     token: str = ""
 
 
+#: How long ``quarantine_async`` blocks the strategy consumer on the durable
+#: write before letting it finish in the background. Two orders of magnitude
+#: above a healthy write (two fsyncs) and an order of magnitude below
+#: ``locked_state``'s own two-second lock deadline, so a contended lock costs
+#: the bus 200 ms rather than 2 s.
+_PERSIST_WAIT_S = 0.2
+
+
 class StrategyHealthGovernor:
     def __init__(self, metrics=None, evidence_writer=None):
         self.metrics = metrics or MetricsRegistry.get()
@@ -231,6 +239,20 @@ class StrategyHealthGovernor:
         persist()
         return transition
 
+    def _log_persist_outcome(self, strategy_id: str, task: "asyncio.Future[None]") -> None:
+        """Report a durable-write failure that nobody is waiting on any more."""
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error(
+                "strategy_quarantine_persist_failed",
+                strategy_id=strategy_id,
+                error=str(exc),
+                error_type=type(exc).__name__,
+                consequence="latch held in memory only; a restart will not restore it",
+            )
+
     async def quarantine_async(self, strategy_id: str, *, reason: str) -> AutonomyTransition:
         """Latch the strategy now; write the durable record off the event loop.
 
@@ -242,12 +264,42 @@ class StrategyHealthGovernor:
         for up to two seconds -- against a 1 ms budget (``.agent/rules``
         ``01-core-laws.md``), and precisely while a strategy is failing.
 
-        The latch itself stays inline and immediate; only the write moves. It is
-        awaited rather than fired and forgotten, so a persistence failure still
-        surfaces to the caller instead of being discovered at the next restart.
+        The latch itself stays inline and immediate; only the write moves. Two
+        further properties matter, and neither is obvious:
+
+        **The wait is bounded.** ``to_thread`` keeps the loop runnable, but this
+        coroutine is awaited by ``StrategyRunner``'s *only* bus consumer, so
+        however long the write takes is time that consumer is not draining the
+        ring buffer -- for every strategy, not just the failing one. Waiting
+        ``_PERSIST_WAIT_S`` and then letting the write finish in the background
+        keeps the common case (a couple of fsyncs) fully reported while capping
+        the pathological one.
+
+        **It cannot raise into the dispatch path.** The call site is inside
+        ``process_event``'s ``except`` handler, and ``process_event`` is awaited
+        directly from ``async for event in self.bus.consume(...)``, which
+        catches only ``CancelledError``. An exception here would therefore not
+        merely fail the write -- it would tear down the strategy consumer and
+        stop *all* strategies from receiving events, turning a disk problem into
+        a total dispatch outage. The strategy is already latched and skipped in
+        memory by this point, so the honest failure mode is a loud log saying
+        the latch may not survive a restart.
         """
         transition, persist = self._latch_quarantine(strategy_id, reason=reason)
-        await asyncio.to_thread(persist)
+        task = asyncio.ensure_future(asyncio.to_thread(persist))
+        task.add_done_callback(lambda t: self._log_persist_outcome(strategy_id, t))
+        try:
+            # shield: the timeout must stop *waiting*, not abandon the write.
+            await asyncio.wait_for(asyncio.shield(task), _PERSIST_WAIT_S)
+        except (TimeoutError, asyncio.TimeoutError):
+            logger.error(
+                "strategy_quarantine_persist_slow",
+                strategy_id=strategy_id,
+                waited_s=_PERSIST_WAIT_S,
+                consequence="write continues in the background; dispatch resumed",
+            )
+        except Exception:  # noqa: BLE001 -- reported by _log_persist_outcome
+            pass
         return transition
 
     def is_quarantined(self, strategy_id: str) -> bool:

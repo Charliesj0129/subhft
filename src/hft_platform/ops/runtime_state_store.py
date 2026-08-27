@@ -21,6 +21,7 @@ replaced atomically underneath it.
 
 from __future__ import annotations
 
+import errno
 import fcntl
 import json
 import os
@@ -186,22 +187,39 @@ def _atomic_write(path: Path, state: dict[str, Any]) -> None:
         tmp_path.unlink(missing_ok=True)
 
 
+#: Errnos that mean "this filesystem does not do directory fsync", as opposed to
+#: "this write did not reach the disk". Only the first kind may be ignored --
+#: swallowing the second reports durability that was never achieved, and startup
+#: reads a missing latch as an all-clear.
+_FSYNC_UNSUPPORTED = frozenset(
+    errno_value
+    for errno_value in (
+        getattr(errno, name, None) for name in ("EINVAL", "EPERM", "EACCES", "ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EBADF")
+    )
+    if errno_value is not None
+)
+
+
 def _fsync_dir(directory: Path) -> None:
     """Flush the directory entry created by a rename.
 
-    Best-effort: some filesystems refuse ``O_RDONLY`` fsync on a directory, and
-    failing the whole write there would be worse than the durability it buys --
-    the payload is already fsynced and renamed, so the only thing at risk is the
-    rename surviving a crash in the next few seconds.
+    Tolerant of platforms that cannot do this at all -- some filesystems refuse
+    ``O_RDONLY`` fsync on a directory -- and intolerant of everything else. The
+    distinction is the whole point: an ``EIO`` here means the rename may not
+    have reached the disk, and returning normally from that would tell the
+    caller a safety latch is durable when it is not.
     """
     try:
         dir_fd = os.open(directory, os.O_RDONLY)
-    except OSError:
-        return
+    except OSError as exc:
+        if exc.errno in _FSYNC_UNSUPPORTED:
+            return
+        raise
     try:
         os.fsync(dir_fd)
-    except OSError:
-        pass
+    except OSError as exc:
+        if exc.errno not in _FSYNC_UNSUPPORTED:
+            raise
     finally:
         os.close(dir_fd)
 
