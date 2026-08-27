@@ -53,10 +53,31 @@ updates:
       # operator approval: 1.5.x replaced the SDK internals with a Rust `_core`
       # (see docs/runbooks/shioaji-version-diff.md) and every broker callback
       # payload type in feed_adapter/shioaji/ is written against that surface.
-      # The semver-major rule above does not cover it — 1.5.6 -> 1.7.2 is a
-      # minor bump — so #406 was opened and had to be closed by hand. Ignore
-      # the package outright; a deliberate bump is a hand-written PR that also
-      # regenerates the SDK surface golden (`make shioaji-surface-regen`).
+      # The semver-major rule above does not cover a new feature line — 1.5.6 ->
+      # 1.7.2 is a *minor* bump — which is why #406 was opened and had to be
+      # closed by hand. So minor and major are both ignored here.
+      #
+      # Patch bumps on the pinned line are deliberately NOT ignored. This entry
+      # used to read `dependency-name: "shioaji"` with no update-types, which is
+      # blunter than the reasoning above: it also suppressed same-minor fix
+      # releases, and those are exactly what a stabilization freeze wants to
+      # still let through. 1.5.7 ("recover exhausted Solace sessions", released
+      # 2026-08-13) went unannounced for two weeks because of it.
+      #
+      # A patch PR is safe to *receive* because it cannot land silently:
+      # tests/unit/feed_adapter/shioaji/test_sdk_surface_golden.py compares the
+      # installed SDK surface against its committed golden, so any bump turns
+      # the unit job red until someone runs `make shioaji-surface-regen` and
+      # reviews `make shioaji-diff`. The PR is the notification; the guard is
+      # what makes it a decision rather than a merge.
+      #
+      # Releases on other lines are surfaced by `make shioaji-watch` instead
+      # (scripts/shioaji_api_diff/watch.py), which reads PyPI directly and is
+      # not affected by anything in this file.
+      #
       # Security advisories still reach us through Dependabot alerts, which
       # this list does not suppress.
       - dependency-name: "shioaji"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"

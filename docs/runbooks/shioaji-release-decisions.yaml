@@ -1,0 +1,114 @@
+# Shioaji upgrade decisions
+# =========================
+#
+# One entry per published release newer than the pin. `make shioaji-watch`
+# reads this file and fails when a release has no decision here, or when a
+# deferral's `revisit_after` has passed. Capturing an API surface is evidence,
+# not a decision -- without this file the weekly watcher goes quiet the moment
+# somebody runs the capture command, which is not the same as somebody having
+# made a call.
+#
+# `pin` must equal the `shioaji==` requirement in pyproject.toml. Every verdict
+# below was reached relative to that pin, so if the pin moves, all of them are
+# void and this file has to be rewritten against the new one.
+#
+# Verdicts (scripts/shioaji_api_diff/decisions.py enforces every rule here):
+#   ADOPT    move the pin. Refused if the evidence diff names any change to a
+#            symbol the platform actually uses.
+#   DEFER    not now. MUST carry `revisit_after` -- a deferral with no expiry
+#            is indistinguishable from having forgotten.
+#   BLOCKED  the evidence diff names a platform-breaking change. MUST list the
+#            `blocking_symbols`, and each must appear in that diff.
+#
+# `evidence` must be the pin-to-candidate diff (diff_<pin>_to_<version>.json).
+# Consecutive hops do not describe the upgrade anyone would actually perform:
+# 1.7.2 -> 1.7.3 is SAFE on its own while 1.5.6 -> 1.7.3 is BLOCKED.
+#
+# Regenerate a missing diff from the committed surfaces (no network, no login):
+#   uv run python -m scripts.shioaji_api_diff diff --from 1.5.6 --to <version> \
+#     > tests/golden/shioaji_sdk/diff_1.5.6_to_<version>.json
+
+pin: "1.5.6"
+
+decisions:
+  - version: "1.5.7"
+    verdict: DEFER
+    decided_on: 2026-08-27
+    revisit_after: 2026-09-26
+    evidence: tests/golden/shioaji_sdk/diff_1.5.6_to_1.5.7.json
+    rationale: >
+      API-identical to the pin: the captured surface diff is empty in every
+      section. That is precisely why the diff cannot clear it -- 1.5.x is a
+      compiled Rust core, so a fix release changes behaviour without moving a
+      single Python symbol, and this tool can only see symbols. What is missing
+      is not evidence but a decision: whether to spend an HFT_MODE=sim soak on
+      it. Deferred until that call is made; the soak is the operator's to
+      authorise, not something a surface capture can substitute for.
+
+  - version: "1.7.0"
+    verdict: BLOCKED
+    decided_on: 2026-08-27
+    evidence: tests/golden/shioaji_sdk/diff_1.5.6_to_1.7.0.json
+    blocking_symbols:
+      - SecurityType.Future
+      - Shioaji.login(contracts_timeout)
+      - Shioaji.login(fetch_contract)
+    rationale: >
+      The release that introduces the whole 1.7.x break. Three symbols the
+      platform uses by name change: the SecurityType.Future enum member is
+      renamed to Futures, and login() drops both contracts_timeout and
+      fetch_contract. All three are shimmable in feed_adapter/shioaji/, but
+      none of that adapter work exists yet, and the platform is under a
+      stabilization freeze.
+
+  - version: "1.7.1"
+    verdict: BLOCKED
+    decided_on: 2026-08-27
+    evidence: tests/golden/shioaji_sdk/diff_1.5.6_to_1.7.1.json
+    blocking_symbols:
+      - SecurityType.Future
+      - Shioaji.login(contracts_timeout)
+      - Shioaji.login(fetch_contract)
+    rationale: >
+      Carries 1.7.0's three breaks forward unchanged. Its own hop from 1.7.0 is
+      SAFE and largely additive, which is exactly why the verdict has to rest on
+      the diff from the pin rather than on the release-to-release one.
+
+  - version: "1.7.2"
+    verdict: BLOCKED
+    decided_on: 2026-08-27
+    evidence: tests/golden/shioaji_sdk/diff_1.5.6_to_1.7.2.json
+    blocking_symbols:
+      - SecurityType.Future
+      - Shioaji.login(contracts_timeout)
+      - Shioaji.login(fetch_contract)
+    rationale: >
+      Same three breaks inherited from 1.7.0; nothing in this release removes or
+      restores any of them.
+
+  - version: "1.7.3"
+    verdict: BLOCKED
+    decided_on: 2026-08-27
+    evidence: tests/golden/shioaji_sdk/diff_1.5.6_to_1.7.3.json
+    blocking_symbols:
+      - SecurityType.Future
+      - Shioaji.login(contracts_timeout)
+      - Shioaji.login(fetch_contract)
+    rationale: >
+      Same three breaks. The combo-order and shortable-info features SinoPac
+      announced here are additive and would be genuinely useful, but they arrive
+      behind the 1.7.0 adapter work and cannot be taken separately.
+
+  - version: "1.7.4"
+    verdict: BLOCKED
+    decided_on: 2026-08-27
+    evidence: tests/golden/shioaji_sdk/diff_1.5.6_to_1.7.4.json
+    blocking_symbols:
+      - SecurityType.Future
+      - Shioaji.login(contracts_timeout)
+      - Shioaji.login(fetch_contract)
+    rationale: >
+      Head of the 1.7.x line as of this snapshot, and still the same three
+      breaks -- 31 additions and 55 benign changes accumulate on top of them.
+      When the adapter work is scheduled, this is the version to target: taking
+      1.7.0 first buys nothing, because the shim needed is identical.

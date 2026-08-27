@@ -261,3 +261,68 @@ class TestFuturesMultiplier:
         result = calc.calculate()
         # (110-100) * 5 * 1 * SCALE = 50 * SCALE = 500_000
         assert result["acc:strat:SYM"] == 10 * SCALE * 5
+
+
+class TestSnapshotCarriesCompleteness:
+    """A bare total cannot distinguish a flat book from an unpriced one.
+
+    ``calculate()`` skips any non-flat position whose mid is unavailable and
+    sums the rest, so an entirely unpriced book totals 0 -- the same number a
+    genuinely flat book produces. The daily-loss stop reads this number to
+    decide whether it may lift, so the difference is the difference between
+    "no loss" and "no idea". ``snapshot()`` carries the evidence.
+    """
+
+    def test_an_entirely_unpriced_book_is_not_reported_as_complete(self):
+        pos = Position("acc", "strat", "TMFI6")
+        pos.net_qty = 3
+        pos.avg_price_scaled = 100 * SCALE
+
+        store = _make_store_with_positions({"acc:strat:TMFI6": pos})
+        calc = MarkToMarketCalculator(store, _mid_prices({}))
+
+        snap = calc.snapshot()
+        assert snap.total_scaled == 0, "the skipped position leaves a 0 total"
+        assert snap.unpriced == 1
+        assert snap.complete is False, "0 here means unknown, not flat"
+
+    def test_a_flat_book_is_complete(self):
+        pos = Position("acc", "strat", "TMFI6")
+        pos.net_qty = 0
+        pos.avg_price_scaled = 100 * SCALE
+
+        store = _make_store_with_positions({"acc:strat:TMFI6": pos})
+        calc = MarkToMarketCalculator(store, _mid_prices({}))
+
+        snap = calc.snapshot()
+        assert snap.total_scaled == 0
+        assert snap.unpriced == 0
+        assert snap.complete is True
+
+    def test_one_unpriced_position_makes_a_partial_total_incomplete(self):
+        priced = Position("acc", "strat", "SYM1")
+        priced.net_qty = 10
+        priced.avg_price_scaled = 100 * SCALE
+        unpriced = Position("acc", "strat", "SYM2")
+        unpriced.net_qty = 4
+        unpriced.avg_price_scaled = 50 * SCALE
+
+        store = _make_store_with_positions({"acc:strat:SYM1": priced, "acc:strat:SYM2": unpriced})
+        calc = MarkToMarketCalculator(store, _mid_prices({"SYM1": 105 * SCALE}))
+
+        snap = calc.snapshot()
+        assert snap.total_scaled == 5 * SCALE * 10, "SYM1 still contributes"
+        assert snap.priced == 1
+        assert snap.unpriced == 1
+        assert snap.complete is False
+
+    def test_total_unrealized_pnl_still_returns_the_bare_total(self):
+        """The old API keeps its contract; it just cannot vouch for it."""
+        pos = Position("acc", "strat", "SYM1")
+        pos.net_qty = 10
+        pos.avg_price_scaled = 100 * SCALE
+
+        store = _make_store_with_positions({"acc:strat:SYM1": pos})
+        calc = MarkToMarketCalculator(store, _mid_prices({"SYM1": 105 * SCALE}))
+
+        assert calc.total_unrealized_pnl() == calc.snapshot().total_scaled

@@ -13,12 +13,11 @@ Skips cleanly if `docker` CLI is unavailable in the test env (CI-friendly).
 from __future__ import annotations
 
 import shutil
-import subprocess
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import pytest
-import yaml
 
 REPO_ROOT = Path(__file__).parent.parent.parent
 
@@ -26,8 +25,14 @@ REPO_ROOT = Path(__file__).parent.parent.parent
 _STRIPPED_TARGETS = frozenset({"/app/src", "/app/scripts", "/app/config"})
 
 _LOCKED_COMPOSE = REPO_ROOT / "docker-compose.prod.locked.yml"
-_BASE_COMPOSE = REPO_ROOT / "docker-compose.yml"
-_PROD_OVERLAY = REPO_ROOT / "docker-compose.production.yml"
+_LOCKED_NAME = _LOCKED_COMPOSE.name
+_BASE_NAME = "docker-compose.yml"
+_PROD_NAME = "docker-compose.production.yml"
+
+# ``compose_render`` (tests/integration/conftest.py) renders these from a scratch
+# copy with interpolation on. See that module for why neither file may be read
+# in place or with ``--no-interpolate``.
+Renderer = Callable[..., dict[str, Any]]
 
 # Properties we compare between locked and base+prod configs.
 _COMPARED_KEYS = (
@@ -52,40 +57,6 @@ def _docker_available() -> bool:
     return shutil.which("docker") is not None
 
 
-def _run_compose_config(files: list[Path], timeout: int = 60) -> dict[str, Any]:
-    """Run `docker compose config` and parse the YAML output.
-
-    Older docker compose plugin versions (e.g. some GitHub Actions runners
-    with the bundled v2.x plugin) fail to validate volume specs containing
-    ``${VAR:-default}`` substitutions under ``--no-interpolate`` (counted
-    as "too many colons"). Skip cleanly in that case rather than misreport
-    a failure on parity intent.
-    """
-    cmd = ["docker", "compose"]
-    for f in files:
-        cmd += ["-f", str(f)]
-    cmd += ["config", "--no-interpolate"]
-    result = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        cwd=str(REPO_ROOT),
-    )
-    if result.returncode != 0:
-        # Some older docker compose plugin versions reject ``${VAR:-default}``
-        # under ``--no-interpolate`` with "too many colons". Skip rather than
-        # misreport a parity failure caused by the CI tool, not the compose
-        # files.
-        if "too many colons" in result.stderr:
-            pytest.skip(
-                f"docker compose plugin in this env rejects parameterized volume "
-                f"specs under --no-interpolate; rc={result.returncode}"
-            )
-        pytest.fail(f"docker compose config failed (rc={result.returncode}):\n{result.stderr}")
-    return yaml.safe_load(result.stdout)
-
-
 def _vol_key(v: dict[str, Any]) -> tuple[str, str, bool, str]:
     return (
         str(v.get("source", "")),
@@ -105,13 +76,10 @@ def test_locked_compose_exists() -> None:
 
 
 @pytest.mark.skipif(not _docker_available(), reason="docker CLI not available in this environment")
-def test_service_properties_match_base_plus_prod() -> None:
+def test_service_properties_match_base_plus_prod(compose_render: Renderer) -> None:
     """Non-volume service properties must be identical in locked vs base+prod."""
-    if not _LOCKED_COMPOSE.exists():
-        pytest.skip("docker-compose.prod.locked.yml not generated yet")
-
-    locked = _run_compose_config([_LOCKED_COMPOSE])
-    base_prod = _run_compose_config([_BASE_COMPOSE, _PROD_OVERLAY])
+    locked = compose_render(_LOCKED_NAME)
+    base_prod = compose_render(_BASE_NAME, _PROD_NAME)
 
     locked_services: dict[str, Any] = locked.get("services", {})
     base_prod_services: dict[str, Any] = base_prod.get("services", {})
@@ -134,13 +102,17 @@ def test_service_properties_match_base_plus_prod() -> None:
 
 
 @pytest.mark.skipif(not _docker_available(), reason="docker CLI not available in this environment")
-def test_volumes_differ_only_on_source_paths() -> None:
-    """After removing stripped source-path entries, remaining volumes must match."""
-    if not _LOCKED_COMPOSE.exists():
-        pytest.skip("docker-compose.prod.locked.yml not generated yet")
+def test_volumes_differ_only_on_source_paths(compose_render: Renderer) -> None:
+    """After removing stripped source-path entries, remaining volumes must match.
 
-    locked = _run_compose_config([_LOCKED_COMPOSE])
-    base_prod = _run_compose_config([_BASE_COMPOSE, _PROD_OVERLAY])
+    Both sides are rendered from the same staging directory, so a host path is
+    identical on both or the artifact genuinely disagrees with base+prod. That
+    is only true because the locked file records paths relative to itself; while
+    it baked in absolute paths from the generating checkout, this comparison
+    could not be made from a git worktree at all.
+    """
+    locked = compose_render(_LOCKED_NAME)
+    base_prod = compose_render(_BASE_NAME, _PROD_NAME)
 
     locked_services: dict[str, Any] = locked.get("services", {})
     base_prod_services: dict[str, Any] = base_prod.get("services", {})
@@ -173,12 +145,9 @@ def test_volumes_differ_only_on_source_paths() -> None:
 
 
 @pytest.mark.skipif(not _docker_available(), reason="docker CLI not available in this environment")
-def test_no_source_bind_mounts_in_locked() -> None:
+def test_no_source_bind_mounts_in_locked(compose_render: Renderer) -> None:
     """The locked compose must contain zero broad source bind mounts."""
-    if not _LOCKED_COMPOSE.exists():
-        pytest.skip("docker-compose.prod.locked.yml not generated yet")
-
-    locked = _run_compose_config([_LOCKED_COMPOSE])
+    locked = compose_render(_LOCKED_NAME)
     locked_services: dict[str, Any] = locked.get("services", {})
 
     violations: list[str] = []
@@ -191,3 +160,29 @@ def test_no_source_bind_mounts_in_locked() -> None:
     assert not violations, "Locked compose contains broad source bind mounts that should be stripped:\n" + "\n".join(
         violations
     )
+
+
+@pytest.mark.skipif(not _docker_available(), reason="docker CLI not available in this environment")
+def test_locked_compose_loads_outside_the_checkout_that_generated_it(
+    compose_render: Renderer,
+) -> None:
+    """Compose must accept the locked file anywhere. Every check above is moot otherwise.
+
+    Two defects made this false for the whole life of the file, and neither was
+    visible to a check that read it with ``--no-interpolate``:
+
+    - a ``${VAR}``-sourced mount renders as long-syntax ``type: volume`` with
+      interpolation off, because there is no resolved source to classify as a
+      path; fed back to Compose that is a named-volume reference nothing
+      declares, and the file is rejected outright;
+    - ``docker compose config`` emits every host path absolute, so ``env_file``
+      and 35 bind sources named the checkout that generated the file. A
+      ``required`` ``env_file`` that does not exist on the deploy host is a hard
+      load failure.
+
+    Rendering from a scratch directory (``compose_render``) exercises both: the
+    file is parsed with interpolation, and from a directory that is not the one
+    it was generated in.
+    """
+    services = compose_render(_LOCKED_NAME).get("services") or {}
+    assert services, "the locked compose rendered with no services"

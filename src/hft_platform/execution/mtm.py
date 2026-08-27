@@ -8,7 +8,7 @@ uses scaled integers (x10000) — no float for financial values.
 from __future__ import annotations
 
 import threading
-from typing import Callable
+from typing import Callable, NamedTuple
 
 from prometheus_client import Gauge
 from structlog import get_logger
@@ -22,6 +22,30 @@ portfolio_unrealized_pnl = Gauge(
     "portfolio_unrealized_pnl",
     "Portfolio-level mark-to-market unrealized PnL (scaled int x10000)",
 )
+
+
+class MtMSnapshot(NamedTuple):
+    """A mark-to-market total that says how much of the book it actually covers.
+
+    ``calculate()`` skips any non-flat position whose mid-price is unavailable,
+    so a bare total cannot distinguish "the book is flat" from "nothing could be
+    priced" -- both are 0. A risk gate that reads the bare total therefore reads
+    missing market data as an absence of loss, which is the fail-open direction.
+
+    ``unpriced`` is the count of non-flat positions that had no mid. Callers
+    that use the total to *release* a stop must require ``complete``; callers
+    that use it to *apply* one may use the partial total, because latching on
+    partial data is the safe direction.
+    """
+
+    total_scaled: int
+    priced: int
+    unpriced: int
+
+    @property
+    def complete(self) -> bool:
+        """True when every non-flat position had a usable mid-price."""
+        return self.unpriced == 0
 
 
 class MarkToMarketCalculator:
@@ -89,7 +113,12 @@ class MarkToMarketCalculator:
         This removes the cross-thread torn-read race documented in the
         class docstring.
         """
+        return self._evaluate()[0]
+
+    def _evaluate(self) -> tuple[dict[str, int], int]:
+        """Single pass: per-position PnL, plus how many non-flat ones had no mid."""
         result: dict[str, int] = {}
+        unpriced = 0
         snapshot = self._position_store.snapshot_positions()
         with self._lock:
             for key, pos in snapshot.items():
@@ -99,6 +128,7 @@ class MarkToMarketCalculator:
 
                 mid = self._mid_price_fn(pos.symbol)
                 if mid is None:
+                    unpriced += 1
                     logger.warning(
                         "mid_price_unavailable",
                         symbol=pos.symbol,
@@ -109,18 +139,37 @@ class MarkToMarketCalculator:
                 multiplier = self._multiplier_fn(pos.symbol)
                 result[key] = self._unrealized(pos.net_qty, pos.avg_price_scaled, mid, multiplier)
 
-        return result
+        return result, unpriced
 
-    def total_unrealized_pnl(self) -> int:
-        """Portfolio-level sum of unrealized PnL (scaled int).
+    def snapshot(self) -> MtMSnapshot:
+        """Portfolio unrealized PnL together with how complete the valuation is.
+
+        Prefer this over ``total_unrealized_pnl()`` anywhere the number
+        authorizes something. See ``MtMSnapshot``.
+
+        One pass over one position snapshot: counting the unpriced positions
+        separately would read the store twice and could straddle a fill, so the
+        total and the completeness claim would not describe the same book.
 
         Updates the ``portfolio_unrealized_pnl`` Prometheus gauge as a
         side-effect.
         """
-        pnl_map = self.calculate()
+        pnl_map, unpriced = self._evaluate()
         total = sum(pnl_map.values())
         portfolio_unrealized_pnl.set(total)
-        return total
+        return MtMSnapshot(total_scaled=total, priced=len(pnl_map), unpriced=unpriced)
+
+    def total_unrealized_pnl(self) -> int:
+        """Portfolio-level sum of unrealized PnL (scaled int).
+
+        Carries no completeness information: an all-unpriced book and a flat
+        book both return 0. Use ``snapshot()`` when the caller acts on that
+        difference.
+
+        Updates the ``portfolio_unrealized_pnl`` Prometheus gauge as a
+        side-effect.
+        """
+        return self.snapshot().total_scaled
 
     # ------------------------------------------------------------------
     # Internal helpers
