@@ -161,7 +161,6 @@ class StrategyQuarantine:
 #: above a healthy write (two fsyncs) and an order of magnitude below
 #: ``locked_state``'s own two-second lock deadline, so a contended lock costs
 #: the bus 200 ms rather than 2 s.
-_PERSIST_WAIT_S = 0.2
 
 
 class StrategyHealthGovernor:
@@ -183,6 +182,14 @@ class StrategyHealthGovernor:
         # They carry that run's id, not ours, so ``owns_token`` cannot recognise
         # them by prefix. See its docstring.
         self._restored_tokens: set[str] = set()
+        #: Strong references to in-flight durable writes.
+        #: ``asyncio`` keeps only a weak reference to a running future, so a
+        #: fire-and-forget submission whose only other reference is a local
+        #: variable can be garbage-collected mid-write. This set is what makes
+        #: "the write continues in the background" true rather than merely
+        #: stated. Entries are discarded by the done callback, so it is bounded
+        #: by the number of writes actually in flight.
+        self._persist_tasks: set[asyncio.Future[Any]] = set()
 
     def _mint_token(self, strategy_id: str) -> str:
         """A token names one quarantine *instance*, unique within this process."""
@@ -293,13 +300,24 @@ class StrategyHealthGovernor:
         The latch itself stays inline and immediate; only the write moves. Two
         further properties matter, and neither is obvious:
 
-        **The wait is bounded.** ``to_thread`` keeps the loop runnable, but this
-        coroutine is awaited by ``StrategyRunner``'s *only* bus consumer, so
-        however long the write takes is time that consumer is not draining the
-        ring buffer -- for every strategy, not just the failing one. Waiting
-        ``_PERSIST_WAIT_S`` and then letting the write finish in the background
-        keeps the common case (a couple of fsyncs) fully reported while capping
-        the pathological one.
+        **Nothing waits for it.** An earlier version awaited the write for up
+        to 200 ms "so the common case is fully reported". That reasoning was
+        wrong twice over. This coroutine is awaited by ``StrategyRunner``'s
+        *only* bus consumer, so every millisecond spent here is a millisecond
+        the ``RingBufferBus`` is not drained -- for every strategy, not just the
+        failing one -- against a 1 ms budget (``.agent/rules/01-core-laws.md``).
+        And it bought nothing: ``transition`` is built by ``_latch_quarantine``
+        before the task exists, the caller reads only ``transition.reason``, and
+        ``_log_persist_outcome`` is a *done callback* that reports success or
+        failure whether or not anyone awaited. A wait that yields no information
+        and no ordering guarantee is pure dispatch latency.
+
+        **The task is held, not just launched.** ``asyncio`` keeps only a weak
+        reference to a running task. The old code's sole strong reference was
+        the local ``task`` variable, alive exactly as long as the await -- so
+        once the 200 ms timeout fired, the very write whose log line promised it
+        "continues in the background" was eligible for garbage collection.
+        ``_persist_tasks`` is the strong reference that makes that promise true.
 
         **It cannot raise into the dispatch path.** The call site is inside
         ``process_event``'s ``except`` handler, and ``process_event`` is awaited
@@ -312,20 +330,31 @@ class StrategyHealthGovernor:
         the latch may not survive a restart.
         """
         transition, persist = self._latch_quarantine(strategy_id, reason=reason)
-        task = asyncio.ensure_future(asyncio.to_thread(persist))
-        task.add_done_callback(lambda t: self._log_persist_outcome(strategy_id, t))
         try:
-            # shield: the timeout must stop *waiting*, not abandon the write.
-            await asyncio.wait_for(asyncio.shield(task), _PERSIST_WAIT_S)
-        except (TimeoutError, asyncio.TimeoutError):
+            # ``run_in_executor``, deliberately, not ``to_thread``:
+            # ``to_thread`` is a coroutine, so ``ensure_future`` only *schedules*
+            # the submission -- the work reaches the pool on the loop's next
+            # iteration. ``asyncio.run`` cancels every pending task before it
+            # joins the executor, so a quarantine raised as the last act before
+            # shutdown produced a cancelled task whose outcome was discarded by
+            # ``_log_persist_outcome``'s ``task.cancelled()`` guard: a failed
+            # write, reported to nobody. ``run_in_executor`` submits
+            # synchronously here and returns a Future rather than a Task, so
+            # the cancel-all does not reach it and the outcome survives.
+            task = asyncio.get_running_loop().run_in_executor(None, persist)
+        except RuntimeError:
+            # No running loop. The latch is already applied in memory, and
+            # raising here would tear down the bus consumer (see above), so the
+            # honest failure is a loud log, not an exception.
             logger.error(
-                "strategy_quarantine_persist_slow",
+                "strategy_quarantine_persist_not_scheduled",
                 strategy_id=strategy_id,
-                waited_s=_PERSIST_WAIT_S,
-                consequence="write continues in the background; dispatch resumed",
+                consequence="latch held in memory only; a restart will not restore it",
             )
-        except Exception:  # noqa: BLE001 -- reported by _log_persist_outcome
-            pass
+            return transition
+        self._persist_tasks.add(task)
+        task.add_done_callback(self._persist_tasks.discard)
+        task.add_done_callback(lambda t: self._log_persist_outcome(strategy_id, t))
         return transition
 
     def is_quarantined(self, strategy_id: str) -> bool:
