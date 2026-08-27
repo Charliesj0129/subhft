@@ -1248,17 +1248,40 @@ class HFTSystem:
                 drawdown_pct = self._get_drawdown_pct(self.position_store, self.settings)
                 if self._mtm_calculator is not None:
                     try:
-                        unrealized = self._mtm_calculator.total_unrealized_pnl()
+                        # snapshot() rather than total_unrealized_pnl(): the
+                        # bare total reports 0 both for a flat book and for a
+                        # book where nothing could be priced, and the daily
+                        # stop is allowed to lift only on the former.
+                        mtm = self._mtm_calculator.snapshot()
+                        unrealized = mtm.total_scaled
                         drawdown_pct = self._combine_drawdown_with_mtm(
                             realized_drawdown_pct=drawdown_pct,
                             unrealized_scaled=int(unrealized),
                             base_capital=int(self.settings.get("base_capital", 10_000_000)),
                         )
-                        self.risk_engine.update_unrealized_pnl(int(unrealized))
-                    except Exception:
-                        pass
+                        if not mtm.complete:
+                            logger.warning(
+                                "mark-to-market incomplete; daily stop cannot release",
+                                priced=mtm.priced,
+                                unpriced=mtm.unpriced,
+                            )
+                        self.risk_engine.update_unrealized_pnl(int(unrealized), complete=mtm.complete)
+                    except Exception as e:
+                        # Was a bare ``pass``. A mark-to-market that fails every
+                        # tick also starves the daily-loss reset, and silence
+                        # made that indistinguishable from a healthy engine.
+                        logger.warning("StormGuard mark-to-market update failed", error=str(e))
             except Exception as e:
                 logger.warning("StormGuard drawdown computation failed", error=str(e))
+
+            # The daily-loss reset boundary ticks regardless of the block above:
+            # it is what releases a latched daily-loss HALT, and both the
+            # drawdown read and the MtM read can fail for reasons that have
+            # nothing to do with the calendar.
+            try:
+                self.risk_engine.roll_daily_loss_boundary()
+            except Exception as e:
+                logger.warning("daily loss boundary roll failed", error=str(e))
 
             # 3. Latency input for StormGuard.
             latency_us = self._stormguard_latency_us(lag_s)
