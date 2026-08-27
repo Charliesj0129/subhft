@@ -263,3 +263,92 @@ def test_merging_a_recovery_position_does_not_double_count_the_bank(tmp_path: Pa
         f"the merge changed the portfolio total: {restarted._total_realized_pnl_scaled} != {total_before}"
     )
     assert restarted.get_drawdown_pct() == 0.0
+
+
+# ---------------------------------------------------------------------------
+# The two doors the first version of this fix left open (Codex review, 2026-08-27)
+# ---------------------------------------------------------------------------
+
+
+def test_clearing_a_recovery_position_banks_its_realized_pnl() -> None:
+    """``clear_symbol_positions`` banked live positions but plain-deleted recovery ones.
+
+    The asymmetry was invisible until rebanking made recovery entries load-bearing:
+    ``rebank_unaccounted_realized_pnl`` counts their realized PnL as *accounted*, so a
+    later reconciliation clear removed PnL that the bank had already declined to cover.
+    """
+    store = _store()
+    store.load_recovery(account_id="ACC", symbol="AAA", net_qty=1, avg_price_scaled=100, realized_pnl_scaled=500)
+
+    store.clear_symbol_positions("AAA")
+
+    assert store._evicted_realized_pnl_scaled == 500
+
+
+def test_a_reconciliation_clear_does_not_resurface_as_drawdown() -> None:
+    """Restore, clear a phantom, then trade: the total must survive all three."""
+    store = _store()
+    store.restore_portfolio_aggregates(peak_equity_scaled=100_000, total_realized_pnl_scaled=100_000)
+    store.load_recovery(account_id="ACC", symbol="AAA", net_qty=1, avg_price_scaled=100, realized_pnl_scaled=100_000)
+
+    store.clear_symbol_positions("AAA")
+    # An *opening* fill carries pnl_delta == 0 and so takes the full-recompute branch.
+    store.on_fill(_fill("BBB", Side.BUY, 1, 100, "bbb-open"))
+
+    assert store._total_realized_pnl_scaled == 100_000
+    assert store.get_drawdown_pct() == 0.0
+
+
+def test_clearing_a_live_and_a_recovery_position_banks_both() -> None:
+    store = _store()
+    _round_trip(store, "AAA", entry=100, exit_=200)  # a live position carrying realized PnL
+    store.load_recovery(account_id="ACC", symbol="AAA", net_qty=1, avg_price_scaled=100, realized_pnl_scaled=400)
+    live_pnl = sum(p.realized_pnl_scaled for p in store.positions.values() if p.symbol == "AAA")
+
+    store.clear_symbol_positions("AAA")
+
+    assert store._evicted_realized_pnl_scaled == live_pnl + 400
+
+
+def test_a_checkpoint_recording_zero_totals_is_still_restored(tmp_path: Path) -> None:
+    """peak=0 and total=0 is a valid record, not an absent one.
+
+    A retained position at +100000 against an evicted -100000 totals exactly zero.
+    Reading that zero as "this checkpoint has no aggregates" skipped the rebank, and
+    the next opening fill recomputed the total as the retained +100000 alone.
+    """
+    source = _store()
+    source.load_recovery(account_id="ACC", symbol="AAA", net_qty=1, avg_price_scaled=100, realized_pnl_scaled=100_000)
+    source._evicted_realized_pnl_scaled = -100_000
+    source._total_realized_pnl_scaled = 0
+    source._peak_equity_scaled = 0
+    path = tmp_path / "ckpt.json"
+    trading_date = _write_checkpoint(source, path)
+
+    restarted = _recover_from(path, trading_date)
+    restarted.on_fill(_fill("BBB", Side.BUY, 1, 100, "bbb-open"))
+
+    assert restarted._total_realized_pnl_scaled == 0
+    assert restarted._peak_equity_scaled == 0
+    assert restarted.get_drawdown_pct() == 0.0
+
+
+def test_a_checkpoint_with_no_aggregate_fields_at_all_is_left_alone(tmp_path: Path) -> None:
+    """A pre-M2 checkpoint has genuinely absent fields; it must not be rebanked to zero."""
+    source = _store()
+    _round_trip(source, "AAA", entry=100, exit_=200)
+    path = tmp_path / "ckpt.json"
+    trading_date = _write_checkpoint(source, path)
+
+    import json
+
+    payload = json.loads(path.read_text())
+    payload.pop("peak_equity_scaled", None)
+    payload.pop("total_realized_pnl_scaled", None)
+    path.write_text(json.dumps(payload))
+
+    restarted = _recover_from(path, trading_date)
+
+    # Nothing was restored, so nothing was rebanked -- the bank stays untouched
+    # rather than being forced to balance against a total that was never read.
+    assert restarted._evicted_realized_pnl_scaled == 0

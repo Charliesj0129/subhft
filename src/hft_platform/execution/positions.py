@@ -797,6 +797,15 @@ class PositionStore:
                 del self.positions[k]
             rkeys_to_remove = [rk for rk, rd in self._recovery_positions.items() if _recovery_matches(rd)]
             for rk in rkeys_to_remove:
+                # Bank it, exactly as the live-position branch above does. A
+                # recovery entry's realized PnL counts toward the portfolio total
+                # (_update_portfolio_aggregates sums positions + bank + recovery),
+                # so deleting one without banking deletes realized PnL from the
+                # account -- the same silent drop that turns a flat book into a
+                # false drawdown and HALTs StormGuard.
+                rdata = self._recovery_positions[rk]
+                if isinstance(rdata, dict):
+                    self._evicted_realized_pnl_scaled += int(rdata.get("realized_pnl_scaled", 0) or 0)
                 del self._recovery_positions[rk]
             # Same keys out of the Rust tracker, or the next fill resurrects the
             # phantom quantity this call exists to remove.

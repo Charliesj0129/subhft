@@ -252,9 +252,22 @@ class StartupPositionVerifier:
                     ckpt_positions = ckpt_data.get("positions", {})
                     # M2: Restore portfolio-level aggregates so StormGuard drawdown
                     # resumes from the correct high-watermark after crash recovery.
-                    peak_equity = int(ckpt_data.get("peak_equity_scaled") or 0)
-                    total_rpnl = int(ckpt_data.get("total_realized_pnl_scaled") or 0)
-                    if peak_equity or total_rpnl:
+                    #
+                    # Presence, not truthiness. A checkpoint recording peak=0 and
+                    # total=0 is a *valid* record, and it still needs rebanking
+                    # whenever the surviving positions do not themselves sum to
+                    # zero -- a retained position at +100000 against an evicted
+                    # -100000 totals zero, but restores as +100000 and inflates
+                    # peak by the same amount. Reading the checkpoint's own zero
+                    # as "no checkpoint aggregates" is what made that invisible;
+                    # only a genuinely absent field means a pre-M2 checkpoint.
+                    has_aggregates = (
+                        ckpt_data.get("peak_equity_scaled") is not None
+                        or ckpt_data.get("total_realized_pnl_scaled") is not None
+                    )
+                    if has_aggregates:
+                        peak_equity = int(ckpt_data.get("peak_equity_scaled") or 0)
+                        total_rpnl = int(ckpt_data.get("total_realized_pnl_scaled") or 0)
                         self.store.restore_portfolio_aggregates(
                             peak_equity_scaled=peak_equity,
                             total_realized_pnl_scaled=total_rpnl,
