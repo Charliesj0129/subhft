@@ -4,7 +4,7 @@
 -include .env
 export
 
-.PHONY: dev build-rust feature-parity test test-all test-integration verify-ce3 coverage coverage-html arch-gate dependency-boundary test-assertion-check test-name-check test-quality-pattern-check test-collection-check test-hygiene-check test-file test-node shioaji-surface shioaji-surface-regen shioaji-diff shioaji-guard lint lint-fix format format-check typecheck check latency-gate-ci benchmark benchmark-baseline benchmark-compare start start-engine start-monitor start-maintenance stop logs swarm-start swarm-stop swarm-logs clean clean-rust clean-all ci recorder-status wal-dlq-status wal-dlq-replay wal-dlq-replay-dry-run wal-manifest-tmp-cleanup drill-ck-down drill-wal-pressure drill-loader-lag wal-archive-cleanup soak-daily-report soak-weekly-report soak-canary-report deploy-drift-snapshot deploy-drift-check deploy-pre-sync-template release-channel-gate release-channel-promote release-converge-scan release-converge-clean release-converge release-converge-mvp release-first-ops-gate release-first-ops-promote release-readiness-check canary-snapshot canary-evaluate canary-auto reliability-monthly-pack roadmap-delivery-check roadmap-delivery-execute ch-query-guard-check ch-query-guard-run ch-query-guard-suite env-vars-guard feature-canary-report callback-latency-report incident-timeline history-repair research-init research-converge-tools research-clean research-audit research-audit-strict research-index research-optimize research research-run research-triage research-scaffold research-report research-fetch-paper research-search-papers research-paper-prototype research-record-paper research-summarize-paper research-check-paper-governance research-gen-synth-lob research-stamp-data-meta research-validate-data-meta research-export-l2-ticks research-validate-l2-ticks research-data-quality research-archive-sync research-hftbacktest monitor-remote experiment-gc experiment-gc-dry-run help rebuild-symbols-yaml pre-market-check post-market-check alert-test drill-recon-mismatch rollback-drill git-precheck git-postcheck git-session-check
+.PHONY: dev build-rust feature-parity test test-all test-integration verify-ce3 coverage coverage-html arch-gate dependency-boundary test-assertion-check test-name-check test-quality-pattern-check test-collection-check test-hygiene-check test-file test-node shioaji-surface shioaji-surface-regen shioaji-diff shioaji-guard shioaji-watch shioaji-decision-evidence lint lint-fix format format-check typecheck check latency-gate-ci benchmark benchmark-baseline benchmark-compare start start-engine start-monitor start-maintenance stop logs swarm-start swarm-stop swarm-logs clean clean-rust clean-all ci recorder-status wal-dlq-status wal-dlq-replay wal-dlq-replay-dry-run wal-manifest-tmp-cleanup drill-ck-down drill-wal-pressure drill-loader-lag wal-archive-cleanup soak-daily-report soak-weekly-report soak-canary-report deploy-drift-snapshot deploy-drift-check deploy-pre-sync-template release-channel-gate release-channel-promote release-converge-scan release-converge-clean release-converge release-converge-mvp release-first-ops-gate release-first-ops-promote release-readiness-check canary-snapshot canary-evaluate canary-auto reliability-monthly-pack roadmap-delivery-check roadmap-delivery-execute ch-query-guard-check ch-query-guard-run ch-query-guard-suite env-vars-guard feature-canary-report callback-latency-report incident-timeline history-repair research-init research-converge-tools research-clean research-audit research-audit-strict research-index research-optimize research research-run research-triage research-scaffold research-report research-fetch-paper research-search-papers research-paper-prototype research-record-paper research-summarize-paper research-check-paper-governance research-gen-synth-lob research-stamp-data-meta research-validate-data-meta research-export-l2-ticks research-validate-l2-ticks research-data-quality research-archive-sync research-hftbacktest monitor-remote experiment-gc experiment-gc-dry-run help rebuild-symbols-yaml pre-market-check post-market-check alert-test drill-recon-mismatch rollback-drill git-precheck git-postcheck git-session-check
 
 PY ?= uv run python
 
@@ -86,14 +86,24 @@ test-node: ## Run one pytest node without repository-wide coverage gate
 	@test -n "$(NODE)" || (echo "Usage: make test-node NODE=tests/unit/test_x.py::test_y" && exit 1)
 	uv run pytest --no-cov $(NODE) -q
 
+# VERSIONS is overridable because the hardcoded list is why this was never
+# re-run: `make shioaji-watch` prints the exact invocation for whatever is new.
+SHIOAJI_VERSIONS ?= 1.2.9 1.3.3 1.5.3 1.5.5 1.5.6 1.5.7 1.7.0 1.7.1 1.7.2 1.7.3 1.7.4
+
+shioaji-watch: ## List PyPI shioaji releases newer than the pin (exit 1 if any awaits a decision)
+	$(PY) -m scripts.shioaji_api_diff watch --strict
+
+shioaji-decision-evidence: ## Rebuild the pin-to-candidate diff each upgrade decision cites
+	$(PY) -m scripts.shioaji_api_diff decision-evidence
+
 shioaji-surface: ## Capture shioaji API surfaces across versions in throwaway /tmp venvs
-	$(PY) -m scripts.shioaji_api_diff orchestrate --versions 1.2.9 1.3.3 1.5.3 1.5.5 1.5.6 --jobs 5
+	$(PY) -m scripts.shioaji_api_diff orchestrate --versions $(or $(VERSIONS),$(SHIOAJI_VERSIONS)) --jobs 5
 
 shioaji-surface-regen: ## Recapture the CURRENTLY-installed shioaji surface into its golden
 	$(PY) -m scripts.shioaji_api_diff guard-regen
 
 shioaji-diff: ## Build machine diffs + the human runbook (docs/runbooks/shioaji-version-diff.md)
-	$(PY) -m scripts.shioaji_api_diff report --versions 1.2.9 1.3.3 1.5.3 1.5.5 1.5.6
+	$(PY) -m scripts.shioaji_api_diff report --versions $(or $(VERSIONS),$(SHIOAJI_VERSIONS))
 
 shioaji-guard: ## Run only the shioaji surface regression guard (no coverage gate)
 	uv run pytest --no-cov tests/unit/feed_adapter/shioaji/test_sdk_surface_golden.py -q
