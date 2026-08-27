@@ -7,8 +7,12 @@ from threading import Lock
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
+import structlog
+
 from hft_platform.core import timebase
 from hft_platform.ops.runtime_state_store import locked_state
+
+logger = structlog.get_logger(__name__)
 
 _TZ_TAIPEI = ZoneInfo("Asia/Taipei")
 
@@ -23,9 +27,10 @@ class AutonomyEvidenceWriter:
         self.base_dir = Path(base_dir) if base_dir is not None else DEFAULT_AUTONOMY_EVIDENCE_DIR
         self._trading_date: date | None = None
         self._on_transition_callbacks: list[Callable[[dict[str, Any]], None]] = []
-        # Guards the multi-file write in record_transition. Transitions are
-        # written from the event loop only, but this is cheap insurance for the
-        # shared singleton writer.
+        # Guards the multi-file write in record_transition. Since
+        # ``quarantine_async`` moved the durable write off the event loop this
+        # is load-bearing rather than insurance: the shared singleton writer is
+        # now reached from the loop, from executor threads, and from the CLI.
         self._transition_lock = Lock()
 
     def set_trading_date(self, d: date) -> None:
@@ -211,10 +216,38 @@ class AutonomyEvidenceWriter:
                         # Recovery: drop the flag AND the consumed request, so
                         # the same request can never be replayed against a later
                         # quarantine of the same strategy.
-                        strategies[strategy_id] = {
-                            "manual_rearm_required": False,
-                            "reason": None,
-                        }
+                        #
+                        # Clear only the latch this acknowledgement names. The
+                        # governor's token check guards one process's in-memory
+                        # state, and session ownership is advisory, so two
+                        # engines can overlap: an acknowledgement minted for
+                        # token T1 must not erase a T2 quarantine another
+                        # process persisted in between -- the next restart would
+                        # then hydrate nothing and resume a strategy no operator
+                        # authorized. The ``required`` branch above records the
+                        # token precisely so this branch can compare it, under
+                        # the same lock that is about to write.
+                        acked = metadata.get("quarantine_token")
+                        acked = acked if isinstance(acked, str) and acked else None
+                        persisted_entry = strategies.get(strategy_id)
+                        persisted = (
+                            persisted_entry.get("quarantine_token") if isinstance(persisted_entry, dict) else None
+                        )
+                        persisted = persisted if isinstance(persisted, str) and persisted else None
+                        # A latch with no persisted token predates tokens; refusing
+                        # there would make it permanently unclearable.
+                        if persisted is not None and acked != persisted:
+                            logger.warning(
+                                "stale_strategy_rearm_ack_ignored",
+                                strategy_id=strategy_id,
+                                acknowledged_token=acked,
+                                persisted_token=persisted,
+                            )
+                        else:
+                            strategies[strategy_id] = {
+                                "manual_rearm_required": False,
+                                "reason": None,
+                            }
 
     def _append_markdown(self, filename: str, line: str) -> None:
         path = self._ensure_session_dir() / filename

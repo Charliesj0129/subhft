@@ -1078,6 +1078,30 @@ class HFTSystem:
             logger.warning("manual_rearm_state_read_failed", error=str(exc))
             return None
 
+    def _retire_rearm_request(self, request: Any) -> bool:
+        """Delete one request, reporting failure instead of raising.
+
+        ``consume`` is one ``unlink``, but a read-only remount, a permission
+        change or a transient filesystem error makes it throw -- and nothing
+        between here and ``HFTSystem.run()`` catches it, so the supervisor would
+        die. The request survives the restart, so the next boot dies the same
+        way: a crash loop out of a control-plane housekeeping step.
+
+        Returning False leaves the quarantine latched and the request in place
+        for the next tick, which is the fail-closed direction.
+        """
+        try:
+            rearm_requests.consume(request)
+        except Exception as exc:  # noqa: BLE001 - a failed delete must not stop supervision
+            logger.error(
+                "strategy_rearm_request_delete_failed",
+                strategy_id=getattr(request, "strategy_id", None),
+                request_id=getattr(request, "request_id", None),
+                error=str(exc),
+            )
+            return False
+        return True
+
     def _consume_strategy_rearm_requests(self, state: dict | None = None) -> None:
         """Apply operator re-arm requests to the live governor.
 
@@ -1120,7 +1144,8 @@ class HFTSystem:
                 # engine restarted since the request was written (a strategy
                 # quarantine does not survive a restart). Retire the request so
                 # it cannot linger and cannot apply to some future quarantine.
-                rearm_requests.consume(request)
+                if not self._retire_rearm_request(request):
+                    continue
                 logger.warning(
                     "strategy_rearm_request_retired_no_live_quarantine",
                     strategy_id=request.strategy_id,
@@ -1130,7 +1155,8 @@ class HFTSystem:
             if live_token != request.quarantine_token:
                 # Authorizes a different quarantine instance than the live one.
                 # Retire it: the operator must look at the current failure.
-                rearm_requests.consume(request)
+                if not self._retire_rearm_request(request):
+                    continue
                 logger.warning(
                     "strategy_rearm_request_superseded",
                     strategy_id=request.strategy_id,
@@ -1142,7 +1168,10 @@ class HFTSystem:
             # Consume before applying. If the process dies between the two, the
             # strategy stays quarantined and the operator reissues -- the
             # fail-closed direction. Consuming after could replay the request.
-            rearm_requests.consume(request)
+            # A consume that *fails* must not be followed by the re-arm either,
+            # for the same reason: the request would still be on disk to replay.
+            if not self._retire_rearm_request(request):
+                continue
             if governor.rearm(
                 request.strategy_id,
                 expected_token=request.quarantine_token,

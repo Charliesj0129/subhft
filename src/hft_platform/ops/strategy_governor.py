@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import uuid
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from structlog import get_logger
 
@@ -175,7 +177,16 @@ class StrategyHealthGovernor:
         entry = self._quarantined.get(strategy_id)
         return entry.token if entry is not None else None
 
-    def quarantine(self, strategy_id: str, *, reason: str) -> AutonomyTransition:
+    def _latch_quarantine(self, strategy_id: str, *, reason: str) -> tuple[AutonomyTransition, Callable[[], None]]:
+        """Apply the in-memory latch; return it with the durable write deferred.
+
+        The split exists because the two halves have opposite constraints. The
+        latch has to be immediate -- it is what stops the strategy -- and costs
+        a dict write. The durable record has to be *serialized against other
+        processes*, so it goes through ``locked_state``, which polls ``flock``
+        and then reads and rewrites a JSON file. Doing that inline puts an
+        unbounded wait on whatever thread called ``quarantine``.
+        """
         from_mode = AutonomyMode.STRATEGY_QUARANTINED if strategy_id in self._quarantined else AutonomyMode.NORMAL
         transition = self._build_transition(from_mode=from_mode, reason=reason)
         token = self._mint_token(strategy_id)
@@ -188,15 +199,50 @@ class StrategyHealthGovernor:
         self._set_strategy_quarantine_active(strategy_id, active=True)
         self._set_strategy_scope_state()
         transition.record_transition(self.metrics)
-        if self.evidence_writer is not None:
-            self.evidence_writer.record_transition(
+        logger.warning("strategy_quarantined", strategy_id=strategy_id, reason=reason, quarantine_token=token)
+
+        writer = self.evidence_writer
+
+        def _persist() -> None:
+            if writer is None:
+                return
+            writer.record_transition(
                 scope="strategy",
                 mode=transition.to_mode.value,
                 reason=transition.reason,
                 manual_rearm_required=transition.manual_rearm_required,
                 metadata={"strategy_id": strategy_id, "quarantine_token": token},
             )
-        logger.warning("strategy_quarantined", strategy_id=strategy_id, reason=reason, quarantine_token=token)
+
+        return transition, _persist
+
+    def quarantine(self, strategy_id: str, *, reason: str) -> AutonomyTransition:
+        """Latch the strategy and persist the latch, synchronously.
+
+        For callers that are not on the event loop -- the CLI, tests, boot-time
+        paths. The trading loop must use :meth:`quarantine_async`.
+        """
+        transition, persist = self._latch_quarantine(strategy_id, reason=reason)
+        persist()
+        return transition
+
+    async def quarantine_async(self, strategy_id: str, *, reason: str) -> AutonomyTransition:
+        """Latch the strategy now; write the durable record off the event loop.
+
+        ``StrategyRunner.process_event`` quarantines from inside the dispatch
+        path, so the durable write ran on the event loop: ``locked_state`` polls
+        ``flock`` with ``time.sleep(0.01)`` up to a two-second deadline and then
+        reads and rewrites JSON. A CLI ``rearm-strategy`` or a second engine
+        holding that lock would therefore stall feed, risk and order processing
+        for up to two seconds -- against a 1 ms budget (``.agent/rules``
+        ``01-core-laws.md``), and precisely while a strategy is failing.
+
+        The latch itself stays inline and immediate; only the write moves. It is
+        awaited rather than fired and forgotten, so a persistence failure still
+        surfaces to the caller instead of being discovered at the next restart.
+        """
+        transition, persist = self._latch_quarantine(strategy_id, reason=reason)
+        await asyncio.to_thread(persist)
         return transition
 
     def is_quarantined(self, strategy_id: str) -> bool:
