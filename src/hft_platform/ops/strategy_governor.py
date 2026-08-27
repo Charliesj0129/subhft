@@ -179,6 +179,10 @@ class StrategyHealthGovernor:
         #: and a sequence number both repeat, so this is the only part carrying
         #: the non-collision guarantee.
         self._run_id: str = f"{os.getpid():d}-{uuid.uuid4().hex}"
+        # Tokens minted by an earlier run and adopted by ``restore_persisted_quarantines``.
+        # They carry that run's id, not ours, so ``owns_token`` cannot recognise
+        # them by prefix. See its docstring.
+        self._restored_tokens: set[str] = set()
 
     def _mint_token(self, strategy_id: str) -> str:
         """A token names one quarantine *instance*, unique within this process."""
@@ -189,6 +193,28 @@ class StrategyHealthGovernor:
         """Token of the strategy's live quarantine, or ``None`` if not quarantined."""
         entry = self._quarantined.get(strategy_id)
         return entry.token if entry is not None else None
+
+    def owns_token(self, token: str) -> bool:
+        """True when this engine could have issued ``token``.
+
+        ``_run_id`` is ``pid-uuid4``, so a token names not just a quarantine
+        instance but the engine run that minted it. That matters because the
+        re-arm request directory is shared state and the session-ownership
+        preflight is advisory -- ``build()`` continues past a conflicting owner
+        -- so two engines can legitimately be scanning the same directory.
+
+        The consumer retires (unlinks) any request whose token does not match
+        the live latch. Without this check, engine A retires a request that
+        names engine B's quarantine: B never sees it, and the operator's
+        authorization is destroyed by an engine that was never entitled to
+        judge it. The operator gets no error, because from A's side the request
+        looked stale.
+
+        Tokens restored from disk count as ours: the latch is this engine's now,
+        and if it is later cleared and re-quarantined, the older request must
+        still be retirable or it would linger with nothing able to match it.
+        """
+        return token.startswith(f"{self._run_id}:") or token in self._restored_tokens
 
     def _latch_quarantine(self, strategy_id: str, *, reason: str) -> tuple[AutonomyTransition, Callable[[], None]]:
         """Apply the in-memory latch; return it with the durable write deferred.
@@ -440,6 +466,7 @@ class StrategyHealthGovernor:
                 token=token,
             )
             self._set_strategy_quarantine_active(strategy_id, active=True)
+            self._restored_tokens.add(token)
             restored.append(strategy_id)
 
         self._set_strategy_scope_state()
@@ -563,6 +590,10 @@ class StrategyHealthGovernor:
                 token=persisted.token,
             )
             self._set_strategy_quarantine_active(strategy_id, active=True)
+            # Adopted from another engine's write: the token carries *its* run
+            # id, but the latch is ours to clear now, so a request naming it is
+            # ours to judge. See ``owns_token``.
+            self._restored_tokens.add(persisted.token)
             adopted.append(strategy_id)
         if adopted:
             self._set_strategy_scope_state()
