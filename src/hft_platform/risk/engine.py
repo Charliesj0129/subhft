@@ -1121,6 +1121,21 @@ class RiskEngine:
                 break
         self._check_daily_loss_halt()
 
+    def roll_daily_loss_boundary(self) -> None:
+        """Tick the daily-loss reset boundary and re-sync StormGuard's hold.
+
+        Called once per supervisor tick, independently of mark-to-market. The
+        reset is the only thing that releases a latched daily-loss HALT, so it
+        must not sit behind the MtM calculator existing and its last call
+        having succeeded -- that would put the release path behind failures
+        that have nothing to do with the calendar.
+        """
+        for v in self.validators:
+            if isinstance(v, DailyLossLimitValidator):
+                v.roll_daily_boundary()
+                break
+        self._sync_daily_loss_hold()
+
     def _sync_daily_loss_hold(self) -> None:
         """Mirror ``DailyLossLimitValidator.halt_triggered`` onto StormGuard.
 

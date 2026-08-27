@@ -1255,10 +1255,22 @@ class HFTSystem:
                             base_capital=int(self.settings.get("base_capital", 10_000_000)),
                         )
                         self.risk_engine.update_unrealized_pnl(int(unrealized))
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        # Was a bare ``pass``. A mark-to-market that fails every
+                        # tick also starves the daily-loss reset, and silence
+                        # made that indistinguishable from a healthy engine.
+                        logger.warning("StormGuard mark-to-market update failed", error=str(e))
             except Exception as e:
                 logger.warning("StormGuard drawdown computation failed", error=str(e))
+
+            # The daily-loss reset boundary ticks regardless of the block above:
+            # it is what releases a latched daily-loss HALT, and both the
+            # drawdown read and the MtM read can fail for reasons that have
+            # nothing to do with the calendar.
+            try:
+                self.risk_engine.roll_daily_loss_boundary()
+            except Exception as e:
+                logger.warning("daily loss boundary roll failed", error=str(e))
 
             # 3. Latency input for StormGuard.
             latency_us = self._stormguard_latency_us(lag_s)

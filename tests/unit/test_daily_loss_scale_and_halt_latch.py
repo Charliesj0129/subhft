@@ -20,6 +20,7 @@ Three defects, one chain, all reachable only once fills started recording again:
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
 from unittest import mock
 from unittest.mock import MagicMock
 
@@ -324,3 +325,145 @@ class TestRiskEngineKeepsTheHoldInSync:
 
         engine._check_daily_loss_halt()
         assert engine.storm_guard.daily_loss_hold is False
+
+
+# ---------------------------------------------------------------------------
+# 4. The latch must not gate its own release
+# ---------------------------------------------------------------------------
+
+
+def _at(iso_utc: str) -> int:
+    """Epoch-ns for a UTC timestamp, for driving the 21:00 UTC reset boundary."""
+    return int(datetime.fromisoformat(iso_utc).replace(tzinfo=timezone.utc).timestamp() * 1_000_000_000)
+
+
+# 2026-08-26 in production: the hard limit latched at 14:24:35Z and the engine
+# was still holding HALT at 09:32Z the following day, 12.5 hours after the
+# 21:00Z boundary that should have released it.
+_BEFORE_BOUNDARY = _at("2026-08-26T14:24:35")
+_AFTER_BOUNDARY = _at("2026-08-27T09:32:00")
+
+
+class TestTheDailyResetIsReachableWhileHalted:
+    """The 21:00 UTC reset is the only thing that clears ``halt_triggered``.
+
+    Every other caller of ``_maybe_reset()`` sits downstream of the HALT that
+    the latch is holding: ``check()`` needs an intent, and StormGuard HALT
+    rejects intents before the validator sees them; ``record_pnl()`` needs a
+    fill, and HALT blocks the orders that would produce one. That leaves the
+    supervisor's ``update_unrealized()`` tick as the sole live path -- and on
+    ``origin/main`` it reached the reset only through
+    ``if not self.halt_triggered``, so the latch gated its own release.
+
+    Measured on THESHOW 2026-08-27: 27 hours of HALT, ``execution_gateway_alive
+    0``, and ``stormguard_deescalation_blocked_daily_loss_hold`` logged once a
+    second with ``target_state: NORMAL`` -- StormGuard wanting to recover and
+    the validator never letting it. ``_force_reset()``, the manual clear the
+    docstrings pointed at, has no production caller at all.
+    """
+
+    def test_the_boundary_clears_the_latch_on_the_supervisor_tick(self):
+        v = _make_validator()
+        with mock.patch("hft_platform.core.timebase.now_ns", return_value=_BEFORE_BOUNDARY):
+            v.record_pnl("R47", _ntd(-5460))
+            v.update_unrealized(0)
+            assert v.halt_triggered is True
+
+        with mock.patch("hft_platform.core.timebase.now_ns", return_value=_AFTER_BOUNDARY):
+            v.update_unrealized(0)
+
+        assert v.halt_triggered is False
+        assert v._accumulated_loss == {}
+
+    def test_the_latch_survives_a_supervisor_tick_before_the_boundary(self):
+        v = _make_validator()
+        with mock.patch("hft_platform.core.timebase.now_ns", return_value=_BEFORE_BOUNDARY):
+            v.record_pnl("R47", _ntd(-5460))
+            v.update_unrealized(0)
+            assert v.halt_triggered is True
+
+            # Same trading day, an hour later: the stop is for the whole day.
+            v.update_unrealized(0)
+            assert v.halt_triggered is True
+
+    def test_a_fresh_loss_after_the_boundary_latches_again(self):
+        """The reset opens the new day; it does not disarm the limit."""
+        v = _make_validator()
+        with mock.patch("hft_platform.core.timebase.now_ns", return_value=_BEFORE_BOUNDARY):
+            v.record_pnl("R47", _ntd(-5460))
+            v.update_unrealized(0)
+
+        with mock.patch("hft_platform.core.timebase.now_ns", return_value=_AFTER_BOUNDARY):
+            v.update_unrealized(0)
+            assert v.halt_triggered is False
+
+            v.record_pnl("R47", _ntd(-5000))
+            v.update_unrealized(0)
+            assert v.halt_triggered is True
+
+    def test_the_boundary_releases_the_stormguard_hold_through_the_supervisor(self):
+        """End to end on the path production actually runs once a tick."""
+        from hft_platform.risk.engine import RiskEngine
+
+        v = _make_validator()
+        engine = RiskEngine.__new__(RiskEngine)
+        engine.validators = [v]
+        engine.storm_guard = _storm_guard()
+        engine._notification_dispatcher = None
+
+        with mock.patch("hft_platform.core.timebase.now_ns", return_value=_BEFORE_BOUNDARY):
+            v.record_pnl("R47", _ntd(-5460))
+            engine.update_unrealized_pnl(0)
+            assert engine.storm_guard.state == StormGuardState.HALT
+            assert engine.storm_guard.daily_loss_hold is True
+
+            # A day of clean ticks cannot talk StormGuard out of the hold.
+            for _ in range(30):
+                _clean_tick(engine.storm_guard)
+                engine.update_unrealized_pnl(0)
+            assert engine.storm_guard.state == StormGuardState.HALT
+
+        with mock.patch("hft_platform.core.timebase.now_ns", return_value=_AFTER_BOUNDARY):
+            engine.update_unrealized_pnl(0)
+            assert engine.storm_guard.daily_loss_hold is False
+            for _ in range(5):
+                _clean_tick(engine.storm_guard)
+
+        assert engine.storm_guard.state < StormGuardState.HALT
+
+    def test_the_boundary_ticks_even_when_mark_to_market_never_reports(self):
+        """The release path must not depend on the MtM calculator.
+
+        ``update_unrealized()`` is reached only when ``_mtm_calculator`` exists
+        and ``total_unrealized_pnl()`` returns; both failures used to be
+        swallowed by a bare ``except: pass``. A supervisor that never gets a
+        mark-to-market would otherwise hold a daily-loss HALT indefinitely.
+        """
+        from hft_platform.risk.engine import RiskEngine
+
+        v = _make_validator()
+        engine = RiskEngine.__new__(RiskEngine)
+        engine.validators = [v]
+        engine.storm_guard = _storm_guard()
+        engine._notification_dispatcher = None
+
+        with mock.patch("hft_platform.core.timebase.now_ns", return_value=_BEFORE_BOUNDARY):
+            v.record_pnl("R47", _ntd(-5460))
+            v.check(_make_intent())
+            engine._check_daily_loss_halt()
+            assert engine.storm_guard.daily_loss_hold is True
+
+        # No update_unrealized() anywhere: only the boundary tick runs.
+        with mock.patch("hft_platform.core.timebase.now_ns", return_value=_AFTER_BOUNDARY):
+            engine.roll_daily_loss_boundary()
+
+        assert v.halt_triggered is False
+        assert engine.storm_guard.daily_loss_hold is False
+
+    def test_the_boundary_tick_does_not_overwrite_unrealized_pnl(self):
+        """It ticks the calendar; it must not invent a PnL value."""
+        v = _make_validator()
+        with mock.patch("hft_platform.core.timebase.now_ns", return_value=_BEFORE_BOUNDARY):
+            v.update_unrealized(_ntd(-100))
+            v.roll_daily_boundary()
+            assert v._unrealized_pnl == _ntd(-100)

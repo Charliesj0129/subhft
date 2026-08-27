@@ -422,7 +422,9 @@ class DailyLossLimitValidator(RiskValidator):
         self._current_reset_boundary_ns: int = self._current_boundary_ns()
         # Platform-wide unrealized PnL (scaled int, updated externally)
         self._unrealized_pnl: int = 0
-        # Set to True when limit is breached; cleared only by _force_reset()
+        # Set to True when limit is breached. Cleared by the 21:00 UTC daily
+        # boundary in _maybe_reset(); _force_reset() is a test/manual override
+        # with no production caller, so it is not a recovery path.
         self.halt_triggered: bool = False
 
         self._derive_from_defaults()
@@ -512,6 +514,15 @@ class DailyLossLimitValidator(RiskValidator):
             self.soft_limit_active = False
             self._soft_limit_cooldown_until_ns = 0
 
+    def roll_daily_boundary(self) -> None:
+        """Apply the 05:00 TST reset if the boundary has passed.
+
+        Public because the supervisor has to tick the boundary without having
+        a PnL value to offer: calling ``update_unrealized(0)`` for that would
+        overwrite live unrealized PnL with a zero the caller does not know.
+        """
+        self._maybe_reset()
+
     def _force_reset(self) -> None:
         """Unconditionally clear all accumulated state (e.g. for testing or manual override)."""
         self._accumulated_loss.clear()
@@ -539,6 +550,16 @@ class DailyLossLimitValidator(RiskValidator):
             unrealized_scaled: Total unrealized PnL in scaled int (x10000).
                                Negative = unrealized loss; positive = unrealized gain.
         """
+        # The daily reset runs BEFORE the latch is consulted, because the latch
+        # gates every other way of reaching it. ``check()`` needs an intent and
+        # StormGuard HALT rejects intents upstream of the validator;
+        # ``record_pnl()`` needs a fill and HALT blocks the orders that make
+        # one. This supervisor tick is the only caller left, so reaching the
+        # reset through ``if not self.halt_triggered`` made the stop permanent:
+        # on THESHOW the hard limit latched 2026-08-26 14:24:35Z and HALT was
+        # still held at 09:32Z the next day, 12.5 h past the 21:00Z boundary,
+        # with the gateway down the whole time.
+        self._maybe_reset()
         self._unrealized_pnl = unrealized_scaled
         if not self.halt_triggered:
             self._evaluate_halt_from_unrealized()
