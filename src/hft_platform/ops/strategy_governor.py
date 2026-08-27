@@ -463,6 +463,60 @@ class StrategyHealthGovernor:
                 note="latch predates quarantine tokens; identity filled in so it can be re-armed",
             )
 
+    def reconcile_persisted_quarantines(self, snapshot: Any) -> list[str]:
+        """Adopt latches this process does not hold. Never touch one it does.
+
+        ``restore_persisted_quarantines`` reads once, at boot, and session
+        ownership is a non-blocking preflight -- so a previous engine that is
+        still alive can persist a quarantine a moment after that read. Nothing
+        looked at strategy latch state again: the supervisor tick only consumes
+        re-arm *request* files. The new engine therefore never learned about
+        that latch and kept dispatching the strategy, which is a fail-open on
+        the one piece of state that exists to stop it.
+
+        Strictly additive, and that is the whole difference from the boot
+        restore. The restore *replaces* the in-memory record, which is right
+        when nothing is in memory and wrong on a tick: ``quarantine_async``
+        applies the latch before its write lands, so a tick landing in that
+        window would overwrite the new token with the previous one still on
+        disk -- silently breaking the re-arm protocol the token exists for.
+
+        A tokenless legacy latch is skipped rather than minted here. Minting is
+        a *write*, the boot restore already owns that migration, and doing it on
+        a tick would race the other engine that is still writing this document.
+
+        Returns the strategy ids adopted, in sorted order.
+        """
+        latched = {sid: rec for sid, rec in parse_persisted_quarantines(snapshot).items() if rec is not None}
+        adopted: list[str] = []
+        for strategy_id in sorted(latched):
+            if strategy_id in self._quarantined:
+                continue
+            persisted = latched[strategy_id]
+            if persisted.token is None:
+                continue
+            transition = self._build_transition(
+                from_mode=AutonomyMode.STRATEGY_QUARANTINED,
+                reason=persisted.reason,
+            )
+            self._quarantined[strategy_id] = StrategyQuarantine(
+                strategy_id=strategy_id,
+                reason=persisted.reason,
+                transition=transition,
+                token=persisted.token,
+            )
+            self._set_strategy_quarantine_active(strategy_id, active=True)
+            adopted.append(strategy_id)
+        if adopted:
+            self._set_strategy_scope_state()
+            logger.warning(
+                "strategy_quarantines_adopted",
+                strategy_ids=adopted,
+                count=len(adopted),
+                note="written by another engine after this one restored at boot",
+            )
+        return adopted
+
     def rearm(self, strategy_id: str, *, expected_token: str, request_id: str | None = None) -> bool:
         """Clear one strategy's quarantine, and only the exact one authorized.
 

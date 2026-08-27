@@ -11,13 +11,20 @@ Each was raised by a Codex review of the re-arm work and reproduced here first:
 * the durable write ran on the event loop. ``locked_state`` polls ``flock`` with
   ``time.sleep`` up to a two-second deadline and then reads and rewrites JSON,
   so a CLI ``rearm-strategy`` holding that lock could stall feed, risk and order
-  processing for two seconds -- against a 1 ms budget, while a strategy failed.
+  processing for two seconds -- against a 1 ms budget, while a strategy failed;
+* that write was atomic but not *durable*: no ``fsync`` of the payload or of the
+  directory the rename creates an entry in. Startup reads an absent latch as an
+  all-clear, so a write lost to a host crash is an unauthenticated re-arm;
+* and the latch was read from disk exactly once, at boot. Another engine can
+  persist a quarantine a moment later -- session ownership is a non-blocking
+  preflight -- and nothing ever looked again, so the strategy kept trading.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import os
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -211,3 +218,134 @@ def test_a_failed_durable_write_surfaces_to_the_caller() -> None:
 
     # The in-memory latch still holds: the strategy is stopped either way.
     assert governor.is_quarantined(STRATEGY)
+
+
+# ---------------------------------------------------------------------------
+# The durable write must survive a crash, not just a concurrent reader
+# ---------------------------------------------------------------------------
+
+
+def test_the_payload_is_fsynced_before_the_rename(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``os.replace`` orders nothing against the disk; the fsync does."""
+    from hft_platform.ops import runtime_state_store
+
+    calls: list[str] = []
+    real_fsync = os.fsync
+    real_replace = Path.replace
+
+    def _fsync(fd: int) -> None:
+        calls.append("fsync")
+        real_fsync(fd)
+
+    def _replace(self: Path, target: Any) -> Path:
+        calls.append("replace")
+        return real_replace(self, target)
+
+    monkeypatch.setattr(runtime_state_store.os, "fsync", _fsync)
+    monkeypatch.setattr(Path, "replace", _replace)
+
+    runtime_state_store._atomic_write(tmp_path / "runtime_state.json", {"platform": {}, "strategies": {}})
+
+    assert calls[:2] == ["fsync", "replace"], f"payload was not durable before the rename: {calls}"
+
+
+def test_the_directory_entry_is_fsynced_after_the_rename(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The rename is directory metadata and needs its own flush."""
+    from hft_platform.ops import runtime_state_store
+
+    calls: list[str] = []
+    real_fsync = os.fsync
+    real_replace = Path.replace
+
+    def _fsync(fd: int) -> None:
+        calls.append("fsync")
+        real_fsync(fd)
+
+    def _replace(self: Path, target: Any) -> Path:
+        calls.append("replace")
+        return real_replace(self, target)
+
+    monkeypatch.setattr(runtime_state_store.os, "fsync", _fsync)
+    monkeypatch.setattr(Path, "replace", _replace)
+
+    runtime_state_store._atomic_write(tmp_path / "runtime_state.json", {"platform": {}, "strategies": {}})
+
+    assert calls == ["fsync", "replace", "fsync"], f"the rename was not flushed: {calls}"
+
+
+def test_a_directory_that_refuses_fsync_does_not_fail_the_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Some filesystems refuse it; losing the write would be the worse outcome."""
+    from hft_platform.ops import runtime_state_store
+
+    monkeypatch.setattr(runtime_state_store.os, "open", lambda *a, **k: (_ for _ in ()).throw(OSError("nope")))
+    path = tmp_path / "runtime_state.json"
+
+    runtime_state_store._atomic_write(path, {"platform": {}, "strategies": {}})
+
+    assert json.loads(path.read_text(encoding="utf-8"))["strategies"] == {}
+
+
+# ---------------------------------------------------------------------------
+# A latch written after boot must still be adopted
+# ---------------------------------------------------------------------------
+
+
+def _document(*, token: str | None, latched: bool = True) -> dict[str, Any]:
+    entry: dict[str, Any] = {"manual_rearm_required": latched, "reason": "written_elsewhere"}
+    if token is not None:
+        entry["quarantine_token"] = token
+    return {"platform": {"manual_rearm_required": False, "reason": None}, "strategies": {STRATEGY: entry}}
+
+
+def test_a_latch_written_after_boot_is_adopted_on_the_next_tick(rig: SimpleNamespace) -> None:
+    """The boot restore reads once; another live engine can write afterwards."""
+    assert not rig.governor.is_quarantined(STRATEGY)
+
+    adopted = rig.governor.reconcile_persisted_quarantines(_document(token="other-engine:1"))
+
+    assert adopted == [STRATEGY]
+    assert rig.governor.quarantine_token(STRATEGY) == "other-engine:1"
+
+
+def test_reconcile_does_not_overwrite_a_live_latch(rig: SimpleNamespace) -> None:
+    """``quarantine_async`` latches before its write lands.
+
+    A tick in that window sees the *previous* token on disk. Replacing the live
+    one with it would break the protocol the token exists for.
+    """
+    rig.governor.quarantine(STRATEGY, reason="local")
+    live_token = rig.governor.quarantine_token(STRATEGY)
+
+    adopted = rig.governor.reconcile_persisted_quarantines(_document(token="an-older-token"))
+
+    assert adopted == []
+    assert rig.governor.quarantine_token(STRATEGY) == live_token
+
+
+def test_a_tokenless_legacy_latch_is_not_adopted_on_a_tick(rig: SimpleNamespace) -> None:
+    """Minting an identity is a write, and the boot restore owns that migration."""
+    assert rig.governor.reconcile_persisted_quarantines(_document(token=None)) == []
+
+
+def test_a_cleared_entry_is_not_adopted(rig: SimpleNamespace) -> None:
+    assert rig.governor.reconcile_persisted_quarantines(_document(token="t", latched=False)) == []
+
+
+def test_an_unparseable_document_does_not_stop_supervision(
+    rig: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Boot is where an unreadable safety document fails closed, not a tick."""
+
+    def _explode(_snapshot: Any) -> list[str]:
+        raise ValueError("strategies section is corrupt")
+
+    monkeypatch.setattr(rig.governor, "reconcile_persisted_quarantines", _explode)
+    rig.governor.quarantine(STRATEGY, reason="handler_exception")
+    rig.gate.rearm_strategy(STRATEGY)
+
+    rig.system._consume_strategy_rearm_requests({"platform": {}, "strategies": {}})  # must not raise
+
+    # The tick adopted nothing, but everything after the reconcile still ran.
+    assert not rig.governor.is_quarantined(STRATEGY)

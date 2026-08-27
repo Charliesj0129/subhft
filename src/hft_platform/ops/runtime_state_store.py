@@ -108,8 +108,7 @@ def _assert_section_shapes(path: Path, raw: Any) -> None:
             # migration -- and reading it as absent releases exactly what the
             # section held: every strategy quarantine, or the platform HALT.
             raise RuntimeStateUnreadable(
-                f"{path} exists but has no {section!r} section; only a missing file proves "
-                "nothing was latched"
+                f"{path} exists but has no {section!r} section; only a missing file proves nothing was latched"
             )
         value = raw[section]
         if not isinstance(value, dict):
@@ -158,15 +157,53 @@ def read_state(path: Path) -> dict[str, Any]:
 
 
 def _atomic_write(path: Path, state: dict[str, Any]) -> None:
+    """Replace ``path`` with ``state``, atomically *and* durably.
+
+    ``os.replace`` alone is atomic against concurrent readers and says nothing
+    about power loss: the rename can reach the disk before the bytes it points
+    at, and the rename is itself directory metadata that may not be on disk at
+    all. This file is the record that decides whether a strategy comes back
+    quarantined, and startup reads an absent latch as an all-clear -- so a lost
+    write here is an unauthenticated re-arm, the exact failure this module
+    exists to prevent. Durability is not an optimisation to skip.
+
+    Three steps, in this order: fsync the payload, rename it into place, fsync
+    the directory that now names it. The cost is two fsyncs per write, which is
+    one of the reasons the quarantine path performs this off the event loop.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     # Writer-unique temp name: a shared `.tmp` means whichever process renames
     # second either moves the other's payload or fails with FileNotFoundError.
     tmp_path = path.with_suffix(f"{path.suffix}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
     try:
-        tmp_path.write_text(json.dumps(state, indent=2, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+        with open(tmp_path, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(state, indent=2, ensure_ascii=False, sort_keys=True))
+            handle.flush()
+            os.fsync(handle.fileno())
         tmp_path.replace(path)
+        _fsync_dir(path.parent)
     finally:
         tmp_path.unlink(missing_ok=True)
+
+
+def _fsync_dir(directory: Path) -> None:
+    """Flush the directory entry created by a rename.
+
+    Best-effort: some filesystems refuse ``O_RDONLY`` fsync on a directory, and
+    failing the whole write there would be worse than the durability it buys --
+    the payload is already fsynced and renamed, so the only thing at risk is the
+    rename surviving a crash in the next few seconds.
+    """
+    try:
+        dir_fd = os.open(directory, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(dir_fd)
+    except OSError:
+        pass
+    finally:
+        os.close(dir_fd)
 
 
 class RuntimeStateLockTimeout(TimeoutError):

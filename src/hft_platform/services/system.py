@@ -1121,10 +1121,10 @@ class HFTSystem:
         a deadline, a lock, or a consumed-id watermark -- a request is consumed
         by deleting it, so a replay is impossible because the request is gone.
 
-        ``state`` is accepted and ignored; it remains in the signature only so
-        the supervisor keeps its single shared read.
+        ``state`` is the supervisor's single shared read of the safety document.
+        It is used to converge on latches another engine may have persisted
+        after this one booted, before any request is applied.
         """
-        del state
         runner = getattr(self, "strategy_runner", None)
         governor = getattr(runner, "strategy_governor", None)
         if governor is None:
@@ -1132,6 +1132,16 @@ class HFTSystem:
         gate = getattr(self, "manual_rearm_gate", None)
         if gate is None:
             return
+        if state:
+            # Converge before consuming: a request in this same tick must be
+            # able to clear a latch adopted a few lines above it.
+            try:
+                governor.reconcile_persisted_quarantines(state)
+            except Exception as exc:
+                # A document this tick cannot parse must not stop supervision --
+                # the boot path is where an unreadable safety document fails
+                # closed. Here it means one tick adopts nothing.
+                logger.warning("strategy_quarantine_reconcile_failed", error=str(exc))
         try:
             requests = rearm_requests.pending(gate.state_path.parent)
         except Exception as exc:
