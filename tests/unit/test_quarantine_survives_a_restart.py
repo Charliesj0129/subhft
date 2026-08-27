@@ -551,6 +551,53 @@ def test_a_second_start_adopts_the_token_the_first_one_committed(tmp_path: Path)
     assert second.quarantine_token(_SID) == committed
 
 
+def test_the_adopting_start_still_owns_the_latch_it_adopted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Adopting the token is only half the migration.
+
+    The adopted token carries the *other* run's id, so ``owns_token``'s prefix
+    test rejects it -- and that test is what
+    ``HFTSystem._consume_strategy_rearm_requests`` uses to decide a request
+    belongs to a different engine. Registering the token was missed, so the
+    governor disowned its own live latch: every operator re-arm naming the disk
+    token was logged ``strategy_rearm_request_foreign_token`` and skipped, and
+    the strategy stayed quarantined with nothing able to clear it.
+
+    This is not hypothetical for the tokenless shape. The production document
+    on 2026-08-28 carried exactly it for ``R47_MAKER_TMF``, so this migration
+    path runs on the next boot.
+    """
+    state = tmp_path / "runtime_state.json"
+    legacy = _latched()
+    del legacy["strategies"][_SID]["quarantine_token"]
+    _write_state(state, legacy)
+
+    first = StrategyHealthGovernor()
+    first.restore_persisted_quarantines(state_path=state)
+    committed = first.quarantine_token(_SID)
+    assert committed
+
+    # The race, reproduced exactly. ``restore_persisted_quarantines`` re-reads
+    # the file even when handed a snapshot, so simply passing the tokenless
+    # document is NOT enough: the re-read finds the token ``first`` committed
+    # and takes the ordinary restore path, which registers the token by a
+    # different line and hides this defect completely. (Verified -- the first
+    # version of this test passed against the unfixed code.)
+    #
+    # The branch fires only when both reads still show tokenless and the write
+    # lands before this start takes the lock. Pinning the gate's snapshot to
+    # the tokenless document is that window, held open.
+    monkeypatch.setattr(ManualRearmGate, "snapshot", lambda self: legacy)
+    second = StrategyHealthGovernor()
+    second.restore_persisted_quarantines(snapshot=legacy, state_path=state)
+
+    live = second.quarantine_token(_SID)
+    assert live == committed, "the adopting start kept its own token"
+    assert second.owns_token(live), "the governor disowned the latch it is holding"
+    assert first.owns_token(committed), "the minting start must still own it too"
+
+
 @pytest.mark.parametrize("snapshot", [None, [], "latched", 3, {"strategies": None}])
 def test_a_malformed_supplied_snapshot_refuses(snapshot: object) -> None:
     """A directly supplied snapshot bypasses the strict file reader.

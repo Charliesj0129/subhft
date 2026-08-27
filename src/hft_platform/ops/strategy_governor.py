@@ -561,6 +561,21 @@ class StrategyHealthGovernor:
         for strategy_id, token in adopted.items():
             held = self._quarantined.get(strategy_id)
             if held is not None:
+                # Adopting the token is only half the migration. The adopted
+                # token carries the *other* run's id, so ``owns_token``'s prefix
+                # test rejects it -- and that test is what
+                # ``_consume_strategy_rearm_requests`` uses to decide a request
+                # is somebody else's. Without this the governor disowns its own
+                # live latch: every operator re-arm naming the disk token is
+                # logged as foreign and skipped, and the strategy stays
+                # quarantined with no way to clear it. Registering it here is
+                # the same move ``restore_persisted_quarantines`` makes for a
+                # token minted by a previous run.
+                self._restored_tokens.add(token)
+                # The token we minted and lost was never written to disk and
+                # never published, so nothing can name it; drop it so the set
+                # stays a description of tokens that actually exist.
+                self._restored_tokens.discard(held.token)
                 self._quarantined[strategy_id] = replace(held, token=token)
         if adopted:
             logger.warning(
