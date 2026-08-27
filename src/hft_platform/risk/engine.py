@@ -1124,11 +1124,17 @@ class RiskEngine:
     def roll_daily_loss_boundary(self) -> None:
         """Tick the daily-loss reset boundary and re-sync StormGuard's hold.
 
-        Called once per supervisor tick, independently of mark-to-market. The
-        reset is the only thing that releases a latched daily-loss HALT, so it
-        must not sit behind the MtM calculator existing and its last call
-        having succeeded -- that would put the release path behind failures
-        that have nothing to do with the calendar.
+        Called once per supervisor tick, independently of mark-to-market: the
+        boundary is a calendar fact and must not sit behind the MtM calculator
+        existing and its last call having succeeded, which is what made the
+        2026-08-26 stop permanent.
+
+        This does NOT by itself release a latched stop. The validator rolls the
+        calendar and keeps the stop until a fresh PnL snapshot arrives through
+        ``update_unrealized_pnl()`` -- see
+        ``DailyLossLimitValidator.roll_daily_boundary``. So a broken MtM leaves
+        the platform halted rather than trading on an unknown book, and a
+        working MtM releases on its next tick.
         """
         for v in self.validators:
             if isinstance(v, DailyLossLimitValidator):

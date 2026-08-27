@@ -341,7 +341,22 @@ def _at(iso_utc: str) -> int:
 # was still holding HALT at 09:32Z the following day, 12.5 hours after the
 # 21:00Z boundary that should have released it.
 _BEFORE_BOUNDARY = _at("2026-08-26T14:24:35")
+
 _AFTER_BOUNDARY = _at("2026-08-27T09:32:00")
+
+
+def _validator_at(ts_ns: int):
+    """Build a validator whose reset boundary is anchored at ``ts_ns``.
+
+    Construction reads the clock to seed ``_current_reset_boundary_ns``. A
+    validator built at the real "now" and then driven with a mocked past starts
+    with a boundary in its own future, so the very first mocked call looks like
+    a boundary *change* -- which is the backward-clock defect these tests now
+    guard against. They were leaning on it without saying so, and only said so
+    once the comparison became forward-only.
+    """
+    with mock.patch("hft_platform.core.timebase.now_ns", return_value=ts_ns):
+        return _make_validator()
 
 
 class TestTheDailyResetIsReachableWhileHalted:
@@ -363,7 +378,7 @@ class TestTheDailyResetIsReachableWhileHalted:
     """
 
     def test_the_boundary_clears_the_latch_on_the_supervisor_tick(self):
-        v = _make_validator()
+        v = _validator_at(_BEFORE_BOUNDARY)
         with mock.patch("hft_platform.core.timebase.now_ns", return_value=_BEFORE_BOUNDARY):
             v.record_pnl("R47", _ntd(-5460))
             v.update_unrealized(0)
@@ -376,7 +391,7 @@ class TestTheDailyResetIsReachableWhileHalted:
         assert v._accumulated_loss == {}
 
     def test_the_latch_survives_a_supervisor_tick_before_the_boundary(self):
-        v = _make_validator()
+        v = _validator_at(_BEFORE_BOUNDARY)
         with mock.patch("hft_platform.core.timebase.now_ns", return_value=_BEFORE_BOUNDARY):
             v.record_pnl("R47", _ntd(-5460))
             v.update_unrealized(0)
@@ -388,7 +403,7 @@ class TestTheDailyResetIsReachableWhileHalted:
 
     def test_a_fresh_loss_after_the_boundary_latches_again(self):
         """The reset opens the new day; it does not disarm the limit."""
-        v = _make_validator()
+        v = _validator_at(_BEFORE_BOUNDARY)
         with mock.patch("hft_platform.core.timebase.now_ns", return_value=_BEFORE_BOUNDARY):
             v.record_pnl("R47", _ntd(-5460))
             v.update_unrealized(0)
@@ -405,7 +420,7 @@ class TestTheDailyResetIsReachableWhileHalted:
         """End to end on the path production actually runs once a tick."""
         from hft_platform.risk.engine import RiskEngine
 
-        v = _make_validator()
+        v = _validator_at(_BEFORE_BOUNDARY)
         engine = RiskEngine.__new__(RiskEngine)
         engine.validators = [v]
         engine.storm_guard = _storm_guard()
@@ -431,17 +446,56 @@ class TestTheDailyResetIsReachableWhileHalted:
 
         assert engine.storm_guard.state < StormGuardState.HALT
 
-    def test_the_boundary_ticks_even_when_mark_to_market_never_reports(self):
-        """The release path must not depend on the MtM calculator.
+    def test_a_dead_mark_to_market_holds_the_stop_across_the_boundary(self):
+        """The calendar rolls; the authorization to trade does not follow it.
 
-        ``update_unrealized()`` is reached only when ``_mtm_calculator`` exists
-        and ``total_unrealized_pnl()`` returns; both failures used to be
-        swallowed by a bare ``except: pass``. A supervisor that never gets a
-        mark-to-market would otherwise hold a daily-loss HALT indefinitely.
+        This test asserted the opposite until 2026-08-27, when an adversarial
+        review pointed out what it was really encoding. The boundary tick was
+        added so a broken MtM could not hold the stop forever -- but written as
+        an unconditional release it did something worse: it reopened order flow
+        on a book nobody had measured. ``_unrealized_pnl`` was zeroed at the
+        boundary, so a dead MtM never refreshed it and the validator went on
+        believing the loss was 0.
+
+        Fail-closed direction: no PnL snapshot, no release.
         """
         from hft_platform.risk.engine import RiskEngine
 
-        v = _make_validator()
+        v = _validator_at(_BEFORE_BOUNDARY)
+        engine = RiskEngine.__new__(RiskEngine)
+        engine.validators = [v]
+        engine.storm_guard = _storm_guard()
+        engine._notification_dispatcher = None
+
+        with mock.patch("hft_platform.core.timebase.now_ns", return_value=_BEFORE_BOUNDARY):
+            v.record_pnl("R47", _ntd(-5460))
+            v.check(_make_intent())
+            engine._check_daily_loss_halt()
+            assert engine.storm_guard.daily_loss_hold is True
+            v.update_unrealized(_ntd(-1000))
+
+        # No update_unrealized() after the boundary: MtM is dead.
+        with mock.patch("hft_platform.core.timebase.now_ns", return_value=_AFTER_BOUNDARY):
+            engine.roll_daily_loss_boundary()
+            engine.roll_daily_loss_boundary()
+
+        assert v.halt_triggered is True, "a dead MtM must not buy a release"
+        assert engine.storm_guard.daily_loss_hold is True
+        # Yesterday's realized loss is gone -- that part IS a calendar fact.
+        assert v._accumulated_loss == {}
+        # The last measured exposure survives; zeroing it would fake a flat book.
+        assert v._unrealized_pnl == _ntd(-1000)
+
+    def test_the_stop_releases_on_the_first_fresh_pnl_after_the_boundary(self):
+        """The withheld release is deferred, not cancelled.
+
+        The 2026-08-26 outage was a stop that could never lift. Holding it for
+        a dead MtM must not recreate that: as soon as a real snapshot arrives,
+        the stop lifts on the same call.
+        """
+        from hft_platform.risk.engine import RiskEngine
+
+        v = _validator_at(_BEFORE_BOUNDARY)
         engine = RiskEngine.__new__(RiskEngine)
         engine.validators = [v]
         engine.storm_guard = _storm_guard()
@@ -453,16 +507,78 @@ class TestTheDailyResetIsReachableWhileHalted:
             engine._check_daily_loss_halt()
             assert engine.storm_guard.daily_loss_hold is True
 
-        # No update_unrealized() anywhere: only the boundary tick runs.
         with mock.patch("hft_platform.core.timebase.now_ns", return_value=_AFTER_BOUNDARY):
             engine.roll_daily_loss_boundary()
+            assert v.halt_triggered is True
+            # MtM comes back with a benign book.
+            engine.update_unrealized_pnl(_ntd(-10))
+            assert v.halt_triggered is False
+            engine.roll_daily_loss_boundary()
+
+        assert engine.storm_guard.daily_loss_hold is False
+
+    def test_a_fresh_pnl_still_over_the_limit_re_latches_instead_of_releasing(self):
+        """Releasing on evidence means the evidence gets to say no."""
+        v = _validator_at(_BEFORE_BOUNDARY)
+        with mock.patch("hft_platform.core.timebase.now_ns", return_value=_BEFORE_BOUNDARY):
+            v.record_pnl("R47", _ntd(-5460))
+            v.check(_make_intent())
+            assert v.halt_triggered is True
+
+        with mock.patch("hft_platform.core.timebase.now_ns", return_value=_AFTER_BOUNDARY):
+            v.roll_daily_boundary()
+            assert v.halt_triggered is True
+            # New day, empty accumulator, but the open book is already past the
+            # hard limit on its own.
+            v.update_unrealized(_ntd(-6000))
+
+        assert v.halt_triggered is True
+        assert v._halt_release_pending is False
+
+    def test_a_backward_clock_across_the_boundary_does_not_clear_the_stop(self):
+        """``now_ns()`` is the wall clock, so it can go backwards.
+
+        ``timebase.now_ns()`` is ``time.time_ns()``. An NTP correction or a
+        manual clock set can move it back across 21:00 UTC. The boundary
+        comparison was ``!=``, which reads any change as a new trading day --
+        so a clock correction could clear a latched financial stop without a
+        day ever passing. Forward-only is the fail-closed direction.
+        """
+        v = _validator_at(_AFTER_BOUNDARY)
+        with mock.patch("hft_platform.core.timebase.now_ns", return_value=_AFTER_BOUNDARY):
+            v.record_pnl("R47", _ntd(-5460))
+            v.check(_make_intent())
+            assert v.halt_triggered is True
+            boundary_before = v._current_reset_boundary_ns
+
+        # Clock corrected backwards, across the boundary, to the previous day.
+        with mock.patch("hft_platform.core.timebase.now_ns", return_value=_BEFORE_BOUNDARY):
+            v.update_unrealized(0)
+            v.roll_daily_boundary()
+            v.check(_make_intent())
+
+        assert v.halt_triggered is True, "a backward clock is not a new trading day"
+        assert v._accumulated_loss != {}
+        assert v._current_reset_boundary_ns == boundary_before
+
+    def test_a_forward_jump_of_several_days_resets_once(self):
+        """Forward-only must not mean once-per-day-only."""
+        v = _validator_at(_BEFORE_BOUNDARY)
+        with mock.patch("hft_platform.core.timebase.now_ns", return_value=_BEFORE_BOUNDARY):
+            v.record_pnl("R47", _ntd(-5460))
+            v.check(_make_intent())
+            assert v.halt_triggered is True
+
+        three_days_on = _AFTER_BOUNDARY + 3 * 86_400 * 1_000_000_000
+        with mock.patch("hft_platform.core.timebase.now_ns", return_value=three_days_on):
+            v.update_unrealized(_ntd(-10))
 
         assert v.halt_triggered is False
-        assert engine.storm_guard.daily_loss_hold is False
+        assert v._accumulated_loss == {}
 
     def test_the_boundary_tick_does_not_overwrite_unrealized_pnl(self):
         """It ticks the calendar; it must not invent a PnL value."""
-        v = _make_validator()
+        v = _validator_at(_BEFORE_BOUNDARY)
         with mock.patch("hft_platform.core.timebase.now_ns", return_value=_BEFORE_BOUNDARY):
             v.update_unrealized(_ntd(-100))
             v.roll_daily_boundary()
