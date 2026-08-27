@@ -5,7 +5,8 @@ Subcommands:
   diff          Print a classified diff between two captured surfaces (JSON).
   report        Write machine diff JSON(s) + the Markdown runbook.
   guard-regen   Recapture the CURRENTLY-installed shioaji surface into its golden.
-  watch         List PyPI releases newer than the pin and flag unassessed ones.
+  watch         List PyPI releases newer than the pin, with the decision recorded for each.
+  decision-evidence  Rebuild the pin-to-candidate diff every ledger entry cites.
 
 ``diff``/``report`` read only committed JSON (no venv, no network).
 """
@@ -18,6 +19,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from . import decisions as decisions_mod
 from . import report
 from . import watch as watch_mod
 from ._capture_entrypoint import build_surface_snapshot, canonical_json
@@ -38,13 +40,13 @@ def _write(path: Path, text: str) -> None:
 
 def _cmd_orchestrate(args: argparse.Namespace) -> int:
     from .orchestrator import orchestrate
+
     orchestrate(args.versions, refresh=args.refresh, keep_venv=args.keep_venv, jobs=args.jobs)
     return 0
 
 
 def _cmd_diff(args: argparse.Namespace) -> int:
-    doc = report.build_diff_doc(args.from_v, args.to_v,
-                                _load_surface(args.from_v), _load_surface(args.to_v))
+    doc = report.build_diff_doc(args.from_v, args.to_v, _load_surface(args.from_v), _load_surface(args.to_v))
     sys.stdout.write(report.canonical_json(doc))
     return 0
 
@@ -75,21 +77,50 @@ def _cmd_guard_regen(args: argparse.Namespace) -> int:
 
 
 def _cmd_watch(args: argparse.Namespace) -> int:
-    """Report PyPI releases newer than the pin, and which lack a captured surface.
+    """Report PyPI releases newer than the pin and what was decided about each.
 
-    Exits non-zero when a newer release has no surface snapshot, so a scheduled
-    job can treat "a release nobody has looked at" as the failure condition.
-    ``--releases-json`` reads a saved PyPI payload instead of the network.
+    Exits non-zero under ``--strict`` when any release still needs attention:
+    no captured surface, no recorded decision, or a deferral that has come due.
+    A scheduled job uses that as its failure condition. ``--releases-json``
+    reads a saved PyPI payload instead of the network.
     """
     pin = watch_mod.read_pin()
+    ledger_pin, decisions = decisions_mod.load_decisions(args.ledger)
+    if ledger_pin != pin:
+        # Every verdict in the ledger was reached relative to ledger_pin. If the
+        # requirement moved, none of them describe the upgrade in front of us --
+        # and silently reporting them against the new pin would be worse than
+        # reporting nothing.
+        raise SystemExit(
+            f"decision ledger is written against shioaji=={ledger_pin} but pyproject.toml pins "
+            f"{pin}; rewrite docs/runbooks/shioaji-release-decisions.yaml against the new pin"
+        )
     if args.releases_json:
         payload = json.loads(Path(args.releases_json).read_text(encoding="utf-8"))
         versions = watch_mod.releases_from_payload(payload)
     else:
         versions = watch_mod.fetch_releases()
-    doc = watch_mod.build_report(pin, watch_mod.newer_releases(pin, versions))
+    releases = watch_mod.newer_releases(pin, versions, decisions)
+    doc = watch_mod.build_report(pin, releases)
     sys.stdout.write(report.canonical_json(doc) if args.json else watch_mod.render_text(doc))
-    return 1 if doc["counts"]["unassessed"] and args.strict else 0
+    return 1 if doc["counts"]["needs_action"] and args.strict else 0
+
+
+def _cmd_decision_evidence(args: argparse.Namespace) -> int:
+    """Rebuild, from committed surfaces, the diff each ledger decision cites.
+
+    The ledger requires ``diff_<pin>_to_<version>.json`` because that is the
+    upgrade actually being decided; ``report`` writes consecutive hops, which
+    tell the story of the SDK's evolution instead. Both are derived from the
+    same surface snapshots, so this needs no network and no broker login.
+    """
+    pin, records = decisions_mod.load_decisions(args.ledger)
+    for version in sorted(records):
+        doc = report.build_diff_doc(pin, version, _load_surface(pin), _load_surface(version))
+        out = GOLDEN_DIR / f"diff_{pin}_to_{version}.json"
+        _write(out, report.canonical_json(doc))
+        sys.stderr.write(f"[ok]   wrote {out.name} (verdict {doc['verdict']})\n")
+    return 0
 
 
 def _consecutive_pairs(versions: list[str]) -> list[tuple[str, str]]:
@@ -104,8 +135,7 @@ def _pair(text: str) -> tuple[str, str]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="python -m scripts.shioaji_api_diff",
-                                     description=__doc__)
+    parser = argparse.ArgumentParser(prog="python -m scripts.shioaji_api_diff", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_orch = sub.add_parser("orchestrate", help="capture surfaces in throwaway venvs")
@@ -122,20 +152,36 @@ def build_parser() -> argparse.ArgumentParser:
     p_diff.set_defaults(func=_cmd_diff)
 
     p_rep = sub.add_parser("report", help="write diff JSONs + the Markdown runbook")
-    p_rep.add_argument("--versions", nargs="+", default=list(DEFAULT_VERSIONS),
-                       help="consecutive pairs are diffed unless --pair is given")
-    p_rep.add_argument("--pair", dest="pairs", type=_pair, action="append",
-                       help="explicit FROM:TO pair (repeatable)")
+    p_rep.add_argument(
+        "--versions",
+        nargs="+",
+        default=list(DEFAULT_VERSIONS),
+        help="consecutive pairs are diffed unless --pair is given",
+    )
+    p_rep.add_argument("--pair", dest="pairs", type=_pair, action="append", help="explicit FROM:TO pair (repeatable)")
     p_rep.add_argument("--date", default=None, help="snapshot date stamped in the runbook")
     p_rep.set_defaults(func=_cmd_report)
 
     p_watch = sub.add_parser("watch", help="list PyPI releases newer than the pin")
     p_watch.add_argument("--json", action="store_true", help="emit the machine report")
-    p_watch.add_argument("--releases-json", default=None,
-                         help="read a saved PyPI payload instead of calling the network")
-    p_watch.add_argument("--strict", action="store_true",
-                         help="exit 1 when a newer release has no captured surface")
+    p_watch.add_argument(
+        "--releases-json", default=None, help="read a saved PyPI payload instead of calling the network"
+    )
+    p_watch.add_argument(
+        "--ledger", default=None, help="decision ledger path (default docs/runbooks/shioaji-release-decisions.yaml)"
+    )
+    p_watch.add_argument(
+        "--strict",
+        action="store_true",
+        help="exit 1 when a release lacks a surface, lacks a decision, or its deferral came due",
+    )
     p_watch.set_defaults(func=_cmd_watch)
+
+    p_eviden = sub.add_parser("decision-evidence", help="rebuild the pin-to-candidate diff each ledger decision cites")
+    p_eviden.add_argument(
+        "--ledger", default=None, help="decision ledger path (default docs/runbooks/shioaji-release-decisions.yaml)"
+    )
+    p_eviden.set_defaults(func=_cmd_decision_evidence)
 
     p_guard = sub.add_parser("guard-regen", help="recapture the installed surface into its golden")
     p_guard.set_defaults(func=_cmd_guard_regen)

@@ -2,9 +2,11 @@ name: Shioaji Release Watch
 
 # Nothing announces a new SinoPac SDK release on the lines dependabot ignores
 # (minor and major — see .github/dependabot.yml). This job is that announcement:
-# it reads PyPI and fails when a release newer than the pin has no captured API
-# surface in tests/golden/shioaji_sdk/, which is what `make shioaji-diff` needs
-# before anyone can call an upgrade SAFE or BLOCKED.
+# it reads PyPI and fails when a release newer than the pin is still waiting on
+# someone — no captured API surface in tests/golden/shioaji_sdk/, no recorded
+# verdict in docs/runbooks/shioaji-release-decisions.yaml, or a DEFER whose
+# revisit date has passed. The last of those is what makes this job recurring
+# rather than one-shot: a deferral comes back by itself.
 #
 # Deliberately NOT wired to push/pull_request: it depends on the network and on
 # what SinoPac published this week, neither of which should ever be able to
@@ -34,8 +36,15 @@ jobs:
       - name: What to do when this fails
         if: failure()
         run: |
-          echo "::notice::A shioaji release newer than the pin has no captured API surface."
-          echo "Capture and classify it locally (throwaway /tmp venvs, no broker login):"
+          echo "::notice::A shioaji release newer than the pin is waiting on a decision."
+          echo "The step output above says which of the three states each release is in."
+          echo ""
+          echo "NO_SURFACE — capture it locally (throwaway /tmp venvs, no broker login):"
           echo "  make shioaji-surface VERSIONS='<versions>'"
-          echo "  make shioaji-diff"
-          echo "Then review docs/runbooks/shioaji-version-diff.md and decide."
+          echo "  uv run python -m scripts.shioaji_api_diff diff --from <pin> --to <version> \\"
+          echo "    > tests/golden/shioaji_sdk/diff_<pin>_to_<version>.json"
+          echo ""
+          echo "UNDECIDED / EXPIRED — record or renew the verdict in:"
+          echo "  docs/runbooks/shioaji-release-decisions.yaml"
+          echo "  (ADOPT / DEFER+revisit_after / BLOCKED+blocking_symbols; the loader"
+          echo "   refuses a verdict its own evidence diff contradicts.)"

@@ -115,7 +115,11 @@ def test_a_release_with_a_captured_surface_is_not_flagged_unassessed(monkeypatch
 def test_the_report_counts_only_uncaptured_releases_as_unassessed(monkeypatch: Any) -> None:
     monkeypatch.setattr(watch, "_captured_versions", lambda: {"1.5.7"})
     report = watch.build_report("1.5.6", watch.newer_releases("1.5.6", ["1.5.7", "1.7.0"]))
-    assert report["counts"] == {"newer": 2, "unassessed": 1, "patch_on_pin_line": 1}
+    assert report["counts"]["unassessed"] == 1
+    # With no ledger passed, the captured release is undecided rather than settled --
+    # a surface is evidence, not a decision. See test_release_decisions.py.
+    assert report["counts"]["undecided"] == 1
+    assert report["counts"]["needs_action"] == 2
 
 
 def test_the_text_report_names_the_capture_command_for_what_is_missing(
