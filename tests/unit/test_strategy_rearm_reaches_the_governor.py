@@ -7,6 +7,7 @@ channel cannot regress into any of them.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
 import time
@@ -35,7 +36,7 @@ def rig(tmp_path):
 
 
 def tick(rig) -> None:
-    rig.system._consume_strategy_rearm_requests()
+    asyncio.run(rig.system._consume_strategy_rearm_requests())
 
 
 # --- the behaviour ------------------------------------------------------------

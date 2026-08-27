@@ -17,6 +17,11 @@ from hft_platform.ops.evidence import get_shared_autonomy_evidence_writer
 
 logger = get_logger("strategy_governor")
 
+
+def _noop_persist() -> None:
+    """Nothing to write: the decision was 'no'."""
+
+
 _AUTONOMY_MODE_VALUES = {
     AutonomyMode.NORMAL: 0,
     AutonomyMode.STRATEGY_QUARANTINED: 1,
@@ -538,9 +543,27 @@ class StrategyHealthGovernor:
 
         Returns ``True`` only when a live quarantine was actually cleared.
         """
+        cleared, persist = self._clear_quarantine(strategy_id, expected_token=expected_token, request_id=request_id)
+        if cleared:
+            persist()
+        return cleared
+
+    def _clear_quarantine(
+        self,
+        strategy_id: str,
+        *,
+        expected_token: str,
+        request_id: str | None,
+    ) -> tuple[bool, Callable[[], None]]:
+        """Apply the re-arm decision; return it with the durable write deferred.
+
+        The mirror of ``_latch_quarantine``, and for the same reason: the
+        decision is a dict comparison that must be atomic on the loop, and the
+        record is a lock-then-rewrite that must not be.
+        """
         entry = self._quarantined.get(strategy_id)
         if entry is None or entry.token != expected_token:
-            return False
+            return False, _noop_persist
 
         # Decide and mutate with nothing in between.
         self._quarantined.pop(strategy_id, None)
@@ -553,16 +576,21 @@ class StrategyHealthGovernor:
             request_id=request_id,
         )
 
-        if self.evidence_writer is not None:
+        writer = self.evidence_writer
+        token = entry.token
+
+        def _persist() -> None:
+            if writer is None:
+                return
             try:
-                self.evidence_writer.record_transition(
+                writer.record_transition(
                     scope="strategy",
                     mode=AutonomyMode.NORMAL.value,
                     reason="manual_rearm",
                     manual_rearm_required=False,
                     metadata={
                         "strategy_id": strategy_id,
-                        "quarantine_token": entry.token,
+                        "quarantine_token": token,
                         "request_id": request_id,
                     },
                 )
@@ -575,7 +603,22 @@ class StrategyHealthGovernor:
                     request_id=request_id,
                     error=str(exc),
                 )
-        return True
+
+        return True, _persist
+
+    async def rearm_async(self, strategy_id: str, *, expected_token: str, request_id: str | None = None) -> bool:
+        """Re-arm now; write the durable record off the event loop.
+
+        The supervisor consumes operator re-arm requests on its tick, which runs
+        on the event loop, and the record goes through ``locked_state`` -- the
+        same bounded ``flock`` poll and JSON rewrite that made
+        ``quarantine_async`` necessary. Fixing one side and leaving the other
+        would keep the stall exactly on the path an operator triggers by hand.
+        """
+        cleared, persist = self._clear_quarantine(strategy_id, expected_token=expected_token, request_id=request_id)
+        if cleared:
+            await asyncio.to_thread(persist)
+        return cleared
 
     def build_cancel_intents(
         self,

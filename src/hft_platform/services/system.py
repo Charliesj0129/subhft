@@ -1047,10 +1047,16 @@ class HFTSystem:
         self._start_service(name, coro_factory())
         self._task_started_at[name] = timebase.now_s()
 
-    def _update_platform_degrade_state(self) -> None:
-        state = self._read_rearm_state()
+    async def _update_platform_degrade_state(self) -> None:
+        """One supervisor tick of the control plane.
+
+        Async because everything under it that touches the safety document does
+        so through a shared ``flock``: the decisions stay on the loop, the reads
+        and writes do not. See ``StrategyHealthGovernor.quarantine_async``.
+        """
+        state = await asyncio.to_thread(self._read_rearm_state)
         self._consume_platform_rearm_request(state)
-        self._consume_strategy_rearm_requests(state)
+        await self._consume_strategy_rearm_requests(state)
         controller = getattr(self, "platform_degrade_controller", None)
         inputs = getattr(self, "platform_degrade_inputs", None)
         if controller is None or inputs is None:
@@ -1102,7 +1108,7 @@ class HFTSystem:
             return False
         return True
 
-    def _consume_strategy_rearm_requests(self, state: dict | None = None) -> None:
+    async def _consume_strategy_rearm_requests(self, state: dict | None = None) -> None:
         """Apply operator re-arm requests to the live governor.
 
         Without this the strategy re-arm is a **write-only loop**. The quarantine
@@ -1143,7 +1149,7 @@ class HFTSystem:
                 # closed. Here it means one tick adopts nothing.
                 logger.warning("strategy_quarantine_reconcile_failed", error=str(exc))
         try:
-            requests = rearm_requests.pending(gate.state_path.parent)
+            requests = await asyncio.to_thread(rearm_requests.pending, gate.state_path.parent)
         except Exception as exc:
             logger.warning("strategy_rearm_request_scan_failed", error=str(exc))
             return
@@ -1154,7 +1160,7 @@ class HFTSystem:
                 # engine restarted since the request was written (a strategy
                 # quarantine does not survive a restart). Retire the request so
                 # it cannot linger and cannot apply to some future quarantine.
-                if not self._retire_rearm_request(request):
+                if not await asyncio.to_thread(self._retire_rearm_request, request):
                     continue
                 logger.warning(
                     "strategy_rearm_request_retired_no_live_quarantine",
@@ -1165,7 +1171,7 @@ class HFTSystem:
             if live_token != request.quarantine_token:
                 # Authorizes a different quarantine instance than the live one.
                 # Retire it: the operator must look at the current failure.
-                if not self._retire_rearm_request(request):
+                if not await asyncio.to_thread(self._retire_rearm_request, request):
                     continue
                 logger.warning(
                     "strategy_rearm_request_superseded",
@@ -1180,9 +1186,9 @@ class HFTSystem:
             # fail-closed direction. Consuming after could replay the request.
             # A consume that *fails* must not be followed by the re-arm either,
             # for the same reason: the request would still be on disk to replay.
-            if not self._retire_rearm_request(request):
+            if not await asyncio.to_thread(self._retire_rearm_request, request):
                 continue
-            if governor.rearm(
+            if await governor.rearm_async(
                 request.strategy_id,
                 expected_token=request.quarantine_token,
                 request_id=request.request_id,
@@ -1554,7 +1560,7 @@ class HFTSystem:
                     _log_kwargs["gateway_api"] = _api_q_log.qsize()
                 logger.info("Queues", **_log_kwargs)
 
-            self._update_platform_degrade_state()
+            await self._update_platform_degrade_state()
 
             # Periodic stale symbol eviction for FeatureEngine (rate-limited internally)
             _fe = getattr(getattr(self, "md_service", None), "feature_engine", None)

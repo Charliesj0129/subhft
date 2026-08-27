@@ -354,7 +354,7 @@ def test_update_platform_degrade_state_with_reasons():
 
     with patch("hft_platform.services.system.timebase") as mock_tb:
         mock_tb.now_ns.return_value = 1000
-        sys_obj._update_platform_degrade_state()
+        asyncio.run(sys_obj._update_platform_degrade_state())
 
     assert sys_obj.platform_degrade_controller.enter_reduce_only.call_count == 2
     sys_obj.platform_degrade_controller.check_auto_recovery.assert_called_once()
@@ -368,7 +368,7 @@ def test_update_platform_degrade_state_no_reasons():
 
     with patch("hft_platform.services.system.timebase") as mock_tb:
         mock_tb.now_ns.return_value = 1000
-        sys_obj._update_platform_degrade_state()
+        asyncio.run(sys_obj._update_platform_degrade_state())
 
     sys_obj.platform_degrade_controller.check_auto_recovery.assert_called_once()
 
@@ -379,7 +379,7 @@ def test_update_platform_degrade_state_no_controller():
     sys_obj.platform_degrade_controller = None
 
     # Should not raise
-    sys_obj._update_platform_degrade_state()
+    asyncio.run(sys_obj._update_platform_degrade_state())
     assert sys_obj.platform_degrade_controller is None
 
 
@@ -389,7 +389,7 @@ def test_update_platform_degrade_state_no_inputs():
     sys_obj.platform_degrade_inputs = None
 
     # Should not raise
-    sys_obj._update_platform_degrade_state()
+    asyncio.run(sys_obj._update_platform_degrade_state())
     assert sys_obj.platform_degrade_inputs is None
 
 

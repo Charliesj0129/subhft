@@ -137,7 +137,7 @@ def test_a_failed_request_delete_does_not_stop_supervision(
 
     monkeypatch.setattr(rearm_requests, "consume", _explode)
 
-    rig.system._consume_strategy_rearm_requests()  # must not raise
+    asyncio.run(rig.system._consume_strategy_rearm_requests())  # must not raise
 
     # Fail-closed: the latch is still held and the request is still on disk, so
     # the next tick retries rather than the engine dying and the request
@@ -150,7 +150,7 @@ def test_the_request_is_applied_once_the_delete_succeeds_again(rig: SimpleNamesp
     rig.governor.quarantine(STRATEGY, reason="handler_exception")
     rig.gate.rearm_strategy(STRATEGY)
 
-    rig.system._consume_strategy_rearm_requests()
+    asyncio.run(rig.system._consume_strategy_rearm_requests())
 
     assert not rig.governor.is_quarantined(STRATEGY)
     assert not rearm_requests.pending(rig.gate.state_path.parent)
@@ -345,7 +345,38 @@ def test_an_unparseable_document_does_not_stop_supervision(
     rig.governor.quarantine(STRATEGY, reason="handler_exception")
     rig.gate.rearm_strategy(STRATEGY)
 
-    rig.system._consume_strategy_rearm_requests({"platform": {}, "strategies": {}})  # must not raise
+    asyncio.run(rig.system._consume_strategy_rearm_requests({"platform": {}, "strategies": {}}))  # must not raise
 
     # The tick adopted nothing, but everything after the reconcile still ran.
     assert not rig.governor.is_quarantined(STRATEGY)
+
+
+def test_rearm_async_writes_the_durable_record_off_the_event_loop() -> None:
+    """The mirror of the quarantine case, on the path an operator triggers."""
+    writer = _ThreadRecordingWriter()
+    governor = StrategyHealthGovernor(evidence_writer=writer)
+    governor.quarantine(STRATEGY, reason="handler_exception")
+    token = governor.quarantine_token(STRATEGY)
+    assert token is not None
+    writer.thread_ident = None  # the sync quarantine above wrote on this thread
+
+    async def _run() -> int:
+        assert await governor.rearm_async(STRATEGY, expected_token=token, request_id="req-1")
+        return threading.get_ident()
+
+    loop_thread = asyncio.run(_run())
+
+    assert writer.thread_ident is not None, "the durable write never ran"
+    assert writer.thread_ident != loop_thread
+
+
+def test_rearm_async_refuses_a_token_that_does_not_match() -> None:
+    """The guard the token exists for must survive the split."""
+    writer = _ThreadRecordingWriter()
+    governor = StrategyHealthGovernor(evidence_writer=writer)
+    governor.quarantine(STRATEGY, reason="handler_exception")
+    writer.thread_ident = None
+
+    assert not asyncio.run(governor.rearm_async(STRATEGY, expected_token="not-the-token", request_id="req-1"))
+    assert governor.is_quarantined(STRATEGY)
+    assert writer.thread_ident is None, "a refused re-arm must not write a recovery record"
