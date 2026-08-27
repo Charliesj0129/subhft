@@ -17,6 +17,10 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PROJECT_DIR:-/home/charlie/hft_platform}/.claude/hooks/git_guard.py\""
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR:-/home/charlie/hft_platform}/.claude/hooks/codex_review_gate.py\""
           }
         ]
       }
