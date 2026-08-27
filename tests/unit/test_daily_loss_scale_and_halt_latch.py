@@ -381,11 +381,11 @@ class TestTheDailyResetIsReachableWhileHalted:
         v = _validator_at(_BEFORE_BOUNDARY)
         with mock.patch("hft_platform.core.timebase.now_ns", return_value=_BEFORE_BOUNDARY):
             v.record_pnl("R47", _ntd(-5460))
-            v.update_unrealized(0)
+            v.update_unrealized(0, complete=True)
             assert v.halt_triggered is True
 
         with mock.patch("hft_platform.core.timebase.now_ns", return_value=_AFTER_BOUNDARY):
-            v.update_unrealized(0)
+            v.update_unrealized(0, complete=True)
 
         assert v.halt_triggered is False
         assert v._accumulated_loss == {}
@@ -394,11 +394,11 @@ class TestTheDailyResetIsReachableWhileHalted:
         v = _validator_at(_BEFORE_BOUNDARY)
         with mock.patch("hft_platform.core.timebase.now_ns", return_value=_BEFORE_BOUNDARY):
             v.record_pnl("R47", _ntd(-5460))
-            v.update_unrealized(0)
+            v.update_unrealized(0, complete=True)
             assert v.halt_triggered is True
 
             # Same trading day, an hour later: the stop is for the whole day.
-            v.update_unrealized(0)
+            v.update_unrealized(0, complete=True)
             assert v.halt_triggered is True
 
     def test_a_fresh_loss_after_the_boundary_latches_again(self):
@@ -406,14 +406,14 @@ class TestTheDailyResetIsReachableWhileHalted:
         v = _validator_at(_BEFORE_BOUNDARY)
         with mock.patch("hft_platform.core.timebase.now_ns", return_value=_BEFORE_BOUNDARY):
             v.record_pnl("R47", _ntd(-5460))
-            v.update_unrealized(0)
+            v.update_unrealized(0, complete=True)
 
         with mock.patch("hft_platform.core.timebase.now_ns", return_value=_AFTER_BOUNDARY):
-            v.update_unrealized(0)
+            v.update_unrealized(0, complete=True)
             assert v.halt_triggered is False
 
             v.record_pnl("R47", _ntd(-5000))
-            v.update_unrealized(0)
+            v.update_unrealized(0, complete=True)
             assert v.halt_triggered is True
 
     def test_the_boundary_releases_the_stormguard_hold_through_the_supervisor(self):
@@ -428,18 +428,18 @@ class TestTheDailyResetIsReachableWhileHalted:
 
         with mock.patch("hft_platform.core.timebase.now_ns", return_value=_BEFORE_BOUNDARY):
             v.record_pnl("R47", _ntd(-5460))
-            engine.update_unrealized_pnl(0)
+            engine.update_unrealized_pnl(0, complete=True)
             assert engine.storm_guard.state == StormGuardState.HALT
             assert engine.storm_guard.daily_loss_hold is True
 
             # A day of clean ticks cannot talk StormGuard out of the hold.
             for _ in range(30):
                 _clean_tick(engine.storm_guard)
-                engine.update_unrealized_pnl(0)
+                engine.update_unrealized_pnl(0, complete=True)
             assert engine.storm_guard.state == StormGuardState.HALT
 
         with mock.patch("hft_platform.core.timebase.now_ns", return_value=_AFTER_BOUNDARY):
-            engine.update_unrealized_pnl(0)
+            engine.update_unrealized_pnl(0, complete=True)
             assert engine.storm_guard.daily_loss_hold is False
             for _ in range(5):
                 _clean_tick(engine.storm_guard)
@@ -472,7 +472,7 @@ class TestTheDailyResetIsReachableWhileHalted:
             v.check(_make_intent())
             engine._check_daily_loss_halt()
             assert engine.storm_guard.daily_loss_hold is True
-            v.update_unrealized(_ntd(-1000))
+            v.update_unrealized(_ntd(-1000), complete=True)
 
         # No update_unrealized() after the boundary: MtM is dead.
         with mock.patch("hft_platform.core.timebase.now_ns", return_value=_AFTER_BOUNDARY):
@@ -511,7 +511,7 @@ class TestTheDailyResetIsReachableWhileHalted:
             engine.roll_daily_loss_boundary()
             assert v.halt_triggered is True
             # MtM comes back with a benign book.
-            engine.update_unrealized_pnl(_ntd(-10))
+            engine.update_unrealized_pnl(_ntd(-10), complete=True)
             assert v.halt_triggered is False
             engine.roll_daily_loss_boundary()
 
@@ -530,7 +530,7 @@ class TestTheDailyResetIsReachableWhileHalted:
             assert v.halt_triggered is True
             # New day, empty accumulator, but the open book is already past the
             # hard limit on its own.
-            v.update_unrealized(_ntd(-6000))
+            v.update_unrealized(_ntd(-6000), complete=True)
 
         assert v.halt_triggered is True
         assert v._halt_release_pending is False
@@ -553,13 +553,113 @@ class TestTheDailyResetIsReachableWhileHalted:
 
         # Clock corrected backwards, across the boundary, to the previous day.
         with mock.patch("hft_platform.core.timebase.now_ns", return_value=_BEFORE_BOUNDARY):
-            v.update_unrealized(0)
+            v.update_unrealized(0, complete=True)
             v.roll_daily_boundary()
             v.check(_make_intent())
 
         assert v.halt_triggered is True, "a backward clock is not a new trading day"
         assert v._accumulated_loss != {}
         assert v._current_reset_boundary_ns == boundary_before
+
+    def test_an_incomplete_snapshot_does_not_buy_a_release(self):
+        """``complete=False`` is not evidence, whatever integer rides with it.
+
+        ``MarkToMarketCalculator.calculate()`` skips non-flat positions with no
+        mid-price and sums the rest, so a book where nothing can be priced
+        totals 0 -- identical to a flat book. Releasing on that reads missing
+        market data as an absence of loss.
+        """
+        v = _validator_at(_BEFORE_BOUNDARY)
+        with mock.patch("hft_platform.core.timebase.now_ns", return_value=_BEFORE_BOUNDARY):
+            v.record_pnl("R47", _ntd(-5460))
+            v.check(_make_intent())
+            assert v.halt_triggered is True
+
+        with mock.patch("hft_platform.core.timebase.now_ns", return_value=_AFTER_BOUNDARY):
+            # The unpriced book reports 0, over and over.
+            v.update_unrealized(0, complete=False)
+            v.update_unrealized(0, complete=False)
+
+        assert v.halt_triggered is True, "an unpriced book is not a flat book"
+        assert v._halt_release_pending is True
+
+        # Prices come back; the same 0 now means something.
+        with mock.patch("hft_platform.core.timebase.now_ns", return_value=_AFTER_BOUNDARY):
+            v.update_unrealized(0, complete=True)
+        assert v.halt_triggered is False
+
+    def test_a_late_fill_after_the_boundary_does_not_release_the_stop(self):
+        """``record_pnl()`` must never lift the latch.
+
+        ExecutionRouter keeps processing fills during HALT and in-flight
+        cancellation is asynchronous, so a fill can land just after 21:00 UTC
+        and before the supervisor's first roll. While ``_maybe_reset()``
+        defaulted to releasing, that fill cleared the stop with no valuation at
+        all -- and advanced the boundary as it went, so the supervisor's later
+        roll saw nothing to do and could not re-arm the hold.
+        """
+        v = _validator_at(_BEFORE_BOUNDARY)
+        with mock.patch("hft_platform.core.timebase.now_ns", return_value=_BEFORE_BOUNDARY):
+            v.record_pnl("R47", _ntd(-5460))
+            v.check(_make_intent())
+            assert v.halt_triggered is True
+
+        with mock.patch("hft_platform.core.timebase.now_ns", return_value=_AFTER_BOUNDARY):
+            v.record_pnl("R47", -1)  # the late fill
+            assert v.halt_triggered is True, "a fill is not a valuation"
+            # And the supervisor can still re-arm afterwards.
+            v.roll_daily_boundary()
+            assert v.halt_triggered is True
+            assert v._halt_release_pending is True
+
+    def test_an_intent_check_across_the_boundary_does_not_release_the_stop(self):
+        """``check()`` is the other non-releasing caller, for the same reason."""
+        v = _validator_at(_BEFORE_BOUNDARY)
+        with mock.patch("hft_platform.core.timebase.now_ns", return_value=_BEFORE_BOUNDARY):
+            v.record_pnl("R47", _ntd(-5460))
+            v.check(_make_intent())
+            assert v.halt_triggered is True
+
+        with mock.patch("hft_platform.core.timebase.now_ns", return_value=_AFTER_BOUNDARY):
+            v.check(_make_intent())
+
+        assert v.halt_triggered is True
+        assert v._halt_release_pending is True
+
+    def test_a_stale_gain_cannot_offset_a_new_day_loss(self):
+        """Yesterday's unrealized gain is not evidence about today.
+
+        Nothing was latched here, so no release is involved -- but the boundary
+        still rolled with no fresh valuation, and carrying a stale +10,000 into
+        the new day let it absorb a real -5,500 realized loss and return OK
+        against a 5,000 hard limit. Stale gains are dropped at the boundary;
+        stale losses are kept. Both directions fail closed.
+        """
+        v = _validator_at(_BEFORE_BOUNDARY)
+        with mock.patch("hft_platform.core.timebase.now_ns", return_value=_BEFORE_BOUNDARY):
+            v.update_unrealized(_ntd(10000), complete=True)
+            assert v.halt_triggered is False
+
+        with mock.patch("hft_platform.core.timebase.now_ns", return_value=_AFTER_BOUNDARY):
+            # MtM is dead; only the calendar ticks.
+            v.roll_daily_boundary()
+            assert v._unrealized_pnl == 0, "a stale gain must not survive the day"
+            v.record_pnl("R47", _ntd(-5500))
+            allowed, _reason = v.check(_make_intent())
+
+        assert allowed is False, "the new-day loss must not be masked"
+        assert v.halt_triggered is True
+
+    def test_a_stale_loss_survives_the_boundary(self):
+        """The clamp is one-directional: it drops gains, it does not erase losses."""
+        v = _validator_at(_BEFORE_BOUNDARY)
+        with mock.patch("hft_platform.core.timebase.now_ns", return_value=_BEFORE_BOUNDARY):
+            v.update_unrealized(_ntd(-100), complete=True)
+
+        with mock.patch("hft_platform.core.timebase.now_ns", return_value=_AFTER_BOUNDARY):
+            v.roll_daily_boundary()
+
+        assert v._unrealized_pnl == _ntd(-100)
 
     def test_a_forward_jump_of_several_days_resets_once(self):
         """Forward-only must not mean once-per-day-only."""
@@ -571,7 +671,7 @@ class TestTheDailyResetIsReachableWhileHalted:
 
         three_days_on = _AFTER_BOUNDARY + 3 * 86_400 * 1_000_000_000
         with mock.patch("hft_platform.core.timebase.now_ns", return_value=three_days_on):
-            v.update_unrealized(_ntd(-10))
+            v.update_unrealized(_ntd(-10), complete=True)
 
         assert v.halt_triggered is False
         assert v._accumulated_loss == {}
@@ -580,6 +680,6 @@ class TestTheDailyResetIsReachableWhileHalted:
         """It ticks the calendar; it must not invent a PnL value."""
         v = _validator_at(_BEFORE_BOUNDARY)
         with mock.patch("hft_platform.core.timebase.now_ns", return_value=_BEFORE_BOUNDARY):
-            v.update_unrealized(_ntd(-100))
+            v.update_unrealized(_ntd(-100), complete=True)
             v.roll_daily_boundary()
             assert v._unrealized_pnl == _ntd(-100)

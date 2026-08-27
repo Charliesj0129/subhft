@@ -500,7 +500,7 @@ class DailyLossLimitValidator(RiskValidator):
         # Shift time back by offset so that floor-to-day gives us the last 21:00 UTC
         return ((now_ns - offset) // ns_per_day) * ns_per_day + offset
 
-    def _maybe_reset(self, *, release_halt: bool = True) -> None:
+    def _maybe_reset(self, *, release_halt: bool = False) -> None:
         """Reset accumulated losses if the 05:00 Taiwan (21:00 UTC) boundary has passed.
 
         Forward-only. ``timebase.now_ns()`` is ``time.time_ns()`` -- the wall
@@ -510,8 +510,13 @@ class DailyLossLimitValidator(RiskValidator):
         passing; ``>`` makes a backward clock a no-op, which is the fail-closed
         direction. A forward jump over several days still resets exactly once.
 
-        ``release_halt=False`` does the calendar work but leaves
-        ``halt_triggered`` standing -- see ``roll_daily_boundary``.
+        ``release_halt`` defaults to False: the calendar work happens, the stop
+        stands. Only ``update_unrealized()`` passes True, and only when the
+        snapshot it carries is complete. ``check()`` and ``record_pnl()`` must
+        never release -- a fill can land just after the boundary and before the
+        supervisor's first roll, and letting ``record_pnl()`` clear the latch
+        there would both lift the stop on no valuation at all and advance the
+        boundary, so the supervisor's later roll could no longer re-arm it.
         """
         boundary_ns = self._current_boundary_ns()
         if boundary_ns > self._current_reset_boundary_ns:
@@ -532,12 +537,21 @@ class DailyLossLimitValidator(RiskValidator):
                 self._unrealized_pnl = 0
                 self.halt_triggered = False
                 self._halt_release_pending = False
-            elif self.halt_triggered:
-                # Calendar rolled, but this caller brought no PnL to justify
-                # reopening. Keep the stop and keep the last known unrealized
-                # figure: zeroing it here would let a dead mark-to-market look
-                # like a flat book.
-                self._halt_release_pending = True
+            else:
+                # Calendar rolled, but this caller brought no complete PnL to
+                # justify reopening.
+                if self.halt_triggered:
+                    self._halt_release_pending = True
+                # Yesterday's unrealized figure must not be carried into the new
+                # day as evidence. Zeroing it outright would let a dead
+                # mark-to-market look like a flat book, so clamp instead: a
+                # stale GAIN is dropped, a stale LOSS is kept. Both directions
+                # then fail closed -- a leftover +10,000 cannot offset today's
+                # -5,500 into looking safe, and a leftover loss cannot be
+                # erased by the calendar. The first complete snapshot overwrites
+                # this value anyway.
+                if self._unrealized_pnl > 0:
+                    self._unrealized_pnl = 0
 
     def roll_daily_boundary(self) -> None:
         """Advance the calendar boundary WITHOUT granting authorization to trade.
@@ -575,7 +589,7 @@ class DailyLossLimitValidator(RiskValidator):
         if total_pnl > self._peak_pnl_scaled:
             self._peak_pnl_scaled = total_pnl
 
-    def update_unrealized(self, unrealized_scaled: int) -> None:
+    def update_unrealized(self, unrealized_scaled: int, *, complete: bool = False) -> None:
         """Update the platform-wide unrealized PnL used in loss calculations.
 
         Also evaluates whether total (realized + unrealized) exceeds the hard
@@ -585,6 +599,13 @@ class DailyLossLimitValidator(RiskValidator):
         Args:
             unrealized_scaled: Total unrealized PnL in scaled int (x10000).
                                Negative = unrealized loss; positive = unrealized gain.
+            complete: True only when every non-flat position was priced --
+                      ``MtMSnapshot.complete``. It defaults to False because an
+                      unqualified integer is not evidence: ``calculate()`` skips
+                      unpriced positions and sums the rest, so an entirely
+                      unpriced book reports 0, which is indistinguishable from a
+                      flat one. A partial total may still LATCH the stop (that
+                      direction is safe); only a complete one may release it.
         """
         # The daily reset runs BEFORE the latch is consulted, because the latch
         # gates every other way of reaching it. ``check()`` needs an intent and
@@ -595,9 +616,9 @@ class DailyLossLimitValidator(RiskValidator):
         # on THESHOW the hard limit latched 2026-08-26 14:24:35Z and HALT was
         # still held at 09:32Z the next day, 12.5 h past the 21:00Z boundary,
         # with the gateway down the whole time.
-        self._maybe_reset()
+        self._maybe_reset(release_halt=complete)
         self._unrealized_pnl = unrealized_scaled
-        if self._halt_release_pending:
+        if self._halt_release_pending and complete:
             # A supervisor tick already rolled the calendar while the stop was
             # latched, but had no PnL to justify lifting it. This call carries
             # the fresh snapshot that was missing, so the stop lifts now and the
@@ -605,7 +626,7 @@ class DailyLossLimitValidator(RiskValidator):
             self._halt_release_pending = False
             self.halt_triggered = False
             logger.info(
-                "DailyLossLimitValidator: daily stop released on fresh PnL",
+                "DailyLossLimitValidator: daily stop released on complete PnL snapshot",
                 unrealized_pnl=unrealized_scaled,
             )
         if not self.halt_triggered:

@@ -1109,15 +1109,20 @@ class RiskEngine:
                 v.record_pnl(strategy_id, pnl_delta)
                 return
 
-    def update_unrealized_pnl(self, unrealized_scaled: int) -> None:
+    def update_unrealized_pnl(self, unrealized_scaled: int, *, complete: bool = False) -> None:
         """Forward unrealized PnL to the DailyLossLimitValidator.
 
         Also re-evaluates daily loss HALT so that the supervisor loop
         can trigger HALT even when no new intents are arriving.
+
+        ``complete`` is ``MtMSnapshot.complete`` -- True only when every
+        non-flat position had a mid-price. It defaults to False so that a
+        caller which cannot vouch for the valuation can still raise the stop
+        but never lift it.
         """
         for v in self.validators:
             if isinstance(v, DailyLossLimitValidator):
-                v.update_unrealized(unrealized_scaled)
+                v.update_unrealized(unrealized_scaled, complete=complete)
                 break
         self._check_daily_loss_halt()
 
