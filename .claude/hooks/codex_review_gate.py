@@ -196,7 +196,19 @@ def main() -> int:
         for head, pr in targets:
             rng = canonical_range(head, cwd=cwd)
             if rng is None:
-                continue  # no origin/main -> not this project's layout
+                if not git("rev-parse", "--verify", "--quiet", "origin/main", cwd=cwd):
+                    continue  # no origin/main -> not this project's layout
+                # origin/main exists but the range does not: the object is not in
+                # this checkout. A PR head that was never fetched must not slip
+                # through as "nothing to gate".
+                print(
+                    "BLOCKED by codex_review_gate: "
+                    f"{head[:8]} is not present locally, so its changes cannot be inspected.\n"
+                    f"  Fetch it first (git fetch origin, or gh pr checkout {pr or ''}).\n"
+                    f"  Deliberate bypass:  {OVERRIDE}=1 <command>",
+                    file=sys.stderr,
+                )
+                return 2
             touched = gated_files(rng, cwd=cwd)
             if not touched:
                 continue

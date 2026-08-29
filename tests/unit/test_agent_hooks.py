@@ -645,3 +645,57 @@ def test_only_high_severity_findings_require_an_ack(tmp_path):
     assert ("high", "Latch released") in required
     assert ("P1", "Move the write off the loop") in required
     assert not any(t == "Typo" for _, t in required), "a low finding must not demand an ACK"
+
+
+def _stub_gh(tmp_path, head_oid):
+    """A `gh` on PATH that answers `pr view --json headRefOid` and nothing else."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    gh = bin_dir / "gh"
+    gh.write_text(f'#!/bin/sh\nprintf \'{{"headRefOid":"{head_oid}"}}\'\n')
+    gh.chmod(0o755)
+    return bin_dir
+
+
+def test_review_gate_blocks_a_pr_head_that_is_not_present_locally(tmp_path):
+    """A PR head that was never fetched must not read as "nothing to gate".
+
+    `canonical_range` returns None both when origin/main is missing (not this
+    project -- allow) and when the head object is absent (cannot inspect it --
+    block). Conflating the two would let `gh pr merge` publish unreviewed code.
+    """
+    repo, _ = _gated_repo(tmp_path)
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    absent = "0" * 39 + "1"
+    r = run_hook(
+        "codex_review_gate.py",
+        {"tool_name": "Bash", "cwd": str(repo), "tool_input": {"command": "gh pr merge 460 --squash"}},
+        repo,
+        env={
+            "DUAL_REVIEW_REPORTS": str(reports),
+            "PATH": f"{_stub_gh(tmp_path, absent)}{os.pathsep}{os.environ['PATH']}",
+        },
+    )
+    assert r.returncode == 2 and "not present locally" in r.stderr
+
+
+def test_review_gate_allows_a_push_in_a_repository_without_origin_main(tmp_path):
+    """The other half of that fork: an unrelated repo must not be gated at all."""
+    repo = tmp_path / "other"
+    repo.mkdir()
+    _run_git(repo, "init", "-q", "-b", "main")
+    (repo / "src").mkdir()
+    (repo / "src/x.py").write_text("v = 1\n")
+    _run_git(repo, "add", "-A")
+    _run_git(repo, "commit", "-q", "-m", "work")
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    assert _push(repo, reports).returncode == 0
+
+
+def test_verifier_reports_a_missing_attestation_rather_than_crashing(tmp_path):
+    m = _attestation_module()
+    m.REPORTS = tmp_path / "nope"
+    d = m.verify(str(tmp_path), "a" * 40)
+    assert d.ok is False and "review reports directory" in d.reason
