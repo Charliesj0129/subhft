@@ -448,6 +448,9 @@ class HFTSystem:
             pass
 
         logger.info("System Starting...")
+        # Lifecycle boundary, not the trading loop: nothing is trading yet, and
+        # `manual_rearm_required=False` on a non-ack transition never reaches the
+        # locking store anyway -- only the audit trail. Left synchronous.
         self.evidence_writer.record_transition(
             scope="platform",
             mode="NORMAL",
@@ -960,7 +963,7 @@ class HFTSystem:
 
         # 5. Exit REDUCE_ONLY if active
         if self.platform_degrade_controller.reduce_only_active:
-            self.platform_degrade_controller.exit_reduce_only(reason=reason)
+            await self.platform_degrade_controller.exit_reduce_only_async(reason=reason)
             results["reduce_only"] = "exited"
             logger.info("graceful_reset: REDUCE_ONLY exited", reason=reason)
         else:
@@ -1063,8 +1066,8 @@ class HFTSystem:
             return
         reasons = inputs.reduce_only_reasons()
         for reason in reasons:
-            controller.enter_reduce_only(reason=reason)
-        controller.check_auto_recovery(
+            await controller.enter_reduce_only_async(reason=reason)
+        await controller.check_auto_recovery_async(
             current_reasons=reasons,
             now_ns=timebase.now_ns(),
         )
@@ -2034,6 +2037,7 @@ class HFTSystem:
             except Exception as exc:
                 logger.warning("SessionGovernor stop failed", error=str(exc))
 
+        # Shutdown boundary; see the note at system_start. Left synchronous.
         self.evidence_writer.record_transition(
             scope="platform",
             mode="CLOSED",

@@ -21,6 +21,11 @@ def _make_monitor(**overrides) -> AutonomyMonitor:
     storm_guard.state = StormGuardState.NORMAL
     platform_degrade = MagicMock()
     platform_degrade.reduce_only_active = False
+    # Awaited now: the degrade transition persists off the event loop, so the
+    # double it stands in for has to be awaitable too.
+    platform_degrade.enter_reduce_only_async = AsyncMock()
+    platform_degrade.exit_reduce_only_async = AsyncMock()
+    platform_degrade.check_auto_recovery_async = AsyncMock(return_value=False)
     platform_inputs = MagicMock()
     platform_inputs.reduce_only_reasons = MagicMock(return_value=[])
 
@@ -171,7 +176,7 @@ class TestCheckMargin:
         notifier = AsyncMock()
         monitor = _make_monitor(margin_monitor=margin_mon, notification_dispatcher=notifier)
         await monitor._check_margin()
-        monitor._platform_degrade.enter_reduce_only.assert_called_once()
+        monitor._platform_degrade.enter_reduce_only_async.assert_awaited_once()
         notifier.notify_margin_critical.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -182,7 +187,7 @@ class TestCheckMargin:
         margin_mon.check = AsyncMock(return_value=result)
         monitor = _make_monitor(margin_monitor=margin_mon, notification_dispatcher=None)
         await monitor._check_margin()
-        monitor._platform_degrade.enter_reduce_only.assert_called_once()
+        monitor._platform_degrade.enter_reduce_only_async.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_check_margin_warn_notifies(self) -> None:
@@ -345,13 +350,13 @@ class TestExecute:
             )
         ]
         await monitor._execute(decisions)
-        monitor._platform_degrade.enter_reduce_only.assert_called_once_with(reason="rss_unhealthy")
+        monitor._platform_degrade.enter_reduce_only_async.assert_awaited_once_with(reason="rss_unhealthy")
 
     @pytest.mark.asyncio
     async def test_enter_reduce_only_exception_caught(self) -> None:
         """Exception in enter_reduce_only is caught (lines 427-428)."""
         monitor = _make_monitor()
-        monitor._platform_degrade.enter_reduce_only.side_effect = RuntimeError("degrade boom")
+        monitor._platform_degrade.enter_reduce_only_async.side_effect = RuntimeError("degrade boom")
         decisions = [
             MonitorDecision(
                 rule_name="rss_unhealthy",
@@ -368,6 +373,7 @@ class TestExecute:
     async def test_evidence_writer_records_transition(self) -> None:
         """Evidence writer is called for each decision (lines 432-433)."""
         evidence = MagicMock()
+        evidence.record_transition_async = AsyncMock()
         monitor = _make_monitor(evidence_writer=evidence)
         decisions = [
             MonitorDecision(
@@ -379,7 +385,7 @@ class TestExecute:
             )
         ]
         await monitor._execute(decisions)
-        evidence.record_transition.assert_called_once_with(
+        evidence.record_transition_async.assert_awaited_once_with(
             scope="platform",
             mode="enter_reduce_only",
             reason="rss_unhealthy",
@@ -388,9 +394,9 @@ class TestExecute:
 
     @pytest.mark.asyncio
     async def test_evidence_writer_exception_caught(self) -> None:
-        """Exception in evidence_writer.record_transition is caught (lines 439-440)."""
+        """Exception in evidence_writer.record_transition_async is caught."""
         evidence = MagicMock()
-        evidence.record_transition.side_effect = RuntimeError("write boom")
+        evidence.record_transition_async = AsyncMock(side_effect=RuntimeError("write boom"))
         monitor = _make_monitor(evidence_writer=evidence)
         decisions = [
             MonitorDecision(

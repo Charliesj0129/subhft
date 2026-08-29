@@ -61,6 +61,11 @@ def _make_stub() -> HFTSystem:
     sys_obj.daily_report_service = None
     sys_obj.evidence_writer = MagicMock()
     sys_obj.platform_degrade_controller = MagicMock()
+    # The degrade transitions persist off the event loop now, so the three
+    # moved methods have to be awaitable on the double as well.
+    sys_obj.platform_degrade_controller.enter_reduce_only_async = AsyncMock()
+    sys_obj.platform_degrade_controller.exit_reduce_only_async = AsyncMock()
+    sys_obj.platform_degrade_controller.check_auto_recovery_async = AsyncMock(return_value=False)
     sys_obj.platform_degrade_inputs = MagicMock()
     sys_obj.tasks = {}
     sys_obj._recorder_drop_on_full = True
@@ -274,8 +279,8 @@ class TestUpdatePlatformDegradeState:
 
         asyncio.run(sys_obj._update_platform_degrade_state())
 
-        assert sys_obj.platform_degrade_controller.enter_reduce_only.call_count == 2
-        sys_obj.platform_degrade_controller.check_auto_recovery.assert_called_once()
+        assert sys_obj.platform_degrade_controller.enter_reduce_only_async.await_count == 2
+        sys_obj.platform_degrade_controller.check_auto_recovery_async.assert_awaited_once()
 
     def test_skips_when_controller_is_none(self):  # noqa: no-assert
         sys_obj = _make_stub()
@@ -628,7 +633,7 @@ class TestGracefulReset:
         results = await sys_obj.graceful_reset(reason="operator_manual")
 
         assert results["reduce_only"] == "exited"
-        sys_obj.platform_degrade_controller.exit_reduce_only.assert_called_once_with(reason="operator_manual")
+        sys_obj.platform_degrade_controller.exit_reduce_only_async.assert_awaited_once_with(reason="operator_manual")
 
 
 # ===========================================================================

@@ -187,7 +187,7 @@ class AutonomyMonitor:
             return
 
         if result.action == "critical":
-            self._platform_degrade.enter_reduce_only(
+            await self._platform_degrade.enter_reduce_only_async(
                 reason=f"margin_critical_{result.ratio:.0%}",
             )
             if self._notification_dispatcher:
@@ -404,14 +404,14 @@ class AutonomyMonitor:
 
             elif decision.action == "enter_reduce_only":
                 try:
-                    self._platform_degrade.enter_reduce_only(reason=decision.reason)
+                    await self._platform_degrade.enter_reduce_only_async(reason=decision.reason)
                 except Exception as exc:
                     logger.error("enter_reduce_only_failed", error=str(exc))
 
             # Record evidence
             if self._evidence_writer:
                 try:
-                    self._evidence_writer.record_transition(
+                    await self._evidence_writer.record_transition_async(
                         scope=decision.scope,
                         mode=decision.action,
                         reason=decision.reason,

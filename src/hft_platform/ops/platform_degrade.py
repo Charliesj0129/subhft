@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import time
+from collections.abc import Callable
 from typing import Any
 
 from structlog import get_logger
@@ -96,6 +98,37 @@ class PlatformDegradeController:
         return bool(self._active_reasons - _AUTO_RECOVERABLE_REASONS)
 
     def enter_reduce_only(self, *, reason: str) -> AutonomyTransition:
+        """Enter reduce-only, persisting the record on the calling thread.
+
+        For synchronous callers only. Anything running on the event loop must
+        use :meth:`enter_reduce_only_async`: the persistence underneath can poll
+        ``flock`` for up to ``DEFAULT_LOCK_TIMEOUT_S`` (2 s) and then fsync
+        twice, against a loop lag budget of 1 ms.
+        """
+        transition, persist = self._enter_reduce_only_locally(reason)
+        if persist is not None:
+            persist()
+        return transition
+
+    async def enter_reduce_only_async(self, *, reason: str) -> AutonomyTransition:
+        """Enter reduce-only without blocking the event loop.
+
+        The in-memory half runs first and synchronously -- ``reduce_only_active``,
+        the active-reason set and the metrics are all correct the moment this
+        coroutine reaches its first await, so no order can slip through a
+        degradation the controller has already decided on.
+
+        The durable half is awaited, not fired and forgotten, so a caller still
+        does not proceed until the record commits. The ordering guarantee is
+        identical to the synchronous method; only the loop is released.
+        """
+        transition, persist = self._enter_reduce_only_locally(reason)
+        if persist is not None:
+            await asyncio.to_thread(persist)
+        return transition
+
+    def _enter_reduce_only_locally(self, reason: str) -> tuple[AutonomyTransition, Callable[[], None] | None]:
+        """Apply the transition in memory; return it plus its pending write."""
         self._active_reasons.add(reason)
         if self.reduce_only_active and self.last_transition is not None:
             # Rate-limit repeated log to break RSS→log→heap feedback loop
@@ -108,7 +141,7 @@ class PlatformDegradeController:
                     reason=reason,
                     active_reasons=sorted(self._active_reasons),
                 )
-            return self.last_transition
+            return self.last_transition, None
 
         transition = AutonomyTransition.enter_platform_reduce_only(
             reason,
@@ -128,22 +161,50 @@ class PlatformDegradeController:
             manual_rearm_required=transition.manual_rearm_required,
             active_reasons=sorted(self._active_reasons),
         )
-        if self.evidence_writer is not None:
-            self.evidence_writer.record_transition(
+        if self.metrics is not None:
+            transition.record_transition(self.metrics)
+        return transition, self._pending_write(transition, transition.manual_rearm_required)
+
+    def exit_reduce_only(self, *, reason: str) -> AutonomyTransition:
+        """Leave reduce-only, persisting the record on the calling thread.
+
+        Synchronous callers only -- see :meth:`enter_reduce_only`.
+        """
+        transition, persist = self._exit_reduce_only_locally(reason)
+        if persist is not None:
+            persist()
+        return transition
+
+    async def exit_reduce_only_async(self, *, reason: str) -> AutonomyTransition:
+        """Leave reduce-only without blocking the event loop."""
+        transition, persist = self._exit_reduce_only_locally(reason)
+        if persist is not None:
+            await asyncio.to_thread(persist)
+        return transition
+
+    def _pending_write(self, transition: AutonomyTransition, manual_rearm_required: bool) -> Callable[[], None] | None:
+        """The durable half of a transition, or None when nothing records it."""
+        writer = self.evidence_writer
+        if writer is None:
+            return None
+        def write() -> None:
+            writer.record_transition(
                 scope="platform",
                 mode=transition.to_mode.value,
                 reason=transition.reason,
-                manual_rearm_required=transition.manual_rearm_required,
+                manual_rearm_required=manual_rearm_required,
             )
-        if self.metrics is not None:
-            transition.record_transition(self.metrics)
-        return transition
 
-    def exit_reduce_only(self, *, reason: str) -> AutonomyTransition:
+        return write
+
+    def _exit_reduce_only_locally(self, reason: str) -> tuple[AutonomyTransition, Callable[[], None] | None]:
         if not self.reduce_only_active:
-            return AutonomyTransition.enter_platform_reduce_only(
-                reason,
-                from_mode=AutonomyMode.NORMAL,
+            return (
+                AutonomyTransition.enter_platform_reduce_only(
+                    reason,
+                    from_mode=AutonomyMode.NORMAL,
+                ),
+                None,
             )
 
         transition = AutonomyTransition.exit_platform_reduce_only(
@@ -163,16 +224,9 @@ class PlatformDegradeController:
             from_mode=transition.from_mode.value,
             to_mode=transition.to_mode.value,
         )
-        if self.evidence_writer is not None:
-            self.evidence_writer.record_transition(
-                scope="platform",
-                mode=transition.to_mode.value,
-                reason=transition.reason,
-                manual_rearm_required=False,
-            )
         if self.metrics is not None:
             transition.record_transition(self.metrics)
-        return transition
+        return transition, self._pending_write(transition, False)
 
     def force_clear(self, *, reason: str = "manual_rearm") -> AutonomyTransition | None:
         """Operator escape hatch: clear all reasons and exit reduce_only.
@@ -252,7 +306,72 @@ class PlatformDegradeController:
 
         elapsed_ns = now_ns - self._recovery_started_ns
         if elapsed_ns >= self._auto_recovery_cooldown_ns:
-            self.exit_reduce_only(reason=f"auto_recovery: all_reasons_cleared_{self._auto_recovery_cooldown_s}s")
+            transition, persist = self._exit_reduce_only_locally(
+                reason=f"auto_recovery: all_reasons_cleared_{self._auto_recovery_cooldown_s}s"
+            )
+            if persist is not None:
+                persist()
+            del transition
+            self._recovery_started_ns = 0
+            return True
+
+        return False
+
+    async def check_auto_recovery_async(self, *, current_reasons: list[str], now_ns: int) -> bool:
+        """:meth:`check_auto_recovery`, off the event loop.
+
+        The supervisor loop calls this every cycle, and on the cycle that
+        actually recovers it writes the durable record. Same split as
+        :meth:`enter_reduce_only_async`: the in-memory recovery lands first, the
+        write is awaited off-loop.
+        """
+        if not self.reduce_only_active or not self._auto_recovery_enabled:
+            return False
+
+        # Sync: remove auto-recoverable reasons that inputs no longer report
+        input_reason_set = set(current_reasons)
+        auto_recoverable_active = self._active_reasons & _AUTO_RECOVERABLE_REASONS
+        cleared = auto_recoverable_active - input_reason_set
+        if cleared:
+            self._active_reasons -= cleared
+            logger.info(
+                "auto_recovery_reasons_cleared", cleared=sorted(cleared), remaining=sorted(self._active_reasons)
+            )
+
+        # Sync: re-add auto-recoverable reasons that are re-firing in inputs
+        re_fired = (input_reason_set & _AUTO_RECOVERABLE_REASONS) - self._active_reasons
+        if re_fired:
+            self._active_reasons |= re_fired
+            self._recovery_started_ns = 0
+            logger.info(
+                "auto_recovery_reasons_refired", refired=sorted(re_fired), active_reasons=sorted(self._active_reasons)
+            )
+
+        # If ANY non-auto-recoverable reason remains, block auto-recovery
+        non_recoverable = self._active_reasons - _AUTO_RECOVERABLE_REASONS
+        if non_recoverable:
+            self._recovery_started_ns = 0
+            return False
+
+        # If any active reason remains (auto-recoverable but still firing), reset
+        if self._active_reasons:
+            self._recovery_started_ns = 0
+            return False
+
+        # All reasons cleared — run cooldown timer
+        if self._recovery_started_ns == 0:
+            self._recovery_started_ns = now_ns
+            logger.info("auto_recovery_cooldown_started", cooldown_s=self._auto_recovery_cooldown_s)
+            return False
+
+        elapsed_ns = now_ns - self._recovery_started_ns
+        if elapsed_ns >= self._auto_recovery_cooldown_ns:
+            transition, persist = self._exit_reduce_only_locally(
+                reason=f"auto_recovery: all_reasons_cleared_{self._auto_recovery_cooldown_s}s"
+            )
+            if persist is not None:
+                await asyncio.to_thread(persist)
+            del transition
             self._recovery_started_ns = 0
             return True
 
