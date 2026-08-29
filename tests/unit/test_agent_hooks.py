@@ -300,13 +300,13 @@ def _gated_repo(tmp_path, files=("src/hft_platform/x.py",), seeded=()):
     return repo, _run_git(repo, "rev-parse", "HEAD")
 
 
-def _canonical_sha(repo, head):
+def _canonical_sha(repo, head, base=None):
     """The documented hash formula, recomputed independently of the hook."""
     import hashlib
 
-    base = _run_git(repo, "merge-base", "origin/main", head)
+    base = base or _run_git(repo, "merge-base", "origin/main", head)
     raw = subprocess.run(
-        ["git", "diff", "--no-renames", "--full-index", f"{base}...{head}"],
+        ["git", "diff", "--no-renames", "--full-index", f"{base}..{head}"],
         cwd=repo,
         capture_output=True,
         check=True,
@@ -328,6 +328,7 @@ def _report(
     native_body="",
     ack=None,
     complete=True,
+    base=None,
 ):
     d = reports / name
     d.mkdir(parents=True)
@@ -345,9 +346,10 @@ def _report(
             {
                 "schema": 1,
                 "mode": mode,
+                "base_oid": base or _run_git(repo, "merge-base", "origin/main", head),
                 "head_oid": head,
                 "pr_number": None,
-                "diff_sha256": diff_sha if diff_sha is not None else _canonical_sha(repo, head),
+                "diff_sha256": diff_sha if diff_sha is not None else _canonical_sha(repo, head, base),
                 "reviewers": {
                     "review": {"completed": native_ok, "failure": None},
                     "adversarial": {"completed": True, "verdict": verdict},
@@ -583,6 +585,7 @@ def test_attestation_marks_a_dead_native_reviewer_incomplete(tmp_path):
         pr_number=None,
         native=NATIVE_DEAD,
         adversarial=ADV_OK,
+        base=None,
         head="x",
         now="t",
     )
@@ -599,6 +602,7 @@ def test_attestation_marks_a_usage_limited_adversarial_reviewer_incomplete(tmp_p
         pr_number=None,
         native=NATIVE_OK,
         adversarial=ADV_LIMIT,
+        base=None,
         head="x",
         now="t",
     )
@@ -609,7 +613,14 @@ def test_attestation_marks_a_usage_limited_adversarial_reviewer_incomplete(tmp_p
 def test_attestation_reads_the_verdict_from_the_adversarial_report(tmp_path):
     m = _attestation_module()
     a = m.build_attestation(
-        repo_root=str(tmp_path), mode="branch", pr_number=None, native=NATIVE_OK, adversarial=ADV_OK, head="x", now="t"
+        repo_root=str(tmp_path),
+        mode="branch",
+        pr_number=None,
+        native=NATIVE_OK,
+        adversarial=ADV_OK,
+        base=None,
+        head="x",
+        now="t",
     )
     assert a["reviewers"]["adversarial"]["verdict"] == "needs-attention"
 
@@ -622,6 +633,7 @@ def test_attestation_never_completes_for_a_working_tree_review(tmp_path):
         pr_number=None,
         native=NATIVE_OK,
         adversarial=ADV_OK.replace("needs-attention", "approve"),
+        base=None,
         head="x",
         now="t",
     )
@@ -699,3 +711,52 @@ def test_verifier_reports_a_missing_attestation_rather_than_crashing(tmp_path):
     m.REPORTS = tmp_path / "nope"
     d = m.verify(str(tmp_path), "a" * 40)
     assert d.ok is False and "review reports directory" in d.reason
+
+
+def test_review_gate_survives_origin_main_advancing_after_the_review(tmp_path):
+    """A benchmark-baseline commit on main must not invalidate a real review.
+
+    The hash is bound to the base the reviewers actually used, so main moving
+    underneath does not silently re-derive a different range.
+    """
+    repo, head = _gated_repo(tmp_path)
+    _report(tmp_path / "reports", repo, head)
+
+    # main advances with an unrelated commit, exactly as CI does on every run
+    main_tip = _run_git(repo, "rev-parse", "origin/main")
+    _run_git(repo, "branch", "-f", "tmp-main", main_tip)
+    _run_git(repo, "checkout", "-q", "tmp-main")
+    (repo / "docs").mkdir(exist_ok=True)
+    (repo / "docs/changelog.md").write_text("advanced\n")
+    _run_git(repo, "add", "-A")
+    _run_git(repo, "commit", "-q", "-m", "unrelated main commit")
+    _run_git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    _run_git(repo, "checkout", "-q", head)
+
+    assert _push(repo, tmp_path / "reports", command=f"git push origin {head}").returncode == 0
+
+
+def test_review_gate_blocks_a_review_whose_base_was_narrowed(tmp_path):
+    """`--base HEAD^` reviews one commit and would otherwise stamp the branch."""
+    repo, _ = _gated_repo(tmp_path, files=("src/hft_platform/first.py",))
+    second = repo / "src/hft_platform/second.py"
+    second.write_text("v = 2\n")
+    _run_git(repo, "add", "-A")
+    _run_git(repo, "commit", "-q", "-m", "second source commit")
+    head = _run_git(repo, "rev-parse", "HEAD")
+    narrow_base = _run_git(repo, "rev-parse", "HEAD~1")
+
+    _report(tmp_path / "reports", repo, head, base=narrow_base)
+    r = _push(repo, tmp_path / "reports")
+    assert r.returncode == 2, "a narrowed review base credited unreviewed files"
+    assert "narrower" in r.stderr and "first.py" in r.stderr
+
+
+def test_review_gate_blocks_an_attestation_with_no_recorded_base(tmp_path):
+    repo, head = _gated_repo(tmp_path)
+    d = _report(tmp_path / "reports", repo, head)
+    att = json.loads((d / "ATTESTATION.json").read_text())
+    att["base_oid"] = None
+    (d / "ATTESTATION.json").write_text(json.dumps(att))
+    r = _push(repo, tmp_path / "reports")
+    assert r.returncode == 2 and "no reviewed base" in r.stderr

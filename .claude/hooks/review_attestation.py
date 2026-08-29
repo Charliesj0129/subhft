@@ -87,30 +87,35 @@ def git(*args: str, cwd: str | None = None) -> str:
     return out.stdout.strip() if out.returncode == 0 else ""
 
 
+def canonical_base(head: str, cwd: str | None = None) -> str | None:
+    """The base a review of ``head`` is expected to have used."""
+    return git("merge-base", "origin/main", head, cwd=cwd) or None
+
+
 def canonical_range(head: str, cwd: str | None = None) -> str | None:
-    """The one range a review of ``head`` is expected to have covered.
+    """``<merge-base>..<head>``, or None when the range cannot be formed."""
+    base = canonical_base(head, cwd=cwd)
+    return f"{base}..{head}" if base else None
 
-    Producer and consumer must agree exactly, so this is the only place either
-    decides what "the diff" means.
+
+def diff_sha256(base: str, head: str, cwd: str | None = None) -> str | None:
+    """sha256 of the diff from ``base`` to ``head``.
+
+    The base is an explicit argument, not re-derived, because ``origin/main``
+    moves: this repo lands a benchmark-baseline commit on every CI run, and a
+    merge-base recomputed after that advance would invalidate an otherwise valid
+    review. Binding to the recorded base keeps the hash stable; the separate
+    coverage check below is what stops a deliberately narrow base from being
+    used to shrink what was reviewed.
+
+    ``--no-renames`` matters twice. It makes the hash stable across git versions
+    and rename-detection thresholds, and it stops a source file *moved out of* a
+    gated directory from disappearing: with rename detection ``--name-only``
+    reports only the destination, so moving ``src/x.py`` to ``docs/x.py`` deletes
+    production source while showing the gate no ``src/``.
     """
-    base = git("merge-base", "origin/main", head, cwd=cwd)
-    return f"{base}...{head}" if base else None
-
-
-def diff_sha256(head: str, cwd: str | None = None) -> str | None:
-    """sha256 of the canonical diff.
-
-    ``--no-renames`` matters twice. It is what makes the hash stable across git
-    versions and rename-detection thresholds, and it is what stops a source file
-    *moved out of* a gated directory from disappearing: with rename detection
-    ``--name-only`` reports only the destination path, so moving ``src/x.py`` to
-    ``docs/x.py`` deletes production source while showing the gate no ``src/``.
-    """
-    rng = canonical_range(head, cwd=cwd)
-    if not rng:
-        return None
     out = subprocess.run(
-        ["git", "diff", "--no-renames", "--full-index", rng],
+        ["git", "diff", "--no-renames", "--full-index", f"{base}..{head}"],
         cwd=cwd,
         capture_output=True,
         timeout=60,
@@ -174,7 +179,15 @@ def all_findings(native: str, adversarial: str) -> list[dict]:
 
 
 def build_attestation(
-    *, repo_root: str, mode: str, pr_number: int | None, native: str, adversarial: str, head: str, now: str
+    *,
+    repo_root: str,
+    mode: str,
+    pr_number: int | None,
+    native: str,
+    adversarial: str,
+    base: str | None,
+    head: str,
+    now: str,
 ) -> dict:
     """The attestation payload. Pure apart from the git calls it needs for the hash.
 
@@ -184,8 +197,7 @@ def build_attestation(
     """
     native_ok, native_failure = native_state(native)
     adv_ok, verdict = adversarial_state(adversarial)
-    base = None if mode == "working-tree" else git("merge-base", "origin/main", head, cwd=repo_root)
-    sha = None if mode == "working-tree" else diff_sha256(head, cwd=repo_root)
+    sha = None if (mode == "working-tree" or not base or not head) else diff_sha256(base, head, cwd=repo_root)
     return {
         "schema": 1,
         "written_at": now,
@@ -295,14 +307,31 @@ def _rejection(att: dict, d: Path, repo_root: str | None, head_oid: str, pr_numb
             "a launched review is not a completed one."
         )
 
-    recomputed = diff_sha256(head_oid, cwd=repo_root)
+    reviewed_base = att.get("base_oid")
+    if not reviewed_base:
+        return f"{d.name}: the attestation records no reviewed base"
+
+    recomputed = diff_sha256(reviewed_base, head_oid, cwd=repo_root)
     if recomputed is None:
         return f"{d.name}: the diff for {head_oid[:8]} could not be recomputed"
     if recomputed != att.get("diff_sha256"):
         return (
             f"{d.name}: the review covered a different diff than the one being published "
             f"(recorded {str(att.get('diff_sha256'))[:12]}, now {recomputed[:12]}). "
-            "Amending, rebasing, or reviewing a narrower base invalidates the evidence."
+            "Amending or rebasing after the review invalidates the evidence."
+        )
+
+    # A hash bound to the recorded base is stable while origin/main advances, but
+    # on its own it would let `--base HEAD^` shrink what "reviewed" means. So the
+    # gated files the reviewers saw must cover every gated file being published.
+    publishing = set(gated_files(canonical_range(head_oid, cwd=repo_root) or "", cwd=repo_root))
+    reviewed = set(gated_files(f"{reviewed_base}..{head_oid}", cwd=repo_root))
+    unreviewed = sorted(publishing - reviewed)
+    if unreviewed:
+        listed = "\n".join(f"    - {f}" for f in unreviewed[:10])
+        return (
+            f"{d.name}: the review base ({str(reviewed_base)[:8]}) is narrower than what is being "
+            f"published, so {len(unreviewed)} gated file(s) were never reviewed:\n{listed}"
         )
 
     if pr_number is not None and att.get("pr_number") not in (pr_number, None):
