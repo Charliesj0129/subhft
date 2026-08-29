@@ -79,6 +79,15 @@ NATIVE_FAILURES = (
     "Codex did not return valid structured JSON.",
 )
 
+# The provider aborting the run mid-investigation. Measured over all 28 report
+# directories on 2026-08-29: this line appears in 7 of them and in every one of
+# those `review.md` is the 95-byte dead body, while all 21 without it hold a real
+# report. It is the only signal that separates the two -- and it is the signal
+# `Verdict:` alone cannot give, because a truncated adversarial reviewer still
+# renders one. Both `approve` verdicts in the entire corpus are runs carrying
+# this line; not one reviewer that ran to completion has ever said approve.
+PROVIDER_ABORT = "[codex] Codex error:"
+
 _VERDICT = re.compile(r"^Verdict:\s*(approve|needs-attention)\s*$", re.M)
 _ADV_FINDING = re.compile(r"^-\s*\[(critical|high|medium|low)\]\s*(.+?)\s*$", re.M | re.I)
 _NATIVE_FINDING = re.compile(r"^-\s*\[(P\d)\]\s*(.+?)(?:\s+—\s+|\s+--\s+|$)", re.M)
@@ -141,34 +150,59 @@ def gated_files(rng: str, cwd: str | None = None) -> list[str]:
     return [f for f in files.splitlines() if f.startswith(GATED_PREFIXES)]
 
 
-def native_state(text: str) -> tuple[bool, str | None]:
+def native_state(text: str, err: str = "") -> tuple[bool, str | None]:
     """(completed, failure sentence) for the native reviewer.
 
     `/codex:review` renders free-form prose and NEVER a `Verdict:` line -- true
-    of all 25 historical reports -- so completion has to be read as the absence
+    of all 28 historical reports -- so completion has to be read as the absence
     of the four bodies render.mjs writes when nothing came back. `review.md` is
     95 bytes in that state; a real report is kilobytes.
+
+    `err` is the `.err` sidecar. An unreadable one reads as "no error", which is
+    the fail-open direction -- but the four bodies above are checked
+    independently, so the sidecar is the second lock, never the only one.
     """
     if not text.strip():
         return False, "no output"
     for sentence in NATIVE_FAILURES:
         if sentence in text:
             return False, sentence
+    if PROVIDER_ABORT in err:
+        return False, _abort_reason(err)
     return True, None
 
 
-def adversarial_state(text: str) -> tuple[bool, str | None]:
+def adversarial_state(text: str, err: str = "") -> tuple[bool, str | None]:
     """(completed, verdict) for the adversarial reviewer.
 
     `/codex:adversarial-review` is schema-constrained
-    (schemas/review-output.schema.json, verdict enum approve|needs-attention) and
-    the line is rendered only once that JSON parsed, so its presence IS the
-    completion signal. Do NOT substitute `.err`'s `Turn completed.`:
-    20260827-224921-dailyloss-r3 has `Turn failed` in the sidecar and a valid
-    `Verdict: approve` with a real body in the report.
+    (schemas/review-output.schema.json, verdict enum approve|needs-attention), so
+    a `Verdict:` line means the JSON parsed. It does NOT mean the reviewer
+    finished looking: a run the provider aborts renders a verdict over whatever
+    it had reached. On 2026-08-29 that produced `Verdict: approve` /
+    "No material findings" from a 375-byte report whose sidecar says the usage
+    limit was hit -- an approval of a branch the reviewer had not finished
+    reading, which is exactly the empty-review-reads-like-an-approval failure
+    this whole mechanism exists to close, arriving through the mechanism itself.
+
+    So the verdict is necessary and not sufficient; the sidecar must also be
+    clean. `Turn failed.` on its own stays non-authoritative -- it is
+    coextensive with PROVIDER_ABORT across all 28 reports and adds nothing.
     """
     m = _VERDICT.search(text)
-    return (True, m.group(1)) if m else (False, None)
+    if not m:
+        return False, None
+    if PROVIDER_ABORT in err:
+        return False, m.group(1)
+    return True, m.group(1)
+
+
+def _abort_reason(err: str) -> str:
+    """The provider's own abort line, trimmed to one sentence for the report."""
+    for line in err.splitlines():
+        if line.startswith(PROVIDER_ABORT):
+            return line[len("[codex] ") :].strip()[:160]
+    return "provider aborted the run"
 
 
 def all_findings(native: str, adversarial: str) -> list[dict]:
@@ -197,6 +231,8 @@ def build_attestation(
     base: str | None,
     head: str,
     now: str,
+    native_err: str = "",
+    adversarial_err: str = "",
 ) -> dict:
     """The attestation payload. Pure apart from the git calls it needs for the hash.
 
@@ -204,8 +240,8 @@ def build_attestation(
     repository and outside its CI. The consumer must never be the only tested
     half of a contract.
     """
-    native_ok, native_failure = native_state(native)
-    adv_ok, verdict = adversarial_state(adversarial)
+    native_ok, native_failure = native_state(native, native_err)
+    adv_ok, verdict = adversarial_state(adversarial, adversarial_err)
     sha = None if (mode == "working-tree" or not base or not head) else diff_sha256(base, head, cwd=repo_root)
     return {
         "schema": 1,
@@ -218,7 +254,11 @@ def build_attestation(
         "diff_sha256": sha,
         "reviewers": {
             "review": {"completed": native_ok, "failure": native_failure},
-            "adversarial": {"completed": adv_ok, "verdict": verdict},
+            "adversarial": {
+                "completed": adv_ok,
+                "verdict": verdict,
+                "failure": None if adv_ok else (_abort_reason(adversarial_err) if verdict else "no verdict"),
+            },
         },
         "findings": all_findings(native, adversarial),
         # A working-tree review can never credit a publish, so it is never

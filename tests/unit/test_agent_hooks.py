@@ -606,8 +606,120 @@ def test_attestation_marks_a_usage_limited_adversarial_reviewer_incomplete(tmp_p
         head="x",
         now="t",
     )
-    assert a["reviewers"]["adversarial"] == {"completed": False, "verdict": None}
+    assert a["reviewers"]["adversarial"]["completed"] is False
+    assert a["reviewers"]["adversarial"]["verdict"] is None
     assert a["complete"] is False
+
+
+# The provider's own abort line, verbatim from
+# 20260829-144619-review-gate-r2/adversarial.err. The URLs are trimmed; the
+# prefix is the part the verifier matches on.
+ERR_ABORTED = (
+    "[codex] Command completed: /bin/bash -lc 'git rev-parse --show-toplevel' (exit 0)\n"
+    "[codex] Codex error: You've hit your usage limit. Upgrade to Pro, visit "
+    "https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 6:03 PM.\n"
+    "[codex] Turn failed.\n"
+)
+ERR_CLEAN = "[codex] Review output captured.\n[codex] Reviewer finished.\n[codex] Turn completed.\n"
+# What a reviewer aborted mid-investigation actually renders: the schema
+# validated, so a verdict exists, over a body that reached no findings.
+ADV_TRUNCATED_APPROVE = (
+    "# Codex Adversarial Review\n\nTarget: branch diff against origin/main\nVerdict: approve\n\n"
+    "I\u2019m applying the repository\u2019s task-intake and strict-review procedures.\n\nNo material findings.\n"
+)
+
+
+def test_attestation_refuses_an_approve_the_provider_aborted_mid_run(tmp_path):
+    """A verdict proves the schema parsed, not that the reviewer finished looking.
+
+    Measured 2026-08-29 on this branch's own round-2 review: the usage limit hit,
+    `review.md` came back the 95-byte dead body, and the adversarial reviewer
+    rendered `Verdict: approve` / "No material findings" from 375 bytes. Crediting
+    that is crediting an empty review as an approval -- the failure the gate
+    exists to close, arriving through the gate's own evidence channel.
+    """
+    m = _attestation_module()
+    a = m.build_attestation(
+        repo_root=str(tmp_path),
+        mode="branch",
+        pr_number=None,
+        native=NATIVE_OK,
+        adversarial=ADV_TRUNCATED_APPROVE,
+        adversarial_err=ERR_ABORTED,
+        base=None,
+        head="x",
+        now="t",
+    )
+    assert a["reviewers"]["adversarial"]["completed"] is False
+    assert a["reviewers"]["adversarial"]["verdict"] == "approve"
+    assert "usage limit" in a["reviewers"]["adversarial"]["failure"]
+    assert a["complete"] is False
+
+
+def test_attestation_refuses_a_native_report_the_provider_aborted_mid_run(tmp_path):
+    """The four failure bodies are not the only way the native reviewer dies.
+
+    A run aborted after it had already written prose leaves a report that passes
+    the body check, so the sidecar is the second lock.
+    """
+    m = _attestation_module()
+    a = m.build_attestation(
+        repo_root=str(tmp_path),
+        mode="branch",
+        pr_number=None,
+        native=NATIVE_OK,
+        native_err=ERR_ABORTED,
+        adversarial=ADV_OK,
+        base=None,
+        head="x",
+        now="t",
+    )
+    assert a["reviewers"]["review"]["completed"] is False
+    assert "usage limit" in a["reviewers"]["review"]["failure"]
+    assert a["complete"] is False
+
+
+def test_attestation_accepts_a_clean_sidecar(tmp_path):
+    """The premise of the two tests above: without the abort line, both complete."""
+    m = _attestation_module()
+    a = m.build_attestation(
+        repo_root=str(tmp_path),
+        mode="branch",
+        pr_number=None,
+        native=NATIVE_OK,
+        native_err=ERR_CLEAN,
+        adversarial=ADV_TRUNCATED_APPROVE,
+        adversarial_err=ERR_CLEAN,
+        base=None,
+        head="x",
+        now="t",
+    )
+    assert a["reviewers"]["review"]["completed"] is True
+    assert a["reviewers"]["adversarial"]["completed"] is True
+
+
+def test_attestation_does_not_treat_turn_failed_alone_as_an_abort(tmp_path):
+    """`Turn failed.` adds nothing PROVIDER_ABORT does not already say.
+
+    It is coextensive with the provider's error line across all 28 historical
+    reports, so treating it as authoritative on its own would only add a way to
+    be wrong about a run that recovered.
+    """
+    m = _attestation_module()
+    a = m.build_attestation(
+        repo_root=str(tmp_path),
+        mode="branch",
+        pr_number=None,
+        native=NATIVE_OK,
+        native_err="[codex] Turn failed.\n",
+        adversarial=ADV_OK,
+        adversarial_err="[codex] Turn failed.\n",
+        base=None,
+        head="x",
+        now="t",
+    )
+    assert a["reviewers"]["review"]["completed"] is True
+    assert a["reviewers"]["adversarial"]["completed"] is True
 
 
 def test_attestation_reads_the_verdict_from_the_adversarial_report(tmp_path):
