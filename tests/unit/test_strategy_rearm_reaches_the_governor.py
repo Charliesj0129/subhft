@@ -324,3 +324,88 @@ def test_the_scan_is_cheap_when_there_is_nothing_to_do(rig):
         rearm_requests.pending(rig.base)
     per_call_ms = (time.perf_counter() - started) * 1000 / 200
     assert per_call_ms < 1.0, f"empty scan cost {per_call_ms:.3f} ms per tick"
+
+
+class TestQuarantineDurabilityIsVisible:
+    """A latch held in memory only must be observable, not just logged.
+
+    ``_log_persist_outcome`` has always named the consequence -- "a restart will
+    not restore it" -- in a log line. An operator deciding whether it is safe to
+    restart cannot query a log line that has scrolled, and nothing else in the
+    process could see the state either.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_confirmed_write_leaves_the_quarantine_durable(self, tmp_path):
+        from hft_platform.ops.evidence import AutonomyEvidenceWriter
+        from hft_platform.ops.strategy_governor import StrategyHealthGovernor
+
+        gov = StrategyHealthGovernor(evidence_writer=AutonomyEvidenceWriter(base_dir=tmp_path))
+        await gov.quarantine_async("R47_MAKER_TMF", reason="repeated_rejects")
+
+        assert gov.undurable_quarantines == frozenset()
+
+    @pytest.mark.asyncio
+    async def test_a_failed_write_marks_the_quarantine_undurable(self, tmp_path):
+        from hft_platform.ops.evidence import AutonomyEvidenceWriter
+        from hft_platform.ops.strategy_governor import StrategyHealthGovernor
+
+        writer = AutonomyEvidenceWriter(base_dir=tmp_path)
+
+        def explode(**_kwargs):
+            raise OSError("no space left on device")
+
+        writer.record_transition = explode  # type: ignore[method-assign]
+        gov = StrategyHealthGovernor(evidence_writer=writer)
+
+        # The latch must still be applied: a disk problem is not a reason to let
+        # a failing strategy keep trading.
+        await gov.quarantine_async("R47_MAKER_TMF", reason="repeated_rejects")
+
+        assert gov.is_quarantined("R47_MAKER_TMF") is True
+        assert "R47_MAKER_TMF" in gov.undurable_quarantines
+
+    @pytest.mark.asyncio
+    async def test_the_window_is_open_before_the_write_is_confirmed(self, tmp_path):
+        """Undurable is the starting state, not a state entered on failure.
+
+        The window opens the moment the latch exists in memory; reporting it
+        only after a failure would leave the in-flight case looking durable.
+        """
+        import asyncio as _asyncio
+
+        from hft_platform.ops.evidence import AutonomyEvidenceWriter
+        from hft_platform.ops.strategy_governor import StrategyHealthGovernor
+
+        writer = AutonomyEvidenceWriter(base_dir=tmp_path)
+        started, release = _asyncio.Event(), _asyncio.Event()
+        loop = _asyncio.get_running_loop()
+        real = writer.record_transition
+
+        def slow(**kwargs):
+            loop.call_soon_threadsafe(started.set)
+            # Bounded. An unbounded spin means a failing assertion below leaves a
+            # non-daemon executor thread running and pytest hangs at teardown
+            # instead of reporting the failure -- which is what an earlier
+            # version of this test did.
+            deadline = time.monotonic() + 5.0
+            while not release.is_set() and time.monotonic() < deadline:
+                time.sleep(0.005)
+            return real(**kwargs)
+
+        writer.record_transition = slow  # type: ignore[method-assign]
+        gov = StrategyHealthGovernor(evidence_writer=writer)
+
+        task = _asyncio.create_task(gov.quarantine_async("R47_MAKER_TMF", reason="repeated_rejects"))
+        try:
+            await _asyncio.wait_for(started.wait(), timeout=5)
+            assert "R47_MAKER_TMF" in gov.undurable_quarantines, "in flight is not yet durable"
+        finally:
+            # Always, so a failure above reports as a failure and not as a hang.
+            loop.call_soon_threadsafe(release.set)
+        await task
+        for _ in range(200):  # the write completes on a worker thread
+            if gov.undurable_quarantines == frozenset():
+                break
+            await _asyncio.sleep(0.01)
+        assert gov.undurable_quarantines == frozenset()

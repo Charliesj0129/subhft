@@ -187,6 +187,7 @@ class PlatformDegradeController:
         writer = self.evidence_writer
         if writer is None:
             return None
+
         def write() -> None:
             writer.record_transition(
                 scope="platform",
