@@ -54,12 +54,21 @@ REPORTS = Path(os.environ.get("DUAL_REVIEW_REPORTS") or (Path.home() / ".claude"
 #: here because the two most expensive defects of 2026-08 were config, not code:
 #: the daily-loss limit enforced 10x too tight, and an expired contract seed in
 #: ``strategies.yaml`` that left a strategy bound to nothing.
-GATED_PREFIXES = ("src/", "rust_core/", "config/")
+GATED_PREFIXES = (
+    "src/",
+    "rust_core/",
+    "config/",
+    # The gate protects itself. Without these, a change that weakens or deletes
+    # the review hooks is "not source" and publishes freely -- after which
+    # nothing stops the next one.
+    ".claude/hooks/",
+    "scripts/git-hooks/",
+)
 
 #: Severities that must be named in ACK.md before a ``needs-attention`` review can
 #: publish. Medium and low are deliberately exempt -- friction disproportionate to
 #: severity gets routed around, and a gate nobody uses protects nothing.
-ACK_SEVERITIES = ("critical", "high")
+ACK_SEVERITIES = ("critical", "high", "p0", "p1")
 
 #: The four bodies ``render.mjs`` emits when the native reviewer produced nothing.
 #: ``review.md`` is 95 bytes in that state; a real report is kilobytes.
@@ -218,6 +227,27 @@ def build_attestation(
     }
 
 
+def _is_ancestor(maybe_ancestor: str, descendant: str, cwd: str | None = None) -> bool:
+    out = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", maybe_ancestor, descendant],
+        cwd=cwd,
+        capture_output=True,
+        timeout=20,
+        check=False,
+    )
+    return out.returncode == 0
+
+
+def blocking_findings(att: dict) -> list[tuple[str, str]]:
+    """(severity, title) for every finding in the attestation that needs an ACK."""
+    out: list[tuple[str, str]] = []
+    for f in att.get("findings") or []:
+        sev = str(f.get("severity", "")).lower()
+        if sev in ACK_SEVERITIES:
+            out.append((sev, str(f.get("title", ""))))
+    return out
+
+
 def _normalise(title: str) -> str:
     """Compare finding titles loosely enough to survive a re-render."""
     return re.sub(r"[^a-z0-9 ]+", "", title.lower()).strip()
@@ -236,8 +266,8 @@ def findings_needing_ack(report_dir: Path) -> list[tuple[str, str]]:
     if native.is_file():
         text = native.read_text(encoding="utf-8", errors="replace")
         for sev, title in _NATIVE_FINDING.findall(text):
-            if sev.upper() == "P1":
-                out.append(("P1", title))
+            if sev.lower() in ACK_SEVERITIES:
+                out.append((sev.upper(), title))
     return out
 
 
@@ -322,27 +352,36 @@ def _rejection(att: dict, d: Path, repo_root: str | None, head_oid: str, pr_numb
         )
 
     # A hash bound to the recorded base is stable while origin/main advances, but
-    # on its own it would let `--base HEAD^` shrink what "reviewed" means. So the
-    # gated files the reviewers saw must cover every gated file being published.
-    publishing = set(gated_files(canonical_range(head_oid, cwd=repo_root) or "", cwd=repo_root))
-    reviewed = set(gated_files(f"{reviewed_base}..{head_oid}", cwd=repo_root))
-    unreviewed = sorted(publishing - reviewed)
-    if unreviewed:
-        listed = "\n".join(f"    - {f}" for f in unreviewed[:10])
+    # on its own it would let `--base HEAD^` shrink what "reviewed" means.
+    #
+    # Comparing the two sets of gated FILENAMES is not enough, and the reviewers
+    # reproduced why: when an unreviewed commit and a reviewed commit touch the
+    # same file, the sets are equal and the narrow attestation passes with the
+    # earlier hunks never read. Ancestry is the exact test -- the reviewed base
+    # must be at or before the canonical one, so the reviewed range is a superset.
+    canonical = canonical_base(head_oid, cwd=repo_root)
+    if not canonical:
+        return f"{d.name}: no merge-base with origin/main for {head_oid[:8]}"
+    if reviewed_base != canonical and not _is_ancestor(reviewed_base, canonical, cwd=repo_root):
         return (
-            f"{d.name}: the review base ({str(reviewed_base)[:8]}) is narrower than what is being "
-            f"published, so {len(unreviewed)} gated file(s) were never reviewed:\n{listed}"
+            f"{d.name}: the review base ({str(reviewed_base)[:8]}) is NARROWER than the range being "
+            f"published (canonical base {canonical[:8]}), so commits before it were never reviewed. "
+            "Re-review without a hand-picked --base."
         )
 
     if pr_number is not None and att.get("pr_number") not in (pr_number, None):
         return f"{d.name}: reviewed PR #{att.get('pr_number')}, not #{pr_number}"
 
-    if ((reviewers.get("adversarial") or {}).get("verdict") or "").strip() == "needs-attention":
-        required = findings_needing_ack(d)
-        if required:
-            ok, why = _ack_covers(d, required)
-            if not ok:
-                return f"{d.name}: {why}"
+    # Blocking findings come from the attestation, which is written once and never
+    # edited, not from the report markdown. Deleting adversarial.md used to empty
+    # the requirement list and turn a NO SHIP into an approval; and a native P1
+    # went unacknowledged whenever the adversarial reviewer happened to approve,
+    # so the requirement is per-finding rather than per-verdict.
+    required = blocking_findings(att) or findings_needing_ack(d)
+    if required:
+        ok, why = _ack_covers(d, required)
+        if not ok:
+            return f"{d.name}: {why}"
     return None
 
 

@@ -58,33 +58,52 @@ def _segments(cmd: str) -> Iterator[list[str]]:
 
 
 def _skip_prefix(toks: list[str]) -> int:
-    """Index of the program name, past env assignments and wrapper commands."""
-    i = 0
-    while i < len(toks) and _ENV_ASSIGN.match(toks[i]):
-        i += 1
-    if i < len(toks) and toks[i] in _WRAPPERS:
-        i += 1
-        while i < len(toks) and (toks[i].startswith("-") or toks[i].replace(".", "").isdigit()):
-            i += 1
-    return i
+    """Index of the program name, past env assignments and wrapper commands.
 
-
-def _skip_global_options(toks: list[str], i: int, with_value: set[str]) -> int:
-    """Index of the first non-option token, past `git -C <dir>` / `gh --repo <x>`.
-
-    An option written `--repo=x` carries its value in the same token, so only the
-    bare form consumes the next one.
+    Loops rather than unwrapping once: `env LANG=C git push` put a NAME=value
+    operand where the old code expected a flag, so it stopped there and reported
+    no git invocation at all -- a bypass of BOTH this gate and the subagent
+    mutation guard. `timeout 5 env A=b git push` nests the same trap.
     """
-    while i < len(toks) and toks[i].startswith("-"):
-        i += 2 if toks[i] in with_value else 1
+    i = 0
+    while i < len(toks):
+        if _ENV_ASSIGN.match(toks[i]):
+            i += 1
+            continue
+        if os.path.basename(toks[i]) in _WRAPPERS:
+            i += 1
+            # a wrapper's own options, and `env -i` / `timeout 5` style operands
+            while i < len(toks) and (toks[i].startswith("-") or toks[i].replace(".", "").isdigit()):
+                i += 1
+            continue
+        break
     return i
 
 
-def git_invocations(cmd: str) -> Iterator[tuple[str, list[str]]]:
-    """Yield (subcommand, rest_tokens) for each shell segment whose command is git.
+def _skip_global_options(toks: list[str], i: int, with_value: set[str]) -> tuple[int, str | None]:
+    """(index of the first non-option token, value of a -C/--repo style option).
 
-    Global options are skipped, so `git -C /repo push` and `git -c k=v push` both
-    yield ("push", [...]) -- a raw `\\bgit\\s+push\\b` regex sees neither.
+    The `-C <dir>` value is returned rather than discarded: a push resolved in
+    the session's cwd while git publishes another worktree's HEAD would attest
+    the wrong objects entirely.
+    """
+    cwd: str | None = None
+    while i < len(toks) and toks[i].startswith("-"):
+        if toks[i] == "-C" and i + 1 < len(toks):
+            cwd = toks[i + 1]
+        elif toks[i].startswith("-C") and len(toks[i]) > 2:
+            cwd = toks[i][2:]
+        i += 2 if toks[i] in with_value else 1
+    return i, cwd
+
+
+def git_invocations(cmd: str) -> Iterator[tuple[str, list[str], str | None]]:
+    """Yield (subcommand, rest_tokens, cwd_override) for each git invocation.
+
+    Global options are skipped, so `git -C /repo push` and `git -c k=v push`
+    both yield a "push" -- a raw `\\bgit\\s+push\\b` regex sees neither. `-C`'s
+    value comes back with it, because the directory git operates on decides
+    which HEAD is being published.
 
     This is a floor, not a sandbox: indirection like `g=git; $g push` is out of
     scope. The orchestrator reviews diffs regardless.
@@ -93,9 +112,9 @@ def git_invocations(cmd: str) -> Iterator[tuple[str, list[str]]]:
         i = _skip_prefix(toks)
         if i >= len(toks) or os.path.basename(toks[i]) != "git":
             continue
-        i = _skip_global_options(toks, i + 1, _GIT_OPTS_WITH_VALUE)
+        i, cwd = _skip_global_options(toks, i + 1, _GIT_OPTS_WITH_VALUE)
         if i < len(toks):
-            yield toks[i], toks[i + 1 :]
+            yield toks[i], toks[i + 1 :], cwd
 
 
 def gh_invocations(cmd: str) -> Iterator[tuple[str, str, list[str]]]:
@@ -108,10 +127,10 @@ def gh_invocations(cmd: str) -> Iterator[tuple[str, str, list[str]]]:
         i = _skip_prefix(toks)
         if i >= len(toks) or os.path.basename(toks[i]) != "gh":
             continue
-        i = _skip_global_options(toks, i + 1, _GH_OPTS_WITH_VALUE)
+        i, _ = _skip_global_options(toks, i + 1, _GH_OPTS_WITH_VALUE)
         if i >= len(toks):
             continue
         group = toks[i]
-        j = _skip_global_options(toks, i + 1, _GH_OPTS_WITH_VALUE)
+        j, _ = _skip_global_options(toks, i + 1, _GH_OPTS_WITH_VALUE)
         sub = toks[j] if j < len(toks) else ""
         yield group, sub, toks[j + 1 :]

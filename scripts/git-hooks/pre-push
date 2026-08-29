@@ -76,7 +76,17 @@ def main() -> int:
 
         rng = canonical_range(local_oid, cwd=root)
         if rng is None:
-            continue  # no origin/main -> not this project's layout
+            # An orphan commit, an unrelated history, or a missing origin/main.
+            # The Claude-side hook allows here because it also runs in unrelated
+            # repositories; this hook is installed into ONE repo on purpose, so
+            # "the range cannot be formed" means the changes cannot be inspected.
+            print(
+                f"BLOCKED by pre-push: no merge-base between origin/main and {local_oid[:8]}, "
+                "so the changes being published cannot be inspected.\n"
+                f"  Bypass:  {OVERRIDE}=1 git push ...   or   git push --no-verify",
+                file=sys.stderr,
+            )
+            return 1
         touched = gated_files(rng, cwd=root)
         if not touched:
             continue

@@ -749,7 +749,7 @@ def test_review_gate_blocks_a_review_whose_base_was_narrowed(tmp_path):
     _report(tmp_path / "reports", repo, head, base=narrow_base)
     r = _push(repo, tmp_path / "reports")
     assert r.returncode == 2, "a narrowed review base credited unreviewed files"
-    assert "narrower" in r.stderr and "first.py" in r.stderr
+    assert "NARROWER" in r.stderr
 
 
 def test_review_gate_blocks_an_attestation_with_no_recorded_base(tmp_path):
@@ -760,3 +760,123 @@ def test_review_gate_blocks_an_attestation_with_no_recorded_base(tmp_path):
     (d / "ATTESTATION.json").write_text(json.dumps(att))
     r = _push(repo, tmp_path / "reports")
     assert r.returncode == 2 and "no reviewed base" in r.stderr
+
+
+# --- regressions for the 2026-08-29 dual review ------------------------------
+#
+# Every case below was reported by one or both Codex reviewers against the first
+# three commits of this branch, and reproduced before being fixed.
+
+
+def test_review_gate_blocks_a_narrowed_review_that_reuses_the_same_file(tmp_path):
+    """Comparing gated FILENAMES is not enough when both commits touch one file.
+
+    The reviewers reproduced this: an unreviewed commit and a reviewed commit
+    both modify src/hft_platform/risk.py, so the two filename sets are equal and
+    a set-difference check sees nothing missing. Ancestry is the exact test.
+    """
+    repo, _ = _gated_repo(tmp_path, files=("src/hft_platform/risk.py",))
+    (repo / "src/hft_platform/risk.py").write_text("limit = 5000\n")
+    _run_git(repo, "add", "-A")
+    _run_git(repo, "commit", "-q", "-m", "second change to the SAME file")
+    head = _run_git(repo, "rev-parse", "HEAD")
+    narrow_base = _run_git(repo, "rev-parse", "HEAD~1")
+
+    reviewed = set(_run_git(repo, "diff", "--name-only", "--no-renames", f"{narrow_base}..{head}").split())
+    publishing = set(_run_git(repo, "diff", "--name-only", "--no-renames", f"origin/main..{head}").split())
+    assert publishing == reviewed, "premise broken: the filename sets were expected to be equal"
+
+    _report(tmp_path / "reports", repo, head, base=narrow_base)
+    r = _push(repo, tmp_path / "reports")
+    assert r.returncode == 2 and "NARROWER" in r.stderr
+
+
+def test_review_gate_requires_an_ack_for_a_native_p1_even_when_adversarial_approves(tmp_path):
+    repo, head = _gated_repo(tmp_path)
+    d = _report(tmp_path / "reports", repo, head, verdict="approve")
+    att = json.loads((d / "ATTESTATION.json").read_text())
+    att["findings"] = [{"reviewer": "review", "severity": "P1", "title": "Blocking native finding"}]
+    (d / "ATTESTATION.json").write_text(json.dumps(att))
+    r = _push(repo, tmp_path / "reports")
+    assert r.returncode == 2 and "Blocking native finding" in r.stderr
+
+
+def test_review_gate_keeps_blocking_findings_when_the_reports_are_deleted(tmp_path):
+    """Findings live in the write-once attestation, not in mutable markdown."""
+    repo, head = _gated_repo(tmp_path)
+    d = _report(tmp_path / "reports", repo, head, verdict="needs-attention")
+    att = json.loads((d / "ATTESTATION.json").read_text())
+    att["findings"] = [{"reviewer": "adversarial", "severity": "high", "title": "A real problem"}]
+    (d / "ATTESTATION.json").write_text(json.dumps(att))
+    (d / "adversarial.md").unlink()
+    (d / "review.md").unlink()
+    r = _push(repo, tmp_path / "reports")
+    assert r.returncode == 2, "deleting the reports turned NO SHIP into an approval"
+    assert "A real problem" in r.stderr
+
+
+def test_review_gate_fails_closed_on_a_multi_ref_push(tmp_path):
+    """`git push --all` publishes refs the gate cannot enumerate."""
+    repo, _ = _gated_repo(tmp_path)
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    for cmd in ("git push --all origin", "git push --mirror origin", "git push --branches origin"):
+        r = _push(repo, reports, command=cmd)
+        assert r.returncode == 2, f"{cmd!r} published unenumerated refs"
+        assert "cannot enumerate" in r.stderr or "cannot resolve" in r.stderr
+
+
+def test_review_gate_does_not_mistake_a_push_option_value_for_a_refspec(tmp_path):
+    """`git push -o ci.skip` must gate HEAD, not try to resolve 'ci.skip'."""
+    repo, head = _gated_repo(tmp_path)
+    _report(tmp_path / "reports", repo, head)
+    r = _push(repo, tmp_path / "reports", command="git push -o ci.skip origin main")
+    assert r.returncode == 0, r.stderr
+
+
+def test_review_gate_resolves_the_worktree_named_by_git_dash_c(tmp_path):
+    """`git -C <other> push` publishes THAT worktree's HEAD, not this one's."""
+    other, other_head = _gated_repo(tmp_path)
+    here = tmp_path / "here"
+    here.mkdir()
+    _run_git(here, "init", "-q", "-b", "main")
+    _run_git(here, "commit", "-q", "--allow-empty", "-m", "docs only")
+    _run_git(here, "update-ref", "refs/remotes/origin/main", "HEAD")
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    r = run_hook(
+        "codex_review_gate.py",
+        {"tool_name": "Bash", "cwd": str(here), "tool_input": {"command": f"git -C {other} push origin main"}},
+        here,
+        env={"DUAL_REVIEW_REPORTS": str(reports)},
+    )
+    assert r.returncode == 2, "the other worktree's gated changes were attested against this HEAD"
+    assert other_head[:8] in r.stderr or "no completed Codex review" in r.stderr
+
+
+def test_review_gate_sees_a_push_behind_an_env_assignment_wrapper(tmp_path):
+    """`env LANG=C git push` was invisible to the parser entirely."""
+    repo, _ = _gated_repo(tmp_path)
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    assert _push(repo, reports, command="env LANG=C git push origin main").returncode == 2
+
+
+def test_git_guard_blocks_a_subagent_mutation_behind_an_env_wrapper(tmp_path):
+    """The same parser gap let a subagent amend history unseen."""
+    _git_repo_with_commit(tmp_path, ["a.md"])
+    ev = {
+        "tool_name": "Bash",
+        "agent_type": "hft-executor",
+        "tool_input": {"command": "env GIT_EDITOR=true git commit --amend"},
+    }
+    r = run_hook("git_guard.py", ev, tmp_path)
+    assert r.returncode == 2 and "git commit" in r.stderr
+
+
+def test_review_gate_gates_changes_to_its_own_enforcement_code(tmp_path):
+    """A change that weakens the gate must not publish unreviewed."""
+    repo, _ = _gated_repo(tmp_path, files=(".claude/hooks/codex_review_gate.py",))
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    assert _push(repo, reports).returncode == 2

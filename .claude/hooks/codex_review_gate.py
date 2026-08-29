@@ -67,19 +67,47 @@ from review_attestation import GATED_PREFIXES, canonical_range, gated_files, git
 OVERRIDE = "CODEX_REVIEW_OVERRIDE"
 
 
-def _is_push(rest: list[str]) -> bool:
-    """A push that publishes objects. Deletions remove a ref and add no source."""
-    return "--delete" not in rest and "-d" not in rest
+#: Push options that consume the next token. Without these, `git push -o ci.skip`
+#: reads "ci.skip" as a refspec and blocks a legitimate push.
+_PUSH_OPTS_WITH_VALUE = {"-o", "--push-option", "--receive-pack", "--exec", "--repo"}
+
+#: Selectors that publish refs beyond the ones named on the command line. There
+#: is no single head to attest, so they fail closed rather than being checked
+#: against HEAD and passing while other refs go out unreviewed.
+_MULTI_REF = {"--all", "--branches", "--mirror", "--tags", "--follow-tags"}
+
+
+def _is_delete(rest: list[str]) -> bool:
+    """A deletion removes a ref and publishes no source."""
+    return "--delete" in rest or "-d" in rest
+
+
+def _push_positionals(rest: list[str]) -> list[str]:
+    """Positional arguments of `git push`, with option values consumed."""
+    out: list[str] = []
+    i = 0
+    while i < len(rest):
+        tok = rest[i]
+        if tok.startswith("-"):
+            i += 2 if tok in _PUSH_OPTS_WITH_VALUE else 1
+            continue
+        out.append(tok)
+        i += 1
+    return out
 
 
 def _push_heads(rest: list[str], cwd: str | None) -> tuple[list[str], list[str]]:
-    """(resolved head OIDs, refspecs that could not be resolved).
+    """(resolved head OIDs, selectors that could not be resolved).
 
-    ``git push`` with no refspec publishes the current branch; with refspecs it
-    publishes each source side. A ``:dst`` refspec with an empty source is a
+    `git push` with no refspec publishes the current branch; with refspecs it
+    publishes each source side. A `:dst` refspec with an empty source is a
     delete and publishes nothing.
     """
-    positional = [t for t in rest if not t.startswith("-")]
+    multi = sorted(set(rest) & _MULTI_REF)
+    if multi:
+        return [], [f"{' '.join(multi)} (publishes refs this gate cannot enumerate)"]
+
+    positional = _push_positionals(rest)
     refspecs = positional[1:]  # positional[0] is the remote
     if not refspecs:
         head = git("rev-parse", "HEAD", cwd=cwd)
@@ -96,18 +124,18 @@ def _push_heads(rest: list[str], cwd: str | None) -> tuple[list[str], list[str]]
     return heads, unresolved
 
 
-def _pr_head(number: str, cwd: str | None) -> str:
+def _gh_pr_head(selector: str, cwd: str | None) -> str:
+    """The PR head OID GitHub would merge, for a number, branch, or URL.
+
+    Always asked of GitHub, never inferred from local HEAD: a merge happens
+    server-side, so a PR whose head advanced remotely would otherwise be
+    authorised by a review of whatever this checkout happens to be on.
+    """
     import json
     import subprocess
 
-    out = subprocess.run(
-        ["gh", "pr", "view", number, "--json", "headRefOid"],
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-    )
+    args = ["gh", "pr", "view"] + ([selector] if selector else []) + ["--json", "headRefOid"]
+    out = subprocess.run(args, cwd=cwd, capture_output=True, text=True, timeout=30, check=False)
     if out.returncode != 0:
         return ""
     try:
@@ -116,32 +144,47 @@ def _pr_head(number: str, cwd: str | None) -> str:
         return ""
 
 
-def _targets(cmd: str, cwd: str | None) -> tuple[list[tuple[str, int | None]], list[str]]:
-    """[(head_oid, pr_number)] this command would publish, plus unresolved refspecs."""
-    targets: list[tuple[str, int | None]] = []
+def _option_value(rest: list[str], name: str) -> str:
+    for i, tok in enumerate(rest):
+        if tok == name and i + 1 < len(rest):
+            return rest[i + 1]
+        if tok.startswith(f"{name}="):
+            return tok.split("=", 1)[1]
+    return ""
+
+
+def _targets(cmd: str, event_cwd: str | None) -> tuple[list[tuple[str, str | None]], list[str]]:
+    """[(head_oid, repo cwd)] this command would publish, plus unresolved selectors."""
+    targets: list[tuple[str, str | None]] = []
     unresolved: list[str] = []
 
-    for sub, rest in git_invocations(cmd):
-        if sub == "push" and _is_push(rest):
-            heads, bad = _push_heads(rest, cwd)
-            targets += [(h, None) for h in heads]
-            unresolved += bad
+    for sub, rest, cwd_override in git_invocations(cmd):
+        if sub != "push" or _is_delete(rest):
+            continue
+        # `git -C <dir> push` publishes THAT worktree's HEAD, not this one's.
+        cwd = cwd_override or event_cwd
+        heads, bad = _push_heads(rest, cwd)
+        targets += [(h, cwd) for h in heads]
+        unresolved += bad
 
     for group, sub, rest in gh_invocations(cmd):
         if group != "pr" or sub not in ("create", "merge"):
             continue
         if sub == "create":
-            head = git("rev-parse", "HEAD", cwd=cwd)
-            (targets.append((head, None)) if head else unresolved.append("HEAD"))
+            # A PR is opened from a local branch: --head names it, else HEAD.
+            ref = _option_value(rest, "--head") or "HEAD"
+            oid = git("rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}", cwd=event_cwd)
+            if oid:
+                targets.append((oid, event_cwd))
+            else:
+                unresolved.append(f"gh pr create --head {ref}")
             continue
-        number = next((t for t in rest if t.isdigit()), "")
-        if not number:
-            # `gh pr merge` with no number merges the PR for the current branch.
-            head = git("rev-parse", "HEAD", cwd=cwd)
-            (targets.append((head, None)) if head else unresolved.append("HEAD"))
-            continue
-        oid = _pr_head(number, cwd)
-        (targets.append((oid, int(number))) if oid else unresolved.append(f"PR #{number}"))
+        selector = next((tok for tok in rest if not tok.startswith("-")), "")
+        oid = _gh_pr_head(selector, event_cwd)
+        if oid:
+            targets.append((oid, event_cwd))
+        else:
+            unresolved.append(f"gh pr merge {selector or '(current branch)'}")
 
     return targets, unresolved
 
@@ -193,10 +236,10 @@ def main() -> int:
             )
             return 2
 
-        for head, pr in targets:
-            rng = canonical_range(head, cwd=cwd)
+        for head, target_cwd in targets:
+            rng = canonical_range(head, cwd=target_cwd)
             if rng is None:
-                if not git("rev-parse", "--verify", "--quiet", "origin/main", cwd=cwd):
+                if not git("rev-parse", "--verify", "--quiet", "origin/main", cwd=target_cwd):
                     continue  # no origin/main -> not this project's layout
                 # origin/main exists but the range does not: the object is not in
                 # this checkout. A PR head that was never fetched must not slip
@@ -204,15 +247,15 @@ def main() -> int:
                 print(
                     "BLOCKED by codex_review_gate: "
                     f"{head[:8]} is not present locally, so its changes cannot be inspected.\n"
-                    f"  Fetch it first (git fetch origin, or gh pr checkout {pr or ''}).\n"
+                    "  Fetch it first: git fetch origin, or gh pr checkout <N>.\n"
                     f"  Deliberate bypass:  {OVERRIDE}=1 <command>",
                     file=sys.stderr,
                 )
                 return 2
-            touched = gated_files(rng, cwd=cwd)
+            touched = gated_files(rng, cwd=target_cwd)
             if not touched:
                 continue
-            decision = verify(cwd, head, pr_number=pr)
+            decision = verify(target_cwd, head)
             if decision.ok:
                 print(f"codex_review_gate: {decision.reason}", file=sys.stderr)
                 continue

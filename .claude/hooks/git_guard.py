@@ -46,7 +46,7 @@ def main() -> None:
     if not is_subagent(e):
         sys.exit(0)
     cmd = (e.get("tool_input") or {}).get("command") or ""
-    for sub, rest in git_invocations(cmd):
+    for sub, rest, _cwd in git_invocations(cmd):
         if sub in READONLY:
             continue
         if sub in LIST_FORMS:

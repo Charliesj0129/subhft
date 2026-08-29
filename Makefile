@@ -146,6 +146,12 @@ git-session-check: ## Full git hygiene check (worktrees, branches, stash, confli
 
 install-git-hooks: ## Install the pre-push Codex review gate into this checkout
 	@hooks=$$(git rev-parse --git-path hooks) && mkdir -p "$$hooks" \
+	  && if [ -e "$$hooks/pre-push" ] && ! cmp -s scripts/git-hooks/pre-push "$$hooks/pre-push"; then \
+	       echo "REFUSING: $$hooks/pre-push already exists and differs."; \
+	       echo "  Another hook (LFS, secret scanning, ...) may own it. Chain them by hand,"; \
+	       echo "  or remove it deliberately first. Silently replacing it would delete a guard."; \
+	       exit 1; \
+	     fi \
 	  && install -m 755 scripts/git-hooks/pre-push "$$hooks/pre-push" \
 	  && echo "installed $$hooks/pre-push"
 
