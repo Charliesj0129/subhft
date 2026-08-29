@@ -1,0 +1,105 @@
+#!/usr/bin/env python3
+"""git pre-push: refuse to publish gated source without a completed Codex review.
+
+Why this exists alongside the Claude Code hook
+----------------------------------------------
+``.claude/hooks/codex_review_gate.py`` can only ever see a command string typed
+in one session. It cannot see a push from a terminal, another agent, an IDE, or
+a second Claude session. git hands *this* hook the real thing on stdin::
+
+    <local_ref> <local_oid> <remote_ref> <remote_oid>
+
+so the objects being checked are the objects actually leaving the repository --
+which is the finding the Claude-side hook could not fix from where it sits.
+
+Install
+-------
+``make install-git-hooks``
+
+Failure mode
+------------
+Fail-closed, the opposite of the Claude-side hook. That hook allows on an
+internal error because a wedged session has no escape; this one has a first-class
+escape (``git push --no-verify``), so refusing on an error strands nobody.
+
+Honest limits
+-------------
+``git push --no-verify`` bypasses this entirely, and a push from another machine
+or a merge from the GitHub web UI never reaches it. This is a floor against
+forgetting, not a control against intent.
+"""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+ZERO = "0" * 40
+OVERRIDE = "CODEX_REVIEW_OVERRIDE"
+
+
+def repo_root() -> str:
+    out = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, timeout=20, check=False
+    )
+    return out.stdout.strip()
+
+
+def main() -> int:
+    if os.environ.get(OVERRIDE) == "1":
+        print(f"pre-push: overridden explicitly by {OVERRIDE}=1", file=sys.stderr)
+        return 0
+
+    root = repo_root()
+    if not root:
+        return 0
+    sys.path.insert(0, str(Path(root) / ".claude" / "hooks"))
+    try:
+        from review_attestation import GATED_PREFIXES, canonical_range, gated_files, verify
+    except Exception as exc:
+        print(
+            f"BLOCKED by pre-push: the review verifier could not be loaded ({exc}).\n"
+            f"  Bypass:  {OVERRIDE}=1 git push ...   or   git push --no-verify",
+            file=sys.stderr,
+        )
+        return 1
+
+    updates = [line.split() for line in sys.stdin.read().splitlines() if line.strip()]
+    for parts in updates:
+        if len(parts) < 4:
+            continue
+        _local_ref, local_oid, remote_ref, _remote_oid = parts[:4]
+        if local_oid == ZERO:
+            continue  # deleting a ref publishes no source
+
+        rng = canonical_range(local_oid, cwd=root)
+        if rng is None:
+            continue  # no origin/main -> not this project's layout
+        touched = gated_files(rng, cwd=root)
+        if not touched:
+            continue
+
+        decision = verify(root, local_oid)
+        if decision.ok:
+            print(f"pre-push: {decision.reason}", file=sys.stderr)
+            continue
+        print(
+            f"BLOCKED by pre-push: {remote_ref} carries {len(touched)} change(s) under "
+            f"{', '.join(GATED_PREFIXES)}.\n"
+            f"  {decision.reason}\n"
+            f"  Bypass:  {OVERRIDE}=1 git push ...   or   git push --no-verify",
+            file=sys.stderr,
+        )
+        return 1
+
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except Exception as exc:  # fail-closed: --no-verify is the escape
+        print(f"BLOCKED by pre-push: internal error ({exc}). Bypass: git push --no-verify", file=sys.stderr)
+        sys.exit(1)
