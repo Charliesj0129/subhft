@@ -61,7 +61,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from hook_common import gh_invocations, git_invocations, read_event  # noqa: E402
+from hook_common import gh_invocations, git_invocations, read_event, unattributed_segments  # noqa: E402
 from review_attestation import GATED_PREFIXES, canonical_range, gated_files, git, verify  # noqa: E402
 
 OVERRIDE = "CODEX_REVIEW_OVERRIDE"
@@ -153,6 +153,26 @@ def _option_value(rest: list[str], name: str) -> str:
     return ""
 
 
+def _local_repo_names(cwd: str | None) -> set[str]:
+    """`owner/name` for every remote of this checkout, lowercased.
+
+    Used to decide whether a `gh --repo X` command is acting on the repository
+    whose review evidence the gate is about to check, or on a different one.
+    """
+    out: set[str] = set()
+    raw = git("remote", "-v", cwd=cwd)
+    for line in raw.splitlines():
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        url = parts[1].removesuffix(".git")
+        url = url.split(":")[-1] if url.startswith("git@") else url
+        bits = [b for b in url.split("/") if b]
+        if len(bits) >= 2:
+            out.add("/".join(bits[-2:]).lower())
+    return out
+
+
 def _targets(cmd: str, event_cwd: str | None) -> tuple[list[tuple[str, str | None]], list[str]]:
     """[(head_oid, repo cwd)] this command would publish, plus unresolved selectors."""
     targets: list[tuple[str, str | None]] = []
@@ -167,9 +187,29 @@ def _targets(cmd: str, event_cwd: str | None) -> tuple[list[tuple[str, str | Non
         targets += [(h, cwd) for h in heads]
         unresolved += bad
 
-    for group, sub, rest in gh_invocations(cmd):
+    for seg in unattributed_segments(cmd):
+        # Same fail-closed rule as git_guard: a publish command this parser
+        # cannot read is exactly the state that must not pass.
+        unresolved.append(f"unreadable command: {seg}")
+
+    for group, sub, rest, repo in gh_invocations(cmd):
         if group != "pr" or sub not in ("create", "merge"):
             continue
+        if repo and repo.lower().removesuffix(".git") not in _local_repo_names(event_cwd):
+            # `gh` would act on a repository this checkout is not. The diff hash
+            # can only be recomputed against a local worktree, so a foreign
+            # --repo can never be verified -- and silently resolving the
+            # selector here would attest THIS repository's PR instead.
+            unresolved.append(f"gh --repo {repo} (not this repository; cannot verify its review)")
+            continue
+        if sub == "merge":
+            matched = _option_value(rest, "--match-head-commit")
+            if not matched:
+                unresolved.append(
+                    "gh pr merge without --match-head-commit (the head can advance between "
+                    "this check and the merge GitHub performs)"
+                )
+                continue
         if sub == "create":
             # A PR is opened from a local branch: --head names it, else HEAD.
             ref = _option_value(rest, "--head") or "HEAD"
@@ -181,10 +221,13 @@ def _targets(cmd: str, event_cwd: str | None) -> tuple[list[tuple[str, str | Non
             continue
         selector = next((tok for tok in rest if not tok.startswith("-")), "")
         oid = _gh_pr_head(selector, event_cwd)
-        if oid:
-            targets.append((oid, event_cwd))
-        else:
+        if not oid:
             unresolved.append(f"gh pr merge {selector or '(current branch)'}")
+        elif oid != matched:
+            # The OID the command pins is not the head GitHub reports now.
+            unresolved.append(f"gh pr merge --match-head-commit {matched} but PR head is {oid}")
+        else:
+            targets.append((oid, event_cwd))
 
     return targets, unresolved
 

@@ -376,7 +376,7 @@ def test_review_gate_allows_a_push_with_a_complete_approving_review(tmp_path):
     assert _push(repo, tmp_path / "reports").returncode == 0
 
 
-def test_review_gate_blocks_when_the_native_reviewer_failed(tmp_path):
+def test_review_gate_blocks_an_attestation_marked_incomplete(tmp_path):
     repo, head = _gated_repo(tmp_path)
     _report(tmp_path / "reports", repo, head, native_ok=False, complete=False)
     r = _push(repo, tmp_path / "reports")
@@ -577,7 +577,17 @@ ADV_LIMIT = "# Codex Adversarial Review\n\nCodex did not return valid structured
 ADV_OK = "# Codex Adversarial Review\n\nVerdict: needs-attention\n\nFindings:\n- [high] Latch released (src/a.py:1-2)\n- [low] Typo (src/b.py:9)\n"
 
 
-def test_attestation_marks_a_dead_native_reviewer_incomplete(tmp_path):
+def test_attestation_records_a_dead_native_reviewer_without_blocking_on_it(tmp_path):
+    """The native reviewer is advisory: recorded as failed, but not a veto.
+
+    Built against a REAL repo so the diff hash is genuine. The earlier version
+    of this test passed ``base=None``, which made ``complete`` false because no
+    diff could be hashed -- it would have gone on passing whichever way the
+    native reviewer was treated, and said nothing about the rule in its name.
+    """
+    _git_repo_with_commit(tmp_path, ["src/a.py"])
+    base = subprocess.run(["git", "rev-parse", "HEAD~1"], cwd=tmp_path, capture_output=True, text=True).stdout.strip()
+    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=tmp_path, capture_output=True, text=True).stdout.strip()
     m = _attestation_module()
     a = m.build_attestation(
         repo_root=str(tmp_path),
@@ -585,12 +595,33 @@ def test_attestation_marks_a_dead_native_reviewer_incomplete(tmp_path):
         pr_number=None,
         native=NATIVE_DEAD,
         adversarial=ADV_OK,
-        base=None,
-        head="x",
+        base=base,
+        head=head,
         now="t",
     )
     assert a["reviewers"]["review"]["completed"] is False
     assert a["reviewers"]["review"]["failure"] == "Reviewer failed to output a response."
+    assert a["diff_sha256"], "the diff must actually hash, or this proves nothing"
+    assert a["complete"] is True
+
+
+def test_attestation_still_blocks_when_the_adversarial_reviewer_died(tmp_path):
+    """The one reviewer that does gate. Same real-repo construction as above."""
+    _git_repo_with_commit(tmp_path, ["src/a.py"])
+    base = subprocess.run(["git", "rev-parse", "HEAD~1"], cwd=tmp_path, capture_output=True, text=True).stdout.strip()
+    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=tmp_path, capture_output=True, text=True).stdout.strip()
+    m = _attestation_module()
+    a = m.build_attestation(
+        repo_root=str(tmp_path),
+        mode="branch",
+        pr_number=None,
+        native=NATIVE_OK,
+        adversarial="# Codex Adversarial Review\n\nCodex review failed.\n",
+        base=base,
+        head=head,
+        now="t",
+    )
+    assert a["diff_sha256"], "the diff must actually hash, or this proves nothing"
     assert a["complete"] is False
 
 
@@ -794,7 +825,14 @@ def test_review_gate_blocks_a_pr_head_that_is_not_present_locally(tmp_path):
     absent = "0" * 39 + "1"
     r = run_hook(
         "codex_review_gate.py",
-        {"tool_name": "Bash", "cwd": str(repo), "tool_input": {"command": "gh pr merge 460 --squash"}},
+        {
+            "tool_name": "Bash",
+            "cwd": str(repo),
+            # --match-head-commit is now mandatory for a merge, so it is pinned
+            # here to the same absent OID: this test is about a head that cannot
+            # be inspected, not about the pin being missing.
+            "tool_input": {"command": f"gh pr merge 460 --squash --match-head-commit {absent}"},
+        },
         repo,
         env={
             "DUAL_REVIEW_REPORTS": str(reports),
@@ -992,3 +1030,124 @@ def test_review_gate_gates_changes_to_its_own_enforcement_code(tmp_path):
     reports = tmp_path / "reports"
     reports.mkdir()
     assert _push(repo, reports).returncode == 2
+
+
+# --- regressions for the 2026-08-29 adversarial review ------------------------
+
+
+def test_git_guard_blocks_a_mutation_behind_a_valued_wrapper_option(tmp_path):
+    """`env -u NAME git commit` parsed to no invocation at all, so it was allowed.
+
+    The option value is the token that does NOT look like a flag; skipping only
+    dash-prefixed tokens stopped the walk on it and reported "no git here". The
+    worst reachable form was `timeout -s TERM 5 git reset --hard HEAD^`, which
+    destroys uncommitted user work.
+    """
+    for cmd in (
+        "env -u GIT_CONFIG git commit --amend",
+        "timeout -s TERM 5 git reset --hard HEAD^",
+        "env -i -u X git push",
+        "nice --adjustment 10 git push",
+    ):
+        r = run_hook(
+            "git_guard.py",
+            {"tool_name": "Bash", "agent_type": "hft-docs", "tool_input": {"command": cmd}},
+            tmp_path,
+        )
+        assert r.returncode == 2, f"{cmd!r} was allowed"
+
+
+def test_git_guard_still_allows_a_read_only_command_behind_a_wrapper(tmp_path):
+    """The fail-closed rule must not swallow the read-only forms subagents need."""
+    r = run_hook(
+        "git_guard.py",
+        {"tool_name": "Bash", "agent_type": "hft-docs", "tool_input": {"command": "timeout -s TERM 5 git status"}},
+        tmp_path,
+    )
+    assert r.returncode == 0
+
+
+def test_review_gate_blocks_a_merge_of_a_different_repository(tmp_path):
+    """`gh --repo other/project pr merge` resolved the selector in THIS repo.
+
+    A reviewed PR here would then authorize a server-side merge of unrelated,
+    unreviewed code there. The diff hash can only be recomputed against a local
+    worktree, so a foreign --repo can never be verified -- it must block.
+    """
+    repo, head = _gated_repo(tmp_path)
+    _report(tmp_path / "reports", repo, head)
+    r = run_hook(
+        "codex_review_gate.py",
+        {
+            "tool_name": "Bash",
+            "cwd": str(repo),
+            "tool_input": {"command": f"gh --repo other/project pr merge 460 --match-head-commit {head}"},
+        },
+        repo,
+        env={
+            "DUAL_REVIEW_REPORTS": str(tmp_path / "reports"),
+            "PATH": f"{_stub_gh(tmp_path, head)}{os.pathsep}{os.environ['PATH']}",
+        },
+    )
+    assert r.returncode == 2 and "not this repository" in r.stderr
+
+
+def test_review_gate_blocks_a_merge_without_a_pinned_head(tmp_path):
+    """The head GitHub merges can advance after the gate reads it.
+
+    Verifying `headRefOid` and then allowing an unpinned `gh pr merge` leaves a
+    window in which a bot or a concurrent actor moves the branch, so the OID
+    that was reviewed is not the OID that lands.
+    """
+    repo, head = _gated_repo(tmp_path)
+    _report(tmp_path / "reports", repo, head)
+    r = run_hook(
+        "codex_review_gate.py",
+        {"tool_name": "Bash", "cwd": str(repo), "tool_input": {"command": "gh pr merge 460 --squash"}},
+        repo,
+        env={
+            "DUAL_REVIEW_REPORTS": str(tmp_path / "reports"),
+            "PATH": f"{_stub_gh(tmp_path, head)}{os.pathsep}{os.environ['PATH']}",
+        },
+    )
+    assert r.returncode == 2 and "--match-head-commit" in r.stderr
+
+
+def test_review_gate_blocks_a_pin_that_disagrees_with_the_live_pr_head(tmp_path):
+    """A pin is only evidence when it matches what GitHub reports right now."""
+    repo, head = _gated_repo(tmp_path)
+    _report(tmp_path / "reports", repo, head)
+    stale = "0" * 39 + "1"
+    r = run_hook(
+        "codex_review_gate.py",
+        {
+            "tool_name": "Bash",
+            "cwd": str(repo),
+            "tool_input": {"command": f"gh pr merge 460 --match-head-commit {stale}"},
+        },
+        repo,
+        env={
+            "DUAL_REVIEW_REPORTS": str(tmp_path / "reports"),
+            "PATH": f"{_stub_gh(tmp_path, head)}{os.pathsep}{os.environ['PATH']}",
+        },
+    )
+    assert r.returncode == 2 and "but PR head is" in r.stderr
+
+
+def test_review_gate_allows_a_command_that_publishes_nothing(tmp_path):
+    """Ported from the superseded tests/unit/test_codex_review_gate.py."""
+    repo, _ = _gated_repo(tmp_path)
+    r = run_hook(
+        "codex_review_gate.py",
+        {"tool_name": "Bash", "cwd": str(repo), "tool_input": {"command": "git status"}},
+        repo,
+        env={"DUAL_REVIEW_REPORTS": str(tmp_path / "reports")},
+    )
+    assert r.returncode == 0
+
+
+def test_review_gate_allows_rather_than_wedging_on_malformed_stdin(tmp_path):
+    """Ported from the superseded module. A gate that wedges every command when
+    its own input is unreadable costs more than it protects."""
+    r = run_hook("codex_review_gate.py", "not json at all", tmp_path)
+    assert r.returncode == 0

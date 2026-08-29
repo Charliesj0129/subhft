@@ -263,7 +263,15 @@ def build_attestation(
         "findings": all_findings(native, adversarial),
         # A working-tree review can never credit a publish, so it is never
         # complete for the gate's purposes even when both reviewers reported.
-        "complete": bool(native_ok and adv_ok and mode != "working-tree" and sha),
+        # Only the adversarial reviewer is REQUIRED. Measured over 30 report
+        # directories on 2026-08-29: the native reviewer died 13 times (43%) to
+        # the adversarial one's 1, and produced a `Verdict:` line, a severity,
+        # or a file:line anchor in exactly none of them -- there is nothing in
+        # its output a gate can read. It still runs when asked and its failure
+        # is still recorded; it just no longer decides whether work can ship.
+        # A required check that fails two times in five gets switched off, and
+        # then nothing is checked at all.
+        "complete": bool(adv_ok and mode != "working-tree" and sha),
     }
 
 
@@ -362,7 +370,12 @@ def _rejection(att: dict, d: Path, repo_root: str | None, head_oid: str, pr_numb
     cheap structural checks run before the diff is recomputed.
     """
     if not att.get("complete"):
-        return f"{d.name}: the review never finished (complete=false)"
+        why = att.get("failure")
+        # The producer records WHY when it refuses to build a real attestation
+        # (e.g. the verifier is not readable from origin/main). Printing only
+        # "never finished" for that case sends the reader to the reviewer logs,
+        # where there is nothing wrong to find.
+        return f"{d.name}: {why}" if why else f"{d.name}: the review never finished (complete=false)"
     if att.get("mode") == "working-tree":
         return (
             f"{d.name}: reviewed the working tree, not commits. Uncommitted files are not "
@@ -370,12 +383,8 @@ def _rejection(att: dict, d: Path, repo_root: str | None, head_oid: str, pr_numb
         )
 
     reviewers = att.get("reviewers") or {}
-    dead = [n for n in ("review", "adversarial") if not (reviewers.get(n) or {}).get("completed")]
-    if dead:
-        return (
-            f"{d.name}: {', '.join(dead)} produced no report. Both reviewers must finish -- "
-            "a launched review is not a completed one."
-        )
+    if not (reviewers.get("adversarial") or {}).get("completed"):
+        return f"{d.name}: the adversarial reviewer produced no report -- a launched review is not a completed one."
 
     reviewed_base = att.get("base_oid")
     if not reviewed_base:

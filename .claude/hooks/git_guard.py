@@ -9,7 +9,7 @@ treated as main-session (harness always sends valid JSON; probe 2026-07-14)."""
 
 import sys
 
-from hook_common import block, git_invocations, is_subagent, read_event
+from hook_common import block, git_invocations, is_subagent, read_event, unattributed_segments
 
 READONLY = {
     "status",
@@ -46,6 +46,16 @@ def main() -> None:
     if not is_subagent(e):
         sys.exit(0)
     cmd = (e.get("tool_input") or {}).get("command") or ""
+    for seg in unattributed_segments(cmd):
+        # `env -u GIT_CONFIG git commit --amend` and `timeout -s TERM 5 git
+        # reset --hard HEAD^` both parsed to NO invocation at all, so a subagent
+        # could destroy user work through a wrapper option that takes a value.
+        # An unreadable git command is not a safe one.
+        block(
+            f"[git-guard] could not read the git command in {seg!r}. Subagents never mutate "
+            "git state, and a command this hook cannot parse is not evidence that it is "
+            "read-only. Report intent to the orchestrator."
+        )
     for sub, rest, _cwd in git_invocations(cmd):
         if sub in READONLY:
             continue
