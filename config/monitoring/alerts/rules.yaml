@@ -1059,6 +1059,33 @@ groups:
       summary: "Manual rearm required"
       description: "Platform requires manual intervention to resume normal operations."
 
+  # A quarantine that exists only in memory. The failure log line has always
+  # named the consequence -- "a restart will not restore it" -- and nothing could
+  # act on it once the line scrolled. This is a hard restart blocker: restarting
+  # while it fires releases the strategy with no operator authorisation.
+  - alert: StrategyQuarantineUndurable
+    expr: strategy_quarantine_undurable == 1
+    for: 30s
+    labels:
+      severity: critical
+    annotations:
+      summary: "Strategy quarantine {{ $labels.strategy }} is held in memory only"
+      description: >-
+        The durable record for this quarantine has not been confirmed, so a
+        restart would silently re-arm the strategy. Do NOT restart the engine
+        until this clears. See docs/runbooks/strategy-quarantine.md.
+
+  - alert: StrategyQuarantinePersistFailing
+    expr: increase(strategy_quarantine_persist_failed_total[10m]) > 0
+    for: 0s
+    labels:
+      severity: critical
+    annotations:
+      summary: "Strategy quarantine durable write failed ({{ $labels.strategy }})"
+      description: >-
+        The quarantine latch could not be written to the runtime state store.
+        The strategy is still latched in memory; a restart releases it.
+
   - alert: AutonomyStateTransition
     expr: increase(autonomy_transitions_total[5m]) > 0
     for: 0s
