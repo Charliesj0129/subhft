@@ -588,6 +588,17 @@ class ReconciliationService:
                     # a window with no reason active at all, so reduce-only could
                     # exit while the drift was getting WORSE.
                     self._critical_drift_streak += 1
+                    if not self._drift_reduce_only:
+                        # Critical drift is the more severe condition and had
+                        # the weaker response: noncritical asserted reduce-only
+                        # at streak 2, while critical asserted nothing and waited
+                        # out the full HALT debounce -- three observations at the
+                        # sync interval with risk-opening orders still allowed
+                        # and the two books disagreeing about a position's SIGN.
+                        # Asserting on a possibly-straddled sample is the safe
+                        # direction; only CLEARING requires a trusted one.
+                        self._drift_reduce_only = True
+                        await self.platform_degrade_controller.enter_reduce_only_async(reason="reconciliation_drift")
                     if self._halt_triggered:
                         # Already in HALT — do not re-trigger (prevents
                         # resetting StormGuard's de-escalation counters).
@@ -651,32 +662,40 @@ class ReconciliationService:
                 # equal, which keeps the previous behaviour for stores that do
                 # not implement it rather than silently refusing to ever clear.
                 fill_gen_after = getattr(self.store, "fill_generation", None)
-                if fill_gen_before == fill_gen_after:
-                    self._drift_reduce_only = False
-                else:
+                if fill_gen_before != fill_gen_after:
+                    # EVERY resolution-side effect is gated, not just the
+                    # reduce-only signal. Holding that flag while still zeroing
+                    # the streak, clearing `_halt_triggered` and releasing the
+                    # reconciliation hold let StormGuard de-escalate out of HALT
+                    # on a sample this branch has just declared untrustworthy,
+                    # and made reconciliation debounce all the way back up to
+                    # re-trigger it.
                     logger.info(
                         "reconciliation_clean_sample_straddled_a_fill",
                         fill_generation_before=fill_gen_before,
                         fill_generation_after=fill_gen_after,
-                        consequence="drift signal held; the two halves describe different moments",
+                        halt_triggered=self._halt_triggered,
+                        consequence="resolution withheld; the two halves describe different moments",
                     )
-                try:
-                    _streak_g = getattr(self._metrics(), "reconciliation_drift_streak", None)
-                    if _streak_g is not None and self._last_noncritical_drift_signature:
-                        _m = self._metrics()
-                        for _sym in self._last_noncritical_drift_signature.keys():
-                            _capped = _m.cap_symbol(_sym) if _m else _sym
-                            _streak_g.labels(symbol=_capped).set(0)
-                except Exception:
-                    pass
-                self._last_noncritical_drift_signature = {}
-                self._noncritical_drift_streak = 0
-                self._critical_drift_streak = 0
-                if self._halt_triggered:
-                    # Drift resolved — release reconciliation hold so
-                    # StormGuard can de-escalate from HALT.
-                    self.storm_guard.set_reconciliation_hold(False)
-                self._halt_triggered = False
+                else:
+                    self._drift_reduce_only = False
+                    try:
+                        _streak_g = getattr(self._metrics(), "reconciliation_drift_streak", None)
+                        if _streak_g is not None and self._last_noncritical_drift_signature:
+                            _m = self._metrics()
+                            for _sym in self._last_noncritical_drift_signature.keys():
+                                _capped = _m.cap_symbol(_sym) if _m else _sym
+                                _streak_g.labels(symbol=_capped).set(0)
+                    except Exception:
+                        pass
+                    self._last_noncritical_drift_signature = {}
+                    self._noncritical_drift_streak = 0
+                    self._critical_drift_streak = 0
+                    if self._halt_triggered:
+                        # Drift resolved -- release reconciliation hold so
+                        # StormGuard can de-escalate from HALT.
+                        self.storm_guard.set_reconciliation_hold(False)
+                    self._halt_triggered = False
                 if sync_log_due:
                     logger.info(
                         "Portfolio Sync Complete - No discrepancies",

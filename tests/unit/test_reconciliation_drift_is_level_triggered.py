@@ -245,3 +245,77 @@ async def test_drift_deasserts_only_when_reconciliation_finds_no_discrepancy():
     await svc.sync_portfolio()
 
     assert svc.drift_reduce_only_active is False
+
+
+@pytest.mark.asyncio
+async def test_a_fresh_critical_discrepancy_asserts_reduce_only_before_the_halt_debounce():
+    """Critical drift is the WORSE condition and had the WEAKER response.
+
+    Noncritical drift asserted reduce-only at streak 2. Critical drift asserted
+    nothing at all: it incremented a streak and waited out the full HALT
+    debounce -- three observations at the 5 s interval, ~10 s in which
+    risk-opening orders were still permitted with the local and broker books
+    disagreeing about the SIGN of a position.
+
+    Starts with the flag false on purpose. The earlier escalation test pre-set
+    it to true, which is what let this gap hide underneath a passing suite.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    svc = _service(local={"TXFA5": 3}, broker=[{"code": "TXFA5", "quantity": -3}])
+    controller = MagicMock()
+    controller.enter_reduce_only_async = AsyncMock()
+    svc.platform_degrade_controller = controller
+
+    assert svc.drift_reduce_only_active is False, "premise: nothing asserted yet"
+
+    await svc.sync_portfolio()
+
+    assert svc._critical_drift_streak == 1, "premise: the critical branch was reached"
+    assert svc._halt_triggered is False, "premise: still inside the HALT debounce"
+    assert svc.drift_reduce_only_active is True, "critical drift left order flow open during debounce"
+    controller.enter_reduce_only_async.assert_awaited_once_with(reason="reconciliation_drift")
+
+
+@pytest.mark.asyncio
+async def test_a_straddled_clean_sample_does_not_release_the_reconciliation_hold():
+    """The fence guarded one side effect and left the rest of the resolution.
+
+    `_drift_reduce_only` was held on a distrusted sample, but the same sample
+    still zeroed the critical streak, cleared `_halt_triggered`, and released
+    StormGuard's reconciliation hold -- so StormGuard could de-escalate out of
+    HALT after its cooldown while the critical drift was still unresolved, and
+    reconciliation had to debounce all the way back up to re-trigger it.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from hft_platform.execution.reconciliation import ReconciliationService
+
+    client = MagicMock()
+    store = MagicMock()
+    snapshot = {"TXFA5": SimpleNamespace(symbol="TXFA5", net_qty=3, strategy_id="R47_MAKER_TMF")}
+    store.snapshot_positions = MagicMock(return_value=snapshot)
+    store.positions = snapshot
+
+    gens = iter([7, 8])
+    type(store).fill_generation = property(lambda _self: next(gens))
+    client.get_positions = MagicMock(return_value=[{"code": "TXFA5", "quantity": 3}])
+
+    storm_guard = MagicMock()
+    with patch("hft_platform.execution.reconciliation.MetricsRegistry") as m:
+        m.get.return_value = MagicMock()
+        svc = ReconciliationService(client, store, {}, storm_guard)
+
+    # Already in HALT from unresolved critical drift.
+    svc._drift_reduce_only = True
+    svc._halt_triggered = True
+    svc._critical_drift_streak = 3
+
+    await svc.sync_portfolio()
+
+    assert svc.drift_reduce_only_active is True
+    assert svc._halt_triggered is True, "a distrusted sample cleared the HALT latch"
+    assert svc._critical_drift_streak == 3, "a distrusted sample zeroed the critical streak"
+    assert storm_guard.set_reconciliation_hold.call_count == 0, "a distrusted sample released the HALT hold"
+
+    del type(store).fill_generation
