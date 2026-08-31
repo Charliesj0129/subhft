@@ -137,8 +137,16 @@ def _string_command(toks: list[str]) -> tuple[bool, str | None]:
         base = os.path.basename(toks[i])
         if base in _SHELLS:
             for j in range(i + 1, len(toks)):
-                if _SHELL_C.match(toks[j]):
-                    return True, toks[j + 1] if j + 1 < len(toks) else None
+                if not _SHELL_C.match(toks[j]):
+                    continue
+                # `bash -c -- '<cmd>'` and `bash -c -x '<cmd>'` both RUN the
+                # quoted command -- verified against bash itself. Taking the
+                # token immediately after `-c` selected `--`/`-x`, flattened to
+                # a segment containing no git, and reported nothing at all.
+                k = j + 1
+                while k < len(toks) and (toks[k] == "--" or toks[k].startswith("-")):
+                    k += 1
+                return True, toks[k] if k < len(toks) else None
             return False, None
         wrapper = _WRAPPERS.get(base)
         if wrapper is None:

@@ -1480,3 +1480,55 @@ def test_pre_push_refuses_a_rewind_and_a_deletion(tmp_path):
             text=True,
         )
         assert r.returncode == 1, f"{what} was allowed:\n{r.stdout}{r.stderr}"
+
+
+def test_git_guard_blocks_a_mutation_behind_a_shell_c_separator(tmp_path):
+    """`bash -c -- 'git reset --hard'` runs -- verified against bash itself.
+
+    The payload was taken as the token immediately after `-c`, which selected
+    `--` (or `-x`), flattened to a segment containing no git, and reported
+    neither an invocation nor an unreadable segment.
+    """
+    for cmd in (
+        "bash -c -- 'git reset --hard HEAD^'",
+        "sh -c -- 'git push origin HEAD'",
+        "bash -c -x 'git push'",
+    ):
+        ev = {"agent_type": "hft-executor", "tool_name": "Bash", "tool_input": {"command": cmd}}
+        r = run_hook("git_guard.py", ev, tmp_path)
+        assert r.returncode == 2, f"not blocked: {cmd}\n{r.stderr}"
+
+    # A separator with nothing after it is unreadable, and unreadable blocks.
+    ev = {"agent_type": "hft-executor", "tool_name": "Bash", "tool_input": {"command": "bash -c --"}}
+    assert run_hook("git_guard.py", ev, tmp_path).returncode == 2
+
+
+def test_a_newer_blocking_review_is_not_outvoted_by_an_older_approval(tmp_path):
+    """Re-reviewing and FINDING a defect has to revoke the earlier approval.
+
+    `verify` scans newest-first but only recorded a rejection and kept going, so
+    an older approving attestation for the same head still returned success --
+    the exact commit could publish while its newest high-severity finding sat
+    unacknowledged.
+    """
+    repo, head = _gated_repo(tmp_path)
+    reports = tmp_path / "reports"
+    # Older: a clean approval of this exact head.
+    _report(reports, repo, head, name="20260101-000000-old-approval", verdict="approve")
+    # Newer: the same head, same diff, now with an unacknowledged high finding.
+    _report(
+        reports,
+        repo,
+        head,
+        name="20260102-000000-new-blocking",
+        verdict="needs-attention",
+        adversarial_body="Findings:\n- [high] the money path is wrong (src/x.py:1)\n",
+    )
+    r = run_hook(
+        "codex_review_gate.py",
+        {"tool_name": "Bash", "cwd": str(repo), "tool_input": {"command": "git push origin HEAD"}},
+        repo,
+        env={"DUAL_REVIEW_REPORTS": str(reports)},
+    )
+    assert r.returncode == 2, f"the older approval outvoted the newer blocking review\n{r.stderr}"
+    assert "new-blocking" in r.stderr, r.stderr

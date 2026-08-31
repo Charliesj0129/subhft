@@ -376,11 +376,20 @@ def _load(path: Path) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
-def _rejection(att: dict, d: Path, repo_root: str | None, head_oid: str, pr_number: int | None) -> str | None:
-    """Why this attestation cannot credit the publish, or None when it can.
+def _rejection(
+    att: dict, d: Path, repo_root: str | None, head_oid: str, pr_number: int | None
+) -> tuple[str | None, bool]:
+    """(why this attestation cannot credit the publish, is that answer final).
 
     Split out of ``verify`` so each rule reads as one clause. Order matters: the
     cheap structural checks run before the diff is recomputed.
+
+    The second element separates "this report does not apply to what is being
+    published" -- unfinished, stale hash, wrong PR, narrower base -- from "this
+    report applies to exactly this diff and says NO". Only the second is final.
+    Without that distinction ``verify`` fell past a fresh blocking review to an
+    older approval of the same head, so re-reviewing and FINDING a defect did
+    not revoke the earlier approval.
     """
     if not att.get("complete"):
         why = att.get("failure")
@@ -388,30 +397,32 @@ def _rejection(att: dict, d: Path, repo_root: str | None, head_oid: str, pr_numb
         # (e.g. the verifier is not readable from origin/main). Printing only
         # "never finished" for that case sends the reader to the reviewer logs,
         # where there is nothing wrong to find.
-        return f"{d.name}: {why}" if why else f"{d.name}: the review never finished (complete=false)"
+        return (f"{d.name}: {why}" if why else f"{d.name}: the review never finished (complete=false)"), False
     if att.get("mode") == "working-tree":
         return (
             f"{d.name}: reviewed the working tree, not commits. Uncommitted files are not "
             "what a push publishes -- re-review the branch."
-        )
+        ), False
 
     reviewers = att.get("reviewers") or {}
     if not (reviewers.get("adversarial") or {}).get("completed"):
-        return f"{d.name}: the adversarial reviewer produced no report -- a launched review is not a completed one."
+        return (
+            f"{d.name}: the adversarial reviewer produced no report -- a launched review is not a completed one."
+        ), False
 
     reviewed_base = att.get("base_oid")
     if not reviewed_base:
-        return f"{d.name}: the attestation records no reviewed base"
+        return f"{d.name}: the attestation records no reviewed base", False
 
     recomputed = diff_sha256(reviewed_base, head_oid, cwd=repo_root)
     if recomputed is None:
-        return f"{d.name}: the diff for {head_oid[:8]} could not be recomputed"
+        return f"{d.name}: the diff for {head_oid[:8]} could not be recomputed", False
     if recomputed != att.get("diff_sha256"):
         return (
             f"{d.name}: the review covered a different diff than the one being published "
             f"(recorded {str(att.get('diff_sha256'))[:12]}, now {recomputed[:12]}). "
             "Amending or rebasing after the review invalidates the evidence."
-        )
+        ), False
 
     # A hash bound to the recorded base is stable while origin/main advances, but
     # on its own it would let `--base HEAD^` shrink what "reviewed" means.
@@ -423,16 +434,16 @@ def _rejection(att: dict, d: Path, repo_root: str | None, head_oid: str, pr_numb
     # must be at or before the canonical one, so the reviewed range is a superset.
     canonical = canonical_base(head_oid, cwd=repo_root)
     if not canonical:
-        return f"{d.name}: no merge-base with origin/main for {head_oid[:8]}"
+        return f"{d.name}: no merge-base with origin/main for {head_oid[:8]}", False
     if reviewed_base != canonical and not _is_ancestor(reviewed_base, canonical, cwd=repo_root):
         return (
             f"{d.name}: the review base ({str(reviewed_base)[:8]}) is NARROWER than the range being "
             f"published (canonical base {canonical[:8]}), so commits before it were never reviewed. "
             "Re-review without a hand-picked --base."
-        )
+        ), False
 
     if pr_number is not None and att.get("pr_number") not in (pr_number, None):
-        return f"{d.name}: reviewed PR #{att.get('pr_number')}, not #{pr_number}"
+        return f"{d.name}: reviewed PR #{att.get('pr_number')}, not #{pr_number}", False
 
     # Blocking findings come from the attestation, which is written once and never
     # edited, not from the report markdown. Deleting adversarial.md used to empty
@@ -443,8 +454,10 @@ def _rejection(att: dict, d: Path, repo_root: str | None, head_oid: str, pr_numb
     if required:
         ok, why = _ack_covers(d, required)
         if not ok:
-            return f"{d.name}: {why}"
-    return None
+            # FINAL: this review read exactly this diff and named a blocking
+            # finding. An older approval of the same head cannot outvote it.
+            return f"{d.name}: {why}", True
+    return None, False
 
 
 def verify(repo_root: str | None, head_oid: str, *, pr_number: int | None = None) -> Decision:
@@ -461,11 +474,16 @@ def verify(repo_root: str | None, head_oid: str, *, pr_number: int | None = None
         if not att or att.get("head_oid") != head_oid:
             continue
         seen_head = True
-        rejection = _rejection(att, d, repo_root, head_oid, pr_number)
+        rejection, final = _rejection(att, d, repo_root, head_oid, pr_number)
         if rejection is None:
             verdict = ((att.get("reviewers") or {}).get("adversarial") or {}).get("verdict") or "n/a"
             return Decision(True, f"{head_oid[:8]} reviewed ({d.name}, verdict={verdict})", d)
         last_reason = rejection
+        if final:
+            # Newest first, so this is the most recent review that actually read
+            # this diff. Falling through to an older approval would mean a
+            # re-review that FOUND something could not revoke the first one.
+            return Decision(False, rejection)
 
     if not seen_head:
         last_reason = (
