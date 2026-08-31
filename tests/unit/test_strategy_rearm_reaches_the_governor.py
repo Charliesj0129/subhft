@@ -409,3 +409,62 @@ class TestQuarantineDurabilityIsVisible:
                 break
             await _asyncio.sleep(0.01)
         assert gov.undurable_quarantines == frozenset()
+
+
+@pytest.mark.asyncio
+async def test_a_stale_persist_completion_cannot_bless_a_newer_quarantine(tmp_path):
+    """Durability was one bit per strategy, so a late success blessed the wrong latch.
+
+    Quarantine A's write times out in flight; the operator re-arms; the strategy
+    fails straight back into quarantine B. A's write then finishes and reported
+    ``durable=True`` for the strategy -- clearing B's undurable state while B's
+    own write was still pending. In that window a restart releases B without
+    authorisation, and the gauge an operator consults to decide whether it is
+    safe to restart is the thing that lies.
+    """
+    writer = AutonomyEvidenceWriter(base_dir=tmp_path)
+    governor = StrategyHealthGovernor(evidence_writer=writer)
+
+    released: list[threading.Event] = []
+    real = writer.record_transition
+
+    def blocking_record(**kw):
+        # Only the QUARANTINE writes are held; the re-arm's own record must run
+        # freely or the test would be measuring its own scaffolding.
+        if kw.get("reason") == "manual_rearm":
+            return real(**kw)
+        gate = threading.Event()
+        released.append(gate)
+        assert gate.wait(timeout=5.0), "the test never released the write"
+        return real(**kw)
+
+    writer.record_transition = blocking_record
+
+    # A: latched, write blocked in the thread pool.
+    a = asyncio.create_task(governor.quarantine_async(STRATEGY, reason="first"))
+    while not released:
+        await asyncio.sleep(0.005)
+    token_a = governor._quarantined[STRATEGY].token
+    assert STRATEGY in governor.undurable_quarantines
+
+    # The operator re-arms A, and the strategy fails immediately back into B.
+    assert await governor.rearm_async(STRATEGY, expected_token=token_a) is True
+    assert STRATEGY not in governor.undurable_quarantines, "re-arm must retire the state it can no longer match"
+    b = asyncio.create_task(governor.quarantine_async(STRATEGY, reason="second"))
+    while len(released) < 2:
+        await asyncio.sleep(0.005)
+    token_b = governor._quarantined[STRATEGY].token
+    assert token_b != token_a
+    assert STRATEGY in governor.undurable_quarantines
+
+    # A's write now succeeds -- for a quarantine that no longer exists.
+    released[0].set()
+    await a
+    await asyncio.sleep(0.01)  # let A's done-callback run
+
+    assert STRATEGY in governor.undurable_quarantines, "A's stale completion marked B durable while B was pending"
+
+    released[1].set()
+    await b
+    await asyncio.sleep(0.01)
+    assert STRATEGY not in governor.undurable_quarantines, "B's own completion must clear it"

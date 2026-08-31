@@ -173,3 +173,44 @@ async def test_auto_recovery_does_not_stall_the_loop(tmp_path):
     assert recovered is True, "premise: this is the cycle that actually recovers and writes"
     assert controller.reduce_only_active is False
     assert worst < MAX_STALL_S, f"event loop stalled {worst * 1000:.0f} ms during auto-recovery"
+
+
+@pytest.mark.asyncio
+async def test_manual_platform_rearm_does_not_stall_the_loop_while_the_lock_is_held(tmp_path):
+    """The operator path was the one un-awaited call left on the supervisor tick.
+
+    ``_update_platform_degrade_state`` offloaded its state read and awaited every
+    other member of the family, then called ``_consume_platform_rearm_request``
+    synchronously -- straight into ``force_clear`` -> ``exit_reduce_only`` ->
+    ``record_transition``. The stall therefore landed exactly while permissions
+    were being restored and cancellation and risk processing had to stay live.
+    """
+    writer = AutonomyEvidenceWriter(base_dir=tmp_path)
+    controller = PlatformDegradeController(evidence_writer=writer, metrics=None)
+    controller.enter_reduce_only(reason="margin_critical")
+    holder = _hold_the_lock(tmp_path / "runtime_state.json", HOLD_S)
+
+    worst, transition = await _loop_stall_while(controller.force_clear_async(reason="manual_rearm_gate"))
+
+    holder.join(timeout=5)
+    assert transition is not None
+    assert controller.reduce_only_active is False
+    assert worst < MAX_STALL_S, f"event loop stalled {worst * 1000:.0f} ms during manual re-arm"
+
+
+@pytest.mark.asyncio
+async def test_manual_rearm_takes_effect_before_the_write_is_awaited(tmp_path):
+    """Permissions must be restored on the loop, not when the disk catches up."""
+    writer = AutonomyEvidenceWriter(base_dir=tmp_path)
+    controller = PlatformDegradeController(evidence_writer=writer, metrics=None)
+    controller.enter_reduce_only(reason="margin_critical")
+    holder = _hold_the_lock(tmp_path / "runtime_state.json", HOLD_S)
+
+    task = asyncio.create_task(controller.force_clear_async(reason="manual_rearm_gate"))
+    await asyncio.sleep(0)  # one loop turn: past the sync half, into the await
+
+    assert controller.reduce_only_active is False
+    assert not task.done(), "premise: the write is still in flight behind the held lock"
+
+    await task
+    holder.join(timeout=5)

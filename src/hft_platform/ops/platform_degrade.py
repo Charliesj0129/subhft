@@ -246,8 +246,33 @@ class PlatformDegradeController:
         Returns the resulting :class:`AutonomyTransition`, or ``None``
         if reduce_only was already inactive.
         """
+        transition, persist = self._force_clear_locally(reason)
+        if persist is not None:
+            persist()
+        return transition
+
+    async def force_clear_async(self, *, reason: str = "manual_rearm") -> AutonomyTransition | None:
+        """:meth:`force_clear` without blocking the event loop.
+
+        The supervisor consumes operator re-arm requests on its tick, which runs
+        on the loop, and the record goes through ``locked_state``: a bounded
+        ``flock`` poll (``time.sleep(0.01)`` up to two seconds) followed by two
+        fsyncs. A slow-writer probe measured a 356 ms stall here -- 356x the 1 ms
+        budget, and precisely while permissions are being restored and
+        cancellation and risk processing must stay responsive.
+
+        The in-memory clear still happens immediately and synchronously; only
+        the durable record is offloaded. See :meth:`exit_reduce_only_async`.
+        """
+        transition, persist = self._force_clear_locally(reason)
+        if persist is not None:
+            await asyncio.to_thread(persist)
+        return transition
+
+    def _force_clear_locally(self, reason: str) -> tuple[AutonomyTransition | None, Callable[[], None] | None]:
+        """Apply the operator override in memory; return the deferred record."""
         if not self.reduce_only_active:
-            return None
+            return None, None
         # Drop reasons before exit so observability reflects the manual
         # override path rather than a phantom remaining condition.
         cleared_reasons = sorted(self._active_reasons)
@@ -259,7 +284,7 @@ class PlatformDegradeController:
             reason=reason,
             cleared_reasons=cleared_reasons,
         )
-        return self.exit_reduce_only(reason=f"manual_force_clear:{reason}")
+        return self._exit_reduce_only_locally(f"manual_force_clear:{reason}")
 
     def check_auto_recovery(self, *, current_reasons: list[str], now_ns: int) -> bool:
         """Check if auto-recovery should trigger. Called from supervisor loop.
