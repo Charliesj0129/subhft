@@ -56,6 +56,7 @@ Two different answers, on purpose:
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -75,6 +76,7 @@ OVERRIDE = "CODEX_REVIEW_OVERRIDE"
 
 #: Push options that consume the next token. Without these, `git push -o ci.skip`
 #: reads "ci.skip" as a refspec and blocks a legitimate push.
+_PUSH_CONFIG_OVERRIDE = re.compile(r"(?:^|\s)-c\s*=?\s*(?:push\.default|remote\.[^\s=]+\.push)=")
 _PUSH_OPTS_WITH_VALUE = {"-o", "--push-option", "--receive-pack", "--exec", "--repo"}
 
 #: Selectors that publish refs beyond the ones named on the command line. There
@@ -102,6 +104,26 @@ def _push_positionals(rest: list[str]) -> list[str]:
     return out
 
 
+def _configured_refspec(remote: str | None, cwd: str | None) -> str | None:
+    """A reason a bare `git push` would NOT publish HEAD, or None.
+
+    Resolving a refspec-less push to HEAD is only correct when git would agree.
+    `remote.<name>.push` and `push.default = matching` both override it: a probe
+    with `remote.probe.push` set had `git push --dry-run` publishing
+    `refs/remotes/origin/main` while the gate attested the branch tip. Reading
+    git's effective refspec back would mean contacting the remote, so the honest
+    answer for a configured push is that this parser cannot resolve it.
+    """
+    if remote is None:
+        branch = git("rev-parse", "--abbrev-ref", "HEAD", cwd=cwd)
+        remote = git("config", "--get", f"branch.{branch}.remote", cwd=cwd) or "origin"
+    if git("config", "--get-all", f"remote.{remote}.push", cwd=cwd):
+        return f"git push {remote} (remote.{remote}.push is configured; the refspec is not on the command line)"
+    if git("config", "--get", "push.default", cwd=cwd) == "matching":
+        return f"git push {remote} (push.default=matching publishes every matching branch)"
+    return None
+
+
 def _push_heads(rest: list[str], cwd: str | None) -> tuple[list[str], list[str]]:
     """(resolved head OIDs, selectors that could not be resolved).
 
@@ -118,9 +140,13 @@ def _push_heads(rest: list[str], cwd: str | None) -> tuple[list[str], list[str]]
     # unconditional slice dropped it and fell through to HEAD, which let a
     # reviewed HEAD authorise `git push --repo=origin origin/main:refs/heads/x`
     # -- objects the gate never resolved.
-    from_repo_flag = flag_value(rest, ("--repo",)) is not None
-    refspecs = positional if from_repo_flag else positional[1:]
+    repo_flag = flag_value(rest, ("--repo",))
+    refspecs = positional if repo_flag is not None else positional[1:]
     if not refspecs:
+        remote = repo_flag or (positional[0] if positional else None)
+        configured = _configured_refspec(remote, cwd)
+        if configured:
+            return [], [configured]
         head = git("rev-parse", "HEAD", cwd=cwd)
         return ([head] if head else []), ([] if head else ["HEAD"])
 
@@ -197,6 +223,13 @@ def _targets(cmd: str, event_cwd: str | None) -> tuple[list[tuple[str, str | Non
         heads, bad = _push_heads(rest, cwd)
         targets += [(h, cwd) for h in heads]
         unresolved += bad
+
+    if targets and _PUSH_CONFIG_OVERRIDE.search(cmd):
+        # `git -c push.default=matching push` and `git -c remote.o.push=...` are
+        # consumed as global options, so they never reach `rest`. A push that
+        # rewrites its own refspec rules on the command line is not resolvable
+        # from the command line.
+        unresolved.append("git -c push./remote.*.push override (the effective refspec is not on the command line)")
 
     for seg in unattributed_segments(cmd):
         # Same fail-closed rule as git_guard: a publish command this parser

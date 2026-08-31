@@ -596,6 +596,7 @@ def test_attestation_records_a_dead_native_reviewer_without_blocking_on_it(tmp_p
         pr_number=None,
         native=NATIVE_DEAD,
         adversarial=ADV_OK,
+        adversarial_status="0",
         base=base,
         head=head,
         now="t",
@@ -722,6 +723,7 @@ def test_attestation_accepts_a_clean_sidecar(tmp_path):
         native_err=ERR_CLEAN,
         adversarial=ADV_TRUNCATED_APPROVE,
         adversarial_err=ERR_CLEAN,
+        adversarial_status="0",
         base=None,
         head="x",
         now="t",
@@ -746,6 +748,7 @@ def test_attestation_does_not_treat_turn_failed_alone_as_an_abort(tmp_path):
         native_err="[codex] Turn failed.\n",
         adversarial=ADV_OK,
         adversarial_err="[codex] Turn failed.\n",
+        adversarial_status="0",
         base=None,
         head="x",
         now="t",
@@ -1336,3 +1339,144 @@ def test_pre_push_refuses_when_the_published_verifier_is_unreadable(tmp_path):
 
     verifier, why = mod.load_verifier(str(repo))
     assert verifier is None and "not readable" in why
+
+
+# --- Adversarial review r6: four more, found after the r5 round ---------------
+
+
+def test_git_guard_blocks_a_mutation_hidden_in_an_env_split_string(tmp_path):
+    """`env -S 'git reset --hard'` was WORSE than the shell form.
+
+    `-S` genuinely is an option-with-a-value, so the arity fix skipped its value
+    correctly -- and the value is the entire command. A probe returned no
+    invocation AND no unreadable segment, while `env -S 'git rev-parse ...'`
+    really does execute git.
+    """
+    for cmd in (
+        "env -S 'git reset --hard HEAD^'",
+        "env --split-string='git push origin main'",
+        "timeout 5 env -S 'git push'",
+    ):
+        ev = {"agent_type": "hft-executor", "tool_name": "Bash", "tool_input": {"command": cmd}}
+        r = run_hook("git_guard.py", ev, tmp_path)
+        assert r.returncode == 2, f"not blocked: {cmd}\n{r.stderr}"
+
+    ok = {"agent_type": "hft-executor", "tool_name": "Bash", "tool_input": {"command": "env -S 'echo hi'"}}
+    assert run_hook("git_guard.py", ok, tmp_path).returncode == 0, "benign env -S must still pass"
+
+
+def test_review_gate_blocks_a_bare_push_whose_refspec_is_configured(tmp_path):
+    """A refspec-less `git push` does not necessarily publish HEAD.
+
+    `remote.<name>.push` and `push.default = matching` override it. A probe with
+    `remote.probe.push` set had `git push --dry-run` publishing
+    `refs/remotes/origin/main` while the gate attested the branch tip.
+    """
+    repo, head = _gated_repo(tmp_path)
+    _report(tmp_path / "reports", repo, head)
+    _run_git(repo, "config", "--local", "remote.probe.url", ".")
+    _run_git(repo, "config", "--local", "remote.probe.push", "refs/remotes/origin/main:refs/heads/x")
+    r = run_hook(
+        "codex_review_gate.py",
+        {"tool_name": "Bash", "cwd": str(repo), "tool_input": {"command": "git push probe"}},
+        repo,
+        env={"DUAL_REVIEW_REPORTS": str(tmp_path / "reports")},
+    )
+    assert r.returncode == 2 and "remote.probe.push" in r.stderr, r.stderr
+
+
+def test_review_gate_blocks_a_push_that_rewrites_its_own_push_config(tmp_path):
+    """`git -c push.default=matching push` -- the override never reaches `rest`.
+
+    `-c` is consumed as a global option, so the gate saw a plain `git push` and
+    resolved HEAD. A push that rewrites its own refspec rules on the command
+    line is not resolvable from the command line.
+    """
+    repo, head = _gated_repo(tmp_path)
+    _report(tmp_path / "reports", repo, head)
+    r = run_hook(
+        "codex_review_gate.py",
+        {
+            "tool_name": "Bash",
+            "cwd": str(repo),
+            "tool_input": {"command": "git -c push.default=matching push origin"},
+        },
+        repo,
+        env={"DUAL_REVIEW_REPORTS": str(tmp_path / "reports")},
+    )
+    assert r.returncode == 2, r.stderr
+
+
+def test_attestation_is_incomplete_without_a_positive_completion_status(tmp_path):
+    """Absence of a known error string is not evidence that the reviewer finished.
+
+    The discriminator was built entirely on a negative, so any UNKNOWN failure --
+    a new provider message, a killed process, a lost sidecar -- read as success.
+    The launcher now records the reviewer's exit code after it exits, and a
+    missing, unreadable, or non-zero status stays incomplete.
+    """
+    m = _attestation_module()
+    for status in ("", "1", "137", "not-a-number"):
+        a = m.build_attestation(
+            repo_root=str(tmp_path),
+            mode="branch",
+            pr_number=None,
+            native=NATIVE_OK,
+            adversarial=ADV_OK,
+            adversarial_err=ERR_CLEAN,
+            adversarial_status=status,
+            base=None,
+            head="x",
+            now="t",
+        )
+        assert a["reviewers"]["adversarial"]["completed"] is False, f"status {status!r} counted as finished"
+        assert a["complete"] is False
+
+
+def test_pre_push_refuses_a_rewind_and_a_deletion(tmp_path):
+    """The remote OID was discarded, so a force-push inspected clean.
+
+    The gated range is `merge-base(origin/main, local)..local`, which describes
+    what SURVIVES a rewind, never what is dropped -- and for a local OID already
+    an ancestor of origin/main it is empty. A force-push removing files under
+    `src/` therefore returned no gated files at all.
+    """
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+
+    repo = tmp_path / "repo"
+    (repo / ".claude" / "hooks").mkdir(parents=True)
+    shutil.copy(HOOKS / "review_attestation.py", repo / ".claude" / "hooks" / "review_attestation.py")
+    _run_git(repo, "init", "-q", "-b", "main")
+    _run_git(repo, "add", "-A")
+    _run_git(repo, "commit", "-q", "-m", "one")
+    old = _run_git(repo, "rev-parse", "HEAD")
+    (repo / "src").mkdir()
+    (repo / "src" / "money.py").write_text("value = 1\n")
+    _run_git(repo, "add", "-A")
+    _run_git(repo, "commit", "-q", "-m", "two")
+    new = _run_git(repo, "rev-parse", "HEAD")
+    _run_git(repo, "update-ref", "refs/remotes/origin/main", new)
+
+    path = HOOKS.parents[1] / "scripts" / "git-hooks" / "pre-push"
+    spec = importlib.util.spec_from_loader("prepush_rewind", SourceFileLoader("prepush_rewind", str(path)))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    # Premise: the range for the rewind target is empty, so the old check saw nothing.
+    verifier, _ = mod.load_verifier(str(repo))
+    rng = verifier.canonical_range(old, cwd=str(repo))
+    assert verifier.gated_files(rng, cwd=str(repo)) == [], "premise: a rewind shows no gated files"
+
+    zero = "0" * 40
+    rewind = f"refs/heads/main {old} refs/heads/main {new}"
+    delete = f"(delete) {zero} refs/heads/main {new}"
+    for stdin_line, what in ((rewind, "rewind"), (delete, "deletion")):
+        r = subprocess.run(
+            [sys.executable, str(path)],
+            cwd=repo,
+            input=stdin_line + "\n",
+            capture_output=True,
+            text=True,
+        )
+        assert r.returncode == 1, f"{what} was allowed:\n{r.stdout}{r.stderr}"

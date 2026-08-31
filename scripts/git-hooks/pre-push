@@ -59,6 +59,22 @@ def repo_root() -> str:
     return out.stdout.strip()
 
 
+def _is_ancestor(root: str, older: str, newer: str) -> bool:
+    """Whether `older` is reachable from `newer` -- i.e. this push fast-forwards.
+
+    Fail-closed on error: an unanswerable question about whether history is
+    being destroyed is not a yes.
+    """
+    out = subprocess.run(
+        ["git", "-C", root, "merge-base", "--is-ancestor", older, newer],
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+    return out.returncode == 0
+
+
 def load_verifier(root: str) -> tuple[types.ModuleType | None, str]:
     """The review verifier as published on ``VERIFIER_REF``, or (None, reason).
 
@@ -116,9 +132,35 @@ def main() -> int:
     for parts in updates:
         if len(parts) < 4:
             continue
-        _local_ref, local_oid, remote_ref, _remote_oid = parts[:4]
+        _local_ref, local_oid, remote_ref, remote_oid = parts[:4]
         if local_oid == ZERO:
-            continue  # deleting a ref publishes no source
+            # Publishes no source -- and destroys the remote ref. "Nothing is
+            # added" was read as "nothing is at stake", which is exactly
+            # backwards: a deletion cannot be reviewed because there is no diff
+            # to review, so it can only be authorised deliberately.
+            print(
+                f"BLOCKED by pre-push: this deletes {remote_ref} on the remote.\n"
+                "  A deletion publishes no diff, so no review can cover it.\n"
+                f"  Deliberate:  {OVERRIDE}=1 git push ...   or   git push --no-verify",
+                file=sys.stderr,
+            )
+            return 1
+
+        if remote_oid != ZERO and not _is_ancestor(root, remote_oid, local_oid):
+            # A non-fast-forward: commits that exist on the remote will stop
+            # existing. The gated range is merge-base(origin/main, local)..local,
+            # which for a rewind describes what SURVIVES, never what is dropped
+            # -- and for a local OID that is already an ancestor of origin/main
+            # it is empty, so a rewind that removes src/ files inspected clean.
+            print(
+                f"BLOCKED by pre-push: {remote_ref} would be rewound -- {remote_oid[:8]} "
+                f"is not an ancestor of {local_oid[:8]}.\n"
+                "  A force-push removes commits from the remote; the review range covers\n"
+                "  what survives, not what is dropped, so no review can cover it.\n"
+                f"  Deliberate:  {OVERRIDE}=1 git push ...   or   git push --no-verify",
+                file=sys.stderr,
+            )
+            return 1
 
         rng = canonical_range(local_oid, cwd=root)
         if rng is None:

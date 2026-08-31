@@ -176,7 +176,7 @@ def native_state(text: str, err: str = "") -> tuple[bool, str | None]:
     return True, None
 
 
-def adversarial_state(text: str, err: str = "") -> tuple[bool, str | None]:
+def adversarial_state(text: str, err: str = "", status: str = "") -> tuple[bool, str | None]:
     """(completed, verdict) for the adversarial reviewer.
 
     `/codex:adversarial-review` is schema-constrained
@@ -189,13 +189,21 @@ def adversarial_state(text: str, err: str = "") -> tuple[bool, str | None]:
     reading, which is exactly the empty-review-reads-like-an-approval failure
     this whole mechanism exists to close, arriving through the mechanism itself.
 
-    So the verdict is necessary and not sufficient; the sidecar must also be
-    clean. `Turn failed.` on its own stays non-authoritative -- it is
-    coextensive with PROVIDER_ABORT across all 28 reports and adds nothing.
+    So the verdict is necessary and not sufficient. Neither is the sidecar:
+    absence of a known error string is not evidence of success, and building the
+    whole discriminator on a negative meant any UNKNOWN failure -- a new provider
+    message, a killed process, a lost sidecar -- read as "finished". `status` is
+    the positive half: the launcher records the reviewer's exit code only after
+    it exits, so a missing, unreadable, or non-zero status is incomplete.
+
+    `Turn failed.` on its own stays non-authoritative -- it is coextensive with
+    PROVIDER_ABORT across all 28 reports and adds nothing.
     """
     m = _VERDICT.search(text)
     if not m:
         return False, None
+    if status.strip() != "0":
+        return False, m.group(1)
     if PROVIDER_ABORT in err:
         return False, m.group(1)
     return True, m.group(1)
@@ -237,6 +245,7 @@ def build_attestation(
     now: str,
     native_err: str = "",
     adversarial_err: str = "",
+    adversarial_status: str = "",
 ) -> dict:
     """The attestation payload. Pure apart from the git calls it needs for the hash.
 
@@ -245,7 +254,7 @@ def build_attestation(
     half of a contract.
     """
     native_ok, native_failure = native_state(native, native_err)
-    adv_ok, verdict = adversarial_state(adversarial, adversarial_err)
+    adv_ok, verdict = adversarial_state(adversarial, adversarial_err, adversarial_status)
     sha = None if (mode == "working-tree" or not base or not head) else diff_sha256(base, head, cwd=repo_root)
     return {
         "schema": 1,

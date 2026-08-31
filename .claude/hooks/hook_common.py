@@ -34,6 +34,11 @@ _GH_OPTS_WITH_VALUE = {"-R", "--repo", "--hostname"}
 _SHELLS = ("sh", "bash", "zsh", "dash", "ksh", "ash", "busybox", "fish")
 _SHELL_C = re.compile(r"^-[a-zA-Z]*c$")
 _MAX_SHELL_DEPTH = 4
+# `env -S '<cmd>'` is the same trick without a shell, and it was WORSE here:
+# -S is genuinely an option-with-a-value, so the arity fix skipped its value
+# correctly -- and the value is the entire command. `env -S 'git push'` reported
+# no invocation AND no unreadable segment.
+_PAYLOAD_OPTS = ("-S", "--split-string")
 
 # Options and environment variables that point git at ANOTHER repository. The
 # gate resolves HEAD in the session's cwd, so a command carrying one of these
@@ -100,31 +105,62 @@ def _segments(cmd: str, _depth: int = 0) -> Iterator[list[str]]:
             toks = seg.split()
         if not toks:
             continue
-        # `bash -c "..."` is flattened into the segments it would actually run,
-        # so every consumer below sees the real program at position 0. Bounded,
+        # `bash -c "..."` and `env -S "..."` are flattened into the segments they
+        # would actually run, so every consumer sees the real program at position
+        # 0. Bounded,
         # because `bash -c "bash -c ..."` nests; past the bound the segment is
         # yielded intact and reported unreadable by unattributed_segments.
         if _depth < _MAX_SHELL_DEPTH:
-            is_shell, payload = _shell_payload(toks)
-            if is_shell and payload is not None:
+            hidden, payload = _string_command(toks)
+            if hidden and payload is not None:
                 yield from _segments(payload, _depth + 1)
                 continue
         yield toks
 
 
-def _shell_payload(toks: list[str]) -> tuple[bool, str | None]:
-    """(is this a ``<shell> -c`` exec form, the command string it would run).
+def _string_command(toks: list[str]) -> tuple[bool, str | None]:
+    """(does this segment hide its real command in a string argument, and that string).
+
+    Two shapes do it: ``<shell> -c '<cmd>'`` and ``env -S '<cmd>'``. Both put an
+    entire command inside ONE shlex token, where no basename check can see it.
 
     ``(True, None)`` is the fail-closed answer: the form was recognised but the
     payload is not where a payload belongs, so the caller must treat the segment
-    as unreadable rather than as a command that runs nothing.
+    as unreadable rather than as a command that runs nothing. The wrapper chain
+    is walked, so ``timeout 5 env -S '...'`` is found too.
     """
-    i = _skip_prefix(toks)
-    if i >= len(toks) or os.path.basename(toks[i]) not in _SHELLS:
-        return False, None
-    for j in range(i + 1, len(toks)):
-        if _SHELL_C.match(toks[j]):
-            return True, toks[j + 1] if j + 1 < len(toks) else None
+    i = 0
+    while i < len(toks):
+        if _ENV_ASSIGN.match(toks[i]):
+            i += 1
+            continue
+        base = os.path.basename(toks[i])
+        if base in _SHELLS:
+            for j in range(i + 1, len(toks)):
+                if _SHELL_C.match(toks[j]):
+                    return True, toks[j + 1] if j + 1 < len(toks) else None
+            return False, None
+        wrapper = _WRAPPERS.get(base)
+        if wrapper is None:
+            return False, None
+        i += 1
+        while i < len(toks):
+            tok = toks[i]
+            if tok == "--":
+                i += 1
+                break
+            if tok in _PAYLOAD_OPTS:
+                return True, toks[i + 1] if i + 1 < len(toks) else None
+            name, sep, val = tok.partition("=")
+            if sep and name in _PAYLOAD_OPTS:
+                return True, val
+            if tok in wrapper:
+                i += 2
+                continue
+            if tok.startswith("-") or tok.replace(".", "").isdigit():
+                i += 1
+                continue
+            break
     return False, None
 
 
@@ -193,8 +229,8 @@ def unattributed_segments(cmd: str) -> list[str]:
     """
     out: list[str] = []
     for toks in _segments(cmd):
-        # A shell form reaching here is one _segments could not flatten.
-        if _shell_payload(toks)[0]:
+        # A string-command form reaching here is one _segments could not flatten.
+        if _string_command(toks)[0]:
             out.append(" ".join(toks))
             continue
         i = _skip_prefix(toks)
