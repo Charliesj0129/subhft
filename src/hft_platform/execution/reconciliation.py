@@ -472,7 +472,12 @@ class ReconciliationService:
                     self._last_discrepancies = []
                     self._last_noncritical_drift_signature = {}
                     self._noncritical_drift_streak = 0
-                    self._drift_reduce_only = False
+                    # _drift_reduce_only is deliberately NOT cleared here. This
+                    # snapshot is explicitly distrusted -- that is why it is
+                    # debounced -- so it is evidence of nothing, and least of all
+                    # that the drift resolved. Clearing it let the supervisor drop
+                    # the reason and a pending manual re-arm reopen order flow with
+                    # the positions still unreconciled.
                     duration = time.monotonic() - t0
                     self._record_sync_duration(duration)
                     self._record_sync_result("success")
@@ -570,7 +575,11 @@ class ReconciliationService:
                 if critical:
                     self._last_noncritical_drift_signature = {}
                     self._noncritical_drift_streak = 0
-                    self._drift_reduce_only = False
+                    # The NONCRITICAL streak resets because the drift escalated,
+                    # not because it cleared. _drift_reduce_only stays asserted:
+                    # dropping it here handed the three-observation HALT debounce
+                    # a window with no reason active at all, so reduce-only could
+                    # exit while the drift was getting WORSE.
                     self._critical_drift_streak += 1
                     if self._halt_triggered:
                         # Already in HALT — do not re-trigger (prevents

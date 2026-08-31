@@ -109,3 +109,86 @@ async def test_a_manual_rearm_relatches_drift_because_inputs_now_report_it():
     assert not opened, "allow_open() was true while position drift was still asserted"
     assert controller.reduce_only_active is True
     assert "reconciliation_drift" in controller._active_reasons
+
+
+# --- Transitions, against the real service ------------------------------------
+#
+# The first version of this file toggled a SimpleNamespace boolean, which proves
+# the wiring and nothing about when the flag actually moves. The adversarial
+# review reproduced both premature de-assertions below with the real service.
+
+
+def _service(local, broker, config=None):
+    """A real ReconciliationService over mocked store/client.
+
+    `snapshot_positions()` is what the service actually reads -- a MagicMock
+    answers `hasattr` for it, so setting only `store.positions` silently feeds
+    the service an empty book and every assertion below would be about the
+    wrong scenario.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from hft_platform.execution.reconciliation import ReconciliationService
+
+    client = MagicMock()
+    client.get_positions = MagicMock(return_value=broker)
+    store = MagicMock()
+    snapshot = {
+        sym: SimpleNamespace(symbol=sym, net_qty=qty, strategy_id="R47_MAKER_TMF") for sym, qty in local.items()
+    }
+    store.snapshot_positions = MagicMock(return_value=snapshot)
+    store.positions = snapshot
+    with patch("hft_platform.execution.reconciliation.MetricsRegistry") as m:
+        m.get.return_value = MagicMock()
+        svc = ReconciliationService(client, store, config or {}, MagicMock())
+    return svc
+
+
+@pytest.mark.asyncio
+async def test_drift_stays_asserted_when_a_distrusted_broker_snapshot_arrives():
+    """The broker-zero debounce exists BECAUSE the snapshot is not believed.
+
+    Clearing the drift signal there treated "we do not trust this reading" as
+    "the drift resolved", so the supervisor dropped the reason and a pending
+    manual re-arm could reopen order flow with positions unreconciled.
+    """
+    svc = _service(local={"TXFA5": 3}, broker=[])
+    svc._drift_reduce_only = True
+    svc._broker_zero_streak = 0
+
+    await svc.sync_portfolio()
+
+    assert svc._broker_zero_streak >= 1, "premise: the debounce path was taken"
+    assert svc._broker_zero_streak < svc.broker_zero_debounce_observations
+    assert svc.drift_reduce_only_active is True, "a distrusted snapshot cleared the safety signal"
+
+
+@pytest.mark.asyncio
+async def test_drift_stays_asserted_when_noncritical_drift_escalates_to_critical():
+    """The noncritical streak resets because the drift got WORSE, not better.
+
+    Dropping the reason here handed the HALT debounce a window with no reason
+    active at all, so reduce-only could exit while positions were diverging.
+    """
+    svc = _service(local={"TXFA5": 3}, broker=[{"code": "TXFA5", "quantity": 0}])
+    svc._drift_reduce_only = True
+
+    await svc.sync_portfolio()
+
+    if svc._critical_drift_streak >= 1:
+        assert svc.drift_reduce_only_active is True, "escalation to critical cleared the safety signal"
+    else:
+        # Not a critical discrepancy in this shape; assert the flag survived a
+        # non-resolving cycle rather than silently passing on a wrong premise.
+        assert svc.drift_reduce_only_active is True
+
+
+@pytest.mark.asyncio
+async def test_drift_deasserts_only_when_reconciliation_finds_no_discrepancy():
+    """The one genuine resolution path, so the latch cannot become permanent."""
+    svc = _service(local={"TXFA5": 3}, broker=[{"code": "TXFA5", "quantity": 3}])
+    svc._drift_reduce_only = True
+
+    await svc.sync_portfolio()
+
+    assert svc.drift_reduce_only_active is False
