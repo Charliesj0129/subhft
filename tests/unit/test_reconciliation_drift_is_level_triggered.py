@@ -319,3 +319,159 @@ async def test_a_straddled_clean_sample_does_not_release_the_reconciliation_hold
     assert storm_guard.set_reconciliation_hold.call_count == 0, "a distrusted sample released the HALT hold"
 
     del type(store).fill_generation
+
+
+# --- A corrupt sample is not evidence in EITHER direction ---------------------
+#
+# The first fence only guarded the no-discrepancy branch, on the reasoning that
+# asserting reduce-only is always the safe direction. That was too glib. For
+# futures `is_critical` is `abs(diff) >= 1`, so a straddled fill that invents a
+# single lot of difference is CRITICAL, and one transient sample was enough to
+# enter reduce-only and start the recovery cooldown. You do not act on a
+# measurement you already know is corrupt -- in either direction.
+
+
+def _straddling_store(local_qty: int):
+    """A store whose fill fence advances between the two halves of the sample."""
+    from unittest.mock import MagicMock
+
+    store = MagicMock()
+    snapshot = {"TXFA5": SimpleNamespace(symbol="TXFA5", net_qty=local_qty, strategy_id="R47_MAKER_TMF")}
+    store.snapshot_positions = MagicMock(return_value=snapshot)
+    store.positions = snapshot
+    gens = iter([7, 8])
+    type(store).fill_generation = property(lambda _self: next(gens))
+    return store
+
+
+@pytest.mark.asyncio
+async def test_a_straddled_sample_that_disagrees_does_not_assert_reduce_only():
+    """A fill between the two reads can INVENT a discrepancy, not just hide one."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from hft_platform.execution.reconciliation import ReconciliationService
+
+    store = _straddling_store(local_qty=2)
+    client = MagicMock()
+    client.get_positions = MagicMock(return_value=[{"code": "TXFA5", "quantity": 1}])
+    with patch("hft_platform.execution.reconciliation.MetricsRegistry") as m:
+        m.get.return_value = MagicMock()
+        svc = ReconciliationService(client, store, {}, MagicMock())
+    controller = MagicMock()
+    controller.enter_reduce_only_async = AsyncMock()
+    svc.platform_degrade_controller = controller
+
+    await svc.sync_portfolio()
+
+    assert svc._critical_drift_streak == 0, "a straddled sample was counted as critical drift"
+    assert svc.drift_reduce_only_active is False, "a straddled sample asserted reduce-only"
+    controller.enter_reduce_only_async.assert_not_awaited()
+    assert svc._untrusted_sample_streak == 1
+
+    del type(store).fill_generation
+
+
+@pytest.mark.asyncio
+async def test_a_partial_broker_snapshot_is_not_treated_as_the_whole_book():
+    """AccountGateway.get_positions() has THREE outcomes, and recon knew two.
+
+    Both accounts failing returns None. ONE account failing returns the other
+    account's positions and records `last_positions_error`. Comparing that
+    half-book against the full local book reads every position of the missing
+    account as broker=0 -- fabricated critical drift on real positions, on a
+    path whose response to critical drift is now immediate reduce-only.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from hft_platform.execution.reconciliation import ReconciliationService
+
+    store = MagicMock()
+    snapshot = {"TXFA5": SimpleNamespace(symbol="TXFA5", net_qty=3, strategy_id="R47_MAKER_TMF")}
+    store.snapshot_positions = MagicMock(return_value=snapshot)
+    store.positions = snapshot
+    store.fill_generation = 7
+
+    client = MagicMock()
+    # The futures query failed; the stock account answered. Non-None, partial.
+    client.get_positions = MagicMock(return_value=[{"code": "2330", "quantity": 1000}])
+    client.account_gateway.last_positions_error = "futopt: 500 Please check param."
+
+    with patch("hft_platform.execution.reconciliation.MetricsRegistry") as m:
+        m.get.return_value = MagicMock()
+        svc = ReconciliationService(client, store, {}, MagicMock())
+    controller = MagicMock()
+    controller.enter_reduce_only_async = AsyncMock()
+    svc.platform_degrade_controller = controller
+
+    await svc.sync_portfolio()
+
+    assert svc._critical_drift_streak == 0, "a partial broker snapshot fabricated critical drift"
+    assert svc.drift_reduce_only_active is False
+    controller.enter_reduce_only_async.assert_not_awaited()
+    assert svc._untrusted_sample_streak == 1
+
+
+@pytest.mark.asyncio
+async def test_a_partial_broker_snapshot_cannot_clear_an_existing_drift_signal():
+    """The other direction: an omitted broker position must not read as resolved."""
+    from unittest.mock import MagicMock, patch
+
+    from hft_platform.execution.reconciliation import ReconciliationService
+
+    store = MagicMock()
+    store.snapshot_positions = MagicMock(return_value={})
+    store.positions = {}
+    store.fill_generation = 7
+
+    client = MagicMock()
+    client.get_positions = MagicMock(return_value=[])
+    client.account_gateway.last_positions_error = "futopt: 500 Please check param."
+
+    storm_guard = MagicMock()
+    with patch("hft_platform.execution.reconciliation.MetricsRegistry") as m:
+        m.get.return_value = MagicMock()
+        svc = ReconciliationService(client, store, {}, storm_guard)
+    svc._drift_reduce_only = True
+    svc._halt_triggered = True
+    svc._critical_drift_streak = 3
+
+    await svc.sync_portfolio()
+
+    assert svc.drift_reduce_only_active is True, "a partial snapshot cleared the drift signal"
+    assert svc._halt_triggered is True
+    assert storm_guard.set_reconciliation_hold.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_consecutive_untrusted_samples_are_visible_rather_than_silent():
+    """Skipping is right per-sample and dangerous in aggregate.
+
+    A persistently bad source would stop reconciling anything and look calm
+    doing it. The streak is the only thing standing between that and a silent
+    blind spot, so it must count up and reset -- not merely be set once.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from hft_platform.execution.reconciliation import ReconciliationService
+
+    store = MagicMock()
+    store.snapshot_positions = MagicMock(return_value={})
+    store.positions = {}
+    store.fill_generation = 7
+
+    client = MagicMock()
+    client.get_positions = MagicMock(return_value=[])
+    client.account_gateway.last_positions_error = "futopt: 500 Please check param."
+
+    with patch("hft_platform.execution.reconciliation.MetricsRegistry") as m:
+        m.get.return_value = MagicMock()
+        svc = ReconciliationService(client, store, {}, MagicMock())
+
+    for expected in (1, 2, 3):
+        await svc.sync_portfolio()
+        assert svc._untrusted_sample_streak == expected
+
+    # A trustworthy sample must reset it, or the alert would latch forever.
+    client.account_gateway.last_positions_error = None
+    await svc.sync_portfolio()
+    assert svc._untrusted_sample_streak == 0

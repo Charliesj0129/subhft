@@ -168,6 +168,7 @@ class ReconciliationService:
         #: The direct ``enter_reduce_only_async`` below latches immediately;
         #: this is what keeps the latch alive until the drift actually resolves.
         self._drift_reduce_only: bool = False
+        self._untrusted_sample_streak: int = 0
         self._broker_zero_streak: int = 0
         self._consecutive_failures: int = 0
         self._halt_triggered: bool = False
@@ -218,6 +219,14 @@ class ReconciliationService:
 
     def _record_sync_duration(self, duration_s: float) -> None:  # precision-ok
         self._metrics().reconciliation_sync_duration_seconds.observe(duration_s)
+
+    def _set_untrusted_sample_streak(self, value: int) -> None:
+        try:
+            gauge = getattr(self._metrics(), "reconciliation_untrusted_sample_streak", None)
+            if gauge is not None:
+                gauge.set(value)
+        except Exception:
+            pass
 
     def _record_discrepancy(self, severity: str) -> None:
         self._metrics().reconciliation_discrepancy_total.labels(severity=severity).inc()
@@ -374,10 +383,12 @@ class ReconciliationService:
         t0 = time.monotonic()
         try:
             # Fence the whole sample. The broker snapshot is fetched BEFORE the
-            # local one, so a fill landing between the two reads can make the
-            # older broker quantity equal the newer local quantity -- a clean
-            # reading of a book that is not clean. That is only dangerous in one
-            # direction: it must never be allowed to DE-ASSERT the drift signal.
+            # local one, so a fill landing between the two reads describes two
+            # different moments: it can make the older broker quantity equal the
+            # newer local quantity (a clean reading of an unclean book), and it
+            # can equally invent a one-lot difference -- which for futures is
+            # CRITICAL, so a single transient sample would enter reduce-only.
+            # A reading known to be corrupt is not evidence in either direction.
             fill_gen_before = getattr(self.store, "fill_generation", None)
 
             # 1. Fetch positions from broker
@@ -406,6 +417,47 @@ class ReconciliationService:
                 if hasattr(self.store, "snapshot_positions")
                 else dict(self.store.positions)
             )
+            fill_gen_after = getattr(self.store, "fill_generation", None)
+
+            # A partial broker snapshot is untrustworthy for the same reason.
+            # AccountGateway.get_positions() has THREE outcomes, not two: both
+            # accounts failing returns None (handled above), but ONE account
+            # failing returns the other account's positions and records the
+            # failure in last_positions_error. Comparing that half-book against
+            # the full local book reads every position of the missing account as
+            # broker=0 -- fabricated critical drift on real positions.
+            untrusted: str | None = None
+            if fill_gen_before != fill_gen_after:
+                untrusted = "straddled_fill"
+            elif _extract_positions_error(self.client):
+                untrusted = "partial_broker_snapshot"
+
+            if untrusted is not None:
+                # Preserve every latch, streak and hold: assert nothing, clear
+                # nothing, escalate nothing, auto-correct nothing. Retry on the
+                # next cycle with a fresh sample.
+                self._untrusted_sample_streak += 1
+                self._set_untrusted_sample_streak(self._untrusted_sample_streak)
+                # Skipping is correct per-sample and dangerous in aggregate: a
+                # persistently bad source would stop reconciliation entirely and
+                # look calm doing it, so the streak escalates instead of hiding.
+                log = logger.error if self._untrusted_sample_streak >= 3 else logger.info
+                log(
+                    "reconciliation_sample_untrusted",
+                    reason=untrusted,
+                    consecutive=self._untrusted_sample_streak,
+                    broker_error=_extract_positions_error(self.client),
+                    drift_reduce_only=self._drift_reduce_only,
+                    halt_triggered=self._halt_triggered,
+                    consequence="no state transition this cycle; latches preserved",
+                )
+                self._record_sync_duration(time.monotonic() - t0)
+                self._record_sync_result("skipped_untrusted")
+                return
+            if self._untrusted_sample_streak:
+                self._untrusted_sample_streak = 0
+                self._set_untrusted_sample_streak(0)
+
             for key, pos in snapshot.items():
                 symbol = pos.symbol
                 local_map[symbol] = local_map.get(symbol, 0) + pos.net_qty
@@ -652,50 +704,34 @@ class ReconciliationService:
                         self._drift_reduce_only = True
                         await self.platform_degrade_controller.enter_reduce_only_async(reason="reconciliation_drift")
             else:
-                # Drift resolved — stop asserting the reason so auto-recovery can
-                # legitimately clear it, and clear streak gauges.
+                # Drift resolved -- stop asserting the reason so auto-recovery
+                # can legitimately clear it, and clear streak gauges.
                 #
-                # Only on a TRUSTED clean sample. If a fill landed between the
-                # broker and local reads, the two halves describe different
-                # moments and "no discrepancy" is not evidence of anything. A
-                # store with no fence reports None on both sides and compares
-                # equal, which keeps the previous behaviour for stores that do
-                # not implement it rather than silently refusing to ever clear.
-                fill_gen_after = getattr(self.store, "fill_generation", None)
-                if fill_gen_before != fill_gen_after:
-                    # EVERY resolution-side effect is gated, not just the
-                    # reduce-only signal. Holding that flag while still zeroing
-                    # the streak, clearing `_halt_triggered` and releasing the
-                    # reconciliation hold let StormGuard de-escalate out of HALT
-                    # on a sample this branch has just declared untrustworthy,
-                    # and made reconciliation debounce all the way back up to
-                    # re-trigger it.
-                    logger.info(
-                        "reconciliation_clean_sample_straddled_a_fill",
-                        fill_generation_before=fill_gen_before,
-                        fill_generation_after=fill_gen_after,
-                        halt_triggered=self._halt_triggered,
-                        consequence="resolution withheld; the two halves describe different moments",
-                    )
-                else:
-                    self._drift_reduce_only = False
-                    try:
-                        _streak_g = getattr(self._metrics(), "reconciliation_drift_streak", None)
-                        if _streak_g is not None and self._last_noncritical_drift_signature:
-                            _m = self._metrics()
-                            for _sym in self._last_noncritical_drift_signature.keys():
-                                _capped = _m.cap_symbol(_sym) if _m else _sym
-                                _streak_g.labels(symbol=_capped).set(0)
-                    except Exception:
-                        pass
-                    self._last_noncritical_drift_signature = {}
-                    self._noncritical_drift_streak = 0
-                    self._critical_drift_streak = 0
-                    if self._halt_triggered:
-                        # Drift resolved -- release reconciliation hold so
-                        # StormGuard can de-escalate from HALT.
-                        self.storm_guard.set_reconciliation_hold(False)
-                    self._halt_triggered = False
+                # No trust check here: an untrustworthy sample returned long
+                # before this point. Keeping a second fence in this branch meant
+                # two places had to agree on what "trusted" means, and they did
+                # not -- the first version held the reduce-only flag but still
+                # zeroed the streak, cleared _halt_triggered and released
+                # StormGuard's reconciliation hold on the very sample it had
+                # just declared untrustworthy.
+                self._drift_reduce_only = False
+                try:
+                    _streak_g = getattr(self._metrics(), "reconciliation_drift_streak", None)
+                    if _streak_g is not None and self._last_noncritical_drift_signature:
+                        _m = self._metrics()
+                        for _sym in self._last_noncritical_drift_signature.keys():
+                            _capped = _m.cap_symbol(_sym) if _m else _sym
+                            _streak_g.labels(symbol=_capped).set(0)
+                except Exception:
+                    pass
+                self._last_noncritical_drift_signature = {}
+                self._noncritical_drift_streak = 0
+                self._critical_drift_streak = 0
+                if self._halt_triggered:
+                    # Drift resolved -- release reconciliation hold so
+                    # StormGuard can de-escalate from HALT.
+                    self.storm_guard.set_reconciliation_hold(False)
+                self._halt_triggered = False
                 if sync_log_due:
                     logger.info(
                         "Portfolio Sync Complete - No discrepancies",

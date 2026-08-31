@@ -358,6 +358,7 @@ class MetricsRegistry:
                 _pn("strategy_bound_live_symbols"),
                 _pn("feed_connect_gate_blocked_total"),
                 _pn("reconciliation_drift_streak"),
+                _pn("reconciliation_untrusted_sample_streak"),
                 # Q3 (2026-04-27): symbol config reload result observability.
                 _pn("feed_symbol_config_reload_total"),
                 # P2 #8 (2026-04-27): per-conn subscription truncation —
@@ -1753,6 +1754,14 @@ class MetricsRegistry:
             _pn("reconciliation_drift_streak"),
             "Consecutive reconciliation observations of the same drift (resets to 0 on resolve)",
             ["symbol"],
+        )
+        # A reconciliation cycle that ran on an untrustworthy sample performs NO
+        # state transition at all. That is the safe response to a bad reading,
+        # but it means a persistently untrustworthy source would silently stop
+        # reconciling anything -- so the skip has to be visible.
+        self.reconciliation_untrusted_sample_streak = Gauge(
+            _pn("reconciliation_untrusted_sample_streak"),
+            "Consecutive reconciliation samples skipped as untrustworthy (straddled fill or partial broker snapshot)",
         )
 
         # System (v2)
