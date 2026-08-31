@@ -163,6 +163,11 @@ class ReconciliationService:
         self._last_discrepancies: List[PositionDiscrepancy] = []
         self._last_noncritical_drift_signature: dict[str, int] = {}
         self._noncritical_drift_streak: int = 0
+        #: Whether drift is asserting reduce-only RIGHT NOW. Read every
+        #: supervisor tick by ``PlatformDegradeInputs.reduce_only_reasons``.
+        #: The direct ``enter_reduce_only_async`` below latches immediately;
+        #: this is what keeps the latch alive until the drift actually resolves.
+        self._drift_reduce_only: bool = False
         self._broker_zero_streak: int = 0
         self._consecutive_failures: int = 0
         self._halt_triggered: bool = False
@@ -185,6 +190,20 @@ class ReconciliationService:
     def drift_streak(self) -> int:
         """Number of consecutive non-critical drift observations (read-only)."""
         return self._noncritical_drift_streak
+
+    @property
+    def drift_reduce_only_active(self) -> bool:
+        """Whether position drift is currently asserting platform reduce-only.
+
+        Level-triggered on purpose. ``reconciliation_drift`` is listed in
+        ``_AUTO_RECOVERABLE_REASONS``, and ``check_auto_recovery`` drops any
+        auto-recoverable reason the live inputs no longer report -- so a reason
+        that was never reported by an input at all was dropped on the FIRST
+        supervisor tick after it latched, about a second later, and reduce-only
+        exited ~60 s after that with the drift unresolved. Absence of a signal
+        was being read as "the condition cleared".
+        """
+        return self._drift_reduce_only
 
     # ------------------------------------------------------------------
     # Metrics helpers (WU-18)
@@ -453,6 +472,7 @@ class ReconciliationService:
                     self._last_discrepancies = []
                     self._last_noncritical_drift_signature = {}
                     self._noncritical_drift_streak = 0
+                    self._drift_reduce_only = False
                     duration = time.monotonic() - t0
                     self._record_sync_duration(duration)
                     self._record_sync_result("success")
@@ -550,6 +570,7 @@ class ReconciliationService:
                 if critical:
                     self._last_noncritical_drift_signature = {}
                     self._noncritical_drift_streak = 0
+                    self._drift_reduce_only = False
                     self._critical_drift_streak += 1
                     if self._halt_triggered:
                         # Already in HALT — do not re-trigger (prevents
@@ -601,9 +622,12 @@ class ReconciliationService:
                         # form takes the runtime-state flock (poll up to 2s) and
                         # fsyncs twice on the event loop -- 2000x the 1ms budget,
                         # on the path that reacts to position drift.
+                        self._drift_reduce_only = True
                         await self.platform_degrade_controller.enter_reduce_only_async(reason="reconciliation_drift")
             else:
-                # Drift resolved — clear streak gauges for previously-drifting symbols.
+                # Drift resolved — stop asserting the reason so auto-recovery can
+                # legitimately clear it, and clear streak gauges.
+                self._drift_reduce_only = False
                 try:
                     _streak_g = getattr(self._metrics(), "reconciliation_drift_streak", None)
                     if _streak_g is not None and self._last_noncritical_drift_signature:

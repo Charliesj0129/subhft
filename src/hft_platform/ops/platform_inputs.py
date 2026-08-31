@@ -47,6 +47,11 @@ class PlatformDegradeInputs:
     order_queue: Any
     intent_channel: Any | None = None
     api_queue: Any | None = None
+    #: The reconciliation service, read level-triggered for position drift.
+    #: Optional so every existing construction site keeps working; when it is
+    #: absent the reason simply is not reported, which is the behaviour that
+    #: existed before -- not a new silent hole.
+    reconciliation: Any | None = None
     redis_client: Any | None = None
     redis_healthcheck: Callable[[], bool] | None = None
     metrics: Any | None = None
@@ -94,6 +99,16 @@ class PlatformDegradeInputs:
 
     def reduce_only_reasons(self) -> list[str]:
         reasons: list[str] = []
+
+        # Position drift, asked of its owner every tick. It used to be latched
+        # ONLY by reconciliation calling enter_reduce_only directly, while
+        # `reconciliation_drift` sat in _AUTO_RECOVERABLE_REASONS -- so
+        # check_auto_recovery dropped it on the first tick after it latched,
+        # because a reason no input ever reports looks exactly like a reason
+        # that has cleared.
+        drift = getattr(self.reconciliation, "drift_reduce_only_active", None)
+        if drift:
+            reasons.append("reconciliation_drift")
 
         feed_gap_s = self._feed_gap_s()
         if feed_gap_s >= self.feed_gap_threshold_s:
