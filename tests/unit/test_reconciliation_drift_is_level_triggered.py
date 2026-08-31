@@ -475,3 +475,98 @@ async def test_consecutive_untrusted_samples_are_visible_rather_than_silent():
     client.account_gateway.last_positions_error = None
     await svc.sync_portfolio()
     assert svc._untrusted_sample_streak == 0
+
+
+# --- Sustained unverifiability must fail CLOSED, not merely log ---------------
+#
+# Skipping a corrupt sample is right per-sample and dangerous sustained: nothing
+# was watching. ReconciliationDiscrepancyDetected cannot fire, because a skipped
+# cycle never computes a discrepancy; reconciliation_last_success_ts had no
+# alert rule at all. So a broker account outage meant positions went unverified
+# indefinitely with trading fully open, and the only witness was a log line.
+
+
+def _always_partial_service(threshold: int | None = None):
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from hft_platform.execution.reconciliation import ReconciliationService
+
+    store = MagicMock()
+    store.snapshot_positions = MagicMock(return_value={})
+    store.positions = {}
+    store.fill_generation = 7
+
+    client = MagicMock()
+    client.get_positions = MagicMock(return_value=[])
+    client.account_gateway.last_positions_error = "futopt: 500 Please check param."
+
+    cfg = {"reconciliation": {"untrusted_sample_degrade_after": threshold}} if threshold else {}
+    with patch("hft_platform.execution.reconciliation.MetricsRegistry") as m:
+        m.get.return_value = MagicMock()
+        svc = ReconciliationService(client, store, cfg, MagicMock())
+    controller = MagicMock()
+    controller.enter_reduce_only_async = AsyncMock()
+    svc.platform_degrade_controller = controller
+    return svc, client, controller
+
+
+@pytest.mark.asyncio
+async def test_sustained_untrustworthy_samples_enter_reduce_only():
+    svc, _client, controller = _always_partial_service()
+
+    for _ in range(svc.untrusted_sample_degrade_after - 1):
+        await svc.sync_portfolio()
+    assert svc.reconciliation_unverifiable_active is False, "escalated before the threshold"
+    controller.enter_reduce_only_async.assert_not_awaited()
+
+    await svc.sync_portfolio()
+
+    assert svc.reconciliation_unverifiable_active is True, "positions unverifiable and trading stayed open"
+    controller.enter_reduce_only_async.assert_awaited_once_with(reason="reconciliation_unverifiable")
+
+
+@pytest.mark.asyncio
+async def test_the_unverifiable_latch_is_not_re_entered_every_cycle():
+    """It is a latch, not a per-cycle write: each entry persists off the loop."""
+    svc, _client, controller = _always_partial_service(threshold=2)
+
+    for _ in range(5):
+        await svc.sync_portfolio()
+
+    assert svc.reconciliation_unverifiable_active is True
+    assert controller.enter_reduce_only_async.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_a_trustworthy_sample_resolves_the_unverifiable_state():
+    """Otherwise the reason latches forever and only a restart clears it."""
+    svc, client, _controller = _always_partial_service(threshold=2)
+
+    await svc.sync_portfolio()
+    await svc.sync_portfolio()
+    assert svc.reconciliation_unverifiable_active is True
+
+    client.account_gateway.last_positions_error = None
+    await svc.sync_portfolio()
+
+    assert svc.reconciliation_unverifiable_active is False
+    assert svc._untrusted_sample_streak == 0
+
+
+def test_the_unverifiable_reason_is_reported_and_auto_recoverable():
+    """Both halves of the level-triggered contract, or it repeats a known bug.
+
+    Reported by an input, so `check_auto_recovery` does not read "no input
+    mentions it" as "it cleared"; and auto-recoverable, so it does not latch
+    past the outage and force a manual re-arm.
+    """
+    from hft_platform.ops.platform_degrade import _AUTO_RECOVERABLE_REASONS
+
+    _c, inputs, recon = _rig(drift=False)
+    recon.reconciliation_unverifiable_active = True
+    assert "reconciliation_unverifiable" in inputs.reduce_only_reasons()
+
+    recon.reconciliation_unverifiable_active = False
+    assert "reconciliation_unverifiable" not in inputs.reduce_only_reasons()
+
+    assert "reconciliation_unverifiable" in _AUTO_RECOVERABLE_REASONS

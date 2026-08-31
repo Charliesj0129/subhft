@@ -97,18 +97,31 @@ class PlatformDegradeInputs:
         self.redis_client = redis_client
         self.redis_healthcheck = redis_healthcheck
 
+    def _reconciliation_reasons(self) -> list[str]:
+        """Reasons owned by ReconciliationService, asked of it every tick.
+
+        Both are level-triggered. They used to be latched ONLY by
+        reconciliation calling enter_reduce_only directly, while
+        `reconciliation_drift` sat in _AUTO_RECOVERABLE_REASONS -- so
+        check_auto_recovery dropped it on the first tick after it latched,
+        because a reason no input ever reports looks exactly like a reason that
+        has cleared.
+
+        Kept apart from each other on purpose: "the books disagree" and "I
+        cannot read the books" need different operator responses, and merging
+        them would hide a broker-side outage inside a position-drift alert.
+        """
+        reasons: list[str] = []
+        if getattr(self.reconciliation, "drift_reduce_only_active", None):
+            reasons.append("reconciliation_drift")
+        if getattr(self.reconciliation, "reconciliation_unverifiable_active", None):
+            reasons.append("reconciliation_unverifiable")
+        return reasons
+
     def reduce_only_reasons(self) -> list[str]:
         reasons: list[str] = []
 
-        # Position drift, asked of its owner every tick. It used to be latched
-        # ONLY by reconciliation calling enter_reduce_only directly, while
-        # `reconciliation_drift` sat in _AUTO_RECOVERABLE_REASONS -- so
-        # check_auto_recovery dropped it on the first tick after it latched,
-        # because a reason no input ever reports looks exactly like a reason
-        # that has cleared.
-        drift = getattr(self.reconciliation, "drift_reduce_only_active", None)
-        if drift:
-            reasons.append("reconciliation_drift")
+        reasons.extend(self._reconciliation_reasons())
 
         feed_gap_s = self._feed_gap_s()
         if feed_gap_s >= self.feed_gap_threshold_s:

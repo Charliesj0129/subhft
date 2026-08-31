@@ -138,6 +138,16 @@ class ReconciliationService:
                 os.environ.get("HFT_RECON_BROKER_ZERO_DEBOUNCE_OBSERVATIONS", "2"),
             )
         )
+        # One untrustworthy sample is noise. A RUN of them means reconciliation
+        # is not functioning, and "we cannot verify the positions" is itself a
+        # reason to stop opening risk -- otherwise skipping the cycle trades a
+        # per-sample fail-open for a slower, quieter one.
+        self.untrusted_sample_degrade_after: int = int(
+            recon_cfg.get(
+                "untrusted_sample_degrade_after",
+                os.environ.get("HFT_RECON_UNTRUSTED_SAMPLE_DEGRADE_AFTER", "3"),
+            )
+        )
 
         # 2026-08-12: at the 5 s default this loop wrote ~86k lines/day, every
         # one of them describing the same empty portfolio — and its four debug
@@ -169,6 +179,7 @@ class ReconciliationService:
         #: this is what keeps the latch alive until the drift actually resolves.
         self._drift_reduce_only: bool = False
         self._untrusted_sample_streak: int = 0
+        self._unverifiable_reduce_only: bool = False
         self._broker_zero_streak: int = 0
         self._consecutive_failures: int = 0
         self._halt_triggered: bool = False
@@ -191,6 +202,18 @@ class ReconciliationService:
     def drift_streak(self) -> int:
         """Number of consecutive non-critical drift observations (read-only)."""
         return self._noncritical_drift_streak
+
+    @property
+    def reconciliation_unverifiable_active(self) -> bool:
+        """Whether reconciliation has been unable to take a trustworthy sample.
+
+        Distinct from ``drift_reduce_only_active`` on purpose: "the books
+        disagree" and "I cannot read the books" need different operator
+        responses, and collapsing them would hide a broker-side outage inside a
+        position-drift alert. Level-triggered for the same reason as its
+        sibling -- see the note below.
+        """
+        return self._unverifiable_reduce_only
 
     @property
     def drift_reduce_only_active(self) -> bool:
@@ -451,12 +474,34 @@ class ReconciliationService:
                     halt_triggered=self._halt_triggered,
                     consequence="no state transition this cycle; latches preserved",
                 )
+                if (
+                    self._untrusted_sample_streak >= self.untrusted_sample_degrade_after
+                    and not self._unverifiable_reduce_only
+                ):
+                    # Fail closed. Skipping is the right response to ONE corrupt
+                    # sample; sustained, it means positions are never verified
+                    # while trading continues, and the only thing that noticed
+                    # was a log line. reconciliation_last_success_ts has no
+                    # alert rule, and reconciliation_discrepancy_count cannot
+                    # fire because a skipped cycle never computes one.
+                    self._unverifiable_reduce_only = True
+                    logger.error(
+                        "reconciliation_unverifiable_entering_reduce_only",
+                        reason=untrusted,
+                        consecutive=self._untrusted_sample_streak,
+                        threshold=self.untrusted_sample_degrade_after,
+                    )
+                    await self.platform_degrade_controller.enter_reduce_only_async(reason="reconciliation_unverifiable")
                 self._record_sync_duration(time.monotonic() - t0)
                 self._record_sync_result("skipped_untrusted")
                 return
             if self._untrusted_sample_streak:
                 self._untrusted_sample_streak = 0
                 self._set_untrusted_sample_streak(0)
+            # A trustworthy sample is the only thing that resolves "unverifiable".
+            # Dropping the flag lets the supervisor's auto-recovery clear the
+            # reason; it does NOT clear any drift this sample then finds.
+            self._unverifiable_reduce_only = False
 
             for key, pos in snapshot.items():
                 symbol = pos.symbol
