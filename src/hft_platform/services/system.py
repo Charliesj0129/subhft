@@ -1058,13 +1058,17 @@ class HFTSystem:
         and writes do not. See ``StrategyHealthGovernor.quarantine_async``.
         """
         state = await asyncio.to_thread(self._read_rearm_state)
-        await self._consume_platform_rearm_request_async(state)
-        await self._consume_strategy_rearm_requests(state)
         controller = getattr(self, "platform_degrade_controller", None)
         inputs = getattr(self, "platform_degrade_inputs", None)
+        # Read the live reasons BEFORE the re-arm is consumed. The re-arm has to
+        # re-apply them in memory before it suspends, or clearing here and
+        # re-checking below leaves allow_open() true across the audit write --
+        # a fail-open during exactly the condition reduce-only contains.
+        reasons = inputs.reduce_only_reasons() if inputs is not None else []
+        await self._consume_platform_rearm_request_async(state, reasons)
+        await self._consume_strategy_rearm_requests(state)
         if controller is None or inputs is None:
             return
-        reasons = inputs.reduce_only_reasons()
         for reason in reasons:
             await controller.enter_reduce_only_async(reason=reason)
         await controller.check_auto_recovery_async(
@@ -1241,7 +1245,11 @@ class HFTSystem:
         if self._platform_rearm_is_due(state):
             self.platform_degrade_controller.force_clear(reason="manual_rearm_gate")
 
-    async def _consume_platform_rearm_request_async(self, state: Any = _STATE_NOT_SUPPLIED) -> None:
+    async def _consume_platform_rearm_request_async(
+        self,
+        state: Any = _STATE_NOT_SUPPLIED,
+        current_reasons: "list[str] | tuple[str, ...]" = (),
+    ) -> None:
         """The supervisor's consumer: decide on the loop, persist off it.
 
         ``force_clear`` reaches ``exit_reduce_only`` and ``record_transition``,
@@ -1253,7 +1261,9 @@ class HFTSystem:
         if state is _STATE_NOT_SUPPLIED:
             state = await asyncio.to_thread(self._read_rearm_state)
         if self._platform_rearm_is_due(state):
-            await self.platform_degrade_controller.force_clear_async(reason="manual_rearm_gate")
+            await self.platform_degrade_controller.force_clear_async(
+                reason="manual_rearm_gate", current_reasons=current_reasons
+            )
 
     async def _supervise(self):
         """

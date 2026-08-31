@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Any
 
 from structlog import get_logger
@@ -251,7 +251,12 @@ class PlatformDegradeController:
             persist()
         return transition
 
-    async def force_clear_async(self, *, reason: str = "manual_rearm") -> AutonomyTransition | None:
+    async def force_clear_async(
+        self,
+        *,
+        reason: str = "manual_rearm",
+        current_reasons: Iterable[str] = (),
+    ) -> AutonomyTransition | None:
         """:meth:`force_clear` without blocking the event loop.
 
         The supervisor consumes operator re-arm requests on its tick, which runs
@@ -263,10 +268,31 @@ class PlatformDegradeController:
 
         The in-memory clear still happens immediately and synchronously; only
         the durable record is offloaded. See :meth:`exit_reduce_only_async`.
+
+        ``current_reasons`` are re-applied IN MEMORY before this coroutine
+        yields for the first time, and that ordering is the whole point. The
+        synchronous predecessor cleared and re-checked with no suspension
+        between the two; awaiting the audit write in the middle opened a window
+        in which ``allow_open()`` was true while a degradation reason was still
+        firing, so other loop tasks could submit risk-opening orders during
+        exactly the condition reduce-only exists to contain. Under a contended
+        lock that window is the full write latency -- hundreds of milliseconds.
+        Re-entry is idempotent, so the supervisor's own later pass writes
+        nothing extra.
         """
         transition, persist = self._force_clear_locally(reason)
+        if transition is None:
+            return None
+        relatch: list[Callable[[], None]] = []
+        for active in current_reasons:
+            _t, write = self._enter_reduce_only_locally(active)
+            if write is not None:
+                relatch.append(write)
+        # Everything above ran without suspending. Only the records are offloaded.
         if persist is not None:
             await asyncio.to_thread(persist)
+        for write in relatch:
+            await asyncio.to_thread(write)
         return transition
 
     def _force_clear_locally(self, reason: str) -> tuple[AutonomyTransition | None, Callable[[], None] | None]:

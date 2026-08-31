@@ -200,7 +200,11 @@ async def test_manual_platform_rearm_does_not_stall_the_loop_while_the_lock_is_h
 
 @pytest.mark.asyncio
 async def test_manual_rearm_takes_effect_before_the_write_is_awaited(tmp_path):
-    """Permissions must be restored on the loop, not when the disk catches up."""
+    """With nothing still firing, permissions come back on the loop, not on the disk.
+
+    This is the half of the behaviour that SHOULD be immediate: the operator
+    attested the conditions are safe and no input contradicts them.
+    """
     writer = AutonomyEvidenceWriter(base_dir=tmp_path)
     controller = PlatformDegradeController(evidence_writer=writer, metrics=None)
     controller.enter_reduce_only(reason="margin_critical")
@@ -214,3 +218,37 @@ async def test_manual_rearm_takes_effect_before_the_write_is_awaited(tmp_path):
 
     await task
     holder.join(timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_manual_rearm_never_opens_risk_while_a_reason_is_still_firing(tmp_path):
+    """Taking the stall off the loop must not put a fail-open in its place.
+
+    The synchronous predecessor cleared reduce-only and re-checked live reasons
+    with no suspension between the two. Awaiting the audit write in the middle
+    made ``allow_open()`` true for the whole write latency -- during exactly the
+    condition reduce-only exists to contain, and on a contended lock that is
+    hundreds of milliseconds of unrestricted order flow.
+
+    The first version of the test above asserted that mid-flight clear as if it
+    were the goal, which is why this one names the input that must survive it.
+    """
+    writer = AutonomyEvidenceWriter(base_dir=tmp_path)
+    controller = PlatformDegradeController(evidence_writer=writer, metrics=None)
+    controller.enter_reduce_only(reason="queue_depth_exceeded")
+    holder = _hold_the_lock(tmp_path / "runtime_state.json", HOLD_S)
+
+    task = asyncio.create_task(
+        controller.force_clear_async(reason="manual_rearm_gate", current_reasons=["queue_depth_exceeded"])
+    )
+
+    # Sample allow_open on every loop turn for the whole life of the write.
+    opened = False
+    while not task.done():
+        await asyncio.sleep(0)
+        opened = opened or controller.allow_open()
+
+    await task
+    holder.join(timeout=5)
+    assert not opened, "allow_open() was true while queue_depth_exceeded was still firing"
+    assert controller.reduce_only_active is True
