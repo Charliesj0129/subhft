@@ -7,6 +7,7 @@ harness invokes them. Probe verdict 2026-07-14: subagent tool calls carry
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -1151,3 +1152,187 @@ def test_review_gate_allows_rather_than_wedging_on_malformed_stdin(tmp_path):
     its own input is unreadable costs more than it protects."""
     r = run_hook("codex_review_gate.py", "not json at all", tmp_path)
     assert r.returncode == 0
+
+
+# --- Adversarial review r5: five paths that published or mutated unseen -------
+
+
+def test_git_guard_blocks_a_mutation_hidden_in_a_shell_c_payload(tmp_path):
+    """`bash -c 'git reset --hard HEAD^'` reached neither guard.
+
+    After shlex the payload is ONE token, so the basename of every token is
+    "bash", "-c", or the whole command string -- and both parsers concluded the
+    segment does not run git. A direct probe had git_guard exiting 0 on a
+    destructive reset issued by a subagent.
+    """
+    for cmd in (
+        "bash -c 'git reset --hard HEAD^'",
+        'sh -c "git push origin HEAD"',
+        "bash -lc 'git commit -m x'",
+        "bash -c 'bash -c \"git reset --hard\"'",
+    ):
+        ev = {"agent_type": "hft-executor", "tool_name": "Bash", "tool_input": {"command": cmd}}
+        r = run_hook("git_guard.py", ev, tmp_path)
+        assert r.returncode == 2, f"not blocked: {cmd}\n{r.stderr}"
+
+
+def test_git_guard_blocks_a_shell_form_whose_payload_it_cannot_find(tmp_path):
+    """A recognised `-c` form with no payload is unreadable, and unreadable blocks."""
+    ev = {"agent_type": "hft-executor", "tool_name": "Bash", "tool_input": {"command": "bash -c"}}
+    r = run_hook("git_guard.py", ev, tmp_path)
+    assert r.returncode == 2 and "git-guard" in r.stderr
+
+
+def test_git_guard_still_allows_shell_commands_that_do_not_run_git(tmp_path):
+    """The payload is re-parsed, not pattern-matched: benign `-c` work must pass.
+
+    Blocking every `bash -c` would be fail-closed and useless; the fix has to
+    distinguish a payload that runs git from one that does not.
+    """
+    for cmd in ("bash -c 'echo hello'", "sh -c 'ls -la'", "bash scripts/run.sh", "echo 'git push'"):
+        ev = {"agent_type": "hft-executor", "tool_name": "Bash", "tool_input": {"command": cmd}}
+        r = run_hook("git_guard.py", ev, tmp_path)
+        assert r.returncode == 0, f"false positive: {cmd}\n{r.stderr}"
+
+
+def test_review_gate_blocks_a_push_aimed_at_another_repository(tmp_path):
+    """`--git-dir` / `GIT_DIR=` publish from a repo the gate never resolved.
+
+    The global-option parser consumed both and returned only a -C-derived cwd,
+    so the gate attested THIS worktree's HEAD while git pushed another
+    repository's objects. `-C` stays allowed: its value is honoured.
+    """
+    repo, head = _gated_repo(tmp_path)
+    _report(tmp_path / "reports", repo, head)
+    for cmd in (
+        f"git --git-dir={tmp_path}/other/.git push origin HEAD",
+        f"GIT_DIR={tmp_path}/other/.git git push origin HEAD",
+        f"git --work-tree={tmp_path}/other push origin HEAD",
+    ):
+        r = run_hook(
+            "codex_review_gate.py",
+            {"tool_name": "Bash", "cwd": str(repo), "tool_input": {"command": cmd}},
+            repo,
+            env={"DUAL_REVIEW_REPORTS": str(tmp_path / "reports")},
+        )
+        assert r.returncode == 2, f"not blocked: {cmd}\n{r.stderr}"
+
+
+def test_review_gate_still_allows_reading_this_repositorys_git_dir(tmp_path):
+    """`git rev-parse --git-dir` asks THIS repo where it is; it publishes nothing.
+
+    Only the global-option span is scanned, so a subcommand flag of the same
+    spelling must not be mistaken for a repository selector.
+    """
+    repo, head = _gated_repo(tmp_path)
+    _report(tmp_path / "reports", repo, head)
+    r = run_hook(
+        "codex_review_gate.py",
+        {"tool_name": "Bash", "cwd": str(repo), "tool_input": {"command": "git rev-parse --git-dir"}},
+        repo,
+        env={"DUAL_REVIEW_REPORTS": str(tmp_path / "reports")},
+    )
+    assert r.returncode == 0, r.stderr
+
+
+def test_review_gate_resolves_the_refspec_when_repo_supplies_the_remote(tmp_path):
+    """`git push --repo=origin <refspec>` attested HEAD instead of the refspec.
+
+    positional[0] was discarded unconditionally as the remote, but `--repo`
+    already supplied it -- so the first positional is a refspec, and dropping it
+    fell through to HEAD. A reviewed HEAD then authorised publishing another ref.
+    """
+    repo, head = _gated_repo(tmp_path)
+    # A second branch carrying its OWN unreviewed gated change.
+    _run_git(repo, "checkout", "-q", "-b", "unreviewed", "origin/main")
+    (repo / "src" / "hft_platform").mkdir(parents=True, exist_ok=True)
+    (repo / "src" / "hft_platform" / "sneaky.py").write_text("value = 2\n")
+    _run_git(repo, "add", "-A")
+    _run_git(repo, "commit", "-q", "-m", "unreviewed work")
+    other = _run_git(repo, "rev-parse", "unreviewed")
+    _run_git(repo, "checkout", "-q", head)
+    _report(tmp_path / "reports", repo, head)  # only HEAD is reviewed
+    for cmd in (
+        "git push --repo=origin unreviewed:refs/heads/x",
+        "git push --repo origin unreviewed:refs/heads/x",
+    ):
+        r = run_hook(
+            "codex_review_gate.py",
+            {"tool_name": "Bash", "cwd": str(repo), "tool_input": {"command": cmd}},
+            repo,
+            env={"DUAL_REVIEW_REPORTS": str(tmp_path / "reports")},
+        )
+        assert r.returncode == 2, f"HEAD authorised {other[:8]}: {cmd}\n{r.stderr}"
+
+
+def test_the_file_that_activates_the_hooks_is_gated_source(tmp_path):
+    """Gating the hook implementations but not their registration is not a gate.
+
+    A branch deleting the PreToolUse entries from `.claude/settings.json` touched
+    no gated prefix, published freely, and disabled enforcement on checkout.
+    """
+    sys.path.insert(0, str(HOOKS))
+    try:
+        import review_attestation
+    finally:
+        sys.path.pop(0)
+    assert ".claude/settings.json" in review_attestation.GATED_PREFIXES
+    assert ".claude/settings.json".startswith(review_attestation.GATED_PREFIXES)
+    assert not "docs/notes.md".startswith(review_attestation.GATED_PREFIXES)
+
+
+def test_pre_push_loads_its_verifier_from_the_published_ref(tmp_path):
+    """The outgoing branch supplied the verifier that judged its own push.
+
+    `sys.path.insert(root/.claude/hooks)` meant a branch could ship
+    `GATED_PREFIXES = ()` or an approving `verify` and that code authorised the
+    same push. The verifier is read from origin/main instead: a branch may
+    improve it, but not use the improvement before it is reviewed.
+    """
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+
+    repo = tmp_path / "repo"
+    (repo / ".claude" / "hooks").mkdir(parents=True)
+    shutil.copy(HOOKS / "review_attestation.py", repo / ".claude" / "hooks" / "review_attestation.py")
+    _run_git(repo, "init", "-q", "-b", "main")
+    _run_git(repo, "add", "-A")
+    _run_git(repo, "commit", "-q", "-m", "the real verifier")
+    _run_git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    (repo / ".claude" / "hooks" / "review_attestation.py").write_text(
+        "GATED_PREFIXES = ()\n"
+        "def canonical_range(*a, **k): return None\n"
+        "def gated_files(*a, **k): return []\n"
+        "def verify(*a, **k): return True\n"
+    )
+    _run_git(repo, "commit", "-qam", "a verifier that approves everything")
+
+    path = HOOKS.parents[1] / "scripts" / "git-hooks" / "pre-push"
+    spec = importlib.util.spec_from_loader("prepush_under_test", SourceFileLoader("prepush_under_test", str(path)))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    verifier, why = mod.load_verifier(str(repo))
+    assert verifier is not None, why
+    assert verifier.GATED_PREFIXES, "the outgoing tree's empty GATED_PREFIXES was used"
+    assert "src/" in verifier.GATED_PREFIXES
+
+
+def test_pre_push_refuses_when_the_published_verifier_is_unreadable(tmp_path):
+    """Fail-closed, unlike the Claude-side hook: this one has `--no-verify`."""
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _run_git(repo, "init", "-q", "-b", "main")
+    _run_git(repo, "commit", "-q", "--allow-empty", "-m", "no verifier here")
+    _run_git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+
+    path = HOOKS.parents[1] / "scripts" / "git-hooks" / "pre-push"
+    spec = importlib.util.spec_from_loader("prepush_missing", SourceFileLoader("prepush_missing", str(path)))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    verifier, why = mod.load_verifier(str(repo))
+    assert verifier is None and "not readable" in why

@@ -63,6 +63,10 @@ GATED_PREFIXES = (
     # nothing stops the next one.
     ".claude/hooks/",
     "scripts/git-hooks/",
+    # ...and the file that ACTIVATES them. Gating only the implementations left
+    # the registrations ungated: a branch deleting the PreToolUse entries touches
+    # no gated prefix, publishes freely, and disables enforcement on checkout.
+    ".claude/settings.json",
 )
 
 #: Severities that must be named in ACK.md before a ``needs-attention`` review can

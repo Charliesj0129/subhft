@@ -34,10 +34,22 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-from pathlib import Path
+import types
 
 ZERO = "0" * 40
 OVERRIDE = "CODEX_REVIEW_OVERRIDE"
+
+#: The verifier is read from here, never from the tree being published. Loading
+#: it from the worktree let the outgoing branch supply the code that judged it:
+#: empty ``GATED_PREFIXES``, or a ``verify`` that always approves, authorised its
+#: own push. A branch may still improve the verifier -- it just cannot use the
+#: improvement until it has been reviewed and merged.
+#:
+#: Limit, stated rather than hidden: this reads the local remote-tracking ref, so
+#: a stale ``origin/main`` verifies with a stale verifier. The hook does not fetch;
+#: a hook that reaches the network is a hook that gets disabled.
+VERIFIER_REF = "origin/main"
+VERIFIER_PATH = ".claude/hooks/review_attestation.py"
 
 
 def repo_root() -> str:
@@ -45,6 +57,38 @@ def repo_root() -> str:
         ["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, timeout=20, check=False
     )
     return out.stdout.strip()
+
+
+def load_verifier(root: str) -> tuple[types.ModuleType | None, str]:
+    """The review verifier as published on ``VERIFIER_REF``, or (None, reason).
+
+    Executed into a real ``types.ModuleType`` registered in ``sys.modules``
+    because ``@dataclass`` resolves ``sys.modules[cls.__module__]``; exec'ing
+    into a bare dict raises ``AttributeError: 'NoneType' object has no attribute
+    '__dict__'`` and would send every push down the refusal path.
+    """
+    out = subprocess.run(
+        ["git", "-C", root, "show", f"{VERIFIER_REF}:{VERIFIER_PATH}"],
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+    if out.returncode != 0 or not out.stdout.strip():
+        return None, f"not readable at {VERIFIER_REF}:{VERIFIER_PATH}"
+    name = "review_attestation_from_main"
+    mod = types.ModuleType(name)
+    mod.__file__ = f"{VERIFIER_REF}:{VERIFIER_PATH}"
+    sys.modules[name] = mod
+    try:
+        exec(compile(out.stdout, mod.__file__, "exec"), mod.__dict__)
+    except Exception as exc:
+        sys.modules.pop(name, None)
+        return None, f"{VERIFIER_REF} copy did not load: {exc!r}"
+    missing = [n for n in ("GATED_PREFIXES", "canonical_range", "gated_files", "verify") if not hasattr(mod, n)]
+    if missing:
+        return None, f"{VERIFIER_REF} copy is missing {', '.join(missing)}"
+    return mod, ""
 
 
 def main() -> int:
@@ -55,16 +99,18 @@ def main() -> int:
     root = repo_root()
     if not root:
         return 0
-    sys.path.insert(0, str(Path(root) / ".claude" / "hooks"))
-    try:
-        from review_attestation import GATED_PREFIXES, canonical_range, gated_files, verify
-    except Exception as exc:
+    verifier, why = load_verifier(root)
+    if verifier is None:
         print(
-            f"BLOCKED by pre-push: the review verifier could not be loaded ({exc}).\n"
+            f"BLOCKED by pre-push: the review verifier could not be loaded ({why}).\n"
             f"  Bypass:  {OVERRIDE}=1 git push ...   or   git push --no-verify",
             file=sys.stderr,
         )
         return 1
+    GATED_PREFIXES = verifier.GATED_PREFIXES
+    canonical_range = verifier.canonical_range
+    gated_files = verifier.gated_files
+    verify = verifier.verify
 
     updates = [line.split() for line in sys.stdin.read().splitlines() if line.strip()]
     for parts in updates:

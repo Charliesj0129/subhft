@@ -24,6 +24,32 @@ _WRAPPERS = {
 _GIT_OPTS_WITH_VALUE = {"-C", "-c", "--namespace", "--work-tree", "--git-dir", "--exec-path"}
 _GH_OPTS_WITH_VALUE = {"-R", "--repo", "--hostname"}
 
+# Interpreter forms whose real command lives inside a string argument.
+# `bash -c 'git reset --hard HEAD^'` is THREE tokens after shlex, and the
+# basename of each is "bash", "-c", and the entire payload -- so every parser
+# below read it as a command that does not run git, and both the mutation guard
+# and the review gate exited 0 on a destructive reset. The payload is re-parsed
+# rather than pattern-matched, and a form whose payload cannot be located is
+# reported unreadable instead of allowed.
+_SHELLS = ("sh", "bash", "zsh", "dash", "ksh", "ash", "busybox", "fish")
+_SHELL_C = re.compile(r"^-[a-zA-Z]*c$")
+_MAX_SHELL_DEPTH = 4
+
+# Options and environment variables that point git at ANOTHER repository. The
+# gate resolves HEAD in the session's cwd, so a command carrying one of these
+# publishes objects that were never the ones under review. `-C` is deliberately
+# absent: its value is captured and honoured rather than refused.
+_GIT_REPO_SELECTORS = ("--git-dir", "--work-tree", "--namespace")
+_GIT_REPO_ENV = (
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_NAMESPACE",
+    "GIT_COMMON_DIR",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+)
+
 
 def read_event() -> dict:
     """The hook event, or {} when stdin is not a JSON object.
@@ -60,7 +86,7 @@ def is_subagent(event: dict) -> bool:
     return bool(event.get("agent_type"))
 
 
-def _segments(cmd: str) -> Iterator[list[str]]:
+def _segments(cmd: str, _depth: int = 0) -> Iterator[list[str]]:
     """Yield the token list of each shell segment of a command string.
 
     Splitting on shell operators is what lets `a && git push` be seen as a git
@@ -72,8 +98,51 @@ def _segments(cmd: str) -> Iterator[list[str]]:
             toks = shlex.split(seg)
         except ValueError:
             toks = seg.split()
-        if toks:
-            yield toks
+        if not toks:
+            continue
+        # `bash -c "..."` is flattened into the segments it would actually run,
+        # so every consumer below sees the real program at position 0. Bounded,
+        # because `bash -c "bash -c ..."` nests; past the bound the segment is
+        # yielded intact and reported unreadable by unattributed_segments.
+        if _depth < _MAX_SHELL_DEPTH:
+            is_shell, payload = _shell_payload(toks)
+            if is_shell and payload is not None:
+                yield from _segments(payload, _depth + 1)
+                continue
+        yield toks
+
+
+def _shell_payload(toks: list[str]) -> tuple[bool, str | None]:
+    """(is this a ``<shell> -c`` exec form, the command string it would run).
+
+    ``(True, None)`` is the fail-closed answer: the form was recognised but the
+    payload is not where a payload belongs, so the caller must treat the segment
+    as unreadable rather than as a command that runs nothing.
+    """
+    i = _skip_prefix(toks)
+    if i >= len(toks) or os.path.basename(toks[i]) not in _SHELLS:
+        return False, None
+    for j in range(i + 1, len(toks)):
+        if _SHELL_C.match(toks[j]):
+            return True, toks[j + 1] if j + 1 < len(toks) else None
+    return False, None
+
+
+def _repo_selectors(toks: list[str], i: int) -> list[str]:
+    """Tokens in this segment that aim git at a repository other than `cwd`.
+
+    Only the GLOBAL option span is scanned -- the tokens between the program and
+    the subcommand. `git rev-parse --git-dir` is a read of this repository and
+    must stay allowed; `git --git-dir=/other push` is a publish from another one
+    and must not.
+    """
+    found = [t for t in toks[:i] if _ENV_ASSIGN.match(t) and t.split("=", 1)[0] in _GIT_REPO_ENV]
+    j = i + 1
+    while j < len(toks) and toks[j].startswith("-"):
+        if toks[j].split("=", 1)[0] in _GIT_REPO_SELECTORS:
+            found.append(toks[j])
+        j += 2 if toks[j] in _GIT_OPTS_WITH_VALUE else 1
+    return found
 
 
 def _skip_prefix(toks: list[str]) -> int:
@@ -124,8 +193,17 @@ def unattributed_segments(cmd: str) -> list[str]:
     """
     out: list[str] = []
     for toks in _segments(cmd):
+        # A shell form reaching here is one _segments could not flatten.
+        if _shell_payload(toks)[0]:
+            out.append(" ".join(toks))
+            continue
         i = _skip_prefix(toks)
-        if i < len(toks) and os.path.basename(toks[i]) in ("git", "gh"):
+        if i < len(toks) and os.path.basename(toks[i]) == "git":
+            selectors = _repo_selectors(toks, i)
+            if selectors:
+                out.append(f"{' '.join(toks)}  [aims git elsewhere: {' '.join(selectors)}]")
+            continue
+        if i < len(toks) and os.path.basename(toks[i]) == "gh":
             continue
         if any(os.path.basename(t) in ("git", "gh") for t in toks[i:]):
             out.append(" ".join(toks))

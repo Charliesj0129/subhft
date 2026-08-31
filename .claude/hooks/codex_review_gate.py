@@ -61,7 +61,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from hook_common import gh_invocations, git_invocations, read_event, unattributed_segments  # noqa: E402
+from hook_common import (  # noqa: E402
+    flag_value,
+    gh_invocations,
+    git_invocations,
+    read_event,
+    unattributed_segments,
+)
 from review_attestation import GATED_PREFIXES, canonical_range, gated_files, git, verify  # noqa: E402
 
 OVERRIDE = "CODEX_REVIEW_OVERRIDE"
@@ -108,7 +114,12 @@ def _push_heads(rest: list[str], cwd: str | None) -> tuple[list[str], list[str]]
         return [], [f"{' '.join(multi)} (publishes refs this gate cannot enumerate)"]
 
     positional = _push_positionals(rest)
-    refspecs = positional[1:]  # positional[0] is the remote
+    # `--repo` supplies the remote, so positional[0] is already a REFSPEC. The
+    # unconditional slice dropped it and fell through to HEAD, which let a
+    # reviewed HEAD authorise `git push --repo=origin origin/main:refs/heads/x`
+    # -- objects the gate never resolved.
+    from_repo_flag = flag_value(rest, ("--repo",)) is not None
+    refspecs = positional if from_repo_flag else positional[1:]
     if not refspecs:
         head = git("rev-parse", "HEAD", cwd=cwd)
         return ([head] if head else []), ([] if head else ["HEAD"])
