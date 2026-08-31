@@ -169,18 +169,71 @@ async def test_drift_stays_asserted_when_noncritical_drift_escalates_to_critical
 
     Dropping the reason here handed the HALT debounce a window with no reason
     active at all, so reduce-only could exit while positions were diverging.
+
+    A SIGN mismatch, because it is unconditionally critical and -- unlike a zero
+    broker quantity -- does not take the broker-zero debounce, which returns
+    before critical discrepancies are ever computed. The first version of this
+    test used broker=0 and carried a fallback branch, so it never reached the
+    critical path and would have passed even if that path cleared the latch
+    again: the exact regression it claims to prevent.
     """
-    svc = _service(local={"TXFA5": 3}, broker=[{"code": "TXFA5", "quantity": 0}])
+    svc = _service(local={"TXFA5": 3}, broker=[{"code": "TXFA5", "quantity": -3}])
     svc._drift_reduce_only = True
 
     await svc.sync_portfolio()
 
-    if svc._critical_drift_streak >= 1:
-        assert svc.drift_reduce_only_active is True, "escalation to critical cleared the safety signal"
-    else:
-        # Not a critical discrepancy in this shape; assert the flag survived a
-        # non-resolving cycle rather than silently passing on a wrong premise.
-        assert svc.drift_reduce_only_active is True
+    assert svc._critical_drift_streak == 1, "premise: the critical branch was reached"
+    assert svc.drift_reduce_only_active is True, "escalation to critical cleared the safety signal"
+
+
+@pytest.mark.asyncio
+async def test_a_clean_sample_that_straddled_a_fill_does_not_clear_the_drift():
+    """The broker half is read before the local half, so a fill splits the sample.
+
+    A fill between the two reads can make the OLDER broker quantity equal the
+    NEWER local quantity -- a clean reading of a book that is not clean. Only
+    de-asserting matters here: a false clean that clears the signal lets
+    cooldown recovery or a manual re-arm reopen order flow with drift unresolved.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from hft_platform.execution.reconciliation import ReconciliationService
+
+    client = MagicMock()
+    store = MagicMock()
+    snapshot = {"TXFA5": SimpleNamespace(symbol="TXFA5", net_qty=3, strategy_id="R47_MAKER_TMF")}
+    store.snapshot_positions = MagicMock(return_value=snapshot)
+    store.positions = snapshot
+
+    # The fence advances between the broker read and the local read -- exactly
+    # the window the two-phase sample opens.
+    gens = iter([7, 8])
+    type(store).fill_generation = property(lambda _self: next(gens))
+
+    # Broker agrees with the local book, so the cycle looks perfectly clean.
+    client.get_positions = MagicMock(return_value=[{"code": "TXFA5", "quantity": 3}])
+
+    with patch("hft_platform.execution.reconciliation.MetricsRegistry") as m:
+        m.get.return_value = MagicMock()
+        svc = ReconciliationService(client, store, {}, MagicMock())
+    svc._drift_reduce_only = True
+
+    await svc.sync_portfolio()
+
+    assert svc.drift_reduce_only_active is True, "a clean sample straddling a fill cleared the drift signal"
+
+    del type(store).fill_generation
+
+
+@pytest.mark.asyncio
+async def test_a_clean_sample_with_no_intervening_fill_does_clear_the_drift():
+    """The fence must not make the latch permanent -- the control for the test above."""
+    svc = _service(local={"TXFA5": 3}, broker=[{"code": "TXFA5", "quantity": 3}])
+    svc._drift_reduce_only = True
+
+    await svc.sync_portfolio()
+
+    assert svc.drift_reduce_only_active is False
 
 
 @pytest.mark.asyncio

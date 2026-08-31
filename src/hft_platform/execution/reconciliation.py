@@ -373,6 +373,13 @@ class ReconciliationService:
         # never reaches it, "Portfolio Sync Failed") says everything it did.
         t0 = time.monotonic()
         try:
+            # Fence the whole sample. The broker snapshot is fetched BEFORE the
+            # local one, so a fill landing between the two reads can make the
+            # older broker quantity equal the newer local quantity -- a clean
+            # reading of a book that is not clean. That is only dangerous in one
+            # direction: it must never be allowed to DE-ASSERT the drift signal.
+            fill_gen_before = getattr(self.store, "fill_generation", None)
+
             # 1. Fetch positions from broker
             raw_positions = await asyncio.to_thread(self.client.get_positions)
 
@@ -636,7 +643,23 @@ class ReconciliationService:
             else:
                 # Drift resolved — stop asserting the reason so auto-recovery can
                 # legitimately clear it, and clear streak gauges.
-                self._drift_reduce_only = False
+                #
+                # Only on a TRUSTED clean sample. If a fill landed between the
+                # broker and local reads, the two halves describe different
+                # moments and "no discrepancy" is not evidence of anything. A
+                # store with no fence reports None on both sides and compares
+                # equal, which keeps the previous behaviour for stores that do
+                # not implement it rather than silently refusing to ever clear.
+                fill_gen_after = getattr(self.store, "fill_generation", None)
+                if fill_gen_before == fill_gen_after:
+                    self._drift_reduce_only = False
+                else:
+                    logger.info(
+                        "reconciliation_clean_sample_straddled_a_fill",
+                        fill_generation_before=fill_gen_before,
+                        fill_generation_after=fill_gen_after,
+                        consequence="drift signal held; the two halves describe different moments",
+                    )
                 try:
                     _streak_g = getattr(self._metrics(), "reconciliation_drift_streak", None)
                     if _streak_g is not None and self._last_noncritical_drift_signature:
