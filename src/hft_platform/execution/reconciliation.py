@@ -455,54 +455,6 @@ class ReconciliationService:
             elif _extract_positions_error(self.client):
                 untrusted = "partial_broker_snapshot"
 
-            if untrusted is not None:
-                # Preserve every latch, streak and hold: assert nothing, clear
-                # nothing, escalate nothing, auto-correct nothing. Retry on the
-                # next cycle with a fresh sample.
-                self._untrusted_sample_streak += 1
-                self._set_untrusted_sample_streak(self._untrusted_sample_streak)
-                # Skipping is correct per-sample and dangerous in aggregate: a
-                # persistently bad source would stop reconciliation entirely and
-                # look calm doing it, so the streak escalates instead of hiding.
-                log = logger.error if self._untrusted_sample_streak >= 3 else logger.info
-                log(
-                    "reconciliation_sample_untrusted",
-                    reason=untrusted,
-                    consecutive=self._untrusted_sample_streak,
-                    broker_error=_extract_positions_error(self.client),
-                    drift_reduce_only=self._drift_reduce_only,
-                    halt_triggered=self._halt_triggered,
-                    consequence="no state transition this cycle; latches preserved",
-                )
-                if (
-                    self._untrusted_sample_streak >= self.untrusted_sample_degrade_after
-                    and not self._unverifiable_reduce_only
-                ):
-                    # Fail closed. Skipping is the right response to ONE corrupt
-                    # sample; sustained, it means positions are never verified
-                    # while trading continues, and the only thing that noticed
-                    # was a log line. reconciliation_last_success_ts has no
-                    # alert rule, and reconciliation_discrepancy_count cannot
-                    # fire because a skipped cycle never computes one.
-                    self._unverifiable_reduce_only = True
-                    logger.error(
-                        "reconciliation_unverifiable_entering_reduce_only",
-                        reason=untrusted,
-                        consecutive=self._untrusted_sample_streak,
-                        threshold=self.untrusted_sample_degrade_after,
-                    )
-                    await self.platform_degrade_controller.enter_reduce_only_async(reason="reconciliation_unverifiable")
-                self._record_sync_duration(time.monotonic() - t0)
-                self._record_sync_result("skipped_untrusted")
-                return
-            if self._untrusted_sample_streak:
-                self._untrusted_sample_streak = 0
-                self._set_untrusted_sample_streak(0)
-            # A trustworthy sample is the only thing that resolves "unverifiable".
-            # Dropping the flag lets the supervisor's auto-recovery clear the
-            # reason; it does NOT clear any drift this sample then finds.
-            self._unverifiable_reduce_only = False
-
             for key, pos in snapshot.items():
                 symbol = pos.symbol
                 local_map[symbol] = local_map.get(symbol, 0) + pos.net_qty
@@ -567,6 +519,62 @@ class ReconciliationService:
                 )
                 logger.debug("Portfolio Sync: Local State", positions=local_map)
             self.platform_degrade_controller.update_reference_positions(local_map=local_map, broker_map=broker_map)
+
+            # The reference map is a best-estimate of exposure, not a drift
+            # verdict, and reduce-only enforcement asks it whether an order
+            # actually reduces. Freezing it through an outage is worse than
+            # refreshing it from an imperfect sample: it already degrades to
+            # the platform's own fresh book when the broker reports nothing
+            # for a symbol, whereas a frozen map drifts arbitrarily far from
+            # reality while fills keep landing. So it updates first, and only
+            # the DECISIONS below are skipped.
+            if untrusted is not None:
+                # Preserve every latch, streak and hold: assert nothing, clear
+                # nothing, escalate nothing, auto-correct nothing. Retry on the
+                # next cycle with a fresh sample.
+                self._untrusted_sample_streak += 1
+                self._set_untrusted_sample_streak(self._untrusted_sample_streak)
+                # Skipping is correct per-sample and dangerous in aggregate: a
+                # persistently bad source would stop reconciliation entirely and
+                # look calm doing it, so the streak escalates instead of hiding.
+                log = logger.error if self._untrusted_sample_streak >= 3 else logger.info
+                log(
+                    "reconciliation_sample_untrusted",
+                    reason=untrusted,
+                    consecutive=self._untrusted_sample_streak,
+                    broker_error=_extract_positions_error(self.client),
+                    drift_reduce_only=self._drift_reduce_only,
+                    halt_triggered=self._halt_triggered,
+                    consequence="no state transition this cycle; latches preserved",
+                )
+                if (
+                    self._untrusted_sample_streak >= self.untrusted_sample_degrade_after
+                    and not self._unverifiable_reduce_only
+                ):
+                    # Fail closed. Skipping is the right response to ONE corrupt
+                    # sample; sustained, it means positions are never verified
+                    # while trading continues, and the only thing that noticed
+                    # was a log line. reconciliation_last_success_ts has no
+                    # alert rule, and reconciliation_discrepancy_count cannot
+                    # fire because a skipped cycle never computes one.
+                    self._unverifiable_reduce_only = True
+                    logger.error(
+                        "reconciliation_unverifiable_entering_reduce_only",
+                        reason=untrusted,
+                        consecutive=self._untrusted_sample_streak,
+                        threshold=self.untrusted_sample_degrade_after,
+                    )
+                    await self.platform_degrade_controller.enter_reduce_only_async(reason="reconciliation_unverifiable")
+                self._record_sync_duration(time.monotonic() - t0)
+                self._record_sync_result("skipped_untrusted")
+                return
+            if self._untrusted_sample_streak:
+                self._untrusted_sample_streak = 0
+                self._set_untrusted_sample_streak(0)
+            # A trustworthy sample is the only thing that resolves "unverifiable".
+            # Dropping the flag lets the supervisor's auto-recovery clear the
+            # reason; it does NOT clear any drift this sample then finds.
+            self._unverifiable_reduce_only = False
 
             broker_has_positions = any(int(qty) != 0 for qty in broker_map.values())
             local_has_positions = any(int(qty) != 0 for qty in local_map.values())

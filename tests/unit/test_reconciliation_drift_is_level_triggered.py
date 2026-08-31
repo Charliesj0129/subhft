@@ -570,3 +570,44 @@ def test_the_unverifiable_reason_is_reported_and_auto_recoverable():
     assert "reconciliation_unverifiable" not in inputs.reduce_only_reasons()
 
     assert "reconciliation_unverifiable" in _AUTO_RECOVERABLE_REASONS
+
+
+@pytest.mark.asyncio
+async def test_an_untrusted_cycle_still_refreshes_the_reduce_only_reference_map():
+    """Skipping the DECISIONS must not freeze the exposure estimate.
+
+    `reference_available_net_qty` is what reduce-only enforcement asks to decide
+    whether an order actually reduces a position (order/adapter.py). A cycle
+    that returned before `update_reference_positions` froze that map at the last
+    trusted sample, so during exactly the outage that triggers reduce-only, the
+    enforcement was reading arbitrarily stale exposure and could permit an order
+    that does not reduce. The map already degrades to the platform's own fresh
+    book when the broker reports nothing for a symbol.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from hft_platform.execution.reconciliation import ReconciliationService
+
+    store = MagicMock()
+    snapshot = {"TXFA5": SimpleNamespace(symbol="TXFA5", net_qty=5, strategy_id="R47_MAKER_TMF")}
+    store.snapshot_positions = MagicMock(return_value=snapshot)
+    store.positions = snapshot
+    store.fill_generation = 7
+
+    client = MagicMock()
+    client.get_positions = MagicMock(return_value=[])
+    client.account_gateway.last_positions_error = "futopt: 500 Please check param."
+
+    with patch("hft_platform.execution.reconciliation.MetricsRegistry") as m:
+        m.get.return_value = MagicMock()
+        svc = ReconciliationService(client, store, {}, MagicMock())
+    controller = MagicMock()
+    controller.enter_reduce_only_async = AsyncMock()
+    svc.platform_degrade_controller = controller
+
+    await svc.sync_portfolio()
+
+    controller.update_reference_positions.assert_called_once()
+    kwargs = controller.update_reference_positions.call_args.kwargs
+    assert kwargs["local_map"] == {"TXFA5": 5}, "reduce-only enforcement was left reading a frozen book"
+    assert svc._untrusted_sample_streak == 1, "premise: this cycle was rejected"
