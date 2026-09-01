@@ -238,6 +238,59 @@ class PositionStore:
             return 0.0
         return (peak - current) / peak
 
+    def restore_portfolio_aggregates(
+        self,
+        *,
+        peak_equity_scaled: int,
+        total_realized_pnl_scaled: int,
+    ) -> None:
+        """Reinstate the portfolio aggregates a checkpoint recorded."""
+        with self._fill_lock:
+            self._peak_equity_scaled = peak_equity_scaled
+            self._total_realized_pnl_scaled = total_realized_pnl_scaled
+            self._evicted_realized_pnl_scaled = 0
+
+    def rebank_unaccounted_realized_pnl(self, total_realized_pnl_scaled: int) -> int:
+        """Make the evicted bank absorb realized PnL no restored position carries.
+
+        Recovery does not reinstate every position a checkpoint recorded, and it
+        should not: ``load_recovery`` drops flat entries, and the broker-sourced
+        paths replace the checkpoint's positions outright. Their realized PnL is
+        still money the account made, and ``_peak_equity_scaled`` -- restored
+        from the same checkpoint -- still contains it.
+
+        Restoring ``_total_realized_pnl_scaled`` alone does not survive contact
+        with the first fill. ``Position.update`` only moves
+        ``realized_pnl_scaled`` when a position *closes*, so every *opening*
+        fill reaches ``_update_portfolio_aggregates`` with ``pnl_delta == 0`` and takes the
+        full-recompute branch, which sums positions + recovery + this bank. Any
+        realized PnL none of those three carries vanishes at that moment, while
+        the peak keeps it, and the gap is reported as drawdown that never
+        happened -- to ``get_drawdown_pct``, which is StormGuard's input.
+
+        ``_evicted_realized_pnl_scaled`` is already the term for realized PnL
+        whose position is gone (the cardinality cap and ``clear_symbol_positions``
+        bank into it), so it is where the unaccounted remainder belongs. Setting
+        it here makes a recompute reproduce the checkpoint's total exactly.
+
+        The remainder is a balancing term, so it is not clamped: if recovery ever
+        reinstates positions carrying *more* realized PnL than the checkpoint
+        recorded, the bank goes negative and the total is still exactly the
+        checkpoint's. Clamping would trade that exactness for a nicer-looking
+        field, and the total is the number StormGuard acts on.
+
+        Returns the banked amount.
+        """
+        with self._fill_lock:
+            accounted = sum(p.realized_pnl_scaled for p in self.positions.values()) + sum(
+                int(rdata.get("realized_pnl_scaled", 0) or 0)
+                for rdata in self._recovery_positions.values()
+                if isinstance(rdata, dict)
+            )
+            self._evicted_realized_pnl_scaled = total_realized_pnl_scaled - accounted
+            self._total_realized_pnl_scaled = total_realized_pnl_scaled
+            return self._evicted_realized_pnl_scaled
+
     def net_qty_for_symbol(self, symbol: str, strategy_id: str | None = None) -> int:
         """Return aggregate net_qty for *symbol*, optionally filtered by strategy.
 
@@ -744,6 +797,15 @@ class PositionStore:
                 del self.positions[k]
             rkeys_to_remove = [rk for rk, rd in self._recovery_positions.items() if _recovery_matches(rd)]
             for rk in rkeys_to_remove:
+                # Bank it, exactly as the live-position branch above does. A
+                # recovery entry's realized PnL counts toward the portfolio total
+                # (_update_portfolio_aggregates sums positions + bank + recovery),
+                # so deleting one without banking deletes realized PnL from the
+                # account -- the same silent drop that turns a flat book into a
+                # false drawdown and HALTs StormGuard.
+                rdata = self._recovery_positions[rk]
+                if isinstance(rdata, dict):
+                    self._evicted_realized_pnl_scaled += int(rdata.get("realized_pnl_scaled", 0) or 0)
                 del self._recovery_positions[rk]
             # Same keys out of the Rust tracker, or the next fill resurrects the
             # phantom quantity this call exists to remove.

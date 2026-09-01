@@ -1,0 +1,66 @@
+{
+  "changes": [
+    {
+      "after": null,
+      "before": null,
+      "classification": "ADDITIVE",
+      "kind": "field_added",
+      "model": "ComboContract",
+      "platform_used": false,
+      "qualname": "ComboContract.code",
+      "remediation": "",
+      "section": "model",
+      "shimmable": false
+    },
+    {
+      "after": null,
+      "before": null,
+      "classification": "ADDITIVE",
+      "kind": "field_added",
+      "model": "ComboContract",
+      "platform_used": false,
+      "qualname": "ComboContract.combo_type",
+      "remediation": "",
+      "section": "model",
+      "shimmable": false
+    },
+    {
+      "after": null,
+      "before": null,
+      "classification": "ADDITIVE",
+      "kind": "field_added",
+      "model": "ComboContract",
+      "platform_used": false,
+      "qualname": "ComboContract.managed",
+      "remediation": "",
+      "section": "model",
+      "shimmable": false
+    },
+    {
+      "after": null,
+      "before": null,
+      "classification": "ADDITIVE",
+      "kind": "field_added",
+      "model": "ComboContract",
+      "platform_used": false,
+      "qualname": "ComboContract.region",
+      "remediation": "",
+      "section": "model",
+      "shimmable": false
+    }
+  ],
+  "counts": {
+    "additive": 4,
+    "behavioral": 0,
+    "benign": 0,
+    "breaking_other": 0,
+    "breaking_platform": 0,
+    "informational": 0
+  },
+  "from": "1.7.2",
+  "from_sha256": "a5e464dd3073720813cbf16cb97a04f8639b6dc0626d33b1058cf81047673b29",
+  "generated_by": "scripts/shioaji_api_diff",
+  "to": "1.7.3",
+  "to_sha256": "d60e06f7d8064afb0472a025903e79f8c0a7da5cbccd434e9aedb27d80f207f6",
+  "verdict": "SAFE"
+}
