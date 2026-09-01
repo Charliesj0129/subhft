@@ -463,7 +463,13 @@ async def test_cancel_skips_coalesce_window(tmp_config):
 
     client = _make_client()
     adapter = _make_adapter(tmp_config, client)
-    adapter._api_coalesce_window_s = 0.5  # 500ms window — would be very noticeable
+    # 30 s, not 500 ms. The discrimination this test needs is "did the CANCEL
+    # wait for the window or not", and the old 500 ms window left only 150 ms
+    # of headroom for scheduler jitter. Under the 16-worker xdist run `make ci`
+    # uses, that failed 2 runs in 3 while the behaviour was correct. A window
+    # far larger than any plausible scheduling delay makes the two outcomes
+    # unmistakable instead of merely far apart.
+    adapter._api_coalesce_window_s = 30.0
 
     # Seed a live order so cancel dispatch finds its target
     adapter.live_orders["strat1:ORD-TARGET"] = MagicMock()
@@ -476,23 +482,27 @@ async def test_cancel_skips_coalesce_window(tmp_config):
 
     await adapter._api_queue.put(cancel_cmd)
 
-    # Run worker briefly — it should dispatch without waiting 500ms
     adapter.running = True
     t0 = time.monotonic()
     worker = asyncio.create_task(adapter._api_worker())
-    # Give enough time for one iteration but NOT 500ms
-    await asyncio.sleep(0.05)
+    # Poll for the dispatch rather than sleeping a fixed 50 ms and timing the
+    # whole block: the old version measured its own sleep plus jitter, so a
+    # loaded runner failed it. Polling measures only how long the worker took.
+    deadline = t0 + 2.0
+    while time.monotonic() < deadline and not client.cancel_order.called:
+        await asyncio.sleep(0.005)
+    elapsed = time.monotonic() - t0
     adapter.running = False
     worker.cancel()
     try:
         await worker
     except asyncio.CancelledError:
         pass
-    elapsed = time.monotonic() - t0
 
-    # Should have dispatched within 50ms, not waited 500ms coalesce
-    assert elapsed < 0.2, f"Took {elapsed:.3f}s — coalesce window was NOT bypassed"
     client.cancel_order.assert_called_once()
+    # Dispatched at all within 2 s proves the 30 s window was bypassed; no
+    # scheduling delay bridges that gap.
+    assert elapsed < 30.0, f"Took {elapsed:.3f}s — coalesce window was NOT bypassed"
 
 
 @pytest.mark.asyncio
@@ -502,7 +512,7 @@ async def test_force_flat_skips_coalesce_window(tmp_config):
 
     client = _make_client()
     adapter = _make_adapter(tmp_config, client)
-    adapter._api_coalesce_window_s = 0.5
+    adapter._api_coalesce_window_s = 30.0  # see test_cancel_skips_coalesce_window
 
     flat_intent = _make_intent(intent_type=IntentType.FORCE_FLAT)
     flat_cmd = _make_cmd(intent=flat_intent)
@@ -520,7 +530,9 @@ async def test_force_flat_skips_coalesce_window(tmp_config):
     adapter.running = True
     t0 = time.monotonic()
     worker = asyncio.create_task(adapter._api_worker())
-    await asyncio.sleep(0.05)
+    deadline = t0 + 2.0
+    while time.monotonic() < deadline and not dispatched:
+        await asyncio.sleep(0.005)
     adapter.running = False
     worker.cancel()
     try:
@@ -528,9 +540,9 @@ async def test_force_flat_skips_coalesce_window(tmp_config):
     except asyncio.CancelledError:
         pass
 
-    # Dispatch should have been reached within 50ms, not after 500ms coalesce
     assert len(dispatched) == 1, "Expected exactly one dispatch call"
-    assert dispatched[0] - t0 < 0.2, f"Dispatch took {dispatched[0] - t0:.3f}s — coalesce NOT bypassed"
+    # Reached dispatch at all within 2 s proves the 30 s window was bypassed.
+    assert dispatched[0] - t0 < 30.0, f"Dispatch took {dispatched[0] - t0:.3f}s — coalesce NOT bypassed"
 
 
 # ---------------------------------------------------------------------------

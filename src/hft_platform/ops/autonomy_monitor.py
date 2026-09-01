@@ -408,7 +408,22 @@ class AutonomyMonitor:
                 except Exception as exc:
                     logger.error("enter_reduce_only_failed", error=str(exc))
 
-            # Record evidence
+            # Record evidence -- off the loop.
+            #
+            # ``record_transition`` holds ``AutonomyEvidenceWriter._transition_lock``
+            # across a multi-file write, and one of those files goes through
+            # ``locked_state``: an ``flock`` acquired by polling with
+            # ``time.sleep(0.01)``. Until ``quarantine_async`` existed that lock
+            # was uncontended, because every caller was this one thread. It now
+            # has a second holder -- the ``to_thread`` persist behind a strategy
+            # quarantine -- and ``threading.Lock.acquire`` is not awaitable, so
+            # a loop-side call would stop feed, risk and order processing dead
+            # for as long as the other holder keeps it. This is the monitor's
+            # periodic path, so it would happen in normal operation.
+            #
+            # ``to_thread`` makes the wait somebody else's thread. The write is
+            # already best-effort here (the ``except`` below predates this), so
+            # nothing downstream depends on it having finished.
             if self._evidence_writer:
                 try:
                     await self._evidence_writer.record_transition_async(

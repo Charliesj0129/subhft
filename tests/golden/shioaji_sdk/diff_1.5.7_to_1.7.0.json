@@ -1,0 +1,398 @@
+{
+  "changes": [
+    {
+      "after": "Futures",
+      "before": "Future",
+      "classification": "BREAKING",
+      "enum": "SecurityType",
+      "kind": "enum_member_renamed",
+      "platform_used": true,
+      "qualname": "SecurityType.Future",
+      "remediation": "contracts_runtime.py",
+      "section": "enum",
+      "shimmable": true,
+      "value": "FUT"
+    },
+    {
+      "after": null,
+      "before": {
+        "annotation": null,
+        "default": 0,
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "contracts_timeout"
+      },
+      "classification": "BREAKING",
+      "cls": "Shioaji",
+      "kind": "param_removed",
+      "method": "login",
+      "param": "contracts_timeout",
+      "platform_used": true,
+      "qualname": "Shioaji.login(contracts_timeout)",
+      "remediation": "session_runtime.py:login",
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": null,
+      "before": {
+        "annotation": null,
+        "default": true,
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "fetch_contract"
+      },
+      "classification": "BREAKING",
+      "cls": "Shioaji",
+      "kind": "param_removed",
+      "method": "login",
+      "param": "fetch_contract",
+      "platform_used": true,
+      "qualname": "Shioaji.login(fetch_contract)",
+      "remediation": "session_runtime.py:login",
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": "WRT",
+      "before": null,
+      "classification": "ADDITIVE",
+      "enum": "SecurityType",
+      "kind": "enum_member_added",
+      "platform_used": false,
+      "qualname": "SecurityType.Warrant",
+      "remediation": "",
+      "section": "enum",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": false,
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "bind"
+      },
+      "before": null,
+      "classification": "ADDITIVE",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "on_quote_idx_v1",
+      "param": "bind",
+      "platform_used": false,
+      "qualname": "Shioaji.on_quote_idx_v1(bind)",
+      "remediation": "",
+      "required": false,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": false,
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "bind"
+      },
+      "before": null,
+      "classification": "ADDITIVE",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "set_on_quote_idx_v1_callback",
+      "param": "bind",
+      "platform_used": false,
+      "qualname": "Shioaji.set_on_quote_idx_v1_callback(bind)",
+      "remediation": "",
+      "required": false,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": [
+        "ContractsApi",
+        "ContractsApiAsync",
+        "ContractsTypedView",
+        "FuturesInfo",
+        "IndexInfo",
+        "OptionInfo",
+        "QuoteIdxV1",
+        "Region",
+        "StockInfo",
+        "WarrantInfo"
+      ],
+      "before": [
+        "ContractAction",
+        "ContractUpdateEvent",
+        "ContractUpdateSecurityType"
+      ],
+      "classification": "INFORMATIONAL",
+      "kind": "compiled_attrs_changed",
+      "platform_used": false,
+      "qualname": "shioaji._core.module_attrs",
+      "remediation": "",
+      "section": "compiled",
+      "shimmable": false
+    },
+    {
+      "after": null,
+      "before": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_ONLY",
+        "name": "self"
+      },
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_removed",
+      "method": "clear_contract_event_callback",
+      "param": "self",
+      "platform_used": false,
+      "qualname": "Shioaji.clear_contract_event_callback(self)",
+      "remediation": "(no specific remediation pointer)",
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": null,
+      "before": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_ONLY",
+        "name": "self"
+      },
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_removed",
+      "method": "clear_on_quote_callback",
+      "param": "self",
+      "platform_used": false,
+      "qualname": "Shioaji.clear_on_quote_callback(self)",
+      "remediation": "(no specific remediation pointer)",
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_ONLY",
+        "name": "self"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "clear_on_quote_idx_v1_callback",
+      "param": "self",
+      "platform_used": false,
+      "qualname": "Shioaji.clear_on_quote_idx_v1_callback(self)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": null,
+      "before": {
+        "annotation": null,
+        "default": null,
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "contracts_cb"
+      },
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_removed",
+      "method": "login",
+      "param": "contracts_cb",
+      "platform_used": false,
+      "qualname": "Shioaji.login(contracts_cb)",
+      "remediation": "session_runtime.py:login",
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": null,
+      "before": {
+        "annotation": null,
+        "default": null,
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "callback"
+      },
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_removed",
+      "method": "on_quote",
+      "param": "callback",
+      "platform_used": false,
+      "qualname": "Shioaji.on_quote(callback)",
+      "remediation": "(no specific remediation pointer)",
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": null,
+      "before": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_ONLY",
+        "name": "self"
+      },
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_removed",
+      "method": "on_quote",
+      "param": "self",
+      "platform_used": false,
+      "qualname": "Shioaji.on_quote(self)",
+      "remediation": "(no specific remediation pointer)",
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_ONLY",
+        "name": "self"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "on_quote_idx_v1",
+      "param": "self",
+      "platform_used": false,
+      "qualname": "Shioaji.on_quote_idx_v1(self)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": null,
+      "before": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "callback"
+      },
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_removed",
+      "method": "set_contract_event_callback",
+      "param": "callback",
+      "platform_used": false,
+      "qualname": "Shioaji.set_contract_event_callback(callback)",
+      "remediation": "(no specific remediation pointer)",
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": null,
+      "before": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_ONLY",
+        "name": "self"
+      },
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_removed",
+      "method": "set_contract_event_callback",
+      "param": "self",
+      "platform_used": false,
+      "qualname": "Shioaji.set_contract_event_callback(self)",
+      "remediation": "(no specific remediation pointer)",
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": null,
+      "before": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "callback"
+      },
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_removed",
+      "method": "set_on_quote_callback",
+      "param": "callback",
+      "platform_used": false,
+      "qualname": "Shioaji.set_on_quote_callback(callback)",
+      "remediation": "(no specific remediation pointer)",
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": null,
+      "before": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_ONLY",
+        "name": "self"
+      },
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_removed",
+      "method": "set_on_quote_callback",
+      "param": "self",
+      "platform_used": false,
+      "qualname": "Shioaji.set_on_quote_callback(self)",
+      "remediation": "(no specific remediation pointer)",
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "callback"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "set_on_quote_idx_v1_callback",
+      "param": "callback",
+      "platform_used": false,
+      "qualname": "Shioaji.set_on_quote_idx_v1_callback(callback)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_ONLY",
+        "name": "self"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "set_on_quote_idx_v1_callback",
+      "param": "self",
+      "platform_used": false,
+      "qualname": "Shioaji.set_on_quote_idx_v1_callback(self)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    }
+  ],
+  "counts": {
+    "additive": 3,
+    "behavioral": 0,
+    "benign": 13,
+    "breaking_other": 0,
+    "breaking_platform": 3,
+    "informational": 1
+  },
+  "from": "1.5.7",
+  "from_sha256": "744d18a6fce4812f73a7556bc7fb100b51a093f25d15c2b4b1a8f0ef99d35cc5",
+  "generated_by": "scripts/shioaji_api_diff",
+  "to": "1.7.0",
+  "to_sha256": "1188f5cd9e51bdd8d9abd755fe4a59c2d745a885d15d39843c2fc3e12d408882",
+  "verdict": "BLOCKED"
+}

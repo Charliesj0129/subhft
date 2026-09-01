@@ -1,0 +1,203 @@
+#!/usr/bin/env python3
+"""git pre-push: refuse to publish gated source without a completed Codex review.
+
+Why this exists alongside the Claude Code hook
+----------------------------------------------
+``.claude/hooks/codex_review_gate.py`` can only ever see a command string typed
+in one session. It cannot see a push from a terminal, another agent, an IDE, or
+a second Claude session. git hands *this* hook the real thing on stdin::
+
+    <local_ref> <local_oid> <remote_ref> <remote_oid>
+
+so the objects being checked are the objects actually leaving the repository --
+which is the finding the Claude-side hook could not fix from where it sits.
+
+Install
+-------
+``make install-git-hooks``
+
+Failure mode
+------------
+Fail-closed, the opposite of the Claude-side hook. That hook allows on an
+internal error because a wedged session has no escape; this one has a first-class
+escape (``git push --no-verify``), so refusing on an error strands nobody.
+
+Honest limits
+-------------
+``git push --no-verify`` bypasses this entirely, and a push from another machine
+or a merge from the GitHub web UI never reaches it. This is a floor against
+forgetting, not a control against intent.
+"""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+import types
+
+ZERO = "0" * 40
+OVERRIDE = "CODEX_REVIEW_OVERRIDE"
+
+#: The verifier is read from here, never from the tree being published. Loading
+#: it from the worktree let the outgoing branch supply the code that judged it:
+#: empty ``GATED_PREFIXES``, or a ``verify`` that always approves, authorised its
+#: own push. A branch may still improve the verifier -- it just cannot use the
+#: improvement until it has been reviewed and merged.
+#:
+#: Limit, stated rather than hidden: this reads the local remote-tracking ref, so
+#: a stale ``origin/main`` verifies with a stale verifier. The hook does not fetch;
+#: a hook that reaches the network is a hook that gets disabled.
+VERIFIER_REF = "origin/main"
+VERIFIER_PATH = ".claude/hooks/review_attestation.py"
+
+
+def repo_root() -> str:
+    out = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, timeout=20, check=False
+    )
+    return out.stdout.strip()
+
+
+def _is_ancestor(root: str, older: str, newer: str) -> bool:
+    """Whether `older` is reachable from `newer` -- i.e. this push fast-forwards.
+
+    Fail-closed on error: an unanswerable question about whether history is
+    being destroyed is not a yes.
+    """
+    out = subprocess.run(
+        ["git", "-C", root, "merge-base", "--is-ancestor", older, newer],
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+    return out.returncode == 0
+
+
+def load_verifier(root: str) -> tuple[types.ModuleType | None, str]:
+    """The review verifier as published on ``VERIFIER_REF``, or (None, reason).
+
+    Executed into a real ``types.ModuleType`` registered in ``sys.modules``
+    because ``@dataclass`` resolves ``sys.modules[cls.__module__]``; exec'ing
+    into a bare dict raises ``AttributeError: 'NoneType' object has no attribute
+    '__dict__'`` and would send every push down the refusal path.
+    """
+    out = subprocess.run(
+        ["git", "-C", root, "show", f"{VERIFIER_REF}:{VERIFIER_PATH}"],
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+    if out.returncode != 0 or not out.stdout.strip():
+        return None, f"not readable at {VERIFIER_REF}:{VERIFIER_PATH}"
+    name = "review_attestation_from_main"
+    mod = types.ModuleType(name)
+    mod.__file__ = f"{VERIFIER_REF}:{VERIFIER_PATH}"
+    sys.modules[name] = mod
+    try:
+        exec(compile(out.stdout, mod.__file__, "exec"), mod.__dict__)
+    except Exception as exc:
+        sys.modules.pop(name, None)
+        return None, f"{VERIFIER_REF} copy did not load: {exc!r}"
+    missing = [n for n in ("GATED_PREFIXES", "canonical_range", "gated_files", "verify") if not hasattr(mod, n)]
+    if missing:
+        return None, f"{VERIFIER_REF} copy is missing {', '.join(missing)}"
+    return mod, ""
+
+
+def main() -> int:
+    if os.environ.get(OVERRIDE) == "1":
+        print(f"pre-push: overridden explicitly by {OVERRIDE}=1", file=sys.stderr)
+        return 0
+
+    root = repo_root()
+    if not root:
+        return 0
+    verifier, why = load_verifier(root)
+    if verifier is None:
+        print(
+            f"BLOCKED by pre-push: the review verifier could not be loaded ({why}).\n"
+            f"  Bypass:  {OVERRIDE}=1 git push ...   or   git push --no-verify",
+            file=sys.stderr,
+        )
+        return 1
+    GATED_PREFIXES = verifier.GATED_PREFIXES
+    canonical_range = verifier.canonical_range
+    gated_files = verifier.gated_files
+    verify = verifier.verify
+
+    updates = [line.split() for line in sys.stdin.read().splitlines() if line.strip()]
+    for parts in updates:
+        if len(parts) < 4:
+            continue
+        _local_ref, local_oid, remote_ref, remote_oid = parts[:4]
+        if local_oid == ZERO:
+            # Publishes no source -- and destroys the remote ref. "Nothing is
+            # added" was read as "nothing is at stake", which is exactly
+            # backwards: a deletion cannot be reviewed because there is no diff
+            # to review, so it can only be authorised deliberately.
+            print(
+                f"BLOCKED by pre-push: this deletes {remote_ref} on the remote.\n"
+                "  A deletion publishes no diff, so no review can cover it.\n"
+                f"  Deliberate:  {OVERRIDE}=1 git push ...   or   git push --no-verify",
+                file=sys.stderr,
+            )
+            return 1
+
+        if remote_oid != ZERO and not _is_ancestor(root, remote_oid, local_oid):
+            # A non-fast-forward: commits that exist on the remote will stop
+            # existing. The gated range is merge-base(origin/main, local)..local,
+            # which for a rewind describes what SURVIVES, never what is dropped
+            # -- and for a local OID that is already an ancestor of origin/main
+            # it is empty, so a rewind that removes src/ files inspected clean.
+            print(
+                f"BLOCKED by pre-push: {remote_ref} would be rewound -- {remote_oid[:8]} "
+                f"is not an ancestor of {local_oid[:8]}.\n"
+                "  A force-push removes commits from the remote; the review range covers\n"
+                "  what survives, not what is dropped, so no review can cover it.\n"
+                f"  Deliberate:  {OVERRIDE}=1 git push ...   or   git push --no-verify",
+                file=sys.stderr,
+            )
+            return 1
+
+        rng = canonical_range(local_oid, cwd=root)
+        if rng is None:
+            # An orphan commit, an unrelated history, or a missing origin/main.
+            # The Claude-side hook allows here because it also runs in unrelated
+            # repositories; this hook is installed into ONE repo on purpose, so
+            # "the range cannot be formed" means the changes cannot be inspected.
+            print(
+                f"BLOCKED by pre-push: no merge-base between origin/main and {local_oid[:8]}, "
+                "so the changes being published cannot be inspected.\n"
+                f"  Bypass:  {OVERRIDE}=1 git push ...   or   git push --no-verify",
+                file=sys.stderr,
+            )
+            return 1
+        touched = gated_files(rng, cwd=root)
+        if not touched:
+            continue
+
+        decision = verify(root, local_oid)
+        if decision.ok:
+            print(f"pre-push: {decision.reason}", file=sys.stderr)
+            continue
+        print(
+            f"BLOCKED by pre-push: {remote_ref} carries {len(touched)} change(s) under "
+            f"{', '.join(GATED_PREFIXES)}.\n"
+            f"  {decision.reason}\n"
+            f"  Bypass:  {OVERRIDE}=1 git push ...   or   git push --no-verify",
+            file=sys.stderr,
+        )
+        return 1
+
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except Exception as exc:  # fail-closed: --no-verify is the escape
+        print(f"BLOCKED by pre-push: internal error ({exc}). Bypass: git push --no-verify", file=sys.stderr)
+        sys.exit(1)

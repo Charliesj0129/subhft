@@ -20,11 +20,36 @@ The channel here removes the shared mutable document instead of protecting it:
   is dict work measured in microseconds, so the decision needs no thread, no
   deadline, and no ordering against a disk write.
 
-That last point rests on a property worth stating plainly: **a strategy
-quarantine does not survive a restart.** Only the platform scope has
-``_restore_manual_rearm_state``; there is no strategy equivalent. So durability
-was never a requirement of this path, and every mechanism built to guarantee it
-was protecting state that a restart discards anyway.
+That last point used to rest on a property this module stated plainly: *a
+strategy quarantine does not survive a restart*, so durability was never a
+requirement of this path. **That is no longer true, and the correction matters
+more than the original claim did.** ``StrategyHealthGovernor``
+``restore_persisted_quarantines`` hydrates every latched strategy at boot and
+reuses the persisted token verbatim, precisely so a request published before a
+restart still names the latch it authorizes.
+
+What survives from the original argument is the part that was never about
+durability: the decision is still made in memory against ``_quarantined``, and
+that is still dict work. What changes is who may retire a request. A token is
+``run_id:strategy_id:seq`` and ``run_id`` is ``pid-uuid4``, so it names the
+engine run that minted it as well as the quarantine instance. The consumer
+retires any request whose token does not match the live latch -- correct for a
+superseded quarantine of its own, wrong for a token that was never its to
+judge:
+
+    engine A                     shared dir              engine B
+    --------                     ----------              --------
+    quarantines S -> tokA                                quarantines S -> tokB
+                                 req(tokB)  <---- operator authorizes B
+    tokA != tokB
+      -> unlink req(tokB)  X                             (never sees it)
+
+``StrategyHealthGovernor.owns_token`` is the guard: an engine only retires a
+request whose token it could have issued -- its own run id, or a token it
+adopted from disk. A foreign request is left in place and logged once. It is
+inert either way, because a run id is never reused, so nothing else can match
+it; the cost of leaving it is a file, and the cost of deleting it is an
+operator authorization that vanished without an error.
 """
 
 from __future__ import annotations
