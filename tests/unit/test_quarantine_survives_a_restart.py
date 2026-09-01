@@ -551,9 +551,7 @@ def test_a_second_start_adopts_the_token_the_first_one_committed(tmp_path: Path)
     assert second.quarantine_token(_SID) == committed
 
 
-def test_the_adopting_start_still_owns_the_latch_it_adopted(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_the_adopting_start_still_owns_the_latch_it_adopted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Adopting the token is only half the migration.
 
     The adopted token carries the *other* run's id, so ``owns_token``'s prefix
