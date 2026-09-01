@@ -4,7 +4,7 @@
 -include .env
 export
 
-.PHONY: dev build-rust feature-parity test test-all test-integration verify-ce3 coverage coverage-html arch-gate dependency-boundary test-assertion-check test-name-check test-quality-pattern-check test-collection-check test-hygiene-check test-file test-node shioaji-surface shioaji-surface-regen shioaji-diff shioaji-guard shioaji-watch shioaji-decision-evidence lint lint-fix format format-check typecheck check latency-gate-ci benchmark benchmark-baseline benchmark-compare start start-engine start-monitor start-maintenance stop logs swarm-start swarm-stop swarm-logs clean clean-rust clean-all ci recorder-status wal-dlq-status wal-dlq-replay wal-dlq-replay-dry-run wal-manifest-tmp-cleanup drill-ck-down drill-wal-pressure drill-loader-lag wal-archive-cleanup soak-daily-report soak-weekly-report soak-canary-report deploy-drift-snapshot deploy-drift-check deploy-pre-sync-template release-channel-gate release-channel-promote release-converge-scan release-converge-clean release-converge release-converge-mvp release-first-ops-gate release-first-ops-promote release-readiness-check canary-snapshot canary-evaluate canary-auto reliability-monthly-pack roadmap-delivery-check roadmap-delivery-execute ch-query-guard-check ch-query-guard-run ch-query-guard-suite env-vars-guard feature-canary-report callback-latency-report incident-timeline history-repair research-init research-converge-tools research-clean research-audit research-audit-strict research-index research-optimize research research-run research-triage research-scaffold research-report research-fetch-paper research-search-papers research-paper-prototype research-record-paper research-summarize-paper research-check-paper-governance research-gen-synth-lob research-stamp-data-meta research-validate-data-meta research-export-l2-ticks research-validate-l2-ticks research-data-quality research-archive-sync research-hftbacktest monitor-remote experiment-gc experiment-gc-dry-run help rebuild-symbols-yaml pre-market-check post-market-check alert-test drill-recon-mismatch rollback-drill git-precheck git-postcheck git-session-check
+.PHONY: dev build-rust feature-parity test test-all test-integration verify-ce3 coverage coverage-html arch-gate dependency-boundary test-assertion-check test-name-check test-quality-pattern-check test-collection-check test-hygiene-check test-file test-node shioaji-surface shioaji-surface-regen shioaji-diff shioaji-guard shioaji-watch shioaji-decision-evidence lint lint-fix format format-check typecheck check latency-gate-ci benchmark benchmark-baseline benchmark-compare start start-engine start-monitor start-maintenance stop logs swarm-start swarm-stop swarm-logs clean clean-rust clean-all ci recorder-status wal-dlq-status wal-dlq-replay wal-dlq-replay-dry-run wal-manifest-tmp-cleanup drill-ck-down drill-wal-pressure drill-loader-lag wal-archive-cleanup soak-daily-report soak-weekly-report soak-canary-report deploy-drift-snapshot deploy-drift-check deploy-pre-sync-template release-channel-gate release-channel-promote release-converge-scan release-converge-clean release-converge release-converge-mvp release-first-ops-gate release-first-ops-promote release-readiness-check canary-snapshot canary-evaluate canary-auto reliability-monthly-pack roadmap-delivery-check roadmap-delivery-execute ch-query-guard-check ch-query-guard-run ch-query-guard-suite env-vars-guard feature-canary-report callback-latency-report incident-timeline history-repair research-init research-converge-tools research-clean research-audit research-audit-strict research-index research-optimize research research-run research-triage research-scaffold research-report research-fetch-paper research-search-papers research-paper-prototype research-record-paper research-summarize-paper research-check-paper-governance research-gen-synth-lob research-stamp-data-meta research-validate-data-meta research-export-l2-ticks research-validate-l2-ticks research-data-quality research-archive-sync research-hftbacktest monitor-remote experiment-gc experiment-gc-dry-run help rebuild-symbols-yaml pre-market-check post-market-check alert-test drill-recon-mismatch rollback-drill git-precheck git-postcheck git-session-check install-git-hooks
 
 PY ?= uv run python
 
@@ -143,6 +143,17 @@ git-postcheck: ## Verify git state after merge/rebase (no conflict markers)
 
 git-session-check: ## Full git hygiene check (worktrees, branches, stash, conflicts)
 	bash scripts/check_git_preconditions.sh --full
+
+install-git-hooks: ## Install the pre-push Codex review gate into this checkout
+	@hooks=$$(git rev-parse --git-path hooks) && mkdir -p "$$hooks" \
+	  && if [ -e "$$hooks/pre-push" ] && ! cmp -s scripts/git-hooks/pre-push "$$hooks/pre-push"; then \
+	       echo "REFUSING: $$hooks/pre-push already exists and differs."; \
+	       echo "  Another hook (LFS, secret scanning, ...) may own it. Chain them by hand,"; \
+	       echo "  or remove it deliberately first. Silently replacing it would delete a guard."; \
+	       exit 1; \
+	     fi \
+	  && install -m 755 scripts/git-hooks/pre-push "$$hooks/pre-push" \
+	  && echo "installed $$hooks/pre-push"
 
 agent-docs-check: ## Verify agent governing docs match the tree (paths, skill index, memory table)
 	$(PY) scripts/check_agent_docs.py
