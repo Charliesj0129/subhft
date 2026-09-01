@@ -138,6 +138,16 @@ class ReconciliationService:
                 os.environ.get("HFT_RECON_BROKER_ZERO_DEBOUNCE_OBSERVATIONS", "2"),
             )
         )
+        # One untrustworthy sample is noise. A RUN of them means reconciliation
+        # is not functioning, and "we cannot verify the positions" is itself a
+        # reason to stop opening risk -- otherwise skipping the cycle trades a
+        # per-sample fail-open for a slower, quieter one.
+        self.untrusted_sample_degrade_after: int = int(
+            recon_cfg.get(
+                "untrusted_sample_degrade_after",
+                os.environ.get("HFT_RECON_UNTRUSTED_SAMPLE_DEGRADE_AFTER", "3"),
+            )
+        )
 
         # 2026-08-12: at the 5 s default this loop wrote ~86k lines/day, every
         # one of them describing the same empty portfolio — and its four debug
@@ -163,6 +173,13 @@ class ReconciliationService:
         self._last_discrepancies: List[PositionDiscrepancy] = []
         self._last_noncritical_drift_signature: dict[str, int] = {}
         self._noncritical_drift_streak: int = 0
+        #: Whether drift is asserting reduce-only RIGHT NOW. Read every
+        #: supervisor tick by ``PlatformDegradeInputs.reduce_only_reasons``.
+        #: The direct ``enter_reduce_only_async`` below latches immediately;
+        #: this is what keeps the latch alive until the drift actually resolves.
+        self._drift_reduce_only: bool = False
+        self._untrusted_sample_streak: int = 0
+        self._unverifiable_reduce_only: bool = False
         self._broker_zero_streak: int = 0
         self._consecutive_failures: int = 0
         self._halt_triggered: bool = False
@@ -186,6 +203,32 @@ class ReconciliationService:
         """Number of consecutive non-critical drift observations (read-only)."""
         return self._noncritical_drift_streak
 
+    @property
+    def reconciliation_unverifiable_active(self) -> bool:
+        """Whether reconciliation has been unable to take a trustworthy sample.
+
+        Distinct from ``drift_reduce_only_active`` on purpose: "the books
+        disagree" and "I cannot read the books" need different operator
+        responses, and collapsing them would hide a broker-side outage inside a
+        position-drift alert. Level-triggered for the same reason as its
+        sibling -- see the note below.
+        """
+        return self._unverifiable_reduce_only
+
+    @property
+    def drift_reduce_only_active(self) -> bool:
+        """Whether position drift is currently asserting platform reduce-only.
+
+        Level-triggered on purpose. ``reconciliation_drift`` is listed in
+        ``_AUTO_RECOVERABLE_REASONS``, and ``check_auto_recovery`` drops any
+        auto-recoverable reason the live inputs no longer report -- so a reason
+        that was never reported by an input at all was dropped on the FIRST
+        supervisor tick after it latched, about a second later, and reduce-only
+        exited ~60 s after that with the drift unresolved. Absence of a signal
+        was being read as "the condition cleared".
+        """
+        return self._drift_reduce_only
+
     # ------------------------------------------------------------------
     # Metrics helpers (WU-18)
     # ------------------------------------------------------------------
@@ -199,6 +242,14 @@ class ReconciliationService:
 
     def _record_sync_duration(self, duration_s: float) -> None:  # precision-ok
         self._metrics().reconciliation_sync_duration_seconds.observe(duration_s)
+
+    def _set_untrusted_sample_streak(self, value: int) -> None:
+        try:
+            gauge = getattr(self._metrics(), "reconciliation_untrusted_sample_streak", None)
+            if gauge is not None:
+                gauge.set(value)
+        except Exception:
+            pass
 
     def _record_discrepancy(self, severity: str) -> None:
         self._metrics().reconciliation_discrepancy_total.labels(severity=severity).inc()
@@ -354,6 +405,15 @@ class ReconciliationService:
         # never reaches it, "Portfolio Sync Failed") says everything it did.
         t0 = time.monotonic()
         try:
+            # Fence the whole sample. The broker snapshot is fetched BEFORE the
+            # local one, so a fill landing between the two reads describes two
+            # different moments: it can make the older broker quantity equal the
+            # newer local quantity (a clean reading of an unclean book), and it
+            # can equally invent a one-lot difference -- which for futures is
+            # CRITICAL, so a single transient sample would enter reduce-only.
+            # A reading known to be corrupt is not evidence in either direction.
+            fill_gen_before = getattr(self.store, "fill_generation", None)
+
             # 1. Fetch positions from broker
             raw_positions = await asyncio.to_thread(self.client.get_positions)
 
@@ -380,6 +440,21 @@ class ReconciliationService:
                 if hasattr(self.store, "snapshot_positions")
                 else dict(self.store.positions)
             )
+            fill_gen_after = getattr(self.store, "fill_generation", None)
+
+            # A partial broker snapshot is untrustworthy for the same reason.
+            # AccountGateway.get_positions() has THREE outcomes, not two: both
+            # accounts failing returns None (handled above), but ONE account
+            # failing returns the other account's positions and records the
+            # failure in last_positions_error. Comparing that half-book against
+            # the full local book reads every position of the missing account as
+            # broker=0 -- fabricated critical drift on real positions.
+            untrusted: str | None = None
+            if fill_gen_before != fill_gen_after:
+                untrusted = "straddled_fill"
+            elif _extract_positions_error(self.client):
+                untrusted = "partial_broker_snapshot"
+
             for key, pos in snapshot.items():
                 symbol = pos.symbol
                 local_map[symbol] = local_map.get(symbol, 0) + pos.net_qty
@@ -445,6 +520,62 @@ class ReconciliationService:
                 logger.debug("Portfolio Sync: Local State", positions=local_map)
             self.platform_degrade_controller.update_reference_positions(local_map=local_map, broker_map=broker_map)
 
+            # The reference map is a best-estimate of exposure, not a drift
+            # verdict, and reduce-only enforcement asks it whether an order
+            # actually reduces. Freezing it through an outage is worse than
+            # refreshing it from an imperfect sample: it already degrades to
+            # the platform's own fresh book when the broker reports nothing
+            # for a symbol, whereas a frozen map drifts arbitrarily far from
+            # reality while fills keep landing. So it updates first, and only
+            # the DECISIONS below are skipped.
+            if untrusted is not None:
+                # Preserve every latch, streak and hold: assert nothing, clear
+                # nothing, escalate nothing, auto-correct nothing. Retry on the
+                # next cycle with a fresh sample.
+                self._untrusted_sample_streak += 1
+                self._set_untrusted_sample_streak(self._untrusted_sample_streak)
+                # Skipping is correct per-sample and dangerous in aggregate: a
+                # persistently bad source would stop reconciliation entirely and
+                # look calm doing it, so the streak escalates instead of hiding.
+                log = logger.error if self._untrusted_sample_streak >= 3 else logger.info
+                log(
+                    "reconciliation_sample_untrusted",
+                    reason=untrusted,
+                    consecutive=self._untrusted_sample_streak,
+                    broker_error=_extract_positions_error(self.client),
+                    drift_reduce_only=self._drift_reduce_only,
+                    halt_triggered=self._halt_triggered,
+                    consequence="no state transition this cycle; latches preserved",
+                )
+                if (
+                    self._untrusted_sample_streak >= self.untrusted_sample_degrade_after
+                    and not self._unverifiable_reduce_only
+                ):
+                    # Fail closed. Skipping is the right response to ONE corrupt
+                    # sample; sustained, it means positions are never verified
+                    # while trading continues, and the only thing that noticed
+                    # was a log line. reconciliation_last_success_ts has no
+                    # alert rule, and reconciliation_discrepancy_count cannot
+                    # fire because a skipped cycle never computes one.
+                    self._unverifiable_reduce_only = True
+                    logger.error(
+                        "reconciliation_unverifiable_entering_reduce_only",
+                        reason=untrusted,
+                        consecutive=self._untrusted_sample_streak,
+                        threshold=self.untrusted_sample_degrade_after,
+                    )
+                    await self.platform_degrade_controller.enter_reduce_only_async(reason="reconciliation_unverifiable")
+                self._record_sync_duration(time.monotonic() - t0)
+                self._record_sync_result("skipped_untrusted")
+                return
+            if self._untrusted_sample_streak:
+                self._untrusted_sample_streak = 0
+                self._set_untrusted_sample_streak(0)
+            # A trustworthy sample is the only thing that resolves "unverifiable".
+            # Dropping the flag lets the supervisor's auto-recovery clear the
+            # reason; it does NOT clear any drift this sample then finds.
+            self._unverifiable_reduce_only = False
+
             broker_has_positions = any(int(qty) != 0 for qty in broker_map.values())
             local_has_positions = any(int(qty) != 0 for qty in local_map.values())
             if local_has_positions and not broker_has_positions:
@@ -453,6 +584,12 @@ class ReconciliationService:
                     self._last_discrepancies = []
                     self._last_noncritical_drift_signature = {}
                     self._noncritical_drift_streak = 0
+                    # _drift_reduce_only is deliberately NOT cleared here. This
+                    # snapshot is explicitly distrusted -- that is why it is
+                    # debounced -- so it is evidence of nothing, and least of all
+                    # that the drift resolved. Clearing it let the supervisor drop
+                    # the reason and a pending manual re-arm reopen order flow with
+                    # the positions still unreconciled.
                     duration = time.monotonic() - t0
                     self._record_sync_duration(duration)
                     self._record_sync_result("success")
@@ -550,7 +687,23 @@ class ReconciliationService:
                 if critical:
                     self._last_noncritical_drift_signature = {}
                     self._noncritical_drift_streak = 0
+                    # The NONCRITICAL streak resets because the drift escalated,
+                    # not because it cleared. _drift_reduce_only stays asserted:
+                    # dropping it here handed the three-observation HALT debounce
+                    # a window with no reason active at all, so reduce-only could
+                    # exit while the drift was getting WORSE.
                     self._critical_drift_streak += 1
+                    if not self._drift_reduce_only:
+                        # Critical drift is the more severe condition and had
+                        # the weaker response: noncritical asserted reduce-only
+                        # at streak 2, while critical asserted nothing and waited
+                        # out the full HALT debounce -- three observations at the
+                        # sync interval with risk-opening orders still allowed
+                        # and the two books disagreeing about a position's SIGN.
+                        # Asserting on a possibly-straddled sample is the safe
+                        # direction; only CLEARING requires a trusted one.
+                        self._drift_reduce_only = True
+                        await self.platform_degrade_controller.enter_reduce_only_async(reason="reconciliation_drift")
                     if self._halt_triggered:
                         # Already in HALT — do not re-trigger (prevents
                         # resetting StormGuard's de-escalation counters).
@@ -601,9 +754,20 @@ class ReconciliationService:
                         # form takes the runtime-state flock (poll up to 2s) and
                         # fsyncs twice on the event loop -- 2000x the 1ms budget,
                         # on the path that reacts to position drift.
+                        self._drift_reduce_only = True
                         await self.platform_degrade_controller.enter_reduce_only_async(reason="reconciliation_drift")
             else:
-                # Drift resolved — clear streak gauges for previously-drifting symbols.
+                # Drift resolved -- stop asserting the reason so auto-recovery
+                # can legitimately clear it, and clear streak gauges.
+                #
+                # No trust check here: an untrustworthy sample returned long
+                # before this point. Keeping a second fence in this branch meant
+                # two places had to agree on what "trusted" means, and they did
+                # not -- the first version held the reduce-only flag but still
+                # zeroed the streak, cleared _halt_triggered and released
+                # StormGuard's reconciliation hold on the very sample it had
+                # just declared untrustworthy.
+                self._drift_reduce_only = False
                 try:
                     _streak_g = getattr(self._metrics(), "reconciliation_drift_streak", None)
                     if _streak_g is not None and self._last_noncritical_drift_signature:
@@ -617,7 +781,7 @@ class ReconciliationService:
                 self._noncritical_drift_streak = 0
                 self._critical_drift_streak = 0
                 if self._halt_triggered:
-                    # Drift resolved — release reconciliation hold so
+                    # Drift resolved -- release reconciliation hold so
                     # StormGuard can de-escalate from HALT.
                     self.storm_guard.set_reconciliation_hold(False)
                 self._halt_triggered = False

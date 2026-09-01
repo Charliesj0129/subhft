@@ -358,6 +358,7 @@ class SystemBootstrapper:
         order_queue: asyncio.Queue[Any],
         intent_channel: Any | None = None,
         api_queue: Any | None = None,
+        reconciliation: Any | None = None,
     ) -> PlatformDegradeInputs:
         metrics = None
         try:
@@ -377,6 +378,7 @@ class SystemBootstrapper:
             order_queue=order_queue,
             intent_channel=intent_channel,
             api_queue=api_queue,
+            reconciliation=reconciliation,
             metrics=metrics,
         )
         inputs.configure_thresholds(
@@ -1370,6 +1372,7 @@ class SystemBootstrapper:
             order_queue=order_queue,
             intent_channel=intent_channel if _gateway_enabled else None,
             api_queue=_gw_api_queue,
+            reconciliation=recon_service,
         )
 
         # Opt-in: SessionGovernor (disabled by default)

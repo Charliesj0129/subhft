@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import tempfile
+import threading
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -57,6 +58,21 @@ class TestLoaderInsertRetry(unittest.TestCase):
     @patch("time.sleep")
     def test_insert_batch_retry_on_failure(self, mock_sleep):
         """Test insert retries on transient failure."""
+        # ``patch("time.sleep")`` replaces the attribute on the *stdlib* module,
+        # so the mock records every sleep in the process for as long as the
+        # patch is active -- including ones made by background threads other
+        # tests left running. ``mock_sleep.call_count`` was therefore a count of
+        # unrelated work: 80 instead of 2 in CI on 2026-09-01, green locally.
+        # Attribute the sleeps by thread instead.
+        own_sleeps: list[float] = []
+        this_thread = threading.get_ident()
+
+        def _record(seconds: float = 0.0) -> None:
+            if threading.get_ident() == this_thread:
+                own_sleeps.append(seconds)
+
+        mock_sleep.side_effect = _record
+
         loader = WALLoaderService(wal_dir=self.wal_dir, archive_dir=self.archive_dir)
         loader.ch_client = MagicMock()
         loader.ch_client.insert.side_effect = [
@@ -72,7 +88,7 @@ class TestLoaderInsertRetry(unittest.TestCase):
         result = loader.insert_batch("market_data", rows)
         self.assertTrue(result)
         self.assertEqual(loader.ch_client.insert.call_count, 3)
-        self.assertEqual(mock_sleep.call_count, 2)
+        self.assertEqual(len(own_sleeps), 2)
 
     @patch("time.sleep")
     def test_insert_batch_fails_after_max_retries(self, mock_sleep):

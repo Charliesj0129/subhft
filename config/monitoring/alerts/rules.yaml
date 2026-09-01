@@ -662,6 +662,24 @@ groups:
         summary: "Reconciliation discrepancy detected"
         description: "reconciliation_discrepancy_count has been > 0 for more than 1 minute; position state may diverge from broker."
 
+  # ReconciliationDiscrepancyDetected above cannot fire for THIS failure: a
+  # cycle that rejects its sample never computes a discrepancy, so the gauge
+  # sits at its last value (0 from a clean start) while nothing is verified.
+  # reconciliation_last_success_ts has no rule of its own either.
+  #
+  # Absence is safe here, unlike the heartbeat rules below: this gauge is
+  # published as 0 from process start and 0 is the true healthy value (zero
+  # consecutive rejected samples), so a restart cannot page and a dead engine
+  # is caught by the liveness alerts rather than by this one.
+  - alert: ReconciliationSamplesUntrustworthy
+    expr: reconciliation_untrusted_sample_streak >= 3
+    for: 1m
+    labels:
+        severity: critical
+    annotations:
+        summary: "Reconciliation cannot take a trustworthy sample"
+        description: "reconciliation_untrusted_sample_streak has been >= 3 for 1 minute: every cycle is being rejected as a straddled fill or a partial broker snapshot, so positions are not being verified. The platform enters reduce-only with reason=reconciliation_unverifiable. Check the broker account gateway (last_positions_error) before re-arming."
+
   # The `> 0` gate is load-bearing. execution_router_heartbeat_ts is a Gauge,
   # so prometheus_client publishes it as 0 from process start until the router
   # first beats -- and `time() - 0` is ~1.8e9, far past 120. With `for: 0s` and

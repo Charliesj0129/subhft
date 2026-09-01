@@ -192,6 +192,14 @@ class PositionStore:
         # 2. The critical section is very short (microseconds for Rust path)
         # 3. For async contexts, use on_fill_async() which runs this in a thread pool
         self._fill_lock = threading.Lock()
+        #: Monotonic count of applied fills, bumped inside ``_fill_lock``.
+        #: Reconciliation fences its broker/local sampling on this: the broker
+        #: snapshot is fetched before the local one, so a fill landing between
+        #: them can make the OLDER broker quantity equal the NEWER local
+        #: quantity and produce a clean reading of a book that is not clean.
+        #: One int, incremented under a lock already held -- no allocation, no
+        #: extra locking on the fill path.
+        self._fill_generation: int = 0
         # Recovery positions from crash recovery (keyed by "account:symbol")
         self._recovery_positions: Dict[str, Dict[str, Any]] = {}
         # Offsets to add to Rust-returned rpnl/fees (keyed by position key "acc:strat:sym")
@@ -462,6 +470,7 @@ class PositionStore:
 
         # Use lock to ensure atomic check-and-call for tracker selection
         with self._fill_lock:
+            self._fill_generation += 1
             # Merge recovery position on first fill for this key.
             # Priority: account:strategy:symbol → account:symbol → suffix search.
             recovery = self._recovery_positions.pop(
@@ -681,6 +690,11 @@ class PositionStore:
             positions = {k: dataclasses.replace(v) for k, v in self.positions.items()}
             recovery = {k: dict(v) if isinstance(v, dict) else v for k, v in self._recovery_positions.items()}
         return positions, recovery
+
+    @property
+    def fill_generation(self) -> int:
+        """Fills applied so far. A fence, not a metric -- see ``_fill_generation``."""
+        return self._fill_generation
 
     def snapshot_positions(self) -> dict:
         """Return a consistent deep copy of positions under fill lock.

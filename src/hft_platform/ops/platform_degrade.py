@@ -30,6 +30,7 @@ _AUTO_RECOVERABLE_REASONS: frozenset[str] = frozenset(
         "feed_gap_exceeded",
         "feed_reconnect_flapping",
         "reconciliation_drift",
+        "reconciliation_unverifiable",
         "rss_unhealthy",
         # The reasons below are all level-based in platform_inputs.reduce_only_reasons:
         # re-emitted each tick only while the live probe still observes the failure.
