@@ -200,15 +200,84 @@ def _isolate_autonomy_state_paths(tmp_path, monkeypatch):
     """
     from hft_platform.ops import evidence as _evidence
     from hft_platform.ops import manual_rearm as _manual_rearm
+    from hft_platform.ops import platform_degrade as _platform_degrade
 
     base = tmp_path / "autonomy_state"
     monkeypatch.setattr(_manual_rearm, "DEFAULT_RUNTIME_STATE_PATH", base / "runtime_state.json")
     monkeypatch.setattr(_evidence, "DEFAULT_AUTONOMY_EVIDENCE_DIR", base)
     _evidence.reset_shared_autonomy_evidence_writer()
+    # The degrade controller is a process-wide singleton holding the platform's
+    # own REDUCE_ONLY/HALT latch, and a latch is designed to survive -- so it
+    # survives the test that set it. ``tests/spec/test_resilience.py`` drives a
+    # real ``HFTSystem`` to HALT and leaves the platform in REDUCE_ONLY for the
+    # rest of the process: every later test that dispatches a NEW order gets it
+    # DLQ'd with ``reason="platform_reduce_only"``. Alphabetical collection put
+    # ``tests/e2e`` before ``tests/spec``, so a full run hid it and naming a
+    # tier explicitly did not.
+    _platform_degrade.reset_shared_platform_degrade_controller()
     try:
         yield
     finally:
         _evidence.reset_shared_autonomy_evidence_writer()
+        _platform_degrade.reset_shared_platform_degrade_controller()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_execution_state_paths(tmp_path, monkeypatch):
+    """Keep the ``.state/`` durability files inside the test's tmp dir.
+
+    Sibling of ``_isolate_autonomy_state_paths``, for the same reason one level
+    over: the fill-dedup window, position checkpoint, order-id map, gateway
+    dedup window and leader lease all default to CWD-relative ``.state/``
+    paths, so every test that builds a real execution path writes into the
+    checkout pytest was launched from.
+
+    These files are *durability* state, and durability is the point: they
+    survive the process. So they also survive the pytest run. A fill id a test
+    replays -- ``SEQ001`` in ``tests/e2e/test_04_execution_plane.py`` -- lands
+    in ``.state/fill_dedup_window.jsonl`` and is deduplicated on the next run,
+    so the test passes exactly once on a clean tree and fails on every run
+    after that. The failure looks like a flake and is not: it is the previous
+    run's evidence doing its job.
+    """
+    # Deliberately NOT created: several tests assert their ``tmp_path`` is
+    # empty, and a directory this fixture made would be a file they never
+    # wrote. Every writer below does ``mkdir(parents=True)`` on first use, so
+    # the directory appears only when a test actually persists something.
+    base = tmp_path / "exec_state"
+    monkeypatch.setenv("HFT_FILL_DEDUP_PERSIST_PATH", str(base / "fill_dedup_window.jsonl"))
+    monkeypatch.setenv("HFT_DEDUP_PERSIST_PATH", str(base / "dedup_window.jsonl"))
+    monkeypatch.setenv("HFT_POSITION_CHECKPOINT_PATH", str(base / "position_checkpoint.json"))
+    monkeypatch.setenv("HFT_ORDER_ID_MAP_PERSIST_PATH", str(base / "order_id_map.jsonl"))
+    monkeypatch.setenv("HFT_GATEWAY_LEADER_LEASE_PATH", str(base / "gateway_leader.lock"))
+
+
+@pytest.fixture(autouse=True)
+def _isolate_wal_and_state_dirs(tmp_path, monkeypatch):
+    """Keep the WAL and state *directories* out of the checkout too.
+
+    ``_isolate_execution_state_paths`` names five individual files, but the
+    two directories they live beside are read straight from the environment
+    with a CWD-relative default -- ``HFT_WAL_DIR`` (``.wal``), its market-data
+    sibling ``HFT_MD_WAL_DIR``, and ``HFT_STATE_DIR`` (``.state``, home of the
+    execution-overflow DLQ). A full unit run wrote 350 KB of real batch files
+    and a DLQ line into the working tree.
+
+    That is not just litter. Both directories are shared mutable state keyed
+    only by the working directory, so two pytest processes in one checkout
+    interfere: on 2026-08-26 a unit run and a non-unit run started seconds
+    apart reported 13 failures that neither produced alone.
+
+    Tests that exercise these paths deliberately set the same variables
+    themselves, which still wins -- ``monkeypatch``/``patch.dict`` applied
+    inside the test overrides what this fixture set up.
+    """
+    wal = tmp_path / "wal"
+    state = tmp_path / "state"
+    monkeypatch.setenv("HFT_WAL_DIR", str(wal))
+    monkeypatch.setenv("HFT_MD_WAL_DIR", str(wal))
+    monkeypatch.setenv("HFT_STATE_DIR", str(state))
+    monkeypatch.setenv("HFT_CONTRACT_REFRESH_STATUS_PATH", str(state / "contract_refresh_status.json"))
 
 
 @pytest.fixture(autouse=True)

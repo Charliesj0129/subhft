@@ -25,7 +25,15 @@ pub fn normalize_tick_tuple(
     let price = if let Some(obj) = close_obj {
         let obj = obj.bind(py);
         if let Ok(p) = obj.extract::<f64>() {
-            (p * scale as f64) as i64
+            // `as i64` truncates toward zero. The book scaler in this same
+            // crate (`normalizer_lob_fused`) and the Python fallback both
+            // round, so a trade at NT$1.14 came back as 11399 while the quote
+            // at 1.14 sat in the book as 11400 -- a trade at the ask printing
+            // below the ask, biasing every affected price one unit down and
+            // corrupting the trade-direction classification that compares the
+            // two. 55 of 3599 prices on the TWSE tick grid diverge at x10000.
+            // `round_ties_even` is Python's `round` (see `py_round_i64`).
+            (p * scale as f64).round_ties_even() as i64
         } else if let Ok(p) = obj.extract::<i64>() {
             p * scale
         } else {

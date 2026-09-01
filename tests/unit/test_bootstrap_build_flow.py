@@ -155,7 +155,13 @@ class TestBuildServiceGraph:
         assert registry.intent_channel is None
 
     @pytest.mark.usefixtures("_sim_env", "_mock_services")
-    def test_build_wires_startup_verifier_to_durable_checkpoint_default(self) -> None:
+    def test_build_wires_startup_verifier_to_durable_checkpoint_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # This test's subject is the *unset-env* default, so it has to opt out
+        # of the autouse ``_isolate_execution_state_paths`` fixture that points
+        # every other test's checkpoint into its tmp dir. Safe here: both the
+        # writer and the verifier are mocked, so the literal path is only ever
+        # inspected as a call kwarg, never opened.
+        monkeypatch.delenv("HFT_POSITION_CHECKPOINT_PATH", raising=False)
         with (
             patch("hft_platform.execution.checkpoint.PositionCheckpointWriter") as writer_cls,
             patch("hft_platform.execution.startup_recon.StartupPositionVerifier") as verifier_cls,

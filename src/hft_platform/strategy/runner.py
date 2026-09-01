@@ -1247,7 +1247,10 @@ class StrategyRunner:
                 intents = []
                 _gov = self.strategy_governor
                 if _gov is not None:
-                    transition = _gov.quarantine(strategy.strategy_id, reason="strategy_exception")
+                    # ``quarantine_async`` keeps the durable write off this
+                    # loop; the latch that stops the strategy is still applied
+                    # before the await returns.
+                    transition = await _gov.quarantine_async(strategy.strategy_id, reason="strategy_exception")
                     self._emit_trace(
                         "strategy_quarantined",
                         trace_id,

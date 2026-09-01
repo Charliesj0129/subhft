@@ -281,6 +281,11 @@ class HFTSystem:
         self._EXEC_OVERFLOW_MAX: int = 4096
         self._exec_overflow_counter: int = 0
         self._exec_overflow_evicted: int = 0
+        # Request ids already reported as belonging to another engine's
+        # quarantine. The supervisor rescans the directory every tick and a
+        # foreign request is never consumed, so without this the same file
+        # would produce a warning per tick forever.
+        self._foreign_rearm_request_ids: set[str] = set()
         self._exec_startup_overflow_lost: bool = False
         self.risk_queue = self.registry.risk_queue
         self.order_queue = self.registry.order_queue
@@ -1047,10 +1052,16 @@ class HFTSystem:
         self._start_service(name, coro_factory())
         self._task_started_at[name] = timebase.now_s()
 
-    def _update_platform_degrade_state(self) -> None:
-        state = self._read_rearm_state()
+    async def _update_platform_degrade_state(self) -> None:
+        """One supervisor tick of the control plane.
+
+        Async because everything under it that touches the safety document does
+        so through a shared ``flock``: the decisions stay on the loop, the reads
+        and writes do not. See ``StrategyHealthGovernor.quarantine_async``.
+        """
+        state = await asyncio.to_thread(self._read_rearm_state)
         self._consume_platform_rearm_request(state)
-        self._consume_strategy_rearm_requests(state)
+        await self._consume_strategy_rearm_requests(state)
         controller = getattr(self, "platform_degrade_controller", None)
         inputs = getattr(self, "platform_degrade_inputs", None)
         if controller is None or inputs is None:
@@ -1078,7 +1089,31 @@ class HFTSystem:
             logger.warning("manual_rearm_state_read_failed", error=str(exc))
             return None
 
-    def _consume_strategy_rearm_requests(self, state: dict | None = None) -> None:
+    def _retire_rearm_request(self, request: Any) -> bool:
+        """Delete one request, reporting failure instead of raising.
+
+        ``consume`` is one ``unlink``, but a read-only remount, a permission
+        change or a transient filesystem error makes it throw -- and nothing
+        between here and ``HFTSystem.run()`` catches it, so the supervisor would
+        die. The request survives the restart, so the next boot dies the same
+        way: a crash loop out of a control-plane housekeeping step.
+
+        Returning False leaves the quarantine latched and the request in place
+        for the next tick, which is the fail-closed direction.
+        """
+        try:
+            rearm_requests.consume(request)
+        except Exception as exc:  # noqa: BLE001 - a failed delete must not stop supervision
+            logger.error(
+                "strategy_rearm_request_delete_failed",
+                strategy_id=getattr(request, "strategy_id", None),
+                request_id=getattr(request, "request_id", None),
+                error=str(exc),
+            )
+            return False
+        return True
+
+    async def _consume_strategy_rearm_requests(self, state: dict | None = None) -> None:
         """Apply operator re-arm requests to the live governor.
 
         Without this the strategy re-arm is a **write-only loop**. The quarantine
@@ -1097,10 +1132,10 @@ class HFTSystem:
         a deadline, a lock, or a consumed-id watermark -- a request is consumed
         by deleting it, so a replay is impossible because the request is gone.
 
-        ``state`` is accepted and ignored; it remains in the signature only so
-        the supervisor keeps its single shared read.
+        ``state`` is the supervisor's single shared read of the safety document.
+        It is used to converge on latches another engine may have persisted
+        after this one booted, before any request is applied.
         """
-        del state
         runner = getattr(self, "strategy_runner", None)
         governor = getattr(runner, "strategy_governor", None)
         if governor is None:
@@ -1108,19 +1143,61 @@ class HFTSystem:
         gate = getattr(self, "manual_rearm_gate", None)
         if gate is None:
             return
+        if state:
+            # Converge before consuming: a request in this same tick must be
+            # able to clear a latch adopted a few lines above it.
+            try:
+                governor.reconcile_persisted_quarantines(state)
+            except Exception as exc:
+                # A document this tick cannot parse must not stop supervision --
+                # the boot path is where an unreadable safety document fails
+                # closed. Here it means one tick adopts nothing.
+                logger.warning("strategy_quarantine_reconcile_failed", error=str(exc))
         try:
-            requests = rearm_requests.pending(gate.state_path.parent)
+            requests = await asyncio.to_thread(rearm_requests.pending, gate.state_path.parent)
         except Exception as exc:
             logger.warning("strategy_rearm_request_scan_failed", error=str(exc))
             return
         for request in requests:
+            if not governor.owns_token(request.quarantine_token):
+                # Another engine's quarantine. The directory is shared state and
+                # the session-ownership preflight is advisory, so two engines can
+                # be scanning it; retiring this would unlink an authorization the
+                # other engine has not seen yet and the operator would never learn
+                # it was destroyed. Not ours to judge, not ours to delete.
+                # Lazily, because this method is also exercised against an
+                # ``HFTSystem.__new__`` rig that never runs ``__init__``.
+                seen = getattr(self, "_foreign_rearm_request_ids", None)
+                if seen is None:
+                    seen = self._foreign_rearm_request_ids = set()
+                if request.request_id not in seen:
+                    seen.add(request.request_id)
+                    logger.warning(
+                        "strategy_rearm_request_foreign_token",
+                        strategy_id=request.strategy_id,
+                        request_id=request.request_id,
+                        authorized_token=request.quarantine_token,
+                        consequence="left in place for the engine that minted the token",
+                    )
+                continue
             live_token = governor.quarantine_token(request.strategy_id)
             if live_token is None:
-                # No live quarantine: either it was already cleared, or the
-                # engine restarted since the request was written (a strategy
-                # quarantine does not survive a restart). Retire the request so
+                # No live quarantine, and after this branch that no longer
+                # includes "the engine restarted". It used to: the comment here
+                # said a strategy quarantine does not survive a restart, which
+                # is the exact defect ``restore_persisted_quarantines`` removes,
+                # and leaving it would tell the next reader that retiring a
+                # request across a restart is normal. It is not. A restored
+                # latch keeps its persisted token, so a request written before
+                # the restart still matches and is still applied.
+                #
+                # What reaches here now: an operator or an earlier request in
+                # this same tick cleared the latch, the request names a strategy
+                # that was never quarantined, or the pre-restart durable write
+                # failed so there was no latch on disk to restore. Retire it so
                 # it cannot linger and cannot apply to some future quarantine.
-                rearm_requests.consume(request)
+                if not await asyncio.to_thread(self._retire_rearm_request, request):
+                    continue
                 logger.warning(
                     "strategy_rearm_request_retired_no_live_quarantine",
                     strategy_id=request.strategy_id,
@@ -1130,7 +1207,8 @@ class HFTSystem:
             if live_token != request.quarantine_token:
                 # Authorizes a different quarantine instance than the live one.
                 # Retire it: the operator must look at the current failure.
-                rearm_requests.consume(request)
+                if not await asyncio.to_thread(self._retire_rearm_request, request):
+                    continue
                 logger.warning(
                     "strategy_rearm_request_superseded",
                     strategy_id=request.strategy_id,
@@ -1142,8 +1220,11 @@ class HFTSystem:
             # Consume before applying. If the process dies between the two, the
             # strategy stays quarantined and the operator reissues -- the
             # fail-closed direction. Consuming after could replay the request.
-            rearm_requests.consume(request)
-            if governor.rearm(
+            # A consume that *fails* must not be followed by the re-arm either,
+            # for the same reason: the request would still be on disk to replay.
+            if not await asyncio.to_thread(self._retire_rearm_request, request):
+                continue
+            if await governor.rearm_async(
                 request.strategy_id,
                 expected_token=request.quarantine_token,
                 request_id=request.request_id,
@@ -1538,7 +1619,7 @@ class HFTSystem:
                     _log_kwargs["gateway_api"] = _api_q_log.qsize()
                 logger.info("Queues", **_log_kwargs)
 
-            self._update_platform_degrade_state()
+            await self._update_platform_degrade_state()
 
             # Periodic stale symbol eviction for FeatureEngine (rate-limited internally)
             _fe = getattr(getattr(self, "md_service", None), "feature_engine", None)

@@ -153,6 +153,16 @@ class TestChain:
                 "live_uplift_factor": 1.5,
                 "model_applied": True,
             },
+            # Gate D grew a blocking replay-parity audit (Slice C). It is
+            # fail-closed: a scorecard with no ``replay_parity`` cannot be
+            # promoted. This test is the tripwire for exactly that, and it fired
+            # correctly -- the fixture is what was out of date.
+            "replay_parity": {"match_pct": 99.0},
+            # L6 equity provenance. Absence is warn-only for scorecards that
+            # predate the field, but a *contract* fixture is not a legacy run:
+            # what this test pins is what a well-formed scorecard looks like
+            # now, and that includes declaring where the equity came from.
+            "equity_source": "real",
         }
 
         # Validate scorecard against the actual production gate
@@ -169,10 +179,44 @@ class TestChain:
             f"Well-formed scorecard must pass Gate D; failed checks: "
             f"{[k for k, v in checks.items() if not v.get('pass')]}"
         )
-        # Every check key in Gate D must be present in our scorecard
-        for key in checks:
-            assert key in scorecard, (
-                f"Gate D checks '{key}' but scorecard contract is missing it — update the scorecard schema"
+        # Every Gate D check must be accounted for by a scorecard field.
+        #
+        # The check name is no longer always the field name: the audits added
+        # since this was written are called ``<field>_audit`` and read a
+        # differently-named payload. Asserting name equality therefore reported
+        # a contract gap that did not exist, while a genuinely new check would
+        # have been indistinguishable from that noise. Declaring the mapping
+        # keeps the tripwire -- a new check with no entry here still breaks the
+        # test -- without the false positive.
+        check_to_scorecard_field = {
+            "sharpe_oos": "sharpe_oos",
+            "max_drawdown": "max_drawdown",
+            "turnover": "turnover",
+            "correlation_pool_max": "correlation_pool_max",
+            "latency_profile": "latency_profile",
+            "latency_audit_strict": "latency_profile",
+            "replay_parity_audit": "replay_parity",
+            # Advisory, and legitimately absent from a well-formed scorecard:
+            # the gate returns an explicit advisory PASS when the field is
+            # missing, so the field is optional by design.
+            "equity_source": "equity_source",
+            "inventory_mtm_audit": None,
+            "cost_uncertainty_audit": None,
+        }
+        for key, check in checks.items():
+            assert key in check_to_scorecard_field, (
+                f"Gate D checks '{key}' but this test does not know which scorecard field it reads — "
+                "add it to check_to_scorecard_field and to the scorecard contract"
+            )
+            field = check_to_scorecard_field[key]
+            if field is None:
+                assert check.get("required") is not True, (
+                    f"Gate D check '{key}' is required but is mapped to no scorecard field"
+                )
+                continue
+            assert field in scorecard, (
+                f"Gate D checks '{key}' via scorecard['{field}'] but the contract is missing it — "
+                "update the scorecard schema"
             )
 
     def test_gate_d_threshold_evaluation(self) -> None:
@@ -188,6 +232,9 @@ class TestChain:
                 "latency_profile_id": "sim_p95_v2026-02-26",
                 "model_applied": True,
             },
+            # Blocking since Slice C -- see test_gate_c_backtest_scorecard.
+            "replay_parity": {"match_pct": 99.0},
+            "equity_source": "real",
         }
         config = PromotionConfig(
             alpha_id="test_alpha",
@@ -200,6 +247,7 @@ class TestChain:
 
         passed, checks = _evaluate_gate_d(scorecard, config)
         assert passed is True
+        assert checks["replay_parity_audit"]["pass"] is True
         assert checks["sharpe_oos"]["pass"] is True
         assert checks["max_drawdown"]["pass"] is True
         assert checks["turnover"]["pass"] is True

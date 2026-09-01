@@ -351,7 +351,15 @@ class TestStormGuardChaos:
         guard.trigger_halt("metric-test")
         mock_metrics.stormguard_mode.labels.return_value.set.assert_called_with(int(StormGuardState.HALT))
 
+        # ``_transition`` is half a protocol: it only *queues* the metric and
+        # audit side-effects, because emitting them would take the Prometheus
+        # and audit locks while ``_state_lock`` is held, and the scrape thread
+        # takes those in the opposite order. Its docstring requires every caller
+        # to flush with ``_emit_pending_transition()`` after releasing the lock;
+        # ``trigger_halt`` above does, which is why its assertion passed. This
+        # one called the first half only and read the gauge before it moved.
         guard._transition(StormGuardState.NORMAL, "reset")
+        guard._emit_pending_transition()
         mock_metrics.stormguard_mode.labels.return_value.set.assert_called_with(int(StormGuardState.NORMAL))
 
     # 15. HALT -> NORMAL recovery cycle --------------------------------------

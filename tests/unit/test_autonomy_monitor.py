@@ -242,3 +242,88 @@ class TestHaltFlattenRetry:
         monitor._storm_guard.state = StormGuardState.HALT
         decisions2 = monitor._evaluate()
         assert len(decisions2) == 0
+
+
+class TestTheEvidenceWriteDoesNotRunOnTheEventLoop:
+    """``record_transition`` acquires a ``threading.Lock`` across a multi-file write.
+
+    One of those files goes through ``locked_state``, which acquires an
+    ``flock`` by polling with ``time.sleep(0.01)`` up to a two-second deadline.
+    That lock used to have exactly one holder -- this thread -- so calling it
+    inline was free. ``StrategyHealthGovernor.quarantine_async`` gave it a
+    second holder on a worker thread, and ``threading.Lock.acquire`` is not
+    awaitable: a loop-side call now stops market, risk and order processing for
+    as long as the worker keeps the lock.
+    """
+
+    def test_the_evidence_write_happens_on_a_worker_thread(self) -> None:
+        import asyncio
+        import threading
+
+        monitor = _make_monitor()
+        writer = MagicMock()
+        seen: dict[str, int] = {}
+
+        def _record(**_kwargs) -> None:
+            seen["thread"] = threading.get_ident()
+
+        writer.record_transition.side_effect = _record
+        monitor._evidence_writer = writer
+        decision = MonitorDecision(
+            rule_name="r",
+            action="notify_quarantine",
+            reason="test",
+            scope="platform",
+            rearm="manual",
+        )
+
+        async def _run() -> int:
+            await monitor._execute([decision])
+            return threading.get_ident()
+
+        loop_thread = asyncio.run(_run())
+        assert "thread" in seen, "the evidence write never ran"
+        assert seen["thread"] != loop_thread, "the evidence write ran on the event loop thread"
+
+    def test_a_held_evidence_lock_does_not_stall_the_loop(self) -> None:
+        """The loop must stay runnable while another holder keeps the lock."""
+        import asyncio
+        import threading
+
+        monitor = _make_monitor()
+        writer = MagicMock()
+        release = threading.Event()
+
+        def _record(**_kwargs) -> None:
+            release.wait(timeout=5.0)
+
+        writer.record_transition.side_effect = _record
+        monitor._evidence_writer = writer
+        decision = MonitorDecision(
+            rule_name="r",
+            action="notify_quarantine",
+            reason="test",
+            scope="platform",
+            rearm="manual",
+        )
+
+        ticks = 0
+
+        async def _ticker() -> None:
+            nonlocal ticks
+            while True:
+                ticks += 1
+                await asyncio.sleep(0.005)
+
+        async def _run() -> None:
+            t = asyncio.ensure_future(_ticker())
+            exec_task = asyncio.ensure_future(monitor._execute([decision]))
+            await asyncio.sleep(0.15)
+            release.set()
+            await exec_task
+            t.cancel()
+
+        asyncio.run(_run())
+        # Inline, the loop thread would be inside Lock.acquire for the whole
+        # 0.15 s and this counter could not advance past its first tick.
+        assert ticks > 5, f"the loop only advanced {ticks} times; it was blocked"

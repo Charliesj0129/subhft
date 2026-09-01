@@ -272,7 +272,7 @@ class TestUpdatePlatformDegradeState:
         sys_obj = _make_stub()
         sys_obj.platform_degrade_inputs.reduce_only_reasons.return_value = ["reason_a", "reason_b"]
 
-        sys_obj._update_platform_degrade_state()
+        asyncio.run(sys_obj._update_platform_degrade_state())
 
         assert sys_obj.platform_degrade_controller.enter_reduce_only.call_count == 2
         sys_obj.platform_degrade_controller.check_auto_recovery.assert_called_once()
@@ -282,13 +282,13 @@ class TestUpdatePlatformDegradeState:
         sys_obj.platform_degrade_controller = None
 
         # Should not raise
-        sys_obj._update_platform_degrade_state()
+        asyncio.run(sys_obj._update_platform_degrade_state())
 
     def test_skips_when_inputs_is_none(self):  # noqa: no-assert
         sys_obj = _make_stub()
         sys_obj.platform_degrade_inputs = None
 
-        sys_obj._update_platform_degrade_state()
+        asyncio.run(sys_obj._update_platform_degrade_state())
 
 
 # ===========================================================================

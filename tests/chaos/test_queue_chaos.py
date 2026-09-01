@@ -6,9 +6,11 @@ graceful degradation, and edge cases under load.
 
 import asyncio
 import threading
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
+
+from hft_platform.events import GapEvent
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -25,16 +27,17 @@ def _patch_bus_env(monkeypatch):
     monkeypatch.setenv("HFT_BUS_TYPED_BOOK_RINGS", "0")
 
 
-@pytest.fixture()
-def mock_metrics():
-    m = MagicMock()
-    with patch("hft_platform.engine.event_bus.MetricsRegistry.get", return_value=m):
-        yield m
+# The former ``mock_metrics`` fixture patched
+# ``hft_platform.engine.event_bus.MetricsRegistry.get`` so these tests would not
+# touch the global registry. The bus no longer reaches for one: telemetry is an
+# injected port (``EventBusTelemetry``) defaulting to
+# ``NOOP_EVENT_BUS_TELEMETRY``, so the patch target stopped existing and the
+# fixture errored at setup. Nothing here asserted on it -- the subject is
+# ring-buffer semantics under concurrency -- so it is gone rather than rebuilt.
 
 
 def _make_bus(size: int = 64, mock_metrics_fixture=None):
     """Create a fresh RingBufferBus with Python fallback (Rust disabled)."""
-    from unittest.mock import patch
 
     with (
         patch("hft_platform.engine.event_bus._RUST_ENABLED", False),
@@ -116,7 +119,7 @@ class TestQueueChaos:
         assert produced + dropped == 200
 
     # 4. Multiple producers (5 threads) --------------------------------------
-    def test_multiple_producers_threads(self, mock_metrics):
+    def test_multiple_producers_threads(self):
         """5 threads publish to RingBufferBus concurrently."""
         bus = _make_bus(size=256)
         barrier = threading.Barrier(5)
@@ -164,7 +167,7 @@ class TestQueueChaos:
         assert q.qsize() == 2
 
     # 6. Ring buffer overflow (oldest overwritten) ---------------------------
-    def test_ring_buffer_overflow_overwrites_oldest(self, mock_metrics):
+    def test_ring_buffer_overflow_overwrites_oldest(self):
         """Publishing beyond ring size overwrites oldest slots."""
         bus = _make_bus(size=4)
         for i in range(10):
@@ -178,7 +181,7 @@ class TestQueueChaos:
 
     # 7. Ring buffer read consistency after overflow -------------------------
     @pytest.mark.asyncio
-    async def test_ring_buffer_read_consistency_after_overflow(self, mock_metrics):
+    async def test_ring_buffer_read_consistency_after_overflow(self):
         """Consumer that lags behind still reads consistent (newer) data."""
         bus = _make_bus(size=8)
 
@@ -186,16 +189,24 @@ class TestQueueChaos:
         for i in range(20):
             bus.publish_nowait(("ev", i))
 
-        # Consumer starting from 0 should skip to recent window
+        # A consumer starting from 0 has been lapped. The bus does not silently
+        # hand it the newer window: it yields a GapEvent first, so the consumer
+        # learns it lost data instead of inferring continuity from timestamps.
+        # This test used to subscript that GapEvent as a tuple.
         events_read: list[int] = []
+        gaps: list[GapEvent] = []
         count = 0
         async for event in bus.consume(start_cursor=0):
-            events_read.append(event[1])
+            if isinstance(event, GapEvent):
+                gaps.append(event)
+            else:
+                events_read.append(event[1])
             count += 1
             if count >= 8:
                 break
 
-        # Should only see events from the recent window (12..19)
+        assert gaps, "a lapped consumer must be told it was lapped"
+        # Whatever it does read afterwards is from the recent window (12..19).
         assert all(v >= 12 for v in events_read)
 
     # 8. Back-pressure signal (QueueFull) ------------------------------------

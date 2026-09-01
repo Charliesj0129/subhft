@@ -21,6 +21,7 @@ replaced atomically underneath it.
 
 from __future__ import annotations
 
+import errno
 import fcntl
 import json
 import os
@@ -71,7 +72,78 @@ def read_state_strict(path: Path) -> dict[str, Any]:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:
         raise RuntimeStateUnreadable(f"{path} exists but could not be read: {exc}") from exc
+    _assert_section_shapes(path, raw)
     return normalize_state(raw)
+
+
+def _assert_section_shapes(path: Path, raw: Any) -> None:
+    """Reject a document that parses but whose latch sections are the wrong shape.
+
+    ``normalize_state`` replaces a non-object ``platform`` or ``strategies``
+    with an empty one. For the tolerant observer read that is the right call --
+    a gauge should not crash the engine. For the strict read it is the same
+    fail-open the strict read exists to prevent, just one level down: a
+    ``strategies`` section that arrives as ``[]`` reads as "no strategy is
+    latched", and a ``platform`` section that arrives as ``null`` reads as "no
+    HALT is latched". Neither is something this file can honestly conclude.
+
+    Every existing document must carry both latch sections, each an object.
+    Nothing writes one without them (``normalize_state`` supplies both, and
+    every write goes through it), so a document missing one is damage rather
+    than an older format -- and reading a missing ``strategies`` as absent
+    releases every quarantine, a missing ``platform`` the HALT.
+
+    Note ``raw.get(section)`` cannot distinguish an absent key from a present
+    ``null``; a present ``null`` is the shape a truncated or half-migrated
+    writer is most likely to leave behind, and it must not read as absent
+    either. Both are rejected here.
+    """
+    if not isinstance(raw, dict):
+        raise RuntimeStateUnreadable(
+            f"{path} parses as {type(raw).__name__}, not an object; its latch state cannot be read"
+        )
+    for section in ("platform", "strategies"):
+        if section not in raw:
+            # Only a missing *file* can prove a cold start. An existing document
+            # that has lost a section is damage -- a partial write, a rolled-back
+            # migration -- and reading it as absent releases exactly what the
+            # section held: every strategy quarantine, or the platform HALT.
+            raise RuntimeStateUnreadable(
+                f"{path} exists but has no {section!r} section; only a missing file proves nothing was latched"
+            )
+        value = raw[section]
+        if not isinstance(value, dict):
+            raise RuntimeStateUnreadable(
+                f"{path} has a {section!r} section of type {type(value).__name__}, not an object; "
+                "refusing to read it as 'nothing latched'"
+            )
+    _assert_platform_latch_readable(path, raw.get("platform"))
+
+
+def _assert_platform_latch_readable(path: Path, platform: Any) -> None:
+    """The platform HALT latch is one field; check the field, not its container.
+
+    Checking only that ``platform`` is an object left the identical fail-open
+    one level further down: ``normalize_state`` ``setdefault``s a missing or
+    ``null`` ``manual_rearm_required`` to ``False``, and ``ManualRearmGate``
+    then reports "no re-arm required", so a boot comes up NORMAL holding a HALT
+    latch it could not read. Every writer of this field writes an actual bool
+    (``ops/manual_rearm.py``, ``ops/evidence.py``), so a missing key or any
+    other type is damage -- and damage to a HALT latch is not something to
+    resolve in the trading direction.
+
+    The strategy half of this same check lives in
+    ``strategy_governor.parse_persisted_quarantines``; both sections of one
+    document need it, which is the part the first pass missed.
+    """
+    if not isinstance(platform, dict):
+        return  # absent, or already rejected by the caller
+    required = platform.get("manual_rearm_required")
+    if not isinstance(required, bool):
+        raise RuntimeStateUnreadable(
+            f"{path} has a platform section with manual_rearm_required={required!r} "
+            f"({type(required).__name__}), not a bool; refusing to read it as 'no HALT is latched'"
+        )
 
 
 def read_state(path: Path) -> dict[str, Any]:
@@ -86,15 +158,88 @@ def read_state(path: Path) -> dict[str, Any]:
 
 
 def _atomic_write(path: Path, state: dict[str, Any]) -> None:
+    """Replace ``path`` with ``state``, atomically *and* durably.
+
+    ``os.replace`` alone is atomic against concurrent readers and says nothing
+    about power loss: the rename can reach the disk before the bytes it points
+    at, and the rename is itself directory metadata that may not be on disk at
+    all. This file is the record that decides whether a strategy comes back
+    quarantined, and startup reads an absent latch as an all-clear -- so a lost
+    write here is an unauthenticated re-arm, the exact failure this module
+    exists to prevent. Durability is not an optimisation to skip.
+
+    Three steps, in this order: fsync the payload, rename it into place, fsync
+    the directory that now names it. The cost is two fsyncs per write, which is
+    one of the reasons the quarantine path performs this off the event loop.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     # Writer-unique temp name: a shared `.tmp` means whichever process renames
     # second either moves the other's payload or fails with FileNotFoundError.
     tmp_path = path.with_suffix(f"{path.suffix}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
     try:
-        tmp_path.write_text(json.dumps(state, indent=2, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+        with open(tmp_path, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(state, indent=2, ensure_ascii=False, sort_keys=True))
+            handle.flush()
+            os.fsync(handle.fileno())
         tmp_path.replace(path)
+        _fsync_dir(path.parent)
     finally:
         tmp_path.unlink(missing_ok=True)
+
+
+def _errnos(*names: str) -> frozenset[int]:
+    return frozenset(v for v in (getattr(errno, n, None) for n in names) if v is not None)
+
+
+#: Errnos from ``os.open(dir, O_RDONLY)`` that mean "this directory cannot be
+#: opened for fsync on this system", as opposed to "the write did not land".
+#: A directory can be mode ``-wx`` -- creatable and renameable into, not
+#: readable -- and some sandboxes and FUSE mounts refuse the open outright.
+_DIR_OPEN_UNSUPPORTED = _errnos("EACCES", "EPERM", "EINVAL", "ENOTSUP", "EOPNOTSUPP", "ENOSYS")
+
+#: Errnos from ``os.fsync(dir_fd)`` that mean "this filesystem does not
+#: implement directory fsync". Deliberately NARROWER than the open set, and the
+#: difference is the point.
+#:
+#: The two calls fail for different reasons and were sharing one errno set, so
+#: three errnos that can only come back from the *open* were also being
+#: swallowed at the *fsync*:
+#:
+#:   EBADF   -- on an fd this function opened four lines earlier this is a bug
+#:              in this module, not a property of the filesystem.
+#:   EACCES  -- permission is decided by open(); at fsync time it means
+#:   EPERM      something took the fd away, which is not "unsupported".
+#:
+#: Every one of them returned normally, and returning normally from here is
+#: this module telling ``_atomic_write`` the rename is on disk. Startup reads a
+#: missing latch as an all-clear, so a durability claim that was never earned
+#: is an unauthenticated re-arm with extra steps. EIO and ENOSPC were always
+#: raised and still are.
+_DIR_FSYNC_UNSUPPORTED = _errnos("EINVAL", "ENOTSUP", "EOPNOTSUPP", "ENOSYS")
+
+
+def _fsync_dir(directory: Path) -> None:
+    """Flush the directory entry created by a rename.
+
+    Tolerant of platforms that cannot do this at all -- some filesystems refuse
+    ``O_RDONLY`` fsync on a directory -- and intolerant of everything else. The
+    distinction is the whole point: an ``EIO`` here means the rename may not
+    have reached the disk, and returning normally from that would tell the
+    caller a safety latch is durable when it is not.
+    """
+    try:
+        dir_fd = os.open(directory, os.O_RDONLY)
+    except OSError as exc:
+        if exc.errno in _DIR_OPEN_UNSUPPORTED:
+            return
+        raise
+    try:
+        os.fsync(dir_fd)
+    except OSError as exc:
+        if exc.errno not in _DIR_FSYNC_UNSUPPORTED:
+            raise
+    finally:
+        os.close(dir_fd)
 
 
 class RuntimeStateLockTimeout(TimeoutError):

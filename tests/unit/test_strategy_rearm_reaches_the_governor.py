@@ -7,6 +7,7 @@ channel cannot regress into any of them.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
 import time
@@ -18,6 +19,7 @@ from hft_platform.ops import rearm_requests
 from hft_platform.ops.evidence import AutonomyEvidenceWriter
 from hft_platform.ops.manual_rearm import ManualRearmGate
 from hft_platform.ops.strategy_governor import StrategyHealthGovernor
+from hft_platform.services import system as system_module
 from hft_platform.services.system import HFTSystem
 
 STRATEGY = "R47_MAKER_TMF"
@@ -35,7 +37,7 @@ def rig(tmp_path):
 
 
 def tick(rig) -> None:
-    rig.system._consume_strategy_rearm_requests()
+    asyncio.run(rig.system._consume_strategy_rearm_requests())
 
 
 # --- the behaviour ------------------------------------------------------------
@@ -196,19 +198,91 @@ def test_a_concurrent_requarantine_cannot_be_cleared_by_an_older_authorization(r
     assert rig.governor.quarantine_token(STRATEGY) == token_2
 
 
-def test_a_request_left_by_a_previous_engine_run_is_retired(rig):
-    """A quarantine does not survive a restart, so neither may its request."""
+def test_a_request_written_before_a_restart_still_clears_the_restored_latch(rig):
+    """This test used to assert the opposite, and the docstring said why.
+
+    It read: *a quarantine does not survive a restart, so neither may its
+    request* -- and it simulated the restart by constructing a fresh governor
+    and nothing else. Once ``restore_persisted_quarantines`` existed that
+    simulation stopped being a restart: a real one hydrates the latch and
+    reuses the persisted token verbatim, precisely so an authorization the
+    operator published before the restart still names the latch it authorizes.
+    Retiring it there would destroy a legitimate authorization on every boot,
+    and a restart loop would destroy every retry.
+    """
     rig.governor.quarantine(STRATEGY, reason="handler_exception")
+    token = rig.governor.quarantine_token(STRATEGY)
     rig.gate.rearm_strategy(STRATEGY)
 
-    # Simulate a restart: fresh governor, no in-memory quarantines.
+    # A restart: fresh governor, then the boot restore the engine performs.
     fresh = StrategyHealthGovernor(evidence_writer=rig.writer)
+    assert fresh.restore_persisted_quarantines(state_path=rig.gate.state_path) == [STRATEGY]
+    assert fresh.quarantine_token(STRATEGY) == token, "the restore must reuse the persisted token"
     rig.system.strategy_runner = SimpleNamespace(strategy_governor=fresh)
 
     tick(rig)
 
-    assert not fresh.is_quarantined(STRATEGY)
-    assert rearm_requests.pending(rig.base) == [], "an orphaned request must not persist forever"
+    assert not fresh.is_quarantined(STRATEGY), "the pre-restart authorization must still apply"
+    assert rearm_requests.pending(rig.base) == []
+
+
+def test_a_request_for_another_engines_quarantine_is_left_alone(rig):
+    """The request directory is shared state, and two engines can scan it.
+
+    ``SystemBootstrapper._check_session_ownership`` is advisory -- it logs and
+    ``build()`` continues -- so engine A can be consuming while engine B holds
+    the quarantine the operator actually authorized. A token is
+    ``run_id:strategy_id:seq`` with ``run_id = pid-uuid4``, so A can see that
+    the token was never its to judge. Unlinking it would destroy B's
+    authorization with no error anywhere the operator would look.
+    """
+    other = StrategyHealthGovernor(evidence_writer=rig.writer)
+    other.quarantine(STRATEGY, reason="the other engine's failure")
+    foreign_token = other.quarantine_token(STRATEGY)
+    rig.gate.rearm_strategy(STRATEGY)
+
+    # This engine has its own, different, live quarantine for the same strategy.
+    rig.governor.quarantine(STRATEGY, reason="our failure")
+    ours = rig.governor.quarantine_token(STRATEGY)
+    assert ours != foreign_token
+
+    tick(rig)
+
+    assert rig.governor.is_quarantined(STRATEGY), "a foreign token must not clear our latch"
+    assert rig.governor.quarantine_token(STRATEGY) == ours
+    still = rearm_requests.pending(rig.base)
+    assert [r.quarantine_token for r in still] == [foreign_token], "the other engine's request was destroyed"
+
+
+def test_a_foreign_request_is_reported_once_not_once_per_tick(rig, monkeypatch):
+    """The scan runs every supervisor tick and a foreign request is never consumed."""
+    other = StrategyHealthGovernor(evidence_writer=rig.writer)
+    other.quarantine(STRATEGY, reason="the other engine's failure")
+    rig.gate.rearm_strategy(STRATEGY)
+    rig.governor.quarantine(STRATEGY, reason="our failure")
+
+    seen: list[str] = []
+
+    # The module's ``logger``, not a structlog processor. ``utils.logging``
+    # configures structlog with ``cache_logger_on_first_use=True``, so
+    # ``system.py``'s module-level proxy binds its processor chain the first
+    # time anything in the worker logs through it -- after which a later
+    # ``structlog.configure()`` is invisible to it. A processor-based capture
+    # therefore passes when this test runs first and records nothing when it
+    # does not; it failed exactly that way in CI on 2026-09-01 while passing
+    # locally. Substituting the module attribute cannot be order-dependent.
+    class _Recorder:
+        def warning(self, event: str, **_kwargs) -> None:
+            seen.append(event)
+
+        def __getattr__(self, _name):  # info/debug/error: recorded as no-ops
+            return lambda *_a, **_k: None
+
+    monkeypatch.setattr(system_module, "logger", _Recorder())
+    for _ in range(4):
+        tick(rig)
+
+    assert seen.count("strategy_rearm_request_foreign_token") == 1, seen
 
 
 # --- failure handling ---------------------------------------------------------

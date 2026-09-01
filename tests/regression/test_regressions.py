@@ -118,11 +118,17 @@ def test_execution_normalizer_price_scale(monkeypatch, tmp_path):
             "quantity": 1,
             "price": 1.23,
             "ts": time.time_ns(),
+            # Required: a fill carrying no account attribution is rejected
+            # outright (``fill_rejected_missing_account_id``, logged CRITICAL).
+            # Without it this test dereferenced ``None`` rather than checking
+            # the price scale it exists to check.
+            "account": "ACC-TEST",
         },
         time.time_ns(),
     )
 
     fill = norm.normalize_fill(raw)
+    assert fill is not None
     assert fill.price == 123
 
 
@@ -150,7 +156,15 @@ def test_long_strategy_id_fallback(mock_load):
     cmd = OrderCommand(1, intent, time.time_ns() + 1_000_000_000, 0)
     asyncio.run(adapter._dispatch_to_api(cmd))
 
-    assert client.place_order.call_args.kwargs["custom_field"] == "strate"
+    # NOT the strategy id truncated to six characters. That is what this
+    # asserted, and truncation is exactly why order attribution read UNKNOWN:
+    # every order from one strategy carried the same six bytes, so the callback
+    # could not name which order it belonged to. ``custom_field`` is now a
+    # per-order token allocated by the adapter and used as an order_id_map key.
+    custom_field = client.place_order.call_args.kwargs["custom_field"]
+    assert len(custom_field) == 6
+    assert custom_field != strategy_id[:6]
+    assert adapter.order_id_map[custom_field] == f"{strategy_id}:9"
     assert adapter.order_id_map["S99"] == f"{strategy_id}:9"
     assert adapter.order_id_map["O99"] == f"{strategy_id}:9"
 
