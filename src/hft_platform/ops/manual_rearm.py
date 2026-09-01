@@ -1,13 +1,15 @@
 from __future__ import annotations
 
-import json
+import uuid
 from pathlib import Path
 from typing import Any
 
 from structlog import get_logger
 
 from hft_platform.core import timebase
+from hft_platform.ops import rearm_requests
 from hft_platform.ops.platform_degrade_registry import try_force_clear_shared_controller
+from hft_platform.ops.runtime_state_store import locked_state, read_state_strict
 
 logger = get_logger("manual_rearm")
 
@@ -18,16 +20,56 @@ class ManualRearmGate:
     def __init__(self, *, state_path: str | Path | None = None) -> None:
         self.state_path = Path(state_path) if state_path is not None else DEFAULT_RUNTIME_STATE_PATH
 
-    def rearm_strategy(self, strategy_id: str) -> None:
+    def rearm_strategy(self, strategy_id: str) -> str:
+        """Publish an operator request to clear one strategy's quarantine.
+
+        This writes a *request*, not the outcome, and it writes it to its own
+        file rather than mutating the shared state document. It used to clear
+        ``manual_rearm_required`` directly, which made the channel
+        level-triggered: any strategy whose flag read false was treated by the
+        engine as freshly authorized, so a stale false -- from an earlier
+        re-arm, or from a quarantine whose persist never landed -- silently
+        re-enabled a broken strategy with no operator involved.
+
+        The request names the exact ``quarantine_token`` it intends to clear.
+        The engine matches that against its live in-memory quarantine, clears it
+        only on an exact match, and deletes the request. Nothing here mutates
+        state the engine also writes, so the two processes cannot lose each
+        other's updates.
+
+        Returns the request id, for correlating with the engine's
+        ``strategy_rearm_applied_from_operator_request`` log line.
+        """
         state = self._load_state()
         strategies = self._strategies_section(state)
         strategy_state = strategies.get(strategy_id)
         if not isinstance(strategy_state, dict) or not bool(strategy_state.get("manual_rearm_required")):
             raise ValueError(f"strategy {strategy_id!r} does not require manual re-arm")
 
-        strategy_state["manual_rearm_required"] = False
-        strategy_state["reason"] = None
-        self._write_state(state)
+        token = strategy_state.get("quarantine_token")
+        if not isinstance(token, str) or not token:
+            # Fail closed. An entry without a token predates this protocol, so
+            # the engine cannot verify which quarantine the request targets.
+            raise ValueError(
+                f"strategy {strategy_id!r} has no quarantine_token; the running engine "
+                "predates the request/ack re-arm protocol. Restart the engine to clear "
+                "the quarantine, or deploy the current build first."
+            )
+
+        request_id = uuid.uuid4().hex
+        rearm_requests.publish(
+            self.state_path.parent,
+            strategy_id=strategy_id,
+            quarantine_token=token,
+            request_id=request_id,
+        )
+        logger.warning(
+            "strategy_rearm_requested",
+            strategy_id=strategy_id,
+            request_id=request_id,
+            quarantine_token=token,
+        )
+        return request_id
 
     def rearm_platform(self) -> None:
         """Persist the manual-rearm flag AND clear the live controller.
@@ -73,12 +115,11 @@ class ManualRearmGate:
         holds the registry lock — to discard a stale auto-recoverable flag
         without deadlocking.
         """
-        state = self._load_state()
-        platform_state = self._platform_section(state)
-        platform_state["manual_rearm_required"] = False
-        platform_state["reason"] = None
-        platform_state["rearm_requested_at"] = timebase.now_s()
-        self._write_state(state)
+        with locked_state(self.state_path) as state:
+            platform_state = self._platform_section(state)
+            platform_state["manual_rearm_required"] = False
+            platform_state["reason"] = None
+            platform_state["rearm_requested_at"] = timebase.now_s()
 
     def requires_manual_rearm(self, scope: str, *, strategy_id: str | None = None) -> bool:
         state = self._load_state()
@@ -100,23 +141,21 @@ class ManualRearmGate:
         return self._load_state()
 
     def _load_state(self) -> dict[str, Any]:
-        if not self.state_path.exists():
-            return self._default_state()
-
-        raw = json.loads(self.state_path.read_text(encoding="utf-8"))
-        if not isinstance(raw, dict):
-            return self._default_state()
-
-        state = dict(raw)
-        self._platform_section(state)
-        self._strategies_section(state)
-        return state
+        """Strict. ``requires_manual_rearm`` feeds the platform bootstrap's
+        decision to restore reduce-only, so an unreadable file must raise rather
+        than read as an all-clear. A missing file is still a cold start."""
+        return read_state_strict(self.state_path)
 
     def _write_state(self, state: dict[str, Any]) -> None:
-        self.state_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = self.state_path.with_suffix(f"{self.state_path.suffix}.tmp")
-        tmp_path.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
-        tmp_path.replace(self.state_path)
+        """Replace the whole document under the shared lock.
+
+        Only for callers that already hold the complete intended state. Prefer
+        ``locked_state`` for read-modify-write: taking the lock only around the
+        write does not stop a lost update, it only stops a torn file.
+        """
+        with locked_state(self.state_path) as current:
+            current.clear()
+            current.update(state)
 
     @staticmethod
     def _default_state() -> dict[str, Any]:

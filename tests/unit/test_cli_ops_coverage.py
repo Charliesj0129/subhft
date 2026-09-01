@@ -316,13 +316,21 @@ from hft_platform.cli._ops import cmd_ops_rearm_strategy  # noqa: E402
 
 
 class TestCmdOpsRearmStrategy:
-    def test_rearm_strategy_success(self, capsys):
+    def test_rearm_strategy_reports_a_request_not_a_completed_rearm(self, capsys):
+        """The old message claimed "Strategy re-armed" while nothing consumed it.
+
+        That false success is how a dead strategy looked recovered to the
+        operator who ran the command -- R47_MAKER_TMF sat quarantined for 33 h
+        behind exactly this line. The output must describe what happened.
+        """
         gate = MagicMock()
+        gate.rearm_strategy.return_value = "abc123"
         with patch("hft_platform.cli._ops.ManualRearmGate", return_value=gate):
             cmd_ops_rearm_strategy(_ns(strategy_id="strat1", state_path=None))
         gate.rearm_strategy.assert_called_once_with("strat1")
         out = capsys.readouterr().out
-        assert "re-armed" in out
+        assert "requested" in out.lower()
+        assert "abc123" in out
         assert "strat1" in out
 
     def test_rearm_strategy_value_error_exits_1(self, capsys):

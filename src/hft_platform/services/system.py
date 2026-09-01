@@ -13,6 +13,7 @@ from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceCodec
 from hft_platform.core.session_hooks import SessionHookManager
 from hft_platform.observability.health import HealthServer
+from hft_platform.ops import rearm_requests
 from hft_platform.ops.evidence import get_shared_autonomy_evidence_writer
 from hft_platform.ops.manual_rearm import ManualRearmGate
 from hft_platform.ops.platform_degrade import get_shared_platform_degrade_controller
@@ -56,6 +57,12 @@ def _audit_persistence_writer_for_recorder(recorder: Any) -> Any | None:
 
         return RecorderQueueAuditWriter(queue)
     return getattr(recorder, "writer", None)
+
+
+#: Distinguishes "caller did not supply state" from "the shared read failed and
+#: returned None". Without it the failure path read runtime_state.json twice and
+#: logged two warnings on every one-second supervisor tick.
+_STATE_NOT_SUPPLIED: Any = object()
 
 
 class HFTSystem:
@@ -316,6 +323,9 @@ class HFTSystem:
         )
         self.manual_rearm_gate = ManualRearmGate()
         self._last_platform_rearm_request_seen = 0.0
+        # Request ids already applied to the governor, so a duplicate read of
+        # the same request within one tick cannot re-arm twice.
+
         self.platform_degrade_inputs = getattr(
             self.registry, "platform_degrade_inputs", None
         ) or self.bootstrapper.build_platform_degrade_inputs(
@@ -1068,61 +1078,89 @@ class HFTSystem:
             logger.warning("manual_rearm_state_read_failed", error=str(exc))
             return None
 
-    def _consume_strategy_rearm_requests(self, state: dict | None) -> None:
-        """Apply an operator's ``hft ops rearm-strategy`` to the live governor.
+    def _consume_strategy_rearm_requests(self, state: dict | None = None) -> None:
+        """Apply operator re-arm requests to the live governor.
 
         Without this the strategy re-arm is a **write-only loop**. The quarantine
         that gates dispatch is ``StrategyHealthGovernor._quarantined``, an
-        in-memory dict; ``ManualRearmGate.rearm_strategy`` only clears a flag in
-        runtime_state.json, and until now nothing read that flag back --
-        ``_consume_platform_rearm_request`` polls the ``platform`` section only,
-        and ``StrategyHealthGovernor.rearm`` had no production caller at all, just
-        two lines in a unit test. The CLI command therefore reported success and
-        changed nothing, leaving an engine restart as the only real remedy.
+        in-memory dict; the CLI only wrote to disk, and nothing read it back --
+        ``StrategyHealthGovernor.rearm`` had no production caller at all. The
+        command reported success and changed nothing, leaving an engine restart
+        as the only real remedy. Measured on THESHOW: ``R47_MAKER_TMF`` was
+        quarantined at 2026-08-23T14:18:20Z by a single rejected intent and
+        emitted no alpha decision for 46 h, paging the whole time.
 
-        Measured consequence on THESHOW: ``R47_MAKER_TMF`` was quarantined at
-        2026-08-23T14:18:20Z by a single rejected intent and had emitted no alpha
-        decision for the 22 h since -- through a full day session and into the
-        next night session -- with ``StrategyQuarantineActive`` and
-        ``ManualRearmRequired`` both paging the whole time.
+        Requests arrive as write-once files, each naming the ``quarantine_token``
+        it authorizes. This runs entirely on the event loop and entirely in
+        memory: listing an empty directory is one ``scandir``, and matching a
+        token against the live dict is microseconds. Nothing here needs a worker,
+        a deadline, a lock, or a consumed-id watermark -- a request is consumed
+        by deleting it, so a replay is impossible because the request is gone.
 
-        No watermark is needed here, unlike the platform path. The in-memory dict
-        *is* the state: a re-armed strategy leaves ``_quarantined`` and stops
-        being examined, and a fresh quarantine rewrites the persisted flag back to
-        true. A strategy quarantined in memory but missing from the file (evidence
-        writer disabled, or its write failed) reads as "no re-arm requested" and
-        stays quarantined, which is the fail-closed direction.
+        ``state`` is accepted and ignored; it remains in the signature only so
+        the supervisor keeps its single shared read.
         """
-        if not state:
-            return
+        del state
         runner = getattr(self, "strategy_runner", None)
         governor = getattr(runner, "strategy_governor", None)
         if governor is None:
             return
-        quarantined = getattr(governor, "_quarantined", None)
-        if not quarantined:
+        gate = getattr(self, "manual_rearm_gate", None)
+        if gate is None:
             return
-        strategies = state.get("strategies")
-        if not isinstance(strategies, dict):
+        try:
+            requests = rearm_requests.pending(gate.state_path.parent)
+        except Exception as exc:
+            logger.warning("strategy_rearm_request_scan_failed", error=str(exc))
             return
-        for strategy_id in list(quarantined):
-            entry = strategies.get(strategy_id)
-            if not isinstance(entry, dict):
+        for request in requests:
+            live_token = governor.quarantine_token(request.strategy_id)
+            if live_token is None:
+                # No live quarantine: either it was already cleared, or the
+                # engine restarted since the request was written (a strategy
+                # quarantine does not survive a restart). Retire the request so
+                # it cannot linger and cannot apply to some future quarantine.
+                rearm_requests.consume(request)
+                logger.warning(
+                    "strategy_rearm_request_retired_no_live_quarantine",
+                    strategy_id=request.strategy_id,
+                    request_id=request.request_id,
+                )
                 continue
-            if bool(entry.get("manual_rearm_required")):
+            if live_token != request.quarantine_token:
+                # Authorizes a different quarantine instance than the live one.
+                # Retire it: the operator must look at the current failure.
+                rearm_requests.consume(request)
+                logger.warning(
+                    "strategy_rearm_request_superseded",
+                    strategy_id=request.strategy_id,
+                    request_id=request.request_id,
+                    authorized_token=request.quarantine_token,
+                    live_token=live_token,
+                )
                 continue
-            governor.rearm(strategy_id)
-            logger.warning(
-                "strategy_rearm_applied_from_operator_request",
-                strategy_id=strategy_id,
-            )
+            # Consume before applying. If the process dies between the two, the
+            # strategy stays quarantined and the operator reissues -- the
+            # fail-closed direction. Consuming after could replay the request.
+            rearm_requests.consume(request)
+            if governor.rearm(
+                request.strategy_id,
+                expected_token=request.quarantine_token,
+                request_id=request.request_id,
+            ):
+                logger.warning(
+                    "strategy_rearm_applied_from_operator_request",
+                    strategy_id=request.strategy_id,
+                    request_id=request.request_id,
+                    quarantine_token=request.quarantine_token,
+                )
 
-    def _consume_platform_rearm_request(self, state: dict | None = None) -> None:
+    def _consume_platform_rearm_request(self, state: Any = _STATE_NOT_SUPPLIED) -> None:
         gate = getattr(self, "manual_rearm_gate", None)
         controller = getattr(self, "platform_degrade_controller", None)
         if gate is None or controller is None:
             return
-        if state is None:
+        if state is _STATE_NOT_SUPPLIED:
             state = self._read_rearm_state()
         if not state:
             return

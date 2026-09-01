@@ -111,14 +111,18 @@ def test_rearm_removes_quarantine():
     governor.quarantine("strat1", reason="strategy_exception")
     assert governor.is_quarantined("strat1") is True
 
-    governor.rearm("strat1")
+    # The token names the exact quarantine instance being cleared; a re-arm that
+    # does not name the live one is refused, so an authorization for an earlier
+    # failure cannot release a newer one.
+    token = governor.quarantine_token("strat1")
+    assert governor.rearm("strat1", expected_token=token) is True
     assert governor.is_quarantined("strat1") is False
 
 
 def test_rearm_not_quarantined_is_noop():
     metrics = _make_mock_metrics()
     governor = StrategyHealthGovernor(metrics=metrics, evidence_writer=None)
-    governor.rearm("strat1")  # should not raise
+    assert governor.rearm("strat1", expected_token="any") is False  # should not raise
     assert governor.is_quarantined("strat1") is False
 
 

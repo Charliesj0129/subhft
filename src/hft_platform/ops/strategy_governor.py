@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import uuid
 from dataclasses import dataclass
 from typing import Any, Iterable
 
@@ -20,11 +22,22 @@ _AUTONOMY_MODE_VALUES = {
 }
 
 
+#: Identifies this engine run. A quarantine token carries it so a re-arm request
+#: written against a *previous* run can never match a live quarantine after a
+#: restart, when the per-process counter starts over at 1. Full uuid4, not a
+#: truncation: a PID and a sequence number both repeat across restarts, so the
+#: run id is the only part carrying the non-collision guarantee.
+_RUN_ID = f"{os.getpid():d}-{uuid.uuid4().hex}"
+
+
 @dataclass(slots=True, frozen=True)
 class StrategyQuarantine:
     strategy_id: str
     reason: str
     transition: AutonomyTransition
+    #: Unique per quarantine *instance*, not per strategy. An operator re-arm
+    #: must name the exact token it intends to clear; see ``rearm``.
+    token: str = ""
 
 
 class StrategyHealthGovernor:
@@ -32,14 +45,23 @@ class StrategyHealthGovernor:
         self.metrics = metrics or MetricsRegistry.get()
         self.evidence_writer = evidence_writer or get_shared_autonomy_evidence_writer()
         self._quarantined: dict[str, StrategyQuarantine] = {}
+        self._quarantine_seq: int = 0
+
+    def quarantine_token(self, strategy_id: str) -> str | None:
+        """Token of the strategy's live quarantine, or ``None`` if not quarantined."""
+        entry = self._quarantined.get(strategy_id)
+        return entry.token if entry is not None else None
 
     def quarantine(self, strategy_id: str, *, reason: str) -> AutonomyTransition:
         from_mode = AutonomyMode.STRATEGY_QUARANTINED if strategy_id in self._quarantined else AutonomyMode.NORMAL
         transition = self._build_transition(from_mode=from_mode, reason=reason)
+        self._quarantine_seq += 1
+        token = f"{_RUN_ID}:{strategy_id}:{self._quarantine_seq}"
         self._quarantined[strategy_id] = StrategyQuarantine(
             strategy_id=strategy_id,
             reason=reason,
             transition=transition,
+            token=token,
         )
         self._set_strategy_quarantine_active(strategy_id, active=True)
         self._set_strategy_scope_state()
@@ -50,21 +72,71 @@ class StrategyHealthGovernor:
                 mode=transition.to_mode.value,
                 reason=transition.reason,
                 manual_rearm_required=transition.manual_rearm_required,
-                metadata={"strategy_id": strategy_id},
+                metadata={"strategy_id": strategy_id, "quarantine_token": token},
             )
-        logger.warning("strategy_quarantined", strategy_id=strategy_id, reason=reason)
+        logger.warning("strategy_quarantined", strategy_id=strategy_id, reason=reason, quarantine_token=token)
         return transition
 
     def is_quarantined(self, strategy_id: str) -> bool:
         return strategy_id in self._quarantined
 
-    def rearm(self, strategy_id: str) -> None:
-        if strategy_id not in self._quarantined:
-            return
+    def rearm(self, strategy_id: str, *, expected_token: str, request_id: str | None = None) -> bool:
+        """Clear one strategy's quarantine, and only the exact one authorized.
+
+        ``expected_token`` names a specific quarantine *instance*, so an
+        authorization issued for an earlier failure can never release a later
+        one. The comparison and the removal happen together, with no await and
+        no IO between them, so nothing can interleave: on the event loop this is
+        atomic by construction.
+
+        The evidence write follows the decision rather than gating it. That
+        ordering is safe here for a reason specific to this state -- **a
+        strategy quarantine does not survive a restart**; only the platform
+        scope has a boot-time restore. So the record is an audit trail, not a
+        durability guarantee, and a filesystem failure must not be allowed to
+        block a recovery the operator has already authorized. It is recorded
+        best-effort and loudly on failure.
+
+        Returns ``True`` only when a live quarantine was actually cleared.
+        """
+        entry = self._quarantined.get(strategy_id)
+        if entry is None or entry.token != expected_token:
+            return False
+
+        # Decide and mutate with nothing in between.
         self._quarantined.pop(strategy_id, None)
         self._set_strategy_quarantine_active(strategy_id, active=False)
         self._set_strategy_scope_state()
-        logger.info("strategy_rearmed", strategy_id=strategy_id)
+        logger.info(
+            "strategy_rearmed",
+            strategy_id=strategy_id,
+            quarantine_token=entry.token,
+            request_id=request_id,
+        )
+
+        if self.evidence_writer is not None:
+            try:
+                self.evidence_writer.record_transition(
+                    scope="strategy",
+                    mode=AutonomyMode.NORMAL.value,
+                    reason="manual_rearm",
+                    manual_rearm_required=False,
+                    metadata={
+                        "strategy_id": strategy_id,
+                        "quarantine_token": entry.token,
+                        "request_id": request_id,
+                    },
+                )
+            except Exception as exc:
+                # The strategy is re-armed either way; losing the audit record
+                # must not be silent.
+                logger.error(
+                    "strategy_rearm_evidence_write_failed",
+                    strategy_id=strategy_id,
+                    request_id=request_id,
+                    error=str(exc),
+                )
+        return True
 
     def build_cancel_intents(
         self,

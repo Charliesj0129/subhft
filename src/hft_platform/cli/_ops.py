@@ -357,11 +357,19 @@ def _manual_rearm_gate(args: argparse.Namespace) -> ManualRearmGate:
 def cmd_ops_rearm_strategy(args: argparse.Namespace) -> None:
     gate = _manual_rearm_gate(args)
     try:
-        gate.rearm_strategy(args.strategy_id)
+        request_id = gate.rearm_strategy(args.strategy_id)
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         raise SystemExit(1) from exc
-    print(f"Strategy re-armed: {args.strategy_id}")
+    # Say what actually happened. The old message claimed "Strategy re-armed"
+    # while writing a flag nothing consumed, so a dead strategy looked recovered
+    # to the operator who ran this. The engine applies the request on its next
+    # supervisor tick; confirm via strategy_quarantine_active.
+    print(
+        f"Re-arm requested for {args.strategy_id} (request_id={request_id}). "
+        "The engine applies it on its next supervisor tick; confirm with "
+        f'strategy_quarantine_active{{strategy="{args.strategy_id}"}} == 0.'
+    )
 
 
 def cmd_ops_rearm_platform(args: argparse.Namespace) -> None:
