@@ -8,6 +8,7 @@ import pytest
 
 from hft_platform.contracts.strategy import StormGuardState
 from hft_platform.ops.autonomy_monitor import AutonomyMonitor, MonitorDecision
+from hft_platform.ops.evidence import AutonomyEvidenceWriter
 
 
 def _make_monitor(**overrides) -> AutonomyMonitor:
@@ -256,18 +257,22 @@ class TestTheEvidenceWriteDoesNotRunOnTheEventLoop:
     as long as the worker keeps the lock.
     """
 
-    def test_the_evidence_write_happens_on_a_worker_thread(self) -> None:
+    def test_the_evidence_write_happens_on_a_worker_thread(self, tmp_path) -> None:
         import asyncio
         import threading
 
         monitor = _make_monitor()
-        writer = MagicMock()
+        # A real writer, with only the blocking leaf replaced: the point under
+        # test is that ``record_transition_async``'s hand-off actually leaves
+        # this thread, so a mock standing in for that method would assert
+        # nothing.
+        writer = AutonomyEvidenceWriter(tmp_path)
         seen: dict[str, int] = {}
 
         def _record(**_kwargs) -> None:
             seen["thread"] = threading.get_ident()
 
-        writer.record_transition.side_effect = _record
+        writer.record_transition = _record  # type: ignore[method-assign]
         monitor._evidence_writer = writer
         decision = MonitorDecision(
             rule_name="r",
@@ -285,19 +290,21 @@ class TestTheEvidenceWriteDoesNotRunOnTheEventLoop:
         assert "thread" in seen, "the evidence write never ran"
         assert seen["thread"] != loop_thread, "the evidence write ran on the event loop thread"
 
-    def test_a_held_evidence_lock_does_not_stall_the_loop(self) -> None:
+    def test_a_held_evidence_lock_does_not_stall_the_loop(self, tmp_path) -> None:
         """The loop must stay runnable while another holder keeps the lock."""
         import asyncio
         import threading
 
         monitor = _make_monitor()
-        writer = MagicMock()
+        writer = AutonomyEvidenceWriter(tmp_path)
         release = threading.Event()
+        entered = threading.Event()
 
         def _record(**_kwargs) -> None:
+            entered.set()
             release.wait(timeout=5.0)
 
-        writer.record_transition.side_effect = _record
+        writer.record_transition = _record  # type: ignore[method-assign]
         monitor._evidence_writer = writer
         decision = MonitorDecision(
             rule_name="r",
@@ -319,6 +326,7 @@ class TestTheEvidenceWriteDoesNotRunOnTheEventLoop:
             t = asyncio.ensure_future(_ticker())
             exec_task = asyncio.ensure_future(monitor._execute([decision]))
             await asyncio.sleep(0.15)
+            assert entered.is_set(), "the evidence write never started"
             release.set()
             await exec_task
             t.cancel()

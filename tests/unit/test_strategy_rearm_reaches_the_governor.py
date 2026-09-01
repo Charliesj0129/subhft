@@ -415,6 +415,12 @@ class TestQuarantineDurabilityIsVisible:
         gov = StrategyHealthGovernor(evidence_writer=AutonomyEvidenceWriter(base_dir=tmp_path))
         await gov.quarantine_async("R47_MAKER_TMF", reason="repeated_rejects")
 
+        # ``quarantine_async`` deliberately does not await the write -- it is
+        # called from the only bus consumer -- so the flag flips in the done
+        # callback. Drain the executor future the way the loop eventually does.
+        for pending in list(gov._persist_tasks):
+            await pending
+
         assert gov.undurable_quarantines == frozenset()
 
     @pytest.mark.asyncio
@@ -518,6 +524,10 @@ async def test_a_stale_persist_completion_cannot_bless_a_newer_quarantine(tmp_pa
         await asyncio.sleep(0.005)
     token_a = governor._quarantined[STRATEGY].token
     assert STRATEGY in governor.undurable_quarantines
+    # The persist future itself, so the assertions below can wait on the write
+    # instead of on a sleep: ``quarantine_async`` deliberately does not await it,
+    # so awaiting the coroutine proves nothing about the write's completion.
+    (persist_a,) = tuple(governor._persist_tasks)
 
     # The operator re-arms A, and the strategy fails immediately back into B.
     assert await governor.rearm_async(STRATEGY, expected_token=token_a) is True
@@ -525,6 +535,7 @@ async def test_a_stale_persist_completion_cannot_bless_a_newer_quarantine(tmp_pa
     b = asyncio.create_task(governor.quarantine_async(STRATEGY, reason="second"))
     while len(released) < 2:
         await asyncio.sleep(0.005)
+    (persist_b,) = tuple(governor._persist_tasks - {persist_a})
     token_b = governor._quarantined[STRATEGY].token
     assert token_b != token_a
     assert STRATEGY in governor.undurable_quarantines
@@ -532,11 +543,11 @@ async def test_a_stale_persist_completion_cannot_bless_a_newer_quarantine(tmp_pa
     # A's write now succeeds -- for a quarantine that no longer exists.
     released[0].set()
     await a
-    await asyncio.sleep(0.01)  # let A's done-callback run
+    await persist_a  # the done callbacks are registered first, so they run first
 
     assert STRATEGY in governor.undurable_quarantines, "A's stale completion marked B durable while B was pending"
 
     released[1].set()
     await b
-    await asyncio.sleep(0.01)
+    await persist_b
     assert STRATEGY not in governor.undurable_quarantines, "B's own completion must clear it"
