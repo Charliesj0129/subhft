@@ -187,17 +187,35 @@ def _atomic_write(path: Path, state: dict[str, Any]) -> None:
         tmp_path.unlink(missing_ok=True)
 
 
-#: Errnos that mean "this filesystem does not do directory fsync", as opposed to
-#: "this write did not reach the disk". Only the first kind may be ignored --
-#: swallowing the second reports durability that was never achieved, and startup
-#: reads a missing latch as an all-clear.
-_FSYNC_UNSUPPORTED = frozenset(
-    errno_value
-    for errno_value in (
-        getattr(errno, name, None) for name in ("EINVAL", "EPERM", "EACCES", "ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EBADF")
-    )
-    if errno_value is not None
-)
+def _errnos(*names: str) -> frozenset[int]:
+    return frozenset(v for v in (getattr(errno, n, None) for n in names) if v is not None)
+
+
+#: Errnos from ``os.open(dir, O_RDONLY)`` that mean "this directory cannot be
+#: opened for fsync on this system", as opposed to "the write did not land".
+#: A directory can be mode ``-wx`` -- creatable and renameable into, not
+#: readable -- and some sandboxes and FUSE mounts refuse the open outright.
+_DIR_OPEN_UNSUPPORTED = _errnos("EACCES", "EPERM", "EINVAL", "ENOTSUP", "EOPNOTSUPP", "ENOSYS")
+
+#: Errnos from ``os.fsync(dir_fd)`` that mean "this filesystem does not
+#: implement directory fsync". Deliberately NARROWER than the open set, and the
+#: difference is the point.
+#:
+#: The two calls fail for different reasons and were sharing one errno set, so
+#: three errnos that can only come back from the *open* were also being
+#: swallowed at the *fsync*:
+#:
+#:   EBADF   -- on an fd this function opened four lines earlier this is a bug
+#:              in this module, not a property of the filesystem.
+#:   EACCES  -- permission is decided by open(); at fsync time it means
+#:   EPERM      something took the fd away, which is not "unsupported".
+#:
+#: Every one of them returned normally, and returning normally from here is
+#: this module telling ``_atomic_write`` the rename is on disk. Startup reads a
+#: missing latch as an all-clear, so a durability claim that was never earned
+#: is an unauthenticated re-arm with extra steps. EIO and ENOSPC were always
+#: raised and still are.
+_DIR_FSYNC_UNSUPPORTED = _errnos("EINVAL", "ENOTSUP", "EOPNOTSUPP", "ENOSYS")
 
 
 def _fsync_dir(directory: Path) -> None:
@@ -212,13 +230,13 @@ def _fsync_dir(directory: Path) -> None:
     try:
         dir_fd = os.open(directory, os.O_RDONLY)
     except OSError as exc:
-        if exc.errno in _FSYNC_UNSUPPORTED:
+        if exc.errno in _DIR_OPEN_UNSUPPORTED:
             return
         raise
     try:
         os.fsync(dir_fd)
     except OSError as exc:
-        if exc.errno not in _FSYNC_UNSUPPORTED:
+        if exc.errno not in _DIR_FSYNC_UNSUPPORTED:
             raise
     finally:
         os.close(dir_fd)

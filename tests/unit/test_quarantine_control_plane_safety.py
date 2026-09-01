@@ -23,6 +23,7 @@ Each was raised by a Codex review of the re-arm work and reproduced here first:
 from __future__ import annotations
 
 import asyncio
+import gc
 import json
 import os
 import threading
@@ -494,15 +495,76 @@ def test_a_filesystem_that_cannot_fsync_a_directory_is_still_usable(
     assert json.loads(target.read_text(encoding="utf-8"))["strategies"]["X"]["manual_rearm_required"] is True
 
 
+@pytest.mark.parametrize("errno_name", ["EBADF", "EACCES", "EPERM"])
+def test_an_errno_that_only_open_can_raise_is_not_tolerated_at_fsync(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, errno_name: str
+) -> None:
+    """These three say nothing about whether the rename reached the disk.
+
+    ``os.open`` and ``os.fsync`` fail for different reasons and shared one
+    errno set. ``EBADF`` on an fd this module opened four lines earlier is a bug
+    in this module; ``EACCES``/``EPERM`` are decided at open time, so seeing
+    them at fsync means the fd was taken away, not that the filesystem lacks
+    the feature. All three used to return normally -- which is this module
+    telling the caller the safety latch is durable.
+    """
+    import errno as errno_mod
+
+    from hft_platform.ops import runtime_state_store as store
+
+    real_fsync = os.fsync
+    err = getattr(errno_mod, errno_name)
+
+    def _fail_on_directory(fd: int) -> None:
+        if os.fstat(fd).st_mode & 0o040000:
+            raise OSError(err, errno_name)
+        real_fsync(fd)
+
+    monkeypatch.setattr(store.os, "fsync", _fail_on_directory)
+    with pytest.raises(OSError) as excinfo:
+        store._atomic_write(tmp_path / "runtime_state.json", {"strategies": {}})
+    assert excinfo.value.errno == err
+
+
+def test_a_directory_that_cannot_be_opened_for_fsync_is_still_usable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """EACCES from ``os.open`` is the one place it genuinely means "cannot".
+
+    A directory can be mode ``-wx``: writable and renameable into, not
+    readable. The write itself succeeded, so refusing here would make the
+    latch unwritable on a filesystem that can hold it perfectly well.
+    """
+    import errno as errno_mod
+
+    from hft_platform.ops import runtime_state_store as store
+
+    real_open = os.open
+
+    def _refuse_directory(path, flags, *args, **kwargs):  # type: ignore[no-untyped-def]
+        if os.path.isdir(path):
+            raise OSError(errno_mod.EACCES, "permission denied")
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(store.os, "open", _refuse_directory)
+    target = tmp_path / "runtime_state.json"
+    store._atomic_write(target, {"strategies": {"X": {"manual_rearm_required": True}}})
+    assert json.loads(target.read_text(encoding="utf-8"))["strategies"]["X"]["manual_rearm_required"] is True
+
+
 def test_a_stalled_durable_write_does_not_hold_the_strategy_consumer(rig: SimpleNamespace) -> None:
     """``quarantine_async`` is awaited by StrategyRunner's only bus consumer.
 
     However long the write takes is time nothing drains the ring buffer -- for
-    every strategy, not just the failing one. The wait is therefore bounded and
-    the write is allowed to finish behind it.
-    """
-    from hft_platform.ops import strategy_governor as sg
+    every strategy, not just the failing one, against a 1 ms budget.
 
+    This test previously allowed ``_PERSIST_WAIT_S * 4`` (800 ms) and passed
+    against a version that deliberately waited 200 ms. That bound was wrong:
+    the wait bought no information (``_log_persist_outcome`` is a done callback
+    that fires either way) and no ordering guarantee (the caller reads only
+    ``transition.reason``, built before the task exists), so it was 200 ms of
+    pure dispatch latency. The write must now be launched and left.
+    """
     released = threading.Event()
     entered = threading.Event()
 
@@ -527,9 +589,9 @@ def test_a_stalled_durable_write_does_not_hold_the_strategy_consumer(rig: Simple
 
     elapsed = asyncio.run(_run())
     assert entered.is_set(), "the write never started"
-    # Bounded by the wait, not by the write: without the bound this would sit
-    # here for the full five seconds the persist blocks for.
-    assert elapsed < sg._PERSIST_WAIT_S * 4, f"consumer held for {elapsed:.3f}s"
+    # Launched and left. 50 ms is generous for "did not wait at all" while
+    # staying far below the 200 ms the old version spent here on purpose.
+    assert elapsed < 0.05, f"consumer held for {elapsed:.3f}s"
 
 
 def test_a_failing_durable_write_does_not_raise_into_the_dispatch_path(rig: SimpleNamespace) -> None:
@@ -558,13 +620,62 @@ def test_a_failing_durable_write_does_not_raise_into_the_dispatch_path(rig: Simp
     assert transition.reason == "strategy_exception"
 
 
-def test_a_healthy_durable_write_still_completes_before_quarantine_async_returns(
-    rig: SimpleNamespace,
-) -> None:
-    """The bound is a cap on the pathological case, not a switch to fire-and-forget."""
+def test_a_healthy_durable_write_still_lands(rig: SimpleNamespace) -> None:
+    """Fire-and-forget still writes the record -- it just does not block dispatch.
+
+    Named for what it actually proves. The previous name claimed the write
+    completed *before ``quarantine_async`` returned*, which is no longer true
+    and was never what this assertion tested: it reads the file after
+    ``asyncio.run`` has returned, and ``asyncio.run`` joins the default thread
+    pool during shutdown. So the write lands either way; what changed is that
+    the bus consumer no longer waits for it.
+    """
 
     async def _run() -> None:
         await rig.governor.quarantine_async(STRATEGY, reason="strategy_exception")
 
     asyncio.run(_run())
     assert _persisted(rig).get("manual_rearm_required") is True
+
+
+def test_an_in_flight_durable_write_is_strongly_referenced(rig: SimpleNamespace) -> None:
+    """A launched task is not a surviving task.
+
+    ``asyncio`` holds only a weak reference to a running task, so a
+    fire-and-forget ``ensure_future`` whose sole strong reference is a local
+    variable can be garbage-collected mid-write. The old code's only strong
+    reference was that local, alive exactly as long as the 200 ms await -- so
+    the moment the timeout fired, the write its own log line promised
+    "continues in the background" became collectable. Assert the governor keeps
+    the reference while the write is in flight and drops it afterwards, so the
+    set cannot grow without bound either.
+    """
+    entered = threading.Event()
+    released = threading.Event()
+
+    def _slow_persist() -> None:
+        entered.set()
+        released.wait(timeout=5.0)
+
+    rig.governor._latch_quarantine = (  # type: ignore[method-assign]
+        lambda strategy_id, *, reason: (
+            SimpleNamespace(reason=reason, to_mode=SimpleNamespace(value="STRATEGY_QUARANTINED")),
+            _slow_persist,
+        )
+    )
+
+    async def _run() -> tuple[int, int]:
+        await rig.governor.quarantine_async(STRATEGY, reason="strategy_exception")
+        assert entered.wait(timeout=5.0), "the write never started"
+        gc.collect()  # a weakly-referenced task would die exactly here
+        in_flight = len(rig.governor._persist_tasks)
+        released.set()
+        for _ in range(500):
+            if not rig.governor._persist_tasks:
+                break
+            await asyncio.sleep(0.005)
+        return in_flight, len(rig.governor._persist_tasks)
+
+    in_flight, after = asyncio.run(_run())
+    assert in_flight == 1, "the in-flight write is not strongly referenced"
+    assert after == 0, "the reference is never released; the set grows unbounded"

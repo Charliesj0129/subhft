@@ -281,6 +281,11 @@ class HFTSystem:
         self._EXEC_OVERFLOW_MAX: int = 4096
         self._exec_overflow_counter: int = 0
         self._exec_overflow_evicted: int = 0
+        # Request ids already reported as belonging to another engine's
+        # quarantine. The supervisor rescans the directory every tick and a
+        # foreign request is never consumed, so without this the same file
+        # would produce a warning per tick forever.
+        self._foreign_rearm_request_ids: set[str] = set()
         self._exec_startup_overflow_lost: bool = False
         self.risk_queue = self.registry.risk_queue
         self.order_queue = self.registry.order_queue
@@ -1161,11 +1166,42 @@ class HFTSystem:
             logger.warning("strategy_rearm_request_scan_failed", error=str(exc))
             return
         for request in requests:
+            if not governor.owns_token(request.quarantine_token):
+                # Another engine's quarantine. The directory is shared state and
+                # the session-ownership preflight is advisory, so two engines can
+                # be scanning it; retiring this would unlink an authorization the
+                # other engine has not seen yet and the operator would never learn
+                # it was destroyed. Not ours to judge, not ours to delete.
+                # Lazily, because this method is also exercised against an
+                # ``HFTSystem.__new__`` rig that never runs ``__init__``.
+                seen = getattr(self, "_foreign_rearm_request_ids", None)
+                if seen is None:
+                    seen = self._foreign_rearm_request_ids = set()
+                if request.request_id not in seen:
+                    seen.add(request.request_id)
+                    logger.warning(
+                        "strategy_rearm_request_foreign_token",
+                        strategy_id=request.strategy_id,
+                        request_id=request.request_id,
+                        authorized_token=request.quarantine_token,
+                        consequence="left in place for the engine that minted the token",
+                    )
+                continue
             live_token = governor.quarantine_token(request.strategy_id)
             if live_token is None:
-                # No live quarantine: either it was already cleared, or the
-                # engine restarted since the request was written (a strategy
-                # quarantine does not survive a restart). Retire the request so
+                # No live quarantine, and after this branch that no longer
+                # includes "the engine restarted". It used to: the comment here
+                # said a strategy quarantine does not survive a restart, which
+                # is the exact defect ``restore_persisted_quarantines`` removes,
+                # and leaving it would tell the next reader that retiring a
+                # request across a restart is normal. It is not. A restored
+                # latch keeps its persisted token, so a request written before
+                # the restart still matches and is still applied.
+                #
+                # What reaches here now: an operator or an earlier request in
+                # this same tick cleared the latch, the request names a strategy
+                # that was never quarantined, or the pre-restart durable write
+                # failed so there was no latch on disk to restore. Retire it so
                 # it cannot linger and cannot apply to some future quarantine.
                 if not await asyncio.to_thread(self._retire_rearm_request, request):
                     continue
@@ -1368,17 +1404,40 @@ class HFTSystem:
                 drawdown_pct = self._get_drawdown_pct(self.position_store, self.settings)
                 if self._mtm_calculator is not None:
                     try:
-                        unrealized = self._mtm_calculator.total_unrealized_pnl()
+                        # snapshot() rather than total_unrealized_pnl(): the
+                        # bare total reports 0 both for a flat book and for a
+                        # book where nothing could be priced, and the daily
+                        # stop is allowed to lift only on the former.
+                        mtm = self._mtm_calculator.snapshot()
+                        unrealized = mtm.total_scaled
                         drawdown_pct = self._combine_drawdown_with_mtm(
                             realized_drawdown_pct=drawdown_pct,
                             unrealized_scaled=int(unrealized),
                             base_capital=int(self.settings.get("base_capital", 10_000_000)),
                         )
-                        self.risk_engine.update_unrealized_pnl(int(unrealized))
-                    except Exception:
-                        pass
+                        if not mtm.complete:
+                            logger.warning(
+                                "mark-to-market incomplete; daily stop cannot release",
+                                priced=mtm.priced,
+                                unpriced=mtm.unpriced,
+                            )
+                        self.risk_engine.update_unrealized_pnl(int(unrealized), complete=mtm.complete)
+                    except Exception as e:
+                        # Was a bare ``pass``. A mark-to-market that fails every
+                        # tick also starves the daily-loss reset, and silence
+                        # made that indistinguishable from a healthy engine.
+                        logger.warning("StormGuard mark-to-market update failed", error=str(e))
             except Exception as e:
                 logger.warning("StormGuard drawdown computation failed", error=str(e))
+
+            # The daily-loss reset boundary ticks regardless of the block above:
+            # it is what releases a latched daily-loss HALT, and both the
+            # drawdown read and the MtM read can fail for reasons that have
+            # nothing to do with the calendar.
+            try:
+                self.risk_engine.roll_daily_loss_boundary()
+            except Exception as e:
+                logger.warning("daily loss boundary roll failed", error=str(e))
 
             # 3. Latency input for StormGuard.
             latency_us = self._stormguard_latency_us(lag_s)

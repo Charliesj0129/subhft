@@ -1,0 +1,42 @@
+{
+  "changes": [
+    {
+      "after": "SBLShort",
+      "before": null,
+      "classification": "ADDITIVE",
+      "enum": "StockOrderCond",
+      "kind": "enum_member_added",
+      "platform_used": false,
+      "qualname": "StockOrderCond.SBLShort",
+      "remediation": "",
+      "section": "enum",
+      "shimmable": false
+    },
+    {
+      "after": "SBLShortPriceExempt",
+      "before": null,
+      "classification": "ADDITIVE",
+      "enum": "StockOrderCond",
+      "kind": "enum_member_added",
+      "platform_used": false,
+      "qualname": "StockOrderCond.SBLShortPriceExempt",
+      "remediation": "",
+      "section": "enum",
+      "shimmable": false
+    }
+  ],
+  "counts": {
+    "additive": 2,
+    "behavioral": 0,
+    "benign": 0,
+    "breaking_other": 0,
+    "breaking_platform": 0,
+    "informational": 0
+  },
+  "from": "1.7.1",
+  "from_sha256": "3338f42f4d379e0093ffecb647e2c78db50d011f636c5dcc96c46de74bf5439b",
+  "generated_by": "scripts/shioaji_api_diff",
+  "to": "1.7.2",
+  "to_sha256": "a5e464dd3073720813cbf16cb97a04f8639b6dc0626d33b1058cf81047673b29",
+  "verdict": "SAFE"
+}

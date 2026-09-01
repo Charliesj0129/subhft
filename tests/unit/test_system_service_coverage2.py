@@ -22,6 +22,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from hft_platform.contracts.strategy import IntentType
+from hft_platform.execution.mtm import MtMSnapshot
 from hft_platform.risk.storm_guard import StormGuardState
 from hft_platform.services.system import HFTSystem
 
@@ -1294,8 +1295,10 @@ class TestSuperviseStormGuardUpdate:
         sys_obj.settings = {"base_capital": 10_000_000}
 
         mtm_calc = MagicMock()
-        # 500K NTD unrealized loss, scaled int (x10000) — Bug 11 fix descales before dividing
-        mtm_calc.total_unrealized_pnl.return_value = -500_000 * 10_000
+        # 500K NTD unrealized loss, scaled int (x10000) — Bug 11 fix descales before dividing.
+        # The supervisor reads snapshot() rather than total_unrealized_pnl(), because a bare
+        # total cannot say whether the book was fully priced; a complete one is asserted here.
+        mtm_calc.snapshot.return_value = MtMSnapshot(total_scaled=-500_000 * 10_000, priced=1, unpriced=0)
         sys_obj._mtm_calculator = mtm_calc
 
         mock_metrics = MagicMock()
