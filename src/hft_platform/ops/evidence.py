@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import date, datetime
 from pathlib import Path
@@ -106,6 +107,36 @@ class AutonomyEvidenceWriter:
                 except Exception:
                     pass
             return record
+
+    async def record_transition_async(
+        self,
+        *,
+        scope: str,
+        mode: str,
+        reason: str,
+        manual_rearm_required: bool = True,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """:meth:`record_transition`, off the event loop.
+
+        The write underneath takes an exclusive ``flock`` it may poll for up to
+        ``runtime_state_store.DEFAULT_LOCK_TIMEOUT_S`` (2 s, because the operator
+        CLI mutates the same document from another process) and then fsyncs the
+        payload and its directory. That is three orders of magnitude past the
+        1 ms loop budget, and the callers that reach it are the margin check and
+        the degrade path -- the moments when the loop must keep cancelling.
+
+        Awaited, not fired and forgotten: the caller's durability ordering is
+        unchanged, only the loop is released while the write commits.
+        """
+        await asyncio.to_thread(
+            self.record_transition,
+            scope=scope,
+            mode=mode,
+            reason=reason,
+            manual_rearm_required=manual_rearm_required,
+            metadata=metadata,
+        )
 
     def record_manual_rearm_requirement(
         self,

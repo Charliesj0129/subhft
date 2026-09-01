@@ -397,3 +397,158 @@ def test_the_scan_is_cheap_when_there_is_nothing_to_do(rig):
         rearm_requests.pending(rig.base)
     per_call_ms = (time.perf_counter() - started) * 1000 / 200
     assert per_call_ms < 1.0, f"empty scan cost {per_call_ms:.3f} ms per tick"
+
+
+class TestQuarantineDurabilityIsVisible:
+    """A latch held in memory only must be observable, not just logged.
+
+    ``_log_persist_outcome`` has always named the consequence -- "a restart will
+    not restore it" -- in a log line. An operator deciding whether it is safe to
+    restart cannot query a log line that has scrolled, and nothing else in the
+    process could see the state either.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_confirmed_write_leaves_the_quarantine_durable(self, tmp_path):
+        from hft_platform.ops.evidence import AutonomyEvidenceWriter
+        from hft_platform.ops.strategy_governor import StrategyHealthGovernor
+
+        gov = StrategyHealthGovernor(evidence_writer=AutonomyEvidenceWriter(base_dir=tmp_path))
+        await gov.quarantine_async("R47_MAKER_TMF", reason="repeated_rejects")
+
+        # ``quarantine_async`` deliberately does not await the write -- it is
+        # called from the only bus consumer -- so the flag flips in the done
+        # callback. Drain the executor future the way the loop eventually does.
+        for pending in list(gov._persist_tasks):
+            await pending
+
+        assert gov.undurable_quarantines == frozenset()
+
+    @pytest.mark.asyncio
+    async def test_a_failed_write_marks_the_quarantine_undurable(self, tmp_path):
+        from hft_platform.ops.evidence import AutonomyEvidenceWriter
+        from hft_platform.ops.strategy_governor import StrategyHealthGovernor
+
+        writer = AutonomyEvidenceWriter(base_dir=tmp_path)
+
+        def explode(**_kwargs):
+            raise OSError("no space left on device")
+
+        writer.record_transition = explode  # type: ignore[method-assign]
+        gov = StrategyHealthGovernor(evidence_writer=writer)
+
+        # The latch must still be applied: a disk problem is not a reason to let
+        # a failing strategy keep trading.
+        await gov.quarantine_async("R47_MAKER_TMF", reason="repeated_rejects")
+
+        assert gov.is_quarantined("R47_MAKER_TMF") is True
+        assert "R47_MAKER_TMF" in gov.undurable_quarantines
+
+    @pytest.mark.asyncio
+    async def test_the_window_is_open_before_the_write_is_confirmed(self, tmp_path):
+        """Undurable is the starting state, not a state entered on failure.
+
+        The window opens the moment the latch exists in memory; reporting it
+        only after a failure would leave the in-flight case looking durable.
+        """
+        import asyncio as _asyncio
+
+        from hft_platform.ops.evidence import AutonomyEvidenceWriter
+        from hft_platform.ops.strategy_governor import StrategyHealthGovernor
+
+        writer = AutonomyEvidenceWriter(base_dir=tmp_path)
+        started, release = _asyncio.Event(), _asyncio.Event()
+        loop = _asyncio.get_running_loop()
+        real = writer.record_transition
+
+        def slow(**kwargs):
+            loop.call_soon_threadsafe(started.set)
+            # Bounded. An unbounded spin means a failing assertion below leaves a
+            # non-daemon executor thread running and pytest hangs at teardown
+            # instead of reporting the failure -- which is what an earlier
+            # version of this test did.
+            deadline = time.monotonic() + 5.0
+            while not release.is_set() and time.monotonic() < deadline:
+                time.sleep(0.005)
+            return real(**kwargs)
+
+        writer.record_transition = slow  # type: ignore[method-assign]
+        gov = StrategyHealthGovernor(evidence_writer=writer)
+
+        task = _asyncio.create_task(gov.quarantine_async("R47_MAKER_TMF", reason="repeated_rejects"))
+        try:
+            await _asyncio.wait_for(started.wait(), timeout=5)
+            assert "R47_MAKER_TMF" in gov.undurable_quarantines, "in flight is not yet durable"
+        finally:
+            # Always, so a failure above reports as a failure and not as a hang.
+            loop.call_soon_threadsafe(release.set)
+        await task
+        for _ in range(200):  # the write completes on a worker thread
+            if gov.undurable_quarantines == frozenset():
+                break
+            await _asyncio.sleep(0.01)
+        assert gov.undurable_quarantines == frozenset()
+
+
+@pytest.mark.asyncio
+async def test_a_stale_persist_completion_cannot_bless_a_newer_quarantine(tmp_path):
+    """Durability was one bit per strategy, so a late success blessed the wrong latch.
+
+    Quarantine A's write times out in flight; the operator re-arms; the strategy
+    fails straight back into quarantine B. A's write then finishes and reported
+    ``durable=True`` for the strategy -- clearing B's undurable state while B's
+    own write was still pending. In that window a restart releases B without
+    authorisation, and the gauge an operator consults to decide whether it is
+    safe to restart is the thing that lies.
+    """
+    writer = AutonomyEvidenceWriter(base_dir=tmp_path)
+    governor = StrategyHealthGovernor(evidence_writer=writer)
+
+    released: list[threading.Event] = []
+    real = writer.record_transition
+
+    def blocking_record(**kw):
+        # Only the QUARANTINE writes are held; the re-arm's own record must run
+        # freely or the test would be measuring its own scaffolding.
+        if kw.get("reason") == "manual_rearm":
+            return real(**kw)
+        gate = threading.Event()
+        released.append(gate)
+        assert gate.wait(timeout=5.0), "the test never released the write"
+        return real(**kw)
+
+    writer.record_transition = blocking_record
+
+    # A: latched, write blocked in the thread pool.
+    a = asyncio.create_task(governor.quarantine_async(STRATEGY, reason="first"))
+    while not released:
+        await asyncio.sleep(0.005)
+    token_a = governor._quarantined[STRATEGY].token
+    assert STRATEGY in governor.undurable_quarantines
+    # The persist future itself, so the assertions below can wait on the write
+    # instead of on a sleep: ``quarantine_async`` deliberately does not await it,
+    # so awaiting the coroutine proves nothing about the write's completion.
+    (persist_a,) = tuple(governor._persist_tasks)
+
+    # The operator re-arms A, and the strategy fails immediately back into B.
+    assert await governor.rearm_async(STRATEGY, expected_token=token_a) is True
+    assert STRATEGY not in governor.undurable_quarantines, "re-arm must retire the state it can no longer match"
+    b = asyncio.create_task(governor.quarantine_async(STRATEGY, reason="second"))
+    while len(released) < 2:
+        await asyncio.sleep(0.005)
+    (persist_b,) = tuple(governor._persist_tasks - {persist_a})
+    token_b = governor._quarantined[STRATEGY].token
+    assert token_b != token_a
+    assert STRATEGY in governor.undurable_quarantines
+
+    # A's write now succeeds -- for a quarantine that no longer exists.
+    released[0].set()
+    await a
+    await persist_a  # the done callbacks are registered first, so they run first
+
+    assert STRATEGY in governor.undurable_quarantines, "A's stale completion marked B durable while B was pending"
+
+    released[1].set()
+    await b
+    await persist_b
+    assert STRATEGY not in governor.undurable_quarantines, "B's own completion must clear it"

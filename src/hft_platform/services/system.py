@@ -453,6 +453,9 @@ class HFTSystem:
             pass
 
         logger.info("System Starting...")
+        # Lifecycle boundary, not the trading loop: nothing is trading yet, and
+        # `manual_rearm_required=False` on a non-ack transition never reaches the
+        # locking store anyway -- only the audit trail. Left synchronous.
         self.evidence_writer.record_transition(
             scope="platform",
             mode="NORMAL",
@@ -965,7 +968,7 @@ class HFTSystem:
 
         # 5. Exit REDUCE_ONLY if active
         if self.platform_degrade_controller.reduce_only_active:
-            self.platform_degrade_controller.exit_reduce_only(reason=reason)
+            await self.platform_degrade_controller.exit_reduce_only_async(reason=reason)
             results["reduce_only"] = "exited"
             logger.info("graceful_reset: REDUCE_ONLY exited", reason=reason)
         else:
@@ -1060,16 +1063,20 @@ class HFTSystem:
         and writes do not. See ``StrategyHealthGovernor.quarantine_async``.
         """
         state = await asyncio.to_thread(self._read_rearm_state)
-        self._consume_platform_rearm_request(state)
-        await self._consume_strategy_rearm_requests(state)
         controller = getattr(self, "platform_degrade_controller", None)
         inputs = getattr(self, "platform_degrade_inputs", None)
+        # Read the live reasons BEFORE the re-arm is consumed. The re-arm has to
+        # re-apply them in memory before it suspends, or clearing here and
+        # re-checking below leaves allow_open() true across the audit write --
+        # a fail-open during exactly the condition reduce-only contains.
+        reasons = inputs.reduce_only_reasons() if inputs is not None else []
+        await self._consume_platform_rearm_request_async(state, reasons)
+        await self._consume_strategy_rearm_requests(state)
         if controller is None or inputs is None:
             return
-        reasons = inputs.reduce_only_reasons()
         for reason in reasons:
-            controller.enter_reduce_only(reason=reason)
-        controller.check_auto_recovery(
+            await controller.enter_reduce_only_async(reason=reason)
+        await controller.check_auto_recovery_async(
             current_reasons=reasons,
             now_ns=timebase.now_ns(),
         )
@@ -1236,19 +1243,23 @@ class HFTSystem:
                     quarantine_token=request.quarantine_token,
                 )
 
-    def _consume_platform_rearm_request(self, state: Any = _STATE_NOT_SUPPLIED) -> None:
+    def _platform_rearm_is_due(self, state: Any) -> bool:
+        """Whether this tick should force-clear platform reduce-only.
+
+        Shared by the sync and async consumers so the request-sequence bookkeeping
+        (``_last_platform_rearm_request_seen``) cannot drift between them: an
+        operator request must be consumed exactly once whichever path sees it.
+        """
         gate = getattr(self, "manual_rearm_gate", None)
         controller = getattr(self, "platform_degrade_controller", None)
         if gate is None or controller is None:
-            return
-        if state is _STATE_NOT_SUPPLIED:
-            state = self._read_rearm_state()
+            return False
         if not state:
-            return
+            return False
 
         platform = state.get("platform")
         if not isinstance(platform, dict):
-            return
+            return False
         try:
             requested_at = float(platform.get("rearm_requested_at") or 0.0)
         except (TypeError, ValueError):
@@ -1256,13 +1267,39 @@ class HFTSystem:
 
         last_seen = float(getattr(self, "_last_platform_rearm_request_seen", 0.0))
         if requested_at <= last_seen:
-            return
+            return False
         self._last_platform_rearm_request_seen = requested_at
 
         if bool(platform.get("manual_rearm_required")):
-            return
-        if getattr(controller, "reduce_only_active", False):
-            controller.force_clear(reason="manual_rearm_gate")
+            return False
+        return bool(getattr(controller, "reduce_only_active", False))
+
+    def _consume_platform_rearm_request(self, state: Any = _STATE_NOT_SUPPLIED) -> None:
+        """Synchronous consumer, for callers that are not on the event loop."""
+        if state is _STATE_NOT_SUPPLIED:
+            state = self._read_rearm_state()
+        if self._platform_rearm_is_due(state):
+            self.platform_degrade_controller.force_clear(reason="manual_rearm_gate")
+
+    async def _consume_platform_rearm_request_async(
+        self,
+        state: Any = _STATE_NOT_SUPPLIED,
+        current_reasons: "list[str] | tuple[str, ...]" = (),
+    ) -> None:
+        """The supervisor's consumer: decide on the loop, persist off it.
+
+        ``force_clear`` reaches ``exit_reduce_only`` and ``record_transition``,
+        which take the shared ``flock`` (polled with ``time.sleep``, two-second
+        deadline) and fsync twice. This was the one un-awaited call left on
+        ``_update_platform_degrade_state``, and it sat on the manual path -- the
+        stall landed exactly when an operator was restoring permissions.
+        """
+        if state is _STATE_NOT_SUPPLIED:
+            state = await asyncio.to_thread(self._read_rearm_state)
+        if self._platform_rearm_is_due(state):
+            await self.platform_degrade_controller.force_clear_async(
+                reason="manual_rearm_gate", current_reasons=current_reasons
+            )
 
     async def _supervise(self):
         """
@@ -2093,6 +2130,7 @@ class HFTSystem:
             except Exception as exc:
                 logger.warning("SessionGovernor stop failed", error=str(exc))
 
+        # Shutdown boundary; see the note at system_start. Left synchronous.
         self.evidence_writer.record_transition(
             scope="platform",
             mode="CLOSED",

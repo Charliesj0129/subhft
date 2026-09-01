@@ -169,6 +169,13 @@ class StrategyHealthGovernor:
         self.evidence_writer = evidence_writer or get_shared_autonomy_evidence_writer()
         self._quarantined: dict[str, StrategyQuarantine] = {}
         self._quarantine_seq: int = 0
+        #: Strategies whose latch is in memory only -- the durable write failed,
+        #: or has not finished -- mapped to the TOKEN of the quarantine that is
+        #: waiting. Keyed by token because one bit per strategy let a stale
+        #: completion bless a newer latch: A times out in flight, the operator
+        #: re-arms, the strategy fails straight back into B, and A's late success
+        #: cleared B's undurable state while B's write was still pending.
+        self._undurable: dict[str, str] = {}
         #: Identifies this governor instance. A quarantine token carries it so a
         #: re-arm request issued for an *earlier* quarantine can never match a
         #: later one, even when the process is the same: the per-instance
@@ -270,14 +277,63 @@ class StrategyHealthGovernor:
         """
         transition, persist = self._latch_quarantine(strategy_id, reason=reason)
         persist()
+        # persist() raises on failure, so reaching here means the record landed.
+        latched = self._quarantined.get(strategy_id)
+        if latched is not None:
+            self._mark_durability(strategy_id, token=latched.token, durable=True)
         return transition
 
-    def _log_persist_outcome(self, strategy_id: str, task: "asyncio.Future[None]") -> None:
+    def _mark_durability(self, strategy_id: str, *, token: str, durable: bool) -> None:
+        """Publish whether this strategy's latch would survive a restart.
+
+        The log line below has always named the consequence -- "a restart will
+        not restore it" -- and nothing acted on it or could even see it after
+        the line scrolled. An operator deciding whether it is safe to restart
+        has to be able to ask, so the state is a gauge, not a log.
+        """
+        live = self._quarantined.get(strategy_id)
+        if live is None or live.token != token:
+            # A completion for a quarantine that has since been re-armed or
+            # superseded. Publishing it would describe the wrong latch -- and in
+            # the durable=True direction it would report a pending write as
+            # finished, after which a restart releases an unauthorised strategy.
+            logger.debug(
+                "strategy_quarantine_durability_stale",
+                strategy_id=strategy_id,
+                completed_token=token,
+                live_token=None if live is None else live.token,
+            )
+            return
+        if durable:
+            self._undurable.pop(strategy_id, None)
+        else:
+            self._undurable[strategy_id] = token
+        gauge = getattr(self.metrics, "strategy_quarantine_undurable", None)
+        if gauge is not None:
+            try:
+                gauge.labels(strategy=strategy_id).set(0 if durable else 1)
+            except Exception:  # noqa: BLE001 -- observability must not break the latch
+                logger.debug("strategy_quarantine_undurable_metric_failed", strategy_id=strategy_id)
+
+    @property
+    def undurable_quarantines(self) -> frozenset[str]:
+        """Strategies latched in memory only; a restart would release them."""
+        return frozenset(self._undurable)
+
+    def _log_persist_outcome(self, strategy_id: str, token: str, task: "asyncio.Future[None]") -> None:
         """Report a durable-write failure that nobody is waiting on any more."""
         if task.cancelled():
+            self._mark_durability(strategy_id, token=token, durable=False)
             return
         exc = task.exception()
         if exc is not None:
+            counter = getattr(self.metrics, "strategy_quarantine_persist_failed_total", None)
+            if counter is not None:
+                try:
+                    counter.labels(strategy=strategy_id).inc()
+                except Exception:  # noqa: BLE001 -- observability must not break the latch
+                    logger.debug("strategy_quarantine_persist_failed_metric_failed", strategy_id=strategy_id)
+            self._mark_durability(strategy_id, token=token, durable=False)
             logger.error(
                 "strategy_quarantine_persist_failed",
                 strategy_id=strategy_id,
@@ -285,6 +341,8 @@ class StrategyHealthGovernor:
                 error_type=type(exc).__name__,
                 consequence="latch held in memory only; a restart will not restore it",
             )
+            return
+        self._mark_durability(strategy_id, token=token, durable=True)
 
     async def quarantine_async(self, strategy_id: str, *, reason: str) -> AutonomyTransition:
         """Latch the strategy now; write the durable record off the event loop.
@@ -330,6 +388,11 @@ class StrategyHealthGovernor:
         the latch may not survive a restart.
         """
         transition, persist = self._latch_quarantine(strategy_id, reason=reason)
+        latched = self._quarantined.get(strategy_id)
+        token = latched.token if latched is not None else ""
+        # Undurable until the write is confirmed, not the other way round: the
+        # window this reports on opens the moment the latch exists in memory.
+        self._mark_durability(strategy_id, token=token, durable=False)
         try:
             # ``run_in_executor``, deliberately, not ``to_thread``:
             # ``to_thread`` is a coroutine, so ``ensure_future`` only *schedules*
@@ -354,7 +417,7 @@ class StrategyHealthGovernor:
             return transition
         self._persist_tasks.add(task)
         task.add_done_callback(self._persist_tasks.discard)
-        task.add_done_callback(lambda t: self._log_persist_outcome(strategy_id, t))
+        task.add_done_callback(lambda t: self._log_persist_outcome(strategy_id, token, t))
         return transition
 
     def is_quarantined(self, strategy_id: str) -> bool:
@@ -694,6 +757,15 @@ class StrategyHealthGovernor:
 
         # Decide and mutate with nothing in between.
         self._quarantined.pop(strategy_id, None)
+        if self._undurable.pop(strategy_id, None) is not None:
+            # Nothing can match this strategy's token again once the entry is
+            # gone, so the gauge has to be retired here or it reads 1 forever.
+            gauge = getattr(self.metrics, "strategy_quarantine_undurable", None)
+            if gauge is not None:
+                try:
+                    gauge.labels(strategy=strategy_id).set(0)
+                except Exception:  # noqa: BLE001 -- observability must not break the re-arm
+                    logger.debug("strategy_quarantine_undurable_metric_failed", strategy_id=strategy_id)
         self._set_strategy_quarantine_active(strategy_id, active=False)
         self._set_strategy_scope_state()
         logger.info(

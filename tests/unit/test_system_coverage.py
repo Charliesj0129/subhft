@@ -81,6 +81,11 @@ def _make_system():
             sys_obj.gateway_service = None
             sys_obj.evidence_writer = MagicMock()
             sys_obj.platform_degrade_controller = MagicMock()
+            # The degrade transitions persist off the event loop now, so the three
+            # moved methods have to be awaitable on the double as well.
+            sys_obj.platform_degrade_controller.enter_reduce_only_async = AsyncMock()
+            sys_obj.platform_degrade_controller.exit_reduce_only_async = AsyncMock()
+            sys_obj.platform_degrade_controller.check_auto_recovery_async = AsyncMock(return_value=False)
             sys_obj.platform_degrade_inputs = MagicMock()
             sys_obj.tasks = {}
             sys_obj._recorder_drop_on_full = True
@@ -356,8 +361,8 @@ def test_update_platform_degrade_state_with_reasons():
         mock_tb.now_ns.return_value = 1000
         asyncio.run(sys_obj._update_platform_degrade_state())
 
-    assert sys_obj.platform_degrade_controller.enter_reduce_only.call_count == 2
-    sys_obj.platform_degrade_controller.check_auto_recovery.assert_called_once()
+    assert sys_obj.platform_degrade_controller.enter_reduce_only_async.await_count == 2
+    sys_obj.platform_degrade_controller.check_auto_recovery_async.assert_awaited_once()
 
 
 def test_update_platform_degrade_state_no_reasons():
@@ -370,7 +375,7 @@ def test_update_platform_degrade_state_no_reasons():
         mock_tb.now_ns.return_value = 1000
         asyncio.run(sys_obj._update_platform_degrade_state())
 
-    sys_obj.platform_degrade_controller.check_auto_recovery.assert_called_once()
+    sys_obj.platform_degrade_controller.check_auto_recovery_async.assert_awaited_once()
 
 
 def test_update_platform_degrade_state_no_controller():

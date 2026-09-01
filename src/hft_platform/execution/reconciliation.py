@@ -597,7 +597,11 @@ class ReconciliationService:
                     except Exception:
                         pass
                     if persists_or_grows and self._noncritical_drift_streak >= 2:
-                        self.platform_degrade_controller.enter_reduce_only(reason="reconciliation_drift")
+                        # Awaited: sync_portfolio is a coroutine, and the sync
+                        # form takes the runtime-state flock (poll up to 2s) and
+                        # fsyncs twice on the event loop -- 2000x the 1ms budget,
+                        # on the path that reacts to position drift.
+                        await self.platform_degrade_controller.enter_reduce_only_async(reason="reconciliation_drift")
             else:
                 # Drift resolved — clear streak gauges for previously-drifting symbols.
                 try:

@@ -267,6 +267,8 @@ class MetricsRegistry:
                 _pn("autonomy_mode"),
                 _pn("autonomy_transitions_total"),
                 _pn("strategy_quarantine_active"),
+                _pn("strategy_quarantine_undurable"),
+                _pn("strategy_quarantine_persist_failed_total"),
                 _pn("platform_reduce_only_active"),
                 _pn("manual_rearm_required"),
                 # WU-04/WU-18 Reconciliation resilience metrics
@@ -590,6 +592,20 @@ class MetricsRegistry:
         self.strategy_quarantine_active = Gauge(
             _pn("strategy_quarantine_active"),
             "Whether a strategy is currently quarantined (1=active, 0=inactive)",
+            ["strategy"],
+        )
+        self.strategy_quarantine_undurable = Gauge(
+            _pn("strategy_quarantine_undurable"),
+            (
+                "Whether a strategy's quarantine is held in memory only because its "
+                "durable write failed or has not been confirmed (1=undurable, 0=durable). "
+                "While this is 1 a restart will silently release that quarantine."
+            ),
+            ["strategy"],
+        )
+        self.strategy_quarantine_persist_failed_total = Counter(
+            _pn("strategy_quarantine_persist_failed_total"),
+            "Strategy quarantine durable writes that failed outright",
             ["strategy"],
         )
         self.platform_reduce_only_active = Gauge(
