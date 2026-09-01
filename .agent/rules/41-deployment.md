@@ -19,11 +19,16 @@ guardrail form — when in doubt, open the runbook.
 - **D4 Back up every overwritten file first** to
   `~/deploy_backup_<UTC-date>/<batch>/` with `MD5SUMS.txt`.
 - **D5 Class decides mechanism.** A = bind-mounted `src/`/`config/`/`scripts/`
-  → `restart`. B = monitoring rules → reload API, no restart. C = env/compose/
-  image → `up -d` = recreate.
-- **D6 `restart`, never `up -d`** for Class A/B. `up -d` recreates the container
-  and destroys the writable layer holding `/app/outputs` (autonomy evidence,
-  not bind-mounted). Class C must rescue it with `docker cp` first.
+  → `stop` → wait 60 s → `start`. B = monitoring rules → reload API, no restart.
+  C = env/compose/image → `up -d` = recreate.
+- **D6 Never `up -d`** for Class A/B. `up -d` recreates the container and
+  destroys the writable layer holding `/app/outputs` (autonomy evidence, not
+  bind-mounted). Class C must rescue it with `docker cp` first.
+- **D6a Never `docker compose restart` the engine.** Refuted 2026-06-21 and
+  2026-06-22: it races the broker's 5-session release, so `order_client` fails
+  and the quote facades come back logged out while `FeedState` still reads
+  `CONNECTED`. Stop, wait 60 s, start, and verify `subscribed_count` and the
+  login flags — not `FeedState`.
 - **D7 Validate on the host before restarting**: `py_compile` in the engine
   container for code, `promtool check rules` for alert rules. Local gates are a
   precondition, not a substitute.
