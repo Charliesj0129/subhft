@@ -99,7 +99,7 @@ lose the writable layer (D6).
 
 | Class | What changed | Mechanism | Engine restart | Writable layer |
 |---|---|---|---|---|
-| **A — bind-mounted code/config** | anything under `src/`, `config/`, `scripts/` | `scp` + `docker compose restart hft-engine` | yes (~10 s) | **preserved** |
+| **A — bind-mounted code/config** | anything under `src/`, `config/`, `scripts/` | `scp` + `stop` → wait 60 s → `start` (D6a) | yes (~60 s) | **preserved** |
 | **B — monitoring rules** | `config/monitoring/alerts/*.yaml`, `prometheus.yml` | `scp` + Prometheus reload API | **no** | untouched |
 | **C — env / compose / image** | `.env`, `docker-compose.yml`, Dockerfile, dependency pins | `docker compose up -d` = **recreate** | yes | **DESTROYED** — needs rescue plan first |
 
@@ -123,6 +123,36 @@ Verified engine bind mounts (2026-07-26):
 
 Anything **not** in that list lives in the container's writable layer and is
 lost on recreate.
+
+### D6a — the engine is stopped and started, never restarted
+
+`docker compose restart hft-engine` is **refuted** for this engine, twice, on
+2026-06-21 and 2026-06-22 (`.agent/memory/failed-attempts.md`). The container
+comes back before the broker has released the previous login's five sessions,
+so the reconnect takes a `451`, `order_client` fails, and the quote facades come
+up **logged out and unsubscribed while `FeedState` still reads `CONNECTED`** —
+a silent failure a restart-and-glance verification cannot see.
+
+```
+  BEFORE (refuted)                    AFTER (D6a)
+  ----------------                    -----------
+  docker compose restart              docker compose stop hft-engine
+        |                                   |
+        |  container up in ~10 s            |  wait 60 s   <- broker releases
+        v                                   |               the 5 sessions
+  broker still holds 5 sessions             v
+        |                             docker compose start hft-engine
+        X  451 Too Many Connections         |
+           order_client fails               v
+           facades logged out          login flags true, subscribed_count
+           FeedState=CONNECTED (lies)  back at its pre-stop value
+```
+
+**Verify with `subscribed_count` and the per-facade login flags, never with
+`FeedState`** — that is the field that masked it both times.
+
+`restart` is still correct for sidecars that hold no broker session
+(Prometheus, Grafana, the wal-loader).
 
 ### D6 — `restart` is not `up -d`
 
@@ -312,12 +342,15 @@ ssh $HOST "docker exec hft-engine python -m py_compile $(printf '/app/%s ' $FILE
 **6. Capture the baseline** for the metrics named in D9 — you cannot show a
 metric changed without its before value.
 
-**7. Restart** (D6 — `restart`, never `up -d`):
+**7. Stop, wait, start** (D6a — never `restart`, never `up -d`):
 
 ```bash
 ssh $HOST "cd $ROOT
 docker exec hft-engine sh -c 'find /app/outputs -type f | wc -l'   # before
-docker compose restart hft-engine
+docker compose stop hft-engine"
+sleep 60                                   # the broker's 5-session release
+ssh $HOST "cd $ROOT
+docker compose start hft-engine
 docker exec hft-engine sh -c 'find /app/outputs -type f | wc -l'   # must match"
 ```
 
@@ -480,7 +513,8 @@ B=~/deploy_backup_<date>/<batch>
 cd \$B && md5sum -c MD5SUMS.txt          # backup integrity first
 cd $ROOT
 for f in \$(cd \$B && find . -type f ! -name MD5SUMS.txt | sed 's|^\./||'); do cp -p \"\$B/\$f\" \"\$f\"; done
-docker compose restart hft-engine"       # Class B: promtool + reload instead
+docker compose stop hft-engine" && sleep 60 && ssh $HOST "cd $ROOT && docker compose start hft-engine"
+# Class B: promtool + reload instead of the stop/start
 ```
 
 **Class C** — restore `.env`/compose from the backup, then `up -d` again, then
