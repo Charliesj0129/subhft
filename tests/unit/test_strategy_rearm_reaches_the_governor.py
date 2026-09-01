@@ -19,6 +19,7 @@ from hft_platform.ops import rearm_requests
 from hft_platform.ops.evidence import AutonomyEvidenceWriter
 from hft_platform.ops.manual_rearm import ManualRearmGate
 from hft_platform.ops.strategy_governor import StrategyHealthGovernor
+from hft_platform.services import system as system_module
 from hft_platform.services.system import HFTSystem
 
 STRATEGY = "R47_MAKER_TMF"
@@ -253,7 +254,7 @@ def test_a_request_for_another_engines_quarantine_is_left_alone(rig):
     assert [r.quarantine_token for r in still] == [foreign_token], "the other engine's request was destroyed"
 
 
-def test_a_foreign_request_is_reported_once_not_once_per_tick(rig):
+def test_a_foreign_request_is_reported_once_not_once_per_tick(rig, monkeypatch):
     """The scan runs every supervisor tick and a foreign request is never consumed."""
     other = StrategyHealthGovernor(evidence_writer=rig.writer)
     other.quarantine(STRATEGY, reason="the other engine's failure")
@@ -261,25 +262,25 @@ def test_a_foreign_request_is_reported_once_not_once_per_tick(rig):
     rig.governor.quarantine(STRATEGY, reason="our failure")
 
     seen: list[str] = []
-    import structlog
 
-    def _capture(_logger, _name, event_dict):
-        seen.append(event_dict.get("event", ""))
-        return event_dict
+    # The module's ``logger``, not a structlog processor. ``utils.logging``
+    # configures structlog with ``cache_logger_on_first_use=True``, so
+    # ``system.py``'s module-level proxy binds its processor chain the first
+    # time anything in the worker logs through it -- after which a later
+    # ``structlog.configure()`` is invisible to it. A processor-based capture
+    # therefore passes when this test runs first and records nothing when it
+    # does not; it failed exactly that way in CI on 2026-09-01 while passing
+    # locally. Substituting the module attribute cannot be order-dependent.
+    class _Recorder:
+        def warning(self, event: str, **_kwargs) -> None:
+            seen.append(event)
 
-    # Save and restore the exact config rather than ``reset_defaults()``: this
-    # process configures structlog in ``utils.logging`` at import, and resetting
-    # to structlog's own defaults would leave every later test in this xdist
-    # worker running against a different logger. See the lesson recorded for
-    # ``patch('mod.time.sleep')`` -- global mutation passes alone and fails in
-    # a suite.
-    saved = structlog.get_config()
-    structlog.configure(processors=[_capture, *saved["processors"]])
-    try:
-        for _ in range(4):
-            tick(rig)
-    finally:
-        structlog.configure(**saved)
+        def __getattr__(self, _name):  # info/debug/error: recorded as no-ops
+            return lambda *_a, **_k: None
+
+    monkeypatch.setattr(system_module, "logger", _Recorder())
+    for _ in range(4):
+        tick(rig)
 
     assert seen.count("strategy_rearm_request_foreign_token") == 1, seen
 
