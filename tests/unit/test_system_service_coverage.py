@@ -1107,8 +1107,17 @@ class TestOnExecNoOrderAdapter:
 # ===========================================================================
 
 
-class TestOnExecOrderTopicSkipsResolution:
-    def test_order_topic_does_not_resolve_strategy(self):
+class TestOnExecOrderTopicWithNoCandidates:
+    """Renamed 2026-09-03. It was ``TestOnExecOrderTopicSkipsResolution``, and
+    it asserted that the order topic skips attribution entirely -- which was
+    the defect, not a property: ``hft.orders`` held 414 rows at 100 %
+    ``strategy_id='UNKNOWN'`` because ``_on_exec`` gated the whole block on
+    ``topic == "deal"``. The order topic now resolves. What survives is the
+    narrower and still-true claim: a payload carrying no ids and no
+    symbol/action resolves nothing, and does not pay for a resolver call on the
+    broker callback thread to find that out."""
+
+    def test_order_topic_with_no_candidates_resolves_nothing(self):
         sys_obj = _make_stub()
         sys_obj.running = False
         resolver = MagicMock()

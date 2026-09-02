@@ -132,6 +132,15 @@ class ExecutionNormalizer:
                 return str(val)
         return None
 
+    def _resolve_order_key_from_injected(self, raw: RawExecEvent) -> Optional[str]:
+        """Order key injected by ``_on_exec`` from the pending-fill index."""
+        d = raw.data
+        if isinstance(d, dict):
+            val = d.get("_resolved_order_key")
+            if val:
+                return str(val)
+        return None
+
     def _resolve_from_custom_field(self, raw: RawExecEvent) -> Optional[str]:
         d, _ = self._unwrap_data(raw)
         order = self._payload_get(d, "order")
@@ -233,6 +242,13 @@ class ExecutionNormalizer:
             client_order_id = self.order_id_resolver.resolve_order_key_from_candidates(
                 [ord_no, seq_no, other_id, custom_field]
             )
+            if not client_order_id:
+                # The order-ACK callback arrives ~4.3 ms before place_order()
+                # returns the Trade carrying the broker ids, so the resolver
+                # above CANNOT succeed on a first ACK -- it was empty on 414 of
+                # 414 rows. _on_exec peeks the pending-fill index (registered
+                # before dispatch) and injects the order key here.
+                client_order_id = self._resolve_order_key_from_injected(raw) or ""
             if not client_order_id:
                 self._record_unattributed_order(
                     ord_no=ord_no, seq_no=seq_no, other_id=other_id, custom_field=custom_field

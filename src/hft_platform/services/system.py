@@ -2374,10 +2374,25 @@ class HFTSystem:
         loop = getattr(self, "loop", None)
         from hft_platform.execution.normalizer import RawExecEvent
 
-        # For deal callbacks, attempt to resolve strategy_id as early as possible.
+        # For deal AND order callbacks, resolve strategy_id as early as possible.
         # Prefer strong correlation (broker IDs/custom_field token in order_id_map),
         # then fall back to the pending fill index only when necessary.
-        if topic == "deal" and hasattr(self, "order_adapter") and self.order_adapter is not None:
+        #
+        # This used to read ``topic == "deal"``, which is why hft.orders held
+        # 414 rows at 100% strategy_id='UNKNOWN' while fills were 9/9 correctly
+        # attributed: the order topic never entered this block at all. The
+        # order-ACK callback cannot resolve by broker id either, because it
+        # arrives ~4.3 ms BEFORE place_order() returns the Trade that carries
+        # those ids, so order_id_map cannot contain them yet:
+        #
+        #   13:55:19.204785  order callback, map_size=1 -> UNKNOWN
+        #   13:55:19.209064  _register_broker_ids writes ordno  (4.3 ms late)
+        #
+        # The pending-fill index, by contrast, is registered BEFORE dispatch
+        # (``_register_pending_fill``), so it is already populated when the ACK
+        # lands. The order path must PEEK it rather than consume it -- the fill
+        # that follows is the rightful consumer.
+        if topic in ("deal", "order") and hasattr(self, "order_adapter") and self.order_adapter is not None:
             _payload = data.get("payload", data) if isinstance(data, dict) else data
             if isinstance(_payload, dict):
                 _get = _payload.get
@@ -2433,17 +2448,34 @@ class HFTSystem:
                         ]
                     )
             _resolved = None
+            _ids = [str(v) for v in _id_candidates if v]
             resolver = getattr(self.order_adapter, "order_id_resolver", None)
-            if resolver is not None:
-                _resolved = resolver.resolve_strategy_id_from_candidates([str(v) for v in _id_candidates if v])
+            # No candidates means nothing to look up. This runs on the broker
+            # callback thread, so an empty-list resolver call is pure overhead
+            # on every callback that carries no ids.
+            if resolver is not None and _ids:
+                _resolved = resolver.resolve_strategy_id_from_candidates(_ids)
                 if _resolved == "UNKNOWN":
                     _resolved = None
             if _resolved is None and _action:
                 _symbols = [str(v) for v in (_full_code, _code) if v]
                 if _symbols:
-                    _resolved = self.order_adapter.resolve_strategy_from_deal_candidates(_symbols, str(_action))
+                    if topic == "deal":
+                        _resolved = self.order_adapter.resolve_strategy_from_deal_candidates(_symbols, str(_action))
+                    else:
+                        _resolved = self.order_adapter.peek_strategy_from_pending_candidates(_symbols, str(_action))
             if _resolved and isinstance(data, dict):
                 data["_resolved_strategy_id"] = _resolved
+            if topic == "order" and _action and isinstance(data, dict) and not data.get("_resolved_order_key"):
+                # Backfills hft.orders.client_order_id, which the resolver
+                # cannot supply on an ACK: it keys off broker ids that
+                # _register_broker_ids has not written yet. Without it the
+                # column is empty and hft.orders cannot be joined to hft.fills.
+                _symbols_ok = [str(v) for v in (_full_code, _code) if v]
+                if _symbols_ok:
+                    _order_key = self.order_adapter.peek_order_key_from_pending_candidates(_symbols_ok, str(_action))
+                    if _order_key:
+                        data["_resolved_order_key"] = _order_key
 
         event = RawExecEvent(topic, data, timebase.now_ns())
         if not self.running:

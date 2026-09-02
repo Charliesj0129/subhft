@@ -2195,6 +2195,28 @@ class OrderAdapter:
 
         Returns strategy_id string or None if no pending order matches.
         """
+        return self._lookup_pending_strategy(symbol, action, consume=True)
+
+    def _lookup_pending_strategy(self, symbol: str, action: str, *, consume: bool) -> str | None:
+        """Strategy id from the pending-fill index. See ``_lookup_pending_order_key``."""
+        order_key = self._lookup_pending_order_key(symbol, action, consume=consume)
+        if not order_key:
+            return None
+        # order_key is "STRATEGY_ID:intent_id"
+        return order_key.split(":", 1)[0] if ":" in order_key else order_key
+
+    def _lookup_pending_order_key(self, symbol: str, action: str, *, consume: bool) -> str | None:
+        """Shared body of the consuming and peeking pending-fill lookups.
+
+        ``consume=True`` pops the matched entry (the deal callback owns the
+        fill). ``consume=False`` leaves it in place (the order-ACK callback
+        only needs to know who the order belongs to; the fill that follows is
+        the rightful consumer).
+
+        Expiry is NOT conditional on ``consume``: an entry past its TTL is
+        stale for every reader, and leaving it would let a peek resolve against
+        a record the next consuming call is about to discard.
+        """
         action_text = str(action).lower()
         side = "SELL" if "sell" in action_text or action == -1 else "BUY"
         key = f"{symbol}:{side}"
@@ -2233,36 +2255,79 @@ class OrderAdapter:
                 except Exception:  # noqa: BLE001
                     pass
                 return None
-            # FIFO pop: takes the oldest pending order for this symbol+side.
-            order_key = pending.pop(0)
-            self._pending_fill_registered_at.pop(order_key, None)
+            # FIFO: takes the oldest pending order for this symbol+side.
+            if consume:
+                order_key = pending.pop(0)
+                self._pending_fill_registered_at.pop(order_key, None)
+            else:
+                order_key = pending[0]
             if remaining_before_pop > 1:
                 logger.warning(
                     "pending_fill_fifo_ambiguous",
                     symbol=symbol,
                     action=action,
                     chosen_key=order_key,
-                    remaining_candidates=len(pending),
+                    remaining_candidates=len(pending) - (0 if consume else 1),
                     msg="FIFO fallback with multiple candidates — fill may be misattributed",
                 )
-            if not pending:
+            if consume and not pending:
                 del self._pending_fill_index[key]
-        # order_key is "STRATEGY_ID:intent_id"
-        strategy_id = order_key.split(":", 1)[0] if ":" in order_key else order_key
         logger.info(
             "pending_fill_index_resolved",
             symbol=symbol,
             action=action,
             order_key=order_key,
-            strategy_id=strategy_id,
+            consumed=consume,
         )
-        return strategy_id
+        return order_key
 
     def resolve_strategy_from_deal_candidates(self, symbols: list[str], action: str) -> str | None:
         for symbol in symbols:
             if not symbol:
                 continue
             resolved = self.resolve_strategy_from_deal(symbol, action)
+            if resolved:
+                return resolved
+        return None
+
+    def peek_strategy_from_pending(self, symbol: str, action: str) -> str | None:
+        """Resolve strategy_id from the pending-fill index WITHOUT consuming it.
+
+        The order-ACK callback needs the same answer the deal callback needs,
+        but it must not take the entry: the fill for that same order arrives
+        later and is the rightful consumer. ``resolve_strategy_from_deal``
+        pops, so calling it from the order topic would attribute the ACK
+        correctly and then leave the fill with nothing to match -- trading a
+        100% order-attribution failure for a fill-attribution failure.
+
+        Shares ``_lookup_pending_strategy`` with the consuming path so the TTL
+        sweep, the strict-mode ambiguity refusal and the FIFO choice cannot
+        drift apart between them.
+        """
+        return self._lookup_pending_strategy(symbol, action, consume=False)
+
+    def peek_strategy_from_pending_candidates(self, symbols: list[str], action: str) -> str | None:
+        for symbol in symbols:
+            if not symbol:
+                continue
+            resolved = self.peek_strategy_from_pending(symbol, action)
+            if resolved:
+                return resolved
+        return None
+
+    def peek_order_key_from_pending_candidates(self, symbols: list[str], action: str) -> str | None:
+        """Full ``STRATEGY_ID:intent_id`` order key, without consuming the entry.
+
+        This is what ``hft.orders.client_order_id`` needs. The resolver-based
+        lookup cannot supply it on an order ACK, because it keys off broker ids
+        that ``_register_broker_ids`` has not written yet -- which is why that
+        column was empty on 414 of 414 rows, leaving hft.orders and hft.fills
+        with no join key on the orders side.
+        """
+        for symbol in symbols:
+            if not symbol:
+                continue
+            resolved = self._lookup_pending_order_key(symbol, action, consume=False)
             if resolved:
                 return resolved
         return None
