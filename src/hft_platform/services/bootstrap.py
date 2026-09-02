@@ -1104,7 +1104,21 @@ class SystemBootstrapper:
         # When a fill arrives with UNKNOWN strategy_id, the router checks phantom
         # order candidates (dispatch-failed orders that may have reached broker).
         exec_service.set_phantom_resolver(order_adapter.resolve_phantom_fill)
-        recon_service = ReconciliationService(order_client, position_store, self.settings, storm_guard)
+        # ``symbol_source=md_client`` is load-bearing, not tidiness: the
+        # platform symbol universe is read from ``subscribed_codes`` /
+        # ``alias_to_actual``, which are QUOTE-side attributes. Handed only the
+        # order client, ReconciliationService fell back to the configured list
+        # -- under loop_v1 the continuous front-month aliases {TMFR1, TXFR1} --
+        # and so treated every resolved contract it actually trades as an
+        # externally placed phantom.
+        recon_service = ReconciliationService(
+            order_client,
+            position_store,
+            self.settings,
+            storm_guard,
+            symbol_source=md_client,
+            order_mode=resolve_order_mode(),
+        )
 
         # CE-M2: GatewayService wiring
         gateway_service = None
