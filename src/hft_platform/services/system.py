@@ -13,7 +13,7 @@ from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceCodec
 from hft_platform.core.session_hooks import SessionHookManager
 from hft_platform.observability.health import HealthServer
-from hft_platform.ops import rearm_requests
+from hft_platform.ops import quarantine_requests, rearm_requests
 from hft_platform.ops.evidence import get_shared_autonomy_evidence_writer
 from hft_platform.ops.manual_rearm import ManualRearmGate
 from hft_platform.ops.platform_degrade import get_shared_platform_degrade_controller
@@ -1072,6 +1072,10 @@ class HFTSystem:
         reasons = inputs.reduce_only_reasons() if inputs is not None else []
         await self._consume_platform_rearm_request_async(state, reasons)
         await self._consume_strategy_rearm_requests(state)
+        # After the re-arm, deliberately: if an operator has both a re-arm
+        # and a quarantine pending for the same strategy, the tick must end
+        # quarantined. Stopping is the fail-closed direction.
+        await self._consume_strategy_quarantine_requests()
         if controller is None or inputs is None:
             return
         for reason in reasons:
@@ -1119,6 +1123,106 @@ class HFTSystem:
             )
             return False
         return True
+
+    def _retire_quarantine_request(self, request: Any) -> bool:
+        """Delete one quarantine request, reporting failure instead of raising.
+
+        Same contract as :meth:`_retire_rearm_request`: an ``unlink`` that
+        throws must not kill the supervisor, because the request survives the
+        restart and the next boot would die the same way.
+
+        The fail-closed direction differs, though, and that is why this is not
+        shared with the re-arm helper. There, a failed delete leaves the
+        strategy quarantined. Here it leaves the request on disk to be applied
+        again next tick -- which is harmless, because quarantining an already
+        quarantined strategy is a no-op.
+        """
+        try:
+            quarantine_requests.consume(request)
+        except Exception as exc:  # noqa: BLE001 - a failed delete must not stop supervision
+            logger.error(
+                "strategy_quarantine_request_delete_failed",
+                strategy_id=getattr(request, "strategy_id", None),
+                request_id=getattr(request, "request_id", None),
+                error=str(exc),
+            )
+            return False
+        return True
+
+    async def _consume_strategy_quarantine_requests(self) -> None:
+        """Apply operator quarantine requests to the live governor.
+
+        The inverse of :meth:`_consume_strategy_rearm_requests`, and it did not
+        exist. ``StrategyHealthGovernor.quarantine_async`` had no
+        operator-reachable caller, and the config lever an operator would reach
+        for instead -- ``enabled: false`` in ``config/live/strategies.yaml`` --
+        makes the engine refuse to start while the loop binds that strategy
+        (``config/loader.py:_assert_strategy_enabled``). Measured 2026-09-03:
+        that attempt crash-looped the engine, RestartCount 0 -> 10. Stopping the
+        platform's only strategy required stopping the engine.
+
+        Unlike a re-arm, a quarantine request carries no token -- it creates the
+        latch rather than releasing a named one -- so staleness is bounded by a
+        TTL instead. An expired request is retired unapplied and logged.
+        """
+        runner = getattr(self, "strategy_runner", None)
+        governor = getattr(runner, "strategy_governor", None)
+        if governor is None:
+            return
+        gate = getattr(self, "manual_rearm_gate", None)
+        if gate is None:
+            return
+        try:
+            requests = await asyncio.to_thread(quarantine_requests.pending, gate.state_path.parent)
+        except Exception as exc:  # noqa: BLE001 - a scan failure must not stop supervision
+            logger.warning("strategy_quarantine_request_scan_failed", error=str(exc))
+            return
+        for request in requests:
+            if quarantine_requests.is_expired(request):
+                if not await asyncio.to_thread(self._retire_quarantine_request, request):
+                    continue
+                logger.warning(
+                    "strategy_quarantine_request_expired",
+                    strategy_id=request.strategy_id,
+                    request_id=request.request_id,
+                    requested_at_ns=request.requested_at_ns,
+                    consequence="retired unapplied; reissue if the strategy should still stop",
+                )
+                continue
+            if governor.quarantine_token(request.strategy_id) is not None:
+                # Already latched. Retire the request rather than re-latching:
+                # a second quarantine would mint a new token and orphan any
+                # re-arm request the operator has already written against the
+                # current one.
+                if not await asyncio.to_thread(self._retire_quarantine_request, request):
+                    continue
+                logger.warning(
+                    "strategy_quarantine_request_already_quarantined",
+                    strategy_id=request.strategy_id,
+                    request_id=request.request_id,
+                )
+                continue
+            # Apply BEFORE consuming, the opposite of the re-arm path and for
+            # the same reason: fail closed. If the process dies between the two
+            # the request is reapplied next boot, and re-quarantining is a
+            # no-op. Consuming first would risk losing the stop entirely.
+            try:
+                await governor.quarantine_async(request.strategy_id, reason=request.reason)
+            except Exception as exc:  # noqa: BLE001 - one bad request must not stop the rest
+                logger.error(
+                    "strategy_quarantine_request_failed",
+                    strategy_id=request.strategy_id,
+                    request_id=request.request_id,
+                    error=str(exc),
+                )
+                continue
+            await asyncio.to_thread(self._retire_quarantine_request, request)
+            logger.warning(
+                "strategy_quarantine_applied_from_operator_request",
+                strategy_id=request.strategy_id,
+                request_id=request.request_id,
+                reason=request.reason,
+            )
 
     async def _consume_strategy_rearm_requests(self, state: dict | None = None) -> None:
         """Apply operator re-arm requests to the live governor.
