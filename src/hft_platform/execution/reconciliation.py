@@ -548,35 +548,6 @@ class ReconciliationService:
                 logger.debug("Portfolio Sync: Local State", positions=local_map)
             self.platform_degrade_controller.update_reference_positions(local_map=local_map, broker_map=broker_map)
 
-            # Under a paper/sim order path the platform's orders are routed to
-            # a simulation venue while ``list_positions()`` reads the real
-            # account, so a broker-vs-local comparison is not wrong -- it is
-            # undefined. Every platform position reads as broker_qty 0, which
-            # is exactly the shape the auto-resolve below deletes on.
-            #
-            # Recorded as its own outcome rather than "success": this loop
-            # reported reconciliation_sync_total{result="success"} 7138 while
-            # verifying nothing. Reference positions are refreshed above (they
-            # are exposure, not a verdict); everything downstream is skipped,
-            # and no latch is asserted -- being unable to compare in sim is the
-            # configured state, not a fault.
-            if self._order_mode in _NON_COMPARABLE_ORDER_MODES:
-                self._set_not_comparable(True)
-                self._last_discrepancies = []
-                self._record_sync_duration(time.monotonic() - t0)
-                self._record_sync_result("not_comparable")
-                self._update_last_success_ts()
-                if sync_log_due:
-                    logger.info(
-                        "reconciliation_not_comparable",
-                        order_mode=self._order_mode,
-                        local_positions=local_map,
-                        broker_positions=broker_map,
-                        consequence="no comparison, no auto-resolve, no drift verdict this cycle",
-                    )
-                return
-            self._set_not_comparable(False)
-
             # The reference map is a best-estimate of exposure, not a drift
             # verdict, and reduce-only enforcement asks it whether an order
             # actually reduces. Freezing it through an outage is worse than
@@ -678,8 +649,45 @@ class ReconciliationService:
             # two lives on the quote client while this service was handed the
             # order client. See ``_get_platform_symbols``.
             discrepancies_before_resolution = discrepancies
+
+            # Under a paper/sim order path the platform's orders are routed to
+            # a simulation venue while ``get_positions()`` reads the real
+            # account. That makes exactly ONE direction undefined: a position
+            # the platform holds locally and the broker reports as 0. It is not
+            # drift -- it is the configured routing -- and it is precisely the
+            # shape the auto-resolve below deletes on.
+            #
+            # The opposite direction stays fully meaningful and is deliberately
+            # NOT suppressed: a position the BROKER reports and the platform
+            # does not hold was placed outside this platform, and paper routing
+            # explains nothing about it. Suppressing that too would have hidden
+            # real external exposure -- caught by
+            # tests/integration/test_risk_and_safety.py::test_storm_guard.
+            _sim_unverifiable: list[PositionDiscrepancy] = []
+            if self._order_mode in _NON_COMPARABLE_ORDER_MODES:
+                _kept_sim: list[PositionDiscrepancy] = []
+                for d in discrepancies:
+                    if d.broker_qty == 0 and d.local_qty != 0:
+                        _sim_unverifiable.append(d)
+                    else:
+                        _kept_sim.append(d)
+                discrepancies = _kept_sim
+                if _sim_unverifiable and sync_log_due:
+                    logger.warning(
+                        "reconciliation_not_comparable_under_sim_order_mode",
+                        order_mode=self._order_mode,
+                        symbols=[d.symbol for d in _sim_unverifiable],
+                        consequence=(
+                            "platform positions cannot be confirmed against a live account "
+                            "while orders route to paper; not drift, and never auto-resolved"
+                        ),
+                    )
+            self._set_not_comparable(bool(_sim_unverifiable))
+
             platform_codes = self._get_platform_symbols()
-            if platform_codes:
+            # Never delete under a mode where broker_qty == 0 carries no
+            # information about the platform's own positions.
+            if platform_codes and self._order_mode not in _NON_COMPARABLE_ORDER_MODES:
                 # A position the platform's own book attributes to a named
                 # strategy was opened by this platform, whatever the symbol
                 # universe says. Calling it externally placed is a category
@@ -732,7 +740,10 @@ class ReconciliationService:
             # 7. Duration + success metrics
             duration = time.monotonic() - t0
             self._record_sync_duration(duration)
-            self._record_sync_result("success")
+            # A cycle that could not verify the platform's own positions is not
+            # a success. This loop reported success 7138 times while doing
+            # exactly that.
+            self._record_sync_result("not_comparable" if _sim_unverifiable else "success")
             self._update_last_success_ts()
 
             if discrepancies:

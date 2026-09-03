@@ -135,7 +135,7 @@ async def test_discrepancy_gauge_counts_before_auto_resolution(guard):
 
 @pytest.mark.asyncio
 async def test_sim_order_mode_records_not_comparable_and_deletes_nothing(guard):
-    """Under sim routing the broker cannot confirm platform positions."""
+    """Under sim routing the broker cannot confirm the platform's positions."""
     store = _store_with_strategy_position(symbol="TX438500D6", strategy_id=MANUAL_STRATEGY_ID)
     svc = _service(store, guard, order_mode="sim")
     metrics = MagicMock()
@@ -146,4 +146,36 @@ async def test_sim_order_mode_records_not_comparable_and_deletes_nothing(guard):
     assert "not_comparable" in results, f"sim cycle reported {results}, not not_comparable"
     assert "success" not in results, "a cycle that verified nothing reported success"
     assert "TX438500D6" in _symbols_in(store), "sim cycle deleted a position it could not verify"
-    metrics.reconciliation_not_comparable.set.assert_called_with(1)
+    metrics.reconciliation_not_comparable.set.assert_called_with(True)
+
+
+@pytest.mark.asyncio
+async def test_sim_order_mode_still_reports_a_broker_only_position(guard):
+    """The other direction is NOT suppressed.
+
+    Paper routing explains why the platform's own positions are missing at the
+    broker. It explains nothing about a position the BROKER reports and the
+    platform does not hold -- that was placed outside this platform and is real
+    exposure. Suppressing it too would hide external positions, which is what
+    tests/integration/test_risk_and_safety.py::test_storm_guard caught.
+    """
+    store = PositionStore()
+    client = MagicMock()
+    client.get_positions.return_value = [SimpleNamespace(code="2330", quantity=50, direction="Action.Buy")]
+    del client.subscribed_codes
+    del client.alias_to_actual
+    svc = ReconciliationService(
+        client,
+        store,
+        {"symbols": [{"code": _ALIAS}]},
+        storm_guard=guard,
+        order_mode="sim",
+    )
+    svc.broker_zero_debounce_observations = 1
+
+    await svc.sync_portfolio()
+
+    found = {d.symbol: d for d in svc._last_discrepancies}
+    assert "2330" in found, "a broker-only position was hidden by the sim gate"
+    assert found["2330"].local_qty == 0
+    assert found["2330"].broker_qty == 50
