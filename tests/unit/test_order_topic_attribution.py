@@ -213,3 +213,113 @@ def test_order_topic_attribution_leaves_the_fill_resolvable(tmp_config):
     assert deal.get("_resolved_strategy_id") == _STRATEGY, (
         "the ACK consumed the entry the fill needed -- order attribution was traded for fill attribution"
     )
+
+
+# --------------------------------------------------------------------------- #
+# The real order-topic payload shape                                           #
+# --------------------------------------------------------------------------- #
+# Measured on THESHOW 2026-09-04, immediately after the fix above shipped:
+# hft.orders took 5 new rows and every one was still strategy_id='UNKNOWN'
+# with an empty client_order_id. The gate fix was correct and still produced
+# nothing, because the block reads `action` and the symbol off the payload
+# ROOT -- which is the *deal* topic's shape.
+#
+# The order topic nests them, exactly as normalize_order reads them
+# (execution/normalizer.py:257 `d.get("contract")`, :273 `order.get("action")`):
+#
+#   deal :  {"code": "TMFI6", "action": "Buy", ...}          <- flat
+#   order:  {"contract": {"code": "TMFI6"},                  <- nested
+#            "order":    {"action": "Buy", "ordno": ...},
+#            "status":   {...}}
+#
+# So `_action` was None on every real order callback and both attribution
+# branches were skipped in silence. The tests above passed only because they
+# were written with the flat shape.
+
+
+def _real_order_payload() -> dict:
+    """The shape shioaji actually delivers on the order topic."""
+    return {
+        "state": "Submitted",
+        "payload": {
+            "contract": {"code": _SYMBOL},
+            "order": {"action": "Buy", "ordno": "B2", "seqno": "A1"},
+            "status": {"status": "Submitted"},
+        },
+    }
+
+
+def test_order_topic_resolves_from_the_nested_broker_payload(tmp_config):
+    """action under `order` and the symbol under `contract` must both resolve."""
+    adapter = _with_pending(_adapter(tmp_config))
+    system = _system(adapter)
+    adapter.order_id_resolver = types.SimpleNamespace(
+        resolve_strategy_id_from_candidates=lambda _c: "UNKNOWN",
+    )
+    data = _real_order_payload()
+
+    system._on_exec("order", data)
+
+    assert data.get("_resolved_strategy_id") == _STRATEGY, (
+        "the order topic nests action under `order`; reading only the payload "
+        "root leaves _action None and skips attribution entirely"
+    )
+    assert data.get("_resolved_order_key") == _ORDER_KEY, (
+        "client_order_id stays empty and hft.orders cannot join hft.fills"
+    )
+
+
+def test_nested_order_payload_still_leaves_the_fill_resolvable(tmp_config):
+    """The nested path must peek, not consume, exactly like the flat one."""
+    adapter = _with_pending(_adapter(tmp_config))
+    system = _system(adapter)
+    adapter.order_id_resolver = types.SimpleNamespace(
+        resolve_strategy_id_from_candidates=lambda _c: "UNKNOWN",
+    )
+
+    ack = _real_order_payload()
+    system._on_exec("order", ack)
+    deal = {"payload": {"code": _SYMBOL, "action": "Buy"}}
+    system._on_exec("deal", deal)
+
+    # Assert the ACK resolved too, or this passes trivially against code that
+    # never enters the block at all -- which is how the flat-shape tests above
+    # stayed green through a 100 % production attribution failure.
+    assert ack.get("_resolved_strategy_id") == _STRATEGY
+    assert deal.get("_resolved_strategy_id") == _STRATEGY
+
+
+def test_flat_order_payload_still_resolves_after_the_nested_fallback(tmp_config):
+    """The root read must stay the first choice, not be replaced by the nested one."""
+    adapter = _with_pending(_adapter(tmp_config))
+    system = _system(adapter)
+    adapter.order_id_resolver = types.SimpleNamespace(
+        resolve_strategy_id_from_candidates=lambda _c: "UNKNOWN",
+    )
+    data = _order_payload()
+
+    system._on_exec("order", data)
+
+    assert data.get("_resolved_strategy_id") == _STRATEGY
+    assert data.get("_resolved_order_key") == _ORDER_KEY
+
+
+def test_nested_sell_payload_does_not_match_a_buy_pending(tmp_config):
+    """Side must survive the nested read -- a SELL ACK must not take the BUY slot."""
+    adapter = _with_pending(_adapter(tmp_config))
+    system = _system(adapter)
+    adapter.order_id_resolver = types.SimpleNamespace(
+        resolve_strategy_id_from_candidates=lambda _c: "UNKNOWN",
+    )
+    sell = _real_order_payload()
+    sell["payload"]["order"]["action"] = "Sell"
+    buy = _real_order_payload()
+
+    system._on_exec("order", sell)
+    system._on_exec("order", buy)
+
+    assert sell.get("_resolved_strategy_id") is None, "a SELL ACK took the BUY pending slot"
+    assert sell.get("_resolved_order_key") is None
+    # The BUY must still resolve, or the assertions above pass merely because
+    # the nested read is broken rather than because the side is respected.
+    assert buy.get("_resolved_strategy_id") == _STRATEGY
