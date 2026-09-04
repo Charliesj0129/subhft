@@ -278,6 +278,7 @@ class MetricsRegistry:
                 _pn("reconciliation_consecutive_failures"),
                 _pn("reconciliation_last_success_ts"),
                 _pn("reconciliation_auto_corrected_total"),
+                _pn("reconciliation_not_comparable"),
                 _pn("position_drift_qty"),
                 _pn("portfolio_drawdown_pct"),
                 _pn("portfolio_trade_count"),
@@ -946,6 +947,10 @@ class MetricsRegistry:
             _pn("reconciliation_auto_corrected_total"),
             "Positions auto-corrected by adopting broker state",
             ["symbol"],
+        )
+        self.reconciliation_not_comparable = Gauge(
+            _pn("reconciliation_not_comparable"),
+            "1 when the broker snapshot cannot confirm platform positions (e.g. sim order routing)",
         )
         # Recorder batch insert retry count
         self.recorder_insert_retry_total = Counter(

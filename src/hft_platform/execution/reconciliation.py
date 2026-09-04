@@ -99,6 +99,18 @@ def _compute_backoff_delay(
     return raw * jitter_factor
 
 
+#: Order modes under which the broker cannot confirm the platform's own
+#: positions, because orders are routed to a paper venue while
+#: ``list_positions()`` reads the real account. Mirrors the sim aliases in
+#: ``hft_platform.services.bootstrap._ORDER_MODE_ALIASES``; kept local so
+#: ``execution`` does not import ``services``.
+_NON_COMPARABLE_ORDER_MODES = frozenset({"sim", "simulation", "paper"})
+
+#: Strategy ids that do NOT assert platform ownership of a position. See
+#: ``ReconciliationService._strategy_owned_symbols``.
+_UNOWNED_STRATEGY_IDS = frozenset({"*", MANUAL_STRATEGY_ID, "UNKNOWN"})
+
+
 class ReconciliationService:
     def __init__(
         self,
@@ -106,10 +118,21 @@ class ReconciliationService:
         position_store: PositionStore,
         config: dict,
         storm_guard: StormGuard,
+        *,
+        symbol_source: Any = None,
+        order_mode: str | None = None,
     ) -> None:
         self.client = client
         self.store = position_store
         self.config = config
+        # Where the *platform symbol universe* is read from. This is a
+        # market-data concern: ``subscribed_codes`` and ``alias_to_actual`` are
+        # quote-side attributes, and passing the ORDER client (which has
+        # neither) is what made ``_get_platform_symbols`` fall back to the
+        # config list alone -- see the note there. Defaults to ``client`` so
+        # existing callers keep their current behaviour.
+        self._symbol_source = symbol_source if symbol_source is not None else client
+        self._order_mode = (order_mode or os.environ.get("HFT_ORDER_MODE", "")).strip().lower()
         self.storm_guard = storm_guard
         self.platform_degrade_controller = get_shared_platform_degrade_controller()
 
@@ -239,6 +262,11 @@ class ReconciliationService:
 
     def _record_sync_result(self, result: str) -> None:
         self._metrics().reconciliation_sync_total.labels(result=result).inc()
+
+    def _set_not_comparable(self, active: bool) -> None:
+        gauge = getattr(self._metrics(), "reconciliation_not_comparable", None)
+        if gauge is not None:
+            gauge.set(1 if active else 0)
 
     def _record_sync_duration(self, duration_s: float) -> None:  # precision-ok
         self._metrics().reconciliation_sync_duration_seconds.observe(duration_s)
@@ -611,12 +639,65 @@ class ReconciliationService:
             # Symbols not in the client's subscribed set were placed externally
             # (e.g. manual broker app trade).  If broker reports 0 for such a
             # symbol, clear the phantom position without entering the HALT path.
+            #
+            # This path DELETES the platform's local position record, so every
+            # guard below narrows it and none widens it. On 2026-09-02 it
+            # cleared R47_MAKER_TMF's live TMFI6 position 19 times in one
+            # session: the loop's configured universe is the continuous
+            # front-month ALIAS set {TMFR1, TXFR1}, the resolved contract that
+            # actually trades is TMFI6, and the alias map that reconciles the
+            # two lives on the quote client while this service was handed the
+            # order client. See ``_get_platform_symbols``.
+            discrepancies_before_resolution = discrepancies
+
+            # Under a paper/sim order path the platform's orders are routed to
+            # a simulation venue while ``get_positions()`` reads the real
+            # account. That makes exactly ONE direction undefined: a position
+            # the platform holds locally and the broker reports as 0. It is not
+            # drift -- it is the configured routing -- and it is precisely the
+            # shape the auto-resolve below deletes on.
+            #
+            # The opposite direction stays fully meaningful and is deliberately
+            # NOT suppressed: a position the BROKER reports and the platform
+            # does not hold was placed outside this platform, and paper routing
+            # explains nothing about it. Suppressing that too would have hidden
+            # real external exposure -- caught by
+            # tests/integration/test_risk_and_safety.py::test_storm_guard.
+            _sim_unverifiable: list[PositionDiscrepancy] = []
+            if self._order_mode in _NON_COMPARABLE_ORDER_MODES:
+                _kept_sim: list[PositionDiscrepancy] = []
+                for d in discrepancies:
+                    if d.broker_qty == 0 and d.local_qty != 0:
+                        _sim_unverifiable.append(d)
+                    else:
+                        _kept_sim.append(d)
+                discrepancies = _kept_sim
+                if _sim_unverifiable and sync_log_due:
+                    logger.warning(
+                        "reconciliation_not_comparable_under_sim_order_mode",
+                        order_mode=self._order_mode,
+                        symbols=[d.symbol for d in _sim_unverifiable],
+                        consequence=(
+                            "platform positions cannot be confirmed against a live account "
+                            "while orders route to paper; not drift, and never auto-resolved"
+                        ),
+                    )
+            self._set_not_comparable(bool(_sim_unverifiable))
+
             platform_codes = self._get_platform_symbols()
-            if platform_codes:
+            # Never delete under a mode where broker_qty == 0 carries no
+            # information about the platform's own positions.
+            if platform_codes and self._order_mode not in _NON_COMPARABLE_ORDER_MODES:
+                # A position the platform's own book attributes to a named
+                # strategy was opened by this platform, whatever the symbol
+                # universe says. Calling it externally placed is a category
+                # error -- and the breakdown logged seconds earlier in this
+                # same cycle already named the owner.
+                protected = platform_codes | self._strategy_owned_symbols(per_strategy_map)
                 resolved: list[PositionDiscrepancy] = []
                 kept: list[PositionDiscrepancy] = []
                 for d in discrepancies:
-                    if d.symbol not in platform_codes and d.broker_qty == 0 and d.local_qty != 0:
+                    if d.symbol not in protected and d.broker_qty == 0 and d.local_qty != 0:
                         self.store.clear_symbol_positions(d.symbol)
                         resolved.append(d)
                     else:
@@ -638,7 +719,11 @@ class ReconciliationService:
             self._last_discrepancies = discrepancies
 
             # 5. Update reconciliation discrepancy metric (legacy)
-            self._metrics().reconciliation_discrepancy_count.set(len(discrepancies))
+            # Counted BEFORE auto-resolution. Counting the kept list let the
+            # deletion path guarantee its own alert read zero: every cycle that
+            # cleared a position reported ``reconciliation_discrepancy_count 0``
+            # to the only rule watching this loop.
+            self._metrics().reconciliation_discrepancy_count.set(len(discrepancies_before_resolution))
 
             # 6. Record per-severity discrepancy metrics (WU-18)
             for d in discrepancies:
@@ -655,7 +740,10 @@ class ReconciliationService:
             # 7. Duration + success metrics
             duration = time.monotonic() - t0
             self._record_sync_duration(duration)
-            self._record_sync_result("success")
+            # A cycle that could not verify the platform's own positions is not
+            # a success. This loop reported success 7138 times while doing
+            # exactly that.
+            self._record_sync_result("not_comparable" if _sim_unverifiable else "success")
             self._update_last_success_ts()
 
             if discrepancies:
@@ -815,17 +903,51 @@ class ReconciliationService:
         # True if ANY overlapping symbol persisted or grew; false only if ALL shrank
         return any(current_signature[s] >= previous_signature[s] for s in overlapping_symbols)
 
+    @staticmethod
+    def _strategy_owned_symbols(per_strategy_map: dict[str, dict[str, int]]) -> set[str]:
+        """Symbols the platform's own book attributes to a named strategy.
+
+        Used only to *protect* positions from the non-platform auto-resolve. A
+        position carrying a real strategy_id was opened by this platform, so
+        the premise of that path -- "this was placed externally" -- is false
+        for it by construction, regardless of what the symbol universe happens
+        to contain.
+
+        Three ids are deliberately NOT protected, because none of them asserts
+        platform ownership: ``MANUAL`` is the explicit marker for a manual or
+        orphan broker-app position (exactly what auto-resolve exists to clear),
+        ``UNKNOWN`` is the attribution-failure sentinel, and ``"*"`` is the
+        unattributed bucket. The symbol-universe check still governs all three.
+        """
+        owned: set[str] = set()
+        for strategy_id, positions in per_strategy_map.items():
+            if not strategy_id or strategy_id in _UNOWNED_STRATEGY_IDS:
+                continue
+            for symbol, qty in positions.items():
+                if int(qty) != 0:
+                    owned.add(str(symbol))
+        return owned
+
     def _get_platform_symbols(self) -> set[str]:
         """Return the set of symbols the platform is actively managing.
 
-        Combines the client's subscribed codes with alias→actual mappings.
-        Returns empty set if unavailable (disables the non-platform filter).
+        Combines the symbol source's subscribed codes with alias→actual
+        mappings. Returns empty set if unavailable (disables the non-platform
+        filter).
+
+        ``subscribed_codes`` and ``alias_to_actual`` are QUOTE-side attributes.
+        Handed the order client -- which has neither -- this degraded silently
+        to the config list, and under loop_v1 that list is
+        ``['TMFR1', 'TXFR1']``: continuous front-month aliases, not tradable
+        codes. Every resolved contract the platform actually trades was
+        therefore "not a platform symbol", while the set stayed non-empty so
+        the filter still ran. Hence ``symbol_source``.
         """
         codes: set[str] = set()
-        sub = getattr(self.client, "subscribed_codes", None)
+        sub = getattr(self._symbol_source, "subscribed_codes", None)
         if sub:
             codes |= set(sub)
-        alias_map = getattr(self.client, "alias_to_actual", None)
+        alias_map = getattr(self._symbol_source, "alias_to_actual", None)
         if alias_map:
             codes |= set(alias_map.keys())
             codes |= set(alias_map.values())
