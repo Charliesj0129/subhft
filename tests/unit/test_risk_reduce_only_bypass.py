@@ -18,9 +18,14 @@ treated identically to opening orders and blocked by the same safety gates.
 
 Fix: Add `reduces_position(intent)` predicate to RiskValidator base. When the
 order strictly reduces absolute position magnitude, bypass DailyLossLimit,
-MaxNotional, and PerSymbolNotional validators. PositionLimit is intrinsically
-safe (checks resulting_qty) and needs no change. Overshooting (flip sign and
+MaxNotional, and PerSymbolNotional validators. Overshooting (flip sign and
 grow) is correctly NOT classified as reducing.
+
+2026-09-04 follow-up: PositionLimit was left out of that fix as "intrinsically
+safe (checks resulting_qty)", which is true only while the position is inside
+its cap. TMFI6 reached -5 lots against max_position_lots=1 and then could not
+be unwound, because every cover order also projected to an abs() over the cap.
+See TestPositionLimitCoverBypass.
 """
 
 from __future__ import annotations
@@ -30,6 +35,7 @@ from hft_platform.risk.validators import (
     DailyLossLimitValidator,
     MaxNotionalValidator,
     PerSymbolNotionalValidator,
+    PositionLimitValidator,
     RiskValidator,
 )
 
@@ -332,3 +338,74 @@ class TestPerSymbolNotionalCoverBypass:
         v = self._make(position=-1)
         ok, reason = v.check(_make_intent(side=Side.BUY, price=374780000, qty=1))
         assert ok, f"Cover under per-symbol notional cap must bypass, got: {reason}"
+
+
+# ---------------------------------------------------------------------------
+# 6. PositionLimit cover bypass  (2026-09-04 TMFI6 -5 lot deadlock)
+# ---------------------------------------------------------------------------
+# The Bug 21 round concluded PositionLimit "is intrinsically safe (checks
+# resulting_qty) and needs no change". That holds only while the position is
+# inside its cap. Once it is outside -- reached live on 2026-09-04 when
+# concurrent resting quotes filled together -- every intent projects to an
+# abs() still above the cap, so the gate rejects the cover orders as well and
+# the strategy can never walk back to flat.
+#
+#   position TMFI6 = -5, max_position_lots = 1
+#
+#     BUY 1 (cover) -> resulting = -4 -> abs(-4) > 1 -> REJECT   X
+#     SELL 1 (open) -> resulting = -6 -> abs(-6) > 1 -> REJECT   (correct)
+#
+#   measured: 21x "POSITION_LIMIT_EXCEEDED: abs(-4) > 1", position_age 3561s
+class TestPositionLimitCoverBypass:
+    def _make(self, position: int, max_lots: int = 1):
+        cfg = {"global_defaults": {"max_position_lots": max_lots}}
+        positions = {("TMFE6", "R47"): position}
+        return PositionLimitValidator(cfg, None, position_provider=_position_provider(positions))
+
+    def test_cover_is_allowed_while_position_is_over_the_cap(self):
+        """The live TMFI6 case: -5 lots, cap 1, BUY 1 must be able to unwind."""
+        v = self._make(position=-5)
+        ok, reason = v.check(_make_intent(side=Side.BUY, qty=1))
+        assert ok, f"Cover from an over-cap short must bypass, got: {reason}"
+        assert reason == "REDUCE_ONLY_BYPASS"
+
+    def test_cover_is_allowed_while_long_position_is_over_the_cap(self):
+        v = self._make(position=5)
+        ok, reason = v.check(_make_intent(side=Side.SELL, qty=1))
+        assert ok, f"Cover from an over-cap long must bypass, got: {reason}"
+        assert reason == "REDUCE_ONLY_BYPASS"
+
+    def test_opener_is_still_rejected_while_position_is_over_the_cap(self):
+        """The bypass must not become a hole: adding to -5 stays rejected."""
+        v = self._make(position=-5)
+        ok, reason = v.check(_make_intent(side=Side.SELL, qty=1))
+        assert not ok
+        assert reason == "POSITION_LIMIT_EXCEEDED: abs(-6) > 1"
+
+    def test_opener_is_still_rejected_from_a_position_inside_the_cap(self):
+        """Unchanged behaviour: the cap still stops an in-cap position growing."""
+        v = self._make(position=1)
+        ok, reason = v.check(_make_intent(side=Side.BUY, qty=1))
+        assert not ok
+        assert reason == "POSITION_LIMIT_EXCEEDED: abs(2) > 1"
+
+    def test_over_cover_that_flips_sign_and_grows_is_rejected(self):
+        """-1 with cap 1, BUY 5 -> +4: a flip that grows magnitude is an opener."""
+        v = self._make(position=-1)
+        ok, reason = v.check(_make_intent(side=Side.BUY, qty=5))
+        assert not ok
+        assert reason == "POSITION_LIMIT_EXCEEDED: abs(4) > 1"
+
+    def test_in_cap_approval_still_reports_ok_not_a_bypass(self):
+        """A normal approving intent must not be relabelled as a bypass."""
+        v = self._make(position=0)
+        ok, reason = v.check(_make_intent(side=Side.BUY, qty=1))
+        assert ok
+        assert reason == "OK"
+
+    def test_flat_position_over_cap_qty_is_rejected(self):
+        """No position to reduce: a 3-lot opener against cap 1 is still rejected."""
+        v = self._make(position=0)
+        ok, reason = v.check(_make_intent(side=Side.BUY, qty=3))
+        assert not ok
+        assert reason == "POSITION_LIMIT_EXCEEDED: abs(3) > 1"

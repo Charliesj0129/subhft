@@ -355,6 +355,22 @@ class PositionLimitValidator(RiskValidator):
         signed_qty = int(intent.qty if intent.side == Side.BUY else -intent.qty)
         resulting_qty = current_qty + signed_qty
         if abs(resulting_qty) > max_lots:
+            # Bug 21 applies here too, and this was the one safety gate missing
+            # it: MaxNotional, DailyLossLimit and PerSymbolNotional all bypass
+            # for cover orders, so a position already over its cap was rejected
+            # in *both* directions and could never be unwound. Live evidence
+            # 2026-09-04: TMFI6 sat at -5 lots against max_position_lots=1 for
+            # 59 min while 21 covering intents were rejected as
+            # "POSITION_LIMIT_EXCEEDED: abs(-4) > 1".
+            #
+            # reduces_position() is strictly monotone toward flat
+            # (abs(current + signed) < abs(current)) and returns False for an
+            # over-cover that flips sign and matches or grows magnitude, so this
+            # can never open or grow exposure -- it only lets the strategy walk
+            # back to flat. Evaluated on the reject path only, so the approving
+            # path costs no extra position lookup.
+            if self.reduces_position(intent):
+                return True, "REDUCE_ONLY_BYPASS"
             return False, f"POSITION_LIMIT_EXCEEDED: abs({resulting_qty}) > {max_lots}"
 
         return True, "OK"
