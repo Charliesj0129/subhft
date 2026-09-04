@@ -320,3 +320,6 @@ backups/
 # governed artifacts belong under research/experiments/ with provenance
 # (research/README.md).
 research/combinatorial/results/
+
+# pip-audit report written by `make security-scan` into the repo root
+audit-output.txt
