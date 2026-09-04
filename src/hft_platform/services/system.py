@@ -26,6 +26,20 @@ from hft_platform.utils.logging import configure_logging
 logger = get_logger("system")
 
 
+def _payload_field(payload: Any, key: str) -> Any:
+    """Read a field from a broker payload that may be a dict or an object.
+
+    shioaji 1.5.x hands the order topic a Rust-backed mapping while other
+    callbacks arrive as plain objects, so every payload read has to work both
+    ways.
+    """
+    if payload is None:
+        return None
+    if isinstance(payload, dict):
+        return payload.get(key)
+    return getattr(payload, key, None)
+
+
 def _read_kill_switch_reason(path: str) -> str:
     """Read kill-switch reason from JSON file. Runs in executor thread."""
     import json as _json
@@ -2447,6 +2461,21 @@ class HFTSystem:
                             getattr(_order, "custom_field", None),
                         ]
                     )
+            # The order topic nests what the deal topic carries flat. shioaji
+            # delivers {"contract": {...}, "order": {...}, "status": {...}} on
+            # `order`, so `action` lives on `order` and the symbol on
+            # `contract` -- exactly how normalize_order reads them
+            # (execution/normalizer.py:257,273). The id candidates above
+            # already descend into `order`; `action` and the symbol did not,
+            # so on every real order callback `_action` was None and both
+            # attribution branches below were skipped in silence.
+            if _action is None:
+                _action = _payload_field(_order, "action")
+            if _full_code is None and _code is None:
+                _contract = _payload_field(_payload, "contract")
+                _full_code = _payload_field(_contract, "full_code")
+                _code = _payload_field(_contract, "code")
+
             _resolved = None
             _ids = [str(v) for v in _id_candidates if v]
             resolver = getattr(self.order_adapter, "order_id_resolver", None)
