@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import sys
+import uuid
 from importlib import import_module
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,7 @@ from typing import Any
 import structlog
 
 from hft_platform.config.loader import load_settings, resolve_active_strategy
+from hft_platform.ops import quarantine_requests
 from hft_platform.ops.flatten_gate import FlattenGate, FlattenRequest, FlattenStatus
 from hft_platform.ops.manual_rearm import ManualRearmGate
 
@@ -373,6 +375,35 @@ def cmd_ops_rearm_strategy(args: argparse.Namespace) -> None:
         f"Re-arm requested for {args.strategy_id} (request_id={request_id}). "
         "The engine applies it on its next supervisor tick; confirm with "
         f'strategy_quarantine_active{{strategy="{args.strategy_id}"}} == 0.'
+    )
+
+
+def cmd_ops_quarantine_strategy(args: argparse.Namespace) -> None:
+    """Publish a request to STOP one strategy.
+
+    The inverse of ``rearm-strategy``, and until 2026-09-03 it did not exist:
+    ``StrategyHealthGovernor.quarantine()`` had no operator-reachable caller,
+    and ``enabled: false`` in ``config/live/strategies.yaml`` is not a
+    substitute -- the loader refuses to start while the loop binds that
+    strategy, so that attempt crash-looped the engine instead of containing it.
+
+    Like the re-arm, this writes a *request*, not an outcome. The engine applies
+    it on its next supervisor tick.
+    """
+    gate = _manual_rearm_gate(args)
+    request_id = uuid.uuid4().hex
+    reason = str(getattr(args, "reason", "") or "operator_request")
+    quarantine_requests.publish(
+        gate.state_path.parent,
+        strategy_id=args.strategy_id,
+        reason=reason,
+        request_id=request_id,
+    )
+    print(
+        f"Quarantine requested for {args.strategy_id} (request_id={request_id}, reason={reason}). "
+        "The engine applies it on its next supervisor tick; confirm with "
+        f'strategy_quarantine_active{{strategy="{args.strategy_id}"}} == 1. '
+        f"Reverse with: hft ops rearm-strategy --strategy-id {args.strategy_id}"
     )
 
 

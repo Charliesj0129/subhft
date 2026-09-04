@@ -1000,6 +1000,19 @@ class OrderAdapter:
         self._get_phantom_legacy_intents()[phantom_key] = entry.intent
         return phantom_key
 
+    def _has_phantom_for(self, intent: OrderIntent) -> bool:
+        """Whether a phantom candidate is currently registered for ``intent``.
+
+        ``_call_api`` returns ``None`` for two very different outcomes: a
+        mutating call that TIMED OUT (a phantom is registered, the order may
+        have reached the broker) and a non-transient failure (nothing was
+        registered, nothing reached the broker). The caller must tell them
+        apart to decide whether releasing the strategy's pending slot is safe.
+        """
+        phantom_key = f"{intent.strategy_id}:{intent.intent_id}"
+        with self._phantom_lock:
+            return bool(self._get_phantom_records().get(phantom_key))
+
     def _evict_stale_phantom_records(self, max_age_s: float = 3600.0) -> int:
         """M4: drop ``_PhantomEntry`` items older than ``max_age_s``.
         Removes empty per-key lists. Caller MUST be inside ``_phantom_lock``.
@@ -2819,6 +2832,9 @@ class OrderAdapter:
                     _is_timeout = trade is _GUARD_TIMEOUT
                     _fail_reason = "api_timeout" if _is_timeout else "api_failure"
                     _dlq_reason = RejectionReason.API_TIMEOUT if _is_timeout else RejectionReason.CONNECTION_ERROR
+                    # Read BEFORE the live_orders teardown below, which is what
+                    # blinds the other reclaim paths.
+                    _phantom_pending = (not _is_timeout) and self._has_phantom_for(intent)
                     async with self._live_orders_lock:
                         self.live_orders.pop(order_key, None)
                         self._untrack_live_order_intent(order_key)
@@ -2828,6 +2844,32 @@ class OrderAdapter:
                     self.metrics.order_reject_total.inc()
                     self._dedup_commit(intent.idempotency_key, False, _fail_reason, cmd.cmd_id)
                     await self._add_to_dlq(intent, _dlq_reason, _fail_reason)
+                    # The strategy is still holding the pending slot it took to
+                    # emit this intent, and this is the last point at which
+                    # anything can tell it otherwise. Returning False without
+                    # feedback blinded all three reclaim paths at once:
+                    # release_stale_phantom_pendings had no phantom to find on a
+                    # non-transient failure, sweep_stale_live_orders had just had
+                    # the entry deleted above, and no RiskFeedback was emitted.
+                    # A maker holding one slot per side then has can_buy and
+                    # can_sell both false -- a silent freeze that needs a human.
+                    # That is what kept R47_MAKER_TMF dead for 10 days after the
+                    # 2026-08-31 "401 Token is expired", which _is_transient_error
+                    # correctly classifies as non-transient.
+                    #
+                    # phantom_pending decides who owns the slot from here:
+                    #   _GUARD_TIMEOUT -> the semaphore was never acquired, so
+                    #     the broker call was never made: release now.
+                    #   None + phantom  -> a mutating call timed out and may have
+                    #     reached the broker. Keep the slot held (Bug 23) and let
+                    #     the phantom TTL release it, or a fill claim it.
+                    #   None, no phantom -> nothing reached the broker: release.
+                    self._send_dispatch_rejection(
+                        intent,
+                        _fail_reason,
+                        phantom_pending=_phantom_pending,
+                        side=intent.side,
+                    )
                     return False
 
                 self.metrics.order_actions_total.labels(type="new").inc()

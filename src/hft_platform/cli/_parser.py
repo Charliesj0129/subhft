@@ -59,6 +59,7 @@ from ._ops import (
     cmd_feed_status,
     cmd_ops_autonomy_status,
     cmd_ops_flatten,
+    cmd_ops_quarantine_strategy,
     cmd_ops_rearm_platform,
     cmd_ops_rearm_strategy,
     cmd_recorder_status,
@@ -383,6 +384,19 @@ def build_parser() -> argparse.ArgumentParser:
     ops_rearm_strategy.add_argument("--strategy-id", required=True, help="Strategy id to re-arm")
     ops_rearm_strategy.add_argument("--state-path", help="Override autonomy runtime state path")
     ops_rearm_strategy.set_defaults(func=cmd_ops_rearm_strategy)
+
+    ops_quarantine_strategy = ops_sub.add_parser(
+        "quarantine-strategy",
+        help="Stop one strategy (the inverse of rearm-strategy)",
+    )
+    ops_quarantine_strategy.add_argument("--strategy-id", required=True, help="Strategy id to quarantine")
+    ops_quarantine_strategy.add_argument(
+        "--reason",
+        default="operator_request",
+        help="Why the strategy is being stopped; recorded on the latch",
+    )
+    ops_quarantine_strategy.add_argument("--state-path", help="Override autonomy runtime state path")
+    ops_quarantine_strategy.set_defaults(func=cmd_ops_quarantine_strategy)
 
     ops_rearm_platform = ops_sub.add_parser("rearm-platform", help="Clear platform manual re-arm state")
     ops_rearm_platform.add_argument("--state-path", help="Override autonomy runtime state path")
