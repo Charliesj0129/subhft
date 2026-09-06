@@ -1,35 +1,26 @@
 """Risk management CLI commands."""
 
-import json
-import os
-
 from structlog import get_logger
 
-from hft_platform.core import timebase
+from hft_platform.risk import kill_switch
 
 logger = get_logger(__name__)
 
-_DEFAULT_KILL_SWITCH_PATH = ".runtime/kill_switch"
-
-
-def _get_kill_switch_path() -> str:
-    return os.getenv("HFT_KILL_SWITCH_PATH", _DEFAULT_KILL_SWITCH_PATH)
+# The latch itself lives in hft_platform.risk.kill_switch so the engine's own
+# startup gate and this operator surface cannot drift on path or record shape.
+_DEFAULT_KILL_SWITCH_PATH = kill_switch.DEFAULT_PATH
+_get_kill_switch_path = kill_switch.kill_switch_path
 
 
 def cmd_risk_halt(args):
-    path = _get_kill_switch_path()
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    data = {"reason": args.reason, "timestamp_ns": timebase.now_ns(), "actor": "cli"}
-    with open(path, "w") as f:
-        json.dump(data, f)
+    path = kill_switch.activate(args.reason, actor="cli")
     print(f"Kill switch ACTIVATED at {path}")
     print(f"Reason: {args.reason}")
 
 
 def cmd_risk_resume(args):
     path = _get_kill_switch_path()
-    if os.path.exists(path):
-        os.remove(path)
+    if kill_switch.deactivate(path):
         print(f"Kill switch DEACTIVATED (removed {path})")
     else:
         print(f"No kill switch file found at {path}")
@@ -37,10 +28,9 @@ def cmd_risk_resume(args):
 
 def cmd_risk_status(args):
     path = _get_kill_switch_path()
-    if os.path.exists(path):
+    if kill_switch.is_active(path):
         try:
-            with open(path) as f:
-                data = json.load(f)
+            data = kill_switch.read_payload(path)
             print("Status: ACTIVE")
             print(f"Reason: {data.get('reason', 'unknown')}")
             print(f"Actor:  {data.get('actor', 'unknown')}")

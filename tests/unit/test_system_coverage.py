@@ -90,6 +90,7 @@ def _make_system():
             sys_obj.tasks = {}
             sys_obj._recorder_drop_on_full = True
             sys_obj._bootstrap_torn_down = False
+            sys_obj._recovery_halted = False
             sys_obj._task_restart_attempts = {}
             sys_obj._task_restart_until_s = {}
             sys_obj._task_started_at = {}
