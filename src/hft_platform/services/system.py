@@ -471,6 +471,10 @@ class HFTSystem:
                 logger.warning("kill_switch_unreadable_at_boot", error=str(exc))
                 _boot_ks_reason = "kill_switch_file_present"
             self.storm_guard.trigger_halt(f"KILL_SWITCH_FILE: {_boot_ks_reason}")
+            # trigger_halt alone is not a latch: update() derives its target
+            # from drawdown/latency/feed-gap, so a quiet market de-escalates
+            # HALT once the cooldown elapses. The hold is what makes it stick.
+            self.storm_guard.set_kill_switch_hold(True)
             logger.critical(
                 "Kill switch active at startup - booting into HALT",
                 path=kill_switch.kill_switch_path(),
@@ -784,6 +788,13 @@ class HFTSystem:
             # cross-restart latch is lost. Loud, not fatal.
             logger.critical("kill_switch_latch_write_failed", error=str(exc), reason=reason)
         self.storm_guard.trigger_halt(f"STARTUP_POSITION_RECOVERY: {source}")
+        # Pinned for the process lifetime, and deliberately not released by
+        # ``_supervise`` when the latch file goes away. This process holds an
+        # empty position store and has its checkpoint writer suppressed, so
+        # resuming it in place would trade with no position truth and persist
+        # nothing. Resolving a recovery halt is: fix the checkpoint, clear the
+        # latch, restart.
+        self.storm_guard.set_kill_switch_hold(True)
 
     def _write_halt_entry_checkpoint(self) -> None:
         """M5: persist positions once per HALT episode, on entry, not every tick.
@@ -1753,7 +1764,7 @@ class HFTSystem:
                     logger.warning("pool_metrics_update_failed", error=str(e))
 
             # Kill-switch file check (async to avoid blocking event loop)
-            kill_switch_path = os.getenv("HFT_KILL_SWITCH_PATH", ".runtime/kill_switch")
+            kill_switch_path = kill_switch.kill_switch_path()
             loop = asyncio.get_running_loop()
             ks_exists = await loop.run_in_executor(None, os.path.exists, kill_switch_path)
             if ks_exists:
@@ -1764,6 +1775,15 @@ class HFTSystem:
                         _ks_reason = "kill_switch_file_present"
                     self.storm_guard.trigger_halt(f"KILL_SWITCH_FILE: {_ks_reason}")
                     logger.critical("Kill switch file detected", path=kill_switch_path, reason=_ks_reason)
+                # Every tick, not just on entry: the hold is what stops HALT
+                # de-escalating out from under a latch that is still present.
+                self.storm_guard.set_kill_switch_hold(True)
+            elif not self._recovery_halted:
+                # The file is the operator's authority, so removing it releases
+                # the hold and HALT de-escalates through the normal cooldown.
+                # A startup recovery halt is the one case that does not: see
+                # ``_on_startup_recovery_halt``.
+                self.storm_guard.set_kill_switch_hold(False)
 
             # R11-C4: Telegram /stop emergency halt via Redis key.
             # P2-e (2026-04-27): the file-based kill-switch above (lines

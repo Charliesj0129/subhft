@@ -35,8 +35,16 @@ from hft_platform.services.system import HFTSystem
 SYSTEM_SRC = Path(__file__).resolve().parents[2] / "src" / "hft_platform" / "services" / "system.py"
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def latch_path(tmp_path, monkeypatch):
+    """Redirect the latch into tmp_path for EVERY test in this module.
+
+    Autouse on purpose. The default path is ``.runtime/kill_switch`` relative
+    to the working directory, so one test here that forgets the fixture writes
+    a real latch into the checkout -- which then makes every *other* test that
+    exercises the supervise tick see a kill switch and halt. That is exactly
+    what happened while this module was being written.
+    """
     path = tmp_path / "runtime" / "kill_switch"
     monkeypatch.setenv(kill_switch.PATH_ENV, str(path))
     return path
@@ -45,9 +53,13 @@ def latch_path(tmp_path, monkeypatch):
 class _SpyStormGuard:
     def __init__(self) -> None:
         self.halts: list[str] = []
+        self.holds: list[bool] = []
 
     def trigger_halt(self, reason: str) -> None:
         self.halts.append(reason)
+
+    def set_kill_switch_hold(self, hold: bool) -> None:
+        self.holds.append(hold)
 
 
 class _SpyCheckpointWriter:
@@ -278,3 +290,93 @@ class TestOperatorAndEngineAgreeOnTheLatch:
 
         assert system_module._read_kill_switch_reason(str(latch_path)) == "STARTUP_POSITION_RECOVERY"
         assert os.path.exists(latch_path)
+
+
+# ---------------------------------------------------------------------------
+# 6. The halt has to hold
+# ---------------------------------------------------------------------------
+
+
+class TestTheHaltActuallyHolds:
+    """``trigger_halt()`` alone de-escalates; only a hold makes it a latch.
+
+    ``StormGuard.update()`` derives its target state from drawdown, latency and
+    feed gap. "An operator stopped this engine" is not among them, so a quiet
+    market computes NORMAL, the 60 s cooldown elapses, and HALT drops -- then
+    the next supervise tick re-reads the still-present latch and re-halts::
+
+        t=0     trigger_halt(KILL_SWITCH_FILE)      HALT
+        t=60    update(): inputs clean, cooldown ok NORMAL   <- dispatch window
+        t=60+   supervise: file still there        HALT
+        ...     square wave, ~60 s period
+
+    That is the same shape the daily-loss hold was added for on 2026-08-21.
+    """
+
+    def test_a_recovery_halt_pins_the_hold(self) -> None:
+        system = _system()
+
+        system._on_startup_recovery_halt(reason="r", source="dual", mismatches=[])
+
+        assert system.storm_guard.holds == [True]
+
+    def test_the_hold_blocks_halt_deescalation(self) -> None:
+        from hft_platform.risk.storm_guard import StormGuard, StormGuardState
+
+        guard = StormGuard()
+        guard.trigger_halt("KILL_SWITCH_FILE: operator")
+        guard.set_kill_switch_hold(True)
+        # Cooldown long elapsed and every input clean -- the exact condition
+        # that used to de-escalate.
+        guard._halt_entry_ts = 0.0
+
+        for _ in range(10):
+            guard.update()
+
+        assert guard.state == StormGuardState.HALT
+
+    def test_clearing_the_hold_lets_halt_deescalate_again(self) -> None:
+        """The latch is the authority; removing it must actually release."""
+        from hft_platform.risk.storm_guard import StormGuard, StormGuardState
+
+        guard = StormGuard()
+        guard.trigger_halt("KILL_SWITCH_FILE: operator")
+        guard.set_kill_switch_hold(True)
+        guard._halt_entry_ts = 0.0
+        for _ in range(10):
+            guard.update()
+        assert guard.state == StormGuardState.HALT
+
+        guard.set_kill_switch_hold(False)
+        guard._halt_entry_ts = 0.0
+        for _ in range(10):
+            guard.update()
+
+        assert guard.state != StormGuardState.HALT
+
+    def test_the_hold_is_independent_of_the_other_two(self) -> None:
+        """Three owners, three flags -- reconciliation must not release ours."""
+        from hft_platform.risk.storm_guard import StormGuard
+
+        guard = StormGuard()
+        guard.set_kill_switch_hold(True)
+
+        guard.set_reconciliation_hold(False)
+        guard.set_daily_loss_hold(False)
+
+        assert guard.kill_switch_hold is True
+
+    def test_supervise_releases_the_hold_only_when_the_latch_is_gone(self) -> None:
+        """Source-level: the release is guarded by ``_recovery_halted``.
+
+        A recovery-halted process holds an empty store and has its checkpoint
+        writer suppressed, so ``hft risk resume`` must not resume it in place.
+        """
+        import inspect
+
+        from hft_platform.services import system as system_module
+
+        src = inspect.getsource(system_module.HFTSystem._supervise)
+        release = src.index("set_kill_switch_hold(False)")
+        guard = src.rindex("elif not self._recovery_halted:", 0, release)
+        assert 0 < release - guard < 500
