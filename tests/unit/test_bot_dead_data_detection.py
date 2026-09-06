@@ -18,6 +18,12 @@ Pinned behaviors:
   3. `consecutive_empty_attempts` resets to 0 on any successful symbol.
   4. `_telegram_error_handler` increments `bot_handler_errors_total` for
      any captured exception.
+  5. The streak advances only on a TRADING day, and a closed day neither
+     advances nor resets it.
+
+Every case that depends on (5) names its own date. Reading the real clock
+made behaviour 2 assert something different on a Wednesday than on a Sunday,
+and main's CI was red every weekend with `assert 0 >= 2` because of it.
 """
 
 from __future__ import annotations
@@ -28,10 +34,21 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from zoneinfo import ZoneInfo
 
 import pytest
+from structlog.testing import capture_logs
 
 from hft_platform.reports.models import ComposedReport, MessagePart
 
 _TZ = ZoneInfo("Asia/Taipei")
+
+
+#: A date the market calendar agrees was open, and one it agrees was closed.
+#: The streak counter is only advanced on a trading day, so a test that lets
+#: ``resolve_trading_date`` read the real clock asserts a different thing on a
+#: Wednesday than on a Sunday -- which is how
+#: ``test_alert_fires_after_threshold_consecutive_empties`` failed with
+#: ``assert 0 >= 2`` on main every weekend while passing on weekdays.
+_TRADING_DAY = "2026-09-02"  # Wednesday
+_CLOSED_DAY = "2026-09-05"  # Saturday
 
 
 def _make_composed(msgs: list[str] | None = None) -> ComposedReport:
@@ -95,9 +112,7 @@ class TestAttemptTracking:
 
 class TestDeadDataAlert:
     @pytest.mark.asyncio
-    async def test_alert_fires_after_threshold_consecutive_empties(
-        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_alert_fires_after_threshold_consecutive_empties(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HFT_REPORT_SYMBOLS", "NOSYM1")
         import hft_platform.bot.app as bot_app
         from hft_platform.bot.scheduler import _push_report
@@ -105,14 +120,73 @@ class TestDeadDataAlert:
         ctx = MagicMock()
         ctx.bot.send_message = AsyncMock()
         threshold = bot_app.DEAD_DATA_ALERT_THRESHOLD
-        with patch(
-            "hft_platform.reports.pipeline.build_hybrid_report_async",
-            new=AsyncMock(return_value=SimpleNamespace(composed=None, dossier=None, decision=None, llm_error=None)),
+        with (
+            patch("hft_platform.reports.pipeline.resolve_trading_date", return_value=_TRADING_DAY),
+            patch(
+                "hft_platform.reports.pipeline.build_hybrid_report_async",
+                new=AsyncMock(return_value=SimpleNamespace(composed=None, dossier=None, decision=None, llm_error=None)),
+            ),
+            capture_logs() as logs,
         ):
             for _ in range(threshold):
                 await _push_report(ctx, "day")
 
         assert bot_app.consecutive_empty_attempts >= threshold
+        # The counter is the state; the alert is what an operator actually sees.
+        assert [e for e in logs if e.get("event") == "bot.dead_data_alert"]
+
+    @pytest.mark.asyncio
+    async def test_streak_does_not_advance_when_the_market_was_closed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A closed market is not a dead feed.
+
+        This is the other half of the pin above and the reason it needed one:
+        the counter's behaviour is a function of the date, so both branches
+        have to name their date instead of inheriting the runner's clock.
+        """
+        monkeypatch.setenv("HFT_REPORT_SYMBOLS", "NOSYM1")
+        import hft_platform.bot.app as bot_app
+        from hft_platform.bot.scheduler import _push_report
+
+        ctx = MagicMock()
+        ctx.bot.send_message = AsyncMock()
+        with (
+            patch("hft_platform.reports.pipeline.resolve_trading_date", return_value=_CLOSED_DAY),
+            patch(
+                "hft_platform.reports.pipeline.build_hybrid_report_async",
+                new=AsyncMock(return_value=SimpleNamespace(composed=None, dossier=None, decision=None, llm_error=None)),
+            ),
+        ):
+            for _ in range(bot_app.DEAD_DATA_ALERT_THRESHOLD):
+                await _push_report(ctx, "day")
+
+        assert bot_app.consecutive_empty_attempts == 0
+
+    @pytest.mark.asyncio
+    async def test_a_closed_day_does_not_launder_a_streak_that_started_earlier(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A feed that died on Friday is still dead on Monday.
+
+        Suppressing the closed day must not also clear the evidence, or a
+        weekend would reset every outage that began before it.
+        """
+        monkeypatch.setenv("HFT_REPORT_SYMBOLS", "NOSYM1")
+        import hft_platform.bot.app as bot_app
+        from hft_platform.bot.scheduler import _push_report
+
+        bot_app.consecutive_empty_attempts = 3
+        ctx = MagicMock()
+        ctx.bot.send_message = AsyncMock()
+        with (
+            patch("hft_platform.reports.pipeline.resolve_trading_date", return_value=_CLOSED_DAY),
+            patch(
+                "hft_platform.reports.pipeline.build_hybrid_report_async",
+                new=AsyncMock(return_value=SimpleNamespace(composed=None, dossier=None, decision=None, llm_error=None)),
+            ),
+        ):
+            await _push_report(ctx, "day")
+
+        assert bot_app.consecutive_empty_attempts == 3
 
     @pytest.mark.asyncio
     async def test_streak_resets_on_successful_symbol(self, monkeypatch: pytest.MonkeyPatch) -> None:
