@@ -179,3 +179,61 @@ async def test_sim_order_mode_still_reports_a_broker_only_position(guard):
     assert "2330" in found, "a broker-only position was hidden by the sim gate"
     assert found["2330"].local_qty == 0
     assert found["2330"].broker_qty == 50
+
+
+@pytest.mark.asyncio
+async def test_sim_order_mode_does_not_count_a_non_comparable_position_as_drift(guard):
+    """The cycle that logs "not drift" must not set the drift gauge.
+
+    Live defect, 2026-09-07: ``discrepancies_before_resolution`` was snapshotted
+    ahead of the not-comparable split, so the same ``sync_portfolio`` call
+    logged ``reconciliation_not_comparable_under_sim_order_mode`` with
+    ``consequence="... not drift ..."`` and then set
+    ``reconciliation_discrepancy_count`` to the count of exactly those entries.
+
+    Under a paper order mode that shape recurs on every cycle forever, so the
+    gauge latched at 1 and the critical ``ReconciliationDiscrepancyDetected``
+    rule fired continuously from 2026-09-04T20:04:56Z -- three days of a
+    crying-wolf page on the one rule that watches position truth, on an engine
+    whose books were correct.
+    """
+    store = _store_with_strategy_position()
+    svc = _service(store, guard, order_mode="sim")
+    metrics = MagicMock()
+    with patch.object(ReconciliationService, "_metrics", staticmethod(lambda: metrics)):
+        await svc.sync_portfolio()
+
+    observed = [call.args[0] for call in metrics.reconciliation_discrepancy_count.set.call_args_list]
+    assert observed, "discrepancy gauge was never set"
+    assert observed == [0], f"a non-comparable position was counted as drift: {observed}"
+    metrics.reconciliation_not_comparable.set.assert_called_with(True)
+
+
+@pytest.mark.asyncio
+async def test_sim_order_mode_still_counts_a_comparable_discrepancy(guard):
+    """Suppression is one-directional -- a broker-only position still counts.
+
+    The sibling of the test above, and the reason the snapshot moved rather
+    than the gauge being silenced under sim: a position the BROKER reports and
+    the platform does not hold is real external exposure that paper routing
+    explains nothing about, so it must still reach the alert.
+    """
+    store = PositionStore()
+    client = MagicMock()
+    client.get_positions.return_value = [SimpleNamespace(code="2330", quantity=50, direction="Action.Buy")]
+    del client.subscribed_codes
+    del client.alias_to_actual
+    svc = ReconciliationService(
+        client,
+        store,
+        {"symbols": [{"code": _ALIAS}]},
+        storm_guard=guard,
+        order_mode="sim",
+    )
+    svc.broker_zero_debounce_observations = 1
+    metrics = MagicMock()
+    with patch.object(ReconciliationService, "_metrics", staticmethod(lambda: metrics)):
+        await svc.sync_portfolio()
+
+    observed = [call.args[0] for call in metrics.reconciliation_discrepancy_count.set.call_args_list]
+    assert observed == [1], f"a comparable broker-only discrepancy was suppressed: {observed}"

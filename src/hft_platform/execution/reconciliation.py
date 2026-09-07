@@ -648,7 +648,6 @@ class ReconciliationService:
             # actually trades is TMFI6, and the alias map that reconciles the
             # two lives on the quote client while this service was handed the
             # order client. See ``_get_platform_symbols``.
-            discrepancies_before_resolution = discrepancies
 
             # Under a paper/sim order path the platform's orders are routed to
             # a simulation venue while ``get_positions()`` reads the real
@@ -683,6 +682,24 @@ class ReconciliationService:
                         ),
                     )
             self._set_not_comparable(bool(_sim_unverifiable))
+
+            # Snapshot for the discrepancy gauge: AFTER the not-comparable
+            # split, BEFORE auto-resolution.
+            #
+            # "Before auto-resolution" is P0-c and stays: counting the kept
+            # list let the deletion path guarantee its own alert read zero.
+            #
+            # "After the not-comparable split" is the correction. Taking the
+            # snapshot ahead of it made the same cycle log
+            # ``reconciliation_not_comparable_under_sim_order_mode ... "not
+            # drift"`` and then set the drift gauge to the count of exactly
+            # those entries. Under a paper order mode the platform's own
+            # positions read as ``broker_qty == 0`` on every cycle forever, so
+            # the gauge latched non-zero and the critical
+            # ``ReconciliationDiscrepancyDetected`` rule fired continuously
+            # from 2026-09-04T20:04:56Z with nothing wrong -- three days of a
+            # crying-wolf page on the one rule that watches position truth.
+            discrepancies_before_resolution = discrepancies
 
             platform_codes = self._get_platform_symbols()
             # Never delete under a mode where broker_qty == 0 carries no
@@ -719,10 +736,8 @@ class ReconciliationService:
             self._last_discrepancies = discrepancies
 
             # 5. Update reconciliation discrepancy metric (legacy)
-            # Counted BEFORE auto-resolution. Counting the kept list let the
-            # deletion path guarantee its own alert read zero: every cycle that
-            # cleared a position reported ``reconciliation_discrepancy_count 0``
-            # to the only rule watching this loop.
+            # Comparable drift only, counted before auto-resolution -- see the
+            # snapshot above for why each half of that is load-bearing.
             self._metrics().reconciliation_discrepancy_count.set(len(discrepancies_before_resolution))
 
             # 6. Record per-severity discrepancy metrics (WU-18)
