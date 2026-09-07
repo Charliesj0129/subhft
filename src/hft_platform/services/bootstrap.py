@@ -862,6 +862,8 @@ class SystemBootstrapper:
             client=order_client,
             position_store=position_store,
             checkpoint_path=os.getenv("HFT_POSITION_CHECKPOINT_PATH", DEFAULT_POSITION_CHECKPOINT_PATH),
+            # Already normalized to a canonical alias by ``resolve_order_mode``.
+            order_mode=os.getenv("HFT_ORDER_MODE", ""),
         )
         startup_fill_reconciler = None
         try:

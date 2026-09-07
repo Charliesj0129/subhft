@@ -39,6 +39,18 @@ startup_recon_auto_corrected = Gauge(
     "startup_recon_auto_corrected",
     "Number of position discrepancies auto-corrected at startup",
 )
+startup_recon_not_comparable = Gauge(
+    "startup_recon_not_comparable",
+    "Symbols the broker could not confirm at startup because orders route to a paper venue",
+)
+startup_recon_not_comparable.set(0)
+
+#: Order modes under which the broker cannot confirm the platform's own
+#: positions, because orders are routed to a paper venue while
+#: ``list_positions()`` reads the real account. Mirrors
+#: ``execution.reconciliation._NON_COMPARABLE_ORDER_MODES`` and the sim aliases
+#: in ``services.bootstrap._ORDER_MODE_ALIASES``.
+_NON_COMPARABLE_ORDER_MODES = frozenset({"sim", "simulation", "paper"})
 
 _BLOCK_ENV = "HFT_STARTUP_RECON_BLOCK"
 _CHECKPOINT_PATH_ENV = "HFT_POSITION_CHECKPOINT_PATH"
@@ -68,9 +80,14 @@ class StartupPositionVerifier:
         checkpoint_path: str | None = None,
         qty_threshold: int | None = None,
         futures_qty_threshold: int | None = None,
+        order_mode: str | None = None,
     ) -> None:
         self.client = client
         self.store = position_store
+        # Under a paper order path the live account cannot confirm the
+        # platform's own positions, so ``broker_qty == 0`` carries no
+        # information about them. See ``_recover_dual``.
+        self._order_mode = (order_mode or os.environ.get("HFT_ORDER_MODE", "")).strip().lower()
         # Set when a valid checkpoint is read; ``_write_to_store`` uses it to
         # bank the realized PnL no restored position ends up carrying.
         self._ckpt_total_rpnl: int | None = None
@@ -396,7 +413,9 @@ class StartupPositionVerifier:
         mismatches: list[dict] = []
         has_critical = False
         auto_corrected = 0
+        not_comparable = 0
         merged: Dict[str, Dict[str, Any]] = {}
+        sim_unverifiable = self._order_mode in _NON_COMPARABLE_ORDER_MODES
 
         for symbol in all_symbols:
             ckpt_qty = ckpt_qty_map.get(symbol, 0)
@@ -404,6 +423,31 @@ class StartupPositionVerifier:
             classification = self._classify_discrepancy(symbol, ckpt_qty, broker_qty)
 
             entries = ckpt_entries_by_symbol.get(symbol, [])
+
+            # Exactly ONE direction is undefined under a paper order path: a
+            # position the checkpoint holds and the live account reports as 0.
+            # That is the configured routing, not drift, and on 2026-09-04 it
+            # halted the engine on checkpoint -4 vs broker 0.
+            #
+            # The opposite direction stays fully meaningful and is deliberately
+            # NOT suppressed: a position the BROKER reports and the platform
+            # does not hold was placed outside this platform, and paper routing
+            # explains nothing about it. Same partition as
+            # ``ReconciliationService`` draws for the steady-state loop.
+            if sim_unverifiable and broker_qty == 0 and ckpt_qty != 0:
+                not_comparable += 1
+                mismatches.append(
+                    {
+                        "symbol": symbol,
+                        "checkpoint_qty": ckpt_qty,
+                        "broker_qty": broker_qty,
+                        "action": "preserved_not_comparable",
+                    }
+                )
+                # Restore the checkpoint unchanged. ``ckpt_total == target_qty``
+                # so the per-strategy split is preserved exactly.
+                self._distribute_correction(entries, ckpt_qty, account_id, merged, symbol=symbol)
+                continue
 
             if classification == "critical":
                 has_critical = True
@@ -433,12 +477,27 @@ class StartupPositionVerifier:
                 if broker_qty != 0:
                     self._distribute_correction(entries, broker_qty, account_id, merged, symbol=symbol)
 
+        startup_recon_not_comparable.set(not_comparable)
+        if not_comparable:
+            logger.warning(
+                "startup_recon_not_comparable_under_sim_order_mode",
+                order_mode=self._order_mode,
+                symbols=[m["symbol"] for m in mismatches if m["action"] == "preserved_not_comparable"],
+                consequence=(
+                    "checkpoint positions cannot be confirmed against a live account "
+                    "while orders route to paper; restored as recorded, never halted on"
+                ),
+            )
+
         if has_critical:
             startup_recon_status.set(3)
             return RecoveryResult(source="dual", halted=True, mismatches=mismatches)
 
         loaded = self._write_to_store(merged, account_id)
-        status_val = 2 if auto_corrected > 0 else 1
+        # 1 means "positions match". A book that could not be compared has not
+        # matched anything, and a startup that verified nothing must not read as
+        # a clean pass on the one gauge an operator looks at.
+        status_val = 2 if (auto_corrected > 0 or not_comparable > 0) else 1
         startup_recon_status.set(status_val)
         startup_recon_positions_loaded.set(loaded)
         startup_recon_auto_corrected.set(auto_corrected)
