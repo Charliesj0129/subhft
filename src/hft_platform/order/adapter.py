@@ -666,12 +666,17 @@ class OrderAdapter:
         ``on_fill``. If no fill arrives, pending remains elevated — a safe
         liveness loss preferred over an unsafe max_pos breach.
         """
-        if self._rejection_sink is None:
+        # getattr, not attribute access: ``_rejection_sink`` is a __slots__
+        # entry, and the HALT rejection in ``execute`` runs OUTSIDE that
+        # method's try:, so a half-built adapter would raise AttributeError
+        # straight into the order path rather than skipping the feedback.
+        sink = getattr(self, "_rejection_sink", None)
+        if sink is None:
             return
         try:
             from hft_platform.contracts.strategy import RiskFeedback
 
-            self._rejection_sink.put_nowait(
+            sink.put_nowait(
                 RiskFeedback(
                     intent_id=intent.intent_id if hasattr(intent, "intent_id") else 0,
                     strategy_id=intent.strategy_id,
@@ -2381,10 +2386,11 @@ class OrderAdapter:
             or self._intent_reduces_position(intent)
         )
         if _is_halt and not _halt_exempt:
-            await self._add_to_dlq(
+            await self._reject_before_dispatch(
                 intent,
                 RejectionReason.STORMGUARD_HALT,
                 "StormGuard HALT",
+                "dispatch_halt_reject",
                 halt_exempt_blocked=self._is_strategy_halt_exempt(intent.strategy_id),
             )
             return
@@ -2405,7 +2411,12 @@ class OrderAdapter:
                     prior_approved=existing.approved,
                 )
                 self.metrics.order_reject_total.inc()
-                await self._add_to_dlq(intent, RejectionReason.IDEMPOTENCY_DUPLICATE, "Duplicate idempotency_key")
+                await self._reject_before_dispatch(
+                    intent,
+                    RejectionReason.IDEMPOTENCY_DUPLICATE,
+                    "Duplicate idempotency_key",
+                    "duplicate_idempotency_key",
+                )
                 return
 
         # R2-01: Track whether we reserved a dedup slot so we can release it on
@@ -2420,29 +2431,54 @@ class OrderAdapter:
             if not _safety_exempt:
                 ps_result = self.per_symbol_rate_limiter.check(intent.symbol)
                 if ps_result == PerSymbolRateResult.HARD:
-                    await self._add_to_dlq(intent, RejectionReason.RATE_LIMIT, "Per-symbol hard rate limit")
+                    await self._reject_before_dispatch(
+                        intent,
+                        RejectionReason.RATE_LIMIT,
+                        "Per-symbol hard rate limit",
+                        "per_symbol_rate_limit",
+                    )
                     return
 
             # Per-strategy circuit breaker check (WU-09)
             if not _safety_exempt and self.strategy_cb_mgr.is_open(intent.strategy_id):
-                await self._add_to_dlq(intent, RejectionReason.CIRCUIT_BREAKER, "Per-strategy circuit breaker open")
+                await self._reject_before_dispatch(
+                    intent,
+                    RejectionReason.CIRCUIT_BREAKER,
+                    "Per-strategy circuit breaker open",
+                    "strategy_circuit_breaker_open",
+                )
                 return
 
             # Circuit Breaker Check
             if not _safety_exempt and self.circuit_breaker.is_open():
                 logger.warning("Circuit Breaker Open - Rejecting", cmd_id=cmd.cmd_id)
-                await self._add_to_dlq(intent, RejectionReason.CIRCUIT_BREAKER, "Circuit breaker open")
+                await self._reject_before_dispatch(
+                    intent,
+                    RejectionReason.CIRCUIT_BREAKER,
+                    "Circuit breaker open",
+                    "circuit_breaker_open",
+                )
                 return
 
             if not _safety_exempt and not self.check_rate_limit():
                 # Rate limit exceeded
-                await self._add_to_dlq(intent, RejectionReason.RATE_LIMIT, "Rate limit exceeded")
+                await self._reject_before_dispatch(
+                    intent,
+                    RejectionReason.RATE_LIMIT,
+                    "Rate limit exceeded",
+                    "rate_limit_exceeded",
+                )
                 return
 
             if not self._platform_degrade_allows(intent):
                 self.metrics.order_reject_total.inc()
                 self._emit_trace("order_reject", intent, {"reason": "platform_reduce_only", "cmd_id": int(cmd.cmd_id)})
-                await self._add_to_dlq(intent, RejectionReason.PLATFORM_REDUCE_ONLY, "Platform is in reduce-only mode")
+                await self._reject_before_dispatch(
+                    intent,
+                    RejectionReason.PLATFORM_REDUCE_ONLY,
+                    "Platform is in reduce-only mode",
+                    "platform_reduce_only",
+                )
                 return
             self._reserve_platform_reduce_only_close(intent)
 
@@ -2458,7 +2494,12 @@ class OrderAdapter:
                 self.circuit_breaker.record_failure()
                 self._update_cb_metric()
                 self.strategy_cb_mgr.record_failure(intent.strategy_id)
-                await self._add_to_dlq(intent, RejectionReason.VALIDATION_ERROR, "Client validation failed")
+                await self._reject_before_dispatch(
+                    intent,
+                    RejectionReason.VALIDATION_ERROR,
+                    "Client validation failed",
+                    "client_validation_failed",
+                )
                 return
 
             if not self.running:
@@ -2528,6 +2569,51 @@ class OrderAdapter:
             )
         except (TypeError, ValueError, OSError) as e:
             logger.error("Failed to add to DLQ", error=str(e))
+
+    async def _reject_before_dispatch(
+        self,
+        intent: OrderIntent,
+        reason: RejectionReason,
+        error_message: str,
+        reason_code: str,
+        halt_exempt_blocked: bool = False,
+    ) -> None:
+        """DLQ an intent rejected by a guard that runs BEFORE the broker call.
+
+        Every caller of this helper rejects on a local guard -- rate limit,
+        circuit breaker, platform reduce-only -- and returns without ever
+        touching ``self.client``. Nothing reached the broker, so no phantom
+        exists and the strategy's pending slot must be released immediately:
+        ``phantom_pending=False``.
+
+        This exists because ``_add_to_dlq`` alone is NOT a complete rejection.
+        It records the order and commits the dedup entry, but emits no
+        ``RiskFeedback``, so a strategy that incremented ``_pending_buy`` /
+        ``_pending_sell`` at submit never decrements it. On 2026-09-07 the
+        broker's paper order session went to ``SessionNotEstablished`` at the
+        08:45 CST open; five consecutive failures tripped the global circuit
+        breaker at 00:45:06Z, and the two intents rejected by it leaked their
+        slots. ``strategy_pending_qty{side="SELL"}`` pinned at 2 and
+        R47_MAKER_TMF stopped quoting for the rest of the session -- while the
+        five *dispatch* failures immediately before it released correctly,
+        because that path already called ``_send_dispatch_rejection``.
+
+        Keep DLQ and release together in one call so another guard cannot be
+        added that silently reintroduces the leak.
+
+        Only ``NEW`` releases. ``on_risk_feedback`` decrements
+        ``_pending_buy`` / ``_pending_sell`` purely on ``feedback.side``, and
+        only a ``NEW`` submit ever incremented one. CANCEL and FORCE_FLAT
+        cannot reach most of these guards (they are ``_safety_exempt``), but
+        AMEND can, and releasing on an AMEND rejection would decrement a slot
+        that this intent never took.
+        """
+        if halt_exempt_blocked:
+            await self._add_to_dlq(intent, reason, error_message, halt_exempt_blocked=True)
+        else:
+            await self._add_to_dlq(intent, reason, error_message)
+        if intent.intent_type == IntentType.NEW:
+            self._send_dispatch_rejection(intent, reason_code, phantom_pending=False)
 
     def _validate_client(self, intent: OrderIntent) -> bool:
         if intent.intent_type in (IntentType.NEW, IntentType.FORCE_FLAT):
@@ -2746,7 +2832,12 @@ class OrderAdapter:
                     logger.error("No broker codec configured — cannot dispatch order", symbol=intent.symbol)
                     self.metrics.order_reject_total.inc()
                     self._dedup_commit(intent.idempotency_key, False, "no_broker_codec", cmd.cmd_id)
-                    await self._add_to_dlq(intent, RejectionReason.BROKER_CODEC_MISSING, "no_broker_codec")
+                    await self._reject_before_dispatch(
+                        intent,
+                        RejectionReason.BROKER_CODEC_MISSING,
+                        "no_broker_codec",
+                        "no_broker_codec",
+                    )
                     return False
                 logger.info("Placing Order", symbol=intent.symbol, price=intent.price, qty=intent.qty, side=intent.side)
 
@@ -3348,10 +3439,11 @@ class OrderAdapter:
                     try:
                         self._api_queue.put_nowait(evicted)
                     except asyncio.QueueFull:
-                        await self._add_to_dlq(
+                        await self._reject_before_dispatch(
                             evicted.intent,
                             RejectionReason.RATE_LIMIT,
                             "Lost during priority eviction race",
+                            "api_queue_eviction_lost",
                         )
                 else:
                     self._emit_trace(
@@ -3380,10 +3472,11 @@ class OrderAdapter:
                         ).inc()
                     except Exception:  # noqa: BLE001 — metric must never block path
                         pass
-                    await self._add_to_dlq(
+                    await self._reject_before_dispatch(
                         evicted.intent,
                         RejectionReason.RATE_LIMIT,
                         f"Preempted by higher-priority {evictor_type.name}",
+                        "api_queue_preempted",
                     )
                     return True
             logger.warning(
@@ -3395,7 +3488,12 @@ class OrderAdapter:
             )
             self.metrics.order_reject_total.inc()
             self._emit_trace("order_reject", cmd.intent, {"reason": "API_QUEUE_FULL", "cmd_id": int(cmd.cmd_id)})
-            await self._add_to_dlq(cmd.intent, RejectionReason.RATE_LIMIT, "API queue full")
+            await self._reject_before_dispatch(
+                cmd.intent,
+                RejectionReason.RATE_LIMIT,
+                "API queue full",
+                "api_queue_full",
+            )
             return False
 
     def _evict_lower_priority_for_safety_intent(self, evictor_intent_type: IntentType) -> OrderCommand | None:
