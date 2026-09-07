@@ -978,7 +978,8 @@ class TestOptionsRoundRobinSharding:
 class TestQuoteConnectionPoolDegradedRollup:
     """Verify pool-level degraded gauge + debounced CRITICAL log (P1-d)."""
 
-    def _make_pool_with_4_slots(self, tmp_path):
+    @staticmethod
+    def _make_pool_with_4_slots(tmp_path):
         """Build a pool with 4 connection slots and 4 mock facades — bypasses
         ``create_facades`` so the test does not need a real Shioaji session.
         """
@@ -1057,6 +1058,179 @@ class TestQuoteConnectionPoolDegradedRollup:
         clock["now"] = 1003.0
         pool.update_metrics()
         assert mock_logger.critical.call_count == 1, "CRITICAL log must be emitted exactly once until recovery"
+
+
+class TestPoolDegradedIgnoresMarketClose:
+    """The degraded rollup must not read a market close as a pool outage.
+
+    Regression for the 20 false CRITICALs measured 2026-08-31..2026-09-07. With
+    no ticks to refresh them, all four slots aged into DEGRADED at every TAIFEX
+    close and the rollup fired 300s later -- at 05:50Z (day close 13:45 CST),
+    06:39Z (odd-lot close) and 21:05Z (night close 05:00 CST), to the second,
+    every single day. Prometheus ``hft_quote_conn_state`` showed every slot at
+    1/DEGRADED and none at 3/DISCONNECTED across those windows, so not one of
+    the 20 was a real loss of connectivity.
+
+    A stale feed is only evidence of a fault while the market is open -- the
+    same split ``check_facade_health`` already applies to the gap-driven
+    reconnect trigger. Outside a session only a slot that is genuinely down
+    counts, so a real pool failure at 05:05 CST still alerts.
+    """
+
+    @staticmethod
+    def _degraded_pool(tmp_path, monkeypatch, *, session_open, states):
+        """A 4-slot pool at ``states`` with the calendar pinned to ``session_open``."""
+        import hft_platform.feed_adapter.shioaji.quote_connection_pool as qcp
+
+        pool = TestQuoteConnectionPoolDegradedRollup._make_pool_with_4_slots(tmp_path)
+        pool._pool_degraded_alert_after_s = 1.0
+        for slot, state in zip(pool._slots, states, strict=True):
+            slot.state = state
+        # ``QuoteConnectionPool`` defines __slots__, so the calendar stub has
+        # to be installed on the class rather than the instance.
+        monkeypatch.setattr(qcp.QuoteConnectionPool, "session_open_now", lambda _self: session_open)
+        clock = {"now": 1000.0}
+        monkeypatch.setattr(qcp.time, "monotonic", lambda: clock["now"])
+        mock_logger = mock.MagicMock()
+        monkeypatch.setattr(qcp, "logger", mock_logger)
+        return pool, clock, mock_logger
+
+    def test_every_slot_degraded_outside_session_does_not_alert(self, tmp_path, monkeypatch):
+        """The exact 21:05Z shape: 4/4 DEGRADED at a close must stay quiet."""
+        import hft_platform.feed_adapter.shioaji.quote_connection_pool as qcp
+        from hft_platform.feed_adapter.shioaji.facade_slot import FacadeState
+
+        pool, clock, mock_logger = self._degraded_pool(
+            tmp_path, monkeypatch, session_open=False, states=[FacadeState.DEGRADED] * 4
+        )
+
+        pool.update_metrics()
+        clock["now"] = 1002.0
+        pool.update_metrics()
+        clock["now"] = 1400.0  # far past the real 300s threshold
+        pool.update_metrics()
+
+        assert mock_logger.critical.call_count == 0, "a market close is not a pool outage"
+        assert pool._pool_degraded_alerted is False
+        assert pool._pool_degraded_since_mono == 0.0, "the degradation timer must not run"
+        assert qcp._METRIC_POOL_DEGRADED._value.get() == 0.0
+
+    def test_every_slot_degraded_during_session_still_alerts(self, tmp_path, monkeypatch):
+        """The same 4/4 DEGRADED state inside a session is a real outage."""
+        from hft_platform.feed_adapter.shioaji.facade_slot import FacadeState
+
+        pool, clock, mock_logger = self._degraded_pool(
+            tmp_path, monkeypatch, session_open=True, states=[FacadeState.DEGRADED] * 4
+        )
+
+        pool.update_metrics()
+        clock["now"] = 1002.0
+        pool.update_metrics()
+
+        assert mock_logger.critical.call_count == 1
+        assert mock_logger.critical.call_args[0][0] == "quote_pool_degraded"
+        assert pool._pool_degraded_alerted is True
+
+    def test_disconnected_majority_outside_session_still_alerts(self, tmp_path, monkeypatch):
+        """The detector keeps its teeth: a genuine outage at a close still fires."""
+        import hft_platform.feed_adapter.shioaji.quote_connection_pool as qcp
+        from hft_platform.feed_adapter.shioaji.facade_slot import FacadeState
+
+        pool, clock, mock_logger = self._degraded_pool(
+            tmp_path,
+            monkeypatch,
+            session_open=False,
+            states=[
+                FacadeState.DISCONNECTED,
+                FacadeState.DISCONNECTED,
+                FacadeState.RECOVERING,
+                FacadeState.CONNECTED,
+            ],
+        )
+
+        pool.update_metrics()
+        clock["now"] = 1002.0
+        pool.update_metrics()
+
+        assert mock_logger.critical.call_count == 1
+        assert mock_logger.critical.call_args[1].get("n_hard_down") == 3
+        assert qcp._METRIC_POOL_DEGRADED._value.get() == 1.0
+
+    def test_hard_down_minority_outside_session_does_not_alert(self, tmp_path, monkeypatch):
+        """4/4 unhealthy but only 1 actually down at a close is not an outage."""
+        from hft_platform.feed_adapter.shioaji.facade_slot import FacadeState
+
+        pool, clock, mock_logger = self._degraded_pool(
+            tmp_path,
+            monkeypatch,
+            session_open=False,
+            states=[
+                FacadeState.DISCONNECTED,
+                FacadeState.DEGRADED,
+                FacadeState.DEGRADED,
+                FacadeState.DEGRADED,
+            ],
+        )
+
+        pool.update_metrics()
+        clock["now"] = 1002.0
+        pool.update_metrics()
+
+        assert mock_logger.critical.call_count == 0
+        assert pool._pool_degraded_alerted is False
+
+    def test_the_close_clears_an_alert_raised_during_the_session(self, tmp_path, monkeypatch):
+        """A real in-session alert must clear at the bell, not latch overnight."""
+        import hft_platform.feed_adapter.shioaji.quote_connection_pool as qcp
+        from hft_platform.feed_adapter.shioaji.facade_slot import FacadeState
+
+        session = {"open": True}
+        pool, clock, mock_logger = self._degraded_pool(
+            tmp_path, monkeypatch, session_open=True, states=[FacadeState.DEGRADED] * 4
+        )
+        monkeypatch.setattr(qcp.QuoteConnectionPool, "session_open_now", lambda _self: session["open"])
+
+        pool.update_metrics()
+        clock["now"] = 1002.0
+        pool.update_metrics()
+        assert pool._pool_degraded_alerted is True
+
+        session["open"] = False  # the bell
+        clock["now"] = 1003.0
+        pool.update_metrics()
+
+        assert pool._pool_degraded_alerted is False
+        assert qcp._METRIC_POOL_DEGRADED._value.get() == 0.0
+        assert mock_logger.warning.call_args[0][0] == "quote_pool_degraded_cleared"
+
+    def test_the_session_gate_costs_no_calendar_lookup_while_healthy(self, tmp_path, monkeypatch):
+        """A healthy pool must not pay for a calendar lookup on every tick."""
+        from hft_platform.feed_adapter.shioaji.facade_slot import FacadeState
+
+        pool, _clock, _log = self._degraded_pool(
+            tmp_path, monkeypatch, session_open=True, states=[FacadeState.CONNECTED] * 4
+        )
+        calls = {"n": 0}
+
+        def _counted(_self):
+            calls["n"] += 1
+            return True
+
+        monkeypatch.setattr(type(pool), "session_open_now", _counted)
+        pool.update_metrics()
+        pool.update_metrics()
+
+        assert calls["n"] == 0, "the gate must short-circuit behind majority_unhealthy"
+
+    def test_the_close_blindness_cannot_be_reintroduced(self):
+        """Source guard: the rollup gate must consult the market calendar."""
+        import inspect
+
+        import hft_platform.feed_adapter.shioaji.quote_connection_pool as qcp
+
+        src = inspect.getsource(qcp.QuoteConnectionPool._publish_metrics)
+        assert "session_open_now()" in src, "the degraded rollup must be session-aware"
+        assert "n_hard_down" in src, "the rollup must separate staleness from a down link"
 
 
 class TestReconnectAllowedSessionBoundaries:

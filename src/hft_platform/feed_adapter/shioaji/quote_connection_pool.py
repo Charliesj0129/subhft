@@ -981,15 +981,21 @@ class QuoteConnectionPool:
         """Push per-connection metrics to Prometheus gauges.
 
         Also computes the P1-d pool-degraded rollup: if >50% of slots are
-        NOT in CONNECTED state for ``_pool_degraded_alert_after_s``
-        seconds, set ``hft_quote_pool_degraded`` and emit a CRITICAL log
-        once. The alert clears as soon as the pool returns to majority-
-        healthy so dashboards can correlate alert windows with recovery.
+        unhealthy for ``_pool_degraded_alert_after_s`` seconds, set
+        ``hft_quote_pool_degraded`` and emit a CRITICAL log once. The alert
+        clears as soon as the pool returns to majority-healthy so dashboards
+        can correlate alert windows with recovery.
+
+        What counts as unhealthy depends on whether the market is open. During
+        a session any non-CONNECTED slot counts. Outside one, a slot that is
+        merely DEGRADED is just a feed that has nothing to carry, so only
+        RECOVERING/DISCONNECTED slots count -- see the gate below.
         """
         _ensure_metrics()
         now = time.monotonic()
         n_slots = len(self._slots)
         n_unhealthy = 0
+        n_hard_down = 0
         for slot in self._slots:
             cid = str(slot.conn_id)
             if _METRIC_SUBSCRIBED is not None:
@@ -1002,11 +1008,42 @@ class QuoteConnectionPool:
                 _METRIC_CONN_STATE.labels(conn_id=cid).set(int(slot.state))
             if slot.state != FacadeState.CONNECTED:
                 n_unhealthy += 1
+                # DEGRADED is the pure staleness state; RECOVERING and
+                # DISCONNECTED both mean the connection itself is in
+                # trouble. FacadeState is ordered by severity, so one
+                # comparison separates "no data arrived" from "the link
+                # is down" -- see the alert gate below for why that
+                # distinction decides whether this is evidence at all.
+                if slot.state >= FacadeState.RECOVERING:
+                    n_hard_down += 1
         # P1-d: pool-level rollup
         fraction = (n_unhealthy / n_slots) if n_slots > 0 else 0.0
         if _METRIC_POOL_DEGRADED_FRACTION is not None:
             _METRIC_POOL_DEGRADED_FRACTION.set(fraction)
+        # A stale feed is only evidence of a fault while the market is open.
+        # This is the same split ``check_facade_health`` already applies to the
+        # gap-driven reconnect trigger ("a feed gap only proves a broken
+        # connection while the session is open; a DISCONNECTED slot is proof on
+        # its own"), which this rollup never applied to its own alert.
+        #
+        # Every TAIFEX close therefore read as a pool outage: all four slots
+        # aged into DEGRADED with no ticks to refresh them, and 300s later the
+        # CRITICAL fired. Measured 2026-08-31..2026-09-07 -- 20 of 20 firings
+        # were closes, at 05:50Z (day close 13:45 CST), 06:39Z (odd-lot close)
+        # and 21:05Z (night close 05:00 CST) to the second, and Prometheus
+        # ``hft_quote_conn_state`` shows every slot at 1/DEGRADED and none ever
+        # at 3/DISCONNECTED across those windows. A detector that fires on the
+        # ordinary end of every session cannot report the outage that hides in
+        # it.
+        #
+        # Outside a session only a slot that is actually down counts, so a real
+        # pool failure at 05:05 CST still alerts. ``session_open_now`` covers
+        # both TAIFEX sessions (day 08:45-13:45, night 15:00-05:00) and is
+        # evaluated only once a majority is already unhealthy, so the healthy
+        # tick costs no calendar lookup.
         majority_unhealthy = n_slots > 0 and (2 * n_unhealthy) > n_slots
+        if majority_unhealthy and not self.session_open_now():
+            majority_unhealthy = (2 * n_hard_down) > n_slots
         if majority_unhealthy:
             if self._pool_degraded_since_mono == 0.0:
                 # First tick of the degradation window — start the timer.
@@ -1023,6 +1060,7 @@ class QuoteConnectionPool:
                     "quote_pool_degraded",
                     n_slots=n_slots,
                     n_unhealthy=n_unhealthy,
+                    n_hard_down=n_hard_down,
                     fraction=fraction,
                     duration_s=now - self._pool_degraded_since_mono,
                     threshold_s=self._pool_degraded_alert_after_s,
@@ -1037,6 +1075,7 @@ class QuoteConnectionPool:
                     "quote_pool_degraded_cleared",
                     n_slots=n_slots,
                     n_unhealthy=n_unhealthy,
+                    n_hard_down=n_hard_down,
                 )
             self._pool_degraded_since_mono = 0.0
             self._pool_degraded_alerted = False
