@@ -139,6 +139,11 @@ class StormGuard:
         # ``update()`` derives its target state from drawdown/latency/feed-gap
         # only, so "we stopped for the day" is a reason it cannot see.
         "_daily_loss_hold",
+        # Blocks HALT de-escalation while the emergency kill-switch latch is
+        # the reason for the halt. Same shape, same reason as the two above:
+        # ``update()`` sees drawdown/latency/feed-gap, and "an operator or a
+        # startup safety gate refused this process" is not among them.
+        "_kill_switch_hold",
         # P0-I4: engine loop reference bound via ``bind_loop()`` by HFTSystem.run().
         # Used by ``_fire_halt_callback`` to dispatch coroutine halt callbacks from
         # non-asyncio threads (e.g. bootstrap lease-refresh daemon).
@@ -231,6 +236,7 @@ class StormGuard:
         # ReconciliationService confirms drift is resolved.
         self._reconciliation_hold: bool = False
         self._daily_loss_hold: bool = False
+        self._kill_switch_hold: bool = False
         # P0-I4: engine loop reference; bound by HFTSystem.run() via ``bind_loop``.
         # When ``None``, ``_fire_halt_callback`` falls back to a best-effort
         # ``asyncio.get_running_loop()`` lookup (safe on the loop thread itself).
@@ -611,6 +617,23 @@ class StormGuard:
                     self._de_escalate_count = 0
                     logger.warning(
                         "stormguard_deescalation_blocked_daily_loss_hold",
+                        current_state=self.state.name,
+                        target_state=new_state.name,
+                    )
+                    current_state = self.state
+                    return current_state
+                # Kill-switch hold: third instance of the same shape. Without
+                # it ``trigger_halt("KILL_SWITCH_FILE: ...")`` is not a latch --
+                # a quiet market computes NORMAL, the cooldown elapses, HALT
+                # de-escalates, and the next supervise tick re-reads the file
+                # and re-halts. That square wave leaves a dispatch window open
+                # once per cycle while the operator believes the engine is
+                # stopped, which is the same failure the daily-loss hold above
+                # was added for on 2026-08-21.
+                if self.state == StormGuardState.HALT and self._kill_switch_hold:
+                    self._de_escalate_count = 0
+                    logger.warning(
+                        "stormguard_deescalation_blocked_kill_switch_hold",
                         current_state=self.state.name,
                         target_state=new_state.name,
                     )
@@ -1400,3 +1423,29 @@ class StormGuard:
     def daily_loss_hold(self) -> bool:
         """Whether the daily-loss hold is active (read-only)."""
         return self._daily_loss_hold
+
+    def set_kill_switch_hold(self, hold: bool) -> None:
+        """Set or clear the kill-switch hold on HALT de-escalation.
+
+        ``HFTSystem`` keeps this in sync with the latch file on every supervise
+        tick, so removing the file (``hft risk resume``) releases the hold and
+        HALT de-escalates through the normal cooldown. A startup recovery halt
+        additionally pins it for the process lifetime: that process holds an
+        empty position store and has its checkpoint writer suppressed, so it
+        must not resume without a restart no matter what happens to the file.
+        Thread-safe.
+        """
+        with self._state_lock:
+            old = self._kill_switch_hold
+            self._kill_switch_hold = hold
+        if old != hold:
+            logger.warning(
+                "stormguard_kill_switch_hold_changed",
+                hold=hold,
+                current_state=self.state.name,
+            )
+
+    @property
+    def kill_switch_hold(self) -> bool:
+        """Whether the kill-switch hold is active (read-only)."""
+        return self._kill_switch_hold

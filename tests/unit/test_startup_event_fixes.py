@@ -271,6 +271,10 @@ class TestStartupFillBackfill:
             running=False,
             loop=None,
             _exec_startup_overflow_lost=False,
+            # run() consults this before starting the checkpoint writer: a
+            # startup recovery halt must not arm anything that overwrites the
+            # checkpoint it halted on.
+            _recovery_halted=False,
             _md_record_direct=True,
             _fill_record_direct=True,
             _order_record_direct=True,

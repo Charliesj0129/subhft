@@ -6,12 +6,13 @@ import os
 import shutil
 from typing import Any
 
-_DEFAULT_KILL_SWITCH_PATH = ".runtime/kill_switch"
+from hft_platform.risk import kill_switch
+
+_DEFAULT_KILL_SWITCH_PATH = kill_switch.DEFAULT_PATH
 
 
 def check_kill_switch(*, active_detail: str = "ACTIVE") -> dict[str, Any]:
-    path = os.getenv("HFT_KILL_SWITCH_PATH", _DEFAULT_KILL_SWITCH_PATH)
-    active = os.path.exists(path)
+    active = kill_switch.is_active()
     return {"name": "kill_switch", "ok": not active, "detail": active_detail if active else "inactive"}
 
 

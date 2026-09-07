@@ -103,6 +103,7 @@ def _make_stub(**overrides) -> HFTSystem:
     sys_obj._pnl_snapshot_drops = 0
     sys_obj._halt_log_mono = 0.0
     sys_obj._halt_checkpoint_written = False
+    sys_obj._recovery_halted = False
     sys_obj._audit_writer = None
     sys_obj.loop = None
     # Apply overrides

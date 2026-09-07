@@ -17,6 +17,7 @@ from hft_platform.ops import quarantine_requests, rearm_requests
 from hft_platform.ops.evidence import get_shared_autonomy_evidence_writer
 from hft_platform.ops.manual_rearm import ManualRearmGate
 from hft_platform.ops.platform_degrade import get_shared_platform_degrade_controller
+from hft_platform.risk import kill_switch
 from hft_platform.risk.storm_guard import StormGuardState
 from hft_platform.services.bootstrap import SystemBootstrapper, resolve_order_mode
 from hft_platform.services.heartbeat import DEFAULT_HEARTBEAT_PATH, heartbeat_writable, write_heartbeat
@@ -42,11 +43,7 @@ def _payload_field(payload: Any, key: str) -> Any:
 
 def _read_kill_switch_reason(path: str) -> str:
     """Read kill-switch reason from JSON file. Runs in executor thread."""
-    import json as _json
-
-    with open(path, "r") as f:
-        data = _json.load(f)
-    return data.get("reason", "unknown")
+    return kill_switch.read_reason(path)
 
 
 def _log_safety_dispatch_error(task: "asyncio.Task[None]") -> None:
@@ -379,6 +376,10 @@ class HFTSystem:
 
         self._halt_log_mono: float = 0.0  # rate-limit HALT log to avoid spam
         self._halt_checkpoint_written: bool = False  # write checkpoint once on HALT entry
+        # Set when startup position recovery could not establish position truth.
+        # Everything that writes the checkpoint reads it: on that path the store
+        # is empty by construction, so any write replaces the evidence with zeros.
+        self._recovery_halted: bool = False
         self._drift_burst_symbol = ""
         self._mtm_calculator = None
         try:
@@ -457,6 +458,29 @@ class HFTSystem:
                 evicted_count=self._exec_overflow_evicted,
             )
             self.storm_guard.trigger_halt("exec_overflow_startup_race")
+
+        # A latch a restart clears is not a latch. The container runs under
+        # ``restart: always``, so this file is the only thing that carries an
+        # emergency halt across a boot -- and _supervise() does not read it
+        # until every trading service is already running. Read it here instead,
+        # before anything can dispatch.
+        if kill_switch.is_active():
+            try:
+                _boot_ks_reason = kill_switch.read_reason()
+            except Exception as exc:  # noqa: BLE001 - present but unreadable is still active
+                logger.warning("kill_switch_unreadable_at_boot", error=str(exc))
+                _boot_ks_reason = "kill_switch_file_present"
+            self.storm_guard.trigger_halt(f"KILL_SWITCH_FILE: {_boot_ks_reason}")
+            # trigger_halt alone is not a latch: update() derives its target
+            # from drawdown/latency/feed-gap, so a quiet market de-escalates
+            # HALT once the cooldown elapses. The hold is what makes it stick.
+            self.storm_guard.set_kill_switch_hold(True)
+            logger.critical(
+                "Kill switch active at startup - booting into HALT",
+                path=kill_switch.kill_switch_path(),
+                reason=_boot_ks_reason,
+                consequence="feeds and recorder start; no new orders; cancels still allowed",
+            )
         _gc_disabled = False
 
         import signal
@@ -549,12 +573,11 @@ class HFTSystem:
                         account_id=self.registry.account_id or self.registry.broker_id,
                     )
                     if recovery.halted:
-                        logger.critical(
-                            "Position recovery HALT — refusing to start trading",
+                        self._on_startup_recovery_halt(
+                            reason=f"startup_position_recovery:{recovery.source}",
                             source=recovery.source,
                             mismatches=recovery.mismatches,
                         )
-                        return
                     logger.info(
                         "Position recovery complete",
                         source=recovery.source,
@@ -562,8 +585,12 @@ class HFTSystem:
                         corrected=recovery.auto_corrected,
                     )
                 except Exception as exc:
-                    logger.critical("Position recovery failed", error=str(exc))
-                    return
+                    self._on_startup_recovery_halt(
+                        reason="startup_position_recovery_failed",
+                        source="exception",
+                        mismatches=[],
+                        error=str(exc),
+                    )
 
             if (
                 orders_enabled
@@ -594,7 +621,12 @@ class HFTSystem:
                 self._start_service("exec_gateway", self.execution_gateway.run())
 
                 # ── Checkpoint Writer (after recovery, before trading) ──
-                if os.getenv("HFT_CHECKPOINT_ENABLED", "1") == "1" and self.checkpoint_writer:
+                if self._recovery_halted:
+                    logger.critical(
+                        "checkpoint_writer_suppressed_after_recovery_halt",
+                        consequence="the checkpoint is preserved exactly as recovery found it",
+                    )
+                elif os.getenv("HFT_CHECKPOINT_ENABLED", "1") == "1" and self.checkpoint_writer:
                     self._start_service("checkpoint_writer", self.checkpoint_writer.run())
 
                 self._start_service("recon", self.recon_service.run())
@@ -711,6 +743,97 @@ class HFTSystem:
             # Use stop_async() for ordered shutdown: bridge → recorder drain → tasks.
             # The sync stop() skips the recorder drain path, risking data loss.
             await self.stop_async()
+
+    def _on_startup_recovery_halt(
+        self,
+        *,
+        reason: str,
+        source: str,
+        mismatches: list[dict[str, Any]],
+        error: str | None = None,
+    ) -> None:
+        """Refuse to trade when startup recovery could not establish position truth.
+
+        This was a bare ``return`` out of ``run()``. Under the container's
+        ``restart: always`` policy that is not fail-closed -- the process exited
+        0, Docker read success, restarted, and the second boot found a
+        checkpoint the shutdown path had just rewritten from an empty store::
+
+            BEFORE:  halt -> return -> exit 0 -> restart -> trade, mismatch gone
+            AFTER:   halt -> latch file + StormGuard HALT, checkpoint untouched
+
+        Observed in production 2026-09-04: boot 1 at 14:06:36Z halted on
+        checkpoint -4 vs broker 0, exited 0 at 14:07:53Z, and boot 2 at
+        14:08:01Z logged "Position recovery complete, loaded=0" and started
+        trading. ``RestartCount`` went 0 -> 1; nothing in the logs said restart.
+
+        Booting on is deliberate. A crash loop would take the feeds, the
+        recorder and every metric down with it and leave the operator blind to
+        the mismatch that needs resolving, while HALT already blocks new orders
+        and still allows cancels. The latch is what makes it survive a restart;
+        clearing it is an operator action (``hft risk resume``).
+        """
+        self._recovery_halted = True
+        logger.critical(
+            "Position recovery HALT - refusing to trade",
+            source=source,
+            mismatches=mismatches,
+            error=error,
+        )
+        try:
+            path = kill_switch.activate(reason, actor="startup_position_recovery")
+            logger.critical("kill_switch_latched_by_startup_recovery", path=path, reason=reason)
+        except OSError as exc:
+            # The in-memory HALT below still holds for this boot; only the
+            # cross-restart latch is lost. Loud, not fatal.
+            logger.critical("kill_switch_latch_write_failed", error=str(exc), reason=reason)
+        self.storm_guard.trigger_halt(f"STARTUP_POSITION_RECOVERY: {source}")
+        # Pinned for the process lifetime, and deliberately not released by
+        # ``_supervise`` when the latch file goes away. This process holds an
+        # empty position store and has its checkpoint writer suppressed, so
+        # resuming it in place would trade with no position truth and persist
+        # nothing. Resolving a recovery halt is: fix the checkpoint, clear the
+        # latch, restart.
+        self.storm_guard.set_kill_switch_hold(True)
+
+    def _write_halt_entry_checkpoint(self) -> None:
+        """M5: persist positions once per HALT episode, on entry, not every tick.
+
+        Skipped entirely after a startup recovery halt: that HALT is *caused* by
+        the checkpoint, and the store behind this write holds nothing, so the
+        write would destroy the record that produced it.
+        """
+        if self._recovery_halted or self._halt_checkpoint_written:
+            return
+        if self.checkpoint_writer is None:
+            return
+        self._halt_checkpoint_written = True
+        try:
+            self.checkpoint_writer.write_checkpoint()
+        except Exception:
+            logger.exception("halt_checkpoint_write_failed")
+
+    def _write_final_checkpoint(self) -> None:
+        """Persist positions on shutdown, unless recovery refused to trust them.
+
+        On the recovery-halt path this is the single most damaging write in the
+        system: the store is empty by construction, so it overwrites the very
+        checkpoint that refused the boot and the next boot finds nothing left to
+        halt on. That is how the 2026-09-04 mismatch was lost.
+        """
+        if self._recovery_halted:
+            logger.critical(
+                "final_checkpoint_skipped_after_recovery_halt",
+                consequence="checkpoint left exactly as recovery found it",
+            )
+            return
+        if self.checkpoint_writer is None:
+            return
+        try:
+            self.checkpoint_writer.write_checkpoint()
+            logger.info("Final position checkpoint written")
+        except Exception as exc:
+            logger.warning("Final checkpoint failed", error=str(exc))
 
     def _start_service(self, name, coro):
         if name in {"exec_router", "exec_gateway"}:
@@ -1641,7 +1764,7 @@ class HFTSystem:
                     logger.warning("pool_metrics_update_failed", error=str(e))
 
             # Kill-switch file check (async to avoid blocking event loop)
-            kill_switch_path = os.getenv("HFT_KILL_SWITCH_PATH", ".runtime/kill_switch")
+            kill_switch_path = kill_switch.kill_switch_path()
             loop = asyncio.get_running_loop()
             ks_exists = await loop.run_in_executor(None, os.path.exists, kill_switch_path)
             if ks_exists:
@@ -1652,6 +1775,15 @@ class HFTSystem:
                         _ks_reason = "kill_switch_file_present"
                     self.storm_guard.trigger_halt(f"KILL_SWITCH_FILE: {_ks_reason}")
                     logger.critical("Kill switch file detected", path=kill_switch_path, reason=_ks_reason)
+                # Every tick, not just on entry: the hold is what stops HALT
+                # de-escalating out from under a latch that is still present.
+                self.storm_guard.set_kill_switch_hold(True)
+            elif not self._recovery_halted:
+                # The file is the operator's authority, so removing it releases
+                # the hold and HALT de-escalates through the normal cooldown.
+                # A startup recovery halt is the one case that does not: see
+                # ``_on_startup_recovery_halt``.
+                self.storm_guard.set_kill_switch_hold(False)
 
             # R11-C4: Telegram /stop emergency halt via Redis key.
             # P2-e (2026-04-27): the file-based kill-switch above (lines
@@ -1823,13 +1955,7 @@ class HFTSystem:
                 # gateway rejects new intents while we drain queues below.
                 if self.gateway_service is not None:
                     self.gateway_service.set_halt()
-                # M5: Write position checkpoint once on HALT entry, not every tick.
-                if self.checkpoint_writer is not None and not self._halt_checkpoint_written:
-                    self._halt_checkpoint_written = True
-                    try:
-                        self.checkpoint_writer.write_checkpoint()
-                    except Exception:
-                        logger.exception("halt_checkpoint_write_failed")
+                self._write_halt_entry_checkpoint()
                 # Drain risk queue — preserve safety orders + halt-exempt intents
                 risk_drained = 0
                 _requeue: list = []
@@ -2160,12 +2286,7 @@ class HFTSystem:
         except Exception as exc:
             logger.warning("order_id_map_persist_failed_shutdown", error=str(exc))
 
-        if self.checkpoint_writer is not None:
-            try:
-                self.checkpoint_writer.write_checkpoint()
-                logger.info("Final position checkpoint written")
-            except Exception as exc:
-                logger.warning("Final checkpoint failed", error=str(exc))
+        self._write_final_checkpoint()
 
         # Stop AuditWriter flush tasks and drain remaining rows
         _aw = getattr(self, "_audit_writer", None)
