@@ -305,6 +305,37 @@ def _disarm_loop_stall_watchdog(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _restore_order_mode_env():
+    """Undo ``resolve_order_mode``'s write-back into ``os.environ``.
+
+    ``services/bootstrap.py:resolve_order_mode`` normalizes a legacy or aliased
+    value by assigning ``os.environ["HFT_ORDER_MODE"]``. A test that sets only
+    ``HFT_ORDER_SIMULATION`` (``tests/unit/test_bootstrap_lifecycle.py:285``)
+    never had ``HFT_ORDER_MODE`` recorded by ``monkeypatch``, so monkeypatch
+    cannot restore what it did not set: the value stays ``sim`` for every later
+    test in that xdist worker.
+
+    That is not cosmetic. ``ReconciliationService`` and ``StartupRecon`` read
+    the variable at construction time and treat a paper order mode as *not
+    comparable*, so the leak turned
+    ``tests/integration/test_recon_mismatch_drill.py`` into a test asserting
+    nothing about mismatch detection -- the drill for the position-truth path.
+    It passed run alone and failed at 99% of a full ``-n 8`` run, depending
+    only on which files a worker happened to collect first.
+    """
+    sentinel = object()
+    before = os.environ.get("HFT_ORDER_MODE", sentinel)
+    try:
+        yield
+    finally:
+        if os.environ.get("HFT_ORDER_MODE", sentinel) is not before:
+            if before is sentinel:
+                os.environ.pop("HFT_ORDER_MODE", None)
+            else:
+                os.environ["HFT_ORDER_MODE"] = before
+
+
+@pytest.fixture(autouse=True)
 def _reset_broker_login_slot(monkeypatch):
     """Clear the process-wide broker login slot between tests.
 
