@@ -249,6 +249,11 @@ class SessionRuntime:
                 "off",
             }
             attempts_total = max(1, c._login_retry_max + 1)
+            # ``attempts_total`` is the ladder's *budget*. The ladder also has
+            # two paths that stop early on purpose, so the budget is not what
+            # actually happened -- see the exit below.
+            attempts_made = 0
+            deferred_reason: str | None = None
 
             def _do_login(fetch_contract: bool) -> None:
                 c.api.login(
@@ -261,6 +266,7 @@ class SessionRuntime:
                 )
 
             for attempt in range(1, attempts_total + 1):
+                attempts_made = attempt
                 login_fetch_contract = c.fetch_contract
                 start_ns = time.perf_counter_ns()
                 ok, _, err, timed_out = c._safe_call_with_timeout(
@@ -294,6 +300,7 @@ class SessionRuntime:
                             attempt=attempt,
                             blocking_op=getattr(err, "blocking_op", None),
                         )
+                        deferred_reason = "sdk_busy"
                         break
                     if _is_connection_limit_error(c._last_login_error):
                         logger.error(
@@ -301,6 +308,7 @@ class SessionRuntime:
                             attempt=attempt,
                             error=c._last_login_error,
                         )
+                        deferred_reason = "broker_connection_limit"
                         break
                     if login_fetch_contract and fallback_enabled:
                         logger.warning(
@@ -419,7 +427,34 @@ class SessionRuntime:
                     )
                     time.sleep(retry_sleep_s)
 
-            logger.error("Login retries exhausted", attempts=attempts_total, error=c._last_login_error)
+            # Only one of the three ways out of that loop is an exhausted
+            # ladder. The other two break deliberately -- the SDK is still
+            # inside an earlier call, or the broker refused on its connection
+            # limit -- after a single attempt, and each already logged its own
+            # accurate line just above. Reporting all three as "retries
+            # exhausted ... attempts=<budget>" contradicted that line and
+            # inflated the count: over 2026-08-07..2026-09-07 the engine logged
+            # 56 exhaustions against 33 connection-limit breaks, so most of them
+            # never exhausted anything and none of them had made
+            # ``attempts_total`` attempts.
+            #
+            # The metric still counts every failed login, labelled by cause; it
+            # is only the log line that stops overstating.
+            if deferred_reason is not None:
+                logger.warning(
+                    "login_deferred_without_exhausting_ladder",
+                    reason=deferred_reason,
+                    attempts_made=attempts_made,
+                    attempts_allowed=attempts_total,
+                    error=c._last_login_error,
+                )
+            else:
+                logger.error(
+                    "Login retries exhausted",
+                    attempts=attempts_made,
+                    attempts_allowed=attempts_total,
+                    error=c._last_login_error,
+                )
             if c.metrics and hasattr(c.metrics, "shioaji_login_fail_total"):
                 c.metrics.shioaji_login_fail_total.labels(reason=classify_login_failure(c._last_login_error)).inc()
             c._release_session_lock()
