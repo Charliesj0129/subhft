@@ -366,3 +366,90 @@ def test_fill_path_drawdown_does_not_consult_the_clock(store, monkeypatch):
     monkeypatch.setattr(_ckpt, "_taifex_trading_date", _boom)
     _build_drawdown(store)  # exercises _get_drawdown_pct_locked via on_fill
     assert store._get_drawdown_pct_locked() == pytest.approx(0.2)
+
+
+class _RecordingGauge:
+    """Records every value published to ``portfolio_drawdown_pct``."""
+
+    def __init__(self) -> None:
+        self.values: list[float] = []
+
+    def set(self, value: float) -> None:
+        self.values.append(value)
+
+
+class _Metrics:
+    def __init__(self) -> None:
+        self.portfolio_drawdown_pct = _RecordingGauge()
+
+    # The fill path also touches these; keep them harmless.
+    def cap_symbol(self, symbol: str) -> str:
+        return symbol
+
+    def __getattr__(self, name: str):  # pragma: no cover - inert stand-ins
+        class _Any:
+            def labels(self, **_kw):
+                return self
+
+            def set(self, *_a, **_k):
+                return None
+
+            def inc(self, *_a, **_k):
+                return None
+
+        return _Any()
+
+
+def test_the_drawdown_read_by_the_risk_path_is_the_one_exported(store):
+    """The gauge must carry the number the gate acts on, not a stale one.
+
+    Until 2026-09-08 the two ``_on_fill`` sites were the gauge's only writers,
+    so a drawdown that blocked every intent -- and therefore every fill --
+    could never be published. On THESHOW the gauge read 0.0 while StormGuard
+    gated on -111 bps.
+    """
+    metrics = _Metrics()
+    store.metrics = metrics
+    _build_drawdown(store)
+    metrics.portfolio_drawdown_pct.values.clear()
+
+    drawdown = store.get_drawdown_pct()
+
+    assert drawdown == pytest.approx(0.2)
+    assert metrics.portfolio_drawdown_pct.values, "get_drawdown_pct published nothing"
+    assert metrics.portfolio_drawdown_pct.values[-1] == pytest.approx(drawdown)
+
+
+def test_the_gauge_tracks_the_drawdown_without_any_new_fill(store):
+    """The incident shape: no fill can occur, and the gauge must still update.
+
+    A drawdown STORM blocks every non-reducing intent, so a flat strategy
+    produces no fill. If the fill path is the only writer, the published
+    drawdown is frozen exactly when it matters.
+    """
+    metrics = _Metrics()
+    store.metrics = metrics
+    _build_drawdown(store)
+    metrics.portfolio_drawdown_pct.values.clear()
+
+    for _ in range(3):
+        store.get_drawdown_pct()
+
+    assert len(metrics.portfolio_drawdown_pct.values) == 3
+    assert all(v == pytest.approx(0.2) for v in metrics.portfolio_drawdown_pct.values)
+
+
+def test_publishing_the_drawdown_never_breaks_the_risk_read(store):
+    """A broken metrics backend must not take the risk path down with it."""
+
+    class _Exploding:
+        def set(self, _value: float) -> None:
+            raise RuntimeError("metrics backend down")
+
+    class _M:
+        portfolio_drawdown_pct = _Exploding()
+
+    _build_drawdown(store)
+    store.metrics = _M()
+
+    assert store.get_drawdown_pct() == pytest.approx(0.2)
