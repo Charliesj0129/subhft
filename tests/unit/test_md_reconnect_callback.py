@@ -5,12 +5,25 @@ from unittest.mock import MagicMock
 import pytest
 
 from hft_platform.services._md_reconnect import MarketDataReconnectMixin
+from hft_platform.services.market_data import MarketDataService
 
 
 class _FakeMDService(MarketDataReconnectMixin):
-    """Minimal stub implementing attributes used by _trigger_reconnect."""
+    """Minimal stub implementing attributes used by _trigger_reconnect.
+
+    ``_trigger_reconnect`` is bound from ``MarketDataService``: the mixin no
+    longer carries a shadowed second copy for this fixture to inherit.
+    """
+
+    _trigger_reconnect = MarketDataService._trigger_reconnect
 
     def __init__(self) -> None:
+        import asyncio
+
+        self.raw_queue: asyncio.Queue = asyncio.Queue()
+        self._event_counts: dict[str, int] = {}
+        self._ever_active_symbols: set[str] = set()
+        self._symbol_last_tick: dict[str, float] = {}
         self._last_reconnect_ts = 0.0
         self.reconnect_cooldown_s = 0.0
         self.reconnect_timeout_s = 30.0

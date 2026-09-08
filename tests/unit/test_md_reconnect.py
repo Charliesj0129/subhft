@@ -13,6 +13,7 @@ Tests cover:
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -20,6 +21,7 @@ import pytest
 
 from hft_platform.services._md_ingestion import FeedState
 from hft_platform.services._md_reconnect import MarketDataReconnectMixin
+from hft_platform.services.market_data import MarketDataService
 
 # ---------------------------------------------------------------------------
 # Helper: a minimal concrete class that mixes in MarketDataReconnectMixin
@@ -27,9 +29,25 @@ from hft_platform.services._md_reconnect import MarketDataReconnectMixin
 
 
 class _FakeMD(MarketDataReconnectMixin):
-    """Minimal stub that satisfies all getattr() probes in the mixin."""
+    """Minimal stub that satisfies all getattr() probes in the mixin.
+
+    ``_trigger_reconnect`` is bound from ``MarketDataService`` rather than
+    inherited: the mixin used to carry a second, shadowed copy, so every test
+    below exercised an implementation that never ran in production -- and the
+    dead one was missing the DATA-010 stale-queue drain. Binding the live
+    method keeps this fixture lightweight while pointing the tests at the code
+    the engine actually executes.
+    """
+
+    _trigger_reconnect = MarketDataService._trigger_reconnect
 
     def __init__(self) -> None:
+        self.raw_queue: asyncio.Queue = asyncio.Queue()
+        self.lob = None
+        self.feature_engine = None
+        self._event_counts: dict[str, int] = {}
+        self._ever_active_symbols: set[str] = set()
+        self._on_reconnect_callbacks: list = []
         self.running = True
         self.state = FeedState.CONNECTED
         self.last_event_ts: float = 0.0
@@ -415,7 +433,8 @@ class TestTriggerReconnect:
         now_ts = dt.datetime(2024, 1, 15, 9, 0, 0, tzinfo=dt.timezone.utc).timestamp()
         md._last_reconnect_ts = now_ts - 10.0  # well within 60s cooldown
         with (
-            patch("hft_platform.services._md_reconnect.timebase") as tb,
+            patch("hft_platform.services.market_data.timebase") as tb,
+            patch("hft_platform.services._md_reconnect.timebase") as tb_mixin,
             patch.dict("os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}),
         ):
             tb.now_s.return_value = now_ts
@@ -428,7 +447,8 @@ class TestTriggerReconnect:
         md.reconnect_hours = "08:00-13:00"
         md._last_reconnect_ts = 0.0
         with (
-            patch("hft_platform.services._md_reconnect.timebase") as tb,
+            patch("hft_platform.services.market_data.timebase") as tb,
+            patch("hft_platform.services._md_reconnect.timebase") as tb_mixin,
             patch.dict("os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}),
         ):
             tb.now_s.return_value = now.timestamp()
@@ -441,7 +461,8 @@ class TestTriggerReconnect:
         md._last_reconnect_ts = 0.0
         md.client = None
         with (
-            patch("hft_platform.services._md_reconnect.timebase") as tb,
+            patch("hft_platform.services.market_data.timebase") as tb,
+            patch("hft_platform.services._md_reconnect.timebase") as tb_mixin,
             patch.dict("os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}),
         ):
             tb.now_s.return_value = now_ts
@@ -457,7 +478,8 @@ class TestTriggerReconnect:
         client.reconnect.return_value = True
         md.client = client
         with (
-            patch("hft_platform.services._md_reconnect.timebase") as tb,
+            patch("hft_platform.services.market_data.timebase") as tb,
+            patch("hft_platform.services._md_reconnect.timebase") as tb_mixin,
             patch.dict("os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}),
         ):
             tb.now_s.return_value = now_ts
@@ -474,7 +496,8 @@ class TestTriggerReconnect:
         client.reconnect.return_value = False
         md.client = client
         with (
-            patch("hft_platform.services._md_reconnect.timebase") as tb,
+            patch("hft_platform.services.market_data.timebase") as tb,
+            patch("hft_platform.services._md_reconnect.timebase") as tb_mixin,
             patch.dict("os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}),
         ):
             tb.now_s.return_value = now_ts
@@ -499,7 +522,8 @@ class TestTriggerReconnect:
         client.reconnect.side_effect = slow_reconnect
         md.client = client
         with (
-            patch("hft_platform.services._md_reconnect.timebase") as tb,
+            patch("hft_platform.services.market_data.timebase") as tb,
+            patch("hft_platform.services._md_reconnect.timebase") as tb_mixin,
             patch.dict("os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}),
         ):
             tb.now_s.return_value = now_ts
@@ -515,7 +539,8 @@ class TestTriggerReconnect:
         client.reconnect.side_effect = RuntimeError("boom")
         md.client = client
         with (
-            patch("hft_platform.services._md_reconnect.timebase") as tb,
+            patch("hft_platform.services.market_data.timebase") as tb,
+            patch("hft_platform.services._md_reconnect.timebase") as tb_mixin,
             patch.dict("os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}),
         ):
             tb.now_s.return_value = now_ts
@@ -531,7 +556,8 @@ class TestTriggerReconnect:
         client.reconnect.return_value = True
         md.client = client
         with (
-            patch("hft_platform.services._md_reconnect.timebase") as tb,
+            patch("hft_platform.services.market_data.timebase") as tb,
+            patch("hft_platform.services._md_reconnect.timebase") as tb_mixin,
             patch.dict("os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}),
         ):
             tb.now_s.return_value = now_ts
@@ -539,6 +565,40 @@ class TestTriggerReconnect:
         call_args = client.reconnect.call_args
         # second positional arg is force_login=True
         assert call_args[0][1] is True
+
+    @pytest.mark.asyncio
+    async def test_drains_stale_raw_queue_after_successful_reconnect(self, md: _FakeMD) -> None:
+        """DATA-010: pre-reconnect messages must not reach a freshly reset book.
+
+        This is the behaviour the shadowed copy in ``_md_reconnect`` never had,
+        and every test in this class used to run against that copy.
+        """
+        now_ts = dt.datetime(2024, 1, 15, 9, 0, 0, tzinfo=dt.timezone.utc).timestamp()
+        md._last_reconnect_ts = 0.0
+        client = MagicMock()
+        client.reconnect.return_value = True
+        md.client = client
+        for i in range(3):
+            md.raw_queue.put_nowait(("stale", i))
+
+        with (
+            patch("hft_platform.services.market_data.timebase") as tb,
+            patch("hft_platform.services._md_reconnect.timebase") as tb_mixin,
+            patch.dict("os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}),
+        ):
+            tb.now_s.return_value = now_ts
+            tb_mixin.now_s.return_value = now_ts
+            result = await md._trigger_reconnect(30.0)
+
+        assert result is True
+        assert md.raw_queue.empty(), "stale pre-reconnect messages survived into the reset book"
+
+    def test_mixin_does_not_shadow_the_live_implementation(self) -> None:
+        """One implementation only -- a duplicate is where a fix goes to die."""
+        from hft_platform.services import _md_reconnect
+
+        assert "_trigger_reconnect" not in vars(_md_reconnect.MarketDataReconnectMixin)
+        assert MarketDataService._trigger_reconnect.__qualname__ == "MarketDataService._trigger_reconnect"
 
 
 # ---------------------------------------------------------------------------

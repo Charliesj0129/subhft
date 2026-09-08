@@ -96,15 +96,20 @@ class TestReconnectBackstopOutlastsInnerBudgets:
         measured_worst_login_s = 59.98  # 2026-09-07T00:30:04Z, the slowest of 68
         assert _outer_default() > measured_worst_login_s
 
-    def test_the_mixin_fallback_agrees_with_the_service_default(self):
-        """A divergent fallback is a second, silently different, budget."""
-        from hft_platform.services import _md_reconnect
+    def test_there_is_only_one_reconnect_implementation_to_carry_the_budget(self):
+        """A divergent fallback is a second, silently different, budget.
 
-        src = inspect.getsource(_md_reconnect.MarketDataReconnectMixin._trigger_reconnect)
-        marker = 'getattr(self, "reconnect_timeout_s", '
-        assert marker in src
-        fallback = float(src.split(marker, 1)[1].split(")", 1)[0])
-        assert fallback == _outer_default(), "mixin fallback and service default must not diverge"
+        This used to compare the mixin's ``getattr(self, "reconnect_timeout_s",
+        ...)`` default against the service's. That guard was itself reading dead
+        code -- the mixin's copy was shadowed by the class body and never ran --
+        so it pinned a budget nothing used. The duplicate is gone; the invariant
+        it was protecting is now structural.
+        """
+        from hft_platform.services import _md_reconnect
+        from hft_platform.services.market_data import MarketDataService
+
+        assert "_trigger_reconnect" not in vars(_md_reconnect.MarketDataReconnectMixin)
+        assert MarketDataService._trigger_reconnect.__qualname__ == "MarketDataService._trigger_reconnect"
 
 
 class TestReconnectBackstopBehaviour:
