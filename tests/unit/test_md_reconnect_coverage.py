@@ -13,6 +13,7 @@ import pytest
 
 from hft_platform.services._md_ingestion import FeedState
 from hft_platform.services._md_reconnect import MarketDataReconnectMixin
+from hft_platform.services.market_data import MarketDataService
 
 # ---------------------------------------------------------------------------
 # Minimal concrete class mixing in MarketDataReconnectMixin
@@ -20,7 +21,18 @@ from hft_platform.services._md_reconnect import MarketDataReconnectMixin
 
 
 class _FakeMD(MarketDataReconnectMixin):
+    # Bound from the service: the mixin no longer shadows the live method.
+    _trigger_reconnect = MarketDataService._trigger_reconnect
+
     def __init__(self) -> None:
+        import asyncio
+
+        self.raw_queue: asyncio.Queue = asyncio.Queue()
+        self._event_counts: dict[str, int] = {}
+        self._ever_active_symbols: set[str] = set()
+        self.lob = None
+        self.feature_engine = None
+        self._on_reconnect_callbacks: list = []
         self.running = True
         self.state = FeedState.CONNECTED
         self.last_event_ts: float = 0.0

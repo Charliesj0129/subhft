@@ -180,65 +180,14 @@ class MarketDataReconnectMixin:
             return
         self._mark_pending_reconnect(gap, reason=reason)
 
-    async def _trigger_reconnect(self: Any, gap: float, reason: str | None = None) -> bool:
-        now = timebase.now_s()
-        if now - getattr(self, "_last_reconnect_ts", 0.0) < getattr(self, "reconnect_cooldown_s", 60.0):
-            return False
-        if not self._within_reconnect_window():
-            return False
-        self._last_reconnect_ts = now
-        reason_label = reason or "heartbeat_gap"
-        logger.warning("Triggering reconnect", gap=gap, reason=reason_label)
-        self._set_state(FeedState.RECOVERING)
-        force_login = reason_label == "session_rollover"
-        # Fallback must track ``MarketDataService.reconnect_timeout_s``'s own
-        # default -- see the budget arithmetic there for why 30s inverted the
-        # nesting against the broker client's inner stage timeouts.
-        reconnect_timeout_s = getattr(self, "reconnect_timeout_s", 240.0)
-        client = getattr(self, "client", None)
-        if client is None:
-            self._set_state(FeedState.DISCONNECTED)
-            return False
-        metrics_registry = getattr(self, "metrics_registry", None)
-        try:
-            ok = await asyncio.wait_for(
-                asyncio.to_thread(client.reconnect, f"{reason_label} {gap:.1f}s", force_login),
-                timeout=max(0.1, float(reconnect_timeout_s)),
-            )
-        except asyncio.TimeoutError:
-            logger.error("Reconnect timed out", reason=reason_label, timeout_s=reconnect_timeout_s)
-            if metrics_registry and hasattr(metrics_registry, "feed_reconnect_timeout_total"):
-                metrics_registry.feed_reconnect_timeout_total.labels(reason=reason_label).inc()
-            self._set_state(FeedState.DISCONNECTED)
-            return False
-        except Exception as exc:
-            logger.error("Reconnect raised exception", reason=reason_label, error=str(exc))
-            if metrics_registry and hasattr(metrics_registry, "feed_reconnect_exception_total"):
-                from hft_platform.observability.metrics import cap_exception_type  # noqa: PLC0415
-
-                metrics_registry.feed_reconnect_exception_total.labels(
-                    reason=reason_label,
-                    exception_type=cap_exception_type(exc),
-                ).inc()
-            self._set_state(FeedState.DISCONNECTED)
-            return False
-        self._apply_post_reconnect_resets()
-        if ok:
-            self._set_state(FeedState.CONNECTED)
-            self.last_event_ts = timebase.now_s()
-            self.last_event_mono = time.monotonic()
-            self._resubscribe_attempts = 0
-            # Fire post-reconnect callbacks (e.g. invalidate stale live orders)
-            for cb in getattr(self, "_on_reconnect_callbacks", []):
-                try:
-                    result = cb(reason_label)
-                    if asyncio.iscoroutine(result):
-                        await result
-                except Exception as cb_exc:
-                    logger.warning("on_reconnect_callback_error", error=str(cb_exc))
-        else:
-            self._set_state(FeedState.DISCONNECTED)
-        return ok
+    # ``_trigger_reconnect`` intentionally lives only in ``MarketDataService``
+    # (``market_data.py``). A copy used to sit here, shadowed by the class body
+    # and therefore dead, and the two had drifted apart in two ways that matter
+    # on a reconnect: only the live one drains the stale pre-reconnect
+    # raw_queue (DATA-010), and this one skipped the LOB/Feature reset for any
+    # client exposing ``get_healthy_feed_gap_s``. A duplicate is where a fix
+    # goes to be silently ignored -- the same reasoning that already collapsed
+    # ``_within_reconnect_window`` to a single implementation.
 
     def _apply_post_reconnect_resets(self: Any) -> None:
         """Apply deferred LOB/Feature resets after reconnect (thread-safe on event loop)."""
