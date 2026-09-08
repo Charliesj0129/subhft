@@ -191,7 +191,10 @@ class MarketDataReconnectMixin:
         logger.warning("Triggering reconnect", gap=gap, reason=reason_label)
         self._set_state(FeedState.RECOVERING)
         force_login = reason_label == "session_rollover"
-        reconnect_timeout_s = getattr(self, "reconnect_timeout_s", 30.0)
+        # Fallback must track ``MarketDataService.reconnect_timeout_s``'s own
+        # default -- see the budget arithmetic there for why 30s inverted the
+        # nesting against the broker client's inner stage timeouts.
+        reconnect_timeout_s = getattr(self, "reconnect_timeout_s", 240.0)
         client = getattr(self, "client", None)
         if client is None:
             self._set_state(FeedState.DISCONNECTED)

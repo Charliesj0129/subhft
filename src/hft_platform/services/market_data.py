@@ -315,7 +315,37 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         self.reconnect_gap_s = float(os.getenv("HFT_MD_RECONNECT_GAP_S", "60"))
         self.force_reconnect_gap_s = float(os.getenv("HFT_MD_FORCE_RECONNECT_GAP_S", "300"))
         self.reconnect_cooldown_s = float(os.getenv("HFT_MD_RECONNECT_COOLDOWN_S", "60"))
-        self.reconnect_timeout_s = float(os.getenv("HFT_MD_RECONNECT_TIMEOUT_S", "30"))
+        # Backstop for a reconnect that never returns -- deliberately larger
+        # than every budget the broker client enforces inside it, because this
+        # wrapper cannot stop the work: ``asyncio.wait_for`` around
+        # ``asyncio.to_thread`` abandons the future, it does not cancel the
+        # thread. Expiring early therefore does not end the reconnect; it only
+        # makes the platform believe a reconnect that is still running has
+        # failed, mark the feed DISCONNECTED, and schedule a competing one.
+        #
+        # At 30s it did exactly that, every trading day. The shioaji client's
+        # own stage budgets (all defaults, none overridden in production) add up
+        # to 195s:
+        #
+        #     logout     HFT_SHIOAJI_RECONNECT_TIMEOUT_S            45
+        #     login      max(LOGIN_TIMEOUT_S 20, LOGIN_CONTRACT_TIMEOUT_S 60)
+        #                x (1 + LOGIN_RETRY_MAX 1) attempts        120
+        #     subscribe  HFT_SHIOAJI_RECONNECT_SUBSCRIBE_TIMEOUT_S  30
+        #
+        # so the wrapper used to expire before the logout stage alone could.
+        # Measured 2026-08-31..2026-09-07: of 68 logins, median 0.26s and p90
+        # 7.73s, but the five pre-open reconnects at 08:30:0x CST took 44-60s
+        # -- every one of them over the old bound and none over this one. Each
+        # logged "Reconnect timed out", dropped to DISCONNECTED, and was then
+        # overtaken by its own login succeeding ~30s later.
+        #
+        # A long backstop is safe here: the feed sits in RECOVERING meanwhile,
+        # which already holds the platform in PLATFORM_REDUCE_ONLY, and a stage
+        # that genuinely wedges is caught by its own tighter inner timeout long
+        # before this fires. ``test_md_reconnect_timeout_budget.py`` pins the
+        # ordering against those inner defaults so it cannot silently invert
+        # again.
+        self.reconnect_timeout_s = float(os.getenv("HFT_MD_RECONNECT_TIMEOUT_S", "240"))
         self._heartbeat_gap_metric_cooldown_s = float(os.getenv("HFT_MD_GAP_METRIC_COOLDOWN_S", "30"))
         self._last_heartbeat_gap_metric_ts = 0.0
         self.reconnect_days = {d.strip().lower() for d in os.getenv("HFT_RECONNECT_DAYS", "").split(",") if d.strip()}
