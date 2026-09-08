@@ -98,7 +98,13 @@ class TestSessionDownIsVisible:
         metrics.shioaji_session_down_total.inc.side_effect = RuntimeError("registry gone")
         runtime = self._runtime(metrics)
 
-        QuoteRuntime.on_session_down(runtime)  # must not raise
+        with structlog.testing.capture_logs() as logs:
+            QuoteRuntime.on_session_down(runtime)  # must not raise
+
+        # Reaching the counter proves the raise came from inside the handler
+        # and was swallowed there, rather than the handler never running.
+        metrics.shioaji_session_down_total.inc.assert_called_once_with()
+        assert [e for e in logs if e["event"] == "shioaji_session_down"]
 
     def test_session_down_does_not_trigger_a_reconnect(self) -> None:
         """Observational by design -- recovery stays with the feed-gap watchdog.
