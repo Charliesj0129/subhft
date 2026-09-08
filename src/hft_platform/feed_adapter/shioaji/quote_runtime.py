@@ -16,6 +16,12 @@ if TYPE_CHECKING:
 
 logger = get_logger("feed_adapter.quote_runtime")
 
+# How many watchdog iterations may fail inside the decay window before the
+# thread gives up. One transient failure is a broker hiccup and must not cost
+# the facade its stall detection; a run of them means the watchdog itself is
+# stuck, and ending it fail-closed is what ShioajiWatchdogThreadDown alerts on.
+_WATCHDOG_MAX_CONSECUTIVE_ERRORS = 5
+
 
 @dataclass(frozen=True)
 class QuotePendingState:
@@ -518,80 +524,125 @@ class QuoteRuntime:
             # the same way its session-refresh thread was lost on 2026-07-25,
             # when one facade went silent for 24 h carrying 74 symbols.
             was_logged_out = False
+            # One bad iteration must not end the thread. The try below used to
+            # wrap the whole loop, so a single exception -- a transient
+            # "Already mutably borrowed" out of the shioaji 1.5.x Rust core, seen
+            # on the live engine 2026-09-07T17:47:26Z -- ran the finally, cleared
+            # _quote_watchdog_running, and left the facade with no stall detection
+            # at all. That is the failure the comment above already describes: a
+            # facade silent for 24 h carrying 74 symbols. It survived that time
+            # only because a reconnect happened to follow 70 ms later and restart
+            # the thread; nothing in the design guarantees one does.
+            #
+            # Errors are counted with a decay rather than reset on a clean pass,
+            # because the loop body leaves by ``continue`` on five ordinary paths
+            # and a reset statement after it would be skipped by all of them.
+            # Isolated hiccups therefore age out; only a genuinely stuck watchdog
+            # -- _WATCHDOG_MAX_CONSECUTIVE_ERRORS failures inside the decay
+            # window -- still ends the thread, fail-closed, for
+            # ShioajiWatchdogThreadDown to alert on.
+            was_logged_out = False
+            consecutive_errors = 0
+            last_error_mono = 0.0
+            error_decay_s = max(60.0, float(c._quote_watchdog_interval_s) * 5.0)
             try:
                 while c.api and c._quote_watchdog_running:
-                    time.sleep(c._quote_watchdog_interval_s)
-                    if not c._quote_watchdog_running:
-                        break
-                    if not c.logged_in:
-                        # Re-login belongs to the session-refresh thread. Stall
-                        # detection here would only queue resubscribes that
-                        # cannot succeed while the facade has no session.
-                        was_logged_out = True
-                        continue
-                    if was_logged_out:
-                        # The refresh path has just re-subscribed. Do not count
-                        # the logged-out gap as a quote stall.
-                        was_logged_out = False
+                    try:
+                        time.sleep(c._quote_watchdog_interval_s)
+                        if not c._quote_watchdog_running:
+                            break
+                        if not c.logged_in:
+                            # Re-login belongs to the session-refresh thread. Stall
+                            # detection here would only queue resubscribes that
+                            # cannot succeed while the facade has no session.
+                            was_logged_out = True
+                            continue
+                        if was_logged_out:
+                            # The refresh path has just re-subscribed. Do not count
+                            # the logged-out gap as a quote stall.
+                            was_logged_out = False
+                            c._last_quote_data_ts = timebase.now_s()
+                            continue
+                        c._update_quote_pending_metrics()
+                        last = c._last_quote_data_ts
+                        if last <= 0:
+                            continue
+                        gap = timebase.now_s() - last
+                        # Use relaxed threshold during market open grace period (C4)
+                        threshold = c._quote_no_data_s
+                        if c._is_market_open_grace_period():
+                            threshold = max(threshold, c._market_open_grace_s)
+                        if gap < threshold:
+                            continue
+                        if not c._allow_quote_recovery("watchdog_no_data"):
+                            continue
+                        c._mark_quote_pending("no_data")
+                        downgrade_allowed = c._quote_version_mode == "auto" or (
+                            c._quote_version_mode == "v1" and not c._quote_version_strict
+                        )
+                        if downgrade_allowed and c._quote_version == "v1" and c._supports_quote_v0():
+                            logger.warning(
+                                "No quote data; switching quote version",
+                                gap_s=round(gap, 3),
+                                to_version="v0",
+                            )
+                            with c._quote_version_lock:
+                                c._quote_version = "v0"
+                            if c.metrics:
+                                c.metrics.quote_version_switch_total.labels(direction="downgrade").inc()
+                                try:
+                                    c.metrics.quote_watchdog_recovery_attempts_total.labels(
+                                        action="version_downgrade"
+                                    ).inc()
+                                except Exception as exc:
+                                    logger.debug("operation_fallback", error=str(exc))
+                                    pass
+                        else:
+                            if downgrade_allowed and c._quote_version == "v1" and not c._supports_quote_v0():
+                                logger.warning("Quote v0 callbacks unavailable; staying on v1")
+                            logger.warning(
+                                "No quote data; re-registering callbacks",
+                                gap_s=round(gap, 3),
+                                quote_version=c._quote_version,
+                            )
+                            if c.metrics:
+                                try:
+                                    c.metrics.quote_watchdog_recovery_attempts_total.labels(
+                                        action="callback_reregister"
+                                    ).inc()
+                                except Exception as exc:
+                                    logger.debug("operation_fallback", error=str(exc))
+                                    pass
+                        if c.tick_callback:
+                            c._callbacks_registered = False
+                            c._ensure_callbacks(c.tick_callback)
+                            c._resubscribe_all()
                         c._last_quote_data_ts = timebase.now_s()
-                        continue
-                    c._update_quote_pending_metrics()
-                    last = c._last_quote_data_ts
-                    if last <= 0:
-                        continue
-                    gap = timebase.now_s() - last
-                    # Use relaxed threshold during market open grace period (C4)
-                    threshold = c._quote_no_data_s
-                    if c._is_market_open_grace_period():
-                        threshold = max(threshold, c._market_open_grace_s)
-                    if gap < threshold:
-                        continue
-                    if not c._allow_quote_recovery("watchdog_no_data"):
-                        continue
-                    c._mark_quote_pending("no_data")
-                    downgrade_allowed = c._quote_version_mode == "auto" or (
-                        c._quote_version_mode == "v1" and not c._quote_version_strict
-                    )
-                    if downgrade_allowed and c._quote_version == "v1" and c._supports_quote_v0():
-                        logger.warning(
-                            "No quote data; switching quote version",
-                            gap_s=round(gap, 3),
-                            to_version="v0",
-                        )
-                        with c._quote_version_lock:
-                            c._quote_version = "v0"
-                        if c.metrics:
-                            c.metrics.quote_version_switch_total.labels(direction="downgrade").inc()
-                            try:
-                                c.metrics.quote_watchdog_recovery_attempts_total.labels(
-                                    action="version_downgrade"
-                                ).inc()
-                            except Exception as exc:
-                                logger.debug("operation_fallback", error=str(exc))
-                                pass
-                    else:
-                        if downgrade_allowed and c._quote_version == "v1" and not c._supports_quote_v0():
-                            logger.warning("Quote v0 callbacks unavailable; staying on v1")
-                        logger.warning(
-                            "No quote data; re-registering callbacks",
-                            gap_s=round(gap, 3),
-                            quote_version=c._quote_version,
+                    except Exception as exc:  # noqa: BLE001 - one iteration must not end the thread
+                        now_mono = time.monotonic()
+                        if now_mono - last_error_mono > error_decay_s:
+                            consecutive_errors = 0
+                        last_error_mono = now_mono
+                        consecutive_errors += 1
+                        logger.error(
+                            "quote_watchdog_iteration_failed",
+                            error=str(exc),
+                            consecutive_errors=consecutive_errors,
+                            max_consecutive=_WATCHDOG_MAX_CONSECUTIVE_ERRORS,
                         )
                         if c.metrics:
                             try:
-                                c.metrics.quote_watchdog_recovery_attempts_total.labels(
-                                    action="callback_reregister"
-                                ).inc()
-                            except Exception as exc:
-                                logger.debug("operation_fallback", error=str(exc))
-                                pass
-                    if c.tick_callback:
-                        c._callbacks_registered = False
-                        c._ensure_callbacks(c.tick_callback)
-                        c._resubscribe_all()
-                    c._last_quote_data_ts = timebase.now_s()
+                                c.metrics.quote_watchdog_recovery_attempts_total.labels(action="iteration_error").inc()
+                            except Exception as metric_exc:
+                                logger.debug("operation_fallback", error=str(metric_exc))
+                        if consecutive_errors >= _WATCHDOG_MAX_CONSECUTIVE_ERRORS:
+                            raise
             except Exception as exc:
-                logger.error("Quote watchdog thread crashed", error=str(exc))
+                logger.error(
+                    "Quote watchdog thread crashed",
+                    error=str(exc),
+                    consecutive_errors=consecutive_errors,
+                )
             finally:
                 c._quote_watchdog_running = False
                 c._set_thread_alive_metric("quote_watchdog", False)
