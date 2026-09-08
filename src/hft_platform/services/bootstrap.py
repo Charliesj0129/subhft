@@ -1551,6 +1551,17 @@ class SystemBootstrapper:
                 position_stuck_monitor = PositionStuckMonitor(
                     position_store=position_store,
                     dispatcher=notification_dispatcher if "notification_dispatcher" in dir() else None,
+                    # Until 2026-09-08 neither of the next two arguments was
+                    # passed, so ``_estimate_unrealized_ntd`` returned ``None``
+                    # on every alert in every environment: the warning that
+                    # exists to tell an operator a position is stuck could not
+                    # say how much money was on it. Measured on THESHOW that
+                    # day -- ``position_stuck_alert ... net_qty=1 age_s=300
+                    # unrealized_ntd=null``. The unit test covering the field
+                    # passed throughout, because it supplied the mid-price
+                    # function that production never did.
+                    mid_price_fn=_get_mid_price,
+                    contract_multiplier_fn=getattr(symbol_metadata, "contract_multiplier", None),
                 )
                 logger.info("PositionStuckMonitor created")
             except Exception as exc:  # noqa: BLE001
