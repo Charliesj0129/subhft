@@ -245,3 +245,124 @@ def test_multiple_strategies_independent_positions(store):
     assert pnl_alpha == 100_000
     assert pnl_beta == -100_000
     assert store.total_pnl == 0
+
+
+# ---------------------------------------------------------------------------
+# Trading-date rollover of the peak-equity high-water mark
+#
+# ``_peak_equity_scaled`` only ever ratchets up, and the sole writer that lowers
+# it (``reset()``) also wipes every position and has no production caller. The
+# startup path already scopes it to a trading date -- ``StartupReconciler``
+# restores it only while the checkpoint's ``trading_date`` is still current --
+# so a process that runs *through* a rollover was the one case that never got
+# the reset.
+# ---------------------------------------------------------------------------
+
+
+def _build_drawdown(store) -> None:
+    """Take the store to a peak, then give part of it back."""
+    store.on_fill(_make_fill(Side.BUY, 10, 1_000_000))
+    store.on_fill(_make_fill(Side.SELL, 10, 1_500_000))  # +5_000_000 = peak
+    store.on_fill(_make_fill(Side.BUY, 10, 1_000_000))
+    store.on_fill(_make_fill(Side.SELL, 10, 900_000))  # -1_000_000
+
+
+def test_peak_equity_rebases_at_the_trading_date_rollover(store, monkeypatch):
+    """Yesterday's high-water mark must not gate today's session."""
+    import hft_platform.execution.checkpoint as _ckpt
+
+    monkeypatch.setattr(_ckpt, "_taifex_trading_date", lambda: "20260907")
+    _build_drawdown(store)
+    assert store.get_drawdown_pct() == pytest.approx(0.2)
+
+    monkeypatch.setattr(_ckpt, "_taifex_trading_date", lambda: "20260908")
+
+    assert store.get_drawdown_pct() == 0.0
+    assert store._peak_equity_scaled == store.total_pnl
+
+
+def test_peak_equity_holds_within_the_same_trading_date(store, monkeypatch):
+    """The gate must not be weakened intraday -- only the rollover re-bases it."""
+    import hft_platform.execution.checkpoint as _ckpt
+
+    monkeypatch.setattr(_ckpt, "_taifex_trading_date", lambda: "20260907")
+    _build_drawdown(store)
+
+    for _ in range(5):
+        assert store.get_drawdown_pct() == pytest.approx(0.2)
+    assert store._peak_equity_scaled == 5_000_000
+
+
+def test_drawdown_releases_at_the_rollover_while_flat_and_idle(store, monkeypatch):
+    """The production stall: flat, no fills possible, drawdown its own input.
+
+    StormGuard blocks every non-reducing intent above ``storm_drawdown_bps``.
+    A flat strategy has nothing to reduce, so nothing it sends is permitted,
+    and realised PnL -- the only input that could lower the drawdown -- is
+    frozen by the block itself. Observed 2026-09-08: ``portfolio_drawdown_pct``
+    held at one value to four decimal places for 8 h 29 min across 2,346
+    rejected intents. The rollover
+    is what has to break that cycle, without a fill and without a restart.
+    """
+    import hft_platform.execution.checkpoint as _ckpt
+
+    monkeypatch.setattr(_ckpt, "_taifex_trading_date", lambda: "20260907")
+    _build_drawdown(store)
+    assert store.net_qty_for_symbol("SYM") == 0, "precondition: nothing left to reduce"
+    assert store.get_drawdown_pct() > 0.0
+
+    monkeypatch.setattr(_ckpt, "_taifex_trading_date", lambda: "20260908")
+
+    # No fill, no restart -- the rollover alone must clear it.
+    assert store.get_drawdown_pct() == 0.0
+    assert store.net_qty_for_symbol("SYM") == 0
+
+
+def test_first_read_adopts_the_restored_watermark_without_rebasing(store, monkeypatch):
+    """StartupReconciler restores the watermark *after* construction.
+
+    The first read of a process must therefore adopt what recovery decided
+    rather than treat the unset date as a rollover and discard it.
+    """
+    import hft_platform.execution.checkpoint as _ckpt
+
+    monkeypatch.setattr(_ckpt, "_taifex_trading_date", lambda: "20260908")
+    store._total_realized_pnl_scaled = 4_000_000
+    store._peak_equity_scaled = 5_000_000  # as StartupReconciler restores it
+
+    assert store.get_drawdown_pct() == pytest.approx(0.2)
+    assert store._peak_equity_scaled == 5_000_000
+
+
+def test_rollover_uses_the_checkpoints_own_trading_date_definition(store, monkeypatch):
+    """One boundary definition, not two.
+
+    The checkpoint already scopes ``peak_equity_scaled`` with
+    ``_taifex_trading_date``; the in-process re-base must read the same
+    function, or the same engine answers differently depending only on whether
+    it restarted.
+    """
+    import hft_platform.execution.checkpoint as _ckpt
+
+    calls = []
+
+    def _probe() -> str:
+        calls.append(1)
+        return "20260907"
+
+    monkeypatch.setattr(_ckpt, "_taifex_trading_date", _probe)
+    store.get_drawdown_pct()
+
+    assert calls, "get_drawdown_pct did not consult the checkpoint trading date"
+
+
+def test_fill_path_drawdown_does_not_consult_the_clock(store, monkeypatch):
+    """The locked variant runs inside ``on_fill``; keep the date lookup off it."""
+    import hft_platform.execution.checkpoint as _ckpt
+
+    def _boom() -> str:
+        raise AssertionError("trading-date lookup reached the fill path")
+
+    monkeypatch.setattr(_ckpt, "_taifex_trading_date", _boom)
+    _build_drawdown(store)  # exercises _get_drawdown_pct_locked via on_fill
+    assert store._get_drawdown_pct_locked() == pytest.approx(0.2)

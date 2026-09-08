@@ -169,6 +169,7 @@ class PositionStore:
         "_log_fills",
         "_fill_lock",
         "_peak_equity_scaled",
+        "_peak_trading_date",
         "_total_realized_pnl_scaled",
         "_evicted_realized_pnl_scaled",
         "_recovery_positions",
@@ -207,6 +208,11 @@ class PositionStore:
         self._recovery_fees_offsets: Dict[str, int] = {}
         # Portfolio-level tracking for StormGuard drawdown
         self._peak_equity_scaled: int = 0  # High watermark of total realized PnL
+        #: TAIFEX trading date the high-watermark above belongs to. Empty
+        #: until the first drawdown read, so ``StartupReconciler`` -- which
+        #: restores the watermark *after* construction -- keeps ownership of
+        #: the recovered value.
+        self._peak_trading_date: str = ""
         self._total_realized_pnl_scaled: int = 0  # Sum across all positions
         self._evicted_realized_pnl_scaled: int = 0  # Accumulated PnL from evicted flat positions
 
@@ -231,7 +237,70 @@ class PositionStore:
         triggering false HALT. Operators tune via the env var.
         """
         with self._fill_lock:
+            self._roll_peak_equity_if_new_day_locked()
             return self._get_drawdown_pct_locked()
+
+    def _roll_peak_equity_if_new_day_locked(self) -> None:
+        """Re-base the high-watermark at the TAIFEX trading-date rollover.
+
+        Caller MUST hold ``self._fill_lock``.
+
+        ``_peak_equity_scaled`` only ratchets up
+        (``_update_portfolio_aggregates``), and the one writer that lowers it,
+        ``reset()``, also clears every position and has no production caller.
+        The startup path already scopes the mark to a trading date:
+        ``StartupReconciler`` restores it while the checkpoint's
+        ``trading_date`` is still current and drops it otherwise. A process
+        running *through* a rollover never got that reset, so the same engine
+        computed a different drawdown depending only on whether it happened to
+        restart -- and yesterday's high-watermark went on gating today.
+
+        That is not academic. StormGuard blocks every non-reducing intent at
+        ``storm_drawdown_bps``. Once a strategy is flat no intent reduces a
+        position, so nothing it can send is permitted, and realised PnL -- the
+        only input that could lower the drawdown -- is frozen by the block
+        itself. Observed on THESHOW 2026-09-08: ``portfolio_drawdown_pct``
+        held at one value to four decimal places for 8 h 29 min across 2,346
+        ``STORMGUARD_STORM_BLOCKED`` rejections, with no exit short of an
+        operator reset. A gauge that constant is stuck, not stable.
+        ``DailyLossLimitValidator._maybe_reset`` already clears its own
+        ``_peak_pnl_scaled`` on this boundary; this is the same watermark, one
+        module away, that never got the same treatment.
+
+        Positions themselves still carry across the rollover -- the checkpoint
+        tolerance exists precisely so they do. Only the mark the drawdown is
+        measured *from* re-bases, which is what makes it an intraday figure.
+
+        Re-bases to current realised PnL rather than 0: 0 would leave the gate
+        disabled by the ``_MIN_PEAK_SCALED`` cold-start guard until the next
+        fill, whereas the session's opening equity is what an intraday
+        drawdown is measured from.
+        """
+        # Imported here, not at module scope: ``checkpoint`` imports this
+        # module for ``PositionStore``. Reading the checkpoint's own definition
+        # is the point -- a second copy of the boundary is how the in-process
+        # and startup answers drift apart again.
+        from hft_platform.execution.checkpoint import _taifex_trading_date
+
+        today = _taifex_trading_date()
+        previous = self._peak_trading_date
+        if previous == today:
+            return
+        self._peak_trading_date = today
+        if not previous:
+            # First read of this process: recovery has already decided whether
+            # the restored mark is current. Adopt it rather than discard it.
+            return
+        if self._peak_equity_scaled == self._total_realized_pnl_scaled:
+            return
+        logger.info(
+            "peak_equity_rebased_on_trading_date_rollover",
+            prev_trading_date=previous,
+            trading_date=today,
+            prev_peak_equity_scaled=self._peak_equity_scaled,
+            peak_equity_scaled=self._total_realized_pnl_scaled,
+        )
+        self._peak_equity_scaled = self._total_realized_pnl_scaled
 
     def _get_drawdown_pct_locked(self) -> float:
         # Caller MUST hold self._fill_lock. Splitting the locked snapshot
