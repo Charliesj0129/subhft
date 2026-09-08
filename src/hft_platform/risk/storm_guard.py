@@ -84,6 +84,11 @@ class RiskThresholds:
 
     feed_gap_storm_s: float = 1.0  # precision-time (triggers STORM, not HALT)
 
+    # Seconds a drawdown-driven STORM must hold before a *flat* strategy may
+    # open again. 0 disables the release entirely, restoring the pre-2026-09-08
+    # behaviour. See ``_drawdown_flat_release_due`` for why this exists at all.
+    drawdown_flat_release_after_s: float = 300.0
+
 
 class StormGuard:
     """
@@ -124,6 +129,7 @@ class StormGuard:
         "_session_active",
         "_halt_exempt_strategies",
         "_position_provider",
+        "_target_state_reason",
         "_feature_failure_active",
         "_feature_failure_storm_ts",
         "_norm_failure_active",
@@ -250,6 +256,11 @@ class StormGuard:
         self._inflight_dispatch_tickets: dict[int, dict[str, Any]] = {}
         self._next_ticket_id: int = 0
         self._order_rtt_peak_us: int = 0
+        #: Reason string for the state ``_evaluate_target_state`` last computed,
+        #: refreshed every ``update()`` rather than only on a transition. The
+        #: transition log records why STORM was *entered*; a gate needs to know
+        #: what is holding it *now*, which can be a different input entirely.
+        self._target_state_reason: str = ""
 
     def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         """Bind the engine event loop for cross-thread halt-callback dispatch.
@@ -291,6 +302,8 @@ class StormGuard:
             ):
                 if key in risk_cfg:
                     setattr(self.thresholds, key, int(risk_cfg[key]))
+            if "drawdown_flat_release_after_s" in risk_cfg:
+                self.thresholds.drawdown_flat_release_after_s = float(risk_cfg["drawdown_flat_release_after_s"])
             if "feed_gap_storm_s" in risk_cfg:
                 self.thresholds.feed_gap_storm_s = float(risk_cfg["feed_gap_storm_s"])  # precision-ok
             self._apply_env_overrides()
@@ -319,6 +332,13 @@ class StormGuard:
                     var="HFT_STORMGUARD_FEED_GAP_STORM_S",
                     value=feed_gap_storm,
                 )
+
+        flat_release = os.getenv("HFT_STORMGUARD_DRAWDOWN_FLAT_RELEASE_S")
+        if flat_release:
+            try:
+                self.thresholds.drawdown_flat_release_after_s = float(flat_release)  # precision-time
+            except ValueError:
+                logger.warning("Invalid HFT_STORMGUARD_DRAWDOWN_FLAT_RELEASE_S", value=flat_release)
 
         latency_storm = os.getenv("HFT_STORMGUARD_LATENCY_STORM_US")
         if latency_storm:
@@ -548,6 +568,7 @@ class StormGuard:
         self._observe_latency_input("loop_lag", latency_us)
         self._observe_latency_input("order_rtt", order_rtt_us)
         new_state, reason = self._evaluate_target_state(drawdown_bps, latency_us, feed_gap_s, order_rtt_us)
+        self._target_state_reason = reason
 
         # Transition Logic (with hysteresis protection for de-escalation)
         fire_callback = False
@@ -1052,6 +1073,7 @@ class StormGuard:
                 now = time.monotonic()
                 self._storm_entry_ts = now
                 self._de_escalate_count = 0
+                self._target_state_reason = reason
                 self._transition(StormGuardState.STORM, reason)
 
         # P1 fix: flush metrics + audit outside _state_lock.
@@ -1120,6 +1142,12 @@ class StormGuard:
             if intent.intent_type in (IntentType.NEW, IntentType.AMEND):
                 if self._intent_reduces_position(intent):
                     return True, "STORM_REDUCE_ONLY"
+                if self._drawdown_flat_release_due(intent):
+                    try:
+                        self.metrics.stormguard_drawdown_flat_release_total.inc()
+                    except Exception:  # noqa: BLE001 - never break the gate on metrics
+                        pass
+                    return True, "STORM_DRAWDOWN_FLAT_RELEASE"
                 if intent.strategy_id in self._halt_exempt_strategies:
                     logger.warning(
                         "stormguard_storm_exempt_bypass",
@@ -1221,6 +1249,65 @@ class StormGuard:
             return False
         signed = int(intent.qty if intent.side == Side.BUY else -intent.qty)
         return abs(current + signed) < abs(current)
+
+    def _drawdown_flat_release_due(self, intent: OrderIntent) -> bool:
+        """True when a *flat* strategy may open again under a drawdown STORM.
+
+        A drawdown STORM is the one STORM cause that can outlive its own
+        evidence. The drawdown is measured against a high-watermark of realised
+        PnL, so the only input that can lower it is a fill -- and STORM permits
+        nothing but ``_intent_reduces_position``, which a flat strategy can
+        never satisfy. The gate therefore freezes the number it is reading:
+
+            drawdown >= storm_drawdown_bps -> STORM
+                -> flat, so no intent reduces -> all blocked
+                -> no fills -> realised PnL frozen -> drawdown frozen
+                -> X  no exit
+
+        Observed on THESHOW 2026-09-08: STORM held for 8 h 29 min with
+        ``portfolio_drawdown_pct`` reporting one value to four decimal places
+        the entire time, across 2,346 ``STORMGUARD_STORM_BLOCKED`` rejections.
+        A restart would not have cleared it -- the watermark is checkpointed.
+
+        ``DailyLossLimitValidator._evaluate_soft_limit`` already carries this
+        release for the same deadlock in the soft-limit gate (Bug #39): flat
+        plus cooldown re-opens, and the reduce-only rule takes over the moment
+        the strategy is exposed again. Same shape here.
+
+        What the release does *not* give up:
+
+        * **Only a drawdown STORM.** A feed-gap, latency, order-RTT or
+          component-failure STORM says the platform is unhealthy, and opening
+          new risk into that stays blocked. ``_target_state_reason`` is the
+          live reason, refreshed each ``update()``, not the one STORM was
+          entered on.
+        * **Only while strictly flat.** Exposure is bounded to whatever one
+          order opens; every adding order is blocked again immediately, because
+          the strategy is no longer flat.
+        * **Only after a cooldown**, so a transient drawdown still stops
+          trading for ``drawdown_flat_release_after_s``.
+        * **HALT is untouched.** ``halt_drawdown_bps`` still hard-stops.
+        * **Fail-closed** on a missing or raising position provider: without a
+          position it cannot be proven flat, so it stays blocked.
+        """
+        after_s = self.thresholds.drawdown_flat_release_after_s
+        if after_s <= 0:
+            return False
+        if not self._target_state_reason.startswith("Drawdown"):
+            return False
+        entered = self._storm_entry_ts
+        if entered <= 0.0 or (time.monotonic() - entered) < after_s:
+            return False
+        # Two provider reads on this path (``_intent_reduces_position`` took the
+        # first) -- it is the rejection path, and one implementation of "what is
+        # the position" is worth more than the saved dict lookup.
+        provider = self._position_provider
+        if provider is None:
+            return False
+        try:
+            return int(provider(intent.symbol, intent.strategy_id) or 0) == 0
+        except Exception:  # noqa: BLE001 - cannot prove flat, so stay blocked
+            return False
 
     def set_session_active(self, active: bool) -> None:
         """Inform StormGuard whether any trading session is currently open.
