@@ -379,7 +379,11 @@ class TestCooldownDefaults:
         assert svc.reconnect_gap_s == 60.0
         assert svc.reconnect_cooldown_s == 60.0
         assert svc.force_reconnect_gap_s == 300.0
-        assert svc.reconnect_timeout_s == 30.0
+        # Raised from 30s: the wrapper must outlast the broker client's own
+        # stage budgets (195s with shipped defaults), or it reports a false
+        # failure on a reconnect that is still running. The ordering itself is
+        # pinned in test_md_reconnect_timeout_budget.py.
+        assert svc.reconnect_timeout_s == 240.0
 
     def test_custom_gap_thresholds(self, _symbols_config):
         """Custom env vars override gap defaults."""
