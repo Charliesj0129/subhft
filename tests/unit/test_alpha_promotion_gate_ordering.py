@@ -82,8 +82,8 @@ def test_verify_gate_c_warns_and_proceeds_when_no_meta(tmp_path: Path, capsys: p
 
     captured = capsys.readouterr()
     # structlog emits the event key in the rendered output
-    assert "gate_c_verification_skipped_no_meta" in captured.out or "meta.json" in captured.out, (
-        f"Expected a warning about missing meta.json in stdout; got: {captured.out!r}"
+    assert "gate_c_verification_skipped_no_meta" in captured.err or "meta.json" in captured.err, (
+        f"Expected a warning about missing meta.json in stderr; got: {captured.err!r}"
     )
 
 

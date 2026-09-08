@@ -84,9 +84,14 @@ def test_configure_logging_binds_both_sinks_to_stderr() -> None:
     from hft_platform.utils import logging as hft_logging
 
     src = inspect.getsource(hft_logging.configure_logging)
-    assert "PrintLoggerFactory(file=sys.stderr)" in src
+    assert "logger_factory=_stderr_logger_factory" in src
     assert "stream=sys.stderr" in src
     assert "stream=sys.stdout" not in src
+
+    # The sink resolves sys.stderr per write; binding it once would pin a
+    # test's redirect buffer for the rest of the process.
+    factory_src = inspect.getsource(hft_logging._CurrentStderr)
+    assert "sys.stderr.write" in factory_src
 
 
 def test_logging_level_still_applies() -> None:

@@ -229,7 +229,7 @@ def test_a_failed_durable_write_is_reported_without_taking_down_dispatch(
     asyncio.run(governor.quarantine_async(STRATEGY, reason="strategy_exception"))
 
     assert governor.is_quarantined(STRATEGY)
-    emitted = capsys.readouterr().out
+    emitted = capsys.readouterr().err
     assert "strategy_quarantine_persist_failed" in emitted, f"the failure was swallowed: {emitted!r}"
 
 

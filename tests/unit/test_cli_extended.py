@@ -327,7 +327,7 @@ def test_apply_live_downgrade_fallback_downgrades_live_without_credentials(monke
 
     assert downgraded == "sim"
     assert settings["mode"] == "sim"
-    assert "downgrading to sim mode" in capsys.readouterr().out
+    assert "downgrading to sim mode" in capsys.readouterr().err
 
 
 def test_apply_live_downgrade_fallback_keeps_live_with_credentials(monkeypatch, capsys):
@@ -338,7 +338,7 @@ def test_apply_live_downgrade_fallback_keeps_live_with_credentials(monkeypatch, 
 
     assert downgraded is None
     assert settings["mode"] == "live"
-    assert capsys.readouterr().out == ""
+    assert capsys.readouterr().err == ""
 
 
 def test_apply_live_downgrade_fallback_ignores_sim_mode(monkeypatch, capsys):
@@ -349,7 +349,7 @@ def test_apply_live_downgrade_fallback_ignores_sim_mode(monkeypatch, capsys):
 
     assert downgraded is None
     assert settings["mode"] == "sim"
-    assert capsys.readouterr().out == ""
+    assert capsys.readouterr().err == ""
 
 
 def test_cmd_symbols_build_with_warnings(monkeypatch, capsys, tmp_path):
