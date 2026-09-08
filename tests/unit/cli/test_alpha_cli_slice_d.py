@@ -66,19 +66,19 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
 
 
 def _extract_json_payload(stdout: str) -> Any:
-    """Extract the JSON object emitted by the CLI command from captured stdout.
+    """Parse the CLI command's machine-readable payload from captured stdout.
 
-    The cheap_screen pipeline emits a ``debug`` structlog event before the
-    JSON payload (and structlog's default output target is stdout). We strip
-    everything before the first ``{`` and parse from there. ``NaN`` is
-    tolerated because Python's ``json`` accepts it under default settings.
+    stdout carries the payload and nothing else -- logs go to stderr. The old
+    version of this helper skipped to the first ``{`` to step over a
+    ``cheap_screen_start`` debug line that structlog wrote to stdout, but that
+    brace belonged to the *log* line, so the parse then failed on the real
+    payload with "Extra data" whenever DEBUG was enabled. Parsing the whole
+    stream is what makes this a regression guard rather than an accommodation.
+
+    ``NaN`` is tolerated because Python's ``json`` accepts it by default.
     """
-    start = stdout.find("{")
-    if start == -1:
-        # Fall back to list payload (cluster --json)
-        start = stdout.find("[")
-    assert start >= 0, f"no JSON in stdout: {stdout!r}"
-    return json.loads(stdout[start:])
+    assert stdout.strip(), "command produced no stdout"
+    return json.loads(stdout)
 
 
 def _make_screener_fixture(

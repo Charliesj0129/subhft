@@ -103,11 +103,28 @@ def configure_logging(level: int = logging.INFO) -> None:
             structlog.processors.format_exc_info,
             structlog.processors.JSONRenderer(),
         ],
-        logger_factory=structlog.PrintLoggerFactory(),
+        # Logs go to stderr so stdout stays a clean channel for machine-readable
+        # command output. structlog's PrintLoggerFactory defaults to stdout,
+        # which put log lines and JSON payloads on the same stream: ``hft alpha
+        # cheap-screen`` emitted a ``cheap_screen_start`` debug line directly in
+        # front of its JSON verdict, so piping the command to ``jq`` failed with
+        # "Extra data" whenever DEBUG was enabled. Docker's json-file driver
+        # captures both streams, so operator-visible logging is unchanged.
+        logger_factory=structlog.PrintLoggerFactory(file=sys.stderr),
         cache_logger_on_first_use=True,
     )
-    logging.basicConfig(format="%(message)s", stream=sys.stdout, level=level)
+    logging.basicConfig(format="%(message)s", stream=sys.stderr, level=level)
 
 
 def get_logger(name: str):
     return structlog.get_logger(name)
+
+
+# structlog's *own* defaults also print to stdout, and they apply to every log
+# line emitted before ``configure_logging`` runs -- at import time, in a unit
+# test that calls a command function directly, or in any entry point that logs
+# on the way to configuring. Binding the default sink here makes "logs never
+# touch stdout" hold regardless of ordering, instead of depending on whoever
+# configured logging first. Every module reaches a logger through
+# ``get_logger`` above, so importing this module is the earliest common point.
+structlog.configure(logger_factory=structlog.PrintLoggerFactory(file=sys.stderr))
