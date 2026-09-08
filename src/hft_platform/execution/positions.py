@@ -238,7 +238,32 @@ class PositionStore:
         """
         with self._fill_lock:
             self._roll_peak_equity_if_new_day_locked()
-            return self._get_drawdown_pct_locked()
+            drawdown = self._get_drawdown_pct_locked()
+        # Publish here, not only on the fill path. Until 2026-09-08 the two
+        # ``_on_fill`` sites below were the gauge's ONLY writers, which made
+        # ``portfolio_drawdown_pct`` refreshable only by the event a drawdown
+        # STORM exists to prevent: the gate blocks every non-reducing intent,
+        # a flat strategy then produces no fill, and the gauge keeps whatever
+        # it last held -- or, after a restart, a clean 0.0. Measured on
+        # THESHOW that day: the gauge read 0.0 for 13 minutes while StormGuard
+        # was gating on -111 bps and blocking every intent, so the only
+        # published drawdown disagreed with the one the risk engine acted on.
+        # This is the 1 Hz supervisor read, off the fill hot path.
+        self._publish_drawdown_gauge(drawdown)
+        return drawdown
+
+    def _publish_drawdown_gauge(self, drawdown: float) -> None:
+        """Export the drawdown the risk path just read. Never raises."""
+        metrics = self.metrics
+        if metrics is None:
+            return
+        gauge = getattr(metrics, "portfolio_drawdown_pct", None)
+        if gauge is None:
+            return
+        try:
+            gauge.set(drawdown)
+        except Exception:  # noqa: BLE001 - a metric must not break a risk read
+            pass
 
     def _roll_peak_equity_if_new_day_locked(self) -> None:
         """Re-base the high-watermark at the TAIFEX trading-date rollover.
