@@ -53,13 +53,32 @@ def _intent(side: Side = Side.BUY, qty: int = 1) -> OrderIntent:
     )
 
 
+def _age_storm(guard, seconds: float = 10_000.0) -> None:
+    """Make the STORM look ``seconds`` old, without sleeping and without
+    driving its entry stamp past the guard's "never entered" sentinel.
+
+    ``_storm_entry_ts`` holds a ``time.monotonic()`` reading, which on Linux is
+    time since boot, and ``0.0`` is what the guard reads as "not in STORM".
+    Subtracting a fixed age from it is therefore only safe on a host that has
+    been up longer than the age being simulated: a freshly booted CI runner
+    reports a few tens of seconds, the subtraction lands *below* the sentinel,
+    and every assertion about the release becomes vacuous -- the gate returns
+    early having never evaluated it. Age only within the headroom the clock
+    actually has, and bring the threshold under the resulting age instead.
+    """
+    entered = guard._storm_entry_ts
+    assert entered > 0.0, "expected the guard to have recorded a STORM entry"
+    aged = min(seconds, entered / 2.0)
+    guard._storm_entry_ts = entered - aged
+    guard.thresholds.drawdown_flat_release_after_s = aged / 2.0
+
+
 def _enter_drawdown_storm(guard, position: int = 0, elapsed_s: float = 10_000.0) -> None:
     """Drive the guard into a drawdown STORM with the cooldown already elapsed."""
     guard.set_position_provider(lambda symbol, strategy_id: position)
     guard.update(drawdown_bps=-150)
     assert guard.state is StormGuardState.STORM
-    # Age the STORM past drawdown_flat_release_after_s without sleeping.
-    guard._storm_entry_ts -= elapsed_s
+    _age_storm(guard, elapsed_s)
 
 
 def test_flat_strategy_is_released_from_a_drawdown_storm(guard):
@@ -100,7 +119,7 @@ def test_a_feed_gap_storm_does_not_release_a_flat_strategy(guard):
     guard.set_session_active(True)
     guard.update(feed_gap_s=5.0)
     assert guard.state is StormGuardState.STORM
-    guard._storm_entry_ts -= 10_000.0
+    _age_storm(guard)
 
     allowed, reason = guard.validate(_intent())
 
@@ -112,7 +131,7 @@ def test_a_latency_storm_does_not_release_a_flat_strategy(guard):
     guard.set_position_provider(lambda symbol, strategy_id: 0)
     guard.update(latency_us=50_000)
     assert guard.state is StormGuardState.STORM
-    guard._storm_entry_ts -= 10_000.0
+    _age_storm(guard)
 
     allowed, reason = guard.validate(_intent())
 
@@ -131,7 +150,7 @@ def test_release_waits_out_the_cooldown(guard):
     assert allowed is False
     assert reason == "STORMGUARD_STORM_BLOCKED"
 
-    guard._storm_entry_ts -= guard.thresholds.drawdown_flat_release_after_s + 1.0
+    _age_storm(guard)
     allowed, reason = guard.validate(_intent())
     assert allowed is True
     assert reason == "STORM_DRAWDOWN_FLAT_RELEASE"
@@ -139,8 +158,10 @@ def test_release_waits_out_the_cooldown(guard):
 
 def test_release_is_disabled_when_the_threshold_is_zero(guard):
     """0 restores the pre-2026-09-08 behaviour exactly."""
-    guard.thresholds.drawdown_flat_release_after_s = 0.0
     _enter_drawdown_storm(guard, position=0)
+    # After entry: ``_age_storm`` sets a live threshold, and this test is
+    # about the disabling value winning over an otherwise-due release.
+    guard.thresholds.drawdown_flat_release_after_s = 0.0
 
     allowed, reason = guard.validate(_intent())
 
@@ -152,7 +173,7 @@ def test_release_fails_closed_without_a_position_provider(guard):
     """Flatness cannot be proven, so it is not assumed."""
     guard.update(drawdown_bps=-150)
     assert guard.state is StormGuardState.STORM
-    guard._storm_entry_ts -= 10_000.0
+    _age_storm(guard)
     guard.set_position_provider(None)
 
     allowed, reason = guard.validate(_intent())
@@ -167,7 +188,7 @@ def test_release_fails_closed_when_the_position_provider_raises(guard):
 
     guard.update(drawdown_bps=-150)
     assert guard.state is StormGuardState.STORM
-    guard._storm_entry_ts -= 10_000.0
+    _age_storm(guard)
     guard.set_position_provider(_boom)
 
     allowed, reason = guard.validate(_intent())
@@ -181,7 +202,7 @@ def test_halt_is_not_released(guard):
     guard.set_position_provider(lambda symbol, strategy_id: 0)
     guard.update(drawdown_bps=-250)
     assert guard.state is StormGuardState.HALT
-    guard._storm_entry_ts -= 10_000.0
+    _age_storm(guard)
 
     allowed, reason = guard.validate(_intent())
 
@@ -202,7 +223,7 @@ def test_the_reason_tracked_is_the_live_one_not_the_entry_one(guard):
     # Latency clears, drawdown is now what holds STORM.
     guard.update(drawdown_bps=-150, latency_us=0)
     assert guard.state is StormGuardState.STORM
-    guard._storm_entry_ts -= 10_000.0
+    _age_storm(guard)
 
     allowed, reason = guard.validate(_intent())
 
