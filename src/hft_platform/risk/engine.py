@@ -22,7 +22,7 @@ from hft_platform.contracts.strategy import (
 from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceScaleProvider
 from hft_platform.observability.latency import LatencyRecorder
-from hft_platform.observability.metrics import MetricsRegistry
+from hft_platform.observability.metrics import MetricsRegistry, cap_reject_reason
 from hft_platform.risk.storm_guard import StormGuard
 from hft_platform.risk.validators import (
     DailyLossLimitValidator,
@@ -1048,7 +1048,9 @@ class RiskEngine:
             if self._reject_metric_cache_owner_id != owner_id:
                 self._reject_metric_cache.clear()
                 self._reject_metric_cache_owner_id = owner_id
-            key = (str(strategy_id), str(reason))
+            # Bounded label: see ``cap_reject_reason``. The full reason is on the
+            # rejection log line immediately above the caller.
+            key = (str(strategy_id), cap_reject_reason(str(reason)))
             child = self._reject_metric_cache.get(key)
             if child is None:
                 child = metrics.risk_reject_total.labels(strategy=key[0], reason=key[1])

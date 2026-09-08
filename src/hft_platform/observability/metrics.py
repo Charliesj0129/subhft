@@ -37,6 +37,42 @@ def cap_exception_type(exc: BaseException) -> str:
     return "_other"
 
 
+# Reject reasons are formatted messages, not codes: ``SOFT_LIMIT: loss=<pnl>
+# >= threshold=<limit>``, ``PRICE_EXCEEDS_CAP(<symbol>): <price> > <cap>``. Used
+# raw as a Prometheus label, every distinct PnL, notional, price or quantity
+# minted a time series that is never freed for the life of the process, plus a
+# matching permanent entry in the caller's label cache. Observed on THESHOW
+# 2026-09-08: three ``risk_reject_total{reason="SOFT_LIMIT: ..."}`` series after
+# a single day, differing only by a loss figure. The contract field these travel
+# in is named ``reason_code`` and defaults to ``"OK"``, so both labels were built
+# on a promise the value does not keep.
+#
+# ``ops.autonomy._reason_code_for_metrics`` bounds its own label with an
+# allowlist, which fits there because that reason is free-form operator text.
+# Here the code is the constant head of an f-string, so the set is already
+# bounded by the source: taking that head keeps the label bounded *and* lets a
+# newly added gate show up under its own name instead of silently collapsing
+# into a catch-all.
+_REJECT_REASON_MAX_LEN = 64
+
+
+def cap_reject_reason(reason: str) -> str:
+    """Return the stable code at the head of a reject reason, else ``'OTHER'``.
+
+    The formatted detail is not lost -- it stays on the rejection log line and
+    on ``RiskDecision`` / ``RiskFeedback``, which is where an operator reading a
+    single rejection looks. A counter is the wrong place for it.
+    """
+    head = reason.split(":", 1)[0].split("(", 1)[0].strip()
+    if not head or len(head) > _REJECT_REASON_MAX_LEN:
+        return "OTHER"
+    if not head.isascii() or not head[0].isalpha():
+        return "OTHER"
+    if not all(ch.isalnum() or ch == "_" for ch in head):
+        return "OTHER"
+    return head
+
+
 def _pn(name: str) -> str:
     """Prefix a metric name if HFT_METRICS_PREFIX is set."""
     if _METRICS_PREFIX and not name.startswith(_METRICS_PREFIX):

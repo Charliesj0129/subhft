@@ -34,6 +34,7 @@ from hft_platform.gateway.channel import (
 from hft_platform.gateway.dedup import IdempotencyStore
 from hft_platform.gateway.exposure import ExposureKey, ExposureLimitError, ExposureStore
 from hft_platform.gateway.policy import GatewayPolicy
+from hft_platform.observability.metrics import cap_reject_reason
 
 logger = get_logger("gateway.service")
 
@@ -729,10 +730,14 @@ class GatewayService:
             metrics = self._metrics_or_refresh()
             if metrics is None:
                 return
-            child = self._gateway_reject_metric_cache.get(reason)
+            # Bounded label: see ``cap_reject_reason``. Same rejection strings as
+            # the risk counter -- fixing one and leaving the twin is how the
+            # first copy got missed.
+            code = cap_reject_reason(reason)
+            child = self._gateway_reject_metric_cache.get(code)
             if child is None:
-                child = metrics.gateway_reject_total.labels(reason=reason)
-                self._gateway_reject_metric_cache[reason] = child
+                child = metrics.gateway_reject_total.labels(reason=code)
+                self._gateway_reject_metric_cache[code] = child
             child.inc()
         except Exception as exc:  # noqa: BLE001
             logger.debug("metrics_emit_failed", stage="emit_reject", error=str(exc))
