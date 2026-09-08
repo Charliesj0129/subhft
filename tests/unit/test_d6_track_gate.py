@@ -29,9 +29,9 @@ class TestTrackGateDefaultClosed:
         gate.get_phase("NEW_SYM")
         gate.get_phase("NEW_SYM")
         gate.get_phase("NEW_SYM")
-        # structlog uses PrintLoggerFactory in this project — check stdout
+        # Logs go to stderr; stdout is reserved for command output.
         captured = capsys.readouterr()
-        count = captured.out.count("track_gate_unknown_symbol_blocked")
+        count = captured.err.count("track_gate_unknown_symbol_blocked")
         assert count == 1, f"Expected 1 warning, got {count}"
 
     def test_env_override_restores_open_default(self):

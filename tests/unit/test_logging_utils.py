@@ -1,6 +1,6 @@
 import io
 import logging
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr
 
 from hft_platform.utils.logging import configure_logging, credential_scrubber, get_logger
 
@@ -25,7 +25,7 @@ def test_logger_renders_traceback_when_exc_info_true():
     logger = get_logger("traceback-test")
     buf = io.StringIO()
     sentinel = "VeryUniqueSentinelException_EXCBE9F"
-    with redirect_stdout(buf):
+    with redirect_stderr(buf):
         try:
             raise RuntimeError(sentinel)
         except RuntimeError:
@@ -94,13 +94,16 @@ def test_credential_scrubber_short_circuit_when_no_jwt_marker():
 
 
 def test_full_pipeline_does_not_leak_jwt_in_rendered_output():
-    """End-to-end: configure_logging → log error containing JWT → captured stdout
+    """End-to-end: configure_logging → log error containing JWT → captured stderr
     must NOT contain the JWT body."""
     configure_logging(level=logging.INFO)
     logger = get_logger("jwt-leak-test")
     buf = io.StringIO()
-    with redirect_stdout(buf):
+    with redirect_stderr(buf):
         logger.error("rpc_call_failed", error=f"shioaji RPC blew up: {_FAKE_JWT}")
     out = buf.getvalue()
+    # Absence assertions alone pass on an empty capture, so prove the line was
+    # actually emitted before concluding anything about what it omits.
+    assert out.strip(), "nothing was logged; the leak assertions below would be vacuous"
     assert "eyJ" not in out, f"JWT body leaked in JSON output: {out!r}"
     assert "person_id" not in out, "JWT payload fragment leaked"

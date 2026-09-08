@@ -38,8 +38,8 @@ def test_halt_callback_exception_is_logged(storm_guard_with_failing_callback, ca
     asyncio.run(_run())
 
     captured = capsys.readouterr()
-    assert "halt_callback_failed" in captured.out, (
-        "Expected 'halt_callback_failed' in log output but got: " + captured.out
+    assert "halt_callback_failed" in captured.err, (
+        "Expected 'halt_callback_failed' in log output but got: " + captured.err
     )
 
 
@@ -59,4 +59,4 @@ def test_halt_callback_success_no_error_log(capsys):
     asyncio.run(_run())
 
     captured = capsys.readouterr()
-    assert "halt_callback_failed" not in captured.out
+    assert "halt_callback_failed" not in captured.err

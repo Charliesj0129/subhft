@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import io
 import logging
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr
 
 import pytest
 
@@ -80,11 +80,11 @@ def test_scrubber_masks_known_secret_key_names(key: str) -> None:
 
 def test_full_pipeline_does_not_leak_telegram_token_in_field() -> None:
     """End-to-end: configure_logging → log dict containing a Telegram token →
-    captured stdout must NOT contain the token body."""
+    captured stderr must NOT contain the token body."""
     configure_logging(level=logging.INFO)
     logger = get_logger("telegram-leak-test")
     buf = io.StringIO()
-    with redirect_stdout(buf):
+    with redirect_stderr(buf):
         logger.error("rpc_call_failed", telegram_token=_FAKE_TELEGRAM_TOKEN)
     out = buf.getvalue()
     assert _FAKE_TELEGRAM_TOKEN not in out, f"telegram token leaked in JSON: {out!r}"
@@ -98,9 +98,12 @@ def test_full_pipeline_does_not_leak_telegram_token_in_message() -> None:
     configure_logging(level=logging.INFO)
     logger = get_logger("telegram-leak-msg-test")
     buf = io.StringIO()
-    with redirect_stdout(buf):
+    with redirect_stderr(buf):
         logger.error("investigator_probe", note=f"telegram_token={_FAKE_TELEGRAM_TOKEN}")
     out = buf.getvalue()
+    # Absence assertions alone pass on an empty capture, so prove the line was
+    # actually emitted before concluding anything about what it omits.
+    assert out.strip(), "nothing was logged; the leak assertion below would be vacuous"
     assert _FAKE_TELEGRAM_TOKEN not in out, f"telegram token leaked in JSON: {out!r}"
 
 
