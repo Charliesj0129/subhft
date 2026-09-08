@@ -11,6 +11,7 @@ Tests:
 import asyncio
 import os
 import tempfile
+import time
 from contextlib import suppress
 from unittest.mock import MagicMock, patch
 
@@ -44,6 +45,47 @@ def _make_intent(intent_id: int, key: str, intent_type: IntentType = IntentType.
         tif=TIF.LIMIT,
         idempotency_key=key,
     )
+
+
+async def _await_condition(
+    predicate,
+    timeout_s: float = 5.0,
+    interval_s: float = 0.005,
+) -> bool:
+    """Poll ``predicate`` until it holds, or ``timeout_s`` elapses.
+
+    These tests used to advance on fixed ``asyncio.sleep`` calls sized for an
+    idle machine. On a loaded CI runner the gateway had simply not got there
+    yet. The failover case raced its own 200 ms window in exactly that way:
+    the standby had not taken the lease when the second batch was submitted,
+    and an intent arriving at a gateway that is not the leader is rejected
+    ``NOT_LEADER`` outright -- never queued, never retried -- so all 50 were
+    lost and the assertion read ``50 == 100``. Waiting on the condition each
+    test is actually about keeps the failure honest: it now names the step
+    that did not happen instead of reporting a count.
+    """
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        await asyncio.sleep(interval_s)
+    return bool(predicate())
+
+
+def _lease_debug(*services) -> str:
+    """Describe every gateway's view of the lease.
+
+    The CI failure this hardening came from could not be reproduced locally,
+    so a recurrence has to explain itself: report who each gateway thinks the
+    leader is, alongside the lease object's own state, rather than only the
+    count that came out wrong.
+    """
+    parts = []
+    for idx, svc in enumerate(services, start=1):
+        lease = getattr(svc, "_leader_lease", None)
+        status = lease.status() if lease is not None and hasattr(lease, "status") else None
+        parts.append(f"svc{idx}: leader_active={svc.get_health().get('leader_active')} lease={status}")
+    return " | ".join(parts)
 
 
 def _build_service(channel, api_queue, storm_guard=None):
@@ -97,8 +139,9 @@ async def test_three_runners_150_unique_dispatches():
 
     task = asyncio.create_task(svc.run())
     await asyncio.gather(runner(0, 50), runner(1, 50), runner(2, 50))
-    # Allow service to drain
-    await asyncio.sleep(0.2)
+    assert await _await_condition(lambda: svc._dispatched >= 150), (
+        f"gateway drained only {svc._dispatched} of 150 intents"
+    )
     task.cancel()
     try:
         await task
@@ -120,7 +163,9 @@ async def test_dedup_same_key_3x():
         channel.submit_nowait(_make_intent(1, "shared-key"))
 
     task = asyncio.create_task(svc.run())
-    await asyncio.sleep(0.1)
+    assert await _await_condition(lambda: svc._dispatched + svc._dedup_hits >= 3), (
+        f"gateway settled only {svc._dispatched + svc._dedup_hits} of 3 submissions"
+    )
     task.cancel()
     try:
         await task
@@ -146,7 +191,9 @@ async def test_halt_blocks_new_allows_cancel():
     channel.submit_nowait(_make_intent(2, "cancel-1", IntentType.CANCEL))
 
     task = asyncio.create_task(svc.run())
-    await asyncio.sleep(0.1)
+    assert await _await_condition(lambda: svc._rejected >= 1 and svc._dispatched >= 1), (
+        f"gateway settled with rejected={svc._rejected} dispatched={svc._dispatched}"
+    )
     task.cancel()
     try:
         await task
@@ -208,7 +255,9 @@ async def test_gateway_ha_failover_no_duplicate_dispatch():
 
             t1 = asyncio.create_task(svc1.run())
             t2 = asyncio.create_task(svc2.run())
-            await asyncio.sleep(0.10)  # allow lease election
+            assert await _await_condition(
+                lambda: bool(svc1.get_health().get("leader_active")) or bool(svc2.get_health().get("leader_active"))
+            ), "neither gateway acquired the leader lease"
 
             def _submit_duped_batch(start_id: int, n: int) -> None:
                 for i in range(n):
@@ -218,22 +267,32 @@ async def test_gateway_ha_failover_no_duplicate_dispatch():
                     ch2.submit_nowait(_make_intent(iid, key))
 
             _submit_duped_batch(1, 50)
-            await asyncio.sleep(0.30)
+            assert await _await_condition(lambda: shared_api_queue.qsize() >= 50), (
+                f"leader dispatched only {shared_api_queue.qsize()} of 50"
+            )
 
             # Only one gateway should have dispatched each unique intent.
             assert shared_api_queue.qsize() == 50
 
             leader_first = svc1 if svc1.get_health().get("leader_active") else svc2
+            standby = svc2 if leader_first is svc1 else svc1
             leader_task = t1 if leader_first is svc1 else t2
 
             # Simulate gateway outage (leader dies).
             leader_task.cancel()
             with suppress(asyncio.CancelledError):
                 await leader_task
-            await asyncio.sleep(0.20)  # standby should acquire lease
+
+            # The standby must hold the lease *before* the next batch arrives.
+            assert await _await_condition(lambda: bool(standby.get_health().get("leader_active"))), (
+                f"standby never acquired the leader lease after the leader died -- {_lease_debug(svc1, svc2)}"
+            )
 
             _submit_duped_batch(51, 50)
-            await asyncio.sleep(0.40)
+            assert await _await_condition(lambda: shared_api_queue.qsize() >= 100), (
+                f"standby dispatched only {shared_api_queue.qsize() - 50} of 50 after failover"
+                f" -- {_lease_debug(svc1, svc2)}"
+            )
 
             for task in (t1, t2):
                 if task.done():
