@@ -370,3 +370,79 @@ class TestQuoteOnlyConnectionSuppressesBlockedLog:
         assert any("order placement will be blocked" in e for e in error_events), (
             "Order-capable connection (fetch_contract=True) with contracts_ready=False must still emit the ERROR log"
         )
+
+
+class TestLoginLadderReportsWhatActuallyHappened:
+    """ "Login retries exhausted" must mean the ladder actually exhausted.
+
+    Three paths leave the retry loop. Two of them stop deliberately after a
+    single attempt -- the SDK is still inside an earlier call, or the broker
+    refused on its connection limit -- and each already logs its own accurate
+    line. The exit reported all three as ``Login retries exhausted`` with
+    ``attempts=<budget>``, contradicting that line and overstating the count:
+    over 2026-08-07..2026-09-07 the live engine logged 56 exhaustions against 33
+    connection-limit breaks, and none of them had made ``attempts_total``
+    attempts.
+    """
+
+    @staticmethod
+    def _runtime_failing_with(error: str, retry_max: int = 1):
+        client = make_mock_client(_login_retry_max=retry_max, fetch_contract=False)
+        client._safe_call_with_timeout = MagicMock(return_value=(False, None, Exception(error), False))
+        client._last_login_error = error
+        return SessionRuntime(client), client
+
+    def test_sdk_busy_is_reported_as_deferred_not_exhausted(self):
+        """One attempt, a deliberate stop -- not an exhausted ladder."""
+        rt, _client = self._runtime_failing_with("Already borrowed")
+        with patch("hft_platform.feed_adapter.shioaji.session_runtime.logger") as log:
+            assert rt.login_with_retry(api_key="k", secret_key="s") is False
+
+        assert not any(call.args and call.args[0] == "Login retries exhausted" for call in log.error.call_args_list), (
+            "an SDK-busy deferral is not an exhausted ladder"
+        )
+        deferrals = [
+            call
+            for call in log.warning.call_args_list
+            if call.args and call.args[0] == "login_deferred_without_exhausting_ladder"
+        ]
+        assert len(deferrals) == 1
+        assert deferrals[0].kwargs["reason"] == "sdk_busy"
+        assert deferrals[0].kwargs["attempts_made"] == 1
+
+    def test_connection_limit_is_reported_as_deferred_not_exhausted(self):
+        """The broker's 451 already logged its own error; do not double-count."""
+        rt, _client = self._runtime_failing_with("status_code=451 Too Many Connections")
+        with patch("hft_platform.feed_adapter.shioaji.session_runtime.logger") as log:
+            assert rt.login_with_retry(api_key="k", secret_key="s") is False
+
+        assert not any(call.args and call.args[0] == "Login retries exhausted" for call in log.error.call_args_list)
+        deferrals = [
+            call
+            for call in log.warning.call_args_list
+            if call.args and call.args[0] == "login_deferred_without_exhausting_ladder"
+        ]
+        assert len(deferrals) == 1
+        assert deferrals[0].kwargs["reason"] == "broker_connection_limit"
+        assert deferrals[0].kwargs["attempts_made"] == 1
+
+    def test_a_genuine_exhaustion_still_reports_an_error(self, monkeypatch):
+        """The error is not removed, only made true."""
+        monkeypatch.setattr("hft_platform.feed_adapter.shioaji.session_runtime.time.sleep", MagicMock())
+        rt, _client = self._runtime_failing_with("invalid credentials", retry_max=1)
+        with patch("hft_platform.feed_adapter.shioaji.session_runtime.logger") as log:
+            assert rt.login_with_retry(api_key="k", secret_key="s") is False
+
+        exhausted = [
+            call for call in log.error.call_args_list if call.args and call.args[0] == "Login retries exhausted"
+        ]
+        assert len(exhausted) == 1
+        assert exhausted[0].kwargs["attempts"] == 2, "must report attempts actually made"
+        assert exhausted[0].kwargs["attempts_allowed"] == 2
+
+    def test_the_failure_metric_still_counts_a_deferral(self):
+        """Only the log line changes; a failed login stays counted."""
+        rt, client = self._runtime_failing_with("Already borrowed")
+        with patch("hft_platform.feed_adapter.shioaji.session_runtime.logger"):
+            assert rt.login_with_retry(api_key="k", secret_key="s") is False
+        assert client.metrics.shioaji_login_fail_total.labels.called
