@@ -989,6 +989,29 @@ class QuoteRuntime:
         )
         c._resubscribe_thread.start()
 
+    def on_session_down(self) -> None:
+        """Record the SDK's session-down notification at error level.
+
+        Deliberately observational: it logs and counts, it does not trigger a
+        reconnect. Recovery is already owned by the feed-gap watchdog, and this
+        platform has a documented history of reconnect storms (the 05:00 close
+        relogin storm, the pre-open storm), so adding a second, faster trigger
+        on a broker-thread callback would risk re-creating them. What was
+        missing was never the recovery -- it was the operator ever learning the
+        session dropped.
+
+        Runs on a broker thread, so it must not raise into the SDK's C caller.
+        """
+        try:
+            logger.error("shioaji_session_down")
+            if self._client.metrics:
+                try:
+                    self._client.metrics.shioaji_session_down_total.inc()
+                except Exception as exc:
+                    logger.debug("operation_fallback", error=str(exc))
+        except Exception as exc:  # noqa: BLE001 - must never raise into the SDK
+            logger.debug("operation_fallback", error=str(exc))
+
     def on_quote_event(self, resp_code: int, event_code: int, info: str, event: str) -> None:
         c = self._client
         try:
