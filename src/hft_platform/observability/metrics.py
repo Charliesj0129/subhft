@@ -158,6 +158,7 @@ class MetricsRegistry:
                 _pn("stormguard_latency_input_max_us"),
                 _pn("drift_burst_detected_total"),
                 _pn("stormguard_halt_exempt_bypass_total"),
+                _pn("stormguard_drawdown_flat_release_total"),
                 _pn("halt_drain_safety_intent_lost_total"),
                 # H2: HALT notification-callback dispatch observability
                 _pn("halt_callback_no_loop_total"),
@@ -596,6 +597,14 @@ class MetricsRegistry:
         self.stormguard_halt_exempt_bypass_total = Counter(
             _pn("stormguard_halt_exempt_bypass_total"),
             "StormGuard halt-exempt bypass events (strategy allowed through HALT)",
+        )
+        # A risk gate letting an order through must be countable, or the only
+        # record that the drawdown STORM stopped blocking is the absence of a
+        # rejection -- and an absence is what hid the 8.5 h stall in the first
+        # place.
+        self.stormguard_drawdown_flat_release_total = Counter(
+            _pn("stormguard_drawdown_flat_release_total"),
+            "Intents allowed through a drawdown-driven STORM because the strategy was flat",
         )
         self.halt_drain_safety_intent_lost_total = Counter(
             _pn("halt_drain_safety_intent_lost_total"),
