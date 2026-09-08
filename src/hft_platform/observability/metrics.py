@@ -190,6 +190,7 @@ class MetricsRegistry:
                 _pn("feed_gap_latched_silent_symbols_total"),
                 # Phase 12 metrics
                 _pn("shioaji_keepalive_failures_total"),
+                _pn("shioaji_session_down_total"),
                 _pn("quote_version_switch_total"),
                 _pn("quote_schema_mismatch_total"),
                 _pn("shioaji_contract_lookup_errors_total"),
@@ -990,6 +991,13 @@ class MetricsRegistry:
         self.shioaji_keepalive_failures_total = Counter(
             _pn("shioaji_keepalive_failures_total"),
             "Shioaji keep-alive check failures",
+        )
+        # The SDK's own "your session went down" notification. Distinct from
+        # the keep-alive counter above: a keep-alive failure is the platform
+        # noticing silence, this is the broker reporting the transport is gone.
+        self.shioaji_session_down_total = Counter(
+            _pn("shioaji_session_down_total"),
+            "Shioaji broker session-down notifications delivered by the SDK",
         )
         # Quote version switch counter (A4)
         self.quote_version_switch_total = Counter(

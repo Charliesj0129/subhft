@@ -489,6 +489,9 @@ class ShioajiClient:
         self._event_callback_retrying = False
         self._event_callback_retry_thread: threading.Thread | None = None
         self._event_callback_retry_s = float(os.getenv("HFT_QUOTE_EVENT_RETRY_S", "5"))
+        self._session_down_callback_registered = False
+        # Same strong-reference reasoning as ``_event_callback_fn``.
+        self._session_down_callback_fn = self._on_session_down
         self._pending_quote_reason: str | None = None
         self._resubscribe_scheduled = False
         self._resubscribe_thread: threading.Thread | None = None
@@ -1184,6 +1187,10 @@ class ShioajiClient:
                 ok_quote = False
 
             ok_event = self._register_event_callback()
+            # Observational only -- deliberately not folded into ok_quote /
+            # ok_event, so losing it never blocks quote registration or the
+            # retry ladder.
+            self._session_down_callback_registered = self._register_session_down_callback()
 
             self._callbacks_registered = ok_quote
             self._event_callback_registered = ok_event
@@ -1224,6 +1231,39 @@ class ShioajiClient:
             self._record_crash_signature(str(exc), context="register_event_callback")
             logger.warning("Failed quote event callback registration", error=str(exc))
             return False
+
+    def _register_session_down_callback(self) -> bool:
+        """Subscribe to the SDK's own session-down notification.
+
+        Without this the only evidence a broker transport died is the Solace C
+        library writing to stderr, which never reaches structlog: on 2026-09-07
+        the SDK logged 57 stderr lines for six failed sessions while the
+        platform's structured logs held zero error events for the window. The
+        quote-event callback does not cover it -- it delivered nothing at all
+        during that outage.
+
+        Present on every SDK surface the repo tracks (1.3.3 through 1.7.x), but
+        resolved defensively so a version that drops it degrades to a warning
+        instead of refusing to register the quote callbacks.
+        """
+        api = self.api
+        if api is None:
+            return False
+        setter = getattr(api, "set_session_down_callback", None)
+        if setter is None:
+            logger.warning("SDK exposes no set_session_down_callback; session-down stays invisible")
+            return False
+        try:
+            setter(self._session_down_callback_fn)
+            return True
+        except Exception as exc:
+            self._record_crash_signature(str(exc), context="register_session_down_callback")
+            logger.warning("Failed session-down callback registration", error=str(exc))
+            return False
+
+    def _on_session_down(self) -> None:
+        """SDK session-down callback. Runs on a broker thread; takes no args."""
+        self._quotes().on_session_down()
 
     def _get_quote_version(self):
         """Delegates to ReconnectOrchestrator.get_quote_version()."""
