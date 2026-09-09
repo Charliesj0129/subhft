@@ -123,6 +123,43 @@ class TestBuildServiceGraph:
             assert hasattr(registry, attr), f"ServiceRegistry missing attribute: {attr}"
             assert getattr(registry, attr) is not None, f"ServiceRegistry.{attr} is None"
 
+    @pytest.mark.usefixtures("_sim_env")
+    def test_the_position_stuck_alert_can_price_the_position_it_alerts_on(self, _mock_services: dict) -> None:
+        """A stuck-position alert must be able to say how much money is on it.
+
+        ``PositionStuckMonitor`` computes ``unrealized_ntd`` from a mid-price
+        function and a contract multiplier, both optional constructor
+        arguments. Neither was passed here until 2026-09-08, so the estimate
+        returned ``None`` in every environment and the live warning read
+        ``unrealized_ntd=null``. The monitor's own unit test never caught it:
+        it supplied the mid-price function itself. This one asserts the
+        monitor *bootstrap builds* can price a lot.
+        """
+        book = MagicMock()
+        book.mid_price_x2 = 379_000_000 * 2
+        _mock_services["MarketDataService"].return_value.lob.books.get.return_value = book
+        _mock_services["SymbolMetadata"].return_value.contract_multiplier.return_value = 10
+
+        registry = _build_with_mocks()
+        monitor = registry.position_stuck_monitor
+        assert monitor is not None
+
+        # One short TMFD6 lot carried from 37800 while the mid sits at 37900:
+        # 100 points against, at 10 NTD per point, is -1000 NTD.
+        assert monitor._estimate_unrealized_ntd("TMFI6", -1, 378_000_000) == -1000
+
+    @pytest.mark.usefixtures("_sim_env")
+    def test_the_stuck_monitor_prices_with_the_symbol_metadata_multiplier(self, _mock_services: dict) -> None:
+        """The multiplier must come from symbol metadata, not the 10 NTD default.
+
+        TMF is 10 NTD/pt but TXF is 200 and MXF is 50; a hardcoded default
+        would understate a TXF alert twentyfold.
+        """
+        registry = _build_with_mocks()
+        monitor = registry.position_stuck_monitor
+        assert monitor is not None
+        assert monitor._get_contract_multiplier is _mock_services["SymbolMetadata"].return_value.contract_multiplier
+
     @pytest.mark.usefixtures("_sim_env", "_mock_services")
     def test_build_sim_default_broker_id_is_shioaji(self) -> None:
         registry = _build_with_mocks()
