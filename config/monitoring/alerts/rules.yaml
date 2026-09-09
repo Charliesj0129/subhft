@@ -1182,3 +1182,55 @@ groups:
     annotations:
       summary: "SSD wear level below 20%"
       description: "Device {{ $labels.device }} wear level at {{ $value }}%. Plan disk replacement."
+
+# ---------------------------------------------------------------------------
+# Broker order-path round-trip recording rules (added 2026-09-09).
+#
+# These live in this file, alongside the alerts, because this is the only rule
+# file production Prometheus loads: prometheus.yml has a single entry,
+# /etc/prometheus/alerts/rules.yaml, and only config/monitoring/alerts is
+# mounted into the container. config/monitoring/recording_rules/slo.yaml is
+# referenced by nothing in the repo and has never been evaluated -- do not add
+# rules there expecting them to run.
+#
+# Why the order path needs recorded series at all: every hot-path stage had
+# one and the broker call had none, so the only durable signal above
+# StormGuard's order_rtt threshold was stormguard_latency_input_max_us, a
+# process-lifetime max that cannot tell one stuck call from a broker-wide
+# slowdown. On 2026-09-09 that gap produced a false "20x latency regression"
+# report read off e2e_order_latency_ns, which is an order-to-FILL span and for
+# a passive maker is mostly book residence time.
+#
+# 30 m windows, not 5 m: the order path is low-rate (1675 place_order calls in
+# 15 h on THESHOW), so a 5 m window holds ~10 samples and a p99 over it is
+# noise.
+#
+# Deliberately no alert rule here. An alert needs a threshold, and the
+# order_rtt thresholds (500 ms WARM / 1000 ms STORM, RiskThresholds in
+# src/hft_platform/risk/storm_guard.py) are a live-impacting policy decision
+# these recordings exist to inform, not to pre-empt.
+# ---------------------------------------------------------------------------
+- name: order_path_latency_recording
+  interval: 30s
+  rules:
+  - record: order:api_place_order_latency:p50_ms
+    expr: histogram_quantile(0.50, sum(rate(pipeline_latency_ns_bucket{stage="api_place_order"}[30m])) by (le)) / 1e6
+  - record: order:api_place_order_latency:p95_ms
+    expr: histogram_quantile(0.95, sum(rate(pipeline_latency_ns_bucket{stage="api_place_order"}[30m])) by (le)) / 1e6
+  - record: order:api_place_order_latency:p99_ms
+    expr: histogram_quantile(0.99, sum(rate(pipeline_latency_ns_bucket{stage="api_place_order"}[30m])) by (le)) / 1e6
+  - record: order:api_cancel_order_latency:p50_ms
+    expr: histogram_quantile(0.50, sum(rate(pipeline_latency_ns_bucket{stage="api_cancel_order"}[30m])) by (le)) / 1e6
+  - record: order:api_cancel_order_latency:p95_ms
+    expr: histogram_quantile(0.95, sum(rate(pipeline_latency_ns_bucket{stage="api_cancel_order"}[30m])) by (le)) / 1e6
+  - record: order:api_cancel_order_latency:p99_ms
+    expr: histogram_quantile(0.99, sum(rate(pipeline_latency_ns_bucket{stage="api_cancel_order"}[30m])) by (le)) / 1e6
+  # Calls per second crossing each order_rtt threshold. This, not a percentile,
+  # is what explains the breaker's escalation rate: the input is a peak over
+  # the update interval, so what matters is how often ANY call crosses the
+  # line. Measured 2026-09-09: 157 calls over 500 ms in 14.5 h (~10.8/h)
+  # against 111 escalations in 15 h (~7.7/h).
+  - record: order:api_latency_over_500ms:rate30m
+    expr: sum(rate(pipeline_latency_ns_count{stage=~"api_place_order|api_cancel_order"}[30m])) - sum(rate(pipeline_latency_ns_bucket{stage=~"api_place_order|api_cancel_order",le="5e+08"}[30m]))
+  - record: order:api_latency_over_1s:rate30m
+    expr: sum(rate(pipeline_latency_ns_count{stage=~"api_place_order|api_cancel_order"}[30m])) - sum(rate(pipeline_latency_ns_bucket{stage=~"api_place_order|api_cancel_order",le="1e+09"}[30m]))

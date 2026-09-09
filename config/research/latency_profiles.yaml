@@ -124,6 +124,39 @@ profiles:
       forward. Re-measure after any broker SDK / network path / subaccount
       change.
 
+# ---------------------------------------------------------------------------
+# CAVEAT on r47_maker_shioaji_p95_v2026-04-24_measured (added 2026-09-09).
+#
+# The profile above is NIGHT-SESSION ONLY. Its probe ran at 16:28 CST, which
+# is inside the TAIFEX night session (opens 15:00 CST). No day-session probe
+# has ever been taken, so the day session has never been in any profile the
+# R47 family was validated against.
+#
+# Passive observation of the live engine on 2026-09-09 (read-only, from
+# pipeline_latency_ns{stage="api_place_order"}, n=1675 over 15 h) suggests the
+# two sessions are not interchangeable:
+#
+#   night session (14:01-17:31Z): place_order p50 flat at ~36 ms
+#                                 -- close to the profile's 27.4 ms
+#   day   session (01:01-05:31Z): place_order p50 ramps 34.6 -> 82.7 ms
+#                                 monotonically through the session, while
+#                                 the platform's own stages stayed flat
+#                                 (order_queue p50 0.43 -> 0.36 ms, strategy
+#                                 p50 8.6 -> 9.2 us, risk p50 40.7 -> 44.4 us)
+#                                 and the order rate FELL 794 -> 134 per hour.
+#
+# This is an observation, not a profile. It is deliberately a comment rather
+# than a profile entry so Gate D cannot select it: passive engine histograms
+# are a different measurement from the controlled probe (different symbol,
+# uncontrolled offset, no submitted_ack decomposition) and must not be mixed
+# into a promotion decision.
+#
+# What it does establish is that the day session is unmeasured, not that it
+# regressed. Settling that needs scripts/latency/shioaji_rtt_bulk_probe.py
+# --mode real run during a day session, which places live orders and requires
+# explicit operator authorization.
+# ---------------------------------------------------------------------------
+
   fubon_estimated_p95_v2026-03-12:
     description: "Fubon TradeAPI conservative P95 estimates — 2026-03-12"
     source: "estimated_conservative"
