@@ -8,7 +8,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from hft_platform.feed_adapter.fubon import session_runtime
 from hft_platform.feed_adapter.fubon.session_runtime import FubonSessionRuntime
+from tests.unit.time_stub import sleepless_time
 
 # ------------------------------------------------------------------ #
 # Helpers
@@ -132,7 +134,7 @@ class TestLoginWithRetry:
         ]
         rt = FubonSessionRuntime(sdk)
 
-        with patch("hft_platform.feed_adapter.fubon.session_runtime.time.sleep"):
+        with patch.object(session_runtime, "time", sleepless_time()):
             result = rt.login_with_retry(max_retries=3, api_key="k", password="p")
 
         assert result is True
@@ -142,7 +144,7 @@ class TestLoginWithRetry:
         sdk = _make_sdk(login_raises=ConnectionError("fail"))
         rt = FubonSessionRuntime(sdk)
 
-        with patch("hft_platform.feed_adapter.fubon.session_runtime.time.sleep"):
+        with patch.object(session_runtime, "time", sleepless_time()):
             result = rt.login_with_retry(max_retries=3, api_key="k", password="p")
 
         assert result is False
@@ -154,9 +156,10 @@ class TestLoginWithRetry:
 
         sleep_calls: list[float] = []
 
-        with patch(
-            "hft_platform.feed_adapter.fubon.session_runtime.time.sleep",
-            side_effect=lambda s: sleep_calls.append(s),
+        with patch.object(
+            session_runtime,
+            "time",
+            sleepless_time(side_effect=lambda s: sleep_calls.append(s)),
         ):
             rt.login_with_retry(max_retries=4, backoff_base_s=1.0, api_key="k", password="p")
 
@@ -169,9 +172,10 @@ class TestLoginWithRetry:
 
         sleep_calls: list[float] = []
 
-        with patch(
-            "hft_platform.feed_adapter.fubon.session_runtime.time.sleep",
-            side_effect=lambda s: sleep_calls.append(s),
+        with patch.object(
+            session_runtime,
+            "time",
+            sleepless_time(side_effect=lambda s: sleep_calls.append(s)),
         ):
             rt.login_with_retry(max_retries=3, backoff_base_s=0.5, api_key="k", password="p")
 
@@ -190,7 +194,7 @@ class TestReconnect:
         sdk = _make_sdk(login_ok=True)
         rt = FubonSessionRuntime(sdk)
 
-        with patch("hft_platform.feed_adapter.fubon.session_runtime.time.sleep"):
+        with patch.object(session_runtime, "time", sleepless_time()):
             result = rt.reconnect(reason="test", force=True)
 
         assert result is True
@@ -202,7 +206,7 @@ class TestReconnect:
         sdk = _make_sdk(login_ok=True)
         rt = FubonSessionRuntime(sdk, config={"reconnect_cooldown_s": 100.0})
 
-        with patch("hft_platform.feed_adapter.fubon.session_runtime.time.sleep"):
+        with patch.object(session_runtime, "time", sleepless_time()):
             # First reconnect succeeds
             assert rt.reconnect(reason="first", force=True) is True
             # Second reconnect blocked by cooldown
@@ -214,7 +218,7 @@ class TestReconnect:
         sdk = _make_sdk(login_ok=True)
         rt = FubonSessionRuntime(sdk, config={"reconnect_cooldown_s": 100.0})
 
-        with patch("hft_platform.feed_adapter.fubon.session_runtime.time.sleep"):
+        with patch.object(session_runtime, "time", sleepless_time()):
             assert rt.reconnect(reason="first", force=True) is True
             assert rt.reconnect(reason="second", force=True) is True
 
@@ -225,7 +229,7 @@ class TestReconnect:
         sdk = _make_sdk(login_ok=True)
         rt = FubonSessionRuntime(sdk)
 
-        with patch("hft_platform.feed_adapter.fubon.session_runtime.time.sleep"):
+        with patch.object(session_runtime, "time", sleepless_time()):
             assert rt.reconnect(reason="initial") is True
 
 
