@@ -1487,6 +1487,19 @@ class StormGuard:
         """Whether reconciliation hold is active (read-only)."""
         return self._reconciliation_hold
 
+    @property
+    def state_reason(self) -> str:
+        """Why the guard is in its current state (read-only).
+
+        ``StormGuard Transition`` carries this at the moment of the change and
+        never again, so anything logging a *sustained* state -- the HALT status
+        line in ``services/system.py`` -- had no way to say what it was holding
+        for. Reads the live value, which is the one the gate acts on: on
+        2026-09-08 a HALT logged for four hours as ``Drawdown -233bps`` while
+        the exported drawdown gauge read something else entirely.
+        """
+        return self._target_state_reason
+
     def set_daily_loss_hold(self, hold: bool) -> None:
         """Set or clear the daily-loss hold on HALT de-escalation.
 

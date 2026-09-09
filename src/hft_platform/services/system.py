@@ -375,6 +375,10 @@ class HFTSystem:
         self.recon_service.platform_degrade_controller = self.platform_degrade_controller
 
         self._halt_log_mono: float = 0.0  # rate-limit HALT log to avoid spam
+        # ``None`` means "not currently halted". Deliberately not 0.0: a float
+        # sentinel inside the range of the clock it stores is how the STORM
+        # entry stamp broke (see tests/unit/test_storm_drawdown_flat_release.py).
+        self._halt_episode_start_mono: float | None = None
         self._halt_checkpoint_written: bool = False  # write checkpoint once on HALT entry
         # Set when startup position recovery could not establish position truth.
         # Everything that writes the checkpoint reads it: on that path the store
@@ -795,6 +799,33 @@ class HFTSystem:
         # nothing. Resolving a recovery halt is: fix the checkpoint, clear the
         # latch, restart.
         self.storm_guard.set_kill_switch_hold(True)
+
+    def _halt_status_log_kind(self, now_mono: float, interval_s: float = 60.0) -> str:
+        """Decide what this HALT tick should log: ``entry``, ``heartbeat`` or ``""``.
+
+        A HALT is one condition, not one condition per minute. Until 2026-09-09
+        every tick past the rate limiter emitted the same field-less line at
+        ``error``, so a single four-hour HALT on THESHOW produced 239 of that
+        day's 240 error records. That makes every error-rate signal -- an alert,
+        a dashboard, or a "no errors in N days" claim -- a measure of how long a
+        HALT lasted rather than of how many things went wrong, and it buried the
+        one unrelated error of the day (a ``place_order`` timeout) under 239
+        copies of a fact already reported by ``StormGuard Transition`` and by
+        the ``StormGuardHalt`` alert.
+
+        Announce the episode once at ``error``; keep saying so at ``warning``,
+        carrying the age that makes the repetition worth reading.
+
+        Advances the rate-limit state, so call it once per tick.
+        """
+        if self._halt_episode_start_mono is None:
+            self._halt_episode_start_mono = now_mono
+            self._halt_log_mono = now_mono
+            return "entry"
+        if now_mono - self._halt_log_mono >= interval_s:
+            self._halt_log_mono = now_mono
+            return "heartbeat"
+        return ""
 
     def _write_halt_entry_checkpoint(self) -> None:
         """M5: persist positions once per HALT episode, on entry, not every tick.
@@ -1947,10 +1978,19 @@ class HFTSystem:
             # Check StormGuard State - CRITICAL: Block orders when HALT
             if self.storm_guard.state == StormGuardState.HALT:
                 _now_mono = time.monotonic()
-                _halt_log_interval_s = 60.0
-                if _now_mono - self._halt_log_mono >= _halt_log_interval_s:
-                    self._halt_log_mono = _now_mono
-                    logger.error("System HALTED by StormGuard - blocking orders")
+                _halt_started_mono = self._halt_episode_start_mono
+                _halt_log_kind = self._halt_status_log_kind(_now_mono)
+                if _halt_log_kind == "entry":
+                    logger.error(
+                        "System HALTED by StormGuard - blocking orders",
+                        reason=self.storm_guard.state_reason,
+                    )
+                elif _halt_log_kind == "heartbeat" and _halt_started_mono is not None:
+                    logger.warning(
+                        "System still HALTED by StormGuard - blocking orders",
+                        reason=self.storm_guard.state_reason,
+                        halted_for_s=round(_now_mono - _halt_started_mono, 1),
+                    )
                 # Defense-in-depth: propagate HALT to gateway policy FIRST so the
                 # gateway rejects new intents while we drain queues below.
                 if self.gateway_service is not None:
@@ -2083,6 +2123,7 @@ class HFTSystem:
                 self._set_service_running(self.order_adapter, True)
                 # Reset HALT log/checkpoint rate-limiting for next HALT episode.
                 self._halt_checkpoint_written = False
+                self._halt_episode_start_mono = None
 
             # Periodic gen-0 GC: reclaim cyclic refs from framework objects
             # (structlog, Prometheus, asyncio internals) without full GC pause.
