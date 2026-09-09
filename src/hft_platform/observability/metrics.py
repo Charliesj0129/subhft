@@ -530,6 +530,20 @@ class MetricsRegistry:
             buckets=[0.1, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000],
         )
 
+        # The top finite bucket used to be 1 s, which was fine while this
+        # histogram only carried sub-millisecond pipeline stages. It stopped
+        # being fine once ``api_place_order`` / ``api_cancel_order`` started
+        # reporting here: a broker call is the one stage that routinely spends
+        # whole seconds, and ``histogram_quantile`` cannot interpolate into
+        # ``+Inf``, so every tail query returned exactly 1000.0 ms whatever the
+        # real value was. Measured on THESHOW 2026-09-09 over 15 h: 18 of 1675
+        # ``api_place_order`` calls and 11 of 1617 ``api_cancel_order`` calls
+        # landed above 1 s, and the day-session p99 read a flat 1000.0 ms for
+        # four consecutive hours -- a saturated quantile that looks exactly
+        # like a stable one. StormGuard's ``order_rtt`` STORM threshold is
+        # 1 s, so the region the breaker actually fires in was the region this
+        # histogram could not describe. The three added edges cover it; they
+        # cost 3 series per active stage.
         self.pipeline_latency_ns = Histogram(
             _pn("pipeline_latency_ns"),
             "Pipeline stage latency (ns)",
@@ -548,6 +562,9 @@ class MetricsRegistry:
                 100_000_000,
                 500_000_000,
                 1_000_000_000,
+                2_500_000_000,
+                5_000_000_000,
+                10_000_000_000,
             ],
         )
 
@@ -802,10 +819,26 @@ class MetricsRegistry:
         self.execution_gateway_heartbeat_ts = Gauge(
             _pn("execution_gateway_heartbeat_ts"), "Execution gateway heartbeat (unix seconds)"
         )
-        # E2E order-to-fill latency (SLO-2)
+        # E2E order-to-fill latency (SLO-2).
+        #
+        # NOT a broker round-trip. The clock starts at ``OrderCommand.created_ns``
+        # (stamped in ``OrderAdapter._cmd_created_ns_map``) and stops at
+        # ``FillEvent.ingest_ts_ns`` (observed in ``ExecutionRouter``), so for a
+        # passive maker such as R47 the span is dominated by the time the quote
+        # rests in the book waiting to be hit -- a market-conditions quantity,
+        # not a platform or broker health signal. A one-second reading here is
+        # the expected shape for a resting limit order, and reading it as broker
+        # slowness produced a false "20x latency regression" report on
+        # 2026-09-09 that the correct instrument then contradicted.
+        #
+        # The broker round-trip is ``pipeline_latency_ns{stage="api_place_order"}``
+        # / ``{stage="api_cancel_order"}``: the same measured duration that feeds
+        # StormGuard's ``order_rtt`` breaker input. Use that one for any question
+        # about the broker, the order path, or a latency threshold.
         self.e2e_order_latency_ns = Histogram(
             _pn("e2e_order_latency_ns"),
-            "End-to-end order-to-fill latency in nanoseconds",
+            "Order-command-to-fill latency in ns (INCLUDES passive book residence "
+            "time; NOT broker RTT -- see pipeline_latency_ns{stage=api_place_order})",
             buckets=[1e6, 5e6, 10e6, 20e6, 50e6, 100e6, 200e6, 500e6, 1e9],
         )
         self.recorder_exec_drops_total = Counter(

@@ -1,3 +1,21 @@
+# WARNING: NOTHING LOADS THIS FILE.
+#
+# Production Prometheus (config/monitoring/prometheus.yml) has exactly one
+# rule_files entry, /etc/prometheus/alerts/rules.yaml, and its container mounts
+# only config/monitoring/alerts. Verified on THESHOW 2026-09-09: the running
+# Prometheus reports a single rule group, HFT_Critical, with 93 rules. Nothing
+# else in this repo -- no compose file, no Makefile target, no scrape config --
+# references this path either.
+#
+# So every rule below has never been evaluated, including
+# slo:e2e_order_latency:p95_ms_rate5m, which reads like a live SLO and is not
+# one. Same family as a metric that is exported but never scraped: it looks
+# green because it is absent, not because it is healthy.
+#
+# Add new recording rules to config/monitoring/alerts/rules.yaml instead. To
+# revive this file, add it to rule_files AND mount its directory into the
+# Prometheus container -- both, or it stays dead.
+
 groups:
 - name: slo_recording
   interval: 30s
