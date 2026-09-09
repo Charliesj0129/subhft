@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from hft_platform.feed_adapter.fubon import session_runtime
 from hft_platform.feed_adapter.fubon.session_runtime import FubonSessionRuntime
+from tests.unit.time_stub import sleepless_time
 
 
 def make_mock_sdk(
@@ -97,18 +100,18 @@ class TestLoginEnvVarFallback:
 
 
 class TestLoginWithRetryFirstAttempt:
-    @patch("hft_platform.feed_adapter.fubon.session_runtime.time.sleep")
-    def test_success_first_attempt(self, mock_sleep: MagicMock) -> None:
+    @patch.object(session_runtime, "time", new_callable=sleepless_time)
+    def test_success_first_attempt(self, stub_time: SimpleNamespace) -> None:
         sdk = make_mock_sdk()
         rt = _make_runtime(sdk)
         assert rt.login_with_retry(api_key="k", password="p") is True
         sdk.login.assert_called_once()
-        mock_sleep.assert_not_called()
+        stub_time.sleep.assert_not_called()
 
 
 class TestLoginWithRetrySecondAttempt:
-    @patch("hft_platform.feed_adapter.fubon.session_runtime.time.sleep")
-    def test_success_second_attempt(self, mock_sleep: MagicMock) -> None:
+    @patch.object(session_runtime, "time", new_callable=sleepless_time)
+    def test_success_second_attempt(self, stub_time: SimpleNamespace) -> None:
         sdk = MagicMock()
         fail_result = MagicMock()
         fail_result.data = []
@@ -118,17 +121,17 @@ class TestLoginWithRetrySecondAttempt:
         rt = _make_runtime(sdk)
         assert rt.login_with_retry(max_retries=3, backoff_base_s=0.5, api_key="k", password="p") is True
         assert sdk.login.call_count == 2
-        mock_sleep.assert_called_once_with(0.5)
+        stub_time.sleep.assert_called_once_with(0.5)
 
 
 class TestLoginWithRetryExhausted:
-    @patch("hft_platform.feed_adapter.fubon.session_runtime.time.sleep")
-    def test_all_retries_fail(self, mock_sleep: MagicMock) -> None:
+    @patch.object(session_runtime, "time", new_callable=sleepless_time)
+    def test_all_retries_fail(self, stub_time: SimpleNamespace) -> None:
         sdk = make_mock_sdk(login_error=RuntimeError("down"))
         rt = _make_runtime(sdk)
         assert rt.login_with_retry(max_retries=3, backoff_base_s=1.0, api_key="k", password="p") is False
         assert sdk.login.call_count == 3
-        assert mock_sleep.call_count == 2
+        assert stub_time.sleep.call_count == 2
 
 
 class TestLogoutSuccess:
@@ -153,8 +156,10 @@ class TestLogoutException:
 
 
 class TestReconnectSuccess:
-    @patch("hft_platform.feed_adapter.fubon.session_runtime.time.sleep")
-    def test_reconnect_calls_logout_then_login(self, mock_sleep: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:
+    @patch.object(session_runtime, "time", new_callable=sleepless_time)
+    def test_reconnect_calls_logout_then_login(
+        self, stub_time: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("HFT_FUBON_API_KEY", "k")
         monkeypatch.setenv("HFT_FUBON_PASSWORD", "p")
         sdk = make_mock_sdk()
@@ -165,8 +170,8 @@ class TestReconnectSuccess:
 
 
 class TestReconnectCooldown:
-    @patch("hft_platform.feed_adapter.fubon.session_runtime.time.sleep")
-    def test_cooldown_blocks_reconnect(self, mock_sleep: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:
+    @patch.object(session_runtime, "time", new_callable=sleepless_time)
+    def test_cooldown_blocks_reconnect(self, stub_time: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HFT_FUBON_API_KEY", "k")
         monkeypatch.setenv("HFT_FUBON_PASSWORD", "p")
         sdk = make_mock_sdk()
@@ -176,8 +181,8 @@ class TestReconnectCooldown:
 
 
 class TestReconnectForce:
-    @patch("hft_platform.feed_adapter.fubon.session_runtime.time.sleep")
-    def test_force_bypasses_cooldown(self, mock_sleep: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:
+    @patch.object(session_runtime, "time", new_callable=sleepless_time)
+    def test_force_bypasses_cooldown(self, stub_time: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HFT_FUBON_API_KEY", "k")
         monkeypatch.setenv("HFT_FUBON_PASSWORD", "p")
         sdk = make_mock_sdk()
