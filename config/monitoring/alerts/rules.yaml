@@ -461,14 +461,24 @@ groups:
         summary: "Queue Depth Spike"
         description: "Queue depth exceeded 1000 in the last 30s."
 
+  # The ``stormguard_mode != 3`` guard was added 2026-09-10. A StormGuard HALT
+  # stops the execution gateway on purpose: verified on THESHOW 2026-09-08,
+  # "ExecutionGateway stopped" logged 5 s after the HALT latched at 16:59:28 and
+  # "ExecutionGateway started" logged in the same second as its release at
+  # 21:00:04. So this rule and ExecutionGatewayHeartbeatStale both fired for the
+  # whole 4 h HALT alongside StormGuardHalt and StormGuardHaltStuck -- one
+  # correct protective action paging four times, and at a 15 m critical repeat
+  # interval that is roughly 64 messages. The guard keeps the rule live for a
+  # gateway that dies while the platform is NOT halted, which is the only case
+  # where a dead gateway is news.
   - alert: ExecutionGatewayTaskDown
-    expr: max_over_time(execution_gateway_alive[2m]) < 1
+    expr: max_over_time(execution_gateway_alive[2m]) < 1 and on() stormguard_mode != 3
     for: 1m
     labels:
         severity: critical
     annotations:
         summary: "Execution gateway task down"
-        description: "execution_gateway_alive has been 0 for more than 1 minute."
+        description: "execution_gateway_alive has been 0 for more than 1 minute while StormGuard was not HALTed."
 
   - alert: ExecutionRouterTaskDown
     expr: max_over_time(execution_router_alive[2m]) < 1
@@ -1114,14 +1124,19 @@ groups:
       description: "The autonomy control-plane changed state. Check current mode."
 
   # ── Gateway Heartbeat (M-11) ─────────────────────────────────
+  # Guarded on StormGuard HALT for the same reason as ExecutionGatewayTaskDown
+  # above: the gateway's heartbeat loop is stopped deliberately by a HALT, so
+  # the staleness it measures is the designed state, not a fault. Measured
+  # across the 2026-09-08 HALT, the heartbeat aged linearly from 27 s to
+  # 14,427 s and recovered to 2 s within one scrape of the release.
   - alert: ExecutionGatewayHeartbeatStale
-    expr: execution_gateway_heartbeat_ts > 0 and (time() - execution_gateway_heartbeat_ts) > 60
+    expr: execution_gateway_heartbeat_ts > 0 and (time() - execution_gateway_heartbeat_ts) > 60 and on() stormguard_mode != 3
     for: 30s
     labels:
       severity: critical
     annotations:
       summary: "Execution Gateway heartbeat is stale (>60s)"
-      description: "execution_gateway_heartbeat_ts has not been updated in >60 seconds."
+      description: "execution_gateway_heartbeat_ts has not been updated in >60 seconds while StormGuard was not HALTed."
 
   # ── WAL Integrity (M-12) ─────────────────────────────────────
   - alert: WALCorruptionDetected

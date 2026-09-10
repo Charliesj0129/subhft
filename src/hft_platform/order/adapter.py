@@ -3836,7 +3836,39 @@ class OrderAdapter:
             return True
         # Check error message for common transient patterns
         err_str = str(exc).lower()
-        transient_patterns = ("econnrefused", "econnreset", "etimedout", "connection reset", "temporarily unavailable")
+        # The session-establishment group was added 2026-09-10. The Shioaji
+        # SDK reports a broker session that has not come up yet as
+        #
+        #   place_order: Shioaji error Session error SolClient send request
+        #   api/v1/paper/place_order, code: NotReady, Error ErrorInfo {
+        #   sub_code: SubCode(SessionNotEstablished), error_str: "Unable to
+        #   wait for session '(cN,sN)_sinopac' to be established" }
+        #
+        # and none of the five original substrings appear anywhere in it, so
+        # the most obviously retryable condition there is -- a session still
+        # coming up -- was classified permanent. ``_call_api`` then skips its
+        # retry loop entirely and the order goes to the DLQ on the first
+        # attempt. Measured on THESHOW: 166 occurrences over the log retention
+        # window, escalating 6 -> 30 -> 34 -> 96 per day, driving
+        # ``dlq_size_total{source="order"}`` from 6 to 31 inside one night
+        # session and tripping the circuit breaker.
+        #
+        # This does NOT come back as a ``TimeoutError``: the SDK raises fast,
+        # so the failing call costs tens of milliseconds, not the 3 s
+        # ``HFT_API_TIMEOUT_S``. It therefore reaches the plain non-transient
+        # return below rather than the mutating-timeout guard above, which is
+        # exactly why no retry ever happened and why this is safe to retry --
+        # a call that never reached the broker cannot have placed an order.
+        transient_patterns = (
+            "econnrefused",
+            "econnreset",
+            "etimedout",
+            "connection reset",
+            "temporarily unavailable",
+            "sessionnotestablished",
+            "session not established",
+            "to be established",
+        )
         return any(p in err_str for p in transient_patterns)
 
     async def _call_api(
