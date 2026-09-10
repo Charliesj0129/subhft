@@ -482,7 +482,16 @@ class ExecutionRouter:
                                     if _phantom_strat and _phantom_strat != "UNKNOWN":
                                         fill_event = dataclasses.replace(fill_event, strategy_id=_phantom_strat)
                                         _phantom_resolved = True
-                                        self.metrics.orphaned_fill_total.inc()
+                                        # ``orphaned_fill_total`` is declared as "Orphaned fills
+                                        # routed to DLQ" and is NOT bumped here: this branch is the
+                                        # one where the fill was successfully attributed back to
+                                        # its strategy, so nothing was orphaned. It used to bump
+                                        # both counters, which made a recovery indistinguishable
+                                        # from a loss and fired OrphanedFillDetected
+                                        # (increase(orphaned_fill_total[5m]) > 0) on a correct
+                                        # outcome. Measured on THESHOW 2026-09-10: 4 increments,
+                                        # of which 2 were reconciliations -- half the warnings
+                                        # that alert sent were reporting the recovery working.
                                         _phantom_metric = getattr(self.metrics, "phantom_fill_reconciled_total", None)
                                         if _phantom_metric is not None:
                                             _phantom_metric.inc()
@@ -675,6 +684,12 @@ class ExecutionRouter:
                                     if _sd_strat and _sd_strat != "UNKNOWN":
                                         fill_event = dataclasses.replace(fill_event, strategy_id=_sd_strat)
                                         _sd_phantom_resolved = True
+                                        # Counted for the same reason the main loop counts it:
+                                        # a reconciliation that leaves no trace looks identical
+                                        # to a fill that never arrived.
+                                        _sd_metric = getattr(self.metrics, "phantom_fill_reconciled_total", None)
+                                        if _sd_metric is not None:
+                                            _sd_metric.inc()
                                         logger.warning(
                                             "shutdown_drain_phantom_reconciled",
                                             symbol=fill_event.symbol,
