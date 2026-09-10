@@ -1021,23 +1021,99 @@ groups:
         `shioaji_family_populator_snapshot_installed` in the engine log.
       runbook_url: "docs/runbooks/alpha-development-workflow.md"
 
-  - alert: StrategyProducesNoIntentsDuringSession
+  # ── Strategy health, not strategy opinion (2026-09-10) ───────────
+  # This block replaces StrategyProducesNoIntentsDuringSession, which alerted
+  # on the strategy's *output*: "no intent in 30 minutes of open session". A
+  # market maker that declines to quote a spread it judges too tight is doing
+  # its job, so that rule paged on a policy decision rather than a fault.
+  #
+  # Measured over the 14 days to 2026-09-10 it fired for 4185 minutes across
+  # 20 episodes. The strategy's one genuine outage in that window — 1555
+  # minutes on 09-01 and 09-02, during which StrategyRunner dispatched no
+  # event to it at all — overlapped those episodes for ZERO minutes. The rule
+  # was loud while the strategy was healthy and structurally silent while it
+  # was dead, because its `flat > 0` term cannot be true for a strategy that
+  # is receiving nothing.
+  #
+  # The rules below ask whether the strategy is RUNNING. Placement is left
+  # unalerted on purpose: that is where policy lives.
+  #
+  #   StrategyRunner._dispatch_event
+  #        |
+  #        |  timeout breaker open -> `continue`, strategy skipped entirely
+  #        |     strategy_circuit_break_total -> StrategyTimeoutCircuitBroken
+  #        v
+  #     strategy_events_received_total  -> StrategyNotProcessingEvents
+  #        |     (incremented immediately BEFORE the call, so a skipped or
+  #        |      starved strategy shows up here and nowhere else)
+  #        v
+  #     strategy.handle_event(ctx, event)
+  #        |     strategy_exceptions_total -> StrategyExceptionsRateHigh
+  #        |     strategy_timeout_total    -> StrategyHandlerTimingOut
+  #        v
+  #     decision emitted
+  #        |     alpha_signal_events_total -> AlphaSignalSilent
+  #        v
+  #     placement gates -> OrderIntent      (NOT alerted: policy, not health)
+  #
+  - alert: StrategyNotProcessingEvents
     expr: |
-      (sum by (strategy) (increase(alpha_signal_events_total{outcome="intent"}[30m])) == 0)
-      and (sum by (strategy) (increase(alpha_signal_events_total{outcome="flat"}[30m])) > 0)
+      (sum by (strategy_id) (increase(strategy_events_received_total[15m])) == 0)
       and on() market_trading_hours_active == 1
     for: 10m
     labels:
       severity: warning
     annotations:
-      summary: "Strategy {{ $labels.strategy }} has decided flat on every event for 30m"
+      summary: "Strategy {{ $labels.strategy_id }} was handed no event for 15m of open session"
       description: >-
-        The strategy is registered, receiving events and deciding — the flat
-        counter is moving — but has not produced a single intent in 30 minutes
-        of open session. The `flat > 0` term is what separates this from a
-        disabled or unsubscribed strategy, so unlike AlphaSignalSilent this
-        rule does not need `alpha_last_signal_ts > 0` and therefore still fires
-        for a strategy that has *never* emitted an intent.
+        StrategyRunner increments this counter immediately before calling
+        handle_event, so a flat counter means the strategy is not executing at
+        all — it is not merely declining to quote. Reachable causes, in the
+        order worth checking: the timeout circuit breaker is open and the
+        runner is skipping the strategy; the strategy was quarantined and
+        never re-armed; the executor list no longer contains it; or the feed
+        is delivering nothing, in which case a feed alert is firing too. This
+        replaced an intent-output rule that could not see any of them.
+        Backtested over the 14 days to 2026-09-10: 3 firings, all genuine,
+        covering the 09-01/09-02 outage the old rule missed entirely.
+      runbook_url: "docs/runbooks/alpha-development-workflow.md"
+
+  # The breaker recovers by itself after HFT_STRATEGY_TIMEOUT_RECOVER_S (60s
+  # by default), so a single break is invisible to the 25-minute silence rule
+  # above. An oscillating break/recover cycle keeps events flowing just often
+  # enough to hold that rule quiet while the strategy misses most of the
+  # session, which is precisely the shape this rule exists to name.
+  - alert: StrategyTimeoutCircuitBroken
+    expr: sum by (strategy_name) (increase(strategy_circuit_break_total[10m])) > 0
+    for: 0s
+    labels:
+      severity: warning
+    annotations:
+      summary: "Runner opened the timeout circuit breaker on {{ $labels.strategy_name }}"
+      description: >-
+        handle_event exceeded HFT_STRATEGY_TIMEOUT_MS on
+        HFT_STRATEGY_TIMEOUT_STRIKES consecutive events, so StrategyRunner is
+        now skipping this strategy until the recovery window elapses. It is
+        not receiving events and cannot quote or cancel while the breaker is
+        open. Never fired in production as of 2026-09-10.
+
+  # Non-consecutive overruns never reach the strike limit, so the breaker
+  # above stays shut while the strategy misses its wall-clock budget over and
+  # over. The window is deliberately long and the threshold well clear of one
+  # burst: 20 overruns in half an hour cannot be a single stall.
+  - alert: StrategyHandlerTimingOut
+    expr: sum by (strategy_name) (increase(strategy_timeout_total[30m])) > 20
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "{{ $labels.strategy_name }} is overrunning its wall-clock budget repeatedly"
+      description: >-
+        handle_event exceeded HFT_STRATEGY_TIMEOUT_MS more than 20 times in 30
+        minutes without tripping the consecutive-strike breaker. The strategy
+        is running but not keeping up, so its quotes are being computed from
+        state that has already moved. Check event-loop lag and the feature
+        pipeline before the strategy's own code.
 
   # A connect gate refusing is correct, deliberate behaviour — and it looks
   # from the outside exactly like a broker outage, because the engine ends up

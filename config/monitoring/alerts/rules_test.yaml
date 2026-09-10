@@ -68,62 +68,146 @@ tests:
         alertname: StrategyBoundToNoLiveSymbols
         exp_alerts: []
 
-  # ── StrategyProducesNoIntentsDuringSession ──────────────────────
+  # ── StrategyNotProcessingEvents ─────────────────────────────────
+  # Positive control: the 09-01/09-02 shape. The dispatch counter is present
+  # and frozen while the session is open. The rule this replaced could not
+  # fire here, because with no dispatch there are no flat decisions either.
   - interval: 1m
-    name: all-flat-no-intent fires for a strategy that has never emitted an intent
+    name: not-processing-events fires when dispatch freezes during the session
     input_series:
-      # Flat counter climbing steadily; intent counter flat at zero. This is
-      # what AlphaSignalSilent reads as perfectly healthy.
-      - series: 'alpha_signal_events_total{strategy="R47_MAKER_TMF",outcome="flat"}'
-        values: "0+1000x60"
-      - series: 'alpha_signal_events_total{strategy="R47_MAKER_TMF",outcome="intent"}'
-        values: "0+0x60"
+      - series: 'strategy_events_received_total{strategy_id="R47_MAKER_TMF"}'
+        values: "1000+0x60"
       - series: "market_trading_hours_active"
         values: "1+0x60"
+      # The old rule's inputs, held in the state that kept it silent.
+      - series: 'alpha_signal_events_total{strategy="R47_MAKER_TMF",outcome="flat"}'
+        values: "0+0x60"
+      - series: 'alpha_signal_events_total{strategy="R47_MAKER_TMF",outcome="intent"}'
+        values: "0+0x60"
     alert_rule_test:
-      - eval_time: 45m
-        alertname: StrategyProducesNoIntentsDuringSession
+      - eval_time: 20m
+        alertname: StrategyNotProcessingEvents
         exp_alerts:
           - exp_labels:
               severity: warning
-              strategy: R47_MAKER_TMF
+              strategy_id: R47_MAKER_TMF
             exp_annotations:
-              summary: "Strategy R47_MAKER_TMF has decided flat on every event for 30m"
+              summary: "Strategy R47_MAKER_TMF was handed no event for 15m of open session"
               description: >-
-                The strategy is registered, receiving events and deciding — the flat counter is moving —
-                but has not produced a single intent in 30 minutes of open session. The `flat > 0` term is
-                what separates this from a disabled or unsubscribed strategy, so unlike AlphaSignalSilent
-                this rule does not need `alpha_last_signal_ts > 0` and therefore still fires for a strategy
-                that has *never* emitted an intent.
+                StrategyRunner increments this counter immediately before calling handle_event, so a flat
+                counter means the strategy is not executing at all — it is not merely declining to quote.
+                Reachable causes, in the order worth checking: the timeout circuit breaker is open and the
+                runner is skipping the strategy; the strategy was quarantined and never re-armed; the
+                executor list no longer contains it; or the feed is delivering nothing, in which case a feed
+                alert is firing too. This replaced an intent-output rule that could not see any of them.
+                Backtested over the 14 days to 2026-09-10: 3 firings, all genuine, covering the 09-01/09-02
+                outage the old rule missed entirely.
+              runbook_url: "docs/runbooks/alpha-development-workflow.md"
 
+  # Negative control, and the whole point of the change: a maker that receives
+  # every event, decides flat on every one of them and places nothing is
+  # RUNNING. This fixture is the exact state that paged for 4185 minutes.
   - interval: 1m
-    name: all-flat-no-intent stays quiet while intents are flowing
+    name: not-processing-events stays quiet for a maker deciding flat on every event
     input_series:
+      - series: 'strategy_events_received_total{strategy_id="R47_MAKER_TMF"}'
+        values: "0+1000x60"
       - series: 'alpha_signal_events_total{strategy="R47_MAKER_TMF",outcome="flat"}'
         values: "0+1000x60"
       - series: 'alpha_signal_events_total{strategy="R47_MAKER_TMF",outcome="intent"}'
-        values: "0+1x60"
+        values: "0+0x60"
+      - series: 'strategy_gate_blocked_total{strategy="R47_MAKER_TMF",gate="spread"}'
+        values: "0+450x60"
       - series: "market_trading_hours_active"
         values: "1+0x60"
     alert_rule_test:
       - eval_time: 45m
-        alertname: StrategyProducesNoIntentsDuringSession
+        alertname: StrategyNotProcessingEvents
         exp_alerts: []
 
+  # A frozen dispatch counter outside the session is the market being shut.
   - interval: 1m
-    name: all-flat-no-intent does not fire for a strategy receiving no events
+    name: not-processing-events stays quiet while the market is closed
     input_series:
-      # No flat decisions either — the strategy is disabled or unsubscribed.
-      # That is AlphaSignalSilent's job, not this rule's.
-      - series: 'alpha_signal_events_total{strategy="R47_MAKER_TMF",outcome="flat"}'
-        values: "0+0x60"
-      - series: 'alpha_signal_events_total{strategy="R47_MAKER_TMF",outcome="intent"}'
-        values: "0+0x60"
+      - series: 'strategy_events_received_total{strategy_id="R47_MAKER_TMF"}'
+        values: "1000+0x60"
       - series: "market_trading_hours_active"
-        values: "1+0x60"
+        values: "0+0x60"
     alert_rule_test:
       - eval_time: 45m
-        alertname: StrategyProducesNoIntentsDuringSession
+        alertname: StrategyNotProcessingEvents
+        exp_alerts: []
+
+  # ── StrategyTimeoutCircuitBroken ────────────────────────────────
+  # A break followed by the 60-second auto-recovery: dispatch resumes long
+  # before the 25-minute silence rule could see it, so this rule is the only
+  # one that can name it.
+  - interval: 1m
+    name: timeout-circuit-broken fires on a single break the silence rule cannot see
+    input_series:
+      - series: 'strategy_circuit_break_total{strategy_name="R47_MAKER_TMF"}'
+        values: "0 0 1 1 1 1 1 1 1 1 1 1"
+      - series: 'strategy_events_received_total{strategy_id="R47_MAKER_TMF"}'
+        values: "0+1000x11"
+      - series: "market_trading_hours_active"
+        values: "1+0x11"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: StrategyTimeoutCircuitBroken
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              strategy_name: R47_MAKER_TMF
+            exp_annotations:
+              summary: "Runner opened the timeout circuit breaker on R47_MAKER_TMF"
+              description: >-
+                handle_event exceeded HFT_STRATEGY_TIMEOUT_MS on HFT_STRATEGY_TIMEOUT_STRIKES consecutive
+                events, so StrategyRunner is now skipping this strategy until the recovery window elapses.
+                It is not receiving events and cannot quote or cancel while the breaker is open. Never fired
+                in production as of 2026-09-10.
+      - eval_time: 4m
+        alertname: StrategyNotProcessingEvents
+        exp_alerts: []
+
+  # ── StrategyHandlerTimingOut ────────────────────────────────────
+  # Negative control first: one burst of overruns is a stall, not a pattern,
+  # and must not page. Six increments is above the breaker's strike limit but
+  # far below this rule's 20-in-30-minutes threshold.
+  - interval: 1m
+    name: handler-timing-out ignores a single burst of overruns
+    input_series:
+      - series: 'strategy_timeout_total{strategy_name="R47_MAKER_TMF"}'
+        values: "0 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6"
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: StrategyHandlerTimingOut
+        exp_alerts: []
+
+  # Positive control: sustained overruns that never trip the consecutive
+  # breaker, so StrategyTimeoutCircuitBroken must stay silent here.
+  - interval: 1m
+    name: handler-timing-out fires on sustained overruns that never trip the breaker
+    input_series:
+      - series: 'strategy_timeout_total{strategy_name="R47_MAKER_TMF"}'
+        values: "0+2x40"
+      - series: 'strategy_circuit_break_total{strategy_name="R47_MAKER_TMF"}'
+        values: "0+0x40"
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: StrategyHandlerTimingOut
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              strategy_name: R47_MAKER_TMF
+            exp_annotations:
+              summary: "R47_MAKER_TMF is overrunning its wall-clock budget repeatedly"
+              description: >-
+                handle_event exceeded HFT_STRATEGY_TIMEOUT_MS more than 20 times in 30 minutes without
+                tripping the consecutive-strike breaker. The strategy is running but not keeping up, so its
+                quotes are being computed from state that has already moved. Check event-loop lag and the
+                feature pipeline before the strategy's own code.
+      - eval_time: 35m
+        alertname: StrategyTimeoutCircuitBroken
         exp_alerts: []
 
   # ── FeedConnectGateBlockedConnect ───────────────────────────────
