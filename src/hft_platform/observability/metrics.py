@@ -208,6 +208,8 @@ class MetricsRegistry:
                 _pn("feed_reconnect_total"),
                 _pn("feed_reconnect_timeout_total"),
                 _pn("feed_reconnect_exception_total"),
+                _pn("order_session_reconnect_total"),
+                _pn("order_session_down"),
                 _pn("system_cpu_usage"),
                 _pn("system_memory_usage"),
                 _pn("event_loop_lag_ms"),
@@ -433,6 +435,20 @@ class MetricsRegistry:
             ["plane"],
         )
         self.feed_reconnect_total = Counter(_pn("feed_reconnect_total"), "Feed reconnect attempts", ["result"])
+        # The order path runs on its own broker session, separate from the
+        # quote pool, and until 2026-09-10 nothing ever re-authenticated it.
+        # These two are the only outside view of that session: a feed metric
+        # cannot stand in for it, because the feed can be perfectly healthy
+        # while no order has reached the broker for hours.
+        self.order_session_reconnect_total = Counter(
+            _pn("order_session_reconnect_total"),
+            "Order-session reconnect attempts made by the order-session watchdog",
+            ["result"],
+        )
+        self.order_session_down = Gauge(
+            _pn("order_session_down"),
+            "1 when consecutive order attempts are failing on an unestablished broker session",
+        )
         self.feed_reconnect_timeout_total = Counter(
             _pn("feed_reconnect_timeout_total"),
             "Feed reconnect attempts that timed out",

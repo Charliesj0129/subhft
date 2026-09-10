@@ -531,9 +531,18 @@ class HFTSystem:
                         "order_client logged in",
                         contracts_ready=getattr(self.order_client, "contracts_ready", "N/A"),
                     )
+                    # Kept on the instance so the order-session watchdog can
+                    # re-register exactly these after a reconnect. The reconnect
+                    # orchestrator restores *quote* callbacks only, so a relogin
+                    # that did not do this would leave the session authenticated
+                    # and placing orders while every fill went nowhere.
+                    self._exec_callbacks = (
+                        lambda state, payload: self._on_exec("order", {"state": state, "payload": payload}),
+                        lambda payload: self._on_exec("deal", {"payload": payload}),
+                    )
                     self.order_client.set_execution_callbacks(
-                        on_order=lambda state, payload: self._on_exec("order", {"state": state, "payload": payload}),
-                        on_deal=lambda payload: self._on_exec("deal", {"payload": payload}),
+                        on_order=self._exec_callbacks[0],
+                        on_deal=self._exec_callbacks[1],
                     )
                 else:
                     logger.error("order_client login returned false — orders are unavailable", order_mode=order_mode)
@@ -623,6 +632,11 @@ class HFTSystem:
                     self._start_service("risk", self.risk_engine.run())
                 self._start_service("order", self.order_adapter.run())
                 self._start_service("exec_gateway", self.execution_gateway.run())
+                # Started under ``orders_enabled`` with the rest of the order
+                # path: with orders disabled there is no order session to keep
+                # alive, and a watchdog that relogs in a session nobody uses
+                # would spend the account's session allowance for nothing.
+                self._start_service("order_session_watchdog", self._order_session_watchdog())
 
                 # ── Checkpoint Writer (after recovery, before trading) ──
                 if self._recovery_halted:
@@ -998,6 +1012,108 @@ class HFTSystem:
         except Exception as exc:
             logger.warning("Bootstrap teardown failed", error=str(exc))
 
+    async def _order_session_watchdog(self):
+        """Re-authenticate the order session when it stops answering.
+
+        The order path runs on its own ``ShioajiClientFacade``, built alongside
+        but separately from the quote pool. The quote side has a watchdog, a
+        forced-relogin path and a reconnect orchestrator; the order side was
+        logged in exactly once at startup and never again. On 2026-09-08 that
+        session went down and stayed down for 45 hours across zero container
+        restarts, with the feed healthy the whole time -- 1,692 orders into the
+        dead-letter queue and not one successful placement.
+
+        The loop is only a clock. The decision lives in
+        ``_check_order_session_once`` so it can be tested without waiting out
+        an interval.
+        """
+        interval_s = self._env_float("HFT_ORDER_SESSION_CHECK_S", 30.0, 5.0)
+        threshold = max(1, int(os.getenv("HFT_ORDER_SESSION_DOWN_THRESHOLD", "3")))
+        logger.info("order_session_watchdog_started", interval_s=interval_s, threshold=threshold)
+        while self.running:
+            await asyncio.sleep(interval_s)
+            try:
+                await self._check_order_session_once(threshold)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 — a watchdog must outlive its own failures
+                logger.error("order_session_watchdog_error", error=str(exc))
+
+    async def _check_order_session_once(self, threshold: int) -> str:
+        """One health decision for the order session. Returns what it did.
+
+        Driven by order outcomes, deliberately not by
+        ``order_client.is_connected()``: that returns ``logged_in and api is
+        not None``, and both stayed true for the whole 45-hour outage. The only
+        honest signal that this session is dead is that orders keep dying on
+        it::
+
+            place_order -> SessionNotEstablished  (x threshold, in a row)
+                                |
+                                v
+                    reconnect(force=False)   <- backoff/cooldown/login-slot
+                                |                 guards live inside it
+                                v
+                    set_execution_callbacks()  <- MUST happen here; the
+                                                  reconnect orchestrator
+                                                  restores quote callbacks and
+                                                  re-subscribes quotes, and
+                                                  never touches the order/deal
+                                                  pair. Skipping it leaves the
+                                                  session authenticated and
+                                                  placing orders while every
+                                                  fill goes nowhere.
+        """
+        from hft_platform.observability.metrics import MetricsRegistry  # noqa: PLC0415
+
+        metrics = MetricsRegistry.get()
+        adapter = getattr(self, "order_adapter", None)
+        if adapter is None:
+            return "no_adapter"
+
+        failures = int(getattr(adapter, "consecutive_session_errors", 0))
+        metrics.order_session_down.set(1 if failures >= threshold else 0)
+        if failures < threshold:
+            return "healthy"
+
+        reconnect = getattr(self.order_client, "reconnect", None)
+        if reconnect is None:
+            # A broker facade with no reconnect (sim/no-op clients). Say so
+            # every interval rather than looping silently: an order session
+            # nobody can revive is worth a log line.
+            logger.error("order_session_down_but_client_cannot_reconnect", consecutive_session_errors=failures)
+            return "cannot_reconnect"
+
+        logger.warning("order_session_reconnect_attempt", consecutive_session_errors=failures, threshold=threshold)
+        loop = asyncio.get_running_loop()
+        # force=False on purpose: the orchestrator's cooldown, backoff and
+        # process-wide login slot are what stop a persistently dead session
+        # from becoming a relogin storm that burns the account's session
+        # allowance and earns everything a 451.
+        ok = await loop.run_in_executor(
+            None,
+            lambda: reconnect(reason="order_session_not_established", force=False),
+        )
+        if not ok:
+            metrics.order_session_reconnect_total.labels(result="fail").inc()
+            logger.warning("order_session_reconnect_failed_or_gated")
+            return "reconnect_failed"
+
+        callbacks = getattr(self, "_exec_callbacks", None)
+        if callbacks is None:
+            # Reconnected but the fill path cannot be restored. Trading on
+            # would be worse than not trading: orders would fill and the
+            # platform would never hear about it.
+            metrics.order_session_reconnect_total.labels(result="no_callbacks").inc()
+            logger.critical("order_session_reconnected_without_execution_callbacks")
+            return "no_callbacks"
+
+        self.order_client.set_execution_callbacks(on_order=callbacks[0], on_deal=callbacks[1])
+        metrics.order_session_reconnect_total.labels(result="ok").inc()
+        metrics.order_session_down.set(0)
+        logger.info("order_session_reconnected", previous_consecutive_errors=failures)
+        return "reconnected"
+
     async def _pnl_snapshot_exporter(self):
         """Periodically dump position state to hft.pnl_snapshots via recorder."""
         interval_s = float(os.getenv("HFT_PNL_SNAPSHOT_INTERVAL_S", "60"))
@@ -1056,6 +1172,10 @@ class HFTSystem:
                     ("recon", "ReconciliationService", self.recon_service.run),
                     ("strat", "StrategyRunner", self.strategy_runner.run),
                     ("pnl_exporter", "PnLSnapshotExporter", self._pnl_snapshot_exporter),
+                    # Supervised like the rest of the order path. A recovery
+                    # loop that dies quietly leaves exactly the state it exists
+                    # to prevent: a dead order session nobody re-authenticates.
+                    ("order_session_watchdog", "OrderSessionWatchdog", self._order_session_watchdog),
                 )
             )
             if self.gateway_service is not None:

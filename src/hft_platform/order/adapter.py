@@ -56,6 +56,16 @@ _MUTATING_OPS: frozenset[str] = frozenset({"place_order", "update_order"})
 # the duplicate-order sense: a broker that stops answering cancels is exactly
 # the condition the breaker exists for.
 _ORDER_RTT_OPS: frozenset[str] = frozenset({"place_order", "cancel_order", "update_order"})
+# Substrings that identify a broker session that has not come up. Shared by
+# ``_is_transient_error`` (which retries them) and
+# ``_is_session_establishment_error`` (which counts them toward a reconnect),
+# so the two can never drift apart and start disagreeing about what a dead
+# session looks like.
+_SESSION_ESTABLISHMENT_PATTERNS: tuple[str, ...] = (
+    "sessionnotestablished",
+    "session not established",
+    "to be established",
+)
 
 
 class _TimeoutCancelled(Exception):
@@ -128,6 +138,7 @@ class OrderAdapter:
         "_live_orders_lock",
         "rate_limiter",
         "circuit_breaker",
+        "_consecutive_session_errors",
         "order_id_resolver",
         "_api_timeout_s",
         "_api_guard_timeout_s",
@@ -306,6 +317,12 @@ class OrderAdapter:
         # Helpers
         self.rate_limiter = RateLimiter(soft_cap=180, hard_cap=250, window_s=10)
         self.circuit_breaker = CircuitBreaker(threshold=5, timeout_s=60)
+        # Counts order attempts lost in a row to a session that never came
+        # up. The circuit breaker above stops *sending* into a broken
+        # broker; this counts a specific reason so the session watchdog can
+        # go and fix it. Neither can substitute for the other: the breaker
+        # re-probes every 60 s forever without ever re-authenticating.
+        self._consecutive_session_errors = 0
         self.order_id_resolver = OrderIdResolver(self.order_id_map, lock=self._order_id_map_lock)
         self._api_timeout_s = float(os.getenv("HFT_API_TIMEOUT_S", "3.0"))  # precision-time
         self._api_guard_timeout_s = float(os.getenv("HFT_API_GUARD_TIMEOUT_S", "0.005"))  # precision-time
@@ -3865,11 +3882,36 @@ class OrderAdapter:
             "etimedout",
             "connection reset",
             "temporarily unavailable",
-            "sessionnotestablished",
-            "session not established",
-            "to be established",
+            *_SESSION_ESTABLISHMENT_PATTERNS,
         )
         return any(p in err_str for p in transient_patterns)
+
+    @staticmethod
+    def _is_session_establishment_error(exc: Exception) -> bool:
+        """True when the broker refused because its session has not come up.
+
+        A strict subset of ``_is_transient_error``. Retrying is the right
+        immediate response and ``_call_api`` already does it, but a retry only
+        helps a session that is *coming up*. The 2026-09-08 outage was a
+        session that stayed down for 45 hours, and no number of retries fixes
+        that -- something has to log in again. Separating this class of error
+        from the rest is what lets the session watchdog tell "the broker
+        blipped" apart from "this session is gone", without treating an
+        ordinary connection reset as a reason to re-authenticate.
+        """
+        return any(p in str(exc).lower() for p in _SESSION_ESTABLISHMENT_PATTERNS)
+
+    @property
+    def consecutive_session_errors(self) -> int:
+        """Order attempts lost in a row to a session that never came up.
+
+        Reset to zero by any successful broker call, so a non-zero value means
+        the session is failing *now*, not that it once failed. Read by the
+        order-session watchdog in ``services/system.py``; nothing in the order
+        path branches on it, so a stale read can delay a reconnect but can
+        never affect an order.
+        """
+        return self._consecutive_session_errors
 
     async def _call_api(
         self,
@@ -3940,6 +3982,11 @@ class OrderAdapter:
                     # evaluator, so the breaker cannot be escalated from a path
                     # its own state machine cannot see.
                     self._observe_order_rtt(op, duration)
+                    # Any answer at all means the session is up. Reset here
+                    # rather than only on place_order so a successful cancel
+                    # also clears it -- the watchdog must not relogin a session
+                    # that is demonstrably working.
+                    self._consecutive_session_errors = 0
                     self.circuit_breaker.record_success()
                     self._update_cb_metric()
                     if intent and intent.strategy_id:
@@ -4026,6 +4073,12 @@ class OrderAdapter:
                         continue
 
                     # Non-transient error or exhausted retries
+                    # Count only here, where the order is actually given up on:
+                    # counting per attempt would treat one lost order as three
+                    # and trip the watchdog at a third of the intended
+                    # threshold.
+                    if self._is_session_establishment_error(exc):
+                        self._consecutive_session_errors += 1
                     logger.error(
                         "API call failed",
                         op=op,
@@ -4033,6 +4086,7 @@ class OrderAdapter:
                         error_type=type(exc).__name__,
                         attempts=attempt + 1,
                         is_transient=is_transient,
+                        consecutive_session_errors=self._consecutive_session_errors,
                     )
                     self.metrics.order_reject_total.inc()
                     self.circuit_breaker.record_failure()

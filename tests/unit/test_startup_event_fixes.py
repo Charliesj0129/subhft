@@ -286,6 +286,9 @@ class TestStartupFillBackfill:
             _start_service=_start_service,
             # run() also starts the loop-lag probe alongside the supervisor.
             _probe_event_loop_lag=MagicMock(return_value=asyncio.sleep(0)),
+            # run() starts the order-session watchdog with the rest of the
+            # order path when orders are enabled.
+            _order_session_watchdog=MagicMock(return_value=asyncio.sleep(0)),
             _supervise=MagicMock(return_value=asyncio.sleep(0)),
             stop_async=MagicMock(return_value=asyncio.sleep(0)),
             evidence_writer=MagicMock(record_transition=MagicMock()),
