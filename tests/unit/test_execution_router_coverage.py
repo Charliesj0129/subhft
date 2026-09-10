@@ -521,7 +521,12 @@ async def test_run_phantom_resolver_resolves_fill():
         router.raw_queue.put_nowait(raw)
         await _run_router_one_tick(router)
 
-    metrics.orphaned_fill_total.inc.assert_called()
+    # This used to assert ``orphaned_fill_total.inc`` — encoding the defect the
+    # test's own name contradicts. The resolver RESOLVED the fill, so nothing
+    # was orphaned; counting it fired OrphanedFillDetected on a success. The
+    # counter that belongs on this path is the reconciliation one.
+    metrics.orphaned_fill_total.inc.assert_not_called()
+    metrics.phantom_fill_reconciled_total.inc.assert_called_once()
     router.position_store.on_fill.assert_called()
 
 
