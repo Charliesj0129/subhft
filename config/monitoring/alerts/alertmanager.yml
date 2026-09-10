@@ -82,25 +82,41 @@ receivers:
   - name: "null"
 
 inhibit_rules:
-  # Critical infra-down alerts suppress cascade warnings
+  # ``equal: [alertname]`` was removed from every rule below on 2026-09-10
+  # because it made all of them dead. ``equal`` requires the source and the
+  # target alert to carry the SAME value for each listed label, so pairing a
+  # critical source with a warning target and then demanding an identical
+  # alertname asks for one name that exists at both severities. Parsing
+  # rules.yaml: 93 rules, 93 distinct alert names, 45 critical-only and 48
+  # warning-only, and zero names defined at more than one severity. No target
+  # could ever satisfy both matchers, so this file has never suppressed
+  # anything. The measured cost was one event paging four times -- see the
+  # StormGuard pair below.
+  #
+  # Without ``equal`` these read the way their comments always claimed: while
+  # the named infrastructure is down, its downstream warnings stay quiet.
   - source_matchers:
       - alertname = ClickHouseConnectionDown
     target_matchers:
       - severity = warning
-    equal: [alertname]
   - source_matchers:
       - alertname = RedisConnectionDown
     target_matchers:
       - severity = warning
-    equal: [alertname]
   - source_matchers:
       - alertname = HFTEngineDown
     target_matchers:
       - severity =~ warning|info
-    equal: [alertname]
-  # Generic: same-alertname critical suppresses warning
+
+  # Replaces a generic "same-alertname critical suppresses warning" rule that
+  # could never match, for the reason above. StormGuardHalt and
+  # StormGuardHaltStuck are the identical expression ``stormguard_mode == 3``,
+  # differing only in ``for:`` (0s vs 5m), so a HALT lasting longer than five
+  # minutes always pages twice. The 2026-09-08 drawdown HALT held mode 3 for
+  # 240 minutes and both fired for all of it. Keeping the ``for: 5m`` variant
+  # inhibited preserves it as a distinct series in Prometheus while sending one
+  # notification per HALT instead of two.
   - source_matchers:
-      - severity = critical
+      - alertname = StormGuardHalt
     target_matchers:
-      - severity = warning
-    equal: [alertname]
+      - alertname = StormGuardHaltStuck
