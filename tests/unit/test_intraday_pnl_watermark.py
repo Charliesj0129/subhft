@@ -312,6 +312,27 @@ class TestStaleUnrealizedDoubleCount:
         assert ok is True, reason
         assert v.halt_triggered is False
 
+    def test_stale_substitution_expires_when_marks_stop_arriving(self):
+        """A dead mark-to-market must not hide realized losses forever.
+
+        The substitution is only correct while the next tick is really coming.
+        ``update_unrealized`` is wrapped in a try in the supervisor loop, so a
+        broken MtM stops feeding it; past the grace window the gates fall back
+        to the raw sum, which is the pre-fix, fail-closed behaviour.
+        """
+        v = _make_wide_soft_limit_validator()
+        v.update_unrealized(_ntd(-800))
+        v.record_pnl("TEST", _ntd(-800))
+        ok, _ = v.check(_make_intent())
+        assert ok is True  # inside the grace window
+        assert v.halt_triggered is False
+
+        v._last_consistent_ts_ns = 0  # force the grace window expired
+        ok, reason = v.check(_make_intent())
+        assert ok is False
+        assert "DAILY_LOSS_LIMIT_EXCEEDED" in reason
+        assert v.halt_triggered is True
+
     def test_daily_reset_clears_stale_marker(self):
         v = _make_validator()
         v.update_unrealized(_ntd(1950))

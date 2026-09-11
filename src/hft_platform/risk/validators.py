@@ -425,9 +425,16 @@ class DailyLossLimitValidator(RiskValidator):
         "_hard_limit_threshold_scaled",
         "_unrealized_stale",
         "_last_consistent_total_pnl",
+        "_last_consistent_ts_ns",
         "_halt_reason",
         "_peak_drawdown_halt_ts_ns",
     )
+
+    # How long the last time-consistent PnL total may stand in for the live
+    # sum. The supervisor feeds ``update_unrealized`` at 1 Hz, so the real gap
+    # after a fill is under a second; five seconds is five missed ticks, which
+    # is a dead mark-to-market rather than normal jitter.
+    _STALE_GRACE_NS: int = 5 * 1_000_000_000
 
     # Nanoseconds per calendar day
     _NS_PER_DAY: int = 86_400 * 1_000_000_000
@@ -467,6 +474,7 @@ class DailyLossLimitValidator(RiskValidator):
         # halted for 20 h on a 45.7% "drawdown" that was exactly the stale mark.
         self._unrealized_stale: bool = False
         self._last_consistent_total_pnl: int = 0
+        self._last_consistent_ts_ns: int = 0
 
         # Which branch latched the stop. Only PEAK_DRAWDOWN is releasable; the
         # hard daily-loss limit keeps its designed sticky semantics.
@@ -592,6 +600,7 @@ class DailyLossLimitValidator(RiskValidator):
             # the roll IS the total, and both halves now carry the same stamp.
             self._unrealized_stale = False
             self._last_consistent_total_pnl = self._unrealized_pnl
+            self._last_consistent_ts_ns = timebase.now_ns()
 
     def roll_daily_boundary(self) -> None:
         """Advance the calendar boundary WITHOUT granting authorization to trade.
@@ -627,6 +636,7 @@ class DailyLossLimitValidator(RiskValidator):
         self._soft_limit_cooldown_until_ns = 0
         self._unrealized_stale = False
         self._last_consistent_total_pnl = 0
+        self._last_consistent_ts_ns = 0
 
     def _update_peak(self, total_pnl: int) -> None:
         """Update the intraday peak PnL if current total exceeds the recorded peak."""
@@ -668,6 +678,7 @@ class DailyLossLimitValidator(RiskValidator):
         # a separate axis, carried by ``complete``.
         self._unrealized_stale = False
         self._last_consistent_total_pnl = sum(self._accumulated_loss.values()) + unrealized_scaled
+        self._last_consistent_ts_ns = timebase.now_ns()
         if self._halt_release_pending and complete:
             # A supervisor tick already rolled the calendar while the stop was
             # latched, but had no PnL to justify lifting it. This call carries
@@ -777,6 +788,7 @@ class DailyLossLimitValidator(RiskValidator):
             self._unrealized_stale = True
         else:
             self._last_consistent_total_pnl = sum(self._accumulated_loss.values())
+            self._last_consistent_ts_ns = timebase.now_ns()
 
     def _evaluate_soft_limit(
         self,
@@ -904,7 +916,19 @@ class DailyLossLimitValidator(RiskValidator):
         # permanently and the correction that follows reads as a retracement
         # that never happened. Gate on the last total whose halves were sampled
         # together: at most one tick old, on a series only sampled once a tick.
-        if self._intraday_pnl_enabled and self._unrealized_stale:
+        #
+        # Bounded by ``_STALE_GRACE_NS``. The substitution is only ever right
+        # while the next tick really is coming. If mark-to-market dies -- it is
+        # wrapped in a try in the supervisor loop -- no tick arrives, and
+        # holding the last consistent total indefinitely would hide every
+        # subsequent realized loss from these gates. Past the grace the raw sum
+        # comes back, which is exactly the pre-fix behaviour: still the
+        # fail-closed direction, on a book whose valuation is already unknown.
+        if (
+            self._intraday_pnl_enabled
+            and self._unrealized_stale
+            and (timebase.now_ns() - self._last_consistent_ts_ns) <= self._STALE_GRACE_NS
+        ):
             total_pnl = self._last_consistent_total_pnl
 
         # d. Update peak — always, even when total_pnl >= 0
