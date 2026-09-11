@@ -423,6 +423,10 @@ class DailyLossLimitValidator(RiskValidator):
         "_soft_limit_cooldown_ns",
         "_peak_drawdown_min_peak_scaled",
         "_hard_limit_threshold_scaled",
+        "_unrealized_stale",
+        "_last_consistent_total_pnl",
+        "_halt_reason",
+        "_peak_drawdown_halt_ts_ns",
     )
 
     # Nanoseconds per calendar day
@@ -454,6 +458,20 @@ class DailyLossLimitValidator(RiskValidator):
         self._peak_pnl_scaled: int = 0
         self.soft_limit_active: bool = False
         self._soft_limit_cooldown_until_ns: int = 0
+
+        # Two-clock consistency. ``_accumulated_loss`` is fed at the fill;
+        # ``_unrealized_pnl`` is fed by the 1 Hz mark-to-market tick. Between a
+        # closing fill and the next tick the same money sits in both halves, so
+        # a naive sum counts it twice. THESHOW 2026-09-11T00:45:41Z: a book that
+        # only ever rose, +795 -> +1045 -> +2320, recorded a peak of +4270 and
+        # halted for 20 h on a 45.7% "drawdown" that was exactly the stale mark.
+        self._unrealized_stale: bool = False
+        self._last_consistent_total_pnl: int = 0
+
+        # Which branch latched the stop. Only PEAK_DRAWDOWN is releasable; the
+        # hard daily-loss limit keeps its designed sticky semantics.
+        self._halt_reason: str = ""
+        self._peak_drawdown_halt_ts_ns: int = 0
 
     def _derive_from_defaults(self) -> None:
         """Thresholds only. Runtime state (accumulated loss, latched HALT,
@@ -553,6 +571,8 @@ class DailyLossLimitValidator(RiskValidator):
                 self._unrealized_pnl = 0
                 self.halt_triggered = False
                 self._halt_release_pending = False
+                self._halt_reason = ""
+                self._peak_drawdown_halt_ts_ns = 0
             else:
                 # Calendar rolled, but this caller brought no complete PnL to
                 # justify reopening.
@@ -568,6 +588,10 @@ class DailyLossLimitValidator(RiskValidator):
                 # this value anyway.
                 if self._unrealized_pnl > 0:
                     self._unrealized_pnl = 0
+            # The accumulator was just cleared, so whatever unrealized survived
+            # the roll IS the total, and both halves now carry the same stamp.
+            self._unrealized_stale = False
+            self._last_consistent_total_pnl = self._unrealized_pnl
 
     def roll_daily_boundary(self) -> None:
         """Advance the calendar boundary WITHOUT granting authorization to trade.
@@ -594,11 +618,15 @@ class DailyLossLimitValidator(RiskValidator):
         self._unrealized_pnl = 0
         self.halt_triggered = False
         self._halt_release_pending = False
+        self._halt_reason = ""
+        self._peak_drawdown_halt_ts_ns = 0
         self._current_reset_boundary_ns = self._current_boundary_ns()
         # Reset watermark state
         self._peak_pnl_scaled = 0
         self.soft_limit_active = False
         self._soft_limit_cooldown_until_ns = 0
+        self._unrealized_stale = False
+        self._last_consistent_total_pnl = 0
 
     def _update_peak(self, total_pnl: int) -> None:
         """Update the intraday peak PnL if current total exceeds the recorded peak."""
@@ -634,6 +662,12 @@ class DailyLossLimitValidator(RiskValidator):
         # with the gateway down the whole time.
         self._maybe_reset(release_halt=complete)
         self._unrealized_pnl = unrealized_scaled
+        # This snapshot is read from the position store the fill has already
+        # updated, so it restores time-consistency between the two feeds
+        # regardless of whether every position could be priced. Completeness is
+        # a separate axis, carried by ``complete``.
+        self._unrealized_stale = False
+        self._last_consistent_total_pnl = sum(self._accumulated_loss.values()) + unrealized_scaled
         if self._halt_release_pending and complete:
             # A supervisor tick already rolled the calendar while the stop was
             # latched, but had no PnL to justify lifting it. This call carries
@@ -641,12 +675,61 @@ class DailyLossLimitValidator(RiskValidator):
             # new day is judged on the new number below.
             self._halt_release_pending = False
             self.halt_triggered = False
+            self._halt_reason = ""
+            self._peak_drawdown_halt_ts_ns = 0
             logger.info(
                 "DailyLossLimitValidator: daily stop released on complete PnL snapshot",
                 unrealized_pnl=unrealized_scaled,
             )
+        if complete:
+            self._maybe_release_peak_drawdown()
         if not self.halt_triggered:
             self._evaluate_halt_from_unrealized()
+
+    def _maybe_release_peak_drawdown(self) -> None:
+        """Release a PEAK_DRAWDOWN stop once PnL climbs back toward the peak.
+
+        ``drawdown_recovery_pct`` has been carried in ``config/base`` and
+        ``config/env/prod`` strategy limits and in ``config/schema.py`` since the
+        watermark went in, and nothing read it. The only exit from a
+        peak-drawdown stop was therefore the 21:00 UTC calendar roll -- on
+        2026-09-11 that was 20 h of no trading for a retracement that lasted
+        seconds.
+
+        Halting at ``peak_drawdown_pct`` and releasing at
+        ``drawdown_recovery_pct`` leaves a hysteresis band, which is why the two
+        were configured as different numbers. The cooldown is the same
+        ``soft_limit_cooldown_s`` the soft limit already uses, and it is what
+        keeps the pair from becoming a square wave.
+
+        Only ``update_unrealized(complete=True)`` reaches here, for two separate
+        reasons. ``check()`` cannot: ``RiskEngine.evaluate()`` runs the
+        StormGuard gate first and returns before the validator loop, so while
+        HALT is latched no intent ever arrives -- the trap that made the
+        2026-08-26 stop permanent. And a partial valuation may latch a stop but
+        never lift one, the rule the rest of this class already follows.
+        """
+        if not self.halt_triggered or self._halt_reason != "PEAK_DRAWDOWN":
+            return
+        if self._drawdown_recovery_pct <= 0.0 or self._peak_pnl_scaled <= 0:
+            return
+        if timebase.now_ns() - self._peak_drawdown_halt_ts_ns < self._soft_limit_cooldown_ns:
+            return
+        total_pnl = sum(self._accumulated_loss.values()) + self._unrealized_pnl
+        drawdown = self._peak_pnl_scaled - total_pnl
+        recovery_limit = int(self._drawdown_recovery_pct * self._peak_pnl_scaled)
+        if drawdown > recovery_limit:
+            return
+        logger.info(
+            "DailyLossLimitValidator: peak drawdown recovered",
+            peak_pnl_scaled=self._peak_pnl_scaled,
+            total_pnl=total_pnl,
+            drawdown=drawdown,
+            recovery_limit=recovery_limit,
+        )
+        self.halt_triggered = False
+        self._halt_reason = ""
+        self._peak_drawdown_halt_ts_ns = 0
 
     def _evaluate_halt_from_unrealized(self) -> None:
         """Check total (realized + unrealized) against hard limit without an intent.
@@ -665,6 +748,7 @@ class DailyLossLimitValidator(RiskValidator):
         )
         if loss_magnitude >= max_daily_loss:
             self.halt_triggered = True
+            self._halt_reason = "DAILY_LOSS_LIMIT"
             logger.warning(
                 "DailyLossLimitValidator: hard limit exceeded via unrealized update",
                 total_realized=total_realized,
@@ -683,6 +767,16 @@ class DailyLossLimitValidator(RiskValidator):
         self._maybe_reset()
         current = self._accumulated_loss.get(strategy_id, 0)
         self._accumulated_loss[strategy_id] = current + pnl_delta
+        if self._unrealized_pnl != 0:
+            # A realizing fill landed while a mark is outstanding. Until the
+            # next mark-to-market tick the two feeds disagree about the same
+            # money, so the gates fall back to the last total whose halves were
+            # sampled together. When unrealized is zero there is nothing to
+            # double-count and the sum is already consistent, which is why the
+            # flag is conditional rather than unconditional.
+            self._unrealized_stale = True
+        else:
+            self._last_consistent_total_pnl = sum(self._accumulated_loss.values())
 
     def _evaluate_soft_limit(
         self,
@@ -749,12 +843,20 @@ class DailyLossLimitValidator(RiskValidator):
         drawdown_limit = int(self._peak_drawdown_pct * self._peak_pnl_scaled)
         if drawdown <= drawdown_limit:
             return None
-        # Why: PEAK_DRAWDOWN must escalate to StormGuard HALT so
-        # autonomy_monitor.flatten_all() closes positions at market (per user
-        # 2026-04-20 — lock in profits on retracement). FORCE_FLAT and
-        # reduce-position intents bypass this gate earlier, so flatten orders
-        # still go through.
+        # Why: PEAK_DRAWDOWN escalates to StormGuard HALT, which stops new
+        # orders (per user 2026-04-20 -- lock in profits on retracement).
+        # FORCE_FLAT and reduce-position intents bypass this gate earlier, so a
+        # manual flatten still goes through.
+        #
+        # It does NOT close the book. The design called for
+        # ``autonomy_monitor.flatten_all()`` to do that, but AutonomyMonitor is
+        # built only when ``HFT_AUTONOMY_MONITOR_ENABLED=1`` and that is unset on
+        # THESHOW, so ``flatten_all`` has never run there. Enabling it means
+        # enabling autonomous market orders and is a separate, deliberate
+        # change; until then this stop freezes the book, it does not flatten it.
         self.halt_triggered = True
+        self._halt_reason = "PEAK_DRAWDOWN"
+        self._peak_drawdown_halt_ts_ns = timebase.now_ns()
         logger.warning(
             "DailyLossLimitValidator: peak drawdown exceeded",
             peak_pnl_scaled=self._peak_pnl_scaled,
@@ -794,6 +896,17 @@ class DailyLossLimitValidator(RiskValidator):
             accumulated = self._accumulated_loss.get(intent.strategy_id, 0)
         total_pnl = accumulated + self._unrealized_pnl
 
+        # c2. Two-clock guard. ``record_pnl`` books a realized delta at the fill;
+        # ``update_unrealized`` refreshes the mark on the 1 Hz supervisor tick.
+        # In the window between them the closing fill's PnL sits in both halves,
+        # so the sum counts it twice -- upward after a winning close, downward
+        # after a losing one. The peak is a latch, so an inflated sample sticks
+        # permanently and the correction that follows reads as a retracement
+        # that never happened. Gate on the last total whose halves were sampled
+        # together: at most one tick old, on a series only sampled once a tick.
+        if self._intraday_pnl_enabled and self._unrealized_stale:
+            total_pnl = self._last_consistent_total_pnl
+
         # d. Update peak — always, even when total_pnl >= 0
         self._update_peak(total_pnl)
 
@@ -828,6 +941,7 @@ class DailyLossLimitValidator(RiskValidator):
 
         if loss_magnitude >= max_daily_loss:
             self.halt_triggered = True
+            self._halt_reason = "DAILY_LOSS_LIMIT"
             logger.warning(
                 "DailyLossLimitValidator: daily loss limit exceeded",
                 strategy_id=intent.strategy_id,
