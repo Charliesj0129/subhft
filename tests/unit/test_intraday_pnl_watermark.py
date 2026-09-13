@@ -235,3 +235,171 @@ class TestReset:
         v._force_reset()
         assert v.soft_limit_active is False
         assert v._peak_pnl_scaled == 0
+
+
+def _make_wide_soft_limit_validator():
+    """Validator whose soft limit is out of the way, isolating the hard limit."""
+    return _make_validator(
+        {
+            "intraday_pnl": {
+                "soft_limit_ntd": 5000,
+                "hard_limit_ntd": 1000,
+                "peak_drawdown_pct": 0.40,
+                "soft_recovery_ntd": 300,
+                "drawdown_recovery_pct": 0.20,
+                "soft_limit_cooldown_s": 60,
+                "peak_drawdown_min_peak_ntd": 200,
+                "price_scale": 10000,
+                "point_value": 10,
+            }
+        }
+    )
+
+
+class TestStaleUnrealizedDoubleCount:
+    """``_accumulated_loss`` is fed at the fill; ``_unrealized_pnl`` is fed by a
+    1 Hz mark-to-market tick. Between the two, the closing fill's profit is
+    present as realized AND as the not-yet-cleared mark of the position it just
+    closed, so a naive sum counts the same money twice.
+
+    Production 2026-09-11T00:45:41Z: a book that went +795 -> +1045 -> +2320
+    with no retracement at all recorded a peak of +4270 and halted for 20 hours
+    on a reported 45.7% drawdown. The reported drawdown, 1950, was exactly the
+    stale unrealized value.
+    """
+
+    def test_peak_ignores_stale_unrealized_after_realizing_fill(self):
+        v = _make_validator()
+        # Open position marked at +1950 NTD, consistent sample.
+        v.update_unrealized(_ntd(1950))
+        ok, _ = v.check(_make_intent())
+        assert ok is True
+        assert v._peak_pnl_scaled == _ntd(1950)
+
+        # The closing fill books +2320 realized. The mark has NOT been
+        # refreshed yet, so _unrealized_pnl still carries +1950 for a position
+        # that no longer exists.
+        v.record_pnl("TEST", _ntd(2320))
+        ok, _ = v.check(_make_intent())
+        assert ok is True
+        # The peak must not absorb the double count.
+        assert v._peak_pnl_scaled == _ntd(1950)
+
+        # MtM catches up: flat, so unrealized is zero and the true total is
+        # +2320 -- a new high, not a drawdown.
+        v.update_unrealized(0)
+        ok, reason = v.check(_make_intent())
+        assert ok is True, reason
+        assert v.halt_triggered is False
+        assert v._peak_pnl_scaled == _ntd(2320)
+
+    def test_hard_limit_not_tripped_by_double_counted_loss(self):
+        # Same staleness, opposite sign: the hard limit must measure the real
+        # loss, not the transient double count.
+        v = _make_wide_soft_limit_validator()
+        v.update_unrealized(_ntd(-800))  # real loss 800 NTD, cap is 1000
+        ok, _ = v.check(_make_intent())
+        assert ok is True
+        assert v.halt_triggered is False
+
+        v.record_pnl("TEST", _ntd(-800))  # closed at the marked loss
+        ok, reason = v.check(_make_intent())
+        assert ok is True, reason
+        assert v.halt_triggered is False
+
+        v.update_unrealized(0)
+        ok, reason = v.check(_make_intent())
+        assert ok is True, reason
+        assert v.halt_triggered is False
+
+    def test_stale_substitution_expires_when_marks_stop_arriving(self):
+        """A dead mark-to-market must not hide realized losses forever.
+
+        The substitution is only correct while the next tick is really coming.
+        ``update_unrealized`` is wrapped in a try in the supervisor loop, so a
+        broken MtM stops feeding it; past the grace window the gates fall back
+        to the raw sum, which is the pre-fix, fail-closed behaviour.
+        """
+        v = _make_wide_soft_limit_validator()
+        v.update_unrealized(_ntd(-800))
+        v.record_pnl("TEST", _ntd(-800))
+        ok, _ = v.check(_make_intent())
+        assert ok is True  # inside the grace window
+        assert v.halt_triggered is False
+
+        v._last_consistent_ts_ns = 0  # force the grace window expired
+        ok, reason = v.check(_make_intent())
+        assert ok is False
+        assert "DAILY_LOSS_LIMIT_EXCEEDED" in reason
+        assert v.halt_triggered is True
+
+    def test_daily_reset_clears_stale_marker(self):
+        v = _make_validator()
+        v.update_unrealized(_ntd(1950))
+        v.record_pnl("TEST", _ntd(2320))
+        assert v._unrealized_stale is True
+        v._force_reset()
+        assert v._unrealized_stale is False
+        assert v._last_consistent_total_pnl == 0
+
+
+class TestPeakDrawdownRecovery:
+    """``drawdown_recovery_pct`` is configured in prod and base YAML and was
+    read nowhere. A peak-drawdown halt latched until the 21:00 UTC daily reset.
+    """
+
+    def _halted(self):
+        v = _make_validator()
+        v.record_pnl("TEST", _ntd(300))
+        v.check(_make_intent())  # peak = +300 NTD
+        v.record_pnl("TEST", _ntd(-150))  # drawdown 150 > 120 (40% of 300)
+        ok, reason = v.check(_make_intent())
+        assert ok is False
+        assert "PEAK_DRAWDOWN" in reason
+        assert v.halt_triggered is True
+        assert v._halt_reason == "PEAK_DRAWDOWN"
+        return v
+
+    def test_peak_drawdown_releases_after_recovery(self):
+        v = self._halted()
+        v.record_pnl("TEST", _ntd(100))  # total = +250, drawdown 50 <= 60 (20%)
+        v._peak_drawdown_halt_ts_ns = 0  # force cooldown expired
+        v.update_unrealized(0, complete=True)
+        assert v.halt_triggered is False
+        assert v._halt_reason == ""
+        ok, reason = v.check(_make_intent())
+        assert ok is True, reason
+
+    def test_peak_drawdown_release_requires_cooldown(self):
+        v = self._halted()
+        v.record_pnl("TEST", _ntd(100))  # recovered, but cooldown still running
+        v.update_unrealized(0, complete=True)
+        assert v.halt_triggered is True
+        assert v._halt_reason == "PEAK_DRAWDOWN"
+
+    def test_peak_drawdown_release_requires_recovery(self):
+        v = self._halted()
+        v.record_pnl("TEST", _ntd(20))  # total = +170, drawdown 130 > 60
+        v._peak_drawdown_halt_ts_ns = 0
+        v.update_unrealized(0, complete=True)
+        assert v.halt_triggered is True
+
+    def test_hard_limit_halt_does_not_release_on_recovery(self):
+        # The hard daily-loss halt keeps its designed sticky semantics.
+        v = _make_validator()
+        v.record_pnl("TEST", _ntd(-1050))
+        v.check(_make_intent())
+        assert v.halt_triggered is True
+        assert v._halt_reason == "DAILY_LOSS_LIMIT"
+        v.record_pnl("TEST", _ntd(1050))  # back to flat PnL
+        v._peak_drawdown_halt_ts_ns = 0
+        v.update_unrealized(0, complete=True)
+        assert v.halt_triggered is True
+
+    def test_peak_drawdown_release_requires_complete_snapshot(self):
+        # A partial valuation may latch a stop but never lift one.
+        v = self._halted()
+        v.record_pnl("TEST", _ntd(100))
+        v._peak_drawdown_halt_ts_ns = 0
+        v.update_unrealized(0, complete=False)
+        assert v.halt_triggered is True
