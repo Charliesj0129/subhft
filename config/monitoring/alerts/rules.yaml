@@ -190,28 +190,51 @@ groups:
   # load, not by the hourly poll: shioaji 1.5.x `fetch_contracts` needs sole
   # ownership of the inner client, which our 74 permanently-registered
   # subscriptions never release, so the poll fails 100% of the time by
-  # construction. The gauge therefore tracks login cadence, and logins cluster
-  # at session boundaries. Measured on THESHOW over 24 h: gaps of 6.01 h
-  # (22:58 CST restart -> 05:00 CST night close) and 3.43 h (05:00 -> 08:30
-  # CST). The worst *legitimate* case is a restart at night-session open with
-  # no relogin until the 05:00 CST close — about 14 h, entirely inside trading
-  # hours. 18 h is that worst case plus margin; anything shorter alerts on
-  # normal overnight operation.
+  # construction. The gauge therefore tracks login cadence.
+  #
+  # RETHRESHOLDED 2026-09-12: this was 18 h, which is shorter than the period
+  # of the only thing that can clear it, so it could not mean what it said.
+  # `session_runtime.start_session_refresh_thread` runs a *preventive* refresh
+  # that logs out and logs back in, and that login stamps this gauge. Its
+  # period is `HFT_SESSION_REFRESH_S` (default 86,400 s = 24 h), it wakes on a
+  # 3,600 s check interval with 15% jitter, and — load-bearing here — it
+  # deliberately skips while `is_trading_hours(product_type="future")`, so the
+  # refresh always lands in a closed window and the staleness it clears is
+  # always measured from one. A threshold below 24 h is therefore breached
+  # every single day before a refresh is even due.
+  #
+  # Measured, not derived. `query_range` over the 14 days to 2026-09-12,
+  # 4,032 five-minute samples, 66 distinct login stamps, 65 gaps:
+  #
+  #     max observed gap  24.21 h      min  0.00 h
+  #
+  #     threshold   samples stale   wall clock
+  #       18 h          427            35.6 h     <- what shipped
+  #       24 h            6             0.5 h
+  #       30 h            0             0.0 h     <- this rule
+  #       36/40/48 h      0             0.0 h
+  #
+  # 30 h is the smallest round threshold with zero breaches over the window
+  # and ~5.8 h of headroom above the worst real gap. Do not shorten it without
+  # re-running that range query: the number is a property of the refresh
+  # timer's config, not of the market calendar.
   - alert: ContractCacheStale
-    expr: contract_cache_last_success_ts > 0 and contract_cache_last_success_ts < (time() - 64800) and on() market_trading_hours_active == 1
+    expr: contract_cache_last_success_ts > 0 and contract_cache_last_success_ts < (time() - 108000) and on() market_trading_hours_active == 1
     for: 30m
     labels:
         severity: warning
     annotations:
-        summary: "Contracts have not been reloaded for >18h during trading hours"
+        summary: "Contracts have not been reloaded for >30h during trading hours"
         description: |
           Last contract load was {{ $value | humanizeTimestamp }}. Contracts are
-          only ever as fresh as the last login, so this means no facade has
-          logged in across a session boundary it should have crossed. Check
-          hft_quote_conn_logged_in and the reconnect windows
-          (HFT_RECONNECT_HOURS / HFT_RECONNECT_HOURS_2); a stranded facade that
-          never relogs in is the usual cause, not the contract path itself.
-          The `> 0` gate keeps this quiet before a fresh process's first login.
+          only ever as fresh as the last login, and the preventive session
+          refresh relogs in every 24h, so 30h means that refresh has not
+          completed for more than a full period. Check the session_refresh
+          thread first: `shioaji_thread_alive{thread="session_refresh"}` per
+          conn_id, then `session_refresh_total` by result, then
+          hft_quote_conn_logged_in. A stranded facade that never relogs in is
+          the usual cause, not the contract path itself. The `> 0` gate keeps
+          this quiet before a fresh process's first login.
 
   # The real staleness condition, and the reason the poll was never needed: the
   # broker announces contract changes on APISUB/V1/SYS/CONTRACT, and

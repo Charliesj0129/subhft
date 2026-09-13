@@ -247,3 +247,66 @@ tests:
       - eval_time: 20m
         alertname: FeedConnectGateBlockedConnect
         exp_alerts: []
+
+  # ── ContractCacheStale (rethresholded 2026-09-12) ───────────────
+  #
+  # The preventive session refresh relogs in every HFT_SESSION_REFRESH_S
+  # (24 h) and only while the market is shut, and that login is the only
+  # writer of contract_cache_last_success_ts. The rule shipped at 18 h, which
+  # is below that period, so it was breached daily before a refresh was due.
+  # The negative control at 19 h is the whole point of the change: it is the
+  # case the old threshold fired on and the new one must not.
+  #
+  # interval is 5m — it has to stay inside Prometheus's 5m lookback or the
+  # series goes stale between samples and `for: 30m` can never accumulate. The
+  # stamp is pinned at 3600 (epoch + 1 h), so age == time() - 3600.
+  - interval: 5m
+    name: contract-cache-stale ignores a 19h gap and fires past 30h
+    input_series:
+      - series: "contract_cache_last_success_ts"
+        values: "3600+0x390"
+      - series: "market_trading_hours_active"
+        values: "1+0x390"
+    alert_rule_test:
+      # age 19 h — the old 18 h threshold would have been firing here
+      - eval_time: 1200m
+        alertname: ContractCacheStale
+        exp_alerts: []
+      # age 29 h — still inside the refresh period plus headroom
+      - eval_time: 1740m
+        alertname: ContractCacheStale
+        exp_alerts: []
+      # age 30.5 h — breached, but `for: 30m` has not elapsed
+      - eval_time: 1890m
+        alertname: ContractCacheStale
+        exp_alerts: []
+      # age 31 h — breached for a full 30m
+      - eval_time: 1920m
+        alertname: ContractCacheStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "Contracts have not been reloaded for >30h during trading hours"
+              description: |
+                Last contract load was 1970-01-01 01:00:00 +0000 UTC. Contracts are
+                only ever as fresh as the last login, and the preventive session
+                refresh relogs in every 24h, so 30h means that refresh has not
+                completed for more than a full period. Check the session_refresh
+                thread first: `shioaji_thread_alive{thread="session_refresh"}` per
+                conn_id, then `session_refresh_total` by result, then
+                hft_quote_conn_logged_in. A stranded facade that never relogs in is
+                the usual cause, not the contract path itself. The `> 0` gate keeps
+                this quiet before a fresh process's first login.
+
+  - interval: 5m
+    name: contract-cache-stale stays quiet while the market is shut
+    input_series:
+      - series: "contract_cache_last_success_ts"
+        values: "3600+0x390"
+      - series: "market_trading_hours_active"
+        values: "0+0x390"
+    alert_rule_test:
+      - eval_time: 1920m
+        alertname: ContractCacheStale
+        exp_alerts: []
