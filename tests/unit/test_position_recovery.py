@@ -4,10 +4,40 @@ from __future__ import annotations
 
 import asyncio
 import os
+from contextlib import contextmanager
 from dataclasses import fields
-from unittest.mock import MagicMock
+from datetime import datetime
+from unittest.mock import MagicMock, patch
+from zoneinfo import ZoneInfo
 
 from hft_platform.contracts.constants import MANUAL_STRATEGY_ID
+
+# ``_ckpt_date_within_tolerance`` accepts an adjacent trading date only while the
+# Taipei wall clock is inside the 05:00-05:05 TAIFEX handover window. Any test
+# that feeds a D-1 checkpoint therefore has two different correct answers
+# depending on what time the suite happens to run, and pinning the clock is the
+# only way to assert either of them.
+#
+# This is not hypothetical: the nightly CI run on 2026-09-13 executed
+# ``test_recover_stale_checkpoint_broker_only`` at 21:04Z = 05:04 Taipei and
+# failed with ``assert 'dual' == 'broker_only'`` while every PR run that day
+# passed. The schedule lands inside the one six-minute window per day where the
+# unpinned assertion is wrong.
+_TAIPEI = ZoneInfo("Asia/Taipei")
+
+# 2026-09-14 is an ordinary Monday; only the time-of-day matters to the gate.
+_OUTSIDE_HANDOVER = datetime(2026, 9, 14, 11, 30, tzinfo=_TAIPEI)
+_INSIDE_HANDOVER = datetime(2026, 9, 14, 5, 2, tzinfo=_TAIPEI)
+
+
+@contextmanager
+def _taipei_clock(when: datetime):
+    """Pin ``startup_recon``'s clock so the handover gate is deterministic."""
+    with patch(
+        "hft_platform.execution.startup_recon.timebase.now_s",
+        return_value=when.timestamp(),
+    ):
+        yield
 
 
 def _make_store():
@@ -205,6 +235,10 @@ def test_recover_side_mismatch_halts(tmp_path):
 
 
 def test_recover_stale_checkpoint_broker_only(tmp_path):
+    """A D-1 checkpoint is discarded outside the 05:00-05:05 handover window.
+
+    The clock is pinned because the gate reads it: see ``_taipei_clock``.
+    """
     from hft_platform.execution.startup_recon import StartupPositionVerifier
 
     ckpt_path = str(tmp_path / "ckpt.json")
@@ -216,7 +250,8 @@ def test_recover_stale_checkpoint_broker_only(tmp_path):
         position_store=store,
         checkpoint_path=ckpt_path,
     )
-    result = asyncio.run(verifier.recover(trading_date="20260325", account_id="test"))
+    with _taipei_clock(_OUTSIDE_HANDOVER):
+        result = asyncio.run(verifier.recover(trading_date="20260325", account_id="test"))
     assert result.source == "broker_only"
     assert result.positions_loaded == 1
     assert result.halted is False
@@ -283,3 +318,95 @@ def test_recover_no_checkpoint_broker_only(tmp_path):
     assert result.source == "broker_only"
     assert result.positions_loaded == 1
     assert result.halted is False
+
+
+# ---------------------------------------------------------------------------
+# The 05:00-05:05 TAIFEX handover window (``_ckpt_date_within_tolerance``).
+#
+# The +/-1-day tolerance exists so a checkpoint written at 04:59 with
+# trading_date=D-1 is still recognised by a recovery run at 05:01, whose
+# trading_date is already D. Until now nothing asserted either side of that
+# gate: the only test that exercised it asserted the *outside* answer without
+# pinning the clock, so the branch was covered by accident for 1434 minutes a
+# day and contradicted for the other six.
+# ---------------------------------------------------------------------------
+
+
+def _stale_ckpt_verifier(tmp_path, ckpt_date, ckpt_qty=1000, broker_qty=1000):
+    from hft_platform.execution.startup_recon import StartupPositionVerifier
+
+    ckpt_path = str(tmp_path / f"ckpt_{ckpt_date}.json")
+    _write_checkpoint(ckpt_path, ckpt_date, {"2330": {"net_qty": ckpt_qty}})
+    return StartupPositionVerifier(
+        client=_make_client([{"code": "2330", "quantity": broker_qty}]),
+        position_store=_make_store(),
+        checkpoint_path=ckpt_path,
+    )
+
+
+def test_previous_day_checkpoint_accepted_inside_the_handover_window(tmp_path):
+    """At 05:02 Taipei a D-1 checkpoint is still the night session's own record.
+
+    Quantities agree, so the only thing this can distinguish is which source
+    recovery chose: ``dual`` means the checkpoint was read, ``broker_only``
+    means it was discarded.
+    """
+    verifier = _stale_ckpt_verifier(tmp_path, "20260324")
+
+    with _taipei_clock(_INSIDE_HANDOVER):
+        result = asyncio.run(verifier.recover(trading_date="20260325", account_id="test"))
+
+    assert result.source == "dual"
+    assert result.halted is False
+
+
+def test_previous_day_checkpoint_rejected_one_minute_after_the_window(tmp_path):
+    """05:06 is outside the window, so the same checkpoint is discarded."""
+    verifier = _stale_ckpt_verifier(tmp_path, "20260324")
+
+    with _taipei_clock(datetime(2026, 9, 14, 5, 6, tzinfo=_TAIPEI)):
+        result = asyncio.run(verifier.recover(trading_date="20260325", account_id="test"))
+
+    assert result.source == "broker_only"
+
+
+def test_previous_day_checkpoint_rejected_one_minute_before_the_window(tmp_path):
+    """04:59 is outside it too — the gate opens at 05:00, not around it."""
+    verifier = _stale_ckpt_verifier(tmp_path, "20260324")
+
+    with _taipei_clock(datetime(2026, 9, 14, 4, 59, tzinfo=_TAIPEI)):
+        result = asyncio.run(verifier.recover(trading_date="20260325", account_id="test"))
+
+    assert result.source == "broker_only"
+
+
+def test_two_day_old_checkpoint_rejected_even_inside_the_handover_window(tmp_path):
+    """The window widens the tolerance to one day, not to any stale file.
+
+    A D-2 checkpoint cannot be a night session straddling this rollover, so the
+    window must not admit it. Without this, a Monday 05:02 restart would read a
+    Friday book as current.
+    """
+    verifier = _stale_ckpt_verifier(tmp_path, "20260323")
+
+    with _taipei_clock(_INSIDE_HANDOVER):
+        result = asyncio.run(verifier.recover(trading_date="20260325", account_id="test"))
+
+    assert result.source == "broker_only"
+
+
+def test_same_trading_date_checkpoint_accepted_regardless_of_clock(tmp_path):
+    """The window gates only the tolerance; an exact date match never needs it."""
+    from hft_platform.execution.startup_recon import StartupPositionVerifier
+
+    for when in (_INSIDE_HANDOVER, _OUTSIDE_HANDOVER):
+        ckpt_path = str(tmp_path / f"ckpt_same_{when.hour}.json")
+        _write_checkpoint(ckpt_path, "20260325", {"2330": {"net_qty": 1000}})
+        verifier = StartupPositionVerifier(
+            client=_make_client([{"code": "2330", "quantity": 1000}]),
+            position_store=_make_store(),
+            checkpoint_path=ckpt_path,
+        )
+        with _taipei_clock(when):
+            result = asyncio.run(verifier.recover(trading_date="20260325", account_id="test"))
+        assert result.source == "dual", f"same-date checkpoint rejected at {when:%H:%M}"
