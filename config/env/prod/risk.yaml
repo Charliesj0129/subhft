@@ -18,13 +18,24 @@ global_limits:
   max_total_notional: 100000
 
 risk:
-  # Daily loss limit: -10,000 NTD = -100,000,000 in scaled int (x10000)
-  max_daily_loss: 100000000
+  # SUPERSEDED — not the operative cap, and this file is not loaded at all.
+  # Three values have claimed to be "the daily loss limit"; the one that
+  # actually stops trading is the SMALLEST and least prominent:
+  #   this file, annotation only        10,000 NTD   read by nothing
+  #   strategy_limits global_defaults    8,000 NTD   dead while intraday_pnl is set
+  #   intraday_pnl.hard_limit_ntd        5,000 NTD   <-- OPERATIVE
+  # validators.py picks `_hard_limit_threshold_scaled if _intraday_pnl_enabled
+  # else _default_max_daily_loss`, and prod defines an intraday_pnl block, so
+  # the global_defaults value is never consulted. Kept in sync at 8,000 below
+  # so the two files at least agree; edit intraday_pnl to change behaviour.
+  max_daily_loss: 80000000
   max_open_positions: 1          # Phase 3 Canary
   max_position_lots: 1           # MaxPositionLotsValidator
   max_order_per_min: 10
   order_size_limit: 1
   daily_pnl_reset_hour: 5       # 05:00 local time (Taiwan)
+  # NOT IMPLEMENTED — no code in src/ reads this key. See the same key in
+  # strategy_limits.yaml for what actually governs release per halt reason.
   halt_requires_manual_recovery: true
 
 # Symbol limits: keyed by root product code. Risk validators resolve actual
