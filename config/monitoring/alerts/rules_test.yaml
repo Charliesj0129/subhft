@@ -310,3 +310,90 @@ tests:
       - eval_time: 1920m
         alertname: ContractCacheStale
         exp_alerts: []
+
+  # ── DLQ source attribution ──────────────────────────────────────
+  #
+  # `dlq_size_total` has three producers under one metric name. Before
+  # 2026-09-14 the growth rule selected none of them, so an order-path
+  # dead-letter paged as a recorder/ClickHouse failure. These tests pin which
+  # source reaches which alert.
+  #
+  # `interval: 1m` matters: a longer interval than Prometheus's 5m lookback
+  # lets the input series go stale between samples, and then nothing fires.
+  - interval: 1m
+    name: an order dead-letter pages as an order fault, not a recorder one
+    input_series:
+      - series: 'dlq_size_total{source="order"}'
+        values: "0+0x10 1+0x30"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: OrderDeadLetterQueueGrowing
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: OrderDeadLetterQueueGrowing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              source: order
+            exp_annotations:
+              summary: "An order was dead-lettered"
+              description: |
+                The order path gave up on a command and wrote it to the order DLQ.
+                This is NOT the recorder and NOT ClickHouse: nothing under .wal/dlq/
+                is involved. Grep the engine log for `"event": "Order added to DLQ"`
+                and read its `reason`:
+                  connection_error        the broker call failed or timed out
+                  circuit_breaker         5 consecutive failures already tripped it,
+                                          so these are downstream of the first cause
+                  cancel_target_not_found the order was already terminal
+                Measured 2026-09-14: 131 entries in 6 h against 3,128 placements,
+                113 of them inside the 00:45Z market-open minute where the order
+                session was not yet established. A burst at the open and a trickle
+                through the session are different faults; check the timestamps before
+                treating them as one.
+      # The whole point of the fix: the same input must NOT reach the recorder
+      # alert. This case fails on every build before 2026-09-14.
+      - eval_time: 15m
+        alertname: RecorderDeadLetterQueueGrowing
+        exp_alerts: []
+
+  - interval: 1m
+    name: a recorder dead-letter still pages as a recorder fault
+    input_series:
+      - series: 'dlq_size_total{source="recorder"}'
+        values: "0+0x10 1+0x30"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: RecorderDeadLetterQueueGrowing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              source: recorder
+            exp_annotations:
+              summary: "Recorder dead-lettered a batch"
+              description: |
+                The recorder failed a ClickHouse insert past its retries and wrote the
+                batch to .wal/dlq/. Those rows are NOT in ClickHouse. Read the first
+                line of the newest .wal/dlq/<table>_*.jsonl for the table and error,
+                then check `SELECT name FROM system.columns` for that table -- a
+                schema drift between the migration ledger and the live table is the
+                way this has failed before (hft.fills, 2026-04-25 to 2026-08-21, four
+                months undetected because this alert did not exist).
+      - eval_time: 15m
+        alertname: OrderDeadLetterQueueGrowing
+        exp_alerts: []
+
+  - interval: 1m
+    name: routine DLQ cleanup pages nobody
+    input_series:
+      # recorder/_loader_dlq.py increments this by (archived + deleted) on a
+      # successful tidy-up. Under the unlabelled rule that was a critical page.
+      - series: 'dlq_size_total{source="cleanup"}'
+        values: "0+0x10 7+0x30"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: RecorderDeadLetterQueueGrowing
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: OrderDeadLetterQueueGrowing
+        exp_alerts: []

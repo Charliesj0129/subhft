@@ -125,8 +125,29 @@ groups:
 
   # Scheduled resubscribes run on a daemon thread; before they recorded an
   # outcome an escaping exception reached only threading.excepthook.
+  # ``dlq_size_total`` carries a ``source`` label with three unrelated
+  # producers, and until 2026-09-14 this rule selected none of them:
+  #
+  #   source="order"     order/deadletter.py:158      the order path
+  #   source="recorder"  recorder/_loader_dlq.py:61   a failed ClickHouse insert
+  #   source="cleanup"   recorder/_loader_dlq.py:254  .inc(archived + deleted)
+  #
+  # So an order-path dead-letter paged as "Recorder dead-lettered a batch" and
+  # sent the reader to .wal/dlq/<table>_*.jsonl and a ClickHouse schema diff,
+  # neither of which has anything to do with it. Measured over 14 days on
+  # THESHOW: 1,240 minutes of firing across 6 days, and `dlq_size_total` has
+  # only ever had ONE series in that window -- source="order". Every page this
+  # rule has ever sent named the wrong subsystem.
+  #
+  # And source="cleanup" increments on routine archive/delete, so the unlabelled
+  # form would page critical on the DLQ being tidied up. It has not yet, only
+  # because that series has never materialised.
+  #
+  # Severity and repeat interval are unchanged on both rules below: an order
+  # dead-letter still pages critical exactly as it does today, and so does a
+  # recorder one. What changes is that the message is true.
   - alert: RecorderDeadLetterQueueGrowing
-    expr: increase(dlq_size_total[30m]) > 0
+    expr: increase(dlq_size_total{source="recorder"}[30m]) > 0
     for: 0s
     labels:
         severity: critical
@@ -140,6 +161,28 @@ groups:
           schema drift between the migration ledger and the live table is the
           way this has failed before (hft.fills, 2026-04-25 to 2026-08-21, four
           months undetected because this alert did not exist).
+
+  - alert: OrderDeadLetterQueueGrowing
+    expr: increase(dlq_size_total{source="order"}[30m]) > 0
+    for: 0s
+    labels:
+        severity: critical
+    annotations:
+        summary: "An order was dead-lettered"
+        description: |
+          The order path gave up on a command and wrote it to the order DLQ.
+          This is NOT the recorder and NOT ClickHouse: nothing under .wal/dlq/
+          is involved. Grep the engine log for `"event": "Order added to DLQ"`
+          and read its `reason`:
+            connection_error        the broker call failed or timed out
+            circuit_breaker         5 consecutive failures already tripped it,
+                                    so these are downstream of the first cause
+            cancel_target_not_found the order was already terminal
+          Measured 2026-09-14: 131 entries in 6 h against 3,128 placements,
+          113 of them inside the 00:45Z market-open minute where the order
+          session was not yet established. A burst at the open and a trickle
+          through the session are different faults; check the timestamps before
+          treating them as one.
 
   - alert: RecorderDeadLetterQueueNonEmpty
     expr: wal_file_count_tiered{tier="dlq"} > 0
