@@ -9,13 +9,16 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any, Dict, List
 
 from prometheus_client import Gauge
 from structlog import get_logger
 
 from hft_platform.contracts.constants import MANUAL_STRATEGY_ID
+from hft_platform.contracts.ref import FutureRef, parse_display
 from hft_platform.core import timebase
+from hft_platform.core.market_calendar import taifex_delivery_cutoff, taifex_monthly_delivery_date
 from hft_platform.core.symbol_classifier import is_futures_symbol
 from hft_platform.execution.positions import PositionStore
 from hft_platform.execution.reconciliation import (
@@ -55,6 +58,26 @@ _NON_COMPARABLE_ORDER_MODES = frozenset({"sim", "simulation", "paper"})
 _BLOCK_ENV = "HFT_STARTUP_RECON_BLOCK"
 _CHECKPOINT_PATH_ENV = "HFT_POSITION_CHECKPOINT_PATH"
 _DEFAULT_CHECKPOINT_PATH = ".state/position_checkpoint.json"
+
+
+def _settled_delivery_date(symbol: str, *, cutoff: date) -> date | None:
+    """Delivery date of the monthly TAIFEX future ``symbol`` if it settled before ``cutoff``.
+
+    None for anything that is not a monthly future code (stocks, options,
+    R1/R2 families, unparseable text) and for a contract still trading.
+
+    Derived from the code, not looked up: once a contract settles the broker
+    delists it, so there is no record left to read a ``delivery_date`` from.
+    The date is the third Wednesday, see ``taifex_monthly_delivery_date``.
+    """
+    try:
+        ref = parse_display(symbol, base_year=cutoff.year)
+    except ValueError:
+        return None
+    if not isinstance(ref, FutureRef):
+        return None
+    delivered = taifex_monthly_delivery_date(ref.expiry.year, ref.expiry.month)
+    return delivered if delivered < cutoff else None
 
 
 @dataclass(slots=True)
@@ -389,12 +412,18 @@ class StartupPositionVerifier:
         ckpt_positions: Dict[str, Dict[str, Any]],
         broker_map: Dict[str, int],
         account_id: str,
+        *,
+        delivery_cutoff: date | None = None,
     ) -> RecoveryResult:
         """Cross-validate checkpoint vs broker, apply graduated response.
 
         Comparison is at symbol-level (broker reports symbol-level only).
         Storage preserves per-strategy granularity from checkpoint.
+
+        ``delivery_cutoff`` is the earliest delivery date still trading;
+        contracts delivering before it have settled. Defaults to now.
         """
+        cutoff = delivery_cutoff if delivery_cutoff is not None else taifex_delivery_cutoff(timebase.now_ns())
         all_symbols = set(broker_map.keys())
         for pos_data in ckpt_positions.values():
             sym = pos_data.get("symbol", "")
@@ -435,6 +464,39 @@ class StartupPositionVerifier:
             # explains nothing about it. Same partition as
             # ``ReconciliationService`` draws for the steady-state loop.
             if sim_unverifiable and broker_qty == 0 and ckpt_qty != 0:
+                # Except when the contract no longer exists. The exchange
+                # settled it on its delivery date, so broker 0 is a fact and
+                # no longer a gap in what paper routing can confirm. Restored
+                # anyway, it could never be priced or closed, so the
+                # mark-to-market stayed incomplete and a daily stop could never
+                # release. That was TMFI6 +1 on THESHOW from 2026-09-16, and a
+                # plain restart would have brought it back every time.
+                #
+                # Its realized PnL is kept: _rebank_unaccounted_realized_pnl
+                # banks whatever the surviving positions do not carry. The
+                # final-settlement mark is not booked, because the platform has
+                # no settlement price to book it at.
+                settled_on = _settled_delivery_date(symbol, cutoff=cutoff)
+                if settled_on is not None:
+                    auto_corrected += 1
+                    mismatches.append(
+                        {
+                            "symbol": symbol,
+                            "checkpoint_qty": ckpt_qty,
+                            "broker_qty": broker_qty,
+                            "action": "dropped_settled",
+                        }
+                    )
+                    logger.warning(
+                        "expired_contract_position_settled",
+                        symbol=symbol,
+                        qty=ckpt_qty,
+                        delivery_date=settled_on.isoformat(),
+                        delivery_cutoff=cutoff.isoformat(),
+                        order_mode=self._order_mode,
+                        consequence="not restored; the exchange settled it and the settlement PnL is not booked",
+                    )
+                    continue
                 not_comparable += 1
                 mismatches.append(
                     {
