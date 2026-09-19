@@ -23,16 +23,31 @@ The partition is one-directional, and these tests pin both halves::
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any
 from unittest.mock import patch
 
 import pytest
 
+from hft_platform.execution import startup_recon
 from hft_platform.execution.positions import PositionStore
 from hft_platform.execution.startup_recon import (
     StartupPositionVerifier,
     startup_recon_not_comparable,
 )
+
+
+@pytest.fixture(autouse=True)
+def _clock_on_the_day_the_shape_was_taken(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Hold the clock at 2026-09-04, when TMFI6 and TXFI6 were live contracts.
+
+    Every test here holds a September position that the live account reports as
+    0. Unpinned, these tests changed meaning when those contracts settled on
+    2026-09-16: a settled contract is dropped, not preserved (see
+    ``test_startup_recon_settled_contract.py``). The partition pinned here is
+    about paper routing, so the contracts must still be trading.
+    """
+    monkeypatch.setattr(startup_recon, "taifex_delivery_cutoff", lambda _now_ns: date(2026, 9, 4))
 
 
 class _FakeBrokerPosition:

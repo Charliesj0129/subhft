@@ -8,6 +8,9 @@ every consumer sees a consistent binding.
 Design
 ------
 * Runs **after** broker login fills the contract table (post-connect hook).
+* Re-evaluates that table when a delivery date passes
+  (:meth:`ShioajiFamilyPopulator.roll_if_due`), because a contract settling
+  is not a connect and would otherwise leave strategies on it.
 * Ignores R1/R2/C0/C1 alias entries — they carry no expiry of their own;
   the family binding itself is what this module builds.
 * Failures in per-contract parsing are logged once and do not abort the
@@ -16,8 +19,9 @@ Design
 
 from __future__ import annotations
 
+import asyncio
 from calendar import monthrange
-from datetime import UTC, date, datetime
+from datetime import date
 from typing import Any
 
 from structlog import get_logger
@@ -28,6 +32,7 @@ from hft_platform.contracts.family_resolver import (
 )
 from hft_platform.contracts.ref import FutureRef
 from hft_platform.core import timebase
+from hft_platform.core.market_calendar import taifex_delivery_cutoff
 from hft_platform.feed_adapter.shioaji._compat import contract_category_groups
 
 logger = get_logger("feed_adapter.shioaji.family_populator")
@@ -125,26 +130,18 @@ def _extract_futures(
     return out, native_hints
 
 
-def populate_resolver_from_shioaji(
+def _install_snapshot(
     resolver: ContractFamilyResolver,
-    api: Any,
+    calendars: dict[str, list[FutureRef]],
+    native_hints: dict[str, object],
     *,
-    today: date | None = None,
+    cutoff: date,
+    snapshot_ns: int,
 ) -> int:
-    """Swap ``resolver``'s snapshot to one derived from the Shioaji contract
-    table. Returns the number of family bindings installed. Idempotent —
-    repeat calls with an unchanged contract table produce no rebinds (and
-    therefore no hook fires).
-    """
-    if today is None:
-        # P3-?: project rule "always `timebase.now_ns()`" applies even on
-        # startup paths so the entire codebase has a single time source.
-        today = datetime.fromtimestamp(timebase.now_ns() / 1e9, tz=UTC).date()
-    calendars, native_hints = _extract_futures(api)
     snapshot = build_snapshot_from_calendar(
         calendars,
-        today=today,
-        snapshot_ns=timebase.now_ns(),
+        today=cutoff,
+        snapshot_ns=snapshot_ns,
         native_hints=native_hints,
     )
     resolver.swap_snapshot(snapshot)
@@ -155,6 +152,7 @@ def populate_resolver_from_shioaji(
             roots=sorted(calendars.keys()),
             bindings=bindings,
             native_hints=len(native_hints),
+            delivery_cutoff=cutoff.isoformat(),
         )
     else:
         # Zero bindings means every strategy keeps whatever symbols its config
@@ -167,3 +165,133 @@ def populate_resolver_from_shioaji(
             note="strategy.symbols will not be rebound to the front month",
         )
     return bindings
+
+
+def populate_resolver_from_shioaji(
+    resolver: ContractFamilyResolver,
+    api: Any,
+    *,
+    today: date | None = None,
+) -> int:
+    """Swap ``resolver``'s snapshot to one derived from the Shioaji contract
+    table. Returns the number of family bindings installed. Idempotent —
+    repeat calls with an unchanged contract table produce no rebinds (and
+    therefore no hook fires).
+
+    ``today`` is the earliest delivery date that may still be bound. Left out,
+    it is :func:`taifex_delivery_cutoff` of now: exchange-local, and already
+    tomorrow once a delivery day's final session has closed.
+    """
+    calendars, native_hints = _extract_futures(api)
+    snapshot_ns = timebase.now_ns()
+    cutoff = today if today is not None else taifex_delivery_cutoff(snapshot_ns)
+    return _install_snapshot(resolver, calendars, native_hints, cutoff=cutoff, snapshot_ns=snapshot_ns)
+
+
+class ShioajiFamilyPopulator:
+    """Keeps a resolver on the front month between connects, not only at them.
+
+    :meth:`populate` reads the broker contract table and runs from the
+    post-connect hook chain, as :func:`populate_resolver_from_shioaji` always
+    has. That was the *only* trigger, so a binding was decided once per
+    connect. THESHOW connected on 2026-09-15 with TMFI6 as the front month,
+    TMFI6 settled at 13:30 the next day, and nothing asked again: R47 stayed
+    bound to a dead contract and did not trade for days while TMFJ6 quoted
+    normally.
+
+    A roll needs no new broker data. The table read at connect already holds
+    the next month, since R1 and R2 are both listed before R1 settles. What
+    changes is the clock. So :meth:`roll_if_due` re-evaluates the table from the
+    last read against the current delivery cutoff, without touching the SDK.
+    No SDK access means no ``Already borrowed`` and no broker-thread handoff.
+    It runs on the event loop, where the rebind hooks mutate
+    ``strategy.symbols``.
+    """
+
+    __slots__ = ("_resolver", "_table", "_expiries", "_cutoff")
+
+    def __init__(self, resolver: ContractFamilyResolver) -> None:
+        self._resolver = resolver
+        # One tuple, assigned whole, so a reader never sees one connect's
+        # calendars paired with another connect's native hints.
+        self._table: tuple[dict[str, list[FutureRef]], dict[str, object]] = ({}, {})
+        self._expiries: frozenset[date] = frozenset()
+        self._cutoff: date | None = None
+
+    @property
+    def delivery_cutoff(self) -> date | None:
+        """The cutoff the installed snapshot was built against, or None before the first read."""
+        return self._cutoff
+
+    def populate(self, api: Any, *, now_ns: int | None = None) -> int:
+        """Read the contract table and install a snapshot. Returns the binding count."""
+        calendars, native_hints = _extract_futures(api)
+        snapshot_ns = timebase.now_ns() if now_ns is None else now_ns
+        cutoff = taifex_delivery_cutoff(snapshot_ns)
+        self._table = (calendars, native_hints)
+        self._expiries = frozenset(ref.expiry for refs in calendars.values() for ref in refs)
+        self._cutoff = cutoff
+        return _install_snapshot(self._resolver, calendars, native_hints, cutoff=cutoff, snapshot_ns=snapshot_ns)
+
+    def roll_if_due(self, *, now_ns: int | None = None) -> int:
+        """Rebind every family whose bound contract has settled since the last install.
+
+        Returns the number of families rebound. Cheap when nothing is due: a
+        date comparison, and a scan of the handful of distinct delivery dates
+        once a day when the cutoff advances. The rebuild itself was measured at
+        about 1.1 ms plus 0.7 ms for the swap, for 330 roots with seven
+        expiries each (the production contract table has about 390 futures
+        roots). It runs once a month, on a delivery day at 13:30.
+        """
+        prev = self._cutoff
+        if prev is None:
+            return 0  # nothing read yet; the first connect installs the table
+        snapshot_ns = timebase.now_ns() if now_ns is None else now_ns
+        cutoff = taifex_delivery_cutoff(snapshot_ns)
+        if cutoff <= prev:
+            return 0
+        self._cutoff = cutoff
+        if not any(prev <= expiry < cutoff for expiry in self._expiries):
+            return 0  # nothing delivered in between: the snapshot would rebuild identically
+        calendars, native_hints = self._table
+        before = self._resolver.snapshot.family_map
+        snapshot = build_snapshot_from_calendar(
+            calendars,
+            today=cutoff,
+            snapshot_ns=snapshot_ns,
+            native_hints=native_hints,
+        )
+        changes = self._resolver.swap_snapshot(snapshot)
+        for change in changes:
+            logger.info(
+                "contract_family_rolled",
+                family=str(change.family),
+                old_ref=(change.old_ref.display() if change.old_ref is not None else None),
+                new_ref=(change.new_ref.display() if change.new_ref is not None else None),
+                delivery_cutoff=cutoff.isoformat(),
+            )
+        # ``swap_snapshot`` reports a family that lost its binding as no change
+        # at all, so a strategy on it would keep the settled contract silently.
+        # There is no next month to rebind it to; say so.
+        unbound = sorted(str(family) for family in before if family not in snapshot.family_map)
+        if unbound:
+            logger.warning(
+                "contract_family_roll_left_unbound",
+                families=unbound,
+                delivery_cutoff=cutoff.isoformat(),
+                note="no listed contract remains for these families; bound strategies keep the settled one",
+            )
+        return len(changes)
+
+    async def run_roll_clock(self, *, interval_s: float = 60.0) -> None:
+        """Call :meth:`roll_if_due` every ``interval_s`` for the life of the loop.
+
+        A minute of lateness costs nothing: the settled contract no longer
+        trades, so the strategy has nothing to do on it in the meantime.
+        """
+        while True:
+            await asyncio.sleep(interval_s)
+            try:
+                self.roll_if_due()
+            except Exception as exc:  # noqa: BLE001 - one bad pass must not end the clock
+                logger.warning("contract_family_roll_check_failed", error=str(exc))

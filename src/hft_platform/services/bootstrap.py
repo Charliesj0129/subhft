@@ -1279,14 +1279,19 @@ class SystemBootstrapper:
         # resolver. Reads the broker contract table (available after login)
         # and swaps the resolver snapshot. Registered *after* the legacy
         # hooks so the family rebind does not interfere with their ordering.
+        # Set for Shioaji only: its roll clock is scheduled with the other
+        # deferred tasks below, once the engine loop exists.
+        shioaji_family_populator: Any = None
         if broker_id == "shioaji":
             from hft_platform.feed_adapter.shioaji.family_populator import (
-                populate_resolver_from_shioaji,
+                ShioajiFamilyPopulator,
             )
+
+            shioaji_family_populator = ShioajiFamilyPopulator(family_resolver)
 
             def _populate_families_from_shioaji() -> None:
                 try:
-                    populate_resolver_from_shioaji(family_resolver, getattr(md_client, "api", None))
+                    shioaji_family_populator.populate(getattr(md_client, "api", None))
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("family_populator_failed", broker="shioaji", error=str(exc))
 
@@ -1604,6 +1609,12 @@ class SystemBootstrapper:
                 logger.info("config_snapshot_fallback", **_snapshot)
         except Exception:  # noqa: BLE001
             logger.warning("config_snapshot_build_failed", exc_info=True)
+
+        # A contract settling is not a connect: without this clock the family
+        # binding is decided once per connect and a strategy stays on a settled
+        # contract until the next one (THESHOW, 2026-09-16 onwards).
+        if shioaji_family_populator is not None:
+            deferred_tasks.append(shioaji_family_populator.run_roll_clock())
 
         # Alertmanager → Telegram bridge (non-blocking, failure does not block trading)
         try:

@@ -20,6 +20,8 @@ from functools import lru_cache
 
 from structlog import get_logger
 
+from hft_platform.core import timebase
+
 logger = get_logger("core.market_calendar")
 
 # Lazy import exchange_calendars to avoid import-time overhead
@@ -445,3 +447,46 @@ def reset_calendar() -> None:
     """Reset singleton for testing."""
     global _instance
     _instance = None
+
+
+# -- TAIFEX monthly contract expiry --------------------------------------------
+#
+# A monthly TAIFEX future stops trading at 13:30 on its delivery date: its final
+# session is the day session, cut short, and it has no night session. The next
+# month is the front month from that instant, not from midnight. So "has this
+# contract expired" is a question about exchange-local *time*, and answering it
+# with a date alone is wrong for the rest of the delivery day. On 2026-09-16 that
+# covered the whole expiry-day night session.
+
+#: Close of a monthly contract's final session, on its delivery date.
+TAIFEX_FINAL_SESSION_CLOSE = dt.time(13, 30)
+
+
+def taifex_delivery_cutoff(now_ns: int) -> dt.date:
+    """The earliest delivery date a contract can have and still trade at ``now_ns``.
+
+    Before 13:30 exchange time that is today, since a contract delivering today
+    is still in its final session. From 13:30 on, it is tomorrow. A contract
+    whose delivery date is before the cutoff has settled.
+
+    Measured on the exchange clock (``timebase.TZINFO``), never UTC: on the UTC
+    date this rule is eight hours late and misses the delivery-day night session.
+    """
+    local = dt.datetime.fromtimestamp(now_ns / 1e9, tz=timebase.TZINFO)
+    if local.time() >= TAIFEX_FINAL_SESSION_CLOSE:
+        return local.date() + dt.timedelta(days=1)
+    return local.date()
+
+
+def taifex_monthly_delivery_date(year: int, month: int) -> dt.date:
+    """The third Wednesday of ``year``-``month``: a TAIFEX monthly contract's delivery date.
+
+    TAIFEX moves delivery to the next business day when the third Wednesday
+    is a holiday, and this function does not. Callers that only hold a contract
+    code use it, because a delisted contract has no broker record to read its
+    real date from. Anything holding a broker ``delivery_date`` must use that.
+    """
+    first = dt.date(year, month, 1)
+    # weekday(): Monday=0 ... Wednesday=2
+    first_wednesday = 1 + (2 - first.weekday()) % 7
+    return dt.date(year, month, first_wednesday + 14)
