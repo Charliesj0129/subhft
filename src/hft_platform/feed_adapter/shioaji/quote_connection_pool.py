@@ -18,6 +18,7 @@ from typing import Any, Callable
 import yaml
 from structlog import get_logger
 
+from hft_platform.config._symbols_types import DEFAULT_CONTRACT_CACHE, DEFAULT_LIST_PATH
 from hft_platform.core import timebase
 from hft_platform.feed_adapter.shioaji.facade_slot import FacadeSlot, FacadeState
 from hft_platform.feed_adapter.shioaji.limits import DEFAULT_MAX_SUBSCRIPTIONS_PER_CONN
@@ -59,15 +60,24 @@ _METRIC_POOL_DEGRADED_FRACTION = None
 # These counters make the publisher's own liveness observable.
 _METRIC_PUBLISHED = None
 _METRIC_PUBLISH_ERRORS = None
+# Every outcome of ``roll_universe``, including the refusals. A roll that never
+# fires and a roll that is refused every hour look identical from the
+# subscription count alone, and only one of them is safe.
+_METRIC_UNIVERSE_ROLL = None
 
 
 def _ensure_metrics() -> None:
     global _METRIC_SUBSCRIBED, _METRIC_LOGGED_IN, _METRIC_LAST_DATA_AGE, _METRIC_CONN_STATE
     global _METRIC_POOL_DEGRADED, _METRIC_POOL_DEGRADED_FRACTION
-    global _METRIC_PUBLISHED, _METRIC_PUBLISH_ERRORS
+    global _METRIC_PUBLISHED, _METRIC_PUBLISH_ERRORS, _METRIC_UNIVERSE_ROLL
     if Gauge is None or _METRIC_SUBSCRIBED is not None:
         return
     if Counter is not None:
+        _METRIC_UNIVERSE_ROLL = Counter(
+            "hft_quote_pool_universe_roll_total",
+            "QuoteConnectionPool.roll_universe outcomes",
+            ["result"],
+        )
         _METRIC_PUBLISHED = Counter(
             "hft_quote_pool_metrics_published_total",
             "Successful QuoteConnectionPool.update_metrics() publishes",
@@ -259,6 +269,10 @@ class QuoteConnectionPool:
         "_per_facade_timeout_s",
         "_user_callback",
         "_symbols_input_path",
+        # Universe roll: the listener that keeps metadata in step, and whether
+        # this pool has adopted a universe other than the canonical file's.
+        "_universe_listener",
+        "_universe_rolled",
         # P1-d: pool-degraded alert state
         "_pool_degraded_since_mono",
         "_pool_degraded_alerted",
@@ -293,6 +307,9 @@ class QuoteConnectionPool:
         # provided (08:30 for an 08:45 open).
         self._reconnect_pre_open_lead_s = float(os.getenv("HFT_FACADE_RECONNECT_PRE_OPEN_LEAD_S", "900"))
         self._user_callback: Callable[..., Any] | None = None
+        # Fired with the adopted universe after a roll — see set_universe_listener.
+        self._universe_listener: Callable[[list[dict[str, Any]]], None] | None = None
+        self._universe_rolled: bool = False
         self._per_facade_timeout_s = float(os.getenv("HFT_PER_FACADE_TIMEOUT_S", "15"))
         # P1-d: alert when >50%% of conns have been non-CONNECTED for >Ns.
         # Default 5min so a brief reconnect storm does not trigger;
@@ -328,6 +345,10 @@ class QuoteConnectionPool:
         if unassigned:
             unassigned.sort(key=lambda s: (str(s.get("product_type") or ""), str(s.get("code") or "")))
             for i, sym in enumerate(unassigned):
+                # Record the assignment on the entry itself: ``roll_universe``
+                # reads placement back off ``_all_symbols`` to keep a code on
+                # the connection it is already subscribed on.
+                sym["group"] = i % num_conns
                 groups[i % num_conns].append(sym)
             logger.info(
                 "auto_assigned_symbols_round_robin",
@@ -1381,6 +1402,318 @@ class QuoteConnectionPool:
                 resubscribed=resubscribed,
             )
             return True
+
+    # ------------------------------------------------------------------ #
+    # Universe roll: follow ``symbols.list`` when a contract settles
+    # ------------------------------------------------------------------ #
+
+    @property
+    def universe_rolled(self) -> bool:
+        """True once this pool has adopted a universe other than the file's."""
+        return self._universe_rolled
+
+    def set_universe_listener(self, listener: Callable[[list[dict[str, Any]]], None] | None) -> None:
+        """Register a callback fired with the new universe after every roll.
+
+        ``services/bootstrap`` uses it to keep ``SymbolMetadata`` in step, so a
+        code that was subscribed a second ago is priced by the same metadata the
+        subscription came from.
+        """
+        self._universe_listener = listener
+
+    def _symbols_list_path(self) -> str:
+        """Return the ``symbols.list`` that produced the canonical universe."""
+        candidate = os.path.join(os.path.dirname(self._symbols_input_path), "symbols.list")
+        if os.path.isfile(candidate):
+            return candidate
+        return DEFAULT_LIST_PATH
+
+    def _contract_index(self) -> Any:
+        """Build a ``ContractIndex`` from the broker contract cache on disk.
+
+        The cache is what the hourly contract refresh already writes, so a roll
+        needs no SDK call of its own — and cannot collide with the SDK's
+        single-borrow contract store.
+        """
+        import json
+
+        from hft_platform.config._symbols_types import ContractIndex
+
+        cache_path = os.getenv("HFT_CONTRACT_CACHE_PATH", DEFAULT_CONTRACT_CACHE)
+        with open(cache_path) as fh:
+            data = json.load(fh)
+        contracts = data.get("contracts", []) if isinstance(data, dict) else []
+        return ContractIndex(contracts=list(contracts))
+
+    @staticmethod
+    def _delivery_lookup(index: Any) -> Callable[[str], dt.date | None]:
+        """Map a code to its delivery date using the broker's own contract row."""
+        by_code = getattr(index, "by_code", {}) or {}
+
+        def delivery_of(code: str) -> dt.date | None:
+            row = by_code.get(code)
+            if not isinstance(row, dict):
+                return None
+            for key in ("delivery_date", "expiry", "due_date", "maturity_date"):
+                raw = str(row.get(key) or "").strip().replace("/", "-")
+                if len(raw) != 10:
+                    continue
+                try:
+                    return dt.date.fromisoformat(raw)
+                except ValueError:
+                    continue
+            return None
+
+        return delivery_of
+
+    def _current_groups(self) -> dict[int, list[dict[str, Any]]]:
+        groups: dict[int, list[dict[str, Any]]] = {i: [] for i in range(self._num_conns)}
+        for sym in self._all_symbols:
+            group_id = sym.get("group", 0)
+            if isinstance(group_id, int) and 0 <= group_id < self._num_conns:
+                groups[group_id].append(sym)
+        return groups
+
+    def roll_universe(self, *, live: bool | None = None, now_ns: int | None = None) -> bool:
+        """Rebuild the universe from ``symbols.list`` and adopt it if it changed.
+
+        Returns True when a new universe was adopted. Refuses — leaving the
+        running universe untouched — when the rebuild errors, when the result
+        fails :func:`validate_universe`, or when it cannot be placed on the
+        connections. Every refusal keeps today's working subscriptions, which is
+        the fail-closed direction for a feed.
+
+        ``live`` decides whether the broker is touched. The default infers it:
+        with facades logged in, the roll unsubscribes settled codes and
+        subscribes new ones; before login (boot) it only rewrites the shards the
+        facades are about to read.
+        """
+        from hft_platform.config.symbols import build_symbols
+        from hft_platform.config.universe_plan import (
+            UniversePlanError,
+            plan_shards,
+            validate_universe,
+        )
+        from hft_platform.core.market_calendar import taifex_delivery_cutoff
+
+        if live is None:
+            live = any(getattr(facade, "logged_in", False) for facade in self._clients)
+
+        # A live roll changes subscriptions on four facades at once. Outside a
+        # session (and outside the pre-open lead) that costs nothing; inside
+        # one it would churn the book mid-trade. ``reconnect_allowed`` covers
+        # both windows and fails open, so an unanswerable calendar defers the
+        # roll rather than running it at a bad time.
+        if live and self.reconnect_allowed():
+            logger.debug("universe_roll_deferred_session_open")
+            self._bump_universe_roll_metric("deferred_session")
+            return False
+
+        with self._refresh_lock:
+            try:
+                index = self._contract_index()
+            except Exception as exc:  # noqa: BLE001 — cache missing/corrupt must not kill the caller
+                logger.warning("universe_roll_contract_cache_unreadable", error=str(exc))
+                self._bump_universe_roll_metric("no_contracts")
+                return False
+
+            list_path = self._symbols_list_path()
+            build_result = build_symbols(list_path, index)
+            if build_result.errors:
+                logger.warning(
+                    "universe_roll_build_failed",
+                    list_path=list_path,
+                    errors=build_result.errors[:5],
+                )
+                self._bump_universe_roll_metric("build_errors")
+                return False
+
+            cutoff = taifex_delivery_cutoff(now_ns if now_ns is not None else timebase.now_ns())
+            errors = validate_universe(
+                build_result.symbols,
+                delivery_of=self._delivery_lookup(index),
+                cutoff=cutoff,
+                num_conns=self._num_conns,
+                per_conn_cap=_MAX_SUBSCRIPTIONS_PER_CONN,
+            )
+            if errors:
+                logger.error(
+                    "universe_roll_refused",
+                    reasons=errors[:5],
+                    rebuilt_count=len(build_result.symbols),
+                    delivery_cutoff=cutoff.isoformat(),
+                )
+                self._bump_universe_roll_metric("refused")
+                return False
+
+            try:
+                plan = plan_shards(
+                    self._current_groups(),
+                    build_result.symbols,
+                    num_conns=self._num_conns,
+                    per_conn_cap=_MAX_SUBSCRIPTIONS_PER_CONN,
+                )
+            except UniversePlanError as exc:
+                logger.error("universe_roll_unplaceable", error=str(exc))
+                self._bump_universe_roll_metric("unplaceable")
+                return False
+
+            if not plan.changed:
+                logger.debug("universe_roll_no_change", symbols=len(build_result.symbols))
+                self._bump_universe_roll_metric("no_change")
+                return False
+
+            self._apply_universe(plan, live=live, cutoff=cutoff)
+            return True
+
+    def _apply_universe(self, plan: Any, *, live: bool, cutoff: dt.date) -> None:
+        """Write the planned universe to shards, facades and listeners."""
+        new_symbols = [entry for group_id in range(self._num_conns) for entry in plan.groups[group_id]]
+
+        for group_id in range(self._num_conns):
+            shard_path = self._shard_paths[group_id] if group_id < len(self._shard_paths) else None
+            if not shard_path:
+                continue
+            with open(shard_path, "w") as fh:
+                yaml.safe_dump({"symbols": plan.groups[group_id]}, fh, sort_keys=False)
+            if group_id < len(self._slots):
+                self._slots[group_id].symbols = {
+                    str(sym.get("code")) for sym in plan.groups[group_id] if sym.get("code")
+                }
+
+        self._all_symbols = new_symbols
+        self._universe_rolled = True
+        self._write_universe_snapshot(new_symbols, cutoff=cutoff)
+
+        listener = getattr(self, "_universe_listener", None)
+        if listener is not None:
+            try:
+                listener(list(new_symbols))
+            except Exception as exc:  # noqa: BLE001 — a listener must not fail the roll
+                logger.warning("universe_roll_listener_failed", error=str(exc))
+
+        resubscribed = 0
+        if live:
+            for conn_id, facade in enumerate(self._clients):
+                try:
+                    resubscribed += self._apply_universe_to_facade(conn_id, facade, plan)
+                except Exception as exc:  # noqa: BLE001 — one facade must not abort the roll
+                    logger.error("universe_roll_facade_failed", conn_id=conn_id, error=str(exc))
+
+        logger.info(
+            "universe_rolled",
+            symbols=len(new_symbols),
+            added=sorted(plan.added_codes)[:10],
+            added_count=len(plan.added_codes),
+            removed=sorted(plan.removed_codes)[:10],
+            removed_count=len(plan.removed_codes),
+            per_group={group_id: len(plan.groups[group_id]) for group_id in range(self._num_conns)},
+            delivery_cutoff=cutoff.isoformat(),
+            live=live,
+            facades_updated=resubscribed,
+        )
+        self._bump_universe_roll_metric("rolled")
+
+    def _apply_universe_to_facade(self, conn_id: int, facade: Any, plan: Any) -> int:
+        """Unsubscribe this facade's settled codes, subscribe its new ones.
+
+        Codes on both sides of the roll are never touched: re-subscribing a live
+        contract to adopt an unrelated month is exactly the churn this avoids.
+        """
+        if not getattr(facade, "logged_in", False):
+            # Its shard file is already rewritten; the reconnect path reads it.
+            return 0
+
+        client = facade._client
+        sub_mgr = client._subscriptions()
+        removed = set(plan.removed.get(conn_id, ()))
+        added = set(plan.added.get(conn_id, ()))
+
+        for sym in list(getattr(client, "symbols", ()) or ()):
+            code = str(sym.get("code") or "")
+            if code in removed and code in client.subscribed_codes:
+                try:
+                    sub_mgr._unsubscribe_symbol(sym)
+                except Exception as exc:  # noqa: BLE001 — a delisted code often refuses
+                    logger.debug("universe_roll_unsubscribe_failed", conn_id=conn_id, code=code, error=str(exc))
+                client.subscribed_codes.discard(code)
+        client.subscribed_count = len(client.subscribed_codes)
+
+        client._load_config()
+
+        callback = self._user_callback
+        slot = self._slots[conn_id] if conn_id < len(self._slots) else None
+        wrapped_cb = self._make_callback_wrapper(slot, callback) if (slot is not None and callback) else callback
+        subscribed = 0
+        if wrapped_cb is not None:
+            for sym in list(getattr(client, "symbols", ()) or ()):
+                code = str(sym.get("code") or "")
+                if code not in added or code in client.subscribed_codes:
+                    continue
+                if sub_mgr._subscribe_symbol(sym, wrapped_cb):
+                    client.subscribed_codes.add(code)
+                    subscribed += 1
+                else:
+                    client._failed_sub_symbols.append(sym)
+        client.subscribed_count = len(client.subscribed_codes)
+        try:
+            client._refresh_quote_routes()
+        except Exception as exc:  # noqa: BLE001 — routing refresh is best effort
+            logger.debug("universe_roll_route_refresh_failed", conn_id=conn_id, error=str(exc))
+
+        logger.info(
+            "universe_roll_facade_applied",
+            conn_id=conn_id,
+            unsubscribed=len(removed),
+            subscribed=subscribed,
+            subscriptions=client.subscribed_count,
+        )
+        return 1
+
+    async def run_universe_roll_clock(self, *, interval_s: float = 600.0) -> None:
+        """Check for a due universe roll forever, on the engine loop.
+
+        The check itself is a file read plus a rebuild (~2 ms at production
+        size), and it runs in a worker thread so neither the read nor the
+        broker calls a roll makes can sit on the loop. ``roll_universe``
+        defers itself while a session is open, so this clock can tick through
+        the trading day without touching a subscription.
+        """
+        import asyncio
+
+        while True:
+            await asyncio.sleep(interval_s)
+            try:
+                await asyncio.to_thread(self.roll_universe)
+            except Exception as exc:  # noqa: BLE001 — the clock outlives any single failure
+                logger.warning("universe_roll_clock_failed", error=str(exc))
+
+    def _write_universe_snapshot(self, symbols: list[dict[str, Any]], *, cutoff: dt.date) -> None:
+        """Write the adopted universe beside the canonical file, never over it."""
+        try:
+            out_path = _resolve_runtime_snapshot_path(self._symbols_input_path)
+            parent = os.path.dirname(out_path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            with open(out_path, "w") as fh:
+                fh.write("# Auto-rolled by QuoteConnectionPool.roll_universe\n")
+                fh.write(f"# Source canonical: {self._symbols_input_path}\n")
+                fh.write(f"# Source list: {self._symbols_list_path()}\n")
+                fh.write(f"# Delivery cutoff: {cutoff.isoformat()}\n\n")
+                yaml.safe_dump({"symbols": symbols}, fh, sort_keys=False, allow_unicode=True)
+        except Exception as exc:  # noqa: BLE001 — the snapshot is a record, not the state
+            logger.warning("universe_roll_snapshot_write_failed", error=str(exc))
+
+    @staticmethod
+    def _bump_universe_roll_metric(result: str) -> None:
+        _ensure_metrics()
+        counter = _METRIC_UNIVERSE_ROLL
+        if counter is None:
+            return
+        try:
+            counter.labels(result=result).inc()
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("operation_fallback", error=str(exc))
 
     def start_options_refresh_thread(
         self,
