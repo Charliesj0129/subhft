@@ -113,6 +113,10 @@ class ShioajiClientFacade:
     def place_order(self, *args, **kwargs) -> Any:
         return self.order_gateway.place_order(*args, **kwargs)
 
+    def warm_order_session(self) -> bool:
+        """Establish the order connection's transport session ahead of an open."""
+        return self.order_gateway.warm_session()
+
     def get_exchange(self, symbol: str) -> str:
         return self._client.get_exchange(symbol) or ""
 

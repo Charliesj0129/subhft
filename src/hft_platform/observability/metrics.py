@@ -171,6 +171,7 @@ class MetricsRegistry:
                 _pn("order_halt_post_dispatch_cancel_total"),
                 _pn("api_queue_priority_eviction_total"),
                 _pn("order_deadline_expired_total"),
+                _pn("order_session_warmup_total"),
                 _pn("phantom_order_candidates_total"),
                 _pn("phantom_recovery_releases_total"),
                 _pn("live_order_ttl_releases_total"),
@@ -1085,6 +1086,14 @@ class MetricsRegistry:
         self.shioaji_keepalive_failures_total = Counter(
             _pn("shioaji_keepalive_failures_total"),
             "Shioaji keep-alive check failures",
+        )
+        # Pre-open probe that keeps the first order of a session off the
+        # transport handshake. ``failed`` is not an outage on its own: orders
+        # still go out, they just pay the handshake the way they did before.
+        self.order_session_warmup_total = Counter(
+            _pn("order_session_warmup_total"),
+            "Order-session warm-up outcomes ahead of a market open",
+            ["result"],
         )
         # The SDK's own "your session went down" notification. Distinct from
         # the keep-alive counter above: a keep-alive failure is the platform

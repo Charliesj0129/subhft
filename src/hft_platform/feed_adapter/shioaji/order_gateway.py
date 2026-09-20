@@ -338,6 +338,44 @@ class OrderGateway:
         name = mapping.get(key, "Auto")
         return getattr(sdk.constant.FuturesOCType, name, sdk.constant.FuturesOCType.Auto)
 
+    def warm_session(self) -> bool:
+        """Probe the order connection so its transport session is established.
+
+        The order facade sends nothing between the close and the next open, so
+        its Solace session lapses and the first ``place_order`` of the day pays
+        a handshake the SDK will not wait out (THESHOW 2026-09-16: 27 s of
+        ``SubCode(SessionNotEstablished)`` against a 30 ms retry budget). One
+        cheap authenticated read is enough to start it.
+
+        ``usage`` is deliberately not routed through
+        ``AccountGateway.get_usage``: that path serves a cached value, and a
+        cache hit is exactly the case where no request crosses the session.
+
+        Returns True only when the broker answered. Never raises, never places,
+        amends, or cancels anything -- a failed warm-up leaves the order path
+        exactly as it was.
+        """
+        client = self._client
+        api = client.api
+        if api is None:
+            logger.debug("order_session_warm_skipped", reason="no_api")
+            return False
+        if not client.logged_in:
+            logger.debug("order_session_warm_skipped", reason="not_logged_in")
+            return False
+        if not hasattr(api, "usage"):
+            logger.debug("order_session_warm_skipped", reason="usage_unsupported")
+            return False
+        start_ns = time.perf_counter_ns()
+        try:
+            api.usage()
+            client._record_api_latency("warm_session", start_ns, ok=True)
+            return True
+        except Exception as exc:  # noqa: BLE001 — broker SDK; the caller retries
+            client._record_api_latency("warm_session", start_ns, ok=False)
+            logger.warning("order_session_warm_probe_failed", error=str(exc))
+            return False
+
     def cancel_order(
         self,
         trade: Any,
