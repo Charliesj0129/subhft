@@ -1640,6 +1640,15 @@ class SystemBootstrapper:
         if hasattr(md_client, "run_universe_roll_clock"):
             deferred_tasks.append(md_client.run_universe_roll_clock())
 
+        # The order facade is idle between sessions, so its transport session
+        # lapses and the first order of the day pays the handshake (27 s on
+        # 2026-09-16) against a 30 ms retry budget. Warm it ahead of the open
+        # instead; a warm-up that fails changes nothing about how orders go out.
+        if hasattr(order_client, "warm_order_session"):
+            from hft_platform.services.order_session_warmup import OrderSessionWarmup
+
+            deferred_tasks.append(OrderSessionWarmup(order_client).run())
+
         # Alertmanager → Telegram bridge (non-blocking, failure does not block trading)
         try:
             from hft_platform.notifications.alertmanager_bridge import AlertmanagerBridge
