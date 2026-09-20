@@ -45,6 +45,7 @@ Base YAML (config/base/main.yaml)
 | `HFT_TASK_RESTART_BACKOFF_S` | `1.0` | 服務崩潰後初始重啟等待（秒） | 降低以加快恢復（最小 0.1） |
 | `HFT_TASK_RESTART_BACKOFF_MAX_S` | `30.0` | 重啟等待上限（秒） | 不建議超過 60s |
 | `HFT_SUPERVISOR_QUEUE_LOG_EVERY_S` | `30.0` | queue 深度日誌記錄頻率 | 除錯時縮短至 5s |
+| `HFT_MTM_INCOMPLETE_REPEAT_TICKS` | `3600` | mark-to-market 無法定價時，重覆提醒之間的 supervisor tick 數（1 Hz，故預設為每小時一次）；進入、標的變動、恢復三個邊緣一律立即記錄 | `0` = 只記錄邊緣，不重覆提醒 |
 
 **Runbook 參考**: [Section 9 — Supervisor restart](../runbooks.md#9-service-task-crash-supervisor-restart)
 
