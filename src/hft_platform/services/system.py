@@ -75,6 +75,31 @@ def _audit_persistence_writer_for_recorder(recorder: Any) -> Any | None:
 #: logged two warnings on every one-second supervisor tick.
 _STATE_NOT_SUPPLIED: Any = object()
 
+#: Supervisor ticks between "still unpriceable" reminders. The supervisor runs
+#: at 1 Hz, so 3600 is hourly: 24 lines a day instead of 86,400.
+DEFAULT_MTM_INCOMPLETE_REPEAT_TICKS = 3600
+
+
+def _mtm_repeat_ticks_from_env() -> int:
+    """Read ``HFT_MTM_INCOMPLETE_REPEAT_TICKS``; ``<= 0`` means edges only.
+
+    Read once at construction rather than per tick, matching how the other
+    supervisor intervals are resolved.
+    """
+    raw = os.getenv("HFT_MTM_INCOMPLETE_REPEAT_TICKS", "").strip()
+    if not raw:
+        return DEFAULT_MTM_INCOMPLETE_REPEAT_TICKS
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(
+            "mtm_repeat_ticks_invalid",
+            value=raw,
+            using=DEFAULT_MTM_INCOMPLETE_REPEAT_TICKS,
+        )
+        return DEFAULT_MTM_INCOMPLETE_REPEAT_TICKS
+    return max(0, value)
+
 
 class HFTSystem:
     # Latched reference instrument for the drift-burst detector (see
@@ -89,6 +114,18 @@ class HFTSystem:
     # than report a confident zero.
     _loop_probe_peak_ms: float = 0.0
     _loop_probe_samples: int = 0
+
+    # Edge state for ``_log_mtm_completeness``: what the last supervisor tick
+    # reported about the mark-to-market's completeness, so a condition that
+    # lasts days costs one line plus a periodic reminder rather than one line
+    # per second. ``None`` means nothing has been reported yet, which is
+    # distinct from "reported complete". Class-level for the same reason as the
+    # probe counters above.
+    _mtm_last_incomplete: bool | None = None
+    _mtm_last_unpriced: tuple[str, ...] = ()
+    _mtm_incomplete_ticks: int = 0
+    _mtm_last_log_tick: int = 0
+    _mtm_repeat_ticks: int = DEFAULT_MTM_INCOMPLETE_REPEAT_TICKS
 
     # -- Typed helpers to replace hasattr probes ----------------------------------
 
@@ -185,6 +222,71 @@ class HFTSystem:
             )
             return realized_drawdown_pct
         return result
+
+    def _log_mtm_completeness(self, mtm: Any) -> None:
+        """Say whether the book could be priced -- on the edge, with names.
+
+        The supervisor ticks at 1 Hz, and this used to warn on every tick a
+        position lacked a mid. On THESHOW a single stale ``TMFI6`` position
+        held that state from 2026-09-07 to 2026-09-19 and produced 97,497
+        ``mark-to-market incomplete`` lines in 48 hours, alongside 97,508
+        ``mid_price_unavailable`` lines from the calculator -- together ~65% of
+        every line the engine wrote. The condition was real and worth knowing;
+        saying it 86,400 times a day is what made it unfindable, and it never
+        named the instrument, so the log could not answer the only question an
+        operator has.
+
+            BEFORE (1 Hz, anonymous):
+              t+0s   mark-to-market incomplete  priced=0 unpriced=1
+              t+1s   mark-to-market incomplete  priced=0 unpriced=1
+              ...    x 86,400 per day, x 13 days     <- which symbol? X
+
+            AFTER (edges + hourly reminder, named):
+              t+0s   mtm_incomplete        unpriced=1 symbols=[TMFI6]
+              t+1h   mtm_still_incomplete  ticks_incomplete=3600 symbols=[TMFI6]
+              ...    (quiet)
+              t+13d  mtm_complete          priced=1   <- recovery is an event too
+
+        Three things break the silence, because each is new information:
+        entering the state, the *set* of unpriced symbols changing while in it,
+        and leaving it. A periodic reminder is kept on purpose -- a condition
+        that blocks the daily stop from releasing must not be invisible to
+        ``docker logs --since 1h``.
+        """
+        incomplete = not mtm.complete
+        symbols = tuple(getattr(mtm, "unpriced_symbols", ()) or ())
+        was_incomplete = self._mtm_last_incomplete
+
+        if incomplete:
+            if was_incomplete is not True:
+                self._mtm_incomplete_ticks = 0
+                self._mtm_last_log_tick = 0
+            self._mtm_incomplete_ticks += 1
+            changed = was_incomplete is not True or symbols != self._mtm_last_unpriced
+            interval = self._mtm_repeat_ticks
+            due = interval > 0 and self._mtm_incomplete_ticks - self._mtm_last_log_tick >= interval
+            if changed or due:
+                logger.warning(
+                    "mtm_incomplete" if changed else "mtm_still_incomplete",
+                    priced=mtm.priced,
+                    unpriced=mtm.unpriced,
+                    symbols=list(symbols),
+                    ticks_incomplete=self._mtm_incomplete_ticks,
+                    hint="daily stop cannot release while the book is unpriceable",
+                )
+                self._mtm_last_log_tick = self._mtm_incomplete_ticks
+        elif was_incomplete:
+            logger.info(
+                "mtm_complete",
+                priced=mtm.priced,
+                recovered_symbols=list(self._mtm_last_unpriced),
+                ticks_incomplete=self._mtm_incomplete_ticks,
+            )
+            self._mtm_incomplete_ticks = 0
+            self._mtm_last_log_tick = 0
+
+        self._mtm_last_incomplete = incomplete
+        self._mtm_last_unpriced = symbols
 
     @staticmethod
     def _set_service_running(service: Any, value: bool) -> None:
@@ -386,6 +488,13 @@ class HFTSystem:
         self._recovery_halted: bool = False
         self._drift_burst_symbol = ""
         self._mtm_calculator = None
+        # See the class-level declarations; only the configured interval needs
+        # resolving per instance.
+        self._mtm_last_incomplete = None
+        self._mtm_last_unpriced = ()
+        self._mtm_incomplete_ticks = 0
+        self._mtm_last_log_tick = 0
+        self._mtm_repeat_ticks = _mtm_repeat_ticks_from_env()
         try:
             from hft_platform.execution.mtm import MarkToMarketCalculator
 
@@ -1807,12 +1916,7 @@ class HFTSystem:
                             unrealized_scaled=int(unrealized),
                             base_capital=int(self.settings.get("base_capital", 10_000_000)),
                         )
-                        if not mtm.complete:
-                            logger.warning(
-                                "mark-to-market incomplete; daily stop cannot release",
-                                priced=mtm.priced,
-                                unpriced=mtm.unpriced,
-                            )
+                        self._log_mtm_completeness(mtm)
                         self.risk_engine.update_unrealized_pnl(int(unrealized), complete=mtm.complete)
                     except Exception as e:
                         # Was a bare ``pass``. A mark-to-market that fails every

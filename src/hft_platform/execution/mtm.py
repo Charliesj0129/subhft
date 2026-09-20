@@ -11,16 +11,24 @@ import threading
 from typing import Callable, NamedTuple
 
 from prometheus_client import Gauge
-from structlog import get_logger
 
 from hft_platform.execution.positions import PositionStore
-
-logger = get_logger("mtm")
 
 # Portfolio-level unrealized PnL gauge (scaled int).
 portfolio_unrealized_pnl = Gauge(
     "portfolio_unrealized_pnl",
     "Portfolio-level mark-to-market unrealized PnL (scaled int x10000)",
+)
+
+# How much of the book the gauge above does NOT cover. Non-zero means
+# ``portfolio_unrealized_pnl`` is a partial total and the daily stop cannot be
+# released from it. Exported because the log no longer says so every second:
+# between 2026-09-07 and 2026-09-19 a single unpriceable position wrote 248,724
+# identical warnings to the THESHOW container log, and a condition that lasts
+# 13 days needs a series, not a line.
+mtm_unpriced_positions = Gauge(
+    "mtm_unpriced_positions",
+    "Non-flat positions with no usable mid-price at the last mark-to-market",
 )
 
 
@@ -36,11 +44,16 @@ class MtMSnapshot(NamedTuple):
     that use the total to *release* a stop must require ``complete``; callers
     that use it to *apply* one may use the partial total, because latching on
     partial data is the safe direction.
+
+    ``unpriced_symbols`` names them, deduplicated and sorted, so the caller can
+    say *which* instrument is holding the valuation open. It is a tuple with a
+    default so every existing positional construction still type-checks.
     """
 
     total_scaled: int
     priced: int
     unpriced: int
+    unpriced_symbols: tuple[str, ...] = ()
 
     @property
     def complete(self) -> bool:
@@ -103,8 +116,10 @@ class MarkToMarketCalculator:
 
         Keys are position-store keys (``account:strategy:symbol``).
         Positions with ``net_qty == 0`` yield ``0``.
-        Positions whose mid-price is unavailable are **skipped** (logged
-        at warning level).
+        Positions whose mid-price is unavailable are **skipped**, and are
+        therefore invisible in the returned map -- ``snapshot()`` is the call
+        that says how many there were and what they were. This method does not
+        log them; see ``_evaluate``.
 
         Wave 3 (2026-04-25): iterate a snapshot from
         ``PositionStore.snapshot_positions()`` (acquires
@@ -115,10 +130,29 @@ class MarkToMarketCalculator:
         """
         return self._evaluate()[0]
 
-    def _evaluate(self) -> tuple[dict[str, int], int]:
-        """Single pass: per-position PnL, plus how many non-flat ones had no mid."""
+    def _evaluate(self) -> tuple[dict[str, int], int, list[str]]:
+        """Single pass: per-position PnL, the unpriced count, and their symbols.
+
+        This used to emit one ``mid_price_unavailable`` warning per unpriced
+        position on every call. The only production caller runs at 1 Hz, so a
+        book that cannot be priced wrote 86,400 identical lines a day: on
+        THESHOW a single stale ``TMFI6`` position produced **248,724** of them
+        between 2026-09-07 and 2026-09-19, which together with the caller's own
+        per-tick warning was ~65% of the entire engine container log. A
+        debugging source that is two thirds one repeated sentence is not a
+        debugging source.
+
+        A calculator is the wrong place to decide how often a condition is
+        worth saying. It now *reports* what it could not price and leaves the
+        saying to the supervisor, which can see the transition; see
+        ``HFTSystem._log_mtm_completeness``.
+
+        The symbol list is built only when something is actually unpriced, so
+        the healthy path allocates nothing beyond the existing result dict.
+        """
         result: dict[str, int] = {}
         unpriced = 0
+        unpriced_symbols: list[str] = []
         snapshot = self._position_store.snapshot_positions()
         with self._lock:
             for key, pos in snapshot.items():
@@ -129,17 +163,14 @@ class MarkToMarketCalculator:
                 mid = self._mid_price_fn(pos.symbol)
                 if mid is None:
                     unpriced += 1
-                    logger.warning(
-                        "mid_price_unavailable",
-                        symbol=pos.symbol,
-                        key=key,
-                    )
+                    if pos.symbol not in unpriced_symbols:
+                        unpriced_symbols.append(pos.symbol)
                     continue
 
                 multiplier = self._multiplier_fn(pos.symbol)
                 result[key] = self._unrealized(pos.net_qty, pos.avg_price_scaled, mid, multiplier)
 
-        return result, unpriced
+        return result, unpriced, unpriced_symbols
 
     def snapshot(self) -> MtMSnapshot:
         """Portfolio unrealized PnL together with how complete the valuation is.
@@ -154,10 +185,16 @@ class MarkToMarketCalculator:
         Updates the ``portfolio_unrealized_pnl`` Prometheus gauge as a
         side-effect.
         """
-        pnl_map, unpriced = self._evaluate()
+        pnl_map, unpriced, unpriced_symbols = self._evaluate()
         total = sum(pnl_map.values())
         portfolio_unrealized_pnl.set(total)
-        return MtMSnapshot(total_scaled=total, priced=len(pnl_map), unpriced=unpriced)
+        mtm_unpriced_positions.set(unpriced)
+        return MtMSnapshot(
+            total_scaled=total,
+            priced=len(pnl_map),
+            unpriced=unpriced,
+            unpriced_symbols=tuple(sorted(unpriced_symbols)),
+        )
 
     def total_unrealized_pnl(self) -> int:
         """Portfolio-level sum of unrealized PnL (scaled int).
