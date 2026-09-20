@@ -255,6 +255,13 @@ async def test_rate_limit_rejection(adapter_config_path, queues, mock_broker):
 
 @pytest.mark.asyncio
 async def test_dlq_population(adapter_config_path, queues, mock_broker):
+    """An open breaker refuses the intent; it does not dead-letter it.
+
+    A dead letter is an order whose fate we do not know. An open breaker never
+    let this one leave the platform, so it is booked on
+    ``order_local_reject_total{reason="circuit_breaker"}`` and the DLQ is left
+    for the dispatch failures that actually lost an order.
+    """
     from hft_platform.order.adapter import OrderAdapter
 
     _, order_q = queues
@@ -262,6 +269,7 @@ async def test_dlq_population(adapter_config_path, queues, mock_broker):
     for _ in range(adapter.circuit_breaker.threshold + 1):
         adapter.circuit_breaker.record_failure()
     initial_size = len(adapter._dlq._buffer)
+    rejects_before = adapter.metrics.order_local_reject_total.labels(reason="circuit_breaker")._value.get()
     cmd = OrderCommand(
         cmd_id=1,
         intent=_make_intent(),
@@ -270,4 +278,8 @@ async def test_dlq_population(adapter_config_path, queues, mock_broker):
         created_ns=timebase.now_ns(),
     )
     await adapter.execute(cmd)
-    assert len(adapter._dlq._buffer) > initial_size
+
+    after = adapter.metrics.order_local_reject_total.labels(reason="circuit_breaker")._value.get()
+    assert after == rejects_before + 1
+    assert len(adapter._dlq._buffer) == initial_size
+    assert mock_broker.placed == []
