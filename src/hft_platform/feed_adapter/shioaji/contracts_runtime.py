@@ -300,6 +300,31 @@ class StaleInstrumentError(Exception):
         )
 
 
+def _is_undated(value: Any) -> bool:
+    """True when the SDK is saying "this instrument has no delivery date".
+
+    Shioaji says that two ways. ``None`` is the obvious one. The other is an
+    **empty string**, which is what every stock and index contract carries --
+    and the empty string used to fall through to ``_coerce_delivery_date`` and
+    raise ``ValueError``, so ``assert_no_stale_subscriptions`` logged
+    ``stale_instrument_delivery_date_unparseable`` once per equity on every
+    boot. On THESHOW that was 50 warnings per start for a field that was
+    correctly empty; the function's own docstring already said an empty string
+    means "undated", so the gate was warning about the case it had documented
+    as normal.
+
+    A blank-but-not-empty value (whitespace) is treated the same way: there is
+    no date in it either, and no operator action would follow from the warning.
+    A value that is present but malformed still raises, because that one is a
+    real SDK quirk worth seeing.
+    """
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    return False
+
+
 def _coerce_delivery_date(value: Any) -> dt.date:
     """Accept a date object or a YYYYMMDD/YYYY-MM-DD/YYYY/MM/DD string."""
     if isinstance(value, dt.datetime):
@@ -323,7 +348,7 @@ def assert_not_expired(contract: Any, *, today: dt.date) -> None:
     date (improves testability and freezes time at the boundary).
     """
     raw = getattr(contract, "delivery_date", None)
-    if raw is None:
+    if _is_undated(raw):
         return  # contract has no delivery_date → not a dated contract
     delivery_date = _coerce_delivery_date(raw)
     if delivery_date < today:
@@ -349,18 +374,26 @@ def assert_no_stale_subscriptions(
     error event with the offending code + delivery_date, then re-raises so
     bootstrap fails closed.
 
-    An unparseable ``delivery_date`` is *not* a refusal. Shioaji reports an
-    empty string for undated instruments (stocks, indices), and this gate
-    exists to catch expired contracts, not to validate the SDK's field
-    formatting — blocking startup over a malformed field would make the whole
-    feed hostage to a cosmetic quirk. Those are logged and skipped.
+    An unparseable ``delivery_date`` is *not* a refusal. This gate exists to
+    catch expired contracts, not to validate the SDK's field formatting —
+    blocking startup over a malformed field would make the whole feed hostage
+    to a cosmetic quirk. Those are logged and skipped.
+
+    Instruments with **no** delivery date at all — every stock and index,
+    which Shioaji reports as an empty string — are counted, not narrated. They
+    used to fall into the unparseable branch and emit one warning each on every
+    boot: 50 per start on THESHOW, for a field that was correctly empty. A
+    normal condition logged per instrument is how a container log stops being
+    readable.
 
     Emits ``stale_instrument_gate_passed`` on a clean pass so the check's own
     execution is observable; a safety gate that leaves no trace when it
-    succeeds cannot be distinguished from one that never ran.
+    succeeds cannot be distinguished from one that never ran. Its ``checked`` /
+    ``undated`` / ``skipped`` split is what replaces the per-instrument lines.
     """
     checked = 0
     skipped = 0
+    undated = 0
     for sym in symbols:
         if not isinstance(sym, dict):
             continue
@@ -371,6 +404,9 @@ def assert_no_stale_subscriptions(
         product_type = sym.get("product_type") or sym.get("security_type") or sym.get("type")
         contract = lookup(str(exchange), str(code), product_type)
         if contract is None:
+            continue
+        if _is_undated(getattr(contract, "delivery_date", None)):
+            undated += 1
             continue
         try:
             assert_not_expired(contract, today=today)
@@ -393,6 +429,7 @@ def assert_no_stale_subscriptions(
     log.info(
         "stale_instrument_gate_passed",
         checked=checked,
+        undated=undated,
         skipped=skipped,
         today=today.isoformat(),
     )
