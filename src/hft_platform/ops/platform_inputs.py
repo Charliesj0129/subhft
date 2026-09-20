@@ -10,6 +10,24 @@ from hft_platform.core import timebase
 logger = get_logger("platform_inputs")
 
 
+def _seconds_since_session_open() -> float | None:
+    """Seconds since the running TAIFEX session opened, or None when shut.
+
+    Fail-closed: a calendar that cannot answer reports "shut", so a feed-gap
+    reading it cannot vouch for never latches reduce-only. Leaving the platform
+    trading normally on an unreadable calendar is the safe direction here --
+    every other reduce-only reason (queues, RSS, Redis, WAL, recorder) is
+    unaffected and still fires.
+    """
+    try:
+        from hft_platform.core.market_calendar import get_calendar
+
+        return get_calendar().seconds_since_futures_session_open()
+    except Exception as exc:  # noqa: BLE001 — a calendar failure must not crash the supervisor
+        logger.debug("platform_inputs_calendar_unavailable", error=str(exc))
+        return None
+
+
 def _metric_sample_value(metric: Any, sample_name: str, labels: dict[str, str] | None = None) -> float | None:
     labelset = labels or {}
     try:
@@ -129,11 +147,16 @@ class PlatformDegradeInputs:
 
         pending_since = getattr(self.md_service, "_pending_reconnect_since", None)
         if pending_since is not None and timebase.now_s() - float(pending_since) >= self.reconnect_pending_threshold_s:
-            # Suppress during expected session gaps (e.g. 13:35-14:55 day→night
-            # transition).  The reconnect is "pending" precisely because we are
-            # outside the reconnect window — that is normal, not anomalous.
-            within_fn = getattr(self.md_service, "within_reconnect_window", None)
-            if within_fn is None or within_fn():
+            # Suppress during expected session gaps (e.g. the 13:45-15:00
+            # day→night transition). The reconnect is "pending" precisely
+            # because the market is shut — that is normal, not anomalous.
+            #
+            # This used to ask ``within_reconnect_window()``, an env wall-clock
+            # range (``HFT_RECONNECT_HOURS=08:30-13:35``) that opens 15 minutes
+            # before the day session and closes 10 minutes before it ends. The
+            # market calendar is the thing actually being asked about, and it
+            # is right at every edge.
+            if _seconds_since_session_open() is not None:
                 reasons.append("feed_reconnect_pending")
 
         if self.reconnect_flap_budget > 0 and self._quote_flap_budget_exceeded():
@@ -198,11 +221,16 @@ class PlatformDegradeInputs:
         fn = active_fn if callable(active_fn) else max_fn
         if fn is None:
             return 0.0
-        gap = fn()
-        within_fn = getattr(self.md_service, "within_reconnect_window", None)
-        if within_fn is not None and not within_fn():
+        gap = float(fn())
+        since_open = _seconds_since_session_open()
+        if since_open is None:
+            # The market is shut. Silence is the close, not an outage.
             return 0.0
-        return float(gap)
+        # A gap cannot be older than the session carrying it. Without this the
+        # first reading of every session is the whole preceding close: EXFI6
+        # carried 12,671 s into 2026-09-15 08:31, 14 minutes before the bell,
+        # which is 21x the 600 s threshold.
+        return min(gap, since_open)
 
     def _quote_flap_budget_exceeded(self) -> bool:
         flap_events = getattr(self.md_service, "_quote_flap_events", None)
