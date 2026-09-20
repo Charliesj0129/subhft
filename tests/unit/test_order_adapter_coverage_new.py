@@ -117,6 +117,24 @@ def _make_adapter(tmp_config: str, client=None):
     return adapter
 
 
+def _refusal(adapter) -> dict:
+    """The single pre-dispatch refusal this adapter booked, as a field dict.
+
+    A guard that refuses an intent before any broker call books it on
+    ``order_local_reject_total``, not on the dead-letter queue.
+    """
+    assert adapter._record_local_reject.call_count == 1, adapter._record_local_reject.call_args_list
+    args, kwargs = adapter._record_local_reject.call_args
+    intent = args[0]
+    return {
+        "intent": intent,
+        "reason": args[1] if len(args) > 1 else kwargs["reason"],
+        "error_message": args[2] if len(args) > 2 else kwargs["error_message"],
+        "symbol": intent.symbol,
+        "strategy_id": intent.strategy_id,
+    }
+
+
 def _make_intent(
     intent_type: IntentType = IntentType.NEW,
     *,
@@ -706,23 +724,24 @@ async def test_dispatch_oserror_cleans_up_sentinel(tmp_config):
 
 @pytest.mark.asyncio
 async def test_execute_strategy_cb_open_rejects_to_dlq(tmp_config):
-    """execute() routes to DLQ when per-strategy circuit breaker is open (line 1078-1079)."""
+    """execute() refuses the intent when the per-strategy breaker is open."""
     adapter = _make_adapter(tmp_config)
+    adapter._record_local_reject = MagicMock()
     adapter.strategy_cb_mgr = MagicMock()
     adapter.strategy_cb_mgr.is_open.return_value = True
 
     cmd = _make_cmd(intent_type=IntentType.NEW)
     await adapter.execute(cmd)
 
-    adapter._dlq.add.assert_awaited_once()
-    call_kwargs = adapter._dlq.add.call_args[1]
-    assert "Per-strategy" in call_kwargs["error_message"]
+    assert "Per-strategy" in _refusal(adapter)["error_message"]
+    adapter._dlq.add.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_execute_global_cb_open_rejects_to_dlq(tmp_config):
-    """execute() routes to DLQ when global circuit breaker is open (line 1082-1085)."""
+    """execute() refuses the intent when the global breaker is open."""
     adapter = _make_adapter(tmp_config)
+    adapter._record_local_reject = MagicMock()
     adapter.strategy_cb_mgr = MagicMock()
     adapter.strategy_cb_mgr.is_open.return_value = False
     adapter.circuit_breaker = MagicMock()
@@ -731,15 +750,15 @@ async def test_execute_global_cb_open_rejects_to_dlq(tmp_config):
     cmd = _make_cmd(intent_type=IntentType.NEW)
     await adapter.execute(cmd)
 
-    adapter._dlq.add.assert_awaited_once()
-    call_kwargs = adapter._dlq.add.call_args[1]
-    assert "Circuit breaker" in call_kwargs["error_message"]
+    assert "Circuit breaker" in _refusal(adapter)["error_message"]
+    adapter._dlq.add.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_execute_validate_client_fail_records_strategy_cb_failure(tmp_config):
     """execute() records strategy CB failure when client validation fails (lines 1106-1111)."""
     adapter = _make_adapter(tmp_config)
+    adapter._record_local_reject = MagicMock()
     adapter.strategy_cb_mgr = MagicMock()
     adapter.strategy_cb_mgr.is_open.return_value = False
     adapter.circuit_breaker = MagicMock()
@@ -753,7 +772,7 @@ async def test_execute_validate_client_fail_records_strategy_cb_failure(tmp_conf
     cmd = _make_cmd(intent_type=IntentType.NEW)
     await adapter.execute(cmd)
 
-    adapter._dlq.add.assert_awaited_once()
+    assert _refusal(adapter)["reason"].value == "validation_error"
     adapter.strategy_cb_mgr.record_failure.assert_called_with("strat1")
 
 
@@ -1122,8 +1141,9 @@ async def test_drain_deferred_terminals_unresolved_entry_stays_in_remaining(tmp_
 
 @pytest.mark.asyncio
 async def test_execute_platform_degrade_rejects_to_dlq(tmp_config):
-    """execute() routes to DLQ when _platform_degrade_allows returns False (lines 1093-1096)."""
+    """execute() refuses the intent when _platform_degrade_allows returns False."""
     adapter = _make_adapter(tmp_config)
+    adapter._record_local_reject = MagicMock()
     adapter.strategy_cb_mgr = MagicMock()
     adapter.strategy_cb_mgr.is_open.return_value = False
     adapter.circuit_breaker = MagicMock()
@@ -1140,9 +1160,8 @@ async def test_execute_platform_degrade_rejects_to_dlq(tmp_config):
     cmd = _make_cmd(intent_type=IntentType.NEW)
     await adapter.execute(cmd)
 
-    adapter._dlq.add.assert_awaited_once()
-    call_kwargs = adapter._dlq.add.call_args[1]
-    assert "reduce-only" in call_kwargs["error_message"].lower()
+    assert "reduce-only" in _refusal(adapter)["error_message"].lower()
+    adapter._dlq.add.assert_not_awaited()
 
 
 # ═════════════════════════════════════════════════════════════════════════════

@@ -2595,28 +2595,51 @@ class OrderAdapter:
         reason_code: str,
         halt_exempt_blocked: bool = False,
     ) -> None:
-        """DLQ an intent rejected by a guard that runs BEFORE the broker call.
+        """Refuse an intent at a guard that runs BEFORE any broker call.
 
         Every caller of this helper rejects on a local guard -- rate limit,
-        circuit breaker, platform reduce-only -- and returns without ever
-        touching ``self.client``. Nothing reached the broker, so no phantom
-        exists and the strategy's pending slot must be released immediately:
-        ``phantom_pending=False``.
+        circuit breaker, platform reduce-only, StormGuard HALT, idempotency,
+        a full API queue -- and returns without ever touching ``self.client``.
+        Nothing reached the broker.
 
-        This exists because ``_add_to_dlq`` alone is NOT a complete rejection.
-        It records the order and commits the dedup entry, but emits no
-        ``RiskFeedback``, so a strategy that incremented ``_pending_buy`` /
-        ``_pending_sell`` at submit never decrements it. On 2026-09-07 the
-        broker's paper order session went to ``SessionNotEstablished`` at the
-        08:45 CST open; five consecutive failures tripped the global circuit
-        breaker at 00:45:06Z, and the two intents rejected by it leaked their
-        slots. ``strategy_pending_qty{side="SELL"}`` pinned at 2 and
-        R47_MAKER_TMF stopped quoting for the rest of the session -- while the
-        five *dispatch* failures immediately before it released correctly,
-        because that path already called ``_send_dispatch_rejection``.
+        Two consequences follow from that one fact, and both live here so that
+        a future guard cannot implement half of them:
 
-        Keep DLQ and release together in one call so another guard cannot be
-        added that silently reintroduces the leak.
+        **The strategy's pending slot must be released immediately.** No
+        phantom exists, so ``phantom_pending=False``. Recording the rejection
+        is NOT a complete rejection: without a ``RiskFeedback``, a strategy
+        that incremented ``_pending_buy`` / ``_pending_sell`` at submit never
+        decrements it. On 2026-09-07 the broker's paper order session went to
+        ``SessionNotEstablished`` at the 08:45 CST open; five consecutive
+        failures tripped the global circuit breaker at 00:45:06Z, and the two
+        intents rejected by it leaked their slots.
+        ``strategy_pending_qty{side="SELL"}`` pinned at 2 and R47_MAKER_TMF
+        stopped quoting for the rest of the session -- while the five
+        *dispatch* failures immediately before it released correctly, because
+        that path already called ``_send_dispatch_rejection``.
+
+        **It is not a dead letter.** A dead letter is an order whose fate the
+        platform does not know: it was dispatched and timed out, or the
+        transport failed mid-call, and someone may have to reconcile or replay
+        it. A refusal is the opposite -- a decision, taken here, with a known
+        outcome and nothing to replay. Replaying one later would be actively
+        wrong: the price that justified it is gone.
+
+        These used to go to ``_add_to_dlq`` anyway, which made
+        ``dlq_size_total{source="order"}`` a rejection counter wearing a
+        queue's name::
+
+            2026-08-28..09-16, THESHOW order DLQ
+              circuit_breaker    1733   <- refusals; never left the platform
+              connection_error    334   <- genuine dead letters
+            OrderDeadLetterQueueGrowing (critical) fires on increase() of the
+            sum, so 84% of its pages were the platform correctly saying no.
+
+        They are counted on ``order_local_reject_total{reason=...}`` instead,
+        which is strictly more information than the DLQ ever carried: the DLQ
+        counter has no reason label, and the order DLQ's buffer is flushed to
+        disk nowhere in the codebase, so the entries were never readable
+        anyway.
 
         Only ``NEW`` releases. ``on_risk_feedback`` decrements
         ``_pending_buy`` / ``_pending_sell`` purely on ``feedback.side``, and
@@ -2625,12 +2648,44 @@ class OrderAdapter:
         AMEND can, and releasing on an AMEND rejection would decrement a slot
         that this intent never took.
         """
-        if halt_exempt_blocked:
-            await self._add_to_dlq(intent, reason, error_message, halt_exempt_blocked=True)
-        else:
-            await self._add_to_dlq(intent, reason, error_message)
+        self._record_local_reject(intent, reason, error_message, halt_exempt_blocked)
         if intent.intent_type == IntentType.NEW:
             self._send_dispatch_rejection(intent, reason_code, phantom_pending=False)
+
+    def _record_local_reject(
+        self,
+        intent: OrderIntent,
+        reason: RejectionReason,
+        error_message: str,
+        halt_exempt_blocked: bool = False,
+    ) -> None:
+        """Book a pre-dispatch refusal: dedup commit, counter, structured log.
+
+        The dedup commit is the half that used to live inside ``_add_to_dlq``
+        and is the reason this cannot simply be deleted -- an idempotency key
+        reserved at submit stays reserved until something resolves it, and a
+        refused intent must resolve it as *not approved*.
+        """
+        self._dedup_commit(intent.idempotency_key, False, error_message, 0)
+        reason_label = reason.value if isinstance(reason, RejectionReason) else str(reason)
+        try:
+            self.metrics.order_local_reject_total.labels(reason=reason_label).inc()
+        except Exception:  # noqa: BLE001 — a metric must never block the order path
+            pass
+        logger.warning(
+            "order_rejected_before_dispatch",
+            intent_id=getattr(intent, "intent_id", 0),
+            strategy_id=intent.strategy_id,
+            symbol=intent.symbol,
+            side=str(intent.side.name if hasattr(intent.side, "name") else intent.side),
+            intent_type=str(intent.intent_type.name if hasattr(intent.intent_type, "name") else intent.intent_type),
+            qty=intent.qty,
+            price=intent.price,
+            reason=reason_label,
+            error_message=error_message,
+            trace_id=getattr(intent, "trace_id", ""),
+            halt_exempt_blocked=halt_exempt_blocked,
+        )
 
     def _validate_client(self, intent: OrderIntent) -> bool:
         if intent.intent_type in (IntentType.NEW, IntentType.FORCE_FLAT):

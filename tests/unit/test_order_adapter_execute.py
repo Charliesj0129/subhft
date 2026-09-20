@@ -106,7 +106,28 @@ def adapter(tmp_config):
     oa.rate_limiter.check.return_value = True
     oa.shadow_sink = MagicMock()
     oa.shadow_sink.enabled = False
+    # A guard that refuses an intent before any broker call books it here, not
+    # on the DLQ -- nothing left the platform, so there is nothing to replay.
+    oa._record_local_reject = MagicMock()
     return oa
+
+
+def _refusal(adapter) -> dict:
+    """The single pre-dispatch refusal this adapter booked, as a field dict.
+
+    Shaped like the old ``_dlq.add`` kwargs so the assertions below still read
+    as "what was recorded about this rejection".
+    """
+    assert adapter._record_local_reject.call_count == 1, adapter._record_local_reject.call_args_list
+    args, kwargs = adapter._record_local_reject.call_args
+    intent = args[0]
+    return {
+        "intent": intent,
+        "reason": args[1] if len(args) > 1 else kwargs["reason"],
+        "error_message": args[2] if len(args) > 2 else kwargs["error_message"],
+        "symbol": intent.symbol,
+        "strategy_id": intent.strategy_id,
+    }
 
 
 def test_order_adapter_wires_shadow_writer(tmp_config):
@@ -176,16 +197,16 @@ async def test_pre_dispatch_deadline_expired_sends_feedback_and_dlq(adapter):
 
 @pytest.mark.asyncio
 async def test_per_symbol_rate_limit_hard_rejects_to_dlq(adapter):
-    """Per-symbol hard rate limit sends intent to DLQ with RATE_LIMIT."""
+    """Per-symbol hard rate limit refuses the intent with RATE_LIMIT."""
     adapter.per_symbol_rate_limiter.check.return_value = PerSymbolRateResult.HARD
     cmd = make_cmd()
 
     await adapter.execute(cmd)
 
-    adapter._dlq.add.assert_awaited_once()
-    call_kwargs = adapter._dlq.add.call_args[1]
+    call_kwargs = _refusal(adapter)
     assert call_kwargs["reason"].value == "rate_limit"
     assert "Per-symbol" in call_kwargs["error_message"]
+    adapter._dlq.add.assert_not_awaited()
 
 
 # --- 2. Per-strategy circuit breaker -> DLQ ---
@@ -193,16 +214,16 @@ async def test_per_symbol_rate_limit_hard_rejects_to_dlq(adapter):
 
 @pytest.mark.asyncio
 async def test_per_strategy_circuit_breaker_rejects_to_dlq(adapter):
-    """Per-strategy CB open sends intent to DLQ with CIRCUIT_BREAKER."""
+    """Per-strategy CB open refuses the intent with CIRCUIT_BREAKER."""
     adapter.strategy_cb_mgr.is_open.return_value = True
     cmd = make_cmd()
 
     await adapter.execute(cmd)
 
-    adapter._dlq.add.assert_awaited_once()
-    call_kwargs = adapter._dlq.add.call_args[1]
+    call_kwargs = _refusal(adapter)
     assert call_kwargs["reason"].value == "circuit_breaker"
     assert "Per-strategy" in call_kwargs["error_message"]
+    adapter._dlq.add.assert_not_awaited()
 
 
 # --- 3. Global circuit breaker -> DLQ ---
@@ -210,16 +231,16 @@ async def test_per_strategy_circuit_breaker_rejects_to_dlq(adapter):
 
 @pytest.mark.asyncio
 async def test_global_circuit_breaker_rejects_to_dlq(adapter):
-    """Global circuit breaker open sends intent to DLQ with CIRCUIT_BREAKER."""
+    """Global circuit breaker open refuses the intent with CIRCUIT_BREAKER."""
     adapter.circuit_breaker.is_open.return_value = True
     cmd = make_cmd()
 
     await adapter.execute(cmd)
 
-    adapter._dlq.add.assert_awaited_once()
-    call_kwargs = adapter._dlq.add.call_args[1]
+    call_kwargs = _refusal(adapter)
     assert call_kwargs["reason"].value == "circuit_breaker"
     assert "Circuit breaker open" in call_kwargs["error_message"]
+    adapter._dlq.add.assert_not_awaited()
 
 
 # --- 4. Global rate limit -> DLQ ---
@@ -227,15 +248,15 @@ async def test_global_circuit_breaker_rejects_to_dlq(adapter):
 
 @pytest.mark.asyncio
 async def test_global_rate_limit_rejects_to_dlq(adapter):
-    """Global rate limit exceeded sends intent to DLQ with RATE_LIMIT."""
+    """Global rate limit exceeded refuses the intent with RATE_LIMIT."""
     adapter.rate_limiter.check.return_value = False
     cmd = make_cmd()
 
     await adapter.execute(cmd)
 
-    adapter._dlq.add.assert_awaited_once()
-    call_kwargs = adapter._dlq.add.call_args[1]
+    call_kwargs = _refusal(adapter)
     assert call_kwargs["reason"].value == "rate_limit"
+    adapter._dlq.add.assert_not_awaited()
 
 
 # --- 5. Shadow mode intercept (no DLQ) ---
@@ -283,16 +304,16 @@ async def test_shadow_mode_sends_terminal_feedback_to_release_strategy_pending(a
 
 @pytest.mark.asyncio
 async def test_client_validation_failure_rejects_to_dlq(adapter):
-    """Client missing required methods sends intent to DLQ with VALIDATION_ERROR."""
+    """Client missing required methods refuses the intent with VALIDATION_ERROR."""
     # Remove place_order to fail validation for NEW intent
     del adapter.client.place_order
     cmd = make_cmd(intent_type=IntentType.NEW)
 
     await adapter.execute(cmd)
 
-    adapter._dlq.add.assert_awaited_once()
-    call_kwargs = adapter._dlq.add.call_args[1]
+    call_kwargs = _refusal(adapter)
     assert call_kwargs["reason"].value == "validation_error"
+    adapter._dlq.add.assert_not_awaited()
 
 
 # --- 7. Expired deadline skipped in run loop ---
@@ -384,14 +405,13 @@ async def test_amend_order_dispatch_not_running(adapter):
 
 @pytest.mark.asyncio
 async def test_per_symbol_hard_rate_limit_dlq_fields(adapter):
-    """Per-symbol HARD rate limit DLQ entry has correct symbol and strategy."""
+    """A per-symbol HARD refusal records the right symbol and strategy."""
     adapter.per_symbol_rate_limiter.check.return_value = PerSymbolRateResult.HARD
     cmd = make_cmd(symbol="2454", strategy_id="mm1")
 
     await adapter.execute(cmd)
 
-    adapter._dlq.add.assert_awaited_once()
-    call_kwargs = adapter._dlq.add.call_args[1]
+    call_kwargs = _refusal(adapter)
     assert call_kwargs["symbol"] == "2454"
     assert call_kwargs["strategy_id"] == "mm1"
     assert call_kwargs["reason"].value == "rate_limit"
@@ -402,7 +422,7 @@ async def test_per_symbol_hard_rate_limit_dlq_fields(adapter):
 
 @pytest.mark.asyncio
 async def test_multiple_rejections_in_sequence(adapter):
-    """Multiple rejected commands each produce separate DLQ entries."""
+    """Multiple rejected commands are each booked separately."""
     adapter.per_symbol_rate_limiter.check.return_value = PerSymbolRateResult.HARD
 
     cmd1 = make_cmd(symbol="2330")
@@ -413,7 +433,9 @@ async def test_multiple_rejections_in_sequence(adapter):
     await adapter.execute(cmd2)
     await adapter.execute(cmd3)
 
-    assert adapter._dlq.add.await_count == 3
+    assert adapter._record_local_reject.call_count == 3
+    assert [c.args[0].symbol for c in adapter._record_local_reject.call_args_list] == ["2330", "2454", "3008"]
+    adapter._dlq.add.assert_not_awaited()
 
 
 # --- 13. DLQ error handling (DLQ.add raises) ---
@@ -421,13 +443,19 @@ async def test_multiple_rejections_in_sequence(adapter):
 
 @pytest.mark.asyncio
 async def test_dlq_add_error_propagates(adapter):
-    """If DLQ.add raises, execute() propagates the exception."""
-    adapter.per_symbol_rate_limiter.check.return_value = PerSymbolRateResult.HARD
+    """A dead-letter write failure is not swallowed.
+
+    ``_add_to_dlq`` catches TypeError/ValueError/OSError and logs; anything
+    else must reach the caller. Retargeted 2026-09-20 from a rate-limit
+    rejection, which no longer touches the DLQ at all.
+    """
+    from hft_platform.order.deadletter import RejectionReason
+
     adapter._dlq.add = AsyncMock(side_effect=RuntimeError("DLQ write failed"))
     cmd = make_cmd()
 
     with pytest.raises(RuntimeError, match="DLQ write failed"):
-        await adapter.execute(cmd)
+        await adapter._add_to_dlq(cmd.intent, RejectionReason.CONNECTION_ERROR, "api_failure")
 
 
 # --- 14. _validate_client for NEW (needs place_order + get_exchange) ---
@@ -483,16 +511,16 @@ async def test_running_adapter_enqueues_to_api_queue(adapter):
 
 @pytest.mark.asyncio
 async def test_storm_guard_halt_rejects_to_dlq(adapter):
-    """Order with storm_guard_state=HALT is DLQ'd before any other check."""
+    """Order with storm_guard_state=HALT is refused before any other check."""
     cmd = make_cmd()
     cmd.storm_guard_state = StormGuardState.HALT
 
     await adapter.execute(cmd)
 
-    adapter._dlq.add.assert_awaited_once()
-    call_kwargs = adapter._dlq.add.call_args[1]
+    call_kwargs = _refusal(adapter)
     assert call_kwargs["reason"].value == "stormguard_halt"
     assert "StormGuard HALT" in call_kwargs["error_message"]
+    adapter._dlq.add.assert_not_awaited()
     # Confirm no other checks ran (per-symbol rate limiter never called)
     adapter.per_symbol_rate_limiter.check.assert_not_called()
 
@@ -561,8 +589,9 @@ async def test_storm_guard_halt_blocks_new_with_halt_flatten_reason(adapter):
 
     await adapter.execute(cmd)
 
-    # Should be DLQ'd — NEW with reason=halt_flatten is no longer a bypass
-    adapter._dlq.add.assert_awaited_once()
+    # Should be refused — NEW with reason=halt_flatten is no longer a bypass
+    assert _refusal(adapter)["reason"].value == "stormguard_halt"
+    adapter._dispatch_to_api.assert_not_awaited()
 
 
 # --- 19. StormGuard HALT allows CANCEL orders ---
@@ -611,8 +640,7 @@ async def test_storm_guard_halt_blocks_new_order(adapter):
 
     await adapter.execute(cmd)
 
-    adapter._dlq.add.assert_awaited_once()
-    call_kwargs = adapter._dlq.add.call_args[1]
+    call_kwargs = _refusal(adapter)
     assert "StormGuard HALT" in call_kwargs["error_message"]
 
 
@@ -628,17 +656,20 @@ async def test_storm_guard_halt_blocks_amend_order(adapter):
 
     await adapter.execute(cmd)
 
-    adapter._dlq.add.assert_awaited_once()
-    call_kwargs = adapter._dlq.add.call_args[1]
+    call_kwargs = _refusal(adapter)
     assert "StormGuard HALT" in call_kwargs["error_message"]
 
 
-# --- 23. API queue full routes to DLQ + metric ---
+# --- 23. API queue full refuses the order + metric ---
 
 
 @pytest.mark.asyncio
 async def test_api_queue_full_routes_to_dlq(adapter):
-    """When API queue is full, order is routed to DLQ with reject metric."""
+    """When the API queue is full, the order is refused with a reject metric.
+
+    A full internal queue is our own backpressure, not a lost order: nothing
+    was dispatched, so it is booked as a refusal rather than dead-lettered.
+    """
     cmd = make_cmd()
     # Make the API queue full
     adapter._api_queue = asyncio.Queue(maxsize=1)
@@ -647,9 +678,9 @@ async def test_api_queue_full_routes_to_dlq(adapter):
     adapter.running = False
     await adapter._enqueue_api(cmd)
 
-    adapter._dlq.add.assert_awaited_once()
-    call_kwargs = adapter._dlq.add.call_args[1]
+    call_kwargs = _refusal(adapter)
     assert "API queue full" in call_kwargs["error_message"]
+    adapter._dlq.add.assert_not_awaited()
     adapter.metrics.order_reject_total.inc.assert_called()
 
 

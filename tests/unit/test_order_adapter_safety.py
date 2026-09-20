@@ -1,10 +1,16 @@
-"""OrderAdapter deadline, retry, and DLQ safety tests.
+"""OrderAdapter deadline, retry, and refusal safety tests.
 
 Tests key safety behaviors of OrderAdapter in isolation:
 - Deadline expiry drops stale commands
 - Rate limiter rejects when hard cap exceeded
 - Circuit breaker rejects when open
 - drain_and_cancel empties queue
+
+A guard that refuses an intent before any broker call books it on
+``order_local_reject_total{reason=...}``, not on the dead-letter queue: nothing
+left the platform, so there is nothing to replay. The refusal assertions below
+therefore read that counter, and several of them additionally pin that the DLQ
+stayed empty -- which is the contract, not an accident.
 """
 
 import asyncio
@@ -79,6 +85,15 @@ def _make_adapter(tmp_path, client=None) -> OrderAdapter:
     return adapter
 
 
+def _local_rejects(adapter: OrderAdapter, reason: str) -> float:
+    """Pre-dispatch refusals booked under ``reason`` so far, process-wide.
+
+    The Prometheus registry outlives a single test, so every caller compares a
+    delta rather than an absolute.
+    """
+    return adapter.metrics.order_local_reject_total.labels(reason=reason)._value.get()
+
+
 # ---------------------------------------------------------------------------
 # Test 1: Deadline expiry drops stale commands
 # ---------------------------------------------------------------------------
@@ -127,16 +142,17 @@ async def test_deadline_expiry_drops_command(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Test 2: Rate limiter rejects when hard cap exceeded -> DLQ
+# Test 2: Rate limiter rejects when hard cap exceeded
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_rate_limiter_rejects_when_exceeded(tmp_path):
-    """When rate limiter hard cap is hit, execute() should route intent to DLQ."""
+    """When rate limiter hard cap is hit, execute() must refuse the intent."""
     adapter = _make_adapter(tmp_path)
 
     # Use a DLQ with tmp_path to avoid polluting the working directory
     dlq = DeadLetterQueue(dlq_dir=str(tmp_path / "dlq"), max_buffer_size=100)
     adapter._dlq = dlq
+    rejects_before = _local_rejects(adapter, "rate_limit")
 
     # Fill rate limiter past hard cap (250 entries in the window)
     for _ in range(260):
@@ -150,25 +166,34 @@ async def test_rate_limiter_rejects_when_exceeded(tmp_path):
     cmd = _make_cmd(intent)
     await adapter.execute(cmd)
 
-    # Verify intent landed in DLQ
+    # Verify the refusal was booked under its own reason
+    assert _local_rejects(adapter, "rate_limit") == rejects_before + 1
+
+    # ...and NOT as a dead letter: nothing reached the broker, so there is
+    # nothing to replay and OrderDeadLetterQueueGrowing must not fire.
     stats = await dlq.get_stats()
-    assert stats["total_entries"] >= 1, "Rejected order should appear in DLQ"
+    assert stats["total_entries"] == 0, "a refusal is not a dead letter"
 
     # Verify the broker was NOT called
     adapter.client.place_order.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
-# Test 3: Circuit breaker rejects when open -> DLQ
+# Test 3: Circuit breaker rejects when open
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_circuit_breaker_rejects_when_open(tmp_path):
-    """When circuit breaker is open, execute() should reject and route to DLQ."""
+    """When circuit breaker is open, execute() must refuse the intent.
+
+    This is the 2026-09-16 shape: an open breaker rejected 1,733 intents over
+    three weeks, every one of them counted as a dead letter.
+    """
     adapter = _make_adapter(tmp_path)
 
     # Use a DLQ with tmp_path
     dlq = DeadLetterQueue(dlq_dir=str(tmp_path / "dlq"), max_buffer_size=100)
     adapter._dlq = dlq
+    rejects_before = _local_rejects(adapter, "circuit_breaker")
 
     # Force circuit breaker open by recording enough failures
     for _ in range(adapter.circuit_breaker.threshold):
@@ -181,9 +206,10 @@ async def test_circuit_breaker_rejects_when_open(tmp_path):
     cmd = _make_cmd(intent)
     await adapter.execute(cmd)
 
-    # Verify intent landed in DLQ with circuit_breaker reason
+    # Verify the refusal was booked under circuit_breaker, not dead-lettered
+    assert _local_rejects(adapter, "circuit_breaker") == rejects_before + 1
     stats = await dlq.get_stats()
-    assert stats["total_entries"] >= 1, "Circuit-breaker-rejected order should appear in DLQ"
+    assert stats["total_entries"] == 0, "an open breaker is a refusal, not a dead letter"
 
     # Verify the broker was NOT called
     adapter.client.place_order.assert_not_called()
@@ -288,22 +314,31 @@ async def test_live_stormguard_halt_rejects_even_if_cmd_stamped_normal(tmp_path)
     cmd.storm_guard_state was stamped NORMAL at RiskEngine time (TOCTOU fix)."""
     adapter = _make_adapter(tmp_path)
 
-    # Simulate live StormGuard in HALT state
+    # Simulate live StormGuard in HALT state.
+    #
+    # ``_intent_reduces_position`` must be stubbed explicitly: the adapter
+    # calls ``bool(sg._intent_reduces_position(intent))``, and a bare
+    # MagicMock returns a truthy MagicMock, which makes every intent look
+    # like a reducing cover order and exempt from HALT. Until 2026-09-20 this
+    # test asserted only "the DLQ grew", and it grew from the unrelated
+    # broker_codec_missing rejection further down execute() -- so it passed
+    # while proving nothing about HALT.
     mock_sg = MagicMock()
     mock_sg.state = StormGuardState.HALT
     mock_sg.is_halt_exempt.return_value = False
+    mock_sg._intent_reduces_position = MagicMock(return_value=False)
     adapter._storm_guard = mock_sg
 
     intent = _make_intent()
     cmd = _make_cmd(intent)  # storm_guard_state = NORMAL (stamped at creation)
     assert cmd.storm_guard_state == StormGuardState.NORMAL
 
-    dlq_size_before = len(adapter._dlq._buffer) if hasattr(adapter._dlq, "_buffer") else 0
+    rejects_before = _local_rejects(adapter, "stormguard_halt")
     await adapter.execute(cmd)
 
-    # Should have been DLQ'd, not dispatched
-    dlq_size_after = len(adapter._dlq._buffer) if hasattr(adapter._dlq, "_buffer") else 0
-    assert dlq_size_after > dlq_size_before, "Order should have been added to DLQ"
+    # Should have been refused, not dispatched
+    assert _local_rejects(adapter, "stormguard_halt") == rejects_before + 1
+    adapter.client.place_order.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -314,12 +349,15 @@ async def test_live_stormguard_halt_allows_halt_flatten(tmp_path):
     mock_sg = MagicMock()
     mock_sg.state = StormGuardState.HALT
     mock_sg.is_halt_exempt.return_value = False
+    # Pinned so the pass comes from FORCE_FLAT's own exemption, not from a
+    # MagicMock answering "yes, this reduces the position".
+    mock_sg._intent_reduces_position = MagicMock(return_value=False)
     adapter._storm_guard = mock_sg
 
     intent = _make_intent(intent_type=IntentType.FORCE_FLAT, reason="halt_flatten")
     cmd = _make_cmd(intent)
 
-    dlq_size_before = len(adapter._dlq._buffer) if hasattr(adapter._dlq, "_buffer") else 0
+    rejects_before = _local_rejects(adapter, "stormguard_halt")
     # Mock the dispatch path to prevent actual broker call
     from unittest.mock import AsyncMock
 
@@ -327,9 +365,10 @@ async def test_live_stormguard_halt_allows_halt_flatten(tmp_path):
     adapter._enqueue_api = AsyncMock(return_value=True)
     await adapter.execute(cmd)
 
-    # Should NOT be DLQ'd
-    dlq_size_after = len(adapter._dlq._buffer) if hasattr(adapter._dlq, "_buffer") else 0
-    assert dlq_size_after == dlq_size_before, "halt_flatten should NOT be DLQ'd"
+    # Not refused, and it actually reached dispatch -- asserting only "no
+    # refusal" would pass even if the intent silently vanished.
+    assert _local_rejects(adapter, "stormguard_halt") == rejects_before
+    adapter._enqueue_api.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
@@ -356,11 +395,11 @@ async def test_cancel_bypasses_per_symbol_rate_limiter(tmp_path):
     intent = _make_intent(intent_type=IntentType.CANCEL, symbol="")
     cmd = _make_cmd(intent)
 
-    dlq_before = len(adapter._dlq._buffer) if hasattr(adapter._dlq, "_buffer") else 0
+    rejects_before = _local_rejects(adapter, "rate_limit")
     await adapter.execute(cmd)
-    dlq_after = len(adapter._dlq._buffer) if hasattr(adapter._dlq, "_buffer") else 0
 
-    assert dlq_after == dlq_before, "CANCEL must not be rate-limited to DLQ"
+    assert _local_rejects(adapter, "rate_limit") == rejects_before, "CANCEL must not be rate-limited"
+    adapter._enqueue_api.assert_awaited_once()
     # per_symbol check should not even be called for CANCEL
     mock_ps_limiter.check.assert_not_called()
 
@@ -383,11 +422,11 @@ async def test_force_flat_bypasses_per_symbol_rate_limiter(tmp_path):
     intent = _make_intent(intent_type=IntentType.FORCE_FLAT)
     cmd = _make_cmd(intent)
 
-    dlq_before = len(adapter._dlq._buffer) if hasattr(adapter._dlq, "_buffer") else 0
+    rejects_before = _local_rejects(adapter, "rate_limit")
     await adapter.execute(cmd)
-    dlq_after = len(adapter._dlq._buffer) if hasattr(adapter._dlq, "_buffer") else 0
 
-    assert dlq_after == dlq_before, "FORCE_FLAT must not be rate-limited to DLQ"
+    assert _local_rejects(adapter, "rate_limit") == rejects_before, "FORCE_FLAT must not be rate-limited"
+    adapter._enqueue_api.assert_awaited_once()
     mock_ps_limiter.check.assert_not_called()
 
 
@@ -408,11 +447,11 @@ async def test_cancel_bypasses_circuit_breaker(tmp_path):
     intent = _make_intent(intent_type=IntentType.CANCEL)
     cmd = _make_cmd(intent)
 
-    dlq_before = len(adapter._dlq._buffer) if hasattr(adapter._dlq, "_buffer") else 0
+    rejects_before = _local_rejects(adapter, "circuit_breaker")
     await adapter.execute(cmd)
-    dlq_after = len(adapter._dlq._buffer) if hasattr(adapter._dlq, "_buffer") else 0
 
-    assert dlq_after == dlq_before, "CANCEL must bypass circuit breaker"
+    assert _local_rejects(adapter, "circuit_breaker") == rejects_before, "CANCEL must bypass circuit breaker"
+    adapter._enqueue_api.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -432,11 +471,11 @@ async def test_cancel_bypasses_global_rate_limiter(tmp_path):
     intent = _make_intent(intent_type=IntentType.CANCEL)
     cmd = _make_cmd(intent)
 
-    dlq_before = len(adapter._dlq._buffer) if hasattr(adapter._dlq, "_buffer") else 0
+    rejects_before = _local_rejects(adapter, "rate_limit")
     await adapter.execute(cmd)
-    dlq_after = len(adapter._dlq._buffer) if hasattr(adapter._dlq, "_buffer") else 0
 
-    assert dlq_after == dlq_before, "CANCEL must bypass global rate limiter"
+    assert _local_rejects(adapter, "rate_limit") == rejects_before, "CANCEL must bypass global rate limiter"
+    adapter._enqueue_api.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -449,12 +488,13 @@ async def test_new_order_still_rejected_by_rate_limiter(tmp_path):
     for _ in range(260):
         adapter.rate_limiter.record()
 
+    rejects_before = _local_rejects(adapter, "rate_limit")
     intent = _make_intent(intent_type=IntentType.NEW)
     cmd = _make_cmd(intent)
     await adapter.execute(cmd)
 
-    stats = await dlq.get_stats()
-    assert stats["total_entries"] >= 1, "NEW orders must still be rate-limited"
+    assert _local_rejects(adapter, "rate_limit") == rejects_before + 1, "NEW orders must still be rate-limited"
+    adapter.client.place_order.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
