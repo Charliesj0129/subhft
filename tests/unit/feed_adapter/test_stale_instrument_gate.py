@@ -18,6 +18,7 @@ import structlog
 
 from hft_platform.feed_adapter.shioaji.contracts_runtime import (
     StaleInstrumentError,
+    _is_undated,
     assert_no_stale_subscriptions,
     assert_not_expired,
 )
@@ -90,6 +91,49 @@ class TestAssertNotExpired:
         err = exc_info.value
         assert err.code == "TXO15000C6"
         assert err.delivery_date == expired
+
+
+class TestUndatedInstruments:
+    """An instrument with no delivery date has nothing for this gate to check.
+
+    Shioaji says "no delivery date" two ways: ``None``, and the empty string it
+    puts on every stock and index. Only the first was recognised, so the second
+    reached ``_coerce_delivery_date``, raised ``ValueError``, and was reported
+    as a malformed field -- 50 warnings per boot on THESHOW.
+    """
+
+    def test_a_missing_delivery_date_is_undated(self) -> None:
+        assert _is_undated(None) is True
+
+    def test_the_empty_string_is_undated(self) -> None:
+        """This is what every equity carries."""
+        assert _is_undated("") is True
+
+    def test_whitespace_is_undated(self) -> None:
+        assert _is_undated("   ") is True
+
+    def test_a_real_date_string_is_dated(self) -> None:
+        assert _is_undated("2026/09/16") is False
+
+    def test_a_date_object_is_dated(self) -> None:
+        assert _is_undated(date(2026, 9, 16)) is False
+
+    def test_a_malformed_string_is_dated_and_still_raises(self) -> None:
+        """Present-but-wrong is a different thing from absent, and stays loud."""
+        assert _is_undated("2026/9") is False
+        contract = SimpleNamespace(code="2330", delivery_date="2026/9")
+        with pytest.raises(ValueError):
+            assert_not_expired(contract, today=date(2026, 5, 5))
+
+    def test_an_equity_passes_the_gate_silently(self) -> None:
+        contract = SimpleNamespace(code="2330", delivery_date="")
+        assert assert_not_expired(contract, today=date(2026, 5, 5)) is None
+
+    def test_an_expired_future_still_blocks(self) -> None:
+        """The relaxation must not reach anything that carries a real date."""
+        contract = SimpleNamespace(code="TMFD6", delivery_date="2026/04/16")
+        with pytest.raises(StaleInstrumentError):
+            assert_not_expired(contract, today=date(2026, 5, 5))
 
 
 # ---------------------------------------------------------------------------
@@ -222,11 +266,13 @@ class TestGateSafetyUnderMalformedFields:
     def _symbols(*codes):
         return [{"code": c, "exchange": "TAIFEX", "product_type": "FUT"} for c in codes]
 
-    def test_unparseable_delivery_date_is_skipped_not_blocked(self):
-        """Shioaji reports ``delivery_date=''`` for undated instruments.
+    def test_an_undated_instrument_is_neither_blocked_nor_warned_about(self):
+        """Shioaji reports ``delivery_date=''`` for every stock and index.
 
         Blocking startup on that would make the feed hostage to a cosmetic SDK
-        quirk, on a code path that had never once executed in production.
+        quirk. Warning about it is almost as bad: THESHOW wrote 50 of these per
+        boot, one per equity, for a field that was correctly empty. This test
+        used to assert the warning -- it was pinning the defect.
         """
         import datetime as dt
 
@@ -241,7 +287,71 @@ class TestGateSafetyUnderMalformedFields:
                 today=dt.date(2026, 8, 8),
             )
 
-        assert [e for e in logs if e.get("event") == "stale_instrument_delivery_date_unparseable"]
+        assert [e for e in logs if e.get("event") == "stale_instrument_delivery_date_unparseable"] == []
+        passed = [e for e in logs if e.get("event") == "stale_instrument_gate_passed"]
+        assert passed and passed[0]["undated"] == 1
+
+    def test_a_genuinely_malformed_delivery_date_is_still_reported(self):
+        """The unparseable branch must keep working -- it just stops firing on ''."""
+        import datetime as dt
+
+        from hft_platform.feed_adapter.shioaji.contracts_runtime import assert_no_stale_subscriptions
+
+        contracts = {"TMFI6": SimpleNamespace(code="TMFI6", delivery_date="2026/9")}
+
+        with structlog.testing.capture_logs() as logs:
+            assert_no_stale_subscriptions(
+                self._symbols("TMFI6"),
+                lambda _exch, code, _pt: contracts.get(code),
+                today=dt.date(2026, 8, 8),
+            )
+
+        warned = [e for e in logs if e.get("event") == "stale_instrument_delivery_date_unparseable"]
+        assert len(warned) == 1
+        assert warned[0]["code"] == "TMFI6"
+        passed = [e for e in logs if e.get("event") == "stale_instrument_gate_passed"]
+        assert passed and passed[0]["skipped"] == 1 and passed[0]["undated"] == 0
+
+    def test_a_whole_equity_universe_costs_one_line(self):
+        """50 stocks used to be 50 warnings; now they are one counted field."""
+        import datetime as dt
+
+        from hft_platform.feed_adapter.shioaji.contracts_runtime import assert_no_stale_subscriptions
+
+        codes = [str(1000 + i) for i in range(50)]
+        contracts = {c: SimpleNamespace(code=c, delivery_date="") for c in codes}
+
+        with structlog.testing.capture_logs() as logs:
+            assert_no_stale_subscriptions(
+                self._symbols(*codes),
+                lambda _exch, code, _pt: contracts.get(code),
+                today=dt.date(2026, 8, 8),
+            )
+
+        assert [e for e in logs if e.get("log_level") == "warning"] == []
+        passed = [e for e in logs if e.get("event") == "stale_instrument_gate_passed"]
+        assert passed and passed[0]["undated"] == 50 and passed[0]["checked"] == 0
+
+    def test_an_undated_instrument_does_not_hide_an_expired_neighbour(self):
+        """Skipping the stocks must not skip the futures standing next to them."""
+        import datetime as dt
+
+        from hft_platform.feed_adapter.shioaji.contracts_runtime import (
+            StaleInstrumentError,
+            assert_no_stale_subscriptions,
+        )
+
+        contracts = {
+            "2330": SimpleNamespace(code="2330", delivery_date=""),
+            "TMFD6": SimpleNamespace(code="TMFD6", delivery_date="2026/04/16"),
+        }
+
+        with pytest.raises(StaleInstrumentError):
+            assert_no_stale_subscriptions(
+                self._symbols("2330", "TMFD6"),
+                lambda _exch, code, _pt: contracts.get(code),
+                today=dt.date(2026, 8, 8),
+            )
 
     def test_expired_contract_still_blocks(self):
         import datetime as dt
@@ -283,3 +393,4 @@ class TestGateSafetyUnderMalformedFields:
         assert passed
         assert passed[0]["checked"] == 2
         assert passed[0]["skipped"] == 0
+        assert passed[0]["undated"] == 0
