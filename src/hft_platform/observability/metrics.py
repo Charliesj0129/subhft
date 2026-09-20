@@ -172,6 +172,7 @@ class MetricsRegistry:
                 _pn("api_queue_priority_eviction_total"),
                 _pn("order_deadline_expired_total"),
                 _pn("order_session_warmup_total"),
+                _pn("order_local_reject_total"),
                 _pn("phantom_order_candidates_total"),
                 _pn("phantom_recovery_releases_total"),
                 _pn("live_order_ttl_releases_total"),
@@ -745,6 +746,15 @@ class MetricsRegistry:
         self.order_deadline_expired_total = Counter(
             _pn("order_deadline_expired_total"),
             "Orders dropped pre-dispatch because deadline_ns was exceeded",
+        )
+        self.order_local_reject_total = Counter(
+            _pn("order_local_reject_total"),
+            "Intents refused by a local guard before any broker call, by reason. "
+            "These are NOT dead letters: nothing left the platform, so there is "
+            "nothing to replay. They used to be written to the order DLQ, where "
+            "1,733 circuit_breaker refusals over 2026-08-28..09-16 drove "
+            "OrderDeadLetterQueueGrowing (critical) on THESHOW.",
+            ["reason"],
         )
         self.phantom_order_candidates_total = Counter(
             _pn("phantom_order_candidates_total"),

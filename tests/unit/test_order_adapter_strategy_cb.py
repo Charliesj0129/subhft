@@ -25,6 +25,7 @@ from hft_platform.contracts.strategy import (
 from hft_platform.core import timebase
 from hft_platform.order.adapter import OrderAdapter
 from hft_platform.order.circuit_breaker import StrategyCircuitBreakerManager
+from hft_platform.order.deadletter import RejectionReason
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -190,7 +191,7 @@ async def test_successful_new_order_calls_strategy_cb_record_success(tmp_path):
 
 @pytest.mark.asyncio
 async def test_strategy_cb_open_blocks_new_order(tmp_path):
-    """Once strategy_cb_mgr.is_open returns True, the order is rejected via DLQ."""
+    """Once strategy_cb_mgr.is_open returns True, the order is refused."""
     client = MagicMock()
     client.place_order = MagicMock(return_value=MagicMock(seq_no="S1", ord_no="O1", id="X1", order=None))
     client.get_exchange = MagicMock(return_value="TSE")
@@ -208,13 +209,13 @@ async def test_strategy_cb_open_blocks_new_order(tmp_path):
     # Breaker should now be open
     assert real_scb.is_open(STRATEGY_ID), "Breaker must be open after threshold failures"
 
-    dlq_received: list[tuple] = []
-    original_add_to_dlq = adapter._add_to_dlq
+    # An open breaker is a local refusal: it is booked, not dead-lettered.
+    refusals: list[tuple] = []
 
-    async def _capture_dlq(intent, reason, msg=""):
-        dlq_received.append((intent, reason, msg))
+    def _capture_refusal(intent, reason, msg="", halt_exempt_blocked=False):
+        refusals.append((intent, reason, msg))
 
-    adapter._add_to_dlq = _capture_dlq  # type: ignore[method-assign]
+    adapter._record_local_reject = _capture_refusal  # type: ignore[method-assign]
 
     # Validate client so we get past validation
     codec = MagicMock()
@@ -230,8 +231,9 @@ async def test_strategy_cb_open_blocks_new_order(tmp_path):
     adapter._validate_client = MagicMock(return_value=True)  # type: ignore[method-assign]
     await adapter.execute(cmd)
 
-    # The order must have been DLQ'd, not placed
-    assert len(dlq_received) == 1, f"Expected 1 DLQ entry, got {dlq_received}"
-    _, reason, msg = dlq_received[0]
-    assert "circuit" in msg.lower(), f"Unexpected DLQ message: {msg!r}"
+    # The order must have been refused, not placed
+    assert len(refusals) == 1, f"Expected 1 refusal, got {refusals}"
+    _, reason, msg = refusals[0]
+    assert reason is RejectionReason.CIRCUIT_BREAKER, f"Unexpected reason: {reason!r}"
+    assert "circuit" in msg.lower(), f"Unexpected refusal message: {msg!r}"
     client.place_order.assert_not_called()

@@ -14,6 +14,7 @@ from hft_platform.contracts.strategy import (
     StormGuardState,
 )
 from hft_platform.core import timebase
+from hft_platform.order.deadletter import RejectionReason
 
 
 def make_cmd(
@@ -97,11 +98,29 @@ def _make_adapter(tmp_config, env_overrides=None):
     return adapter
 
 
+def _capture_refusals(adapter) -> list:
+    """Collect every pre-dispatch refusal instead of the DLQ.
+
+    A duplicate key is refused locally -- the intent never reaches the broker,
+    so it is booked on ``order_local_reject_total`` rather than dead-lettered.
+    ``test_duplicate_key_rejected`` exercises this capture positively, which is
+    what keeps the "no duplicate refusal" assertions below from being vacuous.
+    """
+    refusals: list = []
+
+    def _record(intent, reason, error_message="", halt_exempt_blocked=False):
+        refusals.append((reason, error_message))
+
+    adapter._record_local_reject = _record  # type: ignore[method-assign]
+    return refusals
+
+
 @pytest.mark.asyncio
 async def test_duplicate_key_rejected(tmp_config, mock_deps):
     """Duplicate idempotency_key should be rejected on second execute."""
     adapter = _make_adapter(tmp_config)
     assert adapter._dedup_store is not None
+    refusals = _capture_refusals(adapter)
 
     cmd1 = make_cmd(idempotency_key="order-abc-123")
     cmd2 = make_cmd(idempotency_key="order-abc-123")
@@ -113,15 +132,20 @@ async def test_duplicate_key_rejected(tmp_config, mock_deps):
     await adapter.execute(cmd2)
 
     mock_deps["metrics"].order_reject_total.inc.assert_called()
-    mock_deps["dlq"].add.assert_called()
-    last_call_kwargs = mock_deps["dlq"].add.call_args
-    assert "Duplicate idempotency_key" in str(last_call_kwargs)
+    reasons = [r for r, _ in refusals]
+    # cmd1 is also refused, further down execute(), for a missing broker codec
+    # in this fixture -- the duplicate is the refusal cmd2 earned.
+    assert reasons[-1] is RejectionReason.IDEMPOTENCY_DUPLICATE
+    assert reasons.count(RejectionReason.IDEMPOTENCY_DUPLICATE) == 1
+    # A duplicate never reached the broker, so it is not a dead letter.
+    mock_deps["dlq"].add.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_empty_key_bypasses_dedup(tmp_config, mock_deps):
     """Empty idempotency_key should bypass dedup entirely."""
     adapter = _make_adapter(tmp_config)
+    refusals = _capture_refusals(adapter)
 
     cmd1 = make_cmd(idempotency_key="")
     cmd2 = make_cmd(idempotency_key="")
@@ -130,17 +154,16 @@ async def test_empty_key_bypasses_dedup(tmp_config, mock_deps):
     await adapter.execute(cmd1)
     await adapter.execute(cmd2)
 
-    # Neither should be rejected for dedup (may be rejected for other reasons,
-    # but order_reject_total should not be called for dedup specifically)
-    # Check that DLQ was not called with "Duplicate idempotency_key"
-    for call in mock_deps["dlq"].add.call_args_list:
-        assert "Duplicate idempotency_key" not in str(call)
+    # Neither should be refused for dedup (either may be refused for other
+    # reasons; only the dedup reason is under test here).
+    assert RejectionReason.IDEMPOTENCY_DUPLICATE not in [r for r, _ in refusals]
 
 
 @pytest.mark.asyncio
 async def test_unique_key_passes(tmp_config, mock_deps):
     """Different idempotency_keys should both pass dedup."""
     adapter = _make_adapter(tmp_config)
+    refusals = _capture_refusals(adapter)
 
     cmd1 = make_cmd(idempotency_key="key-001")
     cmd2 = make_cmd(idempotency_key="key-002")
@@ -148,15 +171,15 @@ async def test_unique_key_passes(tmp_config, mock_deps):
     await adapter.execute(cmd1)
     await adapter.execute(cmd2)
 
-    # Neither should be rejected for dedup
-    for call in mock_deps["dlq"].add.call_args_list:
-        assert "Duplicate idempotency_key" not in str(call)
+    # Neither should be refused for dedup
+    assert RejectionReason.IDEMPOTENCY_DUPLICATE not in [r for r, _ in refusals]
 
 
 @pytest.mark.asyncio
 async def test_cancel_bypasses_dedup_even_with_duplicate_key(tmp_config, mock_deps):
     """CANCEL intent should bypass dedup even if idempotency_key is duplicate."""
     adapter = _make_adapter(tmp_config)
+    refusals = _capture_refusals(adapter)
 
     # First: reserve the key with a NEW order
     cmd_new = make_cmd(idempotency_key="cancel-key-001")
@@ -166,15 +189,15 @@ async def test_cancel_bypasses_dedup_even_with_duplicate_key(tmp_config, mock_de
     cmd_cancel = make_cmd(intent_type=IntentType.CANCEL, idempotency_key="cancel-key-001")
     await adapter.execute(cmd_cancel)
 
-    # DLQ should NOT have "Duplicate idempotency_key" for the cancel
-    for call in mock_deps["dlq"].add.call_args_list:
-        assert "Duplicate idempotency_key" not in str(call)
+    # The cancel must not be refused as a duplicate
+    assert RejectionReason.IDEMPOTENCY_DUPLICATE not in [r for r, _ in refusals]
 
 
 @pytest.mark.asyncio
 async def test_force_flat_bypasses_dedup_even_with_duplicate_key(tmp_config, mock_deps):
     """FORCE_FLAT intent should bypass dedup even if idempotency_key is duplicate."""
     adapter = _make_adapter(tmp_config)
+    refusals = _capture_refusals(adapter)
 
     # First: reserve the key with a NEW order
     cmd_new = make_cmd(idempotency_key="ff-key-001")
@@ -184,9 +207,8 @@ async def test_force_flat_bypasses_dedup_even_with_duplicate_key(tmp_config, moc
     cmd_ff = make_cmd(intent_type=IntentType.FORCE_FLAT, idempotency_key="ff-key-001")
     await adapter.execute(cmd_ff)
 
-    # DLQ should NOT have "Duplicate idempotency_key" for the force_flat
-    for call in mock_deps["dlq"].add.call_args_list:
-        assert "Duplicate idempotency_key" not in str(call)
+    # The force-flat must not be refused as a duplicate
+    assert RejectionReason.IDEMPOTENCY_DUPLICATE not in [r for r, _ in refusals]
 
 
 def test_dedup_store_not_created_when_gateway_enabled(tmp_config, mock_deps):

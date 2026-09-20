@@ -4,7 +4,7 @@ Symptom (downstream of Bug 21/22): even with Gateway reduce-only bypass fixed,
 OrderAdapter re-checks StormGuard HALT at dispatch time (TOCTOU closure, M1 gap).
 The adapter's ``_halt_exempt`` clause at ``adapter.py:1055`` only allows
 CANCEL / FORCE_FLAT / halt_exempt strategies — a covering NEW BUY against a short
-position still hits ``_is_halt and not _halt_exempt`` and gets dropped into DLQ.
+position still hits ``_is_halt and not _halt_exempt`` and is refused.
 
 Scenario (race that triggers it):
   1. Gateway passes cover BUY (HALT_REDUCE_ONLY, Bug 22 fix).
@@ -12,7 +12,7 @@ Scenario (race that triggers it):
   3. Between risk-approve and adapter-dispatch, StormGuard transitions to HALT
      (feed gap or margin breach).
   4. Adapter sees live ``_storm_guard.state == HALT`` but intent is NEW BUY.
-  5. Adapter blocks → DLQ → position stays stuck → deadlock returns.
+  5. Adapter blocks → refused → position stays stuck → deadlock returns.
 
 Fix: Add ``_intent_reduces_position(intent)`` helper delegating to StormGuard's
 existing predicate and include it in ``_halt_exempt`` so reducing orders flow
@@ -21,7 +21,7 @@ through at the adapter layer as well.
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -85,9 +85,16 @@ def _make_adapter_in_halt(*, short_position: int = -1) -> OrderAdapter:
 
     adapter._storm_guard._intent_reduces_position = _reduces
 
-    adapter._add_to_dlq = AsyncMock()
+    adapter._record_local_reject = MagicMock()
     adapter.metrics = MagicMock()
     return adapter
+
+
+def _halt_refusals(adapter) -> list:
+    """Pre-dispatch refusals this adapter booked with the StormGuard HALT reason."""
+    return [
+        c for c in adapter._record_local_reject.call_args_list if len(c.args) >= 3 and c.args[2] == "StormGuard HALT"
+    ]
 
 
 class TestAdapterHaltReduceOnlyBypass:
@@ -116,7 +123,7 @@ class TestAdapterHaltReduceOnlyBypass:
     async def test_cover_order_bypasses_halt_gate(self):
         """End-to-end: NEW BUY covering short passes adapter HALT gate.
 
-        Before fix: ``_halt_exempt`` is False → adapter._add_to_dlq is called.
+        Before fix: ``_halt_exempt`` is False → the HALT refusal is booked.
         After fix: ``_halt_exempt`` includes ``_intent_reduces_position`` →
         the code past line 1067 runs (rate limits, dedup, dispatch).
         """
@@ -126,7 +133,7 @@ class TestAdapterHaltReduceOnlyBypass:
         cmd = _make_cmd(cover_intent, sg_state=StormGuardState.HALT)
 
         # Short-circuit the rest of execute() — we only need to test the HALT branch.
-        # The simplest black-box is to check _add_to_dlq was NOT called with HALT reason.
+        # The simplest black-box is that no refusal carried the HALT reason.
         # We stub downstream paths so execute() returns cleanly.
         adapter._dedup_store = None
         adapter.per_symbol_rate_limiter = MagicMock()
@@ -144,12 +151,11 @@ class TestAdapterHaltReduceOnlyBypass:
 
         await adapter.execute(cmd)
 
-        # Assert: none of the _add_to_dlq calls used the "StormGuard HALT" reason.
-        halt_rejects = [
-            c for c in adapter._add_to_dlq.await_args_list if len(c.args) >= 3 and c.args[2] == "StormGuard HALT"
-        ]
+        # Assert: no refusal used the "StormGuard HALT" reason.
+        halt_rejects = _halt_refusals(adapter)
         assert not halt_rejects, (
-            f"Adapter still blocks cover order under HALT (Bug 24 not fixed): {adapter._add_to_dlq.await_args_list}"
+            f"Adapter still blocks cover order under HALT (Bug 24 not fixed): "
+            f"{adapter._record_local_reject.call_args_list}"
         )
 
     @pytest.mark.asyncio
@@ -163,8 +169,6 @@ class TestAdapterHaltReduceOnlyBypass:
 
         await adapter.execute(cmd)
 
-        # Opening orders should still hit DLQ with "StormGuard HALT"
-        halt_rejects = [
-            c for c in adapter._add_to_dlq.await_args_list if len(c.args) >= 3 and c.args[2] == "StormGuard HALT"
-        ]
+        # Opening orders must still be refused with "StormGuard HALT"
+        halt_rejects = _halt_refusals(adapter)
         assert halt_rejects, "Opening order must still be blocked under HALT — fix over-reached"
