@@ -29,10 +29,34 @@ self-termination on a *sustained* stall is the safe failure mode. The recorder
 WAL and gateway dedup are crash-safe (fsync+rename, idempotent replay), so a
 hard exit is recoverable.
 
+Killing the process is necessary but, on its own, not diagnostic. On
+2026-09-15 at 06:33:46Z THESHOW's engine killed itself with
+``event_loop_stall_kill stalled_s=66`` after a 30.6 s stall two minutes
+earlier. Only the engine scrape went ``up=0`` and ClickHouse stayed up, so it
+was blocking work on the engine's own loop -- but *which* call is unknowable,
+because the watchdog recorded the duration and nothing else. The 30.6 s stall
+left no trace at all: it never reached the kill threshold, so it was never
+logged.
+
+So the watchdog also dumps the stalled loop thread's stack, at
+``warn_stall_s`` and again at the kill::
+
+    t=0s    loop stops beating
+    t=15s   event_loop_stall_warning  + stack   <- new; survives a recovery
+    t=60s   event_loop_stall_kill     + stack   <- new; survives the exit
+            os._exit(70) -> container restarts
+
+The dump runs on the watchdog thread, reading ``sys._current_frames()``, so it
+adds nothing to the hot path and needs no cooperation from the starved loop.
+It names the loop thread exactly, because :meth:`beat` records the ident of
+whichever thread calls it.
+
 Configuration (read by the engine when constructing the watchdog):
   - ``HFT_LOOP_STALL_KILL_S``  stall threshold in seconds (default 60;
     ``<= 0`` disables the watchdog entirely).
   - ``HFT_LOOP_STALL_CHECK_S`` poll interval in seconds (default 5).
+  - ``HFT_LOOP_STALL_WARN_S``  stack-dump threshold in seconds (default 15;
+    ``<= 0`` disables the early dump, leaving only the one at the kill).
 
 The default 60 s threshold is ~5 orders of magnitude above normal loop lag
 (sub-millisecond) and well above any legitimate transient blocking, so it
@@ -45,7 +69,9 @@ import os
 import sys
 import threading
 import time
+import traceback
 from collections.abc import Callable
+from types import FrameType
 
 import structlog
 
@@ -54,6 +80,11 @@ logger = structlog.get_logger("service.loop_watchdog")
 # Distinct, non-zero exit code so an operator (and `restart: always`) can tell a
 # stall-kill apart from a normal shutdown or an unrelated crash.
 STALL_KILL_EXIT_CODE = 70
+
+#: Innermost frames kept per stalled thread. Deep enough to cross an SDK
+#: boundary and name the blocking call, short enough that the dump still fits
+#: in one container-log line.
+DEFAULT_STACK_DEPTH = 40
 
 
 def _hard_exit(code: int) -> None:  # pragma: no cover - terminates the process
@@ -74,16 +105,24 @@ class LoopStallWatchdog:
         *,
         stall_kill_s: float,
         check_interval_s: float = 5.0,
+        warn_stall_s: float = 15.0,
+        stack_depth: int = DEFAULT_STACK_DEPTH,
         clock: Callable[[], float] = time.monotonic,
         on_stall: Callable[[float], None] | None = None,
     ) -> None:
         self._stall_kill_s = float(stall_kill_s)
         self._check_interval_s = max(0.1, float(check_interval_s))
+        self._warn_stall_s = float(warn_stall_s)
+        self._stack_depth = max(1, int(stack_depth))
         self._clock = clock
         self._on_stall: Callable[[float], None] = on_stall or (lambda _elapsed: _hard_exit(STALL_KILL_EXIT_CODE))
         self._enabled = self._stall_kill_s > 0.0
         self._last_beat = self._clock()
         self._fired = False
+        self._warned = False
+        # Set by beat(), so the dump names the loop's own thread rather than
+        # guessing at the main thread. None until the loop has beaten once.
+        self._loop_thread_ident: int | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -92,8 +131,15 @@ class LoopStallWatchdog:
         return self._enabled
 
     def beat(self) -> None:
-        """Record event-loop liveness. Cheap; called from the loop each tick."""
+        """Record event-loop liveness. Cheap; called from the loop each tick.
+
+        Also re-arms the warning dump, so a loop that stalls, is dumped, and
+        then recovers gets dumped again on its next stall instead of once per
+        process lifetime.
+        """
         self._last_beat = self._clock()
+        self._loop_thread_ident = threading.get_ident()
+        self._warned = False
 
     def stale_for(self) -> float:
         """Seconds since the last beat (never negative)."""
@@ -109,6 +155,12 @@ class LoopStallWatchdog:
         if not self._enabled:
             return False
         elapsed = self.stale_for()
+        if self._warn_stall_s > 0.0 and elapsed >= self._warn_stall_s and not self._warned:
+            # Fires even when the loop later recovers: a 30 s stall that never
+            # reaches the kill threshold is exactly the evidence that was
+            # missing on 2026-09-15.
+            self._warned = True
+            self._emit_stack_dump("event_loop_stall_warning", elapsed)
         if elapsed < self._stall_kill_s:
             return False
         if not self._fired:
@@ -134,8 +186,74 @@ class LoopStallWatchdog:
                 sys.stderr.flush()
             except Exception:  # pragma: no cover
                 pass
+            self._emit_stack_dump("event_loop_stall_kill_stack", elapsed)
             self._on_stall(elapsed)
         return True
+
+    def capture_stacks(self) -> str:
+        """Render the stalled loop thread's stack, plus a line per other thread.
+
+        Reads ``sys._current_frames()`` from the watchdog thread, so it costs
+        the starved loop nothing and does not need it to cooperate. The loop
+        thread is reported in full depth because it holds the blocking call;
+        every other thread contributes only its innermost frame, which keeps
+        the dump bounded while still showing an SDK thread that is spinning.
+        """
+        try:
+            frames = sys._current_frames()
+        except Exception as exc:  # pragma: no cover - defensive
+            return f"<stack unavailable: {exc}>"
+        names = {t.ident: t.name for t in threading.enumerate() if t.ident is not None}
+        loop_ident = self._loop_thread_ident
+        parts: list[str] = []
+        if loop_ident is not None and loop_ident in frames:
+            parts.append(f"loop thread {loop_ident} ({names.get(loop_ident, '?')}):")
+            parts.append(self._format_frame(frames[loop_ident], self._stack_depth))
+        elif loop_ident is None:
+            # The loop never beat, so there is nothing to single out. Dump every
+            # thread shallowly rather than claiming to know which one is stuck.
+            parts.append("loop thread unknown (never beat); innermost frame per thread:")
+        else:
+            parts.append(f"loop thread {loop_ident} has no frame (exited?); innermost frame per thread:")
+        for ident, frame in frames.items():
+            if ident == loop_ident:
+                continue
+            parts.append(f"thread {ident} ({names.get(ident, '?')}): {self._format_frame(frame, 1).strip()}")
+        return "\n".join(parts)
+
+    @staticmethod
+    def _format_frame(frame: FrameType, depth: int) -> str:
+        try:
+            return "".join(traceback.format_stack(frame, limit=depth))
+        except Exception as exc:  # pragma: no cover - defensive
+            return f"<frame unavailable: {exc}>"
+
+    def _emit_stack_dump(self, event: str, elapsed: float) -> None:
+        """Write the dump to structlog AND raw stderr.
+
+        Both, for the same reason the kill message uses both: a dump that only
+        reaches a starved logging path is a dump that does not exist when it
+        matters.
+        """
+        try:
+            stacks = self.capture_stacks()
+        except Exception as exc:  # pragma: no cover - the dump must never kill the watchdog
+            stacks = f"<capture failed: {exc}>"
+        try:
+            logger.warning(
+                event,
+                stalled_s=round(elapsed, 1),
+                warn_s=self._warn_stall_s,
+                threshold_s=self._stall_kill_s,
+                stacks=stacks,
+            )
+        except Exception:  # pragma: no cover
+            pass
+        try:
+            sys.stderr.write(f"[loop-stall-watchdog] {event} stalled_s={elapsed:.1f}\n{stacks}\n")
+            sys.stderr.flush()
+        except Exception:  # pragma: no cover
+            pass
 
     def start(self) -> None:
         """Spawn the watchdog thread. No-op when disabled or already running."""
