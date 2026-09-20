@@ -283,6 +283,32 @@ class MarketCalendar:
         # Night session: 15:00–(next day)05:00
         return self._is_futures_night_session(ts)
 
+    def seconds_since_futures_session_open(self, ts: dt.datetime | None = None) -> float | None:
+        """Seconds elapsed since the current TAIFEX session opened, else None.
+
+        ``None`` means "no session is running", which is not the same as a
+        zero-length one: a caller that reads a feed gap needs to distinguish
+        "the market is shut, silence is expected" from "the market just
+        opened, silence is one second old".
+
+        A feed gap measured across a closed market is not an outage. It is the
+        close. Clamping a gap to this value is what stops the overnight silence
+        (``EXFI6`` carried 12,671 s into 2026-09-15 08:31) from being read as a
+        dead feed minutes before the bell.
+        """
+        if ts is None:
+            ts = dt.datetime.now(self._tz)
+        if not self._is_futures_trading_hours(ts):
+            return None
+        current_s = self._seconds_of_day(ts)
+        if self._FUT_DAY_OPEN_SEC <= current_s < self._FUT_DAY_CLOSE_SEC:
+            return float(current_s - self._FUT_DAY_OPEN_SEC)
+        if current_s >= self._FUT_NIGHT_OPEN_SEC:
+            return float(current_s - self._FUT_NIGHT_OPEN_SEC)
+        # Past midnight: the session opened at 15:00 on the previous calendar
+        # day, so the elapsed time carries the whole evening with it.
+        return float(current_s + (86400 - self._FUT_NIGHT_OPEN_SEC))
+
     def get_session_open(self, date: dt.date | None = None) -> dt.datetime | None:
         """Get market open time for a trading day.
 

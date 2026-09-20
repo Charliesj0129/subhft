@@ -4,7 +4,7 @@ Covers:
 - Default field values and construction
 - configure_thresholds / bind_runtime_probes
 - reduce_only_reasons: all individual trigger conditions
-- _feed_gap_s: get_max_feed_gap_s + within_reconnect_window gating
+- _feed_gap_s: get_max_feed_gap_s + market-session gating
 - _quote_flap_budget_exceeded: various flap configurations
 - _redis_is_healthy: healthcheck callable, redis client ping, absent
 - _wal_backlog_files: direct attr, get_health dict, event_counts, metrics fallback
@@ -31,6 +31,30 @@ from hft_platform.ops.platform_inputs import (
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _mid_session(monkeypatch: pytest.MonkeyPatch):
+    """Run every test one hour into a trading session.
+
+    ``_feed_gap_s`` used to gate on ``within_reconnect_window()``, an env
+    wall-clock range the mocked md_service supplied. It now asks the market
+    calendar, which no mock controls -- so without this the suite would pass or
+    fail depending on the wall clock of the machine running it. Tests that mean
+    "the market is shut" override it with ``_shut``.
+    """
+    monkeypatch.setattr(
+        "hft_platform.ops.platform_inputs._seconds_since_session_open",
+        lambda: 3600.0,
+    )
+
+
+def _shut(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin the calendar to 'no session is running'."""
+    monkeypatch.setattr(
+        "hft_platform.ops.platform_inputs._seconds_since_session_open",
+        lambda: None,
+    )
+
+
 def _make_queue(size: int = 0) -> MagicMock:
     q = MagicMock()
     q.qsize.return_value = size
@@ -40,7 +64,6 @@ def _make_queue(size: int = 0) -> MagicMock:
 def _make_inputs(
     *,
     feed_gap: float = 0.0,
-    within_window: bool = True,
     pending_since: float | None = None,
     quote_flap_events=None,
     quote_flap_threshold: int = 5,
@@ -58,7 +81,6 @@ def _make_inputs(
     # observe their value.  Tests that need divergence (active vs max) override
     # md_service.get_active_feed_gap_s.return_value explicitly.
     md_service.get_active_feed_gap_s.return_value = feed_gap
-    md_service.within_reconnect_window.return_value = within_window
     md_service._pending_reconnect_since = pending_since
     md_service._quote_flap_events = quote_flap_events
     md_service._quote_flap_threshold = quote_flap_threshold
@@ -198,12 +220,13 @@ class TestFeedGapS:
         inp.md_service.get_active_feed_gap_s = None  # type: ignore[assignment]
         assert inp._feed_gap_s() == 0.0
 
-    def test_returns_zero_outside_reconnect_window(self) -> None:
-        inp = _make_inputs(feed_gap=200.0, within_window=False)
+    def test_returns_zero_when_the_market_is_shut(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _shut(monkeypatch)
+        inp = _make_inputs(feed_gap=200.0)
         assert inp._feed_gap_s() == 0.0
 
     def test_returns_gap_inside_reconnect_window(self) -> None:
-        inp = _make_inputs(feed_gap=150.0, within_window=True)
+        inp = _make_inputs(feed_gap=150.0)
         assert inp._feed_gap_s() == 150.0
 
     def test_no_within_reconnect_window_attr_returns_raw_gap(self) -> None:
@@ -219,7 +242,7 @@ class TestFeedGapS:
         sub-second cadence. The active-aware gap reflects only the actively
         flowing symbols and must not trip reduce_only on chronic stragglers.
         """
-        inp = _make_inputs(feed_gap=2000.0, within_window=True)
+        inp = _make_inputs(feed_gap=2000.0)
         inp.md_service.get_active_feed_gap_s.return_value = 0.5
         assert inp._feed_gap_s() == 0.5
 
@@ -234,7 +257,7 @@ class TestFeedGapS:
         import time as _time
 
         now = _time.time()
-        inp = _make_inputs(feed_gap=2000.0, within_window=True)
+        inp = _make_inputs(feed_gap=2000.0)
         inp.md_service.get_active_feed_gap_s.return_value = 0.5
         with patch("hft_platform.ops.platform_inputs.timebase") as tb:
             tb.now_s.return_value = now
@@ -246,7 +269,7 @@ class TestFeedGapS:
         import time as _time
 
         now = _time.time()
-        inp = _make_inputs(feed_gap=2000.0, within_window=True)
+        inp = _make_inputs(feed_gap=2000.0)
         # Active gap above the 600s default threshold → still must trigger.
         inp.md_service.get_active_feed_gap_s.return_value = 800.0
         with patch("hft_platform.ops.platform_inputs.timebase") as tb:
@@ -256,7 +279,7 @@ class TestFeedGapS:
 
     def test_falls_back_to_max_feed_gap_when_active_method_missing(self) -> None:
         """Backwards-compat: if md_service lacks get_active_feed_gap_s, use the max."""
-        inp = _make_inputs(feed_gap=150.0, within_window=True)
+        inp = _make_inputs(feed_gap=150.0)
         # Remove the new method to simulate older md_service
         inp.md_service.get_active_feed_gap_s = None  # type: ignore[assignment]
         assert inp._feed_gap_s() == 150.0
@@ -280,7 +303,7 @@ class TestFeedGapS:
         import time as _time
 
         now = _time.time()
-        inp = _make_inputs(feed_gap=0.5, within_window=True)
+        inp = _make_inputs(feed_gap=0.5)
         # Simulate the latched-set md_service: max gap remains 0.5 because
         # TXFE6 / MXFE6 still flow normally, but the active-aware accessor
         # returns 2000s reflecting TMFE6's silent failure (still in the
@@ -461,7 +484,7 @@ class TestReduceOnlyReasons:
         return time.time()
 
     def test_feed_gap_triggers_reason(self) -> None:
-        inp = _make_inputs(feed_gap=200.0, within_window=True)
+        inp = _make_inputs(feed_gap=200.0)
         inp.feed_gap_threshold_s = 120.0
         with patch("hft_platform.ops.platform_inputs.timebase") as tb:
             tb.now_s.return_value = self._now()
@@ -484,24 +507,23 @@ class TestReduceOnlyReasons:
             reasons = inp.reduce_only_reasons()
         assert "feed_reconnect_pending" not in reasons
 
-    def test_pending_reconnect_suppressed_outside_reconnect_window(self) -> None:
-        """Session gap (e.g. 13:35-14:55) is expected; must not trigger reduce-only."""
+    def test_pending_reconnect_suppressed_while_the_market_is_shut(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The 13:45-15:00 session gap is expected; must not trigger reduce-only."""
+        _shut(monkeypatch)
         now = self._now()
         inp = _make_inputs(
             pending_since=now - 120.0,  # 120s > 60s threshold
-            within_window=False,  # outside reconnect window
         )
         with patch("hft_platform.ops.platform_inputs.timebase") as tb:
             tb.now_s.return_value = now
             reasons = inp.reduce_only_reasons()
         assert "feed_reconnect_pending" not in reasons
 
-    def test_pending_reconnect_fires_inside_reconnect_window(self) -> None:
-        """When inside reconnect window and pending > threshold, must fire."""
+    def test_pending_reconnect_fires_during_a_session(self) -> None:
+        """Inside a session, a reconnect pending past the threshold must fire."""
         now = self._now()
         inp = _make_inputs(
             pending_since=now - 120.0,  # 120s > 60s threshold
-            within_window=True,  # inside reconnect window
         )
         with patch("hft_platform.ops.platform_inputs.timebase") as tb:
             tb.now_s.return_value = now
@@ -600,7 +622,7 @@ class TestReduceOnlyReasons:
 
     def test_no_duplicate_reasons(self) -> None:
         # Trigger feed gap twice; result must deduplicate
-        inp = _make_inputs(feed_gap=500.0, within_window=True)
+        inp = _make_inputs(feed_gap=500.0)
         with patch("hft_platform.ops.platform_inputs.timebase") as tb:
             tb.now_s.return_value = self._now()
             reasons = inp.reduce_only_reasons()
