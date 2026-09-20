@@ -687,6 +687,13 @@ class SystemBootstrapper:
             from hft_platform.feed_adapter.shioaji.quote_connection_pool import QuoteConnectionPool
 
             pool = QuoteConnectionPool(symbols_path, quote_cfg, num_conns)
+            # Roll before the facades exist: a settled code must never reach a
+            # subscribe call, not even to fail there. Nothing is subscribed yet,
+            # so this only rewrites the shards the facades are about to read.
+            try:
+                pool.roll_universe(live=False)
+            except Exception as exc:  # noqa: BLE001 — boot must survive an unrollable universe
+                logger.warning("universe_boot_roll_failed", error=str(exc))
             pool.create_facades()
             if order_mode == "disabled":
                 return pool, _RoleGuardedNoopClient("order_disabled")
@@ -846,6 +853,15 @@ class SystemBootstrapper:
         broker_id = self._resolve_broker_id()
         base_shioaji_cfg = dict(self.settings.get("shioaji", {}))
         md_client, order_client = self._build_broker_clients(role, symbols_path, base_shioaji_cfg, broker_id)
+
+        # Keep pricing metadata on the universe actually subscribed. The pool
+        # rolls contracts at runtime while ``symbols.yaml`` stays the operator's
+        # file, so without this a rolled-in contract would be priced off a file
+        # that predates it.
+        if hasattr(md_client, "set_universe_listener"):
+            if getattr(md_client, "universe_rolled", False):
+                symbol_metadata.apply_runtime_overlay(list(md_client.symbols))
+            md_client.set_universe_listener(symbol_metadata.apply_runtime_overlay)
 
         # Position checkpoint writer (periodic serialization)
         from hft_platform.execution.checkpoint import (
@@ -1615,6 +1631,14 @@ class SystemBootstrapper:
         # contract until the next one (THESHOW, 2026-09-16 onwards).
         if shioaji_family_populator is not None:
             deferred_tasks.append(shioaji_family_populator.run_roll_clock())
+
+        # The subscription universe has the same problem one layer down: the
+        # codes were resolved when ``symbols.yaml`` was last built by hand, so a
+        # settled month stays subscribed (and pages hourly) until an operator
+        # rebuilds it. This clock rebuilds from ``symbols.list`` and adopts the
+        # result in the next closed window.
+        if hasattr(md_client, "run_universe_roll_clock"):
+            deferred_tasks.append(md_client.run_universe_roll_clock())
 
         # Alertmanager → Telegram bridge (non-blocking, failure does not block trading)
         try:

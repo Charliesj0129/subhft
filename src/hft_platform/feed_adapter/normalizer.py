@@ -200,6 +200,12 @@ class SymbolMetadata:
         self._exchange_cache: dict[str, str] = {}
         self._product_type_cache: dict[str, str] = {}
         self._mtime: float | None = None
+        # A universe roll replaces contracts while the engine runs (see
+        # ``QuoteConnectionPool.roll_universe``). The canonical file on disk is
+        # the operator's, so the rolled universe arrives here instead and is
+        # re-applied after every load — otherwise the next ``reload_if_changed``
+        # would price a freshly subscribed month off a file that predates it.
+        self._runtime_overlay: list[dict[str, Any]] = []
         self.alias_to_actual: dict[str, str] = {}  # config alias → callback code (e.g. TXFR1 → TXFE6)
         from hft_platform.core.instrument_registry import InstrumentRegistry
 
@@ -242,6 +248,42 @@ class SymbolMetadata:
                             self.symbols_by_tag.setdefault(tag, set()).add(code)
         except Exception as exc:
             logger.warning("symbol_metadata_load_failed", error=str(exc), config_path=self.config_path)
+        self._apply_overlay()
+
+    def _apply_overlay(self) -> None:
+        """Fold the rolled universe (if any) over what the file just gave us."""
+        for item in getattr(self, "_runtime_overlay", ()):
+            code = item.get("code")
+            if not code:
+                continue
+            self.meta[code] = item
+            tags_raw = item.get("tags", [])
+            if isinstance(tags_raw, str):
+                tags = [t.strip() for t in re.split(r"[|,]", tags_raw) if t.strip()]
+            elif isinstance(tags_raw, (list, tuple, set)):
+                tags = [str(t).strip() for t in tags_raw if str(t).strip()]
+            else:
+                tags = []
+            normalized = {t.lower() for t in tags}
+            previous = self.tags_by_symbol.pop(code, set())
+            for tag in previous - normalized:
+                holders = self.symbols_by_tag.get(tag)
+                if holders:
+                    holders.discard(code)
+            if normalized:
+                self.tags_by_symbol[code] = normalized
+                for tag in normalized:
+                    self.symbols_by_tag.setdefault(tag, set()).add(code)
+
+    def apply_runtime_overlay(self, symbols: list[dict[str, Any]]) -> None:
+        """Adopt a rolled universe as the metadata of record, over the file.
+
+        Called by the pool's universe roll before the new codes are subscribed,
+        so the first tick of a new contract is scaled by its own metadata rather
+        than by ``DEFAULT_SCALE``.
+        """
+        self._runtime_overlay = [dict(sym) for sym in symbols if sym.get("code")]
+        self.reload()
 
     def reload(self) -> None:
         self._load()
