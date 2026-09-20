@@ -741,6 +741,7 @@ class HFTSystem:
             self._loop_watchdog = LoopStallWatchdog(
                 stall_kill_s=self._env_float("HFT_LOOP_STALL_KILL_S", 60.0, 0.0),
                 check_interval_s=self._env_float("HFT_LOOP_STALL_CHECK_S", 5.0, 0.1),
+                warn_stall_s=self._env_float("HFT_LOOP_STALL_WARN_S", 15.0, 0.0),
             )
             self._loop_watchdog.start()
 
