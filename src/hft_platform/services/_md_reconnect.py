@@ -75,6 +75,50 @@ def _night_session_owner_traded(day: dt.date) -> bool:
         return True
 
 
+def _in_night_session_tail(now: dt.datetime, windows: list[str]) -> bool:
+    """True when *now* is in the after-midnight leg of a live night session.
+
+    TAIFEX's night session opens at 15:00 and closes at 05:00 the **next
+    calendar day**, so between midnight and 05:00 the wall clock says one day
+    and the running session belongs to the one before it. Two guards in
+    :meth:`_within_reconnect_window` read the wall-clock day and rejected that
+    tail outright, before the hours check -- which already knew how to handle
+    it via :func:`_night_session_owner_traded` -- ever ran::
+
+        Taipei local          market   days_until   in reconnect_days
+                               open?   _trading
+        Fri 23:00              True       0 ok           fri ok      -> allowed
+        Sat 00:00              True       2 REJECT       sat MISSING -> refused
+        Sat 02:30              True       2 REJECT       sat MISSING -> refused
+        Sat 04:59              True       2 REJECT       sat MISSING -> refused
+        Sat 05:30              False      2 reject       sat missing -> refused
+        Sun 18:00              False      1 ok           sun missing -> refused
+
+    ``days_until_trading`` measures the distance to the **next** session and
+    never asks whether one is already running, so it reads Saturday -- five
+    live trading hours -- as further from the market than Sunday, which has
+    none. The result was a five-hour hole every Friday night in which the feed
+    watchdog could not reconnect or resubscribe.
+
+    Only the *tail* is recognised here. The evening leg (``now >= start``) is
+    unconditional and is handled by the window loop as before.
+    """
+    now_t = now.timetz().replace(tzinfo=None)
+    for window in windows:
+        try:
+            start_str, end_str = window.split("-", 1)
+            start = dt.time.fromisoformat(start_str)
+            end = dt.time.fromisoformat(end_str)
+        except Exception as exc:
+            logger.debug("operation_fallback", error=str(exc))
+            continue
+        if start <= end:
+            continue  # not a cross-midnight window; it has no tail
+        if now_t <= end and _night_session_owner_traded(now.date()):
+            return True
+    return False
+
+
 class MarketDataReconnectMixin:
     """Reconnection / rollover / watchdog methods for ``MarketDataService``."""
 
@@ -109,6 +153,14 @@ class MarketDataReconnectMixin:
             return True
         tz = getattr(self, "_reconnect_tzinfo", dt.timezone.utc)
         now = dt.datetime.fromtimestamp(timebase.now_s(), tz=tz)
+        windows = [w for w in (reconnect_hours, reconnect_hours_2) if w]
+
+        # The after-midnight tail of a night session is the previous day's
+        # trading, so neither the calendar distance nor the weekday list may
+        # judge it by the wall-clock date. See _in_night_session_tail.
+        if _in_night_session_tail(now, windows):
+            return True
+
         if _calendar_enabled():
             try:
                 from hft_platform.core.market_calendar import get_calendar
@@ -122,7 +174,6 @@ class MarketDataReconnectMixin:
         if reconnect_days and weekday not in reconnect_days:
             return False
 
-        windows = [w for w in (reconnect_hours, reconnect_hours_2) if w]
         if not windows:
             return True
         for window in windows:
