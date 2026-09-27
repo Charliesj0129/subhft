@@ -24,13 +24,13 @@ Key goals:
 ## Canonical Architecture Document
 
 > **The single source of truth for detailed architecture is:**
-> [`docs/architecture/current-architecture.md`](architecture/current-architecture.md)
+> [`docs/architecture/current-architecture.md`](current-architecture.md)
 >
 > It covers: Runtime Planes (7), Module Inventory, Rust Boundary, Persistence Surfaces, Architectural Invariants, Observed Drift, and Cluster Evolution status (CE-M2/M3).
 
 Companion documents:
 
-- [Target Architecture](architecture/target-architecture.md)
+- [Target Architecture](target-architecture.md)
 
 ---
 

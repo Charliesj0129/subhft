@@ -49,8 +49,7 @@ tests/benchmark/baselines/
 # Deployment Secrets
 deployment/.env
 deployment/.env.*
-# Exclude the temporary script we made? No, keep scripts.
-# But exclude key files if any...
+# Private keys / certificates
 *.pem
 *.key
 
@@ -231,6 +230,8 @@ notebooks/.ipynb_checkpoints
 # understand-anything knowledge-graph cache: 42 MB of regenerable batch JSON.
 # Both directory names are in use — the tool wrote `.ua/` in older worktrees
 # (659 untracked entries in one of them) and `.understand-anything/` here.
+# Machine-local: embeds absolute /home/<user> paths and pins a commit, so a
+# committed copy goes stale silently and misreports blast radius.
 .understand-anything/
 .ua/
 
@@ -272,6 +273,8 @@ research/__pycache__/
 # `mine run` artifacts (hunt_*.json, *_qualifying.json, WINNER_*.json) were
 # landing as untracked noise in every status check. Re-runnable from the
 # governed dataset + manifest; ClickHouse and the sidecars are the record.
+# These JSONs carry no run id, dataset fingerprint, or code revision; governed
+# artifacts belong under research/experiments/ with provenance.
 research/combinatorial/results/
 
 # Slice-D alpha-factory generated artifacts (writer-side outputs, re-runnable).
@@ -305,21 +308,6 @@ research/audit/sub_gate_runs.jsonl
 # These are re-derivable from ClickHouse and carry proprietary market data —
 # never commit them (15-security / 70-research-data). Keep local only.
 backups/
-
-# Machine-local analyzer cache (understand-anything plugin). ~42 MB of
-# generated state whose scripts embed absolute /home/<user> paths and a pinned
-# plugin version, so it is neither portable nor reproducible on another host.
-# The graph inside it also pins whatever commit it was built at, so a committed
-# copy goes stale silently and misreports blast radius.
-.understand-anything/
-
-# Combinatorial mining run outputs. `!research/combinatorial/` above un-ignores
-# the whole package so its *.py are trackable, which also un-ignores every
-# artifact a run drops beside them. These JSONs carry no run id, dataset
-# fingerprint, or code revision, so they are not reproducible evidence --
-# governed artifacts belong under research/experiments/ with provenance
-# (research/README.md).
-research/combinatorial/results/
 
 # pip-audit report written by `make security-scan` into the repo root
 audit-output.txt
