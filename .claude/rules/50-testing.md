@@ -1,1 +1,1 @@
-/home/charlie/hft_platform/.agent/rules/50-testing.md
+../../.agent/rules/50-testing.md

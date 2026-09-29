@@ -1,1 +1,1 @@
-/home/charlie/hft_platform/.agent/rules/26-multi-broker-governance.md
+../../.agent/rules/26-multi-broker-governance.md

@@ -1,0 +1,1 @@
+../../.agent/rules/30-git.md

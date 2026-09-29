@@ -1,1 +1,1 @@
-/home/charlie/hft_platform/.agent/rules/10-hft-performance.md
+../../.agent/rules/10-hft-performance.md
