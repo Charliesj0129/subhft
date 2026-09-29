@@ -10,6 +10,7 @@ import asyncio
 import datetime as dt
 import os
 import time
+from collections.abc import Collection
 from typing import Any
 
 from structlog import get_logger
@@ -75,7 +76,7 @@ def _night_session_owner_traded(day: dt.date) -> bool:
         return True
 
 
-def _in_night_session_tail(now: dt.datetime, windows: list[str]) -> bool:
+def _in_night_session_tail(now: dt.datetime, windows: list[str], reconnect_days: Collection[str] = frozenset()) -> bool:
     """True when *now* is in the after-midnight leg of a live night session.
 
     TAIFEX's night session opens at 15:00 and closes at 05:00 the **next
@@ -102,7 +103,15 @@ def _in_night_session_tail(now: dt.datetime, windows: list[str]) -> bool:
 
     Only the *tail* is recognised here. The evening leg (``now >= start``) is
     unconditional and is handled by the window loop as before.
+
+    The tail is judged by the day that owns it, so ``reconnect_days`` is checked
+    against *yesterday's* weekday. Without that, a disabled owning day would be
+    let through, and because :func:`_night_session_owner_traded` fails open, a
+    calendar outage would open Sunday's small hours on a Monday-to-Friday set.
     """
+    owner_weekday = (now.date() - dt.timedelta(days=1)).strftime("%a").lower()
+    if reconnect_days and owner_weekday not in reconnect_days:
+        return False
     now_t = now.timetz().replace(tzinfo=None)
     for window in windows:
         try:
@@ -158,7 +167,7 @@ class MarketDataReconnectMixin:
         # The after-midnight tail of a night session is the previous day's
         # trading, so neither the calendar distance nor the weekday list may
         # judge it by the wall-clock date. See _in_night_session_tail.
-        if _in_night_session_tail(now, windows):
+        if _in_night_session_tail(now, windows, reconnect_days):
             return True
 
         if _calendar_enabled():

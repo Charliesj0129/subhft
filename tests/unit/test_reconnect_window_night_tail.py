@@ -137,6 +137,43 @@ class TestTheTailDoesNotOverrideEverything:
         assert _at(probe, _tpe(*SAT, 2, 30)) is False
 
 
+def _calendar_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    import hft_platform.core.market_calendar as market_calendar
+
+    def _boom() -> Any:
+        raise RuntimeError("calendar unavailable")
+
+    monkeypatch.setattr(market_calendar, "get_calendar", _boom)
+
+
+class TestTheTailHonoursReconnectDays:
+    """The tail belongs to yesterday's session, so yesterday's weekday must be enabled."""
+
+    def test_a_tail_whose_owning_day_is_disabled_is_closed(self) -> None:
+        """Wednesday 02:30 is Tuesday's tail; with only Monday enabled it stays shut."""
+        assert _at(_Probe(days={"mon"}), _tpe(*WED, 2, 30)) is False
+
+    def test_a_tail_whose_owning_day_is_enabled_is_open(self) -> None:
+        """Tuesday 02:30 is Monday's tail; Monday is enabled even though Tuesday is not."""
+        assert _at(_Probe(days={"mon"}), _tpe(*TUE, 2, 30)) is True
+
+    def test_sunday_small_hours_stay_closed_when_the_calendar_is_down(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The owner predicate fails open, so the weekday filter is what keeps Sunday shut."""
+        _calendar_raises(monkeypatch)
+        for hour in (0, 2, 4):
+            assert _at(_Probe(), _tpe(*SUN, hour)) is False
+
+    def test_the_saturday_tail_survives_a_calendar_outage(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _calendar_raises(monkeypatch)
+        assert _at(_Probe(), _tpe(*SAT, 2, 30)) is True
+
+    def test_the_predicate_rejects_a_tail_whose_owning_day_is_disabled(self) -> None:
+        assert _in_night_session_tail(_tpe(*WED, 2, 30), [NIGHT_WINDOW], reconnect_days={"mon"}) is False
+
+    def test_the_predicate_ignores_the_day_filter_when_none_is_configured(self) -> None:
+        assert _in_night_session_tail(_tpe(*WED, 2, 30), [NIGHT_WINDOW], reconnect_days=set()) is True
+
+
 class TestTheTailPredicate:
     def test_it_recognises_the_saturday_small_hours(self) -> None:
         assert _in_night_session_tail(_tpe(*SAT, 2, 30), [DAY_WINDOW, NIGHT_WINDOW]) is True
