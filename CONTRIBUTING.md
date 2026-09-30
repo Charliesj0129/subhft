@@ -110,3 +110,4 @@ docker compose -f docker-compose.yml -f docker-compose.production.yml up -d
 - Check `docs/` for detailed guides
 - Review `.agent/rules/` for coding standards
 - See `CLAUDE.md` for the full platform constitution
+- Security issues: follow `SECURITY.md` (private report, never a public issue)
