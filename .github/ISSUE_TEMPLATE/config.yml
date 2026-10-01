@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/Charliesj0129/subhft/security/advisories/new
+    about: Use a private advisory. Do not open a public issue for credentials, broker or trading-path vulnerabilities.

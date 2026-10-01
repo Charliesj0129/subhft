@@ -1,0 +1,63 @@
+name: Bug report
+description: Something in the platform behaves incorrectly
+title: "fix: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Never paste secrets, account IDs, API keys or certificates. Redact
+        anything from `.env`, broker logs or ClickHouse rows before submitting.
+        Security problems go through the private channel in `SECURITY.md`,
+        not here.
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Surface
+      options:
+        - Hot path (feed / normalizer / LOB / features / bus)
+        - Strategy / alpha runtime
+        - Risk / gateway / order / execution
+        - Broker adapter (Shioaji / Fubon)
+        - Recorder / WAL / ClickHouse
+        - Research / backtest
+        - CLI / ops scripts / CI
+        - Docs
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Run mode
+      options:
+        - sim
+        - replay / backtest
+        - live
+        - CI only
+    validations:
+      required: true
+  - type: textarea
+    id: observed
+    attributes:
+      label: What happened
+      description: Include exact log lines or test output, verbatim.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      description: Commands, config keys and the commit SHA you ran against.
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact
+      description: Orders, positions, data loss, latency or nothing beyond CI noise.
