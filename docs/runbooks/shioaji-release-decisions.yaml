@@ -34,7 +34,7 @@ decisions:
   - version: "1.5.7"
     verdict: DEFER
     decided_on: 2026-08-27
-    revisit_after: 2026-09-26
+    revisit_after: 2026-10-13
     evidence: tests/golden/shioaji_sdk/diff_1.5.6_to_1.5.7.json
     rationale: >
       API-identical to the pin: the captured surface diff is empty in every
@@ -44,6 +44,8 @@ decisions:
       is not evidence but a decision: whether to spend an HFT_MODE=sim soak on
       it. Deferred until that call is made; the soak is the operator's to
       authorise, not something a surface capture can substitute for.
+      Renewed 2026-09-29 by the owner for two weeks (was 2026-09-26); still
+      no soak authorised.
 
   - version: "1.7.0"
     verdict: BLOCKED
