@@ -62,6 +62,18 @@
 | [CODEMAPS/](CODEMAPS/) | Quick-reference codemaps (architecture, backend, data, dependencies) |
 | [ADRs](adr/) | Architecture decision records |
 
+## History & Evidence (dated records, do not rewrite)
+
+| Doc | Description |
+|-----|-------------|
+| [Specs & Plans](superpowers/README.md) | Dated design specs and implementation plans |
+| [Alpha Research Reports](alpha-research/README.md) | Point-in-time research reports and round summaries |
+| [Research Notes](research/README.md) | Literature searches and exploration write-ups |
+| [Incidents & Audits](incidents/README.md) | Post-incident write-ups and audits |
+| [Research Goals](goals/candidate_research_refinement_loop.md) | Candidate research refinement loop goal |
+| [HFTBacktest Reference](reference/hftbacktest/README.md) | Vendored notes on API, queue models, TAIFEX calibration |
+| [Loop_v1 Charter](loop_v1_stabilization_charter.md) / [Log](loop_v1_stabilization_log.md) | Stabilization freeze charter and log |
+
 ## Project TODOs & Tech Debt
 
 | Doc | Description |
