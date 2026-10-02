@@ -436,6 +436,19 @@ jobs:
       - name: Run benchmarks
         run: make benchmark-ci
 
+      - name: Load benchmark baseline
+        # The rolling baseline lives on the ci-benchmark-baseline branch so the
+        # bot's updates stay out of main's history. Until that branch exists the
+        # committed tests/benchmark/.benchmark_baseline.json is the seed.
+        run: |
+          if git fetch --depth=1 origin ci-benchmark-baseline \
+            && git show FETCH_HEAD:benchmark_baseline.json > "$RUNNER_TEMP/benchmark_baseline.json"; then
+            cp "$RUNNER_TEMP/benchmark_baseline.json" tests/benchmark/.benchmark_baseline.json
+            echo "Baseline: ci-benchmark-baseline @ $(git rev-parse --short FETCH_HEAD)"
+          else
+            echo "::notice::ci-benchmark-baseline not available; using the committed baseline"
+          fi
+
       - name: Darwin Gate - Regression Check
         if: always() && hashFiles('benchmark.json') != ''
         run: make benchmark-darwin-gate
@@ -465,12 +478,20 @@ jobs:
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
         run: |
           if [ -f benchmark.json ]; then
-            cp benchmark.json tests/benchmark/.benchmark_baseline.json
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add tests/benchmark/.benchmark_baseline.json
-            git diff --cached --quiet || git commit -m "chore(ci): auto-update benchmark baseline [skip ci]"
-            git push || echo "::warning::Could not push baseline update"
+            # Keep exactly one orphan commit on ci-benchmark-baseline: the branch
+            # is bot-owned state, so it is force-pushed rather than accumulating
+            # a 7 MB blob per merge.
+            WT="$RUNNER_TEMP/baseline-worktree"
+            git worktree add --detach "$WT" HEAD
+            cd "$WT"
+            git checkout --orphan "baseline-update-${GITHUB_SHA::8}"
+            git rm -rqf .
+            cp "$GITHUB_WORKSPACE/benchmark.json" benchmark_baseline.json
+            git add benchmark_baseline.json
+            git -c user.name="github-actions[bot]" \
+                -c user.email="github-actions[bot]@users.noreply.github.com" \
+                commit -qm "chore(ci): benchmark baseline from ${GITHUB_SHA::8}"
+            git push --force origin HEAD:refs/heads/ci-benchmark-baseline || echo "::warning::Could not push baseline update"
           fi
 
   # ============================================================================
