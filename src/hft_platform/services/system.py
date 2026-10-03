@@ -8,7 +8,15 @@ from typing import Any, Dict, Optional
 
 from structlog import get_logger
 
-from hft_platform.contracts.strategy import IntentType
+from hft_platform.contracts.strategy import (
+    IntentType,
+    RiskFeedback,
+    Side,
+    typed_intent_id,
+    typed_intent_side,
+    typed_intent_strategy_id,
+    typed_intent_symbol,
+)
 from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceCodec
 from hft_platform.core.session_hooks import SessionHookManager
@@ -923,6 +931,43 @@ class HFTSystem:
         # nothing. Resolving a recovery halt is: fix the checkpoint, clear the
         # latch, restart.
         self.storm_guard.set_kill_switch_hold(True)
+
+    def _release_halt_drained(self, item: object, reason: str = "HALT_DRAINED") -> None:
+        """Tell the owning strategy that a drained intent/command was dropped.
+
+        The HALT drains discard work without telling anyone. A strategy that
+        counted the item as in flight (R47's ``_pending_sell``) then holds the
+        slot forever: 2026-09-29 two drained reduce-only SELLs left
+        ``pending_sell=2`` and ``can_sell`` False for 79 h, until a restart.
+        ``side`` is mandatory in the feedback; without it ``on_risk_feedback``
+        refuses to release (Bug 9).
+        """
+        queue = getattr(self.strategy_runner, "_rejection_queue", None)
+        if queue is None:
+            return
+        # OrderCommand / IntentEnvelope wrap the intent; a typed envelope wraps
+        # the typed tuple as ``payload``.
+        intent = getattr(item, "intent", None)
+        if intent is None:
+            intent = getattr(item, "payload", item)
+        side = typed_intent_side(intent)
+        strategy_id = typed_intent_strategy_id(intent)
+        if side is None or not strategy_id:
+            logger.warning("halt_drain_feedback_unaddressable", reason=reason, item_type=type(item).__name__)
+            return
+        try:
+            queue.put_nowait(
+                RiskFeedback(
+                    intent_id=typed_intent_id(intent),
+                    strategy_id=strategy_id,
+                    symbol=typed_intent_symbol(intent),
+                    reason_code=reason,
+                    timestamp_ns=timebase.now_ns(),
+                    side=Side(side),
+                )
+            )
+        except (asyncio.QueueFull, ValueError):
+            logger.warning("halt_drain_feedback_dropped", strategy_id=strategy_id, reason=reason)
 
     def _halt_status_log_kind(self, now_mono: float, interval_s: float = 60.0) -> str:
         """Decide what this HALT tick should log: ``entry``, ``heartbeat`` or ``""``.
@@ -2237,6 +2282,7 @@ class HFTSystem:
                             _requeue.append(item)
                         else:
                             risk_drained += 1
+                            self._release_halt_drained(item)
                     except asyncio.QueueEmpty:
                         break
                 for item in _requeue:
@@ -2270,6 +2316,7 @@ class HFTSystem:
                             _ic_requeue.append(envelope)
                         else:
                             _ic_drained += 1
+                            self._release_halt_drained(envelope)
                     # Re-inject safety envelopes via the internal queue (envelope already wrapped)
                     for envelope in _ic_requeue:
                         try:
@@ -2300,6 +2347,7 @@ class HFTSystem:
                             _cmd_requeue.append(cmd)
                         else:
                             drained_count += 1
+                            self._release_halt_drained(cmd)
                     except asyncio.QueueEmpty:
                         break
                 # Safety cmds dispatched directly — execute() handles running=False
