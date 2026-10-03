@@ -3,9 +3,9 @@
 # DO NOT EDIT BY HAND. Regenerate with:
 #   uv run python scripts/ops/generate_locked_compose.py
 #
-# Generated:        2026-08-27T02:08:38Z (UTC)
-# Git SHA:          8994e6b6
-# Base digest:      014d732cfb5dd296  (docker-compose.yml)
+# Generated:        2026-10-03T06:18:19Z (UTC)
+# Git SHA:          3e11fd95
+# Base digest:      b203fa5e5f88411c  (docker-compose.yml)
 # Prod digest:      15529f83b16a6a9e  (docker-compose.production.yml)
 # Volumes stripped: 15 (broad source-path bind mounts)
 #
@@ -386,7 +386,7 @@ services:
     command:
     - sh
     - -lc
-    - HFT_RUNTIME_ROLE=engine HFT_RECORDER_MODE=${HFT_ENGINE_RECORDER_MODE:-wal_first} python -m hft_platform.main
+    - HFT_RUNTIME_ROLE=engine HFT_RECORDER_MODE=${HFT_ENGINE_RECORDER_MODE:-wal_first} exec python -m hft_platform.main
     container_name: hft-engine
     depends_on:
       clickhouse:
