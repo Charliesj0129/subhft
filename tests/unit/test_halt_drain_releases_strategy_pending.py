@@ -123,4 +123,4 @@ def test_full_rejection_queue_drops_the_feedback_without_raising():
 
 
 def test_missing_rejection_queue_is_a_noop():
-    _system(None)._release_halt_drained(_command(Side.SELL))
+    assert _system(None)._release_halt_drained(_command(Side.SELL)) is None
