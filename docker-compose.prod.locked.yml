@@ -3,9 +3,9 @@
 # DO NOT EDIT BY HAND. Regenerate with:
 #   uv run python scripts/ops/generate_locked_compose.py
 #
-# Generated:        2026-10-03T06:18:19Z (UTC)
-# Git SHA:          3e11fd95
-# Base digest:      b203fa5e5f88411c  (docker-compose.yml)
+# Generated:        2026-10-03T11:35:35Z (UTC)
+# Git SHA:          02d35df4
+# Base digest:      1713fbbf8bdca4ea  (docker-compose.yml)
 # Prod digest:      15529f83b16a6a9e  (docker-compose.production.yml)
 # Volumes stripped: 15 (broad source-path bind mounts)
 #
@@ -310,6 +310,8 @@ services:
         GIT_SHA: ${HFT_GIT_SHA:-unknown}
       context: .
       dockerfile: Dockerfile
+    cap_drop:
+    - ALL
     command:
     - sh
     - -lc
@@ -335,6 +337,12 @@ services:
     - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set in .env}
     - LOG_LEVEL=${LOG_LEVEL:-INFO}
     - TZ=Asia/Taipei
+    - SHIOAJI_API_KEY=
+    - SHIOAJI_SECRET_KEY=
+    - SHIOAJI_PERSON_ID=
+    - SHIOAJI_ACCOUNT=
+    - CA_PASSWORD=
+    - CA_CERT_PATH=
     healthcheck:
       interval: 30s
       retries: 3
@@ -346,6 +354,8 @@ services:
     networks:
       default: null
     restart: unless-stopped
+    security_opt:
+    - no-new-privileges:true
     ulimits:
       core: 4294967296
       memlock: -1
@@ -570,6 +580,8 @@ services:
         GIT_SHA: ${HFT_GIT_SHA:-unknown}
       context: .
       dockerfile: Dockerfile
+    cap_drop:
+    - ALL
     command:
     - sh
     - -lc
@@ -602,6 +614,12 @@ services:
     - HFT_MONITOR_FEED_GAP_WARN_S=${HFT_MONITOR_FEED_GAP_WARN_S:-5}
     - HFT_MONITOR_WAL_RATE_WARN=${HFT_MONITOR_WAL_RATE_WARN:-1}
     - HFT_MONITOR_INGEST_RATE_MIN=${HFT_MONITOR_INGEST_RATE_MIN:-1}
+    - SHIOAJI_API_KEY=
+    - SHIOAJI_SECRET_KEY=
+    - SHIOAJI_PERSON_ID=
+    - SHIOAJI_ACCOUNT=
+    - CA_PASSWORD=
+    - CA_CERT_PATH=
     healthcheck:
       interval: 30s
       retries: 3
