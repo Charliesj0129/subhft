@@ -83,6 +83,18 @@ def test_init_picks_up_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
     assert mgr._retain_days == 14
 
 
+def test_retention_defaults_to_seven_days_without_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("HFT_BACKUP_RETAIN_DAYS", raising=False)
+
+    assert BackupManager(backup_dir="/backups")._retain_days == 7
+
+
+def test_backup_script_overrides_container_retention_with_three_days() -> None:
+    script = (Path(__file__).resolve().parents[2] / "scripts" / "clickhouse_backup.sh").read_text()
+
+    assert 'HFT_BACKUP_RETAIN_DAYS="${HFT_BACKUP_RETAIN_DAYS:-3}"' in script
+
+
 def test_init_explicit_args_override_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HFT_CLICKHOUSE_HOST", "env-host")
     mgr = BackupManager(
