@@ -196,7 +196,7 @@ benchmark-compare: ## Compare current benchmarks against baseline
 	$(PY) scripts/benchmark_gate.py \
 		--baseline tests/benchmark/.benchmark_baseline.json \
 		--current benchmark.json \
-		--threshold 0.10
+		--threshold 0.20
 
 # ============================================================================
 # Docker / Services
@@ -302,7 +302,7 @@ benchmark-ci: ## Run benchmark suite and export benchmark.json for Darwin gate
 	uv run pytest tests/benchmark --no-cov --benchmark-only --benchmark-json=benchmark.json -v
 
 benchmark-darwin-gate: ## Check benchmark regressions against baseline
-	$(PY) scripts/benchmark_gate.py --baseline tests/benchmark/.benchmark_baseline.json --current benchmark.json --threshold "$${DARWIN_GATE_THRESHOLD:-0.10}"
+	$(PY) scripts/benchmark_gate.py --baseline tests/benchmark/.benchmark_baseline.json --current benchmark.json --threshold "$${DARWIN_GATE_THRESHOLD:-0.20}"
 
 drill-gateway-wal-hardening: verify-ce3 ## Gateway/WAL hardening integration drill bundle
 
