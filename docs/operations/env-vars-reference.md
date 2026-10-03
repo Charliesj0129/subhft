@@ -47,7 +47,7 @@ Base YAML (config/base/main.yaml)
 | `HFT_SUPERVISOR_QUEUE_LOG_EVERY_S` | `30.0` | queue 深度日誌記錄頻率 | 除錯時縮短至 5s |
 | `HFT_MTM_INCOMPLETE_REPEAT_TICKS` | `3600` | mark-to-market 無法定價時，重覆提醒之間的 supervisor tick 數（1 Hz，故預設為每小時一次）；進入、標的變動、恢復三個邊緣一律立即記錄 | `0` = 只記錄邊緣，不重覆提醒 |
 
-**Runbook 參考**: [Section 9 — Supervisor restart](../runbooks.md#9-service-task-crash-supervisor-restart)
+**Runbook 參考**: [Section 9 — Supervisor restart](../runbooks/quick-reference.md#9-service-task-crash-supervisor-restart)
 
 ---
 
@@ -68,7 +68,7 @@ Base YAML (config/base/main.yaml)
 | `HFT_FEED_SESSION_STALE_TAKEOVER_TTL_S` | `0` | >0 時，TTL 低於此值的 stale lease 可被清除並接管 | 0 = 停用（安全預設） |
 | `HFT_IMAGE` | `hft-platform:latest` | docker-compose 使用的 hft-engine image tag（`docker-compose.yml:13`） | 部署特定版本時設為 image:tag；rollback 時 `unset` 回 latest |
 
-**Runbook 參考**: [Section 12 — Redis Session Lease 衝突](../runbooks.md#12-redis-session-lease-衝突)
+**Runbook 參考**: [Section 12 — Redis Session Lease 衝突](../runbooks/quick-reference.md#12-redis-session-lease-衝突)
 
 ---
 
@@ -86,7 +86,7 @@ Base YAML (config/base/main.yaml)
 
 **告警**: `queue_depth[raw]` 持續 >90% 容量 → 消費者落後，考慮增大或優化消費者。
 
-**Runbook 參考**: [Section 6 — Queue Depth 爆增](../runbooks.md#6-queue-depth-爆增--event-loop-lag)
+**Runbook 參考**: [Section 6 — Queue Depth 爆增](../runbooks/quick-reference.md#6-queue-depth-爆增--event-loop-lag)
 
 ---
 
@@ -121,7 +121,7 @@ Base YAML (config/base/main.yaml)
 | `HFT_CH_MAX_CONCURRENT_INSERTS` | `6` | 同時進行 insert 的上限 | CH 不穩時先降至 1-2 |
 | `HFT_CH_INSERT_CHUNK_ROWS` | `0` | >0 時啟用 chunked insert（每批 row 數） | 大批次回補時可設 256/512 |
 
-**Runbook 參考**: [Section 4 — ClickHouse MEMORY_LIMIT_EXCEEDED](../runbooks.md#4-clickhouse-memory_limit_exceeded), [ch-mv-pressure-tuning](../runbooks/ch-mv-pressure-tuning.md)
+**Runbook 參考**: [Section 4 — ClickHouse MEMORY_LIMIT_EXCEEDED](../runbooks/quick-reference.md#4-clickhouse-memory_limit_exceeded), [ch-mv-pressure-tuning](../runbooks/ch-mv-pressure-tuning.md)
 
 ### 6.4 WAL Loader 運作
 
@@ -149,7 +149,7 @@ Base YAML (config/base/main.yaml)
 | `HFT_CORRUPT_RETENTION_DAYS` | `30` | 損壞檔案保留天數 | — |
 | `HFT_TS_MAX_FUTURE_S` | `5` | 時間戳未來偏移容許（秒）；超過則拒絕 | — |
 
-**Runbook 參考**: [Section 5 — WAL 堆積](../runbooks.md#5-recorderwal-堆積), [Section 13 — WAL 磁碟滿](../runbooks.md#13-wal-磁碟滿diskpressurelevel--3)
+**Runbook 參考**: [Section 5 — WAL 堆積](../runbooks/quick-reference.md#5-recorderwal-堆積), [Section 13 — WAL 磁碟滿](../runbooks/quick-reference.md#13-wal-磁碟滿diskpressurelevel--3)
 
 ### 6.6 WAL 磁碟壓力保護
 
@@ -167,7 +167,7 @@ Base YAML (config/base/main.yaml)
 > （`recorder/disk_monitor.py`）使用，是唯一會真的**丟行情資料**的那組。調錯那組
 > 不會有任何效果，而且問題會照舊發生。
 
-**Runbook 參考**: [recorder-wal-disk-pressure](../runbooks/recorder-wal-disk-pressure.md), [Section 13 — WAL 磁碟滿](../runbooks.md#13-wal-磁碟滿diskpressurelevel--3)
+**Runbook 參考**: [recorder-wal-disk-pressure](../runbooks/recorder-wal-disk-pressure.md), [Section 13 — WAL 磁碟滿](../runbooks/quick-reference.md#13-wal-磁碟滿diskpressurelevel--3)
 
 ---
 
@@ -200,7 +200,7 @@ Base YAML (config/base/main.yaml)
 
 **Runbook 參考**: [feed-reconnect](../runbooks/feed-reconnect.md)
 
-**Runbook 參考**: [Section 1 — Feed Gap](../runbooks.md#1-feed-gap--無行情), [Section 2 — Shioaji API latency](../runbooks.md#2-shioaji-api-latency-激增), [Section 14 — Quote Schema 不符](../runbooks.md#14-quote-schema-不符version-mismatch), [shioaji-contract-refresh-operations](../runbooks/shioaji-contract-refresh-operations.md)
+**Runbook 參考**: [Section 1 — Feed Gap](../runbooks/quick-reference.md#1-feed-gap--無行情), [Section 2 — Shioaji API latency](../runbooks/quick-reference.md#2-shioaji-api-latency-激增), [Section 15 — Quote Schema 不符](../runbooks/quick-reference.md#15-quote-schema-不符version-mismatch), [shioaji-contract-refresh-operations](../runbooks/shioaji-contract-refresh-operations.md)
 
 ---
 
@@ -297,7 +297,7 @@ Shadow deployment note:
 | `HFT_DIAG_TRACE_SAMPLE_EVERY` | `100` | 每 N 事件採樣一筆決策 trace | 流量大時可提高 |
 | `HFT_ALPHA_AUDIT_ENABLED` | `0` | `1` = 啟用 Alpha 審計模式（release gate 必須設置） | `release-first-ops-gate` 前必須設為 `1` |
 
-**Runbook 參考**: [Section 8 — 時間偏移](../runbooks.md#8-時間偏移--未來時間資料), [incident-diagnostics](../runbooks/incident-diagnostics.md)
+**Runbook 參考**: [Section 8 — 時間偏移](../runbooks/quick-reference.md#8-時間偏移--未來時間資料), [incident-diagnostics](../runbooks/incident-diagnostics.md)
 
 ---
 
@@ -419,10 +419,10 @@ Slice B 引入 Maker 策略 backtest 的殘餘部位 MtM、佇列校準、成本
 
 | 症狀 | 優先檢查 | Runbook |
 |---|---|---|
-| Feed 停滯 | `HFT_QUOTE_NO_DATA_S`, `HFT_QUOTE_VERSION` | [Section 1](../runbooks.md#1-feed-gap--無行情) |
-| Redis 衝突 | `HFT_FEED_SESSION_OWNER_TTL_S`, `HFT_RUNTIME_INSTANCE_ID` | [Section 12](../runbooks.md#12-redis-session-lease-衝突) |
-| WAL 磁碟滿 | `HFT_ARCHIVE_RETENTION_DAYS`, `HFT_WAL_SIZE_CRITICAL_MB` | [Section 13](../runbooks.md#13-wal-磁碟滿diskpressurelevel--3) |
-| CH INSERT 失敗 | `HFT_INSERT_MAX_RETRIES`, `HFT_INSERT_BASE_DELAY_S` | [Section 4](../runbooks.md#4-clickhouse-memory_limit_exceeded) |
-| Queue 爆滿 | `HFT_RAW_QUEUE_SIZE`, `HFT_RECORDER_QUEUE_SIZE` | [Section 6](../runbooks.md#6-queue-depth-爆增--event-loop-lag) |
-| Supervisor 重啟風暴 | `HFT_TASK_RESTART_BACKOFF_MAX_S` | [Section 9](../runbooks.md#9-service-task-crash-supervisor-restart) |
-| Quote schema 不符 | `HFT_QUOTE_VERSION`, `HFT_QUOTE_VERSION_STRICT` | [Section 14](../runbooks.md#14-quote-schema-不符version-mismatch) |
+| Feed 停滯 | `HFT_QUOTE_NO_DATA_S`, `HFT_QUOTE_VERSION` | [Section 1](../runbooks/quick-reference.md#1-feed-gap--無行情) |
+| Redis 衝突 | `HFT_FEED_SESSION_OWNER_TTL_S`, `HFT_RUNTIME_INSTANCE_ID` | [Section 12](../runbooks/quick-reference.md#12-redis-session-lease-衝突) |
+| WAL 磁碟滿 | `HFT_ARCHIVE_RETENTION_DAYS`, `HFT_WAL_SIZE_CRITICAL_MB` | [Section 13](../runbooks/quick-reference.md#13-wal-磁碟滿diskpressurelevel--3) |
+| CH INSERT 失敗 | `HFT_INSERT_MAX_RETRIES`, `HFT_INSERT_BASE_DELAY_S` | [Section 4](../runbooks/quick-reference.md#4-clickhouse-memory_limit_exceeded) |
+| Queue 爆滿 | `HFT_RAW_QUEUE_SIZE`, `HFT_RECORDER_QUEUE_SIZE` | [Section 6](../runbooks/quick-reference.md#6-queue-depth-爆增--event-loop-lag) |
+| Supervisor 重啟風暴 | `HFT_TASK_RESTART_BACKOFF_MAX_S` | [Section 9](../runbooks/quick-reference.md#9-service-task-crash-supervisor-restart) |
+| Quote schema 不符 | `HFT_QUOTE_VERSION`, `HFT_QUOTE_VERSION_STRICT` | [Section 15](../runbooks/quick-reference.md#15-quote-schema-不符version-mismatch) |

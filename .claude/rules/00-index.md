@@ -1,1 +1,1 @@
-/home/charlie/hft_platform/.agent/rules/00-index.md
+../../.agent/rules/00-index.md

@@ -24,9 +24,9 @@ Evaluation definitions for hot-path components. Each eval contains:
 | Normalizer      | `feed_adapter/normalizer.py` | < 50us (Python) / < 5us (Rust) | [normalizer.md](normalizer.md)           |
 | LOB Engine      | `feed_adapter/lob_engine.py` | < 100us per update             | [lob-engine.md](lob-engine.md)           |
 | Risk Guard      | `risk/`                      | < 10us per validation          | [risk-guard.md](risk-guard.md)           |
-| Strategy Runner | `strategy/runner.py`         | < 50us dispatch overhead       | [strategy-runner.md](strategy-runner.md) |
-| Gateway         | `gateway/service.py`         | < 100us pipeline               | [gateway.md](gateway.md)                 |
-| Recorder        | `recorder/worker.py`         | < 10us batcher add             | [recorder.md](recorder.md)               |
+| Strategy Runner | `strategy/runner.py`         | < 50us dispatch overhead       | _not yet written_                        |
+| Gateway         | `gateway/service.py`         | < 100us pipeline               | _not yet written_                        |
+| Recorder        | `recorder/worker.py`         | < 10us batcher add             | _not yet written_                        |
 
 ## How to Use
 
