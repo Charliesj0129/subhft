@@ -1,7 +1,19 @@
 # syntax=docker/dockerfile:1.7
 
+# Reproducibility contract (do not weaken without reading this):
+#   * base image      pinned by digest (Dependabot `docker` bumps tag + digest)
+#   * Python packages installed ONLY from a hashed requirements file that the
+#     builder stage derives from uv.lock with `uv export --locked` (the build
+#     fails if uv.lock is stale against pyproject.toml), and installed with
+#     `--require-hashes`. uv.lock is the single source: there is no second
+#     committed file that could drift from it.
+#   * Rust crates     built with `--locked` against the committed Cargo.lock
+#   * Rust toolchain  exact version, installer verified by sha256
+#   * maturin         pinned with hashes (docker/build/requirements.txt)
+# Not pinned: Debian packages from apt (bookworm security updates are wanted).
+
 # Build stage
-FROM python:3.12-slim-bookworm as builder
+FROM python:3.12-slim-bookworm@sha256:54c85f3c47607a77f32adec749d3c81d1348bf25833671f512b26a9b6d778cb3 AS builder
 
 WORKDIR /app
 
@@ -13,33 +25,28 @@ RUN apt-get update \
         pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Rust toolchain (needed for PyO3 extensions)
-# Download and verify rustup installer
-RUN curl -sSf https://sh.rustup.rs -o /tmp/rustup-init.sh \
-    && echo "Verifying rustup installer..." \
-    && sh /tmp/rustup-init.sh -y --default-toolchain stable \
-    && rm /tmp/rustup-init.sh
+# Install a pinned Rust toolchain (needed for PyO3 extensions). The rustup
+# installer is pinned by version and verified against a committed sha256 before
+# it is executed; rustup then verifies the toolchain it downloads itself.
+ARG RUSTUP_VERSION=1.28.2
+ARG RUSTUP_SHA256_X86_64=20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c
+ARG RUSTUP_SHA256_AARCH64=e3853c5a252fca15252d07cb23a1bdd9377a8c6f3efa01531109281ae47f841c
+ARG RUST_VERSION=1.91.1
+RUN set -eux; \
+    case "$(uname -m)" in \
+        x86_64)  triple=x86_64-unknown-linux-gnu;  sha="${RUSTUP_SHA256_X86_64}" ;; \
+        aarch64) triple=aarch64-unknown-linux-gnu; sha="${RUSTUP_SHA256_AARCH64}" ;; \
+        *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL -o /tmp/rustup-init \
+        "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/${triple}/rustup-init"; \
+    echo "${sha}  /tmp/rustup-init" | sha256sum -c -; \
+    chmod +x /tmp/rustup-init; \
+    /tmp/rustup-init -y --no-modify-path --profile minimal --default-toolchain "${RUST_VERSION}"; \
+    rm /tmp/rustup-init
 ENV PATH="/root/.cargo/bin:${PATH}"
 ENV CARGO_HOME=/root/.cargo \
     CARGO_TARGET_DIR=/app/.cargo-target
-
-# Copy dependency manifests first for better Docker layer caching
-COPY pyproject.toml ./
-RUN mkdir -p rust_core
-COPY rust_core/Cargo.toml ./rust_core/Cargo.toml
-COPY rust_core/src/lib.rs ./rust_core/src/lib.rs
-COPY rust_core/benches/ ./rust_core/benches/
-
-# Generate a simple runtime requirements.txt from pyproject dependencies.
-# This avoids an extra `uv` bootstrap download in constrained build environments.
-RUN python - <<'PY'
-import tomllib
-from pathlib import Path
-
-data = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
-deps = data.get("project", {}).get("dependencies", [])
-Path("requirements.txt").write_text("".join(f"{dep}\n" for dep in deps), encoding="utf-8")
-PY
 
 # Cargo network tuning for slow/unstable links
 ENV CARGO_NET_RETRY=10 \
@@ -48,30 +55,36 @@ ENV CARGO_NET_RETRY=10 \
     CARGO_HTTP_LOW_SPEED_TIME=120 \
     CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse
 
-# Install maturin and prefetch Rust dependencies using cache mounts.
-# We keep this explicit prefetch step so progress is visible in Docker logs,
-# then run `maturin build` in offline mode to avoid hanging-looking cargo
-# metadata/index updates during the build step.
-RUN --mount=type=cache,target=/root/.cache/pip \
-    --mount=type=cache,target=/root/.cargo/registry \
-    --mount=type=cache,target=/root/.cargo/git \
-    pip install --no-cache-dir --timeout 600 --retries 10 maturin \
-    && cargo fetch --manifest-path rust_core/Cargo.toml -v
+# maturin and uv, pinned with hashes.
+COPY docker/build/requirements.txt /tmp/build-requirements.txt
+RUN pip install --no-cache-dir --require-hashes --timeout 600 --retries 10 \
+        -r /tmp/build-requirements.txt
 
-# Copy remaining sources after toolchain/dependency prefetch so code changes
-# don't invalidate the cargo prefetch layer.
+# Derive the hashed runtime requirements from uv.lock. `--locked` refuses a lock
+# that does not match pyproject.toml. The bot (python-telegram-bot) and monitor
+# (rich) extras are baked in; dev and research groups are not.
+COPY pyproject.toml uv.lock ./
+RUN uv export --locked --no-dev --no-emit-project --extra bot --extra monitor \
+        --format requirements-txt --no-header -o /app/requirements.lock.txt
+
+# The workspace root manifest carries [profile.release] (lto, codegen-units=1);
+# without it the wheel would be built with different optimisation settings than
+# `make build-rust`. Cargo.lock pins every crate.
+COPY Cargo.toml Cargo.lock ./
 COPY rust_core/ ./rust_core/
-COPY src/ ./src/
 
-# Build Rust extension wheel using warm caches and offline cargo mode.
-# This avoids a second network/index roundtrip inside `maturin`.
+# Fetch and build in ONE RUN. They used to be two RUNs, with the fetch result
+# held only in a cache mount and the build run offline: when the fetch layer was
+# a build-cache hit but the cache mount had been pruned, the offline build found
+# an empty registry and failed. One RUN cannot get out of step with itself.
 RUN --mount=type=cache,target=/root/.cargo/registry \
     --mount=type=cache,target=/root/.cargo/git \
     --mount=type=cache,target=/app/.cargo-target \
-    CARGO_NET_OFFLINE=true maturin build --release --manifest-path rust_core/Cargo.toml -o /tmp/wheels
+    cargo fetch --locked --manifest-path rust_core/Cargo.toml \
+    && maturin build --release --locked --manifest-path rust_core/Cargo.toml -o /tmp/wheels
 
 # Runtime stage
-FROM python:3.12-slim-bookworm
+FROM python:3.12-slim-bookworm@sha256:54c85f3c47607a77f32adec749d3c81d1348bf25833671f512b26a9b6d778cb3
 
 WORKDIR /app
 
@@ -99,24 +112,27 @@ RUN apt-get update \
 # Default container timezone (override with TZ env if needed)
 ENV TZ=Asia/Taipei
 
-# Copy source code first (needed for -e . install)
+# Copy source code first
 COPY pyproject.toml .
-COPY --from=builder /app/requirements.txt .
+COPY --from=builder /app/requirements.lock.txt ./requirements.lock.txt
 COPY --from=builder /tmp/wheels/*.whl /tmp/wheels/
 COPY src/ ./src/
 COPY config/ ./config/
 COPY scripts/ ./scripts/
 
-# Install dependencies into system python (in container)
+# Install dependencies into system python (in container) from the hashed lock.
+# The lock already contains the bot (python-telegram-bot) and monitor (rich)
+# extras and every transitive dependency, so nothing is resolved at build time:
+# `--no-deps` makes pip install exactly the listed files and `--require-hashes`
+# refuses any file whose sha256 is not in the lock. `pip check` fails the build
+# if the installed set is internally inconsistent.
 ENV PIP_DEFAULT_TIMEOUT=600
-RUN pip install --no-cache-dir --timeout 600 --retries 10 -r requirements.txt
-# Install Rust extension wheel (fast-path helpers)
-RUN pip install --no-cache-dir /tmp/wheels/*.whl
-# Install optional bot + monitor dependencies (Telegram Bot interactive service;
-# rich backs hft_platform.monitor imports pulled in by the engine's redis live
-# publisher — requirements.txt is generated from project.dependencies only, so
-# optional groups must be baked here explicitly).
-RUN pip install --no-cache-dir "python-telegram-bot[job-queue]>=21.0" "matplotlib>=3.8" "rich>=13.0"
+RUN pip install --no-cache-dir --timeout 600 --retries 10 \
+        --require-hashes --no-deps --only-binary=:all: -r requirements.lock.txt \
+    && pip check
+# Install Rust extension wheel (fast-path helpers). Built above from Cargo.lock;
+# its own dependencies are all in the lock, so no resolution happens here either.
+RUN pip install --no-cache-dir --no-deps /tmp/wheels/*.whl && pip check
 
 # Create directories for data/wal and set permissions
 RUN mkdir -p .wal data && chown -R hftuser:hftuser /app
