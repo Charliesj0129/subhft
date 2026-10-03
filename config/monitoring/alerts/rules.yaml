@@ -1363,7 +1363,7 @@ groups:
 # noise.
 #
 # Deliberately no alert rule here. An alert needs a threshold, and the
-# order_rtt thresholds (500 ms WARM / 1000 ms STORM, RiskThresholds in
+# order_rtt thresholds (1500 ms WARM / 2500 ms STORM since 2026-10-03; were 500/1000, RiskThresholds in
 # src/hft_platform/risk/storm_guard.py) are a live-impacting policy decision
 # these recordings exist to inform, not to pre-empt.
 # ---------------------------------------------------------------------------
