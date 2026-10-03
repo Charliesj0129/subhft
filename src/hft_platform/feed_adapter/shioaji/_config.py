@@ -7,6 +7,7 @@ and shareable across submodules without re-parsing.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 from dataclasses import dataclass
@@ -165,6 +166,25 @@ class ShioajiClientConfig:
     config_path: str = "config/base/symbols.yaml"
 
 
+def session_lock_id() -> str:
+    """The identifier part of the session-lock file name (``shioaji_session_<id>.lock``).
+
+    ``SHIOAJI_ACCOUNT`` is an operator-chosen label and is used as written. When it is
+    unset the name used to fall back to ``SHIOAJI_PERSON_ID`` and then ``SHIOAJI_API_KEY``
+    verbatim, which put a national ID (or the first 64 characters of the API key) into a
+    file name under ``.wal/.locks/``: visible in directory listings, backups and archives
+    of that tree. Those two are credentials, so they are hashed: the name stays stable for
+    a given credential, differs between credentials, and reveals neither.
+    """
+    account = os.getenv("SHIOAJI_ACCOUNT")
+    if account:
+        return re.sub(r"[^a-zA-Z0-9_.-]+", "_", str(account).strip())[:64] or "default"
+    secret = os.getenv("SHIOAJI_PERSON_ID") or os.getenv("SHIOAJI_API_KEY")
+    if secret:
+        return "id-" + hashlib.sha256(secret.strip().encode("utf-8")).hexdigest()[:16]
+    return "default"
+
+
 def load_shioaji_config(
     settings: dict[str, Any] | None = None,
     *,
@@ -219,10 +239,7 @@ def load_shioaji_config(
     quote_version = "v1" if quote_version_mode in {"v1", "auto"} else "v0"
 
     # --- Session lock ---
-    lock_id_raw = (
-        os.getenv("SHIOAJI_ACCOUNT") or os.getenv("SHIOAJI_PERSON_ID") or os.getenv("SHIOAJI_API_KEY") or "default"
-    )
-    lock_id = re.sub(r"[^a-zA-Z0-9_.-]+", "_", str(lock_id_raw).strip())[:64] or "default"
+    lock_id = session_lock_id()
     lock_dir = os.getenv("HFT_SHIOAJI_SESSION_LOCK_DIR", ".wal/.locks")
     session_lock_path = str(Path(lock_dir) / f"shioaji_session_{lock_id}.lock")
 
