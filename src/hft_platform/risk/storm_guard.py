@@ -79,8 +79,13 @@ class RiskThresholds:
     #
     # Override per host with ``HFT_STORMGUARD_ORDER_RTT_WARM_US`` /
     # ``..._STORM_US``; 0 disarms either side independently.
-    order_rtt_warm_us: int = 500_000  # 500 ms — 2.7x live P99 (185.4 ms)
-    order_rtt_storm_us: int = 1_000_000  # 1000 ms — 5.4x live P99
+    # 2026-10-03: widened 500/1000 ms -> 1500/2500 ms by the operator. The
+    # 500/1000 ms pair was sized off the April P99 (185 ms); live tail p99 over
+    # traffic windows is now 1.7-2.3 s, so the breaker escalated ~100x/day on
+    # a broker that was merely slow, and R47 sat reduce-only. The paragraph
+    # above explains the original sizing and is kept for history.
+    order_rtt_warm_us: int = 1_500_000  # 1500 ms
+    order_rtt_storm_us: int = 2_500_000  # 2500 ms
 
     feed_gap_storm_s: float = 1.0  # precision-time (triggers STORM, not HALT)
 
