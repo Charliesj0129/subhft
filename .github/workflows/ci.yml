@@ -24,7 +24,7 @@ on:
         default: false
         type: boolean
   schedule:
-    - cron: "30 18 * * *" # Daily UTC nightly perf drill
+    - cron: "30 18 * * 1" # Weekly (Mon) UTC perf + recorder drills; PRs run the perf gates before merge
 
 concurrency:
   group: ci-${{ github.ref }}

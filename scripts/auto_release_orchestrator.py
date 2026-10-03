@@ -1,6 +1,6 @@
 """Canary release orchestrator — evaluates promotion readiness on merge.
 
-Called by CI (canary-deploy.yml) after main branch merge.
+Run manually (the canary-deploy.yml workflow that called it was removed 2026-10-03).
 Checks latest commit for feat:/fix: prefix, evaluates gate readiness,
 and creates canary promotion config if approved.
 

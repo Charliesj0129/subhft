@@ -937,7 +937,11 @@ def bench_feature_engine_python_vs_rust_parity_mismatch_rate(n: int = 8_000) -> 
         evt, stats = _feature_bench_event_stats(i + 1, bid, bq, ask, aq)
         p = py_eng.process_lob_update(evt, stats, local_ts_ns=i + 1)
         r = rust_eng.process_lob_update(evt, stats, local_ts_ns=i + 1)
-        if p is None or r is None or p.values != r.values:
+        # The Rust backend computes only the 16 v1 features (the engine logs
+        # rust_feature_backend_v1_gap); Python returns the full v2/v3 vector.
+        # Compare the prefix Rust actually produces, otherwise the lengths alone
+        # make every event a "mismatch" (this gate read 1.000 on every run).
+        if p is None or r is None or tuple(p.values[: len(r.values)]) != tuple(r.values):
             mismatches += 1
     return mismatches / max(1, n)
 
