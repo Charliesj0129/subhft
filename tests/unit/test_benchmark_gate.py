@@ -86,3 +86,15 @@ def test_main_skips_when_baseline_absent(tmp_path: Path, capsys):
 
     assert main(["--baseline", str(tmp_path / "missing.json"), "--current", str(current)]) == 0
     assert "skipping" in capsys.readouterr().out
+
+
+def test_default_threshold_tolerates_ten_percent_microbenchmark_noise(tmp_path: Path, capsys):
+    baseline = _bench_json(tmp_path / "base.json", {"a": 0.000019, "b": 0.000016, "c": 0.000011, "d": 0.000001})
+    noisy = _bench_json(tmp_path / "noisy.json", {"a": 0.000021, "b": 0.000016, "c": 0.000011, "d": 0.000001})
+    regressed = _bench_json(tmp_path / "bad.json", {"a": 0.000019 * 1.35, "b": 0.000016, "c": 0.000011, "d": 0.000001})
+
+    assert main(["--baseline", str(baseline), "--current", str(noisy)]) == 0
+    assert "PASSED" in capsys.readouterr().out
+
+    assert main(["--baseline", str(baseline), "--current", str(regressed)]) == 1
+    assert "FAILED" in capsys.readouterr().out

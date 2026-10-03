@@ -20,7 +20,7 @@ Usage:
     python scripts/benchmark_gate.py \
         --baseline tests/benchmark/.benchmark_baseline.json \
         --current benchmark.json \
-        --threshold 0.10
+        --threshold 0.20
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ import sys
 from pathlib import Path
 from statistics import median
 
-REGRESSION_THRESHOLD = 0.10  # 10% default, on runner-speed-normalized change
+REGRESSION_THRESHOLD = 0.20  # 20% default, on runner-speed-normalized change (10% sat inside the us-scale noise floor)
 CATASTROPHIC_THRESHOLD = 2.0  # +200% raw change fails even if uniform across benchmarks
 
 
