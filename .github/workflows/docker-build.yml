@@ -64,22 +64,28 @@ jobs:
           uv export --locked --no-dev --no-emit-project --extra bot --extra monitor \
             --format requirements-txt --no-header > locked.txt
           docker run --rm --entrypoint python hft-platform:ci -m pip freeze > installed.txt
-          python3 - <<'PY'
+          uv run --no-project --with packaging python - <<'PY'
           import re, sys
+
+          from packaging.markers import Marker
 
           def norm(name: str) -> str:
               return re.sub(r"[-_.]+", "-", name).lower()
 
-          def pins(path: str, pattern: str) -> dict[str, str]:
+          # `uv export` keeps environment markers (e.g. colorama only on win32). The image
+          # is linux/py3.12, so a pin whose marker is false here is rightly absent from it.
+          PIN = r"^([A-Za-z0-9_.-]+)==([^\s;]+)\s*(?:;\s*(.*?))?\s*\\?$"
+
+          def pins(path: str) -> dict[str, str]:
               out: dict[str, str] = {}
               for line in open(path, encoding="utf-8"):
-                  m = re.match(pattern, line.strip())
-                  if m:
+                  m = re.match(PIN, line.strip())
+                  if m and (not m.group(3) or Marker(m.group(3)).evaluate()):
                       out[norm(m.group(1))] = m.group(2)
               return out
 
-          locked = pins("locked.txt", r"^([A-Za-z0-9_.-]+)==([^\s;]+)")
-          installed = pins("installed.txt", r"^([A-Za-z0-9_.-]+)==([^\s;]+)")
+          locked = pins("locked.txt")
+          installed = pins("installed.txt")
           installed.pop("hft-platform", None)  # the wheel built from this repo, not a locked dependency
           missing = sorted(set(locked) - set(installed))
           extra = sorted(set(installed) - set(locked))
