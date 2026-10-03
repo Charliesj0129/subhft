@@ -31,7 +31,7 @@ def test_constructor_defaults_from_env():
         assert mgr._ch_port == 9999
         assert mgr._ch_user == "admin"
         assert mgr._ch_password == "secret"
-        assert mgr._retain_days == 30
+        assert mgr._retain_days == 7
         assert mgr._backup_dir == "/backups"
         assert mgr._notifier is None
 
