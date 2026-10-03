@@ -42,6 +42,30 @@ scrape_configs:
         action: keep
 
     pipeline_stages:
+      # Redact BEFORE anything is parsed, labelled or shipped to Loki. Some of what the
+      # engine prints never passes through our own log scrubber: the Shioaji SDK's native
+      # layer writes lines such as
+      #   Response Code: 200 | Event Code: 18 | Info: #P2P/v:.../PYAPI/<account id>/1003/...
+      # straight to stderr on every login, and
+      # python-telegram-bot's HTTP client puts the bot token in a request URL. Neither can
+      # be fixed in Python, so mask them here.
+      #
+      # STATUS: this job's filter is `com.docker.compose.project=hft_platform`. A stack that
+      # runs under any other compose project name matches no container here, and then the
+      # hft-engine / hft-bot / hft-monitor logs are NOT in Loki (the wal-loader job below
+      # filters on the service label only). These stages exist so that fixing the filter does
+      # not start shipping the raw account id. The raw line stays in the host's `docker logs`
+      # (json-file) until rotation drops it either way.
+      #
+      # Taiwan national ID shape: letter, 1 or 2, eight digits, not inside a longer token.
+      - replace:
+          expression: '(?:^|[^A-Za-z0-9])([A-Z][12][0-9]{8})(?:[^A-Za-z0-9]|$)'
+          replace: '***ID***'
+      # Telegram bot token: <8-11 digit bot id>:<30+ url-safe chars>
+      - replace:
+          expression: '(?:^|[^0-9])([0-9]{8,11}:[A-Za-z0-9_-]{30,})'
+          replace: '***TELEGRAM_TOKEN***'
+
       # Parse JSON structlog output
       - json:
           expressions:
