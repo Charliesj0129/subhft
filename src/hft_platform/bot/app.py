@@ -13,6 +13,8 @@ from zoneinfo import ZoneInfo
 
 import structlog
 
+from hft_platform.utils.logging import configure_logging
+
 _log = structlog.get_logger(__name__)
 _TZ = ZoneInfo("Asia/Taipei")
 
@@ -190,6 +192,13 @@ def main() -> None:
     """Entry point: create app and start polling."""
     global start_time  # noqa: PLW0603
     start_time = datetime.now(_TZ)
+
+    # This process is its own entry point (`python -m hft_platform.bot`) and used to
+    # run on structlog's DEFAULT chain: no credential scrubber, and python-telegram-bot
+    # (which carries the bot token in every request URL) logging through stdlib with
+    # no scrubbing at all. The comments below claim a scrubber; this call is what makes
+    # that true. It must run before anything can log, so before the health server.
+    configure_logging()
 
     _start_health_server_background()
     app = create_app()
