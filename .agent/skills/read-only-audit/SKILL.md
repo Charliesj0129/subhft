@@ -19,8 +19,7 @@ Task statement; current branch name.
    then say "gates not checked"): `gh run list --limit 15`, plus the
    scheduled/dormant legs specifically:
    `gh run list --workflow=ci.yml --event=schedule --limit 3`,
-   `gh run list --workflow=codeql.yml --limit 3`,
-   `gh run list --workflow=deploy.yml --limit 3`.
+   `gh run list --workflow=codeql.yml --limit 3`.
    Any red / startup_failure run is reported BEFORE planning any change —
    gates that don't run in front of the agent stay silently broken (a
    scheduled gate sat red 2026-04-27→2026-07-13 unnoticed; meta-audit

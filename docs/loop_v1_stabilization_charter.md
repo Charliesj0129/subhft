@@ -82,7 +82,7 @@ Alerts fire from `config/monitoring/alerts/replay_parity_alert.yml` based on `ph
 During stabilization the loop is **frozen**:
 
 1. **CODEOWNERS** — `config/loops/`, `src/hft_platform/strategies/`, `src/hft_platform/alpha/`, `src/hft_platform/order/` require explicit human approval. No bot approvals.
-2. **Manual-dispatch-only CD** — `deploy.yml` has no automatic trigger; the only way to start a production deploy is for a human to run the workflow. It previously fired on `workflow_run` for every successful CI run on `main`.
+2. **No CD in GitHub Actions** — `deploy.yml` and `canary-deploy.yml` were deleted (2026-10-03). Production deploys are manual on the host per `docs/runbooks/deployment.md`; no workflow holds deploy credentials. (History: `deploy.yml` was manual-dispatch-only after 2026-08-10; it previously fired on `workflow_run` for every successful CI run on `main`.)
 
    This item used to read "`production` deploy environment requires manual approval". That was never true — the environment was measured on 2026-08-10 with `protection_rules: []`, and the only thing preventing an unattended SSH deploy was that `DEPLOY_HOST`/`DEPLOY_USER`/`DEPLOY_KEY` happened to be unset. Adding required reviewers is still worth doing as defence in depth; verify with `gh api repos/<owner>/<repo>/environments/production` rather than trusting this document.
 3. **Dependabot allowlist** — restricted to security-only updates; major-version bumps blocked.
