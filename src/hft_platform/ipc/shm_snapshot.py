@@ -36,9 +36,27 @@ class SnapshotSlot:
 
 
 def _symbol_hash(symbol: str) -> int:
-    """FNV-1a 64-bit hash for symbol string, matching writer convention."""
+    """FNV-1a 64-bit hash for a symbol string, matching writer convention.
+
+    Encodes as UTF-8, which is ASCII-compatible: every symbol code that hashed
+    before hashes to exactly the same value, so segments and readers written
+    against the old function stay valid. What changes is that the function can
+    no longer *raise*.
+
+    It used to call ``symbol.encode("ascii")``. A hash is asked for on a path
+    whose only error handling is to disable itself, so a string it could not
+    encode took the whole publisher down::
+
+        shm_publisher_init_failed
+          error="'ascii' codec can't encode characters in position 27-30:
+                 ordinal not in range(128)"
+
+    That is one warning line, at boot, for a shared-memory monitor feed that
+    then stays dead for the life of the process (THESHOW, 2026-09-19T15:19:57Z).
+    A hash of a name is never worth refusing to compute.
+    """
     h = 0xCBF29CE484222325
-    for b in symbol.encode("ascii"):
+    for b in symbol.encode("utf-8", "replace"):
         h ^= b
         h = (h * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
     return h
