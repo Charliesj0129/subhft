@@ -44,6 +44,18 @@ route:
   repeat_interval: 4h
   receiver: telegram-bridge
   routes:
+    # A latched HALT is one condition, not a new event every 15 minutes:
+    # 2026-09-29 produced 54 identical notifications. StormGuardHaltStuck
+    # (for: 5m) is the escalation; this route only slows the repeat.
+    - match:
+        alertname: StormGuardHalt
+      receiver: telegram-bridge
+      group_wait: 10s
+      group_interval: 1m
+      repeat_interval: 4h
+      mute_time_intervals: [taipei_off_hours]
+      continue: false
+
     - match:
         severity: critical
       receiver: telegram-bridge

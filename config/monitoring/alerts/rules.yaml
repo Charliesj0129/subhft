@@ -1144,6 +1144,34 @@ groups:
         covering the 09-01/09-02 outage the old rule missed entirely.
       runbook_url: "docs/runbooks/alpha-development-workflow.md"
 
+  # StrategyNotProcessingEvents proves the strategy is being handed events.
+  # It cannot see a strategy that is handed events and quotes nothing because
+  # its own state is wedged: 2026-09-29 R47 held pos=1 with pending_sell=2 for
+  # 79 h (the HALT drain dropped two SELLs without releasing them), events
+  # kept flowing, intents stopped, and the only alert was the in-engine
+  # telegram monitor, which fires 4 times and goes quiet.
+  - alert: StrategyHoldsPositionButEmitsNoIntents
+    expr: |
+      (position_age_seconds > 1800)
+      and on(strategy) (sum by (strategy) (increase(strategy_intents_total[30m])) == 0)
+      and on() market_trading_hours_active == 1
+    for: 15m
+    labels:
+      severity: warning
+    annotations:
+      summary: "{{ $labels.strategy }} holds {{ $labels.symbol }} but has emitted no intent for 30m of open session"
+      description: >-
+        An open position older than 30 minutes while the strategy produced
+        zero order intents for 30 minutes. A strategy that wants out of a
+        position keeps quoting, so silence means it cannot: wedged pending
+        counters (r47 `_pending_sell` held by dropped orders), a latched
+        reduce-only gate, or a quarantine. Check `r47_stats` pending_sell
+        and `strategy_pending_qty`; a restart clears frozen pending. Backtested
+        over the 14 days to 2026-10-03 against host Prometheus: the 2026-09-29
+        episode (continuous, in every open session after) plus 3 runs on
+        2026-09-21 that were not individually investigated.
+      runbook_url: "docs/runbooks/alpha-development-workflow.md"
+
   # The breaker recovers by itself after HFT_STRATEGY_TIMEOUT_RECOVER_S (60s
   # by default), so a single break is invisible to the 25-minute silence rule
   # above. An oscillating break/recover cycle keeps events flowing just often
