@@ -257,6 +257,14 @@ module = [
 disallow_untyped_defs = true
 
 [tool.uv]
+# The lock resolves Python 3.12 and 3.13 only. Production runs 3.12, and the
+# lock must carry the versions production actually runs (pandas 3, hftbacktest
+# 2.4.4). On Python >= 3.14 those two cannot coexist: hftbacktest 2.4.4 needs
+# numpy < 2.3 while pandas 3.0.3 needs numpy >= 2.3.3 there, so a universal
+# lock over >= 3.12 is unsatisfiable without holding pandas back to 2.x, which
+# would silently downgrade production on the next image rebuild.
+environments = ["python_full_version >= '3.12' and python_full_version < '3.14'"]
+
 # Broker SDKs are mutually exclusive extras.
 conflicts = [
     [{ extra = "shioaji-broker" }, { extra = "fubon" }],

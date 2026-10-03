@@ -1,0 +1,110 @@
+name: Docker Build
+
+# Build-only: nothing is pushed and nothing is deployed. This exists because the image
+# used to be built by NOTHING in CI, so a Dockerfile that could not be built, or one that
+# installed a different dependency set than the one CI tested and audited, was only
+# discovered on the production host. The image was built from pyproject version ranges
+# instead of uv.lock.
+#
+# Path-filtered on purpose: it runs only when something the image is built from changes,
+# and never on a schedule.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - uv.lock
+      - pyproject.toml
+      - Cargo.toml
+      - Cargo.lock
+      - rust_core/**
+      - docker/**
+      - .github/workflows/docker-build.yml
+  workflow_dispatch:
+
+concurrency:
+  group: docker-build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    name: Image builds from the lock
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a  # v4
+        with:
+          version: "0.12.22"
+
+      # The Dockerfile derives its requirements from uv.lock with `uv export --locked`
+      # and fails on a stale lock; failing here first gives the same answer in seconds.
+      - name: uv.lock matches pyproject.toml
+        run: uv lock --check
+
+      - name: Build the image (no push)
+        env:
+          GIT_SHA: ${{ github.sha }}
+        run: docker build --tag hft-platform:ci --build-arg "GIT_SHA=${GIT_SHA}" .
+
+      # `pip check` ran inside the build. This proves the converse: that what the image
+      # holds is EXACTLY the locked set, nothing resolved at build time, nothing missing.
+      - name: Image holds exactly the locked set
+        run: |
+          uv export --locked --no-dev --no-emit-project --extra bot --extra monitor \
+            --format requirements-txt --no-header > locked.txt
+          docker run --rm --entrypoint python hft-platform:ci -m pip freeze > installed.txt
+          uv run --no-project --with packaging python - <<'PY'
+          import re, sys
+
+          from packaging.markers import Marker
+
+          def norm(name: str) -> str:
+              return re.sub(r"[-_.]+", "-", name).lower()
+
+          # `uv export` keeps environment markers (e.g. colorama only on win32). The image
+          # is linux/py3.12, so a pin whose marker is false here is rightly absent from it.
+          PIN = r"^([A-Za-z0-9_.-]+)==([^\s;]+)\s*(?:;\s*(.*?))?\s*\\?$"
+
+          def pins(path: str) -> dict[str, str]:
+              out: dict[str, str] = {}
+              for line in open(path, encoding="utf-8"):
+                  m = re.match(PIN, line.strip())
+                  if m and (not m.group(3) or Marker(m.group(3)).evaluate()):
+                      out[norm(m.group(1))] = m.group(2)
+              return out
+
+          locked = pins("locked.txt")
+          installed = pins("installed.txt")
+          installed.pop("hft-platform", None)  # the wheel built from this repo, not a locked dependency
+          missing = sorted(set(locked) - set(installed))
+          extra = sorted(set(installed) - set(locked))
+          drift = sorted(f"{n}: lock {locked[n]} != image {installed[n]}" for n in set(locked) & set(installed) if locked[n] != installed[n])
+          for label, items in (("in the lock but not in the image", missing), ("in the image but not in the lock", extra), ("version differs", drift)):
+              if items:
+                  print(f"{label}:", *items, sep="\n  ")
+          if missing or extra or drift:
+              sys.exit(1)
+          print(f"image == lock: {len(locked)} packages")
+          PY
+
+      - name: Native extensions import
+        run: |
+          docker run --rm --entrypoint python hft-platform:ci \
+            -c "import numpy, pandas, scipy, numba, msgspec, orjson, clickhouse_connect, structlog, telegram"
+
+      # The extension is part of the wheel built from this repo; prove it was packed.
+      - name: Rust extension is in the image
+        run: |
+          docker run --rm --entrypoint sh hft-platform:ci \
+            -c 'pip show -f hft-platform | grep -E "rust_core.*\.so"'

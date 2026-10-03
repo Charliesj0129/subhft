@@ -47,3 +47,20 @@ prometheus_data/
 dist/
 build/
 *.egg-info/
+
+# Secrets and credentials must never enter the build context (a COPY of a parent
+# directory, or a future broad COPY, would otherwise bake them into a layer).
+.claude/
+*.pem
+*.key
+*.pfx
+*.p12
+*.crt
+secrets/
+backups/
+
+# Not read by any COPY in the Dockerfile; keeping them out shrinks the context
+# and the cache-invalidation surface.
+docs/
+tests/
+ops/
