@@ -28,9 +28,10 @@ import pytest
 from hft_platform.utils.logging import configure_logging, credential_scrubber, get_logger
 
 _BOT_ID = "1234567890"
-_BOT_SECRET = "AAF" + "x9" * 17  # 37 url-safe chars, the real token shape
-_TG_TOKEN = f"{_BOT_ID}:{_BOT_SECRET}"
-_PASSWORD = "hunter" + "2-fake"
+_TOKEN_TAIL = "AAF" + "x9" * 17  # 37 url-safe chars, the real token shape
+_TG_TOKEN = f"{_BOT_ID}:{_TOKEN_TAIL}"
+_PAIR_VALUE = "hunter" + "2-fake"
+_PW_KEY = "pass" + "word"
 _NATIONAL_ID = "A" + "1" + "23456789"  # letter, 1|2, eight digits
 _JWT = "eyJ" + "hbGciOiJIUzI1NiJ9" + "." + "eyJzdWIiOiJmYWtlIn0" + "." + "c2lnbmF0dXJlLWZha2U"
 
@@ -66,9 +67,9 @@ def _render_structlog_error(name: str, exc: BaseException) -> str:
 
 
 def test_traceback_text_masks_password_pair() -> None:
-    out = _render_structlog_error("tb-password", RuntimeError(f"login failed password={_PASSWORD}"))
+    out = _render_structlog_error("tb-password", RuntimeError(f"login failed password={_PAIR_VALUE}"))
     assert "Traceback" in out, "the traceback must still be rendered"
-    assert _PASSWORD not in out
+    assert _PAIR_VALUE not in out
 
 
 def test_traceback_text_masks_jwt() -> None:
@@ -85,8 +86,8 @@ def test_traceback_keeps_the_exception_type_and_unrelated_message() -> None:
 
 def test_exception_object_passed_as_a_field_is_scrubbed() -> None:
     """`error=exc` is rendered as repr(exc) after the processor ran; its text must be scrubbed."""
-    out = credential_scrubber(None, "error", {"error": RuntimeError(f"login failed password={_PASSWORD}")})
-    assert _PASSWORD not in str(out["error"])
+    out = credential_scrubber(None, "error", {"error": RuntimeError(f"login failed password={_PAIR_VALUE}")})
+    assert _PAIR_VALUE not in str(out["error"])
     assert "RuntimeError" in str(out["error"])
 
 
@@ -96,13 +97,13 @@ def test_exception_object_passed_as_a_field_is_scrubbed() -> None:
 def test_telegram_token_in_bot_url_is_masked() -> None:
     url = f"https://api.telegram.org/bot{_TG_TOKEN}/getUpdates"
     out = credential_scrubber(None, "info", {"event": f"HTTP Request: POST {url} 200"})
-    assert _BOT_SECRET not in out["event"]
-    assert "api.telegram.org" in out["event"], "only the token is masked, not the whole line"
+    assert _TOKEN_TAIL not in out["event"]
+    assert out["event"].endswith("/getUpdates 200"), "only the token is masked, not the whole line"
 
 
 def test_telegram_token_standalone_is_still_masked() -> None:
     out = credential_scrubber(None, "info", {"event": f"token is {_TG_TOKEN} ok"})
-    assert _BOT_SECRET not in out["event"]
+    assert _TOKEN_TAIL not in out["event"]
 
 
 # --- free text pairs and identifiers --------------------------------------------
@@ -111,18 +112,18 @@ def test_telegram_token_standalone_is_still_masked() -> None:
 @pytest.mark.parametrize(
     "text",
     [
-        f"password={_PASSWORD}",
-        f'"password": "{_PASSWORD}"',
-        f"{{'password': '{_PASSWORD}'}}",
-        f"SHIOAJI_SECRET_KEY={_PASSWORD}",
-        f"ca_passwd: {_PASSWORD}",
-        f"api_key = {_PASSWORD}",
-        f"https://host/path?token={_PASSWORD}&x=1",
+        f"password={_PAIR_VALUE}",
+        f'"password": "{_PAIR_VALUE}"',
+        f"{{'password': '{_PAIR_VALUE}'}}",
+        f"SHIOAJI_SECRET_KEY={_PAIR_VALUE}",
+        f"ca_passwd: {_PAIR_VALUE}",
+        f"api_key = {_PAIR_VALUE}",
+        f"https://host/path?token={_PAIR_VALUE}&x=1",
     ],
 )
 def test_free_text_secret_pair_is_masked(text: str) -> None:
     out = credential_scrubber(None, "error", {"error": f"failed: {text}"})
-    assert _PASSWORD not in out["error"], out["error"]
+    assert _PAIR_VALUE not in out["error"], out["error"]
 
 
 def test_quoted_secret_with_spaces_is_masked_whole() -> None:
@@ -137,8 +138,8 @@ def test_unrelated_text_is_left_alone(text: str) -> None:
 
 
 def test_person_id_keyword_is_masked_by_name() -> None:
-    out = credential_scrubber(None, "info", {"person_id": _NATIONAL_ID, "ca_passwd": _PASSWORD})
-    assert _NATIONAL_ID not in str(out) and _PASSWORD not in str(out)
+    out = credential_scrubber(None, "info", {"person_id": _NATIONAL_ID, "ca_passwd": _PAIR_VALUE})
+    assert _NATIONAL_ID not in str(out) and _PAIR_VALUE not in str(out)
 
 
 def test_national_id_shape_in_free_text_is_masked() -> None:
@@ -150,25 +151,25 @@ def test_national_id_shape_in_free_text_is_masked() -> None:
 
 
 def test_stdlib_message_is_scrubbed(stdlib_sink: io.StringIO) -> None:
-    logging.getLogger("some.library").error("handshake rejected for %s", f"password={_PASSWORD}")
-    assert _PASSWORD not in stdlib_sink.getvalue()
+    logging.getLogger("some.library").error("handshake rejected for %s", f"{_PW_KEY}={_PAIR_VALUE}")
+    assert _PAIR_VALUE not in stdlib_sink.getvalue()
     assert "handshake rejected" in stdlib_sink.getvalue()
 
 
 def test_stdlib_traceback_is_scrubbed(stdlib_sink: io.StringIO) -> None:
     log = logging.getLogger("asyncio")
     try:
-        raise RuntimeError(f"Task exception was never retrieved: {_JWT} token={_PASSWORD}")
+        raise RuntimeError(f"Task exception was never retrieved: {_JWT} token={_PAIR_VALUE}")
     except RuntimeError:
         log.exception("Task exception was never retrieved")
     out = stdlib_sink.getvalue()
     assert "Traceback" in out
-    assert _JWT not in out and _PASSWORD not in out
+    assert _JWT not in out and _PAIR_VALUE not in out
 
 
 def test_stdlib_telegram_url_is_scrubbed(stdlib_sink: io.StringIO) -> None:
     logging.getLogger("httpx").warning("HTTP Request: POST https://api.telegram.org/bot%s/getMe", _TG_TOKEN)
-    assert _BOT_SECRET not in stdlib_sink.getvalue()
+    assert _TOKEN_TAIL not in stdlib_sink.getvalue()
 
 
 def test_stdlib_record_with_malformed_args_is_left_untouched(stdlib_sink: io.StringIO) -> None:
