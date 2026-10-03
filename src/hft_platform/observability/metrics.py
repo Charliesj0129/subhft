@@ -176,6 +176,8 @@ class MetricsRegistry:
                 _pn("phantom_order_candidates_total"),
                 _pn("phantom_recovery_releases_total"),
                 _pn("live_order_ttl_releases_total"),
+                _pn("live_order_swept_after_fill_total"),
+                _pn("live_order_completed_by_fill_total"),
                 _pn("api_guard_timeout_total"),
                 _pn("shadow_orders_total"),
                 _pn("shadow_mode_active"),
@@ -768,6 +770,14 @@ class MetricsRegistry:
             _pn("live_order_ttl_releases_total"),
             "Dispatched orders swept after TTL with no terminal callback, releasing the strategy pending slot "
             "(2026-08-10: two such orders froze R47 for two days with no counter anywhere)",
+        )
+        self.live_order_swept_after_fill_total = Counter(
+            _pn("live_order_swept_after_fill_total"),
+            "Fully filled orders found by the TTL sweep; their pending slot was NOT released a second time",
+        )
+        self.live_order_completed_by_fill_total = Counter(
+            _pn("live_order_completed_by_fill_total"),
+            "Orders removed from live_orders because cumulative fills reached the order quantity",
         )
         self.api_guard_timeout_total = Counter(
             _pn("api_guard_timeout_total"),

@@ -1122,6 +1122,8 @@ class SystemBootstrapper:
         # When a fill arrives with UNKNOWN strategy_id, the router checks phantom
         # order candidates (dispatch-failed orders that may have reached broker).
         exec_service.set_phantom_resolver(order_adapter.resolve_phantom_fill)
+        # Fills finish orders: Shioaji's order topic carries no fill quantity.
+        exec_service.set_fill_tracker(order_adapter)
         # ``symbol_source=md_client`` is load-bearing, not tidiness: the
         # platform symbol universe is read from ``subscribed_codes`` /
         # ``alias_to_actual``, which are QUOTE-side attributes. Handed only the
