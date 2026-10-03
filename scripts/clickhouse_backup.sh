@@ -13,8 +13,12 @@ cd "$PROJECT_DIR"
 
 # Run inside hft-engine container where clickhouse_driver is installed.
 # Pass through HFT_BACKUP_ENABLED from host env (crontab sets it).
+# Retention is set here, not in the container env: `docker exec -e` overrides
+# the creation-time value, so changing it needs no container recreate. 3 daily
+# backups (~12.5G each) because they share a disk with the data (2026-10-03).
 exec docker compose exec -T \
     -e HFT_BACKUP_ENABLED="${HFT_BACKUP_ENABLED:-1}" \
+    -e HFT_BACKUP_RETAIN_DAYS="${HFT_BACKUP_RETAIN_DAYS:-3}" \
     hft-engine python -c "
 from hft_platform.ops.backup import BackupManager
 import sys

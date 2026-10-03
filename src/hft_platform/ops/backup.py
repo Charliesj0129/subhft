@@ -75,7 +75,7 @@ class BackupManager:
         self._ch_port = ch_port or int(os.getenv("HFT_CLICKHOUSE_PORT", "8123"))
         self._ch_user = ch_user or _cfg["username"]
         self._ch_password = ch_password if ch_password is not None else _cfg["password"]
-        self._retain_days = retain_days if retain_days is not None else int(os.getenv("HFT_BACKUP_RETAIN_DAYS", "30"))
+        self._retain_days = retain_days if retain_days is not None else int(os.getenv("HFT_BACKUP_RETAIN_DAYS", "7"))
         self._backup_dir = backup_dir
         self._notifier = notifier
         self._metrics: Any = None

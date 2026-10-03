@@ -370,7 +370,7 @@ Shadow deployment note:
 | 變數 | 預設值 | 用途 | 調整建議 |
 |---|---|---|---|
 | `HFT_BACKUP_ENABLED` | `0` | `1` = 啟用每日自動備份（`backup` service） | 生產環境設 `1` |
-| `HFT_BACKUP_RETAIN_DAYS` | `30` | 每日備份保留天數 | 磁碟不足時縮短至 7-14 |
+| `HFT_BACKUP_RETAIN_DAYS` | `7` | 每日備份保留天數 | 磁碟不足時縮短至 7-14 |
 | `CH_BACKUP_PATH` | `./backups/clickhouse` | 備份 host volume 路徑 | 跨磁碟備份請指向獨立磁區 |
 
 ---

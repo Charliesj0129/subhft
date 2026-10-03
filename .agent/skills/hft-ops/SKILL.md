@@ -131,7 +131,7 @@ make wal-dlq-status                # DLQ status
 | `HFT_RECONNECT_HOURS_2` | — | Secondary window (night session) |
 | `HFT_STORMGUARD_FEED_GAP_HALT_S` | `30` | Feed gap -> HALT threshold |
 | `HFT_BACKUP_ENABLED` | `0` | Automated daily CH backup |
-| `HFT_BACKUP_RETAIN_DAYS` | `30` | Backup retention |
+| `HFT_BACKUP_RETAIN_DAYS` | `7` | Backup retention |
 | `HFT_TELEGRAM_ENABLED` | `0` | Telegram notifications |
 
 ## Notification Flow
