@@ -171,13 +171,14 @@ def test_stdlib_telegram_url_is_scrubbed(stdlib_sink: io.StringIO) -> None:
     assert _BOT_SECRET not in stdlib_sink.getvalue()
 
 
-def test_stdlib_record_with_malformed_args_does_not_raise(stdlib_sink: io.StringIO) -> None:
-    """The scrubbing record factory must not turn a caller's bad %-args into a crash."""
-    logging.raiseExceptions = False  # the handler would otherwise print a "Logging error" banner
-    try:
-        logging.getLogger("some.library").error("two slots %s %s", "one-arg")
-    finally:
-        logging.raiseExceptions = True
+def test_stdlib_record_with_malformed_args_is_left_untouched(stdlib_sink: io.StringIO) -> None:
+    """The scrubbing record factory must not turn a caller's bad %-args into a crash,
+    nor rewrite a record it cannot format: the handler reports it as it always did."""
+    record = logging.getLogRecordFactory()(
+        "some.library", logging.ERROR, __file__, 1, "two slots %s %s", ("one-arg",), None
+    )
+    assert record.msg == "two slots %s %s"
+    assert record.args == ("one-arg",)
 
 
 def test_http_client_loggers_are_not_at_info() -> None:
