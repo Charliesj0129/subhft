@@ -72,6 +72,11 @@ RUN uv export --locked --no-dev --no-emit-project --extra bot --extra monitor \
 # `make build-rust`. Cargo.lock pins every crate.
 COPY Cargo.toml Cargo.lock ./
 COPY rust_core/ ./rust_core/
+# pyproject.toml sets `[tool.maturin] python-source = "src"`: maturin refuses to run
+# unless that directory exists, and packs the package it finds there into the wheel.
+# So a change under src/ rebuilds the Rust layer, exactly as it did before this file
+# derived its requirements from the lock.
+COPY src/ ./src/
 
 # Fetch and build in ONE RUN. They used to be two RUNs, with the fetch result
 # held only in a cache mount and the build run offline: when the fetch layer was

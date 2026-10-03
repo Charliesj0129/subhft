@@ -80,7 +80,7 @@ jobs:
 
           locked = pins("locked.txt", r"^([A-Za-z0-9_.-]+)==([^\s;]+)")
           installed = pins("installed.txt", r"^([A-Za-z0-9_.-]+)==([^\s;]+)")
-          installed.pop("rust-core", None)  # the wheel built from this repo, not a locked dependency
+          installed.pop("hft-platform", None)  # the wheel built from this repo, not a locked dependency
           missing = sorted(set(locked) - set(installed))
           extra = sorted(set(installed) - set(locked))
           drift = sorted(f"{n}: lock {locked[n]} != image {installed[n]}" for n in set(locked) & set(installed) if locked[n] != installed[n])
@@ -95,4 +95,10 @@ jobs:
       - name: Native extensions import
         run: |
           docker run --rm --entrypoint python hft-platform:ci \
-            -c "import numpy, pandas, scipy, numba, msgspec, orjson, clickhouse_connect, structlog, telegram, rust_core"
+            -c "import numpy, pandas, scipy, numba, msgspec, orjson, clickhouse_connect, structlog, telegram"
+
+      # The extension is part of the wheel built from this repo; prove it was packed.
+      - name: Rust extension is in the image
+        run: |
+          docker run --rm --entrypoint sh hft-platform:ci \
+            -c 'pip show -f hft-platform | grep -E "rust_core.*\.so"'
