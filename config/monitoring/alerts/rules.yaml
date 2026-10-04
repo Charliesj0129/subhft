@@ -1172,6 +1172,49 @@ groups:
         2026-09-21 that were not individually investigated.
       runbook_url: "docs/runbooks/alpha-development-workflow.md"
 
+  # StrategyHoldsPositionButEmitsNoIntents needs an open position, so it cannot
+  # see a FLAT strategy whose pending counter is wedged. R47 stops quoting a
+  # side once `pending` for it is non-zero (`can_sell = pos - pending_sell >
+  # -max_pos`), and a leak on the entry side leaves no position to age.
+  #
+  # The cheap discriminator is the strategy's own bookkeeping disagreeing with
+  # itself: `strategy_pending_qty` says quantity is working at the broker,
+  # `strategy_inflight_oids` says it tracks no order for that side. A cancel in
+  # flight can produce that for seconds (the oid is dropped from the in-flight
+  # set when the cancel is sent, the pending is released at the terminal
+  # event) and the order adapter's 300 s sweep bounds the worst legitimate
+  # case, so 15 minutes of it is a leak, not a race.
+  #
+  # `strategy_inflight_oids` carries {strategy, side} only, so the join is on
+  # those two labels and pending is summed over symbol first.
+  - alert: StrategyPendingWithNoInflightOrder
+    expr: |
+      (
+        (sum by (strategy, side) (strategy_pending_qty) > 0)
+        and on(strategy, side) (strategy_inflight_oids == 0)
+      )
+      and on() market_trading_hours_active == 1
+    for: 15m
+    labels:
+      severity: warning
+    annotations:
+      summary: "{{ $labels.strategy }} counts {{ $labels.side }} quantity as working at the broker but tracks no order for it (15m of open session)"
+      description: >-
+        The strategy's pending quantity for this side has been above zero for
+        15 minutes while its in-flight order set for the same side is empty.
+        Nothing is left to complete, cancel or time out, so the pending count
+        will not come down on its own and the strategy will not quote that side
+        again. Known producers: a drained or dropped order that never sent a
+        release (HALT drain, 2026-09-29), and a terminal event that carried the
+        wrong remaining quantity. Check `r47_stats` pending_buy/pending_sell
+        against the order adapter's live orders; a strategy restart clears it.
+        Backtested over the 28 days of host Prometheus history
+        (2026-09-05 to 2026-10-03): two runs reached 15 minutes, both genuine
+        (2026-09-07 R47 held pending_sell=2 on TMFI6 with no in-flight order
+        and no intent from 01:15Z to 14:00Z; 2026-09-29 to 2026-10-02 the HALT
+        drain leak); the longest other run was 14 minutes.
+      runbook_url: "docs/runbooks/alpha-development-workflow.md"
+
   # The breaker recovers by itself after HFT_STRATEGY_TIMEOUT_RECOVER_S (60s
   # by default), so a single break is invisible to the 25-minute silence rule
   # above. An oscillating break/recover cycle keeps events flowing just often
