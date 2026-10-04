@@ -1243,6 +1243,21 @@ class OrderAdapter:
                 else:
                     self._phantom_drop_key(pkey)
         for _pkey, intent in expired:
+            # After this the record can no longer claim a fill: a late fill for
+            # the order reaches the router as strategy UNKNOWN.
+            self._audit_log_order(
+                {
+                    "event": "phantom_expired",
+                    "intent_type": "NEW",
+                    "order_key": _pkey,
+                    "symbol": intent.symbol,
+                    "side": str(intent.side),
+                    "price": intent.price,
+                    "qty": intent.qty,
+                    "strategy_id": intent.strategy_id,
+                    "error": f"phantom_ttl_{ttl:g}s",
+                }
+            )
             self._send_dispatch_rejection(
                 intent,
                 "phantom_recovery_ttl_expired",
@@ -3286,6 +3301,26 @@ class OrderAdapter:
                         self._remove_pending_fill(order_key)
                     self.metrics.order_reject_total.inc()
                     self._dedup_commit(intent.idempotency_key, False, _fail_reason, cmd.cmd_id)
+                    # A timed-out place_order left no row in audit.orders_log: the
+                    # order is accepted by the broker later, shows up as UNKNOWN
+                    # and cannot be traced back to the intent that produced it.
+                    self._audit_log_order(
+                        {
+                            "event": "dispatch_failed",
+                            "intent_type": "NEW",
+                            "order_key": order_key,
+                            "symbol": intent.symbol,
+                            "side": str(intent.side),
+                            "price": intent.price,
+                            "qty": intent.qty,
+                            "strategy_id": intent.strategy_id,
+                            "cmd_id": int(cmd.cmd_id),
+                            "error": _fail_reason,
+                            # True: the call may have reached the broker (a phantom
+                            # candidate is registered). False: it never did.
+                            "phantom": _phantom_pending,
+                        }
+                    )
                     await self._add_to_dlq(intent, _dlq_reason, _fail_reason)
                     # The strategy is still holding the pending slot it took to
                     # emit this intent, and this is the last point at which
