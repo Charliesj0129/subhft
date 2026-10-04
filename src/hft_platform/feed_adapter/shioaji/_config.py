@@ -169,19 +169,24 @@ class ShioajiClientConfig:
 def session_lock_id() -> str:
     """The identifier part of the session-lock file name (``shioaji_session_<id>.lock``).
 
-    ``SHIOAJI_ACCOUNT`` is an operator-chosen label and is used as written. When it is
-    unset the name used to fall back to ``SHIOAJI_PERSON_ID`` and then ``SHIOAJI_API_KEY``
-    verbatim, which put a national ID (or the first 64 characters of the API key) into a
-    file name under ``.wal/.locks/``: visible in directory listings, backups and archives
-    of that tree. Those two are credentials, so they are hashed: the name stays stable for
-    a given credential, differs between credentials, and reveals neither.
+    ``SHIOAJI_ACCOUNT`` is an operator-chosen label (never the broker account number) and
+    is used as written. When it is unset the name used to fall back to ``SHIOAJI_PERSON_ID``
+    and then ``SHIOAJI_API_KEY`` verbatim, which put a national ID (or the first 64
+    characters of the API key) into a file name under ``.wal/.locks/``, and into the
+    conflict warning that logs the lock path.
+
+    Only the API key is used now, as a truncated sha256: it is long and random, so the
+    digest cannot be reversed. ``SHIOAJI_PERSON_ID`` is deliberately NOT an input. A
+    national ID has only about 5e8 valid values, so an unkeyed digest of it, under a scheme
+    published in this repository, is recovered by enumeration. The lock is therefore per
+    API key, not per person; on one host with one ``.env`` that is the same thing.
     """
     account = os.getenv("SHIOAJI_ACCOUNT")
     if account:
         return re.sub(r"[^a-zA-Z0-9_.-]+", "_", str(account).strip())[:64] or "default"
-    secret = os.getenv("SHIOAJI_PERSON_ID") or os.getenv("SHIOAJI_API_KEY")
-    if secret:
-        return "id-" + hashlib.sha256(secret.strip().encode("utf-8")).hexdigest()[:16]
+    api_key = (os.getenv("SHIOAJI_API_KEY") or "").strip()
+    if api_key:
+        return "id-" + hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:16]
     return "default"
 
 
