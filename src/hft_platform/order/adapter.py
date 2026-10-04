@@ -135,6 +135,12 @@ class OrderAdapter:
         # sweep cannot tell the strategy which pending slot it just orphaned.
         # Keyed identically to ``live_orders``; evicted on the same paths.
         "_live_order_intents",
+        # order_key -> (monotonic stamp, cumulative filled qty). Shioaji's order
+        # topic carries no fill quantity, so this ledger is the only place the
+        # platform learns how much of an order has traded.
+        "_fill_ledger",
+        "_fill_ledger_max",
+        "_fill_ledger_ttl_s",
         "_live_orders_lock",
         "rate_limiter",
         "circuit_breaker",
@@ -284,6 +290,11 @@ class OrderAdapter:
         # closing side, which is the opposite of ``intent.side``, so the side
         # is stored explicitly rather than re-derived at release time.
         self._live_order_intents: Dict[str, tuple[OrderIntent, Side]] = {}
+        # Bounded (max cardinality + TTL), engine-loop only. The TTL must outlive
+        # ``_live_orders_ttl_s`` plus the late reject of a cancel that raced the fill.
+        self._fill_ledger: collections.OrderedDict[str, tuple[float, int]] = collections.OrderedDict()
+        self._fill_ledger_max: int = int(os.getenv("HFT_FILL_LEDGER_MAX", "8192"))
+        self._fill_ledger_ttl_s: float = float(os.getenv("HFT_FILL_LEDGER_TTL_S", "900"))
         self._live_orders_lock = asyncio.Lock()
         self._pending_order_keys: set[str] = set()
         # TTL sweep: evict orphaned live_orders entries (missed terminal callbacks)
@@ -801,6 +812,7 @@ class OrderAdapter:
         # calls into the rejection sink's put_nowait and must not run while the
         # live-orders lock is held.
         orphaned_pendings: list[tuple[OrderIntent, Side]] = []
+        filled_swept = 0
         async with self._live_orders_lock:
             stale_keys = [
                 k
@@ -812,7 +824,13 @@ class OrderAdapter:
                 self._live_orders_inserted_at.pop(k, None)
                 tracked = self._live_order_intents.pop(k, None)
                 if tracked is not None:
-                    orphaned_pendings.append(tracked)
+                    if self.filled_qty_for(k) >= tracked[0].qty:
+                        # Fully filled: the fill already gave the slot back via
+                        # on_fill. Releasing again would free a slot a live order
+                        # may occupy (2,169 spurious releases in 31 d, THESHOW).
+                        filled_swept += 1
+                    else:
+                        orphaned_pendings.append(tracked)
                 self._remove_pending_fill(k)
                 evicted += 1
             # Also prune _live_orders_inserted_at for keys no longer in live_orders
@@ -826,7 +844,13 @@ class OrderAdapter:
                 remaining=len(self.live_orders),
                 ttl_s=self._live_orders_ttl_s,
                 pendings_released=len(orphaned_pendings),
+                filled_not_released=filled_swept,
             )
+        if filled_swept:
+            try:
+                self.metrics.live_order_swept_after_fill_total.inc(filled_swept)
+            except Exception:  # noqa: BLE001 — metric must never break order path
+                pass
         for intent, side in orphaned_pendings:
             self._send_dispatch_rejection(
                 intent,
@@ -2019,6 +2043,64 @@ class OrderAdapter:
         self._assert_engine_thread()
         self._cancel_inflight_targets.pop(target_key, None)
 
+    def filled_qty_for(self, order_key: str) -> int:
+        """Cumulative quantity the platform has seen traded for ``order_key``."""
+        entry = self._fill_ledger.get(order_key)
+        if entry is None:
+            return 0
+        stamp, cum = entry
+        if time.monotonic() - stamp > self._fill_ledger_ttl_s:
+            self._fill_ledger.pop(order_key, None)
+            return 0
+        return cum
+
+    def _record_fill_ledger(self, order_key: str, qty: int) -> int:
+        now = time.monotonic()
+        cum = self.filled_qty_for(order_key) + max(0, int(qty))
+        self._fill_ledger[order_key] = (now, cum)
+        self._fill_ledger.move_to_end(order_key)
+        cutoff = now - self._fill_ledger_ttl_s
+        while self._fill_ledger:
+            oldest_key = next(iter(self._fill_ledger))
+            if self._fill_ledger[oldest_key][0] < cutoff or len(self._fill_ledger) > self._fill_ledger_max:
+                self._fill_ledger.popitem(last=False)
+            else:
+                break
+        return cum
+
+    async def on_order_fill(self, order_key: str, qty: int) -> bool:
+        """A deal arrived for ``order_key``: finish the order once it is fully traded.
+
+        Shioaji's order topic carries no fill data, so nothing else ever marks a
+        filled order done. It stayed in ``live_orders`` until the 300 s sweep,
+        which released the strategy's pending slot a second time, and a cancel the
+        strategy sent in the meantime reached the broker, was rejected and came
+        back as FAILED (a third path to the same double release).
+
+        The strategy's slot is NOT released here: ``on_fill`` already did that.
+        Returns True when the order was completed.
+        """
+        self._assert_engine_thread()
+        cum = self._record_fill_ledger(order_key, qty)
+        async with self._live_orders_lock:
+            tracked = self._live_order_intents.get(order_key)
+            if tracked is None or cum < tracked[0].qty:
+                return False
+            if self.live_orders.pop(order_key, None) is None:
+                return False
+            self._live_orders_inserted_at.pop(order_key, None)
+            self._untrack_live_order_intent(order_key)
+            self._record_recent_terminal(order_key, reason="filled")
+            self._cmd_created_ns_map.pop(order_key, None)
+            self._cmd_tca_map.pop(order_key, None)
+            self._cmd_trace_id_map.pop(order_key, None)
+        self._remove_pending_fill(order_key)
+        try:
+            self.metrics.live_order_completed_by_fill_total.inc()
+        except Exception:  # noqa: BLE001 — metric must never break order path
+            pass
+        return True
+
     async def on_terminal_state(self, strategy_id: str, order_id: str) -> None:
         """Called when an order reaches a terminal state (Filled, Cancelled, Rejected)."""
         resolved_order_key = f"{strategy_id}:{order_id}" if order_id is not None else f"{strategy_id}:"
@@ -2053,6 +2135,14 @@ class OrderAdapter:
                         )
                     except Exception:  # noqa: BLE001
                         pass
+                return
+
+            # A cancel/reject that trails the fill which already finished this
+            # order. Without this it would be parked as "terminal before
+            # registration" whenever the strategy has a new order in flight.
+            completed = self._recently_terminal_orders.get(order_key)
+            if completed is not None and completed[1] == "filled":
+                logger.info("terminal_after_fill_ignored", key=order_key)
                 return
 
             # Check if any order for this strategy is in-flight

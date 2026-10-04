@@ -146,6 +146,35 @@ class ExecutionRouter:
         # Phantom order resolver: injected from OrderAdapter post-init.
         # Returns strategy_id for fills matching phantom order candidates.
         self._phantom_resolver: Optional[Callable[[Any], Optional[str]]] = None
+        # Fill tracker: injected from OrderAdapter post-init. Shioaji's order
+        # topic carries no fill quantity, so the router is the only place that
+        # sees both the deal (fills) and the order status (cancel/reject).
+        self._fill_tracker: Optional[Any] = None
+
+    def set_fill_tracker(self, tracker: Any) -> None:
+        """Inject the object that finishes orders on fills.
+
+        Needs ``async on_order_fill(order_key, qty) -> bool`` and
+        ``filled_qty_for(order_key) -> int`` (``OrderAdapter`` provides both).
+        """
+        self._fill_tracker = tracker
+
+    def _apply_fill_ledger(self, order_event: Any) -> None:
+        """Give an order status event the filled quantity the broker did not send.
+
+        Without this ``remaining_qty`` equals the order quantity on every cancel
+        or reject that follows a fill, and the strategy releases the pending slot
+        a second time. Only ever raises ``filled_qty``: a broker that does send
+        fills is left alone.
+        """
+        tracker = self._fill_tracker
+        key = getattr(order_event, "client_order_id", "")
+        if tracker is None or not key:
+            return
+        cum = tracker.filled_qty_for(key)
+        if cum > order_event.filled_qty:
+            order_event.filled_qty = cum
+            order_event.remaining_qty = max(0, order_event.submitted_qty - cum)
 
     def set_risk_engine(self, risk_engine: object) -> None:
         """Set or replace the risk engine reference (late-bind from bootstrap)."""
@@ -410,6 +439,7 @@ class ExecutionRouter:
                     self._backfill_order_id_map(raw)
                     order_event = self.normalizer.normalize_order(raw)
                     if order_event:
+                        self._apply_fill_ledger(order_event)
                         self._publish_nowait(order_event)
 
                         # Direct order recording safety net: bypass RingBufferBus
@@ -613,6 +643,14 @@ class ExecutionRouter:
                                     self.metrics.recorder_exec_drops_total.labels(topic="fills").inc()
                                     logger.warning("recorder_queue_full", topic="fills", event_type="fill")
                                     self._wal_fallback_write(_topic, _payload)
+
+                        # After TCA enrichment and recording, which read the per-order
+                        # maps this call clears. Must never break the execution path.
+                        if _order_key is not None and self._fill_tracker is not None:
+                            try:
+                                await self._fill_tracker.on_order_fill(_order_key, int(fill_event.qty))
+                            except Exception as _ft_exc:  # noqa: BLE001
+                                logger.warning("fill_tracker_error", error=str(_ft_exc), order_key=_order_key)
 
                 # Periodically retry orphaned fills from DLQ
                 self._events_since_dlq_retry += 1
