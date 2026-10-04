@@ -178,6 +178,8 @@ class MetricsRegistry:
                 _pn("live_order_ttl_releases_total"),
                 _pn("live_order_swept_after_fill_total"),
                 _pn("live_order_completed_by_fill_total"),
+                _pn("cancel_unconfirmed_total"),
+                _pn("cancel_retry_total"),
                 _pn("api_guard_timeout_total"),
                 _pn("shadow_orders_total"),
                 _pn("shadow_mode_active"),
@@ -778,6 +780,17 @@ class MetricsRegistry:
         self.live_order_completed_by_fill_total = Counter(
             _pn("live_order_completed_by_fill_total"),
             "Orders removed from live_orders because cumulative fills reached the order quantity",
+        )
+        self.cancel_unconfirmed_total = Counter(
+            _pn("cancel_unconfirmed_total"),
+            "Dispatched cancels whose order was still live after HFT_CANCEL_CONFIRM_S "
+            "(outcome=retried: re-sent once; gave_up: second look, left to the TTL sweep)",
+            ["outcome"],
+        )
+        self.cancel_retry_total = Counter(
+            _pn("cancel_retry_total"),
+            "Result of the single re-sent cancel for an unconfirmed cancel",
+            ["result"],
         )
         self.api_guard_timeout_total = Counter(
             _pn("api_guard_timeout_total"),

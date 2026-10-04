@@ -33,6 +33,15 @@ _TERMINAL_BEFORE_REGISTERED = object()
 _GUARD_TIMEOUT = object()
 
 
+class _CancelWatch(NamedTuple):
+    """A cancel the broker call accepted, whose effect has not been seen yet."""
+
+    at: float  # monotonic stamp of the dispatch (or of the retry)
+    intent: OrderIntent
+    cmd_id: int
+    attempts: int  # 0 = first cancel only, 1 = retried once
+
+
 class _PhantomEntry(NamedTuple):
     """M4: per-occurrence phantom record. Multiple entries can share the
     same ``(strategy_id, intent_id)`` key when an intent_id is reused in
@@ -174,6 +183,10 @@ class OrderAdapter:
         "_cancel_inflight_targets",
         "_cancel_inflight_max",
         "_cancel_inflight_ttl_s",
+        # target order_key -> _CancelWatch. See ``check_unconfirmed_cancels``.
+        "_cancel_watch",
+        "_cancel_confirm_s",
+        "_cancel_retry_tasks",
         "_engine_thread_id",
         # M4: per-occurrence phantom storage. Replaces the parallel
         # ``_phantom_order_keys`` + ``_phantom_intents`` dicts (each keyed
@@ -318,6 +331,11 @@ class OrderAdapter:
         self._cancel_inflight_targets: collections.OrderedDict[str, float] = collections.OrderedDict()
         self._cancel_inflight_max: int = int(os.getenv("HFT_CANCEL_INFLIGHT_MAX", "2048"))
         self._cancel_inflight_ttl_s: float = float(os.getenv("HFT_CANCEL_INFLIGHT_TTL_S", "30"))
+        # Cancels the broker call accepted but whose order is still live after
+        # ``_cancel_confirm_s``. Bounded; engine-loop only.
+        self._cancel_watch: collections.OrderedDict[str, _CancelWatch] = collections.OrderedDict()
+        self._cancel_confirm_s: float = float(os.getenv("HFT_CANCEL_CONFIRM_S", "60"))
+        self._cancel_retry_tasks: set[asyncio.Task[None]] = set()
         # P1-3: ``_recently_terminal_orders`` and ``_cancel_inflight_targets`` are
         # OrderedDicts mutated by the helpers below. They are designed for
         # engine-loop-only use (no lock). Capture the engine thread id lazily on
@@ -806,6 +824,12 @@ class OrderAdapter:
         if now_mono - self._live_orders_last_sweep_s < 60.0:
             return 0
         self._live_orders_last_sweep_s = now_mono
+        # Before eviction: an unconfirmed cancel is retried while the Trade
+        # handle is still held. Never lets a failure here block the sweep.
+        try:
+            await self.check_unconfirmed_cancels()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("check_unconfirmed_cancels_error", error=str(exc))
         cutoff = now_mono - self._live_orders_ttl_s
         evicted = 0
         # Collected under the lock, emitted after it: _send_dispatch_rejection
@@ -2042,6 +2066,107 @@ class OrderAdapter:
     def _clear_cancel_inflight(self, target_key: str) -> None:
         self._assert_engine_thread()
         self._cancel_inflight_targets.pop(target_key, None)
+
+    def _watch_cancel(self, target_key: str, intent: OrderIntent, cmd_id: int) -> None:
+        """Remember a cancel whose effect nobody checks.
+
+        2026-09-03..10-03: 4 orders had a cancel dispatched ~1 s after the NEW,
+        no CANCELLED row ever followed, and each filled 5.6-27 minutes later
+        (3 of them took the position to +2 against max_pos=1). Nothing in the
+        platform looked at whether a dispatched cancel took effect.
+        """
+        self._assert_engine_thread()
+        self._cancel_watch[target_key] = _CancelWatch(time.monotonic(), intent, cmd_id, 0)
+        self._cancel_watch.move_to_end(target_key)
+        while len(self._cancel_watch) > self._cancel_inflight_max:
+            self._cancel_watch.popitem(last=False)
+
+    async def check_unconfirmed_cancels(self) -> int:
+        """Report, and once retry, cancels whose order is still live.
+
+        A watch is confirmed (dropped) as soon as its order leaves
+        ``live_orders``: cancelled, filled and completed, or swept. A cancel
+        still unconfirmed after ``HFT_CANCEL_CONFIRM_S`` is counted and audited,
+        and re-sent ONCE with the Trade handle the platform still holds, before
+        the TTL sweep drops that handle for good. The strategy's pending slot
+        is not touched here. Returns the number of unconfirmed cancels seen.
+        """
+        self._assert_engine_thread()
+        if not self._cancel_watch:
+            return 0
+        now = time.monotonic()
+        due: list[tuple[str, _CancelWatch, Any]] = []
+        async with self._live_orders_lock:
+            for key, watch in list(self._cancel_watch.items()):
+                trade = self.live_orders.get(key)
+                if trade is None:
+                    del self._cancel_watch[key]  # confirmed: the order is gone
+                elif now - watch.at >= self._cancel_confirm_s:
+                    due.append((key, watch, trade))
+        for key, watch, trade in due:
+            can_retry = watch.attempts == 0 and trade is not _PENDING_SENTINEL
+            outcome = "retried" if can_retry else "gave_up"
+            age_s = round(now - watch.at, 1)
+            logger.warning(
+                "cancel_unconfirmed",
+                target=key,
+                strategy_id=watch.intent.strategy_id,
+                age_s=age_s,
+                attempts=watch.attempts,
+                outcome=outcome,
+            )
+            try:
+                self.metrics.cancel_unconfirmed_total.labels(outcome=outcome).inc()
+            except Exception:  # noqa: BLE001 — metric must never break order path
+                pass
+            self._audit_log_order(
+                {
+                    "event": "cancel_unconfirmed",
+                    "intent_type": "CANCEL",
+                    "order_key": f"{watch.intent.strategy_id}:{watch.intent.intent_id}",
+                    "target_key": key,
+                    "symbol": watch.intent.symbol,
+                    "strategy_id": watch.intent.strategy_id,
+                    "cmd_id": watch.cmd_id,
+                    "details": f"age_s={age_s} attempts={watch.attempts} outcome={outcome}",
+                }
+            )
+            if can_retry:
+                self._cancel_watch[key] = watch._replace(at=now, attempts=1)
+                task = asyncio.create_task(self._retry_cancel(key, watch, trade), name=f"cancel_retry:{key}")
+                self._cancel_retry_tasks.add(task)
+                task.add_done_callback(self._cancel_retry_tasks.discard)
+            else:
+                self._cancel_watch.pop(key, None)
+        return len(due)
+
+    async def _retry_cancel(self, key: str, watch: _CancelWatch, trade: Any) -> None:
+        """One more cancel for an order the first one did not remove."""
+        try:
+            result = await self._call_api("cancel_order", self.client.cancel_order, trade, intent=watch.intent)
+            result_label = "failed" if result is None or result is _GUARD_TIMEOUT else "sent"  # None: error or timeout
+        except Exception as exc:  # noqa: BLE001 — a failed retry must not escape the task
+            logger.warning("cancel_retry_error", target=key, error=str(exc))
+            result_label = "error"
+        if result_label == "sent":
+            self.rate_limiter.record()
+            self.per_symbol_rate_limiter.record(watch.intent.symbol)
+        try:
+            self.metrics.cancel_retry_total.labels(result=result_label).inc()
+        except Exception:  # noqa: BLE001 — metric must never break order path
+            pass
+        self._audit_log_order(
+            {
+                "event": "cancel_retry",
+                "intent_type": "CANCEL",
+                "order_key": f"{watch.intent.strategy_id}:{watch.intent.intent_id}",
+                "target_key": key,
+                "symbol": watch.intent.symbol,
+                "strategy_id": watch.intent.strategy_id,
+                "cmd_id": watch.cmd_id,
+                "details": f"result={result_label}",
+            }
+        )
 
     def filled_qty_for(self, order_key: str) -> int:
         """Cumulative quantity the platform has seen traded for ``order_key``."""
@@ -3416,6 +3541,7 @@ class OrderAdapter:
                             "cmd_id": int(cmd.cmd_id),
                         }
                     )
+                    self._watch_cancel(target_key, intent, int(cmd.cmd_id))
                 elif target_trade is _PENDING_SENTINEL:
                     logger.warning("Cancel target still pending", target=target_key)
                     self.metrics.order_reject_total.inc()
