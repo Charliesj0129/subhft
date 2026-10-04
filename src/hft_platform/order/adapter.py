@@ -36,7 +36,7 @@ _GUARD_TIMEOUT = object()
 class _CancelWatch(NamedTuple):
     """A cancel the broker call accepted, whose effect has not been seen yet."""
 
-    at: float  # monotonic stamp of the dispatch (or of the retry)
+    at: float  # precision-time: monotonic stamp of the dispatch (or of the retry)
     intent: OrderIntent
     cmd_id: int
     attempts: int  # 0 = first cancel only, 1 = retried once
@@ -334,7 +334,7 @@ class OrderAdapter:
         # Cancels the broker call accepted but whose order is still live after
         # ``_cancel_confirm_s``. Bounded; engine-loop only.
         self._cancel_watch: collections.OrderedDict[str, _CancelWatch] = collections.OrderedDict()
-        self._cancel_confirm_s: float = float(os.getenv("HFT_CANCEL_CONFIRM_S", "60"))
+        self._cancel_confirm_s: float = float(os.getenv("HFT_CANCEL_CONFIRM_S", "60"))  # precision-time
         self._cancel_retry_tasks: set[asyncio.Task[None]] = set()
         # P1-3: ``_recently_terminal_orders`` and ``_cancel_inflight_targets`` are
         # OrderedDicts mutated by the helpers below. They are designed for
