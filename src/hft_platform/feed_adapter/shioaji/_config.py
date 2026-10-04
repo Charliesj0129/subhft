@@ -7,6 +7,7 @@ and shareable across submodules without re-parsing.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import os
 import re
@@ -175,19 +176,33 @@ def session_lock_id() -> str:
     characters of the API key) into a file name under ``.wal/.locks/``, and into the
     conflict warning that logs the lock path.
 
-    Only the API key is used now, as a truncated sha256: it is long and random, so the
-    digest cannot be reversed. ``SHIOAJI_PERSON_ID`` is deliberately NOT an input. A
-    national ID has only about 5e8 valid values, so an unkeyed digest of it, under a scheme
-    published in this repository, is recovered by enumeration. The lock is therefore per
-    API key, not per person; on one host with one ``.env`` that is the same thing.
+    Only the API key is used now, through PBKDF2 (see ``_credential_lock_id``), so the name
+    cannot be reversed. ``SHIOAJI_PERSON_ID`` is deliberately NOT an input: a national ID
+    has only about 5e8 valid values, so a digest of it, under a scheme published in this
+    repository, is recovered by enumeration. The lock is therefore per API key, not per
+    person; on one host with one ``.env`` that is the same thing.
     """
     account = os.getenv("SHIOAJI_ACCOUNT")
     if account:
         return re.sub(r"[^a-zA-Z0-9_.-]+", "_", str(account).strip())[:64] or "default"
     api_key = (os.getenv("SHIOAJI_API_KEY") or "").strip()
     if api_key:
-        return "id-" + hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:16]
+        return _credential_lock_id(api_key)
     return "default"
+
+
+# A deliberately expensive derivation rather than a bare digest, so the name stays
+# irreversible even for a key with less entropy than an API key should have. 600k
+# iterations is OWASP's PBKDF2-SHA256 figure; the ~0.1 s it costs is paid once per process
+# (the cache holds nothing the process environment does not already hold).
+_LOCK_ID_SALT = b"hft_platform.shioaji.session_lock.v1"
+_LOCK_ID_ITERATIONS = 600_000
+
+
+@functools.lru_cache(maxsize=4)
+def _credential_lock_id(api_key: str) -> str:
+    derived = hashlib.pbkdf2_hmac("sha256", api_key.encode("utf-8"), _LOCK_ID_SALT, _LOCK_ID_ITERATIONS)
+    return "id-" + derived.hex()[:16]
 
 
 def load_shioaji_config(
