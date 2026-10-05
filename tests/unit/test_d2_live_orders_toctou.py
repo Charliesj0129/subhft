@@ -47,6 +47,9 @@ class TestDeferredTerminal:
         a._recently_terminal_orders = collections.OrderedDict()
         a._recently_terminal_max = 2048
         a._recently_terminal_ttl_s = 60.0
+        a._finished_orders = collections.OrderedDict()
+        a._finished_max = 64
+        a._finished_ttl_s = 900.0
         a._cancel_inflight_targets = collections.OrderedDict()
         a._cancel_inflight_max = 2048
         a._cancel_inflight_ttl_s = 30.0
