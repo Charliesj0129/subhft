@@ -31,6 +31,10 @@ logger = get_logger("order_adapter")
 _PENDING_SENTINEL = object()
 _TERMINAL_BEFORE_REGISTERED = object()
 _GUARD_TIMEOUT = object()
+# ``_call_api`` result for a ``cancel_order`` whose wrapper timed out. Distinct from
+# ``None`` (a failure that is known to have failed): the first attempt may still be
+# running in the SDK thread, so the cancel may well have landed.
+_CANCEL_TIMED_OUT = object()
 
 
 class _CancelWatch(NamedTuple):
@@ -40,6 +44,7 @@ class _CancelWatch(NamedTuple):
     intent: OrderIntent
     cmd_id: int
     attempts: int  # 0 = first cancel only, 1 = retried once
+    confirm_s: float | None = None  # precision-time: None uses the global window
 
 
 class _PhantomEntry(NamedTuple):
@@ -65,6 +70,12 @@ _MUTATING_OPS: frozenset[str] = frozenset({"place_order", "update_order"})
 # the duplicate-order sense: a broker that stops answering cancels is exactly
 # the condition the breaker exists for.
 _ORDER_RTT_OPS: frozenset[str] = frozenset({"place_order", "cancel_order", "update_order"})
+# Commands that reduce risk and so outlive their ``deadline_ns``. A NEW or AMEND
+# carries a price that goes stale; a CANCEL does not -- a late one is still the
+# right command, and a target that already ended is answered by
+# ``cancel_already_terminal``. Dropping one leaves the order live at the broker
+# with nothing left that will cancel it (THESHOW 2026-10-05: six SELLs).
+_DEADLINE_EXEMPT_INTENTS: frozenset[IntentType] = frozenset({IntentType.CANCEL, IntentType.FORCE_FLAT})
 # Substrings that identify a broker session that has not come up. Shared by
 # ``_is_transient_error`` (which retries them) and
 # ``_is_session_establishment_error`` (which counts them toward a reconnect),
@@ -186,6 +197,9 @@ class OrderAdapter:
         # target order_key -> _CancelWatch. See ``check_unconfirmed_cancels``.
         "_cancel_watch",
         "_cancel_confirm_s",
+        "_cancel_timeout_confirm_s",
+        "_cancel_check_last_s",
+        "_cancel_check_interval_s",
         "_cancel_retry_tasks",
         "_engine_thread_id",
         # M4: per-occurrence phantom storage. Replaces the parallel
@@ -335,6 +349,11 @@ class OrderAdapter:
         # ``_cancel_confirm_s``. Bounded; engine-loop only.
         self._cancel_watch: collections.OrderedDict[str, _CancelWatch] = collections.OrderedDict()
         self._cancel_confirm_s: float = float(os.getenv("HFT_CANCEL_CONFIRM_S", "60"))  # precision-time
+        # A cancel that TIMED OUT is not retried blind (the first attempt may have
+        # landed); it is looked at again after this shorter window instead.
+        self._cancel_timeout_confirm_s: float = float(os.getenv("HFT_CANCEL_TIMEOUT_CONFIRM_S", "10"))  # precision-time
+        self._cancel_check_interval_s: float = 5.0  # precision-time
+        self._cancel_check_last_s: float = float("-inf")  # monotonic timestamp
         self._cancel_retry_tasks: set[asyncio.Task[None]] = set()
         # P1-3: ``_recently_terminal_orders`` and ``_cancel_inflight_targets`` are
         # OrderedDicts mutated by the helpers below. They are designed for
@@ -693,6 +712,41 @@ class OrderAdapter:
         """
         self._live_order_intents.pop(order_key, None)
 
+    @staticmethod
+    def _deadline_exempt(intent: OrderIntent) -> bool:
+        """True for a command that outlives ``deadline_ns`` (CANCEL, FORCE_FLAT)."""
+        return intent.intent_type in _DEADLINE_EXEMPT_INTENTS
+
+    def _note_late_dispatch(self, cmd_id: int, intent: OrderIntent) -> None:
+        """Count and log a risk-reducing command dispatched past its deadline.
+
+        Called once per command, at the point it is handed to the broker call
+        (``_api_worker``): ``run()`` forwards the same command there, so counting
+        in both places would read 2N for N late commands.
+        """
+        try:
+            self.metrics.order_deadline_overridden_total.labels(intent_type=intent.intent_type.name).inc()
+        except Exception:  # noqa: BLE001 — a metric must never block the order path
+            pass
+        logger.warning(
+            "order_deadline_overridden",
+            cmd_id=cmd_id,
+            symbol=intent.symbol,
+            strategy_id=intent.strategy_id,
+            intent_type=intent.intent_type.name,
+        )
+
+    def _release_slot_feedback(self, intent: OrderIntent, reason_code: str) -> None:
+        """Dispatch-failure feedback for a command that was dropped unsent.
+
+        Only a ``NEW`` ever took a strategy pending slot, and
+        ``on_risk_feedback`` decrements purely on ``feedback.side`` -- so a
+        dropped CANCEL (``side`` is always BUY) or AMEND would release a slot
+        that belongs to some other order. Same rule as ``_reject_before_dispatch``.
+        """
+        if intent.intent_type == IntentType.NEW:
+            self._send_dispatch_rejection(intent, reason_code)
+
     def _send_dispatch_rejection(
         self,
         intent: OrderIntent,
@@ -821,15 +875,19 @@ class OrderAdapter:
         ``client_order_id`` so the slot is not paid for twice.
         """
         now_mono = time.monotonic()
+        # The cancel watch runs on its own, shorter clock: a timed-out cancel is
+        # judged after HFT_CANCEL_TIMEOUT_CONFIRM_S, which a once-a-minute check
+        # would stretch to a minute. It always runs before eviction, while the
+        # Trade handle is still held. A failure here never blocks the sweep.
+        if now_mono - self._cancel_check_last_s >= self._cancel_check_interval_s:
+            self._cancel_check_last_s = now_mono
+            try:
+                await self.check_unconfirmed_cancels()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("check_unconfirmed_cancels_error", error=str(exc))
         if now_mono - self._live_orders_last_sweep_s < 60.0:
             return 0
         self._live_orders_last_sweep_s = now_mono
-        # Before eviction: an unconfirmed cancel is retried while the Trade
-        # handle is still held. Never lets a failure here block the sweep.
-        try:
-            await self.check_unconfirmed_cancels()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("check_unconfirmed_cancels_error", error=str(exc))
         cutoff = now_mono - self._live_orders_ttl_s
         evicted = 0
         # Collected under the lock, emitted after it: _send_dispatch_rejection
@@ -972,11 +1030,15 @@ class OrderAdapter:
         # strategy doesn't emit a duplicate while the broker may still fill.
         # The Bug D recovery janitor will release pending after TTL if no
         # callback arrives.
-        self._send_dispatch_rejection(
-            intent,
-            "dispatch_failed",
-            phantom_pending=is_phantom_candidate,
-        )
+        # Only a phantom candidate (NEW / FORCE_FLAT) is reported: a failed
+        # CANCEL or AMEND never took a slot, and its feedback would be applied
+        # to ``feedback.side`` -- always BUY for a CANCEL (strategy/base.cancel).
+        if is_phantom_candidate:
+            self._send_dispatch_rejection(
+                intent,
+                "dispatch_failed",
+                phantom_pending=True,
+            )
 
         if is_phantom_candidate:
             # M4: append per-occurrence record under _phantom_lock so concurrent
@@ -1506,7 +1568,7 @@ class OrderAdapter:
                     continue
 
                 # Check Deadline
-                if time.monotonic_ns() > cmd.deadline_ns:
+                if time.monotonic_ns() > cmd.deadline_ns and not self._deadline_exempt(cmd.intent):
                     logger.warning("Order Timeout (Pre-dispatch)", cmd_id=cmd.cmd_id)
                     try:
                         self.metrics.order_deadline_expired_total.inc()
@@ -1522,7 +1584,7 @@ class OrderAdapter:
                         RejectionReason.DEADLINE_EXCEEDED,
                         "DEADLINE_EXPIRED",
                     )
-                    self._send_dispatch_rejection(cmd.intent, "dispatch_deadline_expired")
+                    self._release_slot_feedback(cmd.intent, "dispatch_deadline_expired")
                     self.order_queue.task_done()
                     continue
 
@@ -2082,7 +2144,13 @@ class OrderAdapter:
         self._assert_engine_thread()
         self._cancel_inflight_targets.pop(target_key, None)
 
-    def _watch_cancel(self, target_key: str, intent: OrderIntent, cmd_id: int) -> None:
+    def _watch_cancel(
+        self,
+        target_key: str,
+        intent: OrderIntent,
+        cmd_id: int,
+        confirm_s: float | None = None,  # precision-time
+    ) -> None:
         """Remember a cancel whose effect nobody checks.
 
         2026-09-03..10-03: 4 orders had a cancel dispatched ~1 s after the NEW,
@@ -2091,7 +2159,7 @@ class OrderAdapter:
         platform looked at whether a dispatched cancel took effect.
         """
         self._assert_engine_thread()
-        self._cancel_watch[target_key] = _CancelWatch(time.monotonic(), intent, cmd_id, 0)
+        self._cancel_watch[target_key] = _CancelWatch(time.monotonic(), intent, cmd_id, 0, confirm_s)
         self._cancel_watch.move_to_end(target_key)
         while len(self._cancel_watch) > self._cancel_inflight_max:
             self._cancel_watch.popitem(last=False)
@@ -2116,7 +2184,7 @@ class OrderAdapter:
                 trade = self.live_orders.get(key)
                 if trade is None:
                     del self._cancel_watch[key]  # confirmed: the order is gone
-                elif now - watch.at >= self._cancel_confirm_s:
+                elif now - watch.at >= (self._cancel_confirm_s if watch.confirm_s is None else watch.confirm_s):
                     due.append((key, watch, trade))
         for key, watch, trade in due:
             can_retry = watch.attempts == 0 and trade is not _PENDING_SENTINEL
@@ -2147,7 +2215,7 @@ class OrderAdapter:
                 }
             )
             if can_retry:
-                self._cancel_watch[key] = watch._replace(at=now, attempts=1)
+                self._cancel_watch[key] = watch._replace(at=now, attempts=1, confirm_s=None)
                 task = asyncio.create_task(self._retry_cancel(key, watch, trade), name=f"cancel_retry:{key}")
                 self._cancel_retry_tasks.add(task)
                 task.add_done_callback(self._cancel_retry_tasks.discard)
@@ -2159,7 +2227,10 @@ class OrderAdapter:
         """One more cancel for an order the first one did not remove."""
         try:
             result = await self._call_api("cancel_order", self.client.cancel_order, trade, intent=watch.intent)
-            result_label = "failed" if result is None or result is _GUARD_TIMEOUT else "sent"  # None: error or timeout
+            if result is _CANCEL_TIMED_OUT:
+                result_label = "timeout"
+            else:
+                result_label = "failed" if result is None or result is _GUARD_TIMEOUT else "sent"  # None: error
         except Exception as exc:  # noqa: BLE001 — a failed retry must not escape the task
             logger.warning("cancel_retry_error", target=key, error=str(exc))
             result_label = "error"
@@ -3559,6 +3630,28 @@ class OrderAdapter:
                     self._mark_cancel_inflight(target_key)
                     logger.info("Canceling Order", target=target_key)
                     result = await self._call_api("cancel_order", self.client.cancel_order, target_trade, intent=intent)
+                    if result is _CANCEL_TIMED_OUT:
+                        # The SDK thread is still running: this cancel may have
+                        # landed. Watch it on the short window -- re-sent once
+                        # only if the order is still live then. The target stays
+                        # marked in flight (its TTL, or the order's terminal,
+                        # clears it): a strategy that asks again meanwhile gets
+                        # ``cancel_already_inflight`` instead of a blind repeat.
+                        self._audit_log_order(
+                            {
+                                "event": "cancel_timeout",
+                                "intent_type": "CANCEL",
+                                "order_key": f"{intent.strategy_id}:{intent.intent_id}",
+                                "target_key": target_key,
+                                "symbol": intent.symbol,
+                                "strategy_id": intent.strategy_id,
+                                "cmd_id": int(cmd.cmd_id),
+                            }
+                        )
+                        self._watch_cancel(
+                            target_key, intent, int(cmd.cmd_id), confirm_s=self._cancel_timeout_confirm_s
+                        )
+                        return False
                     if result is None or result is _GUARD_TIMEOUT:
                         self._clear_cancel_inflight(target_key)
                         return False
@@ -4024,7 +4117,10 @@ class OrderAdapter:
                         except ValueError:
                             pass
                         continue
-                    if item.deadline_ns and time.monotonic_ns() > item.deadline_ns:
+                    past_deadline = bool(item.deadline_ns) and time.monotonic_ns() > item.deadline_ns
+                    if past_deadline and self._deadline_exempt(item.intent):
+                        self._note_late_dispatch(item.cmd_id, item.intent)
+                    elif past_deadline:
                         logger.warning(
                             "api_worker_deadline_expired",
                             cmd_id=item.cmd_id,
@@ -4038,7 +4134,7 @@ class OrderAdapter:
                             RejectionReason.DEADLINE_EXCEEDED,
                             "DEADLINE_EXPIRED",
                         )
-                        self._send_dispatch_rejection(item.intent, "dispatch_deadline_expired")
+                        self._release_slot_feedback(item.intent, "dispatch_deadline_expired")
                         try:
                             self._api_inflight.remove(item)
                         except ValueError:
@@ -4310,6 +4406,14 @@ class OrderAdapter:
                         exc = asyncio.TimeoutError()
 
                     is_transient = self._is_transient_error(exc)
+                    # A cancel that timed out is not repeated blind either: the
+                    # first attempt may have landed, and the repeat is answered
+                    # "already cancelled" -- a FAILED after CANCELLED (E3,
+                    # 2026-10-05). It is counted once, below, and handed back as
+                    # ``_CANCEL_TIMED_OUT`` so the caller can watch it.
+                    cancel_timed_out = op == "cancel_order" and isinstance(exc, (asyncio.TimeoutError, TimeoutError))
+                    if cancel_timed_out:
+                        is_transient = False
 
                     # For mutating ops that timed out, do NOT retry — the
                     # original thread-pool call may still complete at the
@@ -4408,7 +4512,7 @@ class OrderAdapter:
                             symbol=intent.symbol,
                             strategy_id=intent.strategy_id,
                         )
-                    return None
+                    return _CANCEL_TIMED_OUT if cancel_timed_out else None
 
             # Should not reach here, but handle gracefully
             return None

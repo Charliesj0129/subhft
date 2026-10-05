@@ -1,7 +1,7 @@
 """Tests for _call_api timeout-retry duplicate order prevention.
 
-Verifies that mutating operations (place_order, update_order) are NOT
-retried after a timeout, while read-only operations still retry normally.
+Verifies that mutating operations (place_order, update_order) and cancel_order
+are NOT retried after a timeout, while read-only operations still retry normally.
 """
 
 from __future__ import annotations
@@ -171,10 +171,42 @@ async def test_list_positions_timeout_retries_normally(tmp_config):
 
 
 @pytest.mark.asyncio
-async def test_cancel_order_timeout_retries_normally(tmp_config):
-    """cancel_order is safe to retry (idempotent at broker) and should retry."""
+async def test_cancel_order_timeout_is_not_retried_and_is_flagged_as_timed_out(tmp_config):
+    """A cancel is NOT idempotent at the broker in the way the old test assumed.
+
+    THESHOW 2026-10-05: 34 orders got a FAILED 0.02-1.28 s after their CANCELLED,
+    because the first (timed-out) cancel had landed and the immediate retry was
+    answered "already cancelled". The timeout is now handed back as
+    ``_CANCEL_TIMED_OUT`` so the caller can watch it instead of repeating it.
+    """
+    from hft_platform.order import adapter as adapter_module
+
     adapter = _make_adapter(tmp_config)
     adapter._api_timeout_s = 0.05
+    adapter._api_guard_timeout_s = 5.0
+
+    call_count = 0
+
+    def slow_cancel() -> dict[str, str]:
+        nonlocal call_count
+        call_count += 1
+        time.sleep(0.2)
+        return {"status": "cancelled"}
+
+    result = await adapter._call_api(
+        "cancel_order",
+        slow_cancel,
+        max_retries=2,
+    )
+
+    assert result is adapter_module._CANCEL_TIMED_OUT
+    assert call_count == 1  # no blind retry
+
+
+@pytest.mark.asyncio
+async def test_cancel_order_transient_non_timeout_error_still_retries(tmp_config):
+    adapter = _make_adapter(tmp_config)
+    adapter._api_timeout_s = 1.0
     adapter._api_guard_timeout_s = 5.0
 
     call_count = 0
@@ -183,7 +215,7 @@ async def test_cancel_order_timeout_retries_normally(tmp_config):
         nonlocal call_count
         call_count += 1
         if call_count < 2:
-            time.sleep(0.2)
+            raise ConnectionError("reset")
         return {"status": "cancelled"}
 
     result = await adapter._call_api(
@@ -193,7 +225,7 @@ async def test_cancel_order_timeout_retries_normally(tmp_config):
     )
 
     assert result == {"status": "cancelled"}
-    assert call_count == 2  # Retried once
+    assert call_count == 2  # retried once
 
 
 # ── Normal (non-timeout) flow unaffected ───────────────────────────────────
