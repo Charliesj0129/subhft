@@ -1365,22 +1365,98 @@ class OrderAdapter:
             )
         return released
 
-    async def _run_blocking_call(self, fn: Any, *args: Any, **kwargs: Any) -> Any:
+    @staticmethod
+    def _trade_has_broker_ids(trade: Any) -> bool:
+        """True when ``trade`` carries any broker order id (read only; nothing is kept)."""
+        names = ("seq_no", "seqno", "ord_no", "ordno", "order_id", "id")
+        for holder in (
+            trade,
+            *(trade.get(sub) if isinstance(trade, dict) else getattr(trade, sub, None) for sub in ("order", "status")),
+        ):
+            if holder is None:
+                continue
+            for name in names:
+                if holder.get(name) if isinstance(holder, dict) else getattr(holder, name, None):
+                    return True
+        return False
+
+    def _late_place_reporter(self, intent: OrderIntent | None, start_ns: int) -> Callable[[str, Any], None] | None:
+        """Callback for ``_run_blocking_call``: report a place_order answer that came after the timeout."""
+        if intent is None:
+            return None
+
+        def _report(kind: str, value: Any) -> None:
+            elapsed_s = (time.perf_counter_ns() - start_ns) / 1e9
+            try:
+                has_ids = kind == "trade" and self._trade_has_broker_ids(value)
+            except Exception:  # noqa: BLE001 — an odd SDK object must not cost the whole report
+                has_ids = False
+            order_key = f"{intent.strategy_id}:{intent.intent_id}"
+            logger.warning(
+                "place_order_late_result",
+                order_key=order_key,
+                symbol=intent.symbol,
+                kind=kind,
+                elapsed_s=round(elapsed_s, 1),
+                has_ids=has_ids,
+            )
+            try:
+                self.metrics.place_order_late_result_total.labels(kind=kind).inc()
+            except Exception:  # noqa: BLE001 — a metric must never break the order path
+                pass
+            row: dict[str, Any] = {
+                "event": "late_result",
+                "intent_type": intent.intent_type.name,
+                "order_key": order_key,
+                "symbol": intent.symbol,
+                "side": str(intent.side),
+                "price": intent.price,
+                "qty": intent.qty,
+                "strategy_id": intent.strategy_id,
+                "details": f"kind={kind} elapsed_s={elapsed_s:.1f} has_ids={has_ids}",
+            }
+            if kind == "error":
+                row["error"] = type(value).__name__
+            self._audit_log_order(row)
+
+        return _report
+
+    async def _run_blocking_call(
+        self, fn: Any, *args: Any, _on_late: Callable[[str, Any], None] | None = None, **kwargs: Any
+    ) -> Any:
         """Run a synchronous broker call off-loop without using the loop's default executor.
 
         A daemon thread avoids pytest-asyncio teardown hangs when timed-out broker
         calls are still unwinding in the background.
+
+        ``_on_late(kind, value)`` is called on the event loop when the call
+        finishes AFTER its waiter gave up (the wrapper timed out), instead of the
+        answer being dropped: ``kind`` is ``trade`` (a result), ``error`` (the SDK
+        raised) or ``cancelled_before_send`` (the guard stopped it before the SDK
+        was reached). It must not raise; if it does the exception is swallowed.
         """
         loop = asyncio.get_running_loop()
         result_future: asyncio.Future[Any] = loop.create_future()
 
+        def _late(kind: str, value: Any) -> None:
+            if _on_late is None:
+                return
+            try:
+                _on_late(kind, value)
+            except Exception:  # noqa: BLE001 — observation must never disturb the loop
+                logger.warning("late_result_callback_failed", exc_info=True)
+
         def _set_result(value: Any) -> None:
             if not result_future.done():
                 result_future.set_result(value)
+            else:
+                _late("trade", value)
 
         def _set_exception(exc: BaseException) -> None:
             if not result_future.done():
                 result_future.set_exception(exc)
+            else:
+                _late("cancelled_before_send" if isinstance(exc, _TimeoutCancelled) else "error", exc)
 
         def _worker() -> None:
             try:
@@ -4417,7 +4493,10 @@ class OrderAdapter:
                 try:
                     start_ns = time.perf_counter_ns()
                     result = await asyncio.wait_for(
-                        self._run_blocking_call(_guarded_call),
+                        self._run_blocking_call(
+                            _guarded_call,
+                            _on_late=self._late_place_reporter(intent, start_ns) if op == "place_order" else None,
+                        ),
                         timeout=self._api_timeout_s,
                     )
                     duration = time.perf_counter_ns() - start_ns

@@ -174,6 +174,7 @@ class MetricsRegistry:
                 _pn("order_deadline_overridden_total"),
                 _pn("order_session_warmup_total"),
                 _pn("order_local_reject_total"),
+                _pn("place_order_late_result_total"),
                 _pn("phantom_order_candidates_total"),
                 _pn("phantom_recovery_releases_total"),
                 _pn("live_order_ttl_releases_total"),
@@ -767,6 +768,12 @@ class MetricsRegistry:
             "1,733 circuit_breaker refusals over 2026-08-28..09-16 drove "
             "OrderDeadLetterQueueGrowing (critical) on THESHOW.",
             ["reason"],
+        )
+        self.place_order_late_result_total = Counter(
+            _pn("place_order_late_result_total"),
+            "place_order answers that arrived after the wrapper timeout "
+            "(kind=trade: broker result; error: SDK raised; cancelled_before_send: guard stopped the call)",
+            ["kind"],
         )
         self.phantom_order_candidates_total = Counter(
             _pn("phantom_order_candidates_total"),
