@@ -44,7 +44,7 @@ class _CancelWatch(NamedTuple):
     intent: OrderIntent
     cmd_id: int
     attempts: int  # 0 = first cancel only, 1 = retried once
-    confirm_s: float | None = None  # None: use ``_cancel_confirm_s``; a timed-out cancel gets a short window
+    confirm_s: float | None = None  # precision-time: None uses the global window
 
 
 class _PhantomEntry(NamedTuple):
@@ -2144,7 +2144,13 @@ class OrderAdapter:
         self._assert_engine_thread()
         self._cancel_inflight_targets.pop(target_key, None)
 
-    def _watch_cancel(self, target_key: str, intent: OrderIntent, cmd_id: int, confirm_s: float | None = None) -> None:
+    def _watch_cancel(
+        self,
+        target_key: str,
+        intent: OrderIntent,
+        cmd_id: int,
+        confirm_s: float | None = None,  # precision-time
+    ) -> None:
         """Remember a cancel whose effect nobody checks.
 
         2026-09-03..10-03: 4 orders had a cancel dispatched ~1 s after the NEW,
