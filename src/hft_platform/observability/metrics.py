@@ -171,6 +171,7 @@ class MetricsRegistry:
                 _pn("order_halt_post_dispatch_cancel_total"),
                 _pn("api_queue_priority_eviction_total"),
                 _pn("order_deadline_expired_total"),
+                _pn("order_deadline_overridden_total"),
                 _pn("order_session_warmup_total"),
                 _pn("order_local_reject_total"),
                 _pn("phantom_order_candidates_total"),
@@ -750,6 +751,12 @@ class MetricsRegistry:
         self.order_deadline_expired_total = Counter(
             _pn("order_deadline_expired_total"),
             "Orders dropped pre-dispatch because deadline_ns was exceeded",
+        )
+        self.order_deadline_overridden_total = Counter(
+            _pn("order_deadline_overridden_total"),
+            "CANCEL / FORCE_FLAT commands dispatched although deadline_ns had passed "
+            "(risk-reducing commands are never dropped for lateness)",
+            ["intent_type"],
         )
         self.order_local_reject_total = Counter(
             _pn("order_local_reject_total"),
