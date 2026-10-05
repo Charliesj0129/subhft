@@ -178,6 +178,7 @@ class MetricsRegistry:
                 _pn("live_order_ttl_releases_total"),
                 _pn("live_order_swept_after_fill_total"),
                 _pn("live_order_completed_by_fill_total"),
+                _pn("order_repeat_terminal_total"),
                 _pn("cancel_unconfirmed_total"),
                 _pn("cancel_retry_total"),
                 _pn("api_guard_timeout_total"),
@@ -780,6 +781,12 @@ class MetricsRegistry:
         self.live_order_completed_by_fill_total = Counter(
             _pn("live_order_completed_by_fill_total"),
             "Orders removed from live_orders because cumulative fills reached the order quantity",
+        )
+        self.order_repeat_terminal_total = Counter(
+            _pn("order_repeat_terminal_total"),
+            "Terminal order status events for an order that had already ended, reported with remaining_qty=0 "
+            "so the strategy does not release its pending slot twice",
+            ["status"],
         )
         self.cancel_unconfirmed_total = Counter(
             _pn("cancel_unconfirmed_total"),

@@ -150,6 +150,10 @@ class OrderAdapter:
         "_fill_ledger",
         "_fill_ledger_max",
         "_fill_ledger_ttl_s",
+        # order_key -> monotonic stamp of the moment the order ended. See ``note_terminal``.
+        "_finished_orders",
+        "_finished_max",
+        "_finished_ttl_s",
         "_live_orders_lock",
         "rate_limiter",
         "circuit_breaker",
@@ -308,6 +312,13 @@ class OrderAdapter:
         self._fill_ledger: collections.OrderedDict[str, tuple[float, int]] = collections.OrderedDict()
         self._fill_ledger_max: int = int(os.getenv("HFT_FILL_LEDGER_MAX", "8192"))
         self._fill_ledger_ttl_s: float = float(os.getenv("HFT_FILL_LEDGER_TTL_S", "900"))
+        # Orders that have ended, by any route. A cancel retry the broker rejects
+        # arrives as a second terminal status 0.02-1.28 s after the first
+        # (THESHOW 2026-10-05, 34 orders); the router asks this ledger so the
+        # second one releases nothing. Same bound and TTL as the fill ledger.
+        self._finished_orders: collections.OrderedDict[str, float] = collections.OrderedDict()
+        self._finished_max: int = self._fill_ledger_max
+        self._finished_ttl_s: float = self._fill_ledger_ttl_s
         self._live_orders_lock = asyncio.Lock()
         self._pending_order_keys: set[str] = set()
         # TTL sweep: evict orphaned live_orders entries (missed terminal callbacks)
@@ -699,8 +710,11 @@ class OrderAdapter:
         reason_code: str,
         phantom_pending: bool = False,
         side: Side | None = None,
-    ) -> None:
+    ) -> bool:
         """Non-blocking rejection feedback for dispatch failures.
+
+        Returns True when the feedback was queued for the strategy, False when it
+        was dropped (no sink, sink full, or an error).
 
         Bug 23 (2026-04-17): when ``phantom_pending=True``, the intent was
         registered as a phantom candidate (likely reached the broker despite
@@ -718,7 +732,7 @@ class OrderAdapter:
         # straight into the order path rather than skipping the feedback.
         sink = getattr(self, "_rejection_sink", None)
         if sink is None:
-            return
+            return False
         try:
             from hft_platform.contracts.strategy import RiskFeedback
 
@@ -733,10 +747,12 @@ class OrderAdapter:
                     was_approved=phantom_pending,
                 )
             )
+            return True
         except asyncio.QueueFull:
             self.metrics.rejection_sink_overflow_total.inc()
         except Exception:
             pass  # feedback must never crash order path
+        return False
 
     def _audit_log_order(self, order_data: dict) -> None:
         """Non-blocking audit log for order lifecycle events. Skips silently if no writer."""
@@ -835,7 +851,7 @@ class OrderAdapter:
         # Collected under the lock, emitted after it: _send_dispatch_rejection
         # calls into the rejection sink's put_nowait and must not run while the
         # live-orders lock is held.
-        orphaned_pendings: list[tuple[OrderIntent, Side]] = []
+        orphaned_pendings: list[tuple[str, OrderIntent, Side]] = []
         filled_swept = 0
         async with self._live_orders_lock:
             stale_keys = [
@@ -853,8 +869,9 @@ class OrderAdapter:
                         # on_fill. Releasing again would free a slot a live order
                         # may occupy (2,169 spurious releases in 31 d, THESHOW).
                         filled_swept += 1
+                        self._mark_finished(k)  # the fill already freed the slot
                     else:
-                        orphaned_pendings.append(tracked)
+                        orphaned_pendings.append((k, *tracked))
                 self._remove_pending_fill(k)
                 evicted += 1
             # Also prune _live_orders_inserted_at for keys no longer in live_orders
@@ -875,13 +892,18 @@ class OrderAdapter:
                 self.metrics.live_order_swept_after_fill_total.inc(filled_swept)
             except Exception:  # noqa: BLE001 — metric must never break order path
                 pass
-        for intent, side in orphaned_pendings:
-            self._send_dispatch_rejection(
+        for key, intent, side in orphaned_pendings:
+            released = self._send_dispatch_rejection(
                 intent,
                 "live_order_ttl_expired",
                 phantom_pending=False,
                 side=side,
             )
+            if released:
+                # Only now is the slot known to be on its way back to the strategy.
+                # If the feedback was dropped, the order's real terminal is the one
+                # release the strategy will still get: do not zero it.
+                self._mark_finished(key)
             try:
                 self.metrics.live_order_ttl_releases_total.inc()
             except Exception:  # noqa: BLE001 — metric must never break order path
@@ -1258,11 +1280,15 @@ class OrderAdapter:
                     "error": f"phantom_ttl_{ttl:g}s",
                 }
             )
-            self._send_dispatch_rejection(
+            if self._send_dispatch_rejection(
                 intent,
                 "phantom_recovery_ttl_expired",
                 phantom_pending=False,
-            )
+            ):
+                # The slot is back with the strategy; whatever status the order
+                # gets later must not release it again. (A dropped feedback leaves
+                # the real terminal as the only release, so it is not recorded.)
+                self._mark_finished(_pkey)
             released += 1
             try:
                 self.metrics.phantom_recovery_releases_total.inc()
@@ -2033,6 +2059,7 @@ class OrderAdapter:
         Bounded LRU + TTL eviction; called next to live_orders deletion."""
         self._assert_engine_thread()
         self._clear_cancel_inflight(order_key)
+        self._mark_finished(order_key)
         now = time.monotonic()
         self._recently_terminal_orders[order_key] = (now, reason)
         self._recently_terminal_orders.move_to_end(order_key)
@@ -2207,6 +2234,42 @@ class OrderAdapter:
             else:
                 break
         return cum
+
+    def order_finished(self, order_key: str) -> bool:
+        """True when ``order_key`` has already ended (terminal status, completing
+        fill, TTL-sweep give-up or expired phantom record)."""
+        stamp = self._finished_orders.get(order_key)
+        if stamp is None:
+            return False
+        if time.monotonic() - stamp > self._finished_ttl_s:
+            self._finished_orders.pop(order_key, None)
+            return False
+        return True
+
+    def _mark_finished(self, order_key: str) -> None:
+        now = time.monotonic()
+        self._finished_orders[order_key] = now
+        self._finished_orders.move_to_end(order_key)
+        cutoff = now - self._finished_ttl_s
+        while self._finished_orders:
+            oldest_key = next(iter(self._finished_orders))
+            if self._finished_orders[oldest_key] < cutoff or len(self._finished_orders) > self._finished_max:
+                self._finished_orders.popitem(last=False)
+            else:
+                break
+
+    def note_terminal(self, order_key: str) -> bool:
+        """A terminal status event arrived for ``order_key``.
+
+        Returns True when the order had ALREADY ended before this event -- so the
+        event is a repeat and must release nothing -- and records the order as
+        ended either way. The check comes before the record, so the first
+        terminal of an order is never a repeat; that includes a live FAILED for
+        insufficient margin, which is the only terminal such an order gets.
+        """
+        repeat = self.order_finished(order_key)
+        self._mark_finished(order_key)
+        return repeat
 
     async def on_order_fill(self, order_key: str, qty: int) -> bool:
         """A deal arrived for ``order_key``: finish the order once it is fully traded.

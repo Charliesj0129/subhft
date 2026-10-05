@@ -12,6 +12,7 @@ from typing import Any, Callable, Dict, Optional, Union
 from structlog import get_logger
 
 from hft_platform.contracts.constants import MANUAL_STRATEGY_ID
+from hft_platform.contracts.execution import OrderStatus
 from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceCodec
 from hft_platform.engine.event_bus import RingBufferBus
@@ -21,6 +22,9 @@ from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.recorder.wal import WALWriter
 
 logger = get_logger("execution.router")
+
+# FILLED, CANCELLED and FAILED are the terminal statuses (IntEnum order).
+_FIRST_TERMINAL_STATUS = int(OrderStatus.FILLED)
 
 
 def _synthesize_dedup_key(fill: Any) -> str:
@@ -175,6 +179,31 @@ class ExecutionRouter:
         if cum > order_event.filled_qty:
             order_event.filled_qty = cum
             order_event.remaining_qty = max(0, order_event.submitted_qty - cum)
+
+    def _release_slot_once(self, order_event: Any) -> None:
+        """Make a repeat terminal status release nothing.
+
+        The strategy gives its pending slot back by ``remaining_qty`` on every
+        CANCELLED / FAILED. An order that already ended -- cancelled, filled,
+        given up by the TTL sweep -- and then gets another terminal (the broker
+        rejecting a cancel retry) would free the slot a second time, which by then
+        may belong to a newer quote. The tracker answers once per event, before
+        it records this one, so the first terminal is never touched: a live
+        FAILED for insufficient margin still releases. Status is left alone so
+        the strategy still clears its cancel-in-flight bookkeeping.
+        """
+        tracker = self._fill_tracker
+        key = getattr(order_event, "client_order_id", "")
+        if tracker is None or not key or int(order_event.status) < _FIRST_TERMINAL_STATUS:
+            return
+        note = getattr(tracker, "note_terminal", None)
+        if not callable(note) or note(key) is not True:
+            return
+        order_event.remaining_qty = 0
+        try:
+            self.metrics.order_repeat_terminal_total.labels(status=OrderStatus(order_event.status).name).inc()
+        except Exception:  # noqa: BLE001 — a metric must never break the fill path
+            pass
 
     def set_risk_engine(self, risk_engine: object) -> None:
         """Set or replace the risk engine reference (late-bind from bootstrap)."""
@@ -440,6 +469,7 @@ class ExecutionRouter:
                     order_event = self.normalizer.normalize_order(raw)
                     if order_event:
                         self._apply_fill_ledger(order_event)
+                        self._release_slot_once(order_event)
                         self._publish_nowait(order_event)
 
                         # Direct order recording safety net: bypass RingBufferBus
