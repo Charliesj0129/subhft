@@ -558,6 +558,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Skip the exchange calendar; report coverage over observed days only",
     )
     audit.add_argument(
+        "--no-deep-checks",
+        action="store_true",
+        help=(
+            "Skip the source-layer scans (content duplicates, ingest clamp, session gaps, "
+            "non-trading-day rows, TXO ATM coverage); they read the whole range and take minutes"
+        ),
+    )
+    audit.add_argument(
         "--reference-inventory",
         default=None,
         help=(
@@ -607,6 +615,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             use_calendar=not args.no_calendar,
             chunk_days=args.chunk_days,
             reference_inventory=Path(args.reference_inventory) if args.reference_inventory else None,
+            deep_checks=not args.no_deep_checks,
         )
         json_path, md_path = quality.write_report(report, Path(args.out_dir))
         print(
