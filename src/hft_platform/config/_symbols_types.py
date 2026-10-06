@@ -190,6 +190,10 @@ class ContractIndex:
     by_code: dict[str, dict[str, Any]] = field(default_factory=dict)
     futures_by_root: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     options_by_root: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    # Operator builds set this so an option window with no underlying price is an error instead of a
+    # median-strike guess. Runtime rebuilds (universe roll, contract refresh) leave it off: an error there
+    # would refuse the roll, so they keep the warning.
+    require_underlying: bool = False
 
     def __post_init__(self) -> None:
         normalized_metrics: dict[str, dict[str, Any]] = {}

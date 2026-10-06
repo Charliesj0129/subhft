@@ -345,17 +345,49 @@ def _normalize_option_right(value: Any) -> str:
     return ""
 
 
-def _pick_reference_price(contracts: list[dict[str, Any]]) -> float | None:
-    for key in ("reference", "reference_price", "underlying_price", "close"):
-        for contract in contracts:
-            value = contract.get(key)
-            if value is None:
-                continue
-            try:
-                return float(value)
-            except (TypeError, ValueError):
-                continue
-    return None
+# Option root -> the future whose price the strike window must be centred on. Only roots whose underlying
+# is certain are listed; anything else needs an explicit ``underlying_price``.
+UNDERLYING_FUTURE_ROOT: dict[str, str] = {"TXO": "TXF"}
+
+
+def _positive_float(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def pick_underlying_price(
+    root: str,
+    group: list[dict[str, Any]],
+    contract_index: ContractIndex,
+) -> tuple[float | None, str]:
+    """Price of the instrument an option chain is quoted on, with where it came from.
+
+    An option contract's own ``reference`` / ``close`` is the option PREMIUM, not the underlying, so it is
+    never used here. Order: an explicit ``underlying_price`` on the chain (contract or metrics), then the
+    ``reference`` / ``underlying_price`` of the nearest non-expired underlying future.
+    """
+    for contract in group:
+        code = str(contract.get("code") or "")
+        for source in (contract, contract_index.metrics_by_code.get(code, {})):
+            value = _positive_float(source.get("underlying_price"))
+            if value is not None:
+                return value, "underlying_price"
+
+    future_root = UNDERLYING_FUTURE_ROOT.get(root.upper())
+    futures = contract_index.futures_by_root.get(future_root, []) if future_root else []
+    dated = [(dte, contract) for contract in futures if (dte := contract_dte_days(contract)) is not None and dte >= 0]
+    for _, contract in sorted(dated, key=lambda item: item[0]):
+        code = str(contract.get("code") or "")
+        for source in (contract_index.metrics_by_code.get(code, {}), contract):
+            for key in ("underlying_price", "reference"):
+                value = _positive_float(source.get(key))
+                if value is not None:
+                    return value, f"{future_root}:{code}"
+        break  # only the nearest future is the underlying
+    return None, ""
 
 
 def _parse_selector(selector: str) -> tuple[str, int]:
@@ -451,10 +483,19 @@ def _expand_options(
             result.errors.append(f"No strike data for options root {root}")
             return
 
-        reference = _pick_reference_price(group)
+        reference, _ = pick_underlying_price(root, group, contract_index)
         if reference is None:
+            if contract_index.require_underlying:
+                result.errors.append(
+                    f"No underlying price to centre the {root} {month} option window on; refusing to guess. "
+                    f"Supply underlying_price for the {root} chain or a reference for the nearest "
+                    f"{UNDERLYING_FUTURE_ROOT.get(root.upper(), 'underlying')} future in the metrics file"
+                )
+                return
             reference = strikes[len(strikes) // 2]
-            result.warnings.append(f"Using median strike for ATM ({root} {month})")
+            result.warnings.append(
+                f"Using median strike for ATM ({root} {month}): window is NOT centred on the underlying"
+            )
 
         atm_idx = min(range(len(strikes)), key=lambda i: abs(strikes[i] - reference))
 

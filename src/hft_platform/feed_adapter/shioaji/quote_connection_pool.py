@@ -1259,24 +1259,29 @@ class QuoteConnectionPool:
             # Optional ATM filtering via HFT_OPTIONS_STRIKE_RANGE
             strike_range = int(os.getenv("HFT_OPTIONS_STRIKE_RANGE", "0"))  # 0 = all
             if strike_range > 0:
-                # Find ATM from reference prices
-                refs = [float(c["reference"]) for c in nearest if c.get("reference")]
-                if refs:
-                    atm = sum(refs) / len(refs)
-                    strikes = sorted(set(float(c["strike"]) for c in nearest if c.get("strike")))
-                    if strikes:
-                        atm_idx = min(range(len(strikes)), key=lambda i: abs(strikes[i] - atm))
-                        lo = max(atm_idx - strike_range, 0)
-                        hi = min(atm_idx + strike_range, len(strikes) - 1)
-                        allowed = set(strikes[lo : hi + 1])
-                        nearest = [c for c in nearest if c.get("strike") is not None and float(c["strike"]) in allowed]
-                        logger.info(
-                            "options_strike_filter",
-                            atm=atm,
-                            range=strike_range,
-                            strikes_before=len(strikes),
-                            strikes_after=len(allowed),
-                        )
+                # Centre on the underlying future, never on option premiums: an option contract's
+                # ``reference`` is its own premium. No underlying price -> keep the current chain.
+                from hft_platform.config._symbols_expansion import pick_underlying_price
+
+                atm, atm_source = pick_underlying_price("TXO", nearest, self._contract_index())
+                if atm is None:
+                    logger.error("options_refresh_no_underlying", expiry=nearest_date, strike_range=strike_range)
+                    return False
+                strikes = sorted(set(float(c["strike"]) for c in nearest if c.get("strike")))
+                if strikes:
+                    atm_idx = min(range(len(strikes)), key=lambda i: abs(strikes[i] - atm))
+                    lo = max(atm_idx - strike_range, 0)
+                    hi = min(atm_idx + strike_range, len(strikes) - 1)
+                    allowed = set(strikes[lo : hi + 1])
+                    nearest = [c for c in nearest if c.get("strike") is not None and float(c["strike"]) in allowed]
+                    logger.info(
+                        "options_strike_filter",
+                        atm=atm,
+                        atm_source=atm_source,
+                        range=strike_range,
+                        strikes_before=len(strikes),
+                        strikes_after=len(allowed),
+                    )
 
             calls = sorted(
                 [c for c in nearest if c.get("right") == "C"],

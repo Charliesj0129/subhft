@@ -4,7 +4,7 @@ Covers all public functions and their branches including:
 - _default_exchange_for_code
 - _normalize_option_right
 - _parse_selector
-- _pick_reference_price
+- pick_underlying_price
 - build_entry
 - _group_by_expiry
 - _expand_synthetic
@@ -23,9 +23,9 @@ from hft_platform.config._symbols_expansion import (
     _group_by_expiry,
     _normalize_option_right,
     _parse_selector,
-    _pick_reference_price,
     build_entry,
     expand_spec,
+    pick_underlying_price,
 )
 from hft_platform.config._symbols_types import (
     PLUS_MINUS,
@@ -206,45 +206,55 @@ class TestParseSelector:
 
 
 # ---------------------------------------------------------------------------
-# _pick_reference_price
+# pick_underlying_price
 # ---------------------------------------------------------------------------
 
 
-class TestPickReferencePrice:
-    def test_returns_reference_field(self):
-        contracts = [{"reference": 18000.0}]
-        assert _pick_reference_price(contracts) == 18000.0
+def _txo_chain(**extra: object) -> list[dict]:
+    return [_make_option_contract("TXO18000C7", root="TXO", strike=18000.0, right="C", delivery_date=20270301, **extra)]
 
-    def test_returns_reference_price_field(self):
-        contracts = [{"reference_price": 17500.0}]
-        assert _pick_reference_price(contracts) == 17500.0
 
-    def test_returns_underlying_price(self):
-        contracts = [{"underlying_price": 17000.0}]
-        assert _pick_reference_price(contracts) == 17000.0
+class TestPickUnderlyingPrice:
+    def test_explicit_underlying_price_on_the_chain_wins(self):
+        chain = _txo_chain(underlying_price=19000.0)
+        idx = _make_contract_index(chain)
 
-    def test_returns_close_field(self):
-        contracts = [{"close": 16000.0}]
-        assert _pick_reference_price(contracts) == 16000.0
+        assert pick_underlying_price("TXO", chain, idx) == (19000.0, "underlying_price")
 
-    def test_returns_none_when_no_data(self):
-        contracts = [{"strike": 18000}]
-        assert _pick_reference_price(contracts) is None
+    def test_underlying_price_in_the_metrics_file_is_used(self):
+        chain = _txo_chain()
+        idx = ContractIndex(contracts=chain, metrics_by_code={"TXO18000C7": {"underlying_price": 18800.0}})
 
-    def test_empty_contracts_returns_none(self):
-        assert _pick_reference_price([]) is None
+        assert pick_underlying_price("TXO", chain, idx)[0] == 18800.0
 
-    def test_skips_non_numeric_values(self):
-        contracts = [{"reference": "not_a_number"}, {"close": 15000.0}]
-        assert _pick_reference_price(contracts) == 15000.0
+    def test_the_nearest_underlying_future_reference_is_the_fallback(self):
+        chain = _txo_chain()
+        futures = [
+            _make_futures_contract("TXFC7", root="TXF", delivery_date=20270316, reference=50000.0),
+            _make_futures_contract("TXFB7", root="TXF", delivery_date=20270217, reference=18500.0),
+        ]
+        idx = _make_contract_index(chain + futures)
 
-    def test_priority_reference_over_close(self):
-        contracts = [{"reference": 18000.0, "close": 17000.0}]
-        assert _pick_reference_price(contracts) == 18000.0
+        assert pick_underlying_price("TXO", chain, idx) == (18500.0, "TXF:TXFB7")
 
-    def test_string_numeric_is_coerced(self):
-        contracts = [{"reference": "18500"}]
-        assert _pick_reference_price(contracts) == 18500.0
+    def test_an_option_premium_reference_is_never_taken_for_the_underlying(self):
+        chain = _txo_chain(reference=120.0, close=118.0)
+        idx = _make_contract_index(chain)
+
+        assert pick_underlying_price("TXO", chain, idx) == (None, "")
+
+    def test_a_non_positive_value_is_ignored(self):
+        chain = _txo_chain(underlying_price=0)
+        idx = _make_contract_index(chain)
+
+        assert pick_underlying_price("TXO", chain, idx)[0] is None
+
+    def test_an_unmapped_root_has_no_future_fallback(self):
+        chain = [_make_option_contract("ABC1C7", root="ABC", delivery_date=20270301)]
+        futures = [_make_futures_contract("TXFB7", root="TXF", delivery_date=20270217, reference=18500.0)]
+        idx = _make_contract_index(chain + futures)
+
+        assert pick_underlying_price("ABC", chain, idx)[0] is None
 
 
 # ---------------------------------------------------------------------------
@@ -614,7 +624,7 @@ class TestExpandOptions:
                     root="TXO",
                     strike=k,
                     right="C",
-                    reference=18000.0,
+                    underlying_price=18000.0,
                     delivery_date=20270301,
                 )
             )
@@ -624,7 +634,7 @@ class TestExpandOptions:
                     root="TXO",
                     strike=k,
                     right="P",
-                    reference=18000.0,
+                    underlying_price=18000.0,
                     delivery_date=20270301,
                 )
             )
@@ -711,6 +721,59 @@ class TestExpandOptions:
         assert len(result.warnings) >= 1
         assert "median strike" in result.warnings[0]
 
+    def _skewed_chain(self, **extra: object) -> list[dict]:
+        """Strikes 17000..19000, so the median (18000) is far from a 18500 underlying."""
+        contracts: list[dict] = []
+        for k in (17000.0, 17500.0, 18000.0, 18500.0, 19000.0):
+            for right in ("C", "P"):
+                contracts.append(
+                    _make_option_contract(
+                        f"TXO{int(k)}{right}7", root="TXO", strike=k, right=right, delivery_date=20270301, **extra
+                    )
+                )
+        return contracts
+
+    def test_window_is_centred_on_the_underlying_future_not_the_median_strike(self):
+        futures = [_make_futures_contract("TXFB7", root="TXF", delivery_date=20270217, reference=19000.0)]
+        idx = _make_contract_index(self._skewed_chain() + futures)
+        result = _make_result()
+
+        _expand_options("TXO", "front", "ATM+1", {}, idx, result)
+
+        strikes = {int(s["code"][3:8]) for s in result.symbols}
+        assert strikes == {18500, 19000}
+        assert not any("median strike" in w for w in result.warnings)
+
+    def test_strict_build_refuses_to_guess_when_there_is_no_underlying(self):
+        idx = _make_contract_index(self._skewed_chain())
+        idx.require_underlying = True
+        result = _make_result()
+
+        _expand_options("TXO", "front", "ATM+1", {}, idx, result)
+
+        assert result.symbols == []
+        assert any("refusing to guess" in e for e in result.errors)
+
+    def test_runtime_build_keeps_the_warning_so_a_universe_roll_is_not_refused(self):
+        idx = _make_contract_index(self._skewed_chain())
+        result = _make_result()
+
+        _expand_options("TXO", "front", "ATM+1", {}, idx, result)
+
+        assert result.errors == []
+        assert result.symbols
+        assert "NOT centred" in result.warnings[0]
+
+    def test_option_premium_reference_no_longer_steers_the_window(self):
+        # reference on an option record is its premium; 120 would have picked the lowest strike.
+        idx = _make_contract_index(self._skewed_chain(reference=120.0))
+        result = _make_result()
+
+        _expand_options("TXO", "front", "ATM+1", {}, idx, result)
+
+        strikes = {int(s["code"][3:8]) for s in result.symbols}
+        assert strikes == {17500, 18000, 18500}
+
     def test_otm_offset_two_selects_two_strikes_each_side(self):
         result = _make_result()
         idx = self._make_index()
@@ -783,7 +846,7 @@ class TestExpandSpec:
                     root="TXO",
                     strike=k,
                     right="C",
-                    reference=18000.0,
+                    underlying_price=18000.0,
                     delivery_date=20270301,
                 )
             )
@@ -793,7 +856,7 @@ class TestExpandSpec:
                     root="TXO",
                     strike=k,
                     right="P",
-                    reference=18000.0,
+                    underlying_price=18000.0,
                     delivery_date=20270301,
                 )
             )
