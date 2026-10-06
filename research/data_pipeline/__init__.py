@@ -30,7 +30,7 @@ from src.hft_platform.backtest.ch_data_source import (
     validate_events,
 )
 
-from . import quality
+from . import dedup, quality
 
 CH_PRICE_SCALE = 1_000_000.0
 DEDUP_WINDOW_NS = 500_000
@@ -190,15 +190,30 @@ def rows_to_l2_and_ticks(  # noqa: C901 - sequential protocol conversion mirrors
     rows: Iterable[Sequence[Any]],
     *,
     price_scale: float = CH_PRICE_SCALE,
+    content_dedup: bool = True,
+    dedup_report: dict[str, Any] | None = None,
 ) -> tuple[np.ndarray, np.ndarray, int]:
-    """Convert ordered ClickHouse rows into hftbacktest L2 and tick arrays."""
+    """Convert ordered ClickHouse rows into hftbacktest L2 and tick arrays.
+
+    Duplicate deliveries are removed first (``dedup.RULE_ID``): ticks by delivery multiplicity,
+    BidAsk snapshots when an identical one was already seen at the same ``exch_ts`` (or, as
+    before, an identical one follows within ``DEDUP_WINDOW_NS``). The third return value is the
+    total number of rows removed; ``dedup_report``, when given, is filled with the breakdown
+    so the export sidecar can record what was done.
+    """
+    row_list = list(rows)
+    tick_stats = dedup.DedupStats()
+    if content_dedup:
+        row_list, tick_stats = dedup.dedup_tick_rows(row_list)
     event_dtype = _event_dtype()
     events: list[tuple[Any, ...]] = []
     ticks: list[tuple[Any, ...]] = []
     snapshot_written = False
     prev_bidask_key: tuple[tuple[int, ...], tuple[int, ...], tuple[int, ...], tuple[int, ...]] | None = None
     prev_bidask_ts = 0
-    dedup_removed = 0
+    bidask_removed = 0
+    seen_ts = -1
+    seen_at_ts: set[tuple[tuple[int, ...], tuple[int, ...], tuple[int, ...], tuple[int, ...]]] = set()
     best_bid = 0.0
     best_ask = 0.0
     last_trade_price = 0.0
@@ -209,7 +224,7 @@ def rows_to_l2_and_ticks(  # noqa: C901 - sequential protocol conversion mirrors
     ev_trade_buy = int(TRADE_EVENT | EXCH_EVENT | LOCAL_EVENT | BUY_EVENT)
     ev_trade_sell = int(TRADE_EVENT | EXCH_EVENT | LOCAL_EVENT | SELL_EVENT)
 
-    for row in rows:
+    for row in row_list:
         row_type, exch_ts, local_ts, bids_price, asks_price, bids_vol, asks_vol, px_raw, volume = row
         ts = int(exch_ts)
         local_ts = int(local_ts)
@@ -219,9 +234,15 @@ def rows_to_l2_and_ticks(  # noqa: C901 - sequential protocol conversion mirrors
             bv_list = [int(v) for v in (bids_vol or [])]
             av_list = [int(v) for v in (asks_vol or [])]
             key = (tuple(bp_list), tuple(ap_list), tuple(bv_list), tuple(av_list))
-            if key == prev_bidask_key and (ts - prev_bidask_ts) < DEDUP_WINDOW_NS:
-                dedup_removed += 1
+            if ts != seen_ts:
+                seen_ts, seen_at_ts = ts, set()
+            if content_dedup and key in seen_at_ts:
+                bidask_removed += 1
                 continue
+            if key == prev_bidask_key and (ts - prev_bidask_ts) < DEDUP_WINDOW_NS:
+                bidask_removed += 1
+                continue
+            seen_at_ts.add(key)
             prev_bidask_key = key
             prev_bidask_ts = ts
 
@@ -252,6 +273,15 @@ def rows_to_l2_and_ticks(  # noqa: C901 - sequential protocol conversion mirrors
             events.append(_build_hbt_event(ev, ts, local_ts, price, qty))
             ticks.append((ts, local_ts, price, px_int, qty, side))
 
+    dedup_removed = bidask_removed + tick_stats.removed
+    if dedup_report is not None:
+        dedup_report.update(
+            {
+                "rule": dedup.RULE_ID if content_dedup else "window_only",
+                "bidask_removed": bidask_removed,
+                "tick": tick_stats.to_payload(),
+            }
+        )
     return np.array(events, dtype=event_dtype), np.array(ticks, dtype=TICK_DTYPE), dedup_removed
 
 
@@ -324,6 +354,7 @@ def _write_day_outputs(
     dedup_removed: int,
     owner: str,
     overwrite: bool,
+    dedup_report: dict[str, Any] | None = None,
     quality_report: quality.QualityReport | None = None,
     session_filtered_rows: int = 0,
     session_rule: str = SESSION_RULE_CALENDAR,
@@ -355,6 +386,8 @@ def _write_day_outputs(
         "session_rule": session_rule,
     }
 
+    dedup_provenance = {"dedup_rule": (dedup_report or {}).get("rule", "unrecorded"), "dedup": dedup_report or {}}
+
     l2_meta = {
         "created_at": created_at,
         "data_file": l2_path.name,
@@ -364,6 +397,7 @@ def _write_day_outputs(
         "dataset_id": f"{symbol}_{date}_l2_hftbacktest",
         "date": date,
         "dedup_removed": int(dedup_removed),
+        **dedup_provenance,
         **session_provenance,
         "depth_levels": 5,
         "fields": list(events.dtype.names or ()),
@@ -387,6 +421,7 @@ def _write_day_outputs(
         "data_ul": 5,
         "dataset_id": f"{symbol}_{date}_tick",
         "date": date,
+        **dedup_provenance,
         **session_provenance,
         "fields": list(ticks.dtype.names or ()),
         "generator": "research.data_pipeline.export_l2_ticks",
@@ -469,7 +504,8 @@ def export_l2_ticks(
                         }
                     )
                     continue
-                events, ticks, dedup_removed = rows_to_l2_and_ticks(rows)
+                dedup_report: dict[str, Any] = {}
+                events, ticks, dedup_removed = rows_to_l2_and_ticks(rows, dedup_report=dedup_report)
                 if len(events) == 0 or len(ticks) == 0:
                     summary["errors"].append({"symbol": symbol, "date": date, "error": "empty_export"})
                     continue
@@ -480,6 +516,7 @@ def export_l2_ticks(
                     events=events,
                     ticks=ticks,
                     dedup_removed=dedup_removed,
+                    dedup_report=dedup_report,
                     owner=owner,
                     overwrite=overwrite,
                     quality_report=quality_report,
@@ -566,6 +603,14 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     audit.add_argument(
+        "--official-root",
+        default=None,
+        help=(
+            "Data root of 'official fetch/parse' (holds parsed/fut_ticks/*.summary.json); "
+            "enables the official_volume_reconciliation check for the days it covers"
+        ),
+    )
+    audit.add_argument(
         "--reference-inventory",
         default=None,
         help=(
@@ -616,6 +661,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             chunk_days=args.chunk_days,
             reference_inventory=Path(args.reference_inventory) if args.reference_inventory else None,
             deep_checks=not args.no_deep_checks,
+            official_root=Path(args.official_root) if args.official_root else None,
         )
         json_path, md_path = quality.write_report(report, Path(args.out_dir))
         print(

@@ -797,3 +797,123 @@ class TestSourceChecksInReport:
         assert seen["deep_checks"] is False
         assert pipeline.main(argv) == 0
         assert seen["deep_checks"] is True
+
+
+class TestOfficialVolumeReconciliation:
+    def _row(self, *, deduped: int, official: int = 60_000, raw: int | None = None, day: str = "2026-09-10") -> object:
+        return quality.OfficialVolumeRow(
+            day=day,
+            product="TX",
+            symbol="TXFJ6",
+            raw=raw if raw is not None else deduped,
+            deduped=deduped,
+            official=official,
+        )
+
+    def test_a_complete_deduplicated_day_passes(self) -> None:
+        result = quality.evaluate_official_volume_reconciliation([self._row(deduped=59_700)])
+
+        assert result.status == "pass"
+        assert result.detail["rows"][0]["ratio"] == 0.995
+
+    def test_missing_recording_fails_below_the_floor(self) -> None:
+        result = quality.evaluate_official_volume_reconciliation([self._row(deduped=50_000)])
+
+        assert result.status == "fail"
+        assert "TX 2026-09-10" in result.summary
+
+    def test_duplicate_delivery_that_survives_is_caught_by_the_ceiling(self) -> None:
+        result = quality.evaluate_official_volume_reconciliation([self._row(deduped=119_000, raw=119_000)])
+
+        assert result.status == "fail"
+        assert result.detail["outside_band"][0]["ratio"] > quality.OFFICIAL_RATIO_MAX
+
+    def test_the_raw_ratio_is_reported_next_to_the_deduplicated_one(self) -> None:
+        result = quality.evaluate_official_volume_reconciliation([self._row(deduped=59_700, raw=119_400)])
+
+        assert result.detail["rows"][0]["raw_ratio"] == 1.99
+
+    def test_days_with_a_thin_official_volume_are_not_judged(self) -> None:
+        result = quality.evaluate_official_volume_reconciliation([self._row(deduped=10, official=100)])
+
+        assert result.status == "unavailable"
+
+    def test_no_reference_is_unavailable_not_a_pass(self) -> None:
+        assert quality.evaluate_official_volume_reconciliation(None).status == "unavailable"
+
+    def test_a_day_with_no_recorded_ticks_is_listed_not_scored_as_a_mismatch(self) -> None:
+        rows = [self._row(deduped=59_700), self._row(deduped=0, day="2026-10-05")]
+
+        result = quality.evaluate_official_volume_reconciliation(rows)
+
+        assert result.status == "pass"
+        assert result.detail["no_local_rows"] == ["2026-10-05"]
+
+    def test_only_uncollected_days_leave_the_check_unavailable(self) -> None:
+        result = quality.evaluate_official_volume_reconciliation([self._row(deduped=0, day="2026-10-05")])
+
+        assert result.status == "unavailable"
+        assert result.detail["no_local_rows"] == ["2026-10-05"]
+        assert quality.evaluate_official_volume_reconciliation([]).status == "unavailable"
+
+
+class _TickClient:
+    """Answers every query with the same tick rows and records the parameters it was given."""
+
+    def __init__(self, rows: list[list[object]]) -> None:
+        self.rows = rows
+        self.parameters: list[dict[str, str]] = []
+
+    def query(self, query: str, parameters: dict[str, str] | None = None, settings: object = None) -> _FakeResult:
+        self.parameters.append(dict(parameters or {}))
+        return _FakeResult(self.rows)
+
+
+class TestOfficialVolumeFetch:
+    SUMMARY = [
+        {"product": "TX", "expiry": "202610", "session": "day", "spread": False, "contracts": 41_765, "trades": 9},
+        {"product": "TX", "expiry": "202611", "session": "day", "spread": False, "contracts": 333, "trades": 9},
+        {"product": "TX", "expiry": "202610/202611", "session": "day", "spread": True, "contracts": 180, "trades": 9},
+        {"product": "TX", "expiry": "202610", "session": "night", "spread": False, "contracts": 32_209, "trades": 9},
+        {"product": "TXO", "expiry": "202610", "session": "day", "spread": False, "contracts": 999, "trades": 1},
+    ]
+
+    def _root(self, tmp_path: Path) -> Path:
+        folder = tmp_path / "parsed" / "fut_ticks"
+        folder.mkdir(parents=True)
+        (folder / "2026-10-05.summary.json").write_text(json.dumps(self.SUMMARY), encoding="utf-8")
+        return tmp_path
+
+    def test_the_near_month_is_the_busiest_day_session_single_leg_expiry(self, tmp_path: Path) -> None:
+        volumes = quality.load_official_day_volumes(self._root(tmp_path), "2026-10-01", "2026-10-31")
+
+        assert volumes == {"2026-10-05": {"TX": ("202610", 41_765)}}
+
+    def test_days_outside_the_range_are_ignored(self, tmp_path: Path) -> None:
+        assert quality.load_official_day_volumes(self._root(tmp_path), "2026-11-01", "2026-11-30") == {}
+
+    def test_the_symbol_comes_from_product_and_expiry(self) -> None:
+        assert quality._futures_symbol("TX", "202610") == "TXFJ6"
+        assert quality._futures_symbol("MTX", "202602") == "MXFB6"
+        assert quality._futures_symbol("TMF", "202612") == "TMFL6"
+        assert quality._futures_symbol("TXO", "202610") is None
+        assert quality._futures_symbol("TX", "2026") is None
+
+    def test_without_a_root_the_statistic_is_not_collected(self) -> None:
+        assert quality.fetch_official_volume(object(), "2026-10-01", "2026-10-31", None) is None
+
+    def test_recorded_volume_is_deduplicated_and_compared(self, tmp_path: Path) -> None:
+        ts = 1_790_000_000_000_000_000
+        ticks = []
+        for index in range(30):
+            ticks += [(ts + index * 10**9, 21_000_000_000 + index, 2)] * 2  # every trade delivered twice
+        client = _TickClient([[str(a), str(b), str(c)] for a, b, c in ticks])
+
+        rows = quality.fetch_official_volume(client, "2026-10-01", "2026-10-31", self._root(tmp_path))
+
+        assert rows == [
+            quality.OfficialVolumeRow(
+                day="2026-10-05", product="TX", symbol="TXFJ6", raw=120, deduped=60, official=41_765
+            )
+        ]
+        assert client.parameters[0]["symbol"] == "TXFJ6"

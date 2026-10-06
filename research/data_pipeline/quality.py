@@ -37,6 +37,8 @@ from pathlib import Path
 from statistics import median
 from typing import Any, Literal
 
+from . import dedup
+
 REPORT_SCHEMA = "hft_source_quality.v1"
 DEFAULT_REPORT_DIR = Path("research/reports/data_quality")
 SOURCE_TABLE = "hft.market_data"
@@ -168,6 +170,16 @@ NON_TRADING_DAY_MIN_ROWS = 1_000
 CHAIN_ATM_HALF_WIDTH_POINTS = 500.0
 CHAIN_MIN_EXPIRY_ROWS = 50_000
 
+# Day-session contracts recorded vs the exchange's own tick file. The reference is single-leg
+# contracts only; the official daily volume also counts spread legs (about 0.5% of TX), so a
+# complete, de-duplicated recording sits just under 1.00. Below the floor data is missing; above
+# the ceiling something is still delivered twice.
+OFFICIAL_RATIO_MIN = 0.96
+OFFICIAL_RATIO_MAX = 1.02
+OFFICIAL_MIN_CONTRACTS = 2_000
+OFFICIAL_PRODUCT_ROOTS = {"TX": "TXF", "MTX": "MXF", "TMF": "TMF"}
+_MONTH_LETTERS = "ABCDEFGHIJKL"
+
 
 @dataclass(frozen=True, slots=True)
 class ContentBucket:
@@ -233,6 +245,18 @@ class FuturesRef:
 
 
 @dataclass(frozen=True, slots=True)
+class OfficialVolumeRow:
+    """Day-session contracts of one near-month future: recorded (raw, de-duplicated) vs official."""
+
+    day: str
+    product: str
+    symbol: str
+    raw: int
+    deduped: int
+    official: int
+
+
+@dataclass(frozen=True, slots=True)
 class SourceStats:
     """Inputs of the source-layer checks. ``None`` means "not collected", never "clean"."""
 
@@ -242,6 +266,7 @@ class SourceStats:
     exch_dates: Sequence[ExchDateRows] | None = None
     chain: Sequence[ChainExpiry] | None = None
     futures_ref: Sequence[FuturesRef] | None = None
+    official_volume: Sequence[OfficialVolumeRow] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1074,6 +1099,62 @@ def classify_verdict(checks: Sequence[CheckResult]) -> Verdict:
     return "CLEAN"
 
 
+def evaluate_official_volume_reconciliation(rows: Sequence[OfficialVolumeRow] | None) -> CheckResult:
+    """Recorded day-session contracts against the exchange's tick file, near-month TX / MTX / TMF.
+
+    The ratio uses the de-duplicated count; the raw ratio is reported beside it because the
+    gap between the two is the duplicate delivery the export removes. ``unavailable`` when
+    no official file was supplied: absence of a reference is not agreement.
+    """
+    detail: dict[str, Any] = {"ratio_min": OFFICIAL_RATIO_MIN, "ratio_max": OFFICIAL_RATIO_MAX}
+    if rows is None:
+        return CheckResult(
+            "official_volume_reconciliation", "warn", "unavailable", "no official reference data supplied", detail
+        )
+    candidates = [row for row in rows if row.official >= OFFICIAL_MIN_CONTRACTS]
+    # A day with no recorded ticks is a coverage gap (other checks own that), not a volume mismatch.
+    judged = [row for row in candidates if row.raw > 0]
+    detail["no_local_rows"] = sorted({row.day for row in candidates if row.raw == 0})
+    if not judged:
+        return CheckResult(
+            "official_volume_reconciliation",
+            "warn",
+            "unavailable",
+            "no day has an official near-month volume to compare with",
+            detail,
+        )
+    table = [
+        {
+            "day": row.day,
+            "product": row.product,
+            "symbol": row.symbol,
+            "official": row.official,
+            "deduped": row.deduped,
+            "raw": row.raw,
+            "ratio": round(row.deduped / row.official, 4),
+            "raw_ratio": round(row.raw / row.official, 4),
+        }
+        for row in sorted(judged, key=lambda item: (item.day, item.product))
+    ]
+    outside = [entry for entry in table if not (OFFICIAL_RATIO_MIN <= float(entry["ratio"]) <= OFFICIAL_RATIO_MAX)]
+    detail.update({"rows": table, "outside_band": outside})
+    if outside:
+        worst = max(outside, key=lambda entry: abs(1.0 - float(entry["ratio"])))
+        summary = (
+            f"{len(outside)} of {len(table)} product-days outside "
+            f"[{OFFICIAL_RATIO_MIN}, {OFFICIAL_RATIO_MAX}] of the official volume "
+            f"(worst {worst['product']} {worst['day']}: {worst['ratio']})"
+        )
+        return CheckResult("official_volume_reconciliation", "warn", "fail", summary, detail)
+    return CheckResult(
+        "official_volume_reconciliation",
+        "warn",
+        "pass",
+        f"{len(table)} product-days within [{OFFICIAL_RATIO_MIN}, {OFFICIAL_RATIO_MAX}] of the official volume",
+        detail,
+    )
+
+
 def build_report(
     *,
     date_from: str,
@@ -1100,6 +1181,7 @@ def build_report(
         evaluate_intra_session_gaps(source.gaps),
         evaluate_non_trading_day_rows(source.exch_dates, expected_days),
         evaluate_option_chain_atm_coverage(source.chain, source.futures_ref),
+        evaluate_official_volume_reconciliation(source.official_volume),
         evaluate_coverage(days, expected_days=expected_days),
         evaluate_universe_drift(days, expected_days=expected_days),
         evaluate_field_coverage(months, trade_direction_present=trade_direction_present),
@@ -1520,9 +1602,107 @@ def fetch_futures_reference(client: Any, date_from: str, date_to: str, *, chunk_
     return [FuturesRef(day=str(row[0]), symbol=str(row[1]), mid_points=float(row[2])) for row in rows]
 
 
-def fetch_source_stats(client: Any, date_from: str, date_to: str, *, chunk_days: int = 4) -> SourceStats:
+OFFICIAL_SUMMARY_GLOB = "parsed/fut_ticks/*.summary.json"
+_DAY_SESSION_OPEN = "08:45:00"
+_DAY_SESSION_CLOSE = "13:45:00"
+
+
+def _futures_symbol(product: str, expiry: str) -> str | None:
+    """``("TX", "202610")`` -> ``TXFJ6``."""
+    root = OFFICIAL_PRODUCT_ROOTS.get(product)
+    if root is None or len(expiry) != 6 or not expiry.isdigit() or not 1 <= int(expiry[4:]) <= 12:
+        return None
+    return f"{root}{_MONTH_LETTERS[int(expiry[4:]) - 1]}{expiry[3]}"
+
+
+def load_official_day_volumes(
+    official_root: Path, date_from: str, date_to: str
+) -> dict[str, dict[str, tuple[str, int]]]:
+    """``{day: {product: (near-month expiry, single-leg day-session contracts)}}`` from parsed tick files.
+
+    Reads the ``*.summary.json`` files written by ``official parse --dataset fut_ticks``. The near
+    month is the expiry with the most day-session contracts that day.
+    """
+    out: dict[str, dict[str, tuple[str, int]]] = {}
+    for path in sorted(official_root.glob(OFFICIAL_SUMMARY_GLOB)):
+        day = path.name.removesuffix(".summary.json")
+        if not (date_from <= day <= date_to):
+            continue
+        best: dict[str, tuple[str, int]] = {}
+        for item in json.loads(path.read_text(encoding="utf-8")):
+            product = str(item["product"])
+            if product not in OFFICIAL_PRODUCT_ROOTS or item["session"] != "day" or item["spread"]:
+                continue
+            contracts = int(item["contracts"])
+            if product not in best or contracts > best[product][1]:
+                best[product] = (str(item["expiry"]), contracts)
+        if best:
+            out[day] = best
+    return out
+
+
+def fetch_official_volume(
+    client: Any,
+    date_from: str,
+    date_to: str,
+    official_root: Path | None,
+) -> list[OfficialVolumeRow] | None:
+    """Recorded vs official day-session contracts for every day that has a parsed official file.
+
+    ``None`` (not collected) when no root is given or it holds no parsed files in range. The
+    recorded side reads the near-month tick rows of the day session and applies the same
+    de-duplication the exporter uses, so this checks the exact numbers an export would carry.
+    """
+    if official_root is None:
+        return None
+    official = load_official_day_volumes(official_root, date_from, date_to)
+    if not official:
+        return None
+    rows: list[OfficialVolumeRow] = []
+    for day, products in sorted(official.items()):
+        for product, (expiry, contracts) in sorted(products.items()):
+            symbol = _futures_symbol(product, expiry)
+            if symbol is None:
+                continue
+            result = client.query(
+                "SELECT exch_ts, price_scaled, volume FROM hft.market_data "
+                "WHERE type = 'Tick' AND symbol = %(symbol)s "
+                "AND exch_ts >= toUnixTimestamp64Nano(toDateTime64(%(start)s, 9, 'Asia/Taipei')) "
+                "AND exch_ts <= toUnixTimestamp64Nano(toDateTime64(%(end)s, 9, 'Asia/Taipei')) "
+                "ORDER BY exch_ts, ingest_ts, seq_no",
+                parameters={
+                    "symbol": symbol,
+                    "start": f"{day} {_DAY_SESSION_OPEN}",
+                    "end": f"{day} {_DAY_SESSION_CLOSE}",
+                },
+                settings=QUERY_SETTINGS,
+            )
+            keys = [(int(row[0]), int(row[1]), int(row[2])) for row in result.result_rows]
+            keep, _ = dedup.keep_counts(keys)
+            rows.append(
+                OfficialVolumeRow(
+                    day=day,
+                    product=product,
+                    symbol=symbol,
+                    raw=sum(key[2] for key in keys),
+                    deduped=sum(count * key[2] for key, count in keep.items()),
+                    official=contracts,
+                )
+            )
+    return rows
+
+
+def fetch_source_stats(
+    client: Any,
+    date_from: str,
+    date_to: str,
+    *,
+    chunk_days: int = 4,
+    official_root: Path | None = None,
+) -> SourceStats:
     """Collect every source-layer statistic. The content scan is the expensive one."""
     return SourceStats(
+        official_volume=fetch_official_volume(client, date_from, date_to, official_root),
         content=fetch_content_buckets(client, date_from, date_to, chunk_days=min(chunk_days, 1)),
         clamp=fetch_clamp_stats(client, date_from, date_to, chunk_days=chunk_days),
         gaps=fetch_gap_series(client, date_from, date_to, chunk_days=min(chunk_days, 2)),
@@ -1588,6 +1768,7 @@ def run_audit(
     chunk_days: int = 4,
     reference_inventory: Path | None = None,
     deep_checks: bool = True,
+    official_root: Path | None = None,
 ) -> QualityReport:
     days = fetch_day_stats(client, date_from, date_to, chunk_days=chunk_days)
     trade_direction_present = has_trade_direction_column(client)
@@ -1606,7 +1787,11 @@ def run_audit(
         expected_days=expected,
         local_partitions=fetch_local_partitions(client),
         reference_inventory=load_reference_inventory(reference_inventory),
-        source_stats=fetch_source_stats(client, date_from, date_to, chunk_days=chunk_days) if deep_checks else None,
+        source_stats=(
+            fetch_source_stats(client, date_from, date_to, chunk_days=chunk_days, official_root=official_root)
+            if deep_checks
+            else None
+        ),
     )
 
 
