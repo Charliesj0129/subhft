@@ -1108,6 +1108,8 @@ class SystemBootstrapper:
         # shared order_id_map dict. Without this, router backfill and
         # adapter writes would be serialised by different locks.
         exec_service.normalizer.order_id_resolver.lock = order_adapter._order_id_map_lock
+        # A recycled broker id (seqno / id) may only claim an order that is still live.
+        exec_service.normalizer.order_id_resolver.is_live = order_adapter.is_order_live
         risk_engine = RiskEngine(
             risk_path,
             risk_queue,
