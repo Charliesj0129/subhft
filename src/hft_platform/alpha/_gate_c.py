@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
@@ -252,6 +253,30 @@ def _invoke_sub_gates_advisory(
     return advisory
 
 
+def _resolve_maker_latency_profile(
+    profile_name: str,
+    resolve_profile: Callable[[str], dict[str, Any]],
+    latency_profile_cls: Callable[..., Any],
+) -> tuple[Any | None, dict[str, Any] | None]:
+    """Build the maker latency injection, or say why Gate C cannot run.
+
+    Returns ``(profile, None)`` on success and ``(None, details)`` otherwise, where
+    ``details["reason"]`` is ``latency_profile_missing`` or ``latency_profile_unresolved``.
+    There is deliberately no instant-RTT fallback.
+    """
+    if not profile_name:
+        return None, {"reason": "latency_profile_missing", "profile": ""}
+    try:
+        resolved = resolve_profile(profile_name)
+        profile = latency_profile_cls(
+            place_ns=int(float(resolved["submit_ack_latency_ms"]) * 1_000_000),
+            cancel_ns=int(float(resolved["cancel_ack_latency_ms"]) * 1_000_000),
+        )
+    except (KeyError, ValueError) as exc:
+        return None, {"reason": "latency_profile_unresolved", "profile": profile_name, "error": str(exc)}
+    return profile, None
+
+
 def _load_maker_thresholds(root: Path) -> dict:
     """Load Gate C maker thresholds from gate_thresholds.yaml, or return {}."""
     import yaml as _yaml
@@ -324,24 +349,27 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
         fill_model = QueueDepletionFill(queue_fraction=qf)
 
         # Resolve latency_profile metadata string -> LatencyProfile injected into
-        # MakerEngine. Missing / unresolvable names fall back to instant-RTT
-        # (logged). This closes the wiring gap identified in
+        # MakerEngine. A missing or unresolvable profile FAILS Gate C: the engine
+        # would otherwise run with instant-RTT, i.e. fills no real broker round
+        # trip could produce, and the gate would pass on that. See
         # docs/incidents/2026-04-24-r47-backtest-credibility-audit.md.
         latency_profile_name = getattr(alpha.manifest, "latency_profile", "") or ""
-        latency_profile: Any | None = None
-        if latency_profile_name:
-            try:
-                resolved = resolve_profile(latency_profile_name)
-                latency_profile = LatencyProfile(
-                    place_ns=int(float(resolved["submit_ack_latency_ms"]) * 1_000_000),
-                    cancel_ns=int(float(resolved["cancel_ack_latency_ms"]) * 1_000_000),
-                )
-            except (KeyError, ValueError) as exc:
-                logger.warning(
-                    "maker_gate_c: latency_profile unresolved; defaulting to instant-RTT",
-                    profile=latency_profile_name,
-                    error=str(exc),
-                )
+        latency_profile, latency_failure = _resolve_maker_latency_profile(
+            latency_profile_name, resolve_profile, LatencyProfile
+        )
+        if latency_failure is not None:
+            logger.error(
+                "maker_gate_c: latency_profile not usable; Gate C fails closed",
+                alpha_id=alpha_id,
+                profile=latency_profile_name,
+                reason=latency_failure["reason"],
+            )
+            failed = GateReport(
+                gate="Gate C",
+                passed=False,
+                details={"engine_type": "maker", "instrument": instrument, **latency_failure},
+            )
+            return failed, "", "", "", ""
 
         engine = MakerEngine(
             fill_model=fill_model,
