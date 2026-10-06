@@ -1,7 +1,8 @@
 """Per-instrument cost models for standardized backtest engine."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -70,12 +71,24 @@ def _load_all() -> dict[str, TAIFEXCost]:
     return _cache
 
 
+# TAIFEX month codes A-L (Jan-Dec) plus the year digit: TMFJ6 is the October 2026 TMF contract.
+_CONTRACT_MONTH_CODE = re.compile(r"^(?P<root>TXF|MXF|TMF)[A-L]\d$")
+
+
 def load_cost_profile(instrument: str) -> TAIFEXCost:
+    """Cost profile for ``instrument``: an exact key, else the root of a contract-month code.
+
+    The root profile (``TXF`` / ``MXF`` / ``TMF``) is the conservative default, so a month
+    nobody listed (``TMFJ6``) is still costed rather than raising or silently being free.
+    """
     profiles = _load_all()
-    if instrument not in profiles:
-        raise KeyError(
-            f"No cost profile for '{instrument}'. "
-            f"Available: {sorted(profiles.keys())}. "
-            f"Add to {_CONFIG_PATH}"
-        )
-    return profiles[instrument]
+    if instrument in profiles:
+        return profiles[instrument]
+    match = _CONTRACT_MONTH_CODE.match(instrument)
+    if match and match.group("root") in profiles:
+        return replace(profiles[match.group("root")], instrument=instrument)
+    raise KeyError(
+        f"No cost profile for '{instrument}'. "
+        f"Available: {sorted(profiles.keys())}. "
+        f"Add to {_CONFIG_PATH}"
+    )
