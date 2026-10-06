@@ -786,6 +786,30 @@ jobs:
           fi
 
   # ============================================================================
+  # Research tests (non-required): `pyproject.toml` ignores tests/research and does not recurse
+  # into research/, so ~600 tests there never ran in CI. This job runs them nightly and on
+  # demand; it is deliberately not part of pull-request checks until it has a week of green runs.
+  # ============================================================================
+  research-tests-nightly:
+    name: 🔬 Research Tests (nightly, not required)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+      - uses: ./.github/actions/setup-python-uv
+      - name: Run research tests
+        # --import-mode=importlib: several research alphas share the basename test_smoke.py.
+        # c27 is quarantined: it imports research.alphas.c14_txf_frontmonth_native_maker, which
+        # no longer exists (ModuleNotFoundError at collection).
+        run: >-
+          uv run pytest --no-cov -o addopts="--timeout=60" -p no:cacheprovider --import-mode=importlib
+          tests/research research
+          --ignore=research/archive
+          --ignore=research/alphas/c27_vol_amplification_on_c14
+          -q
+
+  # ============================================================================
   # Stage 6: Security Scanning
   # ============================================================================
   security:
