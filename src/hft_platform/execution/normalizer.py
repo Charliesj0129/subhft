@@ -158,7 +158,9 @@ class ExecutionNormalizer:
         seq_no = self._first_str(order, fm.sequence_id_keys()) or self._first_str(d, fm.sequence_id_keys())
         other_id = self._first_str(order, fm.other_id_keys()) or self._first_str(d, fm.other_id_keys())
         custom_field = self._first_str(order, fm.custom_field_keys()) or self._first_str(d, fm.custom_field_keys())
-        resolved = self.order_id_resolver.resolve_strategy_id_from_candidates([ord_no, seq_no, other_id, custom_field])
+        resolved = self.order_id_resolver.resolve_strategy_id_from_candidates(
+            [ord_no, seq_no, other_id, custom_field], strong=1
+        )
         return resolved if resolved != "UNKNOWN" else None
 
     def _resolve_strategy_id(self, raw: RawExecEvent) -> str:
@@ -239,8 +241,10 @@ class ExecutionNormalizer:
             custom_field = self._first_str(order, fm.custom_field_keys()) or self._first_str(d, fm.custom_field_keys())
             oid = ord_no or seq_no or other_id
             strategy_id = self._resolve_strategy_id(raw)
+            # Only ``ordno`` (first) names an order unconditionally; the other ids are
+            # recycled by the broker and count only while their order is live.
             client_order_id = self.order_id_resolver.resolve_order_key_from_candidates(
-                [ord_no, seq_no, other_id, custom_field]
+                [ord_no, seq_no, other_id, custom_field], strong=1
             )
             if not client_order_id:
                 # The order-ACK callback arrives ~4.3 ms before place_order()
@@ -356,7 +360,7 @@ class ExecutionNormalizer:
             other_id = self._first_str(d, fm.other_id_keys())
             custom_field = self._first_str(d, fm.custom_field_keys())
             client_order_id = self.order_id_resolver.resolve_order_key_from_candidates(
-                [order_id, other_id, custom_field]
+                [order_id, other_id, custom_field], strong=1
             )
             # scale() handles float/int/Decimal inputs with precision
             scale_price = self.price_codec.scale(sym, price_value)

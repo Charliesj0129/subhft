@@ -2912,13 +2912,21 @@ class HFTSystem:
                 _code = _payload_field(_contract, "code")
 
             _resolved = None
-            _ids = [str(v) for v in _id_candidates if v]
+            # ordno never repeats; the other ids are recycled by the broker and
+            # count only while their order is live (see OrderIdResolver.is_live).
+            _strong_ids = [
+                str(v)
+                for src in (_payload, _order)
+                for v in (_payload_field(src, "ordno"), _payload_field(src, "ord_no"))
+                if v
+            ]
+            _ids = _strong_ids + [str(v) for v in _id_candidates if v and str(v) not in _strong_ids]
             resolver = getattr(self.order_adapter, "order_id_resolver", None)
             # No candidates means nothing to look up. This runs on the broker
             # callback thread, so an empty-list resolver call is pure overhead
             # on every callback that carries no ids.
             if resolver is not None and _ids:
-                _resolved = resolver.resolve_strategy_id_from_candidates(_ids)
+                _resolved = resolver.resolve_strategy_id_from_candidates(_ids, strong=len(_strong_ids))
                 if _resolved == "UNKNOWN":
                     _resolved = None
             if _resolved is None and _action:

@@ -7,11 +7,11 @@ phantom TTL). ``_run_blocking_call`` keeps the SDK thread running after the
 timeout and the Trade comes back to the event loop, where ``_set_result`` sees the
 future already done and drops it. Nothing recorded that the answer ever arrived.
 
-This change only OBSERVES: a late result is counted
-(``place_order_late_result_total{kind}``), logged and audited (``late_result``,
-joinable to ``dispatch_failed`` on ``order_key``). It stores no Trade, binds no
-broker id, cancels nothing and releases no pending slot -- what to DO with a late
-Trade is decided from this data.
+A late result is counted (``place_order_late_result_total{kind}``), logged and
+audited (``late_result``, joinable to ``dispatch_failed`` on ``order_key``). What is
+then DONE with a Trade that carries broker ids -- bind, cancel, hand the slot back --
+is covered by ``test_phantom_bound_to_late_trade.py``; a Trade WITHOUT ids stays
+observe-only, which is what is pinned here.
 """
 
 from __future__ import annotations
@@ -191,10 +191,10 @@ async def test_a_late_broker_error_is_reported_with_its_type(tmp_config):
 
 
 @pytest.mark.asyncio
-async def test_observing_a_late_result_changes_no_state(tmp_config):
-    """C-a records only: no Trade is kept, no id is bound, nothing is cancelled and
-    no pending slot is released by the late answer."""
-    broker = _LateBroker({"order": {"ordno": "A1B2C", "seqno": "000123"}})
+async def test_a_late_trade_without_ids_changes_no_state(tmp_config):
+    """Nothing can be bound or cancelled without a broker id: no Trade is kept, no id
+    is bound, nothing is cancelled and no pending slot is released by the answer."""
+    broker = _LateBroker({})
     adapter = _adapter(tmp_config, place_order=broker)
     await adapter._dispatch_to_api(_command())
     sink = adapter._rejection_sink

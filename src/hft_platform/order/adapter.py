@@ -1,5 +1,6 @@
 import asyncio
 import collections
+import dataclasses
 import os
 import tempfile
 import threading
@@ -205,6 +206,7 @@ class OrderAdapter:
         "_cancel_check_last_s",
         "_cancel_check_interval_s",
         "_cancel_retry_tasks",
+        "_phantom_bind_tasks",
         "_engine_thread_id",
         # M4: per-occurrence phantom storage. Replaces the parallel
         # ``_phantom_order_keys`` + ``_phantom_intents`` dicts (each keyed
@@ -366,6 +368,7 @@ class OrderAdapter:
         self._cancel_check_interval_s: float = 5.0  # precision-time
         self._cancel_check_last_s: float = float("-inf")  # monotonic timestamp
         self._cancel_retry_tasks: set[asyncio.Task[None]] = set()
+        self._phantom_bind_tasks: set[asyncio.Task[None]] = set()
         # P1-3: ``_recently_terminal_orders`` and ``_cancel_inflight_targets`` are
         # OrderedDicts mutated by the helpers below. They are designed for
         # engine-loop-only use (no lock). Capture the engine thread id lazily on
@@ -382,7 +385,9 @@ class OrderAdapter:
         # go and fix it. Neither can substitute for the other: the breaker
         # re-probes every 60 s forever without ever re-authenticating.
         self._consecutive_session_errors = 0
-        self.order_id_resolver = OrderIdResolver(self.order_id_map, lock=self._order_id_map_lock)
+        self.order_id_resolver = OrderIdResolver(
+            self.order_id_map, lock=self._order_id_map_lock, is_live=self.is_order_live
+        )
         self._api_timeout_s = float(os.getenv("HFT_API_TIMEOUT_S", "3.0"))  # precision-time
         self._api_guard_timeout_s = float(os.getenv("HFT_API_GUARD_TIMEOUT_S", "0.005"))  # precision-time
         self._api_max_inflight = int(os.getenv("HFT_API_MAX_INFLIGHT", "16"))
@@ -436,7 +441,7 @@ class OrderAdapter:
         self._phantom_order_keys: dict[str, tuple[float, str]] = {}
         self._phantom_intents: dict[str, OrderIntent] = {}
         self._phantom_order_max: int = 1000
-        self._phantom_recovery_ttl_s: float = float(os.getenv("HFT_PHANTOM_RECOVERY_TTL_S", "30"))
+        self._phantom_recovery_ttl_s: float = float(os.getenv("HFT_PHANTOM_RECOVERY_TTL_S", "300"))
         # P0-E2 + M4: serialises access to ``_phantom_records``. Multiple
         # coroutine tasks (``_call_api``, ``_handle_dispatch_exception``,
         # ``release_stale_phantom_pendings``, ``resolve_phantom_fill``,
@@ -1290,8 +1295,12 @@ class OrderAdapter:
         releases the slot.
 
         Trade-off: if a phantom does later fill, on_fill will create an
-        unexpected position update on the strategy. With 30s default TTL this
-        is rare (broker callbacks normally arrive sub-second).
+        unexpected position update on the strategy. The premise that a timed-out
+        order "did not reach the exchange" was wrong on THESHOW (2026-10-05..06,
+        SIM): 40 of 40 were accepted, their Trade coming back 3.1-21.4 s later.
+        Those are now bound and cancelled by ``_bind_late_trade``, which hands the
+        slot back on the order's own terminal; this TTL is only the fallback for
+        an answer that never comes, so it is as long as the live-order TTL.
 
         Returns the number of phantoms released. Called from supervisor loop.
         """
@@ -1418,8 +1427,162 @@ class OrderAdapter:
             if kind == "error":
                 row["error"] = type(value).__name__
             self._audit_log_order(row)
+            if intent.intent_type != IntentType.NEW:
+                return  # only a NEW took a pending slot; never cancel a FORCE_FLAT
+            if kind == "trade" and has_ids:
+                self._spawn_phantom_bind(intent, value)
+            elif kind == "cancelled_before_send" or (kind == "error" and not self._error_may_have_sent(value)):
+                self._release_unsent_phantom(intent)
+            else:
+                self._count_phantom_bound("kept_for_ttl")
 
         return _report
+
+    @staticmethod
+    def _error_may_have_sent(exc: Any) -> bool:
+        """True when an SDK error does not prove the order never reached the broker.
+
+        A request that timed out inside the SDK may still have been accepted;
+        anything else the SDK raised (session not up, token, validation) was
+        refused before an order existed.
+        """
+        if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
+            return True
+        text = str(exc).lower()
+        return "timeout" in text or "timed out" in text
+
+    def _count_phantom_bound(self, outcome: str) -> None:
+        try:
+            self.metrics.phantom_bound_total.labels(outcome=outcome).inc()
+        except Exception:  # noqa: BLE001 — a metric must never break the order path
+            pass
+
+    def _take_phantom_record(self, order_key: str) -> bool:
+        """Remove the oldest phantom record for ``order_key``; True when one existed.
+
+        True means the strategy still holds the pending slot this order took (the
+        TTL sweep and a fill claim both remove the record when they give it back).
+        """
+        with self._phantom_lock:
+            records = self._get_phantom_records().get(order_key)
+            if not records:
+                return False
+            records.pop(0)
+            self._phantom_resync_legacy(order_key)
+            return True
+
+    def _release_unsent_phantom(self, intent: OrderIntent) -> None:
+        """The SDK answered that no order exists: hand the pending slot back now."""
+        order_key = f"{intent.strategy_id}:{intent.intent_id}"
+        if not self._take_phantom_record(order_key):
+            return  # the TTL sweep or a fill claim already settled the slot
+        if self._send_dispatch_rejection(intent, "place_order_not_sent", phantom_pending=False):
+            self._mark_finished(order_key)  # nothing will ever terminal this order
+        self._count_phantom_bound("released_not_sent")
+        self._audit_log_order(
+            {
+                "event": "phantom_released",
+                "intent_type": "NEW",
+                "order_key": order_key,
+                "symbol": intent.symbol,
+                "side": str(intent.side),
+                "price": intent.price,
+                "qty": intent.qty,
+                "strategy_id": intent.strategy_id,
+                "details": "outcome=released_not_sent",
+            }
+        )
+
+    def _spawn_phantom_bind(self, intent: OrderIntent, trade: Any) -> None:
+        task = asyncio.get_running_loop().create_task(
+            self._bind_late_trade(intent, trade), name=f"phantom_bind:{intent.strategy_id}:{intent.intent_id}"
+        )
+        self._phantom_bind_tasks.add(task)
+        task.add_done_callback(self._phantom_bind_tasks.discard)
+
+    async def _bind_late_trade(self, intent: OrderIntent, trade: Any) -> None:
+        """Take over a timed-out order the broker accepted, and cancel it.
+
+        THESHOW (SIM) 2026-10-05..06: 40 of 40 ``place_order`` calls that hit the
+        3 s wrapper timeout were accepted by the broker, the Trade coming back
+        3.1-21.4 s later and being dropped. The slot was handed back after 30 s
+        while the order sat live, so R47 quoted again and the platform went to
+        +2 against ``max_pos=1``; the order's ack was bound to an ended order's
+        key. Here the Trade is registered under its own key (overwriting any
+        stale binding of the same broker ids), tracked like a normally placed
+        order, and cancelled -- the quote is seconds old by now. The pending slot
+        is handed back by the order's own terminal (CANCELLED, or the fill),
+        once, via the finished-order ledger.
+        """
+        order_key = f"{intent.strategy_id}:{intent.intent_id}"
+        try:
+            # The dispatch that timed out removes its placeholder right after the
+            # timeout; installing the Trade before that would lose it.
+            for _ in range(50):
+                async with self._live_orders_lock:
+                    if self.live_orders.get(order_key) is not _PENDING_SENTINEL:
+                        break
+                await asyncio.sleep(0.02)
+            if not await self._register_broker_ids(order_key, trade):
+                self._count_phantom_bound("kept_for_ttl")
+                return
+            self._remove_pending_fill(order_key)
+            slot_held = self._take_phantom_record(order_key)
+            filled = self.filled_qty_for(order_key) >= intent.qty
+            if not filled:
+                async with self._live_orders_lock:
+                    self.live_orders[order_key] = trade
+                    self._live_orders_inserted_at[order_key] = time.monotonic()
+                    if slot_held:
+                        self._track_live_order_intent(order_key, intent, intent.side)
+                await self._drain_deferred_terminals(order_key, trade)
+            async with self._live_orders_lock:
+                live = self.live_orders.get(order_key) is trade
+            if filled:
+                outcome = "skipped_filled"
+            elif not live:
+                outcome = "skipped_gone"  # a terminal that beat the registration ended it
+            elif self._is_cancel_inflight(order_key):
+                outcome = "cancel_inflight"  # another cancel is already on its way
+            else:
+                outcome = await self._cancel_bound_trade(order_key, intent, trade)
+            self._count_phantom_bound(outcome)
+            self._audit_log_order(
+                {
+                    "event": "phantom_bound",
+                    "intent_type": "NEW",
+                    "order_key": order_key,
+                    "symbol": intent.symbol,
+                    "side": str(intent.side),
+                    "price": intent.price,
+                    "qty": intent.qty,
+                    "strategy_id": intent.strategy_id,
+                    "details": f"outcome={outcome} slot_held={slot_held}",
+                }
+            )
+        except Exception:  # noqa: BLE001 — a failed bind falls back to the TTL release
+            logger.warning("phantom_bind_failed", order_key=order_key, exc_info=True)
+            self._count_phantom_bound("kept_for_ttl")
+
+    async def _cancel_bound_trade(self, order_key: str, intent: OrderIntent, trade: Any) -> str:
+        cancel_intent = dataclasses.replace(
+            intent, intent_type=IntentType.CANCEL, target_order_id=order_key, reason="phantom_bound_cancel"
+        )
+        self._mark_cancel_inflight(order_key)
+        result = await self._call_api("cancel_order", self.client.cancel_order, trade, intent=cancel_intent)
+        if result is _CANCEL_TIMED_OUT:
+            self._watch_cancel(order_key, cancel_intent, 0, confirm_s=self._cancel_timeout_confirm_s)
+            return "cancel_timeout"
+        if result is None or result is _GUARD_TIMEOUT:
+            # Nothing landed: look again after the normal window, re-sent once.
+            self._clear_cancel_inflight(order_key)
+            self._watch_cancel(order_key, cancel_intent, 0)
+            return "cancel_failed"
+        self.metrics.order_actions_total.labels(type="cancel").inc()
+        self.rate_limiter.record()
+        self.per_symbol_rate_limiter.record(intent.symbol)
+        self._watch_cancel(order_key, cancel_intent, 0)
+        return "cancel_sent"
 
     async def _run_blocking_call(
         self, fn: Any, *args: Any, _on_late: Callable[[str, Any], None] | None = None, **kwargs: Any
@@ -1497,6 +1660,15 @@ class OrderAdapter:
         with self._phantom_lock:
             self._phantom_drop_key(key)
 
+    def _note_phantom_fill(self, order_key: str, fill_event: Any) -> None:
+        """Record a fill claimed through a phantom record in the fill ledger.
+
+        Skeleton adapters built with ``__new__`` (tests) carry no ledger.
+        """
+        if getattr(self, "_fill_ledger", None) is None:
+            return
+        self._record_fill_ledger(order_key, int(getattr(fill_event, "qty", 0) or 0))
+
     def resolve_phantom_fill(self, fill_event: Any) -> str | None:
         """Attempt to resolve an orphaned fill against phantom order candidates.
 
@@ -1547,6 +1719,7 @@ class OrderAdapter:
                 if not pending:
                     del self._pending_fill_index[pf_key]
                 strategy_id = order_key.split(":", 1)[0] if ":" in order_key else order_key
+                self._note_phantom_fill(order_key, fill_event)
                 # M4: pop ONE phantom occurrence (FIFO) for ``order_key`` so a
                 # sibling occurrence (same intent_id, second submission) stays
                 # resolvable for its own fill.
@@ -1587,6 +1760,9 @@ class OrderAdapter:
                 # M4: pop ONE occurrence FIFO; siblings retained.
                 records.pop(0)
                 self._phantom_resync_legacy(pkey)
+                # The order's Trade may still come back: ``_bind_late_trade`` must
+                # find it already filled instead of cancelling a finished order.
+                self._note_phantom_fill(pkey, fill_event)
                 logger.warning(
                     "phantom_fill_resolved_via_phantom_keys",
                     symbol=symbol,
@@ -2039,6 +2215,13 @@ class OrderAdapter:
         if handle is not None:
             handle.cancel()
             self._order_id_map_trailing_handle = None
+
+    def is_order_live(self, order_key: str) -> bool:
+        """True while ``order_key`` is in flight (placeholder or Trade in ``live_orders``).
+
+        Read from the broker thread too: a dict membership test is atomic.
+        """
+        return order_key in self.live_orders
 
     def _next_custom_field_token(self) -> str:
         """Allocate a 6-char broker-safe token without reusing current map keys."""

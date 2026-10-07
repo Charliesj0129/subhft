@@ -84,12 +84,17 @@ class TestBackfillLogReportsOnlyNewIds:
             def normalize_order_key(self, key):
                 return key
 
+            def key_is_live(self, key):
+                return True
+
             def set_order_id_mapping(self, token, order_key, source=""):
                 self.order_id_map[token] = order_key
 
         resolver = Resolver()
         router = ExecutionRouter.__new__(ExecutionRouter)
-        router.normalizer = types.SimpleNamespace(order_id_resolver=resolver)
+        router.normalizer = types.SimpleNamespace(
+            order_id_resolver=resolver, field_map=types.SimpleNamespace(order_id_keys=lambda: ("ordno", "ord_no"))
+        )
 
         raw = types.SimpleNamespace(data={"id": "ALREADY", "ordno": "FRESH"})
 

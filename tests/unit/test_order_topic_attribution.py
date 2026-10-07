@@ -188,7 +188,7 @@ def test_order_topic_resolves_strategy_and_order_key(tmp_config):
     adapter = _with_pending(_adapter(tmp_config))
     system = _system(adapter)
     adapter.order_id_resolver = types.SimpleNamespace(
-        resolve_strategy_id_from_candidates=lambda _c: "UNKNOWN",
+        resolve_strategy_id_from_candidates=lambda _c, **_kw: "UNKNOWN",
     )
     data = _order_payload()
 
@@ -203,7 +203,7 @@ def test_order_topic_attribution_leaves_the_fill_resolvable(tmp_config):
     adapter = _with_pending(_adapter(tmp_config))
     system = _system(adapter)
     adapter.order_id_resolver = types.SimpleNamespace(
-        resolve_strategy_id_from_candidates=lambda _c: "UNKNOWN",
+        resolve_strategy_id_from_candidates=lambda _c, **_kw: "UNKNOWN",
     )
 
     system._on_exec("order", _order_payload())
@@ -254,7 +254,7 @@ def test_order_topic_resolves_from_the_nested_broker_payload(tmp_config):
     adapter = _with_pending(_adapter(tmp_config))
     system = _system(adapter)
     adapter.order_id_resolver = types.SimpleNamespace(
-        resolve_strategy_id_from_candidates=lambda _c: "UNKNOWN",
+        resolve_strategy_id_from_candidates=lambda _c, **_kw: "UNKNOWN",
     )
     data = _real_order_payload()
 
@@ -274,7 +274,7 @@ def test_nested_order_payload_still_leaves_the_fill_resolvable(tmp_config):
     adapter = _with_pending(_adapter(tmp_config))
     system = _system(adapter)
     adapter.order_id_resolver = types.SimpleNamespace(
-        resolve_strategy_id_from_candidates=lambda _c: "UNKNOWN",
+        resolve_strategy_id_from_candidates=lambda _c, **_kw: "UNKNOWN",
     )
 
     ack = _real_order_payload()
@@ -294,7 +294,7 @@ def test_flat_order_payload_still_resolves_after_the_nested_fallback(tmp_config)
     adapter = _with_pending(_adapter(tmp_config))
     system = _system(adapter)
     adapter.order_id_resolver = types.SimpleNamespace(
-        resolve_strategy_id_from_candidates=lambda _c: "UNKNOWN",
+        resolve_strategy_id_from_candidates=lambda _c, **_kw: "UNKNOWN",
     )
     data = _order_payload()
 
@@ -309,7 +309,7 @@ def test_nested_sell_payload_does_not_match_a_buy_pending(tmp_config):
     adapter = _with_pending(_adapter(tmp_config))
     system = _system(adapter)
     adapter.order_id_resolver = types.SimpleNamespace(
-        resolve_strategy_id_from_candidates=lambda _c: "UNKNOWN",
+        resolve_strategy_id_from_candidates=lambda _c, **_kw: "UNKNOWN",
     )
     sell = _real_order_payload()
     sell["payload"]["order"]["action"] = "Sell"
