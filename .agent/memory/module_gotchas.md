@@ -61,6 +61,8 @@
 - **SymbolMetadata**: Loaded from `config/symbols.yaml`. Contains `price_scale`, `tick_size`, `tags[]` per symbol. Supports hot-reload via `reload_if_changed()`.
 - **GOTCHA**: Normalizer caches `price_scale` lookups. If symbols.yaml changes, `SymbolMetadata.reload_if_changed()` must be called (market_data_service handles this).
 - **One-sided LOB**: Snapshots can arrive with only bid or only ask side populated. Guard each side independently instead of assuming a full book.
+- **Book depth is 0-5, never guaranteed 5**: `scale_book_seq_inner` (`rust_core/src/fast_lob/scale.rs`) keeps only levels with `price > 0`, so the emitted array length is the exchange's priced-level count, not a fixed L5. Measured 2026-09-13: options average 2.98 bid levels (24.9% full L5); futures 4.92 (96.3%); equities 4.98 (99.0%). Consumers must filter on `length(bids_price)`. See `.agent/rules/70-research-data.md`.
+- **GOTCHA - Rust/Python disagree on empty levels**: the Rust kernel drops `price <= 0` levels; the Python fallback at `normalizer.py:1351` (`zip(bp, bv)`) does **not**. If `rust_fallback_total{type="bidask"}` ever increments, book arrays silently become length 5 padded with price-0 levels — changing the meaning of `length(bids_price)` for every downstream consumer and feeding zero-priced levels into the LOB. Verified 2026-09-13: 0 of 121,469,696 recorded BidAsk rows contain an interior zero price, so the fallback has not fired on recorded data.
 - **NormalizerFieldMap**: Broker-specific field names live in a frozen dataclass. Keep `_is_default_map=True` for Shioaji to preserve Rust fast paths.
 
 ## feed_adapter/shioaji_client.py

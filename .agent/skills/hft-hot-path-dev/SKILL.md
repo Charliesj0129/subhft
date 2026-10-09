@@ -154,3 +154,11 @@ Every hot-path change MUST include:
 make test-file FILE=tests/unit/test_normalizer.py
 make hotpath-profile    # per-stage latency profile
 ```
+
+## Performance checklist (folded from the former rule 10)
+
+- O(1) lookups only in tick loops; no scans. No unnecessary copies: views, references, zero-copy FFI.
+- Event-loop lag budget is 1 ms; CPU-heavy Rust releases the GIL.
+- Disabling or avoiding GC during active trading needs explicit lifecycle handling.
+- CPU isolation or kernel-bypass experiments need explicit verification and docs.
+- `Decimal` in the hot path -> scaled int; `pandas` in a loop -> arrays or Rust; exceptions as control flow -> branch or return codes.

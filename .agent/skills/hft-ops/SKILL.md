@@ -152,3 +152,18 @@ AutonomyMonitor detects degradation
 4. **TrackGate unknown symbols -> CLOSED** (safe default, unless `HFT_TRACK_GATE_DEFAULT_OPEN=1`)
 5. **Autonomy reason codes are frozen** — add new ones to the frozen set before using
 6. **Remote deployment is manual** — never auto-deploy (user feedback rule)
+
+## Local stack and ports (folded from the former rule 40)
+
+Local stacks only: `docker compose up -d --build`, `docker compose ps`,
+`docker compose logs -f hft-engine`. `make docker-clean` deletes volumes and
+ClickHouse data. **Production deploys use different commands** (`up -d` there
+destroys the engine's writable layer): follow `.agent/rules/41-deployment.md`
+and `docs/runbooks/deployment.md`.
+
+Ports: engine metrics 9090, ClickHouse 8123/9000, Redis 6379, Prometheus 9091,
+Grafana 3000, Alertmanager 9093. Live-impacting config changes follow
+`docs/operations/change-control.md` (what/why/risk/rollback, test in
+`HFT_MODE=sim`, watch metrics, keep rollback ready). Key env: `HFT_MODE`,
+`HFT_ORDER_MODE`, `HFT_CLICKHOUSE_ENABLED`, `HFT_RECORDER_MODE`,
+`HFT_GATEWAY_ENABLED`, `HFT_OBS_POLICY`. Monitor WAL disk and ClickHouse health.

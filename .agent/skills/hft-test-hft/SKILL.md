@@ -190,3 +190,10 @@ make test-name-check                 # Verify behavior-oriented names
 - Do NOT skip Rust fallback tests when modifying hot-path code
 - Do NOT use `float` assertions for price values (`assert price == 100.15` is WRONG)
 - Do NOT create tests without `assert` statements (advisory limit: 30 zero-assert tests)
+
+## Testing baseline (folded from the former rule 50)
+
+- `make test` quick regression; `make test-all` broader; `make ci` before merge-level confidence.
+- `feat:`/`fix:` need focused tests. New code >= 80% line coverage; hot path >= 90%.
+- Test names describe behavior: `test_<behavior>_<scenario>`; no `test_covers_*`. Every test has assertions.
+- Cover business logic, financial calcs, risk gates, edge books, one-sided quotes, zero prices, fail-closed behavior, monotonic time, scaled ints, state transitions.

@@ -1,277 +1,255 @@
-# AGENTS.md — HFT Platform Agent Workflow
+# AGENTS.md — HFT Platform
 
-This repo is money-facing. Model capability is a safety control: stronger
-models hold authority over riskier surfaces. All agents obey `CLAUDE.md`
-(including its Retrieval First reads), `.agent/rules/`, and the relevant
-`.agent/skills/*/SKILL.md`.
+`hft_platform`: production high-frequency trading platform for Taiwan markets
+(TAIFEX futures/options, TWSE) via Shioaji and Fubon. Money-facing and
+latency-sensitive: a hot-path mistake is real financial loss. A governed
+research program (`research/`) feeds alphas to production through gates;
+research artifacts never enable live trading directly.
 
-## Roles
+This file is the single source of project rules for every agent (Claude Code,
+Codex, Copilot). Claude-only harness notes live in `CLAUDE.md`. Everything not
+stated here is your judgment: read the source, run the checks, and decide.
 
-### 1. Orchestrator (Opus-class or stronger)
+## Architecture
 
-- **Responsibilities**: task intake (`task-intake` skill — every
-  natural-language task enters through it); task decomposition; risk-tier +
-  task-type classification (see Routing); ROI-first routing
-  (direct/delegate/fan-out/stop with a logged reason); writing handoff packets
-  (`small-model-handoff` skill); review of ALL Tier-2/3 diffs; ALL git
-  planning and execution; memory curation; talking to the user.
-- **Non-responsibilities**: bulk mechanical edits; long test-writing sessions
-  (delegate); babysitting green pipelines.
-- **Never delegates**: tier classification; final review; any git command;
-  Tier-X work; memory file writes (executors report facts, orchestrator routes
-  them); Do-NOT-Edit paths.
-- **Allowed**: everything the user has authorized, within `.agent/rules/`.
-- **Forbidden**: live-trading ops, destructive git, production restarts without
-  explicit in-session user confirmation (never blanket-authorized).
-- **Must stop and ask the user**: Remote-Write/Destructive git (push, merge,
-  rebase, reset, clean, stash-drop, force, branch-delete, history edits);
-  live/production ops; dependency pin changes; frozen registry/profile
-  changes; golden regeneration; Do-NOT-Edit paths; unknown or user-owned
-  dirty files in the blast radius; the task's true tier turns out higher than
-  requested; two failed delegation attempts on one task; conflicting
-  instructions between governing files; irreversibility discovered mid-task.
-- **Required context**: full retrieval-first reads; current git state; relevant
-  memory files.
-- **Output**: decisions with reasons; handoff packets; verified merge results.
-- **Validation**: owns the final `make check`/`make ci` evidence before any
-  completion claim to the user. Executor self-reports are context, never
-  evidence — review per `strict-code-review` Step 0.
+```
+  Exchange
+     |  broker thread  -- SDK callbacks land here, NOT on the loop
+     v
+  [BrokerFacade] --call_soon_threadsafe--> [bounded raw queue]
+                                                   |
+  == HOT PATH ==============================       |  no alloc/tick,
+                                                   v  no blocking IO
+      [Normalizer] --int x10000--> [LOBEngine] --> [FeatureEngine]
+                                                          |
+                                                          v
+                                                   [RingBufferBus]
+                                                          |
+                                                          v
+                                                   [StrategyRunner]
+                                                          |  OrderIntent
+                                                          v
+                                    [RiskEngine] --> [GatewayService]
+                                                          |  OrderCommand
+                                                          v
+                                    [OrderAdapter] --> [BrokerFacade]
+                                                          |  FillEvent
+                                                          v
+                                              [Execution / Positions]
+  =========================================================|==========
+                                                           |  put_nowait
+  -- OFF HOT PATH (never blocks the above) --              v
+                                                     [RecorderService]
+                                                           |
+                                                      [Batcher]
+                                                        /      \
+                                               ClickHouse       WAL
+                                                             (fallback;
+                                                        replay idempotent)
+```
 
-### 2. Coding Executor (smaller model: Sonnet/Haiku tier)
+Contract chain — every stage crosses one of these, nothing else:
+`OrderIntent -> RiskDecision -> OrderCommand -> FillEvent -> PositionDelta`.
 
-- **Responsibilities**: implement exactly one handoff packet; run the packet's
-  listed verification commands; report results honestly.
-- **Non-responsibilities**: deciding scope, architecture, or API shape;
-  choosing which tests are "enough"; updating memory.
-- **Allowed**: edit only files listed in the packet; add tests; run read-only
-  commands and the packet's verification commands; create scratch files in the
-  scratchpad only.
-- **Forbidden**: touching any "Do NOT Edit Casually" path unless the packet
-  explicitly lists it; git commit/push/rebase/checkout; editing goldens,
-  pinned deps, migrations, or enforcement config; installing packages;
-  network calls; relaxing a failing gate/threshold to pass; broad refactors
-  ("while I'm here" changes).
-- **Required context**: the handoff packet (self-contained: goal, files,
-  constraints, gotchas, verification commands, stop conditions).
-- **Output format**: `## Changed files` (paths + one-line why each) /
-  `## Commands run` (verbatim, with pass/fail output excerpts) /
-  `## Not verified` / `## Blockers or deviations from packet`.
-- **Validation**: MUST run every verification command in the packet. A missing
-  or failing command = report failure, do not improvise fixes outside packet scope.
-- **Stop-and-escalate triggers**: packet-listed file doesn't exist; test fails
-  for reasons outside the packet's scope; change wants to grow beyond listed
-  files; anything touches prices/time/contracts unexpectedly; git state
-  differs from packet's stated branch.
+- Event prices are scaled int **x10000**. Research ClickHouse raw data is
+  **x1,000,000** (and option strikes differ again); convert explicitly.
+- Broker callbacks run on broker threads and enter the loop only through
+  `call_soon_threadsafe`.
+- Book depth is variable, 0-5 levels; never assume L5. Filter depth-N features
+  on `length(bids_price)` (`.agent/rules/70-research-data.md`).
+- Layout: `src/hft_platform/` (modules: `docs/MODULES_REFERENCE.md`),
+  `rust_core/` (PyO3 kernels), `config/`, `research/`, `tests/`, `scripts/`,
+  `docs/`, `.agent/` (rules, skills, memory). ClickHouse DDL source of truth:
+  `src/hft_platform/migrations/clickhouse/`.
+- Pinned (bump only with explicit approval): `shioaji==1.5.6`
+  (`docs/runbooks/shioaji-version-diff.md`), `prometheus_client<0.25`. The repo
+  pin and the production runtime can diverge; verify the running process.
 
-### 3. Reviewer Agent
+## Commands
 
-- **Responsibilities**: adversarial review of a diff against `CLAUDE.md` laws,
-  `.agent/rules/`, and the originating packet; run `strict-code-review` skill.
-- **Non-responsibilities**: fixing the code (report findings; orchestrator
-  decides); style nitpicks that ruff already enforces.
-- **Allowed**: read everything; run read-only commands, tests, `make check`.
-- **Forbidden**: any file edits; any git state changes.
-- **Required context**: the diff, the packet, the relevant gotchas file.
-- **Output format**: findings ranked by severity, each with file:line, the
-  violated rule, and a concrete failure scenario; explicit verdict
-  APPROVE / APPROVE-WITH-NITS / REQUEST-CHANGES / ESCALATE.
-- **Validation**: every CONFIRMED finding must cite evidence (code read or
-  command output), not pattern-matching.
-- **Routing rule**: Tier-3 diffs (below) get an orchestrator-class reviewer;
-  Tier-1/2 may use a smaller reviewer.
+| Task | Command |
+|---|---|
+| Install / dev | `uv sync` / `make dev` |
+| Rust build | `make build-rust` |
+| Tests | `make test` (unit), `make test-all`, `make test-file FILE=...`, `make test-node NODE=...` |
+| Quality | `make lint`, `make format-check`, `make typecheck`, `make discipline`, `make dependency-boundary` |
+| Everything quality / full local CI | `make check` / `make ci` |
+| Shioaji SDK surface guard | `make shioaji-guard` |
+| Agent docs / roadmap guards | `make agent-docs-check`, `make roadmap-delivery-check` |
+| Sim run / local stack | `uv run hft run sim` / `make start`, `make stop`, `make logs` |
 
-### 4. Test-Writer Agent
+Fail-closed gates: pre-commit (`ruff`, `ruff-format`, `hft-discipline`), CI
+(format, lint, discipline, dependency-boundary, typecheck, coverage), Semgrep,
+CodeQL. New discipline IDs use `HFT-{D|A|P|S}{NNN}`.
 
-- **Responsibilities**: add behavior-named tests for a specified surface;
-  close gaps found by `test-gap-analysis`; regression tests for fixed bugs.
-- **Non-responsibilities**: changing production code (if a test can't pass
-  without a prod change, report it); redefining what "correct" means.
-- **Allowed**: edit under `tests/` only; run pytest via `make test-file`/`test-node`.
-- **Forbidden**: editing `src/`, goldens, or conftest fixtures shared across
-  suites without explicit packet permission; tests without assertions; fixed
-  sleeps >50 ms; weakening existing tests.
-- **Required context**: target module source, its gotchas entry, existing test
-  patterns in the same directory, `.agent/rules/50-testing.md`.
-- **Output**: new/changed test files + `make test-file` output + a gap list of
-  what remains untested and why.
-- **Validation**: new tests pass, AND demonstrably fail when the behavior is
-  broken (state how this was checked); `make test-hygiene-check` clean.
+Gate: 70% coverage (`--cov-fail-under=70`); new code >= 80%, hot path >= 90%.
+Pytest runs with `--timeout=30`. `make help` lists everything else.
 
-### 5. Documentation Agent
+## Laws (hot path)
 
-- **Responsibilities**: keep docs/codemaps/runbooks consistent with source
-  (`doc-updater` skill); write runbooks from incident evidence.
-- **Non-responsibilities**: inventing behavior not verified in source.
-- **Allowed**: edit `docs/`, `README`s, `.agent/` docs; read all source.
-- **Forbidden**: editing code or config; documenting secrets, account IDs,
-  credentials, or production hostnames beyond existing conventions.
-- **Required context**: the source files being documented (read, not recalled).
-- **Output**: diff + a path-verification list (every referenced path checked
-  to exist, with the command used).
-- **Validation**: `rg --files` proof for every path claim; diff review.
+Hot path = ingestion, normalizer, LOB, feature engine, event bus, strategy
+dispatch, risk, gateway, order/execution.
 
-## Harness Bindings (Claude Code)
+1. **Allocator** — no heap allocation per tick; preallocate, pool, ring-buffer, or Rust.
+2. **Cache** — packed, cache-local data (SoA, arrays, `__slots__`, `msgspec.Struct`); no pointer chasing.
+3. **Async** — no blocking IO or >1 ms synchronous compute on the event loop.
+4. **Precision Law (Law 4)** — prices and accounting values are scaled int x10000; no hot-path float price math.
+5. **Boundary** — Python/Rust crossings avoid large copies; explicit FFI contracts.
 
-The four delegated roles above are bound to subagent definitions under
-.claude/agents/ so their boundaries are tool-enforced, not prompt-enforced
-(meta-audit 2026-07-14 action 2). This changes no authority, tier, or
-routing rule — this file stays the source of truth; the definitions are
-condensed bindings of the role contracts.
+Reject on sight: hot-path `datetime.now()`/`time.time()` (use
+`timebase.now_ns()`), `print()` (use structlog), `requests`, `pandas` in loops,
+`Decimal` on the hot path, broad silent exceptions, Rust `unwrap()` reachable
+from Python, exceptions as control flow.
 
-| Role | subagent_type | Default model | Tool enforcement |
-|---|---|---|---|
-| Coding Executor | hft-executor | sonnet | edit+bash; cannot spawn agents |
-| Reviewer | hft-reviewer | inherit (orchestrator-class; pass model: sonnet for Tier-1/2 diffs) | read-only: no Edit/Write tools |
-| Test-Writer | hft-test-writer | sonnet | edit+bash; tests/ scope by contract |
-| Documentation | hft-docs | haiku | edit+bash; docs scope by contract |
+Architecture invariants:
 
-Harness guardrails in .claude/settings.json back the same contracts for
-EVERY session in this repo, orchestrator included: Do-NOT-Edit paths and
-destructive/remote git prompt for per-operation confirmation (ask rules);
-secrets surfaces (.env*, config/settings.py) are denied outright.
+- `contracts/` and `events.py` never import runtime services. Broker SDK
+  imports live only in `feed_adapter/<broker>/`; platform code uses
+  `BrokerProtocol`. SDK import failure is fail-closed (refuse startup).
+- New event-loop stages use bounded queues with an explicit overflow policy.
+  Recording never blocks the hot path; ClickHouse failure falls back to WAL and
+  replay stays idempotent.
+- HALT blocks new orders; cancels stay allowed. Exposure maps declare max
+  cardinality and eviction (default cap 10,000: evict zero-balance first, else
+  reject with `ExposureLimitError`).
+- Structured data gets structured parsers (msgspec/JSON/YAML), not regex.
+- Architecture-affecting changes say where they enter the flow in
+  `docs/architecture/pipeline-chains.md` and update the relevant docs and
+  boundary tests. Crashes on order/risk/execution paths surface to the
+  supervisor and metrics.
+- Security: broker APIs keep TLS verification on; production ClickHouse needs
+  auth; Prometheus/Grafana/Alertmanager ports stay firewalled; images run
+  non-root with pinned versions; scrub structlog fields; never commit data/WAL
+  exports or local reports with sensitive content.
+- Secrets live in `.env`/env vars only, prefix-isolated (`SHIOAJI_*`,
+  `HFT_FUBON_*`, `HFT_*`). Never in code, logs, CLI args, chat, or commits.
+- Conventional commits (`feat: fix: perf: refactor: docs: test: chore: ci: alpha:`);
+  ruff line length 120, py312; no new `type: ignore`/`noqa` without a written reason.
 
-Unattended routines (v3 W3, 2026-07-14; ADR docs/adr/002): scheduled headless
-agents are read-only by default — the runner
-scripts/agent_routines/run_routine.sh is the only entry point, refuses any
-routine with write_scope other than none, tool-disallows Edit/Write, and runs
-only in a dedicated worktree. Escalating a routine's write access is an
-authority change: new ADR + CHANGELOG first. Registry: .agent/routines/;
-rules: .agent/rules/65-unattended-autonomy.md. Routines suggest; interactive
-sessions fix.
+## Red lines — only on an explicit, per-operation user request
 
-Hook enforcement floor (v3 W1, 2026-07-14): four hooks under .claude/hooks/
-lower the same contracts to the tool-interception layer — scope_guard
-(PreToolUse Edit/Write: during a delegation window, writes outside the packet
-allowlist are denied; fail-closed), git_guard (PreToolUse Bash: subagents'
-non-read-only git denied; fail-closed), discipline_feedback (PostToolUse:
-check_discipline on the edited platform file; advisory), commit_audit
-(PostToolUse: HEAD vs the declared allowlist marker; advisory). Hooks add no
-new policy — they enforce rules this file already states. Subagent detection:
-hook input carries agent_type for subagent tool calls (probe 2026-07-14).
-Spec: docs/superpowers/specs/2026-07-14-agent-system-v3-design.md.
+- **Live trading**: `HFT_ORDER_MODE=live`, `uv run hft run live`. Engine
+  cutover is always manual. `HFT_ORDER_MODE=sim` does not gate dispatch;
+  only `disabled` stops orders.
+- **Production host (THESHOW)**: read-only by default: `SELECT`, logs, `ps`,
+  rsync of `.wal`. Never `DROP`/`DELETE`, `rm -rf`, `docker system prune`, git
+  writes, `up -d`, or `docker compose restart` there. Deploys follow
+  `.agent/rules/41-deployment.md` (D1-D10): per-batch authorization, back up
+  first, `stop` -> wait 60 s -> `start`, name the pass criteria first. Broker
+  cap is 5 sessions. Every prod-host action: read `41-deployment.md` first.
+- **Git**: push, merge, rebase, reset, clean, stash drop/clear, `branch -D`,
+  `commit --amend`, history edits, and any `.gitignore` edit. This repo
+  (`Charliesj0129/subhft`) is PUBLIC; a push is publication.
+- **Secrets**: `.env*` and `config/settings.py` are never read into output or committed.
+- **Frozen state**: the live registry is frozen to `r47_tmf_v1` (loop_v1 L11);
+  dependency pins; frozen research profiles/manifests; golden regeneration
+  (`make shioaji-surface-regen` only deliberately, never to make CI pass).
+- **Do-NOT-Edit without explicit instruction + strong review** (the
+  `permissions.ask` list in `.claude/settings.json` mirrors this):
+  `src/hft_platform/contracts/**`, `events.py`, `core/timebase.py`,
+  `core/pricing.py`, `migrations/clickhouse/*.sql` (append only),
+  `config/symbols.yaml`, `config/base/brokers/*.yaml`,
+  `config/research/profiles/vm_ul6_strict.yaml`, `research/experiments/**`
+  (append, never mutate), `tests/golden/**` and SDK-surface goldens,
+  `pyproject.toml` pins, `.importlinter`, `scripts/check_discipline.py`,
+  pre-commit config, `.gitignore`, `docker-compose.production.yml`,
+  `docker-compose.prod.locked.yml`.
 
-## Task Routing (risk tiers)
+## Granted without asking
 
-Entry point: the `task-intake` skill converts a natural-language task into a
-classification against these tables; the tables below stay authoritative.
+Reading any file except secrets; running local tests, lint, typecheck,
+`make check`/`make ci`, and fixing failures you caused, then rerunning;
+creating branches and worktrees; committing on a feature branch. The user's
+working tree may hold concurrent work: do not touch dirty files you did not
+change, and prefer a new worktree (`~/hft_worktrees/<theme>`) for anything
+larger than a small edit. One branch per theme.
+
+## Done means (by blast radius)
+
+| Change | Done when |
+|---|---|
+| Docs only | every referenced path exists; no invented behavior; `make agent-docs-check` passes when governing docs changed |
+| Bug fix | a focused regression test fails before the fix and passes after |
+| Hot path / contracts | targeted tests plus scaled-int, monotonic-time, fail-closed, state-transition cases; benchmark if latency-relevant |
+| Broker / adapter | protocol conformance tests plus `make shioaji-guard` |
+| Test-only | new tests pass, fail when the behavior is broken (say how you checked), `make test-hygiene-check` clean |
+| Anything merged | `make check` minimum, `make ci` for merge confidence |
+
+Tests: `feat:`/`fix:` need focused tests named `test_<behavior>_<scenario>`;
+every test asserts; no fixed sleeps (<= 50 ms if unavoidable, explained).
+Golden tests are regression contracts.
+
+## Reporting
+
+Never claim fixed, passing, or complete without pasted command output, and
+list the checks you did not run. A partial result reported as partial beats a
+confident guess. Scale this to the task, but never drop `[VALIDATION]` or `[RISK]`:
+
+```
+[STATUS]      one line: where the work stands
+[DONE]        what changed, per file; only VERIFIED items
+[VALIDATION]  | check | command | result |   (exact commands, real results)
+[NOT RUN]     checks skipped or impossible here, and why
+[RISK]        what could still be wrong, and its blast radius
+[NEXT]        the single next action
+[VERDICT]     SHIP / HOLD / BLOCKED, with the reason
+```
+
+Status words are literal: `VERIFIED`, `WRITTEN` (exists, not run),
+`NOT VERIFIED`, `FAILED` (paste the output), `BLOCKED`.
+
+Explain flows, state machines, races, layouts, and before/after fixes with a
+fenced pure-ASCII diagram (<= 80 columns) using real identifiers from the
+source; for a defect, mark where the path dies (`X`, `(never reached)`).
+Do not draw what one sentence already says.
+
+## Where to look (open when the situation arises)
+
+| Situation | Read |
+|---|---|
+| Locate a module | `docs/MODULES_REFERENCE.md` |
+| Editing a module with known traps | `.agent/memory/module_gotchas.md` |
+| Any prod-host action | `.agent/rules/41-deployment.md`, `docs/runbooks/deployment.md` |
+| Git hygiene, parallel agents, governance edits | `.agent/rules/30-git.md`, `.agent/rules/60-agent-workflow-governance.md` |
+| Unattended routines | `.agent/rules/65-unattended-autonomy.md` |
+| ClickHouse research data, book depth, export | `.agent/rules/70-research-data.md` |
+| Changing data flow | `docs/architecture/pipeline-chains.md` |
+| Shioaji SDK behavior | `docs/runbooks/shioaji-version-diff.md` |
+| Alpha lifecycle | `docs/runbooks/alpha-development-workflow.md`, `research/README.md` |
+| Live-affecting config change | `docs/operations/change-control.md` |
+| Known risks, past failed attempts | `.agent/memory/current-risks.md`, `.agent/memory/failed-attempts.md` |
+| Task-specific procedure | the matching skill in `.agent/skills/` (the description says when) |
+
+If a referenced path is missing, say so and find the replacement with `rg --files`.
+
+## Multi-agent work
+
+Strong models hold authority over riskier surfaces. The orchestrator owns
+tier classification, all git, memory writes, final review, and anything on the
+red-lines list. Delegate only when it pays: parallel independent sub-tasks,
+large read-only exploration, bulk mechanical edits, or an independent review.
+Small serial work is done directly. Procedure, packet template, and venues:
+`delegation` skill.
 
 | Tier | Surfaces | Executor | Reviewer |
 |---|---|---|---|
-| 1 — Low | docs, comments, test-only changes, scratch analysis, research notebooks | Haiku/Sonnet | Sonnet |
-| 2 — Medium | non-hot-path src, CLI, reports, monitors, ops scripts | Sonnet | Sonnet + orchestrator-class spot-check |
-| 3 — High | hot path, contracts/events, core/pricing/timebase, broker adapters, risk/order/execution/gateway, recorder/WAL, Rust, migrations, alpha governance, anything in the Do-NOT-Edit list | Sonnet with tight packet, or orchestrator directly | orchestrator-class MANDATORY |
-| X — Forbidden to delegate | live/production ops, git history surgery, secret handling, dependency pins, frozen registry/profile changes | orchestrator + explicit user confirmation | user |
+| 1 Low | docs, comments, test-only, scratch analysis | Haiku/Sonnet | Sonnet |
+| 2 Medium | non-hot-path src, CLI, reports, ops scripts | Sonnet | Sonnet + orchestrator spot-check |
+| 3 High | hot path, contracts, pricing/timebase, broker adapters, risk/order/gateway, recorder/WAL, Rust, migrations, alpha governance, Do-NOT-Edit paths | tight packet, or orchestrator directly | orchestrator-class, mandatory |
+| X | live/prod ops, history surgery, secrets, pins, frozen registry | orchestrator + explicit user confirmation | user |
 
-## Task Routing (task types)
+Roles: Coding Executor (one packet, listed files only, no git), Reviewer
+(read-only, severity-ranked findings, explicit verdict), Test-Writer (`tests/`
+only), Documentation (docs only). Executors report in four tables (changed
+files / commands run / not verified / blockers); empty sections say `(none)`.
+Executor self-reports are context, not evidence: the orchestrator verifies
+before anything reaches the user. Two failed delegations on one task: stop and
+ask. Unattended routines are read-only; escalating one needs an ADR first.
 
-| Task type | Route |
-|---|---|
-| Orchestration, tier classification, architecture decisions, incident response | Orchestrator only |
-| Tier-3 implementation | Orchestrator, or Sonnet under a function/line-exact packet |
-| Tier-2 code+test (start <=3 files; widen only with scoreboard evidence) | Sonnet |
-| Test-writing (after orchestrator runs `test-gap-analysis`) | Sonnet |
-| Bounded read-only investigation (cited claims, zero edits) | Sonnet / Explore |
-| Gate cleanup (lint/mypy/format debt, non-hot-path, zero behavior change) | Sonnet |
-| Docs, comments, mechanical edits, counting, formatting, enumeration checks | Haiku — only if executable purely by following commands + rules; any design choice makes it a Sonnet+ task |
-| Tier-1 review | Sonnet |
-| Git planning (sequences, rollback plans) | Orchestrator only (plan is not execution) |
-| Git execution | Orchestrator only; smaller models NEVER |
-| Push, merge, rebase, reset, clean, stash-drop, force-anything, branch-delete; live/prod ops; pins; frozen profiles; golden regen; `.gitignore` | Human approval, per operation |
-| Secrets | Never handled in any model output |
+## Research governance
 
-The "or orchestrator directly" options above are ROI defaults, not free
-choices: per `## ROI-First Delegation`, direct is the default for small /
-low-risk work (log a `direct reason`); delegate/fan-out only when a trigger
-fires.
-
-Routing updates from outcomes (scoreboard in `.agent/memory/model-routing.md`):
-
-- One failure → record it and fix the packet; bad-packet failures never demote
-  the model.
-- Two failures of the same task-class/model pair → demote that class one level
-  (Haiku→Sonnet, Sonnet→Orchestrator) until a deliberately re-run probe passes.
-- Widening a class's scope requires two clean successes at current scope plus
-  one harder probe.
-
-## ROI-First Delegation
-
-Delegation must pay for itself. A subagent starts cold and its output is
-re-reviewed by the orchestrator, so for small serial tasks delegation costs
-MORE than doing it directly (see the net-win column in
-`.agent/memory/model-routing.md`). Route by ROI, not by reflex.
-
-**Default is direct.** A task is done directly — with a logged one-line
-`direct reason` — when it is small / single-file / low-risk and the
-orchestrator already holds enough context, and always for Tier-X, review, and
-git.
-
-**Consider a subagent only when an ROI trigger fires:**
-- 3+ independent sub-tasks runnable in parallel → **fan-out** (saving: parallelism)
-- large read-only exploration whose full context should stay out of the
-  orchestrator → **delegate** (saving: context isolation)
-- bulk same-shape mechanical edits large enough to amortize packet+review →
-  **delegate** (saving: cheaper model)
-- long-running test-writing / repeated fixes / batch validation → **delegate**
-  (saving: long-running labor)
-- work needing independent or adversarial review → **delegate** (saving: review
-  separation)
-
-**Model assignment (cheapest capable — this is where cost actually drops):**
-
-| Work | Model |
-|---|---|
-| docs, counting, path verification, simple mechanical edits | Haiku |
-| bounded code+test, test writing, read-only investigation, medium mechanical | Sonnet |
-| orchestration, routing, review, git control, final acceptance | Opus (never delegated) |
-
-Every task's intake announces one of {direct, delegate, fan-out, stop}, its ROI
-reason, and — if delegating — the expected cost-saving type. Record the
-realized net win in `.agent/memory/model-routing.md` after each delegation.
-
-## Done Definitions (acceptance by task type)
-
-| Task type | Done means |
-|---|---|
-| Docs-only | every referenced path proven to exist (`rg --files`); no invented behavior; drift marked [DRIFT]; diff reviewed |
-| Test-only | new tests pass; break-probe shows they fail when the behavior is broken; `make test-hygiene-check` clean; no existing test weakened |
-| Code+test | Test-only criteria + baseline-vs-after suite comparison; lint/format clean; typecheck clean in changed files; every hunk matched against the packet |
-| Gate cleanup | gate red→green with zero behavior change; no new `type: ignore`/`noqa`; error count only shrinks |
-| Investigation | every claim cited (file:line or pasted output); uncertainty explicit; `git status` unchanged |
-| Git planning | written sequence + `branch-safety-check` output + per-step rollback + human-approval points marked; nothing executed |
-| Memory update | routed per `.agent/memory/README.md`; no duplicates; absolute dates; no secrets; stale entries corrected, not appended-around |
-
-No "passing/fixed/done" claim without pasted command output plus an explicit
-list of checks NOT run.
-
-## Handoff Packet (required for every delegation)
-
-Canonical fill-in template: `.agent/skills/small-model-handoff/SKILL.md`.
-Required fields:
-
-1. Goal (1-3 sentences) + task type + tier + assigned model
-2. Branch + expected `git status` + baseline facts (e.g. current test counts)
-3. Files allowed to touch
-4. Files explicitly off-limits (Do-NOT-Edit list pasted for Tier 2+)
-5. Relevant gotchas (pasted, not linked; whole packet <= ~150 lines)
-6. Constraints (laws that apply)
-7. Verification commands (exact), each worded with the pre-existing-red escape
-   hatch: "expect clean in files you changed; failures elsewhere = stop and
-   report, do not fix"
-8. Stop-and-escalate conditions (minimum set in the skill template)
-9. Rollback note (executed by orchestrator only)
-10. Execution venue: worktree by default; main tree when the built venv/test
-    suite is required (allowlist + orchestrator snapshots + checkout rollback)
-11. Precedence clause: general rule beats enumerated list; enumerations
-    generated by a pasted command
-12. Report contract + budget: 4-section report as final message; orchestrator
-    reviews independently regardless; exceeding budget is a stop-condition
-
-## Cross-Cutting Rules
-
-- Every delegation runs in worktree isolation when it writes files
-  (`.agent/rules/60-agent-workflow-governance.md`), except the main-tree venue
-  in `small-model-handoff` when verification requires the built venv/test
-  suite; parallel agents never share files.
-- Executors report; orchestrator verifies; only verified results reach the user.
-- Any agent that cannot complete honestly says so. Fabricated success is the
-  worst possible output in this repo.
+Research -> Gates A-F -> Canary -> Shadow -> Live. Promotion is gated,
+config-driven, reversible, and latency-realistic. Verdicts are faithful
+(KILL / NEEDS-MORE-DAYS / INCONCLUSIVE); never relax a pre-registered floor or
+gate to improve how a result looks; every PnL claim names its backtest method.
+`research/` may use float for offline metrics; live accounting may not.

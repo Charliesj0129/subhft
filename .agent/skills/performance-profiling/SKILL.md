@@ -136,5 +136,5 @@ Internal microsecond-stage latency does NOT imply executable trading latency.
 ## Reference
 
 - Latency baseline: `docs/architecture/latency-baseline-shioaji-sim-vs-system.md`
-- Performance rules: `.agent/rules/10-hft-performance.md`
+- Performance rules: the `hft-hot-path-dev` skill
 - Rust exports: `src/hft_platform/rust_core` (see CLAUDE.md for full export table)

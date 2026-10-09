@@ -17,7 +17,7 @@ contract and profile semantics, the canonical source is
 | Lifecycle + Gates A–F + profile semantics | `docs/runbooks/alpha-development-workflow.md` |
 | Factory operations (this handbook) | `research/README.md` |
 | Replay-parity gate (why / enable / schema / fail-closed) | `docs/runbooks/replay-parity-gate.md` |
-| Research data source + L1/L2 formats | `.agent/rules/70-research-data.md` |
+| Research data source, L1/L2 formats, **book-depth contract (0-5, never assume L5)** | `.agent/rules/70-research-data.md` |
 | Governed L2+tick export contract | `research.data_pipeline`, `make research-export-l2-ticks`, `make research-validate-l2-ticks` |
 | Constrained hypothesis ideation | `.agent/teams/alpha-research/factor-ideation-pipeline.md` |
 

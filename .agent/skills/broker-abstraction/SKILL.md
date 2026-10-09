@@ -145,3 +145,12 @@ monkeypatch.setenv("HFT_BROKER", "fubon")
 
 - `shioaji-contracts` — Shioaji broker details
 - `fubon-contracts` — Fubon broker details
+
+## Governance (folded from the former rule 26)
+
+- All brokers satisfy `BrokerProtocol`; platform code uses the protocol, not SDKs. SDK imports only under `feed_adapter/<broker>/`.
+- `OrderAdapter` delegates broker-specific conversion to `BrokerOrderTranslator`; `ExecutionNormalizer` uses `BrokerExecFieldMap` (no hardcoded broker field names).
+- Config: `config/base/brokers/<broker>.yaml`; selection via `HFT_BROKER` (default `shioaji`).
+- Each broker declares capabilities, auth, rate limits, and place/update/cancel latency P50/P95/P99 in `config/research/latency_profiles.yaml`; a missing profile blocks Gate D.
+- The ingestion boundary scales prices to platform int x10000. Credentials are prefix-isolated: `SHIOAJI_*`, `HFT_FUBON_*`.
+- Each adapter has protocol conformance tests. SDK import failure is fail-closed: log clearly, refuse startup, never silently switch brokers.
