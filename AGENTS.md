@@ -98,7 +98,7 @@ dispatch, risk, gateway, order/execution.
 
 Reject on sight: hot-path `datetime.now()`/`time.time()` (use
 `timebase.now_ns()`), `print()` (use structlog), `requests`, `pandas` in loops,
-`Decimal` on the hot path, broad silent exceptions, Rust `unwrap()` reachable
+`Decimal` on the hot path, default-mutable hot-path dataclasses, broad silent exceptions, Rust `unwrap()` reachable
 from Python, exceptions as control flow.
 
 Architecture invariants:
@@ -112,6 +112,7 @@ Architecture invariants:
 - HALT blocks new orders; cancels stay allowed. Exposure maps declare max
   cardinality and eviction (default cap 10,000: evict zero-balance first, else
   reject with `ExposureLimitError`).
+- Keep the exchange/source timestamp alongside the local `timebase.now_ns()` stamp. Verify a changed flow with queue depth, latency histograms, and WAL/ClickHouse ingestion.
 - Structured data gets structured parsers (msgspec/JSON/YAML), not regex.
 - Architecture-affecting changes say where they enter the flow in
   `docs/architecture/pipeline-chains.md` and update the relevant docs and
@@ -145,7 +146,8 @@ Architecture invariants:
   dependency pins; frozen research profiles/manifests; golden regeneration
   (`make shioaji-surface-regen` only deliberately, never to make CI pass).
 - **Do-NOT-Edit without explicit instruction + strong review** (the
-  `permissions.ask` list in `.claude/settings.json` mirrors this):
+  `permissions.ask` list in `.claude/settings.json` enforces most of this; pre-commit
+  config, SDK-surface goldens, and `.gitignore` are covered by this rule only):
   `src/hft_platform/contracts/**`, `events.py`, `core/timebase.py`,
   `core/pricing.py`, `migrations/clickhouse/*.sql` (append only),
   `config/symbols.yaml`, `config/base/brokers/*.yaml`,

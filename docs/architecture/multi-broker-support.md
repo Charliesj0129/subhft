@@ -111,4 +111,4 @@ Environment variables for Fubon:
 - `src/hft_platform/feed_adapter/fubon/` -- Fubon broker subpackage
 - `src/hft_platform/feed_adapter/broker_registry.py` -- broker registration
 - `src/hft_platform/feed_adapter/protocol.py` -- BrokerProtocol definition
-- `.agent/skills/broker-abstraction/SKILL.md` -- governance rules
+- `.agent/skills/broker-integration/SKILL.md` -- governance rules

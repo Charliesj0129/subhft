@@ -126,7 +126,7 @@ Same structure as Shioaji. Pre-allocated translation buffers, 10s cooldown.
 | `SHIOAJI_API_KEY` | — | Shioaji broker API key |
 | `SHIOAJI_SECRET_KEY` | — | Shioaji broker secret key |
 
-## Governance Rules (from `.agent/skills/broker-abstraction/SKILL.md`)
+## Governance Rules (from `.agent/skills/broker-integration/SKILL.md`)
 
 - **MB-02**: No broker-specific imports outside `feed_adapter/<broker>/`
 - **MB-04**: ExecutionNormalizer uses BrokerExecFieldMap (no hardcoded fields)
