@@ -27,7 +27,7 @@ A new `.agent/` subdirectory requires a row here at creation time.
 | `routines/` | tracked | ACTIVE | unattended read-only routine registry (`rules/65-unattended-autonomy.md`) |
 | `reports/` | untracked | ACTIVE (destination) | target directory for periodic meta-audit reports (proposal #15); existing 2026-03 files are historical evidence |
 | `library/` | tracked | ACTIVE | reference shelf (broker/API/architecture docs) |
-| `evals/` | tracked | ACTIVE (golden intake cases) | `golden-intake-tasks.md` = routing regression cases run after routing-relevant governance changes (#8); legacy 2026-02/03 module-eval specs retained as historical reference |
+| `evals/` | tracked | ACTIVE (skill trigger cases) | `skill-triggers.md` = skill-description regression cases run after skill edits; legacy 2026-02/03 module-eval specs retained as historical reference |
 | `teams/alpha-research/rounds/` | untracked | EVIDENCE | research round artifacts (R56) — append-only, never rewrite; the surrounding team framework was removed 2026-07-11 |
 | `agent-docs-known-drift.txt` | tracked (force-added) | ACTIVE | ratchet baseline for `scripts/check_agent_docs.py` (`make agent-docs-check`) |
 

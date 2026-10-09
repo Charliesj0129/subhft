@@ -306,7 +306,7 @@ Phase 4         965K   1,000K      330K       400K     2,695K
 
 ### WS-G：熱路徑 Rust 化擴編
 - 對應 TODO：`docs/TODO.md#1.4`
-- 技能：`hft-strategy-dev`、`rust_feature_engineering`、`performance-profiling`
+- 技能：`hft-strategy`、`hft-rust`、`hft-latency-profiling`
 - RACI：R=Rust Lead、A=Tech Lead、C=Strategy Owner、I=Ops Oncall
 - Agent 角色：`explorer`（profiling/baseline，輸出 `hotpath_matrix`）→ `worker`（Rust cutover/CI，輸出 `cutover_patch+ci_report`）→ `default`（整合驗收，輸出 `gate_summary`）
 - KPI：

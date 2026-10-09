@@ -16,10 +16,10 @@ STATUS_FAIL = "fail"
 
 SKILLS_USED: tuple[str, ...] = (
     "search-first",
-    "hft-strategy-dev",
+    "hft-strategy",
     "hft-alpha-research",
     "validation-gate",
-    "troubleshoot-metrics",
+    "runtime-diagnostics",
     "doc-updater",
 )
 

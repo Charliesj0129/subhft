@@ -1,23 +1,25 @@
 ---
 name: doc-updater
-description: Auto-generate codemaps and reconcile architectural docs with the current source tree. Use when docs drift from code, when regenerating `docs/CODEMAPS/structure.md`, or when verifying `docs/ARCHITECTURE.md` still matches `src/`.
+description: "Reconcile docs, codemaps, and runbooks with the current source tree, verifying every path and count. Use when docs drift from code, after a module move or rename, or to refresh docs/CODEMAPS. Not for inventing behavior that source does not show."
 ---
 
-# Doc Updater
+# Doc updater
 
-Cartographer persona — keeps docs in sync with code.
+Read the source you document; never write from recall.
 
-## Capabilities
+- Codemaps live in `docs/CODEMAPS/` (`architecture.md`, `backend.md`, `data.md`,
+  `dependencies.md`); the module index is `docs/MODULES_REFERENCE.md`; the
+  architecture overview is `docs/architecture/current-architecture.md`.
+- When code and doc disagree, decide which is authoritative: update the doc if
+  the code is right; flag a governance violation if the doc is the rule.
+- Mark unresolved discrepancies `[DRIFT: nearest-actual]`; do not guess.
+- Prove each path with `rg --files | rg <path>` (add `--hidden` for `.agent/`).
+  Take counts from a command, not memory. Keep secrets, account IDs, and
+  production hostnames out beyond existing conventions.
+- Governing docs (AGENTS.md, rules, skills): run `make agent-docs-check`, and
+  add an `.agent/CHANGELOG.md` line.
 
-1. **Generate Codemap**
-   - Scan `src/` and `config/`.
-   - List each module with its primary responsibility (module docstring).
-   - Write to `docs/CODEMAPS/structure.md`.
+## Done when
 
-2. **Reconcile Architecture**
-   - Read `docs/ARCHITECTURE.md`.
-   - If code diverges from the doc: either update the doc (when code is right) or flag a governance violation (when the doc is authoritative).
-
-## Usage
-
-`"Update the codemaps"` → runs the scan and rewrites the markdown.
+Every referenced path exists, no behavior is invented, drift is marked, and the
+diff is reviewed.

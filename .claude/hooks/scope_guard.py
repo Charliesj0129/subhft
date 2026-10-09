@@ -3,7 +3,7 @@
 the packet allowlist are denied (fail-closed). No window -> no-op.
 
 Window = .agent/runtime/active-packet.json, written by the orchestrator before
-spawning an executor and deleted at LAND (pipeline-implement skill). Subagents
+spawning an executor and deleted at LAND (delegation skill). Subagents
 can never write the runtime markers themselves (reviewer finding F2 2026-07-14).
 Unreadable stdin falls through to the orchestrator bypass (harness always sends
 valid JSON; probe 2026-07-14) — a floor, not a sandbox."""

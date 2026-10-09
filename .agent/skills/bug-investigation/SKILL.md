@@ -1,46 +1,36 @@
 ---
 name: bug-investigation
-description: "Evidence-first root-cause investigation for unexpected behavior, test failures, or production anomalies — BEFORE proposing any fix. Adds repo-specific evidence sources (gotchas, runbooks, metrics, WAL/ClickHouse, decision traces) to generic debugging discipline."
+description: "Evidence-first root-cause investigation of unexpected behavior, a failing test, or a production anomaly, before proposing a fix. Use when the cause is unknown, a symptom needs explaining, or a signal looks wrong. Not for applying the fix."
 ---
 
-# Skill: bug-investigation
+# Bug investigation
 
-## When to use
-Any unexpected behavior, test failure, or production anomaly — BEFORE
-proposing a fix. Complements `sequential-thinking`; this adds the
-repo-specific evidence sources.
-
-## Required inputs
-Symptom description; when it started; environment (sim/live/test/host).
+Report the cause; fixing is a separate scoped task (a pattern-matched signal
+often has a different cause). Read-only toward production: guarded queries, no
+restarts, no config edits, never "test a theory" on live state.
 
 ## Procedure
-1. Reproduce or capture evidence first: failing test output, structlog lines,
-   Prometheus metrics, decision traces, WAL/ClickHouse state. No evidence → say so.
-2. Check known-issues: `.agent/memory/module_gotchas.md`,
-   `.agent/memory/lessons_learned.md`, `.agent/memory/failed-attempts.md`,
-   runbooks — many symptoms have documented causes (`HFT_ORDER_MODE=sim` fake
-   fills, boot-latch, broker session races, broker-thread handoff).
-3. Establish timeline: `git log` on touched files vs symptom onset.
-4. Form <=3 hypotheses; for each, name the observation that would kill it;
-   test cheapest-first. Verify with source reading, not recall.
-5. Distinguish root cause from trigger from symptom in the writeup.
-6. Do NOT fix in this skill. Report; fixing is a separate scoped task —
-   a pattern-matched signal may have a different cause.
 
-## Safety rules
-Read-only toward production (guarded queries, no restarts, no config edits).
-Never "test a theory" by mutating live state.
+1. **Evidence first.** Failing test output, structlog lines, Prometheus
+   metrics, decision traces, WAL and ClickHouse state (list `audit.*` tables
+   before calling a cause unknowable). No evidence: say so.
+2. **Known causes.** `.agent/memory/module_gotchas.md`, `failed-attempts.md`,
+   `lessons_learned.md`, and runbooks already document many: `HFT_ORDER_MODE=sim`
+   fakes fills and does not gate dispatch, boot-latch, broker session races,
+   broker-thread handoff, registry-wide metrics reading an unset value as `0`.
+3. **Timeline.** `git log` on the touched files against symptom onset.
+4. **Hypotheses.** At most three; name the observation that would kill each;
+   test cheapest first by reading source, not recalling it.
+5. **Separate** root cause from trigger from symptom.
 
-## Output format
-`## Symptom` · `## Evidence` (verbatim excerpts) · `## Hypotheses & how each
-was tested` · `## Root cause (or best current theory + confidence)` ·
-`## Proposed fix scope` · `## Regression test that would have caught it`.
+## Output
 
-## Validation checklist
-- [ ] Root cause backed by evidence, not plausibility
-- [ ] Alternative hypotheses explicitly eliminated
-- [ ] No state was mutated during investigation
+`## Symptom` · `## Evidence` (verbatim excerpts) · `## Hypotheses and how each
+was tested` · `## Root cause (or best theory + confidence)` · `## Proposed fix
+scope` · `## Regression test that would have caught it`. For a path that dies
+somewhere, add an ASCII diagram marking where.
 
-## Example prompt
-"bug-investigation: after last night's restart, subscribed_count shows 0/357
-while FeedState=CONNECTED. Don't fix — find the cause."
+## Done when
+
+The root cause rests on evidence rather than plausibility, alternatives are
+eliminated explicitly, and nothing was mutated.

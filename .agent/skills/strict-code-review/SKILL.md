@@ -1,62 +1,59 @@
 ---
 name: strict-code-review
-description: "Adversarial diff review against HFT laws, boundaries, failure modes, security, and tests. Use on any diff before commit; MANDATORY (orchestrator-class reviewer) for all Tier-3 diffs and all executor-produced diffs before acceptance."
+description: "Adversarial review of a diff against the HFT laws, boundaries, failure modes, security, and tests, reporting P0-P3 findings with file:line and a verdict. Use before commit on any diff, always for Tier-3 diffs and for executor-produced diffs. Not for fixing code or for style ruff already enforces."
 ---
 
-# Skill: strict-code-review
+# Strict code review
 
-## When to use
-Any diff before commit; ALL Tier-3 diffs (mandatory, orchestrator-class
-reviewer); executor-produced diffs before the orchestrator accepts them.
+Review a named diff. Report findings; do not edit.
 
-## Required inputs
-The diff; the originating task/packet; branch test status; for executor
-diffs: the pre-spawn snapshot and privately pre-computed ground truth.
+## Step 0 — executor diffs only
 
-## Procedure
-0. Executor diffs only (mandatory; the self-report is context, never evidence):
-   a. Scope-diff against the pre-spawn `git status --porcelain` + hash
-      snapshot — only allowed files changed, dirty user files untouched.
-   b. Personally re-run every packet verification command.
-   c. Break-probe new/changed tests: break the behavior, confirm they fail,
-      restore byte-exact (hash-verified).
-   d. Adjudicate every red gate: pre-existing vs introduced, with evidence.
-   e. Cross-check numeric/mechanical claims against the ground truth
-      pre-computed before spawning (`small-model-handoff` step 2).
-   f. Any claim of "identical / byte-for-byte / unchanged" between artifacts
-      (files, JSON outputs, run results) is accepted only with a real diff
-      command + its output — never a by-inspection read. (Promoted
-      2026-07-14 per the twice-rule: 2026-07-07 and 2026-07-10 ledger
-      entries, two overclaims caught only by an independent diff.)
-1. Read the packet: does the diff do exactly that — nothing more, nothing less?
-2. Laws pass (hot-path files only): per-tick allocation, float price math,
-   blocking IO/event-loop compute, time source (`timebase.now_ns`), FFI copies.
-3. Boundary pass: broker SDK imports outside `feed_adapter/<broker>/`;
-   contracts importing runtime; new import edges (`make dependency-boundary`).
-4. Failure-mode pass: silent exception swallowing, fail-open paths, unbounded
-   queues/maps, state machines missing transitions, non-idempotent replay.
-5. Security pass: secrets, logged identifiers, injection, TLS.
-6. Test pass: does a test fail if this change is reverted? Are gates/goldens/
-   thresholds weakened anywhere? (Weakened gate = automatic REQUEST-CHANGES.)
-7. Verify each suspected finding by reading surrounding code — no
-   pattern-match-only findings.
+The executor's report is context, never evidence. Before judging the code:
 
-## Safety rules
-Reviewer edits nothing. Findings need concrete failure scenarios, not vibes.
+1. Scope-diff against the pre-spawn `git status --porcelain` and hashes: only
+   allowed files changed; the user's dirty files untouched.
+2. Re-run every packet verification command yourself.
+3. Break-probe new or changed tests: break the behavior, see them fail,
+   restore the file byte-exact (verify the hash).
+4. Adjudicate every red gate as pre-existing or introduced, with evidence.
+5. Check numeric and mechanical claims against the answer key you computed
+   before spawning. Accept "identical / byte-for-byte / unchanged" only with a
+   real `diff` command and its output.
 
-## Output format
-Ranked findings (severity, file:line, rule violated, failure scenario) +
-verdict: APPROVE / APPROVE-WITH-NITS / REQUEST-CHANGES / ESCALATE.
+## What to report
 
-## Validation checklist
-- [ ] Executor diff: Step 0 done (snapshot diff, re-run, break-probe,
-      red-gate adjudication, ground-truth cross-check)
-- [ ] Every "identical/unchanged" claim backed by a real diff command
-- [ ] Diff-vs-packet scope checked
-- [ ] All 5 passes done for applicable files
-- [ ] Each finding evidence-backed
-- [ ] Verdict explicit
+Only issues this diff introduces that the author would fix if they knew, that
+are discrete and actionable, and that you can demonstrate: input or state ->
+wrong result. Read the surrounding code; no pattern-match findings.
 
-## Example prompt
-"strict-code-review this diff to order/adapter.py rate limiting; packet said
-change the sliding window only. Tier 3."
+| Severity | Meaning |
+|---|---|
+| P0 | breaks money, safety, or data integrity; blocks release |
+| P1 | likely bug or law violation on a hot, risk, or order path |
+| P2 | real defect, limited blast radius |
+| P3 | minor, cheap to fix |
+
+Each finding: `[P#] file:line`, the violated rule or intent, the failure
+scenario, and the evidence (code read or command output).
+
+## What to check
+
+- Intent: does the diff do what the packet or task asked, nothing more?
+- Laws (hot-path files): per-tick allocation, float price math, blocking IO or
+  >1 ms compute on the loop, time source (`timebase.now_ns`), FFI copies.
+- Boundaries: broker SDK imports outside `feed_adapter/<broker>/`; contracts
+  importing runtime; new import edges (`make dependency-boundary`).
+- Failure modes: silent exception swallowing, fail-open paths, unbounded
+  queues or maps, state machines missing a transition (HALT must still allow
+  cancels), non-idempotent replay.
+- Security: secrets, logged identifiers, injection, TLS.
+- Tests: does a test fail if the change is reverted? Any gate, golden, or
+  threshold weakened (automatic REQUEST-CHANGES)?
+
+## Done when
+
+You end with exactly one verdict: `APPROVE`, `APPROVE-WITH-NITS`,
+`REQUEST-CHANGES`, or `ESCALATE`. With no findings, say what you checked. A
+review that runs low on budget returns `REQUEST-CHANGES` or `ESCALATE` with
+findings so far, never silence.

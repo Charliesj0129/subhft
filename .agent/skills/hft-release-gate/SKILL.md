@@ -1,163 +1,59 @@
 ---
 name: hft-release-gate
-description: Use when checking if the current state is ready to deploy, before going live with a strategy, or when performing release readiness checks. Unifies all quality gates into a single pass/fail checklist.
+description: "Release-readiness check rolling quality, safety, and operational gates into one pass/fail report, plus a seven-plane runtime audit. Use before proposing a deploy or merge with runtime changes, or after an incident. Not for performing the deploy (rules/41-deployment.md)."
 ---
 
-# HFT Release Gate
+# Release gate
 
-Unified release readiness check combining all quality, safety, and operational gates.
+This produces evidence; it never deploys, enables live trading, or pushes. A
+deploy follows `.agent/rules/41-deployment.md` with the user's per-batch
+approval. The live registry is frozen (`r47_tmf_v1`, loop_v1 L11): enabling any
+other strategy is a red line.
 
-## When to Use
+## Gates
 
-- Before deploying to production (Docker Compose update)
-- Before enabling a new strategy for live trading
-- Before `git push` to main with runtime changes
-- Weekly/monthly release confidence check
+| # | Gate | Command | Pass |
+|---|---|---|---|
+| 1 | Code quality | `make check` | format, lint, typecheck, discipline, dependency-boundary, hygiene all green |
+| 2 | Tests and coverage | `make coverage` | >= 70% line; hot-path files >= 90% (`make coverage-html`) |
+| 3 | Test hygiene | `make test-assertion-check`, `test-name-check`, `test-quality-pattern-check` | clean |
+| 4 | Architecture | `make arch-gate`, `make dependency-boundary` | no forbidden imports |
+| 5 | Security | `make security-audit`; no secrets in the diff; no new `type: ignore` without a reason | clean |
+| 6 | Runtime health | `make pre-market-check` (on the target host's environment, not only CI) | healthy |
+| 7 | Latency | `make hotpath-profile`, `make benchmark-compare` | no stage regresses > 20% |
+| 8 | Drift | `make deploy-drift-snapshot` before, `make deploy-drift-check` after | no unexplained diff |
 
-## Gate Summary
+One-shot for the automated part: `make ci && make pre-market-check && make hotpath-profile`.
 
-| # | Gate | Command | Pass criteria |
-|---|------|---------|---------------|
-| 1 | Code Quality | `make check` | lint + typecheck + discipline + dep-boundary all green |
-| 2 | Test Suite | `make coverage` | 70%+ line coverage, 55%+ branch |
-| 3 | Test Hygiene | `make test-hygiene-check` | Naming, assertions, quality patterns |
-| 4 | Architecture | `make arch-gate` | No forbidden imports, no boundary violations |
-| 5 | Security | `make security-audit` | No known CVEs in dependencies |
-| 6 | Pre-Market | `make pre-market-check` | Docker, ClickHouse, Redis, WAL, metrics healthy |
-| 7 | Latency | `make hotpath-profile` | No regression vs baseline |
+Also check CI on `main` is green including scheduled runs, not only the PR
+(`gh run list`): a green merge proves nothing about a scheduled run.
 
-## Full Gate Sequence
+## Before a strategy runs beyond sim
 
-### Gate 1: Code Quality
+At least one full session in shadow, with a latency profile in
+`config/research/latency_profiles.yaml`, a conservative `max_pos`, a documented
+rollback, and `docs/runbooks/live-trading-activation-sop.md` followed. All of it
+needs the user's explicit instruction.
 
-```bash
-make check
-# Runs: format-check → lint → typecheck → discipline → dependency-boundary → test-hygiene-check
-```
+## Avoid
 
-Must pass with **zero errors**. Key discipline rules:
-- HFT-D001: No silent exception swallow
-- HFT-A001: No broker SDK imports outside adapter
-- HFT-P001: No `datetime.now()` on hot path
-
-### Gate 2: Test Coverage
-
-```bash
-make coverage
-# Enforces: --cov-fail-under=70 --cov-branch
-```
-
-Check per-module coverage for hot-path files:
-```bash
-make coverage-html
-# Open htmlcov/index.html, verify:
-# - normalizer.py: ≥90%
-# - lob_engine.py: ≥90%
-# - risk/engine.py: ≥90%
-```
-
-### Gate 3: Test Hygiene
-
-```bash
-make test-assertion-check    # All tests have asserts
-make test-name-check         # Behavior-oriented names (not test_covers_*)
-make test-quality-pattern-check  # No tautological patterns
-```
-
-### Gate 4: Architecture Conformance
-
-```bash
-make arch-gate
-make dependency-boundary
-```
-
-Verifies:
-- No `contracts` importing runtime services
-- No `events.py` importing strategy/execution
-- No broker-specific code outside `feed_adapter/<broker>/`
-
-### Gate 5: Security
-
-```bash
-make security-audit
-# pip-audit or pip check fallback
-```
-
-Check manually:
-- [ ] No hardcoded secrets in diff (`grep -r "API_KEY\|SECRET\|PASSWORD" src/`)
-- [ ] `.env` is in `.gitignore`
-- [ ] No new `# type: ignore` without justification
-
-### Gate 6: Pre-Market Health
-
-```bash
-make pre-market-check
-```
-
-Verifies:
-- Docker services healthy (`docker compose ps`)
-- ClickHouse responds (`SELECT 1`)
-- Redis responds (`redis-cli ping`)
-- WAL directory clean (no orphan `.tmp` files)
-- Prometheus metrics endpoint live
-- Health endpoint returns 200
-
-### Gate 7: Latency Regression
-
-```bash
-make hotpath-profile
-# Compare against baseline:
-make benchmark-compare
-```
-
-No stage should regress by more than 20% vs baseline.
-
-## Strategy-Specific Gates (for live trading enablement)
-
-Additional checks when enabling `HFT_ORDER_MODE=live`:
-
-| # | Check | How |
-|---|-------|-----|
-| 8 | Shadow session reviewed | At least 1 full trading day in shadow mode |
-| 9 | Latency profile documented | Entry in `config/research/latency_profiles.yaml` |
-| 10 | Max position conservative | `max_pos=1` for first live day |
-| 11 | Canary config exists | `config/strategy_promotions/YYYYMMDD/<alpha>.yaml` |
-| 12 | Rollback plan documented | Can disable via config change + restart |
-
-## Drift Detection
-
-```bash
-make deploy-drift-snapshot    # Capture baseline
-# ... deploy changes ...
-make deploy-drift-check       # Compare against baseline
-```
-
-## Quick One-Shot
-
-For the impatient (runs all automated gates):
-
-```bash
-make ci && make pre-market-check && make hotpath-profile
-```
+Skipping gate 6 for "code-only" changes (config drifts); relying on CI alone;
+releasing without a recovery window before the next session (Friday, before
+holidays); counting a green run as proof of runtime behavior without the
+named metrics.
 
 ## Output
 
-Report gate results in release notes:
-
 ```
-Release Readiness: 7/7 gates PASS
-- Code Quality: PASS (0 errors)
-- Coverage: PASS (72.3% line, 58.1% branch)
-- Test Hygiene: PASS (0 zero-assert, 0 bad names)
-- Architecture: PASS (0 boundary violations)
-- Security: PASS (0 known CVEs)
-- Pre-Market: PASS (all services healthy)
-- Latency: PASS (no regression > 20%)
+Release readiness: N/8 gates PASS
+| gate | command | result |
 ```
+List gates NOT run and why; verdict SHIP / HOLD / BLOCKED.
 
-## Anti-Patterns
+## Done when
 
-- Do NOT skip Gate 6 (pre-market) for "code-only" changes — config drift happens
-- Do NOT rely on CI alone — run `make pre-market-check` on the actual deployment host
-- Do NOT go live without shadow session data for new strategies
-- Do NOT release on Friday (Taiwan market opens Monday 09:00 — no recovery window)
+Every gate is PASS, FAILED (with output), or NOT RUN (with reason).
+
+## References
+
+- `references/plane-audit.md` — read for the 7-plane runtime safety sweep after an incident, before a go-live window, or for the quarterly audit.

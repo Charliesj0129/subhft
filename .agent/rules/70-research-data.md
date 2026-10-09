@@ -55,7 +55,7 @@ Rules for research code:
 
 The L2 exporter drops rows outside a TAIFEX session (clock window **and** XTAI calendar membership) and records `session_filtered_rows` / `session_rule` in the sidecar. `--allow-non-session` relaxes the calendar half only.
 
-Canonical governed L2+tick export is `research.data_pipeline` via `make research-export-l2-ticks`. Sidecar/data-root rules live in `.agent/skills/research-data-governance/SKILL.md`. `research/tools/ch_batch_export.py` is legacy/L1 wrapper and must not reimplement sidecar/dtype governance.
+Canonical governed L2+tick export is `research.data_pipeline` via `make research-export-l2-ticks`. Sidecar/data-root rules live in `.agent/skills/hft-alpha-research/references/data-governance.md`. `research/tools/ch_batch_export.py` is legacy/L1 wrapper and must not reimplement sidecar/dtype governance.
 
 Source-layer quality is audited by `make research-data-quality DATE_FROM=... DATE_TO=...` (`research/data_pipeline/quality.py`). Advisory, read-only; writes `research/reports/data_quality/*_source_audit.{json,md}`. Its verdict is stamped into dataset sidecars as `source_quality_*`. `ts_causality` (`exch_ts` may never lead `ingest_ts`) is the invariant that the 2026-01/02 +8h shift broke — run the audit before trusting a new or re-pulled date range. See `docs/modules/data_quality.md`.
 

@@ -1,11 +1,10 @@
 # Eval Harness Index
 
-## Golden intake tasks (ACTIVE — governance regression)
+## Skill trigger cases (ACTIVE)
 
-[golden-intake-tasks.md](golden-intake-tasks.md) — 8 pinned task→routing
-cases, run after any routing-relevant governance change (see that file for
-procedure). This is the live purpose of `.agent/evals/` since 2026-07-10
-(institutionalization #8).
+[skill-triggers.md](skill-triggers.md) — task statements mapped to the skill
+that should load, plus counter-examples. Run after any skill description
+change (procedure in that file).
 
 ## Component evals (legacy)
 
@@ -19,18 +18,18 @@ Evaluation definitions for hot-path components. Each eval contains:
 
 ## Components
 
-| Eval            | Component                    | Latency Target                 | File                                     |
-| --------------- | ---------------------------- | ------------------------------ | ---------------------------------------- |
-| Normalizer      | `feed_adapter/normalizer.py` | < 50us (Python) / < 5us (Rust) | [normalizer.md](normalizer.md)           |
-| LOB Engine      | `feed_adapter/lob_engine.py` | < 100us per update             | [lob-engine.md](lob-engine.md)           |
-| Risk Guard      | `risk/`                      | < 10us per validation          | [risk-guard.md](risk-guard.md)           |
-| Strategy Runner | `strategy/runner.py`         | < 50us dispatch overhead       | [strategy-runner.md](strategy-runner.md) |
-| Gateway         | `gateway/service.py`         | < 100us pipeline               | [gateway.md](gateway.md)                 |
-| Recorder        | `recorder/worker.py`         | < 10us batcher add             | [recorder.md](recorder.md)               |
+| Eval | Component | File |
+| --- | --- | --- |
+| Normalizer | `feed_adapter/normalizer.py` | [normalizer.md](normalizer.md) |
+| LOB Engine | `feed_adapter/lob_engine.py` | [lob-engine.md](lob-engine.md) |
+| Risk Guard | `risk/` | [risk-guard.md](risk-guard.md) |
+
+Other hot-path components have no eval file; use their unit tests and
+`tests/benchmark/`.
 
 ## How to Use
 
-1. When modifying a hot-path component, review its eval definition first.
+1. When modifying a covered component, review its eval definition first.
 2. Ensure all **Capability** checks pass in unit tests.
 3. Run benchmarks to verify **Regression** targets are met.
 4. Update the eval if new capabilities are added.
@@ -38,8 +37,7 @@ Evaluation definitions for hot-path components. Each eval contains:
 ## Running Benchmarks
 
 ```bash
-# All benchmarks
-make bench
+make benchmark                 # all; make benchmark-compare against baseline
 
 # Specific component
 uv run pytest tests/benchmark/micro_bench_normalizer.py -v
