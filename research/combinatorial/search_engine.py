@@ -211,15 +211,14 @@ class AlphaSearchEngine:
         return self._rng.choice(candidates)
 
     def _mutate_expression(self, expression: str) -> str:
-        tokens = expression.replace("(", " ").replace(")", " ").replace(",", " ").split()
+        tokens = _tokenize_expression(expression)
         out = list(tokens)
         for i, token in enumerate(tokens):
             if token.isdigit() and self._rng.random() < 0.5:
                 out[i] = str(self._rng.choice(self._window_choices))
             elif token in self.features and self._rng.random() < 0.3:
                 out[i] = self._rng.choice(self._feature_keys)
-        rebuilt = " ".join(out)
-        rebuilt = rebuilt.replace(" ,", ",").replace("( ", "(").replace(" )", ")")
+        rebuilt = _render_expression(out)
         if has_self_correlation(rebuilt):
             # Swapping a feature token can collapse ts_corr(a, b, w) into
             # ts_corr(a, a, w), which is identically +1 on every non-degenerate
@@ -276,6 +275,36 @@ class AlphaSearchEngine:
                 if np.isfinite(corr):
                     out = max(out, abs(float(corr)))
         return float(out)
+
+
+_DELIMITERS = "(),"
+
+
+def _tokenize_expression(expression: str) -> list[str]:
+    """Split into names, numbers and the delimiters ``(`` ``)`` ``,``; whitespace is dropped.
+
+    The delimiters are tokens in their own right: mutation swaps names and numbers in
+    place, so the call structure has to survive the round trip through this list.
+    """
+    tokens: list[str] = []
+    word: list[str] = []
+    for char in expression:
+        if char in _DELIMITERS or char.isspace():
+            if word:
+                tokens.append("".join(word))
+                word = []
+            if char in _DELIMITERS:
+                tokens.append(char)
+        else:
+            word.append(char)
+    if word:
+        tokens.append("".join(word))
+    return tokens
+
+
+def _render_expression(tokens: Sequence[str]) -> str:
+    """Inverse of :func:`_tokenize_expression` in the engine's own style: ``f(a, b)``."""
+    return "".join(", " if token == "," else token for token in tokens)
 
 
 def _as_returns(values: Sequence[float] | None) -> np.ndarray | None:
