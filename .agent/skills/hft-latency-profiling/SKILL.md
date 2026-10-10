@@ -1,6 +1,6 @@
 ---
 name: hft-latency-profiling
-description: "Profile hot-path latency (stage budgets, Prometheus metrics, py-spy, flamegraph) and apply the broker-RTT latency realism guard. Use when investigating a latency regression, judging a Rust port, or validating latency before production. Not for correctness review."
+description: "Profile hot-path latency (stage budgets, Prometheus metrics, py-spy, flamegraph) and apply the broker-RTT latency realism guard. Use when investigating a latency regression, judging whether a hot computation needs optimizing, or validating latency before production. Not for correctness review."
 ---
 
 # Latency profiling
@@ -49,8 +49,9 @@ optimistic until shadow or live evidence confirms them (`hft-backtest`).
 
 ## Optimization order
 
-Fused Rust path, then Rust feature backend, then preallocated buffers, then GC
-control during trading, then CPU isolation. Each step needs a before/after
+Preallocated buffers, then numba/vectorized Python, then GC control during
+trading, then CPU isolation. The existing fused Rust path is kept as is; new Rust
+ports are paused. Each step needs a before/after
 measurement under the same load.
 
 ## Done when

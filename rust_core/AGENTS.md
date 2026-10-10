@@ -2,6 +2,8 @@
 
 Project-wide rules: `../AGENTS.md`. This file lists only what differs here.
 
+> **Rust is paused (2026-10-10).** Do not start new Rust kernels or ports. Existing `rust_core/` stays maintained: it keeps building, its parity tests keep passing, and production still imports it. Performance work happens in Python/numba first. Changes here are limited to keeping the crate building and fixing parity or safety defects.
+
 - No `.unwrap()`/`.expect()` on any path reachable from Python. Public
   functions return `PyResult<T>`; map errors with `ok_or_else(|| PyValueError::new_err(..))?`.
 - Release the GIL (`Python::allow_threads`) for CPU-heavy work. Take numpy input

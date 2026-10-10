@@ -1,9 +1,11 @@
 ---
 name: hft-rust
-description: "Rust/PyO3 work in rust_core: when to port, zero-copy FFI, parity tests, benchmark gate, build, exported kernels. Use when porting a hot computation, adding or reviewing a PyO3 export, or debugging a parity or fallback issue. Not for generic Rust style."
+description: "Maintain existing Rust/PyO3 kernels in rust_core: build, parity tests, zero-copy FFI, fallbacks. Rust is paused, so new ports are not started. Use when a parity, build, or fallback issue appears in an existing kernel. Not for new ports or generic Rust style."
 ---
 
 # Rust / PyO3
+
+> **Paused since 2026-10-10.** No new kernels or ports. Use this skill only to keep existing kernels building and in parity. If a computation is slow, profile and optimize the Python/numba path first (`hft-latency-profiling`).
 
 Crate rules (no panics reachable from Python, `PyResult`, GIL release, views not
 copies) are in `rust_core/AGENTS.md`. The Rust extension is built from

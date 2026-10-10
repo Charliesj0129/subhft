@@ -1,7 +1,7 @@
 # HFT Platform
 
 台灣市場（TAIFEX 期貨／選擇權、TWSE）的事件驅動高頻交易平台：Shioaji／Fubon 雙券商、
-ClickHouse、Prometheus、Rust（PyO3）熱路徑核心。這個 repo 涉及真實資金，也有一個受治理的
+ClickHouse、Prometheus、既有的 Rust（PyO3）熱路徑核心（新的 Rust 工作自 2026-10-10 起暫停）。這個 repo 涉及真實資金，也有一個受治理的
 研究計畫（`research/`）：研究產出不會直接啟用實盤，必須經過 Gate、Canary、Shadow。
 
 > 實盤引擎目前凍結在 `r47_tmf_v1`（loop_v1 L11），見
@@ -59,10 +59,10 @@ Shioaji；Fubon 設 `HFT_BROKER=fubon` 與 `HFT_FUBON_*`。
 ## 研究 Pipeline
 
 ```
-論文 -> 原型 -> 資料 -> 回測(延遲+成本) -> 統計驗證 -> 參數優化 -> Paper trade -> Live(Rust)
+論文 -> 原型 -> 資料 -> 回測(延遲+成本) -> 統計驗證 -> 參數優化 -> Paper trade -> Live
 ```
 
-Gate A–F（Manifest／測試／回測／晉升門檻／Paper trade／Rust readiness）與 Canary 的定義和門檻在
+Gate A–F（Manifest／測試／回測／晉升門檻／Paper trade／Rust readiness，後者暫停）與 Canary 的定義和門檻在
 [docs/runbooks/alpha-development-workflow.md](docs/runbooks/alpha-development-workflow.md)；工廠操作手冊是
 [research/README.md](research/README.md)。入口：`make research ALPHA=<id> OWNER=<you> DATA='<path>'`。
 
