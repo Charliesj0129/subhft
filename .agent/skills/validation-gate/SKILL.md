@@ -26,7 +26,7 @@ and shadow evaluation but cannot replace the active loop. Never edit
 | C | Does it hold under realistic assumptions? | scorecard, latency profile, stress, walk-forward; separate warn-only from true blockers |
 | D | Is it eligible for promotion? | configured thresholds plus feature-set parity with live; strict profile has blocking sub-gates and needs a replay-parity report |
 | E | Is paper-trade execution quality adequate? | recorded shadow sessions, reject rates, governance report |
-| F | Rust readiness (optional, taker-heavy alphas) | manifest, parity tests, optional benchmark gate |
+| F | Rust readiness (optional; paused 2026-10-10, skip unless an existing kernel is involved) | manifest, parity tests, optional benchmark gate |
 | Canary | Controlled exposure | canary config and `hft alpha canary evaluate` |
 
 ## Run and read

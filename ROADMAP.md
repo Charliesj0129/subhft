@@ -2,6 +2,9 @@
 
 > **願景**：個人散戶 × 單機部署，專注 TAIFEX 一個市場做到極致 — 100+ 策略、極低延遲、全自動化 24/7 無人值守運維。
 >
+> **2026-10-10 方向調整：Rust 化暫停。** 不再新增 Rust kernel 或移植；既有 `rust_core/` 持續維護（可建置、parity 測試通過、正式機仍在載入）。
+> 下列 Rust 相關項目（回測引擎 v2、全 Rust 熱路徑、共享記憶體 IPC、WS-G cutover）標記為暫停，效能工作先在 Python／numba 路徑上做。
+>
 > **基線**：2026-04 起步，核心代碼 ~95K 行（Python 88K + Rust 7.5K），測試 175K 行，研究 176K 行，總計 ~67.6 萬行。
 > 2026-10-10 重新量測見〈LOC 成長曲線〉。
 >
@@ -156,7 +159,7 @@
 | 替代資料接入 | 台灣特有資料源：法人籌碼、融資融券、選擇權 OI、外資期貨部位 | 25K |
 | Alpha 組合最佳化 | 100+ alpha 的自動權重調整、相關性管理、尾部風險控制 | 20K |
 | 策略生命週期管理 | 從誕生到退役的完整追蹤：研究 → 回測 → shadow → canary → production → decay → retire | 15K |
-| 回測引擎 v2（Rust） | 高效能回測核心遷移到 Rust，支援逐 tick 回測 100+ 策略 × 3 年資料 < 10 分鐘 | 30K |
+| 回測引擎 v2（~~Rust~~ 暫停，改以 Python／numba／hftbacktest 推進） | 高效能回測核心，支援逐 tick 回測 100+ 策略 × 3 年資料 < 10 分鐘 | 30K |
 
 ### 軌道 B — 執行品質 v2
 
@@ -190,7 +193,7 @@
 
 ## Phase 4：Q4 2027 - Q1 2028（10月 → 4月）— 極致化
 
-> 目標：深度學習驅動的 alpha 發現，全 Rust 熱路徑極致延遲，系統自我進化。
+> 目標：深度學習驅動的 alpha 發現，~~全 Rust 熱路徑~~（暫停）改為 Python 路徑的極致延遲，系統自我進化。
 
 ### 軌道 A — Alpha 工廠 v4
 
@@ -206,8 +209,8 @@
 
 | 模組 | 說明 | 預估 LOC |
 |------|------|----------|
-| 全 Rust 熱路徑 | normalizer → LOB → feature → strategy → risk 全鏈路 Rust 化 | 40K (Rust) |
-| 共享記憶體 IPC | Python orchestrator ↔ Rust engine 零拷貝通訊 | 10K (Rust) |
+| ~~全 Rust 熱路徑~~（暫停） | normalizer → LOB → feature → strategy → risk 全鏈路 Rust 化 | 40K (Rust) |
+| ~~共享記憶體 IPC~~（暫停） | Python orchestrator ↔ Rust engine 零拷貝通訊 | 10K (Rust) |
 | 硬體最佳化 | CPU affinity、NUMA-aware、huge pages、kernel bypass（AF_XDP） | 8K |
 | 預測執行 | 在信號確認前預先準備訂單，信號到達後 < 1μs 發送 | 12K |
 
@@ -224,7 +227,7 @@
 
 ### Phase 4 里程碑
 
-- [ ] 全 Rust 熱路徑延遲 < 10μs（normalizer → order out）
+- [ ] ~~全 Rust 熱路徑延遲 < 10μs~~（暫停）；改以 Python 路徑 normalizer → order out 的 P99 預算為準
 - [ ] 深度學習因子佔 alpha 信號的 ≥ 50%
 - [ ] 混沌工程每週自動執行，MTTR < 60 秒
 - [ ] 系統連續 180 天無需人工介入
@@ -268,7 +271,7 @@ Research = `research/**/*.py`（142K，不含筆記與資料）；Infra/Docs = `
 |------|------|------|
 | Alpha 衰減速度 > 生產速度 | 策略庫萎縮 | Phase 2 GP + Phase 3 ML 自動化產能 |
 | TAIFEX 流動性不足以支撐 100+ 策略 | 策略互相擠壓 | Portfolio 構建器管理容量、跨商品分散 |
-| 單機硬體瓶頸 | 回測慢、延遲高 | Phase 4 全 Rust + 硬體升級 |
+| 單機硬體瓶頸 | 回測慢、延遲高 | Phase 4 硬體升級與 Python 路徑最佳化（Rust 暫停） |
 | 個人精力瓶頸 | 開發速度跟不上計畫 | AI 輔助開發（Claude Code）、自動化測試 |
 | 監管風險 | 策略被限制 | 保守風控、合規檢查模組 |
 
@@ -320,7 +323,7 @@ Research = `research/**/*.py`（142K，不含筆記與資料）；Infra/Docs = `
 | WS-D 部署漂移控制 | Phase 2 軌道 C — 災難恢復演練 → Phase 4 自動部署流水線 |
 | WS-E HA / 災難恢復 | Phase 2 軌道 C — 災難恢復演練 |
 | WS-F 硬體與生命週期 | Phase 2 軌道 C — 容量規劃 |
-| WS-G 熱路徑 Rust 化 | Phase 4 軌道 B — 全 Rust 熱路徑 |
+| WS-G 熱路徑 Rust 化（暫停） | Phase 4 軌道 B — 極致執行 |
 | WS-H 研究工廠擴大 | Phase 1-2 軌道 A — Alpha 工廠 v1/v2 |
 
 ---
@@ -331,6 +334,7 @@ Research = `research/**/*.py`（142K，不含筆記與資料）；Infra/Docs = `
 > 子項以 `  - ` 縮排兩格，否則 guard 會視為缺欄。
 
 ### WS-G：熱路徑 Rust 化擴編
+- 狀態：暫停（2026-10-10）；cutover 不啟動，只做 Python 路徑 profiling 與既有 kernel 的 parity 維護
 - 對應 TODO：`docs/TODO.md#1.4`
 - 技能：`hft-strategy`、`hft-rust`、`hft-latency-profiling`
 - RACI：R=Rust Lead、A=Tech Lead、C=Strategy Owner、I=Ops Oncall
@@ -388,7 +392,7 @@ Research = `research/**/*.py`（142K，不含筆記與資料）；Infra/Docs = `
 > 每條任務以 `<n>. <說明>（Owner: …；截止: YYYY-MM-DD；輸出: …；驗收: …）` 格式書寫；
 > guard 會比對含 WS-X 的任務其 owner 與該 WS 區塊 RACI R 是否一致（warn-only）。
 
-1. WS-G：完成熱路徑 profiling matrix v1，輸出 hotpath_matrix 與 cutover backlog 排序（Owner: Rust Lead；截止: 2026-11-09；輸出: outputs/roadmap_execution/ws_g/latest_hotpath_matrix.json；驗收: hotpath_matrix 涵蓋 tick→intent→order→fill 全鏈路且 cutover backlog 已排序入 CI gate）。
+1. WS-G：Rust 暫停，範圍縮減為 Python 熱路徑 profiling matrix v1，只量測不 cutover（Owner: Rust Lead；截止: 2026-11-09；輸出: outputs/roadmap_execution/ws_g/latest_hotpath_matrix.json；驗收: hotpath_matrix 涵蓋 tick→intent→order→fill 全鏈路的各階段 P50/P95/P99，並標出超出預算的階段；不產出 cutover backlog）。
 2. WS-H：完成研究來源盤點與品質 baseline，輸出 source_catalog 與 quality_report，並接上 promotion 前置檢核（Owner: Research Lead；截止: 2026-11-09；輸出: outputs/roadmap_execution/ws_h/latest_source_catalog.json；驗收: source_catalog 已含分級欄位，quality_report 通過率 >= 90% 且 promotion_readiness 報告納入 Gate A-E 結果）。
 3. 10/21 pool-mode 換月驗證：確認 2026-10-21 換月後 R47 重新綁定新合約並下單，並記錄 symbols.yaml 手動重建與重啟的實際程序（Owner: Ops Oncall；截止: 2026-10-22；輸出: docs/runbooks/SymbolsYamlRegeneration.md 的實測補充與換月前後 `strategy_bound_live_symbols` 對照；驗收: 換月後首個完整時段內 R47 有新合約的下單紀錄，且無需臨時手改正式機檔案）。
 4. 驗證 order-RTT 熔斷器 #532（1500/2500 ms）的實際效果並以實測分佈校準（Owner: Tech Lead；截止: 2026-11-09；輸出: 一份 StormGuard order-RTT 分佈與 reduce-only 佔比報告（至少 10 個完整時段）；驗收: 報告列出 P50/P95/P99、門檻與 reduce-only 時間占比，門檻由報告數據推導並記錄推導式；若需改門檻，另開 PR 並走部署批次核准）。

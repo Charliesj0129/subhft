@@ -93,6 +93,8 @@ research/*
 !research/__init__.py
 !research/__main__.py
 !research/README.md
+!research/AGENTS.md
+!research/CLAUDE.md
 !research/factory.py
 !research/pipeline.py
 !research/SOP.md
