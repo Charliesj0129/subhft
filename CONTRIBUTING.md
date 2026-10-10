@@ -32,9 +32,9 @@ uv run hft run sim
 
 ### Before You Code
 
-1. Read `CLAUDE.md` for architecture overview and coding laws
+1. Read `AGENTS.md` for the architecture overview, the five hot-path laws, and the red lines
 2. Check `docs/guides/getting-started.md` for detailed onboarding
-3. Understand the 5 Constitution Laws (no malloc on hot path, no float for prices, etc.)
+3. Know the five laws (no allocation per tick, no float for prices, no blocking the loop, ...); they live in `AGENTS.md` only
 
 ### Making Changes
 
@@ -109,16 +109,18 @@ CI workflows, the Makefile and `AGENTS.md` point at them directly.
 ## Docker
 
 ```bash
-# Development
-docker compose up -d                          # start all services
+# Local development stack
+make start                                    # or: docker compose up -d
+make stop
 
-# Production
-docker compose -f docker-compose.yml -f docker-compose.production.yml up -d
+# Production host: do NOT use the commands above.
+# `up -d` recreates the engine container and destroys its writable layer.
+# Follow docs/runbooks/deployment.md (manual, per-batch approval).
 ```
 
 ## Questions?
 
 - Check `docs/` for detailed guides
-- Review `.agent/rules/` for coding standards
-- See `CLAUDE.md` for the full platform constitution
+- Read `AGENTS.md` for coding standards and red lines; `.agent/rules/` holds the on-demand detail
+- AI agents (Claude Code, Codex, Copilot) read the same `AGENTS.md`
 - Security issues: follow `SECURITY.md` (private report, never a public issue)

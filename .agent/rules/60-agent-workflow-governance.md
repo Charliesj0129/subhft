@@ -18,7 +18,7 @@ Session hygiene: prune/cleanup agent-created worktrees, keep stash count small, 
 
 Governance change control:
 
-- Governing docs: `CLAUDE.md`, `AGENTS.md`, `.agent/rules/`, `.agent/skills/`, `.agent/evals/`, `.agent/templates/`, `.agent/00-MANIFEST.md`.
-- Every governing-doc change commits as `docs(agents):` in the same session that makes it (never left dirty overnight), with a one-line entry in `.agent/CHANGELOG.md` (date / files / why) in the same commit.
-- Changes that alter role authority, tier boundaries, or routing rules additionally require an ADR from `.agent/templates/ADR_TEMPLATE.md`, committed alongside.
-- `make agent-docs-check` must pass before the commit.
+- Governing docs: `AGENTS.md`, `CLAUDE.md`, nested `AGENTS.md`, `.agent/rules/`, `.agent/skills/`, `.agent/evals/`, `.agent/templates/`, `.agent/00-MANIFEST.md`.
+- Add a one-line entry to `.agent/CHANGELOG.md` (date / files / why) in the commit that changes them. Run `make agent-docs-check` before committing; do not leave governing-doc edits dirty for long, but there is no same-session commit deadline.
+- Changes that alter role authority, tier boundaries, or red lines additionally need an ADR from `.agent/templates/ADR_TEMPLATE.md`, committed alongside.
+- One source per rule: put a rule in `AGENTS.md` or one skill and point to it elsewhere. Keep dates and counts out of always-loaded files.

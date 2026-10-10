@@ -4,7 +4,7 @@
 # Usage:
 #   scripts/check_git_preconditions.sh [--pre-merge|--post-merge|--session-start|--session-end|--narrow-commit|--full]
 #
-# --narrow-commit (SAFE-WITH-CARE support, see .agent/skills/branch-safety-check):
+# --narrow-commit (SAFE-WITH-CARE support, see .agent/skills/git-safety):
 #   gate for a path-scoped local commit in a legitimately dirty tree. Dirty
 #   tree is a warning, not a blocker; instead the staged set must exactly
 #   match ALLOWED_PATHS (space-separated, exported by the caller). Fail-closed
@@ -299,7 +299,7 @@ case "$MODE" in
         check_no_conflict_markers
         ;;
     --narrow-commit)
-        # SAFE-WITH-CARE (branch-safety-check skill): a legitimately dirty
+        # SAFE-WITH-CARE (git-safety skill): a legitimately dirty
         # tree warns instead of blocking; the gate enforces staged-set
         # equality with the explicit per-ceremony allowlist instead.
         STRICT_CLEAN=0

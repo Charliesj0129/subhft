@@ -1,6 +1,6 @@
 # Model Routing (tiers + observed delegation outcomes)
 
-Record here: the operative tier table (mirrors AGENTS.md) and OBSERVED
+Record here: OBSERVED
 outcomes — which delegations succeeded/failed by surface and why; packet
 lessons. Do NOT record: generic model claims; single anecdotes (wait for a
 2nd occurrence before writing a pattern).
@@ -15,7 +15,7 @@ lessons. Do NOT record: generic model claims; single anecdotes (wait for a
 | Sonnet | Tier-2 alpha-research (append-only research/) | 2 | 2 | 0 (1 review-caught narrative overclaim, no code fix needed) | 2/2 (context-isolation, parallelism) |
 
 Net-win = delegations that were cheaper/faster than doing it directly (not
-capability probes). ROI-first routing (AGENTS.md `## ROI-First Delegation`)
+capability probes). ROI-first routing (the `delegation` skill)
 exists to raise this column: delegate only when a trigger fires.
 
 ## Record schema (write after EVERY delegation, success or not)
@@ -32,16 +32,9 @@ Update the scoreboard in the same edit. Bad-packet failures: fix the packet,
 don't demote the model. Lessons appearing twice → promote into the relevant
 SKILL.md and replace with a pointer (see `memory-update` skill).
 
-## Tier table (authoritative copy in AGENTS.md)
-- Tier 1 (docs/comments/test-only/scratch): Haiku/Sonnet executor, Sonnet review.
-- Tier 2 (non-hot-path src, CLI, reports, ops scripts): Sonnet executor,
-  Sonnet review + Fable spot-check.
-- Tier 3 (hot path, contracts/events, pricing/timebase, broker adapters,
-  risk/order/execution/gateway, recorder/WAL, Rust, migrations, alpha
-  governance, Do-NOT-Edit list): tight packet or Fable directly;
-  Fable/Opus review MANDATORY.
-- Tier X (live/prod ops, git surgery, secrets, dependency pins, frozen
-  registry/profiles): never delegated; Fable + explicit user confirmation.
+## Tier table
+
+The tier table lives only in `AGENTS.md` (Multi-agent work); not duplicated here.
 
 ## Next probes (pre-registered — run as written, then convert to a ledger entry)
 

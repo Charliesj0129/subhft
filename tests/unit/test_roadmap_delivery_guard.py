@@ -32,7 +32,7 @@ def _seed_docs(
         (
             "# TODO\n"
             "### 1.4 熱路徑 Rust 化擴編（P0）\n"
-            "- 技能：`hft-strategy-dev`、`rust_feature_engineering`、`performance-profiling`\n"
+            "- 技能：`hft-strategy`、`hft-rust`、`hft-latency-profiling`\n"
             "- RACI：R=Rust Lead、A=Tech Lead、C=Strategy Owner、I=Ops Oncall\n"
             "- Agent 角色：`explorer` -> `worker` -> `default`\n"
             "- KPI：\n"
@@ -75,7 +75,7 @@ def _seed_docs(
         (
             "# ROADMAP\n"
             "### WS-G：熱路徑 Rust 化擴編\n"
-            "- 技能：`hft-strategy-dev`、`rust_feature_engineering`、`performance-profiling`\n"
+            "- 技能：`hft-strategy`、`hft-rust`、`hft-latency-profiling`\n"
             "- RACI：R=Rust Lead、A=Tech Lead、C=Strategy Owner、I=Ops Oncall\n"
             "- Agent 角色：`explorer` -> `worker` -> `default`\n"
             "- KPI：\n"

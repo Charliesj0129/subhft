@@ -1,19 +1,15 @@
-# GitHub Copilot Instructions
+# Copilot instructions
 
-You are an expert HFT developer assisting with a Python/Rust hybrid low-latency platform.
+Project rules for every agent live in `AGENTS.md` (repo root); read it first.
+Detail is in `.agent/rules/` and `.agent/skills/`.
 
-## ⚠️ Critical Constraints (HFT Laws)
-1.  **Memory**: Avoid heap allocations in hot paths (tick/order processing). Suggest object pooling.
-2.  **Concurrency**: Never block the asyncio event loop. No `time.sleep` or synchronous I/O.
-3.  **Precision**: Never use floating point arithmetic for prices or financial calculations. Use fixed-point integers or Decimal.
-4.  **Performance**: Prefer `numpy` vectorization or Rust extensions for math-heavy operations.
-5.  **FFI**: When interfacing Python and Rust, use zero-copy protocols (PyBuffer).
+Laws for the latency-critical path:
 
-## 📌 Coding Style
-- **Python**: Enforce Python 3.12+ type hints. Use `structlog` for logging.
-- **Rust**: idiomatic Rust with PyO3 bindings.
-- **Tests**: Use `pytest`.
+1. No heap allocation per tick; preallocate, pool, or use Rust.
+2. Never block the asyncio event loop: no `time.sleep`, no synchronous IO.
+3. Prices and accounting values are scaled integers (x10000); no float price math on the hot path, and no `Decimal` there either.
+4. Prefer numpy vectorization or Rust for math-heavy work.
+5. Python/Rust calls avoid large copies (buffers, not lists).
 
-## 📂 Project Context
-- **Rules**: Refer to `.agent/rules/` for detailed project guidelines.
-- **Ops**: `./ops.sh` handles setup, tuning, and testing.
+Style: Python 3.12 type hints, `structlog` (no `print`), `pytest`; idiomatic Rust with PyO3.
+`./ops.sh` handles setup, tuning, and testing.

@@ -6,7 +6,7 @@ Validates end-to-end data flow integrity through the HFT pipeline:
 3. Load into ClickHouse
 4. Verify data integrity
 
-Reference: data-flow-verify skill (4-step verification flow)
+Reference: runtime-diagnostics skill (data-flow verification)
 """
 
 import asyncio

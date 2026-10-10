@@ -10,16 +10,15 @@ contract and profile semantics, the canonical source is
 
 > `research/SOP.md` is now a thin pointer to this file — do not duplicate process detail there.
 
-## Canonical docs (read before acting)
+## Canonical docs (open the one that matches what you are doing)
 
 | Topic | Canonical source |
 | --- | --- |
 | Lifecycle + Gates A–F + profile semantics | `docs/runbooks/alpha-development-workflow.md` |
 | Factory operations (this handbook) | `research/README.md` |
 | Replay-parity gate (why / enable / schema / fail-closed) | `docs/runbooks/replay-parity-gate.md` |
-| Research data source + L1/L2 formats | `.agent/rules/70-research-data.md` |
+| Research data source, L1/L2 formats, **book-depth contract (0-5, never assume L5)** | `.agent/rules/70-research-data.md` |
 | Governed L2+tick export contract | `research.data_pipeline`, `make research-export-l2-ticks`, `make research-validate-l2-ticks` |
-| Constrained hypothesis ideation | `.agent/teams/alpha-research/factor-ideation-pipeline.md` |
 
 ## Factor Factory Pipeline (8 Stages)
 
@@ -30,16 +29,17 @@ contract and profile semantics, the canonical source is
 | #   | Stage                  | Folder                     | Role            | Skill / Tooling                     | Checklist |
 | --- | ---------------------- | -------------------------- | --------------- | ----------------------------------- | --------- |
 | 1   | 論文 (Paper Intake)    | `knowledge/`               | `planner`       | `iterative-retrieval` + `arxiv` MCP | scope, data plan, acceptance criteria; `make research-fetch-paper ARXIV=...` |
-| 2   | 基礎原型 (Prototype)   | `alphas/<id>/`             | `architect`     | `hft-architect`, `python-pro`       | scaffold via `research/tools/alpha_scaffold.py`; gate/latency/cost assumptions |
-| 3   | 資料 (Data)            | `data/`                    | `planner`       | `hft-backtest-engine` (ingestion)        | dataset under allowed roots + metadata sidecar |
-| 4   | 回測 (Backtest)        | `backtest/`                | `architect`     | `hft-backtest-engine`, `hft-backtest-validation`, `validation-gate` | engine auto-selected from `manifest.strategy_type` |
+| 2   | 基礎原型 (Prototype)   | `alphas/<id>/`             | `architect`     | `hft-architect`                   | scaffold via `research/tools/alpha_scaffold.py`; gate/latency/cost assumptions |
+| 3   | 資料 (Data)            | `data/`                    | `planner`       | `hft-alpha-research` (data)             | dataset under allowed roots + metadata sidecar |
+| 4   | 回測 (Backtest)        | `backtest/`                | `architect`     | `hft-backtest`, `validation-gate` | engine auto-selected from `manifest.strategy_type` |
 | 5   | 因子有效 (Statistical) | `experiments/validations/` | `code-reviewer` | `validation-gate`                   | regression, governance-bypass, operational-risk checks |
-| 6   | 參數優化 (Param Opt)   | `experiments/runs/`        | `architect`     | `hft-backtest-engine`                    | anti-overfit trap detection, robustness sweep |
+| 6   | 參數優化 (Param Opt)   | `experiments/runs/`        | `architect`     | `hft-backtest`                           | anti-overfit trap detection, robustness sweep |
 | 7   | Paper Trade            | `experiments/promotions/`  | `code-reviewer` | Gate-E paper-trade `make` targets   | min 5 shadow sessions (Gate E `min_shadow_sessions=5`) |
-| 8   | Live (Rust)            | `rust_core/src/`           | `architect`     | `rust_feature_engineering`          | profile Python baseline before porting |
+| 8   | Live (Rust)            | `rust_core/src/`           | `architect`     | `hft-rust`                          | profile Python baseline before porting |
 
-Roles map onto Agent System v2 (`AGENTS.md` §Roles; the legacy agents
-generation was removed 2026-07-11). Skills are under `.agent/skills/<name>/SKILL.md`.
+The Role column is a historical label for the kind of work (planning,
+architecture, review); delegation rules are in `AGENTS.md`. Skills are under
+`.agent/skills/<name>/SKILL.md` (native in Claude Code and Codex).
 
 ### Stage-4 engine selection (automatic, via `manifest.yaml`)
 

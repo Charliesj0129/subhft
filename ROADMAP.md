@@ -3,10 +3,12 @@
 > **願景**：個人散戶 × 單機部署，專注 TAIFEX 一個市場做到極致 — 100+ 策略、極低延遲、全自動化 24/7 無人值守運維。
 >
 > **基線**：2026-04 起步，核心代碼 ~95K 行（Python 88K + Rust 7.5K），測試 175K 行，研究 176K 行，總計 ~67.6 萬行。
+> 2026-10-10 重新量測見〈LOC 成長曲線〉。
 >
-> **目標**：2028-04 達到 ~250 萬行級別完整系統，涵蓋 Alpha 工廠、智慧執行、自治運維三大支柱。
+> **目標**：2028-04 達到 ~250 萬行級別完整系統，涵蓋 Alpha 工廠、智慧執行、自治運維三大支柱。LOC 只是規模的粗略代理，
+> 不是進度指標；進度以各 Phase 里程碑的實際結果為準。
 >
-> 版本：v2.0 | 更新日期：2026-04-15
+> 版本：v3.0 | 更新日期：2026-10-10（Phase 1 結算；30 天任務為提案，待 Charlie 確認）
 
 ---
 
@@ -33,7 +35,7 @@
 
 ---
 
-## Phase 1：Q2-Q3 2026（4月 → 10月）— 基底層
+## Phase 1：Q2-Q3 2026（4月 → 10月）— 基底層（已於 2026-10-10 結算，見下）
 
 > 目標：建立 alpha 量產的基礎設施，修復執行品質的度量盲區，系統化自愈能力。
 
@@ -74,6 +76,23 @@
 - [ ] Feed burn-in 連續 60 交易日無 crash-signature critical 告警
 - [ ] WAL Insert failed 比率日 < 0.5%，CH 短故障後 10 分鐘內 backlog 回基線
 - [ ] 每日資料品質報告全自動產出
+
+### Phase 1 結算（2026-10-10）
+
+> 以下判定為提案，依 repo 與本機記憶中的證據整理，由 Charlie 確認後才算數。狀態詞：**達成**＝有證據滿足；
+> **未達成**＝有證據顯示未滿足；**無證據**＝既沒有達成也沒有未達成的可驗證證據（通常是沒有量測）。
+
+| # | 里程碑 | 狀態 | 證據（repo 路徑、PR 或記憶條目） |
+|---|--------|------|-----------------------------------|
+| 1 | Alpha 搜尋引擎每日自動產出 ≥ 5 個候選因子 | 未達成 | 組合搜尋引擎有兩個已確認缺陷（無法 mutate、遇到 reset 不分段），且可挖掘天數（69）低於 100 天門檻（記憶：`combinatorial_search_engine_two_defects`、`mining_day_budget_binding_constraint`）；沒有每日產出紀錄 |
+| 2 | TCA 報告覆蓋 100% 已上線策略的每筆交易 | 未達成 | `hft.fills` 曾因 CREATE+RENAME 重建而空了 4 個月（`src/hft_platform/migrations/clickhouse/20260821_001_restore_fills_columns_lost_in_rmt_rebuild.sql`）；`hft.fills.trace_id` 空白；TCA 價格曾與 `price_scaled` 不同刻度（記憶：`table_rebuild_reverted_applied_migrations`、`fills_trace_id_empty_root_cause`）。上線策略目前只有 R47（SIM 下單） |
+| 3 | 系統連續 7 天無需人工介入 | 未達成 | R47 自 2026-09-29 卡在幻影 `pending_sell`，只能重啟復原；2026-09-16 起因換月未重新綁定停止下單約 3 天（#510 之後修復）（記憶：`r47_pending_sell_frozen_after_halt_2026_10_02`、`strategy_binding_decided_only_at_connect`）；每次部署皆為人工批次（`docs/runbooks/deployment.md`） |
+| 4 | Feed burn-in 連續 60 交易日無 crash-signature critical 告警 | 未達成 | 2026-07-25 quote facade 卡住 24 小時；2026-09-15 事件迴圈停頓 66 秒後 exit 70；05:00 收盤重新登入風暴到 #388 才修（記憶：`theshow_quote_facade_stranded_2026_07_25`、`loop_stall_kill_leaves_no_stack`）。另外 20/20 CRITICAL 皆為收盤誤報，需先修偵測器才能量測 |
+| 5 | WAL Insert failed 比率日 < 0.5%，CH 短故障後 10 分鐘內 backlog 回基線 | 無證據 | wal-loader 的指標從未被 Prometheus 抓取（記憶：`wal_loader_metrics_are_never_scraped`）；演練腳本存在（`make drill-ck-down`）但沒有留存的達標紀錄 |
+| 6 | 每日資料品質報告全自動產出 | 無證據 | `make research-data-quality` 與資料品質稽核存在，但沒有排程或每日產出的證據；`src/hft_platform/reports/` 是每日市場報告 pipeline，不是資料品質報告 |
+
+結論：Phase 1 的六項里程碑沒有一項可標為達成。Phase 2 以前，先把「量測得到」補齊（里程碑 4、5、6 的前提是告警與指標可信），
+再談產能擴張。下方 §6 的 30 天任務據此排序。
 
 ---
 
@@ -216,12 +235,19 @@
 
 ```
                 Core     Test    Research  Infra/Docs    Total
-現在 (Q2'26)     95K     175K      176K       230K       676K
-Phase 1         238K     310K      200K       260K     1,008K
+Q2'26 起步       95K     175K      176K       230K       676K
+現在 (2026-10)  130K     315K      142K       152K       739K   (實測)
+Phase 1 目標    238K     310K      200K       260K     1,008K
 Phase 2         431K     500K      230K       300K     1,461K
 Phase 3         695K     750K      280K       350K     2,075K
 Phase 4         965K   1,000K      330K       400K     2,695K
 ```
+
+2026-10-10 實測方法（可重跑）：`git ls-files` 取追蹤檔，`wc -l` 計行數，排除資料檔、鎖檔與二進位。
+Core = `src/**/*.py`（122K，391 檔）+ `rust_core/**/*.rs`（7.5K）；Test = `tests/**/*.py`（315K，1,282 檔）；
+Research = `research/**/*.py`（142K，不含筆記與資料）；Infra/Docs = `docs`（109K，301 檔）+
+`scripts`、`config`、`ops`、`.github`、`.agent`（43K）。起步時的分類口徑可能不同，只能粗略比較：
+核心增量約 +35K（目標 +143K），測試成長遠快於核心。
 
 ---
 
@@ -229,7 +255,7 @@ Phase 4         965K   1,000K      330K       400K     2,695K
 
 | 時間點 | 建議配置 | 原因 |
 |--------|---------|------|
-| 現在 | 舊電腦（夠用） | Phase 1 開發在本機，部署在舊電腦 |
+| 現在 | THESHOW（正式機，Docker Compose 單機）+ 開發機（WSL2） | 開發與驗證在開發機，部署在 THESHOW（程序見 `docs/runbooks/deployment.md`）；券商 session 上限 5 的預算幾乎沒有餘裕 |
 | Phase 2 | **升級主機**：Ryzen 9 / 64GB / NVMe 2TB | 100+ 策略 + ML 訓練 + 大量回測 |
 | Phase 3 | 加 **GPU**（RTX 4060+） | 深度學習因子訓練 |
 | Phase 4 | 考慮 **10G NIC** + kernel bypass | 極致延遲最佳化 |
@@ -306,7 +332,7 @@ Phase 4         965K   1,000K      330K       400K     2,695K
 
 ### WS-G：熱路徑 Rust 化擴編
 - 對應 TODO：`docs/TODO.md#1.4`
-- 技能：`hft-strategy-dev`、`rust_feature_engineering`、`performance-profiling`
+- 技能：`hft-strategy`、`hft-rust`、`hft-latency-profiling`
 - RACI：R=Rust Lead、A=Tech Lead、C=Strategy Owner、I=Ops Oncall
 - Agent 角色：`explorer`（profiling/baseline，輸出 `hotpath_matrix`）→ `worker`（Rust cutover/CI，輸出 `cutover_patch+ci_report`）→ `default`（整合驗收，輸出 `gate_summary`）
 - KPI：
@@ -357,8 +383,15 @@ Phase 4         965K   1,000K      330K       400K     2,695K
 
 ## 6. 30 天交付任務（roadmap-delivery）
 
-> 每條任務以 `<n>. <說明含 WS-X>（Owner: …；截止: YYYY-MM-DD；輸出: …；驗收: …）` 格式書寫；
-> guard 會比對 owner 與該 WS 區塊 RACI R 是否一致（warn-only）。
+> 2026-10-10 重寫（上一輪 2026-05-31 任務已過期）。**以下全部是提案，欄位由 Charlie 確認或修改後才生效**；
+> 前兩條延續 WS-G／WS-H，其餘依 Phase 1 結算與目前 OPEN 的事項排序。
+> 每條任務以 `<n>. <說明>（Owner: …；截止: YYYY-MM-DD；輸出: …；驗收: …）` 格式書寫；
+> guard 會比對含 WS-X 的任務其 owner 與該 WS 區塊 RACI R 是否一致（warn-only）。
 
-1. WS-G：完成熱路徑 profiling matrix v1，輸出 hotpath_matrix 與 cutover backlog 排序（Owner: Rust Lead；截止: 2026-05-31；輸出: outputs/roadmap_execution/ws_g/latest_hotpath_matrix.json；驗收: hotpath_matrix 涵蓋 tick→intent→order→fill 全鏈路且 cutover backlog 已排序入 CI gate）。
-2. WS-H：完成研究來源盤點與品質 baseline，輸出 source_catalog 與 quality_report，並接上 promotion 前置檢核（Owner: Research Lead；截止: 2026-05-31；輸出: outputs/roadmap_execution/ws_h/latest_source_catalog.json；驗收: source_catalog 已含分級欄位，quality_report 通過率 >= 90% 且 promotion_readiness 報告納入 Gate A-E 結果）。
+1. WS-G：完成熱路徑 profiling matrix v1，輸出 hotpath_matrix 與 cutover backlog 排序（Owner: Rust Lead；截止: 2026-11-09；輸出: outputs/roadmap_execution/ws_g/latest_hotpath_matrix.json；驗收: hotpath_matrix 涵蓋 tick→intent→order→fill 全鏈路且 cutover backlog 已排序入 CI gate）。
+2. WS-H：完成研究來源盤點與品質 baseline，輸出 source_catalog 與 quality_report，並接上 promotion 前置檢核（Owner: Research Lead；截止: 2026-11-09；輸出: outputs/roadmap_execution/ws_h/latest_source_catalog.json；驗收: source_catalog 已含分級欄位，quality_report 通過率 >= 90% 且 promotion_readiness 報告納入 Gate A-E 結果）。
+3. 10/21 pool-mode 換月驗證：確認 2026-10-21 換月後 R47 重新綁定新合約並下單，並記錄 symbols.yaml 手動重建與重啟的實際程序（Owner: Ops Oncall；截止: 2026-10-22；輸出: docs/runbooks/SymbolsYamlRegeneration.md 的實測補充與換月前後 `strategy_bound_live_symbols` 對照；驗收: 換月後首個完整時段內 R47 有新合約的下單紀錄，且無需臨時手改正式機檔案）。
+4. 驗證 order-RTT 熔斷器 #532（1500/2500 ms）的實際效果並以實測分佈校準（Owner: Tech Lead；截止: 2026-11-09；輸出: 一份 StormGuard order-RTT 分佈與 reduce-only 佔比報告（至少 10 個完整時段）；驗收: 報告列出 P50/P95/P99、門檻與 reduce-only 時間占比，門檻由報告數據推導並記錄推導式；若需改門檻，另開 PR 並走部署批次核准）。
+5. R47 幻影 `pending_sell` 修復後驗證：確認 #544–#551、#561 部署後的 SIM 時段不再出現「pending 無在途訂單可釋放」（Owner: Trading Runtime Owner；截止: 2026-11-09；輸出: 部署後 SIM 時段的 pending/在途訂單對帳摘要與 #548 告警紀錄；驗收: 連續 5 個完整時段沒有未釋放的 pending，且無需重啟復原；否則更新 `.agent/memory/current-risks.md`）。
+6. node-exporter 無法被 Prometheus 抓取的修復提案：host-network 的 node-exporter 在橋接網路沒有 DNS 名稱，兩條磁碟告警沒有序列（Owner: Ops Oncall；截止: 2026-11-09；輸出: prometheus.yml 修正的 PR 與 Class B reload 計畫；驗收: 重新載入後 `up` 對該 target 為 1，兩條磁碟告警在 Prometheus 中各有序列；部署需逐批人工核准）。
+7. 安全 PR #540–#543 的處置決定：逐一審查、決定合併或關閉，並安排部署批次（Owner: Tech Lead；截止: 2026-11-09；輸出: 四個 PR 各自的決定紀錄（合併／修改／關閉）與部署批次計畫；驗收: 每個 PR 都有明確結論，已合併者有 Class 判定與驗證項；session lock 僅偵測不阻擋、person-id hash 可逆兩點在說明中保留）。

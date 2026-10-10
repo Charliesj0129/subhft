@@ -1,155 +1,56 @@
 ---
 name: config-env
-description: Configure HFT platform environment variables, YAML config files, and runtime settings. Covers the full config priority chain, broker credentials, and feature flags.
+description: "How config resolves (YAML layers, loop binding, HFT_* env vars, CLI overrides), where settings live, and credential rules. Use when changing settings, debugging why a flag has no effect, or adding an env toggle. Not for broker adapter code or secret values."
 ---
 
-# Config & Environment
+# Config and environment
 
-## When to Use
+Never read, print, or commit secret values. `.env*` and `config/settings.py`
+are denied to tools; set variable names and shapes only.
 
-- Setting up a new environment (sim/live/replay)
-- Changing broker, enabling features, or tuning parameters
-- Debugging config resolution issues
-- Reviewing which env vars override which config
+## Resolution
 
-## Config Priority Chain
+Later layers override earlier ones: `config/base/main.yaml` -> `config/env/<mode>/main.yaml`
+-> per-machine `config/settings.py` (gitignored) -> `HFT_*` environment variables
+-> CLI flags. Loader: `src/hft_platform/config/loader.py`.
 
-Settings resolve via layered merge (later overrides earlier):
+Loop binding (loop_v1): `uv run hft run --loop <id>` reads `config/loops/<id>.yaml`,
+which overrides `strategy` and `broker`, and requires the strategy to be
+`enabled: true` in the registry (`LoopBindingError` otherwise). Live registry is
+frozen to `r47_tmf_v1`.
 
-```
-Base YAML (config/base/main.yaml)
-  -> Env YAML (config/env/{mode}/main.yaml)
-    -> settings.py (config/settings.py)
-      -> Environment Variables (HFT_*)
-        -> CLI Overrides (--mode, --symbols, ...)
-```
+Other files: `config/base/brokers/<broker>.yaml`, `config/risk.yaml`,
+`config/base/session_governor.yaml`, `config/research/latency_profiles.yaml`,
+`config/symbols.yaml` (see `symbols-sync`).
 
-Loader implementation: `src/hft_platform/config/loader.py`
+## Variables
 
-## Environment Variables
+The complete, guarded reference is `docs/operations/env-vars-reference.md`;
+`make env-vars-guard` checks it against the code. Read the code for a variable's
+real default before relying on any doc. The ones that change behavior most:
 
-### Runtime
+| Variable | Note |
+|---|---|
+| `HFT_MODE` | `sim` / `live` / `replay` |
+| `HFT_ORDER_MODE` | `sim` still dispatches; only `disabled` stops orders; `live` is real money and a red line |
+| `HFT_BROKER` | `shioaji` (default) or `fubon` (see `broker-integration`) |
+| `HFT_RECORDER_MODE` | `direct` or `wal_first` (see `hft-recorder`) |
+| `HFT_GATEWAY_ENABLED`, `HFT_STRICT_PRICE_MODE` | gateway dispatch; reject float prices |
+| `HFT_STORMGUARD_FEED_GAP_STORM_S` | feed gap to STORM; a gap alone cannot HALT (`..._HALT_S` is a deprecated alias for STORM) |
+| `HFT_RECONNECT_*`, `HFT_QUOTE_FLAP_*` | reconnect window and flap detection |
 
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `HFT_MODE` | `sim` | Runtime mode: `sim` / `live` / `replay` |
-| `HFT_SYMBOLS` | -- | Comma-separated symbol list override |
-| `HFT_QUOTE_VERSION` | `auto` | Shioaji quote protocol version |
+Adding a toggle: read it once at startup (not per tick), give it a safe default,
+document it in `env-vars-reference.md`, run `make env-vars-guard`. A config value
+copied into a prompt or doc goes stale; grep `.agent/` and docs when a number changes.
 
-### Broker Selection
+## Secrets
 
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `HFT_BROKER` | `shioaji` | Broker backend: `shioaji` / `fubon` |
-| `SHIOAJI_API_KEY` | -- | Shioaji API key |
-| `SHIOAJI_SECRET_KEY` | -- | Shioaji secret key |
-| `HFT_FUBON_CERT_PATH` | -- | Fubon API certificate file path |
-| `HFT_FUBON_ACCOUNT` | -- | Fubon trading account ID |
-| `HFT_FUBON_PASSWORD` | -- | Fubon account password (use secret manager) |
+Prefix-isolated (`SHIOAJI_*`, `HFT_FUBON_*`, `HFT_*`, `CLICKHOUSE_*`, `HFT_TELEGRAM_*`);
+`.env` only; never in code, logs, CLI args (visible in `ps`), or commits. Verify
+with `git check-ignore .env`. Rotate anything that may have leaked.
 
-### Feature Flags
+## Done when
 
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `HFT_FEATURE_ENGINE_ENABLED` | `1` | `0` = disable FeatureEngine in pipeline |
-| `HFT_FEATURE_ENGINE_BACKEND` | `python` | Backend: `python` / `rust` |
-| `HFT_FUSED_NORMALIZER` | `0` | `1` = enable fused Rust normalizer+LOB pipeline |
-| `HFT_GATEWAY_ENABLED` | `0` | `1` = enable CE-M2 order/risk gateway |
-| `HFT_STRICT_PRICE_MODE` | `0` | `1` = reject float prices with TypeError |
-
-### Infrastructure
-
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `HFT_CLICKHOUSE_HOST` | `localhost` | ClickHouse host |
-| `HFT_RECORDER_MODE` | `direct` | `wal_first` = WAL-only write path |
-
-### Monitoring
-
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `HFT_MONITOR_SOURCE` | `clickhouse` | Monitor data source: `clickhouse`/`redis`/`hybrid` |
-| `HFT_MONITOR_LIVE_ENABLED` | `0` | `1` = enable Redis live publisher |
-| `HFT_MONITOR_REDIS_HOST` | `localhost` | Redis host for monitor cache |
-| `HFT_MONITOR_REDIS_PORT` | `6379` | Redis port for monitor cache |
-| `HFT_MONITOR_REDIS_PASSWORD` | -- | Redis password for monitor cache |
-| `HFT_MONITOR_DATA_SOURCE` | `auto` | Data source layer: `ch`/`shm`/`auto` |
-
-### Reconnect & Resilience
-
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `HFT_RECONNECT_HOURS` | `08:30-13:35` | Trading hours window for auto-reconnect |
-| `HFT_RECONNECT_HOURS_2` | -- | Secondary trading hours window |
-| `HFT_RECONNECT_COOLDOWN` | `60` | Reconnect cooldown seconds |
-| `HFT_RECONNECT_BACKOFF_S` | `5` | Initial reconnect backoff delay seconds |
-| `HFT_RECONNECT_BACKOFF_MAX_S` | `120` | Maximum reconnect backoff delay seconds |
-
-### Safety & Limits
-
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `HFT_EXPOSURE_MAX_SYMBOLS` | `10000` | ExposureStore cardinality bound |
-| `HFT_STORMGUARD_FEED_GAP_HALT_S` | `30` | Feed gap threshold to trigger HALT |
-
-### Quote Flap Detection
-
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `HFT_QUOTE_FLAP_THRESHOLD` | `5` | Max flaps in detection window |
-| `HFT_QUOTE_FLAP_WINDOW_S` | `60` | Flap detection window seconds |
-| `HFT_QUOTE_FLAP_COOLDOWN_S` | `300` | Cooldown before re-subscribe after flap |
-
-## Config Files
-
-| File | Purpose |
-|------|---------|
-| `config/base/main.yaml` | Base configuration (all modes) |
-| `config/env/sim/main.yaml` | Sim mode overrides |
-| `config/env/live/main.yaml` | Live mode overrides |
-| `config/env/replay/main.yaml` | Replay mode overrides |
-| `config/base/brokers/shioaji.yaml` | Shioaji-specific config |
-| `config/base/brokers/fubon.yaml` | Fubon-specific config |
-| `config/settings.py` | Per-machine overrides (gitignored) |
-| `config/research/latency_profiles.yaml` | Broker latency profiles for backtesting |
-
-## .env File Template
-
-Create a `.env` file in the project root (gitignored):
-
-```bash
-# Runtime
-HFT_MODE=sim
-HFT_SYMBOLS=2330,2317,2454
-
-# Broker (choose one set)
-HFT_BROKER=shioaji
-SHIOAJI_API_KEY=your_api_key_here
-SHIOAJI_SECRET_KEY=your_secret_key_here
-
-# Or for Fubon:
-# HFT_BROKER=fubon
-# HFT_FUBON_CERT_PATH=/path/to/cert.pfx
-# HFT_FUBON_ACCOUNT=your_account
-# HFT_FUBON_PASSWORD=your_password
-
-# Infrastructure
-HFT_CLICKHOUSE_HOST=localhost
-HFT_RECORDER_MODE=direct
-
-# Features
-HFT_FEATURE_ENGINE_ENABLED=1
-HFT_FEATURE_ENGINE_BACKEND=python
-HFT_FUSED_NORMALIZER=0
-HFT_GATEWAY_ENABLED=0
-```
-
-## Security Rules
-
-- NEVER hardcode API keys, passwords, or tokens in source code
-- Store secrets in `.env` (local) or environment variables (Docker/production)
-- `.env` is in `.gitignore` -- verify with `git check-ignore .env`
-- Each broker uses distinct env var prefixes (Shioaji: `SHIOAJI_*`, Fubon: `HFT_FUBON_*`)
-- Rotate any secrets that may have been exposed
-- Never pass secrets as CLI arguments (visible in `ps aux`)
-- `config/settings.py` is gitignored by convention -- never commit it
+The value resolves as intended in `uv run hft config validate` (or the relevant
+loader test), `make env-vars-guard` passes if variables changed, and no secret
+appeared in output or diff.

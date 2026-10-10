@@ -302,7 +302,7 @@ Adds an offline alpha-factory upstream of promotion: cheap pre-screen, append-on
 
 **Safety attestation:** the DSL compiler source is grep-checked for `eval(`, `exec(`, `compile(`, `__import__`, `getattr(` — any future change reintroducing these tokens fails the attestation test.
 
-**Coverage floor:** `make ci` requires ≥87 % line coverage; per `.agent/rules/25-architecture-governance.md` §11, `alpha/` is permitted to use `float` (offline research path) but is NOT exempt from coverage discipline.
+**Coverage floor:** `make ci` requires ≥87 % line coverage; per `AGENTS.md` (Research governance), `alpha/` is permitted to use `float` (offline research path) but is NOT exempt from coverage discipline.
 
 ## 8. Architectural Invariants (Unchanged)
 

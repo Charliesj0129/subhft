@@ -1,21 +1,15 @@
-# AGENTS.md - Rust Core Domain
+# rust_core/ — PyO3 hot-path kernels
 
-> **Context**: This context is injected when working within `rust_core/`.
-> **Inheritance**: Inherits global laws from `../AGENTS.md`.
+Project-wide rules: `../AGENTS.md`. This file lists only what differs here.
 
-## 1. Safety & Stability
-- **NO PANICS**: Never use `.unwrap()` or `.expect()` in production code reachable from Python.
-    - **Bad**: `let val = option.unwrap();`
-    - **Good**: `let val = option.ok_or_else(|| PyValueError::new_err("Missing"))?;`
-- **Error Handling**: All public functions must return `PyResult<T>`.
-
-## 2. FFI & Performance
-- **GIL Management**: Release GIL for long-running CPU tasks using `Python::allow_threads`.
-- **Zero Copy**: Prefer `PyReadonlyArrayDyn` (numpy view) over `Vec<f64>` (copy) for input data.
-- **Inlining**: Use `#[inline(always)]` for hot-path math functions.
-
-## 3. Structure
-- **Crate Layout**:
-    - `src/lib.rs`: Only PyO3 module definitions.
-    - `src/engine/`: Core logic (pure Rust, no Python dep if possible).
-    - `src/types/`: Shared data structures.
+- No `.unwrap()`/`.expect()` on any path reachable from Python. Public
+  functions return `PyResult<T>`; map errors with `ok_or_else(|| PyValueError::new_err(..))?`.
+- Release the GIL (`Python::allow_threads`) for CPU-heavy work. Take numpy input
+  as `PyReadonlyArrayDyn` views, not `Vec<f64>` copies.
+- `lib.rs` holds only PyO3 module registration; keep logic in pure-Rust
+  modules that do not depend on Python so they test with plain `cargo test`.
+- The built `.so` is bind-mounted on the production host (deploy Class A): a
+  Rust change ships as a rebuilt artifact, not a source sync.
+- Python fallbacks for Rust kernels must be explicit and observable (metric or log).
+- Verify with `make build-rust`, `cargo clippy`, `cargo test`, and the
+  parity tests that compare Python and Rust outputs.
