@@ -125,6 +125,125 @@ class MonthFieldStats:
     directed_ticks: int
 
 
+# ---------------------------------------------------------------------------
+# Source-layer statistics. The day aggregate above cannot see these defects, each
+# needs its own grouping, so each has a small row type and a dedicated query.
+# ---------------------------------------------------------------------------
+
+# Hourly delivery multiplicity = rows / distinct content keys. A clean hour sits at
+# 1.00-1.03 (real same-microsecond fills collapse to one key); the 2026-01-27..02-26
+# delivery duplication sits at exactly 2.0 and 2026-04-28..06-01 at about 4.0, so 1.3
+# separates them from clean with a wide margin on both sides. Hours with fewer rows
+# than the floor are too noisy to judge.
+CONTENT_DUP_HOUR_MULTIPLICITY_MAX = 1.3
+CONTENT_DUP_MIN_HOUR_ROWS = 1_000
+# An hour must also carry this share of its (day, row type) to be judged. The 14:00 hour
+# (equity after-hours fixed-price session, ~0.1% of a day) republishes frozen snapshots
+# and reads 1.7-1.9x on *every* clean day; delivery duplication hits the busy hours.
+CONTENT_DUP_MIN_HOUR_SHARE = 0.01
+CONTENT_DUP_HEAVY_DAY_RATE = 0.10
+
+# ``ingest_ts == exch_ts`` means the local clock was behind the exchange and the
+# normalizer clamped the arrival time. Above 0.30 the arrival-latency distribution is
+# visibly truncated; above 0.60 it is mostly fiction.
+CLAMP_WARN_RATIO = 0.30
+CLAMP_SEVERE_RATIO = 0.60
+CLAMP_MIN_ROWS = 10_000
+
+# A near-month futures series is quoted at 8 Hz whether or not it trades, so a silent
+# minute is a recording gap, not a quiet market. Gaps over GAP_COUNT_SECONDS are summed.
+GAP_MAX_SECONDS = 60
+GAP_CUMULATIVE_MAX_SECONDS = 600
+GAP_COUNT_SECONDS = 10
+GAP_MIN_SERIES_ROWS = 20_000
+GAP_FAMILIES = ("TXF", "MXF", "TMF")
+
+# Rows dated on a day the exchange was closed, after the previous night session ended.
+NON_TRADING_DAY_NIGHT_END_MINUTE = NIGHT_SESSION_CLOSE_MINUTE
+# A closed day with fewer rows than this is a close-time straggler (1-28 rows on 25 Saturdays),
+# not recording on a holiday; it is listed in the detail but does not fail the check.
+NON_TRADING_DAY_MIN_ROWS = 1_000
+
+# The chain is "centred" when its strikes span the futures price +/- this many points.
+CHAIN_ATM_HALF_WIDTH_POINTS = 500.0
+CHAIN_MIN_EXPIRY_ROWS = 50_000
+
+
+@dataclass(frozen=True, slots=True)
+class ContentBucket:
+    """Rows and distinct content keys for one (ingest day, row type, exchange hour)."""
+
+    day: str
+    kind: str
+    hour: int
+    rows: int
+    keys: int
+
+
+@dataclass(frozen=True, slots=True)
+class ClampStats:
+    """BidAsk rows and how many have ``ingest_ts == exch_ts``, per (day, instrument group)."""
+
+    day: str
+    group: str
+    rows: int
+    clamped: int
+
+
+@dataclass(frozen=True, slots=True)
+class GapSeries:
+    """Largest and cumulative silent stretch of one (day, symbol, session) series."""
+
+    day: str
+    symbol: str
+    session: str
+    rows: int
+    max_gap_s: float
+    lost_s: float
+    max_gap_start_s: int
+
+
+@dataclass(frozen=True, slots=True)
+class ExchDateRows:
+    """Rows whose exchange date is ``date`` and whose time is after the night session ends."""
+
+    date: str
+    rows: int
+
+
+@dataclass(frozen=True, slots=True)
+class ChainExpiry:
+    """Strike span of one option expiry (call and put codes merged) on one day."""
+
+    day: str
+    expiry: str
+    min_strike: float
+    max_strike: float
+    strikes: int
+    rows: int
+
+
+@dataclass(frozen=True, slots=True)
+class FuturesRef:
+    """Median day-session mid of the most active TXF contract, in index points."""
+
+    day: str
+    symbol: str
+    mid_points: float
+
+
+@dataclass(frozen=True, slots=True)
+class SourceStats:
+    """Inputs of the source-layer checks. ``None`` means "not collected", never "clean"."""
+
+    content: Sequence[ContentBucket] | None = None
+    clamp: Sequence[ClampStats] | None = None
+    gaps: Sequence[GapSeries] | None = None
+    exch_dates: Sequence[ExchDateRows] | None = None
+    chain: Sequence[ChainExpiry] | None = None
+    futures_ref: Sequence[FuturesRef] | None = None
+
+
 @dataclass(frozen=True, slots=True)
 class CheckResult:
     check_id: str
@@ -307,7 +426,14 @@ def evaluate_duplicate_keys(days: Sequence[DayStats]) -> CheckResult:
     """``market_data`` is a plain MergeTree: a re-import duplicates rather than replaces."""
     total = sum(d.duplicate_rows for d in days)
     offenders = [{"day": d.day, "duplicate_rows": d.duplicate_rows} for d in days if d.duplicate_rows > 0]
-    detail: dict[str, Any] = {"duplicate_rows": total, "offending_days": offenders}
+    detail: dict[str, Any] = {
+        "duplicate_rows": total,
+        "offending_days": offenders,
+        "blind_spot": (
+            "the key includes ingest_ts and seq_no, so identical content delivered twice "
+            "is invisible here; see content_duplicates"
+        ),
+    }
     if not days:
         return CheckResult("duplicate_keys", "warn", "unavailable", "no rows in range", detail)
     if total:
@@ -591,6 +717,342 @@ def evaluate_archive_sync(
     return CheckResult("archive_sync", "warn", "pass", "archive matches the reference inventory", detail)
 
 
+def _consecutive_runs(days: Sequence[str], flagged: set[str]) -> list[list[str]]:
+    """Group flagged days that are adjacent in the observed-day sequence."""
+    runs: list[list[str]] = []
+    current: list[str] = []
+    for day in days:
+        if day in flagged:
+            current.append(day)
+        elif current:
+            runs.append(current)
+            current = []
+    if current:
+        runs.append(current)
+    return runs
+
+
+def evaluate_content_duplicates(buckets: Sequence[ContentBucket] | None) -> CheckResult:
+    """Identical content delivered more than once, judged hour by hour.
+
+    ``duplicate_keys`` hashes ``ingest_ts`` and ``seq_no``, which differ between copies of
+    one event, so it cannot see this. The multiplicity is *not* a constant: it was 2x in
+    2026-01-27..02-26, about 4x in 2026-04-28..06-01, and stepped from 1x to 2x inside the
+    09:00 hour of 2026-06-02. A day-level average hides the step, hence the hourly judgement.
+    """
+    detail: dict[str, Any] = {
+        "hour_multiplicity_max": CONTENT_DUP_HOUR_MULTIPLICITY_MAX,
+        "min_hour_rows": CONTENT_DUP_MIN_HOUR_ROWS,
+        "min_hour_share": CONTENT_DUP_MIN_HOUR_SHARE,
+        "heavy_day_rate": CONTENT_DUP_HEAVY_DAY_RATE,
+    }
+    if buckets is None:
+        return CheckResult(
+            "content_duplicates", "warn", "unavailable", "content-key statistics were not collected", detail
+        )
+    usable = [b for b in buckets if b.rows > 0 and b.keys > 0]
+    if not usable:
+        return CheckResult("content_duplicates", "warn", "unavailable", "no rows in range", detail)
+
+    totals: dict[tuple[str, str], list[int]] = {}
+    for bucket in usable:
+        total = totals.setdefault((bucket.day, bucket.kind), [0, 0])
+        total[0] += bucket.rows
+        total[1] += bucket.keys
+    hours: dict[tuple[str, str], list[tuple[int, float]]] = {}
+    for bucket in usable:
+        multiplicity = bucket.rows / bucket.keys
+        share = bucket.rows / totals[(bucket.day, bucket.kind)][0]
+        if (
+            bucket.rows >= CONTENT_DUP_MIN_HOUR_ROWS
+            and share >= CONTENT_DUP_MIN_HOUR_SHARE
+            and multiplicity > CONTENT_DUP_HOUR_MULTIPLICITY_MAX
+        ):
+            hours.setdefault((bucket.day, bucket.kind), []).append((bucket.hour, multiplicity))
+
+    observed_days = sorted({day for day, _ in totals})
+    flagged_days = {day for day, _ in hours}
+    heavy_days = sorted(
+        {day for (day, _), (rows, keys) in totals.items() if 1.0 - keys / rows > CONTENT_DUP_HEAVY_DAY_RATE}
+    )
+    flagged = []
+    for (day, kind), entries in sorted(hours.items()):
+        worst_hour, worst = max(entries, key=lambda item: item[1])
+        rows, keys = totals[(day, kind)]
+        flagged.append(
+            {
+                "day": day,
+                "kind": kind,
+                "hours_flagged": len(entries),
+                "worst_hour": worst_hour,
+                "worst_multiplicity": round(worst, 2),
+                "day_multiplicity": round(rows / keys, 3),
+            }
+        )
+    runs = []
+    for run in _consecutive_runs(observed_days, flagged_days):
+        day_multiplicity = [
+            max(totals[(day, kind)][0] / totals[(day, kind)][1] for kind in {k for d, k in totals if d == day})
+            for day in run
+        ]
+        runs.append(
+            {
+                "first_day": run[0],
+                "last_day": run[-1],
+                "days": len(run),
+                "median_multiplicity": round(median(day_multiplicity), 2),
+            }
+        )
+    detail.update(
+        {
+            "days_observed": len(observed_days),
+            "flagged_days": sorted(flagged_days),
+            "heavy_days": heavy_days,
+            "runs": runs,
+            "flagged": flagged,
+        }
+    )
+    if flagged_days:
+        worst_overall = max(item["worst_multiplicity"] for item in flagged)
+        summary = (
+            f"{len(flagged_days)} of {len(observed_days)} days have hours delivered more than "
+            f"{CONTENT_DUP_HOUR_MULTIPLICITY_MAX:g}x (worst {worst_overall:g}x); {len(heavy_days)} days exceed "
+            f"{CONTENT_DUP_HEAVY_DAY_RATE:.0%} duplicate rows"
+        )
+        return CheckResult("content_duplicates", "warn", "fail", summary, detail)
+    return CheckResult("content_duplicates", "warn", "pass", "no hour is delivered more than once", detail)
+
+
+def evaluate_ingest_clamp_ratio(stats: Sequence[ClampStats] | None) -> CheckResult:
+    """Share of BidAsk rows whose arrival time was clamped to the exchange time.
+
+    ``ts_causality`` only checks ``ingest_ts >= exch_ts``, which clamping guarantees, so a
+    host clock running behind the exchange passes it while arrival latency is truncated at 0.
+    """
+    detail: dict[str, Any] = {
+        "warn_ratio": CLAMP_WARN_RATIO,
+        "severe_ratio": CLAMP_SEVERE_RATIO,
+        "min_rows": CLAMP_MIN_ROWS,
+    }
+    if stats is None:
+        return CheckResult("ingest_clamp_ratio", "warn", "unavailable", "clamp statistics were not collected", detail)
+    usable = [item for item in stats if item.rows >= CLAMP_MIN_ROWS]
+    if not usable:
+        return CheckResult(
+            "ingest_clamp_ratio", "warn", "unavailable", "no instrument group has enough BidAsk rows", detail
+        )
+
+    groups: dict[str, dict[str, Any]] = {}
+    severe_days: list[dict[str, Any]] = []
+    warn_total = 0
+    monthly: dict[tuple[str, str], list[float]] = {}
+    for item in sorted(usable, key=lambda entry: (entry.group, entry.day)):
+        ratio = item.clamped / item.rows
+        group = groups.setdefault(item.group, {"days_evaluated": 0, "warn_days": 0, "severe_days": 0, "max_ratio": 0.0})
+        group["days_evaluated"] += 1
+        group["max_ratio"] = max(group["max_ratio"], round(ratio, 4))
+        monthly.setdefault((item.group, item.day[:7]), []).append(ratio)
+        if ratio > CLAMP_WARN_RATIO:
+            group["warn_days"] += 1
+            warn_total += 1
+        if ratio > CLAMP_SEVERE_RATIO:
+            group["severe_days"] += 1
+            severe_days.append({"day": item.day, "group": item.group, "ratio": round(ratio, 4)})
+    for (group_name, month), ratios in sorted(monthly.items()):
+        groups[group_name].setdefault("monthly_mean", {})[month] = round(sum(ratios) / len(ratios), 3)
+    detail.update({"groups": groups, "severe_days": severe_days})
+    if warn_total:
+        severe = len(severe_days)
+        summary = (
+            f"{warn_total} day-groups have over {CLAMP_WARN_RATIO:.0%} of BidAsk arrival times clamped "
+            f"({severe} over {CLAMP_SEVERE_RATIO:.0%})"
+        )
+        return CheckResult("ingest_clamp_ratio", "warn", "fail", summary, detail)
+    return CheckResult("ingest_clamp_ratio", "warn", "pass", "arrival times are not clamped", detail)
+
+
+def evaluate_intra_session_gaps(series: Sequence[GapSeries] | None) -> CheckResult:
+    """Recording gaps inside a session, judged on the most active contract of each family.
+
+    Far-month contracts legitimately go quiet, so only the busiest series per
+    (day, session, family) is judged; the all-series count is reported for context. A session
+    flagged in two or more families is reported as an outage: TXF, MXF and TMF do not go
+    quiet together by coincidence.
+    """
+    detail: dict[str, Any] = {
+        "max_gap_s": GAP_MAX_SECONDS,
+        "max_cumulative_s": GAP_CUMULATIVE_MAX_SECONDS,
+        "min_series_rows": GAP_MIN_SERIES_ROWS,
+    }
+    if series is None:
+        return CheckResult("intra_session_gaps", "warn", "unavailable", "gap statistics were not collected", detail)
+    usable = [item for item in series if item.rows >= GAP_MIN_SERIES_ROWS]
+    if not usable:
+        return CheckResult("intra_session_gaps", "warn", "unavailable", "no series has enough rows", detail)
+
+    def _flagged(item: GapSeries) -> bool:
+        return item.max_gap_s > GAP_MAX_SECONDS or item.lost_s > GAP_CUMULATIVE_MAX_SECONDS
+
+    busiest: dict[tuple[str, str, str], GapSeries] = {}
+    for item in usable:
+        key = (item.day, item.session, item.symbol[:3])
+        if key not in busiest or item.rows > busiest[key].rows:
+            busiest[key] = item
+    near_flagged = sorted((item for item in busiest.values() if _flagged(item)), key=lambda item: -item.lost_s)
+
+    by_slot: dict[tuple[str, str], list[GapSeries]] = {}
+    for item in near_flagged:
+        by_slot.setdefault((item.day, item.session), []).append(item)
+    outages = []
+    for (day, session), members in sorted(by_slot.items()):
+        families = {member.symbol[:3] for member in members}
+        if len(families) >= 2:
+            outages.append(
+                {
+                    "day": day,
+                    "session": session,
+                    "families": sorted(families),
+                    "max_gap_s": round(max(member.max_gap_s for member in members), 1),
+                    "lost_s": round(max(member.lost_s for member in members), 1),
+                }
+            )
+    detail.update(
+        {
+            "series_total": len(usable),
+            "series_flagged_all": sum(1 for item in usable if _flagged(item)),
+            "near_series_total": len(busiest),
+            "near_series_flagged": len(near_flagged),
+            "outages": outages,
+            "worst": [
+                {
+                    "day": item.day,
+                    "session": item.session,
+                    "symbol": item.symbol,
+                    "max_gap_s": round(item.max_gap_s, 1),
+                    "max_gap_start_s": item.max_gap_start_s,
+                    "lost_s": round(item.lost_s, 1),
+                }
+                for item in near_flagged[:50]
+            ],
+        }
+    )
+    if near_flagged:
+        summary = (
+            f"{len(near_flagged)} of {len(busiest)} near-month series have a gap over {GAP_MAX_SECONDS}s "
+            f"or over {GAP_CUMULATIVE_MAX_SECONDS}s in total; {len(outages)} multi-family outages"
+        )
+        return CheckResult("intra_session_gaps", "warn", "fail", summary, detail)
+    return CheckResult("intra_session_gaps", "warn", "pass", "no near-month series has a recording gap", detail)
+
+
+def evaluate_non_trading_day_rows(
+    rows: Sequence[ExchDateRows] | None,
+    expected_days: Sequence[str] | None,
+) -> CheckResult:
+    """Rows dated on a day the exchange was closed, once the previous night session is over.
+
+    A Friday night session legitimately runs until 05:00 Saturday, so only rows after that
+    count. 2026-04-03 (a market holiday) carried futures ticks until 12:59, including
+    05:00-08:30 when no session of any kind is open.
+    """
+    detail: dict[str, Any] = {"night_session_end_minute": NON_TRADING_DAY_NIGHT_END_MINUTE}
+    if expected_days is None:
+        return CheckResult("non_trading_day_rows", "warn", "unavailable", "no exchange calendar installed", detail)
+    if rows is None:
+        return CheckResult(
+            "non_trading_day_rows", "warn", "unavailable", "exchange-date statistics were not collected", detail
+        )
+    sessions = set(expected_days)
+    closed_day_rows = [
+        {"date": item.date, "rows": item.rows}
+        for item in sorted(rows, key=lambda entry: entry.date)
+        if item.rows > 0 and item.date not in sessions
+    ]
+    offenders = [item for item in closed_day_rows if item["rows"] >= NON_TRADING_DAY_MIN_ROWS]
+    detail.update(
+        {
+            "min_rows": NON_TRADING_DAY_MIN_ROWS,
+            "offending_dates": offenders,
+            "offending_rows": sum(item["rows"] for item in offenders),
+            "straggler_dates": [item for item in closed_day_rows if item["rows"] < NON_TRADING_DAY_MIN_ROWS],
+        }
+    )
+    if offenders:
+        first_dates = ", ".join(item["date"] for item in offenders[:5])
+        summary = f"{detail['offending_rows']} rows dated on {len(offenders)} non-trading days: {first_dates}"
+        return CheckResult("non_trading_day_rows", "warn", "fail", summary, detail)
+    return CheckResult("non_trading_day_rows", "warn", "pass", "no rows dated on a closed day", detail)
+
+
+def evaluate_option_chain_atm_coverage(
+    chain: Sequence[ChainExpiry] | None,
+    futures_ref: Sequence[FuturesRef] | None,
+) -> CheckResult:
+    """Whether any recorded TXO expiry spans the futures price +/- 500 points.
+
+    An expiry is "covering" when its listed strikes reach both F-500 and F+500; a chain
+    that stops below F holds only deep-in-the-money calls and deep-out-of-the-money puts,
+    so no implied volatility can be read off it.
+    """
+    detail: dict[str, Any] = {
+        "half_width_points": CHAIN_ATM_HALF_WIDTH_POINTS,
+        "min_expiry_rows": CHAIN_MIN_EXPIRY_ROWS,
+    }
+    if chain is None or futures_ref is None:
+        return CheckResult(
+            "option_chain_atm_coverage", "warn", "unavailable", "chain statistics were not collected", detail
+        )
+    reference = {item.day: item.mid_points for item in futures_ref if item.mid_points > 0}
+    expiries: dict[str, list[ChainExpiry]] = {}
+    for item in chain:
+        if item.rows >= CHAIN_MIN_EXPIRY_ROWS and item.day in reference:
+            expiries.setdefault(item.day, []).append(item)
+    if not expiries:
+        return CheckResult(
+            "option_chain_atm_coverage",
+            "warn",
+            "unavailable",
+            "no day has both a TXO chain and a futures reference",
+            detail,
+        )
+
+    near_covered = any_covered = 0
+    by_month: dict[str, dict[str, int]] = {}
+    for day in sorted(expiries):
+        price = reference[day]
+        ordered = sorted(expiries[day], key=lambda item: item.expiry)
+        covers = [
+            item.min_strike <= price - CHAIN_ATM_HALF_WIDTH_POINTS
+            and item.max_strike >= price + CHAIN_ATM_HALF_WIDTH_POINTS
+            for item in ordered
+        ]
+        month = by_month.setdefault(day[:7], {"days": 0, "near_covered": 0, "any_covered": 0})
+        month["days"] += 1
+        month["near_covered"] += int(covers[0])
+        month["any_covered"] += int(any(covers))
+        near_covered += int(covers[0])
+        any_covered += int(any(covers))
+    evaluated = len(expiries)
+    detail.update(
+        {
+            "days_evaluated": evaluated,
+            "near_month_covered": near_covered,
+            "any_expiry_covered": any_covered,
+            "no_expiry_covered": evaluated - any_covered,
+            "by_month": by_month,
+        }
+    )
+    if near_covered < evaluated:
+        summary = (
+            f"near-month TXO chain spans F±{CHAIN_ATM_HALF_WIDTH_POINTS:g} on {near_covered} of {evaluated} days; "
+            f"any expiry on {any_covered}"
+        )
+        return CheckResult("option_chain_atm_coverage", "warn", "fail", summary, detail)
+    return CheckResult(
+        "option_chain_atm_coverage", "warn", "pass", "near-month TXO chain spans the futures price on every day", detail
+    )
+
+
 def _days_until(expiry: Any, moment: datetime) -> int | None:
     """Whole days from ``moment`` to an upstream TTL expiry, or ``None`` when unknown."""
     if not expiry or str(expiry).startswith("1970-01-01"):
@@ -623,7 +1085,9 @@ def build_report(
     generated_at: str | None = None,
     local_partitions: Mapping[str, int] | None = None,
     reference_inventory: Mapping[str, Any] | None = None,
+    source_stats: SourceStats | None = None,
 ) -> QualityReport:
+    source = source_stats or SourceStats()
     checks = (
         evaluate_causality(days),
         evaluate_session_window(days),
@@ -631,6 +1095,11 @@ def build_report(
         evaluate_book_crossed(days),
         evaluate_depth_shape(days),
         evaluate_duplicate_keys(days),
+        evaluate_content_duplicates(source.content),
+        evaluate_ingest_clamp_ratio(source.clamp),
+        evaluate_intra_session_gaps(source.gaps),
+        evaluate_non_trading_day_rows(source.exch_dates, expected_days),
+        evaluate_option_chain_atm_coverage(source.chain, source.futures_ref),
         evaluate_coverage(days, expected_days=expected_days),
         evaluate_universe_drift(days, expected_days=expected_days),
         evaluate_field_coverage(months, trade_direction_present=trade_direction_present),
@@ -844,6 +1313,225 @@ def fetch_month_field_stats(
     ]
 
 
+_INGEST_RANGE = """
+      ingest_ts >= toUnixTimestamp64Nano(toDateTime64(%(date_from)s, 9, 'Asia/Taipei'))
+      AND ingest_ts < toUnixTimestamp64Nano(toDateTime64(%(date_to_next)s, 9, 'Asia/Taipei'))
+"""
+_EXCH_SECOND_OF_DAY_EXPR = "((intDiv(exch_ts, 1000000000) + 28800) % 86400)"
+_FUTURES_FAMILY_PREDICATE = " OR ".join(f"symbol LIKE '{family}%'" for family in GAP_FAMILIES)
+
+# Content key = everything an event is, minus the delivery-specific ``ingest_ts``/``seq_no``.
+CONTENT_DUP_QUERY = f"""
+    SELECT
+        {_DAY_EXPR} AS day,
+        type,
+        toHour(fromUnixTimestamp64Nano(exch_ts, 'Asia/Taipei')) AS hour,
+        count() AS rows,
+        uniqExact(cityHash64(
+            symbol, type, exch_ts, price_scaled, volume,
+            bids_price, bids_vol, asks_price, asks_vol, trade_direction
+        )) AS keys
+    FROM {SOURCE_TABLE}
+    WHERE type IN ('Tick', 'BidAsk') AND exch_ts > 0 AND {_INGEST_RANGE}
+    GROUP BY day, type, hour
+    ORDER BY day, type, hour
+"""
+
+CLAMP_QUERY = f"""
+    SELECT
+        {_DAY_EXPR} AS day,
+        multiIf(
+            symbol LIKE 'TXO%', 'TXO',
+            {_FUTURES_FAMILY_PREDICATE} OR symbol LIKE 'EXF%' OR symbol LIKE 'FXF%', 'FUT',
+            'OTHER'
+        ) AS grp,
+        count() AS rows,
+        countIf(ingest_ts = exch_ts) AS clamped
+    FROM {SOURCE_TABLE}
+    WHERE type = 'BidAsk' AND {_INGEST_RANGE}
+    GROUP BY day, grp
+    ORDER BY day, grp
+"""
+
+# Gaps are measured between distinct active seconds, which keeps the window function over
+# at most ~65k rows per series-day instead of several hundred thousand quote rows. A night
+# session is split at midnight into ``night_pm`` (from 15:00) and ``night_am`` (until 05:00)
+# because grouping is by calendar day; leaving them as one series would report the 10 idle
+# daytime hours between them as a gap. The day is the *exchange* date: grouping by ingest date
+# let one quote stamped 23:59:59.99 and ingested just after midnight open a fake 15 h gap.
+GAP_QUERY = f"""
+    SELECT
+        day, symbol, sess,
+        sum(n) AS rows,
+        max(gap) AS max_gap_s,
+        sumIf(gap, gap > {GAP_COUNT_SECONDS}) AS lost_s,
+        argMax(sec - gap, gap) AS max_gap_start_s
+    FROM (
+        SELECT
+            day, symbol, sess, sec, n,
+            sec - lagInFrame(sec, 1, sec) OVER (PARTITION BY day, symbol, sess ORDER BY sec) AS gap
+        FROM (
+            SELECT
+                toDate(fromUnixTimestamp64Nano(exch_ts, 'Asia/Taipei')) AS day,
+                symbol,
+                multiIf(
+                    {_EXCH_SECOND_OF_DAY_EXPR}
+                        BETWEEN {DAY_SESSION_OPEN_MINUTE * 60} AND {DAY_SESSION_CLOSE_MINUTE * 60},
+                    'day',
+                    {_EXCH_SECOND_OF_DAY_EXPR} >= {NIGHT_SESSION_OPEN_MINUTE * 60},
+                    'night_pm',
+                    {_EXCH_SECOND_OF_DAY_EXPR} < {NIGHT_SESSION_CLOSE_MINUTE * 60},
+                    'night_am',
+                    'other'
+                ) AS sess,
+                intDiv(exch_ts, 1000000000) AS sec,
+                count() AS n
+            FROM {SOURCE_TABLE}
+            WHERE type = 'BidAsk' AND exch_ts > 0 AND length(symbol) = 5
+              AND ({_FUTURES_FAMILY_PREDICATE})
+              AND {_INGEST_RANGE}
+            GROUP BY day, symbol, sess, sec
+            HAVING sess != 'other'
+        )
+    )
+    GROUP BY day, symbol, sess
+    HAVING rows >= {GAP_MIN_SERIES_ROWS}
+    ORDER BY day, symbol, sess
+"""
+
+EXCH_DATE_QUERY = f"""
+    SELECT toDate(fromUnixTimestamp64Nano(exch_ts, 'Asia/Taipei')) AS exch_date, count() AS rows
+    FROM {SOURCE_TABLE}
+    WHERE exch_ts > 0 AND {_INGEST_RANGE}
+      AND {_EXCH_MINUTE_EXPR} >= {NON_TRADING_DAY_NIGHT_END_MINUTE}
+    GROUP BY exch_date
+    ORDER BY exch_date
+"""
+
+# TXO symbols are ``TXO`` + 5-digit strike + month/right code + year digit, e.g.
+# ``TXO39600C7``. ``strike_scaled`` is x10,000 (not the x1,000,000 price scale) and is empty
+# before 2026-08, so the strike falls back to the symbol.
+CHAIN_QUERY = f"""
+    SELECT
+        {_DAY_EXPR} AS day,
+        substring(symbol, 9, 2) AS code,
+        min(strike) AS min_strike,
+        max(strike) AS max_strike,
+        uniqExact(strike) AS strikes,
+        count() AS rows
+    FROM (
+        SELECT
+            ingest_ts, symbol,
+            if(strike_scaled > 0, intDiv(strike_scaled, 10000), toUInt32OrZero(substring(symbol, 4, 5))) AS strike
+        FROM {SOURCE_TABLE}
+        WHERE type = 'BidAsk' AND symbol LIKE 'TXO%' AND length(symbol) = 10 AND {_INGEST_RANGE}
+    )
+    WHERE strike > 0
+    GROUP BY day, code
+    ORDER BY day, code
+"""
+
+FUTURES_REF_QUERY = f"""
+    SELECT day, argMax(symbol, n) AS symbol, argMax(mid, n) AS mid_points
+    FROM (
+        SELECT
+            {_DAY_EXPR} AS day,
+            symbol,
+            count() AS n,
+            median((bids_price[1] + asks_price[1]) / 2) / 1000000 AS mid
+        FROM {SOURCE_TABLE}
+        WHERE type = 'BidAsk' AND symbol LIKE 'TXF%' AND length(symbol) = 5
+          AND length(bids_price) > 0 AND length(asks_price) > 0
+          AND {_EXCH_MINUTE_EXPR} BETWEEN {DAY_SESSION_OPEN_MINUTE} AND {DAY_SESSION_CLOSE_MINUTE}
+          AND {_INGEST_RANGE}
+        GROUP BY day, symbol
+    )
+    GROUP BY day
+    ORDER BY day
+"""
+
+
+def fetch_content_buckets(client: Any, date_from: str, date_to: str, *, chunk_days: int = 1) -> list[ContentBucket]:
+    rows = _query_chunked(client, CONTENT_DUP_QUERY, date_from, date_to, chunk_days=chunk_days)
+    return [
+        ContentBucket(day=str(row[0]), kind=str(row[1]), hour=int(row[2]), rows=int(row[3]), keys=int(row[4]))
+        for row in rows
+    ]
+
+
+def fetch_clamp_stats(client: Any, date_from: str, date_to: str, *, chunk_days: int = 4) -> list[ClampStats]:
+    rows = _query_chunked(client, CLAMP_QUERY, date_from, date_to, chunk_days=chunk_days)
+    return [ClampStats(day=str(row[0]), group=str(row[1]), rows=int(row[2]), clamped=int(row[3])) for row in rows]
+
+
+def fetch_gap_series(client: Any, date_from: str, date_to: str, *, chunk_days: int = 2) -> list[GapSeries]:
+    rows = _query_chunked(client, GAP_QUERY, date_from, date_to, chunk_days=chunk_days)
+    return [
+        GapSeries(
+            day=str(row[0]),
+            symbol=str(row[1]),
+            session=str(row[2]),
+            rows=int(row[3]),
+            max_gap_s=float(row[4]),
+            lost_s=float(row[5]),
+            max_gap_start_s=int(row[6]),
+        )
+        for row in rows
+    ]
+
+
+def fetch_exch_date_rows(client: Any, date_from: str, date_to: str, *, chunk_days: int = 4) -> list[ExchDateRows]:
+    """Rows per exchange date, restricted to the requested range and summed across chunks."""
+    merged: dict[str, int] = {}
+    for row in _query_chunked(client, EXCH_DATE_QUERY, date_from, date_to, chunk_days=chunk_days):
+        exch_date = str(row[0])
+        if date_from <= exch_date <= date_to:
+            merged[exch_date] = merged.get(exch_date, 0) + int(row[1])
+    return [ExchDateRows(date=exch_date, rows=rows) for exch_date, rows in sorted(merged.items())]
+
+
+def _expiry_from_code(code: str) -> str | None:
+    """``C7`` -> ``2027-03``. Calls use A-L and puts M-X for January-December."""
+    if len(code) != 2 or not ("A" <= code[0] <= "X") or not code[1].isdigit():
+        return None
+    return f"{2020 + int(code[1])}-{(ord(code[0]) - ord('A')) % 12 + 1:02d}"
+
+
+def fetch_option_chain(client: Any, date_from: str, date_to: str, *, chunk_days: int = 4) -> list[ChainExpiry]:
+    """Per (day, expiry month) strike span, with the call and put codes merged."""
+    merged: dict[tuple[str, str], list[float]] = {}
+    for row in _query_chunked(client, CHAIN_QUERY, date_from, date_to, chunk_days=chunk_days):
+        expiry = _expiry_from_code(str(row[1]))
+        if expiry is None:
+            continue
+        bucket = merged.setdefault((str(row[0]), expiry), [float("inf"), float("-inf"), 0, 0])
+        bucket[0] = min(bucket[0], float(row[2]))
+        bucket[1] = max(bucket[1], float(row[3]))
+        bucket[2] = max(bucket[2], int(row[4]))
+        bucket[3] += int(row[5])
+    return [
+        ChainExpiry(day=day, expiry=expiry, min_strike=lo, max_strike=hi, strikes=int(strikes), rows=int(rows))
+        for (day, expiry), (lo, hi, strikes, rows) in sorted(merged.items())
+    ]
+
+
+def fetch_futures_reference(client: Any, date_from: str, date_to: str, *, chunk_days: int = 4) -> list[FuturesRef]:
+    rows = _query_chunked(client, FUTURES_REF_QUERY, date_from, date_to, chunk_days=chunk_days)
+    return [FuturesRef(day=str(row[0]), symbol=str(row[1]), mid_points=float(row[2])) for row in rows]
+
+
+def fetch_source_stats(client: Any, date_from: str, date_to: str, *, chunk_days: int = 4) -> SourceStats:
+    """Collect every source-layer statistic. The content scan is the expensive one."""
+    return SourceStats(
+        content=fetch_content_buckets(client, date_from, date_to, chunk_days=min(chunk_days, 1)),
+        clamp=fetch_clamp_stats(client, date_from, date_to, chunk_days=chunk_days),
+        gaps=fetch_gap_series(client, date_from, date_to, chunk_days=min(chunk_days, 2)),
+        exch_dates=fetch_exch_date_rows(client, date_from, date_to, chunk_days=chunk_days),
+        chain=fetch_option_chain(client, date_from, date_to, chunk_days=chunk_days),
+        futures_ref=fetch_futures_reference(client, date_from, date_to, chunk_days=chunk_days),
+    )
+
+
 CALENDAR_NAME = "XTAI"
 
 
@@ -899,6 +1587,7 @@ def run_audit(
     use_calendar: bool = True,
     chunk_days: int = 4,
     reference_inventory: Path | None = None,
+    deep_checks: bool = True,
 ) -> QualityReport:
     days = fetch_day_stats(client, date_from, date_to, chunk_days=chunk_days)
     trade_direction_present = has_trade_direction_column(client)
@@ -917,6 +1606,7 @@ def run_audit(
         expected_days=expected,
         local_partitions=fetch_local_partitions(client),
         reference_inventory=load_reference_inventory(reference_inventory),
+        source_stats=fetch_source_stats(client, date_from, date_to, chunk_days=chunk_days) if deep_checks else None,
     )
 
 
