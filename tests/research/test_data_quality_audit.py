@@ -366,3 +366,554 @@ class TestReportPersistence:
         assert f"**{report.verdict}**" in rendered
         assert "## Daily coverage" in rendered
         assert "| 2026-03-06 | degraded |" in rendered
+
+
+def _bucket(day: str, hour: int, rows: int, keys: int, kind: str = "Tick") -> quality.ContentBucket:
+    return quality.ContentBucket(day=day, kind=kind, hour=hour, rows=rows, keys=keys)
+
+
+def _day_buckets(day: str, multiplicity: float, *, hours: range = range(9, 14), rows: int = 100_000) -> list:
+    return [_bucket(day, hour, rows, int(rows / multiplicity)) for hour in hours]
+
+
+class TestContentDuplicates:
+    def test_content_duplicates_flags_a_two_x_delivery_period(self) -> None:
+        buckets = [
+            *_day_buckets("2026-01-27", 2.0),
+            *_day_buckets("2026-01-28", 2.0),
+            *_day_buckets("2026-02-02", 1.02),
+        ]
+
+        result = quality.evaluate_content_duplicates(buckets)
+
+        assert result.status == "fail"
+        assert result.severity == "warn"
+        assert result.detail["flagged_days"] == ["2026-01-27", "2026-01-28"]
+        assert result.detail["heavy_days"] == ["2026-01-27", "2026-01-28"]
+        assert result.detail["runs"] == [
+            {"first_day": "2026-01-27", "last_day": "2026-01-28", "days": 2, "median_multiplicity": 2.0}
+        ]
+
+    def test_content_duplicates_reports_the_multiplicity_of_a_four_x_period(self) -> None:
+        result = quality.evaluate_content_duplicates(_day_buckets("2026-05-15", 4.0))
+
+        assert result.status == "fail"
+        assert result.detail["runs"][0]["median_multiplicity"] == 4.0
+
+    def test_content_duplicates_sees_a_mid_day_step_that_a_day_average_hides(self) -> None:
+        """2026-06-02 jumped from 1x to 2x inside the 09:00 hour; the day mean is only ~1.6."""
+        buckets = [
+            *_day_buckets("2026-06-02", 1.0, hours=range(0, 9)),
+            *_day_buckets("2026-06-02", 2.0, hours=range(9, 14)),
+        ]
+
+        result = quality.evaluate_content_duplicates(buckets)
+
+        entry = result.detail["flagged"][0]
+        assert result.status == "fail"
+        assert entry["hours_flagged"] == 5
+        assert entry["day_multiplicity"] < 1.6
+        assert entry["worst_multiplicity"] == 2.0
+
+    def test_content_duplicates_passes_on_clean_days(self) -> None:
+        result = quality.evaluate_content_duplicates(
+            [*_day_buckets("2026-09-15", 1.03), *_day_buckets("2026-09-16", 1.0)]
+        )
+
+        assert result.status == "pass"
+        assert result.detail["flagged_days"] == []
+
+    def test_content_duplicates_ignores_a_quiet_hour_that_is_repeated_on_every_clean_day(self) -> None:
+        """The 14:00 after-hours session republishes frozen snapshots: ~1.9x on ~0.1% of a day."""
+        buckets = [*_day_buckets("2026-09-15", 1.02, rows=1_000_000), _bucket("2026-09-15", 14, 15_961, 8_316)]
+
+        result = quality.evaluate_content_duplicates(buckets)
+
+        assert result.status == "pass"
+
+    def test_content_duplicates_ignores_hours_with_too_few_rows(self) -> None:
+        result = quality.evaluate_content_duplicates(
+            [*_day_buckets("2026-09-15", 1.0), _bucket("2026-09-15", 4, 200, 50)]
+        )
+
+        assert result.status == "pass"
+
+    def test_content_duplicates_is_unavailable_when_not_collected_or_empty(self) -> None:
+        assert quality.evaluate_content_duplicates(None).status == "unavailable"
+        assert quality.evaluate_content_duplicates([]).status == "unavailable"
+
+    def test_content_key_excludes_the_fields_that_differ_between_copies(self) -> None:
+        """The whole point of this check: copies differ only in ingest_ts and seq_no."""
+        hashed = quality.CONTENT_DUP_QUERY.split("cityHash64(")[1].split(")) AS keys")[0]
+
+        assert "ingest_ts" not in hashed
+        assert "seq_no" not in hashed
+        assert "exch_ts" in hashed
+        assert "price_scaled" in hashed
+
+    def test_duplicate_keys_names_its_blind_spot(self) -> None:
+        result = quality.evaluate_duplicate_keys(_clean_days())
+
+        assert "content_duplicates" in result.detail["blind_spot"]
+
+
+def _clamp(day: str, group: str, ratio: float, rows: int = 1_000_000) -> quality.ClampStats:
+    return quality.ClampStats(day=day, group=group, rows=rows, clamped=int(rows * ratio))
+
+
+class TestIngestClampRatio:
+    def test_clamp_ratio_flags_days_with_most_arrival_times_clamped(self) -> None:
+        stats = [
+            _clamp("2026-04-14", "FUT", 0.61),
+            _clamp("2026-04-15", "FUT", 0.35),
+            _clamp("2026-05-04", "FUT", 0.01),
+        ]
+
+        result = quality.evaluate_ingest_clamp_ratio(stats)
+
+        assert result.status == "fail"
+        assert result.detail["groups"]["FUT"]["warn_days"] == 2
+        assert result.detail["groups"]["FUT"]["severe_days"] == 1
+        assert result.detail["severe_days"] == [{"day": "2026-04-14", "group": "FUT", "ratio": 0.61}]
+
+    def test_clamp_ratio_reports_a_monthly_mean_per_group(self) -> None:
+        stats = [_clamp("2026-04-14", "FUT", 0.6), _clamp("2026-04-15", "FUT", 0.4), _clamp("2026-05-04", "FUT", 0.0)]
+
+        result = quality.evaluate_ingest_clamp_ratio(stats)
+
+        assert result.detail["groups"]["FUT"]["monthly_mean"] == {"2026-04": 0.5, "2026-05": 0.0}
+
+    def test_clamp_ratio_passes_when_the_clock_keeps_up(self) -> None:
+        result = quality.evaluate_ingest_clamp_ratio(
+            [_clamp("2026-05-04", "FUT", 0.01), _clamp("2026-05-04", "OTHER", 0.0)]
+        )
+
+        assert result.status == "pass"
+
+    def test_clamp_ratio_ignores_groups_with_too_few_rows(self) -> None:
+        result = quality.evaluate_ingest_clamp_ratio([_clamp("2026-04-14", "TXO", 0.9, rows=500)])
+
+        assert result.status == "unavailable"
+
+    def test_clamp_ratio_is_unavailable_when_not_collected(self) -> None:
+        assert quality.evaluate_ingest_clamp_ratio(None).status == "unavailable"
+
+    def test_clamp_ratio_is_invisible_to_the_causality_check(self) -> None:
+        """Clamping guarantees ingest_ts >= exch_ts, so ts_causality cannot see it."""
+        assert quality.evaluate_causality(_clean_days()).status == "pass"
+        assert quality.evaluate_ingest_clamp_ratio([_clamp("2026-04-14", "FUT", 0.8)]).status == "fail"
+
+
+def _series(
+    symbol: str, max_gap: float, lost: float, *, day: str = "2026-05-11", session: str = "day", rows: int = 200_000
+):
+    return quality.GapSeries(
+        day=day,
+        symbol=symbol,
+        session=session,
+        rows=rows,
+        max_gap_s=max_gap,
+        lost_s=lost,
+        max_gap_start_s=1_778_460_989,
+    )
+
+
+class TestIntraSessionGaps:
+    def test_gaps_flag_a_near_month_series_with_a_long_silence(self) -> None:
+        result = quality.evaluate_intra_session_gaps([_series("TXFE6", 250.0, 2776.0), _series("MXFE6", 2.0, 0.0)])
+
+        assert result.status == "fail"
+        assert result.detail["near_series_flagged"] == 1
+        assert result.detail["worst"][0]["symbol"] == "TXFE6"
+
+    def test_gaps_flag_cumulative_silence_even_when_no_single_gap_is_long(self) -> None:
+        result = quality.evaluate_intra_session_gaps([_series("TXFE6", 40.0, 700.0)])
+
+        assert result.status == "fail"
+
+    def test_gaps_do_not_judge_an_illiquid_far_month_series(self) -> None:
+        series = [_series("TXFE6", 2.0, 0.0, rows=300_000), _series("TXFH6", 175.0, 900.0, rows=25_000)]
+
+        result = quality.evaluate_intra_session_gaps(series)
+
+        assert result.status == "pass"
+        assert result.detail["series_flagged_all"] == 1
+
+    def test_gaps_report_an_outage_when_several_families_go_quiet_in_one_session(self) -> None:
+        series = [_series("TXFF6", 3934.0, 5453.0), _series("MXFF6", 3930.0, 5323.0), _series("TMFF6", 3931.0, 5448.0)]
+
+        result = quality.evaluate_intra_session_gaps(series)
+
+        assert result.detail["outages"] == [
+            {
+                "day": "2026-05-11",
+                "session": "day",
+                "families": ["MXF", "TMF", "TXF"],
+                "max_gap_s": 3934.0,
+                "lost_s": 5453.0,
+            }
+        ]
+
+    def test_gaps_do_not_call_one_quiet_family_an_outage(self) -> None:
+        result = quality.evaluate_intra_session_gaps([_series("TMFF6", 120.0, 300.0), _series("TXFF6", 1.0, 0.0)])
+
+        assert result.status == "fail"
+        assert result.detail["outages"] == []
+
+    def test_gaps_ignore_series_with_too_few_rows(self) -> None:
+        assert quality.evaluate_intra_session_gaps([_series("TXFE6", 900.0, 900.0, rows=100)]).status == "unavailable"
+
+    def test_gaps_are_unavailable_when_not_collected(self) -> None:
+        assert quality.evaluate_intra_session_gaps(None).status == "unavailable"
+
+    def test_gap_query_splits_a_night_session_at_midnight(self) -> None:
+        """One series spanning both halves would report the 10 idle daytime hours as a gap."""
+        assert "'night_pm'" in quality.GAP_QUERY
+        assert "'night_am'" in quality.GAP_QUERY
+        assert "'night'," not in quality.GAP_QUERY
+
+
+class TestNonTradingDayRows:
+    def test_non_trading_day_rows_flag_a_market_holiday_with_data(self) -> None:
+        rows = [quality.ExchDateRows("2026-04-02", 6_205_298), quality.ExchDateRows("2026-04-03", 234_815)]
+
+        result = quality.evaluate_non_trading_day_rows(rows, ["2026-04-01", "2026-04-02"])
+
+        assert result.status == "fail"
+        assert result.detail["offending_dates"] == [{"date": "2026-04-03", "rows": 234_815}]
+        assert "2026-04-03" in result.summary
+
+    def test_non_trading_day_rows_pass_when_every_date_is_a_session(self) -> None:
+        rows = [quality.ExchDateRows("2026-04-01", 100), quality.ExchDateRows("2026-04-02", 100)]
+
+        assert quality.evaluate_non_trading_day_rows(rows, ["2026-04-01", "2026-04-02"]).status == "pass"
+
+    def test_non_trading_day_rows_ignore_close_time_stragglers(self) -> None:
+        rows = [quality.ExchDateRows("2026-01-31", 8), quality.ExchDateRows("2026-03-28", 28)]
+
+        result = quality.evaluate_non_trading_day_rows(rows, ["2026-04-01"])
+
+        assert result.status == "pass"
+        assert [item["date"] for item in result.detail["straggler_dates"]] == ["2026-01-31", "2026-03-28"]
+
+    def test_non_trading_day_rows_are_unavailable_without_a_calendar(self) -> None:
+        result = quality.evaluate_non_trading_day_rows([quality.ExchDateRows("2026-04-03", 5)], None)
+
+        assert result.status == "unavailable"
+
+    def test_non_trading_day_rows_are_unavailable_when_not_collected(self) -> None:
+        assert quality.evaluate_non_trading_day_rows(None, ["2026-04-01"]).status == "unavailable"
+
+    def test_non_trading_day_query_skips_the_night_session_tail(self) -> None:
+        """A Friday night session legitimately runs to 05:00 Saturday; only later rows count."""
+        assert f">= {quality.NON_TRADING_DAY_NIGHT_END_MINUTE}" in quality.EXCH_DATE_QUERY
+
+
+def _expiry(day: str, expiry: str, lo: float, hi: float, rows: int = 500_000) -> quality.ChainExpiry:
+    return quality.ChainExpiry(day=day, expiry=expiry, min_strike=lo, max_strike=hi, strikes=50, rows=rows)
+
+
+class TestOptionChainAtmCoverage:
+    def test_atm_coverage_flags_a_chain_that_stopped_below_the_futures_price(self) -> None:
+        """2026-09-15: F = 45,754 but the near-month chain tops out at 44,200."""
+        chain = [_expiry("2026-09-15", "2026-09", 39_000, 44_200), _expiry("2026-09-15", "2026-10", 40_900, 46_100)]
+
+        result = quality.evaluate_option_chain_atm_coverage(
+            chain, [quality.FuturesRef("2026-09-15", "TXFI6", 45_754.0)]
+        )
+
+        assert result.status == "fail"
+        assert result.detail["near_month_covered"] == 0
+        assert result.detail["any_expiry_covered"] == 0
+        assert result.detail["no_expiry_covered"] == 1
+
+    def test_atm_coverage_counts_a_later_expiry_that_spans_the_price(self) -> None:
+        chain = [_expiry("2026-09-15", "2026-09", 39_000, 44_200), _expiry("2026-09-15", "2026-10", 44_000, 47_000)]
+
+        result = quality.evaluate_option_chain_atm_coverage(
+            chain, [quality.FuturesRef("2026-09-15", "TXFI6", 45_754.0)]
+        )
+
+        assert result.status == "fail"
+        assert result.detail["near_month_covered"] == 0
+        assert result.detail["any_expiry_covered"] == 1
+
+    def test_atm_coverage_passes_when_the_near_month_chain_spans_the_price(self) -> None:
+        chain = [_expiry("2026-09-15", "2026-09", 43_000, 47_000)]
+
+        result = quality.evaluate_option_chain_atm_coverage(
+            chain, [quality.FuturesRef("2026-09-15", "TXFI6", 45_754.0)]
+        )
+
+        assert result.status == "pass"
+        assert result.detail["by_month"] == {"2026-09": {"days": 1, "near_covered": 1, "any_covered": 1}}
+
+    def test_atm_coverage_ignores_a_thinly_recorded_expiry(self) -> None:
+        chain = [
+            _expiry("2026-09-15", "2026-09", 30_000, 60_000, rows=100),
+            _expiry("2026-09-15", "2026-10", 40_900, 46_100),
+        ]
+
+        result = quality.evaluate_option_chain_atm_coverage(
+            chain, [quality.FuturesRef("2026-09-15", "TXFI6", 45_754.0)]
+        )
+
+        assert result.detail["any_expiry_covered"] == 0
+
+    def test_atm_coverage_is_unavailable_without_a_futures_reference(self) -> None:
+        chain = [_expiry("2026-09-15", "2026-09", 43_000, 47_000)]
+
+        assert quality.evaluate_option_chain_atm_coverage(chain, []).status == "unavailable"
+        assert quality.evaluate_option_chain_atm_coverage(None, None).status == "unavailable"
+
+    def test_expiry_code_maps_call_and_put_letters_to_the_same_month(self) -> None:
+        assert quality._expiry_from_code("C7") == "2027-03"
+        assert quality._expiry_from_code("O7") == "2027-03"
+        assert quality._expiry_from_code("B6") == "2026-02"
+        assert quality._expiry_from_code("X6") == "2026-12"
+        assert quality._expiry_from_code("ZZ") is None
+        assert quality._expiry_from_code("C") is None
+
+
+class _FakeResult:
+    def __init__(self, rows: list[list[object]]) -> None:
+        self.result_rows = rows
+
+
+class _FakeClient:
+    """Answers each source-layer query with canned rows and records what was asked."""
+
+    def __init__(self, answers: dict[str, list[list[object]]]) -> None:
+        self.answers = answers
+        self.asked: list[str] = []
+
+    def query(self, query: str, parameters: dict[str, str] | None = None, settings: object = None) -> _FakeResult:
+        self.asked.append(query)
+        return _FakeResult(self.answers.get(query, []))
+
+
+class TestSourceFetchers:
+    def test_exch_date_rows_are_summed_across_chunks_and_clipped_to_the_range(self) -> None:
+        client = _FakeClient(
+            {
+                quality.EXCH_DATE_QUERY: [
+                    ["2026-04-02", 10],
+                    ["2026-04-03", 5],
+                    ["2026-04-10", 99],
+                    ["2026-03-31", 7],
+                ]
+            }
+        )
+
+        rows = quality.fetch_exch_date_rows(client, "2026-04-01", "2026-04-09", chunk_days=4)
+
+        assert {item.date: item.rows for item in rows} == {"2026-04-02": 30, "2026-04-03": 15}
+        assert len(client.asked) == 3
+
+    def test_option_chain_merges_call_and_put_codes_and_skips_unparseable_ones(self) -> None:
+        client = _FakeClient(
+            {
+                quality.CHAIN_QUERY: [
+                    ["2026-09-15", "I6", 39_000, 44_200, 40, 100],
+                    ["2026-09-15", "U6", 38_000, 43_800, 53, 200],
+                    ["2026-09-15", "??", 1, 2, 1, 1],
+                ]
+            }
+        )
+
+        chain = quality.fetch_option_chain(client, "2026-09-15", "2026-09-15")
+
+        assert chain == [
+            quality.ChainExpiry(
+                day="2026-09-15", expiry="2026-09", min_strike=38_000, max_strike=44_200, strikes=53, rows=300
+            )
+        ]
+
+    def test_fetch_source_stats_collects_all_six_statistics(self) -> None:
+        client = _FakeClient({})
+
+        stats = quality.fetch_source_stats(client, "2026-09-15", "2026-09-15")
+
+        assert quality.CONTENT_DUP_QUERY in client.asked
+        assert quality.GAP_QUERY in client.asked
+        assert quality.FUTURES_REF_QUERY in client.asked
+        assert stats.content == [] and stats.clamp == [] and stats.gaps == []
+        assert stats.exch_dates == [] and stats.chain == [] and stats.futures_ref == []
+
+    def test_content_query_runs_one_day_at_a_time(self) -> None:
+        client = _FakeClient({})
+
+        quality.fetch_source_stats(client, "2026-09-15", "2026-09-17", chunk_days=4)
+
+        assert client.asked.count(quality.CONTENT_DUP_QUERY) == 3
+
+
+class TestSourceChecksInReport:
+    def test_report_lists_the_source_checks_as_unavailable_when_not_collected(self) -> None:
+        report = _report(_clean_days())
+        by_id = {check.check_id: check for check in report.checks}
+
+        for check_id in (
+            "content_duplicates",
+            "ingest_clamp_ratio",
+            "intra_session_gaps",
+            "non_trading_day_rows",
+            "option_chain_atm_coverage",
+        ):
+            assert by_id[check_id].status == "unavailable"
+        assert report.verdict == "CLEAN"
+
+    def test_report_is_degraded_and_names_the_finding_when_content_is_duplicated(self) -> None:
+        stats = quality.SourceStats(content=_day_buckets("2026-03-02", 2.0))
+
+        report = _report(_clean_days(), source_stats=stats)
+
+        assert report.verdict == "DEGRADED"
+        assert any(finding.startswith("content_duplicates:") for finding in report.findings)
+
+    def test_report_with_source_checks_round_trips_through_its_payload(self) -> None:
+        stats = quality.SourceStats(content=_day_buckets("2026-03-02", 2.0))
+        report = _report(_clean_days(), source_stats=stats)
+
+        restored = quality.QualityReport.from_payload(json.loads(json.dumps(report.to_payload())))
+
+        assert restored.report_sha256 == report.report_sha256
+        assert restored.findings == report.findings
+
+    def test_cli_flag_skips_the_deep_checks(self, monkeypatch: object, tmp_path: Path) -> None:
+        import research.data_pipeline as pipeline
+
+        seen: dict[str, object] = {}
+
+        def fake_run_audit(*args: object, **kwargs: object) -> quality.QualityReport:
+            seen.update(kwargs)
+            return _report(_clean_days())
+
+        monkeypatch.setattr(pipeline, "_get_client", lambda *a, **k: object())  # type: ignore[attr-defined]
+        monkeypatch.setattr(pipeline.quality, "run_audit", fake_run_audit)  # type: ignore[attr-defined]
+        argv = ["quality", "--date-from", "2026-03-02", "--date-to", "2026-03-06", "--out-dir", str(tmp_path)]
+
+        assert pipeline.main([*argv, "--no-deep-checks"]) == 0
+        assert seen["deep_checks"] is False
+        assert pipeline.main(argv) == 0
+        assert seen["deep_checks"] is True
+
+
+class TestOfficialVolumeReconciliation:
+    def _row(self, *, deduped: int, official: int = 60_000, raw: int | None = None, day: str = "2026-09-10") -> object:
+        return quality.OfficialVolumeRow(
+            day=day,
+            product="TX",
+            symbol="TXFJ6",
+            raw=raw if raw is not None else deduped,
+            deduped=deduped,
+            official=official,
+        )
+
+    def test_a_complete_deduplicated_day_passes(self) -> None:
+        result = quality.evaluate_official_volume_reconciliation([self._row(deduped=59_700)])
+
+        assert result.status == "pass"
+        assert result.detail["rows"][0]["ratio"] == 0.995
+
+    def test_missing_recording_fails_below_the_floor(self) -> None:
+        result = quality.evaluate_official_volume_reconciliation([self._row(deduped=50_000)])
+
+        assert result.status == "fail"
+        assert "TX 2026-09-10" in result.summary
+
+    def test_duplicate_delivery_that_survives_is_caught_by_the_ceiling(self) -> None:
+        result = quality.evaluate_official_volume_reconciliation([self._row(deduped=119_000, raw=119_000)])
+
+        assert result.status == "fail"
+        assert result.detail["outside_band"][0]["ratio"] > quality.OFFICIAL_RATIO_MAX
+
+    def test_the_raw_ratio_is_reported_next_to_the_deduplicated_one(self) -> None:
+        result = quality.evaluate_official_volume_reconciliation([self._row(deduped=59_700, raw=119_400)])
+
+        assert result.detail["rows"][0]["raw_ratio"] == 1.99
+
+    def test_days_with_a_thin_official_volume_are_not_judged(self) -> None:
+        result = quality.evaluate_official_volume_reconciliation([self._row(deduped=10, official=100)])
+
+        assert result.status == "unavailable"
+
+    def test_no_reference_is_unavailable_not_a_pass(self) -> None:
+        assert quality.evaluate_official_volume_reconciliation(None).status == "unavailable"
+
+    def test_a_day_with_no_recorded_ticks_is_listed_not_scored_as_a_mismatch(self) -> None:
+        rows = [self._row(deduped=59_700), self._row(deduped=0, day="2026-10-05")]
+
+        result = quality.evaluate_official_volume_reconciliation(rows)
+
+        assert result.status == "pass"
+        assert result.detail["no_local_rows"] == ["2026-10-05"]
+
+    def test_only_uncollected_days_leave_the_check_unavailable(self) -> None:
+        result = quality.evaluate_official_volume_reconciliation([self._row(deduped=0, day="2026-10-05")])
+
+        assert result.status == "unavailable"
+        assert result.detail["no_local_rows"] == ["2026-10-05"]
+        assert quality.evaluate_official_volume_reconciliation([]).status == "unavailable"
+
+
+class _TickClient:
+    """Answers every query with the same tick rows and records the parameters it was given."""
+
+    def __init__(self, rows: list[list[object]]) -> None:
+        self.rows = rows
+        self.parameters: list[dict[str, str]] = []
+
+    def query(self, query: str, parameters: dict[str, str] | None = None, settings: object = None) -> _FakeResult:
+        self.parameters.append(dict(parameters or {}))
+        return _FakeResult(self.rows)
+
+
+class TestOfficialVolumeFetch:
+    SUMMARY = [
+        {"product": "TX", "expiry": "202610", "session": "day", "spread": False, "contracts": 41_765, "trades": 9},
+        {"product": "TX", "expiry": "202611", "session": "day", "spread": False, "contracts": 333, "trades": 9},
+        {"product": "TX", "expiry": "202610/202611", "session": "day", "spread": True, "contracts": 180, "trades": 9},
+        {"product": "TX", "expiry": "202610", "session": "night", "spread": False, "contracts": 32_209, "trades": 9},
+        {"product": "TXO", "expiry": "202610", "session": "day", "spread": False, "contracts": 999, "trades": 1},
+    ]
+
+    def _root(self, tmp_path: Path) -> Path:
+        folder = tmp_path / "parsed" / "fut_ticks"
+        folder.mkdir(parents=True)
+        (folder / "2026-10-05.summary.json").write_text(json.dumps(self.SUMMARY), encoding="utf-8")
+        return tmp_path
+
+    def test_the_near_month_is_the_busiest_day_session_single_leg_expiry(self, tmp_path: Path) -> None:
+        volumes = quality.load_official_day_volumes(self._root(tmp_path), "2026-10-01", "2026-10-31")
+
+        assert volumes == {"2026-10-05": {"TX": ("202610", 41_765)}}
+
+    def test_days_outside_the_range_are_ignored(self, tmp_path: Path) -> None:
+        assert quality.load_official_day_volumes(self._root(tmp_path), "2026-11-01", "2026-11-30") == {}
+
+    def test_the_symbol_comes_from_product_and_expiry(self) -> None:
+        assert quality._futures_symbol("TX", "202610") == "TXFJ6"
+        assert quality._futures_symbol("MTX", "202602") == "MXFB6"
+        assert quality._futures_symbol("TMF", "202612") == "TMFL6"
+        assert quality._futures_symbol("TXO", "202610") is None
+        assert quality._futures_symbol("TX", "2026") is None
+
+    def test_without_a_root_the_statistic_is_not_collected(self) -> None:
+        assert quality.fetch_official_volume(object(), "2026-10-01", "2026-10-31", None) is None
+
+    def test_recorded_volume_is_deduplicated_and_compared(self, tmp_path: Path) -> None:
+        ts = 1_790_000_000_000_000_000
+        ticks = []
+        for index in range(30):
+            ticks += [(ts + index * 10**9, 21_000_000_000 + index, 2)] * 2  # every trade delivered twice
+        client = _TickClient([[str(a), str(b), str(c)] for a, b, c in ticks])
+
+        rows = quality.fetch_official_volume(client, "2026-10-01", "2026-10-31", self._root(tmp_path))
+
+        assert rows == [
+            quality.OfficialVolumeRow(
+                day="2026-10-05", product="TX", symbol="TXFJ6", raw=120, deduped=60, official=41_765
+            )
+        ]
+        assert client.parameters[0]["symbol"] == "TXFJ6"
