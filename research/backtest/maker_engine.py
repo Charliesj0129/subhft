@@ -49,6 +49,27 @@ class TickData:
         return (self.bid_price + self.ask_price) / (2 * self.scale)
 
 
+# Same convention as ``HftNativeRunner`` (``BacktestConfig.is_oos_split``): the first 70% of the
+# ordered observations are in-sample, the rest out-of-sample.
+DEFAULT_IS_OOS_SPLIT = 0.7
+# ``sharpe_oos`` feeds floors such as ``discover_gate_d_candidates(min_sharpe_oos=1.0)``. An annualised
+# Sharpe over n daily returns has a standard error near sqrt(252 / n): about 3.5 at 20 days, so a floor of
+# 1.0 would be cleared by luck. Until the OOS segment has this many days the engine keeps reporting 0.0
+# (the value those floors have always seen) and says why in ``sharpe_oos_status``; the raw figure is
+# still published as ``sharpe_oos_raw`` for people. Fixing the hard-coded 0.0 must not make a gate easier.
+MIN_OOS_DAYS = 20
+
+
+@dataclass(frozen=True)
+class OosSharpe:
+    """Out-of-sample Sharpe as measured (``raw``) and as reported to gates (``reported``)."""
+
+    raw: float
+    reported: float
+    days: int
+    status: str  # "ok" | "insufficient_oos_days" | "flat_oos_returns"
+
+
 @dataclass(frozen=True)
 class LatencyProfile:
     """D5 (2026-04-21 incident): broker latency model for live-faithful backtest.
@@ -67,6 +88,9 @@ class LatencyProfile:
 
     place_ns: int = 0
     cancel_ns: int = 0
+    # Name of the profile in config/research/latency_profiles.yaml that these numbers came
+    # from. Empty when the profile was built by hand; the result then says "unlabelled".
+    profile_id: str = ""
 
     @classmethod
     def shioaji_p95(cls) -> "LatencyProfile":
@@ -210,6 +234,7 @@ class MakerEngine:
         "_cost_model",
         "_ck_source",
         "_latency",
+        "_is_oos_split",
         "_mark_method",
         "_last_mid",
         "_last_avg_entry",
@@ -222,7 +247,11 @@ class MakerEngine:
         ck_source: ClickHouseSource | None = None,
         latency_profile: LatencyProfile | None = None,
         mark_method: str = "last_mid",
+        is_oos_split: float = DEFAULT_IS_OOS_SPLIT,
     ) -> None:
+        if not 0.0 < is_oos_split < 1.0:
+            raise ValueError(f"is_oos_split must be in (0, 1), got {is_oos_split}")
+        self._is_oos_split = is_oos_split
         self._fill_model = fill_model
         self._cost_model = cost_model
         self._ck_source = ck_source or ClickHouseSource()
@@ -350,6 +379,7 @@ class MakerEngine:
         sharpe = 0.0
         if len(daily_returns) > 1 and np.std(daily_returns) > 0:
             sharpe = float(np.mean(daily_returns) / np.std(daily_returns) * np.sqrt(252))
+        oos = self._oos_sharpe(daily_returns, self._is_oos_split)
 
         max_dd = 0.0
         peak = equity[0]
@@ -366,7 +396,7 @@ class MakerEngine:
             equity_curve=equity,
             positions=np.array([]),
             sharpe_is=sharpe,
-            sharpe_oos=0.0,
+            sharpe_oos=oos.reported,
             ic_series=np.array([]),
             ic_mean=0.0,
             ic_std=0.0,
@@ -381,7 +411,7 @@ class MakerEngine:
             capacity_estimate=0.0,
             run_id=str(uuid.uuid4())[:12],
             config_hash="",
-            latency_profile={},
+            latency_profile=self._latency_report(),
             engine_type="maker",
             fill_model=self._fill_model.label,
             cost_model=self._cost_model.label,
@@ -398,6 +428,10 @@ class MakerEngine:
                 "winning_days": winning_days,
                 "winning_day_pct": (round(winning_days / n_days * 100, 1) if n_days > 0 else 0),
                 "n_days": n_days,
+                "oos_days": oos.days,
+                "is_oos_split": self._is_oos_split,
+                "sharpe_oos_raw": oos.raw,
+                "sharpe_oos_status": oos.status,
             },
             per_spread_breakdown={str(k): v for k, v in sorted(spread_breakdown.items())},
             # Slice B Task 4 + 2026-05-29 punch list: residual decomposition.
@@ -410,6 +444,48 @@ class MakerEngine:
             trade_pnl=trade_pnl_pts if trade_pnl_pts else None,
             daily_pnl=daily_pnl,
         )
+
+    @staticmethod
+    def _oos_sharpe(daily_returns: np.ndarray, split: float) -> "OosSharpe":
+        """Annualised Sharpe of the chronologically last ``1 - split`` of the daily returns.
+
+        ``raw`` is the figure whenever the segment has at least two days that vary; ``reported``
+        is ``raw`` only from ``MIN_OOS_DAYS`` days on, else 0.0. Neither is ever NaN, which would
+        slip past ``sharpe_oos < floor`` filters.
+        """
+        n = len(daily_returns)
+        if n < 2:
+            return OosSharpe(raw=0.0, reported=0.0, days=0, status="insufficient_oos_days")
+        split_idx = max(1, min(n - 1, int(n * split)))
+        oos = np.asarray(daily_returns[split_idx:], dtype=float)
+        days = len(oos)
+        raw = float(np.mean(oos) / np.std(oos) * np.sqrt(252)) if days >= 2 and np.std(oos) > 0 else 0.0
+        if days < MIN_OOS_DAYS:
+            return OosSharpe(raw=raw, reported=0.0, days=days, status="insufficient_oos_days")
+        if not np.std(oos) > 0:
+            return OosSharpe(raw=0.0, reported=0.0, days=days, status="flat_oos_returns")
+        return OosSharpe(raw=raw, reported=raw, days=days, status="ok")
+
+    def _latency_report(self) -> dict:
+        """What latency the run actually used. Instant round-trip is reported as such, not as ``{}``."""
+        profile = self._latency
+        if profile is None:
+            return {
+                "latency_profile_id": "instant_rtt",
+                "model_applied": False,
+                "place_ns": 0,
+                "cancel_ns": 0,
+                "submit_ack_latency_ms": 0.0,
+                "cancel_ack_latency_ms": 0.0,
+            }
+        return {
+            "latency_profile_id": profile.profile_id or "unlabelled",
+            "model_applied": bool(profile.place_ns or profile.cancel_ns),
+            "place_ns": int(profile.place_ns),
+            "cancel_ns": int(profile.cancel_ns),
+            "submit_ack_latency_ms": profile.place_ns / 1_000_000,
+            "cancel_ack_latency_ms": profile.cancel_ns / 1_000_000,
+        }
 
     def _run_day(
         self,
