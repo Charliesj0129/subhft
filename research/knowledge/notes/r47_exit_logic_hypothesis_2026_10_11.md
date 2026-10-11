@@ -6,7 +6,7 @@ decides what is worth testing.
 
 ## Observation (from the 2026-10-06 post-deploy review)
 
-`strategies/r47_maker.py:961-983`: the spread, toxicity and PE gates stop `_generate_quotes` as a
+`src/hft_platform/strategies/r47_maker.py:961-983`: the spread, toxicity and PE gates stop `_generate_quotes` as a
 whole, including the quote that would unwind a held lot. With a position held, 373 of 388 gate
 samples were `blocked_by=spread`. The strategy has no exit by holding time or by loss. The largest
 single SIM loss on 10/5 was -165 pts (-1,650 NTD), held 1.9 h, and it alone triggered StormGuard STORM.
