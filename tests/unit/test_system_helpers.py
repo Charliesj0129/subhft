@@ -45,7 +45,7 @@ class TestGetMaxFeedGapS:
 
 class TestGetDrawdownPct:
     def test_has_get_drawdown_pct(self) -> None:
-        store = MagicMock()
+        store = MagicMock(spec=["get_drawdown_pct"])  # a store without the absolute-NTD reader
         store.get_drawdown_pct.return_value = -0.05
         assert HFTSystem._get_drawdown_pct(store, {}) == -0.05
 
