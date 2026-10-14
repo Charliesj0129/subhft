@@ -258,6 +258,20 @@ class TestPersistDoesNotDropFillsSilently:
             assert len(f.read().splitlines()) == 1
         registry.get.return_value.fill_dlq_persist_failed_total.inc.assert_not_called()
 
+    def test_a_new_failing_fill_is_quarantined_after_an_earlier_one_was_drained(self, tmp_path):
+        """CPython reuses the address of a freed object; keying dedup on id() hid later fills."""
+        path = str(tmp_path / "dlq.jsonl")
+        dlq = OrphanedFillDLQ(max_size=10, persist_path=path)
+        rounds = 50
+        for i in range(rounds):
+            dlq.add(self._unserializable("BAD", f"B{i}"))
+            dlq.persist()
+            dlq.drain()
+
+        with open(path + ".unserializable") as f:
+            quarantined = f.read().splitlines()
+        assert len(quarantined) == rounds
+
     def test_a_failing_quarantine_does_not_lose_the_incoming_fill(self, tmp_path):
         dlq = OrphanedFillDLQ(max_size=1, persist_path=str(tmp_path / "dlq.jsonl"))
         dlq.add(self._unserializable("BAD", "B1"))

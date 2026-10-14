@@ -678,8 +678,8 @@ class TestFillDedupLoadReportsWhatItSkips:
 
     ``_load_fill_dedup`` used to ``continue`` past any bad line with no count and
     no log, so a restart could come up with holes in its dedup window and nobody
-    could tell. A torn *last* line is the expected shape of a crash mid-write; a
-    bad line with good lines after it is real corruption.
+    could tell. The writer replaces the file atomically, so any bad line is real
+    damage; the tail/mid split only says where in the file it sits.
     """
 
     @staticmethod

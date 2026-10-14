@@ -13,6 +13,7 @@ from hft_platform.observability.metrics import MetricsRegistry
 logger = get_logger("execution.fill_dlq")
 
 _DEFAULT_PERSIST_PATH = ".state/fill_dlq.jsonl"
+_MAX_QUARANTINE_TRACKED = 10_000
 
 
 class OrphanedFillDLQ:
@@ -23,9 +24,12 @@ class OrphanedFillDLQ:
         self._max_size = max_size
         self._persist_path: str = persist_path or os.getenv("HFT_FILL_DLQ_PERSIST_PATH") or _DEFAULT_PERSIST_PATH
         self._overflow_evicted: list[Any] = []
-        # id() of fills already written to the sidecar: an evicted fill stays in
+        # Fills already written to the sidecar, keyed by id(): an evicted fill stays in
         # ``_overflow_evicted`` and would otherwise be quarantined again by every persist().
-        self._quarantined_ids: set[int] = set()
+        # The value holds the fill itself so its id() cannot be reused by a later object
+        # while the entry exists; bounded FIFO (a re-quarantine after eviction is only a
+        # duplicate sidecar line, never a lost fill).
+        self._quarantined_ids: dict[int, Any] = {}
 
     def add(self, fill_event: Any) -> None:
         if len(self._queue) == self._max_size:
@@ -76,7 +80,10 @@ class OrphanedFillDLQ:
             fresh = [fill for fill in fills if id(fill) not in self._quarantined_ids]
             if not fresh:
                 return
-            self._quarantined_ids.update(id(fill) for fill in fresh)
+            for fill in fresh:
+                self._quarantined_ids[id(fill)] = fill
+            while len(self._quarantined_ids) > _MAX_QUARANTINE_TRACKED:
+                del self._quarantined_ids[next(iter(self._quarantined_ids))]
             MetricsRegistry.get().fill_dlq_persist_failed_total.inc(len(fresh))
             sidecar = self._persist_path + ".unserializable"
             try:
