@@ -363,8 +363,8 @@ class SymbolMetadata:
         one. It used to be (``1 / tick_size``), so a futures entry with
         ``tick_size: 1`` and no ``price_scale`` resolved to scale 1 and every
         price of that symbol was read 10,000 times too small. Event prices are
-        x10000 (Law 4). A symbol without ``price_scale`` is logged once; the
-        result is cached, so this runs once per symbol, not per tick.
+        x10000 (Law 4). A symbol with a ``tick_size`` but no ``price_scale`` is logged once
+        per load; the result is cached, so this runs once per symbol, not per tick.
         """
         cached = self._price_scale_cache.get(symbol)
         if cached is not None:
@@ -376,7 +376,10 @@ class SymbolMetadata:
                 scale = int(raw)
                 self._price_scale_cache[symbol] = scale
                 return scale
-            logger.warning("price_scale_missing_default_used", symbol=symbol, default=self.DEFAULT_SCALE)
+            if entry.get("tick_size") is not None:
+                # Only a row that carries a tick but no scale changed meaning (it used to resolve to 1/tick);
+                # rows with neither were always x10000 and would just repeat on every reload.
+                logger.warning("price_scale_missing_default_used", symbol=symbol, default=self.DEFAULT_SCALE)
         self._price_scale_cache[symbol] = self.DEFAULT_SCALE
         return self.DEFAULT_SCALE
 

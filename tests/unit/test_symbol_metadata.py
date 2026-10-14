@@ -1,6 +1,7 @@
 import os
 import time
 from pathlib import Path
+from unittest.mock import patch
 
 import yaml
 
@@ -60,3 +61,22 @@ def test_symbol_metadata_reload_if_changed(tmp_path: Path) -> None:
     assert meta.reload_if_changed() is True
     assert meta.symbols_for_tags(["tw50"]) == set()
     assert meta.symbols_for_tags(["new"]) == {"CCC"}
+
+
+def test_price_scale_warns_for_a_tick_only_row_but_not_for_a_bare_row(tmp_path: Path) -> None:
+    config = tmp_path / "symbols.yaml"
+    _write_config(
+        config,
+        [
+            {"code": "TICKONLY", "exchange": "FUT", "tick_size": 1},
+            {"code": "BARE", "exchange": "TSE"},
+        ],
+    )
+    with patch("hft_platform.feed_adapter.normalizer.logger") as log:
+        meta = SymbolMetadata(config_path=str(config))
+        assert meta.price_scale("TICKONLY") == SymbolMetadata.DEFAULT_SCALE
+        assert meta.price_scale("TICKONLY") == SymbolMetadata.DEFAULT_SCALE
+        assert meta.price_scale("BARE") == SymbolMetadata.DEFAULT_SCALE
+
+    warned = [call.kwargs.get("symbol") for call in log.warning.call_args_list]
+    assert warned == ["TICKONLY"]
