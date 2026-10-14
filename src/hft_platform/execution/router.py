@@ -223,7 +223,16 @@ class ExecutionRouter:
         self._overflow_buf = buf
 
     def _load_fill_dedup(self) -> None:
-        """Load fill dedup window from disk on startup (restart-safe dedup)."""
+        """Load fill dedup window from disk on startup (restart-safe dedup).
+
+        A damaged line leaves a hole in the window, so a replayed fill with that
+        key would be booked twice. Skips are therefore counted and logged, split
+        by where they sit: an unreadable *last* line is the expected shape of a
+        crash mid-write (``tail``); one with good lines after it is corruption
+        (``mid``). Dedup behaviour itself is unchanged.
+        """
+        self._fill_dedup_load_tail_skipped = 0
+        self._fill_dedup_load_mid_skipped = 0
         path = self._fill_dedup_persist_path
         if not os.path.exists(path):
             return
@@ -232,20 +241,34 @@ class ExecutionRouter:
 
             loaded = 0
             with open(path, "rb") as f:
-                for raw in f:
-                    raw = raw.strip()
-                    if not raw:
-                        continue
-                    try:
-                        key = orjson.loads(raw)
-                        if isinstance(key, str) and key:
-                            self._seen_fill_ids[key] = None
-                            loaded += 1
-                    except Exception:
-                        continue
+                lines = [raw.strip() for raw in f]
+            lines = [raw for raw in lines if raw]
+            last = len(lines) - 1
+            for idx, raw in enumerate(lines):
+                try:
+                    key = orjson.loads(raw)
+                except orjson.JSONDecodeError:
+                    key = None
+                if isinstance(key, str) and key:
+                    self._seen_fill_ids[key] = None
+                    loaded += 1
+                elif idx == last:
+                    self._fill_dedup_load_tail_skipped += 1
+                else:
+                    self._fill_dedup_load_mid_skipped += 1
             # Enforce max size
             while len(self._seen_fill_ids) > self._fill_dedup_max_size:
                 self._seen_fill_ids.popitem(last=False)
+            if self._fill_dedup_load_mid_skipped:
+                logger.error(
+                    "fill_dedup_load_corrupt_lines",
+                    mid_skipped=self._fill_dedup_load_mid_skipped,
+                    tail_skipped=self._fill_dedup_load_tail_skipped,
+                    loaded=loaded,
+                    path=path,
+                )
+            elif self._fill_dedup_load_tail_skipped:
+                logger.warning("fill_dedup_load_torn_tail", loaded=loaded, path=path)
             logger.info("fill_dedup_loaded", count=loaded, path=path)
         except Exception as exc:
             logger.warning("fill_dedup_load_failed", error=str(exc), path=path)

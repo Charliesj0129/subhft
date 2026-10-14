@@ -57,6 +57,31 @@ class OrphanedFillDLQ:
                 f.write(orjson.dumps(row) + b"\n")
         except Exception as exc:
             logger.error("fill_dlq_persist_single_failed", error=str(exc))
+            self._quarantine([fill_event])
+
+    def _quarantine(self, fills: list[Any]) -> None:
+        """Keep fills that could not be serialised in ``<persist_path>.unserializable``.
+
+        A fill is money. Dropping one because a field would not serialise made it
+        vanish with only a log line; the ``repr`` here lets an operator rebuild it
+        by hand. The count is exported so an alert can fire on it.
+        """
+        MetricsRegistry.get().fill_dlq_persist_failed_total.inc(len(fills))
+        sidecar = self._persist_path + ".unserializable"
+        try:
+            os.makedirs(os.path.dirname(sidecar) or ".", exist_ok=True)
+            with open(sidecar, "a", encoding="utf-8") as f:
+                for fill in fills:
+                    f.write(repr(fill) + "\n")
+        except OSError as exc:
+            logger.error("fill_dlq_quarantine_failed", error=str(exc), path=sidecar, count=len(fills))
+        for fill in fills:
+            logger.error(
+                "fill_dlq_fill_unserializable",
+                fill_id=getattr(fill, "fill_id", ""),
+                order_id=getattr(fill, "order_id", ""),
+                symbol=getattr(fill, "symbol", ""),
+            )
 
     @property
     def count(self) -> int:
@@ -91,11 +116,14 @@ class OrphanedFillDLQ:
             self._queue.append(f)
         return resolved, still_orphaned
 
-    def persist(self) -> None:
+    def persist(self) -> tuple[int, int]:
         """Persist DLQ to disk atomically (temp+fsync+rename).
 
         Called during graceful shutdown so orphaned fills survive restart.
         Includes overflow-evicted fills that were too old for the in-memory deque.
+
+        Returns ``(written, failed)``. A fill that cannot be serialised is not
+        written to the main file but is quarantined (see :meth:`_quarantine`).
         """
         path = self._persist_path
         snapshot = list(self._overflow_evicted) + list(self._queue)
@@ -103,7 +131,9 @@ class OrphanedFillDLQ:
             # Remove stale file if queue is empty
             if os.path.exists(path):
                 os.unlink(path)
-            return
+            return (0, 0)
+        written = 0
+        failed: list[Any] = []
         try:
             import orjson
 
@@ -118,9 +148,12 @@ class OrphanedFillDLQ:
                         try:
                             row = asdict(fill)
                             # Side is IntEnum — orjson handles it natively
-                            f.write(orjson.dumps(row) + b"\n")
+                            line = orjson.dumps(row) + b"\n"
                         except Exception:
+                            failed.append(fill)
                             continue
+                        f.write(line)
+                        written += 1
                     f.flush()
                     os.fsync(f.fileno())
                 os.rename(tmp_path, path)
@@ -130,22 +163,26 @@ class OrphanedFillDLQ:
                         os.unlink(tmp_path)
                     except OSError:
                         pass
-            logger.info("fill_dlq_persisted", count=len(snapshot), path=path)
+            if failed:
+                self._quarantine(failed)
+            logger.info("fill_dlq_persisted", written=written, failed=len(failed), path=path)
         except Exception as exc:
             logger.warning("fill_dlq_persist_failed", error=str(exc), path=path)
+        return (written, len(failed))
 
-    def load(self) -> None:
-        """Load DLQ from disk on startup."""
+    def load(self) -> tuple[int, int]:
+        """Load DLQ from disk on startup. Returns ``(loaded, skipped)``."""
         path = self._persist_path
         if not os.path.exists(path):
-            return
+            return (0, 0)
+        loaded = 0
+        skipped = 0
         try:
             import orjson
 
             from hft_platform.contracts.execution import FillEvent
             from hft_platform.contracts.strategy import Side
 
-            loaded = 0
             with open(path, "rb") as f:
                 for raw in f:
                     raw = raw.strip()
@@ -154,16 +191,21 @@ class OrphanedFillDLQ:
                     try:
                         obj = orjson.loads(raw)
                         if not isinstance(obj, dict):
+                            skipped += 1
                             continue
                         obj["side"] = Side(obj["side"])
                         fill = FillEvent(**obj)
                         self._queue.append(fill)
                         loaded += 1
                     except Exception:
+                        skipped += 1
                         continue
-            logger.info("fill_dlq_loaded", count=loaded, path=path)
+            if skipped:
+                logger.error("fill_dlq_load_skipped_lines", loaded=loaded, skipped=skipped, path=path)
+            logger.info("fill_dlq_loaded", count=loaded, skipped=skipped, path=path)
         except Exception as exc:
             logger.warning("fill_dlq_load_failed", error=str(exc), path=path)
+        return (loaded, skipped)
 
 
 _dlq: OrphanedFillDLQ | None = None

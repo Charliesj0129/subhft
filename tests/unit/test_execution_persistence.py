@@ -671,3 +671,40 @@ class TestFillDedupCheckpointDurability:
         router, _ = self._make_router(tmp_path)
         await asyncio.wait_for(router.flush_fill_dedup(), timeout=1.0)
         assert router._fill_dedup_persist_futures == set()
+
+
+class TestFillDedupLoadReportsWhatItSkips:
+    """K3: a damaged dedup checkpoint must say how much of the window is gone.
+
+    ``_load_fill_dedup`` used to ``continue`` past any bad line with no count and
+    no log, so a restart could come up with holes in its dedup window and nobody
+    could tell. A torn *last* line is the expected shape of a crash mid-write; a
+    bad line with good lines after it is real corruption.
+    """
+
+    @staticmethod
+    def _router_loading(tmp_path, payload: bytes):
+        (tmp_path / "fill_dedup.jsonl").write_bytes(payload)
+        router, _ = TestFillDedupPersistence()._make_router(tmp_path)
+        return router
+
+    def test_dedup_load_distinguishes_truncated_tail_from_mid_file_corruption(self, tmp_path):
+        router = self._router_loading(tmp_path, b'"k1"\ngarbage\n"k2"\n"k3')
+
+        assert list(router._seen_fill_ids) == ["k1", "k2"]
+        assert router._fill_dedup_load_mid_skipped == 1
+        assert router._fill_dedup_load_tail_skipped == 1
+
+    def test_dedup_load_counts_entries_that_are_not_keys_as_corruption(self, tmp_path):
+        router = self._router_loading(tmp_path, b'123\n"k1"\n"k2"\n')
+
+        assert list(router._seen_fill_ids) == ["k1", "k2"]
+        assert router._fill_dedup_load_mid_skipped == 1
+        assert router._fill_dedup_load_tail_skipped == 0
+
+    def test_dedup_load_of_a_clean_file_reports_no_skips(self, tmp_path):
+        router = self._router_loading(tmp_path, b'"k1"\n\n"k2"\n')
+
+        assert list(router._seen_fill_ids) == ["k1", "k2"]
+        assert router._fill_dedup_load_mid_skipped == 0
+        assert router._fill_dedup_load_tail_skipped == 0

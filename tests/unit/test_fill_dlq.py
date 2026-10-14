@@ -1,6 +1,7 @@
 """Tests for orphaned fill DLQ (WU-03)."""
 
-from unittest.mock import MagicMock
+import os
+from unittest.mock import MagicMock, patch
 
 from hft_platform.contracts.execution import FillEvent
 from hft_platform.contracts.strategy import Side
@@ -167,3 +168,92 @@ class TestOverflowEvictionPersistence:
         # All 5 should be recoverable (3 evicted + 2 in-memory)
         for i in range(5):
             assert f"SYM{i}" in symbols, f"SYM{i} lost"
+
+
+class TestPersistDoesNotDropFillsSilently:
+    """K2: a fill that cannot be serialised must be quarantined and counted.
+
+    ``persist()`` used to ``continue`` past a bad row and then rename the file
+    over the previous one, so the fill vanished and the log still reported the
+    snapshot size as if everything had been written.
+    """
+
+    @staticmethod
+    def _unserializable(symbol: str, order_id: str) -> FillEvent:
+        fill = _make_fill(symbol, order_id)
+        fill.price = 2**70  # orjson rejects integers beyond 64 bits
+        return fill
+
+    def test_persist_reports_an_unserializable_fill_instead_of_dropping_it(self, tmp_path):
+        path = str(tmp_path / "dlq.jsonl")
+        dlq = OrphanedFillDLQ(max_size=10, persist_path=path)
+        dlq.add(_make_fill("GOOD", "G1"))
+        dlq.add(self._unserializable("BAD", "B1"))
+
+        written, failed = dlq.persist()
+
+        assert (written, failed) == (1, 1)
+        with open(path + ".unserializable") as f:
+            quarantined = f.read()
+        assert "B1" in quarantined
+        reloaded = OrphanedFillDLQ(max_size=10, persist_path=path)
+        loaded, skipped = reloaded.load()
+        assert (loaded, skipped) == (1, 0)
+        assert [fill.symbol for fill in reloaded.drain()] == ["GOOD"]
+
+    def test_persist_counts_the_fills_it_could_not_write(self, tmp_path):
+        dlq = OrphanedFillDLQ(max_size=10, persist_path=str(tmp_path / "dlq.jsonl"))
+        dlq.add(self._unserializable("BAD", "B1"))
+
+        with patch("hft_platform.execution.fill_dlq.MetricsRegistry") as registry:
+            dlq.persist()
+
+        registry.get.return_value.fill_dlq_persist_failed_total.inc.assert_called_once_with(1)
+
+    def test_persist_of_a_clean_queue_leaves_no_quarantine_file(self, tmp_path):
+        path = str(tmp_path / "dlq.jsonl")
+        dlq = OrphanedFillDLQ(max_size=10, persist_path=path)
+        dlq.add(_make_fill("GOOD", "G1"))
+
+        written, failed = dlq.persist()
+
+        assert (written, failed) == (1, 0)
+        assert not os.path.exists(path + ".unserializable")
+
+    def test_overflow_eviction_of_an_unserializable_fill_is_quarantined(self, tmp_path):
+        path = str(tmp_path / "dlq.jsonl")
+        dlq = OrphanedFillDLQ(max_size=1, persist_path=path)
+        dlq.add(self._unserializable("BAD", "B1"))
+
+        dlq.add(_make_fill("GOOD", "G1"))  # evicts BAD -> _persist_single(BAD)
+
+        with open(path + ".unserializable") as f:
+            assert "B1" in f.read()
+
+    def test_load_counts_the_corrupt_lines_it_skips(self, tmp_path):
+        import orjson
+
+        path = tmp_path / "dlq.jsonl"
+        good = orjson.dumps(
+            {
+                "fill_id": "f1",
+                "account_id": "A",
+                "order_id": "O1",
+                "strategy_id": "s",
+                "symbol": "GOOD",
+                "side": 1,
+                "qty": 1,
+                "price": 1,
+                "fee": 0,
+                "tax": 0,
+                "ingest_ts_ns": 0,
+                "match_ts_ns": 0,
+            }
+        )
+        path.write_bytes(good + b"\n{not json\n" + b'{"side": 99}\n' + good + b"\n")
+        dlq = OrphanedFillDLQ(max_size=10, persist_path=str(path))
+
+        loaded, skipped = dlq.load()
+
+        assert (loaded, skipped) == (2, 2)
+        assert dlq.count == 2
