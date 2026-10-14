@@ -432,6 +432,27 @@ class TestPersistDoesNotDropFillsSilently:
         assert open(path, "rb").read() == old_bytes
         assert dlq.last_unrecovered > 0
 
+    def test_persist_parks_the_new_file_when_it_cannot_replace_the_main_file(self, tmp_path):
+        """Unwritable sidecar plus a failing backup link: the serialised fills must survive on disk."""
+        path = str(tmp_path / "dlq.jsonl")
+        seed = OrphanedFillDLQ(max_size=10, persist_path=path)
+        seed.add(_make_fill("OLD", "O1"))
+        seed.persist()
+        old_bytes = open(path, "rb").read()
+        dlq = OrphanedFillDLQ(max_size=10, persist_path=path)
+        dlq.load()
+        dlq.add(_make_fill("NEW", "N1"))
+        dlq.add(self._unserializable("BAD", "B1"))
+        os.mkdir(path + ".unserializable")
+
+        with patch("hft_platform.execution.fill_dlq.os.link", side_effect=OSError(28, "ENOSPC")):
+            dlq.persist()
+
+        assert open(path, "rb").read() == old_bytes
+        parked = list(tmp_path.glob("dlq.jsonl.pending.*"))
+        assert any(b"N1" in p.read_bytes() for p in parked)
+        assert not list(tmp_path.glob("*.tmp"))
+
     def test_persist_syncs_the_directory_holding_the_copies_before_it_renames_the_main_file(self, tmp_path):
         """A new sidecar or backup name is lost on power failure unless its parent directory is fsynced."""
         path = str(tmp_path / "dlq.jsonl")

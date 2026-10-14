@@ -249,6 +249,9 @@ class OrphanedFillDLQ:
                     # The old main file is the only other place these fills may still be: keep
                     # it beside the new one instead of renaming over it.
                     if not self._keep_previous_main_file(path):
+                        # The old main file stays, so this fsynced temp file is the only copy of
+                        # the fills that serialised: park it under a name nothing deletes.
+                        self._park_unreplaced_file(tmp_path, path)
                         raise OSError("could not preserve the previous DLQ file; leaving it in place")
                 os.rename(tmp_path, path)
                 renamed = True
@@ -274,6 +277,20 @@ class OrphanedFillDLQ:
             return (0, len(snapshot))
         self.last_unrecovered = unrecovered
         return (written, len(failed))
+
+    @classmethod
+    def _park_unreplaced_file(cls, tmp_path: str, path: str) -> None:
+        """Rename the fsynced temp file to ``<path>.pending.<ns>`` so the cleanup in persist() cannot delete it."""
+        parked = f"{path}.pending.{timebase.now_ns()}"
+        try:
+            os.rename(tmp_path, parked)
+            logger.critical("fill_dlq_new_file_parked", path=parked, main=path)
+            try:
+                cls._fsync_dir(os.path.dirname(parked))
+            except OSError as exc:
+                logger.error("fill_dlq_dir_sync_failed", error=str(exc), path=parked)
+        except OSError as exc:
+            logger.error("fill_dlq_park_failed", error=str(exc), path=tmp_path)
 
     @classmethod
     def _keep_previous_main_file(cls, path: str) -> bool:
