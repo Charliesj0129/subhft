@@ -27,6 +27,7 @@ class OrphanedFillDLQ:
         "_quarantined_ids",
         "_sidecar_unsynced",
         "last_unrecovered",
+        "_pending_sources",
     )
 
     def __init__(self, max_size: int = 1000, persist_path: str | None = None) -> None:
@@ -44,6 +45,8 @@ class OrphanedFillDLQ:
         self._sidecar_unsynced = False
         # Fills the last persist() could neither write to the main file nor keep durably in the sidecar.
         self.last_unrecovered = 0
+        # Parked files read by load() and not yet covered by a successful persist(); see persist().
+        self._pending_sources: list[str] = []
 
     def add(self, fill_event: Any) -> None:
         if len(self._queue) == self._max_size:
@@ -279,7 +282,18 @@ class OrphanedFillDLQ:
             self.last_unrecovered = unrecovered
             return (0, len(snapshot))
         self.last_unrecovered = unrecovered
+        if not unrecovered:
+            self._mark_pending_consumed()
         return (written, len(failed))
+
+    def _mark_pending_consumed(self) -> None:
+        """Rename recovered ``.pending.*`` files ``.loaded`` once the main file carries their fills."""
+        for source in self._pending_sources:
+            try:
+                os.rename(source, source + ".loaded")
+            except OSError as exc:
+                logger.error("fill_dlq_pending_mark_failed", error=str(exc), path=source)
+        self._pending_sources = []
 
     @classmethod
     def _park_unreplaced_file(cls, tmp_path: str, path: str) -> bool:
@@ -339,20 +353,27 @@ class OrphanedFillDLQ:
         for source in [path, *sorted(glob.glob(glob.escape(path) + ".pending.*"))]:
             if source.endswith(".loaded") or not os.path.exists(source):
                 continue
-            file_loaded, file_skipped = self._load_file(source, seen, dedupe=source != path)
+            file_loaded, file_skipped, complete = self._load_file(source, seen, dedupe=source != path)
             loaded += file_loaded
             skipped += file_skipped
             if source != path:
-                try:
-                    os.rename(source, source + ".loaded")
-                except OSError as exc:
-                    logger.error("fill_dlq_pending_mark_failed", error=str(exc), path=source)
-                logger.critical("fill_dlq_pending_recovered", path=source, loaded=file_loaded, skipped=file_skipped)
+                # Not marked consumed here: the fills are only in memory until persist() writes them
+                # to the main file. A read that failed part-way is never marked at all.
+                if complete and source not in self._pending_sources:
+                    self._pending_sources.append(source)
+                logger.critical(
+                    "fill_dlq_pending_recovered",
+                    path=source,
+                    loaded=file_loaded,
+                    skipped=file_skipped,
+                    complete=complete,
+                )
         return (loaded, skipped)
 
-    def _load_file(self, path: str, seen: set[str], dedupe: bool) -> tuple[int, int]:
+    def _load_file(self, path: str, seen: set[str], dedupe: bool) -> tuple[int, int, bool]:
         loaded = 0
         skipped = 0
+        complete = True
         try:
             import orjson
 
@@ -375,6 +396,9 @@ class OrphanedFillDLQ:
                         if dedupe and fill_key in seen:
                             continue  # a parked file repeats what the main file already carried
                         seen.add(fill_key)
+                        if len(self._queue) == self._max_size:
+                            # Already on disk; keep it for persist() instead of letting the deque drop it.
+                            self._overflow_evicted.append(self._queue[0])
                         self._queue.append(fill)
                         loaded += 1
                     except Exception:
@@ -385,7 +409,8 @@ class OrphanedFillDLQ:
             logger.info("fill_dlq_loaded", count=loaded, skipped=skipped, path=path)
         except Exception as exc:
             logger.warning("fill_dlq_load_failed", error=str(exc), path=path)
-        return (loaded, skipped)
+            complete = False
+        return (loaded, skipped, complete)
 
 
 _dlq: OrphanedFillDLQ | None = None
