@@ -38,7 +38,8 @@ def test_symbol_metadata_load_and_lookups(tmp_path: Path) -> None:
     assert meta.symbols_for_tags(["tw50"]) == {"AAA"}
     assert meta.symbols_for_tags(["fut", "index"]) == {"BBB"}
     assert meta.price_scale("AAA") == 100
-    assert meta.price_scale("BBB") == 2
+    # tick_size is a price step, not a scale: BBB has no price_scale, so it gets the x10000 default.
+    assert meta.price_scale("BBB") == SymbolMetadata.DEFAULT_SCALE
     assert meta.exchange("BBB") == "FUT"
     assert meta.product_type("AAA") == "stock"
     assert meta.product_type("BBB") == "future"
