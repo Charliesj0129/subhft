@@ -131,6 +131,9 @@ class OrphanedFillDLQ:
             self._sidecar_unsynced = False
         except OSError as exc:
             logger.error("fill_dlq_quarantine_sync_failed", error=str(exc), path=sidecar)
+            # Nothing in the sidecar is known durable: make every fill eligible again so the
+            # persist() that called us rewrites and fsyncs them before it renames the main file.
+            self._quarantined_ids.clear()
 
     @property
     def count(self) -> int:

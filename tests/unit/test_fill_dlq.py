@@ -341,6 +341,30 @@ class TestPersistDoesNotDropFillsSilently:
 
         assert os.stat(sidecar).st_ino in synced_inodes
 
+    def test_persist_rewrites_the_sidecar_durably_when_its_fsync_failed(self, tmp_path):
+        """A failed sidecar fsync must not let persist() rename the main file over the only copy."""
+        path = str(tmp_path / "dlq.jsonl")
+        sidecar = path + ".unserializable"
+        dlq = OrphanedFillDLQ(max_size=1, persist_path=path)
+        dlq.add(self._unserializable("BAD", "B1"))
+        dlq.add(_make_fill("GOOD", "G1"))  # evicts BAD -> flush-only quarantine
+        real_fsync = os.fsync
+        sidecar_syncs: list[bool] = []
+
+        def _fsync(fd):
+            if os.fstat(fd).st_ino == os.stat(sidecar).st_ino:
+                sidecar_syncs.append(True)
+                if len(sidecar_syncs) == 1:
+                    raise OSError(5, "EIO")
+            real_fsync(fd)
+
+        with patch("hft_platform.execution.fill_dlq.os.fsync", _fsync):
+            dlq.persist()
+
+        assert len(sidecar_syncs) == 2  # the failed sync, then a durable rewrite
+        with open(sidecar) as f:
+            assert "B1" in f.read()
+
     def test_load_counts_the_corrupt_lines_it_skips(self, tmp_path):
         import orjson
 
