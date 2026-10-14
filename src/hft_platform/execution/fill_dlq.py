@@ -64,9 +64,10 @@ class OrphanedFillDLQ:
                 f.write(orjson.dumps(row) + b"\n")
         except Exception as exc:
             logger.error("fill_dlq_persist_single_failed", error=str(exc))
-            self._quarantine([fill_event])
+            # add() runs on the event loop: flush only, like the main-file append above.
+            self._quarantine([fill_event], durable=False)
 
-    def _quarantine(self, fills: list[Any]) -> None:
+    def _quarantine(self, fills: list[Any], durable: bool = True) -> None:
         """Keep fills that did not reach the main file in ``<persist_path>.unserializable``.
 
         A fill is money. Dropping one because a field would not serialise, or
@@ -75,16 +76,20 @@ class OrphanedFillDLQ:
         exported so an alert can fire on it. Never raises: it runs on the
         ``add()`` path and during shutdown, where a second failure must not
         cost the fill that is still in memory.
+
+        A fill counts as quarantined only after the sidecar write succeeded; a
+        failed write (ENOSPC, EIO) leaves it eligible, so the next ``persist()``
+        retries it. ``durable=False`` skips the fsync for callers on the event
+        loop (``add()``), where a slow disk must not stall fill processing.
         """
         try:
             fresh = [fill for fill in fills if id(fill) not in self._quarantined_ids]
             if not fresh:
                 return
-            for fill in fresh:
-                self._quarantined_ids[id(fill)] = fill
-            while len(self._quarantined_ids) > _MAX_QUARANTINE_TRACKED:
-                del self._quarantined_ids[next(iter(self._quarantined_ids))]
-            MetricsRegistry.get().fill_dlq_persist_failed_total.inc(len(fresh))
+            try:
+                MetricsRegistry.get().fill_dlq_persist_failed_total.inc(len(fresh))
+            except Exception as exc:  # noqa: BLE001 -- a metrics fault must not stop the sidecar write
+                logger.error("fill_dlq_quarantine_metric_failed", error=str(exc))
             sidecar = self._persist_path + ".unserializable"
             try:
                 os.makedirs(os.path.dirname(sidecar) or ".", exist_ok=True)
@@ -92,9 +97,15 @@ class OrphanedFillDLQ:
                     for fill in fresh:
                         f.write(repr(fill) + "\n")
                     f.flush()
-                    os.fsync(f.fileno())
+                    if durable:
+                        os.fsync(f.fileno())
             except OSError as exc:
                 logger.error("fill_dlq_quarantine_failed", error=str(exc), path=sidecar, count=len(fresh))
+            else:
+                for fill in fresh:
+                    self._quarantined_ids[id(fill)] = fill
+                while len(self._quarantined_ids) > _MAX_QUARANTINE_TRACKED:
+                    del self._quarantined_ids[next(iter(self._quarantined_ids))]
             for fill in fresh:
                 logger.error(
                     "fill_dlq_fill_not_persisted",

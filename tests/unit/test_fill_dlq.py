@@ -283,6 +283,45 @@ class TestPersistDoesNotDropFillsSilently:
 
         assert [fill.symbol for fill in dlq.drain()] == ["GOOD"]
 
+    def test_a_failed_quarantine_write_is_retried_by_the_next_persist(self, tmp_path):
+        """ENOSPC on the sidecar must not mark the fill as safe: the next persist() retries it."""
+        path = str(tmp_path / "dlq.jsonl")
+        sidecar = path + ".unserializable"
+        dlq = OrphanedFillDLQ(max_size=10, persist_path=path)
+        dlq.add(self._unserializable("BAD", "B1"))
+        os.mkdir(sidecar)  # open(sidecar, "a") now raises IsADirectoryError, an OSError
+
+        dlq.persist()
+        os.rmdir(sidecar)
+        dlq.persist()
+
+        with open(sidecar) as f:
+            assert "B1" in f.read()
+
+    def test_a_failing_metric_does_not_stop_the_quarantine_write(self, tmp_path):
+        path = str(tmp_path / "dlq.jsonl")
+        dlq = OrphanedFillDLQ(max_size=10, persist_path=path)
+        dlq.add(self._unserializable("BAD", "B1"))
+
+        with patch("hft_platform.execution.fill_dlq.MetricsRegistry") as registry:
+            registry.get.return_value.fill_dlq_persist_failed_total.inc.side_effect = RuntimeError("registry gone")
+            dlq.persist()
+
+        with open(path + ".unserializable") as f:
+            assert "B1" in f.read()
+
+    def test_overflow_quarantine_on_the_event_loop_does_not_fsync(self, tmp_path):
+        """add() runs on the loop: a slow disk must not stall it on the failure path."""
+        dlq = OrphanedFillDLQ(max_size=1, persist_path=str(tmp_path / "dlq.jsonl"))
+        dlq.add(self._unserializable("BAD", "B1"))
+
+        with patch("hft_platform.execution.fill_dlq.os.fsync") as fsync:
+            dlq.add(_make_fill("GOOD", "G1"))  # evicts BAD -> _persist_single fails -> quarantine
+
+        fsync.assert_not_called()
+        with open(str(tmp_path / "dlq.jsonl") + ".unserializable") as f:
+            assert "B1" in f.read()
+
     def test_load_counts_the_corrupt_lines_it_skips(self, tmp_path):
         import orjson
 

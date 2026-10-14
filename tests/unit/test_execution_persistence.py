@@ -708,3 +708,30 @@ class TestFillDedupLoadReportsWhatItSkips:
         assert list(router._seen_fill_ids) == ["k1", "k2"]
         assert router._fill_dedup_load_mid_skipped == 0
         assert router._fill_dedup_load_tail_skipped == 0
+
+    def test_dedup_load_keeps_the_keys_read_before_an_io_error(self, tmp_path):
+        """EIO halfway through must not blank the window: those fills are already booked."""
+        path = str(tmp_path / "fill_dedup.jsonl")
+        router, _ = TestFillDedupPersistence()._make_router(tmp_path)
+        (tmp_path / "fill_dedup.jsonl").write_bytes(b'"k1"\n"k2"\n"k3"\n')
+        real_open = open
+
+        class _FailsAfterTwoLines:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def __iter__(self):
+                yield b'"k1"\n'
+                yield b'"k2"\n'
+                raise OSError("EIO")
+
+        def _open(file, *args, **kwargs):
+            return _FailsAfterTwoLines() if str(file) == path else real_open(file, *args, **kwargs)
+
+        with patch("builtins.open", _open):
+            router._load_fill_dedup()
+
+        assert list(router._seen_fill_ids) == ["k1", "k2"]

@@ -242,22 +242,31 @@ class ExecutionRouter:
             import orjson
 
             loaded = 0
-            with open(path, "rb") as f:
-                lines = [raw.strip() for raw in f]
-            lines = [raw for raw in lines if raw]
-            last = len(lines) - 1
-            for idx, raw in enumerate(lines):
-                try:
-                    key = orjson.loads(raw)
-                except orjson.JSONDecodeError:
-                    key = None
-                if isinstance(key, str) and key:
-                    self._seen_fill_ids[key] = None
-                    loaded += 1
-                elif idx == last:
+            # Stream, holding one bad line back until the next line shows whether it was
+            # the last: keys read before an I/O error stay in the window (those fills are
+            # already booked), and the tail/mid split still needs no second pass.
+            pending_bad = False
+            try:
+                with open(path, "rb") as f:
+                    for raw in f:
+                        raw = raw.strip()
+                        if not raw:
+                            continue
+                        if pending_bad:
+                            self._fill_dedup_load_mid_skipped += 1
+                            pending_bad = False
+                        try:
+                            key = orjson.loads(raw)
+                        except orjson.JSONDecodeError:
+                            key = None
+                        if isinstance(key, str) and key:
+                            self._seen_fill_ids[key] = None
+                            loaded += 1
+                        else:
+                            pending_bad = True
+            finally:
+                if pending_bad:
                     self._fill_dedup_load_tail_skipped += 1
-                else:
-                    self._fill_dedup_load_mid_skipped += 1
             # Enforce max size
             while len(self._seen_fill_ids) > self._fill_dedup_max_size:
                 self._seen_fill_ids.popitem(last=False)
