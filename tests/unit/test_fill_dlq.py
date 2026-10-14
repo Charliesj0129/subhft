@@ -451,6 +451,17 @@ class TestPersistDoesNotDropFillsSilently:
         assert open(path, "rb").read() == old_bytes
         assert any(b"N1" in t.read_bytes() for t in tmp_path.glob("*.tmp"))
 
+    def test_persist_reports_fills_as_not_durable_when_the_final_directory_sync_fails(self, tmp_path):
+        path = str(tmp_path / "dlq.jsonl")
+        dlq = OrphanedFillDLQ(max_size=10, persist_path=path)
+        dlq.add(_make_fill("GOOD", "G1"))
+
+        with patch.object(OrphanedFillDLQ, "_fsync_dir", staticmethod(_raise_eio)):
+            written, failed = dlq.persist()
+
+        assert (written, failed) == (1, 0)
+        assert dlq.last_unrecovered == 1
+
     def test_persist_syncs_the_directory_holding_the_copies_before_it_renames_the_main_file(self, tmp_path):
         """A new sidecar or backup name is lost on power failure unless its parent directory is fsynced."""
         path = str(tmp_path / "dlq.jsonl")

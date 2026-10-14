@@ -260,7 +260,10 @@ class OrphanedFillDLQ:
                 try:
                     self._fsync_dir(persist_dir)
                 except OSError as exc:
-                    logger.warning("fill_dlq_dir_sync_failed", error=str(exc), path=persist_dir)
+                    # The rename may not survive a power cut: report these fills as not durable
+                    # so shutdown logs it, instead of a clean (written, 0).
+                    logger.error("fill_dlq_dir_sync_failed", error=str(exc), path=persist_dir)
+                    unrecovered = max(unrecovered, written)
             finally:
                 if not keep_tmp and os.path.exists(tmp_path):
                     try:
