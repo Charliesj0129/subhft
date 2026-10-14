@@ -1793,7 +1793,7 @@ class MetricsRegistry:
         )
         self.fill_dlq_persist_failed_total = Counter(
             _pn("fill_dlq_persist_failed_total"),
-            "Orphaned fills that could not be serialised and were quarantined instead of persisted",
+            "Orphaned fills quarantined because they could not be serialised or written to the DLQ file",
         )
         self.deferred_terminal_overflow_total = Counter(
             _pn("deferred_terminal_overflow_total"),

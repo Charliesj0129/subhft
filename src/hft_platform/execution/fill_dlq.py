@@ -16,13 +16,16 @@ _DEFAULT_PERSIST_PATH = ".state/fill_dlq.jsonl"
 
 
 class OrphanedFillDLQ:
-    __slots__ = ("_queue", "_max_size", "_persist_path", "_overflow_evicted")
+    __slots__ = ("_queue", "_max_size", "_persist_path", "_overflow_evicted", "_quarantined_ids")
 
     def __init__(self, max_size: int = 1000, persist_path: str | None = None) -> None:
         self._queue: deque[Any] = deque(maxlen=max_size)
         self._max_size = max_size
         self._persist_path: str = persist_path or os.getenv("HFT_FILL_DLQ_PERSIST_PATH") or _DEFAULT_PERSIST_PATH
         self._overflow_evicted: list[Any] = []
+        # id() of fills already written to the sidecar: an evicted fill stays in
+        # ``_overflow_evicted`` and would otherwise be quarantined again by every persist().
+        self._quarantined_ids: set[int] = set()
 
     def add(self, fill_event: Any) -> None:
         if len(self._queue) == self._max_size:
@@ -60,28 +63,40 @@ class OrphanedFillDLQ:
             self._quarantine([fill_event])
 
     def _quarantine(self, fills: list[Any]) -> None:
-        """Keep fills that could not be serialised in ``<persist_path>.unserializable``.
+        """Keep fills that did not reach the main file in ``<persist_path>.unserializable``.
 
-        A fill is money. Dropping one because a field would not serialise made it
-        vanish with only a log line; the ``repr`` here lets an operator rebuild it
-        by hand. The count is exported so an alert can fire on it.
+        A fill is money. Dropping one because a field would not serialise, or
+        because the disk refused the write, made it vanish with only a log line;
+        the ``repr`` here lets an operator rebuild it by hand. The count is
+        exported so an alert can fire on it. Never raises: it runs on the
+        ``add()`` path and during shutdown, where a second failure must not
+        cost the fill that is still in memory.
         """
-        MetricsRegistry.get().fill_dlq_persist_failed_total.inc(len(fills))
-        sidecar = self._persist_path + ".unserializable"
         try:
-            os.makedirs(os.path.dirname(sidecar) or ".", exist_ok=True)
-            with open(sidecar, "a", encoding="utf-8") as f:
-                for fill in fills:
-                    f.write(repr(fill) + "\n")
-        except OSError as exc:
-            logger.error("fill_dlq_quarantine_failed", error=str(exc), path=sidecar, count=len(fills))
-        for fill in fills:
-            logger.error(
-                "fill_dlq_fill_unserializable",
-                fill_id=getattr(fill, "fill_id", ""),
-                order_id=getattr(fill, "order_id", ""),
-                symbol=getattr(fill, "symbol", ""),
-            )
+            fresh = [fill for fill in fills if id(fill) not in self._quarantined_ids]
+            if not fresh:
+                return
+            self._quarantined_ids.update(id(fill) for fill in fresh)
+            MetricsRegistry.get().fill_dlq_persist_failed_total.inc(len(fresh))
+            sidecar = self._persist_path + ".unserializable"
+            try:
+                os.makedirs(os.path.dirname(sidecar) or ".", exist_ok=True)
+                with open(sidecar, "a", encoding="utf-8") as f:
+                    for fill in fresh:
+                        f.write(repr(fill) + "\n")
+                    f.flush()
+                    os.fsync(f.fileno())
+            except OSError as exc:
+                logger.error("fill_dlq_quarantine_failed", error=str(exc), path=sidecar, count=len(fresh))
+            for fill in fresh:
+                logger.error(
+                    "fill_dlq_fill_not_persisted",
+                    fill_id=getattr(fill, "fill_id", ""),
+                    order_id=getattr(fill, "order_id", ""),
+                    symbol=getattr(fill, "symbol", ""),
+                )
+        except Exception as exc:  # noqa: BLE001 -- see docstring: must not raise into add()/shutdown
+            logger.error("fill_dlq_quarantine_error", error=str(exc))
 
     @property
     def count(self) -> int:
@@ -134,6 +149,7 @@ class OrphanedFillDLQ:
             return (0, 0)
         written = 0
         failed: list[Any] = []
+        renamed = False
         try:
             import orjson
 
@@ -156,18 +172,26 @@ class OrphanedFillDLQ:
                         written += 1
                     f.flush()
                     os.fsync(f.fileno())
+                # Before the rename: the sidecar must exist by the time the main
+                # file stops carrying these fills.
+                if failed:
+                    self._quarantine(failed)
                 os.rename(tmp_path, path)
+                renamed = True
             finally:
                 if os.path.exists(tmp_path):
                     try:
                         os.unlink(tmp_path)
                     except OSError:
                         pass
-            if failed:
-                self._quarantine(failed)
             logger.info("fill_dlq_persisted", written=written, failed=len(failed), path=path)
         except Exception as exc:
             logger.warning("fill_dlq_persist_failed", error=str(exc), path=path)
+        if not renamed:
+            # The disk refused the write (or the rename): nothing new is in the
+            # main file, so every fill in memory goes to the sidecar instead.
+            self._quarantine(snapshot)
+            return (0, len(snapshot))
         return (written, len(failed))
 
     def load(self) -> tuple[int, int]:

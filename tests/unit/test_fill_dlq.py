@@ -230,6 +230,45 @@ class TestPersistDoesNotDropFillsSilently:
         with open(path + ".unserializable") as f:
             assert "B1" in f.read()
 
+    def test_persist_quarantines_every_fill_when_the_disk_refuses_the_write(self, tmp_path):
+        path = str(tmp_path / "dlq.jsonl")
+        dlq = OrphanedFillDLQ(max_size=10, persist_path=path)
+        dlq.add(_make_fill("GOOD", "G1"))
+        dlq.add(self._unserializable("BAD", "B1"))
+
+        with patch("hft_platform.execution.fill_dlq.os.fsync", side_effect=OSError("disk full")):
+            written, failed = dlq.persist()
+
+        assert (written, failed) == (0, 2)
+        assert not os.path.exists(path)
+        with open(path + ".unserializable") as f:
+            quarantined = f.read()
+        assert "G1" in quarantined and "B1" in quarantined
+
+    def test_persisting_twice_does_not_quarantine_the_same_fill_twice(self, tmp_path):
+        path = str(tmp_path / "dlq.jsonl")
+        dlq = OrphanedFillDLQ(max_size=10, persist_path=path)
+        dlq.add(self._unserializable("BAD", "B1"))
+
+        dlq.persist()
+        with patch("hft_platform.execution.fill_dlq.MetricsRegistry") as registry:
+            dlq.persist()
+
+        with open(path + ".unserializable") as f:
+            assert len(f.read().splitlines()) == 1
+        registry.get.return_value.fill_dlq_persist_failed_total.inc.assert_not_called()
+
+    def test_a_failing_quarantine_does_not_lose_the_incoming_fill(self, tmp_path):
+        dlq = OrphanedFillDLQ(max_size=1, persist_path=str(tmp_path / "dlq.jsonl"))
+        dlq.add(self._unserializable("BAD", "B1"))
+
+        with patch("hft_platform.execution.fill_dlq.MetricsRegistry") as registry:
+            registry.get.return_value.fill_dlq_persist_failed_total.inc.side_effect = RuntimeError("registry gone")
+            registry.get.return_value.fill_dlq_overflow_total.inc.return_value = None
+            dlq.add(_make_fill("GOOD", "G1"))  # evicts BAD; quarantine raises internally
+
+        assert [fill.symbol for fill in dlq.drain()] == ["GOOD"]
+
     def test_load_counts_the_corrupt_lines_it_skips(self, tmp_path):
         import orjson
 
