@@ -488,7 +488,15 @@ def _expand_options(
             result.errors.append(f"No strike data for options root {root}")
             return
 
-        reference, _ = pick_underlying_price(root, group, contract_index)
+        reference, source = pick_underlying_price(root, group, contract_index)
+        if reference is not None and not strikes[0] <= reference <= strikes[-1]:
+            # A price outside the whole chain (a x10 unit slip, a stale contract) would pin the window to an
+            # edge strike without a trace. Treat it as no underlying so the strict / median paths below decide.
+            result.warnings.append(
+                f"Ignoring underlying {reference:g} from {source or 'chain'}: outside the {root} {month} "
+                f"strike range {strikes[0]:g}-{strikes[-1]:g}"
+            )
+            reference = None
         if reference is None:
             if contract_index.require_underlying:
                 result.errors.append(

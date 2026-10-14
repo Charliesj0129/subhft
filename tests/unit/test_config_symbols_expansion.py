@@ -764,6 +764,29 @@ class TestExpandOptions:
         assert result.symbols
         assert "NOT centred" in result.warnings[0]
 
+    def test_an_underlying_outside_the_strike_range_is_not_used_to_centre_the_window(self):
+        # A x10 slip (190000 for 19000) would otherwise pin the window to the top strike without a trace.
+        futures = [_make_futures_contract("TXFB7", root="TXF", delivery_date=20270217, reference=190000.0)]
+        idx = _make_contract_index(self._skewed_chain() + futures)
+        result = _make_result()
+
+        _expand_options("TXO", "front", "ATM+1", {}, idx, result)
+
+        strikes = {int(s["code"][3:8]) for s in result.symbols}
+        assert strikes == {17500, 18000, 18500}
+        assert any("outside" in w and "190000" in w for w in result.warnings)
+
+    def test_strict_build_refuses_an_underlying_outside_the_strike_range(self):
+        futures = [_make_futures_contract("TXFB7", root="TXF", delivery_date=20270217, reference=1900.0)]
+        idx = _make_contract_index(self._skewed_chain() + futures)
+        idx.require_underlying = True
+        result = _make_result()
+
+        _expand_options("TXO", "front", "ATM+1", {}, idx, result)
+
+        assert result.symbols == []
+        assert any("refusing to guess" in e for e in result.errors)
+
     def test_option_premium_reference_no_longer_steers_the_window(self):
         # reference on an option record is its premium; 120 would have picked the lowest strike.
         idx = _make_contract_index(self._skewed_chain(reference=120.0))
