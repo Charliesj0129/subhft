@@ -432,8 +432,8 @@ class TestPersistDoesNotDropFillsSilently:
         assert open(path, "rb").read() == old_bytes
         assert dlq.last_unrecovered > 0
 
-    def test_persist_parks_the_new_file_when_it_cannot_replace_the_main_file(self, tmp_path):
-        """Unwritable sidecar plus a failing backup link: the serialised fills must survive on disk."""
+    def test_persist_keeps_the_new_file_when_it_cannot_replace_the_main_file(self, tmp_path):
+        """Unwritable sidecar plus a failing backup link: the serialised fills must stay on disk."""
         path = str(tmp_path / "dlq.jsonl")
         seed = OrphanedFillDLQ(max_size=10, persist_path=path)
         seed.add(_make_fill("OLD", "O1"))
@@ -449,89 +449,6 @@ class TestPersistDoesNotDropFillsSilently:
             dlq.persist()
 
         assert open(path, "rb").read() == old_bytes
-        parked = list(tmp_path.glob("dlq.jsonl.pending.*"))
-        assert any(b"N1" in p.read_bytes() for p in parked)
-        assert not list(tmp_path.glob("*.tmp"))
-
-    def _parked_dlq(self, tmp_path, max_size: int = 10):
-        """A main file holding OLD and a parked file holding OLD + NEW (backup link failed)."""
-        path = str(tmp_path / "dlq.jsonl")
-        seed = OrphanedFillDLQ(max_size=max_size, persist_path=path)
-        seed.add(_make_fill("OLD", "O1"))
-        seed.persist()
-        dlq = OrphanedFillDLQ(max_size=max_size, persist_path=path)
-        dlq.load()
-        dlq.add(_make_fill("NEW", "N1"))
-        dlq.add(self._unserializable("BAD", "B1"))
-        os.mkdir(path + ".unserializable")
-        with patch("hft_platform.execution.fill_dlq.os.link", side_effect=OSError(28, "ENOSPC")):
-            dlq.persist()
-        return path
-
-    def test_a_restart_recovers_the_fills_persist_parked_beside_the_main_file(self, tmp_path):
-        path = self._parked_dlq(tmp_path)
-
-        restarted = OrphanedFillDLQ(max_size=10, persist_path=path)
-        loaded, skipped = restarted.load()
-
-        assert skipped == 0
-        assert sorted(f.order_id for f in restarted.drain()) == ["N1", "O1"]  # O1 once, from main + pending
-
-    def test_a_crash_after_recovery_still_replays_the_parked_fills(self, tmp_path):
-        """Reading the parked file is not consuming it: until persist() writes the main file they live in RAM."""
-        path = self._parked_dlq(tmp_path)
-        first = OrphanedFillDLQ(max_size=10, persist_path=path)
-        first.load()
-
-        second = OrphanedFillDLQ(max_size=10, persist_path=path)
-        second.load()
-
-        assert sorted(f.order_id for f in second.drain()) == ["N1", "O1"]
-
-    def test_a_persist_after_recovery_consumes_the_parked_file(self, tmp_path):
-        path = self._parked_dlq(tmp_path)
-        first = OrphanedFillDLQ(max_size=10, persist_path=path)
-        first.load()
-        first.persist()
-
-        later = OrphanedFillDLQ(max_size=10, persist_path=path)
-        later.load()
-
-        assert sorted(f.order_id for f in later.drain()) == ["N1", "O1"]  # now from the main file
-        assert not [p for p in tmp_path.glob("dlq.jsonl.pending.*") if not p.name.endswith(".loaded")]
-
-    def test_recovery_into_a_full_queue_keeps_the_overflow_for_persist(self, tmp_path):
-        path = self._parked_dlq(tmp_path)
-        small = OrphanedFillDLQ(max_size=1, persist_path=path)
-
-        loaded, _ = small.load()
-
-        assert loaded == 2
-        assert sorted(f.order_id for f in [*small._overflow_evicted, *small._queue]) == ["N1", "O1"]
-
-    def test_persist_keeps_the_temp_file_when_parking_it_fails_too(self, tmp_path):
-        path = str(tmp_path / "dlq.jsonl")
-        seed = OrphanedFillDLQ(max_size=10, persist_path=path)
-        seed.add(_make_fill("OLD", "O1"))
-        seed.persist()
-        dlq = OrphanedFillDLQ(max_size=10, persist_path=path)
-        dlq.load()
-        dlq.add(_make_fill("NEW", "N1"))
-        dlq.add(self._unserializable("BAD", "B1"))
-        os.mkdir(path + ".unserializable")
-        real_rename = os.rename
-
-        def rename(src, dst):
-            if ".pending." in str(dst):
-                raise OSError(28, "ENOSPC")
-            real_rename(src, dst)
-
-        with (
-            patch("hft_platform.execution.fill_dlq.os.link", side_effect=OSError(28, "ENOSPC")),
-            patch("hft_platform.execution.fill_dlq.os.rename", side_effect=rename),
-        ):
-            dlq.persist()
-
         assert any(b"N1" in t.read_bytes() for t in tmp_path.glob("*.tmp"))
 
     def test_persist_syncs_the_directory_holding_the_copies_before_it_renames_the_main_file(self, tmp_path):
