@@ -365,6 +365,34 @@ class TestPersistDoesNotDropFillsSilently:
         with open(sidecar) as f:
             assert "B1" in f.read()
 
+    def test_persist_keeps_the_old_main_file_when_a_fill_has_no_durable_copy(self, tmp_path):
+        """No sidecar, no rename over the only other copy: the old file survives as .bak and the shutdown can see it."""
+        path = str(tmp_path / "dlq.jsonl")
+        seed = OrphanedFillDLQ(max_size=10, persist_path=path)
+        seed.add(_make_fill("OLD", "O1"))
+        seed.persist()
+        old_bytes = open(path, "rb").read()
+        dlq = OrphanedFillDLQ(max_size=10, persist_path=path)
+        dlq.load()
+        dlq.add(self._unserializable("BAD", "B1"))
+        os.mkdir(path + ".unserializable")  # the sidecar can never be opened
+
+        written, failed = dlq.persist()
+
+        assert (written, failed) == (1, 1)
+        assert dlq.last_unrecovered == 1
+        assert open(path + ".bak", "rb").read() == old_bytes
+
+    def test_a_durable_quarantine_leaves_nothing_unrecovered(self, tmp_path):
+        path = str(tmp_path / "dlq.jsonl")
+        dlq = OrphanedFillDLQ(max_size=10, persist_path=path)
+        dlq.add(self._unserializable("BAD", "B1"))
+
+        dlq.persist()
+
+        assert dlq.last_unrecovered == 0
+        assert not os.path.exists(path + ".bak")
+
     def test_load_counts_the_corrupt_lines_it_skips(self, tmp_path):
         import orjson
 

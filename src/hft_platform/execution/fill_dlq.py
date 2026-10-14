@@ -17,7 +17,15 @@ _MAX_QUARANTINE_TRACKED = 10_000
 
 
 class OrphanedFillDLQ:
-    __slots__ = ("_queue", "_max_size", "_persist_path", "_overflow_evicted", "_quarantined_ids", "_sidecar_unsynced")
+    __slots__ = (
+        "_queue",
+        "_max_size",
+        "_persist_path",
+        "_overflow_evicted",
+        "_quarantined_ids",
+        "_sidecar_unsynced",
+        "last_unrecovered",
+    )
 
     def __init__(self, max_size: int = 1000, persist_path: str | None = None) -> None:
         self._queue: deque[Any] = deque(maxlen=max_size)
@@ -32,6 +40,8 @@ class OrphanedFillDLQ:
         self._quarantined_ids: dict[int, Any] = {}
         # True once the sidecar took a flush-only write (event-loop path); the next persist() fsyncs it.
         self._sidecar_unsynced = False
+        # Fills the last persist() could neither write to the main file nor keep durably in the sidecar.
+        self.last_unrecovered = 0
 
     def add(self, fill_event: Any) -> None:
         if len(self._queue) == self._max_size:
@@ -69,7 +79,7 @@ class OrphanedFillDLQ:
             # add() runs on the event loop: flush only, like the main-file append above.
             self._quarantine([fill_event], durable=False)
 
-    def _quarantine(self, fills: list[Any], durable: bool = True) -> None:
+    def _quarantine(self, fills: list[Any], durable: bool = True) -> bool:
         """Keep fills that did not reach the main file in ``<persist_path>.unserializable``.
 
         A fill is money. Dropping one because a field would not serialise, or
@@ -83,11 +93,13 @@ class OrphanedFillDLQ:
         failed write (ENOSPC, EIO) leaves it eligible, so the next ``persist()``
         retries it. ``durable=False`` skips the fsync for callers on the event
         loop (``add()``), where a slow disk must not stall fill processing.
+
+        Returns True when every fill in ``fills`` now has a durable copy in the sidecar.
         """
         try:
             fresh = [fill for fill in fills if id(fill) not in self._quarantined_ids]
             if not fresh:
-                return
+                return not self._sidecar_unsynced
             try:
                 MetricsRegistry.get().fill_dlq_persist_failed_total.inc(len(fresh))
             except Exception as exc:  # noqa: BLE001 -- a metrics fault must not stop the sidecar write
@@ -103,8 +115,10 @@ class OrphanedFillDLQ:
                         os.fsync(f.fileno())
                 # a durable write fsyncs the whole file, so it also covers earlier flush-only lines
                 self._sidecar_unsynced = not durable
+                written_durably = durable
             except OSError as exc:
                 logger.error("fill_dlq_quarantine_failed", error=str(exc), path=sidecar, count=len(fresh))
+                written_durably = False
             else:
                 for fill in fresh:
                     self._quarantined_ids[id(fill)] = fill
@@ -117,8 +131,10 @@ class OrphanedFillDLQ:
                     order_id=getattr(fill, "order_id", ""),
                     symbol=getattr(fill, "symbol", ""),
                 )
+            return written_durably
         except Exception as exc:  # noqa: BLE001 -- see docstring: must not raise into add()/shutdown
             logger.error("fill_dlq_quarantine_error", error=str(exc))
+            return False
 
     def _sync_sidecar(self) -> None:
         """fsync a sidecar that only took flush-only writes from ``add()``; keep the flag if it fails."""
@@ -184,10 +200,12 @@ class OrphanedFillDLQ:
             # Remove stale file if queue is empty
             if os.path.exists(path):
                 os.unlink(path)
+            self.last_unrecovered = 0
             return (0, 0)
         written = 0
         failed: list[Any] = []
         renamed = False
+        unrecovered = 0
         try:
             import orjson
 
@@ -212,8 +230,11 @@ class OrphanedFillDLQ:
                     os.fsync(f.fileno())
                 # Before the rename: the sidecar must exist by the time the main
                 # file stops carrying these fills.
-                if failed:
-                    self._quarantine(failed)
+                if failed and not self._quarantine(failed):
+                    unrecovered = len(failed)
+                    # The old main file is the only other place these fills may still be: keep
+                    # it beside the new one instead of renaming over it.
+                    self._keep_previous_main_file(path)
                 os.rename(tmp_path, path)
                 renamed = True
             finally:
@@ -228,9 +249,24 @@ class OrphanedFillDLQ:
         if not renamed:
             # The disk refused the write (or the rename): nothing new is in the
             # main file, so every fill in memory goes to the sidecar instead.
-            self._quarantine(snapshot)
+            if not self._quarantine(snapshot):
+                unrecovered = len(snapshot)
+            self.last_unrecovered = unrecovered
             return (0, len(snapshot))
+        self.last_unrecovered = unrecovered
         return (written, len(failed))
+
+    @staticmethod
+    def _keep_previous_main_file(path: str) -> None:
+        """Hard-link the current main file to ``<path>.bak`` so a rename cannot be its last copy."""
+        backup = path + ".bak"
+        try:
+            if os.path.exists(path):
+                if os.path.exists(backup):
+                    os.unlink(backup)
+                os.link(path, backup)
+        except OSError as exc:
+            logger.error("fill_dlq_backup_failed", error=str(exc), path=backup)
 
     def load(self) -> tuple[int, int]:
         """Load DLQ from disk on startup. Returns ``(loaded, skipped)``."""
