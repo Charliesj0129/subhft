@@ -387,6 +387,11 @@ def _normalize_contract_row(c: Any, exchange: str, kind: str) -> dict[str, Any]:
         "strike": getattr(c, "strike_price", None) or getattr(c, "strike", None),
         "right": right,
     }
+    if kind == "future":
+        # The option strike window is centred on the nearest TXF future's ``reference``
+        # (``pick_underlying_price``). Futures only: an option's ``reference`` is its premium,
+        # the wrong number to centre on, and ~50k option rows would bloat the hourly cache.
+        payload["reference"] = getattr(c, "reference", None)
     return {k: v for k, v in payload.items() if v is not None}
 
 
