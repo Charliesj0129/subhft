@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import threading
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -23,6 +24,8 @@ from hft_platform.config.symbols import load_contract_cache
 from hft_platform.feed_adapter.shioaji._infra import reset_login_slot_for_tests
 from hft_platform.feed_adapter.shioaji.contracts_runtime import ContractsRuntime
 
+# Relative to today: a literal date turns every later run red once it passes.
+EXPIRY = (datetime.now(UTC) + timedelta(days=30)).strftime("%Y/%m/%d")
 TXF_REFERENCE = 23456.0
 OPTION_PREMIUM = 187.5
 
@@ -62,7 +65,7 @@ def _refresh_client(tmp_path: Path):
             symbol="TXF202610",
             name="TXF",
             category="TXF",
-            delivery_date="2026/10/21",
+            delivery_date=EXPIRY,
             reference=TXF_REFERENCE,
         ),
     ]
@@ -72,7 +75,7 @@ def _refresh_client(tmp_path: Path):
             symbol="TXO23500J6",
             name="TXO",
             category="TXO",
-            delivery_date="2026/10/21",
+            delivery_date=EXPIRY,
             strike_price=23500,
             option_right="Call",
             reference=OPTION_PREMIUM,

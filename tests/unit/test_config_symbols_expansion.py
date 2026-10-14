@@ -237,6 +237,16 @@ class TestPickUnderlyingPrice:
 
         assert pick_underlying_price("TXO", chain, idx) == (18500.0, "TXF:TXFB7")
 
+    def test_an_alias_row_without_a_reference_does_not_hide_the_real_nearest_future(self):
+        # TXFR1 shares the real contract's expiry; cache order is not a contract.
+        alias = _make_futures_contract("TXFR1", root="TXF", delivery_date=20270217)
+        real = _make_futures_contract("TXFB7", root="TXF", delivery_date=20270217, reference=19000.0)
+        idx = _make_contract_index([alias, real])
+
+        price, source = pick_underlying_price("TXO", _txo_chain(), idx)
+
+        assert (price, source) == (19000.0, "TXF:TXFB7")
+
     def test_an_option_premium_reference_is_never_taken_for_the_underlying(self):
         chain = _txo_chain(reference=120.0, close=118.0)
         idx = _make_contract_index(chain)

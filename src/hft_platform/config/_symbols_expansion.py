@@ -384,14 +384,18 @@ def pick_underlying_price(
         for contract in futures
         if (dte := contract_dte_days(contract, contract_index.as_of)) is not None and dte >= 0
     ]
-    for _, contract in sorted(dated, key=lambda item: item[0]):
+    if not dated:
+        return None, ""
+    nearest = min(dte for dte, _ in dated)
+    # Only the nearest expiry is the underlying, but the continuous aliases (TXFR1/R2) share its date and the
+    # real contract's cache order is not guaranteed, so every row at that expiry is tried.
+    for _, contract in (item for item in dated if item[0] == nearest):
         code = str(contract.get("code") or "")
         for source in (contract_index.metrics_by_code.get(code, {}), contract):
             for key in ("underlying_price", "reference"):
                 value = _positive_float(source.get(key))
                 if value is not None:
                     return value, f"{future_root}:{code}"
-        break  # only the nearest future is the underlying
     return None, ""
 
 
