@@ -80,6 +80,15 @@ class OrphanedFillDLQ:
             # add() runs on the event loop: flush only, like the main-file append above.
             self._quarantine([fill_event], durable=False)
 
+    @staticmethod
+    def _fsync_dir(directory: str) -> None:
+        """fsync a directory so a file created or linked in it survives power loss; raises OSError."""
+        fd = os.open(directory or ".", os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
     def _quarantine(self, fills: list[Any], durable: bool = True) -> bool:
         """Keep fills that did not reach the main file in ``<persist_path>.unserializable``.
 
@@ -114,6 +123,9 @@ class OrphanedFillDLQ:
                     f.flush()
                     if durable:
                         os.fsync(f.fileno())
+                if durable:
+                    # a new sidecar's directory entry is not durable until its parent is synced
+                    self._fsync_dir(os.path.dirname(sidecar))
                 # a durable write fsyncs the whole file, so it also covers earlier flush-only lines
                 self._sidecar_unsynced = not durable
                 written_durably = durable
@@ -145,6 +157,7 @@ class OrphanedFillDLQ:
         try:
             with open(sidecar, "ab") as f:
                 os.fsync(f.fileno())
+            self._fsync_dir(os.path.dirname(sidecar))
             self._sidecar_unsynced = False
         except OSError as exc:
             logger.error("fill_dlq_quarantine_sync_failed", error=str(exc), path=sidecar)
@@ -239,6 +252,10 @@ class OrphanedFillDLQ:
                         raise OSError("could not preserve the previous DLQ file; leaving it in place")
                 os.rename(tmp_path, path)
                 renamed = True
+                try:
+                    self._fsync_dir(persist_dir)
+                except OSError as exc:
+                    logger.warning("fill_dlq_dir_sync_failed", error=str(exc), path=persist_dir)
             finally:
                 if os.path.exists(tmp_path):
                     try:
@@ -258,8 +275,8 @@ class OrphanedFillDLQ:
         self.last_unrecovered = unrecovered
         return (written, len(failed))
 
-    @staticmethod
-    def _keep_previous_main_file(path: str) -> bool:
+    @classmethod
+    def _keep_previous_main_file(cls, path: str) -> bool:
         """Hard-link the current main file to a new ``<path>.bak.<ns>`` so a rename cannot be its last copy.
 
         Never overwrites or deletes an earlier backup: a repeat persist() while a fill is still
@@ -273,6 +290,8 @@ class OrphanedFillDLQ:
             backup = f"{path}.bak.{stamp}" if attempt == 0 else f"{path}.bak.{stamp}.{attempt}"
             try:
                 os.link(path, backup)
+                # the new name must be durable before the caller renames over the original
+                cls._fsync_dir(os.path.dirname(backup))
                 return True
             except FileExistsError:
                 continue

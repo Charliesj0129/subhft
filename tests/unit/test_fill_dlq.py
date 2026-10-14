@@ -170,6 +170,10 @@ class TestOverflowEvictionPersistence:
             assert f"SYM{i}" in symbols, f"SYM{i} lost"
 
 
+def _raise_eio(directory: str) -> None:
+    raise OSError(5, "EIO")
+
+
 class TestPersistDoesNotDropFillsSilently:
     """K2: a fill that cannot be serialised must be quarantined and counted.
 
@@ -423,6 +427,53 @@ class TestPersistDoesNotDropFillsSilently:
         os.mkdir(path + ".unserializable")
 
         with patch("hft_platform.execution.fill_dlq.os.link", side_effect=OSError(28, "ENOSPC")):
+            dlq.persist()
+
+        assert open(path, "rb").read() == old_bytes
+        assert dlq.last_unrecovered > 0
+
+    def test_persist_syncs_the_directory_holding_the_copies_before_it_renames_the_main_file(self, tmp_path):
+        """A new sidecar or backup name is lost on power failure unless its parent directory is fsynced."""
+        path = str(tmp_path / "dlq.jsonl")
+        seed = OrphanedFillDLQ(max_size=10, persist_path=path)
+        seed.add(_make_fill("OLD", "O1"))
+        seed.persist()
+        dlq = OrphanedFillDLQ(max_size=10, persist_path=path)
+        dlq.load()
+        dlq.add(self._unserializable("BAD", "B1"))
+        events: list[str] = []
+        real_fsync_dir = OrphanedFillDLQ._fsync_dir
+        real_rename = os.rename
+
+        def fsync_dir(directory):
+            events.append("dirsync")
+            real_fsync_dir(directory)
+
+        def rename(src, dst):
+            events.append("rename")
+            real_rename(src, dst)
+
+        with (
+            patch.object(OrphanedFillDLQ, "_fsync_dir", staticmethod(fsync_dir)),
+            patch("hft_platform.execution.fill_dlq.os.rename", side_effect=rename),
+        ):
+            dlq.persist()
+
+        assert events.index("dirsync") < events.index("rename")
+        assert events.count("dirsync") >= 2  # sidecar creation, then the main file's own rename
+
+    def test_persist_keeps_the_main_file_when_the_directory_sync_fails(self, tmp_path):
+        path = str(tmp_path / "dlq.jsonl")
+        seed = OrphanedFillDLQ(max_size=10, persist_path=path)
+        seed.add(_make_fill("OLD", "O1"))
+        seed.persist()
+        old_bytes = open(path, "rb").read()
+        dlq = OrphanedFillDLQ(max_size=10, persist_path=path)
+        dlq.load()
+        dlq.add(_make_fill("NEW", "N1"))
+        dlq.add(self._unserializable("BAD", "B1"))
+
+        with patch.object(OrphanedFillDLQ, "_fsync_dir", staticmethod(_raise_eio)):
             dlq.persist()
 
         assert open(path, "rb").read() == old_bytes
