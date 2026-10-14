@@ -453,6 +453,54 @@ class TestPersistDoesNotDropFillsSilently:
         assert any(b"N1" in p.read_bytes() for p in parked)
         assert not list(tmp_path.glob("*.tmp"))
 
+    def test_a_restart_recovers_the_fills_persist_parked_beside_the_main_file(self, tmp_path):
+        path = str(tmp_path / "dlq.jsonl")
+        seed = OrphanedFillDLQ(max_size=10, persist_path=path)
+        seed.add(_make_fill("OLD", "O1"))
+        seed.persist()
+        dlq = OrphanedFillDLQ(max_size=10, persist_path=path)
+        dlq.load()
+        dlq.add(_make_fill("NEW", "N1"))
+        dlq.add(self._unserializable("BAD", "B1"))
+        os.mkdir(path + ".unserializable")
+        with patch("hft_platform.execution.fill_dlq.os.link", side_effect=OSError(28, "ENOSPC")):
+            dlq.persist()
+
+        restarted = OrphanedFillDLQ(max_size=10, persist_path=path)
+        loaded, skipped = restarted.load()
+
+        assert skipped == 0
+        assert sorted(f.order_id for f in restarted.drain()) == ["N1", "O1"]  # O1 once, from main + pending
+        assert not list(tmp_path.glob("dlq.jsonl.pending.*[!d]"))  # marked .loaded, not replayed again
+        again = OrphanedFillDLQ(max_size=10, persist_path=path)
+        again.load()
+        assert sorted(f.order_id for f in again.drain()) == ["O1"]
+
+    def test_persist_keeps_the_temp_file_when_parking_it_fails_too(self, tmp_path):
+        path = str(tmp_path / "dlq.jsonl")
+        seed = OrphanedFillDLQ(max_size=10, persist_path=path)
+        seed.add(_make_fill("OLD", "O1"))
+        seed.persist()
+        dlq = OrphanedFillDLQ(max_size=10, persist_path=path)
+        dlq.load()
+        dlq.add(_make_fill("NEW", "N1"))
+        dlq.add(self._unserializable("BAD", "B1"))
+        os.mkdir(path + ".unserializable")
+        real_rename = os.rename
+
+        def rename(src, dst):
+            if ".pending." in str(dst):
+                raise OSError(28, "ENOSPC")
+            real_rename(src, dst)
+
+        with (
+            patch("hft_platform.execution.fill_dlq.os.link", side_effect=OSError(28, "ENOSPC")),
+            patch("hft_platform.execution.fill_dlq.os.rename", side_effect=rename),
+        ):
+            dlq.persist()
+
+        assert any(b"N1" in t.read_bytes() for t in tmp_path.glob("*.tmp"))
+
     def test_persist_syncs_the_directory_holding_the_copies_before_it_renames_the_main_file(self, tmp_path):
         """A new sidecar or backup name is lost on power failure unless its parent directory is fsynced."""
         path = str(tmp_path / "dlq.jsonl")

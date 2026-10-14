@@ -1,5 +1,6 @@
 """Dead-letter queue for orphaned fills (WU-03)."""
 
+import glob
 import os
 import tempfile
 from collections import deque
@@ -219,6 +220,7 @@ class OrphanedFillDLQ:
         written = 0
         failed: list[Any] = []
         renamed = False
+        keep_tmp = False
         unrecovered = 0
         try:
             import orjson
@@ -251,7 +253,7 @@ class OrphanedFillDLQ:
                     if not self._keep_previous_main_file(path):
                         # The old main file stays, so this fsynced temp file is the only copy of
                         # the fills that serialised: park it under a name nothing deletes.
-                        self._park_unreplaced_file(tmp_path, path)
+                        keep_tmp = not self._park_unreplaced_file(tmp_path, path)
                         raise OSError("could not preserve the previous DLQ file; leaving it in place")
                 os.rename(tmp_path, path)
                 renamed = True
@@ -260,7 +262,8 @@ class OrphanedFillDLQ:
                 except OSError as exc:
                     logger.warning("fill_dlq_dir_sync_failed", error=str(exc), path=persist_dir)
             finally:
-                if os.path.exists(tmp_path):
+                # keep_tmp: parking it failed too, so it is still the only copy of the new fills
+                if not keep_tmp and os.path.exists(tmp_path):
                     try:
                         os.unlink(tmp_path)
                     except OSError:
@@ -279,18 +282,23 @@ class OrphanedFillDLQ:
         return (written, len(failed))
 
     @classmethod
-    def _park_unreplaced_file(cls, tmp_path: str, path: str) -> None:
-        """Rename the fsynced temp file to ``<path>.pending.<ns>`` so the cleanup in persist() cannot delete it."""
+    def _park_unreplaced_file(cls, tmp_path: str, path: str) -> bool:
+        """Rename the fsynced temp file to ``<path>.pending.<ns>``; load() picks it up at the next start.
+
+        Returns False when the rename failed, in which case the caller must leave ``tmp_path`` alone.
+        """
         parked = f"{path}.pending.{timebase.now_ns()}"
         try:
             os.rename(tmp_path, parked)
-            logger.critical("fill_dlq_new_file_parked", path=parked, main=path)
-            try:
-                cls._fsync_dir(os.path.dirname(parked))
-            except OSError as exc:
-                logger.error("fill_dlq_dir_sync_failed", error=str(exc), path=parked)
         except OSError as exc:
-            logger.error("fill_dlq_park_failed", error=str(exc), path=tmp_path)
+            logger.critical("fill_dlq_park_failed", error=str(exc), path=tmp_path)
+            return False
+        logger.critical("fill_dlq_new_file_parked", path=parked, main=path)
+        try:
+            cls._fsync_dir(os.path.dirname(parked))
+        except OSError as exc:
+            logger.error("fill_dlq_dir_sync_failed", error=str(exc), path=parked)
+        return True
 
     @classmethod
     def _keep_previous_main_file(cls, path: str) -> bool:
@@ -318,10 +326,31 @@ class OrphanedFillDLQ:
         return False
 
     def load(self) -> tuple[int, int]:
-        """Load DLQ from disk on startup. Returns ``(loaded, skipped)``."""
+        """Load DLQ from disk on startup. Returns ``(loaded, skipped)``.
+
+        Reads the main file, then any ``<path>.pending.*`` that persist() parked when it could not
+        replace the main file. A parked file is renamed ``.loaded`` once read so it is not replayed
+        on every start; a fill present in both is kept once.
+        """
         path = self._persist_path
-        if not os.path.exists(path):
-            return (0, 0)
+        loaded = 0
+        skipped = 0
+        seen: set[str] = set()
+        for source in [path, *sorted(glob.glob(glob.escape(path) + ".pending.*"))]:
+            if source.endswith(".loaded") or not os.path.exists(source):
+                continue
+            file_loaded, file_skipped = self._load_file(source, seen, dedupe=source != path)
+            loaded += file_loaded
+            skipped += file_skipped
+            if source != path:
+                try:
+                    os.rename(source, source + ".loaded")
+                except OSError as exc:
+                    logger.error("fill_dlq_pending_mark_failed", error=str(exc), path=source)
+                logger.critical("fill_dlq_pending_recovered", path=source, loaded=file_loaded, skipped=file_skipped)
+        return (loaded, skipped)
+
+    def _load_file(self, path: str, seen: set[str], dedupe: bool) -> tuple[int, int]:
         loaded = 0
         skipped = 0
         try:
@@ -342,6 +371,10 @@ class OrphanedFillDLQ:
                             continue
                         obj["side"] = Side(obj["side"])
                         fill = FillEvent(**obj)
+                        fill_key = str(fill.fill_id)
+                        if dedupe and fill_key in seen:
+                            continue  # a parked file repeats what the main file already carried
+                        seen.add(fill_key)
                         self._queue.append(fill)
                         loaded += 1
                     except Exception:
