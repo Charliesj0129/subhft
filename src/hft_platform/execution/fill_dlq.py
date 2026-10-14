@@ -17,7 +17,7 @@ _MAX_QUARANTINE_TRACKED = 10_000
 
 
 class OrphanedFillDLQ:
-    __slots__ = ("_queue", "_max_size", "_persist_path", "_overflow_evicted", "_quarantined_ids")
+    __slots__ = ("_queue", "_max_size", "_persist_path", "_overflow_evicted", "_quarantined_ids", "_sidecar_unsynced")
 
     def __init__(self, max_size: int = 1000, persist_path: str | None = None) -> None:
         self._queue: deque[Any] = deque(maxlen=max_size)
@@ -30,6 +30,8 @@ class OrphanedFillDLQ:
         # while the entry exists; bounded FIFO (a re-quarantine after eviction is only a
         # duplicate sidecar line, never a lost fill).
         self._quarantined_ids: dict[int, Any] = {}
+        # True once the sidecar took a flush-only write (event-loop path); the next persist() fsyncs it.
+        self._sidecar_unsynced = False
 
     def add(self, fill_event: Any) -> None:
         if len(self._queue) == self._max_size:
@@ -99,6 +101,8 @@ class OrphanedFillDLQ:
                     f.flush()
                     if durable:
                         os.fsync(f.fileno())
+                # a durable write fsyncs the whole file, so it also covers earlier flush-only lines
+                self._sidecar_unsynced = not durable
             except OSError as exc:
                 logger.error("fill_dlq_quarantine_failed", error=str(exc), path=sidecar, count=len(fresh))
             else:
@@ -115,6 +119,18 @@ class OrphanedFillDLQ:
                 )
         except Exception as exc:  # noqa: BLE001 -- see docstring: must not raise into add()/shutdown
             logger.error("fill_dlq_quarantine_error", error=str(exc))
+
+    def _sync_sidecar(self) -> None:
+        """fsync a sidecar that only took flush-only writes from ``add()``; keep the flag if it fails."""
+        if not self._sidecar_unsynced:
+            return
+        sidecar = self._persist_path + ".unserializable"
+        try:
+            with open(sidecar, "ab") as f:
+                os.fsync(f.fileno())
+            self._sidecar_unsynced = False
+        except OSError as exc:
+            logger.error("fill_dlq_quarantine_sync_failed", error=str(exc), path=sidecar)
 
     @property
     def count(self) -> int:
@@ -159,6 +175,7 @@ class OrphanedFillDLQ:
         written to the main file but is quarantined (see :meth:`_quarantine`).
         """
         path = self._persist_path
+        self._sync_sidecar()
         snapshot = list(self._overflow_evicted) + list(self._queue)
         if not snapshot:
             # Remove stale file if queue is empty

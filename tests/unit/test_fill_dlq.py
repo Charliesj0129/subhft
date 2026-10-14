@@ -322,6 +322,25 @@ class TestPersistDoesNotDropFillsSilently:
         with open(str(tmp_path / "dlq.jsonl") + ".unserializable") as f:
             assert "B1" in f.read()
 
+    def test_persist_fsyncs_a_sidecar_the_event_loop_path_only_flushed(self, tmp_path):
+        """add() flushes without fsync; the shutdown persist() must still make that sidecar durable."""
+        path = str(tmp_path / "dlq.jsonl")
+        sidecar = path + ".unserializable"
+        dlq = OrphanedFillDLQ(max_size=1, persist_path=path)
+        dlq.add(self._unserializable("BAD", "B1"))
+        dlq.add(_make_fill("GOOD", "G1"))  # evicts BAD -> flush-only quarantine
+        synced_inodes: list[int] = []
+        real_fsync = os.fsync
+
+        def _spy(fd):
+            synced_inodes.append(os.fstat(fd).st_ino)
+            real_fsync(fd)
+
+        with patch("hft_platform.execution.fill_dlq.os.fsync", _spy):
+            dlq.persist()
+
+        assert os.stat(sidecar).st_ino in synced_inodes
+
     def test_load_counts_the_corrupt_lines_it_skips(self, tmp_path):
         import orjson
 
