@@ -8,6 +8,7 @@ from typing import Any
 
 from structlog import get_logger
 
+from hft_platform.core import timebase
 from hft_platform.observability.metrics import MetricsRegistry
 
 logger = get_logger("execution.fill_dlq")
@@ -234,7 +235,8 @@ class OrphanedFillDLQ:
                     unrecovered = len(failed)
                     # The old main file is the only other place these fills may still be: keep
                     # it beside the new one instead of renaming over it.
-                    self._keep_previous_main_file(path)
+                    if not self._keep_previous_main_file(path):
+                        raise OSError("could not preserve the previous DLQ file; leaving it in place")
                 os.rename(tmp_path, path)
                 renamed = True
             finally:
@@ -257,16 +259,27 @@ class OrphanedFillDLQ:
         return (written, len(failed))
 
     @staticmethod
-    def _keep_previous_main_file(path: str) -> None:
-        """Hard-link the current main file to ``<path>.bak`` so a rename cannot be its last copy."""
-        backup = path + ".bak"
-        try:
-            if os.path.exists(path):
-                if os.path.exists(backup):
-                    os.unlink(backup)
+    def _keep_previous_main_file(path: str) -> bool:
+        """Hard-link the current main file to a new ``<path>.bak.<ns>`` so a rename cannot be its last copy.
+
+        Never overwrites or deletes an earlier backup: a repeat persist() while a fill is still
+        unrecovered must not replace the one file that holds it. Returns False when the link
+        could not be made, in which case the caller must not rename over the main file.
+        """
+        if not os.path.exists(path):
+            return True
+        stamp = timebase.now_ns()
+        for attempt in range(100):
+            backup = f"{path}.bak.{stamp}" if attempt == 0 else f"{path}.bak.{stamp}.{attempt}"
+            try:
                 os.link(path, backup)
-        except OSError as exc:
-            logger.error("fill_dlq_backup_failed", error=str(exc), path=backup)
+                return True
+            except FileExistsError:
+                continue
+            except OSError as exc:
+                logger.error("fill_dlq_backup_failed", error=str(exc), path=backup)
+                return False
+        return False
 
     def load(self) -> tuple[int, int]:
         """Load DLQ from disk on startup. Returns ``(loaded, skipped)``."""

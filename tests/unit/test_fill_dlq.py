@@ -381,7 +381,8 @@ class TestPersistDoesNotDropFillsSilently:
 
         assert (written, failed) == (1, 1)
         assert dlq.last_unrecovered == 1
-        assert open(path + ".bak", "rb").read() == old_bytes
+        backups = sorted(tmp_path.glob("dlq.jsonl.bak.*"))
+        assert len(backups) == 1 and backups[0].read_bytes() == old_bytes
 
     def test_a_durable_quarantine_leaves_nothing_unrecovered(self, tmp_path):
         path = str(tmp_path / "dlq.jsonl")
@@ -391,7 +392,41 @@ class TestPersistDoesNotDropFillsSilently:
         dlq.persist()
 
         assert dlq.last_unrecovered == 0
-        assert not os.path.exists(path + ".bak")
+        assert not list(tmp_path.glob("dlq.jsonl.bak.*"))
+
+    def test_a_repeated_persist_keeps_the_backup_that_holds_the_original_fill(self, tmp_path):
+        """The second persist() must not delete the first backup: it may be the last copy of a fill."""
+        path = str(tmp_path / "dlq.jsonl")
+        seed = OrphanedFillDLQ(max_size=10, persist_path=path)
+        seed.add(_make_fill("OLD", "O1"))
+        seed.persist()
+        dlq = OrphanedFillDLQ(max_size=10, persist_path=path)
+        dlq.load()
+        dlq.add(self._unserializable("BAD", "B1"))
+        os.mkdir(path + ".unserializable")
+
+        dlq.persist()
+        dlq.persist()
+
+        assert any(b"O1" in b.read_bytes() for b in tmp_path.glob("dlq.jsonl.bak.*"))
+
+    def test_persist_does_not_overwrite_the_main_file_when_the_backup_link_fails(self, tmp_path):
+        path = str(tmp_path / "dlq.jsonl")
+        seed = OrphanedFillDLQ(max_size=10, persist_path=path)
+        seed.add(_make_fill("OLD", "O1"))
+        seed.persist()
+        old_bytes = open(path, "rb").read()
+        dlq = OrphanedFillDLQ(max_size=10, persist_path=path)
+        dlq.load()
+        dlq.add(_make_fill("NEW", "N1"))  # makes the would-be new main file differ from the old one
+        dlq.add(self._unserializable("BAD", "B1"))
+        os.mkdir(path + ".unserializable")
+
+        with patch("hft_platform.execution.fill_dlq.os.link", side_effect=OSError(28, "ENOSPC")):
+            dlq.persist()
+
+        assert open(path, "rb").read() == old_bytes
+        assert dlq.last_unrecovered > 0
 
     def test_load_counts_the_corrupt_lines_it_skips(self, tmp_path):
         import orjson
