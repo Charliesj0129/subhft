@@ -1310,13 +1310,25 @@ class QuoteConnectionPool:
             if strike_range > 0:
                 # Centre on the underlying future, never on option premiums: an option contract's
                 # ``reference`` is its own premium. No underlying price -> keep the current chain.
-                from hft_platform.config._symbols_expansion import pick_underlying_price
+                from hft_platform.config._symbols_expansion import pick_underlying_price, underlying_on_chain_scale
 
                 atm, atm_source = pick_underlying_price("TXO", nearest, self._contract_index())
                 if atm is None:
                     logger.error("options_refresh_no_underlying", expiry=nearest_date, strike_range=strike_range)
                     return False
                 strikes = sorted(set(float(c["strike"]) for c in nearest if c.get("strike")))
+                if strikes and not underlying_on_chain_scale(atm, strikes):
+                    # A unit slip would centre the window on the wrong strikes AND mark this expiry as done, so a
+                    # corrected reference could never retry. Keep the current chain and leave _options_expiry alone.
+                    logger.error(
+                        "options_refresh_underlying_scale_mismatch",
+                        expiry=nearest_date,
+                        atm=atm,
+                        atm_source=atm_source,
+                        strike_low=strikes[0],
+                        strike_high=strikes[-1],
+                    )
+                    return False
                 if strikes:
                     atm_idx = min(range(len(strikes)), key=lambda i: abs(strikes[i] - atm))
                     lo = max(atm_idx - strike_range, 0)

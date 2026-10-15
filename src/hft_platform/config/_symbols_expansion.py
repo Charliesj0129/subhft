@@ -427,6 +427,15 @@ def _parse_selector(selector: str) -> tuple[str, int]:
 # ---------------------------------------------------------------------------
 
 
+def underlying_on_chain_scale(reference: float, strikes: list[float]) -> bool:
+    """True when ``reference`` is within ``UNDERLYING_SCALE_FACTOR`` of the chain's middle strike.
+
+    Shared by the DSL expander and the connection pool's options roll, so a unit slip is judged the same way in both.
+    """
+    middle = strikes[len(strikes) // 2]
+    return middle <= 0 or middle / UNDERLYING_SCALE_FACTOR <= reference <= middle * UNDERLYING_SCALE_FACTOR
+
+
 def _vet_underlying(
     reference: float | None, source: str | None, strikes: list[float], label: str, result: SymbolBuildResult
 ) -> float | None:
@@ -438,8 +447,7 @@ def _vet_underlying(
     """
     if reference is None:
         return None
-    middle = strikes[len(strikes) // 2]
-    if middle > 0 and not middle / UNDERLYING_SCALE_FACTOR <= reference <= middle * UNDERLYING_SCALE_FACTOR:
+    if not underlying_on_chain_scale(reference, strikes):
         result.warnings.append(
             f"Ignoring underlying {reference:g} from {source or 'chain'}: not within a factor of "
             f"{UNDERLYING_SCALE_FACTOR:g} of the {label} strikes {strikes[0]:g}-{strikes[-1]:g} (unit slip?)"

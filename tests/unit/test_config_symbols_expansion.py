@@ -15,6 +15,8 @@ Covers all public functions and their branches including:
 
 from __future__ import annotations
 
+import pytest
+
 from hft_platform.config._symbols_expansion import (
     _default_exchange_for_code,
     _expand_futures,
@@ -1097,3 +1099,22 @@ class TestExpandSpec:
         expand_spec("OPT@TXO@front@ATM+1", {}, idx, result)
         # ATM+1 → 3 strikes × C+P = 6
         assert len(result.symbols) == 6
+
+
+class TestUnderlyingOnChainScale:
+    @pytest.mark.parametrize("reference", [9000.0, 18000.0, 19050.0, 35999.0])
+    def test_a_price_within_a_factor_of_two_of_the_middle_strike_is_on_scale(self, reference):
+        from hft_platform.config._symbols_expansion import underlying_on_chain_scale
+
+        assert underlying_on_chain_scale(reference, [17000.0, 18000.0, 19000.0]) is True
+
+    @pytest.mark.parametrize("reference", [1900.0, 8999.0, 36001.0, 190000.0, 0.0])
+    def test_a_unit_slip_is_off_scale(self, reference):
+        from hft_platform.config._symbols_expansion import underlying_on_chain_scale
+
+        assert underlying_on_chain_scale(reference, [17000.0, 18000.0, 19000.0]) is False
+
+    def test_a_non_positive_middle_strike_cannot_judge_the_scale(self):
+        from hft_platform.config._symbols_expansion import underlying_on_chain_scale
+
+        assert underlying_on_chain_scale(5.0, [0.0]) is True
