@@ -17,9 +17,11 @@ docker compose logs --tail=200 hft-engine
 處置：
 1. 檢查 `SYMBOLS_CONFIG` 是否正確。
 2. 檢查 `HFT_QUOTE_NO_DATA_S`、`HFT_QUOTE_WATCHDOG_S` 設定。
-3. 必要時重啟引擎：
+3. 必要時重啟引擎（stop → 等 60 秒 → start，D6a）：
 ```bash
-docker compose restart hft-engine
+docker compose stop hft-engine
+sleep 60    # D6a：等券商釋放 5 個 session；引擎不可用 `docker compose restart`
+docker compose start hft-engine
 ```
 
 診斷指標（正常值 vs. 告警值）：
@@ -53,7 +55,7 @@ uv run python scripts/latency/shioaji_api_probe.py --mode sim --iters 30
 升級路徑：
 1. 若延遲 >500ms 且持續 → 查看 `shioaji_keepalive_failures_total`（keepalive 失效）。
 2. 調低 `HFT_API_MAX_INFLIGHT`（減少並發）；調低 `HFT_API_QUEUE_MAX`。
-3. 若為 VPN/防火牆因素 → 切換備援網路後 `docker compose restart hft-engine`。
+3. 若為 VPN/防火牆因素 → 切換備援網路後，依 D6a 重啟引擎（`docker compose stop hft-engine`、等 60 秒、`docker compose start hft-engine`；不可用 `restart`）。
 
 ## 3) ClickHouse 連不上（DNS/啟動序）
 
@@ -66,7 +68,9 @@ docker compose up -d clickhouse redis
 docker compose ps clickhouse
 # 確認 healthy 後
 
-docker compose restart hft-engine
+docker compose stop hft-engine
+sleep 60    # D6a：等券商釋放 5 個 session；引擎不可用 `docker compose restart`
+docker compose start hft-engine
 ```
 
 ## 4) ClickHouse `MEMORY_LIMIT_EXCEEDED`
@@ -243,9 +247,11 @@ make soak-weekly-report
 docker exec redis redis-cli DEL feed:session:owner
 ```
 （Key 名稱由 `HFT_FEED_SESSION_OWNER_KEY` 控制，預設 `feed:session:owner`）
-3. 確認清除後重啟：
+3. 確認清除後重啟（D6a）：
 ```bash
-docker compose restart hft-engine
+docker compose stop hft-engine
+sleep 60    # D6a：等券商釋放 5 個 session；引擎不可用 `docker compose restart`
+docker compose start hft-engine
 ```
 4. 診斷多 runtime 場景 → `HFT_RUNTIME_INSTANCE_ID` 應於不同主機設為不同值。
 

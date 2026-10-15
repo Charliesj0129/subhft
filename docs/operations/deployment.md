@@ -84,7 +84,10 @@ curl -fsS http://localhost:9090/metrics | head
 ### 3.3 常用命令
 ```bash
 docker compose logs -f hft-engine
-docker compose restart hft-engine
+# 重啟引擎：stop → 等 60 秒 → start（D6a；不可用 `docker compose restart`）
+docker compose stop hft-engine
+sleep 60
+docker compose start hft-engine
 docker compose down
 ```
 
@@ -94,7 +97,9 @@ compose 預設 `SYMBOLS_CONFIG=config/base/symbols.yaml`。若要改用生成版
 # .env
 SYMBOLS_CONFIG=config/symbols.yaml
 
-docker compose restart hft-engine
+# 環境變數在容器建立時固定，restart 或 stop/start 都不會重讀 .env。
+# 本機/開發：重建容器。生產主機：走 Class C（見 docs/runbooks/deployment.md）。
+docker compose up -d hft-engine
 ```
 
 ## 4. Live 模式
@@ -174,7 +179,7 @@ docker compose up -d --build hft-engine
 `/app/outputs`（autonomy 證據，**沒有** bind mount）。
 
 生產發布是**針對性檔案複製**，且因為 `src/` 是 bind mount，程式碼變更只需
-`docker compose restart`，不需要重建 image。完整程序、部署分級、驗證與
+`docker compose stop`、等 60 秒、`docker compose start`（D6a，引擎不可用 `restart`），不需要重建 image。完整程序、部署分級、驗證與
 rollback 見 `docs/runbooks/deployment.md`。
 
 ### 8.3 受控變更證據工具（適用於兩者）
@@ -189,7 +194,7 @@ make deploy-drift-check BASELINE=outputs/deploy_guard/snapshots/<baseline>.json
 # 3) 部署 —— 依環境選擇機制：
 #    本機/開發： docker compose up -d --build hft-engine
 #    生產主機：  依 docs/runbooks/deployment.md 的部署分級
-#               （Class A 程式碼 = scp + docker compose restart hft-engine）
+#               （Class A 程式碼 = scp + docker compose stop → 等 60 秒 → start hft-engine）
 
 # 4) drift check（部署後）
 make deploy-drift-check BASELINE=outputs/deploy_guard/snapshots/<baseline>.json

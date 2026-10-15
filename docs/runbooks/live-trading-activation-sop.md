@@ -130,9 +130,9 @@ When current month contract expires:
 # Option 1: Kill switch file
 echo '{"reason": "manual_halt"}' > .runtime/kill_switch
 
-# Option 2: Set sim mode
-# In .env: HFT_ORDER_MODE=sim
-docker compose restart hft-engine
+# Option 2: Set sim mode — NOT an immediate stop. HFT_ORDER_MODE=sim does not stop
+# dispatch (only `disabled` does), and the engine reads .env at container creation,
+# so this needs a Class C recreate (.agent/rules/41-deployment.md). Use Option 1 or 3.
 
 # Option 3: Stop engine entirely
 docker compose stop hft-engine

@@ -51,7 +51,9 @@ docker compose logs --tail=200 hft-engine | rg -i "NameResolutionError|clickhous
 修復：
 ```bash
 docker compose up -d clickhouse redis
-docker compose restart hft-engine
+docker compose stop hft-engine
+sleep 60    # D6a：等券商釋放 5 個 session；引擎不可用 `docker compose restart`
+docker compose start hft-engine
 ```
 
 ## 6) ClickHouse `MEMORY_LIMIT_EXCEEDED`

@@ -134,11 +134,15 @@ If discrepancies exist, record them before proceeding.
 Make sure the system does not automatically close positions during recovery. HALT auto-flatten is
 **off by default**: the engine reads `HFT_HALT_AUTO_FLATTEN` (`src/hft_platform/risk/halt_flattener.py`)
 and only `1`, `true`, `yes` or `on` enable it. Check that the engine environment does not set it to one
-of those; leave it unset or `0`.
+of those; leave it unset or `0`. Read the value the running container actually has (empty means unset, which is off):
 
 ```bash
-export HFT_HALT_AUTO_FLATTEN=0
+docker exec hft-engine printenv HFT_HALT_AUTO_FLATTEN
 ```
+
+The engine's environment is fixed when its container is created. An `export` in your shell never reaches it, and
+neither `restart` nor stop/start re-reads `.env`. If the value must change, edit `.env` on the host and apply it as
+a Class C change (see "How to change the engine's environment" below).
 
 ### Step 2: Reconcile Positions
 
@@ -149,10 +153,7 @@ and file an incident.
 
 ### Step 3: Restart in Sim Mode
 
-```bash
-export HFT_MODE=sim
-docker compose restart hft-engine
-```
+Set `HFT_MODE=sim` in the host `.env`, then apply it as described in "How to change the engine's environment" below.
 
 Verify:
 - StormGuard state returns to NORMAL
@@ -161,11 +162,8 @@ Verify:
 
 ### Step 4: Resume Live (if appropriate)
 
-```bash
-export HFT_MODE=live
-# Leave HFT_HALT_AUTO_FLATTEN as set in Step 1 unless you deliberately want HALT auto-flatten on.
-docker compose restart hft-engine
-```
+Set `HFT_MODE=live` in the host `.env` and apply it the same way. Leave `HFT_HALT_AUTO_FLATTEN` as set in Step 1
+unless you deliberately want HALT auto-flatten on.
 
 Monitor for 5 minutes before walking away.
 
@@ -180,6 +178,15 @@ hft ops rearm-strategy --strategy-id <strategy_id>
 ```
 
 If the platform remains in `HALT`, keep trading disabled and continue incident handling.
+
+### How to change the engine's environment
+
+`HFT_MODE`, `HFT_ORDER_MODE` and `HFT_HALT_AUTO_FLATTEN` are read from the container's creation-time environment.
+Changing one is a Class C change under `.agent/rules/41-deployment.md` and `docs/runbooks/deployment.md`: it needs
+per-batch authorization, a backup first, and the engine's writable layer (`/app/outputs`) and `docker logs hft-engine`
+rescued before the container is recreated. Do not use `docker compose restart` (refused for the engine, D6a) and do
+not expect an `export` to take effect. After it is back, verify with `subscribed_count` and the per-facade login
+flags, never with `FeedState`.
 
 ---
 
