@@ -1295,7 +1295,9 @@ class TestSuperviseStormGuardUpdate:
         sys_obj = _make_stub()
         sys_obj.running = True
         sys_obj.storm_guard.state = StormGuardState.NORMAL
-        sys_obj.settings = {"base_capital": 10_000_000}
+        # reference 0 = the legacy ratio over base_capital; the absolute-NTD default is
+        # covered in test_drawdown_gate_uses_absolute_ntd.py
+        sys_obj.settings = {"base_capital": 10_000_000, "drawdown_reference_ntd": 0}
 
         mtm_calc = MagicMock()
         # 500K NTD unrealized loss, scaled int (x10000) — Bug 11 fix descales before dividing.

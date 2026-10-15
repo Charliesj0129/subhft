@@ -33,6 +33,7 @@ from hft_platform.services.loop_watchdog import LoopStallWatchdog
 from hft_platform.utils.logging import configure_logging
 
 logger = get_logger("system")
+_DEFAULT_DRAWDOWN_REFERENCE_NTD = 200_000  # warm/storm/halt = 1,000 / 2,000 / 4,000 NTD
 
 
 def _payload_field(payload: Any, key: str) -> Any:
@@ -165,8 +166,29 @@ class HFTSystem:
         return fn()
 
     @staticmethod
+    def _drawdown_reference_ntd(settings: Dict[str, Any]) -> int:
+        """NTD that StormGuard's drawdown ladder is measured against; 0 = legacy ratio.
+
+        StormGuard reads ``warm/storm/halt_drawdown_bps`` (-50/-100/-200). Over this
+        reference they become fixed NTD give-backs: 200_000 gives 1,000 / 2,000 /
+        4,000 NTD, below the 5,000 NTD daily hard limit. The ratio they used to be
+        measured as divided by the day's peak realised PnL, so a small win made a
+        small loss look like a large drawdown (see ``PositionStore.get_drawdown_ntd``).
+        """
+        raw = settings.get("drawdown_reference_ntd", _DEFAULT_DRAWDOWN_REFERENCE_NTD)
+        try:
+            ref = int(raw)
+        except (TypeError, ValueError):
+            return _DEFAULT_DRAWDOWN_REFERENCE_NTD
+        return ref if ref > 0 else 0
+
+    @staticmethod
     def _get_drawdown_pct(position_store: Any, settings: Dict[str, Any]) -> float:
         """Derive drawdown percentage from position store, or 0.0 if unavailable."""
+        reference = HFTSystem._drawdown_reference_ntd(settings)
+        ntd_fn = getattr(position_store, "get_drawdown_ntd", None)
+        if reference > 0 and ntd_fn is not None:
+            return float(ntd_fn()) / reference
         dd_fn = getattr(position_store, "get_drawdown_pct", None)
         if dd_fn is not None:
             return float(dd_fn())
@@ -1960,7 +1982,8 @@ class HFTSystem:
                         drawdown_pct = self._combine_drawdown_with_mtm(
                             realized_drawdown_pct=drawdown_pct,
                             unrealized_scaled=int(unrealized),
-                            base_capital=int(self.settings.get("base_capital", 10_000_000)),
+                            base_capital=self._drawdown_reference_ntd(self.settings)
+                            or int(self.settings.get("base_capital", 10_000_000)),
                         )
                         self._log_mtm_completeness(mtm)
                         self.risk_engine.update_unrealized_pnl(int(unrealized), complete=mtm.complete)
