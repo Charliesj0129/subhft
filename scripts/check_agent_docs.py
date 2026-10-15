@@ -1,13 +1,18 @@
 """Agent-docs consistency gate.
 
-Governing agent documents (CLAUDE.md, AGENTS.md, .agent rules/skills indexes)
-have repeatedly drifted from the tree they describe, and every instance was
-caught by hand. This gate makes the three drift classes machine-checkable:
+Governing agent documents (AGENTS.md and nested AGENTS.md, CLAUDE.md, .agent
+rules and skills) have repeatedly drifted from the tree they describe, and every
+instance was caught by hand. This gate makes the drift classes machine-checkable:
 
   A. path-refs   — every repo path referenced in backticks inside a governing
-                   doc exists on disk.
-  B. skills-index — `.agent/skills/<name>/` directories and the rows of
-                   `.agent/skills/00-index.md` match bidirectionally.
+                   doc (including skill references/*.md) exists on disk.
+  B. skills      — every `.agent/skills/<name>/SKILL.md` is natively
+                   discoverable: line 1 is `---`, frontmatter parses, `name`
+                   equals the directory name (`^[a-z0-9-]{1,64}$`), and
+                   `description` is a single line without `<` or `>` (warning
+                   above 300 characters, error above 1024); and the
+                   `.claude/skills` and `.agents/skills` links resolve to
+                   `.agent/skills`.
   C. memory-table — the routing table in `.agent/memory/README.md` and the
                    actual `.agent/memory/*.md` files match bidirectionally.
 
@@ -26,6 +31,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 KNOWN_DRIFT_FILE = Path(".agent/agent-docs-known-drift.txt")
@@ -54,7 +60,10 @@ _TOP_LEVEL_FILES = {
     ".gitignore",
 }
 _BACKTICK_TOKEN = re.compile(r"`([^`\n]+)`")
-_INDEX_ROW_NAME = re.compile(r"^\|\s*`([A-Za-z0-9_-]+)`\s*\|")
+_SKILL_NAME = re.compile(r"^[a-z0-9-]{1,64}$")
+_DESCRIPTION_WARN = 300
+_DESCRIPTION_MAX = 1024
+_SKILL_LINKS = (".claude/skills", ".agents/skills")
 _MEMORY_ROW_NAME = re.compile(r"^\|\s*`([A-Za-z0-9_.\-]+\.md)`\s*\|")
 
 
@@ -63,15 +72,16 @@ def governing_docs(root: Path) -> list[Path]:
     for name in ("CLAUDE.md", "AGENTS.md"):
         if (root / name).is_file():
             docs.append(root / name)
+    for nested in ("rust_core", "tests", "research"):
+        if (root / nested / "AGENTS.md").is_file():
+            docs.append(root / nested / "AGENTS.md")
     manifest = root / ".agent/00-MANIFEST.md"
     if manifest.is_file():
         docs.append(manifest)
     docs.extend(sorted((root / ".agent/rules").glob("*.md")))
     skills = root / ".agent/skills"
-    for candidate in ("00-index.md", "README.md"):
-        if (skills / candidate).is_file():
-            docs.append(skills / candidate)
     docs.extend(sorted(skills.glob("*/SKILL.md")))
+    docs.extend(sorted(skills.glob("*/references/*.md")))
     readme = root / ".agent/memory/README.md"
     if readme.is_file():
         docs.append(readme)
@@ -108,30 +118,93 @@ def check_path_refs(root: Path, drift: set[str], errors: list[str], seen: set[st
             errors.append(f"path-refs: {rel_doc}: `{token}` does not exist")
 
 
-def check_skills_index(root: Path, drift: set[str], errors: list[str], seen: set[str]) -> None:
-    skills = root / ".agent/skills"
-    index = skills / "00-index.md"
-    if not index.is_file():
-        errors.append("skills-index: .agent/skills/00-index.md is missing")
+def _split_frontmatter(text: str) -> tuple[str | None, str]:
+    """Return (frontmatter body or None, error). Line 1 must be `---`."""
+    lines = text.split("\n")
+    if not lines or lines[0].strip() != "---":
+        return None, "line 1 is not `---` (frontmatter must come first)"
+    for idx in range(1, len(lines)):
+        if lines[idx].strip() == "---":
+            return "\n".join(lines[1:idx]), ""
+    return None, "frontmatter is not closed with `---`"
+
+
+def _parse_frontmatter(body: str) -> tuple[dict[str, object] | None, str]:
+    try:
+        import yaml
+    except ImportError:  # pragma: no cover - PyYAML is a project dependency
+        data: dict[str, object] = {}
+        for line in body.split("\n"):
+            if ":" in line and not line.startswith((" ", "\t")):
+                key, _, value = line.partition(":")
+                data[key.strip()] = value.strip().strip('"').strip("'")
+        return data, ""
+    try:
+        loaded = yaml.safe_load(body)
+    except yaml.YAMLError as exc:
+        return None, f"frontmatter is not valid YAML ({str(exc).splitlines()[0]})"
+    if not isinstance(loaded, dict):
+        return None, "frontmatter is not a mapping"
+    return loaded, ""
+
+
+def _lint_skill_dir(skill_dir: Path, report: Callable[[str, str], None], warnings: list[str]) -> None:
+    name = skill_dir.name
+    skill_md = skill_dir / "SKILL.md"
+    if not skill_md.is_file():
+        report(name, "has no SKILL.md")
         return
-    indexed: set[str] = set()
-    for line in index.read_text(encoding="utf-8").splitlines():
-        match = _INDEX_ROW_NAME.match(line.strip())
-        if match:
-            indexed.add(match.group(1))
-    on_disk = {p.parent.name for p in skills.glob("*/SKILL.md")}
-    for name in sorted(on_disk - indexed):
-        key = f"skill-unindexed {name}"
+    body, problem = _split_frontmatter(skill_md.read_text(encoding="utf-8"))
+    if body is None:
+        report(name, problem)
+        return
+    meta, problem = _parse_frontmatter(body)
+    if meta is None:
+        report(name, problem)
+        return
+    declared = meta.get("name")
+    if declared != name:
+        report(name, f"frontmatter name {declared!r} must equal the directory name")
+    if not isinstance(declared, str) or not _SKILL_NAME.match(declared):
+        report(name, "name must match ^[a-z0-9-]{1,64}$")
+    description = meta.get("description")
+    if not isinstance(description, str) or not description.strip():
+        report(name, "description is missing")
+        return
+    if "\n" in description.strip():
+        report(name, "description must be a single line")
+    if "<" in description or ">" in description:
+        report(name, "description must not contain `<` or `>`")
+    if len(description) > _DESCRIPTION_MAX:
+        report(name, f"description is {len(description)} characters (max {_DESCRIPTION_MAX})")
+    elif len(description) > _DESCRIPTION_WARN:
+        warnings.append(
+            f"skills: `{name}`: description is {len(description)} characters (aim for <= {_DESCRIPTION_WARN})"
+        )
+
+
+def check_skills(root: Path, drift: set[str], errors: list[str], warnings: list[str], seen: set[str]) -> None:
+    skills = root / ".agent/skills"
+    if not skills.is_dir():
+        errors.append("skills: .agent/skills is missing")
+        return
+
+    def report(name: str, message: str) -> None:
+        key = f"skill {name}"
         if key in drift:
             seen.add(key)
-            continue
-        errors.append(f"skills-index: directory `{name}` has no row in 00-index.md")
-    for name in sorted(indexed - on_disk):
-        key = f"skill-phantom {name}"
-        if key in drift:
-            seen.add(key)
-            continue
-        errors.append(f"skills-index: row `{name}` has no .agent/skills/{name}/SKILL.md")
+            return
+        errors.append(f"skills: `{name}`: {message}")
+
+    for skill_dir in sorted(p for p in skills.iterdir() if p.is_dir()):
+        _lint_skill_dir(skill_dir, report, warnings)
+
+    for link in _SKILL_LINKS:
+        path = root / link
+        if not path.exists():
+            errors.append(f"skills: `{link}` is missing (must link to .agent/skills)")
+        elif path.resolve() != skills.resolve():
+            errors.append(f"skills: `{link}` does not resolve to .agent/skills")
 
 
 def check_memory_table(root: Path, drift: set[str], errors: list[str], seen: set[str]) -> None:
@@ -186,12 +259,15 @@ def main(argv: list[str] | None = None) -> int:
     drift = load_known_drift(root)
     seen: set[str] = set()
     errors: list[str] = []
+    warnings: list[str] = []
     check_path_refs(root, drift, errors, seen)
-    check_skills_index(root, drift, errors, seen)
+    check_skills(root, drift, errors, warnings, seen)
     check_memory_table(root, drift, errors, seen)
 
     for line in errors:
         print(f"ERROR {line}")
+    for line in warnings:
+        print(f"WARN {line}")
     stale = sorted(drift - seen)
     for entry in stale:
         print(f"WARN stale known-drift entry (fixed or gone — remove it): {entry}")

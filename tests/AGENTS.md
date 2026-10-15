@@ -1,21 +1,20 @@
-# AGENTS.md - Testing Domain
+# tests/ — test suites
 
-> **Context**: This context is injected when working within `tests/`.
-> **Inheritance**: Inherits global laws from `../AGENTS.md`.
+Project-wide rules (including "Done means"): `../AGENTS.md`. Only the differences here.
 
-## 1. Test Isolation rules
-- **No External Network**: Unit tests must NEVER hit real APIs.
-    - **Use**: `pytest-mock`, `respx`, or local Docker containers.
-- **No Global Mutation**: Tests must not modify global interpreter state without restoration.
-
-## 2. Async Testing
-- **Framework**: Use `pytest-asyncio`.
-- **Marker**: Decorate async tests with `@pytest.mark.asyncio`.
-
-## 3. Data Fixtures
-- **Generators**: Use `hypothesis` for property-based testing where possible.
-- **Snapshots**: Store large expected outputs in `tests/data/`, not inline strings.
-
-## 4. Performance Tests
-- **Separation**: Mark heavy/slow tests with `@pytest.mark.slow` or `@pytest.mark.benchmark`.
-- **Tools**: Use `pytest-benchmark` for latency assertions.
+- Run one file or node with `make test-file FILE=...` / `make test-node NODE=...`
+  (no coverage gate); `make test` is the quick unit suite.
+- Unit tests never touch the network or a real broker; mock (`pytest-mock`,
+  `respx`) or use local containers. Restore any global state you change.
+- Async tests use `pytest-asyncio`. No fixed sleeps: wait on an event or poll
+  (<= 50 ms only if unavoidable, with a comment).
+- Cover the HFT edges: scaled ints, monotonic time, fail-closed paths, state
+  transitions, one-sided and zero-price books.
+- A test that passes is not proof it can fail: break the behavior (or revert
+  the fix) and confirm the test goes red; a test that passes against the bug is
+  worse than none.
+- `tests/golden/**` and the Shioaji surface goldens are contracts; regenerate
+  only deliberately and with justification.
+- Patching `time.sleep` or `os.environ` can leak across tests; scope it to the
+  module under test and use `monkeypatch`.
+- `make test-hygiene-check` must stay clean (assertions present, behavior names).

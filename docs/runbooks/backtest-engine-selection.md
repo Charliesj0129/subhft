@@ -84,7 +84,7 @@ entries `backtest_method_reliability.md`,
 | `MakerEngine` + `QueueDepletionFill` + `shioaji_p95` LatencyProfile | calibrated | ~1× | Default for cost-sensitivity sweeps once latency is enabled. |
 
 **Rule:** Any claim about absolute P&L MUST cite the engine + queue model +
-latency profile combination that produced it. The CLAUDE.md Latency Realism
+latency profile combination that produced it. The `hft-latency-profiling` skill's Latency Realism
 Guard already requires P95 latency for promotion decisions; this matrix is
 the corresponding queue-model requirement.
 
@@ -104,9 +104,8 @@ the corresponding queue-model requirement.
   (`research/registry/schemas.py`).
 * Stage-2 validation profile (loads pipeline overrides):
   `config/research/profiles/vm_ul6_strict.yaml`.
-* Skill (Stage 7): `.agent/skills/hft-backtest-validation/SKILL.md` for
-  bias diagnosis; `.agent/skills/hft-backtest-engine/SKILL.md` for engine
-  configuration.
+* Skill: `.agent/skills/hft-backtest/SKILL.md` for engine configuration and
+  bias diagnosis (`references/validation.md`).
 * Memory: `backtest_method_reliability.md`,
   `calibration_queue_model_fix.md`, `unified_backtest_framework.md`,
   `r47_backtest_data_regression.md`,
