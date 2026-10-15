@@ -479,8 +479,9 @@ release-converge-clean: ## Deep clean caches/artifacts then run release gates (r
 
 release-converge: release-converge-clean ## Alias: converge repository to release-ready state
 
-release-converge-mvp: ## Aggressive MVP release convergence (full gate + minimal research sample + tracked report slimming)
-	$(PY) scripts/release_converge.py --project-root . --output-dir outputs/release_converge --tree-depth "$${TREE_DEPTH:-3}" --cleanup-profile mvp_release --gate-profile full --tracked-slimming-profile root_reports_minimal --seed-minimal-sample $(if $(filter 1,$(CLEAN_RUST)),--clean-rust,)
+release-converge-mvp: ## Aggressive MVP release convergence (full gate + minimal research sample + tracked report slimming). DRY RUN unless CONFIRM=yes; deleting a non-empty .wal/ or data/ also needs ALLOW_DELETE_WAL=1 / ALLOW_DELETE_DATA=1
+	@echo "release-converge-mvp: $(if $(filter yes,$(CONFIRM)),DELETING (CONFIRM=yes),DRY RUN - nothing is deleted; add CONFIRM=yes to run it for real)"
+	$(PY) scripts/release_converge.py --project-root . --output-dir outputs/release_converge --tree-depth "$${TREE_DEPTH:-3}" --cleanup-profile mvp_release --gate-profile full --tracked-slimming-profile root_reports_minimal --seed-minimal-sample $(if $(filter 1,$(CLEAN_RUST)),--clean-rust,) $(if $(filter yes,$(CONFIRM)),,--dry-run) $(if $(filter 1,$(ALLOW_DELETE_WAL)),--allow-delete-wal,) $(if $(filter 1,$(ALLOW_DELETE_DATA)),--allow-delete-data,)
 
 release-first-ops-gate: ## First operational release gate (no cleanup; fail-closed)
 	@if [ -z "$(CHANGE_ID)" ]; then \
