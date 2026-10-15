@@ -774,7 +774,7 @@ class TestExpandOptions:
         assert result.symbols
         assert "NOT centred" in result.warnings[0]
 
-    def test_an_underlying_outside_the_strike_range_is_not_used_to_centre_the_window(self):
+    def test_an_underlying_on_the_wrong_scale_is_not_used_to_centre_the_window(self):
         # A x10 slip (190000 for 19000) would otherwise pin the window to the top strike without a trace.
         futures = [_make_futures_contract("TXFB7", root="TXF", delivery_date=20270217, reference=190000.0)]
         idx = _make_contract_index(self._skewed_chain() + futures)
@@ -784,9 +784,43 @@ class TestExpandOptions:
 
         strikes = {int(s["code"][3:8]) for s in result.symbols}
         assert strikes == {17500, 18000, 18500}
-        assert any("outside" in w and "190000" in w for w in result.warnings)
+        assert any("not within a factor of 2" in w and "190000" in w for w in result.warnings)
 
-    def test_strict_build_refuses_an_underlying_outside_the_strike_range(self):
+    def test_an_underlying_slightly_beyond_the_chain_still_centres_the_window_on_the_edge_strike(self):
+        # The chain has not caught up with a real move: 19050 against strikes 17000..19000 is the market, not an error.
+        futures = [_make_futures_contract("TXFB7", root="TXF", delivery_date=20270217, reference=19050.0)]
+        idx = _make_contract_index(self._skewed_chain() + futures)
+        result = _make_result()
+
+        _expand_options("TXO", "front", "ATM+1", {}, idx, result)
+
+        strikes = {int(s["code"][3:8]) for s in result.symbols}
+        assert strikes == {18500, 19000}
+        assert not any("median strike" in w or "Ignoring" in w for w in result.warnings)
+        assert any("beyond the TXO front strike range" in w for w in result.warnings)
+
+    def test_otm_selection_past_the_chain_edge_never_picks_an_in_the_money_call(self):
+        futures = [_make_futures_contract("TXFB7", root="TXF", delivery_date=20270217, reference=19050.0)]
+        idx = _make_contract_index(self._skewed_chain() + futures)
+        result = _make_result()
+
+        _expand_options("TXO", "front", "OTM+1", {}, idx, result)
+
+        picked = {(int(s["code"][3:8]), s["code"][8]) for s in result.symbols}
+        assert picked == {(18500, "P")}  # no call is out of the money above the last strike
+
+    def test_a_strict_build_accepts_an_underlying_slightly_beyond_the_chain(self):
+        futures = [_make_futures_contract("TXFB7", root="TXF", delivery_date=20270217, reference=19050.0)]
+        idx = _make_contract_index(self._skewed_chain() + futures)
+        idx.require_underlying = True
+        result = _make_result()
+
+        _expand_options("TXO", "front", "ATM+1", {}, idx, result)
+
+        assert result.errors == []
+        assert {int(s["code"][3:8]) for s in result.symbols} == {18500, 19000}
+
+    def test_strict_build_refuses_an_underlying_on_the_wrong_scale(self):
         futures = [_make_futures_contract("TXFB7", root="TXF", delivery_date=20270217, reference=1900.0)]
         idx = _make_contract_index(self._skewed_chain() + futures)
         idx.require_underlying = True

@@ -349,6 +349,9 @@ def _normalize_option_right(value: Any) -> str:
 # Option root -> the future whose price the strike window must be centred on. Only roots whose underlying
 # is certain are listed; anything else needs an explicit ``underlying_price``.
 UNDERLYING_FUTURE_ROOT: dict[str, str] = {"TXO": "TXF"}
+# A reference price this many times above or below the chain's middle strike is a unit slip (x10, /10), not a market
+# move; a real move, or a chain that has not caught up with it, stays well inside this band.
+UNDERLYING_SCALE_FACTOR = 2.0
 
 
 def _positive_float(value: Any) -> float | None:
@@ -424,6 +427,32 @@ def _parse_selector(selector: str) -> tuple[str, int]:
 # ---------------------------------------------------------------------------
 
 
+def _vet_underlying(
+    reference: float | None, source: str | None, strikes: list[float], label: str, result: SymbolBuildResult
+) -> float | None:
+    """Drop a reference whose scale is wrong; keep (and flag) one that is merely beyond the chain's edge.
+
+    A unit slip would pin the window to an edge strike without a trace, so it is treated as no underlying and the
+    strict / median paths decide. A price just past the last listed strike is a real market, so the window keeps
+    clamping to the edge strike as before (replacing it with the median would select in-the-money options).
+    """
+    if reference is None:
+        return None
+    middle = strikes[len(strikes) // 2]
+    if middle > 0 and not middle / UNDERLYING_SCALE_FACTOR <= reference <= middle * UNDERLYING_SCALE_FACTOR:
+        result.warnings.append(
+            f"Ignoring underlying {reference:g} from {source or 'chain'}: not within a factor of "
+            f"{UNDERLYING_SCALE_FACTOR:g} of the {label} strikes {strikes[0]:g}-{strikes[-1]:g} (unit slip?)"
+        )
+        return None
+    if not strikes[0] <= reference <= strikes[-1]:
+        result.warnings.append(
+            f"Underlying {reference:g} from {source or 'chain'} is beyond the {label} strike range "
+            f"{strikes[0]:g}-{strikes[-1]:g}: the window is clamped to the edge strike"
+        )
+    return reference
+
+
 def _expand_options(
     root: str,
     month_token: str,
@@ -493,14 +522,7 @@ def _expand_options(
             return
 
         reference, source = pick_underlying_price(root, group, contract_index)
-        if reference is not None and not strikes[0] <= reference <= strikes[-1]:
-            # A price outside the whole chain (a x10 unit slip, a stale contract) would pin the window to an
-            # edge strike without a trace. Treat it as no underlying so the strict / median paths below decide.
-            result.warnings.append(
-                f"Ignoring underlying {reference:g} from {source or 'chain'}: outside the {root} {month} "
-                f"strike range {strikes[0]:g}-{strikes[-1]:g}"
-            )
-            reference = None
+        reference = _vet_underlying(reference, source, strikes, f"{root} {month}", result)
         if reference is None:
             if contract_index.require_underlying:
                 result.errors.append(
